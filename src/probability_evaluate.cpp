@@ -200,8 +200,8 @@ void parse_eps_delta(const MethodArgs &a, const char *method,
                           || eps <= 0. || eps > 1.))
     provsql_error("method '%s': epsilon must be in (0, 1]", method);
   if(a.has("delta") && (!parse_double_full(a.get("delta"), delta)
-                        || delta <= 0. || delta >= 1.))
-    provsql_error("method '%s': delta must be in (0, 1)", method);
+                        || delta < 0. || delta >= 1.))
+    provsql_error("method '%s': delta must be in [0, 1)", method);
 }
 
 /**
@@ -259,6 +259,15 @@ SampleSpec parse_sample_spec(const MethodArgs &a, const char *method)
   }
 
   parse_eps_delta(a, method, s.eps, s.delta);
+  // delta == 0 is a DETERMINISTIC request: valid only on the tolerance paths
+  // ('relative'/'additive'), which route it to the d-tree / an exact method.
+  // A sampler invoked by name cannot honour it (infinite sample count).
+  if(s.delta == 0. && string(method) != "relative"
+                   && string(method) != "additive")
+    provsql_error("method '%s': delta must be in (0, 1); delta = 0 "
+                  "(deterministic) is supported only on the 'relative' / "
+                  "'additive' paths, which route to the d-tree or an exact "
+                  "method", method);
   if(a.has("max_samples")) {
     s.has_max = true;
     if(!parse_ulong_full(a.get("max_samples"), s.max_samples) || s.max_samples == 0)
@@ -693,7 +702,8 @@ static const double kCostTwProxyFeature  = 3e-4;  // O(S):                ~3e-4 
 static const double kCostMonteCarlo      = 1e-5;  // additive:     ~1e-5 * S * C
 static const double kCostStoppingRule    = 8e-5;  // relative univ: ~8e-5 * S * C  (>= MC: adaptive 1/p risk)
 static const double kCostKarpLuby        = 2e-7;  // relative DNF:  ~2e-7 * S * m * C
-static const double kCostDTree           = 1e-4;  // d-tree: placeholder (byName only, calibrated in Phase 4)
+static const double kCostDTreeExact      = 3e-4;  // d-tree exact:  ~3e-4 * S * m (memoised Shannon; pessimistic vs tree-decomp on low tw)
+static const double kCostDTreeApprox     = 4e-4;  // d-tree approx: ~4e-4 * S / eps, DELTA-INDEPENDENT (deterministic -> overtakes samplers as delta shrinks)
 
 /// 2^k with the exponent clamped to keep the cost finite (a clamped exponent
 /// still sorts the method dead last -- it is then a guaranteed fall-through).
@@ -994,11 +1004,12 @@ public:
   // Additive portfolio member: the universal fixed-sample estimator on the Boolean
   // view, serving the 'additive' path (and any-name).
   bool inDefaultChain() const override { return true; }
+  bool isDeterministic() const override { return false; } // (eps,delta) sampler
   // O(S / eps^2 * ln(1/delta)) -- Hoeffding, p-independent.
   double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
     if(tol.epsilon <= 0.) return std::numeric_limits<double>::infinity();
     return kCostMonteCarlo * static_cast<double>(ctx.circuit_size)
-           * std::log(2.0 / (tol.delta > 0. ? tol.delta : 0.5))
+           * std::log(2.0 / tol.delta)
            / (tol.epsilon * tol.epsilon);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
@@ -1018,6 +1029,7 @@ public:
   std::string name() const override { return "karp-luby"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
   bool inDefaultChain() const override { return true; }
+  bool isDeterministic() const override { return false; } // (eps,delta) sampler
   // Cost / applicability need the DNF-shape feature; the chooser acquires it
   // (lazily) before calling them, so a read-once circuit never pays the walk.
   std::vector<Feature> requiredFeatures() const override {
@@ -1033,7 +1045,7 @@ public:
     const double m = static_cast<double>(ctx.dnf_num_clauses_ > 0
                                          ? ctx.dnf_num_clauses_ : 1);
     return kCostKarpLuby * static_cast<double>(ctx.circuit_size) * m
-           * std::log(2.0 / (tol.delta > 0. ? tol.delta : 0.5))
+           * std::log(2.0 / tol.delta)
            / (tol.epsilon * tol.epsilon);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
@@ -1065,13 +1077,14 @@ public:
   std::string name() const override { return "stopping-rule"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Relative; }
   bool inDefaultChain() const override { return true; }
+  bool isDeterministic() const override { return false; } // (eps,delta) sampler
   // O(S / (p*eps^2) * ln(1/delta)); p is not a static feature, modelled
   // optimistically at p ~ 1 (see the kCost block).  Above karp-luby on DNFs and
   // above plain MC, but below the cheap exact methods so "exact when cheaper" wins.
   double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
     if(tol.epsilon <= 0.) return std::numeric_limits<double>::infinity();
     return kCostStoppingRule * static_cast<double>(ctx.circuit_size)
-           * std::log(2.0 / (tol.delta > 0. ? tol.delta : 0.5))
+           * std::log(2.0 / tol.delta)
            / (tol.epsilon * tol.epsilon);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
@@ -1144,23 +1157,36 @@ class DTreeBoundsMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "d-tree"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
-  bool inDefaultChain() const override { return false; }
+  bool inDefaultChain() const override { return true; }
+  // isDeterministic() defaults to true: the certified interval carries no
+  // failure probability.  That is the d-tree's reason for being in the chain --
+  // it is the ONLY non-exact method admissible for a delta == 0 request, and its
+  // cost is delta-INDEPENDENT, so it overtakes the (eps,delta) samplers as delta
+  // shrinks.  On low treewidth the exact compilers still win on cost; the d-tree
+  // is auto-selected for deterministic / low-delta approximation and for exact
+  // where the treewidth exceeds tree-decomposition's cap.
   std::vector<Feature> requiredFeatures() const override {
     return {Feature::DnfShape};
   }
   bool applicable(const EvalContext &ctx, const Tolerance &) const override {
     return ctx.dnf_ok_;
   }
-  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+  double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
     if(!ctx.dnf_ok_)
       return std::numeric_limits<double>::infinity();
-    // Placeholder: byName-only in Phase 1, so the chooser never reads it.  The
-    // Phase-4 cost must be TOLERANCE-AWARE: pessimistic on the exact path
-    // (Shannon expansion can blow up -- model it via the treewidth proxy w, like
-    // tree-decomposition's S*2^w, so it is picked for exact only when genuinely
-    // cheap) and DECREASING in eps on the approximate paths (the anytime early
-    // stop is the whole point), so it underbids the samplers there.
-    return kCostDTree * static_cast<double>(ctx.circuit_size);
+    const double S = static_cast<double>(ctx.circuit_size);
+    // Approximate: the anytime early stop caps the work (and it is delta-
+    // independent); grows as eps tightens.  NB the treewidth proxy is NOT used
+    // -- the Phase-4 measurement showed it mispredicts this engine (cliques
+    // collapse fast, low-w cycles do not); see doc/TODO/dtree-anytime-bounds.md.
+    if(tol.kind != ToleranceKind::Exact && tol.epsilon > 0.)
+      return kCostDTreeApprox * S / tol.epsilon;
+    // Exact: memoised Shannon compilation, ~S*m.  Pessimistic vs tree-
+    // decomposition (tighter constant) on low treewidth, so it is picked for
+    // exact only where tree-decomposition bails (treewidth above its cap).
+    const double m = static_cast<double>(ctx.dnf_num_clauses_ > 0
+                                         ? ctx.dnf_num_clauses_ : 1);
+    return kCostDTreeExact * S * m;
   }
   double evaluate(EvalContext &ctx, const Tolerance &tol) const override {
     std::vector<gate_t> clause_roots;
@@ -1314,7 +1340,12 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
   // independent); the last such error propagates if the portfolio is exhausted.
   std::vector<const ProbabilityMethod *> portfolio;
   for(const auto &m : methods_)
-    if(m->inDefaultChain() && toleranceAdmits(tol.kind, m->guaranteeKind()))
+    if(m->inDefaultChain() && toleranceAdmits(tol.kind, m->guaranteeKind())
+       // A delta == 0 ("deterministic") request admits only deterministic
+       // methods: the (eps,delta) samplers cannot honour delta = 0 (their cost
+       // model even masks this by falling back to a finite delta), so they must
+       // be excluded by admissibility, not left to lose on cost.
+       && (tol.delta > 0. || m->isDeterministic()))
       portfolio.push_back(m.get());
 
   std::set<Feature> acquired;
@@ -1770,6 +1801,13 @@ static Datum probability_evaluate_internal
                                  /*circuit_size=*/c.getNbGates()};
         result = provsql::MethodCatalog::instance().chooseAndRun(ctx, tol);
         actual_method = ctx.actual_method;
+      } else if(tol.delta == 0.) {
+        // No Boolean view (random-variable / HAVING-aggregate circuit): only the
+        // (eps,delta) samplers apply here, none of which can honour delta = 0.
+        provsql_error("a deterministic (delta = 0) '%s' guarantee is not "
+                      "available for this circuit: it carries random-variable "
+                      "or HAVING-aggregate gates, for which only the (eps,delta) "
+                      "samplers apply -- use delta > 0", method.c_str());
       } else if(method == "relative") {
         run_stopping_rule(gc, gc_root, parse_method_args(args), result,
                           actual_method);

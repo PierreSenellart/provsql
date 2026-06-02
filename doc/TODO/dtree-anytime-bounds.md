@@ -132,12 +132,28 @@ coarser bound).
   entangled (4-cycle) circuit and on a read-once one; additive `epsilon=0.05`
   within ε of exact; non-DNF declined.
 
-### Phase 2 — incremental / memory-efficient form
+### Phase 2 — memoisation (DAG d-tree) — **LANDED**
 
-Only if Phase 1 shows memory pressure on large DNFs. Implement Sec. V-D / Thm.
-5.12: depth-first construction, **close** leaves into aggregated bounds, keep only
-the current root-to-leaf path → O(depth) memory. Lemma 5.11 bound-space check to
-decide a leaf can be closed while preserving the ε-guarantee.
+The Phase-1 recursion, being a *tree* (no sharing), recomputes overlapping
+subproblems. `DTreeContext` now memoises subproblems, keyed on the canonical
+(subsumption-reduced, sorted) residual clause set, mapping to the subproblem's
+exact probability — written only on an exact request (`max_width == 0`, where the
+whole recursion is exact), read always. The recursion is now a shared DAG.
+
+**Measured outcome** (cycle-160, the worst Phase-1 case): exact 38 ms → **17 ms**,
+matching tree-decomposition to 10 decimals (pinned by `dtree.sql`'s `cyc_eq_td`).
+So memoisation gives correctness-preserving ~2× and, more importantly, guards
+against the exponential blow-up a non-memoised tree suffers on structures with
+repeated subproblems.
+
+**But it does not make the d-tree beat tree-decomposition on bounded treewidth**
+— still ~2× behind (17 vs 8 ms), a constant-factor gap from the expensive
+clause-set keys; tree-decomposition is purpose-built for that regime. The
+re-confirmed conclusion: the d-tree's *exact* niche is **high treewidth (`w >
+MAX_TREEWIDTH`), where tree-decomposition bails entirely** (e.g. clique-16:
+d-tree 1.3 ms vs compilation ~40 ms / possible-worlds 2^16), plus the approximate
+paths. Cheaper memo keys (a hash/fingerprint instead of `map<vector<set>>`) and
+the O(depth) leaf-closing form (Sec. V-D) are deferred polish.
 
 ### Phase 3 — generalise to arbitrary circuits
 
@@ -146,28 +162,63 @@ Drop the `DnfShape` requirement. Read `⊗`/`⊙` off the gate structure directl
 expand one more variable toward DNF leaves, or use a coarser fallback bound. This
 makes the engine apply to the full Boolean-circuit surface, not just SPJU lineage.
 
-### Phase 4 — cost model + chooser integration
+### Phase 4 — cost model + chooser integration — **LANDED (via deterministic admissibility)**
 
-**Design settled (the hard part):** the d-tree keeps `guaranteeKind() = Exact`
-— that is the *admissibility* role (it can run to `L=U`, so it must be a
-candidate on every path, including exact, where on an independence-rich circuit
-it can beat tree-decomposition). *Whether it is selected* is governed entirely
-by a **tolerance-aware cost**, NOT by a weaker guarantee kind or a flat
-prohibitive cost (either of which would also bar it from the approximate paths
-where it beats the samplers). So `estimatedCost(ctx, tol)` must be:
+The settled design was: keep `guaranteeKind() = Exact` (admissibility) and govern
+selection by a **tolerance-aware cost** — pessimistic on exact (~`S·2^w` via the
+treewidth proxy), decreasing in ε on the approximate paths. The Phase-4
+measurement (`d-tree` by name vs the competitors, this machine, `p = 0.3`)
+**overturned the cost half of it**:
 
-- **pessimistic on the exact path** (`tol.kind == Exact` / tiny ε): Shannon
-  expansion can blow up, so model it like the other exact compilers, ~`S·2^w`
-  gated on the `TreewidthProxy` `w` (picked for exact only when genuinely cheap);
-- **decreasing in ε on the approximate paths**: the anytime early stop is the
-  point, so it must underbid `stopping-rule` / `karp-luby` as ε loosens, and
-  benefit from `p` near 0/1 where the bounds converge fast.
+| circuit | w | exact d-tree | exact best other | ε=0.1 d-tree | ε=0.1 other |
+|---|---|---|---|---|---|
+| cycle-160 (pairwise) | 2 | 38 ms | tree-decomp **8 ms** | **1.2 ms** | stop-rule 1.6, karp-luby **52** |
+| clique-16 (all pairs) | 15 | **1.3 ms** | poss-worlds 2^16 / compile ~40 | 1.3 ms | — |
 
-Calibrate the constant on this machine via the existing
-`provsql.verbose_level >= 50` instrumentation, as done for the other `kCost*`.
-- Wire into `chooseAndRun` so the chooser prefers `d-tree` over `stopping-rule` /
-  `karp-luby` / `possible-worlds` when its estimate wins. The exact-when-cheaper
-  behaviour falls out: on a tractable circuit the d-tree closes to `L=U` cheaply.
+1. **The treewidth proxy mispredicts the cost.** High-`w` cliques *collapse*
+   under Shannon + subsumption and run fast; low-`w` cycles do not and run slow.
+   So `S·2^w` is backwards; degeneracy is not a usable predictor, and no other
+   *cheap static* feature obviously is (the driver is whether the DNF collapses,
+   which is what running it tells you).
+2. **Exact is dominated** by tree-decomposition — the no-memoisation limitation,
+   hence Phase 2 is promoted ahead of this phase.
+3. **Approximate is only marginally ahead** of the stopping rule (1.2 vs 1.6 ms),
+   though it *does* crush `karp-luby` (52 ms) on a high-clause DNF. But
+   `karp-luby`'s own cost model predicts ~1 ms for that 52 ms run — it is badly
+   miscalibrated too, so the approximate-path chooser is already unreliable
+   independently of the d-tree.
+
+**The integration key was not cost at all — it was admissibility on `delta`.**
+The samplers are `(eps,delta)` with a sample count ∝ `ln(1/delta)`, so:
+
+- **`delta == 0` (deterministic request)**: the samplers are *infeasible* and the
+  d-tree (a certified interval) is the only non-exact method that can serve it.
+  Modelled as a new `ProbabilityMethod::isDeterministic()` (the samplers override
+  it to `false`); `chooseAndRun` drops non-deterministic methods when
+  `tol.delta == 0`. Parsing now accepts `delta = 0` on the `relative`/`additive`
+  paths (a by-name sampler with `delta = 0` errors). The RV/HAVING fallback, which
+  has only samplers, errors on `delta = 0`.
+- **`delta` small but > 0**: the samplers stay admissible but their *cost* grows
+  as `ln(1/delta)` (already in their `estimatedCost` — and the stale
+  `: 0.5` floor that masked this was removed), while the d-tree's cost is
+  **`delta`-independent**. So the chooser migrates to the d-tree as confidence
+  tightens, on cost, with no need to predict collapse.
+
+So the d-tree is now `inDefaultChain() == true` with a `delta`-independent cost:
+approximate `≈ kCostDTreeApprox · S / eps` (the anytime stop caps the work, and
+the treewidth proxy is deliberately NOT used — it mispredicts), exact
+`≈ kCostDTreeExact · S · m` (pessimistic, so tree-decomposition wins low treewidth
+and the d-tree is picked for exact only where tree-decomposition's cap is
+exceeded). Net selection: deterministic / low-`delta` approximation → d-tree;
+high-treewidth exact → d-tree; everything the cheap exact methods resolve →
+exact-when-cheaper, unchanged. Pinned by `dtree.sql` (`det_within_eps`,
+`det_not_sampler`, and the by-name-sampler-`delta=0` error).
+
+Still open: the `karp-luby` / sampler cost *constants* remain miscalibrated
+(karp-luby ~14× under, stopping-rule ~6× over on the measured cases), so the
+`delta > 0` competition among the approximate methods is only roughly right — a
+dedicated sampler-cost calibration pass is the remaining work, independent of the
+d-tree.
 
 ### Phase 5 — optional / research
 

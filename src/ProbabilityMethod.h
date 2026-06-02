@@ -96,6 +96,17 @@ public:
   /// reachable only @c byName).
   virtual bool inDefaultChain() const { return false; }
 
+  /// True iff the method's guarantee holds with CERTAINTY (no failure
+  /// probability).  The exact methods and the d-tree's certified interval are
+  /// deterministic; the (eps,delta) samplers are not.  A request with delta == 0
+  /// ("deterministic") admits only deterministic methods -- the samplers cannot
+  /// honour it (their sample count is proportional to ln(1/delta), so delta = 0
+  /// is infeasible, and their cost model masks this by falling back to a finite
+  /// delta).  For delta > 0 the samplers stay admissible but their cost grows as
+  /// delta shrinks, so the chooser already migrates to the (delta-independent)
+  /// d-tree well before delta reaches 0.
+  virtual bool isDeterministic() const { return true; }
+
   /// Features the method's @c estimatedCost / @c applicable need acquired before
   /// they are meaningful (empty = a free estimate).  The chooser will not call
   /// @c estimatedCost / @c applicable until these are acquired, and acquires

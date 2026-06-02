@@ -24,6 +24,28 @@ namespace {
 using Clauses = std::vector<std::set<gate_t> >;
 
 /**
+ * @brief Shared recursion state: the circuit and the subproblem memo.
+ *
+ * The memo turns the Shannon/independence recursion from a tree into a shared
+ * DAG: distinct paths that reach the same residual DNF (very common on path- and
+ * cycle-shaped lineage) are computed once.  Without it the recursion is
+ * exponential even on bounded treewidth; with it, the number of distinct
+ * residual clause sets is polynomial there, matching the paper's tractable-query
+ * behaviour.
+ *
+ * The key is the @e canonical clause set (subsumption-reduced, then sorted), and
+ * the value is the subproblem's @b exact probability.  An entry is therefore
+ * sound to reuse for @e any request (an exact value satisfies any width target),
+ * but it is only ever WRITTEN on an exact request (@c max_width == 0), where the
+ * whole recursion is exact -- an early-stopped interval is budget-dependent and
+ * must not be cached.
+ */
+struct DTreeContext {
+  const BooleanCircuit &c;
+  std::map<Clauses, double> memo;
+};
+
+/**
  * @brief Drop subsumed clauses from a monotone DNF.
  *
  * For a monotone DNF a clause is the conjunction of its (positive) literals, so
@@ -118,7 +140,7 @@ gate_t mostFrequentVar(const Clauses &clauses)
   return best;
 }
 
-DTreeInterval recurse(const BooleanCircuit &c, Clauses clauses, double max_width)
+DTreeInterval recurse(DTreeContext &ctx, Clauses clauses, double max_width)
 {
   check_stack_depth();
   if(provsql_interrupted)
@@ -130,14 +152,31 @@ DTreeInterval recurse(const BooleanCircuit &c, Clauses clauses, double max_width
     if(cl.empty())
       return {1., 1.}; // a clause with no literals is true, so the DNF is true
 
+  // Canonicalise (subsumption-reduce, then sort) so equivalent residual DNFs
+  // share a memo key.
   removeSubsumed(clauses);
+  std::sort(clauses.begin(), clauses.end());
+
+  // An exact request keeps max_width == 0 through every decomposition (the ⊗
+  // split passes 0/k = 0, ⊕ passes it unchanged), so the whole recursion is
+  // exact and every result is cacheable; an approximate request never writes.
+  const bool exact = (max_width <= 0.);
+  if(exact) {
+    const auto it = ctx.memo.find(clauses);
+    if(it != ctx.memo.end())
+      return {it->second, it->second};
+  }
 
   // Cheap certified interval; stop as soon as it is narrow enough.
   double L, U;
-  c.dnfBounds(clauses, L, U);
-  if(U - L <= max_width)
+  ctx.c.dnfBounds(clauses, L, U);
+  if(U - L <= max_width) {
+    if(exact)
+      ctx.memo.emplace(clauses, L); // independent leaf: L == U, exact
     return {L, U};
+  }
 
+  DTreeInterval res;
   // Independent-or: recurse on each component with a 1/k share of the budget
   // (the OR width is at most the sum of component widths) and combine.
   std::vector<Clauses> comps = components(clauses);
@@ -145,38 +184,42 @@ DTreeInterval recurse(const BooleanCircuit &c, Clauses clauses, double max_width
     double prod_lower = 1., prod_upper = 1.;
     const double sub_width = max_width / static_cast<double>(comps.size());
     for(auto &comp : comps) {
-      DTreeInterval r = recurse(c, std::move(comp), sub_width);
+      DTreeInterval r = recurse(ctx, std::move(comp), sub_width);
       prod_lower *= (1. - r.lower);
       prod_upper *= (1. - r.upper);
     }
-    return {1. - prod_lower, 1. - prod_upper};
+    res = {1. - prod_lower, 1. - prod_upper};
+  } else {
+    // Shannon expansion on the most frequent variable x: Pr = Pr[x]·Pr[Phi|x=1]
+    // + (1-Pr[x])·Pr[Phi|x=0].  For a monotone DNF the cofactors are, on x=1,
+    // every clause with x stripped of x (the literal is satisfied) and every
+    // clause without x unchanged; on x=0, only the clauses not containing x
+    // survive.  The same width budget passes to both branches (the mixture
+    // width is at most the larger branch's).
+    const gate_t x = mostFrequentVar(clauses);
+    const double px = ctx.c.getProb(x);
+    Clauses pos, neg;
+    pos.reserve(clauses.size());
+    neg.reserve(clauses.size());
+    for(const auto &cl : clauses) {
+      if(cl.count(x)) {
+        std::set<gate_t> reduced = cl;
+        reduced.erase(x);
+        pos.push_back(std::move(reduced));
+      } else {
+        pos.push_back(cl);
+        neg.push_back(cl);
+      }
+    }
+    const DTreeInterval rp = recurse(ctx, std::move(pos), max_width);
+    const DTreeInterval rn = recurse(ctx, std::move(neg), max_width);
+    res = {px * rp.lower + (1. - px) * rn.lower,
+           px * rp.upper + (1. - px) * rn.upper};
   }
 
-  // Shannon expansion on the most frequent variable x: Pr = Pr[x]·Pr[Phi|x=1] +
-  // (1-Pr[x])·Pr[Phi|x=0].  For a monotone DNF the cofactors are, on x=1, every
-  // clause with x stripped of x (the literal is satisfied) and every clause
-  // without x unchanged; on x=0, only the clauses not containing x survive.  The
-  // same width budget passes to both branches (the mixture width is at most the
-  // larger branch's).
-  const gate_t x = mostFrequentVar(clauses);
-  const double px = c.getProb(x);
-  Clauses pos, neg;
-  pos.reserve(clauses.size());
-  neg.reserve(clauses.size());
-  for(const auto &cl : clauses) {
-    if(cl.count(x)) {
-      std::set<gate_t> reduced = cl;
-      reduced.erase(x);
-      pos.push_back(std::move(reduced));
-    } else {
-      pos.push_back(cl);
-      neg.push_back(cl);
-    }
-  }
-  const DTreeInterval rp = recurse(c, std::move(pos), max_width);
-  const DTreeInterval rn = recurse(c, std::move(neg), max_width);
-  return {px * rp.lower + (1. - px) * rn.lower,
-          px * rp.upper + (1. - px) * rn.upper};
+  if(exact)
+    ctx.memo.emplace(clauses, res.lower); // exact (res.lower == res.upper)
+  return res;
 }
 
 } // namespace
@@ -184,7 +227,8 @@ DTreeInterval recurse(const BooleanCircuit &c, Clauses clauses, double max_width
 DTreeInterval dtreeBounds(const BooleanCircuit &c, Clauses clauses,
                           double max_width)
 {
-  return recurse(c, std::move(clauses), max_width);
+  DTreeContext ctx{c, {}};
+  return recurse(ctx, std::move(clauses), max_width);
 }
 
 } // namespace provsql
