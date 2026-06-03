@@ -1,0 +1,67 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|k|p
+LEFT exists|1|1.0000
+LEFT exists|2|1.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|k|p
+LEFT count=0|1|0.2500
+LEFT count=0|2|1.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|k|p
+LEFT count>=2|1|0.2500
+LEFT count>=2|2|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|k|p
+RIGHT exists|1|0.7500
+RIGHT exists|3|0.5000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|k|p
+FULL exists|1|1.0000
+FULL exists|2|1.0000
+FULL exists|3|0.5000
+(3 rows)
+add_provenance
+
+(1 row)
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|k|p
+BID count<=1|1|1.0000
+(1 row)
+remove_provenance
+
+(1 row)
+q|k|p
+BID count>=1|1|0.8000
+(1 row)
+remove_provenance
+
+(1 row)
+q|k|p
+BID count=0|1|0.2000
+(1 row)
