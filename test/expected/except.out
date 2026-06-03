@@ -12,3 +12,21 @@ remove_provenance
 (1 row)
 city|formula
 (0 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+n_rows|p_except_all
+1|0.1250
+(1 row)
+remove_provenance
+
+(1 row)
+n_rows|p_except
+1|0.1250
+(1 row)

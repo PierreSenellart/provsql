@@ -6997,6 +6997,45 @@ static void process_insert_select(const constants_t *constants, Query *q) {
  * @param boundParams    Pre-bound parameter values.
  * @return               The planned statement.
  */
+/**
+ * @brief Walker: true if any @c Query in the tree defines a @c provsql column
+ *        by hand.
+ *
+ * A non-junk target entry resnamed @c provsql whose expression is not a
+ * legitimate uuid-typed @c Var (the passthrough of a tracked relation's
+ * provsql column, which @c remove_provenance_attributes_select strips) is a
+ * hand-made provenance column -- e.g. @c "provenance() AS provsql" or
+ * @c "expr AS provsql".  It collides with the provenance column ProvSQL adds
+ * itself: the output column count desyncs and a later @c Var mis-binds to a
+ * non-uuid column, crashing @c get_gate_type when it dereferences the value as
+ * a pointer.
+ *
+ * Run once on the user's ORIGINAL query in the planner hook, before any
+ * rewriting, so the intermediate queries ProvSQL builds (which legitimately
+ * carry a provsql column) are never visited.
+ */
+static bool query_defines_handmade_provsql(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resjunk || te->resname == NULL ||
+          strcmp(te->resname, PROVSQL_COLUMN_NAME))
+        continue;
+      if (IsA(te->expr, Var) &&
+          ((Var *)te->expr)->vartype == constants->OID_TYPE_UUID)
+        continue; /* legitimate passthrough of a real provsql column */
+      return true;
+    }
+    return query_tree_walker(q, query_defines_handmade_provsql, cx, 0);
+  }
+  return expression_tree_walker(node, query_defines_handmade_provsql, cx);
+}
+
 /** @brief Executor nesting depth.
  *
  * Tracks how deep we are inside @c Executor invocations.  Incremented
@@ -7073,6 +7112,17 @@ static PlannedStmt *provsql_planner(Query *q,
       bool *removed = NULL;
       Query *new_query;
       clock_t begin = 0;
+
+      /* A user query may not define its own provsql column by hand; ProvSQL
+       * manages the provenance column itself.  Checked here, once, on the
+       * original query before any rewriting -- so the intermediate queries the
+       * rewriter builds (which legitimately carry a provsql column) are not
+       * flagged. */
+      if (provsql_active &&
+          query_defines_handmade_provsql((Node *)q, (void *)&constants))
+        provsql_error("a query may not define a column named \"%s\" by hand; "
+                      "ProvSQL manages the provenance column itself",
+                      PROVSQL_COLUMN_NAME);
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)

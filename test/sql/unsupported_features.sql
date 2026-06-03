@@ -99,3 +99,14 @@ SELECT city, cnt FROM (SELECT city, COUNT(*) AS cnt FROM personnel GROUP BY city
 
 -- GROUP BY on aggregate from subquery
 SELECT cnt, COUNT(*) FROM (SELECT city, COUNT(*) AS cnt FROM personnel GROUP BY city) t GROUP BY cnt;
+
+-- Hand-made provsql column (collides with the auto-added provenance column)
+SELECT name, provenance() AS provsql FROM personnel;
+
+-- Hand-made provsql column from a plain expression
+SELECT name AS provsql FROM personnel;
+
+-- Hand-made provsql column inside a set-operation arm
+SELECT name, provenance() AS provsql FROM personnel
+EXCEPT ALL
+SELECT name, provenance() AS provsql FROM personnel;
