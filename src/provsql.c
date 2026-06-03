@@ -4997,7 +4997,8 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   ListCell *lc;
   int i, n_tl_sublinks = 0;
   bool in_where = false;
-  Aggref *choose_agg;
+  bool is_agg_body = false;
+  Expr *repl_expr; /* what replaces the SubLink: choose(val) or the aggregate */
 
   if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
     return false;
@@ -5043,17 +5044,22 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     in_where = true;
   }
 
-  /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel.
-   * LIMIT / OFFSET would pick a bounded, order-dependent subset that the
-   * count(...)<=1 decorrelation does not reproduce, and a CTE would be dropped;
-   * reject those rather than silently change the semantics. */
+  /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel, where
+   * val is either a plain value (decorrelated with choose() + count(...)<=1) or
+   * a single bare aggregate (decorrelated to that aggregate over the LEFT-JOIN
+   * group, no count gate).  LIMIT / OFFSET would pick a bounded, order-dependent
+   * subset and a CTE would be dropped; reject those. */
   sub = (Query *)sl->subselect;
-  if (sub->commandType != CMD_SELECT || sub->hasAggs || sub->groupClause ||
+  if (sub->commandType != CMD_SELECT || sub->groupClause ||
       sub->groupingSets || sub->distinctClause || sub->setOperations ||
       sub->hasWindowFuncs || sub->hasSubLinks || sub->limitCount ||
       sub->limitOffset || sub->cteList ||
       list_length(sub->rtable) != 1 || list_length(sub->targetList) != 1)
     return false;
+  if (sub->hasAggs &&
+      !IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref))
+    return false; /* aggregate body must be a single bare aggregate */
+  is_agg_body = sub->hasAggs;
   if (!sub->jointree || list_length(sub->jointree->fromlist) != 1 ||
       !IsA(linitial(sub->jointree->fromlist), RangeTblRef))
     return false;
@@ -5182,14 +5188,34 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     /* Any pre-existing outer WHERE (over R, level 0) stays in jointree->quals.*/
   }
 
-  /* choose(val) picks the single matched value.  For a target-list SubLink it
-   * replaces the entry directly; for a WHERE SubLink it is substituted into the
-   * conjunct, which then moves to HAVING (below). */
-  choose_agg = oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
-                              exprType((Node *)valexpr),
-                              exprType((Node *)valexpr), valexpr);
+  /* What replaces the SubLink, over the LEFT-JOIN group:
+   *  - value body  -> choose(val) picks the single matched value;
+   *  - aggregate body -> the aggregate itself.  count(*) is rewritten to
+   *    count(Q.key) so the null-padded antijoin row (Q.key IS NULL) is not
+   *    counted -- an empty correlated group must give 0, not 1.
+   * For a target-list SubLink it replaces the entry directly; for a WHERE
+   * SubLink it is substituted into the conjunct, which moves to HAVING. */
+  if (is_agg_body) {
+    Aggref *agg = (Aggref *)valexpr; /* the remapped body aggregate */
+    if (agg->aggstar) {
+      Var *qkey = (Var *)copyObject(scan.found_var);
+      qkey->varno = Q_idx;
+#if PG_VERSION_NUM >= 130000
+      qkey->varnosyn = 0;
+      qkey->varattnosyn = 0;
+#endif
+      repl_expr = (Expr *)oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype,
+                                         (Expr *)qkey);
+    } else {
+      repl_expr = valexpr;
+    }
+  } else {
+    repl_expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                       exprType((Node *)valexpr),
+                                       exprType((Node *)valexpr), valexpr);
+  }
   if (!in_where)
-    sl_te->expr = (Expr *)choose_agg;
+    sl_te->expr = repl_expr;
 
   /* GROUP BY every R user column: each needs a target-list entry carrying a
    * ressortgroupref plus a SortGroupClause. */
@@ -5235,39 +5261,43 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     }
   }
 
-  /* HAVING count(Q.key) <= 1, with Q.key a Q column from the correlation
-   * (NULL on the null-padded antijoin rows).  When the SubLink came from a
-   * WHERE comparison, that conjunct (with the SubLink replaced by choose) is
-   * ANDed in -- a comparison on the aggregated value belongs in HAVING. */
+  /* HAVING.  A value body adds count(Q.key) <= 1 (Q.key NULL on the null-padded
+   * antijoin rows), enforcing the scalar subquery's at-most-one-row rule; an
+   * aggregate body needs no such gate.  When the SubLink came from a WHERE
+   * comparison, that conjunct (with the SubLink replaced) is ANDed in -- a
+   * comparison on the aggregated value belongs in HAVING. */
   {
-    Var *qkey = (Var *)copyObject(scan.found_var);
-    Aggref *cnt;
-    OpExpr *le = makeNode(OpExpr);
-    Oid le_op;
-    List *having_conjuncts;
+    List *having_conjuncts = NIL;
 
-    qkey->varno = Q_idx;
+    if (!is_agg_body) {
+      Var *qkey = (Var *)copyObject(scan.found_var);
+      Aggref *cnt;
+      OpExpr *le = makeNode(OpExpr);
+      Oid le_op;
+
+      qkey->varno = Q_idx;
 #if PG_VERSION_NUM >= 130000
-    qkey->varnosyn = 0;
-    qkey->varattnosyn = 0;
+      qkey->varnosyn = 0;
+      qkey->varattnosyn = 0;
 #endif
-    cnt = oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype, (Expr *)qkey);
+      cnt = oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype, (Expr *)qkey);
 
-    le_op = OpernameGetOprid(list_make1(makeString("<=")), INT8OID, INT8OID);
-    le->opno = le_op;
-    le->opfuncid = get_opcode(le_op);
-    le->opresulttype = BOOLOID;
-    le->opcollid = InvalidOid;
-    le->inputcollid = InvalidOid;
-    le->args = list_make2(
-      cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
-                     Int64GetDatum(1), false, FLOAT8PASSBYVAL));
-    le->location = -1;
-    having_conjuncts = list_make1(le);
+      le_op = OpernameGetOprid(list_make1(makeString("<=")), INT8OID, INT8OID);
+      le->opno = le_op;
+      le->opfuncid = get_opcode(le_op);
+      le->opresulttype = BOOLOID;
+      le->opcollid = InvalidOid;
+      le->inputcollid = InvalidOid;
+      le->args = list_make2(
+        cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                       Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+      le->location = -1;
+      having_conjuncts = list_make1(le);
+    }
 
     if (in_where) {
       /* Split the WHERE AND-list: the conjunct holding the SubLink (with the
-       * SubLink -> choose substitution) moves to HAVING; the rest stay. */
+       * SubLink -> repl_expr substitution) moves to HAVING; the rest stay. */
       oj_sl_replace_ctx rc;
       Node *quals = q->jointree->quals;
       List *conjs =
@@ -5279,7 +5309,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       ListCell *lc2;
 
       rc.target = sl;
-      rc.replacement = (Node *)choose_agg;
+      rc.replacement = (Node *)repl_expr;
       foreach (lc2, conjs) {
         Node *c = (Node *)lfirst(lc2);
         if (oj_contains_sublink_walker(c, sl))
@@ -5296,9 +5326,11 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     }
 
     q->havingQual =
-      (list_length(having_conjuncts) == 1)
-        ? (Node *)linitial(having_conjuncts)
-        : (Node *)makeBoolExpr(AND_EXPR, having_conjuncts, -1);
+      (having_conjuncts == NIL)
+        ? NULL
+        : (list_length(having_conjuncts) == 1
+             ? (Node *)linitial(having_conjuncts)
+             : (Node *)makeBoolExpr(AND_EXPR, having_conjuncts, -1));
   }
 
   q->hasAggs = true;

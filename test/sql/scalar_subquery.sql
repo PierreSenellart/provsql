@@ -170,8 +170,7 @@ DROP TABLE ss_s5;
 DROP TABLE ss_r5;
 
 -- Part 6: unsupported scalar-subquery forms are rejected cleanly (never
--- silently miscomputed or crashing): an aggregate body, a LIMIT/OFFSET body,
--- and EXISTS.
+-- silently miscomputed or crashing): a LIMIT/OFFSET body and EXISTS.
 CREATE TABLE rj_r(a int, k int);
 CREATE TABLE rj_q(k int, x int);
 INSERT INTO rj_r VALUES (1,1);
@@ -179,8 +178,6 @@ INSERT INTO rj_q VALUES (1,10),(1,11);
 SELECT add_provenance('rj_r');
 SELECT add_provenance('rj_q');
 
-SELECT rj_r.a, (SELECT max(rj_q.x) FROM rj_q WHERE rj_q.k = rj_r.k) AS sx,
-       provenance() AS p FROM rj_r;
 SELECT rj_r.a, (SELECT rj_q.x FROM rj_q WHERE rj_q.k = rj_r.k LIMIT 1) AS sx,
        provenance() AS p FROM rj_r;
 SELECT rj_r.a, provenance() AS p FROM rj_r
@@ -212,3 +209,45 @@ DROP TABLE su_res;
 
 DROP TABLE su_q;
 DROP TABLE su_u;
+
+-- Part 8: aggregate-body scalar subqueries decorrelate to the aggregate over
+-- the LEFT-JOIN group (no choose / count<=1 gate).  count(*) is rewritten to
+-- count(Q.key) so an empty correlated group gives 0, not 1; max/sum give NULL
+-- on the empty group.
+CREATE TABLE ag_r(a int, k int);
+CREATE TABLE ag_q(k int, x int);
+INSERT INTO ag_r VALUES (10,1),(20,2),(30,3);
+INSERT INTO ag_q VALUES (1,100),(2,200),(2,201);
+SELECT add_provenance('ag_r');
+SELECT add_provenance('ag_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ag_r;
+  PERFORM set_prob(provsql, 0.5) FROM ag_q;
+END $$;
+
+-- count(*) value: k=1 -> 1, k=2 -> 2, k=3 -> 0 (empty group, not 1).
+CREATE TABLE ag_v AS
+  SELECT ag_r.a AS a, (SELECT count(*) FROM ag_q WHERE ag_q.k = ag_r.k) AS c
+  FROM ag_r;
+SELECT remove_provenance('ag_v');
+SELECT a, c FROM ag_v ORDER BY a;
+DROP TABLE ag_v;
+
+-- max(x) value: k=1 -> 100, k=2 -> 201, k=3 -> NULL (empty group).
+CREATE TABLE ag_v AS
+  SELECT ag_r.a AS a, (SELECT max(ag_q.x) FROM ag_q WHERE ag_q.k = ag_r.k) AS m
+  FROM ag_r;
+SELECT remove_provenance('ag_v');
+SELECT a, m FROM ag_v ORDER BY a;
+DROP TABLE ag_v;
+
+-- WHERE count(*) >= 2: only k=2 can reach 2; P(both matches present) = 0.25.
+CREATE TABLE ag_p AS
+  SELECT ag_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ag_r WHERE (SELECT count(*) FROM ag_q WHERE ag_q.k = ag_r.k) >= 2;
+SELECT remove_provenance('ag_p');
+SELECT a, p FROM ag_p ORDER BY a;
+DROP TABLE ag_p;
+
+DROP TABLE ag_q;
+DROP TABLE ag_r;
