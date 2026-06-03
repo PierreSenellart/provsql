@@ -149,6 +149,7 @@ typedef struct constants_t {
   Oid OID_UNNEST; ///< OID of the unnest(anyarray) FUNCTION
   Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
+  Oid OID_FUNCTION_CHOOSE; ///< OID of the choose(anyelement) aggregate (keeps the first non-NULL value); used to decorrelate scalar subqueries into a LEFT JOIN + GROUP BY
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
    *
    *  Installed by the @c 1.5.0--1.6.0 upgrade script.  Wraps its child

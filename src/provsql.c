@@ -4528,6 +4528,352 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
   return true;
 }
 
+/* -------------------------------------------------------------------------
+ * Scalar-subquery decorrelation
+ *
+ * A correlated scalar subquery (SELECT Q.x FROM Q WHERE corr), used as a
+ * top-level target-list entry of a query whose FROM is a single tracked base
+ * relation R, is decorrelated to a LEFT JOIN:
+ *
+ *   SELECT R.cols, choose(Q.x)
+ *   FROM   R LEFT JOIN Q ON corr
+ *   GROUP BY R.cols
+ *   HAVING count(Q.key) <= 1
+ *
+ * The corrected outer-join lowering (lower_outer_joins, which runs next)
+ * supplies the 0-match NULL row, choose() picks the single matched value, and
+ * the count<=1 HAVING gates out the (SQL-illegal) >=2-match worlds -- no
+ * gate-level special case.  Anything outside this shape returns false and the
+ * caller's "Subqueries not supported" error still fires.
+ * ------------------------------------------------------------------------- */
+
+/** @brief Mutator: lift a scalar subquery's body into the outer query level.
+ *  Var(level 0, varno @c q_old) -> Var(level 0, varno @c q_new) [the pulled-up
+ *  Q]; the correlated outer Var(level 1) -> Var(level 0). */
+typedef struct oj_decorr_ctx {
+  Index q_old;
+  Index q_new;
+} oj_decorr_ctx;
+
+static Node *oj_decorr_var_mut(Node *node, void *cx) {
+  oj_decorr_ctx *c = (oj_decorr_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 1) {
+      v = (Var *)copyObject(v);
+      v->varlevelsup = 0;
+      return (Node *)v;
+    }
+    if (v->varlevelsup == 0 && v->varno == c->q_old) {
+      v = (Var *)copyObject(v);
+      v->varno = c->q_new;
+#if PG_VERSION_NUM >= 130000
+      v->varnosyn = 0;
+      v->varattnosyn = 0;
+#endif
+      return (Node *)v;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_decorr_var_mut, cx);
+}
+
+/** @brief Walker: count SubLink nodes, and capture a Var referencing varno
+ *  @p target_varno (level 0) -- used to find a Q column for the count() key. */
+typedef struct oj_sublink_scan {
+  int n_sublinks;
+  Index target_varno; /* find any level-0 Var on this rel */
+  Var *found_var;
+} oj_sublink_scan;
+
+static bool oj_sublink_scan_walker(Node *node, void *cx) {
+  oj_sublink_scan *s = (oj_sublink_scan *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink))
+    s->n_sublinks++;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (s->found_var == NULL && v->varlevelsup == 0 &&
+        v->varno == s->target_varno)
+      s->found_var = v;
+  }
+  return expression_tree_walker(node, oj_sublink_scan_walker, cx);
+}
+
+/** @brief Build an @c Aggref for a single-argument aggregate. */
+static Aggref *oj_make_aggref(Oid aggfnoid, Oid aggtype, Oid argtype,
+                              Expr *arg) {
+  Aggref *agg = makeNode(Aggref);
+  TargetEntry *te = makeNode(TargetEntry);
+  te->resno = 1;
+  te->expr = arg;
+  agg->aggfnoid = aggfnoid;
+  agg->aggtype = aggtype;
+  agg->aggtranstype = InvalidOid;
+  agg->aggargtypes = list_make1_oid(argtype);
+  agg->args = list_make1(te);
+  agg->aggkind = AGGKIND_NORMAL;
+  agg->aggsplit = AGGSPLIT_SIMPLE;
+  agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+  agg->aggno = agg->aggtransno = -1;
+#endif
+  return agg;
+}
+
+/**
+ * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
+ *
+ * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
+ * relation R, with exactly one SubLink in the whole query, that SubLink being
+ * an @c EXPR_SUBLINK that is the direct expression of a target-list entry,
+ * whose body is @c "SELECT val FROM Q [WHERE corr]" over a single base relation
+ * Q referencing only Q (level 0) and R (level 1).  Returns @c true if the
+ * query was rewritten in place.
+ */
+static bool decorrelate_scalar_sublinks(const constants_t *constants,
+                                        Query *q) {
+  RangeTblRef *r_ref;
+  Index R_idx, Q_idx, join_idx;
+  RangeTblEntry *R_rte, *Q_rte_orig, *Q_copy, *jrte;
+  Query *sub;
+  SubLink *sl = NULL;
+  TargetEntry *sl_te = NULL;
+  Expr *valexpr;
+  Node *theta;
+  oj_cols Rc, Qc;
+  oj_decorr_ctx dctx;
+  oj_sublink_scan scan;
+  ListCell *lc;
+  int i;
+
+  if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
+    return false;
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks)
+    return false;
+  if (q->groupClause || q->groupingSets || q->hasAggs || q->distinctClause ||
+      q->setOperations || q->havingQual || q->hasWindowFuncs)
+    return false;
+  /* FROM must be a single base relation R. */
+  if (!q->jointree || list_length(q->jointree->fromlist) != 1)
+    return false;
+  if (!IsA(linitial(q->jointree->fromlist), RangeTblRef))
+    return false;
+  r_ref = (RangeTblRef *)linitial(q->jointree->fromlist);
+  R_idx = r_ref->rtindex;
+  R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+  if (R_rte->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, R_rte))
+    return false;
+
+  /* Exactly one SubLink, the direct expr of a target-list entry. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (IsA(te->expr, SubLink)) {
+      if (sl != NULL)
+        return false; /* more than one */
+      sl = (SubLink *)te->expr;
+      sl_te = te;
+    }
+  }
+  if (sl == NULL || sl->subLinkType != EXPR_SUBLINK ||
+      !IsA(sl->subselect, Query))
+    return false;
+
+  /* No other SubLink anywhere in the query (WHERE, the body, ...). */
+  scan.n_sublinks = 0;
+  scan.target_varno = 0;
+  scan.found_var = NULL;
+  oj_sublink_scan_walker((Node *)q->targetList, &scan);
+  if (q->jointree->quals)
+    oj_sublink_scan_walker(q->jointree->quals, &scan);
+  if (scan.n_sublinks != 1)
+    return false;
+
+  /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel. */
+  sub = (Query *)sl->subselect;
+  if (sub->commandType != CMD_SELECT || sub->hasAggs || sub->groupClause ||
+      sub->groupingSets || sub->distinctClause || sub->setOperations ||
+      sub->hasWindowFuncs || sub->hasSubLinks ||
+      list_length(sub->rtable) != 1 || list_length(sub->targetList) != 1)
+    return false;
+  if (!sub->jointree || list_length(sub->jointree->fromlist) != 1 ||
+      !IsA(linitial(sub->jointree->fromlist), RangeTblRef))
+    return false;
+  Q_rte_orig = list_nth_node(RangeTblEntry, sub->rtable, 0);
+  if (Q_rte_orig->rtekind != RTE_RELATION ||
+      !oj_rte_has_provsql(constants, Q_rte_orig))
+    return false;
+  /* The correlation must reference some Q column (so count() has a key that is
+   * NULL on the null-padded antijoin rows). */
+  scan.n_sublinks = 0;
+  scan.target_varno = 1; /* Q is at index 1 inside the body */
+  scan.found_var = NULL;
+  if (sub->jointree->quals)
+    oj_sublink_scan_walker(sub->jointree->quals, &scan);
+  if (scan.found_var == NULL)
+    return false;
+
+  /* ---- Commit: pull Q up, build the LEFT JOIN, choose() + GROUP BY + count.
+   * R stays at R_idx, Q is appended (Q_idx), join RTE appended (join_idx). ---*/
+  oj_collect_cols(constants, R_rte, &Rc);
+  oj_collect_cols(constants, Q_rte_orig, &Qc);
+
+  Q_copy = copyObject(Q_rte_orig);
+#if PG_VERSION_NUM >= 160000
+  if (Q_rte_orig->perminfoindex != 0) {
+    RTEPermissionInfo *pi =
+      getRTEPermissionInfo(sub->rteperminfos, Q_rte_orig);
+    q->rteperminfos = lappend(q->rteperminfos, copyObject(pi));
+    Q_copy->perminfoindex = list_length(q->rteperminfos);
+  }
+#endif
+  q->rtable = lappend(q->rtable, Q_copy);
+  Q_idx = list_length(q->rtable);
+
+  /* Move the body's Vars to the outer level: Q(level0,1) -> (level0, Q_idx);
+   * correlated R(level1) -> (level0). */
+  dctx.q_old = 1;
+  dctx.q_new = Q_idx;
+  theta = oj_decorr_var_mut(copyObject(sub->jointree->quals), &dctx);
+  valexpr = (Expr *)oj_decorr_var_mut(
+    copyObject((Node *)((TargetEntry *)linitial(sub->targetList))->expr),
+    &dctx);
+
+  /* Build the synthetic join RTE (eref / joinaliasvars / left/right cols), the
+   * same bookkeeping the deparser needs as in oj_build_join_query. */
+  {
+    List *av = NIL, *lcols = NIL, *rcols = NIL, *cn = NIL;
+    jrte = makeNode(RangeTblEntry);
+    for (i = 0; i < Rc.n; ++i) {
+      av = lappend(av, makeVar(R_idx, Rc.attno[i], Rc.type[i], Rc.typmod[i],
+                               Rc.coll[i], 0));
+      lcols = lappend_int(lcols, Rc.attno[i]);
+      rcols = lappend_int(rcols, 0);
+      cn = lappend(cn, makeString(pstrdup(Rc.name[i])));
+    }
+    for (i = 0; i < Qc.n; ++i) {
+      av = lappend(av, makeVar(Q_idx, Qc.attno[i], Qc.type[i], Qc.typmod[i],
+                               Qc.coll[i], 0));
+      lcols = lappend_int(lcols, 0);
+      rcols = lappend_int(rcols, Qc.attno[i]);
+      cn = lappend(cn, makeString(pstrdup(Qc.name[i])));
+    }
+    jrte->rtekind = RTE_JOIN;
+    jrte->jointype = JOIN_LEFT;
+    jrte->alias = NULL;
+    jrte->eref = makeAlias("unnamed_join", cn);
+    jrte->joinaliasvars = av;
+#if PG_VERSION_NUM >= 130000
+    jrte->joinleftcols = lcols;
+    jrte->joinrightcols = rcols;
+    jrte->joinmergedcols = 0;
+#endif
+    jrte->inFromCl = true;
+    q->rtable = lappend(q->rtable, jrte);
+    join_idx = list_length(q->rtable);
+  }
+
+  {
+    JoinExpr *je = makeNode(JoinExpr);
+    RangeTblRef *lr = makeNode(RangeTblRef), *rr = makeNode(RangeTblRef);
+    lr->rtindex = R_idx;
+    rr->rtindex = Q_idx;
+    je->jointype = JOIN_LEFT;
+    je->larg = (Node *)lr;
+    je->rarg = (Node *)rr;
+    je->quals = theta;
+    je->isNatural = false;
+    je->usingClause = NIL;
+    je->rtindex = join_idx;
+    q->jointree->fromlist = list_make1(je);
+    /* Any pre-existing outer WHERE (over R, level 0) stays in jointree->quals.*/
+  }
+
+  /* Replace the SubLink target entry with choose(val). */
+  sl_te->expr = (Expr *)oj_make_aggref(
+    constants->OID_FUNCTION_CHOOSE, exprType((Node *)valexpr),
+    exprType((Node *)valexpr), valexpr);
+
+  /* GROUP BY every R user column: each needs a target-list entry carrying a
+   * ressortgroupref plus a SortGroupClause. */
+  {
+    int sgref = 0;
+    /* Highest existing ressortgroupref, so new ones do not collide. */
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->ressortgroupref > sgref)
+        sgref = te->ressortgroupref;
+    }
+    for (i = 0; i < Rc.n; ++i) {
+      TargetEntry *gte = NULL;
+      SortGroupClause *sgc;
+      ListCell *lc2;
+
+      /* Reuse an existing target entry that already projects this R column. */
+      foreach (lc2, q->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc2);
+        if (IsA(te->expr, Var)) {
+          Var *v = (Var *)te->expr;
+          if (v->varlevelsup == 0 && v->varno == R_idx &&
+              v->varattno == Rc.attno[i]) {
+            gte = te;
+            break;
+          }
+        }
+      }
+      if (gte == NULL) {
+        Var *v = makeVar(R_idx, Rc.attno[i], Rc.type[i], Rc.typmod[i],
+                         Rc.coll[i], 0);
+        gte = makeTargetEntry((Expr *)v, list_length(q->targetList) + 1,
+                              pstrdup(Rc.name[i]), true /* resjunk */);
+        q->targetList = lappend(q->targetList, gte);
+      }
+      if (gte->ressortgroupref == 0)
+        gte->ressortgroupref = ++sgref;
+      sgc = makeNode(SortGroupClause);
+      sgc->tleSortGroupRef = gte->ressortgroupref;
+      get_sort_group_operators(Rc.type[i], false, true, false, &sgc->sortop,
+                               &sgc->eqop, NULL, &sgc->hashable);
+      q->groupClause = lappend(q->groupClause, sgc);
+    }
+  }
+
+  /* HAVING count(Q.key) <= 1, with Q.key a Q column from the correlation
+   * (NULL on the null-padded antijoin rows). */
+  {
+    Var *qkey = (Var *)copyObject(scan.found_var);
+    Aggref *cnt;
+    OpExpr *le = makeNode(OpExpr);
+    Oid le_op;
+
+    qkey->varno = Q_idx;
+#if PG_VERSION_NUM >= 130000
+    qkey->varnosyn = 0;
+    qkey->varattnosyn = 0;
+#endif
+    cnt = oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype, (Expr *)qkey);
+
+    le_op = OpernameGetOprid(list_make1(makeString("<=")), INT8OID, INT8OID);
+    le->opno = le_op;
+    le->opfuncid = get_opcode(le_op);
+    le->opresulttype = BOOLOID;
+    le->opcollid = InvalidOid;
+    le->inputcollid = InvalidOid;
+    le->args = list_make2(
+      cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                     Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+    le->location = -1;
+    q->havingQual = (Node *)le;
+  }
+
+  q->hasAggs = true;
+  q->hasSubLinks = false;
+  return true;
+}
+
 /**
  * @brief Group the right-hand arm of a set difference by all its columns so
  *        the per-tuple right provenances ⊕-combine before the monus.
@@ -6618,6 +6964,13 @@ static Query *process_query(const constants_t *constants, Query *q,
    * runs SPI and creates temp tables at plan time. */
   if (provsql_active)
     inline_ctes(q);
+
+  /* Decorrelate a top-level scalar subquery into a LEFT JOIN + choose() +
+   * GROUP BY + count<=1 HAVING.  Runs before lower_outer_joins so the LEFT JOIN
+   * it produces is lowered with correct outer-join provenance, and before the
+   * "Subqueries not supported" guard further down. */
+  if (provsql_active)
+    decorrelate_scalar_sublinks(constants, q);
 
   /* Lower a top-level outer JOIN (LEFT / RIGHT / FULL) of two base relations
    * into the UNION-ALL of its matched and null-padded antijoin arms, so the

@@ -466,6 +466,11 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD =
     get_provsql_func_oid("rv_aggregate_semimod");
 
+  /* choose(anyelement): keeps the first non-NULL value of a group.  Used by
+   * the scalar-subquery decorrelation to pick the single matched value.
+   * Optional lookup (0 on schemas predating it). */
+  constants.OID_FUNCTION_CHOOSE = get_provsql_func_oid("choose");
+
   /* assume_boolean is installed by the 1.6.0 upgrade script.  Treat
    * its absence as a soft signal: on older schemas the safe-query
    * rewriter (gated behind provsql.boolean_provenance) refuses to
