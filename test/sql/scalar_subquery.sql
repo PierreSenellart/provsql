@@ -472,3 +472,64 @@ DROP TABLE uc3;
 
 DROP TABLE uc_q;
 DROP TABLE uc_r;
+
+-- Part 14: UNcorrelated EXISTS and uncorrelated aggregate comparisons in WHERE.
+-- The predicate is pushed into a one-row HAVING-gated subquery cross-joined into
+-- the FROM, so the conjunct becomes R (x) [predicate].  ProvSQL's HAVING
+-- annotates (the aggregate row is always materialised, gated), so no
+-- actual-instance row is needed.  Faithful to ProvSQL aggregates: the empty-Q
+-- world drops, so NOT EXISTS (satisfied only by the empty group) stays rejected.
+CREATE TABLE ue_r(a int);
+CREATE TABLE ue_q(x int);
+INSERT INTO ue_r VALUES (10),(20);
+INSERT INTO ue_q VALUES (100),(200),(201);
+SELECT add_provenance('ue_r');
+SELECT add_provenance('ue_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ue_r;
+  PERFORM set_prob(provsql, 0.5) FROM ue_q;
+END $$;
+
+-- EXISTS: row exists iff >=1 of the three ue_q rows present, p = 1 - 0.5^3 = 0.875.
+CREATE TABLE ue1 AS
+  SELECT ue_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ue_r WHERE EXISTS (SELECT 1 FROM ue_q);
+SELECT remove_provenance('ue1');
+SELECT a, p FROM ue1 ORDER BY a;
+DROP TABLE ue1;
+
+-- EXISTS with a body filter: P(>=1 of {200,201}) = 1 - 0.25 = 0.75.
+CREATE TABLE ue2 AS
+  SELECT ue_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ue_r WHERE EXISTS (SELECT 1 FROM ue_q WHERE ue_q.x >= 200);
+SELECT remove_provenance('ue2');
+SELECT a, p FROM ue2 ORDER BY a;
+DROP TABLE ue2;
+
+-- count(*) >= 2: P(>=2 of 3 present) = 0.5.
+CREATE TABLE ue3 AS
+  SELECT ue_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ue_r WHERE (SELECT count(*) FROM ue_q) >= 2;
+SELECT remove_provenance('ue3');
+SELECT a, p FROM ue3 ORDER BY a;
+DROP TABLE ue3;
+
+-- count(*) > 5 is unsatisfiable (only 3 rows): every row is gated to probability
+-- 0 (the rows are still materialised, annotated, as ProvSQL's HAVING does).
+CREATE TABLE ue4 AS
+  SELECT ue_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ue_r WHERE (SELECT count(*) FROM ue_q) > 5;
+SELECT remove_provenance('ue4');
+SELECT a, p FROM ue4 ORDER BY a;
+DROP TABLE ue4;
+
+-- max(x) > 150: P(>=1 of {200,201} present) = 0.75.
+CREATE TABLE ue5 AS
+  SELECT ue_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ue_r WHERE (SELECT max(ue_q.x) FROM ue_q) > 150;
+SELECT remove_provenance('ue5');
+SELECT a, p FROM ue5 ORDER BY a;
+DROP TABLE ue5;
+
+DROP TABLE ue_q;
+DROP TABLE ue_r;

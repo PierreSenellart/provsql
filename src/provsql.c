@@ -5484,6 +5484,183 @@ static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
   return D;
 }
 
+/** @brief Is @p sub an uncorrelated clean SELECT over tracked base relations (a
+ *  comma-join is fine)?  The targetList is not inspected (callers replace it). */
+static bool oj_uncorrelated_body_over_tracked(const constants_t *constants,
+                                              Query *sub) {
+  ListCell *lc;
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT)
+    return false;
+  if (sub->groupClause || sub->groupingSets || sub->distinctClause ||
+      sub->setOperations || sub->hasWindowFuncs || sub->hasSubLinks ||
+      sub->limitCount || sub->limitOffset || sub->cteList)
+    return false;
+  if (!sub->jointree || sub->jointree->fromlist == NIL)
+    return false;
+  if (contain_vars_of_level((Node *)sub->targetList, 1) ||
+      (sub->jointree->quals && contain_vars_of_level(sub->jointree->quals, 1)))
+    return false; /* correlated */
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return false;
+  }
+  foreach (lc, sub->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false;
+  }
+  return true;
+}
+
+/** @brief A fresh @c count(*) @c Aggref (returns @c int8). */
+static Aggref *oj_make_count_star(void) {
+  Aggref *cnt = makeNode(Aggref);
+  cnt->aggfnoid = F_COUNT_;
+  cnt->aggtype = INT8OID;
+  cnt->aggtranstype = InvalidOid;
+  cnt->aggargtypes = NIL;
+  cnt->args = NIL;
+  cnt->aggstar = true;
+  cnt->aggkind = AGGKIND_NORMAL;
+  cnt->aggsplit = AGGSPLIT_SIMPLE;
+  cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+  cnt->aggno = cnt->aggtransno = -1;
+#endif
+  return cnt;
+}
+
+/** @brief Build the one-row @c "SELECT 1 FROM <body FROM> HAVING <pred>" gated
+ *  subquery: @p body supplies the FROM (and any uncorrelated WHERE), @p pred the
+ *  aggregate comparison that becomes its provenance. */
+static Query *oj_having_gated_subquery(Query *body, Node *pred) {
+  Query *D = (Query *)copyObject(body);
+  D->targetList = list_make1(makeTargetEntry(
+    (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32), Int32GetDatum(1),
+                      false, true),
+    1, pstrdup("exists"), false));
+  D->havingQual = pred;
+  D->hasAggs = true;
+  return D;
+}
+
+/**
+ * @brief Handle UNcorrelated @c EXISTS and uncorrelated aggregate comparisons in
+ *        WHERE by cross-joining a HAVING-gated one-row subquery.
+ *
+ * @c EXISTS (SELECT … FROM Q) -> @c "SELECT 1 FROM Q HAVING count(*) >= 1";
+ * @c "(SELECT agg(..) FROM Q) OP v" (v not referencing the outer) ->
+ * @c "SELECT 1 FROM Q HAVING agg(..) OP v".  The gated @c D is appended to the
+ * FROM, so the conjunct's truth becomes @c "R ⊗ [predicate]" -- ProvSQL's HAVING
+ * annotates (the one aggregate row is always materialised, gated), so no
+ * actual-instance row is needed.  Faithful to ProvSQL aggregates: the empty-Q
+ * world drops (so @c NOT @c EXISTS, satisfied only by the empty group, is left
+ * rejected).  Correlated predicates are handled by @c rewrite_predicate_sublinks.
+ */
+static bool move_uncorrelated_where_predicates(const constants_t *constants,
+                                               Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals)
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    Query *D = NULL;
+
+    if (IsA(c, SubLink) && ((SubLink *)c)->subLinkType == EXISTS_SUBLINK &&
+        IsA(((SubLink *)c)->subselect, Query) &&
+        oj_uncorrelated_body_over_tracked(constants,
+                                          (Query *)((SubLink *)c)->subselect)) {
+      /* EXISTS -> HAVING count(*) >= 1. */
+      OpExpr *ge = makeNode(OpExpr);
+      Oid o = OpernameGetOprid(list_make1(makeString(">=")), INT8OID, INT8OID);
+      ge->opno = o;
+      ge->opfuncid = get_opcode(o);
+      ge->opresulttype = BOOLOID;
+      ge->opcollid = InvalidOid;
+      ge->inputcollid = InvalidOid;
+      ge->args = list_make2(oj_make_count_star(),
+                            makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                      Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+      ge->location = -1;
+      D = oj_having_gated_subquery((Query *)((SubLink *)c)->subselect,
+                                   (Node *)ge);
+    } else if (IsA(c, OpExpr) && list_length(((OpExpr *)c)->args) == 2) {
+      OpExpr *op = (OpExpr *)c;
+      Node *l = (Node *)linitial(op->args), *r = (Node *)lsecond(op->args);
+      SubLink *sl = NULL;
+      Node *val = NULL;
+      bool sublink_left = false;
+
+      if (IsA(l, SubLink)) {
+        sl = (SubLink *)l;
+        val = r;
+        sublink_left = true;
+      } else if (IsA(r, SubLink)) {
+        sl = (SubLink *)r;
+        val = l;
+      }
+      if (sl != NULL && sl->subLinkType == EXPR_SUBLINK &&
+          IsA(sl->subselect, Query)) {
+        Query *sub = (Query *)sl->subselect;
+        if (sub->hasAggs && list_length(sub->targetList) == 1 &&
+            IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref) &&
+            oj_uncorrelated_body_over_tracked(constants, sub) &&
+            !contain_vars_of_level(val, 0)) {
+          /* (agg) OP v -> HAVING agg OP v, the aggregate copied from the body. */
+          Node *agg =
+            copyObject((Node *)((TargetEntry *)linitial(sub->targetList))->expr);
+          OpExpr *pred = (OpExpr *)copyObject((Node *)op);
+          pred->args = sublink_left ? list_make2(agg, copyObject(val))
+                                    : list_make2(copyObject(val), agg);
+          D = oj_having_gated_subquery(sub, (Node *)pred);
+        }
+      }
+    }
+
+    if (D != NULL) {
+      RangeTblEntry *d_rte = oj_make_subquery_rte(D);
+      RangeTblRef *rtr = makeNode(RangeTblRef);
+      q->rtable = lappend(q->rtable, d_rte);
+      rtr->rtindex = list_length(q->rtable);
+      q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+      changed = true; /* the conjunct is now carried by D's HAVING gate */
+    } else {
+      newconjs = lappend(newconjs, c);
+    }
+  }
+
+  if (changed) {
+    oj_sublink_scan scan;
+    q->jointree->quals =
+      (newconjs == NIL)
+        ? NULL
+        : (list_length(newconjs) == 1 ? (Node *)linitial(newconjs)
+                                      : (Node *)makeBoolExpr(AND_EXPR, newconjs,
+                                                             -1));
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 0;
+    scan.found_var = NULL;
+    oj_sublink_scan_walker((Node *)q->targetList, &scan);
+    if (q->jointree->quals)
+      oj_sublink_scan_walker(q->jointree->quals, &scan);
+    if (scan.n_sublinks == 0)
+      q->hasSubLinks = false;
+  }
+  return changed;
+}
+
 /**
  * @brief Move uncorrelated scalar subqueries that are direct target-list entries
  *        into a cross-joined derived aggregate in the outer FROM.
@@ -8012,6 +8189,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active) {
     rewrite_array_sublinks(constants, q);
     rewrite_predicate_sublinks(constants, q);
+    move_uncorrelated_where_predicates(constants, q);
     move_uncorrelated_sublinks_to_from(constants, q);
     decorrelate_scalar_sublinks(constants, q);
   }

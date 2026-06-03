@@ -21,9 +21,12 @@ planner-hook rewrites in `src/provsql.c` (regression coverage in
   `FILTER` dropping the null-padded row -- `rewrite_array_sublinks`;
 - **multi-table bodies** `(SELECT v FROM Q1, Q2 WHERE …)`, collapsed into a
   derived cross-product subquery -- `oj_wrap_body_from`;
-- **uncorrelated** subqueries, moved into a cross-joined derived aggregate in the
-  outer FROM (value bodies as `choose(v)` + `HAVING count(*) <= 1`) --
-  `move_uncorrelated_sublinks_to_from`;
+- **uncorrelated** target-list subqueries, moved into a cross-joined derived
+  aggregate in the outer FROM (value bodies as `choose(v)` + `HAVING count(*) <=
+  1`) -- `move_uncorrelated_sublinks_to_from`;
+- **uncorrelated `EXISTS`** and **uncorrelated aggregate comparisons in WHERE**
+  (`(SELECT count/max/… FROM Q) OP const`), pushed into a HAVING-gated one-row
+  subquery cross-joined into the FROM -- `move_uncorrelated_where_predicates`;
 - a **HAVING comparison of an aggregate against a grouped column** (per-group
   variable RHS), wrapped like a constant in `having_OpExpr_to_provenance_cmp`;
 - a multi-table / auto-wrapped outer FROM, and an untracked outer relation.
@@ -40,7 +43,7 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 |---|---|---|---|
 | `op ALL` / `<> ALL` (universal) | `… WHERE R.k <> ALL (SELECT Q.k FROM Q)` | Only `ANY` (`IN`) is lowered; `ALL` is a universal, not a semijoin | yes -- `<> ALL` is the antijoin dual of `IN`, lowerable to `count(matching) = 0` |
 | Multi-column / row `IN` | `… WHERE (R.k, R.a) IN (SELECT Q.k, Q.x FROM Q)` | Row-comparison testexpr is not a single `=` `OpExpr` | yes -- split the row `=` into per-column conjuncts |
-| Uncorrelated `EXISTS` | `… WHERE EXISTS (SELECT 1 FROM Q)` | `rewrite_predicate_sublinks` requires a correlation key; an `EXISTS_SUBLINK` is not an `EXPR_SUBLINK` for the FROM-move | yes -- `(SELECT count(*) FROM Q) >= 1` is uncorrelated and movable to FROM |
+| Uncorrelated `NOT EXISTS` | `… WHERE NOT EXISTS (SELECT 1 FROM Q)` | Satisfied only by the empty `Q` group, which ProvSQL's aggregate semantics drop (gate_zero); a HAVING-gated `count(*) = 0` would give a wrong p=0 | hard -- needs the antijoin's 0-match row without a correlation to LEFT-JOIN on |
 | `DISTINCT` body | `(SELECT DISTINCT Q.x FROM Q WHERE Q.k=R.k)` | `distinctClause` would change multiplicity under the regroup | maybe -- needs distinct-aware grouping |
 | `LIMIT` / `OFFSET` body | `(SELECT Q.x FROM Q WHERE Q.k=R.k LIMIT 1)` | Bounded, order-dependent subset | no -- order-dependent, not a set operation |
 | `GROUP BY` body | `(SELECT sum(Q.x) FROM Q WHERE Q.k=R.k GROUP BY Q.k)` | Body grouping conflicts with the decorrelation's own `GROUP BY R.*` | hard |
@@ -48,7 +51,7 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 | Two or more correlated sublinks | `SELECT R.a, (SELECT … WHERE Q.k=R.k) a1, (SELECT … WHERE Q.k=R.k) a2 FROM R` | `decorrelate_scalar_sublinks` handles exactly one sublink (the uncorrelated FROM-move already handles several) | yes -- iterate the correlated decorrelation per sublink |
 | Sublink nested in a target-list expression | `SELECT R.a, (SELECT Q.x WHERE Q.k=R.k) + 1 FROM R` | Sublink is not the direct target entry; for an aggregate result the arithmetic would coerce the `agg_token` to a scalar and drop its provenance | partly -- safe only where the `agg_token` survives |
 | Sublink nested in a WHERE expression | `… WHERE (SELECT Q.x WHERE Q.k=R.k) + 1 > 50` | Comparison is not directly on the sublink (arithmetic in between) | partly |
-| Uncorrelated sublink outside a direct target entry | `SELECT R.a FROM R WHERE (SELECT count(*) FROM Q) > 5` | The FROM-move only fires on a direct target-list entry, to keep the `agg_token` from being coerced (provenance loss) | yes -- an `agg_token`-aware comparison in WHERE |
+| Uncorrelated **value**-body comparison in WHERE | `… WHERE (SELECT Q.x FROM Q) > 5` | The aggregate form (`count`/`max`/…) is handled; a value body would need `choose(x)` + `count(*) <= 1` baked into the gated subquery's HAVING | yes -- extend `move_uncorrelated_where_predicates` to value bodies |
 | Body not over a tracked base relation | `… WHERE EXISTS (SELECT 1 FROM (SELECT 1) z WHERE R.k>0)` | Inner relation untracked / not a base relation | n/a |
 
 ## Priorities
@@ -57,9 +60,8 @@ The genuinely-tractable next steps, roughly in value order:
 
 1. **`<> ALL` / `NOT IN`-via-`ALL`** and **multi-column `IN`** -- both reuse the
    existing semijoin/antijoin lowering, just widening `extract_in_corr`.
-2. **Uncorrelated `EXISTS`** and **uncorrelated sublink in WHERE** -- relax
-   `rewrite_predicate_sublinks` / the FROM-move to the uncorrelated count form,
-   then an `agg_token`-aware WHERE comparison.
+2. **Uncorrelated value-body comparison in WHERE** -- extend
+   `move_uncorrelated_where_predicates` to `choose(x)` + `count(*) <= 1`.
 3. **Multiple correlated sublinks** -- loop `decorrelate_scalar_sublinks`.
 
 `DISTINCT` / `GROUP BY` / `ORDER BY` bodies and `LIMIT` are deferred: each needs
