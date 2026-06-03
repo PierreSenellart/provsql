@@ -2546,7 +2546,14 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
     }
 
     {
-      /* One subquery RTE per outer query */
+      /* One subquery RTE per outer query.  They are appended to q->rtable, so
+       * their range-table indices start at the current rtable length -- which is
+       * NOT the from-list length when the FROM contains a JoinExpr (an outer
+       * join is one from-list item but several rtable slots).  Index everything
+       * off rtable_base, or the RangeTblRefs / Vars below would point at the base
+       * relations the join spans (e.g. "rel 2 already exists" for the join's
+       * right arm). */
+      int rtable_base = list_length(q->rtable);
       int i = 0;
       foreach (lc, outer_queries) {
         Query *oq = lfirst(lc);
@@ -2580,10 +2587,9 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       {
         FromExpr *jt = q->jointree;
         List *from_list = jt->fromlist;
-        unsigned fll = list_length(from_list);
         List *where_args = NIL;
 
-        for (i = fll+1; i <= fll+n_aggs; i++) {
+        for (i = rtable_base + 1; i <= rtable_base + n_aggs; i++) {
           RangeTblRef *rtr = makeNode(RangeTblRef);
           ListCell *lc2;
           unsigned j=0;
@@ -2642,7 +2648,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       /* Build final target list in original column order.
        * DISTINCT agg i → Var(i+1, 1);  GROUP BY col j → Var(1, 2+j). */
       {
-        int agg_idx   = list_length(q->jointree->fromlist) - n_aggs + 1;
+        int agg_idx   = rtable_base + 1;
         ListCell *lc2;
 
         foreach (lc2, q->targetList) {
@@ -2665,8 +2671,8 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
        * order collect_having_distinct_walker visited them. */
       if (n_having > 0) {
         having_replace_ctx hrc;
-        hrc.next_rtindex =
-          list_length(q->jointree->fromlist) - n_having + 1;
+        /* HAVING outers are appended after the target-list ones. */
+        hrc.next_rtindex = rtable_base + (n_aggs - n_having) + 1;
         q->havingQual = replace_having_distinct_mutator(q->havingQual, &hrc);
       }
 
