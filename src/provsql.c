@@ -3766,6 +3766,778 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
   return true;
 }
 
+/* -------------------------------------------------------------------------
+ * Outer-join lowering (LEFT JOIN)
+ *
+ * ProvSQL builds provenance by annotating the all-present instance, which is
+ * sound for monotone SPJU but WRONG for the non-monotone outer join: the
+ * null-padded row (r, NULL) of a LEFT JOIN appears only in the *smaller*
+ * worlds where the right side has no match for r, so for a left row that does
+ * match in the actual instance ProvSQL has nothing to annotate.  The
+ * RTE_JOIN arm of process_query historically treats LEFT/FULL/RIGHT exactly
+ * like INNER, emitting only the matched branch.
+ *
+ * The fix is a structural transform applied in the planner hook before
+ * provenance discovery.  R ⟕_θ S is rewritten as
+ *
+ *     ( SELECT R.cols, S.cols FROM R JOIN S ON θ )            -- matched (⊗)
+ *     UNION ALL                                               -- ⊎ (plus)
+ *     ( SELECT R.cols, NULL,…,NULL
+ *       FROM ( SELECT R.cols FROM R
+ *              EXCEPT ALL                                     -- ProvSQL's −
+ *              SELECT R.cols FROM R JOIN S ON θ ) )           --  R(r)⊗(1⊖⊕match)
+ *
+ * Both UNION ALL and EXCEPT ALL → − are native (process_set_operation_union /
+ * transform_except_into_join), so this code is pure parse-tree construction
+ * plus an outer Var remap: the recursive process_query passes over the
+ * constructed subqueries do all the provenance work.  The antijoin provenance
+ * R(r) ⊖ ⊕_match (R(r)⊗S(s)) that ProvSQL's EXCEPT (NOT-IN semantics) builds
+ * equals R(r) ⊗ (1 ⊖ ⊕_match S(s)), exactly the paper's null-padded branch.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Rename the @c provsql column in @p rel's @c eref so a later
+ *        @c get_provenance_attributes pass does not re-detect @p rel as a
+ *        provenance source.
+ *
+ * Used when a relation's provenance has already been captured elsewhere -- by
+ * an explode-style subquery (the aggregation rewrite) or, in the outer-join
+ * lowering, by the replacement UNION subquery, leaving the original base
+ * relation orphaned in the range table.  Renaming only the (unreferenced)
+ * @c eref entry is enough: detection matches on the @c eref colname.
+ */
+static void hide_provsql_colname(RangeTblEntry *rel) {
+  ListCell *lc;
+  foreach (lc, rel->eref->colnames) {
+    if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME)) {
+      lfirst(lc) = makeString(pstrdup("_provsql_inner"));
+      break;
+    }
+  }
+}
+
+/** @brief Per-relation user-column descriptor for the outer-join lowering. */
+typedef struct oj_cols {
+  int n;             ///< number of user (non-provsql, non-dropped) columns
+  AttrNumber *attno; ///< original attribute number in the base relation
+  Oid *type;         ///< column type OID
+  int32 *typmod;     ///< column typmod
+  Oid *coll;         ///< column collation OID
+  char **name;       ///< column name
+} oj_cols;
+
+/** @brief Collect the user columns (skipping @c provsql and dropped columns)
+ *         of a base-relation RTE. */
+static void oj_collect_cols(const constants_t *constants, RangeTblEntry *rel,
+                            oj_cols *out) {
+  ListCell *lc;
+  AttrNumber attid = 0;
+  int cap = list_length(rel->eref->colnames);
+
+  out->attno  = (AttrNumber *)palloc(cap * sizeof(AttrNumber));
+  out->type   = (Oid *)palloc(cap * sizeof(Oid));
+  out->typmod = (int32 *)palloc(cap * sizeof(int32));
+  out->coll   = (Oid *)palloc(cap * sizeof(Oid));
+  out->name   = (char **)palloc(cap * sizeof(char *));
+  out->n = 0;
+
+  foreach (lc, rel->eref->colnames) {
+    const char *v = strVal(lfirst(lc));
+    Oid t;
+    int32 tm;
+    Oid c;
+    ++attid;
+    if (v[0] == '\0') /* dropped column */
+      continue;
+    if (!strcmp(v, PROVSQL_COLUMN_NAME))
+      continue;
+    get_atttypetypmodcoll(rel->relid, attid, &t, &tm, &c);
+    out->attno[out->n]  = attid;
+    out->type[out->n]   = t;
+    out->typmod[out->n] = tm;
+    out->coll[out->n]   = c;
+    out->name[out->n]   = pstrdup(v);
+    ++out->n;
+  }
+}
+
+/** @brief True if @p rel exposes a @c provsql UUID column. */
+static bool oj_rte_has_provsql(const constants_t *constants,
+                               RangeTblEntry *rel) {
+  ListCell *lc;
+  AttrNumber attid = 0;
+  foreach (lc, rel->eref->colnames) {
+    ++attid;
+    if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) &&
+        get_atttype(rel->relid, attid) == constants->OID_TYPE_UUID)
+      return true;
+  }
+  return false;
+}
+
+/** @brief Wrap a constructed @c Query as an @c RTE_SUBQUERY, building its
+ *         @c eref->colnames from the (non-junk) target list. */
+static RangeTblEntry *oj_make_subquery_rte(Query *sub) {
+  RangeTblEntry *rte = makeNode(RangeTblEntry);
+  List *colnames = NIL;
+  ListCell *lc;
+
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    colnames = lappend(colnames,
+                       makeString(pstrdup(te->resname ? te->resname
+                                                      : "?column?")));
+  }
+
+  rte->rtekind  = RTE_SUBQUERY;
+  rte->subquery = sub;
+  rte->alias    = NULL;
+  rte->eref     = makeAlias("unnamed_subquery", colnames);
+  rte->lateral  = false;
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = 0;
+#endif
+  return rte;
+}
+
+/** @brief Copy a base-relation RTE into the range table of subquery @p sub,
+ *         carrying its permission info (PG 16+). */
+static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
+                                  RangeTblEntry *orig) {
+  RangeTblEntry *c = copyObject(orig);
+#if PG_VERSION_NUM >= 160000
+  if (orig->perminfoindex != 0) {
+    RTEPermissionInfo *pi = getRTEPermissionInfo(outer->rteperminfos, orig);
+    sub->rteperminfos = lappend(sub->rteperminfos, copyObject(pi));
+    c->perminfoindex  = list_length(sub->rteperminfos);
+  } else {
+    c->perminfoindex = 0;
+  }
+#else
+  (void)outer;
+  (void)sub;
+#endif
+  return c;
+}
+
+/** @brief Var-renumber context: map @c varno @c from[i] → @c to[i]. */
+typedef struct oj_renum_ctx {
+  int npairs;
+  Index from[2];
+  Index to[2];
+} oj_renum_ctx;
+
+static Node *oj_renum_mut(Node *node, void *cx) {
+  oj_renum_ctx *c = (oj_renum_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0) {
+      int i;
+      for (i = 0; i < c->npairs; ++i)
+        if (v->varno == c->from[i]) {
+          v = (Var *)copyObject(v);
+          v->varno = c->to[i];
+          v->varnullingrels = NULL;
+#if PG_VERSION_NUM >= 130000
+          v->varnosyn = 0;
+          v->varattnosyn = 0;
+#endif
+          return (Node *)v;
+        }
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_renum_mut, cx);
+}
+
+/** @brief Build the inner-join scan subquery
+ *         @c "SELECT R.cols[, S.cols] FROM R JOIN S ON θ".
+ *
+ *  R is copied at index 1, S at index 2, the synthetic join RTE at index 3.
+ *  θ is copied and its base-relation varnos remapped (R_idx→1, S_idx→2). */
+static Query *oj_build_join_query(const constants_t *constants, Query *outer,
+                                  RangeTblEntry *R, RangeTblEntry *S,
+                                  Index R_idx, Index S_idx, oj_cols *Rc,
+                                  oj_cols *Sc, Node *theta, bool select_s) {
+  Query *sub = makeNode(Query);
+  RangeTblEntry *Rcopy, *Scopy, *jrte = makeNode(RangeTblEntry);
+  JoinExpr *je = makeNode(JoinExpr);
+  RangeTblRef *lr = makeNode(RangeTblRef), *rr = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL, *av = NIL, *lcols = NIL, *rcols = NIL, *cn = NIL;
+  Node *theta2;
+  oj_renum_ctx rctx;
+  int i;
+
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  Rcopy = oj_copy_rel(outer, sub, R);
+  Scopy = oj_copy_rel(outer, sub, S);
+
+  /* Synthetic join RTE: eref / joinaliasvars / joinleftcols / joinrightcols
+   * kept consistent so the ruleutils deparser does not segfault. */
+  for (i = 0; i < Rc->n; ++i) {
+    av = lappend(av, makeVar(1, Rc->attno[i], Rc->type[i], Rc->typmod[i],
+                             Rc->coll[i], 0));
+    lcols = lappend_int(lcols, Rc->attno[i]);
+    rcols = lappend_int(rcols, 0);
+    cn = lappend(cn, makeString(pstrdup(Rc->name[i])));
+  }
+  for (i = 0; i < Sc->n; ++i) {
+    av = lappend(av, makeVar(2, Sc->attno[i], Sc->type[i], Sc->typmod[i],
+                             Sc->coll[i], 0));
+    lcols = lappend_int(lcols, 0);
+    rcols = lappend_int(rcols, Sc->attno[i]);
+    cn = lappend(cn, makeString(pstrdup(Sc->name[i])));
+  }
+  jrte->rtekind = RTE_JOIN;
+  jrte->jointype = JOIN_INNER;
+  jrte->alias = NULL;
+  jrte->eref = makeAlias("unnamed_join", cn);
+  jrte->joinaliasvars = av;
+#if PG_VERSION_NUM >= 130000
+  jrte->joinleftcols = lcols;
+  jrte->joinrightcols = rcols;
+  jrte->joinmergedcols = 0;
+#endif
+  jrte->inFromCl = true;
+
+  sub->rtable = list_make3(Rcopy, Scopy, jrte);
+
+  rctx.npairs = 2;
+  rctx.from[0] = R_idx; rctx.to[0] = 1;
+  rctx.from[1] = S_idx; rctx.to[1] = 2;
+  theta2 = oj_renum_mut(copyObject(theta), &rctx);
+
+  lr->rtindex = 1;
+  rr->rtindex = 2;
+  je->jointype = JOIN_INNER;
+  je->larg = (Node *)lr;
+  je->rarg = (Node *)rr;
+  je->quals = theta2;
+  je->isNatural = false;
+  je->usingClause = NIL;
+  je->rtindex = 3;
+  fe->fromlist = list_make1(je);
+  sub->jointree = fe;
+
+  for (i = 0; i < Rc->n; ++i) {
+    Var *v = makeVar(1, Rc->attno[i], Rc->type[i], Rc->typmod[i], Rc->coll[i],
+                     0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, list_length(tl) + 1,
+                                     pstrdup(Rc->name[i]), false));
+  }
+  if (select_s)
+    for (i = 0; i < Sc->n; ++i) {
+      Var *v = makeVar(2, Sc->attno[i], Sc->type[i], Sc->typmod[i],
+                       Sc->coll[i], 0);
+      tl = lappend(tl, makeTargetEntry((Expr *)v, list_length(tl) + 1,
+                                       pstrdup(Sc->name[i]), false));
+    }
+  sub->targetList = tl;
+
+  return sub;
+}
+
+/** @brief Build the plain-scan subquery @c "SELECT R.cols FROM R". */
+static Query *oj_build_rel_query(const constants_t *constants, Query *outer,
+                                 RangeTblEntry *R, oj_cols *Rc) {
+  Query *sub = makeNode(Query);
+  RangeTblEntry *Rcopy;
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  int i;
+
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  Rcopy = oj_copy_rel(outer, sub, R);
+  sub->rtable = list_make1(Rcopy);
+  rtr->rtindex = 1;
+  fe->fromlist = list_make1(rtr);
+  sub->jointree = fe;
+
+  for (i = 0; i < Rc->n; ++i) {
+    Var *v = makeVar(1, Rc->attno[i], Rc->type[i], Rc->typmod[i], Rc->coll[i],
+                     0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, i + 1, pstrdup(Rc->name[i]),
+                                     false));
+  }
+  sub->targetList = tl;
+  return sub;
+}
+
+/** @brief Build the difference subquery
+ *         @c "SELECT R.cols FROM R EXCEPT ALL SELECT R.cols FROM R JOIN S ON θ".
+ *
+ *  Processed natively as an EXCEPT (→ ProvSQL's −), yielding per distinct r the
+ *  monus provenance R(r) ⊖ ⊕_match (R(r)⊗S(s)) = R(r) ⊗ (1 ⊖ ⊕_match S(s)). */
+static Query *oj_build_diff(const constants_t *constants, Query *outer,
+                            RangeTblEntry *R, RangeTblEntry *S, Index R_idx,
+                            Index S_idx, oj_cols *Rc, oj_cols *Sc,
+                            Node *theta) {
+  Query *ls = oj_build_rel_query(constants, outer, R, Rc);
+  Query *mp = oj_build_join_query(constants, outer, R, S, R_idx, S_idx, Rc, Sc,
+                                  theta, false);
+  RangeTblEntry *ls_rte = oj_make_subquery_rte(ls);
+  RangeTblEntry *mp_rte = oj_make_subquery_rte(mp);
+  Query *D = makeNode(Query);
+  SetOperationStmt *so = makeNode(SetOperationStmt);
+  RangeTblRef *l = makeNode(RangeTblRef), *r = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  int i;
+
+  D->commandType = CMD_SELECT;
+  D->canSetTag = true;
+  D->rtable = list_make2(ls_rte, mp_rte);
+
+  l->rtindex = 1;
+  r->rtindex = 2;
+  so->op = SETOP_EXCEPT;
+  /* EXCEPT ALL = the pure multiset difference q₁−q₂ (NOT IN), which keeps every
+   * left (R) row with its multiplicity -- exactly the antijoin's null-padded
+   * rows.  group_set_difference_right_arm groups the matched-projection arm so
+   * the monus is R(r) ⊖ ⊕(R(r)⊗S(s)) = R(r) ⊗ (1 ⊖ ⊕ S(s)). */
+  so->all = true;
+  so->larg = (Node *)l;
+  so->rarg = (Node *)r;
+  for (i = 0; i < Rc->n; ++i) {
+    so->colTypes = lappend_oid(so->colTypes, Rc->type[i]);
+    so->colTypmods = lappend_int(so->colTypmods, Rc->typmod[i]);
+    so->colCollations = lappend_oid(so->colCollations, Rc->coll[i]);
+  }
+  D->setOperations = (Node *)so;
+  fe->fromlist = NIL;
+  D->jointree = fe;
+
+  for (i = 0; i < Rc->n; ++i) {
+    Var *v = makeVar(1, i + 1, Rc->type[i], Rc->typmod[i], Rc->coll[i], 0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, i + 1, pstrdup(Rc->name[i]),
+                                     false));
+  }
+  D->targetList = tl;
+  return D;
+}
+
+/** @brief Build the null-padded antijoin arm
+ *         @c "SELECT D.cols, NULL,…,NULL FROM (R EXCEPT ALL R⋈S) D". */
+static Query *oj_build_antijoin(const constants_t *constants, Query *outer,
+                                RangeTblEntry *R, RangeTblEntry *S,
+                                Index R_idx, Index S_idx, oj_cols *Rc,
+                                oj_cols *Sc, Node *theta) {
+  Query *D = oj_build_diff(constants, outer, R, S, R_idx, S_idx, Rc, Sc,
+                           theta);
+  RangeTblEntry *D_rte = oj_make_subquery_rte(D);
+  Query *A = makeNode(Query);
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  int i;
+
+  A->commandType = CMD_SELECT;
+  A->canSetTag = true;
+  A->rtable = list_make1(D_rte);
+  rtr->rtindex = 1;
+  fe->fromlist = list_make1(rtr);
+  A->jointree = fe;
+
+  for (i = 0; i < Rc->n; ++i) {
+    Var *v = makeVar(1, i + 1, Rc->type[i], Rc->typmod[i], Rc->coll[i], 0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, list_length(tl) + 1,
+                                     pstrdup(Rc->name[i]), false));
+  }
+  for (i = 0; i < Sc->n; ++i) {
+    Const *nc = makeNullConst(Sc->type[i], Sc->typmod[i], Sc->coll[i]);
+    tl = lappend(tl, makeTargetEntry((Expr *)nc, list_length(tl) + 1,
+                                     pstrdup(Sc->name[i]), false));
+  }
+  A->targetList = tl;
+  return A;
+}
+
+/** @brief Build the UNION-ALL of the matched arm and the antijoin arm:
+ *         the full LEFT-join relation with one combined @c provsql column. */
+static Query *oj_build_union(const constants_t *constants, Query *outer,
+                             RangeTblEntry *R, RangeTblEntry *S, Index R_idx,
+                             Index S_idx, oj_cols *Rc, oj_cols *Sc,
+                             Node *theta) {
+  Query *M = oj_build_join_query(constants, outer, R, S, R_idx, S_idx, Rc, Sc,
+                                 theta, true);
+  Query *A = oj_build_antijoin(constants, outer, R, S, R_idx, S_idx, Rc, Sc,
+                               theta);
+  RangeTblEntry *M_rte = oj_make_subquery_rte(M);
+  RangeTblEntry *A_rte = oj_make_subquery_rte(A);
+  Query *Q = makeNode(Query);
+  SetOperationStmt *so = makeNode(SetOperationStmt);
+  RangeTblRef *l = makeNode(RangeTblRef), *r = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  int i, pos = 0;
+
+  Q->commandType = CMD_SELECT;
+  Q->canSetTag = true;
+  Q->rtable = list_make2(M_rte, A_rte);
+
+  l->rtindex = 1;
+  r->rtindex = 2;
+  so->op = SETOP_UNION;
+  so->all = true;
+  so->larg = (Node *)l;
+  so->rarg = (Node *)r;
+  for (i = 0; i < Rc->n; ++i) {
+    so->colTypes = lappend_oid(so->colTypes, Rc->type[i]);
+    so->colTypmods = lappend_int(so->colTypmods, Rc->typmod[i]);
+    so->colCollations = lappend_oid(so->colCollations, Rc->coll[i]);
+  }
+  for (i = 0; i < Sc->n; ++i) {
+    so->colTypes = lappend_oid(so->colTypes, Sc->type[i]);
+    so->colTypmods = lappend_int(so->colTypmods, Sc->typmod[i]);
+    so->colCollations = lappend_oid(so->colCollations, Sc->coll[i]);
+  }
+  Q->setOperations = (Node *)so;
+  fe->fromlist = NIL;
+  Q->jointree = fe;
+
+  for (i = 0; i < Rc->n; ++i) {
+    Var *v = makeVar(1, ++pos, Rc->type[i], Rc->typmod[i], Rc->coll[i], 0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, pos, pstrdup(Rc->name[i]),
+                                     false));
+  }
+  for (i = 0; i < Sc->n; ++i) {
+    Var *v = makeVar(1, ++pos, Sc->type[i], Sc->typmod[i], Sc->coll[i], 0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, pos, pstrdup(Sc->name[i]),
+                                     false));
+  }
+  Q->targetList = tl;
+  return Q;
+}
+
+/** @brief Walker context: detect a Var referencing the join RTE index. */
+typedef struct oj_joinref_ctx {
+  Index join_idx;
+} oj_joinref_ctx;
+
+static bool oj_joinref_walker(Node *node, void *cx) {
+  oj_joinref_ctx *c = (oj_joinref_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    return (v->varlevelsup == 0 && v->varno == c->join_idx);
+  }
+  return expression_tree_walker(node, oj_joinref_walker, cx);
+}
+
+/** @brief True if any outer Var references the join RTE directly (USING /
+ *         whole-row / alias.col references the conservative remap cannot
+ *         resolve through @c joinaliasvars yet). */
+static bool oj_refs_join_index(Query *q, Index join_idx) {
+  oj_joinref_ctx c;
+  c.join_idx = join_idx;
+  if (oj_joinref_walker((Node *)q->targetList, &c))
+    return true;
+  if (q->jointree && q->jointree->quals &&
+      oj_joinref_walker(q->jointree->quals, &c))
+    return true;
+  if (q->havingQual && oj_joinref_walker(q->havingQual, &c))
+    return true;
+  return false;
+}
+
+/** @brief Outer Var remap context for the LEFT-join lowering: base-relation
+ *         Vars (R_idx / S_idx) are retargeted to the new subquery (new_idx)
+ *         with their attribute number mapped to the subquery column position. */
+typedef struct oj_outer_ctx {
+  Index R_idx, S_idx, new_idx;
+  AttrNumber *R_map, *S_map;
+} oj_outer_ctx;
+
+static Node *oj_outer_remap(Node *node, void *cx) {
+  oj_outer_ctx *c = (oj_outer_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 &&
+        (v->varno == c->R_idx || v->varno == c->S_idx)) {
+      v = (Var *)copyObject(v);
+      if ((Index)((Var *)node)->varno == c->R_idx)
+        v->varattno = c->R_map[v->varattno];
+      else
+        v->varattno = c->S_map[v->varattno];
+      v->varno = c->new_idx;
+      v->varnullingrels = NULL;
+#if PG_VERSION_NUM >= 130000
+      v->varnosyn = 0;
+      v->varattnosyn = 0;
+#endif
+      return (Node *)v;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_outer_remap, cx);
+}
+
+/**
+ * @brief Lower a top-level @c LEFT @c JOIN of two base relations into the
+ *        UNION-ALL of its matched and null-padded antijoin arms.
+ *
+ * Fires only on @c jointree->fromlist == [JoinExpr(JOIN_LEFT, RTR, RTR)] whose
+ * arms are provenance-tracked base relations and where no outer Var references
+ * the join RTE directly.  Everything else falls through unchanged.  Returns
+ * @c true if the query was rewritten.
+ */
+static bool lower_left_outer_joins(const constants_t *constants, Query *q) {
+  JoinExpr *je;
+  RangeTblRef *lref, *rref;
+  Index R_idx, S_idx, join_idx;
+  RangeTblEntry *R_rte, *S_rte;
+  oj_cols Rc, Sc;
+  Node *theta;
+  Query *Q;
+  AttrNumber *R_map, *S_map;
+  int ncolR, ncolS, i;
+  oj_outer_ctx octx;
+
+  if (q->commandType != CMD_SELECT)
+    return false;
+  if (!q->jointree || list_length(q->jointree->fromlist) != 1)
+    return false;
+  if (!IsA(linitial(q->jointree->fromlist), JoinExpr))
+    return false;
+  je = (JoinExpr *)linitial(q->jointree->fromlist);
+  if (je->jointype != JOIN_LEFT)
+    return false;
+  if (!IsA(je->larg, RangeTblRef) || !IsA(je->rarg, RangeTblRef))
+    return false;
+
+  lref = (RangeTblRef *)je->larg;
+  rref = (RangeTblRef *)je->rarg;
+  R_idx = lref->rtindex;
+  S_idx = rref->rtindex;
+  join_idx = je->rtindex;
+  R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+  S_rte = list_nth_node(RangeTblEntry, q->rtable, S_idx - 1);
+
+  if (R_rte->rtekind != RTE_RELATION || S_rte->rtekind != RTE_RELATION)
+    return false;
+  if (!oj_rte_has_provsql(constants, R_rte) ||
+      !oj_rte_has_provsql(constants, S_rte))
+    return false;
+  if (oj_refs_join_index(q, join_idx))
+    return false;
+
+#if PG_VERSION_NUM >= 180000
+  /* Flatten PG 18's synthetic RTE_GROUP so grouped-column Vars are base-
+   * relation Vars again, which the remap below can retarget. */
+  strip_group_rte_pg18(q);
+#endif
+
+  theta = je->quals;
+  oj_collect_cols(constants, R_rte, &Rc);
+  oj_collect_cols(constants, S_rte, &Sc);
+  ncolR = list_length(R_rte->eref->colnames);
+  ncolS = list_length(S_rte->eref->colnames);
+
+  Q = oj_build_union(constants, q, R_rte, S_rte, R_idx, S_idx, &Rc, &Sc,
+                     theta);
+
+  /* The combined provenance now lives in the replacement subquery Q.  The
+   * original base relations are left orphaned in the outer range table; hide
+   * their provsql columns so get_provenance_attributes does not pick them up
+   * again (which would both double-count and reference an unplanned relid). */
+  hide_provsql_colname(R_rte);
+  hide_provsql_colname(S_rte);
+
+  R_map = (AttrNumber *)palloc0((ncolR + 1) * sizeof(AttrNumber));
+  S_map = (AttrNumber *)palloc0((ncolS + 1) * sizeof(AttrNumber));
+  for (i = 0; i < Rc.n; ++i)
+    R_map[Rc.attno[i]] = i + 1;
+  for (i = 0; i < Sc.n; ++i)
+    S_map[Sc.attno[i]] = Rc.n + i + 1;
+
+  /* Replace the JOIN RTE slot in place with the new subquery, reusing the
+   * join's range-table index for the outer reference.  Reusing the *join*
+   * slot (rather than the left relation's) leaves no orphaned RTE_JOIN in the
+   * range table -- an orphaned join RTE without a matching JoinExpr trips the
+   * planner ("so where are the outer joins?").  The two base-relation RTEs are
+   * left orphaned, which the planner tolerates (they are simply not scanned). */
+  {
+    RangeTblEntry *J_rte =
+      list_nth_node(RangeTblEntry, q->rtable, join_idx - 1);
+    List *cn = NIL;
+
+    J_rte->rtekind  = RTE_SUBQUERY;
+    J_rte->subquery = Q;
+    J_rte->jointype = JOIN_INNER;
+    J_rte->joinaliasvars = NIL;
+#if PG_VERSION_NUM >= 130000
+    J_rte->joinleftcols = NIL;
+    J_rte->joinrightcols = NIL;
+    J_rte->joinmergedcols = 0;
+#endif
+    J_rte->relid    = InvalidOid;
+    J_rte->relkind  = 0;
+#if PG_VERSION_NUM >= 120000
+    J_rte->rellockmode = 0;
+#endif
+    J_rte->inh      = false;
+    J_rte->lateral  = false;
+    J_rte->tablesample = NULL;
+#if PG_VERSION_NUM >= 160000
+    J_rte->perminfoindex = 0;
+#else
+    J_rte->selectedCols  = NULL;
+    J_rte->insertedCols  = NULL;
+    J_rte->updatedCols   = NULL;
+    J_rte->requiredPerms = ACL_SELECT;
+#endif
+    for (i = 0; i < Rc.n; ++i)
+      cn = lappend(cn, makeString(pstrdup(Rc.name[i])));
+    for (i = 0; i < Sc.n; ++i)
+      cn = lappend(cn, makeString(pstrdup(Sc.name[i])));
+    J_rte->eref = makeAlias("unnamed_subquery", cn);
+  }
+
+  {
+    RangeTblRef *newr = makeNode(RangeTblRef);
+    newr->rtindex = join_idx;
+    q->jointree->fromlist = list_make1(newr);
+  }
+
+  octx.R_idx = R_idx;
+  octx.S_idx = S_idx;
+  octx.new_idx = join_idx;
+  octx.R_map = R_map;
+  octx.S_map = S_map;
+  q->targetList = (List *)oj_outer_remap((Node *)q->targetList, &octx);
+  if (q->jointree->quals)
+    q->jointree->quals = oj_outer_remap(q->jointree->quals, &octx);
+  if (q->havingQual)
+    q->havingQual = oj_outer_remap(q->havingQual, &octx);
+
+  return true;
+}
+
+/**
+ * @brief Group the right-hand arm of a set difference by all its columns so
+ *        the per-tuple right provenances ⊕-combine before the monus.
+ *
+ * ProvSQL's multiset difference implements the NOT-IN semantics of the ICDE
+ * 2026 paper (§IV-B):
+ * @code
+ *   ⟪q₁ − q₂⟫ = {{ (u, α ⊖ ⊕_{β : (u,β)∈q₂} β)  |  (u,α) ∈ q₁ }}
+ * @endcode
+ * The sum @c ⊕β ranges over ALL right tuples equal to @c u, so the right arm
+ * must be grouped by its columns first.  Without that,
+ * @c transform_except_into_join's bare @c LEFT @c JOIN emits one monus per
+ * matching right tuple (yielding @c ⊕(α⊖βᵢ) instead of @c α⊖⊕β) and inflates
+ * the result multiplicity -- the long-standing "add group by in the right-side
+ * table" gap.  Wrapping the still-raw right arm in
+ * @code
+ *   SELECT cols FROM (rarg) GROUP BY cols
+ * @endcode
+ * makes the later @c get_provenance_attributes / group-by pass build @c ⊕β per
+ * group and gives the right arm exactly one row per distinct @c u.
+ *
+ * Runs before provenance discovery, on the @c SETOP_EXCEPT query (for the
+ * non-ALL case, on the @c all=true inner set operation that
+ * @c rewrite_non_all_into_external_group_by leaves behind).  It applies equally
+ * to @c EXCEPT (@c ε(q₁−q₂)) and @c EXCEPT @c ALL (@c q₁−q₂): the only
+ * difference between them, duplicate elimination of the left arm, is handled
+ * separately by the non-ALL outer GROUP BY.
+ */
+static void group_set_difference_right_arm(const constants_t *constants,
+                                           Query *q) {
+  SetOperationStmt *so;
+  RangeTblRef *rarg_ref;
+  RangeTblEntry *rarg_rte;
+  Query *origB, *G;
+  RangeTblEntry *w_rte;
+  RangeTblRef *rtr;
+  FromExpr *fe;
+  List *tl = NIL;
+  ListCell *lc;
+  int colno = 0, sgref = 0;
+  bool any_group = false;
+
+  (void)constants;
+
+  if (q->setOperations == NULL || !IsA(q->setOperations, SetOperationStmt))
+    return;
+  so = (SetOperationStmt *)q->setOperations;
+  if (so->op != SETOP_EXCEPT)
+    return;
+  /* Chained difference (rarg is itself a SetOperationStmt) is rejected later
+   * by transform_except_into_join; leave it untouched here. */
+  if (!IsA(so->rarg, RangeTblRef))
+    return;
+  rarg_ref = (RangeTblRef *)so->rarg;
+  rarg_rte = list_nth_node(RangeTblEntry, q->rtable, rarg_ref->rtindex - 1);
+  if (rarg_rte->rtekind != RTE_SUBQUERY || rarg_rte->subquery == NULL)
+    return;
+  origB = rarg_rte->subquery;
+
+  /* Already a single-row-per-group shape?  (Our own outer-join antijoin builds
+   * the right arm pre-grouped.)  Re-grouping is harmless but pointless, so skip
+   * when the arm already carries a groupClause. */
+  if (origB->groupClause != NIL || origB->groupingSets != NIL)
+    return;
+
+  G = makeNode(Query);
+  G->commandType = CMD_SELECT;
+  G->canSetTag = true;
+  w_rte = oj_make_subquery_rte(origB);
+  G->rtable = list_make1(w_rte);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  fe = makeNode(FromExpr);
+  fe->fromlist = list_make1(rtr);
+  G->jointree = fe;
+
+  colno = 0;
+  foreach (lc, origB->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Var *v;
+    TargetEntry *nte;
+    SortGroupClause *sgc;
+    Oid coltype;
+
+    ++colno;
+    if (te->resjunk)
+      continue;
+
+    coltype = exprType((Node *)te->expr);
+    v = makeVar(1, colno, coltype, exprTypmod((Node *)te->expr),
+                exprCollation((Node *)te->expr), 0);
+    nte = makeTargetEntry((Expr *)v, list_length(tl) + 1,
+                          te->resname ? pstrdup(te->resname) : NULL, false);
+
+    /* Group by every column (a UUID provsql column would already have been
+     * rejected upstream; raw arms expose only value columns here). */
+    sgc = makeNode(SortGroupClause);
+    sgc->tleSortGroupRef = nte->ressortgroupref = ++sgref;
+    get_sort_group_operators(coltype, false, true, false, &sgc->sortop,
+                             &sgc->eqop, NULL, &sgc->hashable);
+    G->groupClause = lappend(G->groupClause, sgc);
+    any_group = true;
+
+    tl = lappend(tl, nte);
+  }
+  G->targetList = tl;
+
+  if (!any_group)
+    return; /* nothing to group on; leave the arm unchanged */
+
+  rarg_rte->subquery = G;
+}
+
 /**
  * @brief Recursively annotate a UNION tree with the provenance UUID type.
  *
@@ -4774,17 +5546,7 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
    * process_query pass does not re-detect it as a provenance source.  The
    * combined provenance is already captured by the subquery's exposed
    * provsql TargetEntry below. */
-  {
-    ListCell *lc2;
-    AttrNumber i = 1;
-    foreach (lc2, inner_src->eref->colnames) {
-      if (i == provsql_attno) {
-        lfirst(lc2) = makeString(pstrdup("_provsql_inner"));
-        break;
-      }
-      ++i;
-    }
-  }
+  hide_provsql_colname(inner_src);
 
   inner_rtr1 = makeNode(RangeTblRef);
   inner_rtr1->rtindex = 1;
@@ -5754,6 +6516,14 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active)
     inline_ctes(q);
 
+  /* Lower a top-level LEFT JOIN of two base relations into the UNION-ALL of
+   * its matched and null-padded antijoin arms, so the non-monotone outer-join
+   * provenance (the 0-match world) is captured.  No-op on every other shape.
+   * Runs before provenance discovery / set-op handling so the constructed
+   * UNION / EXCEPT subqueries are processed by the recursive passes. */
+  if (provsql_active)
+    lower_left_outer_joins(constants, q);
+
   {
     Bitmapset *removed_sortgrouprefs = NULL;
 
@@ -5866,6 +6636,12 @@ static Query *process_query(const constants_t *constants, Query *q,
        * if any marker fails to land on its input. */
       local_inv_ctx = build_inversion_free_ctx(constants, q, &inv_cert);
     }
+
+    /* Set difference (EXCEPT / EXCEPT ALL): group the right arm so the per-row
+     * right provenances ⊕-combine before the monus, giving the paper's NOT-IN
+     * semantics α ⊖ ⊕β.  Must run before get_provenance_attributes processes
+     * the arms. */
+    group_set_difference_right_arm(constants, q);
 
     // get_provenance_attributes will also recursively process subqueries
     // by calling process_query (threading each subquery's marker sub-context)
