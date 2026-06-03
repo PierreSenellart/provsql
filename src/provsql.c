@@ -4884,10 +4884,11 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
     }
   }
 
-  /* When no FROM relation is provenance-tracked, the outer tuples are certain:
-   * give R' a synthetic gate_one() provsql column so the decorrelation /
-   * outer-join lowering treat it as a certain-provenance arm, and warn that the
-   * outer tuple provenance is lost (only the subquery's provenance is kept). */
+  /* When no FROM relation is provenance-tracked, the outer tuples are certain
+   * (exactly like joining an untracked table): give R' a synthetic gate_one()
+   * provsql column so the decorrelation / outer-join lowering treat it as a
+   * certain-provenance arm.  No warning -- no provenance is lost, the outer
+   * simply contributes the identity and the subquery's provenance flows. */
   if (!any_tracked) {
     FuncExpr *one = makeNode(FuncExpr);
     one->funcid = constants->OID_FUNCTION_GATE_ONE;
@@ -4896,10 +4897,6 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
     one->location = -1;
     rp_tl = lappend(rp_tl, makeTargetEntry((Expr *)one, ++posn,
                                            pstrdup(PROVSQL_COLUMN_NAME), false));
-    provsql_warning("scalar subquery over a provenance-tracked relation with "
-                    "an untracked FROM: the outer tuple provenance is lost "
-                    "(treated as certain); only the subquery's provenance is "
-                    "tracked");
   }
 
   /* Split the WHERE: the conjunct holding the SubLink (for a WHERE SubLink)

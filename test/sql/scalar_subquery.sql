@@ -189,11 +189,11 @@ WHERE EXISTS (SELECT 1 FROM rj_q WHERE rj_q.k = rj_r.k);
 DROP TABLE rj_q;
 DROP TABLE rj_r;
 
--- Part 7: untracked outer FROM with a scalar subquery over a tracked relation.
--- ProvSQL still evaluates it, warning that the outer (untracked) tuple
--- provenance is lost; only the subquery's provenance is kept.  The outer rows
--- are certain, so existence is driven by the subquery: k=1 -> 1 (one match);
--- k=2 -> 0.75 (two independent matches gated by count(...) <= 1).
+-- Part 7: untracked outer FROM with a scalar subquery over a tracked relation
+-- (like joining an untracked table -- no warning; the outer just contributes
+-- the identity).  The outer rows are certain, so existence is driven by the
+-- subquery: k=1 -> 1 (one match); k=2 -> 0.75 (two independent matches gated
+-- by count(...) <= 1).
 CREATE TABLE su_u(a int, k int);
 CREATE TABLE su_q(k int, x int);
 INSERT INTO su_u VALUES (10,1),(20,2);

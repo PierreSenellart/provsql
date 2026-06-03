@@ -89,7 +89,6 @@ ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: scalar subquery over a provenance-tracked relation with an untracked FROM: the outer tuple provenance is lost (treated as certain); only the subquery's provenance is tracked
 remove_provenance
 
 (1 row)
