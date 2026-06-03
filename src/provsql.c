@@ -6000,6 +6000,29 @@ static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
   return changed;
 }
 
+/** @brief Is @p limitCount the literal 1?  Unwraps the @c int4->int8 coercion
+ *  PostgreSQL wraps a @c "LIMIT 1" literal in. */
+static bool oj_limit_count_is_one(Node *limitCount) {
+  Node *n = limitCount;
+  Const *c;
+  if (n == NULL)
+    return false;
+  if (IsA(n, FuncExpr) && list_length(((FuncExpr *)n)->args) == 1)
+    n = (Node *)linitial(((FuncExpr *)n)->args);
+  if (IsA(n, RelabelType))
+    n = (Node *)((RelabelType *)n)->arg;
+  if (!IsA(n, Const) || ((Const *)n)->constisnull)
+    return false;
+  c = (Const *)n;
+  if (c->consttype == INT8OID)
+    return DatumGetInt64(c->constvalue) == 1;
+  if (c->consttype == INT4OID)
+    return DatumGetInt32(c->constvalue) == 1;
+  if (c->consttype == INT2OID)
+    return DatumGetInt16(c->constvalue) == 1;
+  return false;
+}
+
 /**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
@@ -6027,6 +6050,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   int i, n_tl_sublinks = 0;
   bool in_where = false;
   bool is_agg_body = false;
+  bool is_limit1 = false; /* ORDER BY … LIMIT 1 value body: argmax via choose */
   Expr *repl_expr; /* what replaces the SubLink: choose(val) or the aggregate */
 
   if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
@@ -6081,9 +6105,29 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   sub = (Query *)sl->subselect;
   if (sub->commandType != CMD_SELECT || sub->groupClause ||
       sub->groupingSets || sub->distinctClause || sub->setOperations ||
-      sub->hasWindowFuncs || sub->hasSubLinks || sub->limitCount ||
-      sub->limitOffset || sub->cteList || list_length(sub->targetList) != 1)
+      sub->hasWindowFuncs || sub->hasSubLinks || sub->limitOffset ||
+      sub->cteList)
     return false;
+  /* LIMIT: a bare LIMIT picks an arbitrary row (rejected), but an ORDER BY …
+   * LIMIT 1 value body is the argmax -- decorrelated to choose(val ORDER BY key)
+   * with no count gate (LIMIT 1 never errors on >1 rows). */
+  if (sub->limitCount) {
+    if (!sub->sortClause || sub->hasAggs ||
+        !oj_limit_count_is_one(sub->limitCount))
+      return false;
+    is_limit1 = true;
+  }
+  /* Exactly one non-junk output column (the scalar value); ORDER BY adds junk
+   * sort-key entries, which become the choose aggregate's order arguments. */
+  {
+    int nreal = 0;
+    ListCell *tlc;
+    foreach (tlc, sub->targetList)
+      if (!((TargetEntry *)lfirst(tlc))->resjunk)
+        ++nreal;
+    if (nreal != 1 || ((TargetEntry *)linitial(sub->targetList))->resjunk)
+      return false;
+  }
   if (sub->hasAggs &&
       !IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref))
     return false; /* aggregate body must be a single bare aggregate */
@@ -6245,6 +6289,32 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     } else {
       repl_expr = valexpr;
     }
+  } else if (is_limit1) {
+    /* ORDER BY … LIMIT 1 = argmax: choose(val ORDER BY key).  The subselect's
+     * targetList (the value plus junk sort-key entries) and its sortClause map
+     * directly onto the ordered Aggref's args / aggorder; remap each arg's Q
+     * vars to the pulled-up Q.  No count gate -- LIMIT 1 always takes one row. */
+    Aggref *agg = makeNode(Aggref);
+    List *new_args = NIL;
+    ListCell *alc;
+    foreach (alc, sub->targetList) {
+      TargetEntry *te = (TargetEntry *)copyObject(lfirst(alc));
+      te->expr = (Expr *)oj_decorr_var_mut((Node *)te->expr, &dctx);
+      new_args = lappend(new_args, te);
+    }
+    agg->aggfnoid = constants->OID_FUNCTION_CHOOSE;
+    agg->aggtype = exprType((Node *)valexpr);
+    agg->aggtranstype = InvalidOid;
+    agg->aggargtypes = list_make1_oid(exprType((Node *)valexpr));
+    agg->args = new_args;
+    agg->aggorder = (List *)copyObject((Node *)sub->sortClause);
+    agg->aggkind = AGGKIND_NORMAL;
+    agg->aggsplit = AGGSPLIT_SIMPLE;
+    agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+    agg->aggno = agg->aggtransno = -1;
+#endif
+    repl_expr = (Expr *)agg;
   } else {
     repl_expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
                                        exprType((Node *)valexpr),
@@ -6299,13 +6369,14 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
 
   /* HAVING.  A value body adds count(Q.key) <= 1 (Q.key NULL on the null-padded
    * antijoin rows), enforcing the scalar subquery's at-most-one-row rule; an
-   * aggregate body needs no such gate.  When the SubLink came from a WHERE
-   * comparison, that conjunct (with the SubLink replaced) is ANDed in -- a
-   * comparison on the aggregated value belongs in HAVING. */
+   * aggregate body -- and an ORDER BY … LIMIT 1 (argmax) body, which legally
+   * takes the top of many rows -- needs no such gate.  When the SubLink came from
+   * a WHERE comparison, that conjunct (with the SubLink replaced) is ANDed in --
+   * a comparison on the aggregated value belongs in HAVING. */
   {
     List *having_conjuncts = NIL;
 
-    if (!is_agg_body) {
+    if (!is_agg_body && !is_limit1) {
       having_conjuncts =
         list_make1(oj_count_cmp((Var *)scan.found_var, Q_idx, "<=", 1));
       /* A WHERE comparison must test an actual subquery value, so the correlated

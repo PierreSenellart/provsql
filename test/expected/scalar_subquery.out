@@ -414,3 +414,23 @@ k|p
 2|0.5000
 3|0.0000
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+name|latest|p
+Alice|100 (*)|1.0000
+Bob|300 (*)|1.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+name|earliest
+Alice|200 (*)
+Bob|300 (*)
+(2 rows)

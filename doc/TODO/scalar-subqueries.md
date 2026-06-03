@@ -15,6 +15,10 @@ planner-hook rewrites in `src/provsql.c` (regression coverage in
   `count(Q.key) = 1` so the empty group is excluded) -- `decorrelate_scalar_sublinks`;
 - **aggregate-body** subqueries `(SELECT agg(v) FROM Q WHERE corr)` -> the
   aggregate over the join group (no count gate; `count(*)` -> `count(Q.key)`);
+- **`ORDER BY … LIMIT 1` value body** (argmax / "latest per group") ->
+  `choose(v ORDER BY key)` over the join group, no count gate (LIMIT 1 legally
+  takes the top of many rows) -- the body's junk sort-key targetList entries and
+  `sortClause` become the ordered `Aggref`'s order arguments;
 - **`EXISTS` / `IN` / `op ANY`** (semijoin) and **`NOT EXISTS` / `NOT IN` /
   `op ALL`** (antijoin -- `∀q. x op q = ¬∃q. x ¬op q`), plus **row `IN`**
   (`(a,b) IN (SELECT …)`, per-column conjuncts), rewritten to a correlated
@@ -69,11 +73,7 @@ The genuinely-tractable next steps, roughly in value order:
 
 1. **Multiple correlated sublinks** -- decorrelate each onto its own LEFT JOIN
    (coalescing sublinks that share a `(Q, corr)`), instead of bailing on >1.
-2. **`ORDER BY … LIMIT 1` value body** -- argmax: decorrelate to
-   `choose(val ORDER BY key)` over the `R ⟕ Q` group, with NO count gate (LIMIT 1
-   never errors on >1). `choose` already gives the right value; the build is an
-   ordered `Aggref` from the body's `sortClause`.
-3. **Uncorrelated value-body comparison in WHERE** -- extend
+2. **Uncorrelated value-body comparison in WHERE** -- extend
    `move_uncorrelated_where_predicates` to `choose(x)` + `count(*) <= 1` plus a
    WHERE-comparison cmp gate on the cross-joined `agg_token`.
 

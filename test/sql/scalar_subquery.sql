@@ -736,3 +736,43 @@ DROP TABLE qf3;
 
 DROP TABLE qf_q;
 DROP TABLE qf_r;
+
+-- Part 20: ORDER BY … LIMIT 1 value body = argmax.  It decorrelates to
+-- choose(val ORDER BY key) over the R ⟕ Q group: choose keeps the first row in
+-- the aggregate's order, so DESC / ASC give the max / min-key row's value.  No
+-- count <= 1 gate (LIMIT 1 legally takes the top of many matches); the
+-- subselect's junk sort-key targetList entries + sortClause become the choose
+-- Aggref's order arguments.
+CREATE TABLE lt_c(id int, name text);
+CREATE TABLE lt_o(id int, c int, seq int);
+INSERT INTO lt_c VALUES (1,'Alice'),(2,'Bob');
+INSERT INTO lt_o VALUES (100,1,30),(200,1,20),(300,2,10);  -- Alice: 100(seq30), 200; Bob: 300
+SELECT add_provenance('lt_c');
+SELECT add_provenance('lt_o');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM lt_c;
+  PERFORM set_prob(provsql, 0.5) FROM lt_o;
+END $$;
+
+-- latest (max seq): Alice -> 100, Bob -> 300.  Alice has two orders, but LIMIT 1
+-- means no count<=1 gate, so the row exists per lt_c (p = 1).
+CREATE TABLE lt1 AS
+  SELECT lt_c.name AS name,
+         (SELECT o.id FROM lt_o o WHERE o.c = lt_c.id ORDER BY o.seq DESC LIMIT 1) AS latest,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM lt_c;
+SELECT remove_provenance('lt1');
+SELECT name, latest, p FROM lt1 ORDER BY name;
+DROP TABLE lt1;
+
+-- earliest (min seq, ASC): Alice -> 200, Bob -> 300.
+CREATE TABLE lt2 AS
+  SELECT lt_c.name AS name,
+         (SELECT o.id FROM lt_o o WHERE o.c = lt_c.id ORDER BY o.seq ASC LIMIT 1) AS earliest
+  FROM lt_c;
+SELECT remove_provenance('lt2');
+SELECT name, earliest FROM lt2 ORDER BY name;
+DROP TABLE lt2;
+
+DROP TABLE lt_o;
+DROP TABLE lt_c;
