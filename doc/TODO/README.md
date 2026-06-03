@@ -57,6 +57,17 @@ Each plan document follows a consistent layout:
   method-catalog follow-ups (lazy Boolean build, guarantee propagation,
   cost-model calibration), RV-probability transparency, and the
   bibliography additions. Borders [`safe-query-followups.md`](safe-query-followups.md).
+- [`scalar-subqueries.md`](scalar-subqueries.md) : plan to fix
+  **outer-join provenance** (the root cause behind broken scalar
+  subqueries and empty-aggregate NULL rows). ProvSQL annotates the
+  all-present instance, so an outer join's null-padded row -- which
+  appears only in *smaller* worlds -- is dropped for left rows that match
+  in actuality; `LEFT`/`FULL`/`RIGHT` are currently treated like `INNER`.
+  The fix is a structural transform `R ⟕ S → (R⋈S) ⊎ (R − π_R(R⋈S))×NULL`
+  using ProvSQL's `−` (the `NOT IN`, *not* SQL `EXCEPT ALL`, semantics;
+  validated against the ICDE 2026 paper). Contains an explicit, ordered,
+  step-by-step build plan; scalar subqueries then decorrelate with no
+  special override.
 - [`safe-query-followups.md`](safe-query-followups.md) : deferred
   ideas surfaced during the `provsql.boolean_provenance` work --
   further Boolean-only optimisations beyond the hierarchical-CQ

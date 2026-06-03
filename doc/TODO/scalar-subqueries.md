@@ -1,181 +1,188 @@
-# Scalar subqueries: m-semiring semantics and implementation
+# Outer-join provenance (root fix), and scalar subqueries as the payoff
 
-## Goal
+## Why this note exists
 
-Give a scalar (value) subquery `(SELECT x FROM Q WHERE corr)` a correct
-m-semiring provenance, rather than rejecting it. Settled design (discussion with
-Senellart):
+Goal: give scalar (value) subqueries `(SELECT x FROM Q WHERE corr)` a correct
+provenance instead of rejecting them. The investigation showed the real blocker
+is a **deeper, independent bug: ProvSQL's outer-join provenance is wrong**, and
+the scalar-subquery "empty / 0-match world" problem is just one symptom of it.
 
-- **value** `:= choose(x)` -- the PICKFIRST aggregate, total over any
-  cardinality (`0` matches -> NULL, `1` -> the value, `>=2` -> first by
-  occurrence order). Its provenance is the telescoping
-  `⊕_i k_i ⊗ (⊗_{j<i} (1 ⊖ k_j)) ⊗ v_i`, which lives entirely in `⊕`/`⊗`/`⊖` +
-  the value semimodule, so it evaluates correctly in every m-semiring.
-- **existence** `:= outer ⊗ [count(matching Q) ≤ 1]`, the **exclude** semantics:
-  worlds with `>=2` matches carry no mass (SQL would error there; an erroring
-  world contributes nothing, which is the elegant reading). No renormalisation.
-- order never matters: the only worlds where PICKFIRST's order could bite
-  (`>=2` present) are exactly the ones the cardinality condition excludes.
+So the plan is: **fix outer-join provenance (the root cause)**; scalar subqueries
+then decorrelate to a `LEFT JOIN` + `choose` + `HAVING count(...) <= 1` with **no
+special-case override**, and user-written outer joins become correct at the same
+time.
 
-`COUNT` (not `SUM`) also dodges the value-`0` additive-identity trap fixed in
-`sum_dp`.
+This supersedes an earlier, more convoluted plan (a scalar-subquery-specific
+gate-level "existence override" reconstructing `1 ⊖ [count≥2]` by hand). That was
+only ever a hand-reconstruction of what a *correct* `LEFT JOIN` already produces,
+so it is dropped in favour of fixing the join.
 
-### Semiring generality (settled)
+## The bug
 
-`[count ≤ 1] = 1 ⊖ [count ≥ 2]` is a plain `⊕`/`⊗`/`⊖` circuit once the `cmp`
-is HAVING-expanded to its threshold polynomial (no opaque `agg` gate remains).
-Every semiring ProvSQL carries is **positive and naturally ordered**, and a
-naturally ordered semiring has the **canonical, unique** monus
-`a ⊖ b := ⊓{c : a ⊑ b ⊕ c}`. So the exclude existence
-`e ⊗ (1 ⊖ [count ≥ 2])` has a well-defined, canonical value in **every** ProvSQL
-semiring -- there is no "no-monus" boundary (tropical, Viterbi, min-max included;
-they are naturally ordered too). Examples: counting `multₑ ∸ multₑ·[≥2]` (the
-ambiguous copies subtracted from the bag); Viterbi `e` unless the matches are
-jointly certain; how/why/which `e ⊖ e·[≥2]`. Two consequences for the build:
+ProvSQL builds provenance by annotating the rows of the **actual (all-present)
+instance**. That is sound for monotone SPJU: every tuple that appears in any
+possible world also appears in the all-present instance, so annotating the latter
+captures all worlds.
 
-1. **The `cmp` must be expanded to its polynomial on the compiled-semiring path**
-   (`sr_*`), the same expansion the Boolean/probability path already does, so
-   each evaluator sees `⊕`/`⊗`/`⊖`, not an `agg`/`cmp` gate it would reject.
-2. **`[count ≥ 2]` must be the HAVING-expanded recovery on the real `count`**
-   (counts rows *with multiplicity*), **not** the pairwise `⊕_{i<j} kᵢkⱼ`. They
-   agree in Boolean/probability but diverge in counting (a single
-   multiplicity-`≥2` row is ambiguous yet forms no pair). Correctness in
-   non-idempotent semirings depends on this.
+**Outer join is non-monotone.** The null-padded row `(r, NULL)` appears precisely
+when the right side is *empty* -- a *smaller* world, not the all-present one. So
+for a left row `r` that *does* have a match in the actual instance, the
+null-padded tuple is never materialised, and ProvSQL has nothing to annotate.
 
-## The crux: `[count ≤ 1]` must include the empty world
+The offending code is the `RTE_JOIN` arm of `process_query` (`src/provsql.c`):
 
-`[count ≤ 1]` has to be **at-most-one** = `1 ⊖ [count ≥ 2]`, i.e. it includes
-the **0-match world** (where the scalar is NULL and the row still exists) and
-excludes only `>=2`. The standard aggregate provenance cannot express this,
-because it conditions a group's existence on `>=1` contributing tuple
-(empty-group exclusion). This was validated empirically (q rows `(1,10),(1,20)`
-independent at p=0.5; outer `r1.k=1` at p=1; **target P = 0.75**):
-
-| construction | event it actually builds | P | correct? |
-|---|---|---|---|
-| `choose(x) … HAVING count(*) <= 1` | `[exactly 1]` | 0.50 | no -- drops the 0-match world |
-| `choose(x) … HAVING count(*) < 2`  | `[exactly 1]` | 0.50 | no -- same |
-| `… LEFT JOIN q … GROUP BY` (no HAVING) | `[≥1]` (at-least-one) | 0.75 | **coincidence only** |
-| `… HAVING count(*) >= 2` | `[≥2]` | 0.25 | this is the complement we need |
-| `r1 EXCEPT (r1 ⋉ [count≥2])` | `[≤1]` | -- | **rejected** ("non-ALL set op on aggregate results") |
-
-The `LEFT JOIN` aggregate matches `0.75` here **only** because at two symmetric
-candidates `P(both absent) = P(both present) = 0.25`, so `[≥1]` and `[≤1]`
-coincide numerically. With `>=3` candidates or asymmetric `p` they diverge:
-`[≥1]` keeps the `>=2` worlds and drops the empty world -- the opposite of what we
-want. So **no construction available through the SQL surface yields
-`[≤1] = 1 ⊖ [count ≥ 2]` in general.**
-
-## What is already available (the pieces all exist)
-
-- **`LEFT JOIN` is handled by the rewriter** (`src/provsql.c:722` accepts
-  `JOIN_LEFT`/`FULL`/`RIGHT`; verified: a no-match outer row survives with
-  `s = NULL` at the outer row's probability). The `CLAUDE.md` "JOIN (not
-  outer/...)" line is stale. So the value side -- including the `0`-match NULL
-  row -- is handled by `R LEFT JOIN Q ON corr GROUP BY R.*`.
-- **`A EXCEPT B` already lowers to `LEFT JOIN` + `provenance_monus`**
-  (`transform_except_into_join`). So the `outer ⊖ X` shape is a built primitive;
-  the missing bit is only that `EXCEPT` is *refused on aggregate results*, which
-  is why `outer EXCEPT [count≥2]` is rejected at the SQL surface even though the
-  gate-level transform it would use exists.
-- **`choose`** is supported with the correct PICKFIRST provenance.
-- **`[count ≥ 2]`** is expressible (`HAVING count(*) >= 2`, P = 0.25) -- the exact
-  complement we need.
-- **`gate_monus`** gives `1 ⊖ X`.
-- the statically-empty case already returns the identity row (`empty_count`,
-  issue #60: `count=0` with provenance `𝟙`); the probabilistic-empty case is
-  precisely what the `1 ⊖ [count≥2]` existence repairs.
-
-So the only missing link is **building `existence = outer ⊗ (1 ⊖ [count ≥ 2])`
-and pairing it with the `choose` value** (NULL on empty).
-
-## The override is validated (semantic core de-risked)
-
-The existence circuit, built **by hand** from existing provenance UDFs, gives the
-target and is semiring-general (q rows `(1,10),(1,20)` indep p=0.5; outer p=1):
-
-```sql
--- [count≥2] over the correlated q:
-SELECT provenance() AS c2 FROM r1, q WHERE q.k=r1.k GROUP BY r1.k HAVING count(*)>=2;
--- existence = outer ⊗ (𝟙 ⊖ [count≥2]):
-SELECT provenance_times(:outer, provenance_monus(gate_one(), :c2));
+```c
+if (jointype == JOIN_INNER || JOIN_LEFT || JOIN_FULL || JOIN_RIGHT) {
+  // Nothing to do, there will also be RTE entries for the tables ...
+}
 ```
 
-| token | probability | note |
+`LEFT`/`FULL`/`RIGHT` are handled **identically to `INNER`** -- only the matched
+branch `R ⊗ S` is emitted; the antijoin / null-padded branch is missing.
+
+**Symptom** (q rows `(1,10),(1,20)` independent at p=0.5; `r1.k=1` at p=1):
+
+| query | ProvSQL | correct |
 |---|---|---|
-| `[count≥2]` | 0.2500 | the HAVING-expanded recovery (real count, not pairwise) |
-| `𝟙 ⊖ [count≥2]` | 0.7500 | **empty world included** (true at count 0 and 1) |
-| `outer ⊗ (𝟙 ⊖ [count≥2])` | **0.7500** | the target existence |
+| `r1 LEFT JOIN q ON q.k=r1.k GROUP BY r1.k` | 0.75 | **1.0** (group exists in every world `r1` is present) |
+| `… HAVING count(q.k) <= 1` | 0.5 | **0.75** |
 
-And it is a plain `⊕/⊗/⊖` circuit -- **no agg gate to reject**:
-`sr_counting` returns `0`, `sr_formula` returns `𝟙 ⊖ (10 ⊗ 20)` (the symbolic
-m-semiring answer). So the existence override works and evaluates in every
-semiring; the remaining work is purely **making the rewriter emit it**.
+The *statically*-unmatched case is already right (a left row with no match in the
+actual instance keeps its `(r,NULL)` at the outer probability -- the `k=2` case).
+The bug is only the *probabilistically*-unmatched case.
 
-## Implementation plan
+## Correct semantics (validated against the ICDE 2026 ProvSQL paper, §IV-B)
 
-Decorrelate `(SELECT x FROM Q WHERE corr)` to a `LEFT JOIN` + `GROUP BY` over the
-outer, computing `choose(Q.x)`, and **override the group's existence provenance**
-from the default `δ(⊕ k_i)` (= `[≥1]`) to `outer ⊗ (1 ⊖ [count ≥ 2])`:
+```
+R ⟕_θ S  =  (R ⋈_θ S)  ⊎  ( (R − π_R(R ⋈_θ S)) padded with NULL )
+```
 
-1. **Rewriter (`src/provsql.c`):** pull the scalar `SubLink` into the `FROM` as a
-   `LEFT JOIN` of the outer with `Q` on `corr` (LATERAL when correlated; a plain
-   join when not), `GROUP BY` the outer's columns, and replace the `SubLink`
-   node with `choose(Q.x)`. Mechanical parse-tree surgery (rtable + jointree +
-   the SubLink->Var swap). Correlated LATERAL is already accepted by the existing
-   rewriter, so the lateral case is in reach.
-2. **Existence override (the one new circuit shape).** For a scalar-subquery
-   group set the output row's provenance to
-   `times(outer, monus(one, count_ge_2))`, where `count_ge_2` is the
-   **HAVING-expanded recovery on `count(*) >= 2`** over the group members (not the
-   pairwise product -- see the semiring note). Everything else is existing gates.
-3. **Value:** `choose(Q.x)` unchanged (NULL on empty).
+- **matched** `(r, s)` : `R(r) ⊗ S(s)` -- the inner join (already correct).
+- **null-padded** `(r, NULL)` : the antijoin, with provenance
+  ```
+  R(r) ⊗ (1 ⊖ ⊕_{s : θ(r,s)} S(s))
+  ```
 
-### Why the override has to be at the gate level (not SQL)
+built through ProvSQL's **multiset difference `−`**, which is the **`NOT IN`**
+semantics
 
-ProvSQL **couples a tuple's value and its provenance** -- there is no SQL way to
-take `choose`'s *value* while replacing its *provenance*. Any SQL combination
-re-multiplies provenances: joining the existence side `outer ⊗ (1 ⊖ [≥2])` with a
-value side that carries `choose`'s own `[≥1]` existence yields
-`outer ⊗ (1⊖[≥2]) ⊗ [≥1]`, which re-drops the empty world. So the value
-(`choose`, `[≥1]`) and the existence (`1 ⊖ [≥2]`, includes empty) cannot be paired
-in SQL; the output row must be built directly: **value = `choose`'s value,
-provsql = `outer ⊗ (1 ⊖ [count≥2])`**, decoupled. That is the crux that forces a
-rewriter/aggregation-provenance construction rather than a pure query rewrite.
+```
+⟪q₁ − q₂⟫ = {{ (u, α ⊖ ⊕_{β : (u,β)∈⟪q₂⟫} β)  |  (u,α) ∈ ⟪q₁⟫ }}
+```
 
-**Alternative considered and rejected:** lift the "non-ALL set op on aggregate
-results" restriction and do `R EXCEPT (R ⋉ [count≥2])`. It builds the existence
-correctly (and `EXCEPT` already lowers to `LEFT JOIN`+`monus`), but `EXCEPT` drops
-the value column -- and re-joining the value back re-multiplies the provenance
-(same coupling problem). So the gate-level override is the path.
+and is **not** SQL `EXCEPT ALL`. The paper is explicit: the standard bag
+difference `⟦q₁−q₂⟧(t) = max(0, m₁(t) − m₂(t))` (what `EXCEPT ALL` means) makes
+provenance **intractable** and is deliberately not what ProvSQL implements;
+ProvSQL's `−` corresponds to `NOT IN`, and `ε(q₁−q₂)` matches `EXCEPT`. Key
+properties of `−` that make it exactly right here:
 
-## Decisions to rediscuss with Senellart
+- it **keeps every left entry**, so it manufactures the "removed-in-actuality,
+  present-in-a-sub-world" rows -- the whole point;
+- it **preserves `R`'s multiplicity**: `(r,NULL)` appears `mult_R(r)` times when
+  `r` is unmatched and `0` when matched (each copy reduces to `xᵢ ∧ ¬match` in
+  Boolean), matching SQL `LEFT JOIN`'s bag semantics.
 
-1. **Existence override location.** Build `1 ⊖ [count≥2]` inside the
-   aggregation-provenance construction for scalar-subquery groups (step 2), or as
-   a query-level `EXCEPT` after lifting that restriction? The former is more
-   contained and keeps the value pairing.
-2. **`[count ≥ 2]` source.** Reuse the `COUNT` cmp evaluator (`count(*) >= 2`
-   over the group) so the cardinality logic stays in one place, vs. a direct
-   `⊕_{i<j} k_i ⊗ k_j` gate build (O(n^2), but no dependency on the cmp arm).
-3. **Empty / NULL value carrier.** Confirm `choose(Q.x)`'s value (an `agg_token`)
-   threads to the outer expression as a value (e.g. `a + (scalar)` -> `gate_arith`
-   over the choose result), and that its NULL-on-empty reads correctly under the
-   `1 ⊖ [count≥2]` existence (the row exists in the 0-match world with a NULL
-   value).
-4. **Strict variant.** We chose **exclude**; the **error** (SQL-faithful) variant
-   is "raise when `[count ≥ 2]` is satisfiable" -- the same event, a triviality
-   check on the `COUNT` gate (often settled by `RangeCheck`, no full SAT). Keep
-   exclude as the default for an implicit scalar subquery, error as opt-in?
+**Semiring-general.** Every semiring ProvSQL carries is positive and naturally
+ordered, hence has the *canonical, unique* monus `a ⊖ b := ⊓{c : a ⊑ b ⊕ c}`. So
+the antijoin provenance is defined and canonical in **all** of them (no "no-monus"
+boundary). `FULL`/`RIGHT` are symmetric -- add the mirror antijoin branch on the
+other side.
+
+## The structural transform (in the planner hook)
+
+Replace `R ⟕_θ S` with a subquery computing:
+
+```sql
+   ( SELECT R.cols, S.cols  FROM R JOIN S ON θ )              -- matched      (⊗)
+   UNION ALL                                                  -- ⊎  (provenance_plus)
+   ( SELECT R.cols, NULL, …, NULL
+     FROM ( SELECT R.cols FROM R
+            EXCEPT ALL                                        -- ProvSQL's −  (NOT-IN semantics:
+            SELECT R.cols FROM R JOIN S ON θ ) )              --  R(r)⊗(1⊖⊕matches))
+```
+
+Both `UNION ALL` (`process_set_operation_union`) and `EXCEPT ALL` → `−`
+(`transform_except_into_join`) are **native**, so the new code is purely
+parse-tree construction plus a Var remap. Decision (with Senellart): the `EXCEPT`
+rewrite was the *conceptual guide*; the implementation does the equivalent via the
+tractable `−`/`NOT IN`, in the planner hook.
+
+## Implementation plan -- explicit, ordered, each step independently testable
+
+1. **Detect + scope-gate.** A pre-pass `lower_left_outer_joins(q)` (called for
+   `CMD_SELECT` before `process_query`, when `provsql_active`) that fires only when
+   `jointree.fromlist` contains a `JoinExpr` with `jointype = JOIN_LEFT` whose
+   `larg`/`rarg` are base-relation `RangeTblRef`s. Everything else falls through
+   unchanged, so nothing else can regress until the arm is correct.
+   *Test: triggers on `R LEFT JOIN S`, no-ops elsewhere; the 196-test suite stays
+   green.*
+2. **Matched arm.** Build the inner-join subquery
+   `SELECT R.cols, S.cols FROM R JOIN S ON θ`.
+   *Test: matched-row existence equals today's LEFT-treated-as-INNER result.*
+3. **Antijoin arm.** Build
+   `SELECT R.cols, NULL,… FROM R EXCEPT ALL SELECT R.cols FROM R JOIN S ON θ`,
+   padding `S`'s columns with typed `NULL` `Const`s; reuse the `EXCEPT ALL` → `−`
+   path so the provenance is `R(r) ⊗ (1 ⊖ ⊕matches)`.
+   *Test: on the `r1`/`q` example the antijoin existence is `0.75` and includes the
+   0-match world.*
+4. **`UNION ALL` + splice.** Combine the two arms under a `SetOperationStmt`;
+   replace the `JoinExpr` with a `RangeTblRef` to the new subquery RTE
+   (replace-RTE-in-place, line ~4951 pattern, so outer varnos for the *join* index
+   stay valid); remap the base-`R`/`S` Vars to the subquery's columns through the
+   join's `joinaliasvars` (R.i → subcol p, S.j → subcol q).
+   *Test: `r1 LEFT JOIN q GROUP BY r1.k` → `1.0`; `… HAVING count(q.k) <= 1` →
+   `0.75`; full suite green.*
+5. **`FULL` / `RIGHT`** as the mirror antijoin branch (and both branches for
+   `FULL`). Add `test/sql/outer_join.sql` pinning the possible-worlds values
+   (matched, 0-match NULL, ≥2, and the `count`-HAVING cases) for `LEFT`/`RIGHT`/
+   `FULL`, on tuple-independent and `repair_key` (BID) right sides.
+
+**Then scalar subqueries fall out:** decorrelate
+`(SELECT x FROM Q WHERE corr)` to a `LEFT JOIN`:
+
+```sql
+SELECT R.*, choose(Q.x)
+FROM R LEFT JOIN Q ON corr
+GROUP BY R.*
+HAVING count(Q.k) <= 1            -- value = choose; existence from the FIXED LEFT JOIN
+```
+
+No gate-level override -- the corrected `LEFT JOIN` supplies the `0`-match NULL row
+and the `count<=1` HAVING excludes only the `>=2` worlds. (The scalar-`SubLink`
+interception itself already exists and currently errors; it would route here.)
+This is a separate, smaller follow-up once outer joins are correct.
+
+## Code pointers
+
+- **The bug:** `src/provsql.c`, the `RTE_JOIN` arm (`JOIN_LEFT`/`FULL`/`RIGHT`
+  "Nothing to do").
+- **Antijoin/monus construction template:** `transform_except_into_join` -- builds
+  `LEFT JOIN` + `provenance_monus`, including the `joinaliasvars` /
+  `joinleftcols` / `joinrightcols` / `eref` bookkeeping the ruleutils deparser
+  needs (NULL eref segfaults `pg_get_querydef`).
+- **Replace-RTE-in-place, keep outer varnos:** line ~4951 (the safe-query
+  subquery substitution) -- the technique that avoids remapping the *join*-index
+  Vars; the base-relation Vars still need remapping via `joinaliasvars`.
+- **Set-op handling:** `process_set_operation_union` (UNION ALL),
+  `transform_except_into_join` (EXCEPT ALL → `−`).
+- **Cached OIDs (already used nearby):** `OID_FUNCTION_PROVENANCE_TIMES`,
+  `..._MONUS`, `..._PLUS`, `OID_FUNCTION_GATE_ONE`; the `choose` aggregate;
+  `count(*)`.
 
 ## Validated facts (for the record)
 
-- Correlated `LATERAL (SELECT … FROM q WHERE q.k = r1.k …)` is accepted by the
-  rewriter (lowered to `provenance_aggregate(choose(q.x), …)`); no LATERAL error.
-- `LEFT JOIN` keeps the no-match outer row with `NULL` at the outer probability;
-  inner join drops it.
-- `HAVING count(*) <= 1` and `< 2` both compute `[exactly 1]` (drop the empty
-  world) -- the empty-group exclusion, the same convention behind the `sum_dp`
-  value-`0` bug.
-- `EXCEPT` on an aggregate result is rejected
-  (`Non-ALL set operations (UNION, EXCEPT) on aggregate results not supported`).
+- LEFT JOIN currently mis-computes: `r1 LEFT JOIN q GROUP BY r1.k` = 0.75 (should
+  be 1.0); `… HAVING count(q.k) <= 1` = 0.5 (should be 0.75). `LEFT JOIN … HAVING
+  count(q.k) <= 1` does **not** shortcut the fix -- still 0.5.
+- The monus existence `outer ⊗ (1 ⊖ [count≥2])`, built by hand, evaluates
+  correctly and is semiring-general: probability `0.75`, `sr_counting` → `0`,
+  `sr_formula` → `𝟙 ⊖ (10 ⊗ 20)`, with **no** "does not support agg gates" error
+  (the `cmp`/HAVING expands to a plain `⊕/⊗/⊖` circuit).
+- `EXCEPT ALL` is native (→ `−` via `transform_except_into_join`); set `EXCEPT`
+  (which needs the `δ` squash) is refused on aggregate results.
+- ProvSQL's `−` ≠ SQL `EXCEPT ALL`: it is `NOT IN` (`α ⊖ ⊕β`); the standard bag
+  difference `max(0, m₁−m₂)` is intractable for provenance and deliberately not
+  implemented.
+- Outer joins are accepted syntactically (`src/provsql.c:722`) but their
+  provenance is wrong as above -- so the `CLAUDE.md` "JOIN (not outer/...)" line
+  is *correct*, not stale.
