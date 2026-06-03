@@ -34,6 +34,7 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
 #include "executor/executor.h"
+#include "optimizer/optimizer.h"
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
@@ -5386,6 +5387,172 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
 }
 
 /**
+ * @brief Build the derived single-row aggregate @c D for an UNcorrelated scalar
+ *        subquery body, to be cross-joined into the outer FROM.
+ *
+ * Aggregate body @c "SELECT agg(..) FROM Q [WHERE]" -> @c D is the body itself
+ * (always one row).  Value body @c "SELECT val FROM Q [WHERE]" -> @c D is
+ * @c "SELECT choose(val) FROM Q [WHERE] HAVING count(*) <= 1" -- one row, with
+ * the scalar subquery's at-most-one-row rule baked into the moved subquery.
+ * Returns @c NULL unless the body is an uncorrelated clean SELECT over tracked
+ * base relations (a comma-join is fine; @c D is then an inner join).
+ *
+ * Faithful to ProvSQL aggregates: an empty @c Q yields an empty group, hence a
+ * @c gate_zero row that drops out -- exactly what a hand-written derived
+ * aggregate does; the correlated path's 0-match NULL row is not reconstructed.
+ */
+static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
+                                                  Query *body) {
+  Query *D;
+  TargetEntry *vte;
+  ListCell *lc;
+
+  if (!IsA(body, Query) || body->commandType != CMD_SELECT)
+    return NULL;
+  if (body->groupClause || body->groupingSets || body->distinctClause ||
+      body->setOperations || body->hasWindowFuncs || body->hasSubLinks ||
+      body->limitCount || body->limitOffset || body->cteList ||
+      list_length(body->targetList) != 1)
+    return NULL;
+  if (!body->jointree || body->jointree->fromlist == NIL)
+    return NULL;
+  /* Correlated bodies are the LEFT-JOIN decorrelation's job, not this one. */
+  if (contain_vars_of_level((Node *)body->targetList, 1) ||
+      (body->jointree->quals && contain_vars_of_level(body->jointree->quals, 1)))
+    return NULL;
+  /* Every FROM relation must be a tracked base relation, so D is a processable
+   * tracked subquery (a comma-join is fine -- D is then an inner join). */
+  foreach (lc, body->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return NULL;
+  }
+  foreach (lc, body->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return NULL;
+  }
+
+  vte = (TargetEntry *)linitial(body->targetList);
+
+  if (body->hasAggs) {
+    /* Aggregate body: a single bare aggregate (one row, no grouping). */
+    if (!IsA(vte->expr, Aggref))
+      return NULL;
+    D = (Query *)copyObject(body);
+  } else {
+    /* Value body: pick the single value with choose(), gate the >1-row worlds
+     * with HAVING count(*) <= 1. */
+    Aggref *cnt;
+    OpExpr *le;
+    Oid le_op;
+
+    if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
+      return NULL;
+    D = (Query *)copyObject(body);
+    vte = (TargetEntry *)linitial(D->targetList);
+    vte->expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                       exprType((Node *)vte->expr),
+                                       exprType((Node *)vte->expr), vte->expr);
+    D->hasAggs = true;
+
+    cnt = makeNode(Aggref);
+    cnt->aggfnoid = F_COUNT_; /* count(*) */
+    cnt->aggtype = INT8OID;
+    cnt->aggtranstype = InvalidOid;
+    cnt->aggargtypes = NIL;
+    cnt->args = NIL;
+    cnt->aggstar = true;
+    cnt->aggkind = AGGKIND_NORMAL;
+    cnt->aggsplit = AGGSPLIT_SIMPLE;
+    cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+    cnt->aggno = cnt->aggtransno = -1;
+#endif
+    le = makeNode(OpExpr);
+    le_op = OpernameGetOprid(list_make1(makeString("<=")), INT8OID, INT8OID);
+    le->opno = le_op;
+    le->opfuncid = get_opcode(le_op);
+    le->opresulttype = BOOLOID;
+    le->opcollid = InvalidOid;
+    le->inputcollid = InvalidOid;
+    le->args = list_make2(cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                         Int64GetDatum(1), false,
+                                         FLOAT8PASSBYVAL));
+    le->location = -1;
+    D->havingQual = (Node *)le;
+  }
+  return D;
+}
+
+/**
+ * @brief Move uncorrelated scalar subqueries that are direct target-list entries
+ *        into a cross-joined derived aggregate in the outer FROM.
+ *
+ * An uncorrelated @c (SELECT agg/val FROM Q …) is a single constant value: it
+ * becomes a one-row derived table @c D (see @c oj_build_uncorrelated_from_subquery)
+ * appended to the FROM as a cross-join, and the target entry is replaced by a Var
+ * to @c D's column.  Restricted to a direct target-list entry so the (aggregate)
+ * @c agg_token flows straight to the output column: nesting it inside arithmetic
+ * would coerce the @c agg_token to a scalar and silently drop its provenance.
+ * Runs before @c decorrelate_scalar_sublinks; correlated sublinks (and ones in
+ * other positions) are left untouched for the remaining paths.
+ */
+static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
+                                               Query *q) {
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree)
+    return false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    SubLink *sl;
+    Query *D;
+    RangeTblEntry *d_rte;
+    RangeTblRef *rtr;
+    TargetEntry *dte;
+    Index d_idx;
+
+    if (!IsA(te->expr, SubLink))
+      continue;
+    sl = (SubLink *)te->expr;
+    if (sl->subLinkType != EXPR_SUBLINK || !IsA(sl->subselect, Query))
+      continue;
+    D = oj_build_uncorrelated_from_subquery(constants, (Query *)sl->subselect);
+    if (D == NULL)
+      continue;
+
+    d_rte = oj_make_subquery_rte(D);
+    rtr = makeNode(RangeTblRef);
+    dte = (TargetEntry *)linitial(D->targetList);
+    q->rtable = lappend(q->rtable, d_rte);
+    d_idx = list_length(q->rtable);
+    rtr->rtindex = d_idx;
+    q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+    te->expr = (Expr *)makeVar(d_idx, 1, exprType((Node *)dte->expr),
+                               exprTypmod((Node *)dte->expr),
+                               exprCollation((Node *)dte->expr), 0);
+    changed = true;
+  }
+
+  if (changed) {
+    oj_sublink_scan scan;
+    /* Some correlated sublinks may remain; clear hasSubLinks only if none do. */
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 0;
+    scan.found_var = NULL;
+    oj_sublink_scan_walker((Node *)q->targetList, &scan);
+    if (q->jointree->quals)
+      oj_sublink_scan_walker(q->jointree->quals, &scan);
+    if (scan.n_sublinks == 0)
+      q->hasSubLinks = false;
+  }
+  return changed;
+}
+
+/**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
  * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
@@ -7845,6 +8012,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active) {
     rewrite_array_sublinks(constants, q);
     rewrite_predicate_sublinks(constants, q);
+    move_uncorrelated_sublinks_to_from(constants, q);
     decorrelate_scalar_sublinks(constants, q);
   }
 

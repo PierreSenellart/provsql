@@ -5,13 +5,6 @@ SET search_path TO provsql_test, provsql;
 SELECT
     provenance ();
 
--- Uncorrelated scalar aggregate subquery
-SELECT
-    name,
-    (SELECT COUNT(*) FROM personnel) AS total
-FROM
-    personnel;
-
 SELECT DISTINCT ON (city)
     *
 FROM

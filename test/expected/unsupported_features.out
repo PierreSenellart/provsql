@@ -1,6 +1,5 @@
 \set ECHO none
 ERROR:  ProvSQL: provenance() called on a table without provenance
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
 ERROR:  ProvSQL: DISTINCT ON not supported
 ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported
 ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported

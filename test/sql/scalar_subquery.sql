@@ -422,3 +422,53 @@ DROP TABLE mt2;
 DROP TABLE mt_s;
 DROP TABLE mt_q;
 DROP TABLE mt_r;
+
+-- Part 13: an UNcorrelated scalar subquery is a single constant value, so it is
+-- moved out of the SELECT list into a one-row derived aggregate cross-joined
+-- into the outer FROM (no correlation key, so the LEFT-JOIN path does not apply).
+-- An aggregate body goes as-is; a value body becomes choose(val) with a baked-in
+-- HAVING count(*) <= 1.  Faithful to ProvSQL aggregates: an empty group yields a
+-- gate_zero row that drops, so the empty world is not kept (unlike the
+-- correlated path's 0-match NULL row).
+CREATE TABLE uc_r(a int);
+CREATE TABLE uc_q(x int);
+INSERT INTO uc_r VALUES (10),(20);
+INSERT INTO uc_q VALUES (100),(200),(201);
+SELECT add_provenance('uc_r');
+SELECT add_provenance('uc_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM uc_r;
+  PERFORM set_prob(provsql, 0.5) FROM uc_q;
+END $$;
+
+-- Aggregate body: count(*) over all of uc_q.  Value 3; row probability is the
+-- aggregate's existence = P(>=1 of the three uc_q rows present) = 1 - 0.5^3.
+CREATE TABLE uc1 AS
+  SELECT uc_r.a AS a, (SELECT count(*) FROM uc_q) AS c,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM uc_r;
+SELECT remove_provenance('uc1');
+SELECT a, c, p FROM uc1 ORDER BY a;
+DROP TABLE uc1;
+
+-- Value body: (SELECT uc_q.x FROM uc_q) -> choose(x) + count(*) <= 1.  The row
+-- survives only in the exactly-one-present worlds, p = 3 * 0.5^3 = 0.375.
+CREATE TABLE uc2 AS
+  SELECT uc_r.a AS a,
+         (SELECT uc_q.x FROM uc_q) AS v,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM uc_r;
+SELECT remove_provenance('uc2');
+SELECT a, p FROM uc2 ORDER BY a;
+DROP TABLE uc2;
+
+-- Value body, single matching row: the value flows straight through.
+CREATE TABLE uc3 AS
+  SELECT uc_r.a AS a, (SELECT uc_q.x FROM uc_q WHERE uc_q.x = 100) AS v
+  FROM uc_r;
+SELECT remove_provenance('uc3');
+SELECT a, v FROM uc3 ORDER BY a;
+DROP TABLE uc3;
+
+DROP TABLE uc_q;
+DROP TABLE uc_r;

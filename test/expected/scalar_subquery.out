@@ -223,3 +223,30 @@ a|c
 20|1 (*)
 30|0 (*)
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|c|p
+10|3 (*)|0.8750
+20|3 (*)|0.8750
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
+10|0.3750
+20|0.3750
+(2 rows)
+remove_provenance
+
+(1 row)
+a|v
+10|100 (*)
+20|100 (*)
+(2 rows)
