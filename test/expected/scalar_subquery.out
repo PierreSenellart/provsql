@@ -25,3 +25,16 @@ remove_provenance
 a|p
 10|0.7500
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+10|0.5000
+20|0.0000
+(2 rows)

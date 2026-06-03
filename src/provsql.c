@@ -4580,10 +4580,12 @@ static Node *oj_decorr_var_mut(Node *node, void *cx) {
   return expression_tree_mutator(node, oj_decorr_var_mut, cx);
 }
 
-/** @brief Walker: count SubLink nodes, and capture a Var referencing varno
- *  @p target_varno (level 0) -- used to find a Q column for the count() key. */
+/** @brief Walker: count SubLink nodes (capturing the first), and capture a Var
+ *  referencing varno @p target_varno (level 0) -- used to find a Q column for
+ *  the count() key. */
 typedef struct oj_sublink_scan {
   int n_sublinks;
+  SubLink *found_sublink;
   Index target_varno; /* find any level-0 Var on this rel */
   Var *found_var;
 } oj_sublink_scan;
@@ -4592,8 +4594,11 @@ static bool oj_sublink_scan_walker(Node *node, void *cx) {
   oj_sublink_scan *s = (oj_sublink_scan *)cx;
   if (node == NULL)
     return false;
-  if (IsA(node, SubLink))
+  if (IsA(node, SubLink)) {
     s->n_sublinks++;
+    if (s->found_sublink == NULL)
+      s->found_sublink = (SubLink *)node;
+  }
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
     if (s->found_var == NULL && v->varlevelsup == 0 &&
@@ -4601,6 +4606,31 @@ static bool oj_sublink_scan_walker(Node *node, void *cx) {
       s->found_var = v;
   }
   return expression_tree_walker(node, oj_sublink_scan_walker, cx);
+}
+
+/** @brief Mutator: replace the specific @c SubLink node @p target (by pointer)
+ *  with @p replacement. */
+typedef struct oj_sl_replace_ctx {
+  SubLink *target;
+  Node *replacement;
+} oj_sl_replace_ctx;
+
+static Node *oj_sl_replace_mut(Node *node, void *cx) {
+  oj_sl_replace_ctx *c = (oj_sl_replace_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (node == (Node *)c->target)
+    return c->replacement;
+  return expression_tree_mutator(node, oj_sl_replace_mut, cx);
+}
+
+/** @brief Walker: true if the subtree contains the specific SubLink @p cx. */
+static bool oj_contains_sublink_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (node == (Node *)cx)
+    return true;
+  return expression_tree_walker(node, oj_contains_sublink_walker, cx);
 }
 
 /** @brief Build an @c Aggref for a single-argument aggregate. */
@@ -4648,7 +4678,9 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   oj_decorr_ctx dctx;
   oj_sublink_scan scan;
   ListCell *lc;
-  int i;
+  int i, n_tl_sublinks = 0;
+  bool in_where = false;
+  Aggref *choose_agg;
 
   if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
     return false;
@@ -4668,29 +4700,39 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   if (R_rte->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, R_rte))
     return false;
 
-  /* Exactly one SubLink, the direct expr of a target-list entry. */
-  foreach (lc, q->targetList) {
-    TargetEntry *te = (TargetEntry *)lfirst(lc);
-    if (IsA(te->expr, SubLink)) {
-      if (sl != NULL)
-        return false; /* more than one */
-      sl = (SubLink *)te->expr;
-      sl_te = te;
-    }
-  }
-  if (sl == NULL || sl->subLinkType != EXPR_SUBLINK ||
-      !IsA(sl->subselect, Query))
-    return false;
-
-  /* No other SubLink anywhere in the query (WHERE, the body, ...). */
+  /* Exactly one SubLink in the whole query.  It is either the direct expr of a
+   * target-list entry (its value flows to choose()), or it sits inside a WHERE
+   * conjunct (a comparison that will be lifted to HAVING on choose()). */
   scan.n_sublinks = 0;
+  scan.found_sublink = NULL;
   scan.target_varno = 0;
   scan.found_var = NULL;
   oj_sublink_scan_walker((Node *)q->targetList, &scan);
+  n_tl_sublinks = scan.n_sublinks;
   if (q->jointree->quals)
     oj_sublink_scan_walker(q->jointree->quals, &scan);
   if (scan.n_sublinks != 1)
     return false;
+  sl = scan.found_sublink;
+  if (sl == NULL || sl->subLinkType != EXPR_SUBLINK ||
+      !IsA(sl->subselect, Query))
+    return false;
+
+  /* Is it a direct target-list entry?  Otherwise it must be in WHERE; a
+   * SubLink nested inside a target-list expression (arithmetic, comparison)
+   * is not supported. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->expr == (Expr *)sl) {
+      sl_te = te;
+      break;
+    }
+  }
+  if (sl_te == NULL) {
+    if (n_tl_sublinks > 0)
+      return false; /* nested in a target-list expression */
+    in_where = true;
+  }
 
   /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel. */
   sub = (Query *)sl->subselect;
@@ -4792,10 +4834,14 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     /* Any pre-existing outer WHERE (over R, level 0) stays in jointree->quals.*/
   }
 
-  /* Replace the SubLink target entry with choose(val). */
-  sl_te->expr = (Expr *)oj_make_aggref(
-    constants->OID_FUNCTION_CHOOSE, exprType((Node *)valexpr),
-    exprType((Node *)valexpr), valexpr);
+  /* choose(val) picks the single matched value.  For a target-list SubLink it
+   * replaces the entry directly; for a WHERE SubLink it is substituted into the
+   * conjunct, which then moves to HAVING (below). */
+  choose_agg = oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                              exprType((Node *)valexpr),
+                              exprType((Node *)valexpr), valexpr);
+  if (!in_where)
+    sl_te->expr = (Expr *)choose_agg;
 
   /* GROUP BY every R user column: each needs a target-list entry carrying a
    * ressortgroupref plus a SortGroupClause. */
@@ -4842,12 +4888,15 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   }
 
   /* HAVING count(Q.key) <= 1, with Q.key a Q column from the correlation
-   * (NULL on the null-padded antijoin rows). */
+   * (NULL on the null-padded antijoin rows).  When the SubLink came from a
+   * WHERE comparison, that conjunct (with the SubLink replaced by choose) is
+   * ANDed in -- a comparison on the aggregated value belongs in HAVING. */
   {
     Var *qkey = (Var *)copyObject(scan.found_var);
     Aggref *cnt;
     OpExpr *le = makeNode(OpExpr);
     Oid le_op;
+    List *having_conjuncts;
 
     qkey->varno = Q_idx;
 #if PG_VERSION_NUM >= 130000
@@ -4866,7 +4915,42 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
                      Int64GetDatum(1), false, FLOAT8PASSBYVAL));
     le->location = -1;
-    q->havingQual = (Node *)le;
+    having_conjuncts = list_make1(le);
+
+    if (in_where) {
+      /* Split the WHERE AND-list: the conjunct holding the SubLink (with the
+       * SubLink -> choose substitution) moves to HAVING; the rest stay. */
+      oj_sl_replace_ctx rc;
+      Node *quals = q->jointree->quals;
+      List *conjs =
+        (quals && IsA(quals, BoolExpr) &&
+         ((BoolExpr *)quals)->boolop == AND_EXPR)
+          ? ((BoolExpr *)quals)->args
+          : (quals ? list_make1(quals) : NIL);
+      List *kept = NIL;
+      ListCell *lc2;
+
+      rc.target = sl;
+      rc.replacement = (Node *)choose_agg;
+      foreach (lc2, conjs) {
+        Node *c = (Node *)lfirst(lc2);
+        if (oj_contains_sublink_walker(c, sl))
+          having_conjuncts =
+            lappend(having_conjuncts, oj_sl_replace_mut(c, &rc));
+        else
+          kept = lappend(kept, c);
+      }
+      q->jointree->quals =
+        (kept == NIL) ? NULL
+                      : (list_length(kept) == 1 ? (Node *)linitial(kept)
+                                                : (Node *)makeBoolExpr(
+                                                    AND_EXPR, kept, -1));
+    }
+
+    q->havingQual =
+      (list_length(having_conjuncts) == 1)
+        ? (Node *)linitial(having_conjuncts)
+        : (Node *)makeBoolExpr(AND_EXPR, having_conjuncts, -1);
   }
 
   q->hasAggs = true;
