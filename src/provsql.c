@@ -1183,12 +1183,48 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     expr_s->funcresulttype = constants->OID_TYPE_UUID;
 
     // check the particular case of count
-    if (aggregation_function == F_COUNT_ ||
-        aggregation_function == F_COUNT_ANY) // count(*) or count(arg)
+    if (aggregation_function == F_COUNT_) // count(*): counts every row
     {
       Const *one = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
                              sizeof(int32), Int32GetDatum(1), false, true);
       expr_s->args = list_make2(one, expr);
+      aggregation_function = F_SUM_INT4;
+    } else if (aggregation_function == F_COUNT_ANY) // count(expr)
+    {
+      /* count(expr) counts only rows where expr IS NOT NULL, but -- unlike the
+       * other aggregates -- an all-NULL group still has a defined result of 0
+       * (not NULL), so the row must stay PRESENT in the aggregate to carry the
+       * group's existence; it just contributes 0.  Pass the per-row value
+       * CASE WHEN expr IS NOT NULL THEN 1 ELSE 0 END: a NULL expr (e.g. the
+       * NULL-padded rows a LEFT JOIN manufactures) contributes 0 to the count
+       * yet keeps the group alive, so HAVING count(expr)=0 is correctly true.
+       * count(*) keeps the constant 1 above. */
+      Expr *arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
+      CaseExpr *ce = makeNode(CaseExpr);
+      CaseWhen *cw = makeNode(CaseWhen);
+      NullTest *nt = makeNode(NullTest);
+
+      nt->arg = (Expr *)arg;
+      nt->nulltesttype = IS_NOT_NULL;
+      nt->argisrow = false;
+      nt->location = -1;
+
+      cw->expr = (Expr *)nt;
+      cw->result = (Expr *)makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                                     sizeof(int32), Int32GetDatum(1), false,
+                                     true);
+      cw->location = -1;
+
+      ce->casetype = constants->OID_TYPE_INT;
+      ce->casecollid = InvalidOid;
+      ce->arg = NULL;
+      ce->args = list_make1(cw);
+      ce->defresult = (Expr *)makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                                        sizeof(int32), Int32GetDatum(0), false,
+                                        true);
+      ce->location = -1;
+
+      expr_s->args = list_make2(ce, expr);
       aggregation_function = F_SUM_INT4;
     } else {
       expr_s->args =

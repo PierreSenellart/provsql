@@ -3295,6 +3295,10 @@ DECLARE
   agg_tok uuid;
   agg_val varchar;
 BEGIN
+  -- Drop the NULL placeholders array_agg keeps for rows that did not produce a
+  -- semimod gate (provenance_semimod returns NULL for a NULL aggregated value),
+  -- so a NULL input never participates in the aggregate.
+  tokens := array_remove(tokens, NULL);
   c:=COALESCE(array_length(tokens, 1), 0);
 
   agg_val = CAST(val as VARCHAR);
@@ -3335,6 +3339,14 @@ DECLARE
   semimod_token uuid;
   value_token uuid;
 BEGIN
+  -- A NULL value means this row does not participate in the aggregate (SQL
+  -- aggregates ignore NULL inputs; only count(*) counts rows unconditionally,
+  -- and it passes a constant 1 here).  Produce no semimod gate so the row is
+  -- skipped when provenance_aggregate builds the agg gate.
+  IF val IS NULL THEN
+    RETURN NULL;
+  END IF;
+
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
     INTO value_token;
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
