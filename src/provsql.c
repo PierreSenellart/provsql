@@ -4957,11 +4957,15 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     in_where = true;
   }
 
-  /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel. */
+  /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel.
+   * LIMIT / OFFSET would pick a bounded, order-dependent subset that the
+   * count(...)<=1 decorrelation does not reproduce, and a CTE would be dropped;
+   * reject those rather than silently change the semantics. */
   sub = (Query *)sl->subselect;
   if (sub->commandType != CMD_SELECT || sub->hasAggs || sub->groupClause ||
       sub->groupingSets || sub->distinctClause || sub->setOperations ||
-      sub->hasWindowFuncs || sub->hasSubLinks ||
+      sub->hasWindowFuncs || sub->hasSubLinks || sub->limitCount ||
+      sub->limitOffset || sub->cteList ||
       list_length(sub->rtable) != 1 || list_length(sub->targetList) != 1)
     return false;
   if (!sub->jointree || list_length(sub->jointree->fromlist) != 1 ||

@@ -168,3 +168,23 @@ DROP TABLE ss6;
 DROP TABLE ss_q5;
 DROP TABLE ss_s5;
 DROP TABLE ss_r5;
+
+-- Part 6: unsupported scalar-subquery forms are rejected cleanly (never
+-- silently miscomputed or crashing): an aggregate body, a LIMIT/OFFSET body,
+-- and EXISTS.
+CREATE TABLE rj_r(a int, k int);
+CREATE TABLE rj_q(k int, x int);
+INSERT INTO rj_r VALUES (1,1);
+INSERT INTO rj_q VALUES (1,10),(1,11);
+SELECT add_provenance('rj_r');
+SELECT add_provenance('rj_q');
+
+SELECT rj_r.a, (SELECT max(rj_q.x) FROM rj_q WHERE rj_q.k = rj_r.k) AS sx,
+       provenance() AS p FROM rj_r;
+SELECT rj_r.a, (SELECT rj_q.x FROM rj_q WHERE rj_q.k = rj_r.k LIMIT 1) AS sx,
+       provenance() AS p FROM rj_r;
+SELECT rj_r.a, provenance() AS p FROM rj_r
+WHERE EXISTS (SELECT 1 FROM rj_q WHERE rj_q.k = rj_r.k);
+
+DROP TABLE rj_q;
+DROP TABLE rj_r;

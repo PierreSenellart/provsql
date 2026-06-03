@@ -77,3 +77,12 @@ a|p
 10|0.5000
 20|0.5000
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
