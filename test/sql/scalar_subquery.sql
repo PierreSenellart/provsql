@@ -169,8 +169,8 @@ DROP TABLE ss_q5;
 DROP TABLE ss_s5;
 DROP TABLE ss_r5;
 
--- Part 6: unsupported scalar-subquery forms are rejected cleanly (never
--- silently miscomputed or crashing): a LIMIT/OFFSET body and EXISTS.
+-- Part 6: a LIMIT/OFFSET body would pick a bounded, order-dependent subset, so
+-- it is rejected cleanly (never silently miscomputed or crashing).
 CREATE TABLE rj_r(a int, k int);
 CREATE TABLE rj_q(k int, x int);
 INSERT INTO rj_r VALUES (1,1);
@@ -180,8 +180,6 @@ SELECT add_provenance('rj_q');
 
 SELECT rj_r.a, (SELECT rj_q.x FROM rj_q WHERE rj_q.k = rj_r.k LIMIT 1) AS sx,
        provenance() AS p FROM rj_r;
-SELECT rj_r.a, provenance() AS p FROM rj_r
-WHERE EXISTS (SELECT 1 FROM rj_q WHERE rj_q.k = rj_r.k);
 
 DROP TABLE rj_q;
 DROP TABLE rj_r;
@@ -251,3 +249,63 @@ DROP TABLE ag_p;
 
 DROP TABLE ag_q;
 DROP TABLE ag_r;
+
+-- Part 9: EXISTS / IN (semijoin) and NOT EXISTS / NOT IN (antijoin) over a
+-- single tracked relation decorrelate via the same "(SELECT count(*) ...) >= 1"
+-- / "= 0" lowering: count(*) -> count(Q.key) over the "R LEFT JOIN Q" group,
+-- comparison lifted to HAVING.  Semijoin keeps R⊗⊕Q; antijoin keeps R⊗(1⊖⊕Q),
+-- so EXISTS and NOT EXISTS are exact complements (their probabilities sum to 1).
+CREATE TABLE se_r(a int, k int);
+CREATE TABLE se_q(k int, x int);
+INSERT INTO se_r VALUES (10,1),(20,2),(30,3);
+INSERT INTO se_q VALUES (1,100),(2,200),(2,201);  -- k=1 one match, k=2 two, k=3 none
+SELECT add_provenance('se_r');
+SELECT add_provenance('se_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM se_r;
+  PERFORM set_prob(provsql, 0.5) FROM se_q;
+END $$;
+
+-- EXISTS: k=1 -> 0.5, k=2 -> 0.75 (>=1 of two i.i.d. 0.5), k=3 -> 0.
+CREATE TABLE se1 AS
+  SELECT se_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM se_r WHERE EXISTS (SELECT 1 FROM se_q WHERE se_q.k = se_r.k);
+SELECT remove_provenance('se1');
+SELECT a, p FROM se1 ORDER BY a;
+DROP TABLE se1;
+
+-- NOT EXISTS: the complement -- k=1 -> 0.5, k=2 -> 0.25, k=3 -> 1.
+CREATE TABLE se2 AS
+  SELECT se_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM se_r WHERE NOT EXISTS (SELECT 1 FROM se_q WHERE se_q.k = se_r.k);
+SELECT remove_provenance('se2');
+SELECT a, p FROM se2 ORDER BY a;
+DROP TABLE se2;
+
+-- IN matches EXISTS; the correlation key is taken from the IN testexpr.
+CREATE TABLE se3 AS
+  SELECT se_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM se_r WHERE se_r.k IN (SELECT se_q.k FROM se_q);
+SELECT remove_provenance('se3');
+SELECT a, p FROM se3 ORDER BY a;
+DROP TABLE se3;
+
+-- NOT IN matches NOT EXISTS.
+CREATE TABLE se4 AS
+  SELECT se_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM se_r WHERE se_r.k NOT IN (SELECT se_q.k FROM se_q);
+SELECT remove_provenance('se4');
+SELECT a, p FROM se4 ORDER BY a;
+DROP TABLE se4;
+
+-- IN with an extra subselect filter: the testexpr key is ANDed with the body
+-- WHERE.  q.x >= 200 drops the k=1 match (x=100), so k=1 -> 0, k=2 -> 0.75.
+CREATE TABLE se5 AS
+  SELECT se_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM se_r WHERE se_r.k IN (SELECT se_q.k FROM se_q WHERE se_q.x >= 200);
+SELECT remove_provenance('se5');
+SELECT a, p FROM se5 ORDER BY a;
+DROP TABLE se5;
+
+DROP TABLE se_q;
+DROP TABLE se_r;

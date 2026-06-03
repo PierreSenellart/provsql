@@ -37,6 +37,7 @@
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_oper.h"
+#include "rewrite/rewriteManip.h"
 #include "parser/parse_relation.h"
 #include "utils/builtins.h"
 #include "parser/parsetree.h"
@@ -4972,6 +4973,232 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
 }
 
 /**
+ * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
+ *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
+ *
+ * Requires a single tracked base relation Q and a (correlated) WHERE, with none
+ * of the shapes @c decorrelate_scalar_sublinks rejects downstream (aggregates,
+ * grouping, set ops, LIMIT, nested sublinks, CTEs).  The targetList is replaced
+ * wholesale by @c count(*), so its width is irrelevant here.  @p corr_supplied
+ * is set for @c IN / @c NOT @c IN, whose correlation comes from the testexpr and
+ * is ANDed into the (possibly empty) subselect WHERE by the caller.
+ */
+static bool predicate_subselect_decorrelatable(const constants_t *constants,
+                                               Query *sub,
+                                               bool corr_supplied) {
+  RangeTblEntry *qrte;
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT)
+    return false;
+  if (sub->groupClause || sub->groupingSets || sub->hasAggs ||
+      sub->distinctClause || sub->setOperations || sub->hasWindowFuncs ||
+      sub->hasSubLinks || sub->limitCount || sub->limitOffset || sub->cteList ||
+      list_length(sub->rtable) != 1)
+    return false;
+  if (!sub->jointree || (!corr_supplied && !sub->jointree->quals))
+    return false; /* an uncorrelated predicate has no Q key for count() */
+  qrte = list_nth_node(RangeTblEntry, sub->rtable, 0);
+  return qrte->rtekind == RTE_RELATION &&
+         oj_rte_has_provsql(constants, qrte);
+}
+
+/**
+ * @brief Turn a predicate subselect into the boolean @c "(SELECT count(*) FROM Q
+ *        WHERE corr) >= 1" (semijoin) or @c "... = 0" (antijoin).
+ *
+ * @c EXISTS / @c IN are existence tests (@c "⊕Q present"), so they are exactly
+ * @c "count(*) >= 1"; @c NOT @c EXISTS / @c NOT @c IN are their antijoin duals,
+ * @c "count(*) = 0".  Lowering them to a correlated count() comparison lets the
+ * aggregate-body arm of @c decorrelate_scalar_sublinks do the rest: it rewrites
+ * @c count(*) to @c count(Q.key) over the @c "R ⟕ Q" group (so the null-padded
+ * antijoin row is not counted) and lifts the comparison into @c HAVING -- i.e.
+ * the semijoin @c R⊗⊕Q and the antijoin @c R⊗(1⊖⊕Q) fall out of the existing
+ * outer-join lowering.
+ *
+ * @p extra_corr (for @c IN / @c NOT @c IN) is the @c "Q.col = x" correlation
+ * lifted out of the testexpr; it is ANDed into the subselect's WHERE.  @c EXISTS
+ * passes @c NULL, its correlation already living in the subselect.
+ */
+static Node *build_count_predicate(Query *subselect, Node *extra_corr,
+                                   bool antijoin) {
+  Query *sq = (Query *)copyObject(subselect);
+  Aggref *cnt = makeNode(Aggref);
+  SubLink *sl = makeNode(SubLink);
+  OpExpr *op = makeNode(OpExpr);
+  Oid o;
+
+  if (extra_corr)
+    sq->jointree->quals =
+      sq->jointree->quals
+        ? (Node *)makeBoolExpr(AND_EXPR,
+                               list_make2(sq->jointree->quals, extra_corr), -1)
+        : extra_corr;
+
+  cnt->aggfnoid = F_COUNT_; /* count(*) */
+  cnt->aggtype = INT8OID;
+  cnt->aggtranstype = InvalidOid;
+  cnt->aggargtypes = NIL;
+  cnt->args = NIL;
+  cnt->aggstar = true;
+  cnt->aggkind = AGGKIND_NORMAL;
+  cnt->aggsplit = AGGSPLIT_SIMPLE;
+  cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+  cnt->aggno = cnt->aggtransno = -1;
+#endif
+  sq->targetList =
+    list_make1(makeTargetEntry((Expr *)cnt, 1, pstrdup("count"), false));
+  sq->hasAggs = true;
+
+  sl->subLinkType = EXPR_SUBLINK;
+  sl->subselect = (Node *)sq;
+  sl->testexpr = NULL;
+  sl->operName = NIL;
+  sl->location = -1;
+
+  o = OpernameGetOprid(list_make1(makeString(antijoin ? "=" : ">=")), INT8OID,
+                       INT8OID);
+  op->opno = o;
+  op->opfuncid = get_opcode(o);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = InvalidOid;
+  op->args = list_make2(sl, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                      Int64GetDatum(antijoin ? 0 : 1), false,
+                                      FLOAT8PASSBYVAL));
+  op->location = -1;
+  return (Node *)op;
+}
+
+/** @brief Context for @c oj_param_repl_mut. */
+typedef struct {
+  int paramid;
+  Node *replacement;
+} oj_param_repl_ctx;
+
+/** @brief Replace every @c PARAM_SUBLINK with @p paramid by @p replacement. */
+static Node *oj_param_repl_mut(Node *node, void *cx) {
+  oj_param_repl_ctx *c = (oj_param_repl_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Param)) {
+    Param *p = (Param *)node;
+    if (p->paramkind == PARAM_SUBLINK && p->paramid == c->paramid)
+      return copyObject(c->replacement);
+    return node;
+  }
+  return expression_tree_mutator(node, oj_param_repl_mut, cx);
+}
+
+/**
+ * @brief For an @c "x IN (SELECT Q.col FROM Q [WHERE w])" (@c ANY_SUBLINK with
+ *        operator @c '='), build the @c "x = Q.col" correlation conjunct.
+ *
+ * The testexpr is @c "x = Param(subselect output)"; the subselect's single
+ * output column is @c Q.col.  We copy the testexpr, sink its outer operand(s)
+ * one level (@c x lives one step up from inside the subselect), then substitute
+ * @c Q.col for the @c PARAM_SUBLINK placeholder -- keeping the operator and any
+ * coercions (e.g. the @c varchar->text relabel around the param) intact.
+ * Returns @c NULL for anything but the single-column @c '=' form (row IN,
+ * @c > @c ANY, etc.).
+ */
+static Node *extract_in_corr(SubLink *sl) {
+  OpExpr *te;
+  Param *p;
+  Node *rhs, *qcol, *corr;
+  oj_param_repl_ctx ctx;
+  Query *sub = (Query *)sl->subselect;
+
+  if (sl->subLinkType != ANY_SUBLINK || !IsA(sl->testexpr, OpExpr))
+    return NULL;
+  te = (OpExpr *)sl->testexpr;
+  if (list_length(te->args) != 2 || list_length(sub->targetList) != 1)
+    return NULL;
+  rhs = (Node *)lsecond(te->args);
+  if (IsA(rhs, RelabelType))
+    rhs = (Node *)((RelabelType *)rhs)->arg; /* varchar->text etc. */
+  if (!IsA(rhs, Param))
+    return NULL;
+  p = (Param *)rhs;
+  if (p->paramkind != PARAM_SUBLINK || p->paramid != 1)
+    return NULL;
+
+  qcol = copyObject((Node *)((TargetEntry *)linitial(sub->targetList))->expr);
+  corr = copyObject((Node *)te);
+  IncrementVarSublevelsUp(corr, 1, 0); /* outer operands -> one level deeper */
+  ctx.paramid = 1;
+  ctx.replacement = qcol;
+  return oj_param_repl_mut(corr, &ctx);
+}
+
+/**
+ * @brief Rewrite top-level @c EXISTS / @c IN WHERE conjuncts (optionally negated)
+ *        over a single tracked relation into correlated @c count(*) comparisons.
+ *
+ * A pre-pass for @c decorrelate_scalar_sublinks: each qualifying conjunct (a
+ * bare @c EXISTS / @c IN sublink, or one wrapped in a single @c NOT -- i.e.
+ * @c NOT @c EXISTS / @c NOT @c IN) is replaced by the @c build_count_predicate
+ * form, after which the scalar-subquery decorrelation lowers the count()
+ * comparison to the @c "R ⟕ Q" semijoin / antijoin.  Conjuncts whose subselect is
+ * not decorrelatable (untracked / multi-relation / uncorrelated) are left
+ * untouched, so they hit the usual unsupported-subquery error.
+ */
+static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals)
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    Node *inner = c, *rewritten = NULL;
+    bool neg = false;
+    SubLink *sl;
+
+    if (IsA(c, BoolExpr) && ((BoolExpr *)c)->boolop == NOT_EXPR &&
+        list_length(((BoolExpr *)c)->args) == 1) {
+      neg = true;
+      inner = (Node *)linitial(((BoolExpr *)c)->args);
+    }
+    if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
+      sl = (SubLink *)inner;
+      if (sl->subLinkType == EXISTS_SUBLINK &&
+          predicate_subselect_decorrelatable(constants,
+                                             (Query *)sl->subselect, false)) {
+        /* EXISTS / NOT EXISTS: correlation already in the subselect WHERE. */
+        rewritten =
+          build_count_predicate((Query *)sl->subselect, NULL, neg);
+      } else if (sl->subLinkType == ANY_SUBLINK) {
+        /* IN / NOT IN: correlation lifted from the testexpr. */
+        Node *corr = extract_in_corr(sl);
+        if (corr &&
+            predicate_subselect_decorrelatable(constants,
+                                               (Query *)sl->subselect, true))
+          rewritten =
+            build_count_predicate((Query *)sl->subselect, corr, neg);
+      }
+    }
+    newconjs = lappend(newconjs, rewritten ? rewritten : c);
+    if (rewritten)
+      changed = true;
+  }
+
+  if (changed)
+    q->jointree->quals = (list_length(newconjs) == 1)
+                           ? (Node *)linitial(newconjs)
+                           : (Node *)makeBoolExpr(AND_EXPR, newconjs, -1);
+  return changed;
+}
+
+/**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
  * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
@@ -7433,8 +7660,10 @@ static Query *process_query(const constants_t *constants, Query *q,
    * GROUP BY + count<=1 HAVING.  Runs before lower_outer_joins so the LEFT JOIN
    * it produces is lowered with correct outer-join provenance, and before the
    * "Subqueries not supported" guard further down. */
-  if (provsql_active)
+  if (provsql_active) {
+    rewrite_predicate_sublinks(constants, q);
     decorrelate_scalar_sublinks(constants, q);
+  }
 
   /* Lower a top-level outer JOIN (LEFT / RIGHT / FULL) of two base relations
    * into the UNION-ALL of its matched and null-padded antijoin arms, so the

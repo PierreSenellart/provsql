@@ -84,7 +84,6 @@ add_provenance
 
 (1 row)
 ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
 add_provenance
 
 (1 row)
@@ -123,5 +122,51 @@ remove_provenance
 a|p
 10|0.0000
 20|0.2500
+30|0.0000
+(3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+10|0.5000
+20|0.7500
+30|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+10|0.5000
+20|0.2500
+30|1.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+10|0.5000
+20|0.7500
+30|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+10|0.5000
+20|0.2500
+30|1.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+10|0.0000
+20|0.7500
 30|0.0000
 (3 rows)
