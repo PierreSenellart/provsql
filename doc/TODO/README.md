@@ -38,6 +38,13 @@ Each plan document follows a consistent layout:
   formula needing no discrete gate; exact-only under negative weights;
   safety re-checked on the conditioned circuit), adds soft/weighted
   conditioning, and grounds it all in concrete use cases.
+- [`empty-group-aggregation.md`](empty-group-aggregation.md) : SQL-faithful
+  empty-group semantics for **scalar** (no `GROUP BY`) aggregation, via a
+  scalar flag on the `gate_agg` (hashed `info2` high bit). Phase 1
+  (infrastructure) and Phase 2 (scalar `count` true-on-empty HAVING on the
+  probability paths) have landed; the generic-semiring / `cmp`-off path,
+  `IS NULL` HAVING, scalar existence = `gate_one`, and retiring the
+  uncorrelated-antijoin rewrite are deferred with reasons.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.

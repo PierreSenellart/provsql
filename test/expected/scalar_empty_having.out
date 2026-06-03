@@ -1,0 +1,28 @@
+\set ECHO none
+NOTICE:  table "seh_t" does not exist, skipping
+add_provenance
+
+(1 row)
+NOTICE:  scalar HAVING count(*) = 0    p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING count(*) < 2    p=0.3125  (truth 0.3125)
+NOTICE:  scalar HAVING count(*) <= 1   p=0.3125  (truth 0.3125)
+NOTICE:  scalar HAVING count(*) >= 1   p=0.9375  (truth 0.9375)
+NOTICE:  scalar HAVING count(*) = 2    p=0.3750  (truth 0.3750)
+remove_provenance
+
+(1 row)
+shape|exact|mc_1dp
+count=0 exact vs mc|0.0625|0.1
+(1 row)
+NOTICE:  table "seh_g" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped count<2|1|0.5000
+grouped count<2|2|0.5000
+grouped count<2|3|0.5000
+(3 rows)
