@@ -50,6 +50,12 @@
   affiliation_url: https://www.devoteam.com/
   location: Paris, France
 
+- name: Angelo Saadeh
+  url: https://www.angelosaadeh.fr/
+  affiliation: DI ENS, ENS-PSL, CNRS, Inria
+  affiliation_url: https://www.di.ens.fr/
+  location: Paris, France
+
 - name: Aryak Sen
   url: https://github.com/Aryak320
   affiliation: LIG, Université Grenoble Alpes
