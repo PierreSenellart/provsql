@@ -170,3 +170,17 @@ a|p
 20|0.7500
 30|0.0000
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+100|0.5000
+200|0.0000
+300|0.0000
+(3 rows)

@@ -68,7 +68,8 @@ DROP TABLE ssr;
 
 -- Part 3: a scalar subquery in a WHERE comparison lifts to HAVING on choose().
 -- WHERE (SELECT x FROM Q WHERE corr) > 50: the comparison is on the aggregated
--- value, so it becomes HAVING choose(Q.x) > 50 (AND count(Q.k) <= 1).
+-- value, so it becomes HAVING choose(Q.x) > 50 AND count(Q.k) = 1 (a comparison
+-- needs the subquery to return exactly one row; cf. Part 10's empty group).
 CREATE TABLE ssr(a int, k int);
 CREATE TABLE ssq(k int, x int);
 INSERT INTO ssr VALUES (10,1),(20,2);
@@ -309,3 +310,31 @@ DROP TABLE se5;
 
 DROP TABLE se_q;
 DROP TABLE se_r;
+
+-- Part 10: a WHERE comparison of a scalar subquery against an OUTER column (a
+-- per-group variable, not a literal).  The conjunct lifts to HAVING as
+-- choose(q.x) = R.col; R.col is a GROUP BY key, so the cmp builder wraps it like
+-- a constant.  A WHERE comparison also needs the subquery to return a row, so
+-- the antijoin (empty) group is gated out by count(Q.key) >= 1 (not merely <=1).
+CREATE TABLE cv_r(a int, k int);
+CREATE TABLE cv_q(k int, x int);
+INSERT INTO cv_r VALUES (100,1),(200,2),(300,3);
+INSERT INTO cv_q VALUES (1,100),(2,999);  -- k=1: x=100 (=r.a), k=2: x=999, k=3: none
+SELECT add_provenance('cv_r');
+SELECT add_provenance('cv_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM cv_r;
+  PERFORM set_prob(provsql, 0.5) FROM cv_q;
+END $$;
+
+-- (SELECT cv_q.x ...) = cv_r.a : a=100 -> 0.5 (x=100=a iff present); a=200 -> 0
+-- (x=999<>200); a=300 -> 0 (no match: NULL comparison, group gated out).
+CREATE TABLE cv1 AS
+  SELECT cv_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM cv_r WHERE (SELECT cv_q.x FROM cv_q WHERE cv_q.k = cv_r.k) = cv_r.a;
+SELECT remove_provenance('cv1');
+SELECT a, p FROM cv1 ORDER BY a;
+DROP TABLE cv1;
+
+DROP TABLE cv_q;
+DROP TABLE cv_r;

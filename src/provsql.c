@@ -1289,7 +1289,9 @@ static bool needs_having_lift(Node *havingQual, const constants_t *constants);
  * Each argument of @p opExpr must be one of:
  * - A @c Var of type @c agg_token (or a @c FuncExpr implicit-cast wrapper
  *   around one) → cast to UUID via @c agg_token_to_uuid.
- * - A scalar @c Const → wrapped in @c provenance_semimod(const, gate_one()).
+ * - A scalar @c Const, or a bare grouped-column @c Var (necessarily a GROUP BY
+ *   key in a HAVING clause, hence constant within each group) → wrapped in
+ *   @c provenance_semimod(value, gate_one()).
  *
  * If @p negated is true the operator OID is replaced by its negator so that
  * NOT(a < b) becomes a >= b at the provenance level.
@@ -1317,53 +1319,38 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
       }
     }
 
-    if (IsA(node, FuncExpr)) {
-      FuncExpr *fe = (FuncExpr *)node;
-      if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-        // We need to add an explicit cast to UUID
-        FuncExpr *castToUUID = makeNode(FuncExpr);
+    if ((IsA(node, FuncExpr) &&
+         ((FuncExpr *)node)->funcid ==
+           constants->OID_FUNCTION_PROVENANCE_AGGREGATE) ||
+        (IsA(node, Var) &&
+         ((Var *)node)->vartype == constants->OID_TYPE_AGG_TOKEN)) {
+      // The aggregate side: add an explicit cast of the agg_token to UUID.
+      FuncExpr *castToUUID = makeNode(FuncExpr);
 
-        castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
-        castToUUID->funcresulttype = constants->OID_TYPE_UUID;
-        castToUUID->args = list_make1(fe);
-        castToUUID->location = -1;
+      castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+      castToUUID->funcresulttype = constants->OID_TYPE_UUID;
+      castToUUID->args = list_make1(node);
+      castToUUID->location = -1;
 
-        arguments[i] = (Node *)castToUUID;
-      } else {
-        provsql_error("cannot handle complex HAVING expressions");
-      }
-    } else if (IsA(node, Var)) {
-      Var *v = (Var *)node;
-
-      if (v->vartype == constants->OID_TYPE_AGG_TOKEN) {
-        // We need to add an explicit cast to UUID
-        FuncExpr *castToUUID = makeNode(FuncExpr);
-
-        castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
-        castToUUID->funcresulttype = constants->OID_TYPE_UUID;
-        castToUUID->args = list_make1(v);
-        castToUUID->location = -1;
-
-        arguments[i] = (Node *)castToUUID;
-      } else {
-        provsql_error("cannot handle complex HAVING expressions");
-      }
-    } else if (IsA(node, Const)) {
-      Const *literal = (Const *)node;
-      FuncExpr *oneExpr, *semimodExpr;
+      arguments[i] = (Node *)castToUUID;
+    } else if (IsA(node, Const) || IsA(node, Var)) {
+      // The value side: a literal, or a bare grouped-column Var.  A non-agg_token
+      // Var in HAVING is necessarily a GROUP BY key, hence constant within each
+      // group, so it is wrapped exactly like a literal in a value gate carrying
+      // the (per-group) datum with certain provenance.
+      FuncExpr *oneExpr = makeNode(FuncExpr);
+      FuncExpr *semimodExpr = makeNode(FuncExpr);
 
       // gate_one() expression
-      oneExpr = makeNode(FuncExpr);
       oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
       oneExpr->funcresulttype = constants->OID_TYPE_UUID;
       oneExpr->args = NIL;
       oneExpr->location = -1;
 
-      // provenance_semimod(literal, gate_one())
-      semimodExpr = makeNode(FuncExpr);
+      // provenance_semimod(value, gate_one())
       semimodExpr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
       semimodExpr->funcresulttype = constants->OID_TYPE_UUID;
-      semimodExpr->args = list_make2((Expr *)literal, (Expr *)oneExpr);
+      semimodExpr->args = list_make2((Expr *)node, (Expr *)oneExpr);
       semimodExpr->location = -1;
 
       arguments[i] = (Node *)semimodExpr;
@@ -4788,6 +4775,40 @@ static Aggref *oj_make_aggref(Oid aggfnoid, Oid aggtype, Oid argtype,
   return agg;
 }
 
+/**
+ * @brief Build @c "count(Q.key) <op> n" over the decorrelated LEFT-JOIN group.
+ *
+ * @p found_var is some Q column from the correlation (NULL on the null-padded
+ * antijoin rows, so it counts only genuine matches); it is re-pointed to the
+ * pulled-up Q at @p q_idx.  Used for the scalar-subquery at-most-one-row gate
+ * (@c "<= 1") and the WHERE-comparison non-empty gate (@c ">= 1").
+ */
+static OpExpr *oj_count_cmp(Var *found_var, Index q_idx, const char *opstr,
+                            int64 n) {
+  Var *qkey = (Var *)copyObject((Node *)found_var);
+  Aggref *cnt;
+  OpExpr *op = makeNode(OpExpr);
+  Oid o;
+
+  qkey->varno = q_idx;
+#if PG_VERSION_NUM >= 130000
+  qkey->varnosyn = 0;
+  qkey->varattnosyn = 0;
+#endif
+  cnt = oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype, (Expr *)qkey);
+
+  o = OpernameGetOprid(list_make1(makeString((char *)opstr)), INT8OID, INT8OID);
+  op->opno = o;
+  op->opfuncid = get_opcode(o);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = InvalidOid;
+  op->args = list_make2(cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                       Int64GetDatum(n), false, FLOAT8PASSBYVAL));
+  op->location = -1;
+  return op;
+}
+
 /** @brief Var-remap context for the FROM-wrapping pre-step: a Var at
  *  @c target_level on relation @c varno / attribute @c varattno is retargeted to
  *  @c newidx column @c pos[varno][varattno].  Descent into @c skip (the
@@ -5497,29 +5518,17 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     List *having_conjuncts = NIL;
 
     if (!is_agg_body) {
-      Var *qkey = (Var *)copyObject(scan.found_var);
-      Aggref *cnt;
-      OpExpr *le = makeNode(OpExpr);
-      Oid le_op;
-
-      qkey->varno = Q_idx;
-#if PG_VERSION_NUM >= 130000
-      qkey->varnosyn = 0;
-      qkey->varattnosyn = 0;
-#endif
-      cnt = oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype, (Expr *)qkey);
-
-      le_op = OpernameGetOprid(list_make1(makeString("<=")), INT8OID, INT8OID);
-      le->opno = le_op;
-      le->opfuncid = get_opcode(le_op);
-      le->opresulttype = BOOLOID;
-      le->opcollid = InvalidOid;
-      le->inputcollid = InvalidOid;
-      le->args = list_make2(
-        cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
-                       Int64GetDatum(1), false, FLOAT8PASSBYVAL));
-      le->location = -1;
-      having_conjuncts = list_make1(le);
+      having_conjuncts =
+        list_make1(oj_count_cmp((Var *)scan.found_var, Q_idx, "<=", 1));
+      /* A WHERE comparison must test an actual subquery value, so the correlated
+       * group has to be non-empty: count(Q.key) = 1, not merely <= 1.  An empty
+       * group would give a NULL comparison (the row is excluded), but the value
+       * gate over the all-NULL aggregate does not encode that, so the >= 1 gate
+       * supplies it.  (A target-list subquery keeps <= 1 only: zero matches is a
+       * legal NULL value, and the row still exists.) */
+      if (in_where)
+        having_conjuncts = lappend(
+          having_conjuncts, oj_count_cmp((Var *)scan.found_var, Q_idx, ">=", 1));
     }
 
     if (in_where) {
