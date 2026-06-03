@@ -3287,7 +3287,8 @@ CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
     aggtype integer,
     val anyelement,
-    tokens uuid[])
+    tokens uuid[],
+    is_scalar boolean DEFAULT false)
   RETURNS agg_token AS
 $$
 DECLARE
@@ -3310,12 +3311,19 @@ BEGIN
     -- same children would otherwise collapse to a single gate, and
     -- their concurrent set_infos calls would overwrite each other's
     -- aggregation operator (resulting in the wrong agg_kind being
-    -- read by provsql_having under cross-backend contention).
+    -- read by provsql_having under cross-backend contention).  The
+    -- scalar-aggregation flag must likewise be hashed: a scalar and a
+    -- grouped aggregate over identical children carry different info2 and
+    -- must stay distinct gates, else the concurrent set_infos calls would
+    -- clobber the flag.  The flag is stored in the high bit of info2 (the
+    -- low 31 bits keep the result-type OID); aggtype itself is passed clean
+    -- so the agg_token->scalar cast still finds a valid type.
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('agg',aggfnoid,tokens));
+      concat('agg',aggfnoid,tokens,CASE WHEN is_scalar THEN 'S' ELSE '' END));
     PERFORM create_gate(agg_tok, 'agg', tokens);
-    PERFORM set_infos(agg_tok, aggfnoid, aggtype);
+    PERFORM set_infos(agg_tok, aggfnoid,
+                      CASE WHEN is_scalar THEN aggtype | (-2147483648) ELSE aggtype END);
     PERFORM set_extra(agg_tok, agg_val);
   END IF;
 

@@ -1132,7 +1132,7 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
  */
 static Expr *make_aggregation_expression(const constants_t *constants,
                                          Aggref *agg_ref, List *prov_atts,
-                                         semiring_operation op) {
+                                         semiring_operation op, bool is_scalar) {
   Expr *result;
   FuncExpr *expr, *expr_s;
   Aggref *agg = makeNode(Aggref);
@@ -1258,11 +1258,18 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     fn = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
                    Int32GetDatum(aggregation_function), false, true);
 
+    /* The aggregate result-type OID is passed clean (it is also the cast target
+     * when an agg_token is used in arithmetic, see wrap_agg_token_with_cast).
+     * The scalar-aggregation flag travels as a separate boolean argument;
+     * provenance_aggregate sets the high bit of the gate's info2 and folds the
+     * flag into the gate's content UUID. */
     typ = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
                     Int32GetDatum(agg_ref->aggtype), false, true);
 
     plus->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
-    plus->args = list_make4(fn, typ, agg_ref, agg);
+    plus->args = list_make5(fn, typ, agg_ref, agg,
+                            makeConst(BOOLOID, -1, InvalidOid, sizeof(bool),
+                                      BoolGetDatum(is_scalar), false, true));
     plus->location = -1;
 
     result = (Expr *)plus;
@@ -2691,6 +2698,7 @@ typedef struct aggregation_mutator_context {
   List *prov_atts;              ///< List of provenance Var nodes
   semiring_operation op;        ///< Semiring operation for combining tokens
   const constants_t *constants; ///< Extension OID cache
+  bool is_scalar;               ///< Aggregation has no GROUP BY (single always-present row)
 } aggregation_mutator_context;
 
 /**
@@ -2708,7 +2716,8 @@ static Node *aggregation_mutator(Node *node, void *ctx) {
   if (IsA(node, Aggref)) {
     Aggref *ar_v = (Aggref *)node;
     return (Node *)make_aggregation_expression(context->constants, ar_v,
-                                               context->prov_atts, context->op);
+                                               context->prov_atts, context->op,
+                                               context->is_scalar);
   }
 
   return expression_tree_mutator(node, aggregation_mutator, ctx);
@@ -2850,7 +2859,11 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
                                              Query *q, List *prov_atts,
                                              semiring_operation op) {
 
-  aggregation_mutator_context context = {prov_atts, op, constants};
+  /* A scalar aggregation (no GROUP BY / GROUPING SETS) yields a single,
+   * always-present result row; mark its agg gates so the value-aware evaluators
+   * treat the empty-input world as real (vs the "no row" of a grouped query). */
+  bool is_scalar = (q->groupClause == NIL && q->groupingSets == NIL);
+  aggregation_mutator_context context = {prov_atts, op, constants, is_scalar};
   ListCell *lc;
 
   query_tree_mutator(q, aggregation_mutator, &context,

@@ -79,8 +79,9 @@ void provsql_having(
       if (c.getGateType(agg_side) != gate_agg) return false;
 
       // info2 of the gate_agg is the aggregate's result type -- the
-      // comparison domain (int / numeric / float / text).
-      const unsigned aggtype = c.getInfos(agg_side).second;
+      // comparison domain (int / numeric / float / text) -- in its low 31 bits;
+      // the high bit is the scalar-aggregation flag, masked off here.
+      const unsigned aggtype = c.getInfos(agg_side).second & PROVSQL_AGG_TYPE_MASK;
       AggregationOperator agg_kind = getAggregationOperator(c.getInfos(agg_side).first);
       const auto &children = c.getWires(agg_side);
 

@@ -43,7 +43,8 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
    * thresholds work.  Text aggregates, exponential / non-decimal values,
    * and grids too wide for a @c long are declined here and left to the
    * enumeration path. */
-  const unsigned aggtype = gc.getInfos(agg_side).second;
+  const unsigned aggtype =
+    gc.getInfos(agg_side).second & PROVSQL_AGG_TYPE_MASK;  // strip scalar flag
   if (provsql_having_detail::aggtype_is_text(aggtype)) return false;
 
   std::string c_str;

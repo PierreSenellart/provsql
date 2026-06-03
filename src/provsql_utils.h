@@ -78,6 +78,24 @@ typedef enum gate_type {
 } gate_type;
 
 /**
+ * @brief Scalar-aggregation flag, stored in the upper bit of a @c gate_agg's
+ *        @c info2 (whose low 31 bits hold the aggregate result-type OID).
+ *
+ * Set by the query rewriter when the aggregation has no @c GROUP @c BY (a single
+ * always-present result row).  It tells the value-aware evaluators that the
+ * empty-input world is a real possible world (carrying the aggregate's
+ * empty-group value), rather than the "no row" of a grouped query.  Result-type
+ * OIDs never use bit 31, so the low 31 bits still recover the type via
+ * @c PROVSQL_AGG_TYPE_MASK.
+ *
+ * @warning The flag is folded into the gate's content UUID (see
+ * @c provenance_aggregate), so a scalar and a grouped aggregate over identical
+ * children stay distinct gates and their @c set_infos calls do not clobber.
+ */
+#define PROVSQL_AGG_SCALAR_FLAG 0x80000000u
+#define PROVSQL_AGG_TYPE_MASK   0x7FFFFFFFu
+
+/**
  * @brief Arithmetic operator tags used by @c gate_arith.
  *
  * Stored in the gate's @c info1 field.  Local enum (not a PostgreSQL
