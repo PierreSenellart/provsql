@@ -125,52 +125,80 @@ static double probEqual(const std::vector<double> &p, int T)
   }
 }
 
+/* Does the empty-group count (0) satisfy "0 op C"?  For a scalar
+ * aggregation (no GROUP BY) the empty input is a real possible world --
+ * one row whose COUNT is 0 -- so a true-on-empty predicate (= 0, < k,
+ * <= k, ...) selects it.  The grouped cdfForOperator excludes the empty
+ * world unconditionally, so we add probZero back exactly when 0 op C
+ * holds. */
+static bool zeroSatisfies(ComparisonOperator op, int C)
+{
+  switch (op) {
+    case ComparisonOperator::GE: return 0 >= C;
+    case ComparisonOperator::GT: return 0 >  C;
+    case ComparisonOperator::LE: return 0 <= C;
+    case ComparisonOperator::LT: return 0 <  C;
+    case ComparisonOperator::EQ: return 0 == C;
+    case ComparisonOperator::NE: return 0 != C;
+  }
+  return false;
+}
+
 /* Map operator + threshold to @c Pr(B op C) under SQL HAVING
  * semantics : the empty-group case (@c B = 0) is excluded regardless
  * of operator, matching @c count_enum's @c if (m < 1) m = 1 clamp
- * and its @c x >= 1 enumeration lower bound.
+ * and its @c x >= 1 enumeration lower bound -- correct for a GROUPED
+ * aggregate (the empty group is no row).  For a scalar aggregate
+ * (@p is_scalar) the empty world is real, so probZero is added back when
+ * @c zeroSatisfies.
  *
  * Each branch picks at most two of probAtLeast / probAtMost /
  * probEqual / probZero, each O(N x min(C, N-C)) ; the whole
  * dispatch is therefore O(N x min(C, N-C)) per cmp. */
 static double cdfForOperator(const std::vector<double> &p,
                              ComparisonOperator op,
-                             int C)
+                             int C, bool is_scalar)
 {
   const int N = static_cast<int>(p.size());
+  double r = 0.0;
   switch (op) {
     case ComparisonOperator::GE: {
       /* sizes >= max(C, 1) ; the clamp excludes the empty world for
        * GE 0 / GE -K cases.  No further pZero subtraction needed
        * because the [eff_lo, N] range starts at 1 or above. */
-      return probAtLeast(p, std::max(C, 1));
+      r = probAtLeast(p, std::max(C, 1));
+      break;
     }
     case ComparisonOperator::GT: {
-      return probAtLeast(p, std::max(C + 1, 1));
+      r = probAtLeast(p, std::max(C + 1, 1));
+      break;
     }
     case ComparisonOperator::LE: {
       /* sizes [1, min(C, N)] = Pr(B <= min(C, N)) - Pr(B = 0). */
       const int T = std::min(C, N);
-      if (T < 1) return 0.0;
-      return probAtMost(p, T) - probZero(p);
+      r = (T < 1) ? 0.0 : probAtMost(p, T) - probZero(p);
+      break;
     }
     case ComparisonOperator::LT: {
       const int T = std::min(C - 1, N);
-      if (T < 1) return 0.0;
-      return probAtMost(p, T) - probZero(p);
+      r = (T < 1) ? 0.0 : probAtMost(p, T) - probZero(p);
+      break;
     }
     case ComparisonOperator::EQ: {
-      if (C < 1 || C > N) return 0.0;
-      return probEqual(p, C);
+      r = (C < 1 || C > N) ? 0.0 : probEqual(p, C);
+      break;
     }
     case ComparisonOperator::NE: {
       /* sizes [1, N] \ {C} = (1 - Pr(B = 0)) - (Pr(B = C) if 1<=C<=N). */
       const double nonempty = 1.0 - probZero(p);
       const double eq = (C >= 1 && C <= N) ? probEqual(p, C) : 0.0;
-      return nonempty - eq;
+      r = nonempty - eq;
+      break;
     }
   }
-  return 0.0;
+  if (is_scalar && zeroSatisfies(op, C))
+    r += probZero(p);
+  return r;
 }
 
 }  // namespace
@@ -267,8 +295,13 @@ unsigned runCountCmpEvaluator(GenericCircuit &gc)
     }
     if (!sound) continue;
 
+    /* Scalar aggregation (no GROUP BY): the empty input is a real world,
+     * flagged in the agg gate's info2 high bit by provenance_aggregate. */
+    const bool is_scalar =
+      (gc.getInfos(agg).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
+
     /* Run the smaller-side dispatch over the contributor marginals. */
-    double pr = cdfForOperator(p, op, C);
+    double pr = cdfForOperator(p, op, C, is_scalar);
 
     /* Defensive clamp against floating-point roundoff. */
     if (pr < 0.0) pr = 0.0;

@@ -416,12 +416,16 @@ static std::vector<double> countPMF(GenericCircuit &gc,
 /* Tail-sum over the final count PMF under SQL HAVING semantics: sum the
  * mass of every count @c c with @c c >= 1 (empty group excluded) and
  * @c c op C true.  Mirrors CountCmpEvaluator::cdfForOperator exactly,
- * but driven by the materialised PMF rather than a Poisson-binomial. */
+ * but driven by the materialised PMF rather than a Poisson-binomial.
+ *
+ * For a scalar aggregation (@p is_scalar) the empty input is a real world
+ * (one row, count 0), so the sum starts at @c c = 0 and @c pmf[0] is
+ * included when @c 0 op C holds. */
 static double prFromPMF(const std::vector<double> &pmf,
-                        ComparisonOperator op, long C)
+                        ComparisonOperator op, long C, bool is_scalar)
 {
   double pr = 0.0;
-  for (int c = 1; c < static_cast<int>(pmf.size()); ++c) {
+  for (int c = is_scalar ? 0 : 1; c < static_cast<int>(pmf.size()); ++c) {
     bool sat = false;
     switch (op) {
       case ComparisonOperator::GE: sat = (c >= C); break;
@@ -727,7 +731,9 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
     if (agg_kind == AggregationOperator::COUNT) {
       std::vector<double> total = countPMF(gc, leaves, ok);
       if (!ok) continue;
-      pr = prFromPMF(total, match.op, match.C);
+      const bool is_scalar =
+        (gc.getInfos(agg).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
+      pr = prFromPMF(total, match.op, match.C, is_scalar);
     } else if (agg_kind == AggregationOperator::SUM ||
                agg_kind == AggregationOperator::AVG) {
       /* SUM(v) θ C directly; AVG(v) θ C ⟺ SUM(v_i − C) θ 0 (multiply the

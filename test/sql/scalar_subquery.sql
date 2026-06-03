@@ -452,7 +452,11 @@ SELECT a, c, p FROM uc1 ORDER BY a;
 DROP TABLE uc1;
 
 -- Value body: (SELECT uc_q.x FROM uc_q) -> choose(x) + count(*) <= 1.  The row
--- survives only in the exactly-one-present worlds, p = 3 * 0.5^3 = 0.375.
+-- exists whenever the scalar subquery is well-defined: the empty world returns a
+-- (valid) NULL and the single-row worlds return the value; only the >1-row worlds
+-- are the SQL runtime error that count(*) <= 1 gates out.  So p = P(count<=1) =
+-- P(0 present) + P(exactly 1 of 3) = 0.125 + 0.375 = 0.5.  (The empty-input world
+-- is real here because count is a scalar aggregation -- the agg-gate scalar flag.)
 CREATE TABLE uc2 AS
   SELECT uc_r.a AS a,
          (SELECT uc_q.x FROM uc_q) AS v,
