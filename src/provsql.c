@@ -752,6 +752,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       }
     } else if (r->rtekind == RTE_VALUES) {
       // Nothing to do, no provenance attribute in literal values
+    } else if (r->rtekind == RTE_RESULT) {
+      // Empty-FROM RTE (no provenance).  Also what the outer-join lowering
+      // leaves behind when it neutralises an orphaned subquery arm.
 #if PG_VERSION_NUM >= 180000
     } else if (r->rtekind == RTE_GROUP) {
       // Introduced in PostgreSQL 18, we already handle group by from
@@ -3863,45 +3866,77 @@ typedef struct oj_cols {
 } oj_cols;
 
 /** @brief Collect the user columns (skipping @c provsql and dropped columns)
- *         of a base-relation RTE. */
+ *         of an outer-join arm: a base relation or a subquery.  For a relation
+ *         the column @c attno is its catalog attribute number; for a subquery
+ *         it is the target entry's @c resno. */
 static void oj_collect_cols(const constants_t *constants, RangeTblEntry *rel,
                             oj_cols *out) {
   ListCell *lc;
-  AttrNumber attid = 0;
-  int cap = list_length(rel->eref->colnames);
 
-  out->attno  = (AttrNumber *)palloc(cap * sizeof(AttrNumber));
-  out->type   = (Oid *)palloc(cap * sizeof(Oid));
-  out->typmod = (int32 *)palloc(cap * sizeof(int32));
-  out->coll   = (Oid *)palloc(cap * sizeof(Oid));
-  out->name   = (char **)palloc(cap * sizeof(char *));
-  out->n = 0;
+  if (rel->rtekind == RTE_SUBQUERY) {
+    int cap = list_length(rel->subquery->targetList);
+    out->attno  = (AttrNumber *)palloc(cap * sizeof(AttrNumber));
+    out->type   = (Oid *)palloc(cap * sizeof(Oid));
+    out->typmod = (int32 *)palloc(cap * sizeof(int32));
+    out->coll   = (Oid *)palloc(cap * sizeof(Oid));
+    out->name   = (char **)palloc(cap * sizeof(char *));
+    out->n = 0;
+    foreach (lc, rel->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resjunk)
+        continue;
+      if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME))
+        continue;
+      out->attno[out->n]  = te->resno;
+      out->type[out->n]   = exprType((Node *)te->expr);
+      out->typmod[out->n] = exprTypmod((Node *)te->expr);
+      out->coll[out->n]   = exprCollation((Node *)te->expr);
+      out->name[out->n]   = pstrdup(te->resname ? te->resname : "?column?");
+      ++out->n;
+    }
+    return;
+  }
 
-  foreach (lc, rel->eref->colnames) {
-    const char *v = strVal(lfirst(lc));
-    Oid t;
-    int32 tm;
-    Oid c;
-    ++attid;
-    if (v[0] == '\0') /* dropped column */
-      continue;
-    if (!strcmp(v, PROVSQL_COLUMN_NAME))
-      continue;
-    get_atttypetypmodcoll(rel->relid, attid, &t, &tm, &c);
-    out->attno[out->n]  = attid;
-    out->type[out->n]   = t;
-    out->typmod[out->n] = tm;
-    out->coll[out->n]   = c;
-    out->name[out->n]   = pstrdup(v);
-    ++out->n;
+  {
+    AttrNumber attid = 0;
+    int cap = list_length(rel->eref->colnames);
+    out->attno  = (AttrNumber *)palloc(cap * sizeof(AttrNumber));
+    out->type   = (Oid *)palloc(cap * sizeof(Oid));
+    out->typmod = (int32 *)palloc(cap * sizeof(int32));
+    out->coll   = (Oid *)palloc(cap * sizeof(Oid));
+    out->name   = (char **)palloc(cap * sizeof(char *));
+    out->n = 0;
+    foreach (lc, rel->eref->colnames) {
+      const char *v = strVal(lfirst(lc));
+      Oid t;
+      int32 tm;
+      Oid c;
+      ++attid;
+      if (v[0] == '\0') /* dropped column */
+        continue;
+      if (!strcmp(v, PROVSQL_COLUMN_NAME))
+        continue;
+      get_atttypetypmodcoll(rel->relid, attid, &t, &tm, &c);
+      out->attno[out->n]  = attid;
+      out->type[out->n]   = t;
+      out->typmod[out->n] = tm;
+      out->coll[out->n]   = c;
+      out->name[out->n]   = pstrdup(v);
+      ++out->n;
+    }
   }
 }
 
-/** @brief True if @p rel exposes a @c provsql UUID column. */
+/** @brief True if @p rel contributes provenance: a base relation with a
+ *         @c provsql UUID column, or a subquery over tracked relations. */
 static bool oj_rte_has_provsql(const constants_t *constants,
                                RangeTblEntry *rel) {
   ListCell *lc;
   AttrNumber attid = 0;
+
+  if (rel->rtekind == RTE_SUBQUERY)
+    return rel->subquery != NULL && has_provenance(constants, rel->subquery);
+
   foreach (lc, rel->eref->colnames) {
     ++attid;
     if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) &&
@@ -3939,13 +3974,14 @@ static RangeTblEntry *oj_make_subquery_rte(Query *sub) {
   return rte;
 }
 
-/** @brief Copy a base-relation RTE into the range table of subquery @p sub,
- *         carrying its permission info (PG 16+). */
+/** @brief Copy an outer-join arm RTE into the range table of subquery @p sub.
+ *  A base relation carries its permission info (PG 16+); a subquery has no
+ *  direct permissions (its inner query keeps its own rteperminfos). */
 static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
                                   RangeTblEntry *orig) {
   RangeTblEntry *c = copyObject(orig);
 #if PG_VERSION_NUM >= 160000
-  if (orig->perminfoindex != 0) {
+  if (orig->rtekind == RTE_RELATION && orig->perminfoindex != 0) {
     RTEPermissionInfo *pi = getRTEPermissionInfo(outer->rteperminfos, orig);
     sub->rteperminfos = lappend(sub->rteperminfos, copyObject(pi));
     c->perminfoindex  = list_length(sub->rteperminfos);
@@ -3957,6 +3993,23 @@ static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
   (void)sub;
 #endif
   return c;
+}
+
+/** @brief Neutralise an outer-join arm RTE left orphaned after the lowering so
+ *  get_provenance_attributes does not re-pick it up as a provenance source: a
+ *  base relation has its provsql column renamed; a subquery (which would still
+ *  be processed) is turned into an inert RTE_RESULT. */
+static void oj_neutralize_orphan_arm(RangeTblEntry *rel) {
+  if (rel->rtekind == RTE_SUBQUERY) {
+    rel->rtekind = RTE_RESULT;
+    rel->subquery = NULL;
+    rel->eref = makeAlias("*RESULT*", NIL);
+#if PG_VERSION_NUM >= 160000
+    rel->perminfoindex = 0;
+#endif
+    return;
+  }
+  hide_provsql_colname(rel);
 }
 
 /** @brief Var-renumber context: map @c varno @c from[i] → @c to[i]. */
@@ -4428,7 +4481,11 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
   R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
   S_rte = list_nth_node(RangeTblEntry, q->rtable, S_idx - 1);
 
-  if (R_rte->rtekind != RTE_RELATION || S_rte->rtekind != RTE_RELATION)
+  if ((R_rte->rtekind != RTE_RELATION && R_rte->rtekind != RTE_SUBQUERY) ||
+      (S_rte->rtekind != RTE_RELATION && S_rte->rtekind != RTE_SUBQUERY))
+    return false;
+  if ((R_rte->rtekind == RTE_SUBQUERY && R_rte->lateral) ||
+      (S_rte->rtekind == RTE_SUBQUERY && S_rte->lateral))
     return false;
   if (!oj_rte_has_provsql(constants, R_rte) ||
       !oj_rte_has_provsql(constants, S_rte))
@@ -4445,18 +4502,21 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
   theta = je->quals;
   oj_collect_cols(constants, R_rte, &Rc);
   oj_collect_cols(constants, S_rte, &Sc);
-  ncolR = list_length(R_rte->eref->colnames);
-  ncolS = list_length(S_rte->eref->colnames);
+  ncolR = (R_rte->rtekind == RTE_SUBQUERY)
+            ? list_length(R_rte->subquery->targetList)
+            : list_length(R_rte->eref->colnames);
+  ncolS = (S_rte->rtekind == RTE_SUBQUERY)
+            ? list_length(S_rte->subquery->targetList)
+            : list_length(S_rte->eref->colnames);
 
   Q = oj_build_union(constants, q, R_rte, S_rte, R_idx, S_idx, &Rc, &Sc, theta,
                      je->jointype);
 
   /* The combined provenance now lives in the replacement subquery Q.  The
-   * original base relations are left orphaned in the outer range table; hide
-   * their provsql columns so get_provenance_attributes does not pick them up
-   * again (which would both double-count and reference an unplanned relid). */
-  hide_provsql_colname(R_rte);
-  hide_provsql_colname(S_rte);
+   * original arm RTEs are left orphaned in the outer range table; neutralise
+   * them so get_provenance_attributes does not pick them up again. */
+  oj_neutralize_orphan_arm(R_rte);
+  oj_neutralize_orphan_arm(S_rte);
 
   R_map = (AttrNumber *)palloc0((ncolR + 1) * sizeof(AttrNumber));
   S_map = (AttrNumber *)palloc0((ncolS + 1) * sizeof(AttrNumber));
@@ -5330,10 +5390,10 @@ static void build_column_map(Query *q, int **columns, int *nbcols) {
     ListCell *lc;
 
     columns[i] = 0;
-    if (r->eref) {
+    if (r->eref && r->eref->colnames != NIL) {
       unsigned j = 0;
 
-      columns[i] = (int *)palloc(r->eref->colnames->length * sizeof(int));
+      columns[i] = (int *)palloc(list_length(r->eref->colnames) * sizeof(int));
 
       foreach (lc, r->eref->colnames) {
         if (!lfirst(lc)) {

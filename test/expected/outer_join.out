@@ -65,3 +65,23 @@ remove_provenance
 q|k|p
 BID count=0|1|0.2000
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|k|p
+SUBQ-ARM exists|1|1.0000
+SUBQ-ARM exists|2|1.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|k|p
+SUBQ-ARM count=0|1|0.2500
+SUBQ-ARM count=0|2|1.0000
+(2 rows)

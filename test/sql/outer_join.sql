@@ -119,3 +119,37 @@ DROP TABLE oj_t;
 
 DROP TABLE oj_l2;
 DROP TABLE oj_b;
+
+-- Subquery arms: the lowering also fires when an outer-join arm is a subquery
+-- over tracked relations (not only a base relation).
+CREATE TABLE oj_subl(k int);
+CREATE TABLE oj_subr(k int, v int);
+INSERT INTO oj_subl VALUES (1),(2);
+INSERT INTO oj_subr VALUES (1,10),(1,20);
+SELECT add_provenance('oj_subl');
+SELECT add_provenance('oj_subr');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM oj_subl;
+  PERFORM set_prob(provsql, 0.5) FROM oj_subr;
+END $$;
+
+-- (SELECT k FROM oj_subl) LEFT JOIN oj_subr : group existence k=1 -> 1, k=2 -> 1.
+CREATE TABLE oj_t AS
+  SELECT s.k AS k, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM (SELECT k FROM oj_subl) s LEFT JOIN oj_subr ON oj_subr.k = s.k
+  GROUP BY s.k;
+SELECT remove_provenance('oj_t');
+SELECT 'SUBQ-ARM exists' AS q, k, p FROM oj_t ORDER BY k;
+DROP TABLE oj_t;
+
+-- HAVING count(oj_subr.k)=0 : k=1 -> 0.25 (no match), k=2 -> 1 (never matched).
+CREATE TABLE oj_t AS
+  SELECT s.k AS k, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM (SELECT k FROM oj_subl) s LEFT JOIN oj_subr ON oj_subr.k = s.k
+  GROUP BY s.k HAVING count(oj_subr.k) = 0;
+SELECT remove_provenance('oj_t');
+SELECT 'SUBQ-ARM count=0' AS q, k, p FROM oj_t ORDER BY k;
+DROP TABLE oj_t;
+
+DROP TABLE oj_subl;
+DROP TABLE oj_subr;
