@@ -376,3 +376,49 @@ DROP TABLE av1;
 
 DROP TABLE av_q;
 DROP TABLE av_r;
+
+-- Part 12: a multi-table subquery body.  (SELECT val FROM Q1, Q2 WHERE corr) has
+-- its comma-join collapsed into a single derived cross-product subquery D, after
+-- which the body is "SELECT val FROM D WHERE corr" and the usual single-Q path
+-- runs (R LEFT JOIN D, with corr -- correlation + inter-table join -- as the ON).
+-- D is processed recursively, so both Q1 and Q2 contribute provenance.
+CREATE TABLE mt_r(a int, k int);
+CREATE TABLE mt_q(k int, x int);
+CREATE TABLE mt_s(k int, w int);
+INSERT INTO mt_r VALUES (10,1),(20,2),(30,3);
+INSERT INTO mt_q VALUES (1,100),(2,200);
+INSERT INTO mt_s VALUES (1,5),(2,5);  -- one s per k, so the body yields <=1 row
+SELECT add_provenance('mt_r');
+SELECT add_provenance('mt_q');
+SELECT add_provenance('mt_s');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM mt_r;
+  PERFORM set_prob(provsql, 0.5) FROM mt_q;
+  PERFORM set_prob(provsql, 0.5) FROM mt_s;
+END $$;
+
+-- WHERE (SELECT mt_q.x FROM mt_q, mt_s WHERE mt_q.k=r.k AND mt_s.k=mt_q.k) > 50:
+-- the value (100 / 200) clears 50, so the row exists iff BOTH its mt_q and mt_s
+-- rows are present -> p = 0.5 * 0.5 = 0.25; k=3 has no match -> 0.
+CREATE TABLE mt1 AS
+  SELECT mt_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mt_r
+  WHERE (SELECT mt_q.x FROM mt_q, mt_s
+         WHERE mt_q.k = mt_r.k AND mt_s.k = mt_q.k) > 50;
+SELECT remove_provenance('mt1');
+SELECT a, p FROM mt1 ORDER BY a;
+DROP TABLE mt1;
+
+-- Aggregate body over the same multi-table FROM: count(*) over the join.
+CREATE TABLE mt2 AS
+  SELECT mt_r.a AS a,
+         (SELECT count(*) FROM mt_q, mt_s
+          WHERE mt_q.k = mt_r.k AND mt_s.k = mt_q.k) AS c
+  FROM mt_r;
+SELECT remove_provenance('mt2');
+SELECT a, c FROM mt2 ORDER BY a;
+DROP TABLE mt2;
+
+DROP TABLE mt_s;
+DROP TABLE mt_q;
+DROP TABLE mt_r;

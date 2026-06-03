@@ -198,3 +198,28 @@ a|sorted|p
 20|{200,201}|1.0000
 30||1.0000
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+10|0.2500
+20|0.2500
+30|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|c
+10|1 (*)
+20|1 (*)
+30|0 (*)
+(3 rows)

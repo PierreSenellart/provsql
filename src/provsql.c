@@ -5297,6 +5297,95 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Collapse a multi-table scalar-subquery body FROM into one derived
+ *        cross-product subquery @c D, so the decorrelation can treat the body as
+ *        @c "SELECT val FROM D WHERE W" with @c D a single tracked subquery.
+ *
+ * Mirror of @c oj_wrap_outer_from, but for the SubLink body: every body relation
+ * must be a tracked base relation and the FROM a comma-join.  @c D exposes every
+ * base user column (@c oj_collect_cols); the body's own (level-0) references are
+ * retargeted to @c D, while the correlated level-1 references to the outer query
+ * are left untouched.  The body WHERE @c W (correlation + inter-table join) stays
+ * in place: it becomes the @c "R LEFT JOIN D" ON clause, and @c get_provenance_attributes
+ * later processes @c D recursively, giving it the @c Q1 ⊗ … ⊗ Qn provenance.
+ */
+static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
+  int rtlen = list_length(sub->rtable);
+  int **pos;
+  Query *D = makeNode(Query);
+  RangeTblEntry *d_rte;
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  List *d_tl = NIL;
+  oj_wrap_ctx wc;
+  ListCell *lc;
+  int idx, posn = 0;
+
+  if (!sub->jointree || sub->jointree->fromlist == NIL)
+    return false;
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return false;
+  }
+  foreach (lc, sub->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false; /* only a plain comma-join, no explicit JoinExprs */
+  }
+
+  /* D exposes every base user column; record (rtindex,attno) -> D column. */
+  pos = (int **)palloc0((rtlen + 1) * sizeof(int *));
+  idx = 0;
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    oj_cols rc;
+    int j;
+    ++idx;
+    oj_collect_cols(constants, r, &rc);
+    pos[idx] =
+      (int *)palloc0((list_length(r->eref->colnames) + 1) * sizeof(int));
+    for (j = 0; j < rc.n; ++j) {
+      Var *v =
+        makeVar(idx, rc.attno[j], rc.type[j], rc.typmod[j], rc.coll[j], 0);
+      d_tl = lappend(d_tl, makeTargetEntry((Expr *)v, ++posn,
+                                           pstrdup(rc.name[j]), false));
+      pos[idx][rc.attno[j]] = posn;
+    }
+  }
+
+  /* D = SELECT <body base user cols> FROM <body fromlist> (cross product). */
+  D->commandType = CMD_SELECT;
+  D->canSetTag = true;
+  D->rtable = sub->rtable;
+  D->jointree = makeNode(FromExpr);
+  D->jointree->fromlist = sub->jointree->fromlist;
+  D->jointree->quals = NULL;
+  D->targetList = d_tl;
+#if PG_VERSION_NUM >= 160000
+  D->rteperminfos = sub->rteperminfos;
+#endif
+
+  /* Retarget the body's own (level-0) Vars to D; level-1 (outer) Vars stay. */
+  wc.newidx = 1;
+  wc.rtlen = rtlen;
+  wc.pos = pos;
+  wc.target_level = 0;
+  wc.skip = NULL;
+  sub->targetList = (List *)oj_wrap_remap_mut((Node *)sub->targetList, &wc);
+  if (sub->jointree->quals)
+    sub->jointree->quals = oj_wrap_remap_mut(sub->jointree->quals, &wc);
+
+  /* Rebuild the body over D. */
+  d_rte = oj_make_subquery_rte(D);
+  sub->rtable = list_make1(d_rte);
+#if PG_VERSION_NUM >= 160000
+  sub->rteperminfos = NIL;
+#endif
+  rtr->rtindex = 1;
+  sub->jointree->fromlist = list_make1(rtr);
+  return true;
+}
+
+/**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
  * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
@@ -5378,18 +5467,25 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   if (sub->commandType != CMD_SELECT || sub->groupClause ||
       sub->groupingSets || sub->distinctClause || sub->setOperations ||
       sub->hasWindowFuncs || sub->hasSubLinks || sub->limitCount ||
-      sub->limitOffset || sub->cteList ||
-      list_length(sub->rtable) != 1 || list_length(sub->targetList) != 1)
+      sub->limitOffset || sub->cteList || list_length(sub->targetList) != 1)
     return false;
   if (sub->hasAggs &&
       !IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref))
     return false; /* aggregate body must be a single bare aggregate */
   is_agg_body = sub->hasAggs;
-  if (!sub->jointree || list_length(sub->jointree->fromlist) != 1 ||
+  if (!sub->jointree || sub->jointree->fromlist == NIL)
+    return false;
+  /* A multi-table body (Q1, Q2, … in FROM) is collapsed into a single derived
+   * cross-product subquery D, after which the body is "SELECT val FROM D WHERE
+   * W" -- the single-Q path below handles D exactly as it handles a subquery R. */
+  if (list_length(sub->rtable) != 1 && !oj_wrap_body_from(constants, sub))
+    return false;
+  if (list_length(sub->jointree->fromlist) != 1 ||
       !IsA(linitial(sub->jointree->fromlist), RangeTblRef))
     return false;
   Q_rte_orig = list_nth_node(RangeTblEntry, sub->rtable, 0);
-  if (Q_rte_orig->rtekind != RTE_RELATION ||
+  if ((Q_rte_orig->rtekind != RTE_RELATION &&
+       !(Q_rte_orig->rtekind == RTE_SUBQUERY && !Q_rte_orig->lateral)) ||
       !oj_rte_has_provsql(constants, Q_rte_orig))
     return false;
 
