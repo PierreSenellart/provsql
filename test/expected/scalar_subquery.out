@@ -184,3 +184,17 @@ a|p
 200|0.0000
 300|0.0000
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|sorted|p
+10|{100,NULL}|1.0000
+20|{200,201}|1.0000
+30||1.0000
+(3 rows)

@@ -5220,6 +5220,83 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Rewrite a top-level @c ARRAY(SELECT Q.col FROM Q WHERE corr) target-list
+ *        entry into the aggregate body @c (SELECT array_agg(Q.col) FROM Q WHERE
+ *        corr).
+ *
+ * A pre-pass for @c decorrelate_scalar_sublinks: an @c ARRAY_SUBLINK collects the
+ * correlated rows into an array, which is exactly @c array_agg over the group, so
+ * mutating it into an @c EXPR_SUBLINK aggregate body lets the aggregate arm lower
+ * it to @c array_agg(Q.col) over the @c "R ⟕ Q" group -- no @c count gate, since
+ * an array may have zero, one, or many elements.  Subselects that are not
+ * decorrelatable (untracked / multi-relation / uncorrelated) are left untouched.
+ */
+static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks)
+    return false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    SubLink *sl;
+    Query *sub;
+    TargetEntry *innerte;
+    Oid elemtype, arrtype;
+    oj_sublink_scan scan;
+    Aggref *agg;
+    NullTest *nt;
+
+    if (!IsA(te->expr, SubLink))
+      continue;
+    sl = (SubLink *)te->expr;
+    if (sl->subLinkType != ARRAY_SUBLINK || !IsA(sl->subselect, Query))
+      continue;
+    sub = (Query *)sl->subselect;
+    if (!predicate_subselect_decorrelatable(constants, sub, false) ||
+        list_length(sub->targetList) != 1 || sub->sortClause)
+      continue; /* a sortClause fixes array element order, which array_agg over
+                 * the regrouped join would not preserve -- leave it unhandled */
+
+    innerte = (TargetEntry *)linitial(sub->targetList);
+    elemtype = exprType((Node *)innerte->expr);
+    arrtype = get_array_type(elemtype);
+    if (!OidIsValid(arrtype))
+      continue; /* no array type for this element (e.g. a pseudo-type) */
+
+    /* A Q column from the correlation, to key the null-padded-row filter. */
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 1; /* Q is rtindex 1 in the subselect */
+    scan.found_var = NULL;
+    oj_sublink_scan_walker(sub->jointree->quals, &scan);
+    if (scan.found_var == NULL)
+      continue; /* uncorrelated: decorrelation would bail anyway */
+
+    agg = oj_make_aggref(F_ARRAY_AGG_ANYNONARRAY, arrtype, elemtype,
+                         innerte->expr);
+    /* array_agg keeps NULLs in its value, so the LEFT JOIN's null-padded
+     * antijoin row (Q key IS NULL) would inject a spurious NULL element.
+     * Filter it out; a genuinely-NULL matched element (Q key non-NULL) is still
+     * collected.  decorrelate's Var-remap retargets this Q key to the pulled-up
+     * Q just like the aggregate argument. */
+    nt = makeNode(NullTest);
+    nt->arg = (Expr *)copyObject((Node *)scan.found_var);
+    nt->nulltesttype = IS_NOT_NULL;
+    nt->argisrow = false;
+    nt->location = -1;
+    agg->aggfilter = (Expr *)nt;
+
+    innerte->expr = (Expr *)agg;
+    sub->hasAggs = true;
+    sl->subLinkType = EXPR_SUBLINK;
+    changed = true;
+  }
+  return changed;
+}
+
+/**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
  * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
@@ -7670,6 +7747,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * it produces is lowered with correct outer-join provenance, and before the
    * "Subqueries not supported" guard further down. */
   if (provsql_active) {
+    rewrite_array_sublinks(constants, q);
     rewrite_predicate_sublinks(constants, q);
     decorrelate_scalar_sublinks(constants, q);
   }

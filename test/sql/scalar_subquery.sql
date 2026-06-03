@@ -338,3 +338,41 @@ DROP TABLE cv1;
 
 DROP TABLE cv_q;
 DROP TABLE cv_r;
+
+-- Part 11: ARRAY(SELECT Q.x FROM Q WHERE corr) collects the correlated rows, so
+-- it decorrelates to array_agg(Q.x) over the "R LEFT JOIN Q" group (no count
+-- gate -- an array may hold zero, one, or many elements).  array_agg keeps
+-- NULLs, so the null-padded antijoin row is excluded with a FILTER on the
+-- correlation key (Q.key IS NULL only on that row); a genuinely-NULL matched
+-- element is still collected.  The result is an agg_token; its array value is
+-- extracted and sorted below for a stable comparison.
+CREATE TABLE av_r(a int, k int);
+CREATE TABLE av_q(k int, x int);
+INSERT INTO av_r VALUES (10,1),(20,2),(30,3);
+-- k=1: one value 100 plus a NULL element; k=2: two values; k=3: no match.
+INSERT INTO av_q VALUES (1,100),(1,NULL),(2,200),(2,201);
+SELECT add_provenance('av_r');
+SELECT add_provenance('av_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM av_r;
+  PERFORM set_prob(provsql, 0.5) FROM av_q;
+END $$;
+
+-- k=1 -> {100,NULL} (NULL matched element kept), k=2 -> {200,201}, k=3 -> NULL
+-- (empty correlated group).  Each row exists (av_r certain), so p = 1.
+CREATE TABLE av1 AS
+  SELECT av_r.a AS a,
+         ARRAY(SELECT av_q.x FROM av_q WHERE av_q.k = av_r.k) AS arr,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM av_r;
+SELECT remove_provenance('av1');
+SELECT a,
+       (SELECT array_agg(u ORDER BY u NULLS LAST)
+          FROM unnest(split_part(agg_token_value_text(arr::uuid), ' ', 1)::int[]) u)
+         AS sorted,
+       p
+FROM av1 ORDER BY a;
+DROP TABLE av1;
+
+DROP TABLE av_q;
+DROP TABLE av_r;
