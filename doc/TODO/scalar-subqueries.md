@@ -34,7 +34,12 @@ planner-hook rewrites in `src/provsql.c` (regression coverage in
   (multiplicity preserved) -- `rewrite_uncorrelated_antijoin`;
 - a **HAVING comparison of an aggregate against a grouped column** (per-group
   variable RHS), wrapped like a constant in `having_OpExpr_to_provenance_cmp`;
-- a multi-table / auto-wrapped outer FROM, and an untracked outer relation.
+- a multi-table / auto-wrapped outer FROM, and an untracked outer relation;
+- a **sublink whose body touches no tracked relation** (over an untracked table,
+  or a constant/derived source): a deterministic condition/value (untracked data
+  is certain), passed straight through to Postgres with the row keeping its
+  provenance -- the "Subqueries not supported" error now fires only when a
+  sublink's body involves a tracked relation (`query_has_tracked_sublink`).
 
 This note tracks only what is **still rejected** -- each with the clean
 `ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported` error, never a
@@ -56,7 +61,6 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 | Sublink nested in a target-list expression | `SELECT R.a, (SELECT Q.x WHERE Q.k=R.k) + 1 FROM R` | Sublink is not the direct target entry; for an aggregate result the arithmetic would coerce the `agg_token` to a scalar and drop its provenance | partly -- safe only where the `agg_token` survives |
 | Sublink nested in a WHERE expression | `… WHERE (SELECT Q.x WHERE Q.k=R.k) + 1 > 50` | Comparison is not directly on the sublink (arithmetic in between) | partly |
 | Uncorrelated **value**-body comparison in WHERE | `… WHERE (SELECT Q.x FROM Q) > 5` | The aggregate form (`count`/`max`/…) is handled; a value body would need `choose(x)` + `count(*) <= 1` baked into the gated subquery's HAVING | yes -- extend `move_uncorrelated_where_predicates` to value bodies |
-| Body not over a tracked base relation | `… WHERE EXISTS (SELECT 1 FROM (SELECT 1) z WHERE R.k>0)` | Inner relation untracked / not a base relation | n/a |
 
 ## Priorities
 

@@ -657,3 +657,38 @@ DROP TABLE cn1;
 
 DROP TABLE cn_q;
 DROP TABLE cn_r;
+
+-- Part 18: a subquery whose body touches NO provenance-tracked relation is a
+-- deterministic condition/value (untracked data is certain -- the same in every
+-- possible world), so it is passed through to Postgres as an ordinary filter /
+-- value and the row keeps R's provenance.  Only sublinks over a tracked relation
+-- are rejected.
+CREATE TABLE pt_r(a int, k int);   -- tracked
+CREATE TABLE pt_u(k int);           -- NOT provenance-tracked
+INSERT INTO pt_r VALUES (10,1),(20,2),(30,3);
+INSERT INTO pt_u VALUES (1),(2);
+SELECT add_provenance('pt_r');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM pt_r; END $$;
+
+-- EXISTS over the untracked table just filters: k=1,2 match (kept), k=3 dropped;
+-- the kept rows exist with pt_r's own probability 0.5 (the EXISTS adds nothing).
+CREATE TABLE pt1 AS
+  SELECT pt_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM pt_r WHERE EXISTS (SELECT 1 FROM pt_u WHERE pt_u.k = pt_r.k);
+SELECT remove_provenance('pt1');
+SELECT a, p FROM pt1 ORDER BY a;
+DROP TABLE pt1;
+
+-- A scalar value over the untracked table is a deterministic column; the row's
+-- provenance is still pt_r's, so every pt_r row exists with probability 0.5.
+CREATE TABLE pt2 AS
+  SELECT pt_r.a AS a,
+         (SELECT pt_u.k FROM pt_u WHERE pt_u.k = pt_r.k) AS v,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM pt_r;
+SELECT remove_provenance('pt2');
+SELECT a, v, p FROM pt2 ORDER BY a;
+DROP TABLE pt2;
+
+DROP TABLE pt_u;
+DROP TABLE pt_r;

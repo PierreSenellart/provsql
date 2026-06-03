@@ -3493,6 +3493,57 @@ static bool has_provenance(const constants_t *constants, Query *q) {
   return has_provenance_walker((Node *)q, (void *)constants);
 }
 
+/** @brief Context for @c sublink_over_tracked_walker. */
+typedef struct {
+  const constants_t *constants;
+  bool found;
+} sublink_tracked_ctx;
+
+/** @brief Walker: set @c found if a @c SubLink whose subselect (transitively)
+ *  involves a provenance-tracked relation is reached. */
+static bool sublink_over_tracked_walker(Node *node, void *cx) {
+  sublink_tracked_ctx *c = (sublink_tracked_ctx *)cx;
+  if (node == NULL || c->found)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query) &&
+        has_provenance(c->constants, (Query *)sl->subselect)) {
+      c->found = true;
+      return true;
+    }
+    /* Not tracked at this level: fall through to descend (the subselect, for
+     * nested sublinks, and the testexpr). */
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, sublink_over_tracked_walker, cx, 0);
+  return expression_tree_walker(node, sublink_over_tracked_walker, cx);
+}
+
+/**
+ * @brief Does any @c SubLink in @p q's own clauses have a subselect that
+ *        (transitively) involves a provenance-tracked relation?
+ *
+ * Distinguishes the @c "Subqueries not supported" cases (a sublink over a tracked
+ * @c Q, which needs the rewrite passes) from a harmless one whose body touches no
+ * tracked relation -- a deterministic filter/value (untracked data is certain, so
+ * the same in every possible world) that Postgres can evaluate directly, leaving
+ * the row's provenance unchanged.  Only @p q's own expressions are inspected, not
+ * its range table (the outer relation is tracked, and FROM subqueries get their
+ * own @c process_query pass).
+ */
+static bool query_has_tracked_sublink(const constants_t *constants, Query *q) {
+  sublink_tracked_ctx c;
+  c.constants = constants;
+  c.found = false;
+  sublink_over_tracked_walker((Node *)q->targetList, &c);
+  if (!c.found && q->jointree)
+    sublink_over_tracked_walker((Node *)q->jointree, &c);
+  if (!c.found && q->havingQual)
+    sublink_over_tracked_walker(q->havingQual, &c);
+  return c.found;
+}
+
 /**
  * @brief Walker: true if @p node (descending through nested queries) contains
  *        an explicit @c provenance() call.
@@ -8526,7 +8577,10 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
     }
 
-    if (q->hasSubLinks) {
+    if (q->hasSubLinks && query_has_tracked_sublink(constants, q)) {
+      /* Only sublinks over a provenance-tracked relation are unsupported; one
+       * whose body touches no tracked relation is a deterministic filter/value
+       * and is left for Postgres to evaluate (the row keeps R's provenance). */
       provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
       supported = false;
     }
