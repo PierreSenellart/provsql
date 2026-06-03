@@ -125,3 +125,46 @@ DROP TABLE ss4;
 DROP TABLE ss_q;
 DROP TABLE ss_s;
 DROP TABLE ss_r;
+
+-- Part 5: scalar subquery over an un-wrapped multi-table FROM.  The outer FROM
+-- (ss_r5, ss_s5 joined in WHERE) is auto-wrapped into a derived subquery on
+-- which the scalar subquery over ss_q5 decorrelates.
+CREATE TABLE ss_r5(a int, k int);
+CREATE TABLE ss_s5(k int, w int);
+CREATE TABLE ss_q5(k int, x int);
+INSERT INTO ss_r5 VALUES (10,1),(20,2);
+INSERT INTO ss_s5 VALUES (1,100),(2,200);
+INSERT INTO ss_q5 VALUES (1,7),(2,8);
+SELECT add_provenance('ss_r5');
+SELECT add_provenance('ss_s5');
+SELECT add_provenance('ss_q5');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ss_r5;
+  PERFORM set_prob(provsql, 1.0) FROM ss_s5;
+  PERFORM set_prob(provsql, 0.5) FROM ss_q5;
+END $$;
+
+-- target-list subquery: a=10 -> 7, a=20 -> 8 ; rows always exist (p=1).
+CREATE TABLE ss5 AS
+  SELECT ss_r5.a AS a,
+         (SELECT ss_q5.x FROM ss_q5 WHERE ss_q5.k = ss_r5.k) AS sx,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ss_r5, ss_s5 WHERE ss_s5.k = ss_r5.k;
+SELECT remove_provenance('ss5');
+SELECT a, sx, p FROM ss5 ORDER BY a;
+DROP TABLE ss5;
+
+-- WHERE subquery: the value 7/8 is > 5 whenever present, so each row passes
+-- with probability P(its ss_q5 row present) = 0.5.
+CREATE TABLE ss6 AS
+  SELECT ss_r5.a AS a,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ss_r5, ss_s5
+  WHERE ss_s5.k = ss_r5.k AND (SELECT ss_q5.x FROM ss_q5 WHERE ss_q5.k = ss_r5.k) > 5;
+SELECT remove_provenance('ss6');
+SELECT a, p FROM ss6 ORDER BY a;
+DROP TABLE ss6;
+
+DROP TABLE ss_q5;
+DROP TABLE ss_s5;
+DROP TABLE ss_r5;

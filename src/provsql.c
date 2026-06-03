@@ -4714,6 +4714,177 @@ static Aggref *oj_make_aggref(Oid aggfnoid, Oid aggtype, Oid argtype,
   return agg;
 }
 
+/** @brief Var-remap context for the FROM-wrapping pre-step: a Var at
+ *  @c target_level on relation @c varno / attribute @c varattno is retargeted to
+ *  @c newidx column @c pos[varno][varattno].  Descent into @c skip (the
+ *  SubLink) is suppressed. */
+typedef struct oj_wrap_ctx {
+  int target_level;
+  Index newidx;
+  int rtlen;
+  int **pos;       /* pos[varno][varattno] -> R' column (1-based), or 0 */
+  SubLink *skip;
+} oj_wrap_ctx;
+
+static Node *oj_wrap_remap_mut(Node *node, void *cx) {
+  oj_wrap_ctx *c = (oj_wrap_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (c->skip && node == (Node *)c->skip)
+    return node;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if ((int)v->varlevelsup == c->target_level && (int)v->varno >= 1 &&
+        (int)v->varno <= c->rtlen && c->pos[v->varno] != NULL &&
+        v->varattno >= 1 && c->pos[v->varno][v->varattno] > 0) {
+      Var *nv = (Var *)copyObject(v);
+      nv->varno = c->newidx;
+      nv->varattno = c->pos[v->varno][v->varattno];
+#if PG_VERSION_NUM >= 130000
+      nv->varnosyn = 0;
+      nv->varattnosyn = 0;
+#endif
+      return (Node *)nv;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_wrap_remap_mut, cx);
+}
+
+/**
+ * @brief Wrap a non-single-relation outer FROM into a derived subquery R' so a
+ *        scalar subquery can be decorrelated onto it.
+ *
+ * Builds R' = the outer FROM (all its base relations + join RTEs) with the
+ * non-subquery WHERE conjuncts, exposing every base-relation user column.  The
+ * outer query is rewritten to @c "FROM R'" with all references (the target
+ * list, the SubLink's correlation at level 1, and -- for a WHERE SubLink -- the
+ * conjunct that will move to HAVING) retargeted to R''s columns.  The FROM must
+ * consist only of base relations and join RTEs (no nested subqueries / VALUES /
+ * functions); returns @c false otherwise, leaving @p q untouched.
+ */
+static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
+                               SubLink *sl, bool in_where) {
+  int rtlen = list_length(q->rtable);
+  int **pos = (int **)palloc0((rtlen + 1) * sizeof(int *));
+  Query *Rp = makeNode(Query);
+  RangeTblEntry *rp_rte;
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  FromExpr *outer_fe = makeNode(FromExpr);
+  List *rp_tl = NIL;
+  Node *subquery_conj = NULL; /* the WHERE conjunct holding the SubLink */
+  List *kept_conj = NIL;
+  oj_wrap_ctx wc;
+  ListCell *lc;
+  int idx, posn = 0;
+  bool any_tracked = false;
+
+  /* Only base relations and join RTEs are supported in the wrapped FROM. */
+  idx = 0;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    ++idx;
+    if (r->rtekind == RTE_RELATION) {
+      if (oj_rte_has_provsql(constants, r))
+        any_tracked = true;
+    } else if (r->rtekind != RTE_JOIN) {
+      return false;
+    }
+  }
+  if (!any_tracked)
+    return false;
+
+  /* R' exposes every base-relation user column; record (rtindex,attno)->pos. */
+  idx = 0;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    oj_cols rc;
+    int j;
+    ++idx;
+    if (r->rtekind != RTE_RELATION)
+      continue;
+    oj_collect_cols(constants, r, &rc);
+    pos[idx] = (int *)palloc0((list_length(r->eref->colnames) + 1) * sizeof(int));
+    for (j = 0; j < rc.n; ++j) {
+      Var *v = makeVar(idx, rc.attno[j], rc.type[j], rc.typmod[j], rc.coll[j], 0);
+      rp_tl = lappend(rp_tl, makeTargetEntry((Expr *)v, ++posn,
+                                             pstrdup(rc.name[j]), false));
+      pos[idx][rc.attno[j]] = posn;
+    }
+  }
+
+  /* Split the WHERE: the conjunct holding the SubLink (for a WHERE SubLink)
+   * stays in the outer query (it becomes HAVING); the rest move into R'. */
+  if (q->jointree->quals) {
+    Node *quals = q->jointree->quals;
+    List *conjs = (IsA(quals, BoolExpr) &&
+                   ((BoolExpr *)quals)->boolop == AND_EXPR)
+                    ? ((BoolExpr *)quals)->args
+                    : list_make1(quals);
+    foreach (lc, conjs) {
+      Node *cnode = (Node *)lfirst(lc);
+      if (in_where && oj_contains_sublink_walker(cnode, sl))
+        subquery_conj = cnode;
+      else
+        kept_conj = lappend(kept_conj, cnode);
+    }
+  }
+
+  /* Build R'. */
+  Rp->commandType = CMD_SELECT;
+  Rp->canSetTag = true;
+  Rp->rtable = q->rtable;
+  Rp->jointree = makeNode(FromExpr);
+  Rp->jointree->fromlist = q->jointree->fromlist;
+  Rp->jointree->quals =
+    (kept_conj == NIL)
+      ? NULL
+      : (list_length(kept_conj) == 1 ? (Node *)linitial(kept_conj)
+                                     : (Node *)makeBoolExpr(AND_EXPR, kept_conj,
+                                                            -1));
+  Rp->targetList = rp_tl;
+#if PG_VERSION_NUM >= 160000
+  Rp->rteperminfos = q->rteperminfos;
+#endif
+
+  /* Retarget references to R': the outer target list (skipping the SubLink),
+   * the SubLink body's correlation (level 1), and the retained subquery
+   * conjunct (level 0). */
+  wc.newidx = 1;
+  wc.rtlen = rtlen;
+  wc.pos = pos;
+
+  wc.target_level = 0;
+  wc.skip = sl;
+  q->targetList = (List *)oj_wrap_remap_mut((Node *)q->targetList, &wc);
+  if (subquery_conj)
+    subquery_conj = oj_wrap_remap_mut(subquery_conj, &wc);
+
+  /* The SubLink body's correlated (level-1) references to the FROM relations
+   * become level-1 references to R'.  Walk its target list and quals directly
+   * (the mutator does not descend into a Query node). */
+  {
+    Query *sub = (Query *)sl->subselect;
+    wc.target_level = 1;
+    wc.skip = NULL;
+    sub->targetList = (List *)oj_wrap_remap_mut((Node *)sub->targetList, &wc);
+    if (sub->jointree && sub->jointree->quals)
+      sub->jointree->quals = oj_wrap_remap_mut(sub->jointree->quals, &wc);
+  }
+
+  /* Rebuild the outer query: FROM R', WHERE = the retained subquery conjunct. */
+  rp_rte = oj_make_subquery_rte(Rp);
+  q->rtable = list_make1(rp_rte);
+#if PG_VERSION_NUM >= 160000
+  q->rteperminfos = NIL;
+#endif
+  rtr->rtindex = 1;
+  outer_fe->fromlist = list_make1(rtr);
+  outer_fe->quals = subquery_conj;
+  q->jointree = outer_fe;
+  return true;
+}
+
 /**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
@@ -4749,21 +4920,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   if (q->groupClause || q->groupingSets || q->hasAggs || q->distinctClause ||
       q->setOperations || q->havingQual || q->hasWindowFuncs)
     return false;
-  /* FROM must be a single relation R: a tracked base relation, or a
-   * (non-lateral) subquery over tracked relations -- the subquery-arm lowering
-   * handles the resulting R LEFT JOIN Q either way. */
-  if (!q->jointree || list_length(q->jointree->fromlist) != 1)
-    return false;
-  if (!IsA(linitial(q->jointree->fromlist), RangeTblRef))
-    return false;
-  r_ref = (RangeTblRef *)linitial(q->jointree->fromlist);
-  R_idx = r_ref->rtindex;
-  R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
-  if (R_rte->rtekind != RTE_RELATION && R_rte->rtekind != RTE_SUBQUERY)
-    return false;
-  if (R_rte->rtekind == RTE_SUBQUERY && R_rte->lateral)
-    return false;
-  if (!oj_rte_has_provsql(constants, R_rte))
+  if (!q->jointree || q->jointree->fromlist == NIL)
     return false;
 
   /* Exactly one SubLink in the whole query.  It is either the direct expr of a
@@ -4814,6 +4971,41 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   if (Q_rte_orig->rtekind != RTE_RELATION ||
       !oj_rte_has_provsql(constants, Q_rte_orig))
     return false;
+
+  /* Determine R.  If the outer FROM is already a single tracked relation or
+   * (non-lateral) subquery, use it directly; otherwise wrap the whole FROM into
+   * a derived subquery R' (the subquery-arm lowering then handles R' LEFT JOIN
+   * Q either way). */
+  R_rte = NULL;
+  if (list_length(q->jointree->fromlist) == 1 &&
+      IsA(linitial(q->jointree->fromlist), RangeTblRef)) {
+    r_ref = (RangeTblRef *)linitial(q->jointree->fromlist);
+    R_rte = list_nth_node(RangeTblEntry, q->rtable, r_ref->rtindex - 1);
+    if ((R_rte->rtekind == RTE_RELATION ||
+         (R_rte->rtekind == RTE_SUBQUERY && !R_rte->lateral)) &&
+        oj_rte_has_provsql(constants, R_rte))
+      R_idx = r_ref->rtindex;
+    else
+      R_rte = NULL;
+  }
+  if (R_rte == NULL) {
+    if (!oj_wrap_outer_from(constants, q, sl, in_where))
+      return false;
+    R_idx = 1;
+    R_rte = list_nth_node(RangeTblEntry, q->rtable, 0);
+    sub = (Query *)sl->subselect; /* remapped in place by the wrap */
+    /* The wrap rebuilt the target list (the SubLink node itself is preserved),
+     * so re-find the target entry that still carries the SubLink. */
+    sl_te = NULL;
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->expr == (Expr *)sl) {
+        sl_te = te;
+        break;
+      }
+    }
+  }
+
   /* The correlation must reference some Q column (so count() has a key that is
    * NULL on the null-padded antijoin rows). */
   scan.n_sublinks = 0;
