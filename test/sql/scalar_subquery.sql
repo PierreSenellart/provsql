@@ -776,3 +776,35 @@ DROP TABLE lt2;
 
 DROP TABLE lt_o;
 DROP TABLE lt_c;
+
+-- Part 21: a SELECT DISTINCT value body.  The at-most-one-row rule of a scalar
+-- subquery counts distinct VALUES, not rows, so the only change from the plain
+-- value path is the gate: HAVING count(DISTINCT v) <= 1 instead of
+-- count(Q.key) <= 1.  This admits "many matching rows, all the same value"
+-- (which DISTINCT collapses to one) and still gates the >1-distinct-value worlds.
+-- (Relies on the COUNT(DISTINCT)-over-an-outer-join fix.)
+CREATE TABLE di_r(a int, k int);
+CREATE TABLE di_q(k int, x int);
+INSERT INTO di_r VALUES (10,1),(20,2),(30,3);
+INSERT INTO di_q VALUES (1,100),(2,200),(2,200),(3,300),(3,301);  -- k=2 same value twice; k=3 distinct
+SELECT add_provenance('di_r');
+SELECT add_provenance('di_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM di_r;
+  PERFORM set_prob(provsql, 0.5) FROM di_q;
+END $$;
+
+-- (SELECT DISTINCT x ...): k=1 -> 100 (p=1); k=2 -> 200 (p=1, two same-value rows
+-- collapse to one distinct value); k=3 -> p=0.75 (two distinct values, gated when
+-- both present: 1 - 0.5^2).
+CREATE TABLE di1 AS
+  SELECT di_r.a AS a,
+         (SELECT DISTINCT di_q.x FROM di_q WHERE di_q.k = di_r.k) AS v,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM di_r;
+SELECT remove_provenance('di1');
+SELECT a, v, p FROM di1 ORDER BY a;
+DROP TABLE di1;
+
+DROP TABLE di_q;
+DROP TABLE di_r;

@@ -15,6 +15,13 @@ planner-hook rewrites in `src/provsql.c` (regression coverage in
   `count(Q.key) = 1` so the empty group is excluded) -- `decorrelate_scalar_sublinks`;
 - **aggregate-body** subqueries `(SELECT agg(v) FROM Q WHERE corr)` -> the
   aggregate over the join group (no count gate; `count(*)` -> `count(Q.key)`);
+- **`SELECT DISTINCT` value body** `(SELECT DISTINCT Q.x FROM Q WHERE corr)` ->
+  the same `R ⟕ Q`, `GROUP BY R.*`, `choose(v)` decorrelation, but the
+  at-most-one-row gate counts distinct **values** instead of rows:
+  `HAVING count(DISTINCT v) <= 1` (and `= 1` for a WHERE comparison). This
+  admits "many matching rows, all the same value" (which `DISTINCT` collapses to
+  one) and still gates the worlds with more than one distinct value -- relies on
+  the COUNT(DISTINCT)-over-an-outer-join fix in `rewrite_agg_distinct`;
 - **`ORDER BY … LIMIT 1` value body** (argmax / "latest per group") ->
   `choose(v ORDER BY key)` over the join group, no count gate (LIMIT 1 legally
   takes the top of many rows) -- the body's junk sort-key targetList entries and
@@ -58,7 +65,6 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 
 | Form | Example | Why rejected | Extensible? |
 |---|---|---|---|
-| `DISTINCT` body | `(SELECT DISTINCT Q.x FROM Q WHERE Q.k=R.k)` | `distinctClause` would change multiplicity under the regroup | maybe -- needs distinct-aware grouping |
 | bare `LIMIT` / `OFFSET` body (no `ORDER BY`) | `(SELECT Q.x FROM Q WHERE Q.k=R.k LIMIT 1)` | Picks an arbitrary, non-deterministic row | no -- ill-defined without an order (`ORDER BY … LIMIT 1` IS tractable, see Priorities) |
 | `GROUP BY` body | `(SELECT sum(Q.x) FROM Q WHERE Q.k=R.k GROUP BY Q.k)` | Body grouping conflicts with the decorrelation's own `GROUP BY R.*` | hard |
 | `ORDER BY` inside `ARRAY(...)` | `ARRAY(SELECT Q.x FROM Q WHERE Q.k=R.k ORDER BY Q.x)` | Element order would not survive the regroup into `array_agg` | hard -- needs an ordered aggregate |
@@ -77,7 +83,6 @@ The genuinely-tractable next steps, roughly in value order:
    `move_uncorrelated_where_predicates` to `choose(x)` + `count(*) <= 1` plus a
    WHERE-comparison cmp gate on the cross-joined `agg_token`.
 
-`DISTINCT` / `GROUP BY` / `ORDER BY` bodies and bare (un-ordered) `LIMIT` are
-deferred: each needs genuinely new machinery (distinct-aware or ordered aggregation),
-not a reshaping
-of the existing rewrites.
+`GROUP BY` / `ORDER BY` bodies and bare (un-ordered) `LIMIT` are deferred: each
+needs genuinely new machinery (body-grouping or ordered aggregation), not a
+reshaping of the existing rewrites.

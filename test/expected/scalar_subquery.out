@@ -434,3 +434,17 @@ name|earliest
 Alice|200 (*)
 Bob|300 (*)
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|v|p
+10|100 (*)|1.0000
+20|200 (*)|1.0000
+30|300 (*)|0.7500
+(3 rows)

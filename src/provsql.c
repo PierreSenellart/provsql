@@ -4867,6 +4867,48 @@ static OpExpr *oj_count_cmp(Var *found_var, Index q_idx, const char *opstr,
   return op;
 }
 
+/** @brief Build @c "count(DISTINCT v) <op> n" -- the at-most-one-DISTINCT-value
+ *  gate of a @c "SELECT DISTINCT v" body (NULLs, on the null-padded antijoin
+ *  rows, are ignored by @c count, so an empty group counts 0). */
+static OpExpr *oj_count_distinct_cmp(Expr *valexpr, const char *opstr,
+                                     int64 n) {
+  Aggref *cnt = makeNode(Aggref);
+  TargetEntry *arg = makeTargetEntry((Expr *)copyObject((Node *)valexpr), 1,
+                                     NULL, false);
+  SortGroupClause *sgc = makeNode(SortGroupClause);
+  OpExpr *op = makeNode(OpExpr);
+  Oid o;
+
+  arg->ressortgroupref = 1;
+  sgc->tleSortGroupRef = 1;
+  get_sort_group_operators(exprType((Node *)valexpr), false, true, false,
+                           &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+
+  cnt->aggfnoid = F_COUNT_ANY;
+  cnt->aggtype = INT8OID;
+  cnt->aggtranstype = InvalidOid;
+  cnt->aggargtypes = list_make1_oid(exprType((Node *)valexpr));
+  cnt->args = list_make1(arg);
+  cnt->aggdistinct = list_make1(sgc);
+  cnt->aggkind = AGGKIND_NORMAL;
+  cnt->aggsplit = AGGSPLIT_SIMPLE;
+  cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+  cnt->aggno = cnt->aggtransno = -1;
+#endif
+
+  o = OpernameGetOprid(list_make1(makeString((char *)opstr)), INT8OID, INT8OID);
+  op->opno = o;
+  op->opfuncid = get_opcode(o);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = InvalidOid;
+  op->args = list_make2(cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                       Int64GetDatum(n), false, FLOAT8PASSBYVAL));
+  op->location = -1;
+  return op;
+}
+
 /** @brief Var-remap context for the FROM-wrapping pre-step: a Var at
  *  @c target_level on relation @c varno / attribute @c varattno is retargeted to
  *  @c newidx column @c pos[varno][varattno].  Descent into @c skip (the
@@ -6057,6 +6099,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   bool in_where = false;
   bool is_agg_body = false;
   bool is_limit1 = false; /* ORDER BY … LIMIT 1 value body: argmax via choose */
+  bool is_distinct = false; /* SELECT DISTINCT body: count(DISTINCT v) <= 1 gate */
   Expr *repl_expr; /* what replaces the SubLink: choose(val) or the aggregate */
 
   if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
@@ -6110,10 +6153,17 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
    * subset and a CTE would be dropped; reject those. */
   sub = (Query *)sl->subselect;
   if (sub->commandType != CMD_SELECT || sub->groupClause ||
-      sub->groupingSets || sub->distinctClause || sub->setOperations ||
-      sub->hasWindowFuncs || sub->hasSubLinks || sub->limitOffset ||
-      sub->cteList)
+      sub->groupingSets || sub->setOperations || sub->hasWindowFuncs ||
+      sub->hasSubLinks || sub->limitOffset || sub->cteList)
     return false;
+  /* SELECT DISTINCT v: the at-most-one-row rule counts distinct VALUES, so the
+   * gate becomes count(DISTINCT v) <= 1 (admitting many rows of one value).  Not
+   * combined with an aggregate body or LIMIT. */
+  if (sub->distinctClause != NIL) {
+    if (sub->hasDistinctOn || sub->hasAggs || sub->limitCount)
+      return false;
+    is_distinct = true;
+  }
   /* LIMIT: a bare LIMIT picks an arbitrary row (rejected), but an ORDER BY …
    * LIMIT 1 value body is the argmax -- decorrelated to choose(val ORDER BY key)
    * with no count gate (LIMIT 1 never errors on >1 rows). */
@@ -6383,17 +6433,22 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     List *having_conjuncts = NIL;
 
     if (!is_agg_body && !is_limit1) {
-      having_conjuncts =
-        list_make1(oj_count_cmp((Var *)scan.found_var, Q_idx, "<=", 1));
+      /* SELECT DISTINCT v counts distinct VALUES (count(DISTINCT v) <= 1); a
+       * plain value body counts matching rows (count(Q.key) <= 1). */
+      having_conjuncts = list_make1(
+        is_distinct ? oj_count_distinct_cmp(valexpr, "<=", 1)
+                    : oj_count_cmp((Var *)scan.found_var, Q_idx, "<=", 1));
       /* A WHERE comparison must test an actual subquery value, so the correlated
-       * group has to be non-empty: count(Q.key) = 1, not merely <= 1.  An empty
+       * group has to be non-empty: count(…) = 1, not merely <= 1.  An empty
        * group would give a NULL comparison (the row is excluded), but the value
        * gate over the all-NULL aggregate does not encode that, so the >= 1 gate
        * supplies it.  (A target-list subquery keeps <= 1 only: zero matches is a
        * legal NULL value, and the row still exists.) */
       if (in_where)
         having_conjuncts = lappend(
-          having_conjuncts, oj_count_cmp((Var *)scan.found_var, Q_idx, ">=", 1));
+          having_conjuncts,
+          is_distinct ? oj_count_distinct_cmp(valexpr, ">=", 1)
+                      : oj_count_cmp((Var *)scan.found_var, Q_idx, ">=", 1));
     }
 
     if (in_where) {
