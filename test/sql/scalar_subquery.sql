@@ -533,3 +533,127 @@ DROP TABLE ue5;
 
 DROP TABLE ue_q;
 DROP TABLE ue_r;
+
+-- Part 15: an UNcorrelated NOT EXISTS is the m-semiring antijoin.  It is rewritten
+-- to the EXCEPT-ALL difference  R EXCEPT ALL π_R(R × σ_w(Q)), replacing R in the
+-- FROM, so each kept tuple gets  R(r) ⊖ (R(r) ⊗ ⊕_{q:w} Q(q)) = R(r) ⊗ (1 ⊖ ⊕Q)
+-- -- multiplicity preserved (EXCEPT ALL, no GROUP BY), correct in every semiring,
+-- and it materialises every R row from the always-present left arm (so the empty-Q
+-- world a count(*)=0 HAVING would drop is kept).
+CREATE TABLE ne_r(a int);
+CREATE TABLE ne_q(x int);
+INSERT INTO ne_r VALUES (10),(20),(10);     -- duplicate a=10 tests multiplicity
+INSERT INTO ne_q VALUES (100),(200),(201);
+SELECT add_provenance('ne_r');
+SELECT add_provenance('ne_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ne_r;
+  PERFORM set_prob(provsql, 0.5) FROM ne_q;
+END $$;
+
+-- bare NOT EXISTS: each of the 3 R rows survives iff ne_q is empty,
+-- p = P(all three absent) = 0.5^3 = 0.125.  All three rows are kept (multiplicity).
+CREATE TABLE ne1 AS
+  SELECT ne_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ne_r WHERE NOT EXISTS (SELECT 1 FROM ne_q);
+SELECT remove_provenance('ne1');
+SELECT a, p FROM ne1 ORDER BY a;
+DROP TABLE ne1;
+
+-- NOT EXISTS with a body filter (x > 150): survives iff no ne_q with x>150 present,
+-- p = P(200 absent AND 201 absent) = 0.25.
+CREATE TABLE ne2 AS
+  SELECT ne_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ne_r WHERE NOT EXISTS (SELECT 1 FROM ne_q WHERE ne_q.x > 150);
+SELECT remove_provenance('ne2');
+SELECT a, p FROM ne2 ORDER BY a;
+DROP TABLE ne2;
+
+-- A retained ordinary conjunct (a > 15) applies on top of the antijoin.
+CREATE TABLE ne3 AS
+  SELECT ne_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ne_r WHERE ne_r.a > 15 AND NOT EXISTS (SELECT 1 FROM ne_q);
+SELECT remove_provenance('ne3');
+SELECT a, p FROM ne3 ORDER BY a;
+DROP TABLE ne3;
+
+DROP TABLE ne_q;
+DROP TABLE ne_r;
+
+-- Part 16: an uncorrelated count(*) comparison in WHERE.  A predicate FALSE on
+-- the empty group (count(*) >= k, = k for k>=1, …) is the safe HAVING-gate
+-- (move_uncorrelated_where_predicates); one TRUE on the empty group (count(*)
+-- < k, <= k, = 0) is "NOT (a false-on-empty predicate)", so it routes through
+-- the same EXCEPT-ALL antijoin as NOT EXISTS -- otherwise the empty-Q world
+-- (gate_zero) would be silently dropped, under-counting the predicate.
+CREATE TABLE ce_r(a int);
+CREATE TABLE ce_q(x int);
+INSERT INTO ce_r VALUES (10),(20);
+INSERT INTO ce_q VALUES (100),(200),(201);   -- 3 i.i.d. rows at 0.5
+SELECT add_provenance('ce_r');
+SELECT add_provenance('ce_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ce_r;
+  PERFORM set_prob(provsql, 0.5) FROM ce_q;
+END $$;
+
+-- count(*) < 2 (true on empty) -> P(<=1 of 3) = 0.5  (not the 0.375 a HAVING-gate
+-- would give by dropping the count=0 world).
+CREATE TABLE ce1 AS
+  SELECT ce_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ce_r WHERE (SELECT count(*) FROM ce_q) < 2;
+SELECT remove_provenance('ce1');
+SELECT a, p FROM ce1 ORDER BY a;
+DROP TABLE ce1;
+
+-- count(*) = 0 -> P(empty) = 0.125  (NOT EXISTS spelled as a count).
+CREATE TABLE ce2 AS
+  SELECT ce_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ce_r WHERE (SELECT count(*) FROM ce_q) = 0;
+SELECT remove_provenance('ce2');
+SELECT a, p FROM ce2 ORDER BY a;
+DROP TABLE ce2;
+
+-- count(*) >= 2 (false on empty) -> the complement, P(>=2 of 3) = 0.5.
+CREATE TABLE ce3 AS
+  SELECT ce_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ce_r WHERE (SELECT count(*) FROM ce_q) >= 2;
+SELECT remove_provenance('ce3');
+SELECT a, p FROM ce3 ORDER BY a;
+DROP TABLE ce3;
+
+-- count(*) = 2 (false on empty) -> P(exactly 2 of 3) = 0.375.
+CREATE TABLE ce4 AS
+  SELECT ce_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ce_r WHERE (SELECT count(*) FROM ce_q) = 2;
+SELECT remove_provenance('ce4');
+SELECT a, p FROM ce4 ORDER BY a;
+DROP TABLE ce4;
+
+DROP TABLE ce_q;
+DROP TABLE ce_r;
+
+-- Part 17: count(col) (not count(*)) takes the same true-on-empty antijoin, but
+-- D's HAVING reuses the original count aggregate, so count(col)'s NULL semantics
+-- hold.  cn_q has a NULL x, so count(x) counts only the two non-NULL rows;
+-- count(x) < 1 (true on empty) -> P(both non-NULL rows absent) = 0.25.
+CREATE TABLE cn_r(a int);
+CREATE TABLE cn_q(x int);
+INSERT INTO cn_r VALUES (10),(20);
+INSERT INTO cn_q VALUES (100),(200),(NULL);
+SELECT add_provenance('cn_r');
+SELECT add_provenance('cn_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM cn_r;
+  PERFORM set_prob(provsql, 0.5) FROM cn_q;
+END $$;
+
+CREATE TABLE cn1 AS
+  SELECT cn_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM cn_r WHERE (SELECT count(x) FROM cn_q) < 1;
+SELECT remove_provenance('cn1');
+SELECT a, p FROM cn1 ORDER BY a;
+DROP TABLE cn1;
+
+DROP TABLE cn_q;
+DROP TABLE cn_r;

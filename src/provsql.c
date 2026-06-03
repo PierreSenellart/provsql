@@ -5661,6 +5661,177 @@ static bool move_uncorrelated_where_predicates(const constants_t *constants,
   return changed;
 }
 
+/** @brief Build the @c "<cnt> <op> const" OpExpr for an antijoin's HAVING, where
+ *  @p cnt is a @c count aggregate (@c count(*) or @c count(col)). */
+static OpExpr *oj_count_const_cmp(Oid opno, Oid inputcollid, Aggref *cnt,
+                                  Node *constarg) {
+  OpExpr *op = makeNode(OpExpr);
+  op->opno = opno;
+  op->opfuncid = get_opcode(opno);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = inputcollid;
+  op->args = list_make2(cnt, copyObject(constarg));
+  op->location = -1;
+  return op;
+}
+
+/** @brief Does @c 0 satisfy the @c int8 comparison @c "0 <opno> c"?  Detects
+ *  @c count(*) predicates that hold on the empty group (so the HAVING-gate would
+ *  drop them and the antijoin construction is needed instead). */
+static bool oj_zero_satisfies(Oid opno, Const *c) {
+  return DatumGetBool(OidFunctionCall2Coll(get_opcode(opno), c->constcollid,
+                                           Int64GetDatum(0), c->constvalue));
+}
+
+/**
+ * @brief Rewrite an uncorrelated WHERE predicate that is satisfied by the empty
+ *        group -- @c NOT @c EXISTS, or @c "(SELECT count(*) FROM Q) <op> const"
+ *        with @c "0 <op> const" true (e.g. @c "< k", @c "<= k", @c "= 0") -- into
+ *        the EXCEPT-ALL antijoin.
+ *
+ * Such a predicate is @c "NOT P" for a @c P that is FALSE on the empty group
+ * (@c EXISTS, @c count(*) @c >= @c k, …), so it is the m-semiring antijoin
+ * @c "R ⊗ (1 ⊖ ⟦P⟧)".  We materialise @c ⟦P⟧ as the one-row HAVING-gated subquery
+ * @c D = @c "SELECT 1 FROM Q [WHERE w] HAVING count(*) <negated op> const"
+ * (count(*) always yields a row, so @c ⟦P⟧ is correctly captured even when the
+ * group is empty), then take the difference @c "R EXCEPT ALL π_R(R × D)" via
+ * @c oj_build_diff -- ProvSQL's NOT-IN EXCEPT-ALL, giving each kept tuple
+ * @c "R(r) ⊖ (R(r) ⊗ ⟦P⟧) = R(r) ⊗ (1 ⊖ ⟦P⟧)", multiplicity preserved and correct
+ * in every semiring.
+ *
+ * Runs before @c rewrite_predicate_sublinks / @c move_uncorrelated_where_predicates:
+ * those would instead push the raw predicate into a HAVING-gate, whose empty
+ * group is @c gate_zero -- dropping exactly the world this predicate selects (a
+ * silent under-count: @c count(*)=0 → p=0, @c count(*)<2 → @c P(=1) not @c P(≤1)).
+ */
+static bool rewrite_uncorrelated_antijoin(const constants_t *constants,
+                                          Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  RangeTblRef *r_ref;
+  RangeTblEntry *R_rte;
+  Index R_idx;
+  Query *q_body = NULL;  /* the uncorrelated Q body of the matched predicate */
+  Node *neg_having = NULL; /* the false-on-empty count(*) predicate for D */
+  Query *Diff;
+  RangeTblEntry *d_rte;
+  oj_cols Rc, Dc;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals || q->setOperations)
+    return false;
+  if (list_length(q->jointree->fromlist) != 1 ||
+      !IsA(linitial(q->jointree->fromlist), RangeTblRef))
+    return false;
+  r_ref = (RangeTblRef *)linitial(q->jointree->fromlist);
+  R_idx = r_ref->rtindex;
+  R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+  if (R_rte->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, R_rte))
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+
+    if (q_body == NULL && IsA(c, BoolExpr) &&
+        ((BoolExpr *)c)->boolop == NOT_EXPR &&
+        list_length(((BoolExpr *)c)->args) == 1) {
+      /* NOT EXISTS(Q)  ==  NOT (count(*) >= 1). */
+      Node *inner = (Node *)linitial(((BoolExpr *)c)->args);
+      if (IsA(inner, SubLink) &&
+          ((SubLink *)inner)->subLinkType == EXISTS_SUBLINK &&
+          IsA(((SubLink *)inner)->subselect, Query) &&
+          oj_uncorrelated_body_over_tracked(
+            constants, (Query *)((SubLink *)inner)->subselect)) {
+        Oid ge = OpernameGetOprid(list_make1(makeString(">=")), INT8OID,
+                                  INT8OID);
+        q_body = (Query *)((SubLink *)inner)->subselect;
+        neg_having = (Node *)oj_count_const_cmp(
+          ge, InvalidOid, oj_make_count_star(),
+          (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                            Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+        continue; /* drop this conjunct -- carried by the antijoin */
+      }
+    } else if (q_body == NULL && IsA(c, OpExpr) &&
+               list_length(((OpExpr *)c)->args) == 2) {
+      /* (SELECT count(*) FROM Q) <op> const, when 0 <op> const is true. */
+      OpExpr *op = (OpExpr *)c;
+      Node *l = (Node *)linitial(op->args), *r = (Node *)lsecond(op->args);
+      /* count(*) is int8 on the left (so 0::int8 is the right empty value for
+       * oj_zero_satisfies); the literal may be int4 or int8 (PG has cross-type
+       * int8/int4 comparison operators, so it is not coerced). */
+      if (IsA(l, SubLink) && IsA(r, Const) && !((Const *)r)->constisnull &&
+          exprType(l) == INT8OID) {
+        SubLink *sl = (SubLink *)l;
+        Oid neg;
+        if (sl->subLinkType == EXPR_SUBLINK && IsA(sl->subselect, Query)) {
+          Query *s = (Query *)sl->subselect;
+          TargetEntry *te = (list_length(s->targetList) == 1)
+                              ? (TargetEntry *)linitial(s->targetList)
+                              : NULL;
+          Aggref *cnt = (te && IsA(te->expr, Aggref)) ? (Aggref *)te->expr
+                                                      : NULL;
+          /* count(*) (F_COUNT_) or count(col) (F_COUNT_ANY): both return 0 on
+           * the empty group, so a predicate true at 0 needs the antijoin.  D's
+           * HAVING reuses the original count aggregate (so count(col)'s NULL
+           * semantics are preserved). */
+          if (cnt &&
+              (cnt->aggfnoid == F_COUNT_ || cnt->aggfnoid == F_COUNT_ANY) &&
+              oj_uncorrelated_body_over_tracked(constants, s) &&
+              oj_zero_satisfies(op->opno, (Const *)r) &&
+              OidIsValid((neg = get_negator(op->opno)))) {
+            q_body = s;
+            neg_having = (Node *)oj_count_const_cmp(
+              neg, op->inputcollid, (Aggref *)copyObject(cnt), r);
+            continue;
+          }
+        }
+      }
+    }
+    newconjs = lappend(newconjs, c);
+  }
+  if (q_body == NULL)
+    return false;
+
+  /* D = SELECT 1 FROM <Q body> HAVING <false-on-empty count(*) predicate>. */
+  d_rte = oj_make_subquery_rte(oj_having_gated_subquery(q_body, neg_having));
+  oj_collect_cols(constants, R_rte, &Rc);
+  oj_collect_cols(constants, d_rte, &Dc);
+
+  /* Diff = R EXCEPT ALL π_R(R × D)  =  R(r) ⊗ (1 ⊖ ⟦P⟧).  D is a self-contained
+   * subquery, so oj_build_diff copies it into the matched arm (no outer perms). */
+  Diff = oj_build_diff(constants, q, R_rte, d_rte, R_idx,
+                       R_idx /* S_idx unused: theta is NULL */, &Rc, &Dc, NULL,
+                       true /* keep_left */);
+  lfirst(list_nth_cell(q->rtable, R_idx - 1)) =
+    (void *)oj_make_subquery_rte(Diff);
+
+  q->jointree->quals =
+    (newconjs == NIL)
+      ? NULL
+      : (list_length(newconjs) == 1
+           ? (Node *)linitial(newconjs)
+           : (Node *)makeBoolExpr(AND_EXPR, newconjs, -1));
+  {
+    oj_sublink_scan scan;
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 0;
+    scan.found_var = NULL;
+    oj_sublink_scan_walker((Node *)q->targetList, &scan);
+    if (q->jointree->quals)
+      oj_sublink_scan_walker(q->jointree->quals, &scan);
+    if (scan.n_sublinks == 0)
+      q->hasSubLinks = false;
+  }
+  return true;
+}
+
 /**
  * @brief Move uncorrelated scalar subqueries that are direct target-list entries
  *        into a cross-joined derived aggregate in the outer FROM.
@@ -8188,6 +8359,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * "Subqueries not supported" guard further down. */
   if (provsql_active) {
     rewrite_array_sublinks(constants, q);
+    rewrite_uncorrelated_antijoin(constants, q);
     rewrite_predicate_sublinks(constants, q);
     move_uncorrelated_where_predicates(constants, q);
     move_uncorrelated_sublinks_to_from(constants, q);

@@ -27,6 +27,11 @@ planner-hook rewrites in `src/provsql.c` (regression coverage in
 - **uncorrelated `EXISTS`** and **uncorrelated aggregate comparisons in WHERE**
   (`(SELECT count/max/… FROM Q) OP const`), pushed into a HAVING-gated one-row
   subquery cross-joined into the FROM -- `move_uncorrelated_where_predicates`;
+- **uncorrelated `NOT EXISTS`** and **true-on-empty `count(*)` / `count(col)`
+  comparisons** (`(SELECT count(*) FROM Q) < k` / `<= k` / `= 0`), the m-semiring antijoin
+  `R ⊗ (1 ⊖ ⟦P⟧)` for the false-on-empty `P`; rewritten to the EXCEPT-ALL
+  difference `R EXCEPT ALL π_R(R × D)` with `D` the one-row HAVING-gated `P`
+  (multiplicity preserved) -- `rewrite_uncorrelated_antijoin`;
 - a **HAVING comparison of an aggregate against a grouped column** (per-group
   variable RHS), wrapped like a constant in `having_OpExpr_to_provenance_cmp`;
 - a multi-table / auto-wrapped outer FROM, and an untracked outer relation.
@@ -43,7 +48,6 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 |---|---|---|---|
 | `op ALL` / `<> ALL` (universal) | `… WHERE R.k <> ALL (SELECT Q.k FROM Q)` | Only `ANY` (`IN`) is lowered; `ALL` is a universal, not a semijoin | yes -- `<> ALL` is the antijoin dual of `IN`, lowerable to `count(matching) = 0` |
 | Multi-column / row `IN` | `… WHERE (R.k, R.a) IN (SELECT Q.k, Q.x FROM Q)` | Row-comparison testexpr is not a single `=` `OpExpr` | yes -- split the row `=` into per-column conjuncts |
-| Uncorrelated `NOT EXISTS` | `… WHERE NOT EXISTS (SELECT 1 FROM Q)` | Satisfied only by the empty `Q` group, which ProvSQL's aggregate semantics drop (gate_zero); a HAVING-gated `count(*) = 0` would give a wrong p=0 | hard -- needs the antijoin's 0-match row without a correlation to LEFT-JOIN on |
 | `DISTINCT` body | `(SELECT DISTINCT Q.x FROM Q WHERE Q.k=R.k)` | `distinctClause` would change multiplicity under the regroup | maybe -- needs distinct-aware grouping |
 | `LIMIT` / `OFFSET` body | `(SELECT Q.x FROM Q WHERE Q.k=R.k LIMIT 1)` | Bounded, order-dependent subset | no -- order-dependent, not a set operation |
 | `GROUP BY` body | `(SELECT sum(Q.x) FROM Q WHERE Q.k=R.k GROUP BY Q.k)` | Body grouping conflicts with the decorrelation's own `GROUP BY R.*` | hard |
