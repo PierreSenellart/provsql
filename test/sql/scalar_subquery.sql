@@ -188,3 +188,27 @@ WHERE EXISTS (SELECT 1 FROM rj_q WHERE rj_q.k = rj_r.k);
 
 DROP TABLE rj_q;
 DROP TABLE rj_r;
+
+-- Part 7: untracked outer FROM with a scalar subquery over a tracked relation.
+-- ProvSQL still evaluates it, warning that the outer (untracked) tuple
+-- provenance is lost; only the subquery's provenance is kept.  The outer rows
+-- are certain, so existence is driven by the subquery: k=1 -> 1 (one match);
+-- k=2 -> 0.75 (two independent matches gated by count(...) <= 1).
+CREATE TABLE su_u(a int, k int);
+CREATE TABLE su_q(k int, x int);
+INSERT INTO su_u VALUES (10,1),(20,2);
+INSERT INTO su_q VALUES (1,100),(2,200),(2,201);
+SELECT add_provenance('su_q');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM su_q; END $$;
+
+CREATE TABLE su_res AS
+  SELECT su_u.a AS a,
+         (SELECT su_q.x FROM su_q WHERE su_q.k = su_u.k) AS sx,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM su_u;
+SELECT remove_provenance('su_res');
+SELECT a, p FROM su_res ORDER BY a;
+DROP TABLE su_res;
+
+DROP TABLE su_q;
+DROP TABLE su_u;

@@ -3341,6 +3341,56 @@ static bool has_rv_or_provenance_call(Node *node, void *data) {
   return expression_tree_walker(node, has_rv_or_provenance_call, data);
 }
 
+/**
+ * @brief Walker (this query level only): true if an @c EXPR_SUBLINK whose body
+ *        is a decorrelatable value subquery over a provenance-tracked base
+ *        relation appears in an expression.
+ *
+ * Lets the planner gate engage for a scalar subquery over a tracked relation
+ * even when the OUTER query has no tracked relation -- decorrelate_scalar_
+ * sublinks then handles it (wrapping the untracked outer with a certain
+ * gate_one() provenance and warning that its tuple provenance is lost).  The
+ * shape conditions mirror decorrelate's subselect validation, so engagement
+ * implies the decorrelation succeeds (no engage-then-error regression); a
+ * non-decorrelatable scalar subquery still leaves the gate untouched and runs
+ * as plain SQL.  Does not descend into nested Query / SubLink subselects.
+ */
+static bool decorr_value_sublink_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subLinkType == EXPR_SUBLINK && sl->subselect &&
+        IsA(sl->subselect, Query)) {
+      Query *sub = (Query *)sl->subselect;
+      if (!sub->hasAggs && !sub->groupClause && !sub->groupingSets &&
+          !sub->distinctClause && !sub->setOperations && !sub->hasWindowFuncs &&
+          !sub->hasSubLinks && !sub->limitCount && !sub->limitOffset &&
+          !sub->cteList && list_length(sub->rtable) == 1 &&
+          list_length(sub->targetList) == 1 && sub->jointree &&
+          list_length(sub->jointree->fromlist) == 1 &&
+          IsA(linitial(sub->jointree->fromlist), RangeTblRef)) {
+        RangeTblEntry *qr = (RangeTblEntry *)linitial(sub->rtable);
+        if (qr->rtekind == RTE_RELATION) {
+          ListCell *lc;
+          AttrNumber a = 0;
+          foreach (lc, qr->eref->colnames) {
+            ++a;
+            if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) &&
+                get_atttype(qr->relid, a) == constants->OID_TYPE_UUID)
+              return true;
+          }
+        }
+      }
+    }
+    return false; /* do not descend into the subselect */
+  }
+  if (IsA(node, Query))
+    return false; /* nested queries are handled by has_provenance_walker */
+  return expression_tree_walker(node, decorr_value_sublink_walker, data);
+}
+
 static bool has_provenance_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -3376,6 +3426,14 @@ static bool has_provenance_walker(Node *node, void *data) {
     if (has_rv_or_provenance_call((Node *)q->havingQual, data))
       return true;
     if (has_rv_or_provenance_call((Node *)q->returningList, data))
+      return true;
+
+    /* A decorrelatable value scalar subquery over a tracked relation engages
+     * the gate even with an untracked outer (handled with a warning). */
+    if (decorr_value_sublink_walker((Node *)q->targetList, data))
+      return true;
+    if (q->jointree &&
+        decorr_value_sublink_walker((Node *)q->jointree->quals, data))
       return true;
 
     foreach (rc, q->rtable) {
@@ -3934,8 +3992,23 @@ static bool oj_rte_has_provsql(const constants_t *constants,
   ListCell *lc;
   AttrNumber attid = 0;
 
-  if (rel->rtekind == RTE_SUBQUERY)
-    return rel->subquery != NULL && has_provenance(constants, rel->subquery);
+  if (rel->rtekind == RTE_SUBQUERY) {
+    if (rel->subquery == NULL)
+      return false;
+    if (has_provenance(constants, rel->subquery))
+      return true;
+    /* Also tracked if the subquery already exposes a provsql UUID column
+     * (e.g. the synthetic gate_one() column the wrap adds for an untracked
+     * outer). */
+    foreach (lc, rel->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (!te->resjunk && te->resname &&
+          !strcmp(te->resname, PROVSQL_COLUMN_NAME) &&
+          exprType((Node *)te->expr) == constants->OID_TYPE_UUID)
+        return true;
+    }
+    return false;
+  }
 
   foreach (lc, rel->eref->colnames) {
     ++attid;
@@ -4791,8 +4864,6 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
       return false;
     }
   }
-  if (!any_tracked)
-    return false;
 
   /* R' exposes every base-relation user column; record (rtindex,attno)->pos. */
   idx = 0;
@@ -4811,6 +4882,24 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
                                              pstrdup(rc.name[j]), false));
       pos[idx][rc.attno[j]] = posn;
     }
+  }
+
+  /* When no FROM relation is provenance-tracked, the outer tuples are certain:
+   * give R' a synthetic gate_one() provsql column so the decorrelation /
+   * outer-join lowering treat it as a certain-provenance arm, and warn that the
+   * outer tuple provenance is lost (only the subquery's provenance is kept). */
+  if (!any_tracked) {
+    FuncExpr *one = makeNode(FuncExpr);
+    one->funcid = constants->OID_FUNCTION_GATE_ONE;
+    one->funcresulttype = constants->OID_TYPE_UUID;
+    one->args = NIL;
+    one->location = -1;
+    rp_tl = lappend(rp_tl, makeTargetEntry((Expr *)one, ++posn,
+                                           pstrdup(PROVSQL_COLUMN_NAME), false));
+    provsql_warning("scalar subquery over a provenance-tracked relation with "
+                    "an untracked FROM: the outer tuple provenance is lost "
+                    "(treated as certain); only the subquery's provenance is "
+                    "tracked");
   }
 
   /* Split the WHERE: the conjunct holding the SubLink (for a WHERE SubLink)

@@ -84,8 +84,9 @@ INSERT INTO rv_hist_t VALUES ('a');
 SELECT add_provenance('rv_hist_t');
 DO $$
 DECLARE
-  input_tok uuid := (SELECT provsql FROM rv_hist_t WHERE id = 'a');
+  input_tok uuid;
 BEGIN
+  SELECT provenance() INTO input_tok FROM rv_hist_t WHERE id = 'a';
   BEGIN
     PERFORM provsql.rv_histogram(input_tok, 10);
     RAISE EXCEPTION 'expected rv_histogram to reject non-scalar root';
