@@ -5163,44 +5163,90 @@ static Node *oj_param_repl_mut(Node *node, void *cx) {
 }
 
 /**
- * @brief For an @c "x IN (SELECT Q.col FROM Q [WHERE w])" (@c ANY_SUBLINK with
- *        operator @c '='), build the @c "x = Q.col" correlation conjunct.
+ * @brief Build the per-row correlation for a quantified sublink (@c IN /
+ *        @c op @c ANY / @c op @c ALL), setting @p *antijoin.
  *
- * The testexpr is @c "x = Param(subselect output)"; the subselect's single
- * output column is @c Q.col.  We copy the testexpr, sink its outer operand(s)
- * one level (@c x lives one step up from inside the subselect), then substitute
- * @c Q.col for the @c PARAM_SUBLINK placeholder -- keeping the operator and any
- * coercions (e.g. the @c varchar->text relabel around the param) intact.
- * Returns @c NULL for anything but the single-column @c '=' form (row IN,
- * @c > @c ANY, etc.).
+ * The testexpr is @c "x op Param(subselect output)" (single column), or -- for a
+ * row @c IN -- a @c BoolExpr @c AND of per-column @c "xᵢ = Paramᵢ".  For each we
+ * copy the op, sink the outer operand one level, and substitute the subselect's
+ * paramid-th output column for the @c PARAM_SUBLINK placeholder, keeping any
+ * coercions (e.g. a @c varchar->text relabel) intact.  @c ANY is a semijoin
+ * (@c *antijoin = false, operator kept); @c ALL is the universal dual, the
+ * antijoin (@c *antijoin = true, operator negated -- @c "∀q. x op q" =
+ * @c "¬∃q. x ¬op q").  Returns @c NULL for unsupported shapes (a @c RowCompareExpr,
+ * a multi-column @c ALL, a bad paramid, …).
  */
-static Node *extract_in_corr(SubLink *sl) {
-  OpExpr *te;
-  Param *p;
-  Node *rhs, *qcol, *corr;
-  oj_param_repl_ctx ctx;
+static Node *extract_quantified_corr(SubLink *sl, bool *antijoin) {
   Query *sub = (Query *)sl->subselect;
+  List *opexprs, *conjs = NIL;
+  ListCell *lc;
+  bool negate_op;
 
-  if (sl->subLinkType != ANY_SUBLINK || !IsA(sl->testexpr, OpExpr))
+  /* ANY (IN, op ANY) is a semijoin: ∃q. x op q.  ALL (op ALL) is its universal
+   * dual: ∀q. x op q = ¬∃q. x ¬op q -- the antijoin, with the operator negated
+   * in the per-row correlation. */
+  if (sl->subLinkType == ANY_SUBLINK) {
+    *antijoin = false;
+    negate_op = false;
+  } else if (sl->subLinkType == ALL_SUBLINK) {
+    *antijoin = true;
+    negate_op = true;
+  } else {
     return NULL;
-  te = (OpExpr *)sl->testexpr;
-  if (list_length(te->args) != 2 || list_length(sub->targetList) != 1)
-    return NULL;
-  rhs = (Node *)lsecond(te->args);
-  if (IsA(rhs, RelabelType))
-    rhs = (Node *)((RelabelType *)rhs)->arg; /* varchar->text etc. */
-  if (!IsA(rhs, Param))
-    return NULL;
-  p = (Param *)rhs;
-  if (p->paramkind != PARAM_SUBLINK || p->paramid != 1)
+  }
+
+  /* The testexpr is a single "x op Param" (single-column), or -- only for a row
+   * IN -- a BoolExpr AND of per-column "xᵢ = Paramᵢ". */
+  if (IsA(sl->testexpr, OpExpr))
+    opexprs = list_make1(sl->testexpr);
+  else if (sl->subLinkType == ANY_SUBLINK && IsA(sl->testexpr, BoolExpr) &&
+           ((BoolExpr *)sl->testexpr)->boolop == AND_EXPR)
+    opexprs = ((BoolExpr *)sl->testexpr)->args;
+  else
     return NULL;
 
-  qcol = copyObject((Node *)((TargetEntry *)linitial(sub->targetList))->expr);
-  corr = copyObject((Node *)te);
-  IncrementVarSublevelsUp(corr, 1, 0); /* outer operands -> one level deeper */
-  ctx.paramid = 1;
-  ctx.replacement = qcol;
-  return oj_param_repl_mut(corr, &ctx);
+  foreach (lc, opexprs) {
+    OpExpr *oe = (OpExpr *)lfirst(lc);
+    Node *rhs, *qcol, *ci;
+    Param *p;
+    oj_param_repl_ctx ctx;
+
+    if (!IsA(oe, OpExpr) || list_length(oe->args) != 2)
+      return NULL;
+    rhs = (Node *)lsecond(oe->args);
+    if (IsA(rhs, RelabelType))
+      rhs = (Node *)((RelabelType *)rhs)->arg; /* varchar->text etc. */
+    if (!IsA(rhs, Param))
+      return NULL;
+    p = (Param *)rhs;
+    if (p->paramkind != PARAM_SUBLINK || p->paramid < 1 ||
+        p->paramid > list_length(sub->targetList))
+      return NULL;
+
+    /* Build "xᵢ <op'> Q.colᵢ": copy the testexpr op (negating it for ALL),
+     * sink the outer operand a level, and substitute the subselect's
+     * paramid-th output column for its PARAM_SUBLINK placeholder. */
+    ci = copyObject((Node *)oe);
+    if (negate_op) {
+      Oid neg = get_negator(((OpExpr *)ci)->opno);
+      if (!OidIsValid(neg))
+        return NULL;
+      ((OpExpr *)ci)->opno = neg;
+      ((OpExpr *)ci)->opfuncid = get_opcode(neg);
+    }
+    IncrementVarSublevelsUp(ci, 1, 0);
+    qcol = copyObject(
+      (Node *)((TargetEntry *)list_nth(sub->targetList, p->paramid - 1))->expr);
+    ctx.paramid = p->paramid;
+    ctx.replacement = qcol;
+    conjs = lappend(conjs, oj_param_repl_mut(ci, &ctx));
+  }
+
+  if (conjs == NIL)
+    return NULL;
+  return (list_length(conjs) == 1)
+           ? (Node *)linitial(conjs)
+           : (Node *)makeBoolExpr(AND_EXPR, conjs, -1);
 }
 
 /**
@@ -5249,14 +5295,17 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
         /* EXISTS / NOT EXISTS: correlation already in the subselect WHERE. */
         rewritten =
           build_count_predicate((Query *)sl->subselect, NULL, neg);
-      } else if (sl->subLinkType == ANY_SUBLINK) {
-        /* IN / NOT IN: correlation lifted from the testexpr. */
-        Node *corr = extract_in_corr(sl);
+      } else if (sl->subLinkType == ANY_SUBLINK ||
+                 sl->subLinkType == ALL_SUBLINK) {
+        /* IN / NOT IN / op ANY / op ALL: correlation lifted from the testexpr.
+         * ANY is a semijoin, ALL its antijoin dual; a wrapping NOT flips that. */
+        bool base_antijoin;
+        Node *corr = extract_quantified_corr(sl, &base_antijoin);
         if (corr &&
             predicate_subselect_decorrelatable(constants,
                                                (Query *)sl->subselect, true))
-          rewritten =
-            build_count_predicate((Query *)sl->subselect, corr, neg);
+          rewritten = build_count_predicate((Query *)sl->subselect, corr,
+                                            base_antijoin ^ neg);
       }
     }
     newconjs = lappend(newconjs, rewritten ? rewritten : c);

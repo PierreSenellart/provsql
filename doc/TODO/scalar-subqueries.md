@@ -15,8 +15,11 @@ planner-hook rewrites in `src/provsql.c` (regression coverage in
   `count(Q.key) = 1` so the empty group is excluded) -- `decorrelate_scalar_sublinks`;
 - **aggregate-body** subqueries `(SELECT agg(v) FROM Q WHERE corr)` -> the
   aggregate over the join group (no count gate; `count(*)` -> `count(Q.key)`);
-- **`EXISTS` / `IN`** (semijoin) and **`NOT EXISTS` / `NOT IN`** (antijoin),
-  rewritten to a correlated `(SELECT count(*) …) >= 1` / `= 0` -- `rewrite_predicate_sublinks`;
+- **`EXISTS` / `IN` / `op ANY`** (semijoin) and **`NOT EXISTS` / `NOT IN` /
+  `op ALL`** (antijoin -- `∀q. x op q = ¬∃q. x ¬op q`), plus **row `IN`**
+  (`(a,b) IN (SELECT …)`, per-column conjuncts), rewritten to a correlated
+  `(SELECT count(*) …) >= 1` / `= 0` -- `rewrite_predicate_sublinks`,
+  `extract_quantified_corr`;
 - **`ARRAY(SELECT v FROM Q WHERE corr)`** -> `array_agg(v)` over the group, with a
   `FILTER` dropping the null-padded row -- `rewrite_array_sublinks`;
 - **multi-table bodies** `(SELECT v FROM Q1, Q2 WHERE …)`, collapsed into a
@@ -51,10 +54,8 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 
 | Form | Example | Why rejected | Extensible? |
 |---|---|---|---|
-| `op ALL` / `<> ALL` (universal) | `… WHERE R.k <> ALL (SELECT Q.k FROM Q)` | Only `ANY` (`IN`) is lowered; `ALL` is a universal, not a semijoin | yes -- `<> ALL` is the antijoin dual of `IN`, lowerable to `count(matching) = 0` |
-| Multi-column / row `IN` | `… WHERE (R.k, R.a) IN (SELECT Q.k, Q.x FROM Q)` | Row-comparison testexpr is not a single `=` `OpExpr` | yes -- split the row `=` into per-column conjuncts |
 | `DISTINCT` body | `(SELECT DISTINCT Q.x FROM Q WHERE Q.k=R.k)` | `distinctClause` would change multiplicity under the regroup | maybe -- needs distinct-aware grouping |
-| `LIMIT` / `OFFSET` body | `(SELECT Q.x FROM Q WHERE Q.k=R.k LIMIT 1)` | Bounded, order-dependent subset | no -- order-dependent, not a set operation |
+| bare `LIMIT` / `OFFSET` body (no `ORDER BY`) | `(SELECT Q.x FROM Q WHERE Q.k=R.k LIMIT 1)` | Picks an arbitrary, non-deterministic row | no -- ill-defined without an order (`ORDER BY … LIMIT 1` IS tractable, see Priorities) |
 | `GROUP BY` body | `(SELECT sum(Q.x) FROM Q WHERE Q.k=R.k GROUP BY Q.k)` | Body grouping conflicts with the decorrelation's own `GROUP BY R.*` | hard |
 | `ORDER BY` inside `ARRAY(...)` | `ARRAY(SELECT Q.x FROM Q WHERE Q.k=R.k ORDER BY Q.x)` | Element order would not survive the regroup into `array_agg` | hard -- needs an ordered aggregate |
 | Two or more correlated sublinks | `SELECT R.a, (SELECT … WHERE Q.k=R.k) a1, (SELECT … WHERE Q.k=R.k) a2 FROM R` | `decorrelate_scalar_sublinks` handles exactly one sublink (the uncorrelated FROM-move already handles several) | yes -- iterate the correlated decorrelation per sublink |
@@ -66,12 +67,17 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 
 The genuinely-tractable next steps, roughly in value order:
 
-1. **`<> ALL` / `NOT IN`-via-`ALL`** and **multi-column `IN`** -- both reuse the
-   existing semijoin/antijoin lowering, just widening `extract_in_corr`.
-2. **Uncorrelated value-body comparison in WHERE** -- extend
-   `move_uncorrelated_where_predicates` to `choose(x)` + `count(*) <= 1`.
-3. **Multiple correlated sublinks** -- loop `decorrelate_scalar_sublinks`.
+1. **Multiple correlated sublinks** -- decorrelate each onto its own LEFT JOIN
+   (coalescing sublinks that share a `(Q, corr)`), instead of bailing on >1.
+2. **`ORDER BY … LIMIT 1` value body** -- argmax: decorrelate to
+   `choose(val ORDER BY key)` over the `R ⟕ Q` group, with NO count gate (LIMIT 1
+   never errors on >1). `choose` already gives the right value; the build is an
+   ordered `Aggref` from the body's `sortClause`.
+3. **Uncorrelated value-body comparison in WHERE** -- extend
+   `move_uncorrelated_where_predicates` to `choose(x)` + `count(*) <= 1` plus a
+   WHERE-comparison cmp gate on the cross-joined `agg_token`.
 
-`DISTINCT` / `GROUP BY` / `ORDER BY` bodies and `LIMIT` are deferred: each needs
-genuinely new machinery (distinct-aware or ordered aggregation), not a reshaping
+`DISTINCT` / `GROUP BY` / `ORDER BY` bodies and bare (un-ordered) `LIMIT` are
+deferred: each needs genuinely new machinery (distinct-aware or ordered aggregation),
+not a reshaping
 of the existing rewrites.

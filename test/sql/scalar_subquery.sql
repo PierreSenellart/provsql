@@ -692,3 +692,47 @@ DROP TABLE pt2;
 
 DROP TABLE pt_u;
 DROP TABLE pt_r;
+
+-- Part 19: quantified comparisons.  "op ANY" (IN) is a semijoin; "op ALL" is its
+-- universal dual, the antijoin (∀q. x op q = ¬∃q. x ¬op q), so it reuses the
+-- NOT-IN lowering with the operator negated in the correlation.  A row IN splits
+-- its BoolExpr-AND testexpr into per-column equality conjuncts.
+CREATE TABLE qf_r(a int, k int);
+CREATE TABLE qf_q(k int, x int);
+INSERT INTO qf_r VALUES (100,1),(200,2),(300,3);
+INSERT INTO qf_q VALUES (1,100),(2,200),(2,201);   -- q.k in {1,2,2}, each @0.5
+SELECT add_provenance('qf_r');
+SELECT add_provenance('qf_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM qf_r;
+  PERFORM set_prob(provsql, 0.5) FROM qf_q;
+END $$;
+
+-- k <> ALL (q.k)  ==  k NOT IN (q.k): k=1 -> 0.5, k=2 -> 0.25, k=3 -> 1.0.
+CREATE TABLE qf1 AS
+  SELECT qf_r.k AS k, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM qf_r WHERE qf_r.k <> ALL (SELECT qf_q.k FROM qf_q);
+SELECT remove_provenance('qf1');
+SELECT k, p FROM qf1 ORDER BY k;
+DROP TABLE qf1;
+
+-- k > ALL (q.k): true iff k exceeds every present q.k.  k=1 -> 0.125 (only the
+-- empty world), k=2 -> 0.25 (both 2's absent), k=3 -> 1.0 (beats {1,2,2} always).
+CREATE TABLE qf2 AS
+  SELECT qf_r.k AS k, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM qf_r WHERE qf_r.k > ALL (SELECT qf_q.k FROM qf_q);
+SELECT remove_provenance('qf2');
+SELECT k, p FROM qf2 ORDER BY k;
+DROP TABLE qf2;
+
+-- row IN: (k, a) IN (q.k, q.x).  (1,100) and (2,200) each match one q row -> 0.5;
+-- (3,300) matches none -> 0.
+CREATE TABLE qf3 AS
+  SELECT qf_r.k AS k, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM qf_r WHERE (qf_r.k, qf_r.a) IN (SELECT qf_q.k, qf_q.x FROM qf_q);
+SELECT remove_provenance('qf3');
+SELECT k, p FROM qf3 ORDER BY k;
+DROP TABLE qf3;
+
+DROP TABLE qf_q;
+DROP TABLE qf_r;
