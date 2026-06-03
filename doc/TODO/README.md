@@ -65,6 +65,13 @@ Each plan document follows a consistent layout:
   optimisation plan, and the hierarchical-detector follow-ups
   (FD-induced nested rewrite, soft keys, view-descent FD chases,
   data-safe plans).
+- [`scalar-subqueries.md`](scalar-subqueries.md) : the scalar-/correlated-
+  subquery support is largely landed (outer-join provenance fix; correlated
+  value, aggregate, `EXISTS`/`IN`, `ARRAY`, multi-table and uncorrelated
+  bodies). The note now tracks only the **remaining unsupported forms**
+  (`ALL` / multi-column `IN`, uncorrelated `EXISTS`, `DISTINCT` / `LIMIT` /
+  `GROUP BY` / `ORDER BY` bodies, multiple or nested sublinks), with which are
+  tractable to extend.
 - [`studio.md`](studio.md) : plan for ProvSQL Studio work landing
   alongside or after the first PyPI release (`studio-v1.0.0`):
   release plumbing, CI, Docker swap-over, in-app polish, and the
