@@ -808,3 +808,109 @@ DROP TABLE di1;
 
 DROP TABLE di_q;
 DROP TABLE di_r;
+
+-- Part 22: a scalar subquery nested inside a larger expression (arithmetic) is
+-- NOT decorrelatable, but instead of rejecting it ProvSQL lets it through with a
+-- warning: Postgres evaluates the sublink (the value is correct), the row keeps
+-- only the OUTER relation's provenance, and the subquery's data is treated as
+-- certain.  Contrast a direct comparison (no arithmetic), which still decorrelates
+-- into a gated cmp.  A genuinely unsupported DIRECT form (a GROUP BY body) still
+-- raises the clean error.
+CREATE TABLE ne_r(a int, k int);
+CREATE TABLE ne_q(k int, x int);
+INSERT INTO ne_r VALUES (10,1),(20,2),(30,3);
+INSERT INTO ne_q VALUES (1,100),(2,200),(3,300);
+SELECT add_provenance('ne_r');
+SELECT add_provenance('ne_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ne_r;
+  PERFORM set_prob(provsql, 0.5) FROM ne_q;
+END $$;
+
+-- target-list arithmetic: value = x+1 (correct), provenance is outer-only so p=1.
+CREATE TABLE ne1 AS
+  SELECT ne_r.a AS a,
+         (SELECT ne_q.x FROM ne_q WHERE ne_q.k = ne_r.k) + 1 AS v1,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ne_r;
+SELECT remove_provenance('ne1');
+SELECT a, v1, p FROM ne1 ORDER BY a;
+DROP TABLE ne1;
+
+-- WHERE arithmetic: x+1 > 150 keeps a=20,30; provenance outer-only so p=1.
+CREATE TABLE ne2 AS
+  SELECT ne_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ne_r WHERE (SELECT ne_q.x FROM ne_q WHERE ne_q.k = ne_r.k) + 1 > 150;
+SELECT remove_provenance('ne2');
+SELECT a, p FROM ne2 ORDER BY a;
+DROP TABLE ne2;
+
+DROP TABLE ne_q;
+DROP TABLE ne_r;
+
+-- Part 23: several correlated target-list sublinks that share one (Q, corr)
+-- coalesce onto a single LEFT JOIN -- one count(Q.key) <= 1 gate, a choose() per
+-- sublink.  v1, v2 must match what each sublink alone would decorrelate to; the
+-- shared gate still excludes the >=2-match worlds; a missing match leaves both
+-- values NULL with the row present (outer-join null-padding).
+CREATE TABLE co_r(a int, k int);
+CREATE TABLE co_q(k int, x int, y int);
+INSERT INTO co_r VALUES (1,10),(2,20),(3,30),(4,99);  -- k=99 has no match
+INSERT INTO co_q VALUES (10,100,1000),(20,200,2000),(20,201,2001),(30,300,3000);
+SELECT add_provenance('co_r');
+SELECT add_provenance('co_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM co_r;
+  PERFORM set_prob(provsql, 0.5) FROM co_q;
+END $$;
+
+-- k=10,30 -> single match (p=1); k=20 -> two matches, count<=1 gate -> p=0.75
+-- (1 - 0.5^2); k=99 -> no match, both NULL, row present (p=1).
+CREATE TABLE co1 AS
+  SELECT co_r.a AS a,
+         (SELECT co_q.x FROM co_q WHERE co_q.k = co_r.k) AS v1,
+         (SELECT co_q.y FROM co_q WHERE co_q.k = co_r.k) AS v2,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM co_r;
+SELECT remove_provenance('co1');
+SELECT a, v1, v2, p FROM co1 ORDER BY a;
+DROP TABLE co1;
+
+DROP TABLE co_q;
+DROP TABLE co_r;
+
+-- Part 24: an UNcorrelated value-body comparison in WHERE,
+-- (SELECT Q.x FROM Q) OP v, is gated like the aggregate-comparison form: a
+-- one-row HAVING-gated subquery D = (SELECT 1 FROM Q HAVING (choose(x) OP v) AND
+-- count(*) <= 1) cross-joined into the FROM.  The comparison's truth becomes the
+-- provenance gate (R ⊗ [choose(x) OP v]); an empty / >1-row Q is gated out.
+CREATE TABLE uv_r(a int);
+CREATE TABLE uv_q(x int);
+INSERT INTO uv_r VALUES (1),(2),(3);
+INSERT INTO uv_q VALUES (100);
+SELECT add_provenance('uv_r');
+SELECT add_provenance('uv_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM uv_r;
+  PERFORM set_prob(provsql, 0.5) FROM uv_q;
+END $$;
+
+-- (SELECT uv_q.x FROM uv_q) > 50 is true, gated on uv_q present -> p = 0.5.
+CREATE TABLE uv1 AS
+  SELECT uv_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM uv_r WHERE (SELECT uv_q.x FROM uv_q) > 50;
+SELECT remove_provenance('uv1');
+SELECT 'gt50' AS t, a, p FROM uv1 ORDER BY a;
+DROP TABLE uv1;
+
+-- (SELECT uv_q.x FROM uv_q) > 500 is false -> rows present but provenance-gated
+-- to p = 0 (ProvSQL HAVING annotates rather than physically filtering).
+CREATE TABLE uv2 AS
+  SELECT uv_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM uv_r WHERE (SELECT uv_q.x FROM uv_q) > 500;
+SELECT remove_provenance('uv2');
+SELECT 'gt500' AS t, a, p FROM uv2 ORDER BY a;
+DROP TABLE uv2;
+
+DROP TABLE uv_q;
+DROP TABLE uv_r;

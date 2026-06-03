@@ -448,3 +448,63 @@ a|v|p
 20|200 (*)|1.0000
 30|300 (*)|0.7500
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: scalar subquery nested in an expression is not tracked; its data is treated as certain and the result keeps only the outer provenance
+remove_provenance
+
+(1 row)
+a|v1|p
+10|101|1.0000
+20|201|1.0000
+30|301|1.0000
+(3 rows)
+WARNING:  ProvSQL: scalar subquery nested in an expression is not tracked; its data is treated as certain and the result keeps only the outer provenance
+remove_provenance
+
+(1 row)
+a|p
+20|1.0000
+30|1.0000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|v1|v2|p
+1|100 (*)|1000 (*)|1.0000
+2|200 (*)|2000 (*)|0.7500
+3|300 (*)|3000 (*)|1.0000
+4|||1.0000
+(4 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+t|a|p
+gt50|1|0.5000
+gt50|2|0.5000
+gt50|3|0.5000
+(3 rows)
+remove_provenance
+
+(1 row)
+t|a|p
+gt500|1|0.0000
+gt500|2|0.0000
+gt500|3|0.0000
+(3 rows)

@@ -3551,6 +3551,124 @@ static bool query_has_tracked_sublink(const constants_t *constants, Query *q) {
 }
 
 /**
+ * @brief Collect @c SubLink nodes sitting in a "direct", decorrelatable position:
+ *        a target-list entry that @e is the sublink, or a WHERE/HAVING boolean
+ *        factor or a direct operand of a comparison.
+ *
+ * These are exactly the positions the rewrite passes (@c rewrite_predicate_sublinks,
+ * @c decorrelate_scalar_sublinks, …) consume.  A tracked sublink still in such a
+ * position after those passes is a genuinely unsupported @e direct form (a
+ * @c GROUP @c BY body, a multi-relation @c EXISTS, …) that must raise the clean
+ * error.  A tracked sublink anywhere @e else is nested inside an expression
+ * (arithmetic, a function argument); those are let through with a warning instead
+ * -- Postgres evaluates the sublink normally (correct value), the row keeps the
+ * outer relation's provenance, and the subquery's data is treated as certain.
+ */
+static void collect_direct_qual_sublinks(Node *node, List **out) {
+  if (node == NULL)
+    return;
+  if (IsA(node, SubLink)) {
+    /* A bare sublink boolean factor (EXISTS / IN / NOT …). */
+    *out = lappend(*out, node);
+    return;
+  }
+  if (IsA(node, BoolExpr)) {
+    ListCell *lc;
+    foreach (lc, ((BoolExpr *)node)->args)
+      collect_direct_qual_sublinks((Node *)lfirst(lc), out);
+    return;
+  }
+  if (IsA(node, OpExpr)) {
+    /* A comparison whose direct operand is the sublink (a coercion in between is
+     * fine, but arithmetic is not -- that makes the sublink nested). */
+    ListCell *lc;
+    foreach (lc, ((OpExpr *)node)->args) {
+      Node *a = (Node *)lfirst(lc);
+      if (IsA(a, RelabelType))
+        a = (Node *)((RelabelType *)a)->arg;
+      if (IsA(a, SubLink))
+        *out = lappend(*out, a);
+    }
+    return;
+  }
+}
+
+/** @brief Context for @c sublink_classify_walker. */
+typedef struct {
+  const constants_t *constants;
+  List *direct;                 /* sublinks in a decorrelatable position */
+  List *nested;                 /* tracked EXPR_SUBLINKs nested in an expression */
+  bool has_unsupported_direct;  /* a tracked sublink in a direct position remains */
+} sublink_classify_ctx;
+
+/**
+ * @brief Walker classifying each tracked @c SubLink of a query as either a
+ *        still-unsupported @e direct form or an @e arithmetic-nested one.
+ *
+ * Stops descending at a tracked sublink (its subselect is Postgres' business once
+ * we decide to pass it through); keeps descending through untracked sublinks so a
+ * tracked one nested deeper is still found.
+ */
+static bool sublink_classify_walker(Node *node, void *cx) {
+  sublink_classify_ctx *c = (sublink_classify_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query) &&
+        has_provenance(c->constants, (Query *)sl->subselect)) {
+      if (list_member_ptr(c->direct, sl) || sl->subLinkType != EXPR_SUBLINK)
+        c->has_unsupported_direct = true;
+      else
+        c->nested = lappend(c->nested, sl);
+      return false; /* do not descend into a tracked sublink */
+    }
+    /* untracked: fall through to descend (a tracked one may be nested inside) */
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, sublink_classify_walker, cx, 0);
+  return expression_tree_walker(node, sublink_classify_walker, cx);
+}
+
+/**
+ * @brief Partition @p q's remaining tracked sublinks into unsupported-direct vs
+ *        arithmetic-nested.  Returns the list of nested @c SubLink nodes (for
+ *        warnings) and sets @p *has_direct if any unsupported direct form remains.
+ */
+static List *classify_remaining_sublinks(const constants_t *constants, Query *q,
+                                         bool *has_direct) {
+  sublink_classify_ctx c;
+  ListCell *lc;
+
+  c.constants = constants;
+  c.direct = NIL;
+  c.nested = NIL;
+  c.has_unsupported_direct = false;
+
+  /* Direct positions: a target entry that IS the sublink (a coercion allowed). */
+  foreach (lc, q->targetList) {
+    Node *e = (Node *)((TargetEntry *)lfirst(lc))->expr;
+    if (e && IsA(e, RelabelType))
+      e = (Node *)((RelabelType *)e)->arg;
+    if (e && IsA(e, SubLink))
+      c.direct = lappend(c.direct, e);
+  }
+  if (q->jointree && q->jointree->quals)
+    collect_direct_qual_sublinks(q->jointree->quals, &c.direct);
+  if (q->havingQual)
+    collect_direct_qual_sublinks(q->havingQual, &c.direct);
+
+  sublink_classify_walker((Node *)q->targetList, &c);
+  if (q->jointree)
+    sublink_classify_walker((Node *)q->jointree, &c);
+  if (q->havingQual)
+    sublink_classify_walker(q->havingQual, &c);
+
+  *has_direct = c.has_unsupported_direct;
+  return c.nested;
+}
+
+/**
  * @brief Walker: true if @p node (descending through nested queries) contains
  *        an explicit @c provenance() call.
  */
@@ -5772,6 +5890,41 @@ static bool move_uncorrelated_where_predicates(const constants_t *constants,
           pred->args = sublink_left ? list_make2(agg, copyObject(val))
                                     : list_make2(copyObject(val), agg);
           D = oj_having_gated_subquery(sub, (Node *)pred);
+        } else if (!sub->hasAggs && list_length(sub->targetList) == 1 &&
+                   !((TargetEntry *)linitial(sub->targetList))->resjunk &&
+                   OidIsValid(constants->OID_FUNCTION_CHOOSE) &&
+                   oj_uncorrelated_body_over_tracked(constants, sub) &&
+                   !contain_vars_of_level(val, 0)) {
+          /* (value) OP v -> HAVING (choose(value) OP v) AND count(*) <= 1.  The
+           * scalar subquery's single value is picked by choose() and compared;
+           * count(*) <= 1 enforces the at-most-one-row rule.  Empty Q gives
+           * choose() = NULL (the comparison is NULL, so the gated row drops --
+           * matching SQL's NULL-valued scalar subquery); the >1-row world (a SQL
+           * runtime error) is gated out by count(*) <= 1. */
+          Expr *bodyval = ((TargetEntry *)linitial(sub->targetList))->expr;
+          Aggref *ch = oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                      exprType((Node *)bodyval),
+                                      exprType((Node *)bodyval),
+                                      (Expr *)copyObject((Node *)bodyval));
+          OpExpr *cmp = (OpExpr *)copyObject((Node *)op);
+          Oid leo = OpernameGetOprid(list_make1(makeString("<=")), INT8OID,
+                                     INT8OID);
+          OpExpr *le1 = makeNode(OpExpr);
+
+          cmp->args = sublink_left ? list_make2(ch, copyObject(val))
+                                   : list_make2(copyObject(val), ch);
+          le1->opno = leo;
+          le1->opfuncid = get_opcode(leo);
+          le1->opresulttype = BOOLOID;
+          le1->opcollid = InvalidOid;
+          le1->inputcollid = InvalidOid;
+          le1->args =
+            list_make2(oj_make_count_star(),
+                       makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                 Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+          le1->location = -1;
+          D = oj_having_gated_subquery(
+            sub, (Node *)makeBoolExpr(AND_EXPR, list_make2(cmp, le1), -1));
         }
       }
     }
@@ -6072,6 +6225,28 @@ static bool oj_limit_count_is_one(Node *limitCount) {
 }
 
 /**
+ * @brief Can two scalar-subquery bodies share a single decorrelating LEFT JOIN?
+ *
+ * True when both are plain value bodies (no aggregate / DISTINCT / ORDER BY /
+ * LIMIT) over the same single relation @c Q with the same correlation @c WHERE,
+ * differing only in the one selected value.  Then a single @c "R ⟕ Q ON corr"
+ * group serves both: one @c count(Q.key) @c <= @c 1 gate, a @c choose() per
+ * sublink.  Used to decorrelate several correlated target-list sublinks that
+ * share a @c (Q, @c corr) -- e.g. @c "(SELECT Q.x WHERE Q.k=R.k),
+ * (SELECT Q.y WHERE Q.k=R.k)" -- in one pass.
+ */
+static bool oj_sub_bodies_coalescible(Query *a, Query *b) {
+  if (a->hasAggs || b->hasAggs || a->distinctClause || b->distinctClause ||
+      a->sortClause || b->sortClause || a->limitCount || b->limitCount ||
+      a->limitOffset || b->limitOffset)
+    return false;
+  if (list_length(a->targetList) != 1 || list_length(b->targetList) != 1 ||
+      list_length(a->rtable) != 1)
+    return false;
+  return equal(a->rtable, b->rtable) && equal(a->jointree, b->jointree);
+}
+
+/**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
  * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
@@ -6100,6 +6275,8 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   bool is_agg_body = false;
   bool is_limit1 = false; /* ORDER BY … LIMIT 1 value body: argmax via choose */
   bool is_distinct = false; /* SELECT DISTINCT body: count(DISTINCT v) <= 1 gate */
+  bool coalesce = false; /* >1 target-list sublinks sharing one (Q, corr) */
+  List *co_sls = NIL, *co_tes = NIL; /* parallel: each sublink + its target entry */
   Expr *repl_expr; /* what replaces the SubLink: choose(val) or the aggregate */
 
   if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
@@ -6123,6 +6300,37 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   n_tl_sublinks = scan.n_sublinks;
   if (q->jointree->quals)
     oj_sublink_scan_walker(q->jointree->quals, &scan);
+
+  /* Several correlated target-list sublinks sharing one (Q, corr) coalesce onto
+   * a single LEFT JOIN: every one a direct EXPR_SUBLINK target entry, all bodies
+   * coalescible (same Q + correlation, differing only in the value).  Then below
+   * builds one R ⟕ Q group with a choose() per sublink and a single count gate. */
+  if (scan.n_sublinks > 1) {
+    Query *rep = NULL;
+    if (n_tl_sublinks != scan.n_sublinks)
+      return false; /* a WHERE sublink in the mix: not coalescible */
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      SubLink *e;
+      if (te->expr == NULL || !IsA(te->expr, SubLink))
+        continue; /* plain column / expression: kept as a GROUP BY key below */
+      e = (SubLink *)te->expr;
+      if (e->subLinkType != EXPR_SUBLINK || !IsA(e->subselect, Query))
+        return false;
+      if (rep == NULL)
+        rep = (Query *)e->subselect;
+      else if (!oj_sub_bodies_coalescible(rep, (Query *)e->subselect))
+        return false;
+      co_sls = lappend(co_sls, e);
+      co_tes = lappend(co_tes, te);
+    }
+    /* All sublinks must be direct target entries (none nested in an expression). */
+    if (list_length(co_sls) != scan.n_sublinks)
+      return false;
+    coalesce = true;
+    sl = (SubLink *)linitial(co_sls);
+    sl_te = (TargetEntry *)linitial(co_tes);
+  } else {
   if (scan.n_sublinks != 1)
     return false;
   sl = scan.found_sublink;
@@ -6144,7 +6352,18 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     if (n_tl_sublinks > 0)
       return false; /* nested in a target-list expression */
     in_where = true;
+    /* A WHERE SubLink must be a direct operand of a comparison (its value is
+     * lifted to a HAVING cmp gate on choose()).  If it is nested inside
+     * arithmetic -- (SELECT …) + 1 > k -- the comparison cannot be lifted; bail
+     * so the caller passes the sublink through with a warning instead. */
+    {
+      List *direct = NIL;
+      collect_direct_qual_sublinks(q->jointree->quals, &direct);
+      if (!list_member_ptr(direct, sl))
+        return false;
+    }
   }
+  } /* end single-sublink branch */
 
   /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel, where
    * val is either a plain value (decorrelated with choose() + count(...)<=1) or
@@ -6221,6 +6440,11 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       R_rte = NULL;
   }
   if (R_rte == NULL) {
+    /* The coalesce path re-finds many sublink target entries; the outer-FROM
+     * wrap only re-finds one.  Restrict coalesce to a single base R (the common
+     * case); a wrap-needing R with several sublinks stays for a later pass. */
+    if (coalesce)
+      return false;
     if (!oj_wrap_outer_from(constants, q, sl, in_where))
       return false;
     R_idx = 1;
@@ -6376,7 +6600,25 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
                                        exprType((Node *)valexpr),
                                        exprType((Node *)valexpr), valexpr);
   }
-  if (!in_where)
+  if (coalesce) {
+    /* Each coalesced sublink gets its own choose() over the shared group: remap
+     * its body's value to the pulled-up Q and replace its target entry.  (The
+     * representative's repl_expr above is recomputed here as the first item, so
+     * the bodies all use the identical Q/correlation remap.) */
+    ListCell *la, *lb;
+    forboth(la, co_sls, lb, co_tes) {
+      SubLink *sli = (SubLink *)lfirst(la);
+      TargetEntry *tei = (TargetEntry *)lfirst(lb);
+      Expr *vi = (Expr *)oj_decorr_var_mut(
+        copyObject(
+          (Node *)((TargetEntry *)linitial(((Query *)sli->subselect)->targetList))
+            ->expr),
+        &dctx);
+      tei->expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                         exprType((Node *)vi),
+                                         exprType((Node *)vi), vi);
+    }
+  } else if (!in_where)
     sl_te->expr = repl_expr;
 
   /* GROUP BY every R user column: each needs a target-list entry carrying a
@@ -8761,9 +9003,25 @@ static Query *process_query(const constants_t *constants, Query *q,
     if (q->hasSubLinks && query_has_tracked_sublink(constants, q)) {
       /* Only sublinks over a provenance-tracked relation are unsupported; one
        * whose body touches no tracked relation is a deterministic filter/value
-       * and is left for Postgres to evaluate (the row keeps R's provenance). */
-      provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
-      supported = false;
+       * and is left for Postgres to evaluate (the row keeps R's provenance).
+       *
+       * Of the tracked ones, a scalar subquery nested inside a larger expression
+       * (arithmetic, a function argument) is not decorrelatable by the current
+       * rewrites, but rather than rejecting it we let it through with a warning:
+       * Postgres evaluates the sublink (the value is correct), the row keeps the
+       * outer relation's provenance, and the subquery's data is treated as
+       * certain.  A tracked sublink still in a direct position (a GROUP BY body, a
+       * multi-relation EXISTS, …) is a genuinely unsupported form and still errors. */
+      bool has_direct = false;
+      List *nested = classify_remaining_sublinks(constants, q, &has_direct);
+      if (has_direct || nested == NIL) {
+        provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
+        supported = false;
+      } else {
+        provsql_warning(
+          "scalar subquery nested in an expression is not tracked; its data is "
+          "treated as certain and the result keeps only the outer provenance");
+      }
     }
 
     if (supported && q->distinctClause) {
