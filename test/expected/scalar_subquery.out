@@ -38,3 +38,19 @@ a|p
 10|0.5000
 20|0.0000
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|sx|p
+10|7 (*)|1.0000
+20|8 (*)|1.0000
+(2 rows)

@@ -93,3 +93,35 @@ DROP TABLE ss3;
 
 DROP TABLE ssq;
 DROP TABLE ssr;
+
+-- Part 4: scalar subquery over a (multi-table) subquery FROM.  The subquery in
+-- FROM is the R arm of the decorrelated LEFT JOIN, lowered via the subquery-arm
+-- path; the scalar subquery over ssq decorrelates onto it.
+CREATE TABLE ss_r(a int, k int);
+CREATE TABLE ss_s(k int, w int);
+CREATE TABLE ss_q(k int, x int);
+INSERT INTO ss_r VALUES (10,1),(20,2);
+INSERT INTO ss_s VALUES (1,100),(2,200);
+INSERT INTO ss_q VALUES (1,7),(2,8);
+SELECT add_provenance('ss_r');
+SELECT add_provenance('ss_s');
+SELECT add_provenance('ss_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ss_r;
+  PERFORM set_prob(provsql, 1.0) FROM ss_s;
+  PERFORM set_prob(provsql, 0.5) FROM ss_q;
+END $$;
+
+-- a=10 (k=1) -> x=7 ; a=20 (k=2) -> x=8 ; both rows always exist (ss_r, ss_s p=1).
+CREATE TABLE ss4 AS
+  SELECT r.a AS a,
+         (SELECT ss_q.x FROM ss_q WHERE ss_q.k = r.k) AS sx,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT ss_r.a, ss_r.k, ss_s.w FROM ss_r, ss_s WHERE ss_s.k = ss_r.k) r;
+SELECT remove_provenance('ss4');
+SELECT a, sx, p FROM ss4 ORDER BY a;
+DROP TABLE ss4;
+
+DROP TABLE ss_q;
+DROP TABLE ss_s;
+DROP TABLE ss_r;

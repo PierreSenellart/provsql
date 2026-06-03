@@ -4749,7 +4749,9 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   if (q->groupClause || q->groupingSets || q->hasAggs || q->distinctClause ||
       q->setOperations || q->havingQual || q->hasWindowFuncs)
     return false;
-  /* FROM must be a single base relation R. */
+  /* FROM must be a single relation R: a tracked base relation, or a
+   * (non-lateral) subquery over tracked relations -- the subquery-arm lowering
+   * handles the resulting R LEFT JOIN Q either way. */
   if (!q->jointree || list_length(q->jointree->fromlist) != 1)
     return false;
   if (!IsA(linitial(q->jointree->fromlist), RangeTblRef))
@@ -4757,7 +4759,11 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   r_ref = (RangeTblRef *)linitial(q->jointree->fromlist);
   R_idx = r_ref->rtindex;
   R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
-  if (R_rte->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, R_rte))
+  if (R_rte->rtekind != RTE_RELATION && R_rte->rtekind != RTE_SUBQUERY)
+    return false;
+  if (R_rte->rtekind == RTE_SUBQUERY && R_rte->lateral)
+    return false;
+  if (!oj_rte_has_provsql(constants, R_rte))
     return false;
 
   /* Exactly one SubLink in the whole query.  It is either the direct expr of a
