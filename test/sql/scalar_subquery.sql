@@ -914,3 +914,42 @@ DROP TABLE uv2;
 
 DROP TABLE uv_q;
 DROP TABLE uv_r;
+
+-- Part 25: an ORDER BY inside ARRAY(...).  ARRAY(SELECT v FROM Q WHERE corr
+-- ORDER BY key) decorrelates to the ordered aggregate array_agg(v ORDER BY key)
+-- over the R ⟕ Q group: the body's ORDER BY moves inside the aggregate, where it
+-- survives the regroup (the same technique as the LIMIT-1 argmax choose).  The
+-- null-padded antijoin row is still dropped by the FILTER.  (An empty match
+-- yields a NULL-valued agg_token rather than {}, a pre-existing trait of the
+-- FILTER-based array decorrelation, shared with the non-ordered ARRAY path.)
+CREATE TABLE aa_r(a int, k int);
+CREATE TABLE aa_q(k int, x int);
+INSERT INTO aa_r VALUES (1,10),(2,20),(3,99);  -- k=99 has no match
+INSERT INTO aa_q VALUES (10,3),(10,1),(10,2),(20,50),(20,40);
+SELECT add_provenance('aa_r');
+SELECT add_provenance('aa_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM aa_r;
+  PERFORM set_prob(provsql, 0.5) FROM aa_q;
+END $$;
+
+-- ASC: {1,2,3} / {40,50}; DESC reverses; the provenance is the array_agg's
+-- agg_token over the matched aa_q tuples, so probability_evaluate sees them all.
+CREATE TABLE aa1 AS
+  SELECT aa_r.a AS a,
+         ARRAY(SELECT aa_q.x FROM aa_q WHERE aa_q.k = aa_r.k ORDER BY aa_q.x) AS asc_arr
+  FROM aa_r;
+SELECT remove_provenance('aa1');
+SELECT a, asc_arr FROM aa1 ORDER BY a;
+DROP TABLE aa1;
+
+CREATE TABLE aa2 AS
+  SELECT aa_r.a AS a,
+         ARRAY(SELECT aa_q.x FROM aa_q WHERE aa_q.k = aa_r.k ORDER BY aa_q.x DESC) AS desc_arr
+  FROM aa_r;
+SELECT remove_provenance('aa2');
+SELECT a, desc_arr FROM aa2 ORDER BY a;
+DROP TABLE aa2;
+
+DROP TABLE aa_q;
+DROP TABLE aa_r;

@@ -5521,10 +5521,20 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     if (sl->subLinkType != ARRAY_SUBLINK || !IsA(sl->subselect, Query))
       continue;
     sub = (Query *)sl->subselect;
-    if (!predicate_subselect_decorrelatable(constants, sub, false) ||
-        list_length(sub->targetList) != 1 || sub->sortClause)
-      continue; /* a sortClause fixes array element order, which array_agg over
-                 * the regrouped join would not preserve -- leave it unhandled */
+    if (!predicate_subselect_decorrelatable(constants, sub, false))
+      continue;
+    /* Exactly one non-junk output column (the element value).  A body ORDER BY
+     * adds junk sort-key entries to the targetList; those become the ordered
+     * array_agg's extra args (see below), so they are allowed here. */
+    {
+      int nreal = 0;
+      ListCell *tlc;
+      foreach (tlc, sub->targetList)
+        if (!((TargetEntry *)lfirst(tlc))->resjunk)
+          ++nreal;
+      if (nreal != 1 || ((TargetEntry *)linitial(sub->targetList))->resjunk)
+        continue;
+    }
 
     innerte = (TargetEntry *)linitial(sub->targetList);
     elemtype = exprType((Node *)innerte->expr);
@@ -5541,8 +5551,38 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     if (scan.found_var == NULL)
       continue; /* uncorrelated: decorrelation would bail anyway */
 
-    agg = oj_make_aggref(F_ARRAY_AGG_ANYNONARRAY, arrtype, elemtype,
-                         innerte->expr);
+    if (sub->sortClause) {
+      /* ARRAY(SELECT v FROM Q WHERE corr ORDER BY key) -> the ordered aggregate
+       * array_agg(v ORDER BY key): the body's ORDER BY moves inside the
+       * aggregate (where it survives the regroup into the R ⟕ Q group), exactly
+       * as the LIMIT-1 argmax path does for choose().  The aggregate's args are
+       * the value plus the junk sort-key entries, its aggorder the body's
+       * sortClause; decorrelate's Var-remap pulls every arg's Q reference up to
+       * the joined Q. */
+      List *args = NIL, *argtypes = NIL;
+      ListCell *alc;
+      agg = makeNode(Aggref);
+      foreach (alc, sub->targetList) {
+        TargetEntry *ate = (TargetEntry *)copyObject(lfirst(alc));
+        args = lappend(args, ate);
+        argtypes = lappend_oid(argtypes, exprType((Node *)ate->expr));
+      }
+      agg->aggfnoid = F_ARRAY_AGG_ANYNONARRAY;
+      agg->aggtype = arrtype;
+      agg->aggtranstype = InvalidOid;
+      agg->aggargtypes = argtypes;
+      agg->args = args;
+      agg->aggorder = (List *)copyObject((Node *)sub->sortClause);
+      agg->aggkind = AGGKIND_NORMAL;
+      agg->aggsplit = AGGSPLIT_SIMPLE;
+      agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+      agg->aggno = agg->aggtransno = -1;
+#endif
+    } else {
+      agg = oj_make_aggref(F_ARRAY_AGG_ANYNONARRAY, arrtype, elemtype,
+                           innerte->expr);
+    }
     /* array_agg keeps NULLs in its value, so the LEFT JOIN's null-padded
      * antijoin row (Q key IS NULL) would inject a spurious NULL element.
      * Filter it out; a genuinely-NULL matched element (Q key non-NULL) is still
@@ -5555,7 +5595,13 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     nt->location = -1;
     agg->aggfilter = (Expr *)nt;
 
-    innerte->expr = (Expr *)agg;
+    /* The single body output is now the array_agg; the ORDER BY (if any) lives
+     * inside it, so the query-level sortClause and the junk sort-key targetList
+     * entries are dropped. */
+    sub->targetList = list_make1(makeTargetEntry(
+      (Expr *)agg, 1, innerte->resname ? pstrdup(innerte->resname) : NULL,
+      false));
+    sub->sortClause = NIL;
     sub->hasAggs = true;
     sl->subLinkType = EXPR_SUBLINK;
     changed = true;

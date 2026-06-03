@@ -31,8 +31,14 @@ planner-hook rewrites in `src/provsql.c` (regression coverage in
   (`(a,b) IN (SELECT …)`, per-column conjuncts), rewritten to a correlated
   `(SELECT count(*) …) >= 1` / `= 0` -- `rewrite_predicate_sublinks`,
   `extract_quantified_corr`;
-- **`ARRAY(SELECT v FROM Q WHERE corr)`** -> `array_agg(v)` over the group, with a
-  `FILTER` dropping the null-padded row -- `rewrite_array_sublinks`;
+- **`ARRAY(SELECT v FROM Q WHERE corr [ORDER BY key])`** -> `array_agg(v
+  [ORDER BY key])` over the group, with a `FILTER` dropping the null-padded row --
+  `rewrite_array_sublinks`.  A body `ORDER BY` moves inside the aggregate as an
+  ordered `array_agg` (its args = value + junk sort-key entries, `aggorder` = the
+  body's `sortClause`), the same technique as the LIMIT-1 argmax `choose`, so the
+  element order survives the regroup.  (An empty match yields a NULL-valued
+  `agg_token` rather than `{}` -- a pre-existing trait of the FILTER-based array
+  decorrelation, independent of the `ORDER BY`.)
 - **several correlated target-list sublinks sharing one `(Q, corr)`** `SELECT R.a,
   (SELECT Q.x WHERE Q.k=R.k), (SELECT Q.y WHERE Q.k=R.k) FROM R` -- coalesced onto a
   single `R ⟕ Q` group (one `count(Q.key) <= 1` gate, a `choose()` per sublink)
@@ -101,7 +107,6 @@ Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
 |---|---|---|---|
 | bare `LIMIT` / `OFFSET` body (no `ORDER BY`) | `(SELECT Q.x FROM Q WHERE Q.k=R.k LIMIT 1)` | Picks an arbitrary, non-deterministic row | no -- ill-defined without an order (`ORDER BY … LIMIT 1` IS tractable, see Priorities) |
 | `GROUP BY` body | `(SELECT sum(Q.x) FROM Q WHERE Q.k=R.k GROUP BY Q.k)` | Body grouping conflicts with the decorrelation's own `GROUP BY R.*` | hard |
-| `ORDER BY` inside `ARRAY(...)` | `ARRAY(SELECT Q.x FROM Q WHERE Q.k=R.k ORDER BY Q.x)` | Element order would not survive the regroup into `array_agg` | hard -- needs an ordered aggregate |
 | Correlated sublinks over **different** `(Q, corr)` | `SELECT R.a, (SELECT … WHERE Q1.k=R.k) a1, (SELECT … WHERE Q2.k=R.a) a2 FROM R` | The same-`(Q, corr)` case now coalesces (see above); distinct bodies would each need their own LEFT JOIN, and a chain `R ⟕ Q1 ⟕ Q2` is not lowered by `lower_outer_joins` (it needs both join arms to be base `RangeTblRef`s) | yes -- generalise `lower_outer_joins` to a left-deep chain, or wrap-and-recurse per sublink |
 
 ## Priorities
@@ -114,6 +119,6 @@ The genuinely-tractable next step:
    chain `R ⟕ Q1 ⟕ Q2 …` or a wrap-and-recurse that materialises each
    decorrelation as a derived `R'` before the next sublink.
 
-`GROUP BY` / `ORDER BY` bodies and bare (un-ordered) `LIMIT` are deferred: each
-needs genuinely new machinery (body-grouping or ordered aggregation), not a
+A `GROUP BY` body and a bare (un-ordered) `LIMIT` are deferred: each needs
+genuinely new machinery (body-grouping or a deterministic row choice), not a
 reshaping of the existing rewrites.

@@ -70,11 +70,11 @@ Each plan document follows a consistent layout:
   value, aggregate, `EXISTS`/`IN`, `ARRAY`, multi-table and uncorrelated
   bodies). The note now tracks only the **remaining unsupported forms**
   (`ALL` / multi-column `IN`, uncorrelated `EXISTS`, `DISTINCT` and
-  `ORDER BY … LIMIT 1` bodies, same-`(Q, corr)` coalesced multi-sublinks, and
-  uncorrelated value-body WHERE comparisons now landed; scalar sublinks nested in
-  arithmetic pass through with a warning; bare `LIMIT` / `GROUP BY` / `ORDER BY`
-  bodies and different-`(Q, corr)` multi-sublinks still open), with which are
-  tractable to extend.
+  `ORDER BY … LIMIT 1` bodies, ordered `ARRAY(… ORDER BY …)`, same-`(Q, corr)`
+  coalesced multi-sublinks, and uncorrelated value-body WHERE comparisons now
+  landed; scalar sublinks nested in arithmetic pass through with a warning; bare
+  `LIMIT` / `GROUP BY` bodies and different-`(Q, corr)` multi-sublinks still open),
+  with which are tractable to extend.
 - [`studio.md`](studio.md) : plan for ProvSQL Studio work landing
   alongside or after the first PyPI release (`studio-v1.0.0`):
   release plumbing, CI, Docker swap-over, in-app polish, and the
