@@ -7620,10 +7620,61 @@ static Node *add_to_havingQual(Node *havingQual, Expr *expr)
  * @param constants  Extension OID cache.
  * @return  True if the pattern is supported, false otherwise.
  */
+/**
+ * @brief Whether @p n is a single aggregate possibly wrapped in constant
+ *        arithmetic that @c normalize_agg_comparison can fold into the
+ *        comparison threshold.
+ *
+ * Mirrors the normaliser's foldability exactly: a bare aggregate (an
+ * @c agg_token Var or a @c provenance_aggregate call), or an arithmetic
+ * @c OpExpr (@c + @c - @c * @c /, or prefix unary @c -) with one foldable
+ * aggregate operand and one aggregate-free operand.  Division is foldable
+ * only with the aggregate in the numerator (@c agg/c, not @c c/agg).
+ */
+static bool is_foldable_agg_operand(Node *n, const constants_t *constants) {
+  n = peel_agg_casts(n);
+  if (n == NULL)
+    return false;
+  if (IsA(n, Var) && ((Var *)n)->vartype == constants->OID_TYPE_AGG_TOKEN)
+    return true;
+  if (IsA(n, FuncExpr) &&
+      ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+    return true;
+  if (IsA(n, OpExpr)) {
+    OpExpr *op = (OpExpr *)n;
+    char *nm = get_opname(op->opno);
+    int nargs = list_length(op->args);
+    bool arith, is_div;
+
+    if (nm == NULL)
+      return false;
+    arith = strcmp(nm, "+") == 0 || strcmp(nm, "-") == 0 ||
+            strcmp(nm, "*") == 0 || strcmp(nm, "/") == 0;
+    is_div = strcmp(nm, "/") == 0;
+    if (!arith)
+      return false;
+    if (nargs == 1)  /* prefix unary minus */
+      return is_foldable_agg_operand((Node *)linitial(op->args), constants);
+    if (nargs == 2) {
+      Node *x = (Node *)linitial(op->args);
+      Node *y = (Node *)lsecond(op->args);
+      /* aggregate on the left works for every operator; on the right only
+       * for the commutative/foldable ones (not c/agg). */
+      if (is_foldable_agg_operand(x, constants) &&
+          !expr_contains_agg(y, constants))
+        return true;
+      if (!is_div && is_foldable_agg_operand(y, constants) &&
+          !expr_contains_agg(x, constants))
+        return true;
+    }
+  }
+  return false;
+}
+
 static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constants)
 {
-  bool ok=true;
-  bool found_agg_token=false;
+  int agg_sides = 0;
+  bool any_arith = false;
 
   if(op->args->length != 2)
     return false;
@@ -7631,32 +7682,37 @@ static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constant
   for(unsigned i=0; i<2; ++i) {
     Node *arg = lfirst(list_nth_cell(op->args, i));
 
-    // Check both arguments are either an aggtoken or a constant
-    // (possibly after a cast)
-    if((IsA(arg, Var) && ((Var*)arg)->vartype==constants->OID_TYPE_AGG_TOKEN)) {
-      found_agg_token=true;
-    } else if(IsA(arg, Const)) {
-    } else if(IsA(arg, FuncExpr)) {
-      FuncExpr *fe = (FuncExpr*) arg;
-      if(fe->funcformat != COERCE_IMPLICIT_CAST && fe->funcformat != COERCE_EXPLICIT_CAST) {
-        ok=false;
-        break;
+    if(expr_contains_agg(arg, constants)) {
+      Node *peeled = peel_agg_casts(arg);
+      bool bare = (IsA(peeled, Var) &&
+                   ((Var*)peeled)->vartype==constants->OID_TYPE_AGG_TOKEN) ||
+                  (IsA(peeled, FuncExpr) &&
+                   ((FuncExpr*)peeled)->funcid==
+                     constants->OID_FUNCTION_PROVENANCE_AGGREGATE);
+      /* An aggregate side must be either a bare aggregate or a single
+       * aggregate wrapped in constant arithmetic (foldable into the
+       * threshold).  Anything else (agg-vs-agg arithmetic, c/agg, ...) is
+       * unsupported. */
+      if(!bare) {
+        if(!is_foldable_agg_operand(arg, constants))
+          return false;
+        any_arith=true;
       }
-      if(fe->args->length != 1) {
-        ok=false;
-        break;
-      }
-      if(!IsA(lfirst(list_head(fe->args)), Const)) {
-        ok=false;
-        break;
-      }
-    } else {
-      ok=false;
-      break;
+      agg_sides++;
     }
+    /* The non-aggregate side may be any aggregate-free expression (a
+     * literal, a grouped-column Var, constant arithmetic, ...): it becomes
+     * the comparison threshold. */
   }
 
-  return ok && found_agg_token;
+  /* Need exactly one aggregate side once constant arithmetic is involved
+   * (the constant folds into the other, threshold, side).  With only bare
+   * aggregates the historical agg-vs-agg form (two sides) is still allowed. */
+  if(agg_sides == 0)
+    return false;
+  if(any_arith)
+    return agg_sides == 1;
+  return true;
 }
 
 /**

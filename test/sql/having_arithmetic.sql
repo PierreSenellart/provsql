@@ -62,5 +62,21 @@ SELECT ha_probs('count(*) >= 2');  SELECT g, round(p::numeric,3) FROM ha_r ORDER
 SELECT ha_probs('count(*)+1 >= 3'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 SELECT ha_probs('count(*)*10 >= 20'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 
+\echo '# same folding applies to a materialised agg_token column (WHERE, not HAVING)'
+CREATE TABLE har AS SELECT g, sum(x) AS s, count(*) AS c FROM ha GROUP BY g;
+CREATE OR REPLACE FUNCTION har_probs(pred text) RETURNS void AS $$
+BEGIN
+  EXECUTE format(
+    'CREATE TABLE provsql_test.ha_r AS SELECT g, provsql.probability_evaluate(provsql.provenance()) p '
+    'FROM provsql_test.har WHERE %s', pred);
+  PERFORM provsql.remove_provenance('provsql_test.ha_r');
+END $$ LANGUAGE plpgsql;
+SELECT har_probs('s+1 > 16');   SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
+SELECT har_probs('s > 15');     SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
+SELECT har_probs('s*2 > 30');   SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
+SELECT har_probs('c*10 >= 20'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
+DROP FUNCTION har_probs(text);
+DROP TABLE har;
+
 DROP FUNCTION ha_probs(text);
 DROP TABLE ha;

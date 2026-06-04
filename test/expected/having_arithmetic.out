@@ -173,3 +173,32 @@ g|round
 A|0.250
 B|0.250
 (2 rows)
+# same folding applies to a materialised agg_token column (WHERE, not HAVING)
+har_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+har_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+har_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+har_probs
+
+(1 row)
+g|round
+A|0.250
+B|0.250
+(2 rows)
