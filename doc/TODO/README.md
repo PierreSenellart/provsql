@@ -38,22 +38,6 @@ Each plan document follows a consistent layout:
   formula needing no discrete gate; exact-only under negative weights;
   safety re-checked on the conditioned circuit), adds soft/weighted
   conditioning, and grounds it all in concrete use cases.
-- [`empty-group-aggregation.md`](empty-group-aggregation.md) : SQL-faithful
-  empty-group semantics for **scalar** (no `GROUP BY`) aggregation, via a
-  scalar flag on the `gate_agg` (hashed `info2` high bit). Phase 1
-  (infrastructure), Phase 2 (scalar `count` true-on-empty HAVING across all
-  routes -- the probability cmp evaluators, the generic-semiring / `cmp`-off
-  enumeration, and Monte Carlo, plus the `count >= 0` tautology) and Phase 3
-  (`IS NULL` / `IS NOT NULL` HAVING on `sum`/`avg`/`min`/`max`/`array_agg`) and
-  Phase 4 (scalar existence = `gate_one`, with the `agg_token` `min`/`max` moment
-  & support made conditional-on-non-empty so they stay finite) have landed;
-  Phase 5 (retire the uncorrelated-antijoin rewrite) is **resolved as won't-do** --
-  an A/B probe shows the cross-join HAVING-gate fallback regresses `count(col)`
-  with NULLs (0.25 → 0.125) and has no `NOT EXISTS` arm, so the `EXCEPT ALL`
-  antijoin is kept.  Phase 6 fixes scalar/grouped `count(col)` with NULLs
-  (preserve the COUNT identity so its empty group counts as 0), and Phase 7 fixes
-  `IS [NOT] NULL` on a group with NULL-valued rows (split value vs null rows,
-  `δ(⊕Kz) ⊗ (𝟙⊖⊕Kn)`) -- both landed.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.
