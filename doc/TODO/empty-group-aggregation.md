@@ -102,12 +102,15 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   regressions, not re-pins, because it changes what `provenance()` *means* for a
   scalar aggregate and several subsystems rely on the old meaning (`δ(⊕)` =
   "non-empty / a real aggregate expression"):
-  - *continuous-RV moments* (`continuous_expectation`, `continuous_support`):
-    `expected/variance/moment(min|max(rv), provenance())` deliberately pass
-    `provenance()` as the **non-empty conditioning token** (the test comment says
-    so: "otherwise empty-aggregate gives ±Infinity"). `gate_one` removes the
-    conditioning → the moments become unconditional → `±Infinity` and a downstream
-    `a negative number raised to a non-integer power` error.
+  - *agg_token moments over possible worlds* (`continuous_expectation`,
+    `continuous_support`): `expected/variance/moment(min(v)|max(v), provenance())`
+    where `v` is an ordinary `int` column (NOT a `random_variable` -- the
+    randomness is which rows are present).  These deliberately pass `provenance()`
+    as the **non-empty conditioning token** (the test comment says so: "otherwise
+    empty-aggregate gives ±Infinity", since `min`/`max` over the empty world are
+    `±∞`, their monoid identities).  `gate_one` removes the conditioning → the
+    moments become unconditional → `±Infinity` and a downstream `a negative number
+    raised to a non-integer power` error.
   - *nested-aggregate refusal* (`nested_agg_refuse` Case A, non-RV): the deliberate
     "SQL aggregate on top of a ProvSQL aggregation" error relies on `provenance()`
     being a real aggregate expression; `gate_one` (a constant) short-circuits the
@@ -115,8 +118,9 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   The only clean win was `scalar_subquery` uc1 (`(SELECT count(*) FROM Q)`
   existence `0.875 → 1.0`), which is the uncorrelated aggregate-body decorrelation
   and could be fixed surgically there instead. A viable Phase 4 would need a
-  *separate* "non-empty" token for the RV moment machinery and the nested-agg
-  detector to condition on, decoupled from `provenance()` -- a larger redesign.
+  *separate* "non-empty" token for the agg_token moment surface and the
+  nested-agg detector to condition on, decoupled from `provenance()` -- a larger
+  redesign.
   (`GROUP BY <constant>` is fine: positional `GROUP BY 1` keeps a non-NIL
   `groupClause`, so it is correctly grouped, not scalar.)
 - **Phase 5 -- retire `rewrite_uncorrelated_antijoin`**: once the cmp path is
