@@ -8,6 +8,9 @@ NOTICE:  scalar HAVING count(*) < 2    p=0.3125  (truth 0.3125)
 NOTICE:  scalar HAVING count(*) <= 1   p=0.3125  (truth 0.3125)
 NOTICE:  scalar HAVING count(*) >= 1   p=0.9375  (truth 0.9375)
 NOTICE:  scalar HAVING count(*) = 2    p=0.3750  (truth 0.3750)
+NOTICE:  scalar HAVING count(*) >= 0   p=1.0000  (truth 1.0000)
+NOTICE:  scalar HAVING count(*) > -1   p=1.0000  (truth 1.0000)
+NOTICE:  scalar HAVING count(*) <> 0   p=0.9375  (truth 0.9375)
 remove_provenance
 
 (1 row)

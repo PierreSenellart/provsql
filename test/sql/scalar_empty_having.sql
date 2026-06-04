@@ -28,6 +28,11 @@ DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM seh_t; END $$;
 -- False-on-empty predicates are unchanged (the empty world fails anyway):
 --   count(*) >= 1  -> P(count>=1) = 1-1/16  = 0.9375
 --   count(*) = 2   -> P(count=2)            = 0.3750
+-- Tautologies (true in every world, empty included) are gate_one = 1 for a
+-- scalar aggregate -- NOT "group is non-empty" (0.9375), which is the grouped
+-- reading.  count(*) >= 0 and count(*) > -1 are resolved by the always-true
+-- rewriter, which is scalar-aware.  count(*) <> 0 excludes the empty world
+-- (0 = 0 fails <>0), so it stays 0.9375.
 DO $$
 DECLARE r record; p numeric;
 BEGIN
@@ -36,7 +41,10 @@ BEGIN
       ('count(*) < 2',  0.3125),
       ('count(*) <= 1', 0.3125),
       ('count(*) >= 1', 0.9375),
-      ('count(*) = 2',  0.3750)) v(pred, truth)
+      ('count(*) = 2',  0.3750),
+      ('count(*) >= 0', 1.0000),
+      ('count(*) > -1', 1.0000),
+      ('count(*) <> 0', 0.9375)) v(pred, truth)
   LOOP
     EXECUTE format(
       'CREATE TEMP TABLE seh_r AS SELECT probability_evaluate(provenance()) AS pp '

@@ -58,15 +58,27 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   unchanged. (Also corrected `scalar_subquery` Part uc2: an uncorrelated value
   body's `count(*) <= 1` gate now correctly counts the empty world, `0.375 →
   0.5` -- the row exists whenever the scalar subquery is well-defined.)
-- **Phase 2 -- generic-semiring + `cmp`-off path** (`count_enum`): the world
-  enumeration adds the empty subset `mask=0` when `is_scalar` and `0 op C`; the
-  caller (`having_semantics`) annotates it as `one ⊗ (𝟙 ⊖ ⊕(tuples))` -- the
-  correct empty-world term in **every** m-semiring, including the absorptive
-  Boolean expansion of the `cmp`-off probability path (no `!absorptive` gate
-  needed: a true-on-empty predicate is a downset, `upset=false`, so the empty
-  subset gets the monus complement). Verified `cmp`-on == `cmp`-off == MC ==
-  `0.0625`; the scalar `count(*) < 4` why-provenance in `having_on_aggregation`
-  now correctly carries the empty witness `{}` (a grouped count would not).
+- **Phase 2 -- generic-semiring + `cmp`-off path** (`count_enum`): the empty
+  world is folded into each branch's bound via `lo = is_scalar ? 0 : 1` (rather
+  than appended), keeping it consistent with the upset / minimal-witness
+  structure -- for the GE upset, `count >= 0` then has minimal witness `{}` and is
+  a tautology. `having_semantics` annotates the empty subset as
+  `one ⊗ (𝟙 ⊖ ⊕(tuples))` -- the correct term in **every** m-semiring, incl. the
+  absorptive Boolean expansion of `cmp`-off. Verified `cmp`-on == `cmp`-off == MC
+  across the family (`=0 → 0.0625`, `<2 → 0.3125`, `<>2 → 0.625`, …); the scalar
+  `count(*) < 4` why-provenance in `having_on_aggregation` carries the empty
+  witness `{}` (a grouped count would not).
+- **Phase 2 -- tautology fix** (`runHavingAlwaysTrueRewriter`, `RangeCheck.cpp`):
+  a true-on-empty predicate is a downset *except* `count >= 0` / `count > -K`
+  (upsets) -- these are tautologies resolved by the always-true rewriter, which
+  runs unconditionally in the probability path (so it intercepts these before
+  `count_enum`). It used to rewrite an always-true count cmp to "the group is
+  non-empty" (OR of the per-row K-gates) -- the grouped reading; for a **scalar**
+  agg it now resolves to `gate_one` (probability 1), since the empty-input world
+  is a real row. Grouped unchanged. Verified scalar `count(*) >= 0 == 1.0` on all
+  routes; grouped stays group-existence (`0.75 / 0.5 / 0.5`). (`count(*)` is never
+  rerouted to `sum_dp` -- it is detected as COUNT via the unit-weight remap; the
+  tautology was intercepted by `RangeCheck`, not `sum_dp`.)
 
 **Deferred (need care / human judgment):**
 - **Phase 3 -- `IS NULL` HAVING** on `min`/`max`/`avg`/`array_agg`/`choose`:

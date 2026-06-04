@@ -1154,6 +1154,18 @@ unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc)
       continue;
     }
 
+    /* Scalar aggregation (no GROUP BY): the single result row always exists, so
+     * a tautological predicate (count >= 0, count > -K, ...) is gate_one --
+     * probability 1, including the empty-input world.  The "group is non-empty"
+     * rewrite below is the grouped semantics (the empty group is no row), which
+     * is exactly the empty-world over-credit the doc comment on
+     * decideAggVsConstCmp warns against; for a scalar agg that world is real. */
+    if ((gc.getInfos(agg_side).second & PROVSQL_AGG_SCALAR_FLAG) != 0) {
+      gc.resolveCmpToBernoulli(c, 1.0);
+      ++resolved;
+      continue;
+    }
+
     /* Gather the per-row K-gates from the agg's semimod children. */
     std::vector<gate_t> ks;
     bool shape_ok = true;

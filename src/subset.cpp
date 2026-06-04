@@ -218,71 +218,58 @@ static std::vector<mask_t> count_enum(const std::vector<long> &values, long m, C
 {
   const int n = static_cast<int>(values.size());
   std::vector<mask_t> out;
-  const long C0 = m;                 // original threshold (m is mutated below)
-  const ComparisonOperator op0 = op;
 
-  auto add_exact_k = [&](int k) {
+  auto add_exact_k = [&](long k) {
                        if (k < 0 || k > n) return;
-                       combinations(0, k, mask_t(n), out);
+                       combinations(0, static_cast<int>(k), mask_t(n), out);
                      };
+
+  /* The lowest count a group can have: 1 for a grouped aggregate (the empty
+   * group is no row, so a HAVING predicate is never evaluated on it -- the
+   * count >= 0 / count > -K family collapses to "non-empty" rather than to a
+   * tautology), but 0 for a SCALAR aggregate (no GROUP BY), whose single result
+   * row always exists with the empty input contributing count 0.  Folding the
+   * empty world into each branch's bound (rather than appending it afterwards)
+   * keeps it consistent with the upset / minimal-witness structure: for the GE
+   * upset, count >= 0 then has minimal witness {} and is correctly a tautology;
+   * the empty subset is annotated by the caller as one ⊗ (𝟙 ⊖ ⊕(tuples)). */
+  const long lo = is_scalar ? 0 : 1;
 
   switch (op)
   {
   case ComparisonOperator::EQ:
-    if(m!=0) add_exact_k(m);
+    if (m >= lo) add_exact_k(m);
     break;
 
   case ComparisonOperator::GT:
     ++m;
     [[fallthrough]];
-  case ComparisonOperator::GE:
-    /* Skip the empty subset, mirroring the // Skip empty world rule
-     * in @c all_worlds and @c enumerate_exhaustive: a HAVING
-     * predicate on an empty group is undefined in SQL semantics
-     * (the group does not exist, so HAVING is not evaluated), so
-     * the @c count >= 0 / @c count > -K family must collapse to
-     * "group is non-empty" rather than to a universal tautology
-     * (probability 1 in every world).  Equivalently, m is clamped
-     * to at least 1 here. */
-    if (m < 1) m = 1;
-    if(absorptive) {
-      upset=true;
-      add_exact_k(m);
+  case ComparisonOperator::GE: {
+    /* count >= m : minimal present count is max(m, lo). */
+    const long mink = std::max(m, lo);
+    if (absorptive) {
+      upset = true;
+      add_exact_k(mink);
     } else
-      for (int k = m; k <= n; ++k) add_exact_k(k);
+      for (long k = mink; k <= n; ++k) add_exact_k(k);
     break;
+  }
 
   case ComparisonOperator::LT:
     --m;
     [[fallthrough]];
   case ComparisonOperator::LE:
-    for (int k = 1; k <= m; ++k) add_exact_k(k);
+    /* count <= m : worlds k in [lo, m] (empty world k=0 included for a scalar
+     * aggregate iff m >= 0). */
+    for (long k = lo; k <= m; ++k) add_exact_k(k);
     break;
 
   case ComparisonOperator::NE:
-    for (int k = 1; k <= n; ++k)
-    {
+    /* count != m : every world in [lo, n] except k = m (the scalar empty world
+     * k=0 is included iff m != 0). */
+    for (long k = lo; k <= n; ++k)
       if (k != m) add_exact_k(k);
-    }
     break;
-  }
-
-  /* Scalar aggregation (no GROUP BY): the empty input is a real world (count 0),
-   * which every branch above excludes (the grouped semantics).  Add the empty
-   * subset when "0 op C" holds; the caller annotates it as one ⊗ (1 ⊖ ⊕(tuples))
-   * = the correct empty-world term in any m-semiring (probZero for probability,
-   * the all-absent Boolean term in the cmp-off expansion). */
-  if (is_scalar) {
-    bool zero_sat = false;
-    switch (op0) {
-      case ComparisonOperator::GE: zero_sat = (0 >= C0); break;
-      case ComparisonOperator::GT: zero_sat = (0 >  C0); break;
-      case ComparisonOperator::LE: zero_sat = (0 <= C0); break;
-      case ComparisonOperator::LT: zero_sat = (0 <  C0); break;
-      case ComparisonOperator::EQ: zero_sat = (0 == C0); break;
-      case ComparisonOperator::NE: zero_sat = (0 != C0); break;
-    }
-    if (zero_sat) add_exact_k(0);
   }
 
   return out;
