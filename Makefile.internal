@@ -132,7 +132,14 @@ endif
 ifeq ($(ARCH), x86_64)
 PRECXXFLAGS=-I/usr/local/include
 endif
-PRECXXFLAGS+=-std=c++17 -Wno-register -fPIC
+# Boost's serialization / property_tree headers transitively include the
+# deprecated global-namespace Bind placeholders (boost/bind.hpp), which emit a
+# #pragma message under -W -Wall (e.g. when building tdkc).  We do not use the
+# global _1/_2 placeholders ourselves; define BOOST_BIND_GLOBAL_PLACEHOLDERS to
+# retain the current (working) behaviour and silence the deprecation note.  The
+# PGXS object build stays quiet on its own, but keeping this in PRECXXFLAGS makes
+# every target (tdkc, provsql_migrate_mmap, the extension) consistent.
+PRECXXFLAGS+=-std=c++17 -Wno-register -fPIC -DBOOST_BIND_GLOBAL_PLACEHOLDERS
 
 %.o : %.cpp
 	$(CXX) $(PRECXXFLAGS) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
