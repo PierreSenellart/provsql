@@ -47,7 +47,10 @@ Each plan document follows a consistent layout:
   (`IS NULL` / `IS NOT NULL` HAVING on `sum`/`avg`/`min`/`max`/`array_agg`) and
   Phase 4 (scalar existence = `gate_one`, with the `agg_token` `min`/`max` moment
   & support made conditional-on-non-empty so they stay finite) have landed;
-  retiring the uncorrelated-antijoin rewrite (Phase 5) is deferred with reasons.
+  Phase 5 (retire the uncorrelated-antijoin rewrite) is **resolved as won't-do** --
+  an A/B probe shows the cross-join HAVING-gate fallback regresses `count(col)`
+  with NULLs (0.25 → 0.125) and has no `NOT EXISTS` arm, so the `EXCEPT ALL`
+  antijoin is kept.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.

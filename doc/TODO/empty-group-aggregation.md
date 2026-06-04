@@ -118,12 +118,41 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   is fine: positional `GROUP BY 1` keeps a non-NIL `groupClause`, so it is
   correctly grouped, not scalar.)
 
-**Deferred (need care / human judgment):**
-- **Phase 5 -- retire `rewrite_uncorrelated_antijoin`**: once the cmp path is
-  empty-world-correct on all routes (Phase 2 generic + the antijoin's monus is
-  the same `𝟙 ⊖ ⊕` term), route uncorrelated `(SELECT count(*) …) < k` / `= 0` /
-  `NOT EXISTS` through the simple cross-join HAVING-gate instead of the
-  `EXCEPT ALL` construction. Verify per-semiring coverage before deleting.
+**Resolved -- Phase 5 will NOT retire `rewrite_uncorrelated_antijoin`** (kept on
+purpose). The hypothesis was that, now the scalar `cmp` path is empty-world-correct
+(Phase 2), uncorrelated `(SELECT count(*) …) < k` / `= 0` / `NOT EXISTS` could route
+through the simple cross-join HAVING-gate (`move_uncorrelated_where_predicates`)
+instead of the `EXCEPT ALL` construction. An A/B probe (antijoin call disabled,
+fallback observed) shows it cannot:
+
+- **`count(col)` with NULLs regresses.** The antijoin reformulates a true-on-empty
+  predicate as `R ⊗ (𝟙 ⊖ ⟦P'⟧)` for the *false*-on-empty `P'` (e.g. `count(x) >= 1`),
+  so the empty world never needs the scalar `cmp` annotation -- `⟦count(x) >= 1⟧` is
+  evaluated directly from the value-correct PMF, which counts only non-NULL
+  contributors. The cross-join HAVING-gate instead emits the true-on-empty
+  `count(x) = 0` directly, whose scalar empty-world term is `𝟙 ⊖ ⊕(all row tokens)`
+  = `probZero` over *every* row -- conflating "row absent" with "row present but the
+  counted column is NULL". On `cc_q = {(10),(20),(NULL)}` @ p=0.5, `count(x) < 1`
+  gives the antijoin's correct **0.25** (both non-NULL rows absent) but the fallback's
+  wrong **0.125** (all three absent). This is the same latent edge as the direct
+  scalar `… HAVING count(col) = 0` (which also returns 0.125), i.e. the Phase 3
+  "all-NULL-values group" known edge -- the scalar `cmp` annotation is over row
+  *existence* tokens, not value-contributing tokens. `count(*)` (every present row
+  contributes 1) has no such gap and the fallback matches exactly (`= 0 → 0.125`,
+  `< 2 → 0.5`, `= 2 → 0.375`).
+- **No `NOT EXISTS` arm.** `move_uncorrelated_where_predicates` handles
+  `EXISTS` / `(agg) OP v` but not a `NOT`-wrapped `EXISTS`; with the antijoin off,
+  uncorrelated `NOT EXISTS` / `NOT IN` raises "Subqueries … not supported".
+- **Circuit vs evaluator robustness.** The antijoin bakes a `monus` *gate* into the
+  circuit (correct in every consumer / semiring, Shapley included, with no per-route
+  flag handling), whereas the HAVING-gate emits a `cmp` gate whose empty-world
+  correctness is re-derived in each evaluator from the `is_scalar` flag -- strictly
+  less robust.
+
+The one fully-equivalent sub-case is uncorrelated `count(*)` true-on-empty, but
+retiring only that arm shrinks `rewrite_uncorrelated_antijoin` without removing it,
+splits `count(*)` from `count(col)` handling, and buys negligible simplification. So
+the antijoin stays whole; this phase is closed.
 
 ## Cross-cutting
 
