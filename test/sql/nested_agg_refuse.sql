@@ -27,8 +27,13 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM r_nested;
 END $$;
 
--- Case A: the crashing shape -- outer sum() of probability_evaluate(provenance())
--- over an inner GROUP BY.  Must raise a clear error, not segfault.
+-- Case A: outer sum() of probability_evaluate(provenance()) over an inner
+-- GROUP BY.  The OUTER is a *scalar* aggregation (no GROUP BY), so its row always
+-- exists and its provenance() is gate_one (the scalar-existence fix) -- a
+-- constant, not an aggregate expression.  So provenance() substitutes to
+-- gate_one, no nested Aggref is produced, and the query is well-defined:
+-- sum(probability_evaluate(gate_one)) = sum(1.0) over the inner rows = their
+-- count.  (Previously this raised the nested-aggregate error.)
 SELECT count(*) AS rows,
        sum(probability_evaluate(provenance())) AS sum_prob
   FROM (SELECT a.id, probability_evaluate(provenance()) AS p

@@ -5,7 +5,9 @@ add_provenance
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: applying an SQL aggregate on top of a ProvSQL-introduced aggregation is not supported: the inner provenance() would be substituted with an expression containing an aggregate, producing a nested same-level aggregate that PostgreSQL rejects.  Evaluate the per-row provenance in a subquery and aggregate the resulting scalar outside, or drop the surrounding aggregate.
+rows|sum_prob|provsql
+2 (*)|2 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
 WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
 remove_provenance
 

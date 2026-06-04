@@ -3587,36 +3587,49 @@ BEGIN
                   ELSE 1
                 END;
 
-    -- ±Infinity sink: positive probability of "no row included" makes
-    -- MIN = +Inf and MAX = -Inf.  For MIN^k that's +Inf for any k>=1;
-    -- for MAX^k it's (-1)^k * (+Inf) = ±Inf depending on k's parity.
+    -- MIN/MAX over the empty input world are NULL (no elements), not ±Infinity:
+    -- SQL returns one row with a NULL value.  The moment is therefore CONDITIONAL
+    -- on the aggregate being defined (non-empty) -- the empty world is excluded
+    -- and the result renormalised by P(prov AND non-empty).  (count, whose empty
+    -- value 0 is a real value, keeps the empty world; sum keeps it too, as 0.)
+    IF n = 0 THEN
+      RETURN NULL;  -- structurally empty: MIN/MAX undefined
+    END IF;
+
+    -- Numerator E[MIN^k . 1{prov AND non-empty}] (the rank sum naturally omits
+    -- the empty world, since every term requires a present token).
     WITH tok_value AS (
       SELECT (get_children(c))[1] AS tok,
              (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
                * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
       FROM UNNEST(child_pairs) AS c
-    ) SELECT probability_evaluate(provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))))
-        FROM tok_value
-        INTO total_probability;
+    ) SELECT sign_max * COALESCE(SUM(p * power(v, k)), 0) FROM (
+        SELECT t1.v AS v,
+          probability_evaluate(
+            CASE WHEN prov = gate_one()
+                 THEN provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                       provenance_plus(ARRAY_AGG(t2.tok)))
+                 ELSE provenance_times(prov,
+                        provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                         provenance_plus(ARRAY_AGG(t2.tok)))) END,
+            method, arguments) AS p
+        FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
+        GROUP BY t1.v) tmp
+      INTO total;
 
-    IF total_probability > epsilon() THEN
-      total := sign_max * 'Infinity'::float8;
-    ELSE
-      WITH tok_value AS (
-        SELECT (get_children(c))[1] AS tok,
-               (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
-                 * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
-        FROM UNNEST(child_pairs) AS c
-      ) SELECT sign_max * SUM(p * power(v, k)) FROM (
-          SELECT t1.v AS v,
-            probability_evaluate(
-              provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
-                               provenance_plus(ARRAY_AGG(t2.tok))),
-              method, arguments) AS p
-          FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
-          GROUP BY t1.v) tmp
-        INTO total;
+    -- Denominator P(prov AND non-empty) = P(prov (x) (+) tokens).
+    SELECT probability_evaluate(
+             CASE WHEN prov = gate_one()
+                  THEN provenance_plus(ARRAY_AGG(tok))
+                  ELSE provenance_times(prov, provenance_plus(ARRAY_AGG(tok))) END,
+             method, arguments)
+      FROM (SELECT (get_children(c))[1] AS tok FROM UNNEST(child_pairs) AS c) s
+      INTO total_probability;
+
+    IF total_probability <= epsilon() THEN
+      RETURN NULL;  -- never defined under prov: MIN/MAX undefined
     END IF;
+    RETURN total / total_probability;  -- already conditional; skip generic norm
   ELSE
     RAISE EXCEPTION USING MESSAGE=
       'Cannot compute moment for aggregation function ' || aggregation_function;
@@ -3840,36 +3853,18 @@ BEGIN
         FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
               FROM unnest(child_pairs) AS c) sub;
     ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
-      -- Empty agg_token: MIN = +Infinity, MAX = -Infinity (the
-      -- empty-set conventions used by `expected`).
+      -- MIN/MAX over the empty input world are NULL, not ±Infinity (matching the
+      -- moment surface): the empty world carries no value, so the support is just
+      -- the range of the per-row values [min(v), max(v)].  A structurally empty
+      -- aggregate has no defined value at all -> NULL support.
       IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
-        IF aggregation_function = 'min' THEN
-          lo := 'Infinity'::float8; hi := 'Infinity'::float8;
-        ELSE
-          lo := '-Infinity'::float8; hi := '-Infinity'::float8;
-        END IF;
-        RETURN;
+        lo := NULL; hi := NULL; RETURN;
       END IF;
 
-      WITH tok_value AS (
-        SELECT (get_children(c))[1] AS tok,
-               CAST(get_extra((get_children(c))[2]) AS float8) AS v
-        FROM UNNEST(child_pairs) AS c
-      )
-      SELECT min(v), max(v),
-             probability_evaluate(
-               provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))),
-               method, arguments)
-        INTO lo, hi, total_probability
-        FROM tok_value;
-
-      IF total_probability > epsilon() THEN
-        IF aggregation_function = 'min' THEN
-          hi := 'Infinity'::float8;
-        ELSE
-          lo := '-Infinity'::float8;
-        END IF;
-      END IF;
+      SELECT min(v), max(v)
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM UNNEST(child_pairs) AS c) sub;
     ELSE
       RAISE EXCEPTION USING MESSAGE=
         'Cannot compute support for aggregation function ' || aggregation_function;

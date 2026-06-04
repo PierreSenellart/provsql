@@ -131,4 +131,33 @@ FROM seh_gn ORDER BY g;
 DROP TABLE seh_gn;
 
 DROP TABLE seh_g CASCADE;
+
+-- Scalar-aggregation existence = gate_one: a scalar aggregate always returns one
+-- row (count 0 / sum-min-max NULL over the empty input), so its provenance() is
+-- certain (p=1), not P(non-empty).  And the agg_token moment surface excludes the
+-- empty world for NULL-on-empty aggregates (min/max): expected(min) is conditional
+-- on non-empty by default (min over the empty world is NULL, not +Infinity), so it
+-- is finite.  3 rows v=10/20/30 present with p=0.5/0.4/0.3:
+--   existence of count(*)  = 1.0
+--   expected(min(v))       = E[min | non-empty] = 11.70 / 0.79 = 14.8101
+DROP TABLE IF EXISTS seh_e CASCADE;
+CREATE TABLE seh_e(v int);
+INSERT INTO seh_e VALUES (10),(20),(30);
+SELECT add_provenance('seh_e');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM seh_e WHERE v=10;
+  PERFORM set_prob(provenance(), 0.4) FROM seh_e WHERE v=20;
+  PERFORM set_prob(provenance(), 0.3) FROM seh_e WHERE v=30;
+END $$;
+CREATE TEMP TABLE seh_ex AS
+  SELECT count(*) AS c, min(v) AS mn,
+         round(probability_evaluate(provenance())::numeric, 4) AS existence
+  FROM seh_e;
+SELECT remove_provenance('seh_ex');
+SELECT 'scalar count existence' AS shape, existence FROM seh_ex;
+SELECT 'expected(min) conditional' AS shape, round(expected(mn)::numeric, 4) AS e
+FROM seh_ex;
+DROP TABLE seh_ex;
+DROP TABLE seh_e CASCADE;
+
 DROP TABLE seh_t CASCADE;

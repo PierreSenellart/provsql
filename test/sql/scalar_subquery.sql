@@ -441,8 +441,11 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM uc_q;
 END $$;
 
--- Aggregate body: count(*) over all of uc_q.  Value 3; row probability is the
--- aggregate's existence = P(>=1 of the three uc_q rows present) = 1 - 0.5^3.
+-- Aggregate body: count(*) over all of uc_q.  Value 3.  (SELECT count(*) FROM
+-- uc_q) is a SCALAR aggregation -- it always returns one row (count 0 in the
+-- all-absent world), so the outer row always exists: p = 1.0.  (uc_r is certain;
+-- the count subquery's existence does not gate it -- the scalar-aggregation
+-- existence = gate_one fix.)
 CREATE TABLE uc1 AS
   SELECT uc_r.a AS a, (SELECT count(*) FROM uc_q) AS c,
          round(probability_evaluate(provenance())::numeric, 4) AS p

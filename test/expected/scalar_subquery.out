@@ -233,8 +233,8 @@ remove_provenance
 
 (1 row)
 a|c|p
-10|3 (*)|0.8750
-20|3 (*)|0.8750
+10|3 (*)|1.0000
+20|3 (*)|1.0000
 (2 rows)
 remove_provenance
 

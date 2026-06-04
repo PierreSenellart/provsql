@@ -1954,15 +1954,34 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                          needs_having_lift((Node *) q->havingQual, constants);
 
       if (aggregation && !lift_having) {
-        FuncExpr *deltaExpr = makeNode(FuncExpr);
+        if (q->groupClause == NIL && q->groupingSets == NIL) {
+          /* Scalar aggregation (no GROUP BY): the single result row always
+           * exists -- even over an empty input (count 0, sum/min/max NULL) -- so
+           * its existence provenance is gate_one (certain, 1_K in every semiring),
+           * NOT δ(⊕ tuples) which reads as "the input is non-empty".  The per-row
+           * value provenance lives in the agg_token; the "is this aggregate
+           * non-empty" condition is recovered separately (the agg_token moment /
+           * support functions exclude the empty world for NULL-on-empty
+           * aggregates).  δ collapses multiplicity for a *grouped* row, where the
+           * empty group is no row; for a scalar row that distinction does not
+           * apply. */
+          FuncExpr *oneExpr = makeNode(FuncExpr);
+          oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
+          oneExpr->funcresulttype = constants->OID_TYPE_UUID;
+          oneExpr->args = NIL;
+          oneExpr->location = -1;
+          result = (Expr *)oneExpr;
+        } else {
+          FuncExpr *deltaExpr = makeNode(FuncExpr);
 
-        // adding the delta gate to the provenance circuit
-        deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
-        deltaExpr->args = list_make1(result);
-        deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
-        deltaExpr->location = -1;
+          // adding the delta gate to the provenance circuit
+          deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+          deltaExpr->args = list_make1(result);
+          deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
+          deltaExpr->location = -1;
 
-        result = (Expr *)deltaExpr;
+          result = (Expr *)deltaExpr;
+        }
       }
 
       if (lift_having) {

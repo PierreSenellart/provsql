@@ -49,3 +49,16 @@ grouped max IS NOT NULL|1|0.7500
 grouped max IS NOT NULL|2|0.5000
 grouped max IS NOT NULL|3|0.5000
 (3 rows)
+NOTICE:  table "seh_e" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|existence
+scalar count existence|1.0000
+(1 row)
+shape|e
+expected(min) conditional|14.8101
+(1 row)
