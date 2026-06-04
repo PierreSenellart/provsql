@@ -729,6 +729,14 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
      * the cmp falls back to exact enumeration. */
     double pr;
     if (agg_kind == AggregationOperator::COUNT) {
+      /* countPMF treats every contributor as +1 (cardinality), correct only for
+       * count(*) / count(col) with no NULLs.  A count(col) with NULL-valued
+       * contributors carries per-row 0/1 values (match.ms), so cardinality would
+       * over-count; defer it to the value-aware generic enumeration
+       * (having_semantics -> sum_dp), which also keeps the scalar empty world. */
+      bool all_one = true;
+      for (int m : match.ms) if (m != 1) { all_one = false; break; }
+      if (!all_one) continue;
       std::vector<double> total = countPMF(gc, leaves, ok);
       if (!ok) continue;
       const bool is_scalar =

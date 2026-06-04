@@ -118,6 +118,32 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   is fine: positional `GROUP BY 1` keeps a non-NIL `groupClause`, so it is
   correctly grouped, not scalar.)
 
+- **Phase 6 -- `count(col)` (NULL-skipping count) empty world**: a scalar
+  `HAVING count(col) <op> k` true-on-empty (`= 0`, `< k`, `<= k`) under-counted
+  when `col` had NULLs -- e.g. `count(x) = 0` on `{10, 20, NULL}` @ 0.5 returned
+  `0.125` (all three absent) instead of `0.25` (the two non-NULL rows absent; the
+  NULL row is free).  Root cause: the rewriter normalised `count(col)` to
+  `F_SUM_INT4` with per-row `CASE WHEN col IS NOT NULL THEN 1 ELSE 0 END` values,
+  so at eval time it was indistinguishable from a genuine `sum` -- and `sum`'s
+  empty group is SQL NULL (the empty world is dropped), whereas `count`'s empty
+  group is the real value `0` (the empty world counts).  `count(*)` was unaffected
+  (all-unit values -> remapped to `COUNT` -> `count_enum`, which folds the scalar
+  empty world via its `lo` bound).  Fix (approach A, "preserve the COUNT
+  identity"): keep the gate's aggfnoid as `count` (`src/provsql.c`), and make the
+  evaluators value-aware for a non-unit-valued COUNT -- `enumerate_valid_worlds`
+  routes such a COUNT to the value-aware `sum_dp` with a new `keep_empty` flag
+  that re-adds the all-absent world when `0` satisfies the predicate (`subset.cpp`);
+  the cardinality fast paths bail to it (`CountCmpEvaluator` already required
+  all-unit; `AggMarginalEvaluator`'s COUNT arm now bails on non-unit `ms`); and the
+  `agg_token` moment / support surface treats `count` like `sum`-of-indicators
+  (`agg_raw_moment`, `support`).  This also makes a grouped all-NULL-valued group's
+  `count(col) = 0` correct (the group exists with count 0, not `gate_zero`).
+  Verified `count(x) = 0 / < 1 / <= 1 / = 1 / >= 1 / <> 0 / >= 0` across cmp-on ==
+  cmp-off == MC; `expected`/`support` over `count(col)`; `count(*)` unchanged; all
+  201 tests green (`test/sql/scalar_empty_having.sql`).  (Distinct from the Phase 3
+  `IS NULL`-on-an-all-NULL-group edge, which is about `sum`/`max`/… value tokens,
+  not `count`, and remains.)
+
 **Resolved -- Phase 5 will NOT retire `rewrite_uncorrelated_antijoin`** (kept on
 purpose). The hypothesis was that, now the scalar `cmp` path is empty-world-correct
 (Phase 2), uncorrelated `(SELECT count(*) …) < k` / `= 0` / `NOT EXISTS` could route

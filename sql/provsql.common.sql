@@ -3528,7 +3528,11 @@ BEGIN
   child_pairs := get_children(token);
   n := COALESCE(array_length(child_pairs, 1), 0);
 
-  IF aggregation_function = 'sum' THEN
+  IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+    -- count(col) keeps the COUNT identity at the gate level but its value is a
+    -- SUM of per-row 0/1 indicators, so its moments are computed exactly like
+    -- SUM (and its empty group is the real value 0, like SUM).  count(*)
+    -- arrives here as 'sum' (it normalises to F_SUM_INT4); count(col) as 'count'.
     -- Trivial empty aggregation: SUM = 0, so SUM^k = 0 for k >= 1.
     -- Note: agg_token semantics treat the "no row included" world as
     -- SUM = 0, so this stays consistent with k = 1 (= expected()).
@@ -3843,7 +3847,9 @@ BEGIN
       INTO aggregation_function;
     child_pairs := get_children(input::agg_token);
 
-    IF aggregation_function = 'sum' THEN
+    IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+      -- count(col) is a SUM of per-row 0/1 indicators (empty group = 0), so its
+      -- support is computed like SUM; count(*) arrives as 'sum'.
       -- Empty agg_token: SUM is identically 0.
       IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
         lo := 0; hi := 0; RETURN;

@@ -72,7 +72,7 @@ class DPException : public std::exception {};
 /** @brief Return the minimum of two values. */
 #define MIN(x,y) ((x)<(y)?(x):(y))
 
-static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, ComparisonOperator op, bool absorptive, bool &upset, bool keep_empty=false)
 {
   const std::size_t n = values.size();
 
@@ -80,8 +80,8 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
 
   // We first deal with NEQ by combining LT and GT
   if(op == ComparisonOperator::NE) {
-    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOperator::LT, absorptive, upset);
-    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOperator::GT, absorptive, upset);
+    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOperator::LT, absorptive, upset, keep_empty);
+    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOperator::GT, absorptive, upset, keep_empty);
     R.reserve(lt.size()+gt.size());
     R.insert(R.end(),lt.begin(),lt.end());
     R.insert(R.end(),gt.begin(),gt.end());
@@ -186,6 +186,26 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
               return true;
             }),
           R.end());
+
+  // keep_empty marks a SCALAR COUNT enumerated through this value-aware DP
+  // (count(col) with NULL contributors, whose 0/1 values make COUNT a SUM of
+  // indicators).  Unlike a genuine SUM -- empty group SQL NULL, so the empty
+  // world never satisfies -- a COUNT's empty group has the real value 0, so the
+  // all-absent world is a legitimate possible world: re-add it exactly when 0
+  // satisfies the predicate (a true-on-empty bound: = 0, < k, <= k, <> k!=0).
+  if (keep_empty) {
+    bool zero_sat = false;
+    switch(op) {
+    case ComparisonOperator::EQ: zero_sat = (C == 0); break;
+    case ComparisonOperator::NE: zero_sat = (C != 0); break;
+    case ComparisonOperator::LT: zero_sat = (0 <  C); break;
+    case ComparisonOperator::LE: zero_sat = (0 <= C); break;
+    case ComparisonOperator::GT: zero_sat = (0 >  C); break;
+    case ComparisonOperator::GE: zero_sat = (0 >= C); break;
+    }
+    if (zero_sat)
+      R.push_back(mask_t(n));
+  }
 
   return R;
 }
@@ -404,8 +424,25 @@ std::vector<mask_t> enumerate_valid_worlds(
   bool is_scalar
   )
 {
-  if (agg_kind == AggregationOperator::COUNT)
-    return count_enum(values,constant,op, absorptive, upset, is_scalar);
+  if (agg_kind == AggregationOperator::COUNT) {
+    /* count(*) (every contributor's value is the unit 1) is pure cardinality:
+     * count_enum enumerates by subset size and folds the scalar empty world via
+     * its lo bound.  count(col) keeps the COUNT identity but carries per-row 0/1
+     * values (0 for a NULL-valued / null-padded row that still keeps the group
+     * alive); cardinality would wrongly count the 0-valued rows, so route it to
+     * the value-aware sum_dp -- with keep_empty=is_scalar, since a scalar
+     * count(col)'s empty group is the real value 0 (not SQL NULL like a sum). */
+    bool all_one = true;
+    for (long v : values) if (v != 1) { all_one = false; break; }
+    if (all_one)
+      return count_enum(values,constant,op, absorptive, upset, is_scalar);
+    try {
+      return sum_dp(values, constant, op, absorptive, upset, /*keep_empty=*/is_scalar);
+    } catch(DPException &e) {
+      // 0/1 values are non-negative, so this never throws; fall back defensively.
+      return enumerate_exhaustive(values, constant, op, agg_kind, absorptive, upset);
+    }
+  }
 
   if(agg_kind == AggregationOperator::SUM)
     try {

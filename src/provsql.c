@@ -1230,7 +1230,15 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       ce->location = -1;
 
       expr_s->args = list_make2(ce, expr);
-      aggregation_function = F_SUM_INT4;
+      /* Keep the gate's aggfnoid as count (NOT normalised to F_SUM_INT4 like
+       * count(*) is): the per-row CASE already makes the value 0/1 so the
+       * VALUE is the SUM of those, but preserving the COUNT identity tells the
+       * HAVING evaluators that the empty-group result is 0 (a real, comparable
+       * value) rather than NULL as a genuine sum would be.  This is what lets a
+       * scalar true-on-empty predicate (count(col)=0, <k, <=k) keep the
+       * all-absent world: enumerate_valid_worlds routes a COUNT with non-unit
+       * (0/1) values to the value-aware sum_dp with the empty world retained,
+       * while count(*) (all-unit) keeps using count_enum. */
     } else {
       expr_s->args =
         list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
