@@ -253,6 +253,22 @@ bool extract_constant_string(GenericCircuit &c, gate_t x, std::string &C_out) {
   return true;
 }
 
+// Whether a comparison side is (or is arithmetic over) an aggregate: descend
+// through gate_arith until a gate_agg is found.  Used to recognise the cmp
+// gates that the HAVING / WHERE-on-aggregate evaluator must resolve (as
+// opposed to RV comparisons, which carry gate_rv leaves instead).
+static bool side_has_agg(GenericCircuit &c, gate_t g) {
+  gate_type t = c.getGateType(g);
+  if (t == gate_agg)
+    return true;
+  if (t == gate_arith) {
+    for (gate_t ch : c.getWires(g))
+      if (side_has_agg(c, ch))
+        return true;
+  }
+  return false;
+}
+
 // Collect cmp gates in the prov circuit
 std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start) {
   std::vector<gate_t> out;
@@ -273,15 +289,12 @@ std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start) {
         gate_t L = cw[0];
         gate_t R = cw[1];
 
-        int tmpC = 0;
-        std::string tmpC_str;
-        bool is_candidate =
-          (c.getGateType(L) == gate_agg && extract_constant_C(c, R, tmpC)) ||
-          (c.getGateType(R) == gate_agg && extract_constant_C(c, L, tmpC)) ||
-          (c.getGateType(L) == gate_agg && extract_constant_string(c, R, tmpC_str)) ||
-          (c.getGateType(R) == gate_agg && extract_constant_string(c, L, tmpC_str));
-
-        if (is_candidate)
+        // Any comparison with an aggregate on either side (directly, or under
+        // arithmetic): the single-aggregate-vs-constant ones are handled by the
+        // fast path, the rest (agg-vs-agg, products of aggregates, c/agg, ...)
+        // by the general possible-worlds enumeration.  RV comparisons carry
+        // gate_rv leaves instead and are left to the RV evaluator.
+        if (side_has_agg(c, L) || side_has_agg(c, R))
           out.push_back(cur);
       }
     }

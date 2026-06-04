@@ -705,10 +705,12 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root)
     stack.pop();
     if(!seen.insert(g).second) continue;
     auto type = gc.getGateType(g);
-    // gate_arith too: it's exclusively a continuous-arithmetic
-    // composite, the BoolExpr semiring path has no rule for it.
-    // gate_mixture is structurally a compound RV root as well.
-    if(type == gate_rv || type == gate_arith || type == gate_mixture)
+    // A continuous random variable is signalled by a gate_rv leaf or a
+    // gate_mixture root.  gate_arith is NOT itself an RV marker: it is also
+    // arithmetic over aggregates (resolved by provsql_having's possible-worlds
+    // enumeration).  A genuine RV arithmetic gate_arith still reaches its
+    // gate_rv leaves through the child walk below, so it is caught.
+    if(type == gate_rv || type == gate_mixture)
       return true;
     for(gate_t c : gc.getWires(g)) stack.push(c);
   }

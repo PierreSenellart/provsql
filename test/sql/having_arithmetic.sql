@@ -88,3 +88,32 @@ DROP TABLE har;
 
 DROP FUNCTION ha_probs(text);
 DROP TABLE ha;
+
+-- ---------------------------------------------------------------------
+-- Comparisons that do not reduce to a single aggregate vs a constant
+-- (agg vs agg, products of aggregates, constant / aggregate) are resolved
+-- by the general possible-worlds enumeration, for any m-semiring.
+-- ---------------------------------------------------------------------
+CREATE TABLE tt(id text, g text, x int, y int);
+SELECT add_provenance('tt');
+INSERT INTO tt VALUES ('t1','A',10,5),('t2','A',20,30);
+DO $$ BEGIN PERFORM provsql.set_prob(provsql.provenance(), 0.5) FROM provsql_test.tt; END $$;
+SELECT create_provenance_mapping('ttm','tt','id');
+
+\echo '# probabilities by exact possible-worlds enumeration'
+\echo '#   sum(x) > sum(y)  (only world {t1}: 10>5)  -> 0.25'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING sum(x) > sum(y);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   sum(x)*sum(y) > 200  (worlds {t2},{t1,t2})  -> 0.5'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING sum(x)*sum(y) > 200;
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   100/sum(x) > 5  (only world {t1}: sum 10 < 20)  -> 0.25'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING 100/sum(x) > 5;
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+
+\echo '# m-semiring genericity: the formula semiring gives the valid-world expression'
+\echo '#   sum(x) > sum(y): the single world {t1} -> t1 with t2 absent'
+CREATE TABLE tt_r AS SELECT sr_formula(provenance(),'ttm') AS f FROM tt GROUP BY g HAVING sum(x) > sum(y);
+SELECT remove_provenance('tt_r'); SELECT f FROM tt_r; DROP TABLE tt_r;
+
+DROP TABLE tt;

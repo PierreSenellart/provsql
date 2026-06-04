@@ -216,3 +216,39 @@ g|round
 A|0.250
 B|0.250
 (2 rows)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+# probabilities by exact possible-worlds enumeration
+#   sum(x) > sum(y)  (only world {t1}: 10>5)  -> 0.25
+remove_provenance
+
+(1 row)
+round
+0.2500
+(1 row)
+#   sum(x)*sum(y) > 200  (worlds {t2},{t1,t2})  -> 0.5
+remove_provenance
+
+(1 row)
+round
+0.5000
+(1 row)
+#   100/sum(x) > 5  (only world {t1}: sum 10 < 20)  -> 0.25
+remove_provenance
+
+(1 row)
+round
+0.2500
+(1 row)
+# m-semiring genericity: the formula semiring gives the valid-world expression
+#   sum(x) > sum(y): the single world {t1} -> t1 with t2 absent
+remove_provenance
+
+(1 row)
+f
+t1 ⊗ (𝟙 ⊖ t2)
+(1 row)

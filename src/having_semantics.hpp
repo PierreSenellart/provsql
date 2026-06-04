@@ -17,12 +17,17 @@
 #define PROVSQL_HAVING_SEMANTICS_HPP
 
 #include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "GenericCircuit.hpp"
+#include "provsql_utils.h"
 #include "subset.hpp"
+#include "Aggregation.h"
 
 /** @cond INTERNAL */
 namespace provsql_having_detail {
@@ -249,13 +254,200 @@ void provsql_having(
       return true;
     };
 
-    if (c.getGateType(L) == gate_agg)
-      return build_from(L, R, op);
+    // General possible-worlds evaluation for a comparison over an *arithmetic
+    // expression of one or more aggregates* (sum(x)*sum(y) > k, sum(x) > sum(y),
+    // 100/sum(x) > 5, ...), which the single-aggregate path above cannot fold.
+    // We enumerate the joint possible worlds over the union of the aggregates'
+    // contributors, evaluate the arithmetic numerically in each world, and
+    // combine the worlds where the comparison holds in the semiring exactly as
+    // the single-aggregate path does (present_prod ⊗ (1 ⊖ missing_sum)).  This
+    // is exponential in the number of distinct contributors, so it bails out
+    // (returning false, leaving the gate unresolved) beyond a small bound.
+    auto build_general = [&](gate_t Lx, gate_t Rx,
+                             ComparisonOperator opx) -> bool {
+      struct AggInfo {
+        AggregationOperator kind;
+        std::vector<std::pair<int, double> > contribs;  // (distinct-K index, value)
+      };
+      std::map<gate_t, AggInfo> aggs;
+      std::map<gate_t, int> kindex;
+      std::vector<gate_t> kgates;
 
-    if (c.getGateType(R) == gate_agg)
-      return build_from(R, L, flip_op(op));
+      std::function<bool(gate_t)> collect = [&](gate_t gx) -> bool {
+        gate_type gt = c.getGateType(gx);
+        if (gt == gate_agg) {
+          if (aggs.count(gx))
+            return true;
+          AggInfo ai;
+          ai.kind = getAggregationOperator(c.getInfos(gx).first);
+          for (gate_t ch : c.getWires(gx)) {
+            if (c.getGateType(ch) != gate_semimod)
+              return false;
+            std::string ms;
+            gate_t kg{};
+            if (!semimod_extract_string_and_K(c, ch, ms, kg))
+              return false;
+            int idx;
+            auto it = kindex.find(kg);
+            if (it == kindex.end()) {
+              idx = static_cast<int>(kgates.size());
+              kindex[kg] = idx;
+              kgates.push_back(kg);
+            } else
+              idx = it->second;
+            double m;
+            try { m = std::stod(ms); } catch (...) { return false; }
+            ai.contribs.emplace_back(idx, m);
+          }
+          aggs.emplace(gx, std::move(ai));
+          return true;
+        }
+        if (gt == gate_arith) {
+          for (gate_t ch : c.getWires(gx))
+            if (!collect(ch))
+              return false;
+          return true;
+        }
+        if (gt == gate_value)
+          return true;
+        if (gt == gate_semimod) {       // a constant threshold: semimod(1, value)
+          std::string ms;
+          gate_t kg{};
+          if (!semimod_extract_string_and_K(c, gx, ms, kg))
+            return false;
+          return c.getGateType(kg) == gate_one;
+        }
+        return false;
+      };
 
-    return false;
+      if (!collect(Lx) || !collect(Rx))
+        return false;
+      if (aggs.empty())
+        return false;
+      const size_t n = kgates.size();
+      if (n == 0 || n > 24)            // 2^n enumeration: keep it bounded
+        return false;
+
+      // Numeric value of a subexpression in a given world (NULL -> false).
+      std::function<bool(gate_t, uint64_t, double &)> eval =
+        [&](gate_t gx, uint64_t world, double &out) -> bool {
+        gate_type gt = c.getGateType(gx);
+        if (gt == gate_value) {
+          try { out = std::stod(c.getExtra(gx)); } catch (...) { return false; }
+          return true;
+        }
+        if (gt == gate_semimod) {       // constant threshold
+          std::string ms; gate_t kg{};
+          if (!semimod_extract_string_and_K(c, gx, ms, kg)) return false;
+          try { out = std::stod(ms); } catch (...) { return false; }
+          return true;
+        }
+        if (gt == gate_agg) {
+          const AggInfo &ai = aggs.at(gx);
+          double acc = 0, mn = 0, mx = 0;
+          long cnt = 0;
+          bool first = true;
+          for (const auto &pr : ai.contribs)
+            if (world & (uint64_t(1) << pr.first)) {
+              double m = pr.second;
+              acc += m; ++cnt;
+              if (first) { mn = mx = m; first = false; }
+              else { mn = std::min(mn, m); mx = std::max(mx, m); }
+            }
+          switch (ai.kind) {
+          case AggregationOperator::SUM:   out = acc; return true;
+          case AggregationOperator::COUNT: out = acc; return true;  // values 1 or 0/1
+          case AggregationOperator::AVG:   if (cnt == 0) return false; out = acc / cnt; return true;
+          case AggregationOperator::MIN:   if (cnt == 0) return false; out = mn; return true;
+          case AggregationOperator::MAX:   if (cnt == 0) return false; out = mx; return true;
+          default: return false;
+          }
+        }
+        if (gt == gate_arith) {
+          const auto &w = c.getWires(gx);
+          unsigned aop = static_cast<unsigned>(c.getInfos(gx).first);
+          if (aop == PROVSQL_ARITH_PLUS) {
+            double s = 0; for (gate_t ch : w) { double v; if (!eval(ch, world, v)) return false; s += v; }
+            out = s; return true;
+          }
+          if (aop == PROVSQL_ARITH_TIMES) {
+            double p = 1; for (gate_t ch : w) { double v; if (!eval(ch, world, v)) return false; p *= v; }
+            out = p; return true;
+          }
+          if (aop == PROVSQL_ARITH_MINUS) {
+            if (w.size() != 2) return false;
+            double a, b; if (!eval(w[0], world, a) || !eval(w[1], world, b)) return false;
+            out = a - b; return true;
+          }
+          if (aop == PROVSQL_ARITH_DIV) {
+            if (w.size() != 2) return false;
+            double a, b; if (!eval(w[0], world, a) || !eval(w[1], world, b)) return false;
+            if (b == 0) return false;
+            out = a / b; return true;
+          }
+          if (aop == PROVSQL_ARITH_NEG) {
+            if (w.size() != 1) return false;
+            double a; if (!eval(w[0], world, a)) return false;
+            out = -a; return true;
+          }
+          return false;
+        }
+        return false;
+      };
+
+      std::vector<typename SemiringT::value_type> kval(n);
+      for (size_t i = 0; i < n; ++i)
+        kval[i] = c.evaluate<SemiringT>(kgates[i], mapping, S);
+
+      std::vector<typename SemiringT::value_type> disjuncts;
+      const uint64_t total = uint64_t(1) << n;
+      for (uint64_t world = 1; world < total; ++world) {  // skip the empty world
+        double lv, rv;
+        if (!eval(Lx, world, lv) || !eval(Rx, world, rv))
+          continue;                                       // NULL comparison: false
+        bool holds = false;
+        switch (opx) {
+        case ComparisonOperator::EQ: holds = (lv == rv); break;
+        case ComparisonOperator::NE: holds = (lv != rv); break;
+        case ComparisonOperator::LT: holds = (lv <  rv); break;
+        case ComparisonOperator::LE: holds = (lv <= rv); break;
+        case ComparisonOperator::GT: holds = (lv >  rv); break;
+        case ComparisonOperator::GE: holds = (lv >= rv); break;
+        }
+        if (!holds)
+          continue;
+
+        std::vector<typename SemiringT::value_type> present, missing;
+        for (size_t i = 0; i < n; ++i) {
+          if (world & (uint64_t(1) << i)) {
+            if (kval[i] != S.one()) present.push_back(kval[i]);
+          } else {
+            if (kval[i] != S.zero()) missing.push_back(kval[i]);
+          }
+        }
+        auto present_prod = S.times(present);
+        if (missing.empty())
+          disjuncts.push_back(std::move(present_prod));
+        else {
+          auto monus_factor = S.monus(S.one(), S.plus(missing));
+          disjuncts.push_back(
+            present_prod == S.one()
+              ? monus_factor
+              : S.times(std::vector<typename SemiringT::value_type>{
+                  present_prod, monus_factor}));
+        }
+      }
+
+      pw_out = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
+      return true;
+    };
+
+    if (c.getGateType(L) == gate_agg && build_from(L, R, op))
+      return true;
+    if (c.getGateType(R) == gate_agg && build_from(R, L, flip_op(op)))
+      return true;
+
+    return build_general(L, R, op);
   };
 
   for (gate_t cmp_gate : cmp_gates) {

@@ -1299,6 +1299,7 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
  * further down in the file. */
 static bool needs_having_lift(Node *havingQual, const constants_t *constants);
 static Node *peel_agg_casts(Node *n);
+static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants);
 
 /* ----------------------------------------------------------------------
  * Normalising constant arithmetic over an aggregate in a comparison.
@@ -1552,17 +1553,31 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
       }
     }
 
-    if ((IsA(node, FuncExpr) &&
-         ((FuncExpr *)node)->funcid ==
-           constants->OID_FUNCTION_PROVENANCE_AGGREGATE) ||
-        (IsA(node, Var) &&
-         ((Var *)node)->vartype == constants->OID_TYPE_AGG_TOKEN)) {
+    // Identify the aggregate side.  It is either already agg_token-typed (a
+    // bare provenance_aggregate / agg_token Var, or agg_token arithmetic on a
+    // materialised column), or an arithmetic OpExpr over aggregates that still
+    // needs lowering to the native agg_token operators (e.g. the int8-typed
+    // sum(x)*sum(y) of a live HAVING) -- which try_swap_agg_arith turns into a
+    // gate_arith.  Either way the result agg_token is cast to its UUID, so the
+    // gate_cmp wraps the aggregate (or the gate_arith over aggregates); the
+    // possible-worlds evaluator resolves it.
+    Node *agg_node = NULL;
+    if (exprType(node) == constants->OID_TYPE_AGG_TOKEN) {
+      agg_node = node;
+    } else if (IsA(node, OpExpr) && expr_contains_agg(node, constants)) {
+      Node *swapped = try_swap_agg_arith((OpExpr *)node, constants);
+      if (swapped != NULL &&
+          exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
+        agg_node = swapped;
+    }
+
+    if (agg_node != NULL) {
       // The aggregate side: add an explicit cast of the agg_token to UUID.
       FuncExpr *castToUUID = makeNode(FuncExpr);
 
       castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
       castToUUID->funcresulttype = constants->OID_TYPE_UUID;
-      castToUUID->args = list_make1(node);
+      castToUUID->args = list_make1(agg_node);
       castToUUID->location = -1;
 
       arguments[i] = (Node *)castToUUID;
@@ -7740,99 +7755,26 @@ static Node *add_to_havingQual(Node *havingQual, Expr *expr)
  * @param constants  Extension OID cache.
  * @return  True if the pattern is supported, false otherwise.
  */
-/**
- * @brief Whether @p n is a single aggregate possibly wrapped in constant
- *        arithmetic that @c normalize_agg_comparison can fold into the
- *        comparison threshold.
- *
- * Mirrors the normaliser's foldability exactly: a bare aggregate (an
- * @c agg_token Var or a @c provenance_aggregate call), or an arithmetic
- * @c OpExpr (@c + @c - @c * @c /, or prefix unary @c -) with one foldable
- * aggregate operand and one aggregate-free operand.  Division is foldable
- * only with the aggregate in the numerator (@c agg/c, not @c c/agg).
- */
-static bool is_foldable_agg_operand(Node *n, const constants_t *constants) {
-  n = peel_agg_casts(n);
-  if (n == NULL)
-    return false;
-  if (IsA(n, Var) && ((Var *)n)->vartype == constants->OID_TYPE_AGG_TOKEN)
-    return true;
-  if (IsA(n, FuncExpr) &&
-      ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
-    return true;
-  if (IsA(n, OpExpr)) {
-    OpExpr *op = (OpExpr *)n;
-    char *nm = get_opname(op->opno);
-    int nargs = list_length(op->args);
-    bool arith, is_div;
-
-    if (nm == NULL)
-      return false;
-    arith = strcmp(nm, "+") == 0 || strcmp(nm, "-") == 0 ||
-            strcmp(nm, "*") == 0 || strcmp(nm, "/") == 0;
-    is_div = strcmp(nm, "/") == 0;
-    if (!arith)
-      return false;
-    if (nargs == 1)  /* prefix unary minus */
-      return is_foldable_agg_operand((Node *)linitial(op->args), constants);
-    if (nargs == 2) {
-      Node *x = (Node *)linitial(op->args);
-      Node *y = (Node *)lsecond(op->args);
-      /* aggregate on the left works for every operator; on the right only
-       * for the commutative/foldable ones (not c/agg). */
-      if (is_foldable_agg_operand(x, constants) &&
-          !expr_contains_agg(y, constants))
-        return true;
-      if (!is_div && is_foldable_agg_operand(y, constants) &&
-          !expr_contains_agg(x, constants))
-        return true;
-    }
-  }
-  return false;
-}
-
 static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constants)
 {
   int agg_sides = 0;
-  bool any_arith = false;
 
   if(op->args->length != 2)
     return false;
 
   for(unsigned i=0; i<2; ++i) {
     Node *arg = lfirst(list_nth_cell(op->args, i));
-
-    if(expr_contains_agg(arg, constants)) {
-      Node *peeled = peel_agg_casts(arg);
-      bool bare = (IsA(peeled, Var) &&
-                   ((Var*)peeled)->vartype==constants->OID_TYPE_AGG_TOKEN) ||
-                  (IsA(peeled, FuncExpr) &&
-                   ((FuncExpr*)peeled)->funcid==
-                     constants->OID_FUNCTION_PROVENANCE_AGGREGATE);
-      /* An aggregate side must be either a bare aggregate or a single
-       * aggregate wrapped in constant arithmetic (foldable into the
-       * threshold).  Anything else (agg-vs-agg arithmetic, c/agg, ...) is
-       * unsupported. */
-      if(!bare) {
-        if(!is_foldable_agg_operand(arg, constants))
-          return false;
-        any_arith=true;
-      }
+    if(expr_contains_agg(arg, constants))
       agg_sides++;
-    }
-    /* The non-aggregate side may be any aggregate-free expression (a
-     * literal, a grouped-column Var, constant arithmetic, ...): it becomes
-     * the comparison threshold. */
+    /* The other side may be any aggregate-free expression: the threshold. */
   }
 
-  /* Need exactly one aggregate side once constant arithmetic is involved
-   * (the constant folds into the other, threshold, side).  With only bare
-   * aggregates the historical agg-vs-agg form (two sides) is still allowed. */
-  if(agg_sides == 0)
-    return false;
-  if(any_arith)
-    return agg_sides == 1;
-  return true;
+  /* At least one aggregate side.  Constant arithmetic over a single aggregate
+   * is folded into the threshold (normalize_agg_comparison); anything else
+   * (agg-vs-agg, products of aggregates, c/agg, ...) is resolved by the
+   * possible-worlds enumeration in having_semantics, which leaves the gate
+   * unresolved -- a clean error -- if it cannot handle the shape. */
+  return agg_sides >= 1;
 }
 
 /**
