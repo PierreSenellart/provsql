@@ -49,12 +49,21 @@ BEGIN
 END $$;
 
 -- Monte Carlo and the cmp pre-pass must agree (both include the empty world).
+-- All routes agree (each independently counts the empty world):
+--   cmp-on  : the closed-form cmp pre-pass (CountCmpEvaluator)
+--   cmp-off : the generic enumeration / Boolean expansion (count_enum)
+--   mc      : Monte Carlo samples the all-absent world directly
 SET provsql.monte_carlo_seed = 1234;
 CREATE TEMP TABLE seh_tk AS SELECT provenance() AS pv FROM seh_t HAVING count(*) = 0;
 SELECT remove_provenance('seh_tk');
-SELECT 'count=0 exact vs mc' AS shape,
-       round(probability_evaluate((SELECT pv FROM seh_tk))::numeric, 4) AS exact,
-       round(probability_evaluate((SELECT pv FROM seh_tk), 'monte-carlo', '200000')::numeric, 1) AS mc_1dp;
+SELECT 'count=0 cmp-on' AS shape,
+       round(probability_evaluate((SELECT pv FROM seh_tk))::numeric, 4) AS p;
+SET provsql.cmp_probability_evaluation = off;
+SELECT 'count=0 cmp-off' AS shape,
+       round(probability_evaluate((SELECT pv FROM seh_tk))::numeric, 4) AS p;
+SET provsql.cmp_probability_evaluation = on;
+SELECT 'count=0 mc (1dp)' AS shape,
+       round(probability_evaluate((SELECT pv FROM seh_tk), 'monte-carlo', '200000')::numeric, 1) AS p;
 DROP TABLE seh_tk;
 
 -- Grouped aggregation is UNCHANGED: the empty group is no row, so a

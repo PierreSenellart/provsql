@@ -11,8 +11,14 @@ NOTICE:  scalar HAVING count(*) = 2    p=0.3750  (truth 0.3750)
 remove_provenance
 
 (1 row)
-shape|exact|mc_1dp
-count=0 exact vs mc|0.0625|0.1
+shape|p
+count=0 cmp-on|0.0625
+(1 row)
+shape|p
+count=0 cmp-off|0.0625
+(1 row)
+shape|p
+count=0 mc (1dp)|0.1
 (1 row)
 NOTICE:  table "seh_g" does not exist, skipping
 add_provenance

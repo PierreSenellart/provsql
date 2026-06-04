@@ -51,7 +51,8 @@ std::vector<mask_t> enumerate_valid_worlds(
   ComparisonOperator op,
   AggregationOperator agg_kind,
   bool enumerate,
-  bool &upset
+  bool &upset,
+  bool is_scalar = false
   );
 
 /**

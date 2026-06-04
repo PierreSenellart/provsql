@@ -58,21 +58,17 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   unchanged. (Also corrected `scalar_subquery` Part uc2: an uncorrelated value
   body's `count(*) <= 1` gate now correctly counts the empty world, `0.375 →
   0.5` -- the row exists whenever the scalar subquery is well-defined.)
+- **Phase 2 -- generic-semiring + `cmp`-off path** (`count_enum`): the world
+  enumeration adds the empty subset `mask=0` when `is_scalar` and `0 op C`; the
+  caller (`having_semantics`) annotates it as `one ⊗ (𝟙 ⊖ ⊕(tuples))` -- the
+  correct empty-world term in **every** m-semiring, including the absorptive
+  Boolean expansion of the `cmp`-off probability path (no `!absorptive` gate
+  needed: a true-on-empty predicate is a downset, `upset=false`, so the empty
+  subset gets the monus complement). Verified `cmp`-on == `cmp`-off == MC ==
+  `0.0625`; the scalar `count(*) < 4` why-provenance in `having_on_aggregation`
+  now correctly carries the empty witness `{}` (a grouped count would not).
 
 **Deferred (need care / human judgment):**
-
-- **Phase 2, generic-semiring + `cmp`-off-probability path** -- the
-  `count_enum` / `enumerate_valid_worlds` route. Attempted (add the empty subset
-  `mask=0`, which the caller annotates as `𝟙 ⊖ ⊕(tuples)`), but (a) the
-  `cmp`-off probability path expands through the **absorptive Boolean** semiring,
-  where the empty-world annotation interacts with the `upset`/missing handling
-  and needs separate thought, and (b) it perturbed one nested-aggregation formula
-  test (`having_on_aggregation`, an outer `GROUP BY 1` over an inner grouped
-  `count(*)<3`) in a simplification-dependent way that needs to be understood
-  before re-pinning. Reverted to keep the suite green. The default
-  (`cmp_probability_evaluation = on`) probability path is correct; only the
-  non-default `cmp`-off path and the generic semirings still drop the scalar
-  empty world.
 - **Phase 3 -- `IS NULL` HAVING** on `min`/`max`/`avg`/`array_agg`/`choose`:
   needs the HAVING lift (`needs_having_lift` / `having_Expr_to_provenance_cmp`)
   to accept a `NullTest` over an aggregate first (currently errors), then the

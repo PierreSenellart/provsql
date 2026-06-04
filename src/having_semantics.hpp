@@ -82,6 +82,8 @@ void provsql_having(
       // comparison domain (int / numeric / float / text) -- in its low 31 bits;
       // the high bit is the scalar-aggregation flag, masked off here.
       const unsigned aggtype = c.getInfos(agg_side).second & PROVSQL_AGG_TYPE_MASK;
+      const bool is_scalar =
+        (c.getInfos(agg_side).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
       AggregationOperator agg_kind = getAggregationOperator(c.getInfos(agg_side).first);
       const auto &children = c.getWires(agg_side);
 
@@ -193,7 +195,7 @@ void provsql_having(
         if (!rescale_to(m_mant[i], m_scale[i], target_scale, mvals[i])) return false;
 
       bool upset = false;
-      auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind, S.absorptive(), upset);
+      auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind, S.absorptive(), upset, is_scalar);
 
       if (worlds.empty()) {
         pw_out = S.zero();

@@ -214,10 +214,12 @@ static void combinations(std::size_t start,
   combinations(start + 1, k_left - 1, mask, out);
 }
 
-static std::vector<mask_t> count_enum(const std::vector<long> &values, long m, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> count_enum(const std::vector<long> &values, long m, ComparisonOperator op, bool absorptive, bool &upset, bool is_scalar)
 {
   const int n = static_cast<int>(values.size());
   std::vector<mask_t> out;
+  const long C0 = m;                 // original threshold (m is mutated below)
+  const ComparisonOperator op0 = op;
 
   auto add_exact_k = [&](int k) {
                        if (k < 0 || k > n) return;
@@ -263,6 +265,24 @@ static std::vector<mask_t> count_enum(const std::vector<long> &values, long m, C
       if (k != m) add_exact_k(k);
     }
     break;
+  }
+
+  /* Scalar aggregation (no GROUP BY): the empty input is a real world (count 0),
+   * which every branch above excludes (the grouped semantics).  Add the empty
+   * subset when "0 op C" holds; the caller annotates it as one ⊗ (1 ⊖ ⊕(tuples))
+   * = the correct empty-world term in any m-semiring (probZero for probability,
+   * the all-absent Boolean term in the cmp-off expansion). */
+  if (is_scalar) {
+    bool zero_sat = false;
+    switch (op0) {
+      case ComparisonOperator::GE: zero_sat = (0 >= C0); break;
+      case ComparisonOperator::GT: zero_sat = (0 >  C0); break;
+      case ComparisonOperator::LE: zero_sat = (0 <= C0); break;
+      case ComparisonOperator::LT: zero_sat = (0 <  C0); break;
+      case ComparisonOperator::EQ: zero_sat = (0 == C0); break;
+      case ComparisonOperator::NE: zero_sat = (0 != C0); break;
+    }
+    if (zero_sat) add_exact_k(0);
   }
 
   return out;
@@ -393,11 +413,12 @@ std::vector<mask_t> enumerate_valid_worlds(
   ComparisonOperator op,
   AggregationOperator agg_kind,
   bool absorptive,
-  bool &upset
+  bool &upset,
+  bool is_scalar
   )
 {
   if (agg_kind == AggregationOperator::COUNT)
-    return count_enum(values,constant,op, absorptive, upset);
+    return count_enum(values,constant,op, absorptive, upset, is_scalar);
 
   if(agg_kind == AggregationOperator::SUM)
     try {
