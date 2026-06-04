@@ -132,6 +132,54 @@ DROP TABLE seh_gn;
 
 DROP TABLE seh_g CASCADE;
 
+-- Grouped IS [NOT] NULL with NULL-VALUED rows.  sum/avg/min/max/array_agg are
+-- NULL when no value row (a row whose aggregated column is non-NULL) is present,
+-- so a group's rows split into value rows (Kn) and null-valued rows (Kz):
+--   IS NOT NULL    -> δ(⊕Kn)            : a value row is present
+--   IS NULL grouped-> δ(⊕Kz) ⊗ (1⊖⊕Kn) : present via a null row, no value row
+-- (the all-NULL-valued group, formerly dropped to gate_zero, is now handled).
+-- seh_gnv, all p=0.5:
+--   g1 = {x=10 (value), x=NULL}        g2 = {x=NULL, x=NULL} (all-NULL)
+--   g3 = {x=30 (value)}                (no NULL rows)
+-- IS NULL:    g1 = P(10 absent)*P(NULL present) = 0.5*0.5 = 0.25;
+--             g2 = P(>=1 of two NULLs) = 0.75;  g3 = 0 (no NULL row).
+-- IS NOT NULL: g1 = P(10 present) = 0.5; g2 = 0 (no value row); g3 = 0.5.
+DROP TABLE IF EXISTS seh_gnv CASCADE;
+CREATE TABLE seh_gnv(g int, x int);
+INSERT INTO seh_gnv VALUES (1,10),(1,NULL),(2,NULL),(2,NULL),(3,30);
+SELECT add_provenance('seh_gnv');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM seh_gnv; END $$;
+
+CREATE TEMP TABLE seh_gnv_null AS
+  SELECT g, probability_evaluate(provenance()) AS pp
+  FROM seh_gnv GROUP BY g HAVING sum(x) IS NULL;
+SELECT remove_provenance('seh_gnv_null');
+SELECT 'grouped sum IS NULL' AS shape, g, round(pp::numeric, 4) AS p
+FROM seh_gnv_null ORDER BY g;
+DROP TABLE seh_gnv_null;
+
+CREATE TEMP TABLE seh_gnv_nn AS
+  SELECT g, probability_evaluate(provenance()) AS pp
+  FROM seh_gnv GROUP BY g HAVING sum(x) IS NOT NULL;
+SELECT remove_provenance('seh_gnv_nn');
+SELECT 'grouped sum IS NOT NULL' AS shape, g, round(pp::numeric, 4) AS p
+FROM seh_gnv_nn ORDER BY g;
+DROP TABLE seh_gnv_nn;
+
+-- Route-independent (structural monus/delta/times): the cmp pre-pass off path
+-- builds the same circuit, so max IS NULL matches sum IS NULL above.
+SET provsql.cmp_probability_evaluation = off;
+CREATE TEMP TABLE seh_gnv_off AS
+  SELECT g, probability_evaluate(provenance()) AS pp
+  FROM seh_gnv GROUP BY g HAVING max(x) IS NULL;
+SELECT remove_provenance('seh_gnv_off');
+SELECT 'grouped max IS NULL cmp-off' AS shape, g, round(pp::numeric, 4) AS p
+FROM seh_gnv_off ORDER BY g;
+DROP TABLE seh_gnv_off;
+SET provsql.cmp_probability_evaluation = on;
+
+DROP TABLE seh_gnv CASCADE;
+
 -- ----------------------------------------------------------------------
 -- count(col) (as opposed to count(*)) with NULLs.  count(col) counts only
 -- rows whose col IS NOT NULL, but -- unlike sum/min/max/avg -- its empty group

@@ -1394,22 +1394,81 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 }
 
 /**
+ * @brief Build @c "⊕(array_agg(K) FILTER (WHERE V IS [NOT] NULL))" -- the
+ *        per-row provenance @c ⊕ over just the value rows (@p filter @c =
+ *        @c IS_NOT_NULL) or just the null-valued rows (@p filter @c = @c IS_NULL)
+ *        of an aggregate's group.
+ *
+ * @p base_arr is the aggregate's @c array_agg(provenance_semimod(V, K)) Aggref;
+ * we copy it, swap its argument to @c K, and add the @c FILTER on @p V (the
+ * per-row aggregated value, NULL exactly when the row does not contribute).  The
+ * filtered @c array_agg is @c NULL (not an empty array) for a group with no row
+ * of the requested kind, so it is wrapped in @c COALESCE(..., '{}') -- the STRICT
+ * @c provenance_plus then yields @c gate_zero rather than NULL.
+ */
+static FuncExpr *having_null_filtered_plus(const constants_t *constants,
+                                           Aggref *base_arr, Node *V, Node *K,
+                                           NullTestType filter) {
+  Aggref *arr = (Aggref *)copyObject(base_arr);
+  TargetEntry *te = (TargetEntry *)linitial(arr->args);
+  NullTest *flt = makeNode(NullTest);
+  ArrayExpr *empty = makeNode(ArrayExpr);
+  CoalesceExpr *coal = makeNode(CoalesceExpr);
+  FuncExpr *plus = makeNode(FuncExpr);
+
+  te->expr = (Expr *)copyObject(K); /* array_agg(K) instead of the semimod */
+
+  /* The provenance array_agg never carries a user FILTER (make_aggregation_
+   * expression builds a fresh Aggref), so setting aggfilter directly is safe. */
+  flt->arg = (Expr *)copyObject(V);
+  flt->nulltesttype = filter;
+  flt->argisrow = false;
+  flt->location = -1;
+  arr->aggfilter = (Expr *)flt;
+
+  empty->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  empty->array_collid = InvalidOid;
+  empty->element_typeid = constants->OID_TYPE_UUID;
+  empty->elements = NIL;
+  empty->multidims = false;
+  empty->location = -1;
+
+  coal->coalescetype = constants->OID_TYPE_UUID_ARRAY;
+  coal->coalescecollid = InvalidOid;
+  coal->args = list_make2(arr, empty);
+  coal->location = -1;
+
+  plus->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
+  plus->funcresulttype = constants->OID_TYPE_UUID;
+  plus->funcvariadic = true;
+  plus->args = list_make1(coal);
+  plus->location = -1;
+  return plus;
+}
+
+/**
  * @brief Convert a @c NullTest on an aggregate (@c agg IS [NOT] NULL) into a
  *        provenance expression.
  *
  * @c sum / @c avg / @c min / @c max / @c array_agg / @c choose are NULL exactly
- * when the aggregate has no contributor (every aggregated value absent or NULL),
- * so @c IS @c NULL is the empty-group test and @c IS @c NOT @c NULL is its
- * complement.  Writing @c ⊕ for the OR of the aggregate's per-row tokens (its
- * 4th @c provenance_aggregate argument):
+ * when no value row contributes (every aggregated value absent or NULL).  Split
+ * the group's rows into value rows (@c V @c IS @c NOT @c NULL → tokens @c Kn, the
+ * rows the aggregate is defined over) and null-valued rows (@c V @c IS @c NULL →
+ * tokens @c Kz, present but not contributing).  Then:
  *
- * - @c IS @c NOT @c NULL → @c δ(⊕): the aggregate has a contributor (the
- *   group's existence), correct for both scalar and grouped.
- * - @c IS @c NULL, scalar (no GROUP BY) → @c "1 ⊖ ⊕": the single result row
- *   always exists, and is NULL exactly in the all-absent world (probZero).
- * - @c IS @c NULL, grouped → @c gate_zero: a present group always has a
- *   contributor, so the test never holds.  (A group whose aggregated values are
- *   all NULL -- non-empty yet NULL-valued -- is a known unsupported edge.)
+ * - @c IS @c NOT @c NULL → @c δ(⊕Kn): a value row is present.
+ * - @c IS @c NULL, scalar (no GROUP BY) → @c "1 ⊖ ⊕Kn": the single result row
+ *   always exists and is NULL exactly when no value row is present.
+ * - @c IS @c NULL, grouped → @c "δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn)": the group is present via a
+ *   null-valued row while no value row is present, so the aggregate is NULL.
+ *   (When the group has no null-valued rows @c Kz is empty and this collapses to
+ *   @c gate_zero, matching the pre-fix behaviour; the all-NULL-valued group, once
+ *   an unsupported edge, is now handled.)
+ *
+ * Splitting on @p V (not the whole-group @c ⊕) is what fixes both directions when
+ * null-valued rows are present: the old code used @c ⊕ over every row, so
+ * @c IS @c NOT @c NULL over-counted (a null-only world looked non-NULL) and
+ * grouped @c IS @c NULL was dropped entirely.
  *
  * The aggregate must be a direct @c provenance_aggregate call (an @c agg_token
  * @c Var coming from a subquery exposes no token array and is rejected).
@@ -1418,8 +1477,9 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
                                                const constants_t *constants,
                                                bool negated) {
   Node *arg = (Node *)nt->arg;
-  FuncExpr *pa, *plusExpr;
-  Node *token_array;
+  FuncExpr *pa, *plusKn;
+  Node *V, *K;
+  Aggref *base_arr;
   bool is_scalar;
   NullTestType ntt;
 
@@ -1439,13 +1499,13 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
 
   /* provenance_aggregate(aggfnoid, aggtype, Aggref, array_agg(semimods),
    * is_scalar): the 5th argument is the scalar flag, the 4th is
-   * array_agg(provenance_semimod(value, K)).  For existence we need ⊕ of the
-   * per-row provenance tokens K (the semimod's 2nd argument), NOT the semimods
-   * themselves -- a semimod carries a value gate, which the probability and
-   * Boolean evaluators cannot walk.  Rebuild the array_agg over just K. */
+   * array_agg(provenance_semimod(V, K)).  Extract the per-row aggregated value V
+   * and provenance token K (the semimod's two arguments) -- V drives the value /
+   * null split, K is what we ⊕.  We need K rather than the semimod (which carries
+   * a value gate the probability and Boolean evaluators cannot walk). */
   is_scalar = DatumGetBool(((Const *)list_nth(pa->args, 4))->constvalue);
   {
-    Aggref *arr = (Aggref *)copyObject(list_nth(pa->args, 3));
+    Aggref *arr = (Aggref *)list_nth(pa->args, 3);
     TargetEntry *te;
     FuncExpr *sm;
     if (!IsA(arr, Aggref) || list_length(arr->args) != 1)
@@ -1455,32 +1515,30 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
         ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD)
       provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
     sm = (FuncExpr *)te->expr;
-    te->expr = (Expr *)list_nth(sm->args, 1);  /* K, the per-row provenance */
-    token_array = (Node *)arr;
+    V = (Node *)list_nth(sm->args, 0); /* per-row aggregated value */
+    K = (Node *)list_nth(sm->args, 1); /* per-row provenance token */
+    base_arr = arr;
   }
 
   ntt = nt->nulltesttype;
   if (negated)
     ntt = (ntt == IS_NULL) ? IS_NOT_NULL : IS_NULL;
 
-  /* ⊕ of the aggregate's per-row tokens (provenance_plus is VARIADIC uuid[]). */
-  plusExpr = makeNode(FuncExpr);
-  plusExpr->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
-  plusExpr->funcresulttype = constants->OID_TYPE_UUID;
-  plusExpr->funcvariadic = true;
-  plusExpr->args = list_make1(token_array);
-  plusExpr->location = -1;
+  /* ⊕Kn: the OR of the value-row tokens (V IS NOT NULL). */
+  plusKn = having_null_filtered_plus(constants, base_arr, V, K, IS_NOT_NULL);
 
   if (ntt == IS_NOT_NULL) {
+    /* δ(⊕Kn): a value row is present. */
     FuncExpr *delta = makeNode(FuncExpr);
     delta->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
     delta->funcresulttype = constants->OID_TYPE_UUID;
-    delta->args = list_make1(plusExpr);
+    delta->args = list_make1(plusKn);
     delta->location = -1;
     return delta;
   }
 
-  if (is_scalar) {
+  /* IS NULL: no value row present, i.e. 1 ⊖ ⊕Kn. */
+  {
     FuncExpr *one = makeNode(FuncExpr);
     FuncExpr *monus = makeNode(FuncExpr);
     one->funcid = constants->OID_FUNCTION_GATE_ONE;
@@ -1489,18 +1547,40 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
     one->location = -1;
     monus->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
     monus->funcresulttype = constants->OID_TYPE_UUID;
-    monus->args = list_make2(one, plusExpr);  /* 1 ⊖ ⊕ */
+    monus->args = list_make2(one, plusKn); /* 1 ⊖ ⊕Kn */
     monus->location = -1;
-    return monus;
-  }
 
-  {
-    FuncExpr *zero = makeNode(FuncExpr);
-    zero->funcid = constants->OID_FUNCTION_GATE_ZERO;
-    zero->funcresulttype = constants->OID_TYPE_UUID;
-    zero->args = NIL;
-    zero->location = -1;
-    return zero;
+    if (is_scalar)
+      return monus; /* the single result row always exists */
+
+    /* Grouped: the group must also be present, which -- given no value row --
+     * means a null-valued row is present: δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn). */
+    {
+      FuncExpr *plusKz =
+        having_null_filtered_plus(constants, base_arr, V, K, IS_NULL);
+      FuncExpr *deltaKz = makeNode(FuncExpr);
+      FuncExpr *times = makeNode(FuncExpr);
+      ArrayExpr *factors = makeNode(ArrayExpr);
+
+      deltaKz->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+      deltaKz->funcresulttype = constants->OID_TYPE_UUID;
+      deltaKz->args = list_make1(plusKz);
+      deltaKz->location = -1;
+
+      factors->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+      factors->array_collid = InvalidOid;
+      factors->element_typeid = constants->OID_TYPE_UUID;
+      factors->elements = list_make2(deltaKz, monus);
+      factors->multidims = false;
+      factors->location = -1;
+
+      times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+      times->funcresulttype = constants->OID_TYPE_UUID;
+      times->funcvariadic = true;
+      times->args = list_make1(factors);
+      times->location = -1;
+      return times;
+    }
   }
 }
 

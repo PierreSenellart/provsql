@@ -50,7 +50,10 @@ Each plan document follows a consistent layout:
   Phase 5 (retire the uncorrelated-antijoin rewrite) is **resolved as won't-do** --
   an A/B probe shows the cross-join HAVING-gate fallback regresses `count(col)`
   with NULLs (0.25 → 0.125) and has no `NOT EXISTS` arm, so the `EXCEPT ALL`
-  antijoin is kept.
+  antijoin is kept.  Phase 6 fixes scalar/grouped `count(col)` with NULLs
+  (preserve the COUNT identity so its empty group counts as 0), and Phase 7 fixes
+  `IS [NOT] NULL` on a group with NULL-valued rows (split value vs null rows,
+  `δ(⊕Kz) ⊗ (𝟙⊖⊕Kn)`) -- both landed.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.

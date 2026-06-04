@@ -90,9 +90,8 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   `IS NULL → gate_zero`. Structural (monus/delta), hence route-independent.
   Verified scalar `sum/max/avg/array_agg IS NULL → 0.0625`, `IS NOT NULL →
   0.9375` (cmp-on == cmp-off == MC); grouped `IS NOT NULL` = group existence.
-  (Known edge: a grouped group whose aggregated values are *all* NULL -- non-empty
-  yet NULL-valued -- is treated as `gate_zero`; the row tokens differ from the
-  value tokens there, which this rewrite does not separate.)
+  (This first cut used one `⊕` over *every* group row, leaving a known edge -- a
+  group with NULL-valued rows -- since fixed in Phase 7 below.)
 
 - **Phase 4 -- scalar existence `= gate_one`** ("no δ without grouping", the
   `aggregation && !lift_having` arm in `make_provenance_expression`): emit
@@ -140,9 +139,27 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   `count(col) = 0` correct (the group exists with count 0, not `gate_zero`).
   Verified `count(x) = 0 / < 1 / <= 1 / = 1 / >= 1 / <> 0 / >= 0` across cmp-on ==
   cmp-off == MC; `expected`/`support` over `count(col)`; `count(*)` unchanged; all
-  201 tests green (`test/sql/scalar_empty_having.sql`).  (Distinct from the Phase 3
-  `IS NULL`-on-an-all-NULL-group edge, which is about `sum`/`max`/… value tokens,
-  not `count`, and remains.)
+  201 tests green (`test/sql/scalar_empty_having.sql`).  (The companion Phase 3
+  `IS NULL`-on-`sum`/`max`/… edge -- about value tokens, not `count` -- is fixed
+  separately in Phase 7 below.)
+
+- **Phase 7 -- `IS [NOT] NULL` on a group with NULL-valued rows**
+  (`having_NullTest_to_provenance`): Phase 3 used a single `⊕` over *every* group
+  row, which is wrong once a row's aggregated value is NULL -- such a row keeps the
+  group alive but does not contribute to `sum`/`avg`/`min`/`max`/`array_agg`.  Both
+  directions were affected: `IS NOT NULL` over-counted (a NULL-only world looked
+  non-NULL), and grouped `IS NULL` was dropped to `gate_zero` (the all-NULL group).
+  Fix: split the group's rows by the per-row aggregated value `V` into value rows
+  `Kn` (`V IS NOT NULL`) and null-valued rows `Kz` (`V IS NULL`), built as
+  `array_agg(K) FILTER (WHERE V IS [NOT] NULL)` wrapped in `COALESCE(…, '{}')` so
+  the STRICT `provenance_plus` folds an empty group to `gate_zero`.  Then
+  `IS NOT NULL → δ(⊕Kn)`; scalar `IS NULL → 𝟙 ⊖ ⊕Kn`; grouped
+  `IS NULL → δ(⊕Kz) ⊗ (𝟙 ⊖ ⊕Kn)` (present via a null row, no value row).
+  Structural (filter/monus/delta/times), so route-independent.  With no NULL-valued
+  rows `Kz` is empty and every formula collapses to the Phase 3 result, so the
+  earlier tests are unchanged.  Verified on `{g1:(10,NULL), g2:(NULL,NULL),
+  g3:(30)} @ 0.5`: `sum IS NULL → 0.25 / 0.75 / 0`, `IS NOT NULL → 0.5 / 0 / 0.5`,
+  cmp-on == cmp-off across `sum`/`max`; all 201 tests green.
 
 **Resolved -- Phase 5 will NOT retire `rewrite_uncorrelated_antijoin`** (kept on
 purpose). The hypothesis was that, now the scalar `cmp` path is empty-world-correct

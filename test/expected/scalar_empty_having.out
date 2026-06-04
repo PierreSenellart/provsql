@@ -49,6 +49,34 @@ grouped max IS NOT NULL|1|0.7500
 grouped max IS NOT NULL|2|0.5000
 grouped max IS NOT NULL|3|0.5000
 (3 rows)
+NOTICE:  table "seh_gnv" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped sum IS NULL|1|0.2500
+grouped sum IS NULL|2|0.7500
+grouped sum IS NULL|3|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped sum IS NOT NULL|1|0.5000
+grouped sum IS NOT NULL|2|0.0000
+grouped sum IS NOT NULL|3|0.5000
+(3 rows)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped max IS NULL cmp-off|1|0.2500
+grouped max IS NULL cmp-off|2|0.7500
+grouped max IS NULL cmp-off|3|0.0000
+(3 rows)
 NOTICE:  table "seh_c" does not exist, skipping
 add_provenance
 
