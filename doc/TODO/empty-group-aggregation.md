@@ -94,14 +94,31 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   yet NULL-valued -- is treated as `gate_zero`; the row tokens differ from the
   value tokens there, which this rewrite does not separate.)
 
-**Deferred (need care / human judgment):**
+**Deferred / not viable as a blanket change:**
 - **Phase 4 -- scalar existence `= gate_one`** ("no δ without grouping",
-  `src/provsql.c:1843`): low value (the `p=1` corner is the less-useful number),
-  but high churn -- every scalar aggregation's `provenance()` flips from
-  `P(non-empty)` to `1`, needing many re-pins. Also resolve whether
-  `GROUP BY <constant>` (e.g. positional `GROUP BY 1`) collapses to an empty
-  `groupClause` (would wrongly trip the scalar test). Worth doing with a human in
-  the loop on the re-pins.
+  the `aggregation && !lift_having` arm in `make_provenance_expression`).
+  Attempted (emit `gate_one` instead of `δ(⊕)` when `q->groupClause == NIL &&
+  q->groupingSets == NIL`) and **reverted**: it changes only 4 tests, but two are
+  regressions, not re-pins, because it changes what `provenance()` *means* for a
+  scalar aggregate and several subsystems rely on the old meaning (`δ(⊕)` =
+  "non-empty / a real aggregate expression"):
+  - *continuous-RV moments* (`continuous_expectation`, `continuous_support`):
+    `expected/variance/moment(min|max(rv), provenance())` deliberately pass
+    `provenance()` as the **non-empty conditioning token** (the test comment says
+    so: "otherwise empty-aggregate gives ±Infinity"). `gate_one` removes the
+    conditioning → the moments become unconditional → `±Infinity` and a downstream
+    `a negative number raised to a non-integer power` error.
+  - *nested-aggregate refusal* (`nested_agg_refuse` Case A, non-RV): the deliberate
+    "SQL aggregate on top of a ProvSQL aggregation" error relies on `provenance()`
+    being a real aggregate expression; `gate_one` (a constant) short-circuits the
+    detection, turning the error into a questionable success.
+  The only clean win was `scalar_subquery` uc1 (`(SELECT count(*) FROM Q)`
+  existence `0.875 → 1.0`), which is the uncorrelated aggregate-body decorrelation
+  and could be fixed surgically there instead. A viable Phase 4 would need a
+  *separate* "non-empty" token for the RV moment machinery and the nested-agg
+  detector to condition on, decoupled from `provenance()` -- a larger redesign.
+  (`GROUP BY <constant>` is fine: positional `GROUP BY 1` keeps a non-NIL
+  `groupClause`, so it is correctly grouped, not scalar.)
 - **Phase 5 -- retire `rewrite_uncorrelated_antijoin`**: once the cmp path is
   empty-world-correct on all routes (Phase 2 generic + the antijoin's monus is
   the same `𝟙 ⊖ ⊕` term), route uncorrelated `(SELECT count(*) …) < k` / `= 0` /
