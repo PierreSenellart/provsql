@@ -80,11 +80,21 @@ identical children stay distinct gates and their `set_infos` calls do not clobbe
   rerouted to `sum_dp` -- it is detected as COUNT via the unit-weight remap; the
   tautology was intercepted by `RangeCheck`, not `sum_dp`.)
 
+- **Phase 3 -- `IS NULL` HAVING** on `sum`/`avg`/`min`/`max`/`array_agg`/`choose`
+  (`having_NullTest_to_provenance`): the HAVING lift now accepts a `NullTest` over
+  an aggregate. These aggregates are NULL exactly when the aggregate has no
+  contributor, so writing `⊕` for the OR of the per-row provenance tokens K (the
+  2nd argument of each `provenance_semimod`, *not* the semimods -- those carry a
+  value gate the evaluators cannot walk): `IS NOT NULL → δ(⊕)` (the group
+  existence, scalar and grouped); scalar `IS NULL → 𝟙 ⊖ ⊕` (probZero); grouped
+  `IS NULL → gate_zero`. Structural (monus/delta), hence route-independent.
+  Verified scalar `sum/max/avg/array_agg IS NULL → 0.0625`, `IS NOT NULL →
+  0.9375` (cmp-on == cmp-off == MC); grouped `IS NOT NULL` = group existence.
+  (Known edge: a grouped group whose aggregated values are *all* NULL -- non-empty
+  yet NULL-valued -- is treated as `gate_zero`; the row tokens differ from the
+  value tokens there, which this rewrite does not separate.)
+
 **Deferred (need care / human judgment):**
-- **Phase 3 -- `IS NULL` HAVING** on `min`/`max`/`avg`/`array_agg`/`choose`:
-  needs the HAVING lift (`needs_having_lift` / `having_Expr_to_provenance_cmp`)
-  to accept a `NullTest` over an aggregate first (currently errors), then the
-  empty-world term for the scalar case.
 - **Phase 4 -- scalar existence `= gate_one`** ("no δ without grouping",
   `src/provsql.c:1843`): low value (the `p=1` corner is the less-useful number),
   but high churn -- every scalar aggregation's `provenance()` flips from

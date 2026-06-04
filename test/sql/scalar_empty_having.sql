@@ -92,5 +92,43 @@ SELECT 'grouped count<2' AS shape, g, round(pp::numeric, 4) AS p
 FROM seh_gr ORDER BY g;
 DROP TABLE seh_gr;
 
+-- IS NULL HAVING.  sum/avg/min/max/array_agg are NULL exactly when the
+-- aggregate has no contributor, so IS NULL is the empty-group test and IS NOT
+-- NULL its complement.  For a scalar aggregate the empty input is a real row:
+--   agg IS NULL     -> 1 ⊖ ⊕(tokens) = probZero = 0.0625
+--   agg IS NOT NULL -> δ(⊕(tokens))  = P(non-empty) = 0.9375
+-- For a grouped aggregate IS NULL is gate_zero (a present group has a
+-- contributor) and IS NOT NULL is the group's existence.  These are structural
+-- (monus/delta), so route-independent.
+DO $$
+DECLARE r record; p numeric;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      ('sum(x) IS NULL',        0.0625),
+      ('max(x) IS NULL',        0.0625),
+      ('avg(x) IS NULL',        0.0625),
+      ('array_agg(x) IS NULL',  0.0625),
+      ('max(x) IS NOT NULL',    0.9375),
+      ('NOT (sum(x) IS NULL)',  0.9375)) v(pred, truth)
+  LOOP
+    EXECUTE format(
+      'CREATE TEMP TABLE seh_n AS SELECT probability_evaluate(provenance()) AS pp '
+      'FROM seh_t HAVING %s', r.pred);
+    PERFORM remove_provenance('seh_n');
+    SELECT round(pp::numeric, 4) INTO p FROM seh_n;
+    RAISE NOTICE 'scalar HAVING %  p=%  (truth %)', rpad(r.pred, 20), p, r.truth;
+    DROP TABLE seh_n;
+  END LOOP;
+END $$;
+
+-- Grouped IS NOT NULL = group existence (g1 two tuples -> 0.75; g2,g3 -> 0.5).
+CREATE TEMP TABLE seh_gn AS
+  SELECT g, probability_evaluate(provenance()) AS pp
+  FROM seh_g GROUP BY g HAVING max(x) IS NOT NULL;
+SELECT remove_provenance('seh_gn');
+SELECT 'grouped max IS NOT NULL' AS shape, g, round(pp::numeric, 4) AS p
+FROM seh_gn ORDER BY g;
+DROP TABLE seh_gn;
+
 DROP TABLE seh_g CASCADE;
 DROP TABLE seh_t CASCADE;

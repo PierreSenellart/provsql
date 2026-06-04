@@ -41,11 +41,12 @@ Each plan document follows a consistent layout:
 - [`empty-group-aggregation.md`](empty-group-aggregation.md) : SQL-faithful
   empty-group semantics for **scalar** (no `GROUP BY`) aggregation, via a
   scalar flag on the `gate_agg` (hashed `info2` high bit). Phase 1
-  (infrastructure) and Phase 2 (scalar `count` true-on-empty HAVING across all
+  (infrastructure), Phase 2 (scalar `count` true-on-empty HAVING across all
   routes -- the probability cmp evaluators, the generic-semiring / `cmp`-off
-  enumeration, and Monte Carlo) have landed; `IS NULL` HAVING, scalar existence =
-  `gate_one`, and retiring the uncorrelated-antijoin rewrite are deferred with
-  reasons.
+  enumeration, and Monte Carlo, plus the `count >= 0` tautology) and Phase 3
+  (`IS NULL` / `IS NOT NULL` HAVING on `sum`/`avg`/`min`/`max`/`array_agg`) have
+  landed; scalar existence = `gate_one` and retiring the uncorrelated-antijoin
+  rewrite are deferred with reasons.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
   case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.

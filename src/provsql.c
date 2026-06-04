@@ -1386,6 +1386,117 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 }
 
 /**
+ * @brief Convert a @c NullTest on an aggregate (@c agg IS [NOT] NULL) into a
+ *        provenance expression.
+ *
+ * @c sum / @c avg / @c min / @c max / @c array_agg / @c choose are NULL exactly
+ * when the aggregate has no contributor (every aggregated value absent or NULL),
+ * so @c IS @c NULL is the empty-group test and @c IS @c NOT @c NULL is its
+ * complement.  Writing @c ⊕ for the OR of the aggregate's per-row tokens (its
+ * 4th @c provenance_aggregate argument):
+ *
+ * - @c IS @c NOT @c NULL → @c δ(⊕): the aggregate has a contributor (the
+ *   group's existence), correct for both scalar and grouped.
+ * - @c IS @c NULL, scalar (no GROUP BY) → @c "1 ⊖ ⊕": the single result row
+ *   always exists, and is NULL exactly in the all-absent world (probZero).
+ * - @c IS @c NULL, grouped → @c gate_zero: a present group always has a
+ *   contributor, so the test never holds.  (A group whose aggregated values are
+ *   all NULL -- non-empty yet NULL-valued -- is a known unsupported edge.)
+ *
+ * The aggregate must be a direct @c provenance_aggregate call (an @c agg_token
+ * @c Var coming from a subquery exposes no token array and is rejected).
+ */
+static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
+                                               const constants_t *constants,
+                                               bool negated) {
+  Node *arg = (Node *)nt->arg;
+  FuncExpr *pa, *plusExpr;
+  Node *token_array;
+  bool is_scalar;
+  NullTestType ntt;
+
+  /* Unwrap a single-argument implicit/explicit cast around the aggregate. */
+  if (IsA(arg, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)arg;
+    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+         fe->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(fe->args) == 1)
+      arg = (Node *)linitial(fe->args);
+  }
+  if (!IsA(arg, FuncExpr) ||
+      ((FuncExpr *)arg)->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+    provsql_error("HAVING IS [NOT] NULL is only supported directly on an "
+                  "aggregate of a provenance-tracked relation");
+  pa = (FuncExpr *)arg;
+
+  /* provenance_aggregate(aggfnoid, aggtype, Aggref, array_agg(semimods),
+   * is_scalar): the 5th argument is the scalar flag, the 4th is
+   * array_agg(provenance_semimod(value, K)).  For existence we need ⊕ of the
+   * per-row provenance tokens K (the semimod's 2nd argument), NOT the semimods
+   * themselves -- a semimod carries a value gate, which the probability and
+   * Boolean evaluators cannot walk.  Rebuild the array_agg over just K. */
+  is_scalar = DatumGetBool(((Const *)list_nth(pa->args, 4))->constvalue);
+  {
+    Aggref *arr = (Aggref *)copyObject(list_nth(pa->args, 3));
+    TargetEntry *te;
+    FuncExpr *sm;
+    if (!IsA(arr, Aggref) || list_length(arr->args) != 1)
+      provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
+    te = (TargetEntry *)linitial(arr->args);
+    if (!IsA(te->expr, FuncExpr) ||
+        ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD)
+      provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
+    sm = (FuncExpr *)te->expr;
+    te->expr = (Expr *)list_nth(sm->args, 1);  /* K, the per-row provenance */
+    token_array = (Node *)arr;
+  }
+
+  ntt = nt->nulltesttype;
+  if (negated)
+    ntt = (ntt == IS_NULL) ? IS_NOT_NULL : IS_NULL;
+
+  /* ⊕ of the aggregate's per-row tokens (provenance_plus is VARIADIC uuid[]). */
+  plusExpr = makeNode(FuncExpr);
+  plusExpr->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
+  plusExpr->funcresulttype = constants->OID_TYPE_UUID;
+  plusExpr->funcvariadic = true;
+  plusExpr->args = list_make1(token_array);
+  plusExpr->location = -1;
+
+  if (ntt == IS_NOT_NULL) {
+    FuncExpr *delta = makeNode(FuncExpr);
+    delta->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+    delta->funcresulttype = constants->OID_TYPE_UUID;
+    delta->args = list_make1(plusExpr);
+    delta->location = -1;
+    return delta;
+  }
+
+  if (is_scalar) {
+    FuncExpr *one = makeNode(FuncExpr);
+    FuncExpr *monus = makeNode(FuncExpr);
+    one->funcid = constants->OID_FUNCTION_GATE_ONE;
+    one->funcresulttype = constants->OID_TYPE_UUID;
+    one->args = NIL;
+    one->location = -1;
+    monus->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+    monus->funcresulttype = constants->OID_TYPE_UUID;
+    monus->args = list_make2(one, plusExpr);  /* 1 ⊖ ⊕ */
+    monus->location = -1;
+    return monus;
+  }
+
+  {
+    FuncExpr *zero = makeNode(FuncExpr);
+    zero->funcid = constants->OID_FUNCTION_GATE_ZERO;
+    zero->funcresulttype = constants->OID_TYPE_UUID;
+    zero->args = NIL;
+    zero->location = -1;
+    return zero;
+  }
+}
+
+/**
  * @brief Convert a Boolean combination of HAVING comparisons into a
  *        @c provenance_times / @c provenance_plus gate expression.
  *
@@ -1454,6 +1565,8 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
     return having_BoolExpr_to_provenance((BoolExpr *)expr, constants, negated);
   else if (IsA(expr, OpExpr))
     return having_OpExpr_to_provenance_cmp((OpExpr *)expr, constants, negated);
+  else if (IsA(expr, NullTest))
+    return having_NullTest_to_provenance((NullTest *)expr, constants, negated);
   else
     provsql_error("Unknown structure within Boolean expression");
 }

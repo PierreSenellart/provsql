@@ -35,3 +35,17 @@ grouped count<2|1|0.5000
 grouped count<2|2|0.5000
 grouped count<2|3|0.5000
 (3 rows)
+NOTICE:  scalar HAVING sum(x) IS NULL        p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING max(x) IS NULL        p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING avg(x) IS NULL        p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING array_agg(x) IS NULL  p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING max(x) IS NOT NULL    p=0.9375  (truth 0.9375)
+NOTICE:  scalar HAVING NOT (sum(x) IS NULL)  p=0.9375  (truth 0.9375)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped max IS NOT NULL|1|0.7500
+grouped max IS NOT NULL|2|0.5000
+grouped max IS NOT NULL|3|0.5000
+(3 rows)
