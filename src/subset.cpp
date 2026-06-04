@@ -53,16 +53,16 @@ static std::vector<mask_t> all_worlds(const std::vector<long> &values)
 
 static void append_range(std::vector<mask_t> &out,
                          const std::vector<std::vector<mask_t> > &dp,
-                         int lo,
-                         int hi)
+                         long long lo,
+                         long long hi)
 {
   if (dp.empty()) return;
-  const int J = static_cast<int>(dp.size())-1;
-  lo = std::max(lo, 0);
+  const long long J = static_cast<long long>(dp.size())-1;
+  lo = std::max(lo, 0LL);
   hi = std::min(hi, J);
   if (lo>hi) return;
 
-  for (int j = lo; j <= hi; ++j) {
+  for (long long j = lo; j <= hi; ++j) {
     out.insert(out.end(), dp[j].begin(), dp[j].end());
   }
 }
@@ -89,7 +89,7 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
   }
 
   long long T=0;
-  for (int w: values) {
+  for (long w: values) {
     if (w < 0)
       throw DPException();
     T+=w;
@@ -118,19 +118,27 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, Compa
 
   assert(J>=0);
 
+  // The DP is pseudo-polynomial: it allocates one bucket per integer in
+  // [0, J].  A large J (huge aggregate values, or a high-scale decimal grid)
+  // would make that array impractical -- bail out so the caller falls back to
+  // exact subset enumeration, which is magnitude-independent.
+  static const long long SUM_DP_MAX_J = 10000000LL;
+  if (J > SUM_DP_MAX_J)
+    throw DPException();
+
   std::vector<std::vector<mask_t> > dp(static_cast<std::size_t>(J) + 1);
   dp[0].push_back(mask_t(n)); // dp[0] <- {emptyset}
 
-  int pref_sum=0;
+  long long pref_sum=0;
 
   for (std::size_t i=0; i<n; ++i)
   {
-    const int w=values[i];
+    const long w=values[i];
     pref_sum+=w;
-    const int j_max=MIN(J,pref_sum);
+    const long long j_max=MIN(J,pref_sum);
 
-    for (int j = j_max; j >= w; --j) {
-      const int p = j - w;
+    for (long long j = j_max; j >= w; --j) {
+      const long long p = j - w;
       if(absorptive && ((op==ComparisonOperator::GT && p>C) ||
                         (op==ComparisonOperator::GE && p>=C))) {
         upset=true;

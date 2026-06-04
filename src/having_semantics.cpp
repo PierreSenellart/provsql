@@ -61,6 +61,16 @@ bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale) {
     }
   }
   if (!seen_digit) return false;
+  // Drop trailing zeros in the fractional part: they do not change the value
+  // (15.0000000000000000 == 15, 15.50 == 15.5) but inflate the scale, and a
+  // large scale forces every value to be rescaled to a huge integer grid that
+  // the value-aware sum DP cannot represent.  Numeric division in particular
+  // yields such trailing-zero-padded thresholds.  Only fractional zeros are
+  // dropped (scale > 0); trailing zeros of an integer (100) are significant.
+  while (sc > 0 && !digits.empty() && digits.back() == '0') {
+    digits.pop_back();
+    --sc;
+  }
   try {
     std::size_t pos = 0;
     long long val = std::stoll(digits, &pos);
