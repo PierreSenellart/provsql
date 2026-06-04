@@ -59,6 +59,16 @@ ProvSQL Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`
 exposes :sqlfunc:`probability_evaluate` interactively, with method
 and arguments selectors.
 
+When only a coarse estimate is needed, :sqlfunc:`probability_bounds`
+returns cheap lower and upper bounds on the marginal probability of a
+monotone-DNF token (as ``OUT`` parameters ``lower`` / ``upper``),
+without the cost of exact compilation:
+
+.. code-block:: postgresql
+
+    SELECT person, (probability_bounds(provenance())).*
+    FROM suspects;
+
 Computation Methods
 ^^^^^^^^^^^^^^^^^^^^
 

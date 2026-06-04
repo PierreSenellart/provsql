@@ -492,7 +492,7 @@ the row's provenance as a ``gate_cmp``):
     FROM (SELECT reading, provenance() AS prov
             FROM sensor_readings
            WHERE id = 1 AND reading > 2.5) q,
-         LATERAL rv_sample(q.reading, 200, q.prov) AS t(s);
+         LATERAL rv_sample(q.reading::uuid, 200, q.prov) AS t(s);
 
 Mixtures and Categorical Random Variables
 ------------------------------------------

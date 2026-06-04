@@ -89,9 +89,9 @@ CREATE TEMP TABLE nested_mix AS
                provsql.normal(5, 0.5),
                provsql.normal(10, 0.5)))) AS u;
 
-SELECT get_gate_type(u)                                      AS outer_kind,
-       get_gate_type((get_children(u))[3])                    AS outer_y_kind,
-       array_length(get_children((get_children(u))[3]), 1)    AS inner_nb_children
+SELECT get_gate_type(u::uuid)                                AS outer_kind,
+       get_gate_type((get_children(u::uuid))[3])              AS outer_y_kind,
+       array_length(get_children((get_children(u::uuid))[3]), 1) AS inner_nb_children
   FROM nested_mix;
 
 -- D.  Mixture of arith expressions: branch RVs may be gate_arith.
@@ -157,13 +157,13 @@ SELECT set_prob((SELECT b2 FROM bern_g), 0.5);
 SELECT get_gate_type((provsql.mixture(
            provenance_times((SELECT b1 FROM bern_g)::uuid, (SELECT b2 FROM bern_g)),
            provsql.as_random(-5),
-           provsql.as_random( 5)))) AS compound_times_p_kind;
+           provsql.as_random( 5)))::uuid) AS compound_times_p_kind;
 
 -- G2. p = monus(b1, b2): b1 AND NOT b2.
 SELECT get_gate_type((provsql.mixture(
            provenance_monus((SELECT b1 FROM bern_g)::uuid, (SELECT b2 FROM bern_g)),
            provsql.as_random(-5),
-           provsql.as_random( 5)))) AS compound_monus_p_kind;
+           provsql.as_random( 5)))::uuid) AS compound_monus_p_kind;
 
 -- F.  Validation errors.  Keep VERBOSITY terse so the messages stay
 -- compact and we capture them line-by-line.

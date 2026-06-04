@@ -82,8 +82,8 @@ CREATE TEMP TABLE m_nested AS
                provsql.as_random(2),
                provsql.as_random(10)))) AS u;
 
-SELECT abs(provsql.rv_moment((SELECT u FROM m_nested), 1, false) - 3.0)  < 1e-9 AS nested_mean,
-       abs(provsql.rv_moment((SELECT u FROM m_nested), 2, true)  - 17.0) < 1e-9 AS nested_variance;
+SELECT abs(provsql.rv_moment((SELECT u FROM m_nested)::uuid, 1, false) - 3.0)  < 1e-9 AS nested_mean,
+       abs(provsql.rv_moment((SELECT u FROM m_nested)::uuid, 2, true)  - 17.0) < 1e-9 AS nested_variance;
 
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;

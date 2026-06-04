@@ -104,8 +104,8 @@ CREATE TEMP TABLE mix_d AS
              provsql.as_random(-5),
              provsql.as_random( 5))) AS u;
 
-SELECT abs(provsql.rv_moment((SELECT u FROM mix_d), 1, false) - 2.50)  < 1e-9 AS compound_p_mean,
-       abs(provsql.rv_moment((SELECT u FROM mix_d), 2, true)  - 18.75) < 1e-9 AS compound_p_variance;
+SELECT abs(provsql.rv_moment((SELECT u FROM mix_d)::uuid,1, false) - 2.50)  < 1e-9 AS compound_p_mean,
+       abs(provsql.rv_moment((SELECT u FROM mix_d)::uuid,2, true)  - 18.75) < 1e-9 AS compound_p_variance;
 
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;

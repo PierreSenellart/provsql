@@ -464,6 +464,76 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 DROP FUNCTION IF EXISTS probability_benchmark(UUID, INT, TEXT);
 DROP FUNCTION IF EXISTS _probability_benchmark_one(UUID, TEXT, TEXT);
 
--- 7. Refresh the cached OID lookups so a backend warmed under 1.8.0 picks
+-- 7. Demote the random_variable -> uuid cast from IMPLICIT to ASSIGNMENT.
+--    Operators are resolved through search_path but casts are not, so an
+--    implicit cross-domain cast silently reroutes `v < w` to `uuid < uuid`
+--    (raw byte comparison) whenever provsql is not in search_path.  As
+--    ASSIGNMENT that becomes a clean parse error instead of wrong results.
+--    The cast is extension-owned, so DROP/CREATE here re-registers it as an
+--    extension member.  Idempotent: only acts while the cast is implicit.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_cast c
+      JOIN pg_type s ON s.oid = c.castsource
+      JOIN pg_type t ON t.oid = c.casttarget
+     WHERE s.typname = 'random_variable' AND t.typname = 'uuid'
+       AND c.castcontext = 'i')
+  THEN
+    DROP CAST (random_variable AS uuid);
+    CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+  END IF;
+END;
+$$;
+
+-- 8. setup_search_path(): append provsql to the database's default
+--    search_path if missing.  See the function comment in
+--    provsql.common.sql.
+CREATE OR REPLACE FUNCTION setup_search_path()
+  RETURNS text
+  LANGUAGE plpgsql AS $body$
+DECLARE
+  db        text := current_database();
+  cfg       text[];
+  cur       text;
+  new_path  text;
+BEGIN
+  SELECT s.setconfig INTO cfg
+    FROM pg_db_role_setting s
+    JOIN pg_database d ON d.oid = s.setdatabase
+   WHERE d.datname = db AND s.setrole = 0;
+
+  IF cfg IS NOT NULL THEN
+    SELECT substr(e, length('search_path=') + 1) INTO cur
+      FROM unnest(cfg) AS e
+     WHERE e LIKE 'search_path=%';
+  END IF;
+
+  IF cur IS NULL THEN
+    new_path := '"$user", public, provsql';
+    EXECUTE format('ALTER DATABASE %I SET search_path = %s', db, new_path);
+    RAISE NOTICE 'ProvSQL: set search_path = % for database "%" (no previous database-level setting). Only new sessions are affected.',
+      new_path, db;
+    RETURN new_path;
+  END IF;
+
+  IF EXISTS (
+       SELECT 1 FROM unnest(string_to_array(cur, ',')) AS p
+        WHERE btrim(btrim(p), '"') = 'provsql')
+  THEN
+    RAISE NOTICE 'ProvSQL: search_path for database "%" already contains provsql (= %); no change.',
+      db, cur;
+    RETURN cur;
+  END IF;
+
+  new_path := cur || ', provsql';
+  EXECUTE format('ALTER DATABASE %I SET search_path = %s', db, new_path);
+  RAISE NOTICE 'ProvSQL: appended provsql to search_path for database "%" (now: %). Only new sessions are affected.',
+    db, new_path;
+  RETURN new_path;
+END;
+$body$;
+
+-- 9. Refresh the cached OID lookups so a backend warmed under 1.8.0 picks
 --    up the new surface on its next get_constants() call.
 SELECT reset_constants_cache();

@@ -2119,10 +2119,15 @@ CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
 /** @brief Binary-coercible cast random_variable -> uuid.
  *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
  *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
- *  bytes at zero runtime cost.  The cast is IMPLICIT so a `provsql`
- *  column or any random_variable expression flows directly into any
- *  function expecting a uuid. */
-CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS IMPLICIT;
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
 CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
 
 /**
@@ -3764,8 +3769,9 @@ CREATE OR REPLACE FUNCTION rv_support(
  *   point support @f$[c, c]@f$.  Lets callers ask for the support
  *   of a literal without round-tripping through @c as_random.
  * - <b>@c random_variable / bare @c uuid</b> (any provenance gate
- *   token, including the implicit @c random_variable @c -> @c uuid
- *   cast): routes to @c rv_support, which propagates distribution
+ *   token; the @c random_variable branch reinterprets the value via
+ *   the binary-coercible @c random_variable @c -> @c uuid cast):
+ *   routes to @c rv_support, which propagates distribution
  *   supports (uniform exact, exponential @c [0,+∞), normal
  *   @c (-∞,+∞)) through @c gate_arith via interval arithmetic.
  *   @c gate_value gives the same @f$[c, c]@f$ point support as the
@@ -3820,8 +3826,9 @@ BEGIN
     RETURN;
   END IF;
 
-  -- random_variable has an IMPLICIT cast to uuid, so a single
-  -- rv_support call covers both shapes.  rv_support handles
+  -- random_variable is binary-coercible to uuid (explicit cast
+  -- below), so a single rv_support call covers both shapes.
+  -- rv_support handles
   -- gate_value (point), gate_rv (distribution), gate_arith
   -- (propagated), and falls back to the conservative all-real
   -- interval for any other gate kind.  Conditioning on prov is not
@@ -4659,6 +4666,100 @@ $$ LANGUAGE plpgsql;
 
 /** @} */
 
+/**
+ * @brief Append @c provsql to this database's default search_path, if missing.
+ *
+ * ProvSQL's operators and functions live in the @c provsql schema and
+ * are resolved through @c search_path.  When @c provsql is absent from
+ * the path some surfaces fail with a clear error (RV/agg_token
+ * arithmetic), but others can be silently misrouted by an implicit
+ * cross-domain cast.  This helper makes the common case painless: it
+ * reads the current <em>database-level</em> search_path setting from
+ * @c pg_db_role_setting, appends @c provsql if not already present
+ * (never replacing or reordering the existing entries), and applies the
+ * result with @c ALTER @c DATABASE.  It is idempotent and emits a
+ * @c NOTICE describing what it did.
+ *
+ * Only @b new sessions pick up the change; the calling session keeps its
+ * current path.  Role-level settings (if any) take precedence over the
+ * database-level setting and are left untouched.  The caller must be the
+ * database owner or a superuser (the privilege model of @c ALTER
+ * @c DATABASE).  Returns the resulting search_path value.
+ */
+CREATE OR REPLACE FUNCTION setup_search_path()
+  RETURNS text
+  LANGUAGE plpgsql AS $$
+DECLARE
+  db        text := current_database();
+  cfg       text[];
+  cur       text;        -- existing database-level search_path value
+  new_path  text;
+BEGIN
+  -- setrole = 0 selects the database-wide default, not a per-role override.
+  SELECT s.setconfig INTO cfg
+    FROM pg_db_role_setting s
+    JOIN pg_database d ON d.oid = s.setdatabase
+   WHERE d.datname = db AND s.setrole = 0;
+
+  IF cfg IS NOT NULL THEN
+    SELECT substr(e, length('search_path=') + 1) INTO cur
+      FROM unnest(cfg) AS e
+     WHERE e LIKE 'search_path=%';
+  END IF;
+
+  IF cur IS NULL THEN
+    -- No database-level search_path at all: install the documented
+    -- default with provsql appended.
+    new_path := '"$user", public, provsql';
+    EXECUTE format('ALTER DATABASE %I SET search_path = %s', db, new_path);
+    RAISE NOTICE 'ProvSQL: set search_path = % for database "%" (no previous database-level setting). Only new sessions are affected.',
+      new_path, db;
+    RETURN new_path;
+  END IF;
+
+  -- Already contains provsql as a path element?  Idempotent no-op.
+  IF EXISTS (
+       SELECT 1 FROM unnest(string_to_array(cur, ',')) AS p
+        WHERE btrim(btrim(p), '"') = 'provsql')
+  THEN
+    RAISE NOTICE 'ProvSQL: search_path for database "%" already contains provsql (= %); no change.',
+      db, cur;
+    RETURN cur;
+  END IF;
+
+  new_path := cur || ', provsql';
+  EXECUTE format('ALTER DATABASE %I SET search_path = %s', db, new_path);
+  RAISE NOTICE 'ProvSQL: appended provsql to search_path for database "%" (now: %). Only new sessions are affected.',
+    db, new_path;
+  RETURN new_path;
+END;
+$$;
+
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
 SET search_path TO public;
+
+-- Installation-time advisory: if provsql is not in the database's default
+-- search_path, point the user at setup_search_path().  reset_val reflects
+-- the configured session default (postgresql.conf / ALTER DATABASE / ALTER
+-- ROLE), unaffected by the SET search_path statements this script ran.
+-- CREATE EXTENSION raises client_min_messages to WARNING for the duration
+-- of the script, so we lower it around the RAISE NOTICE and restore it.
+DO $$
+DECLARE
+  rp text;
+  has_provsql boolean;
+  saved text := current_setting('client_min_messages');
+BEGIN
+  SELECT reset_val INTO rp FROM pg_settings WHERE name = 'search_path';
+  SELECT bool_or(btrim(btrim(p), '"') = 'provsql')
+    INTO has_provsql
+    FROM unnest(string_to_array(coalesce(rp, ''), ',')) AS p;
+  IF NOT coalesce(has_provsql, false) THEN
+    SET client_min_messages = notice;
+    RAISE NOTICE 'ProvSQL: schema "provsql" is not in your default search_path (currently: %).', rp;
+    RAISE NOTICE 'ProvSQL operators and functions are resolved through search_path. Run "SELECT provsql.setup_search_path();" to add it, or set it manually (e.g. ALTER DATABASE % SET search_path = "$user", public, provsql).', quote_ident(current_database());
+    PERFORM set_config('client_min_messages', saved, false);
+  END IF;
+END;
+$$;

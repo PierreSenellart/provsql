@@ -139,6 +139,20 @@ Installation
    The ``CASCADE`` keyword automatically installs the required
    ``uuid-ossp`` extension if it is not already present.
 
+5. Make sure ``provsql`` is in your ``search_path``. ProvSQL's
+   operators and functions live in the ``provsql`` schema and are
+   resolved through ``search_path`` (see :ref:`search-path` for what
+   goes wrong without it). ``CREATE EXTENSION`` prints a ``NOTICE``
+   if it is missing; the easiest fix is the bundled helper:
+
+   .. code-block:: postgresql
+
+       SELECT provsql.setup_search_path();
+
+   which appends ``provsql`` to the database's ``search_path`` (only
+   new sessions are affected). See :ref:`search-path` for the manual
+   alternative and the details.
+
 Upgrading an Existing Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

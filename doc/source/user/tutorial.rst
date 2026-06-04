@@ -80,6 +80,10 @@ functions can be called without the ``provsql.`` prefix:
 
     SET search_path TO public, provsql;
 
+To make this persistent for the database (so you do not have to repeat
+it each session), run ``SELECT provsql.setup_search_path();`` once; see
+:ref:`search-path`.
+
 Step 2: Build a Sightings Table
 --------------------------------
 
