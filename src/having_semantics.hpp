@@ -38,6 +38,7 @@ bool extract_constant_string(GenericCircuit &c, gate_t x, std::string &C_out);
 bool semimod_extract_M_and_K(GenericCircuit &c, gate_t semimod_gate, int &m_out, gate_t &k_gate_out);
 bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::string &m_out, gate_t &k_gate_out);
 bool aggtype_is_text(unsigned oid);
+bool aggtype_is_integer(unsigned oid);
 bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale);
 bool rescale_to(long mantissa, int scale, int target_scale, long &out);
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok);
@@ -267,7 +268,16 @@ void provsql_having(
                              ComparisonOperator opx) -> bool {
       struct AggInfo {
         AggregationOperator kind;
+        bool is_int;                                    // integer-typed result?
         std::vector<std::pair<int, double> > contribs;  // (distinct-K index, value)
+      };
+      // A decimal text denotes an integer iff it has no fractional/exponent part.
+      auto text_is_int = [](const std::string &s) -> bool {
+        if (s.empty()) return false;
+        for (char ch : s)
+          if (!((ch >= '0' && ch <= '9') || ch == '+' || ch == '-'))
+            return false;
+        return true;
       };
       std::map<gate_t, AggInfo> aggs;
       std::map<gate_t, int> kindex;
@@ -280,6 +290,7 @@ void provsql_having(
             return true;
           AggInfo ai;
           ai.kind = getAggregationOperator(c.getInfos(gx).first);
+          ai.is_int = aggtype_is_integer(c.getInfos(gx).second & PROVSQL_AGG_TYPE_MASK);
           for (gate_t ch : c.getWires(gx)) {
             if (c.getGateType(ch) != gate_semimod)
               return false;
@@ -328,18 +339,22 @@ void provsql_having(
       if (n == 0 || n > 24)            // 2^n enumeration: keep it bounded
         return false;
 
-      // Numeric value of a subexpression in a given world (NULL -> false).
-      std::function<bool(gate_t, uint64_t, double &)> eval =
-        [&](gate_t gx, uint64_t world, double &out) -> bool {
+      // Numeric value of a subexpression in a given world, tracking whether it
+      // is integer-valued so that division floors as SQL does (NULL -> false).
+      std::function<bool(gate_t, uint64_t, double &, bool &)> eval =
+        [&](gate_t gx, uint64_t world, double &out, bool &is_int) -> bool {
         gate_type gt = c.getGateType(gx);
         if (gt == gate_value) {
-          try { out = std::stod(c.getExtra(gx)); } catch (...) { return false; }
+          std::string s = c.getExtra(gx);
+          try { out = std::stod(s); } catch (...) { return false; }
+          is_int = text_is_int(s);
           return true;
         }
         if (gt == gate_semimod) {       // constant threshold
           std::string ms; gate_t kg{};
           if (!semimod_extract_string_and_K(c, gx, ms, kg)) return false;
           try { out = std::stod(ms); } catch (...) { return false; }
+          is_int = text_is_int(ms);
           return true;
         }
         if (gt == gate_agg) {
@@ -354,6 +369,7 @@ void provsql_having(
               if (first) { mn = mx = m; first = false; }
               else { mn = std::min(mn, m); mx = std::max(mx, m); }
             }
+          is_int = ai.is_int;
           switch (ai.kind) {
           case AggregationOperator::SUM:   out = acc; return true;
           case AggregationOperator::COUNT: out = acc; return true;  // values 1 or 0/1
@@ -366,29 +382,42 @@ void provsql_having(
         if (gt == gate_arith) {
           const auto &w = c.getWires(gx);
           unsigned aop = static_cast<unsigned>(c.getInfos(gx).first);
-          if (aop == PROVSQL_ARITH_PLUS) {
-            double s = 0; for (gate_t ch : w) { double v; if (!eval(ch, world, v)) return false; s += v; }
-            out = s; return true;
-          }
-          if (aop == PROVSQL_ARITH_TIMES) {
-            double p = 1; for (gate_t ch : w) { double v; if (!eval(ch, world, v)) return false; p *= v; }
-            out = p; return true;
+          if (aop == PROVSQL_ARITH_PLUS || aop == PROVSQL_ARITH_TIMES) {
+            double r = (aop == PROVSQL_ARITH_PLUS) ? 0 : 1;
+            bool all_int = true;
+            for (gate_t ch : w) {
+              double v; bool vi;
+              if (!eval(ch, world, v, vi)) return false;
+              if (aop == PROVSQL_ARITH_PLUS) r += v; else r *= v;
+              all_int = all_int && vi;
+            }
+            out = r; is_int = all_int; return true;
           }
           if (aop == PROVSQL_ARITH_MINUS) {
             if (w.size() != 2) return false;
-            double a, b; if (!eval(w[0], world, a) || !eval(w[1], world, b)) return false;
-            out = a - b; return true;
+            double a, b; bool ai, bi;
+            if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
+            out = a - b; is_int = ai && bi; return true;
           }
           if (aop == PROVSQL_ARITH_DIV) {
             if (w.size() != 2) return false;
-            double a, b; if (!eval(w[0], world, a) || !eval(w[1], world, b)) return false;
+            double a, b; bool ai, bi;
+            if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
             if (b == 0) return false;
-            out = a / b; return true;
+            if (ai && bi) {     // SQL integer division truncates toward zero
+              out = static_cast<double>(static_cast<long long>(a) /
+                                        static_cast<long long>(b));
+              is_int = true;
+            } else {
+              out = a / b; is_int = false;
+            }
+            return true;
           }
           if (aop == PROVSQL_ARITH_NEG) {
             if (w.size() != 1) return false;
-            double a; if (!eval(w[0], world, a)) return false;
-            out = -a; return true;
+            double a; bool ai;
+            if (!eval(w[0], world, a, ai)) return false;
+            out = -a; is_int = ai; return true;
           }
           return false;
         }
@@ -403,7 +432,8 @@ void provsql_having(
       const uint64_t total = uint64_t(1) << n;
       for (uint64_t world = 1; world < total; ++world) {  // skip the empty world
         double lv, rv;
-        if (!eval(Lx, world, lv) || !eval(Rx, world, rv))
+        bool lint, rint;
+        if (!eval(Lx, world, lv, lint) || !eval(Rx, world, rv, rint))
           continue;                                       // NULL comparison: false
         bool holds = false;
         switch (opx) {

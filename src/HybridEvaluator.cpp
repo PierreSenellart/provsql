@@ -131,6 +131,32 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
 }
 
 /**
+ * @brief Whether the subtree rooted at @p g contains a @c gate_agg.
+ *
+ * The hybrid simplifier is RV-oriented; aggregate arithmetic
+ * (@c gate_arith over @c gate_agg) is a separate feature whose
+ * comparisons are resolved by the HAVING possible-worlds enumeration,
+ * which must see the original operators to apply the correct (integer
+ * floor vs real) division semantics.  Rewrites that are sound for
+ * continuous RVs but not for aggregates (notably the DIV-by-constant to
+ * TIMES-by-reciprocal canonicalisation, which discards integer-division
+ * flooring) consult this to leave aggregate subtrees untouched.
+ */
+bool subtree_contains_agg(const GenericCircuit &gc, gate_t g)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  stk.push(g);
+  while (!stk.empty()) {
+    gate_t cur = stk.top(); stk.pop();
+    if (!seen.insert(cur).second) continue;
+    if (gc.getGateType(cur) == gate_agg) return true;
+    for (gate_t ch : gc.getWires(cur)) stk.push(ch);
+  }
+  return false;
+}
+
+/**
  * @brief Rewrite @p g in place as a @c gate_value carrying @p c.
  *
  * Clears wires and infos; the old children become orphans (no parent
@@ -1123,12 +1149,16 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g,
      *     other downstream TIMES rule fold @c X/c uniformly with
      *     @c c*X.  DIV-by-non-constant is left alone (no closure to
      *     apply); fully-constant @c DIV(value, value) is handled by
-     *     the constant fold above so we never see @c c=0 here. */
+     *     the constant fold above so we never see @c c=0 here.
+     *     Aggregate divisions (an @c X bearing a @c gate_agg) are left
+     *     intact: their HAVING possible-worlds enumeration applies the
+     *     correct integer-floor / real division on the original DIV,
+     *     which a TIMES-by-reciprocal would silently discard. */
     {
       auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
       if (op == PROVSQL_ARITH_DIV) {
         const auto &wires_in = gc.getWires(g);
-        if (wires_in.size() == 2) {
+        if (wires_in.size() == 2 && !subtree_contains_agg(gc, wires_in[0])) {
           const double c = try_eval_constant(gc, wires_in[1]);
           if (!std::isnan(c) && c != 0.0) {
             const gate_t x = wires_in[0];

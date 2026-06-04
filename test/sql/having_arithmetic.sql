@@ -34,7 +34,14 @@ SELECT ha_probs('sum(x)-5 >= 10');  SELECT g, round(p::numeric,3) FROM ha_r ORDE
 SELECT ha_probs('sum(x)*2 > 30');     SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 SELECT ha_probs('2*sum(x) > 30');     SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 SELECT ha_probs('sum(x)*(-1) < -15'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
-SELECT ha_probs('sum(x)/2 >= 5');     SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
+SELECT ha_probs('sum(x)/2.0 >= 5');     SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
+
+\echo '# integer division floors (SQL truncation toward zero): NOT foldable into the'
+\echo '# threshold, resolved by possible-worlds enumeration with integer semantics.'
+\echo '#   sum(x)/2 >= 5  (floor(sum/2) >= 5  <=>  sum >= 10)'
+SELECT ha_probs('sum(x)/2 >= 5'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
+\echo '#   sum(x)/7 = 1  (floor: only the worlds with 7 <= sum < 14 qualify)'
+SELECT ha_probs('sum(x)/7 = 1'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 
 \echo '# unary minus (with flip) and a nested combination, both == sum(x) > 15'
 SELECT ha_probs('-sum(x) < -15');     SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
@@ -107,8 +114,12 @@ SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TAB
 \echo '#   sum(x)*sum(y) > 200  (worlds {t2},{t1,t2})  -> 0.5'
 CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING sum(x)*sum(y) > 200;
 SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
-\echo '#   100/sum(x) > 5  (only world {t1}: sum 10 < 20)  -> 0.25'
-CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING 100/sum(x) > 5;
+\echo '#   100.0/sum(x) > 5  (numeric c/agg; only world {t1}: 100/10>5)  -> 0.25'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING 100.0/sum(x) > 5;
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   100/sum(x) >= 5  (integer c/agg, floor: worlds {t1}:100/10=10, {t2}:100/20=5'
+\echo '#   qualify; {t1,t2}:100/30=3 does not)  -> 0.5'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING 100/sum(x) >= 5;
 SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
 
 \echo '# m-semiring genericity: the formula semiring gives the valid-world expression'

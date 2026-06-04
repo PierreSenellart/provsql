@@ -1454,9 +1454,15 @@ static OpExpr *normalize_agg_comparison(OpExpr *cmp,
           flip = true;
         }
       } else if (strcmp(iname, "/") == 0) {
-        /* agg/c <op> thr  <=>  agg <op> thr*c  (exact: a multiplication, so
-         * the threshold stays integral).  c/agg cannot be folded. */
+        /* agg/c <op> thr  <=>  agg <op> thr*c -- valid for REAL division
+         * only.  An integer (floored) division does not satisfy this
+         * equivalence, so leave it unfolded and let the possible-worlds
+         * enumeration evaluate it with the correct integer-division semantics.
+         * c/agg cannot be folded either way. */
+        Oid divtype = exprType(peeled);
         double cv;
+        if (divtype == INT2OID || divtype == INT4OID || divtype == INT8OID)
+          return NULL;
         if (!agg_left || !const_as_double(c, &cv) || cv == 0.0)
           return NULL;
         thr = build_binop("*", thr, c);

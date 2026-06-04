@@ -68,6 +68,24 @@ g|round
 A|0.750
 B|0.500
 (2 rows)
+# integer division floors (SQL truncation toward zero): NOT foldable into the
+# threshold, resolved by possible-worlds enumeration with integer semantics.
+#   sum(x)/2 >= 5  (floor(sum/2) >= 5  <=>  sum >= 10)
+ha_probs
+
+(1 row)
+g|round
+A|0.750
+B|0.500
+(2 rows)
+#   sum(x)/7 = 1  (floor: only the worlds with 7 <= sum < 14 qualify)
+ha_probs
+
+(1 row)
+g|round
+A|0.250
+B|0.000
+(2 rows)
 # unary minus (with flip) and a nested combination, both == sum(x) > 15
 ha_probs
 
@@ -237,12 +255,20 @@ remove_provenance
 round
 0.5000
 (1 row)
-#   100/sum(x) > 5  (only world {t1}: sum 10 < 20)  -> 0.25
+#   100.0/sum(x) > 5  (numeric c/agg; only world {t1}: 100/10>5)  -> 0.25
 remove_provenance
 
 (1 row)
 round
 0.2500
+(1 row)
+#   100/sum(x) >= 5  (integer c/agg, floor: worlds {t1}:100/10=10, {t2}:100/20=5
+#   qualify; {t1,t2}:100/30=3 does not)  -> 0.5
+remove_provenance
+
+(1 row)
+round
+0.5000
 (1 row)
 # m-semiring genericity: the formula semiring gives the valid-world expression
 #   sum(x) > sum(y): the single world {t1} -> t1 with t2 absent

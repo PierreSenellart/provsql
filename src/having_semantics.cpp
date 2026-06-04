@@ -35,6 +35,15 @@ bool aggtype_is_text(unsigned oid) {
   }
 }
 
+bool aggtype_is_integer(unsigned oid) {
+  switch (oid) {
+    case INT2OID: case INT4OID: case INT8OID:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Parse a plain decimal literal ("-12.340", "6", "6.5") into a scaled
 // integer: the value is @c mantissa * 10^(-scale).  Returns false on
 // exponential notation, inf / nan, or anything that is not a plain
