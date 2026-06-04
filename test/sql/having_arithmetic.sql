@@ -62,8 +62,16 @@ SELECT ha_probs('count(*) >= 2');  SELECT g, round(p::numeric,3) FROM ha_r ORDER
 SELECT ha_probs('count(*)+1 >= 3'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 SELECT ha_probs('count(*)*10 >= 20'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 
-\echo '# same folding applies to a materialised agg_token column (WHERE, not HAVING)'
-CREATE TABLE har AS SELECT g, sum(x) AS s, count(*) AS c FROM ha GROUP BY g;
+\echo '# distributive arithmetic is pushed into the aggregate: sum(x)*2 is a clean'
+\echo '# agg gate (not arith), so a materialised column stays comparable later'
+CREATE TABLE har AS SELECT g, sum(x) AS s, count(*) AS c, sum(x)*2 AS s2 FROM ha GROUP BY g;
+\echo '#   gate type of the pushed sum(x)*2 column (expect agg, not arith)'
+SET provsql.active = off;
+SELECT g, get_gate_type(s2::uuid) AS gate FROM har ORDER BY g;
+SET provsql.active = on;
+\echo '#   WHERE s2 > 30 over the materialised pushed column (== sum(x) > 15)'
+CREATE TABLE ha_r AS SELECT g, probability_evaluate(provenance()) p FROM har WHERE s2 > 30;
+SELECT remove_provenance('ha_r'); SELECT g, round(p::numeric,3) FROM ha_r ORDER BY g; DROP TABLE ha_r;
 CREATE OR REPLACE FUNCTION har_probs(pred text) RETURNS void AS $$
 BEGIN
   EXECUTE format(

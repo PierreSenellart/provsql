@@ -173,7 +173,21 @@ g|round
 A|0.250
 B|0.250
 (2 rows)
-# same folding applies to a materialised agg_token column (WHERE, not HAVING)
+# distributive arithmetic is pushed into the aggregate: sum(x)*2 is a clean
+# agg gate (not arith), so a materialised column stays comparable later
+#   gate type of the pushed sum(x)*2 column (expect agg, not arith)
+g|gate
+A|agg
+B|agg
+(2 rows)
+#   WHERE s2 > 30 over the materialised pushed column (== sum(x) > 15)
+remove_provenance
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
 har_probs
 
 (1 row)

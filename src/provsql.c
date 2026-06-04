@@ -3421,6 +3421,120 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
 }
 
 /**
+ * @brief Push distributive constant arithmetic into an aggregate's argument.
+ *
+ * Rewrites `f(x) <op> c` to `f(x <op'> c)` when @c f distributes over the
+ * arithmetic, so the result is a clean aggregate over transformed per-row
+ * values rather than a @c gate_arith wrapping the aggregate.  Run before the
+ * aggregate is lowered, so the provenance machinery then builds an ordinary
+ * @c gate_agg.  Only the cases that distribute without flipping the aggregate
+ * and without integer-division rounding are handled (the rest fall through to
+ * the gate_arith path):
+ *   - sum, avg:  @c *c (either side), unary @c -;  avg also @c +c / @c -c.
+ *   - min, max:  @c +c (either side), @c -c (aggregate on the left).
+ * The transformed argument must keep the original argument's type (so the
+ * aggregate's function/type stay valid); otherwise no push happens.  Returns
+ * the rewritten @c Aggref, or @c NULL when @p op is not such a case.
+ */
+static Node *try_push_into_aggref(OpExpr *op, const constants_t *constants) {
+  char *opname = get_opname(op->opno);
+  int nargs = list_length(op->args);
+  Node *l = NULL, *r = NULL, *aggn = NULL, *cn = NULL, *old_arg, *new_arg = NULL;
+  Aggref *ar, *newar;
+  char *aggnm;
+  bool agg_left = true, plus, minus, times;
+  bool is_sum, is_avg, is_min, is_max;
+
+  if (opname == NULL)
+    return NULL;
+  plus  = strcmp(opname, "+") == 0;
+  minus = strcmp(opname, "-") == 0;
+  times = strcmp(opname, "*") == 0;
+  if (!(plus || minus || times))   /* division is skipped (rounding) */
+    return NULL;
+
+  if (nargs == 1) {                /* prefix unary minus */
+    if (!minus)
+      return NULL;
+    aggn = peel_agg_casts((Node *)linitial(op->args));
+  } else if (nargs == 2) {
+    l = peel_agg_casts((Node *)linitial(op->args));
+    r = peel_agg_casts((Node *)lsecond(op->args));
+    if (IsA(l, Aggref) && IsA(r, Const)) { aggn = l; cn = r; agg_left = true; }
+    else if (IsA(r, Aggref) && IsA(l, Const)) { aggn = r; cn = l; agg_left = false; }
+    else return NULL;
+  } else
+    return NULL;
+
+  if (!IsA(aggn, Aggref))
+    return NULL;
+  ar = (Aggref *)aggn;
+  /* Need a single ordinary argument: skip count(*) (aggstar), DISTINCT /
+   * FILTER / ORDER BY aggregates, and RV-returning aggregates. */
+  if (ar->aggstar || list_length(ar->args) != 1 ||
+      ar->aggdistinct != NIL || ar->aggfilter != NULL || ar->aggorder != NIL)
+    return NULL;
+  if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
+      ar->aggtype == constants->OID_TYPE_RANDOM_VARIABLE)
+    return NULL;
+
+  aggnm = get_func_name(ar->aggfnoid);
+  if (aggnm == NULL)
+    return NULL;
+  is_sum = strcmp(aggnm, "sum") == 0; is_avg = strcmp(aggnm, "avg") == 0;
+  is_min = strcmp(aggnm, "min") == 0; is_max = strcmp(aggnm, "max") == 0;
+  pfree(aggnm);
+  if (!(is_sum || is_avg || is_min || is_max))
+    return NULL;
+
+  old_arg = (Node *)((TargetEntry *)linitial(ar->args))->expr;
+
+  if (nargs == 1) {                            /* -f(x) */
+    if (is_sum || is_avg)
+      new_arg = build_binop("-", NULL, old_arg);          /* -x */
+  } else if (times) {                          /* f(x)*c, c*f(x) */
+    if (is_sum || is_avg)
+      new_arg = agg_left ? build_binop("*", old_arg, cn)
+                         : build_binop("*", cn, old_arg);
+  } else if (plus) {                           /* f(x)+c, c+f(x) */
+    if (is_avg || is_min || is_max)
+      new_arg = agg_left ? build_binop("+", old_arg, cn)
+                         : build_binop("+", cn, old_arg);
+  } else /* minus */ {
+    if (agg_left) {                            /* f(x)-c */
+      if (is_avg || is_min || is_max)
+        new_arg = build_binop("-", old_arg, cn);
+    } else {                                   /* c-f(x): only avg (no flip) */
+      if (is_avg)
+        new_arg = build_binop("-", cn, old_arg);
+    }
+  }
+  if (new_arg == NULL)
+    return NULL;
+
+  /* Keep the aggregate's argument type, so its function/return type stay valid. */
+  if (exprType(new_arg) != exprType(old_arg))
+    return NULL;
+
+  newar = (Aggref *)copyObject(ar);
+  ((TargetEntry *)linitial(newar->args))->expr = (Expr *)new_arg;
+  return (Node *)newar;
+}
+
+/** @brief Tree-mutator applying @c try_push_into_aggref bottom-up. */
+static Node *push_arith_into_agg_mutator(Node *node, void *ctx) {
+  if (node == NULL)
+    return NULL;
+  node = expression_tree_mutator(node, push_arith_into_agg_mutator, ctx);
+  if (IsA(node, OpExpr)) {
+    Node *pushed = try_push_into_aggref((OpExpr *)node, (const constants_t *)ctx);
+    if (pushed != NULL)
+      return pushed;
+  }
+  return node;
+}
+
+/**
  * @brief Replace every @c Aggref in @p q with a provenance-aware aggregate.
  *
  * Walks the query tree and substitutes each @c Aggref node with the result
@@ -3444,6 +3558,12 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
   bool is_scalar = (q->groupClause == NIL && q->groupingSets == NIL);
   aggregation_mutator_context context = {prov_atts, op, constants, is_scalar};
   ListCell *lc;
+
+  /* First push distributive constant arithmetic into aggregate arguments
+   * (sum(x)*2 -> sum(2*x)), so those become clean aggregates rather than a
+   * gate_arith over the aggregate. */
+  query_tree_mutator(q, push_arith_into_agg_mutator, (void *)constants,
+                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 
   query_tree_mutator(q, aggregation_mutator, &context,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
