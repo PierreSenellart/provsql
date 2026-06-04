@@ -37,6 +37,7 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
+#include "parser/parse_node.h"
 #include "parser/parse_oper.h"
 #include "rewrite/rewriteManip.h"
 #include "parser/parse_relation.h"
@@ -2992,6 +2993,38 @@ static Node *wrap_agg_token_with_cast(FuncExpr *prov_agg,
  * @param parent_funcid  OID of the parent function / operator implementor.
  * @param constants      Extension OID cache.
  */
+/**
+ * @brief Wrap an @c agg_token expression in a cast to @p target_type.
+ *
+ * Companion to @c wrap_agg_token_with_cast for @c agg_token values that are
+ * not a bare @c provenance_aggregate call (e.g. the result of @c agg_token
+ * arithmetic): the original aggregate type is not recoverable from the node,
+ * so we cast to the type the consuming context requires.
+ */
+static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
+                                    const constants_t *constants) {
+  CoercionPathType pathtype;
+  Oid castfuncid;
+
+  pathtype = find_coercion_pathway(target_type, constants->OID_TYPE_AGG_TOKEN,
+                                   COERCION_EXPLICIT, &castfuncid);
+  if (pathtype == COERCION_PATH_FUNC && OidIsValid(castfuncid)) {
+    FuncExpr *cast = makeNode(FuncExpr);
+    cast->funcid = castfuncid;
+    cast->funcresulttype = target_type;
+    cast->funcretset = false;
+    cast->funcvariadic = false;
+    cast->funcformat = COERCE_IMPLICIT_CAST;
+    cast->args = list_make1(arg);
+    cast->location = -1;
+    return (Node *)cast;
+  }
+
+  provsql_error("no cast from agg_token to %s for arithmetic on aggregate",
+                format_type_be(target_type));
+  return arg; /* unreachable */
+}
+
 static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
                                       const constants_t *constants) {
   HeapTuple tp;
@@ -3008,13 +3041,24 @@ static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
   foreach(lc, args) {
     Node *arg = lfirst(lc);
 
-    if (i < procForm->pronargs && IsA(arg, FuncExpr) &&
-        ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+    /* Any agg_token-typed argument (a bare provenance_aggregate, OR the
+     * result of agg_token arithmetic produced by try_swap_agg_arith) must
+     * be cast back to a scalar when the consuming function/operator does not
+     * itself accept agg_token: this is the boundary where an agg_token
+     * "bubbling up" through arithmetic meets a scalar context (e.g. ROUND,
+     * ORDER BY) and its provenance can no longer be carried.  A bare
+     * provenance_aggregate is cast to its own aggregate type; a swapped
+     * arithmetic result is cast to whatever the parent expects. */
+    if (i < procForm->pronargs && exprType(arg) == constants->OID_TYPE_AGG_TOKEN) {
       Oid formal_type = procForm->proargtypes.values[i];
 
       if (formal_type != constants->OID_TYPE_AGG_TOKEN &&
           !IsPolymorphicType(formal_type)) {
-        lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+        if (IsA(arg, FuncExpr) &&
+            ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+          lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+        else
+          lfirst(lc) = cast_agg_token_to_type(arg, formal_type, constants);
       }
     }
     i++;
@@ -3024,15 +3068,108 @@ static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
 }
 
 /**
+ * @brief Peel implicit/explicit cast FuncExprs and RelabelTypes that wrap a
+ *        single argument, returning the underlying expression.
+ *
+ * Used to see through the coercions the parser inserts around an aggregate
+ * (e.g. the @c int8->numeric cast in @c count(*)/2.0) so the underlying
+ * @c agg_token / @c provenance_aggregate can be recognised.
+ */
+static Node *peel_agg_casts(Node *n) {
+  for (;;) {
+    if (n != NULL && IsA(n, FuncExpr)) {
+      FuncExpr *fe = (FuncExpr *)n;
+      if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+           fe->funcformat == COERCE_EXPLICIT_CAST) &&
+          list_length(fe->args) == 1) {
+        n = (Node *)linitial(fe->args);
+        continue;
+      }
+    } else if (n != NULL && IsA(n, RelabelType)) {
+      n = (Node *)((RelabelType *)n)->arg;
+      continue;
+    }
+    return n;
+  }
+}
+
+/**
+ * @brief Rebuild an arithmetic operator over an aggregate so the result
+ *        stays an @c agg_token (provenance preserved).
+ *
+ * When an arithmetic operator (@c + @c - @c * @c /, or prefix unary @c -)
+ * has an @c agg_token operand (after peeling the parser's coercions), the
+ * default rewriting would cast that @c agg_token to its scalar aggregate
+ * type, silently dropping provenance.  Instead, we re-resolve the operator
+ * against the @c agg_token operand via @c make_op, which selects the native
+ * @c agg_token arithmetic operators -- the arithmetic is then recorded
+ * symbolically as a @c gate_arith over the operand provenance, exactly like
+ * arithmetic on @c random_variable.  Returns the rebuilt @c agg_token
+ * expression, or @c NULL if @p op is not arithmetic over an aggregate.
+ */
+static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
+  char *opname;
+  bool is_arith;
+  int nargs = list_length(op->args);
+  Node *l, *r, *lp, *rp;
+  ParseState *pstate;
+  Expr *newop;
+
+  if (nargs < 1 || nargs > 2)
+    return NULL;
+  opname = get_opname(op->opno);
+  if (opname == NULL)
+    return NULL;
+  is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
+             strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0;
+  if (!is_arith) {
+    pfree(opname);
+    return NULL;
+  }
+
+  if (nargs == 2) {
+    l = (Node *)linitial(op->args);
+    r = (Node *)lsecond(op->args);
+  } else {  /* prefix unary minus */
+    l = NULL;
+    r = (Node *)linitial(op->args);
+  }
+  lp = l ? peel_agg_casts(l) : NULL;
+  rp = peel_agg_casts(r);
+
+  if (!((lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN) ||
+        exprType(rp) == constants->OID_TYPE_AGG_TOKEN)) {
+    pfree(opname);
+    return NULL;
+  }
+
+  /* Feed make_op the peeled (uncast) operand wherever it exposes an
+   * agg_token, so resolution picks the agg_token operator; keep the
+   * original node for the non-agg operand to preserve its own coercions. */
+  if (lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN)
+    l = lp;
+  if (exprType(rp) == constants->OID_TYPE_AGG_TOKEN)
+    r = rp;
+
+  pstate = make_parsestate(NULL);
+  newop = make_op(pstate, list_make1(makeString(opname)), l, r, NULL, -1);
+  free_parsestate(pstate);
+  pfree(opname);
+  return (Node *)newop;
+}
+
+/**
  * @brief Tree-mutator that casts @c provenance_aggregate results back
  *        to the original aggregate return type where needed.
  *
  * After the aggregation mutator replaces Aggrefs with
  * @c provenance_aggregate calls (returning @c agg_token), this
  * post-processing step inserts casts where the surrounding expression
- * expects a different type (e.g. @c SUM(id)+1).  Arguments to
- * functions that accept @c agg_token or polymorphic types are left
- * alone.
+ * expects a different type (e.g. a non-arithmetic function over an
+ * aggregate).  Arithmetic over an aggregate is instead kept as an
+ * @c agg_token via @c try_swap_agg_arith so its provenance survives;
+ * arguments to functions that accept @c agg_token or polymorphic types
+ * are left alone.
  *
  * @param node Current expression tree node.
  * @param ctx  Pointer to the @c constants_t OID cache.
@@ -3050,6 +3187,9 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
 
   if (IsA(result, OpExpr)) {
     OpExpr *op = (OpExpr *)result;
+    Node *swapped = try_swap_agg_arith(op, constants);
+    if (swapped != NULL)
+      return swapped;
     set_opfuncid(op);
     maybe_cast_agg_token_args(op->args, op->opfuncid, constants);
   } else if (IsA(result, FuncExpr)) {
@@ -7726,6 +7866,12 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     return NULL;
 
   if (IsA(node, OpExpr)) {
+    /* Arithmetic over an agg_token Var (e.g. cnt+1 where cnt comes from a
+     * subquery aggregate) is kept as an agg_token (gate_arith) rather than
+     * cast to scalar, preserving provenance. */
+    Node *swapped = try_swap_agg_arith((OpExpr *)node, ctx->constants);
+    if (swapped != NULL)
+      return swapped;
     cast_agg_token_args(((OpExpr *)node)->args, ctx);
     return (Node *)node;
   }

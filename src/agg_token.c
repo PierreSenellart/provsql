@@ -146,6 +146,30 @@ agg_token_to_numeric(PG_FUNCTION_ARGS)
   PG_RETURN_DATUM(result);
 }
 
+PG_FUNCTION_INFO_V1(agg_token_value);
+/**
+ * @brief Extract the running value of an @c agg_token as @c numeric.
+ *
+ * Unlike @c agg_token_to_numeric, this does @b not emit the
+ * "provenance information is lost" warning: it is the internal accessor
+ * used by the provenance-preserving @c agg_token arithmetic operators
+ * (which keep the provenance in a @c gate_arith circuit), where no
+ * provenance is dropped.
+ * @return Numeric datum parsed from the aggregate value string.
+ */
+Datum
+agg_token_value(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+  Datum result;
+
+  result = DirectFunctionCall3(numeric_in,
+                               CStringGetDatum(aggtok->val),
+                               ObjectIdGetDatum(InvalidOid),
+                               Int32GetDatum(-1));
+  PG_RETURN_DATUM(result);
+}
+
 PG_FUNCTION_INFO_V1(agg_token_to_float8);
 /**
  * @brief Cast an @c agg_token to @c double precision, extracting only the value.

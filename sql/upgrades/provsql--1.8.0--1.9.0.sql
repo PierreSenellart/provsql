@@ -464,7 +464,133 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 DROP FUNCTION IF EXISTS probability_benchmark(UUID, INT, TEXT);
 DROP FUNCTION IF EXISTS _probability_benchmark_one(UUID, TEXT, TEXT);
 
--- 7. Demote the random_variable -> uuid cast from IMPLICIT to ASSIGNMENT.
+-- 7. Arithmetic on aggregates (agg_token): native + - * / and unary -
+--    operators that build a gate_arith over the operand provenance, plus
+--    the agg_token <op> agg_token comparison diagonal, and demotion of the
+--    agg_token -> numeric cast to ASSIGNMENT (so `s + 1` is provenance-
+--    preserving arithmetic rather than a silent numeric coercion).
+CREATE OR REPLACE FUNCTION agg_token_value(agg_token)
+  RETURNS numeric
+  AS 'provsql','agg_token_value' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_make(tok uuid, val numeric)
+  RETURNS agg_token AS
+$$ SELECT format('( %s , %s )', tok::text, val::text)::provsql.agg_token; $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION agg_value_gate(v numeric)
+  RETURNS uuid AS
+$body$
+DECLARE
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('value', v::text));
+BEGIN
+  PERFORM provsql.create_gate(token, 'value');
+  PERFORM provsql.set_extra(token, v::text);
+  RETURN token;
+END
+$body$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION agg_token_plus(a agg_token, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(0, ARRAY[(a)::uuid,(b)::uuid]),
+     provsql.agg_token_value(a)+provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION agg_token_minus(a agg_token, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(2, ARRAY[(a)::uuid,(b)::uuid]),
+     provsql.agg_token_value(a)-provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION agg_token_times(a agg_token, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(1, ARRAY[(a)::uuid,(b)::uuid]),
+     provsql.agg_token_value(a)*provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(3, ARRAY[(a)::uuid,(b)::uuid]),
+     provsql.agg_token_value(a)/provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(4, ARRAY[(a)::uuid]),
+     - provsql.agg_token_value(a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(0, ARRAY[(a)::uuid,provsql.agg_value_gate(b)]),
+     provsql.agg_token_value(a)+b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(2, ARRAY[(a)::uuid,provsql.agg_value_gate(b)]),
+     provsql.agg_token_value(a)-b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(1, ARRAY[(a)::uuid,provsql.agg_value_gate(b)]),
+     provsql.agg_token_value(a)*b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(3, ARRAY[(a)::uuid,provsql.agg_value_gate(b)]),
+     provsql.agg_token_value(a)/b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(0, ARRAY[provsql.agg_value_gate(a),(b)::uuid]),
+     a+provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(2, ARRAY[provsql.agg_value_gate(a),(b)::uuid]),
+     a-provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(1, ARRAY[provsql.agg_value_gate(a),(b)::uuid]),
+     a*provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token) RETURNS agg_token AS
+$$ SELECT provsql.agg_token_make(provsql.provenance_arith(3, ARRAY[provsql.agg_value_gate(a),(b)::uuid]),
+     a/provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+  RETURNS boolean LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END; $$;
+
+-- Operators (plain CREATE, like section 2; this upgrade runs once).
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+CREATE OPERATOR <  (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token, COMMUTATOR = >,  NEGATOR = >=);
+CREATE OPERATOR <= (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token, COMMUTATOR = >=, NEGATOR = >);
+CREATE OPERATOR >  (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token, COMMUTATOR = <,  NEGATOR = <=);
+CREATE OPERATOR >= (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token, COMMUTATOR = <=, NEGATOR = <);
+CREATE OPERATOR =  (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token, COMMUTATOR = =,  NEGATOR = <>);
+CREATE OPERATOR <> (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token, COMMUTATOR = <>, NEGATOR = =);
+
+-- Demote agg_token -> numeric from IMPLICIT to ASSIGNMENT (idempotent).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_cast c
+      JOIN pg_type s ON s.oid = c.castsource
+      JOIN pg_type t ON t.oid = c.casttarget
+     WHERE s.typname = 'agg_token' AND t.typname = 'numeric'
+       AND c.castcontext = 'i')
+  THEN
+    DROP CAST (agg_token AS numeric);
+    CREATE CAST (agg_token AS numeric) WITH FUNCTION agg_token_to_numeric(agg_token) AS ASSIGNMENT;
+  END IF;
+END;
+$$;
+
+-- 8. Demote the random_variable -> uuid cast from IMPLICIT to ASSIGNMENT.
 --    Operators are resolved through search_path but casts are not, so an
 --    implicit cross-domain cast silently reroutes `v < w` to `uuid < uuid`
 --    (raw byte comparison) whenever provsql is not in search_path.  As
@@ -486,7 +612,7 @@ BEGIN
 END;
 $$;
 
--- 8. setup_search_path(): append provsql to the database's default
+-- 9. setup_search_path(): append provsql to the database's default
 --    search_path if missing.  See the function comment in
 --    provsql.common.sql.
 CREATE OR REPLACE FUNCTION setup_search_path()
@@ -534,6 +660,6 @@ BEGIN
 END;
 $body$;
 
--- 9. Refresh the cached OID lookups so a backend warmed under 1.8.0 picks
+-- 10. Refresh the cached OID lookups so a backend warmed under 1.8.0 picks
 --    up the new surface on its next get_constants() call.
 SELECT reset_constants_cache();
