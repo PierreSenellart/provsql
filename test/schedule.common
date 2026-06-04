@@ -69,6 +69,7 @@ test: sr_boolexpr probability_having probability_having_avg_min_max having_boole
 test: having_count_distinct
 test: scalar_empty_having
 test: having_sum_zero
+test: having_arithmetic
 test: insert_select_sublink
 test: last_eval_method
 

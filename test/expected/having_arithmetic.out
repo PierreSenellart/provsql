@@ -1,0 +1,175 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+# plain sum(x) > 15  /  >= 15
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+# additive forms (== sum(x) > 15, sum(x) >= 15)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+# multiplicative forms (positive, negative-with-flip, division)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.750
+B|0.500
+(2 rows)
+# unary minus (with flip) and a nested combination, both == sum(x) > 15
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+# non-exact / non-terminating multipliers (fractional thresholds)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.750
+B|0.750
+(2 rows)
+# threshold robustness: trailing-zero high scale, and a large magnitude
+#   sum(x) > 15.0000000000000000  ==  sum(x) > 15  (scale trimmed)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+#   sum(x) > 1000000000  (large threshold -> exact-enumeration fallback)
+ha_probs
+
+(1 row)
+g|round
+A|0.000
+B|0.000
+(2 rows)
+# min/max arithmetic (different evaluator) folds the same way
+ha_probs
+
+(1 row)
+g|round
+A|0.000
+B|0.000
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.000
+B|0.000
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.500
+B|0.500
+(2 rows)
+# count(*) arithmetic
+ha_probs
+
+(1 row)
+g|round
+A|0.250
+B|0.250
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.250
+B|0.250
+(2 rows)
+ha_probs
+
+(1 row)
+g|round
+A|0.250
+B|0.250
+(2 rows)

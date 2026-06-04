@@ -1298,6 +1298,212 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
 /* Forward declaration: defined alongside the other tree walkers
  * further down in the file. */
 static bool needs_having_lift(Node *havingQual, const constants_t *constants);
+static Node *peel_agg_casts(Node *n);
+
+/* ----------------------------------------------------------------------
+ * Normalising constant arithmetic over an aggregate in a comparison.
+ *
+ * A comparison such as `sum(x)+1 > 15`, `sum(x)*2 > 30`, or `-sum(x) > 5`
+ * is rewritten so the aggregate stands alone and the constant arithmetic is
+ * folded into the threshold (and the operator flipped where the arithmetic
+ * is monotone-decreasing): `sum(x) > 14`, `sum(x) > 15`, `sum(x) < -5`.
+ * The aggregate-comparison evaluators then resolve it as usual.  This is the
+ * "push arithmetic to data values" half of the agg_token arithmetic story.
+ * -------------------------------------------------------------------- */
+
+/** @brief Context for @c contains_agg_walker. */
+typedef struct contains_agg_ctx {
+  const constants_t *constants;
+  bool found;
+} contains_agg_ctx;
+
+static bool contains_agg_walker(Node *node, contains_agg_ctx *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var) &&
+      ((Var *)node)->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+    ctx->found = true;
+    return true;
+  }
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid ==
+        ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+    ctx->found = true;
+    return true;
+  }
+  return expression_tree_walker(node, contains_agg_walker, ctx);
+}
+
+/** @brief Whether an expression subtree references an aggregate (a bare
+ *  provenance_aggregate call or an agg_token Var). */
+static bool expr_contains_agg(Node *node, const constants_t *constants) {
+  contains_agg_ctx ctx = {constants, false};
+  contains_agg_walker(node, &ctx);
+  return ctx.found;
+}
+
+/** @brief Numeric value of a (possibly cast-wrapped) @c Const; false if the
+ *  node is not a non-NULL @c Const. */
+static bool const_as_double(Node *n, double *out) {
+  Const *c;
+  Oid outfunc;
+  bool isvarlena;
+  char *s;
+
+  n = peel_agg_casts(n);
+  if (n == NULL || !IsA(n, Const) || ((Const *)n)->constisnull)
+    return false;
+  c = (Const *)n;
+  getTypeOutputInfo(c->consttype, &outfunc, &isvarlena);
+  s = OidOutputFunctionCall(outfunc, c->constvalue);
+  *out = atof(s);
+  pfree(s);
+  return true;
+}
+
+/** @brief Build `l <op> r`, resolving the operator by name. */
+static Node *build_binop(const char *op, Node *l, Node *r) {
+  ParseState *p = make_parsestate(NULL);
+  Node *e = (Node *)make_op(p, list_make1(makeString(pstrdup(op))),
+                            l, r, NULL, -1);
+  free_parsestate(p);
+  return e;
+}
+
+/**
+ * @brief Fold constant arithmetic over an aggregate into the comparison
+ *        threshold.
+ *
+ * Given a comparison @c OpExpr one of whose sides is an aggregate wrapped in
+ * constant arithmetic (the other side being aggregate-free), returns an
+ * equivalent @c "bare_agg <op'> threshold'" @c OpExpr.  Returns @c NULL when
+ * the comparison has no aggregate, has aggregates on both sides (which cannot
+ * be folded into a scalar threshold), or uses an arithmetic shape we do not
+ * fold (e.g. a constant divided by the aggregate).
+ */
+static OpExpr *normalize_agg_comparison(OpExpr *cmp,
+                                        const constants_t *constants) {
+  Node *a, *b, *agg_side, *thr;
+  bool a_agg, b_agg;
+  Oid opno;
+  OpExpr *res;
+
+  if (list_length(cmp->args) != 2)
+    return NULL;
+  a = (Node *)linitial(cmp->args);
+  b = (Node *)lsecond(cmp->args);
+  a_agg = expr_contains_agg(a, constants);
+  b_agg = expr_contains_agg(b, constants);
+  if (a_agg == b_agg)  /* none, or aggregate on both sides */
+    return NULL;
+
+  opno = cmp->opno;
+  if (a_agg) {
+    agg_side = a; thr = b;
+  } else {
+    agg_side = b; thr = a;
+    opno = get_commutator(opno);  /* orient: aggregate on the left */
+    if (!OidIsValid(opno))
+      return NULL;
+  }
+
+  /* Conceptually `agg_side <opno> thr`; peel arithmetic from agg_side into
+   * thr until agg_side is a bare aggregate. */
+  for (;;) {
+    Node *peeled = peel_agg_casts(agg_side);
+    OpExpr *inner;
+    char *iname;
+    int nin;
+    bool flip = false;
+
+    if (peeled == NULL || !IsA(peeled, OpExpr)) {
+      agg_side = peeled;
+      break;
+    }
+    inner = (OpExpr *)peeled;
+    iname = get_opname(inner->opno);
+    if (iname == NULL)
+      return NULL;
+    nin = list_length(inner->args);
+
+    if (nin == 1 && strcmp(iname, "-") == 0) {           /* prefix -agg */
+      thr = build_binop("-", NULL, thr);                 /* -thr */
+      flip = true;
+      agg_side = (Node *)linitial(inner->args);
+    } else if (nin == 2) {
+      Node *x = (Node *)linitial(inner->args);
+      Node *y = (Node *)lsecond(inner->args);
+      bool x_agg = expr_contains_agg(x, constants);
+      bool y_agg = expr_contains_agg(y, constants);
+      Node *c;
+      bool agg_left;
+
+      if (x_agg == y_agg)  /* aggregate on both / neither side of inner op */
+        return NULL;
+      if (x_agg) { agg_side = x; c = y; agg_left = true; }
+      else       { agg_side = y; c = x; agg_left = false; }
+
+      if (strcmp(iname, "+") == 0) {
+        thr = build_binop("-", thr, c);                  /* agg+c: thr-c */
+      } else if (strcmp(iname, "-") == 0) {
+        if (agg_left)
+          thr = build_binop("+", thr, c);                /* agg-c: thr+c */
+        else {
+          thr = build_binop("-", c, thr);                /* c-agg: c-thr */
+          flip = true;
+        }
+      } else if (strcmp(iname, "/") == 0) {
+        /* agg/c <op> thr  <=>  agg <op> thr*c  (exact: a multiplication, so
+         * the threshold stays integral).  c/agg cannot be folded. */
+        double cv;
+        if (!agg_left || !const_as_double(c, &cv) || cv == 0.0)
+          return NULL;
+        thr = build_binop("*", thr, c);
+        if (cv < 0.0)
+          flip = true;
+      } else if (strcmp(iname, "*") == 0) {
+        /* agg*c <op> thr  <=>  agg <op> thr/c (exact numeric division, so a
+         * non-integer threshold like 15.5 is preserved).  The aggregate
+         * comparison evaluator handles fractional and high-scale thresholds
+         * (minimal-scale via trailing-zero trimming on the fast DP path, and
+         * an exact-enumeration fallback otherwise). */
+        double cv;
+        Node *thr_num;
+        if (!const_as_double(c, &cv) || cv == 0.0)
+          return NULL;
+        thr_num = coerce_to_target_type(NULL, thr, exprType(thr),
+                                        NUMERICOID, -1, COERCION_EXPLICIT,
+                                        COERCE_EXPLICIT_CAST, -1);
+        if (thr_num == NULL)
+          return NULL;
+        thr = build_binop("/", thr_num, c);
+        if (cv < 0.0)
+          flip = true;
+      } else {
+        return NULL;
+      }
+    } else {
+      return NULL;
+    }
+
+    if (flip) {
+      opno = get_commutator(opno);
+      if (!OidIsValid(opno))
+        return NULL;
+    }
+  }
+
+  res = makeNode(OpExpr);
+  res->opno = opno;
+  res->opresulttype = BOOLOID;
+  res->opretset = false;
+  res->opcollid = InvalidOid;
+  res->inputcollid = cmp->inputcollid;
+  res->location = cmp->location;
+  res->args = list_make2(agg_side, thr);   /* aggregate on the left */
+  set_opfuncid(res);
+  return res;
+}
 
 /**
  * @brief Convert a comparison @c OpExpr on aggregate results into a
@@ -1322,7 +1528,17 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
   FuncExpr *cmpExpr;
   Node *arguments[2];
   Const *oid;
-  Oid opno = opExpr->opno;
+  Oid opno;
+
+  /* Fold any constant arithmetic over the aggregate into the threshold
+   * (e.g. sum(x)+1 > 15  ->  sum(x) > 14), so the comparison reduces to the
+   * bare-aggregate form the rest of this function and the evaluators expect. */
+  {
+    OpExpr *norm = normalize_agg_comparison(opExpr, constants);
+    if (norm != NULL)
+      opExpr = norm;
+  }
+  opno = opExpr->opno;
 
   for (unsigned i = 0; i < 2; ++i) {
     Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
@@ -1350,11 +1566,14 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
       castToUUID->location = -1;
 
       arguments[i] = (Node *)castToUUID;
-    } else if (IsA(node, Const) || IsA(node, Var)) {
-      // The value side: a literal, or a bare grouped-column Var.  A non-agg_token
-      // Var in HAVING is necessarily a GROUP BY key, hence constant within each
-      // group, so it is wrapped exactly like a literal in a value gate carrying
-      // the (per-group) datum with certain provenance.
+    } else if (!expr_contains_agg(node, constants)) {
+      // The value side: a literal, a bare grouped-column Var, or a constant
+      // arithmetic expression folded from the aggregate side by
+      // normalize_agg_comparison (e.g. the `15 - col` of sum(x)+col > 15).
+      // A non-agg_token Var in HAVING is necessarily a GROUP BY key, hence
+      // constant within each group, so any such aggregate-free expression is
+      // wrapped like a literal in a value gate carrying the (per-group) datum
+      // with certain provenance.
       FuncExpr *oneExpr = makeNode(FuncExpr);
       FuncExpr *semimodExpr = makeNode(FuncExpr);
 
