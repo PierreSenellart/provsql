@@ -20,6 +20,13 @@ default:
 test: tdkc
 	bash -c "set -o pipefail && bash test/kcmcp/with-tdkc.sh make installcheck 2>&1 | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
 
+# Upgrade-chain parity: a database upgraded from 1.0.0 must be
+# catalog-identical to a fresh install (the strong form of the
+# extension_upgrade canary; run before every release). Pass psql
+# options via PSQL_ARGS, e.g. make upgrade-parity-test PSQL_ARGS=--port=5434
+upgrade-parity-test:
+	test/upgrade_parity.sh $(PSQL_ARGS)
+
 docs: sql/provsql.sql notebooks
 	cd doc/source && make html
 
@@ -109,7 +116,7 @@ studio-test: studio-lint
 playground-test: playground
 	cd studio && python3 -m pytest tests/web
 
-.PHONY: default test docs website deploy wasm playground deploy-playground playground-test studio studio-lint studio-test tdkc provsql_migrate_mmap
+.PHONY: default test upgrade-parity-test docs website deploy wasm playground deploy-playground playground-test studio studio-lint studio-test tdkc provsql_migrate_mmap
 
 tdkc provsql_migrate_mmap:
 	$(MAKE) -f $(INTERNAL) $@ $(ARGS)

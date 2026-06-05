@@ -215,6 +215,46 @@ EOF
   fi
 fi
 
+# 2e. Upgrade-chain parity check
+#
+# test/upgrade_parity.sh proves the whole upgrade chain reproduces a
+# fresh install's catalog exactly (functions with body hashes,
+# aggregates, operators, casts and their contexts, enum values, member
+# schemas).  It exercises the INSTALLED extension files, so first
+# verify those match the working tree -- silently testing a stale
+# install is exactly the failure mode this step exists to prevent.
+
+command -v pg_config > /dev/null 2>&1 \
+  || die "'pg_config' not found; needed for the upgrade-parity check"
+PG_EXTDIR="$(pg_config --sharedir)/extension"
+DEV_EXTVERSION=$(grep default_version provsql.common.control \
+  | sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
+STALE=0
+for f in sql/upgrades/provsql--*--*.sql; do
+  INSTALLED="$PG_EXTDIR/$(basename "$f")"
+  if [[ ! -f "$INSTALLED" ]] || ! cmp -s "$f" "$INSTALLED"; then
+    echo "  stale or missing: $INSTALLED (differs from $f)"
+    STALE=1
+  fi
+done
+# The dev-cycle upgrade path (provsql--<prev>--<X.Y.Z-dev>.sql) is what
+# ALTER EXTENSION UPDATE actually runs before the version bump; it is a
+# Makefile-generated copy of the release upgrade script.
+if [[ -n "${PREV_VER:-}" && -f "sql/upgrades/provsql--${PREV_VER}--${VERSION}.sql" ]]; then
+  DEV_PATH="$PG_EXTDIR/provsql--${PREV_VER}--${DEV_EXTVERSION}.sql"
+  if [[ ! -f "$DEV_PATH" ]] \
+     || ! cmp -s "sql/upgrades/provsql--${PREV_VER}--${VERSION}.sql" "$DEV_PATH"; then
+    echo "  stale or missing: $DEV_PATH (differs from sql/upgrades/provsql--${PREV_VER}--${VERSION}.sql)"
+    STALE=1
+  fi
+fi
+[[ "$STALE" -eq 0 ]] \
+  || die "Installed extension files are stale. Run: make && sudo make install, then re-run release.sh."
+
+echo "Running the upgrade-chain parity check (test/upgrade_parity.sh)..."
+test/upgrade_parity.sh \
+  || die "Upgrade-chain parity check failed: an upgraded database differs from a fresh install. Complete the upgrade script (see doc/source/dev/testing.rst, Upgrade-Chain Parity) and re-run."
+
 # 3. Collect release notes
 
 NOTES_FILE=$(mktemp /tmp/provsql-release-notes.XXXXXX.md)

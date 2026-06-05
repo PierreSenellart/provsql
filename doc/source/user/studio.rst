@@ -1125,6 +1125,23 @@ extension version.
        :sqlfunc:`annotate` / :sqlfunc:`inversion_free_key` SQL surface,
        and the ``inversion-free`` probability method introduced in 1.8.0.
        See :doc:`probabilities`.
+   * - ``1.5.x``
+     - ``≥ 1.9.0``
+     - Adds :ref:`Notebook mode <studio-notebook-mode>`: a Jupyter-style
+       notebook (SQL / Markdown / circuit-snapshot / evaluation cells)
+       over a pinned kernel session, with the Jupyter keymap, per-cell
+       provenance-scheme overrides, tabs as database bindings,
+       ``.ipynb`` save / load with viewer-ready output fallbacks, the
+       bundled tutorial / case-study example notebooks
+       (``/notebook?nb=<name>``), and Playground support. Also a
+       nav-bar action to empty the connected database, and ``agg_token``
+       arithmetic results rendered as *value (\*)* like plain aggregate
+       tokens. Backed by extension features introduced in 1.9.0: the
+       idempotent :sqlfunc:`add_provenance` /
+       :sqlfunc:`create_provenance_mapping` (the self-establishing
+       example notebooks re-run cleanly) and the ``agg_token``
+       arithmetic operator surface whose ``gate_arith`` tokens record
+       their computed value.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to

@@ -30,14 +30,23 @@ BASE_INSTALL = sql/$(EXTENSION)--1.0.0.sql
 # file is matched by the existing sql/provsql--*.sql gitignore pattern
 # and is therefore not committed.
 #
-# If the current working tree has no reachable git tag (e.g. a Docker
-# build that COPYs the source without .git, or a source tarball), the
-# dev-cycle upgrade script cannot be generated and the
-# extension_upgrade regression test is skipped.  LATEST_RELEASE can be
+# LATEST_RELEASE is read primarily from the committed release upgrade
+# script's file name (sql/upgrades/provsql--<prev>--<bare version>.sql):
+# unlike `git describe`, that works in a source tarball, a Docker COPY
+# without .git, and -- critically -- under `sudo make install`, where
+# git's dubious-ownership protection makes describe fail silently and
+# the dev-cycle upgrade script would be dropped from DATA, leaving a
+# stale copy in the extension directory to hijack the upgrade path.
+# `git describe` remains the fallback for the early dev cycle, before
+# release.sh has created the upgrade script.  LATEST_RELEASE can be
 # overridden on the make command line to force a specific target:
 #   make LATEST_RELEASE=1.2.1
 ifneq ($(findstring -dev,$(EXTVERSION)),)
+BARE_EXTVERSION = $(subst -dev,,$(EXTVERSION))
+LATEST_RELEASE = $(patsubst sql/upgrades/$(EXTENSION)--%--$(BARE_EXTVERSION).sql,%,$(wildcard sql/upgrades/$(EXTENSION)--*--$(BARE_EXTVERSION).sql))
+ifeq ($(LATEST_RELEASE),)
 LATEST_RELEASE = $(shell git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null | sed 's/^v//')
+endif
 ifneq ($(LATEST_RELEASE),)
 DEV_UPGRADE = sql/$(EXTENSION)--$(LATEST_RELEASE)--$(EXTVERSION).sql
 else

@@ -680,7 +680,13 @@ $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 -- Operators on (random_variable, random_variable).  Each is guarded by
 -- a pg_operator existence check on the (provsql, oprname, left, right)
--- key so re-running the script is idempotent.
+-- key so re-running the script is idempotent.  The check also requires
+-- oprcode <> 0: a COMMUTATOR / NEGATOR forward reference in an earlier
+-- CREATE OPERATOR auto-creates a SHELL operator under the same key, and
+-- treating the shell as "exists" would skip the real definition for
+-- good (this script shipped without the oprcode test, leaving <>, >=
+-- and > as shells on upgraded databases; the 1.8.0 -> 1.9.0 script
+-- carries the corrective fill).
 
 DO $$ BEGIN
   IF NOT EXISTS (
@@ -688,6 +694,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '+'
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR + (
       LEFTARG    = random_variable,
@@ -704,6 +711,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '-'
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR - (
       LEFTARG    = random_variable,
@@ -719,6 +727,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '*'
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR * (
       LEFTARG    = random_variable,
@@ -735,6 +744,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '/'
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR / (
       LEFTARG    = random_variable,
@@ -751,6 +761,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '-'
       AND o.oprleft = 0
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR - (
       RIGHTARG  = random_variable,
@@ -765,6 +776,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '<'
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR < (
       LEFTARG    = random_variable,
@@ -782,6 +794,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '<='
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR <= (
       LEFTARG    = random_variable,
@@ -799,6 +812,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '='
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR = (
       LEFTARG    = random_variable,
@@ -816,6 +830,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '<>'
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR <> (
       LEFTARG    = random_variable,
@@ -833,6 +848,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '>='
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR >= (
       LEFTARG    = random_variable,
@@ -850,6 +866,7 @@ DO $$ BEGIN
     WHERE n.nspname = 'provsql' AND o.oprname = '>'
       AND o.oprleft = 'provsql.random_variable'::regtype
       AND o.oprright = 'provsql.random_variable'::regtype
+      AND o.oprcode <> 0  -- a COMMUTATOR/NEGATOR forward reference auto-creates a SHELL; fill it
   ) THEN
     CREATE OPERATOR > (
       LEFTARG    = random_variable,
