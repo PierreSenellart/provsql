@@ -16,8 +16,9 @@
  * - **Predefined function OIDs (< 14)**: The @c F_COUNT_ANY,
  *   @c F_COUNT_, and @c F_SUM_INT4 macros were introduced in PostgreSQL
  *   14.  Stable OID values for older releases are defined here.
- * - **Renamed function OID macros (< 12)**: @c F_ARRAY_AGG_ANYNONARRAY
- *   is mapped back to its pre-PG12 name @c F_ARRAY_AGG.
+ * - **list_make5() (13)**: existed pre-13, dropped by the PG13 list
+ *   rewrite, re-added in PG14; backported for the PG13 gap as a macro
+ *   over @c list_make4() + @c lappend().
  */
 #ifndef COMPATIBILITY_H
 #define COMPATIBILITY_H
@@ -91,6 +92,13 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_SUM_INT4 2108
 #endif
 
+#if PG_VERSION_NUM >= 130000 && PG_VERSION_NUM < 140000
+/** @brief Five-element list constructor.  The linked-list implementation
+ * (pre-PG 13) had it as a macro; the PG13 array rewrite dropped it; PG14
+ * brought it back.  Backport it for the PG13 gap only. */
+#define list_make5(x1, x2, x3, x4, x5) lappend(list_make4(x1, x2, x3, x4), x5)
+#endif
+
 #if PG_VERSION_NUM < 130000
 /** @brief @c int alignment code for the array routines (@c construct_array /
  * @c deconstruct_array).  The @c TYPALIGN_* macros (in @c catalog/pg_type.h)
@@ -99,12 +107,12 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define TYPALIGN_INT 'i'
 #endif
 
-#if PG_VERSION_NUM < 120000
-/** @brief OID of the @c array_agg(anynonarray) aggregate (pre-PG 12).
- * The @c F_ARRAY_AGG_ANYNONARRAY macro only exists since PostgreSQL 12,
- * when @c fmgroids.h was regenerated to cover aggregates with
- * overload-disambiguated names; before that, aggregates had no
- * @c fmgroids.h entry at all.  Same stable OID. */
+#if PG_VERSION_NUM < 140000
+/** @brief OID of the @c array_agg(anynonarray) aggregate (pre-PG 14).
+ * The @c F_ARRAY_AGG_ANYNONARRAY macro only exists since PostgreSQL 14,
+ * when @c fmgroids.h gained overload-disambiguated names for aggregates;
+ * before that, aggregates had no @c fmgroids.h entry at all.  Same
+ * stable OID. */
 #define F_ARRAY_AGG_ANYNONARRAY 2335
 #endif
 
