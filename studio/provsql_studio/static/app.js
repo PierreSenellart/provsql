@@ -105,29 +105,34 @@
   };
   const _toolLabel = (name) => TOOL_LABELS[name] || name;
 
-  // Rebuild a <select> from catalog entries [{name, available}].  An
-  // unavailable tool stays listed but disabled (and labelled "not on PATH")
-  // so it is discoverable yet not selectable; the selection is kept if still
-  // available, else moved to the first available option.  A `change` event
-  // fires so dependent UI updates.
+  // Rebuild a <select> from catalog entries [{name, available}].  A tool
+  // the backend cannot reach (not on the resolved PATH) is dropped
+  // entirely -- offering it would only set the user up for a guaranteed
+  // run-time error; the Tools panel remains the discovery surface for
+  // registered-but-missing tools.  The selection is kept if still listed,
+  // else moved to the first available option.  A `change` event fires so
+  // dependent UI updates.
   function _rebuildSelect(selectEl, entries) {
     const prev = selectEl.value;
+    const avail = entries.filter((e) => e.available);
     selectEl.replaceChildren();
-    let firstAvail = null;
-    let prevStillAvail = false;
-    for (const e of entries) {
+    for (const e of avail) {
       const opt = document.createElement('option');
       opt.value = e.name;
-      opt.textContent = e.available ? _toolLabel(e.name)
-                                    : `${_toolLabel(e.name)} (not on PATH)`;
-      if (!e.available) opt.disabled = true;
-      else if (firstAvail === null) firstAvail = e.name;
-      if (e.name === prev && e.available) prevStillAvail = true;
+      opt.textContent = _toolLabel(e.name);
       selectEl.appendChild(opt);
     }
-    selectEl.value = prevStillAvail ? prev
-      : (firstAvail !== null ? firstAvail
-         : (entries.length ? entries[0].name : ''));
+    if (!avail.length) {
+      // Nothing usable: show a disabled placeholder rather than an empty
+      // box, so the strip explains itself.
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(no tool available)';
+      opt.disabled = true;
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = avail.some((e) => e.name === prev) ? prev
+      : (avail.length ? avail[0].name : '');
     selectEl.dispatchEvent(new Event('change'));
   }
 
@@ -1024,12 +1029,18 @@
         }
         if (fallback) {
           // Populate from the live registry's compile tools (no hardcoded
-          // list); unavailable ones are listed but disabled.
+          // list); unavailable ones are dropped, except the current GUC
+          // value (a compiler the admin set but that is not installed),
+          // which is kept -- disabled and labelled -- so the select still
+          // reflects the actual setting.
           const cat = await refreshToolAvailability();
           const compile = (cat && cat.compile) || [];
+          const current = eff['provsql.fallback_compiler']
+            ? String(eff['provsql.fallback_compiler']) : '';
           if (compile.length) {
             fallback.replaceChildren();
             for (const t of compile) {
+              if (!t.available && t.name !== current) continue;
               const opt = document.createElement('option');
               opt.value = t.name;
               opt.textContent = t.available ? _toolLabel(t.name)
@@ -1038,11 +1049,7 @@
               fallback.appendChild(opt);
             }
           }
-          // Reflect the current GUC value even if it is an option we just
-          // disabled (a compiler the admin set but that is not installed).
-          if (eff['provsql.fallback_compiler']) {
-            fallback.value = String(eff['provsql.fallback_compiler']);
-          }
+          if (current) fallback.value = current;
         }
         const opts = cfg.options || {};
         if (depth && opts.max_circuit_depth != null) {
