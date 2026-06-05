@@ -84,11 +84,14 @@ Approximate coverage of these exists (item 2's sampling); the open work is the
 remaining **exact** (PTIME) coverage.  The laminar / cross-product engine covers
 COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
-- **Branch-spanning SUM** — a value depending on more than one product factor
-  (the current product node bails, since it factors `S_f · M` only when the
-  weight is constant within each factor part). Needs per-factor joint
-  `(sum, count)` distributions; a branch-spanning value may be `#P`-hard, so this
-  must self-gate.
+- **Branch-spanning SUM** — both separable shapes are now exact in
+  `src/AggMarginalEvaluator.cpp`: *additively separable* (`sum(b+c)`,
+  `sum(2b-c+1)`) folds the per-factor joint `(sum, count)` distributions
+  (`sumCountPMF`, `recoverAdditiveSeparation`); *multiplicatively separable*
+  (`sum(b*c)`) is the product of per-factor weighted sums (`mulSeparableSumPMF`,
+  a pivot identity that avoids explicit factorisation). Remaining: genuinely
+  coupled values that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor;
+  may be `#P`-hard, self-gates back to enumeration today).
 - **BID disjoint-block `⊥`** — mutual exclusion from a key constraint is a
   *semantic* fact that need not surface as circuit leaf-sharing, so it is the one
   genuinely **certificate-only** structure (the circuit footprint oracle cannot

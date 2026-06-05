@@ -107,6 +107,32 @@ xprod SUM(b+c) span|1|0.0938|0.0938|0.000000
 xprod SUM(b+c) span|2|0.0000|0.0000|0.000000
 (2 rows)
 shape|g|p_off|p_on|diff
+xprod SUM(2b-c+1) span|1|0.1250|0.1250|0.000000
+xprod SUM(2b-c+1) span|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+xprod SUM(b*c) mult|1|0.1563|0.1563|0.000000
+xprod SUM(b*c) mult|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+xprod SUM(bc+b+c) coupled|1|0.1875|0.1875|0.000000
+xprod SUM(bc+b+c) coupled|2|0.0000|0.0000|0.000000
+(2 rows)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 safe-join aggregate): provenance circuit reduced from 22 to 1 gates
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 safe-join aggregate): provenance circuit reduced from 22 to 1 gates
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p_fires
+0.0938
+(1 row)
+p_fires
+0.1563
+(1 row)
+shape|g|p_off|p_on|diff
 fanout AVG(b) >= 5|1|0.5745|0.5745|0.000000
 fanout AVG(b) >= 5|2|0.3940|0.3940|0.000000
 (2 rows)

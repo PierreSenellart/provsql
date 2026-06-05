@@ -32,6 +32,19 @@
  * with the empty group (@c c = 0) excluded exactly as in
  * @c CountCmpEvaluator / SQL @c HAVING semantics.
  *
+ * A multi-member block with *no* common leaf is the **join (Cartesian
+ * product)** node @c R(a),S(a,b),T(a,c): the contributors are the complete
+ * product of per-factor parts, so @c count is the product of the per-factor
+ * counts.  A @c SUM whose value lives on one factor is @f$S_f\cdot M@f$ (that
+ * factor's weighted sum times the others' count product); a *branch-spanning*
+ * value that is **additively separable** across factors (e.g. @c sum(b+c)) is
+ * @f$\sum_f S_f\cdot\prod_{g\ne f} N_g@f$, folded exactly from the per-factor
+ * *joint* @c (sum,count) distributions (@c sumCountPMF); a
+ * **multiplicatively separable** value (e.g. @c sum(b*c)) is
+ * @f$\prod_f S_f@f$, the product of the per-factor weighted sums
+ * (@c mulSeparableSumPMF).  A value that is neither (e.g. @c sum(b*c+b+c))
+ * couples the factors and self-gates back to enumeration.
+ *
  * **Soundness is circuit-only and self-gating.**  No planner-time skeleton
  * certificate is consulted: the recursion is exact iff at every level each
  * multi-member block has a leaf common to *all* its members (and every

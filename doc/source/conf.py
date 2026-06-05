@@ -334,6 +334,7 @@ _C_FUNC_MAP = {
     'runHybridDecomposer':                   '/doxygen-c/html/namespaceprovsql.html#af4b46c398f275b2dd56a4f6e543ccbb3',
     'runRangeCheck':                         '/doxygen-c/html/namespaceprovsql.html#a56791cfa12bc119d18cfe076800b7631',
     'runAnalyticEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#af6f2f8cf7272ec6aea45225c8ce24658',
+    'runAggMarginalEvaluator':               '/doxygen-c/html/namespaceprovsql.html#a1f4c8b0ac5459572c6d92050181e247f',
     'runCountCmpEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#a202da174e018e993ce6e351f6c7119a1',
     'runMinMaxCmpEvaluator':                 '/doxygen-c/html/namespaceprovsql.html#ab2bf8867a429b145000af10a18f4a88f',
     'runSumCmpEvaluator':                    '/doxygen-c/html/namespaceprovsql.html#ae23e77472355e84f31973703ce94b153',

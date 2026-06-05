@@ -94,9 +94,13 @@ SELECT * FROM sja_parity('tri MAX >= 15', 'SELECT 1 g, probability_evaluate(prov
 -- value on ONE branch: SUM = S_b · N_T (count-product of the other
 -- factor); MIN / MAX reduce to pAllAbsent over the product (a
 -- value-thresholded subset on a single branch is itself a sub-product).
--- These fire.  A value spanning both branches (b+c) couples the factors;
--- SUM bails (and MIN/MAX bail unless the threshold subset happens to be a
--- product) -- either way off and on agree.
+-- These fire.  A value spanning both branches also fires when it is
+-- *additively separable* (b+c): SUM = Σ_f sum_f · ∏_{g≠f} cnt_g from the
+-- per-factor joint (sum,count) distributions (sumCountPMF); or
+-- *multiplicatively separable* (b*c): SUM = ∏_f sum_f from the per-factor
+-- weighted sums (mulSeparableSumPMF).  A value that is neither (b*c+b+c)
+-- couples the factors, so SUM bails (and MIN / MAX bail unless the
+-- threshold subset happens to be a product) -- either way off and on agree.
 CREATE TABLE sja_pr(a int);
 CREATE TABLE sja_ps(a int, b int);
 CREATE TABLE sja_pt(a int, c int);
@@ -115,6 +119,40 @@ SELECT * FROM sja_parity('xprod MAX(b) >= 7', 'SELECT sja_pr.a g, probability_ev
 SELECT * FROM sja_parity('xprod MIN(b) <= 3', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING min(sja_ps.b) <= 3');
 SELECT * FROM sja_parity('xprod MAX(c) >= 9', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING max(sja_pt.c) >= 9');
 SELECT * FROM sja_parity('xprod SUM(b+c) span', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING sum(sja_ps.b + sja_pt.c) >= 20');
+-- additively-separable spanning value with per-branch scaling (2b - c + 1)
+-- still fires; the constant folds into one factor.
+SELECT * FROM sja_parity('xprod SUM(2b-c+1) span', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING sum(2*sja_ps.b - sja_pt.c + 1) >= 10');
+-- multiplicatively-separable spanning value (b*c) fires via the product of
+-- per-factor weighted sums.
+SELECT * FROM sja_parity('xprod SUM(b*c) mult', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING sum(sja_ps.b * sja_pt.c) >= 40');
+-- genuinely coupled value (neither additive nor multiplicative across the
+-- branches): the SUM arm must DECLINE and fall back, still matching off.
+SELECT * FROM sja_parity('xprod SUM(bc+b+c) coupled', 'SELECT sja_pr.a g, probability_evaluate(provenance()) p FROM sja_pr, sja_ps, sja_pt WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a GROUP BY sja_pr.a HAVING sum(sja_ps.b * sja_pt.c + sja_ps.b + sja_pt.c) >= 50');
+
+-- Confirm the pre-pass actually FIRES on the branch-spanning separable
+-- SUM (the parity above stays correct even if it silently bailed back to
+-- enumeration, so pin the "safe-join aggregate" shortcut NOTICE here) --
+-- once for the additive (b+c) and once for the multiplicative (b*c) form.
+SET provsql.verbose_level = 5;
+CREATE TEMP TABLE sja_span_fires AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p_fires
+  FROM (SELECT sja_pr.a, provenance() FROM sja_pr, sja_ps, sja_pt
+        WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a
+        GROUP BY sja_pr.a HAVING sum(sja_ps.b + sja_pt.c) >= 20) q(a, provenance)
+  WHERE a = 1;
+CREATE TEMP TABLE sja_mult_fires AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p_fires
+  FROM (SELECT sja_pr.a, provenance() FROM sja_pr, sja_ps, sja_pt
+        WHERE sja_pr.a=sja_ps.a AND sja_pr.a=sja_pt.a
+        GROUP BY sja_pr.a HAVING sum(sja_ps.b * sja_pt.c) >= 40) q(a, provenance)
+  WHERE a = 1;
+SET provsql.verbose_level = 0;
+SELECT remove_provenance('sja_span_fires');
+SELECT remove_provenance('sja_mult_fires');
+SELECT p_fires FROM sja_span_fires;
+SELECT p_fires FROM sja_mult_fires;
+DROP TABLE sja_span_fires;
+DROP TABLE sja_mult_fires;
 
 -- AVG: reduces to SUM(v - C) op 0 (empty group excluded), so it inherits
 -- the whole laminar / product machinery -- and is closed-form even on the

@@ -641,7 +641,21 @@ baseline the other five aggregates generalise.
 :cfunc:`runSumCmpEvaluator`) compute the **P / α-safe** corner *exactly*
 for independent private contributors (the read-once independence
 certification in ``CmpEvaluatorCommon``, a sufficient condition for
-α-safety on a per-instance basis).
+α-safety on a per-instance basis).  :cfunc:`runAggMarginalEvaluator`
+(``src/AggMarginalEvaluator.cpp``) extends this exact corner to the
+*hierarchical (laminar) join*: a recursive marginal-vector engine that, at
+each level, factors a block's common root event (the ``⊥`` mixture),
+convolves independent blocks (``⊛⁺``), and at a common-less **Cartesian
+product** node ``R(a),S(a,b),T(a,c)`` multiplies the per-factor counts.
+There a ``SUM`` whose value lives on one factor is ``S_f · M``; a
+*branch-spanning* but **additively separable** value (e.g. ``sum(b+c)``) is
+``Σ_f sum_f · ∏_{g≠f} cnt_g``, folded exactly from the per-factor *joint*
+``(sum,count)`` distributions (``sumCountPMF``); a **multiplicatively
+separable** value (e.g. ``sum(b*c)``) is ``∏_f sum_f``, the product of the
+per-factor weighted sums (``mulSeparableSumPMF``, via a pivot identity so no
+explicit factorisation is needed).  A value that is neither (``sum(b*c+b+c)``)
+and a non-laminar shape (the triangle) self-gate back to enumeration.  Pinned
+by ``test/sql/having_safe_join_{count,agg}.sql``.
 :cfunc:`safe_query_skeleton_is_hierarchical` exposes the skeleton-safety
 axis.  The **HAVING classifier** (``src/classify_having.c``, GUC
 ``provsql.classify_having``, default off) combines the two: for each

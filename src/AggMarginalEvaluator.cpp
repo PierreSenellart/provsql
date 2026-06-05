@@ -7,6 +7,7 @@
 #include "AggMarginalEvaluator.h"
 
 #include <algorithm>
+#include <climits>
 #include <map>
 #include <numeric>
 #include <set>
@@ -567,6 +568,274 @@ static bool sumSatisfies(long s, ComparisonOperator op, long C)
   return false;
 }
 
+/* Joint (sum, count) distribution over a contributor set, as a sparse map
+ * (sum, count) -> probability.  Generalises @c countPMF / @c sumPMF to
+ * track both coordinates at once.  This is what the *branch-spanning* SUM
+ * needs: when an additively-separable value spans several product factors,
+ * the block sum is Σ_f sum_f · ∏_{g≠f} cnt_g, which couples each factor's
+ * weighted sum to the others' counts -- so neither marginal alone carries
+ * enough information and the per-factor *joint* must be folded.  Same
+ * laminar recursion as @c sumPMF; clears @p ok on a non-laminar block, a
+ * non-separable product value, or a support overflow. */
+using JointPMF = std::map<std::pair<long, long>, double>;
+
+/* Recover an additive separation of a product block's weights across its
+ * factors: find per-factor part values @p partVals (aligned to
+ * @c pd.parts[f]) with weights[m] == Σ_f partVals[f][part_f(m)], the
+ * constant folded into factor 0.  Uses the reference-axis construction on
+ * the complete grid (h_f(p) = w(ref but p at f) - w(ref)); verifies the
+ * separation reproduces every member.  Returns false -- caller bails --
+ * when the value is not additively separable (it genuinely couples factors
+ * and may be #P-hard, e.g. a product of two branches). */
+static bool recoverAdditiveSeparation(
+    const std::vector<std::vector<gate_t>> &contribs,
+    const std::vector<int> &members, const std::vector<long> &weights,
+    const ProductDecomp &pd, std::vector<std::vector<long>> &partVals)
+{
+  const int nf = static_cast<int>(pd.parts.size());
+
+  auto partOf = [&](int m, int f) {
+    std::vector<gate_t> p;
+    for (gate_t l : contribs[m])                  /* contribs[m] already sorted */
+      if (pd.leafFactor.at(l) == f) p.push_back(l);
+    return p;
+  };
+
+  /* Complete-grid lookup: full part-tuple -> weight. */
+  std::map<std::vector<std::vector<gate_t>>, long> grid;
+  for (int m : members) {
+    std::vector<std::vector<gate_t>> key(nf);
+    for (int f = 0; f < nf; ++f) key[f] = partOf(m, f);
+    grid[key] = weights[m];
+  }
+
+  const int m0 = members[0];
+  const long W0 = weights[m0];
+  std::vector<std::vector<gate_t>> ref(nf);
+  for (int f = 0; f < nf; ++f) ref[f] = partOf(m0, f);
+
+  /* h_f(p) = w(ref, but part p at factor f) - W0  (so h_f(ref_f) = 0). */
+  std::vector<std::map<std::vector<gate_t>, long>> h(nf);
+  for (int f = 0; f < nf; ++f)
+    for (const auto &p : pd.parts[f]) {
+      std::vector<std::vector<gate_t>> key = ref;
+      key[f] = p;
+      auto it = grid.find(key);
+      if (it == grid.end()) return false;         /* incomplete grid */
+      h[f][p] = it->second - W0;
+    }
+
+  /* The separation must reproduce every member's weight. */
+  for (int m : members) {
+    long acc = W0;
+    for (int f = 0; f < nf; ++f) acc += h[f].at(partOf(m, f));
+    if (acc != weights[m]) return false;          /* not additively separable */
+  }
+
+  partVals.assign(nf, {});
+  for (int f = 0; f < nf; ++f) {
+    partVals[f].reserve(pd.parts[f].size());
+    for (const auto &p : pd.parts[f])
+      partVals[f].push_back(h[f].at(p) + (f == 0 ? W0 : 0));  /* fold W0 into f=0 */
+  }
+  return true;
+}
+
+static JointPMF sumCountPMF(GenericCircuit &gc,
+                            std::vector<std::vector<gate_t>> contribs,
+                            std::vector<long> weights, bool &ok)
+{
+  JointPMF total;
+  total[{0, 0}] = 1.0;                             /* δ_(0,0) */
+  if (contribs.empty()) return total;
+
+  for (const auto &members : independenceBlocks(contribs)) {
+    JointPMF blockPMF;
+    if (members.size() == 1) {
+      double q = 1.0;
+      for (gate_t l : contribs[members[0]]) q *= gc.getProb(l);
+      blockPMF[{0, 0}]                  += 1.0 - q;     /* absent: (0,0) */
+      blockPMF[{weights[members[0]], 1}] += q;          /* present: (w,1) */
+    } else {
+      std::vector<gate_t> common = commonLeaves(contribs, members);
+      if (!common.empty()) {
+        /* Laminar shared root: disjoint mixture, recurse on residuals. */
+        double p_root = 1.0;
+        for (gate_t l : common) p_root *= gc.getProb(l);
+        std::vector<long> rweights;
+        rweights.reserve(members.size());
+        for (int m : members) rweights.push_back(weights[m]);
+        JointPMF inner = sumCountPMF(
+          gc, residualsOf(contribs, members, common), std::move(rweights), ok);
+        if (!ok) return {};
+        for (const auto &kv : inner) blockPMF[kv.first] += p_root * kv.second;
+        blockPMF[{0, 0}] += 1.0 - p_root;          /* root absent: (0,0) */
+      } else {
+        /* Cartesian product of independent factors.  An additively
+         * separable value folds per-factor joints with the product
+         * combinator (S,N) ⊗ (s,n) = (S·n + s·N, N·n), identity (0,1):
+         * count multiplies, sum picks up each factor's weighted sum times
+         * the others' counts.  This is exactly Σ_f sum_f · ∏_{g≠f} cnt_g. */
+        ProductDecomp pd = decomposeProduct(contribs, members);
+        if (!pd.ok) { ok = false; return {}; }
+        std::vector<std::vector<long>> partVals;
+        if (!recoverAdditiveSeparation(contribs, members, weights, pd,
+                                       partVals)) {
+          ok = false; return {};                   /* value couples factors */
+        }
+        JointPMF acc;
+        acc[{0, 1}] = 1.0;                          /* empty product: (0,1) */
+        for (std::size_t f = 0; f < pd.parts.size(); ++f) {
+          JointPMF Jf = sumCountPMF(gc, pd.parts[f], partVals[f], ok);
+          if (!ok) return {};
+          JointPMF nacc;
+          for (const auto &a : acc)
+            for (const auto &b : Jf)
+              nacc[{a.first.first * b.first.second
+                      + b.first.first * a.first.second,
+                    a.first.second * b.first.second}] += a.second * b.second;
+          if (nacc.size() > kMaxSumSupport) { ok = false; return {}; }
+          acc.swap(nacc);
+        }
+        blockPMF = std::move(acc);
+      }
+    }
+    /* Independent blocks: sums and counts add. */
+    JointPMF ntotal;
+    for (const auto &a : total)
+      for (const auto &b : blockPMF)
+        ntotal[{a.first.first + b.first.first,
+                a.first.second + b.first.second}] += a.second * b.second;
+    if (ntotal.size() > kMaxSumSupport) { ok = false; return {}; }
+    total.swap(ntotal);
+  }
+  return total;
+}
+
+static std::map<long, double> sumPMF(GenericCircuit &gc,
+                                     std::vector<std::vector<gate_t>> contribs,
+                                     std::vector<long> weights, bool &ok);
+
+/* Overflow-checked 128-bit multiply with magnitude headroom: @c false on
+ * wraparound or a result past @c LIM (so the caller bails to enumeration,
+ * still correct).  Used by the multiplicative-separable fold, whose
+ * intermediate products of per-factor sums can be large. */
+static bool i128_mul(__int128 a, __int128 b, __int128 &out)
+{
+  constexpr __int128 LIM = static_cast<__int128>(1) << 120;
+  if (a == 0 || b == 0) { out = 0; return true; }
+  __int128 r = a * b;
+  if (r / b != a) return false;                   /* wrapped */
+  __int128 ar = r < 0 ? -r : r;
+  if (ar > LIM) return false;                      /* keep headroom for later ops */
+  out = r;
+  return true;
+}
+
+/* SUM distribution of a Cartesian-product block whose value is
+ * *multiplicatively* separable across the factors, w_m = ∏_f v_f(part_f):
+ * then SUM = ∏_f sum_f with sum_f = Σ_{present p} v_f(p), so the block sum
+ * is a product of independent per-factor weighted sums.  No explicit
+ * factorisation is needed -- with a nonzero pivot weight @c D at reference
+ * parts and the grid's axis entries A^f_p = w(ref but p at f), the identity
+ *   block sum = ∏_f (Σ_{present p} A^f_p) / D^{nf-1}
+ * holds (each axis sum carries a spurious factor D/v_f(ref_f), and the nf
+ * of them divide back to D^{nf-1}).  The A^f_p are grid entries (integers),
+ * so per-factor @c sumPMF gives Σ A^f_p exactly; the per-factor sum PMFs are
+ * product-convolved (in 128-bit, guarded) and divided by D^{nf-1} (exact in
+ * every world, since each world's block sum is integral).  Clears @p ok --
+ * caller bails to enumeration -- when the value is not multiplicatively
+ * separable, on overflow, or on a within-factor non-laminar bail. */
+static std::map<long, double> mulSeparableSumPMF(
+    GenericCircuit &gc,
+    const std::vector<std::vector<gate_t>> &contribs,
+    const std::vector<int> &members, const std::vector<long> &weights,
+    const ProductDecomp &pd, bool &ok)
+{
+  const int nf = static_cast<int>(pd.parts.size());
+
+  auto partOf = [&](int m, int f) {
+    std::vector<gate_t> p;
+    for (gate_t l : contribs[m])
+      if (pd.leafFactor.at(l) == f) p.push_back(l);
+    return p;
+  };
+
+  std::map<std::vector<std::vector<gate_t>>, long> grid;
+  for (int m : members) {
+    std::vector<std::vector<gate_t>> key(nf);
+    for (int f = 0; f < nf; ++f) key[f] = partOf(m, f);
+    grid[key] = weights[m];
+  }
+
+  int piv = -1;
+  for (int m : members) if (weights[m] != 0) { piv = m; break; }
+  if (piv < 0) { ok = false; return {}; }     /* all zero: additive handled it */
+  const long D = weights[piv];
+  std::vector<std::vector<gate_t>> ref(nf);
+  for (int f = 0; f < nf; ++f) ref[f] = partOf(piv, f);
+
+  /* Axis values A^f (aligned to pd.parts[f]) and a part -> index map. */
+  std::vector<std::vector<long>> A(nf);
+  std::vector<std::map<std::vector<gate_t>, int>> partIdx(nf);
+  for (int f = 0; f < nf; ++f)
+    for (const auto &p : pd.parts[f]) {
+      partIdx[f][p] = static_cast<int>(A[f].size());
+      std::vector<std::vector<gate_t>> key = ref;
+      key[f] = p;
+      auto it = grid.find(key);
+      if (it == grid.end()) { ok = false; return {}; }
+      A[f].push_back(it->second);
+    }
+
+  /* D^{nf-1}. */
+  __int128 Dk1 = 1;
+  for (int t = 0; t < nf - 1; ++t)
+    if (!i128_mul(Dk1, static_cast<__int128>(D), Dk1)) { ok = false; return {}; }
+
+  /* Verify multiplicative separability: ∏_f A^f_{p_f} == w_m · D^{nf-1}. */
+  for (int m : members) {
+    __int128 prod = 1;
+    for (int f = 0; f < nf; ++f) {
+      long a = A[f][partIdx[f].at(partOf(m, f))];
+      if (!i128_mul(prod, static_cast<__int128>(a), prod)) { ok = false; return {}; }
+    }
+    __int128 rhs;
+    if (!i128_mul(static_cast<__int128>(weights[m]), Dk1, rhs)) { ok = false; return {}; }
+    if (prod != rhs) { ok = false; return {}; }      /* not multiplicatively separable */
+  }
+
+  /* Per-factor sum PMFs (over the axis weights), product-convolved. */
+  std::map<__int128, double> run;
+  run[1] = 1.0;                                       /* multiplicative identity */
+  for (int f = 0; f < nf; ++f) {
+    std::map<long, double> Pf = sumPMF(gc, pd.parts[f], A[f], ok);
+    if (!ok) return {};
+    std::map<__int128, double> nxt;
+    for (const auto &rk : run)
+      for (const auto &sk : Pf) {
+        __int128 prod;
+        if (!i128_mul(rk.first, static_cast<__int128>(sk.first), prod)) {
+          ok = false; return {};
+        }
+        nxt[prod] += rk.second * sk.second;
+      }
+    if (nxt.size() > kMaxSumSupport) { ok = false; return {}; }
+    run.swap(nxt);
+  }
+
+  /* Divide each product by D^{nf-1} (exact per world) and downcast. */
+  std::map<long, double> out;
+  for (const auto &kv : run) {
+    if (kv.first % Dk1 != 0) { ok = false; return {}; }    /* defensive */
+    __int128 bs = kv.first / Dk1;
+    if (bs > static_cast<__int128>(LONG_MAX) ||
+        bs < static_cast<__int128>(LONG_MIN)) { ok = false; return {}; }
+    out[static_cast<long>(bs)] += kv.second;
+  }
+  return out;
+}
+
 /* Distribution of SUM(value) over a hierarchical contributor set, as a
  * sparse map sum -> probability.  Same recursion as countPMF, but a
  * present contributor adds its weight @p weights[i] (not 1), so blocks
@@ -607,12 +876,16 @@ static std::map<long, double> sumPMF(GenericCircuit &gc,
         for (const auto &kv : inner) blockPMF[kv.first] += p_root * kv.second;
         blockPMF[0] += (1.0 - p_root);              /* root absent: sum 0 */
       } else {
-        /* Cartesian product.  SUM factors only when the value depends on a
-         * single factor f: SUM = S_f · M, with S_f the weighted sum over
-         * factor f and M = ∏_{i≠f} N_i the count-product of the others
-         * (independent).  Detect such an f (weight constant within each
-         * f-part group); otherwise the value couples factors and the case
-         * may be #P-hard, so bail. */
+        /* Cartesian product.  Tractable cases: (1) the value depends on a
+         * single factor f -- SUM = S_f · M, with S_f the weighted sum over
+         * factor f and M = ∏_{i≠f} N_i the count-product of the others (the
+         * fast path below, detected by a weight constant within each f-part
+         * group); (2) a branch-spanning but *additively separable* value
+         * (sum(b+c)) -- per-factor joint (sum,count) distributions in
+         * @c sumCountPMF; (3) a *multiplicatively separable* value (sum(b*c))
+         * -- product of per-factor weighted sums in @c mulSeparableSumPMF
+         * (both in the else arm).  A value that is none of these couples the
+         * factors (may be #P-hard), so it bails. */
         ProductDecomp pd = decomposeProduct(contribs, members);
         if (!pd.ok) { ok = false; return {}; }
         const int nf = static_cast<int>(pd.parts.size());
@@ -632,32 +905,61 @@ static std::map<long, double> sumPMF(GenericCircuit &gc,
           }
           if (consistent) { chosen = f; partVal = std::move(pv); }
         }
-        if (chosen < 0) { ok = false; return {}; }   /* value spans factors */
+        if (chosen >= 0) {
+          /* Single-factor value: SUM = S_f · M (the other factors
+           * contribute only their count). */
 
-        /* S_f: weighted-sum distribution over the chosen factor's parts. */
-        std::vector<long> partValues;
-        partValues.reserve(pd.parts[chosen].size());
-        for (const auto &part : pd.parts[chosen])
-          partValues.push_back(partVal[part]);
-        std::map<long, double> Sf =
-          sumPMF(gc, pd.parts[chosen], std::move(partValues), ok);
-        if (!ok) return {};
-
-        /* M: count-product distribution over the other factors. */
-        std::vector<double> M;
-        for (int f = 0; f < nf; ++f) {
-          if (f == chosen) continue;
-          std::vector<double> cf = countPMF(gc, pd.parts[f], ok);
+          /* S_f: weighted-sum distribution over the chosen factor's parts. */
+          std::vector<long> partValues;
+          partValues.reserve(pd.parts[chosen].size());
+          for (const auto &part : pd.parts[chosen])
+            partValues.push_back(partVal[part]);
+          std::map<long, double> Sf =
+            sumPMF(gc, pd.parts[chosen], std::move(partValues), ok);
           if (!ok) return {};
-          M = M.empty() ? std::move(cf) : productConvolve(M, cf);
-        }
 
-        /* blockPMF = distribution of S_f · M (independent factors). */
-        for (const auto &skv : Sf)
-          for (std::size_t mm = 0; mm < M.size(); ++mm)
-            if (M[mm] != 0.0)
-              blockPMF[skv.first * static_cast<long>(mm)] += skv.second * M[mm];
-        if (blockPMF.size() > kMaxSumSupport) { ok = false; return {}; }
+          /* M: count-product distribution over the other factors. */
+          std::vector<double> M;
+          for (int f = 0; f < nf; ++f) {
+            if (f == chosen) continue;
+            std::vector<double> cf = countPMF(gc, pd.parts[f], ok);
+            if (!ok) return {};
+            M = M.empty() ? std::move(cf) : productConvolve(M, cf);
+          }
+
+          /* blockPMF = distribution of S_f · M (independent factors). */
+          for (const auto &skv : Sf)
+            for (std::size_t mm = 0; mm < M.size(); ++mm)
+              if (M[mm] != 0.0)
+                blockPMF[skv.first * static_cast<long>(mm)] += skv.second * M[mm];
+          if (blockPMF.size() > kMaxSumSupport) { ok = false; return {}; }
+        } else {
+          /* Branch-spanning value.  Two tractable shapes: *additively*
+           * separable (sum(b+c)) -> fold the per-factor joint (sum,count)
+           * distributions (sumCountPMF) and read off the sum marginal;
+           * *multiplicatively* separable (sum(b*c)) -> product of the
+           * per-factor weighted sums (mulSeparableSumPMF).  Try additive
+           * first (a value that is both is constant, handled there); a value
+           * that is neither couples the factors and bails. */
+          std::vector<std::vector<long>> sep;
+          if (recoverAdditiveSeparation(contribs, members, weights, pd, sep)) {
+            std::vector<std::vector<gate_t>> bc;
+            std::vector<long> bw;
+            bc.reserve(members.size());
+            bw.reserve(members.size());
+            for (int m : members) {
+              bc.push_back(contribs[m]);
+              bw.push_back(weights[m]);
+            }
+            JointPMF j = sumCountPMF(gc, std::move(bc), std::move(bw), ok);
+            if (!ok) return {};
+            for (const auto &kv : j) blockPMF[kv.first.first] += kv.second;
+          } else {
+            blockPMF = mulSeparableSumPMF(gc, contribs, members, weights, pd, ok);
+            if (!ok) return {};               /* neither separable: bail */
+          }
+          if (blockPMF.size() > kMaxSumSupport) { ok = false; return {}; }
+        }
       }
     }
     std::map<long, double> ntotal;
