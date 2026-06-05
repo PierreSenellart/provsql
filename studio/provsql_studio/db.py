@@ -660,6 +660,43 @@ def list_databases(pool: ConnectionPool) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
+def empty_database(pool: ConnectionPool) -> list[str]:
+    """Drop every user schema in the current database (CASCADE) and
+    recreate an empty `public`, then reinstall the provsql extension.
+    Backs the nav bar's "empty database" action (a clean slate for
+    re-running a notebook from the top).
+
+    The reinstall is not optional: `uuid-ossp` conventionally lives in
+    `public`, so dropping it CASCADEs through provsql too. Recreating
+    both also resets provsql's own state (update-provenance history,
+    tool overrides), which is exactly what "fully empty" should mean.
+
+    Returns the list of schemas dropped."""
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT nspname FROM pg_namespace "
+            "WHERE nspname NOT IN ('pg_catalog', 'information_schema', "
+            "                      'provsql') "
+            "  AND nspname NOT LIKE 'pg\\_%' "
+            "ORDER BY nspname"
+        )
+        schemas = [r[0] for r in cur.fetchall()]
+        for s in schemas:
+            cur.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(
+                sql.Identifier(s)))
+        # The provsql schema survives the loop above but its extension
+        # objects may have been cascade-dropped with uuid-ossp; clear
+        # any residue so CREATE EXTENSION repopulates cleanly.
+        cur.execute("DROP EXTENSION IF EXISTS provsql CASCADE")
+        cur.execute("DROP SCHEMA IF EXISTS provsql CASCADE")
+        cur.execute("CREATE SCHEMA public")
+        # Pre-PG15 default grants on public, so unqualified CREATE TABLE
+        # keeps working for every role that could before.
+        cur.execute("GRANT USAGE, CREATE ON SCHEMA public TO PUBLIC")
+        cur.execute("CREATE EXTENSION IF NOT EXISTS provsql CASCADE")
+    return schemas
+
+
 def create_database(dsn: str | None, name: str) -> str | None:
     """Create database `name` (requires CREATEDB) and best-effort install
     the provsql extension in it, so a scratch database minted for a

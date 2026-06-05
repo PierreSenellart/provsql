@@ -63,6 +63,7 @@
       </div>
     </span>
     <button type="button" class="wp-nav__link wp-nav__refresh" id="metadata-refresh-btn" title="Refresh schema, provenance mappings, and custom semirings" aria-label="Refresh metadata"><i class="fas fa-sync"></i></button>
+    <button type="button" class="wp-nav__link wp-nav__refresh" id="empty-db-btn" title="Empty the connected database: drop every user schema and start from a clean slate (the provsql extension survives)" aria-label="Empty database"><i class="fas fa-broom"></i></button>
     <span class="wp-nav__configwrap">
       <button type="button" class="wp-nav__link wp-nav__refresh" id="tools-btn"
               aria-haspopup="dialog" aria-expanded="false"
@@ -462,6 +463,10 @@
         <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-load"
                 title="Load a .ipynb notebook file"><i class="fas fa-folder-open"></i> Load</button>
         <input type="file" id="nb-load-input" accept=".ipynb,application/json" hidden>
+        <select class="nb__example" id="nb-example"
+                title="Open a bundled example notebook (the tutorial and case studies from the user guide, generated from the same sources)">
+          <option value="">Open example…</option>
+        </select>
         <span class="nb__toolbar-sep"></span>
         <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-show-uuids"
                 aria-pressed="false" title="Show full UUIDs in results">

@@ -3282,3 +3282,25 @@ table thead th[data-sort="desc"]::after {
   font-size: 0.72rem;
   color: var(--fg-muted);
 }
+
+/* Example-notebook picker in the notebook toolbar. */
+.nb__example {
+  font-size: 0.75rem;
+  max-width: 11rem;
+  padding: 0.2rem 0.3rem;
+}
+
+/* Per-cell provenance-scheme chip (cells overriding the toolbar's
+   notebook-level default, e.g. cs7's boolean-provenance steps). */
+.nb-cell__scheme {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-family: var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--purple-700);
+  color: var(--fg-on-dark, #fff);
+  border-radius: 3px;
+  padding: 0.05rem 0.35rem;
+  margin-bottom: 0.2rem;
+}

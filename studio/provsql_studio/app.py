@@ -21,6 +21,7 @@ Routes:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -308,6 +309,32 @@ def create_app(
         info["studio_version"] = STUDIO_VERSION
         return jsonify(info)
 
+    @app.post("/api/database/empty")
+    def api_empty_database():
+        """Drop every user schema in the connected database and recreate
+        an empty public (the provsql extension survives). The front-end
+        nav button confirms twice before calling this."""
+        try:
+            dropped = db.empty_database(get_pool())
+        except psycopg.errors.InsufficientPrivilege as e:
+            return jsonify({"error": str(e).strip()}), 403
+        except psycopg.Error as e:
+            return jsonify({"error": str(e).strip()}), 400
+        # Everything schema-shaped just changed -- including the
+        # extension itself (dropped and reinstalled), so pooled
+        # backends hold stale per-session caches (gate-type OIDs,
+        # prepared lookups). Swap in a fresh pool like a connection
+        # switch does, and drop the kernels and layout cache.
+        old_pool = app.extensions["provsql_pool"]
+        app.extensions["provsql_pool"] = db.make_pool(app.config["DSN"])
+        try:
+            old_pool.close()
+        except Exception:
+            pass
+        layout_cache._store.clear()
+        close_all_kernels()
+        return jsonify({"ok": True, "dropped_schemas": dropped})
+
     @app.post("/api/databases")
     def api_create_database():
         """Create a database (and best-effort install provsql in it).
@@ -578,6 +605,47 @@ def create_app(
             "db": entry["db"],
             "idle_seconds": time.monotonic() - entry["last_used"],
         })
+
+    _NOTEBOOKS_DIR = Path(__file__).resolve().parent / "notebooks"
+    _EXAMPLE_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
+
+    @app.get("/api/nb/examples")
+    def api_nb_examples():
+        """The bundled example notebooks (tutorial / case studies),
+        generated from the user guide by studio/scripts/rst2nb.py.
+        Returns [{name, title, database}] for the Open-example menu."""
+        out = []
+        # The tutorial leads; the case studies follow in name order.
+        ordered = sorted(_NOTEBOOKS_DIR.glob("*.ipynb"),
+                         key=lambda f: (f.stem != "tutorial", f.stem))
+        for f in ordered:
+            try:
+                doc = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            title = f.stem
+            for c in doc.get("cells", []):
+                if c.get("cell_type") != "markdown":
+                    continue
+                m = re.search(r"^#\s+(.+?)\s*$",
+                              "".join(c.get("source") or []), re.M)
+                if m:
+                    title = m.group(1)
+                break
+            meta = (doc.get("metadata") or {}).get("provsql") or {}
+            out.append({"name": f.stem, "title": title,
+                        "database": meta.get("database")})
+        return jsonify(out)
+
+    @app.get("/api/nb/examples/<name>")
+    def api_nb_example(name: str):
+        if not _EXAMPLE_NAME_RE.match(name):
+            return jsonify({"error": "invalid example name"}), 400
+        f = _NOTEBOOKS_DIR / f"{name}.ipynb"
+        if not f.is_file():
+            return jsonify({"error": f"no example named {name!r}"}), 404
+        return app.response_class(f.read_text(),
+                                  mimetype="application/x-ipynb+json")
 
     @app.post("/api/nb/exec")
     def api_nb_exec():

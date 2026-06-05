@@ -116,11 +116,30 @@
     persistTabs();
   }
 
+  // A tab worth dropping silently: never ran anything (no kernel) and
+  // holds no content (the freshly-booted Untitled tab).
+  function tabIsPristine(tab) {
+    if (!tab || tab.kernel) return false;
+    const docCells = (tab.doc && tab.doc.cells) || [];
+    return docCells.every((c) =>
+      !String(Array.isArray(c.source) ? c.source.join('')
+                                      : c.source || '').trim()
+      && !(c.outputs && c.outputs.length));
+  }
+
   function newTab(name, db, doc) {
     flushActiveTab();
+    const prev = currentTab();
     const tab = makeTab(name, db, doc);
     tabs.push(tab);
     activeTabId = tab.id;
+    // Opening a document (example / .ipynb load) from a pristine
+    // Untitled tab replaces it rather than leaving an empty husk
+    // behind. The + button (doc == null) keeps the old tab: making a
+    // second blank tab is exactly its job.
+    if (doc && prev && tabIsPristine(prev)) {
+      tabs.splice(tabs.indexOf(prev), 1);
+    }
     loadTabIntoView(tab);
     persistTabs();
     return tab;
@@ -216,33 +235,60 @@
     });
   }
 
-  /* Binding banner: the active tab's database vs the live connection. */
-  function updateBindingBanner() {
+  /* Binding banner: the active tab's database vs the live connection.
+     Offers exactly the action that makes sense: "Switch to X" when the
+     bound database exists (is CONNECT-able), "Create X" when it does
+     not -- offering both would be nonsense. */
+  let dbListCache = null;   // GET /api/databases payload
+
+  async function accessibleDatabases() {
+    if (dbListCache) return dbListCache;
+    try {
+      const resp = await fetch('/api/databases');
+      if (resp.ok) dbListCache = await resp.json();
+    } catch (e) { /* fall through */ }
+    return dbListCache || [];
+  }
+
+  async function updateBindingBanner() {
     const banner = byId('nb-binding-banner');
     if (!banner) return;
     const tab = currentTab();
     const foreign = tab && tab.db && connDb && tab.db !== connDb;
     banner.hidden = !foreign;
     if (!foreign) { banner.innerHTML = ''; return; }
+    const exists = (await accessibleDatabases()).includes(tab.db);
+    // The tab may have changed while the list was fetched.
+    if (currentTab() !== tab) return;
     const esc = env.escapeHtml;
     banner.innerHTML =
       `<span class="nb__banner-msg"><i class="fas fa-database"></i> `
-      + `This notebook is bound to <strong>${esc(tab.db)}</strong>; `
+      + `This notebook is bound to <strong>${esc(tab.db)}</strong>`
+      + `${exists ? '' : ' (which does not exist)'}; `
       + `you are connected to <strong>${esc(connDb)}</strong>.</span>`
-      + `<button type="button" class="wp-btn wp-btn--mini" id="nb-bind-switch">`
-      + `Switch to ${esc(tab.db)}</button> `
-      + `<button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-bind-create">`
-      + `Create ${esc(tab.db)}</button> `
+      + (exists
+        ? `<button type="button" class="wp-btn wp-btn--mini" id="nb-bind-switch">`
+          + `Switch to ${esc(tab.db)}</button> `
+        : `<button type="button" class="wp-btn wp-btn--mini" id="nb-bind-create">`
+          + `Create ${esc(tab.db)}</button> `)
       + `<button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-bind-keep">`
       + `Rebind to ${esc(connDb)}</button>`;
-    byId('nb-bind-switch').addEventListener('click', () => switchConnectionTo(tab.db));
-    byId('nb-bind-create').addEventListener('click', async () => {
+    const sw = byId('nb-bind-switch');
+    if (sw) sw.addEventListener('click', () => switchConnectionTo(tab.db));
+    const cr = byId('nb-bind-create');
+    if (cr) cr.addEventListener('click', async () => {
       const resp = await fetch('/api/databases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: tab.db }),
       });
       const payload = await resp.json().catch(() => ({}));
+      dbListCache = null;
+      if (resp.status === 409) {
+        // Created elsewhere since the list was cached: just switch.
+        switchConnectionTo(tab.db);
+        return;
+      }
       if (!resp.ok) {
         window.alert(payload.error || `HTTP ${resp.status}`);
         return;
@@ -472,7 +518,7 @@
               <i class="fas fa-project-diagram"></i>
               Circuit for <code class="nb-circ__token" title="${cell.token || ''}">${shortToken(cell.token)}</code>
               <button type="button" class="nb-circ__eval wp-btn wp-btn--ghost wp-btn--mini"
-                      title="Insert an evaluation cell for this token below (semiring / probability)">
+                      ${cell.tokenKind === 'agg_token' || cell.tokenKind === 'random_variable' ? 'hidden ' : ''}title="Insert an evaluation cell for this token below (semiring / probability)">
                 <i class="fas fa-bolt"></i> Evaluate</button>
               <button type="button" class="nb-circ__jump wp-btn wp-btn--ghost wp-btn--mini"
                       title="Open this token in Circuit mode (eval strip, expansion, inspector)">
@@ -488,9 +534,9 @@
               <code class="nb-eval__token" title="${cell.token || ''}">${shortToken(cell.token)}</code>
               <select class="nb-eval__semiring" title="What to evaluate on this token">
                 ${EVAL_SEMIRINGS.map(([v, l]) =>
-                  `<option value="${v}"${v === cell.semiring ? ' selected' : ''}>${l}</option>`).join('')}
+                  `<option value="${v}"${v === (cell.semiring || 'probability') ? ' selected' : ''}>${l}</option>`).join('')}
               </select>
-              <select class="nb-eval__method" title="Probability method (see Circuit mode's eval strip for the full per-method controls)">
+              <select class="nb-eval__method" title="Probability method (the full per-method controls live in Circuit mode)">
                 ${EVAL_METHODS.map((m) =>
                   `<option value="${m}"${m === (cell.method || '') ? ' selected' : ''}>${m || '(default)'}</option>`).join('')}
               </select>
@@ -505,6 +551,9 @@
           </div>
         ` : ''}
         ${cell.type === 'sql' ? `
+          ${cell.scheme ? `
+          <span class="nb-cell__scheme" title="This cell runs under the ${cell.scheme} provenance scheme (overrides the toolbar default)">${cell.scheme}</span>
+          ` : ''}
           <div class="wp-editor nb-cell__editor">
             <div class="wp-editor__panel">
               <pre class="wp-editor__hl nb-cell__hl" aria-hidden="true"><code></code></pre>
@@ -525,6 +574,9 @@
         <button type="button" data-act="del" title="Delete cell (command mode: dd, z undoes)"><i class="fas fa-trash"></i></button>
         ${cell.type === 'sql'
           ? `<button type="button" data-act="to-circuit" title="Open this query in Circuit mode"><i class="fas fa-project-diagram"></i></button>`
+          : ''}
+        ${cell.type === 'sql'
+          ? `<button type="button" data-act="scheme" title="Provenance scheme for this cell: ${cell.scheme || 'notebook default'} — click to cycle (default → semiring → where → boolean)"><i class="fas fa-sliders-h"></i></button>`
           : ''}
         <button type="button" data-act="add-sql" title="Insert SQL cell below (command mode: b below, a above)"><i class="fas fa-plus"></i></button>
         <button type="button" data-act="add-md" title="Insert Markdown cell below (command mode: m converts)"><i class="fab fa-markdown"></i></button>
@@ -622,8 +674,19 @@
       });
       div.querySelector('.nb-circ__jump').addEventListener('click', () => {
         // Same carry mechanism as the where-mode jump button: Circuit
-        // mode preloads the token on arrival.
-        try { sessionStorage.setItem('ps.preloadCircuit', cell.token); } catch (e) {}
+        // mode preloads the token on arrival. The row's provenance
+        // gate (recorded when the snapshot came from a result-row
+        // click on an rv / non-provsql uuid) rides along so the eval
+        // strip's "Conditioned by" presets to the row, as it does for
+        // in-Circuit-mode clicks.
+        try {
+          sessionStorage.setItem('ps.preloadCircuit', cell.token);
+          if (cell.rowProv) {
+            sessionStorage.setItem('ps.preloadCircuitRowProv', cell.rowProv);
+          } else {
+            sessionStorage.removeItem('ps.preloadCircuitRowProv');
+          }
+        } catch (e) { /* plain navigation */ }
         window.location.href = '/circuit';
       });
       // Saved notebooks carry the scene; paint it without a fetch.
@@ -689,6 +752,9 @@
         cells.splice(idx + 1, 0, c);
         div.after(buildCellDom(c));
         focusCell(c);
+      } else if (btn.dataset.act === 'scheme') {
+        cycleScheme(cell, div);
+        return;
       } else if (btn.dataset.act === 'to-circuit') {
         // Carry this cell's SQL into Circuit mode through the standard
         // mode-switch channel: executed cells auto-replay there, drafts
@@ -712,6 +778,36 @@
       }
       scheduleAutosave();
     });
+  }
+
+  // Per-cell scheme cycling (default -> semiring -> where -> boolean).
+  // `undefined` means "follow the toolbar's notebook-level default".
+  const SCHEME_CYCLE = [undefined, 'semiring', 'where', 'boolean'];
+
+  function cycleScheme(cell, div) {
+    const idx = SCHEME_CYCLE.indexOf(cell.scheme);
+    cell.scheme = SCHEME_CYCLE[(idx + 1) % SCHEME_CYCLE.length];
+    // Refresh the chip in place (no full rebuild: outputs stay live).
+    let chip = div.querySelector('.nb-cell__scheme');
+    if (cell.scheme) {
+      if (!chip) {
+        chip = document.createElement('span');
+        chip.className = 'nb-cell__scheme';
+        div.querySelector('.nb-cell__editor').before(chip);
+      }
+      chip.textContent = cell.scheme;
+      chip.title = `This cell runs under the ${cell.scheme} provenance `
+        + 'scheme (overrides the toolbar default)';
+    } else if (chip) {
+      chip.remove();
+    }
+    const btn = div.querySelector('[data-act="scheme"]');
+    if (btn) {
+      btn.title = `Provenance scheme for this cell: `
+        + `${cell.scheme || 'notebook default'} — click to cycle `
+        + '(default → semiring → where → boolean)';
+    }
+    scheduleAutosave();
   }
 
   function focusCell(cell) {
@@ -897,6 +993,22 @@
     scheduleAutosave();
   }
 
+  // The eval strip's semantics (semiring evaluation, probability of a
+  // Boolean event) apply to plain provenance tokens; an agg_token or
+  // random_variable root gets no Evaluate affordance -- Circuit mode's
+  // dedicated dispatch (distribution profiles, moments, agg inspection)
+  // is the investigation surface for those.
+  function evalApplies(cell) {
+    return cell.tokenKind !== 'agg_token'
+        && cell.tokenKind !== 'random_variable';
+  }
+
+  function syncCircuitEvalButton(cell) {
+    const el = cellEl(cell);
+    const btn = el && el.querySelector('.nb-circ__eval');
+    if (btn) btn.hidden = !evalApplies(cell);
+  }
+
   function shortToken(t) {
     const s = String(t || '');
     return s.length > 8 ? s.slice(0, 8) + '…' : s;
@@ -905,18 +1017,23 @@
   // Insert a circuit cell for `token` after `afterCell` -- or, when the
   // next cell is already a circuit cell, retarget it (repeated clicks
   // on result UUIDs swap the snapshot instead of piling cells up).
-  function showCircuitFor(token, afterCell) {
+  function showCircuitFor(token, afterCell, rowProv, tokenKind) {
     const idx = cells.indexOf(afterCell);
     let cell = idx >= 0 && cells[idx + 1] && cells[idx + 1].type === 'circuit'
       ? cells[idx + 1] : null;
     if (cell) {
       cell.token = token;
+      cell.rowProv = rowProv || '';
+      cell.tokenKind = tokenKind || '';
+      syncCircuitEvalButton(cell);
       const el = cellEl(cell);
       const lbl = el && el.querySelector('.nb-circ__token');
       if (lbl) { lbl.textContent = shortToken(token); lbl.title = token; }
     } else {
       cell = newCell('circuit');
       cell.token = token;
+      cell.rowProv = rowProv || '';
+      cell.tokenKind = tokenKind || '';
       const pos = idx >= 0 ? idx + 1 : cells.length;
       cells.splice(pos, 0, cell);
       const anchorEl = idx >= 0 ? cellEl(afterCell) : null;
@@ -931,11 +1048,13 @@
   /* An evaluation cell is one eval-strip invocation as a cell: token +
      evaluation (compiled semiring or probability method) + optional
      arguments / provenance mapping, with the result rendered inline
-     and the full invocation recorded in metadata.provsql so a saved
+     and the invocation recorded in metadata.provsql so a saved
      notebook replays it. The narrative form of "and the probability
-     of this answer is...". The rich control set (per-method epsilon /
-     delta fields, tool pickers, distribution cells) stays in Circuit
-     mode; the cell keeps a free-text arguments field instead. */
+     of this answer is...". Offered only for plain provenance tokens:
+     agg_token / random_variable roots get no Evaluate affordance (the
+     strip's semantics don't apply to them; Circuit mode's dedicated
+     dispatch -- distribution profiles, moments -- is the place to
+     investigate those). */
 
   const EVAL_SEMIRINGS = [
     ['probability', 'Probability'],
@@ -945,11 +1064,6 @@
     ['which', 'Which'],
     ['how', 'How'],
     ['counting', 'Counting'],
-  ];
-  const EVAL_METHODS = [
-    '', 'exact', 'relative', 'additive', 'independent', 'possible-worlds',
-    'sieve', 'd-tree', 'tree-decomposition', 'compilation', 'wmc',
-    'monte-carlo', 'karp-luby', 'stopping-rule',
   ];
 
   let mappingsCache = null;   // /api/provenance_mappings payload
@@ -970,6 +1084,12 @@
     el.querySelector('.nb-eval__mapping').hidden = isProb;
     el.querySelector('.nb-eval__args').hidden = !isProb;
   }
+
+  const EVAL_METHODS = [
+    '', 'exact', 'relative', 'additive', 'independent', 'possible-worlds',
+    'sieve', 'd-tree', 'tree-decomposition', 'compilation', 'wmc',
+    'monte-carlo', 'karp-luby', 'stopping-rule',
+  ];
 
   function renderEvalResult(cell) {
     const el = cellEl(cell);
@@ -1011,7 +1131,7 @@
     if (box) { box.hidden = false; box.textContent = 'evaluating…'; }
     const body = {
       token: cell.token,
-      semiring: cell.semiring,
+      semiring: cell.semiring || 'probability',
     };
     if (cell.semiring === 'probability') {
       if (cell.method) body.method = cell.method;
@@ -1326,8 +1446,11 @@
   function commandKeydown(e) {
     if (inEditMode()) return;            // edit-mode keys live on the editors
     if (!selected || !cells.includes(selected)) {
+      // Jupyter's invariant: the selection is never empty -- there is
+      // always exactly one selected cell for command-mode keys to act
+      // on. Re-establish it (visibly) if some path dropped it.
       if (!cells.length) return;
-      selected = cells[0];
+      selectCell(cells[0], { scroll: false });
     }
     const idx = cells.indexOf(selected);
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
@@ -1429,7 +1552,9 @@
         body: JSON.stringify({
           session_id: k.sessionId,
           sql: cell.source,
-          prov_scheme: byId('nb-scheme').value,
+          // Per-cell override first (e.g. cs7's boolean-provenance
+          // narrative); the toolbar selector is the notebook default.
+          prov_scheme: cell.scheme || byId('nb-scheme').value,
           request_id: requestId,
         }),
       });
@@ -1539,13 +1664,14 @@
           return {
             cell_type: 'code', execution_count: c.count,
             metadata: { provsql: {
-              cell: 'eval', token: c.token, semiring: c.semiring,
+              cell: 'eval', token: c.token,
+              semiring: c.semiring || 'probability',
               method: c.method || undefined, arguments: c.args || undefined,
               mapping: c.mapping || undefined,
             } },
             source: toLines(
-              `-- evaluate ${c.semiring}`
-              + (c.semiring === 'probability' && c.method ? `/${c.method}` : '')
+              `-- evaluate ${c.semiring || 'probability'}`
+              + (c.method ? `/${c.method}` : '')
               + ` on ${c.token}`),
             outputs,
           };
@@ -1563,7 +1689,9 @@
           }
           return {
             cell_type: 'code', execution_count: null,
-            metadata: { provsql: { cell: 'circuit', token: c.token } },
+            metadata: { provsql: { cell: 'circuit', token: c.token,
+                                   row_prov: c.rowProv || undefined,
+                                   token_kind: c.tokenKind || undefined } },
             source: toLines(`-- circuit ${c.token}`),
             outputs,
           };
@@ -1578,7 +1706,8 @@
                          execution_count: c.count, metadata: {}, data });
         }
         return { cell_type: 'code', execution_count: c.count,
-                 metadata: { provsql: {} }, source: toLines(c.source), outputs };
+                 metadata: { provsql: c.scheme ? { scheme: c.scheme } : {} },
+                 source: toLines(c.source), outputs };
       }),
     };
   }
@@ -1612,6 +1741,8 @@
                  && c.metadata.provsql.cell === 'circuit') {
         const cell = newCell('circuit');
         cell.token = String(c.metadata.provsql.token || '');
+        cell.rowProv = String(c.metadata.provsql.row_prov || '');
+        cell.tokenKind = String(c.metadata.provsql.token_kind || '');
         for (const o of (c.outputs || [])) {
           // Re-paint only from the scene JSON (through our own
           // painter); the svg snapshot is for external viewers.
@@ -1621,6 +1752,10 @@
         loaded.push(cell);
       } else if (c.cell_type === 'code') {
         const cell = newCell('sql', joinSource(c.source));
+        const pmeta = (c.metadata && c.metadata.provsql) || {};
+        if (['semiring', 'where', 'boolean'].includes(pmeta.scheme)) {
+          cell.scheme = pmeta.scheme;
+        }
         cell.count = (typeof c.execution_count === 'number') ? c.execution_count : null;
         for (const o of (c.outputs || [])) {
           // Studio re-renders ONLY from its own JSON payload; the
@@ -1748,6 +1883,50 @@
     return true;
   }
 
+  /* ──────── bundled example notebooks ──────── */
+  /* The tutorial / case-study notebooks generated from the user guide
+     (studio/scripts/rst2nb.py), served by name from
+     /api/nb/examples/<name>. Opening one is exactly a file load: a new
+     tab bound per the notebook's metadata (the binding banner then
+     offers to create/switch to its database). */
+
+  async function populateExamples() {
+    const sel = byId('nb-example');
+    if (!sel) return;
+    let examples = [];
+    try {
+      const resp = await fetch('/api/nb/examples');
+      if (resp.ok) examples = await resp.json();
+    } catch (e) { /* treated as no examples below */ }
+    if (!examples.length) {
+      // Older server (endpoint missing) or a build without the bundled
+      // notebooks: hide the menu rather than leaving a dead control.
+      sel.hidden = true;
+      return;
+    }
+    sel.hidden = false;
+    for (const ex of examples) {
+      const opt = document.createElement('option');
+      opt.value = ex.name;
+      opt.textContent = ex.title || ex.name;
+      sel.appendChild(opt);
+    }
+  }
+
+  async function openExample(name) {
+    try {
+      const resp = await fetch(`/api/nb/examples/${encodeURIComponent(name)}`);
+      const doc = await resp.json();
+      if (!resp.ok) throw new Error(doc.error || `HTTP ${resp.status}`);
+      fromIpynb(doc);  // validate before opening a tab
+      const db = (doc.metadata && doc.metadata.provsql
+                  && doc.metadata.provsql.database) || connDb;
+      newTab(name, db, doc);
+    } catch (e) {
+      window.alert(`Could not open example ${name}: ${e.message}`);
+    }
+  }
+
   /* ──────── boot ──────── */
 
   function defaultNotebook() {
@@ -1775,7 +1954,11 @@
       if (!td) return;
       const host = td.closest('.nb-cell');
       const cell = host && cells.find((c) => c.id === host.dataset.cellId);
-      if (cell) showCircuitFor(td.dataset.circuitUuid, cell);
+      if (cell) {
+        showCircuitFor(td.dataset.circuitUuid, cell,
+                       td.dataset.rowProv || '',
+                       td.dataset.tokenKind || '');
+      }
     });
 
     byId('nb-run').addEventListener('click', () => {
@@ -1796,6 +1979,11 @@
     });
     byId('nb-save').addEventListener('click', download);
     byId('nb-load').addEventListener('click', () => byId('nb-load-input').click());
+    byId('nb-example').addEventListener('change', () => {
+      const name = byId('nb-example').value;
+      byId('nb-example').value = '';
+      if (name) openExample(name);
+    });
     byId('nb-load-input').addEventListener('change', async () => {
       const input = byId('nb-load-input');
       const file = input.files && input.files[0];
@@ -1883,6 +2071,15 @@
     loadTabIntoView(currentTab());
     persistTabs();
     refreshSidebarSchema();
+    populateExamples();
+    // Deep link: /notebook?nb=<example> opens that bundled notebook in
+    // its own tab (an already-open tab of the same name is reused).
+    const wanted = new URLSearchParams(window.location.search).get('nb');
+    if (wanted) {
+      const existing = tabs.find((t) => t.name === wanted);
+      if (existing) activateTab(existing.id);
+      else openExample(wanted);
+    }
   }
 
   // Mode-switch carry (app.js carryQueryForSwitch): the current cell's

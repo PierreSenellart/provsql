@@ -544,8 +544,9 @@ def test_loaded_notebook_opens_new_tab_with_binding_banner(
 
     _goto_notebook(page, studio_url)
     page.locator("#nb-load-input").set_input_files(str(nb))
-    # New tab, named after the file, with the foreign-db chip.
-    expect(page.locator(".nb__tab")).to_have_count(2)
+    # New tab named after the file, with the foreign-db chip. The
+    # pristine Untitled tab the load started from is dropped.
+    expect(page.locator(".nb__tab")).to_have_count(1)
     active = page.locator(".nb__tab--active")
     expect(active).to_contain_text("myanalysis")
     expect(active.locator(".nb__tab-db")).to_have_text("some_other_db")
@@ -553,6 +554,10 @@ def test_loaded_notebook_opens_new_tab_with_binding_banner(
     banner = page.locator("#nb-binding-banner")
     expect(banner).to_be_visible()
     expect(banner).to_contain_text("some_other_db")
+    # The bound database does not exist: Create is offered, Switch is
+    # not (offering both would be nonsense).
+    expect(banner.locator("#nb-bind-create")).to_be_visible()
+    expect(banner.locator("#nb-bind-switch")).to_have_count(0)
     banner.locator("#nb-bind-keep").click()
     expect(banner).to_be_hidden()
     expect(active.locator(".nb__tab-db")).to_have_count(0)
@@ -599,7 +604,9 @@ def test_db_switch_opens_tab_bound_to_new_database(page: Page, studio_url: str) 
         other.click()
         banner = page.locator("#nb-binding-banner")
         expect(banner).to_be_visible()
+        # That database exists: Switch is offered, Create is not.
         expect(banner.locator("#nb-bind-switch")).to_contain_text(original_db)
+        expect(banner.locator("#nb-bind-create")).to_have_count(0)
     finally:
         page.evaluate("""db => fetch('/api/conn', {
             method: 'POST',
@@ -646,13 +653,14 @@ def _make_circuit_cell(page: Page) -> None:
         timeout=8000)
 
 
-def test_eval_cell_probability_and_formula(page: Page, studio_url: str) -> None:
-    """The circuit cell's Evaluate button inserts an evaluation cell;
-    probability/exact on the 3-way Paris OR with p=0.5 inputs is
-    1 - 0.5^3 = 0.875; switching to the formula semiring re-evaluates
-    symbolically."""
+def test_eval_cell_probability_and_boolexpr(page: Page, studio_url: str) -> None:
+    """The circuit cell's Evaluate button (offered for plain provenance
+    tokens) inserts an evaluation cell; probability/exact on the 3-way
+    Paris OR with p=0.5 inputs is 1 - 0.5^3 = 0.875; the mapping-free
+    boolexpr semiring re-evaluates symbolically."""
     _goto_notebook(page, studio_url)
     _make_circuit_cell(page)
+    expect(page.locator(".nb-circ__eval")).to_be_visible()
     page.locator(".nb-circ__eval").click()
     ev = page.locator(".nb-cell--eval")
     expect(ev).to_have_count(1)
@@ -662,8 +670,6 @@ def test_eval_cell_probability_and_formula(page: Page, studio_url: str) -> None:
     expect(ev.locator(".nb-eval__meta").first).to_contain_text("via")
     expect(ev.locator(".nb-cell__count")).to_have_text(re.compile(r"\[\d+\]"))
 
-    # Boolean-expression semiring (mapping-free): symbolic OR over the
-    # three input gates, leaves as x<id> placeholders.
     ev.locator(".nb-eval__semiring").select_option("boolexpr")
     ev.locator(".nb-cell__run").click()
     expect(ev.locator(".nb-eval__value")).to_contain_text("∨", timeout=8000)
@@ -700,3 +706,124 @@ def test_eval_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> None
     ev2 = page.locator(".nb-cell--eval")
     expect(ev2.locator(".nb-eval__value")).to_have_text("0.875", timeout=8000)
     expect(page.locator("#nb-kernel-label")).to_have_text("no kernel")
+
+
+def test_open_example_menu_and_deep_link(page: Page, studio_url: str) -> None:
+    """The Open-example menu loads a bundled notebook into a new tab
+    bound to its database; /notebook?nb=<name> deep-links to it."""
+    _goto_notebook(page, studio_url)
+    sel = page.locator("#nb-example")
+    expect(sel.locator("option[value='tutorial']")).to_have_count(1, timeout=8000)
+    sel.select_option("tutorial")
+    # New tab named from the notebook's H1, bound to `tutorial` (foreign
+    # db -> chip + banner offering to create it).
+    active = page.locator(".nb__tab--active")
+    expect(active).to_contain_text("Who Killed Daphine", timeout=8000)
+    expect(active.locator(".nb__tab-db")).to_have_text("tutorial")
+    expect(page.locator("#nb-binding-banner")).to_be_visible()
+    # The setup cells came along, COPY data included.
+    expect(page.locator(".nb-cell--sql").first).to_be_visible()
+    assert page.locator(".nb-cell--sql .nb-cell__ta").evaluate_all(
+        "tas => tas.some(t => t.value.includes('FROM stdin;'))")
+
+    # Deep link in a fresh state: opens the example directly.
+    page.evaluate("localStorage.removeItem('ps.nb.autosave');"
+                  "localStorage.removeItem('ps.nb.tabs')")
+    page.goto(studio_url + "/notebook?nb=cs1")
+    expect(page.locator(".nb__tab--active")).to_contain_text(
+        "Intelligence Agency", timeout=8000)
+
+
+def test_empty_db_button_confirms_and_wipes(
+        page: Page, studio_url: str, test_dsn: str) -> None:
+    """The nav broom asks for confirmation naming the database, then
+    drops every user object; dismissing the confirm does nothing.
+
+    The wipe hits the session-shared fixture database, so the fixture
+    schema (personnel & co.) is rebuilt in the finally block for the
+    tests that follow."""
+    _goto_notebook(page, studio_url)
+    ta = _sql_cell_ta(page)
+    ta.fill("CREATE TABLE empty_btn_probe(x int);")
+    ta.focus()
+    _run_focused(page)
+    cell = page.locator(".nb-cell--sql").first
+    expect(cell.locator(".nb-out")).to_contain_text("CREATE", timeout=8000)
+
+    # Dismissed confirm -> nothing happens.
+    page.once("dialog", lambda d: d.dismiss())
+    page.locator("#empty-db-btn").click()
+    page.wait_for_timeout(400)
+    ta.fill("SELECT count(*) FROM empty_btn_probe;")
+    _run_focused(page)
+    expect(cell.locator(".nb-out tbody td").first).to_have_text("0", timeout=8000)
+
+    # Accepted confirm -> wipe + reload; the probe table is gone.
+    try:
+        page.once("dialog", lambda d: d.accept())
+        running_pid = page.locator("#nb-kernel-label").inner_text()
+        page.locator("#empty-db-btn").click()
+        # The wipe reloads the page; wait for the post-reload state (the
+        # kernel chip resets) rather than racing the old page, whose
+        # kernel the server just closed.
+        expect(page.locator("#nb-kernel-label")).not_to_have_text(
+            running_pid, timeout=10000)
+        expect(page.locator("#nb-kernel-label")).to_have_text(
+            "no kernel", timeout=10000)
+        ta2 = _sql_cell_ta(page)
+        ta2.fill("SELECT count(*) FROM empty_btn_probe;")
+        ta2.focus()
+        _run_focused(page)
+        expect(page.locator(".nb-cell--sql").first.locator(".nb-out .wp-error"))\
+            .to_contain_text("empty_btn_probe", timeout=8000)
+    finally:
+        # Rebuild the shared fixture schema the wipe destroyed.
+        import psycopg
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[3]
+        with psycopg.connect(test_dsn, autocommit=True) as conn:
+            # The fixture script expects a virgin database (plain
+            # CREATE EXTENSION); the wipe reinstalled provsql, so shed
+            # it first.
+            conn.execute("DROP EXTENSION IF EXISTS provsql CASCADE")
+            conn.execute("DROP SCHEMA IF EXISTS provsql CASCADE")
+            for fname in ("setup.sql", "add_provenance.sql"):
+                sql_text = "\n".join(
+                    line for line in
+                    (repo / "test" / "sql" / fname).read_text().splitlines()
+                    if not line.startswith("\\"))
+                conn.execute(sql_text)
+        # The restore re-created the extension behind the server's back;
+        # bounce its pool (same-database connection switch) so later
+        # tests don't hit backends with stale extension caches.
+        import psycopg.conninfo
+        dbname = psycopg.conninfo.conninfo_to_dict(test_dsn).get("dbname")
+        page.request.post(f"{studio_url}/api/conn",
+                          data=json.dumps({"database": dbname}),
+                          headers={"Content-Type": "application/json"})
+
+
+def test_per_cell_scheme_cycles_and_persists(page: Page, studio_url: str) -> None:
+    """The cell-actions scheme button cycles default -> semiring ->
+    where -> boolean; the chip reflects it and the override round-trips
+    through the .ipynb metadata."""
+    _goto_notebook(page, studio_url)
+    cell = page.locator(".nb-cell--sql").first
+    _sql_cell_ta(page).fill("SELECT 1;")
+    cell.hover()
+    btn = cell.locator("[data-act='scheme']")
+    expect(cell.locator(".nb-cell__scheme")).to_have_count(0)
+    btn.click()
+    expect(cell.locator(".nb-cell__scheme")).to_have_text("semiring")
+    btn.click()
+    expect(cell.locator(".nb-cell__scheme")).to_have_text("where")
+    btn.click()
+    expect(cell.locator(".nb-cell__scheme")).to_have_text("boolean")
+
+    dl = _download_notebook(page)
+    doc = json.loads(open(dl.path()).read())
+    code = [c for c in doc["cells"] if c["cell_type"] == "code"]
+    assert code[0]["metadata"]["provsql"]["scheme"] == "boolean"
+
+    btn.click()  # back to default
+    expect(cell.locator(".nb-cell__scheme")).to_have_count(0)

@@ -70,4 +70,5 @@ provsql_studio = [
     "static/img/*",
     "static/fonts/*",
     "static/vendor/*",
+    "notebooks/*.ipynb",
 ]

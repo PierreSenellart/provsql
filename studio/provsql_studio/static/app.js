@@ -268,6 +268,11 @@
   // setup can fire it after the result table renders.
   const preloadCircuitUuid = sessionStorage.getItem('ps.preloadCircuit');
   sessionStorage.removeItem('ps.preloadCircuit');
+  // Optional companion to the preload: the row's provenance gate, so
+  // the eval strip's "Conditioned by" presets exactly as it would on an
+  // in-mode click (set by the notebook's circuit-cell jump).
+  const preloadCircuitRowProv = sessionStorage.getItem('ps.preloadCircuitRowProv');
+  sessionStorage.removeItem('ps.preloadCircuitRowProv');
 
   // GUC toggles. In where mode, where_provenance is forced on (the wrap
   // calls where_provenance(...) and would otherwise return all-empty); the
@@ -284,6 +289,35 @@
   setupConfigPanel();
   setupSchemaPanel();
   setupToolsPanel();
+
+  // Nav-bar "empty database" (broom): drop every user schema in the
+  // connected DB after an explicit, name-bearing confirm. Backed by
+  // POST /api/database/empty; the page reloads onto the clean slate
+  // (kernels were closed server-side, caches dropped).
+  document.getElementById('empty-db-btn')?.addEventListener('click', async () => {
+    let dbName = '';
+    try {
+      const resp = await fetch('/api/conn');
+      if (resp.ok) dbName = (await resp.json()).database || '';
+    } catch (e) { /* confirm below still names the action */ }
+    if (!window.confirm(
+        `Empty the database${dbName ? ` “${dbName}”` : ''}?\n\n`
+        + 'This drops EVERY user schema (tables, views, mappings, '
+        + 'functions) and cannot be undone. The provsql extension '
+        + 'itself survives.')) return;
+    try {
+      const resp = await fetch('/api/database/empty', { method: 'POST' });
+      const payload = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        window.alert(payload.error || `HTTP ${resp.status}`);
+        return;
+      }
+    } catch (e) {
+      window.alert(`Network error: ${e.message}`);
+      return;
+    }
+    window.location.reload();
+  });
 
   // ⌘ / Ctrl+Enter submits the query form. Alt+↑/Alt+↓ steps through the
   // saved query history without opening the dropdown.
@@ -2132,7 +2166,7 @@
       (carriedRan || carry) && document.getElementById('request').value.trim();
     if (shouldReplay) {
       runQuery({ preventDefault() {} }).then(() => {
-        if (carry) loadCircuit(carry);
+        if (carry) loadCircuit(carry, { rowProv: preloadCircuitRowProv || '' });
       });
     } else if (carry) {
       // No query but a preload UUID: render the circuit directly.
@@ -2142,7 +2176,8 @@
       // where->circuit jump never hit this branch (it always carries a
       // query, so the .then() above ran after the IIFE); the notebook's
       // circuit-cell jump carries only the UUID and does.
-      queueMicrotask(() => loadCircuit(carry));
+      queueMicrotask(() => loadCircuit(carry,
+        { rowProv: preloadCircuitRowProv || '' }));
     }
   }
 
@@ -2901,7 +2936,8 @@ function makeBlockRenderer(env, targets) {
           // a uuid cell does.
           if (clickableUuid && (typeName === 'uuid' || typeName === 'random_variable') && value) {
             extraCls  = ' is-clickable';
-            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
+            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`
+                      + ` data-token-kind="${env.escapeAttr(typeName)}"${rowProvAttr}`;
           }
           // agg_token cells: their on-wire text is the underlying UUID
           // (because provsql.aggtoken_text_as_uuid is on for studio
@@ -2914,7 +2950,8 @@ function makeBlockRenderer(env, targets) {
           if (typeName === 'agg_token' && value) {
             if (clickableUuid) {
               extraCls  = (extraCls + ' is-clickable').trim();
-              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
+              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`
+                        + ` data-token-kind="agg_token"${rowProvAttr}`;
               if (extraCls.length) extraCls = ' ' + extraCls;
             }
             extraAttr += ` title="${env.escapeAttr(String(value))}"`;

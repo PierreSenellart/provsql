@@ -227,3 +227,145 @@ def test_create_database_endpoint(client, test_dsn):
     finally:
         with psycopg.connect(admin, autocommit=True) as conn:
             conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+
+
+# ──────── bundled example notebooks ────────
+
+
+def test_examples_list_and_fetch(client):
+    """The generated tutorial / case-study notebooks are listed with
+    their titles and database bindings, and fetchable by name."""
+    resp = client.get("/api/nb/examples")
+    assert resp.status_code == 200
+    names = [e["name"] for e in resp.get_json()]
+    examples = {e["name"]: e for e in resp.get_json()}
+    assert "tutorial" in examples and "cs1" in examples
+    # The tutorial leads the list; case studies follow.
+    assert names[0] == "tutorial" and names[1:] == sorted(names[1:])
+    assert examples["tutorial"]["database"] == "tutorial"
+    assert "Daphine" in examples["tutorial"]["title"]
+
+    resp = client.get("/api/nb/examples/tutorial")
+    assert resp.status_code == 200
+    doc = resp.get_json()
+    assert doc["nbformat"] == 4
+    assert doc["metadata"]["provsql"]["database"] == "tutorial"
+    kinds = {c["cell_type"] for c in doc["cells"]}
+    assert kinds == {"markdown", "code"}
+    # The setup splice carried the COPY data blocks along.
+    assert any("FROM stdin;" in "".join(c["source"])
+               for c in doc["cells"] if c["cell_type"] == "code")
+
+    assert client.get("/api/nb/examples/nope").status_code == 404
+    assert client.get("/api/nb/examples/..%2Fetc").status_code in (400, 404)
+
+
+# ──────── empty-database action ────────
+
+
+def test_empty_database_endpoint(test_dsn, tmp_path, monkeypatch):
+    """POST /api/database/empty drops every user schema and recreates a
+    blank public; the provsql extension survives. Run against a scratch
+    database so the shared fixture is untouched."""
+    import psycopg
+    from provsql_studio.app import create_app
+
+    name = "provsql_nb_empty_test"
+    admin = "dbname=postgres"
+    params = psycopg.conninfo.conninfo_to_dict(test_dsn)
+    params["dbname"] = name
+    scratch_dsn = psycopg.conninfo.make_conninfo(**params)
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+        conn.execute(f'CREATE DATABASE "{name}"')
+    app = None
+    try:
+        with psycopg.connect(scratch_dsn, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION provsql CASCADE")
+            conn.execute("CREATE TABLE t(x int)")
+            conn.execute("CREATE SCHEMA other")
+            conn.execute("CREATE TABLE other.u(y int)")
+
+        monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "cfg"))
+        app = create_app(dsn=scratch_dsn)
+        app.config.update(TESTING=True)
+        client = app.test_client()
+
+        resp = client.post("/api/database/empty")
+        assert resp.status_code == 200, resp.data
+        dropped = resp.get_json()["dropped_schemas"]
+        assert "public" in dropped and "other" in dropped
+
+        with psycopg.connect(scratch_dsn) as conn:
+            assert conn.execute(
+                "SELECT 1 FROM pg_extension WHERE extname='provsql'"
+            ).fetchone()
+            assert conn.execute(
+                "SELECT to_regclass('public.t')").fetchone()[0] is None
+            assert conn.execute(
+                "SELECT count(*) FROM pg_namespace WHERE nspname='other'"
+            ).fetchone()[0] == 0
+            # public exists and is usable
+            conn.execute("CREATE TABLE recheck(x int)")
+    finally:
+        if app is not None:
+            app.extensions["provsql_kernels"]["close_all"]()
+            app.extensions["provsql_pool"].close()
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+
+
+def test_tutorial_notebook_run_all_twice(test_dsn, tmp_path, monkeypatch):
+    """The generated notebooks are idempotent: every SQL cell of the
+    tutorial runs cleanly TWICE in a row on a scratch database (the
+    setup guards, the NOTICE-only add_provenance / mapping re-runs, and
+    the DROP-IF-EXISTS narrative blocks all compose)."""
+    import json
+    from pathlib import Path
+
+    import psycopg
+    from provsql_studio.app import create_app
+
+    name = "provsql_nb_idem_tutorial"
+    admin = "dbname=postgres"
+    params = psycopg.conninfo.conninfo_to_dict(test_dsn)
+    params["dbname"] = name
+    scratch_dsn = psycopg.conninfo.make_conninfo(**params)
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+        conn.execute(f'CREATE DATABASE "{name}"')
+    app = None
+    try:
+        with psycopg.connect(scratch_dsn, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION provsql CASCADE")
+
+        monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "cfg"))
+        app = create_app(dsn=scratch_dsn)
+        app.config.update(TESTING=True)
+        client = app.test_client()
+
+        doc = json.loads(
+            (Path(app.root_path) / "notebooks" / "tutorial.ipynb").read_text())
+        sqls = ["".join(c["source"]) for c in doc["cells"]
+                if c["cell_type"] == "code"]
+        assert len(sqls) > 20
+
+        for round_no in (1, 2):
+            sid = client.post("/api/nb/session").get_json()["session_id"]
+            for i, sql_text in enumerate(sqls):
+                resp = client.post("/api/nb/exec", json={
+                    "session_id": sid, "sql": sql_text})
+                payload = resp.get_json()
+                errors = [b for b in (payload.get("blocks") or [])
+                          if b.get("kind") == "error"]
+                assert not errors, (
+                    f"round {round_no}, cell {i}: "
+                    f"{sql_text[:90]!r} -> {errors}")
+                assert payload.get("kernel_dead") is False
+            client.delete(f"/api/nb/session/{sid}")
+    finally:
+        if app is not None:
+            app.extensions["provsql_kernels"]["close_all"]()
+            app.extensions["provsql_pool"].close()
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
