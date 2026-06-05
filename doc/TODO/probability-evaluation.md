@@ -92,18 +92,18 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   a pivot identity that avoids explicit factorisation). Remaining: genuinely
   coupled values that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor;
   may be `#P`-hard, self-gates back to enumeration today).
-- **BID disjoint-block `⊥`** — the circuit-visible case is now exact: a
-  `repair_key` block surfaces as `gate_mulinput` contributors sharing a
-  block-key child, so `runAggMarginalEvaluator` handles each block as a
-  *categorical* (mutually exclusive, null arm Σp<1) convolved with the TID part,
-  for `COUNT` / `SUM` / `AVG` (`src/AggMarginalEvaluator.cpp`, pinned by
-  `test/sql/having_bid.sql`). Remaining: BID `MIN` / `MAX` (blockwise
-  `pAllAbsent` over value-thresholded alternatives), and the genuinely
-  **certificate-only** residual — a *declared key on a plain TID table*, where
-  mutual exclusion lives in `block_key` metadata only (no `mulinput` in the
-  circuit). That last one needs a `CERT_SAFE_AGG_PLAN` blob baked onto the
-  `gate_agg` at the HAVING-lift site (`having_Expr_to_provenance_cmp` in
-  `src/provsql.c`, via `src/safe_query_cert.{c,h}`), carried through
+- **BID disjoint-block `⊥`** — the circuit-visible case is now exact for *every*
+  aggregate: a `repair_key` block surfaces as `gate_mulinput` contributors
+  sharing a block-key child, so `runAggMarginalEvaluator` handles each block as
+  a *categorical* (mutually exclusive, null arm Σp<1) independent of the TID
+  part — `COUNT` / `SUM` / `AVG` convolve its count / weighted-sum distribution,
+  `MIN` / `MAX` fold a per-block `1-Σ_{pred}p` factor into each `pAllAbsent`
+  (`src/AggMarginalEvaluator.cpp`, pinned by `test/sql/having_bid.sql`). The one
+  residual is the genuinely **certificate-only** case — a *declared key on a
+  plain TID table*, where mutual exclusion lives in `block_key` metadata only
+  (no `mulinput` in the circuit). That needs a `CERT_SAFE_AGG_PLAN` blob baked
+  onto the `gate_agg` at the HAVING-lift site (`having_Expr_to_provenance_cmp`
+  in `src/provsql.c`, via `src/safe_query_cert.{c,h}`), carried through
   `CircuitFromMMap` — and would be the first load-bearing consumer of the
   planner's skeleton/block analysis (today diagnostic-only in
   `classify_having.c`).

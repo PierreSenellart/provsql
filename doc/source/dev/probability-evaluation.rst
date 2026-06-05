@@ -657,17 +657,20 @@ explicit factorisation is needed).  A value that is neither (``sum(b*c+b+c)``)
 and a non-laminar shape (the triangle) self-gate back to enumeration.  Pinned
 by ``test/sql/having_safe_join_{count,agg}.sql``.
 
-The same evaluator also covers **BID blocks** for ``COUNT`` / ``SUM`` / ``AVG``:
-a ``repair_key`` block surfaces as ``gate_mulinput`` contributors sharing a
-block-key child (mutually exclusive, per-alternative probabilities), so each
-block is handled as a *categorical* (at most one alternative present, the null
-arm contributing 0) and convolved with the independent TID part -- no planner
-certificate, since the block *is* visible in the circuit.  This is the
-value-0-present-vs-empty-group corner of ``test/sql/having_sum_zero.sql``,
-exercised exactly rather than by enumeration; pinned by
-``test/sql/having_bid.sql``.  BID ``MIN`` / ``MAX``, and a declared key on a
-plain TID table (mutual exclusion in ``block_key`` metadata only, no
-``mulinput``), still fall back.
+The same evaluator also covers **BID blocks** for every aggregate
+(``COUNT`` / ``SUM`` / ``AVG`` / ``MIN`` / ``MAX``): a ``repair_key`` block
+surfaces as ``gate_mulinput`` contributors sharing a block-key child (mutually
+exclusive, per-alternative probabilities), so each block is handled as a
+*categorical* (at most one alternative present, the null arm contributing 0),
+independent of the TID part.  ``COUNT`` / ``SUM`` / ``AVG`` convolve the
+block's count / weighted-sum distribution; ``MIN`` / ``MAX`` fold a per-block
+factor ``1-Σ_{pred} p_alt`` into each ``pAllAbsent`` over a value-thresholded
+subset.  No planner certificate is needed, since the block *is* visible in the
+circuit.  This is the value-0-present-vs-empty-group corner of
+``test/sql/having_sum_zero.sql``, now exercised exactly rather than by
+enumeration; pinned by ``test/sql/having_bid.sql``.  The one residual is a
+declared key on a plain TID table (mutual exclusion in ``block_key`` metadata
+only, no ``mulinput``), which still falls back.
 :cfunc:`safe_query_skeleton_is_hierarchical` exposes the skeleton-safety
 axis.  The **HAVING classifier** (``src/classify_having.c``, GUC
 ``provsql.classify_having``, default off) combines the two: for each

@@ -36,9 +36,12 @@ SELECT * FROM bid_parity('z SUM = 0',  'SELECT provenance() FROM bid_z GROUP BY 
 SELECT * FROM bid_parity('z SUM >= 5', 'SELECT provenance() FROM bid_z GROUP BY d HAVING sum(val) >= 5');
 SELECT * FROM bid_parity('z AVG < 5',  'SELECT provenance() FROM bid_z GROUP BY d HAVING avg(val) < 5');
 SELECT * FROM bid_parity('z COUNT < 2','SELECT provenance() FROM bid_z GROUP BY d HAVING count(*) < 2');
--- MIN over a BID block is out of scope: the engine must DECLINE and the
--- on-path still matches the enumerator.
-SELECT * FROM bid_parity('z MIN < 5',  'SELECT provenance() FROM bid_z GROUP BY d HAVING min(val) < 5');
+-- MIN / MAX over a BID block: each block is an independent categorical, so a
+-- value-thresholded subset is all-absent w.p. 1-Σp over its matching
+-- alternatives; the engine fires and matches the enumerator.
+SELECT * FROM bid_parity('z MIN < 5',   'SELECT provenance() FROM bid_z GROUP BY d HAVING min(val) < 5');
+SELECT * FROM bid_parity('z MAX >= 10', 'SELECT provenance() FROM bid_z GROUP BY d HAVING max(val) >= 10');
+SELECT * FROM bid_parity('z MAX = 0',   'SELECT provenance() FROM bid_z GROUP BY d HAVING max(val) = 0');
 
 -- A block with a null outcome: P(=0)=0.3, P(=10)=0.3, P(empty)=0.4.
 CREATE TABLE bid_n(e text, val int, p float);
@@ -58,6 +61,8 @@ DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM bid_xy; END $$;
 
 SELECT * FROM bid_parity('xy SUM < 11', 'SELECT provenance() FROM bid_xy GROUP BY c HAVING sum(val) < 11');
 SELECT * FROM bid_parity('xy SUM <= 1', 'SELECT provenance() FROM bid_xy GROUP BY c HAVING sum(val) <= 1');
+SELECT * FROM bid_parity('xy MAX >= 10','SELECT provenance() FROM bid_xy GROUP BY c HAVING max(val) >= 10');
+SELECT * FROM bid_parity('xy MIN >= 1', 'SELECT provenance() FROM bid_xy GROUP BY c HAVING min(val) >= 1');
 
 -- Confirm the BID arm actually FIRES (pin the "safe-join aggregate" NOTICE):
 -- once for a single block, once for the two-block convolution.
@@ -66,6 +71,8 @@ SELECT provenance() AS t1 FROM bid_z  GROUP BY d HAVING sum(val) < 5  \gset
 SELECT round(probability_evaluate(:'t1'::uuid)::numeric, 4) AS z_fires;
 SELECT provenance() AS t2 FROM bid_xy GROUP BY c HAVING sum(val) < 11 \gset
 SELECT round(probability_evaluate(:'t2'::uuid)::numeric, 4) AS xy_fires;
+SELECT provenance() AS t3 FROM bid_z  GROUP BY d HAVING max(val) >= 10 \gset
+SELECT round(probability_evaluate(:'t3'::uuid)::numeric, 4) AS max_fires;
 SET provsql.verbose_level = 0;
 
 DROP FUNCTION bid_parity(text, text);

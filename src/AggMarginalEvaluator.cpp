@@ -504,15 +504,27 @@ static double pAllAbsent(GenericCircuit &gc,
 static double minMaxProb(GenericCircuit &gc,
                          const std::vector<std::vector<gate_t>> &leaves,
                          const std::vector<long> &vals,
+                         const std::vector<std::vector<std::pair<long, double>>> &blocks,
                          AggregationOperator agg, ComparisonOperator op,
                          long C, bool &ok)
 {
-  /* P(all contributors whose value satisfies @p pred are absent). */
+  /* P(all contributors whose value satisfies @p pred are absent).  The TID
+   * part goes through the hierarchical pAllAbsent; each independent BID block
+   * contributes (1 - Σ_{alt: pred} p_alt) -- the probability its (single)
+   * present alternative is not one whose value satisfies @p pred (mutual
+   * exclusion: the matching subset is all-absent iff the chosen one, if any,
+   * lies outside it). */
   auto pAbsentWhere = [&](auto pred) -> double {
     std::vector<std::vector<gate_t>> sub;
     for (std::size_t i = 0; i < leaves.size(); ++i)
       if (pred(vals[i])) sub.push_back(leaves[i]);
-    return pAllAbsent(gc, std::move(sub), ok);
+    double r = pAllAbsent(gc, std::move(sub), ok);
+    for (const auto &blk : blocks) {
+      double s = 0.0;
+      for (const auto &alt : blk) if (pred(alt.first)) s += alt.second;
+      r *= 1.0 - (s > 1.0 ? 1.0 : s);
+    }
+    return r;
   };
 
   const double allAbsent = pAbsentWhere([](int) { return true; });
@@ -1147,8 +1159,19 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
         pr -= emptyMass;
       }
     } else {  /* MIN or MAX */
-      if (!blocks.empty()) continue;       /* BID min/max: out of scope (bail) */
-      pr = minMaxProb(gc, leaves, match.ms, agg_kind, match.op, match.C, ok);
+      /* MIN/MAX over the TID part (laminar pAllAbsent) and the BID blocks
+       * (each an independent categorical; a value-thresholded subset of a
+       * block is all-absent w.p. 1-Σp over its matching alternatives). */
+      std::vector<std::vector<std::pair<long, double>>> blockvec;
+      blockvec.reserve(blocks.size());
+      for (const auto &b : blocks) {
+        std::vector<std::pair<long, double>> alts;
+        alts.reserve(b.second.size());
+        for (const auto &alt : b.second) alts.push_back({alt.second, alt.first});
+        blockvec.push_back(std::move(alts));
+      }
+      pr = minMaxProb(gc, leaves, tid_vals, blockvec, agg_kind, match.op,
+                      match.C, ok);
       if (!ok) continue;
     }
 
