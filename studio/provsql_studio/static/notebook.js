@@ -134,7 +134,7 @@
       ? (tab.doc.cells || []).some((c) => String(
           Array.isArray(c.source) ? c.source.join('') : c.source || '').trim())
       : (id === activeTabId && cells.some((c) => (c.source || '').trim()));
-    if (nonTrivial && !window.confirm(`Close tab “${tab.name}”?`)) return;
+    if (nonTrivial && !window.confirm(`Close tab “${tabDisplayName(tab)}”?`)) return;
     if (tab.kernel) {
       fetch(`/api/nb/session/${encodeURIComponent(tab.kernel.sessionId)}`,
             { method: 'DELETE' }).catch(() => {});
