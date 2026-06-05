@@ -454,13 +454,14 @@
         </table>
       </div>
       <div class="nb-out__meta">
-        <span class="nb-out__count"></span> tuples<span class="nb-out__trunc" hidden></span>
+        <span class="nb-out__count"></span> <span class="nb-out__noun">tuples</span><span class="nb-out__trunc" hidden></span>
         · <span class="nb-out__time">–</span> ms
       </div>`;
     return {
       head: outEl.querySelector('thead tr'),
       body: outEl.querySelector('tbody'),
       count: outEl.querySelector('.nb-out__count'),
+      noun: outEl.querySelector('.nb-out__noun'),
       banners: outEl.querySelector('.nb-out__banners'),
       truncated: outEl.querySelector('.nb-out__trunc'),
     };

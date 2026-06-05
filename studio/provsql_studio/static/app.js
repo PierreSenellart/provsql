@@ -705,7 +705,7 @@
           }
           return `${shown}+ tuples (capped)`;
         }
-        return `${shown} tuples`;
+        return `${shown} tuple${shown === 1 ? '' : 's'}`;
       })();
       return `
       <section class="wp-relation" id="${escapeAttr(sectionId(rel.regclass))}">
@@ -2655,6 +2655,12 @@ const CLASSIFIER_EXPLAINERS = {
    banners, classifier pill -- as the shared result pane. */
 function makeBlockRenderer(env, targets) {
   const { head, body, count } = targets;
+  // Keep the count element purely numeric (tests and callers read it as a
+  // number); the singular/plural noun lives in its own optional element.
+  const setCount = (n) => {
+    count.textContent = n;
+    if (targets.noun) targets.noun.textContent = n === 1 ? 'tuple' : 'tuples';
+  };
 
   // Render a single NOTICE / WARNING / ERROR / INFO banner. Severity drives
   // colour + icon; the literal severity tag is omitted (the visual style
@@ -2782,7 +2788,7 @@ function makeBlockRenderer(env, targets) {
     if (!final) {
       head.innerHTML = '';
       body.innerHTML = '<tr><td style="opacity:.6">(no statements)</td></tr>';
-      count.textContent = 0;
+      setCount(0);
       return;
     }
 
@@ -2796,13 +2802,13 @@ function makeBlockRenderer(env, targets) {
       }
       head.innerHTML = '';
       body.innerHTML = '';
-      count.textContent = 0;
+      setCount(0);
       return;
     }
     if (final.kind === 'status') {
       head.innerHTML = '';
-      body.innerHTML = `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} tuples affected` : ''}</td></tr>`;
-      count.textContent = final.rowcount != null ? final.rowcount : 0;
+      body.innerHTML = `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} tuple${final.rowcount === 1 ? '' : 's'} affected` : ''}</td></tr>`;
+      setCount(final.rowcount != null ? final.rowcount : 0);
       return;
     }
     if (final.kind === 'rows') {
@@ -2967,7 +2973,7 @@ function makeBlockRenderer(env, targets) {
           : '';
         return `<tr>${cells}${jumpBtn}</tr>`;
       }).join('');
-      count.textContent = final.rows.length;
+      setCount(final.rows.length);
       const truncated = targets.truncated;
       if (truncated) {
         if (final.truncated && final.max_rows != null) {
@@ -3088,6 +3094,7 @@ async function runQuery(ev) {
 
   const R = makeBlockRenderer(env, {
     head, body, count,
+    noun: document.getElementById('result-noun'),
     banners: document.getElementById('result-banners'),
     truncated: document.getElementById('result-truncated'),
   });
