@@ -42,10 +42,26 @@ surviving `gate_agg`), an FPRAS when `p ≥ 1/poly`.  What remains is the
 **rounding-based rejection FPTRAS** (Thm 9 / Alg 6.3.1) proper, whose value over
 that stopping rule is **rare-event efficiency** — a sample count that does not
 blow up as `p → 0`, via the rounded proposal's bounded acceptance ratio — plus
-the **MIN/MAX hard direction** on a safe skeleton.  Gated by
-`safe_query_skeleton_is_hierarchical` (`src/safe_query.c`, the read-only detector
-built but so far **unused** — this is what would make it load-bearing); an unsafe
-skeleton is hazardous (no FPTRAS, warn and fall back to additive MC).
+the **MIN/MAX hard direction** on a safe skeleton.  Deciding skeleton safety
+here would re-use the rewriter's hierarchical analysis
+(`find_hierarchical_root_atoms`, `src/safe_query.c`); an unsafe skeleton is
+hazardous (no FPTRAS, warn and fall back to additive MC).
+
+**ProvSQL is now well-positioned for this.** The marginal-vector engine
+(`AggMarginalEvaluator.cpp`) *is* the forward pass of Alg 5.2.1, and the world
+generator is literally that recursion run in reverse (piece 2 below); the
+hardest descent node — the Cartesian-product `⊗` split of a value-carrying
+branch-spanning SUM — needs the per-factor **joint `(sum, count)` distribution**,
+which is exactly `sumCountPMF`, built this session for the branch-spanning work.
+So the one prerequisite that used to be missing is now in place.
+
+**But the gap it closes is narrow.** The rounding FPTRAS only beats the existing
+DKLR sampler on *safe-skeleton SUM with large-magnitude incommensurate values*
+(so the exact pseudo-poly path bails) **and** a *small target probability* (so
+DKLR's `Θ(1/p)` sample count is prohibitive) — the intersection of two corners
+each already handled. It is the sole place ProvSQL is provably weaker than the
+paper, but rarely the bottleneck in practice. Recommendation: keep deferred;
+implement only when that rare-event SUM corner actually bites.
 
 Thm 9 / Alg 6.3.1, three pieces:
 
@@ -54,12 +70,17 @@ Thm 9 / Alg 6.3.1, three pieces:
    recursion already built (`sumPMF` / `countPMF`, well under `kMaxSumSupport`),
    driven by the query-level safe plan from `find_hierarchical_root_atoms`.
 2. *Random-world generator* (Alg 5.2.1, the one genuinely new subroutine):
-   `sampleWorldWithValue(plan_node, target_s)` walks the safe-plan tree
+   `sampleWorldWithValue(node, target_s)` walks the laminar recursion tree
    **top-down**, splitting `target_s` among children ∝ marginal-vector entries
    (`⊕`: pick `s₁+s₂=s` w.p. `m^φ₁[s₁]·m^φ₂[s₂]/m^φ[s]`; `⊗`: `s₁·s₂=s`; `⊔`:
    route all to one branch). **This is the bottom-up `countPMF` / `sumPMF` /
-   `decomposeProduct` recursion run in reverse** (same tree, same vectors, the
-   draw descends instead of folding up). Alg 5.2.2 fills off-plan tuples.
+   `sumCountPMF` / `decomposeProduct` recursion run in reverse** (same tree, same
+   vectors, the draw descends instead of folding up). Two concrete hooks: (i) the
+   forward pass currently *discards* the per-node marginals — they must be
+   retained as a lightweight `(combinator, child-PMFs, leaves)` tree (`O(circuit)`)
+   or recomputed on the way down; (ii) the `⊗` split of a branch-spanning value
+   draws against the per-factor joint from `sumCountPMF`. Alg 5.2.2 fills
+   off-plan tuples (maps onto the existing BID / `mulinput` block handling).
 3. *Accept-test* (Lemma 7): draw a rounded value `∝ μ(rounded)`, draw a world,
    accept iff it is an *original* solution; `m = O(n·β⁻¹·ε⁻²·log δ⁻¹)` samples →
    relative `(ε,δ)`.
@@ -104,9 +125,9 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   (no `mulinput` in the circuit). That needs a `CERT_SAFE_AGG_PLAN` blob baked
   onto the `gate_agg` at the HAVING-lift site (`having_Expr_to_provenance_cmp`
   in `src/provsql.c`, via `src/safe_query_cert.{c,h}`), carried through
-  `CircuitFromMMap` — and would be the first load-bearing consumer of the
-  planner's skeleton/block analysis (today diagnostic-only in
-  `classify_having.c`).
+  `CircuitFromMMap` — consuming, at probability time, the
+  `find_hierarchical_root_atoms` block structure that the rewriter already
+  computes but the HAVING-lift currently discards.
 - **UNION/EXCEPT over a join that re-uses a base tuple** — `(R⋈S) UNION (R⋈T)` →
   `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. The *independent* case (each
   contributor's footprint private — the usual one) is now exact:

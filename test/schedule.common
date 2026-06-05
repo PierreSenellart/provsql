@@ -195,14 +195,8 @@ test: safe_query_ancestry_disjoint
 test: safe_query_inner_join
 test: safe_query_inversion_free
 
-# Read-only skeleton-safety detector (HAVING trichotomy skeleton axis)
-test: skeleton_safety
-
 # Query-time TID / BID / OPAQUE classifier (NOTICE surface)
 test: classify_query
-
-# Query-time HAVING-trichotomy classifier (NOTICE surface)
-test: classify_having
 
 # Load-time Boolean-identity folding (idempotence + plus-with-one absorber)
 test: boolean_fold

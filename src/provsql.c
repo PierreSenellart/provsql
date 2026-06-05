@@ -63,7 +63,6 @@
 #include <time.h>
 
 #include "classify_query.h"
-#include "classify_having.h"
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
@@ -10276,14 +10275,6 @@ static PlannedStmt *provsql_planner(Query *q,
       list_free(cls.source_relids);
     }
 
-    /* HAVING-trichotomy classifier: a NOTICE per HAVING aggregate
-     * comparison labelling it safe / apx-safe / #P-hard / open.  Same
-     * read-only, top-level-only gating as classify_top_level. */
-    if (provsql_executor_depth == 0
-        && provsql_classify_having
-        && constants.ok)
-      provsql_emit_having_classification(q, &constants);
-
     if (constants.ok && has_provenance(&constants, q)) {
       bool *removed = NULL;
       Query *new_query;
@@ -11124,24 +11115,6 @@ void _PG_init(void) {
                            "NOTICE to label query results with their "
                            "certified kind.",
                            &provsql_classify_top_level,
-                           false,
-                           PGC_USERSET,
-                           0,
-                           NULL,
-                           NULL,
-                           NULL);
-  DefineCustomBoolVariable("provsql.classify_having",
-                           "Emit a NOTICE classifying each HAVING aggregate "
-                           "comparison under the Ré-Suciu trichotomy.",
-                           "When on, every top-level SELECT with a HAVING "
-                           "aggregate comparison `alpha(y) theta k` triggers "
-                           "a NOTICE labelling the (alpha, theta) pair as "
-                           "safe (exact PTIME), apx-safe (exact #P-hard but an "
-                           "FPRAS exists), hazardous (no FPRAS), or open, "
-                           "combining the static (alpha, theta) overlay with "
-                           "the skeleton-safety axis.  Read-only : the "
-                           "classifier does not rewrite the query.",
-                           &provsql_classify_having,
                            false,
                            PGC_USERSET,
                            0,

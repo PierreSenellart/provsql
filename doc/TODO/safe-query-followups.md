@@ -45,9 +45,7 @@ folded into Tier 2 below.
   `gate_agg` children *circuit-only*: `runAggMarginalEvaluator`
   (`src/AggMarginalEvaluator.{h,cpp}`) recurses through any hierarchical
   (laminar) join self-gating on whether each multi-member block has a leaf
-  common to all its members, and the planner-side skeleton detector
-  `safe_query_skeleton_is_hierarchical` (`src/safe_query.c`) reports
-  HAVING-skeleton safety to the classifier.  What remains is the planner
+  common to all its members.  What remains is the planner
   certificate for shapes the circuit *cannot* self-certify -- notably BID
   disjoint-block (`⊥`) structure, where the mutual exclusivity is not
   visible from leaf sharing alone.  The certificate would be stamped on the

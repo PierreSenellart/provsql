@@ -516,9 +516,9 @@ Two safety properties drive everything:
 - **Skeleton safety** -- whether ``sk(Q)``, the conjunctive query feeding
   the aggregate (the ``FROM`` / ``WHERE`` body with the group-by and
   aggregated variables as head), is a self-join-free hierarchical CQ
-  (Dalvi–Suciu safe, :cite:`DBLP:journals/jacm/DalviS12`).
-  :cfunc:`safe_query_skeleton_is_hierarchical` (``src/safe_query.c``)
-  decides this read-only.
+  (Dalvi–Suciu safe, :cite:`DBLP:journals/jacm/DalviS12`) -- the same
+  property the safe-query rewriter detects (:cfunc:`find_hierarchical_root_atoms`
+  in ``src/safe_query.c``).
 - **α-safety** -- a stricter, per-aggregate *plan* property.  For
   ``MIN`` / ``MAX`` / ``COUNT`` it coincides with skeleton safety; for
   ``SUM`` / ``AVG`` (Def. 15) and ``COUNT(DISTINCT)`` (Def. 14) it is
@@ -682,15 +682,10 @@ the internal sharing exactly) and models it as an independent one-alternative
 block, reusing the categorical machinery; pinned by ``test/sql/having_union.sql``.
 A base tuple shared *across* a group's contributors is genuinely :math:`\#P`-hard
 and falls back to enumeration.
-:cfunc:`safe_query_skeleton_is_hierarchical` exposes the skeleton-safety
-axis.  The **HAVING classifier** (``src/classify_having.c``, GUC
-``provsql.classify_having``, default off) combines the two: for each
-``HAVING`` aggregate comparison it emits a read-only ``NOTICE`` giving the
-cell above -- safe / apx-safe / hazardous / open -- by pairing the static
-``(α, θ)`` overlay with the per-query skeleton-safety bit.  It mirrors
-``provsql.classify_top_level`` (read-only, top-level only) and is the
-diagnostic that tells a user whether a slow ``HAVING`` probability query is
-exactly tractable, approximable (route to karp-luby), or genuinely hard.
+
+The trichotomy classification above is the standing complexity reference; ProvSQL
+acts on it only through the evaluators (the exact corner) and the sampler (the
+apx-safe corner), not through any read-only verdict surface.
 
 **The apx-safe corner, in practice.**  ``runSumCmpEvaluator`` is
 *pseudo*-polynomial: it declines a ``SUM`` whose reachable range exceeds a

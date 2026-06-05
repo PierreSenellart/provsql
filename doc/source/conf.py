@@ -224,7 +224,7 @@ _C_FUNC_MAP = {
     'resolve_through_group_rte':    '/doxygen-c/html/classify__query_8c.html#a8eee1d3eb92521c4c5695f06f8e6dab3',
     # safe_query.c -- safe-query rewriter + propagation pre-passes
     'is_safe_query_candidate':      '/doxygen-c/html/safe__query_8c.html#a91df2747fa3cd9564c35997e464375c1',
-    'safe_query_skeleton_is_hierarchical': '/doxygen-c/html/safe__query_8c.html#ac81a7730e7fe479a17298775542e2e16',
+    'find_hierarchical_root_atoms': '/doxygen-c/html/safe__query_8c.html#a5bcf3bf32fe73c5efe394d3905863dd9',
     'compact_orphan_rtes':          '/doxygen-c/html/safe__query_8c.html#ac4aca5fe259074c262b928cd700f9bb8',
     # safe_query.c / provsql.c / probability_evaluate.cpp -- inversion-free path
     'detect_inversion_free':        '/doxygen-c/html/safe__query_8c.html#aca9d89ad57555f7370ff4ed6b2da3156',

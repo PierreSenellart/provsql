@@ -38,27 +38,6 @@ extern bool provsql_boolean_provenance;
 extern Query *try_safe_query_rewrite(const constants_t *constants, Query *q);
 
 /**
- * @brief Read-only test: is the conjunctive skeleton @c sk(Q) of an
- *        aggregate / @c HAVING query hierarchical (Dalvi-Suciu safe)?
- *
- * Reuses the hierarchical detector and the read-only normalisation
- * pre-passes of @c try_safe_query_rewrite on a deep copy whose head is
- * the group-by / aggregated variables and whose aggregate, @c HAVING
- * predicate and @c GROUP @c BY are stripped.  Performs no rewrite and
- * does not modify @p q.  Returns @c true only when a hierarchical
- * structure is positively certified (a single base relation is trivially
- * safe; disconnected multi-component skeletons and uninspectable shapes
- * are conservatively @c false).  This is the skeleton-safety axis of the
- * Ré-Suciu HAVING trichotomy, consumed by the HAVING classifier.
- *
- * @param constants  Cached extension OIDs (from @c get_constants).
- * @param orig       The aggregate / @c HAVING @c Query.  Not modified.
- * @return @c true iff @c sk(Q) is certified hierarchical.
- */
-extern bool safe_query_skeleton_is_hierarchical(const constants_t *constants,
-                                                Query *orig);
-
-/**
  * @brief Per-atom marker spec for the inversion-free path.
  *
  * One entry per range-table atom (indexed by @c relid-1).  When @c valid, the
