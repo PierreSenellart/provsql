@@ -79,6 +79,12 @@ struct ClausesHash {
 struct DTreeContext {
   const BooleanCircuit &c;
   std::unordered_map<Clauses, double, ClausesHash> memo;
+  // Speculative-execution budget: count subproblems (recursion entries) and bail
+  // when they exceed @c budget, so the chooser drops the d-tree and escalates to
+  // the next method.  @c budget == 0 means unbounded.  Deterministic (a function
+  // of the circuit), so the chosen method is reproducible.
+  unsigned long steps = 0;
+  unsigned long budget = 0;
 };
 
 /**
@@ -181,6 +187,9 @@ DTreeInterval recurse(DTreeContext &ctx, Clauses clauses, double max_width)
   check_stack_depth();
   if(provsql_interrupted)
     throw CircuitException("Interrupted");
+  ++ctx.steps;
+  if(ctx.budget && ctx.steps > ctx.budget)
+    throw CircuitException("d-tree: cost budget exceeded");
 
   if(clauses.empty())
     return {0., 0.}; // empty disjunction is false
@@ -261,10 +270,15 @@ DTreeInterval recurse(DTreeContext &ctx, Clauses clauses, double max_width)
 } // namespace
 
 DTreeInterval dtreeBounds(const BooleanCircuit &c, Clauses clauses,
-                          double max_width)
+                          double max_width, unsigned long budget,
+                          unsigned long *steps_out)
 {
   DTreeContext ctx{c, {}};
-  return recurse(ctx, std::move(clauses), max_width);
+  ctx.budget = budget;
+  DTreeInterval r = recurse(ctx, std::move(clauses), max_width);
+  if(steps_out)
+    *steps_out = ctx.steps;
+  return r;
 }
 
 // ===========================================================================
@@ -282,6 +296,9 @@ struct GenContext {
   const BooleanCircuit &c;
   std::unordered_map<gate_t, std::set<gate_t> > footprint;
   std::unordered_map<std::string, double> exactMemo; // exact subproblem values
+  // Speculative-execution budget (see DTreeContext): subproblem count + cap.
+  unsigned long steps = 0;
+  unsigned long budget = 0;
 };
 
 inline unsigned long gid(gate_t g)
@@ -522,6 +539,9 @@ DTreeInterval genRefine(GenContext &ctx, gate_t g, Assignment &A, double w)
   check_stack_depth();
   if(provsql_interrupted)
     throw CircuitException("Interrupted");
+  ++ctx.steps;
+  if(ctx.budget && ctx.steps > ctx.budget)
+    throw CircuitException("d-tree: cost budget exceeded");
 
   if(determined(ctx, g, A)) {
     double v = evalDet(ctx, g, A) ? 1.0 : 0.0;
@@ -556,6 +576,9 @@ DTreeInterval genRefineGroup(GenContext &ctx, BooleanGate op,
   check_stack_depth();
   if(provsql_interrupted)
     throw CircuitException("Interrupted");
+  ++ctx.steps;
+  if(ctx.budget && ctx.steps > ctx.budget)
+    throw CircuitException("d-tree: cost budget exceeded");
 
   // Drop children fixed by A (and short-circuit on an absorbing one).
   std::vector<gate_t> live;
@@ -623,11 +646,16 @@ DTreeInterval genRefineGroup(GenContext &ctx, BooleanGate op,
 } // namespace
 
 DTreeInterval dtreeBoundsCircuit(const BooleanCircuit &c, gate_t root,
-                                 double max_width)
+                                 double max_width, unsigned long budget,
+                                 unsigned long *steps_out)
 {
   GenContext ctx{c, {}, {}};
+  ctx.budget = budget;
   Assignment A;
-  return genRefine(ctx, root, A, max_width);
+  DTreeInterval r = genRefine(ctx, root, A, max_width);
+  if(steps_out)
+    *steps_out = ctx.steps;
+  return r;
 }
 
 } // namespace provsql

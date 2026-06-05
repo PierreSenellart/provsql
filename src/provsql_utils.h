@@ -316,6 +316,11 @@ extern int provsql_monte_carlo_seed;
  * analytical-only evaluation. */
 extern int provsql_rv_mc_samples;
 
+/* Debug/safety hard cap on d-tree subproblems before the method bails to the
+ * next (0 = off).  The chooser auto-budgets the d-tree at the next-best
+ * method's estimated cost regardless; this imposes an extra fixed cap. */
+extern int provsql_dtree_max_subproblems;
+
 /** @brief When @c true (default), every @c GenericCircuit returned by
  * @c getGenericCircuit is run through the universal cmp-resolution
  * passes (RangeCheck for now, plus any future passes that decide

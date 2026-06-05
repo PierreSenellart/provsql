@@ -23,6 +23,7 @@
 #include <cassert>
 #include <set>
 #include <algorithm>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -76,7 +77,13 @@ unsigned TreeDecomposition::degeneracyLowerBound(const BooleanCircuit &bc,
     max_deg = std::max(max_deg, d);
   }
   max_degree = max_deg;
-  std::vector<std::unordered_set<unsigned long> > bucket(max_deg + 1);
+  // Ordered buckets so the min-degree peel below picks the smallest-id node
+  // deterministically.  The k-core degeneracy is a graph invariant (independent
+  // of the tie-break), but an unordered_set's begin() is an arbitrary element,
+  // which is a non-determinism smell -- a std::set makes the whole pass provably
+  // deterministic for the price of log-time bucket ops (degeneracy is only a
+  // cheap proxy, so this is negligible).
+  std::vector<std::set<unsigned long> > bucket(max_deg + 1);
   for(const auto &kv : deg)
     bucket[kv.second].insert(kv.first);
 

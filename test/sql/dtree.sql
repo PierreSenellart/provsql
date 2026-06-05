@@ -99,6 +99,17 @@ SELECT current_setting('provsql.last_eval_method')
 -- A by-name sampler cannot honour delta=0 (infinite sample count): clean error.
 SELECT probability_evaluate(current_setting('dt.ent')::uuid,'karp-luby','epsilon=0.1,delta=0');
 
+-- Speculative-execution budget.  In the default chain the chooser budgets the
+-- d-tree at the next-best method's cost and silently escalates on overrun (see
+-- probability_paths' CNF case); the debug GUC provsql.dtree_max_subproblems
+-- imposes a hard subproblem cap.  A by-name call has no chooser to escalate to,
+-- so an overrun surfaces as a clean error.  cap=1 forces it on the entangled
+-- circuit (which needs more than one subproblem); unset, the same call succeeds.
+SET provsql.dtree_max_subproblems = 1;
+SELECT probability_evaluate(current_setting('dt.ent')::uuid,'d-tree');
+RESET provsql.dtree_max_subproblems;
+SELECT probability_evaluate(current_setting('dt.ent')::uuid,'d-tree') > 0 AS dtree_runs_unbudgeted;
+
 SELECT remove_provenance('dt');
 DROP TABLE dt;
 RESET provsql.boolean_provenance;

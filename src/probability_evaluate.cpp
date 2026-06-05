@@ -702,6 +702,17 @@ static const double kCostStoppingRule    = 1e-3;  // relative univ: ~1e-3 * S * 
 static const double kCostKarpLuby        = 3e-6;  // relative DNF:  ~3e-6 * S * m * C (pessimistic: covers the p-dependent slow case)
 static const double kCostDTreeExact      = 3e-4;  // d-tree exact:  ~3e-4 * S * m (memoised Shannon; pessimistic vs tree-decomp on low tw)
 static const double kCostDTreeApprox     = 4e-4;  // d-tree approx: ~4e-4 * S / eps, DELTA-INDEPENDENT (deterministic -> overtakes samplers as delta shrinks)
+// Speculative-execution budget conversion: ms per d-tree subproblem (recursion
+// entry).  The chooser's budget is in ms (the next-best method's cost); the
+// d-tree counts subproblems, so budget_steps = budget_ms / (ms per subproblem).
+// The two recursions have different per-step cost (calibrated on the bench): the
+// monotone-DNF clause path pays an O(m^2) subsumption sweep per node (~1.4e-3
+// ms/step), the general circuit path only a footprint componentise + pivot scan
+// (~5e-4 ms/step).  Using the right one keeps the budget honest -- a single
+// (smaller) constant under-charged the DNF path and let it run well past the
+// fallback's cost instead of bailing.
+static const double kCostDTreeMsPerStepDnf      = 1.4e-3;
+static const double kCostDTreeMsPerStepGeneral  = 5e-4;
 
 /// 2^k with the exponent clamped to keep the cost finite (a clamped exponent
 /// still sorts the method dead last -- it is then a guaranteed fall-through).
@@ -726,6 +737,13 @@ struct EvalContext {
   bool explicitly_named;            ///< invoked via byName (vs the default chain)
   size_t n_inputs = 0;              ///< input count N (O(1) cost feature)
   size_t circuit_size = 0;          ///< gate count S, the circuit-size parameter (O(1))
+  /// Speculative-execution budget: the estimated cost (in the chooser's ms-ish
+  /// units) of the next-cheapest admissible method.  A budget-aware method
+  /// (currently the d-tree) runs until its own work exceeds this and then throws,
+  /// so the chooser drops it and escalates -- bounding wasted work at ~the cost
+  /// of the safe fallback.  Infinity = no budget (the method is the last resort,
+  /// or budgeting is off).
+  double cost_budget = std::numeric_limits<double>::infinity();
   bool multivalued_rewritten = false;
   std::string actual_method;
 
@@ -926,6 +944,21 @@ public:
     ctx.ensureMultivaluedRewritten();
     try {
       TreeDecomposition td(ctx.c);
+      // Speculative execution: the (poly) min-fill build has now discovered the
+      // EXACT treewidth, where the cost estimate above used only the degeneracy
+      // LOWER bound (which under-costs).  Before paying the exponential d-DNNF
+      // build, recompute the real cost from the discovered width; if it exceeds
+      // the next-best method's cost, bail so the chooser escalates -- the
+      // build's own MAX_TREEWIDTH cap is the hard ceiling, this is the
+      // competitive refinement.  A by-name call runs unbounded.
+      if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
+        const double real_cost = kCostTreeDecomp
+          * static_cast<double>(ctx.circuit_size)
+          * pow2_clamped(td.getTreewidth());
+        if(real_cost > ctx.cost_budget)
+          throw CircuitException(
+            "tree-decomposition: discovered treewidth exceeds the budget");
+      }
       dDNNF dd = dDNNFTreeDecompositionBuilder{ctx.c, ctx.gate, td}.build();
       double r = dd.probabilityEvaluation();
       ctx.actual_method = "tree-decomposition";
@@ -1261,9 +1294,32 @@ public:
       max_width = 0.; // exact
     }
 
+    // Speculative-execution budget: convert the chooser's ms budget (the
+    // next-best method's cost) into a subproblem cap, so the d-tree bails (throws,
+    // chooser escalates) rather than blowing up on a high-treewidth circuit its
+    // cheap-feature cost estimate mis-rated.  An explicit by-name call runs
+    // unbounded (it is the user's deliberate choice, with no chooser fallback);
+    // the debug GUC provsql.dtree_max_subproblems imposes an extra hard cap.
+    unsigned long budget_steps = 0; // 0 = unbounded
+    if(!ctx.explicitly_named && std::isfinite(ctx.cost_budget)) {
+      const double ms_per_step = is_dnf ? kCostDTreeMsPerStepDnf
+                                        : kCostDTreeMsPerStepGeneral;
+      budget_steps = static_cast<unsigned long>(
+        std::max(1.0, ctx.cost_budget / ms_per_step));
+    }
+    if(provsql_dtree_max_subproblems > 0) {
+      unsigned long cap = static_cast<unsigned long>(provsql_dtree_max_subproblems);
+      budget_steps = (budget_steps == 0) ? cap : std::min(budget_steps, cap);
+    }
+
+    unsigned long steps = 0;
     provsql::DTreeInterval iv = is_dnf
-      ? provsql::dtreeBounds(ctx.c, std::move(supports), max_width)
-      : provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, max_width);
+      ? provsql::dtreeBounds(ctx.c, std::move(supports), max_width, budget_steps, &steps)
+      : provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, max_width, budget_steps, &steps);
+    if(provsql_verbose >= 50)
+      provsql_notice("calibrate kind=dtree path=%s S=%zu N=%zu steps=%lu budget=%lu",
+                     is_dnf ? "dnf" : "circuit", ctx.circuit_size, ctx.n_inputs,
+                     steps, budget_steps);
     const double est = 0.5 * (iv.lower + iv.upper);
 
     // Deterministic certificate (delta = 0) whenever an approximation was
@@ -1393,6 +1449,7 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
     // and the set of features still gating the not-ready ones.
     const ProbabilityMethod *best = nullptr;
     double best_cost = std::numeric_limits<double>::infinity();
+    double second_cost = std::numeric_limits<double>::infinity();
     std::set<Feature> pending;
     for(const ProbabilityMethod *m : portfolio) {
       bool ready = true;
@@ -1401,8 +1458,14 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
       if(!ready || !m->applicable(ctx, tol))
         continue;
       double cost = m->estimatedCost(ctx, tol);
-      if(cost < best_cost) { best_cost = cost; best = m; }
+      if(cost < best_cost) { second_cost = best_cost; best_cost = cost; best = m; }
+      else if(cost < second_cost) { second_cost = cost; }
     }
+    // Speculative-execution budget: bound the chosen method's work at the cost of
+    // the next-cheapest ready alternative (infinity if it is the only one).  A
+    // budget-aware method (the d-tree) bails past this and the catch below drops
+    // it to that alternative, so wasted work is at most ~the safe fallback's cost.
+    ctx.cost_budget = second_cost;
 
     // The cheapest feature we could acquire to reveal more method costs.
     bool have_pending = false;

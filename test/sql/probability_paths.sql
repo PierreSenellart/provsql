@@ -73,10 +73,13 @@ SHOW provsql.last_eval_method;
 -- A monotone CNF (AND of overlapping 4-var OR windows) over 24 inputs:
 -- 'independent' throws (shared vars), 'sieve' does not apply (CNF, not DNF), and
 -- 2^24 possible-worlds is dear.  The generalised d-tree (dtreeBoundsCircuit)
--- recurses on this CNF directly and returns certified anytime bounds, so the
--- cost chooser picks it for the approximate paths -- a delta-independent
--- guarantee, cheaper here than tree-decomposition or sampling.  Either way the
--- estimate stays within [0,1]; we assert that and report the chosen method.
+-- recurses on this CNF directly, and its cheap-feature cost estimate (S/eps)
+-- rates it cheapest -- but it actually does ~4e5 subproblems here.  Speculative
+-- execution catches that: the chooser budgets the d-tree at the next-best
+-- method's cost (tree-decomposition, which is genuinely fast on this
+-- low-treewidth band), the d-tree exceeds the budget and bails, and the chooser
+-- escalates to tree-decomposition -- the correct, faster choice.  So the
+-- approximate paths report tree-decomposition, and the estimate stays in [0,1].
 CREATE TABLE ppcnf(id int);
 INSERT INTO ppcnf SELECT generate_series(1,24);
 SELECT add_provenance('ppcnf');

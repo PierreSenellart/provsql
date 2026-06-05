@@ -51,7 +51,8 @@ struct DTreeInterval {
  */
 DTreeInterval dtreeBounds(const BooleanCircuit &c,
                           std::vector<std::set<gate_t> > clauses,
-                          double max_width);
+                          double max_width, unsigned long budget = 0,
+                          unsigned long *steps_out = nullptr);
 
 /**
  * @brief Certified probability interval of an @e arbitrary Boolean circuit,
@@ -81,7 +82,8 @@ DTreeInterval dtreeBounds(const BooleanCircuit &c,
  * @return           A sound interval with @c lower <= Pr[root] <= upper.
  */
 DTreeInterval dtreeBoundsCircuit(const BooleanCircuit &c, gate_t root,
-                                 double max_width);
+                                 double max_width, unsigned long budget = 0,
+                                 unsigned long *steps_out = nullptr);
 
 } // namespace provsql
 

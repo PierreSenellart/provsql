@@ -140,11 +140,62 @@ exactly these):
 3. **Stopping soundness** — the additive (`U−L ≤ 2ε`) and relative
    (`(1−ε)U ≤ (1+ε)L`) tests are exact; never round them.
 
-Cost open question: the treewidth proxy **mispredicts** d-tree cost (high-`w`
-cliques collapse under Shannon + subsumption and run fast; low-`w` cycles do
-not), so the current `δ`-independent cost deliberately avoids it. No cheap static
-feature obviously predicts whether the DNF collapses, which is what running it
-tells you; speculative execution (a bounded attempt) may be the only honest plan.
+Cost open question -- **resolved by speculative execution (DONE for the d-tree).**
+A calibration sweep over the random-circuit bench (200 circuits; eval-only ms vs
+`S`, `N`, depth, for `eps = 0` and `eps > 0`) confirmed empirically that **no
+cheap static feature predicts d-tree cost**: depth is the *weakest* predictor
+(corr ~0.15, ~0.32 even at fixed `N`, dominated by `S`); the only decent fits are
+`S·2^N` (exact, R²≈0.69) and `S·N` (approx, R²≈0.47), and those hold only because
+random circuits have treewidth ≈ `N` -- they badly over-predict structured
+low-treewidth circuits (the true driver is `2^treewidth`). The sweep also showed
+the approximate cost is **nearly `eps`-independent** (median `e(0.01)/e(0.1)` ≈
+0.9, not 10), so the old `cost ∝ 1/eps` overstates `eps`-sensitivity by an order
+of magnitude. Since the driver (treewidth) is not cheaply predictable, the cost
+model is *not* the right lever; instead the d-tree now runs under a **subproblem
+budget** (`src/DTree.cpp`: a counter in `recurse` / `genRefine` / `genRefineGroup`
+that throws `"d-tree: cost budget exceeded"` on overrun). The chooser
+(`chooseAndRun`) sets the budget to the **next-best admissible method's estimated
+cost** (`EvalContext::cost_budget`, converted to a subproblem count via
+`kCostDTreeMsPerStep ≈ 5e-4` ms/subproblem); on overrun the existing
+`catch(CircuitException)` drops the d-tree and escalates -- so wasted work is
+bounded at ~the safe fallback's cost (an `O(1)`-competitive "try cheap, escalate
+on blow-up" portfolio). Deterministic (subproblem count, not wall-clock), so
+method selection stays reproducible. Validated: the 24-input CNF in
+`probability_paths.sql`, whose `S/eps` estimate rated the d-tree cheapest but which
+actually does ~4·10⁵ subproblems, is now correctly escalated d-tree → tree-
+decomposition. Debug GUC `provsql.dtree_max_subproblems` imposes an extra hard cap
+(by-name overrun then surfaces as a clean error -- no chooser to escalate to);
+pinned by `dtree.sql`.
+
+**`tree-decomposition` budget -- DONE.** `TreeDecompositionMethod::evaluate`
+builds the (poly) min-fill decomposition, then -- before the exponential d-DNNF
+step -- recomputes the real cost from the *discovered* treewidth
+(`td.getTreewidth()`, exact, vs the degeneracy lower bound the estimate used) and
+throws if it exceeds `cost_budget`, so the chooser escalates.  The build's
+`MAX_TREEWIDTH = 10` cap is still the hard ceiling; this is the competitive
+refinement that defers to a genuinely cheaper method when the proxy under-rated
+the width.  **`compilation` stays the terminal, un-budgeted fallback** (no
+cheaper alternative to escalate to; no multi-compiler trial), per the design
+decision.
+
+**Budget calibration is per recursion path.** `kCostDTreeMsPerStepDnf` (~1.4e-3)
+vs `kCostDTreeMsPerStepGeneral` (~5e-4): the monotone-DNF clause path pays an
+`O(m^2)` subsumption sweep per subproblem, ~3x the general circuit path; a single
+constant under-charged the DNF path and let it run well past the fallback's cost
+(the `dtree_bench` `big_rare` 160-cycle did ~5e4 approx subproblems / ~70 ms).
+
+**Known follow-up surfaced by the budget:** the d-tree's *approximate* path does
+NOT memoise (only the exact path writes the memo, since an early-stopped interval
+is width-dependent), so on a high-sharing circuit (a long cycle) approximate
+evaluation is *slower* than exact (no DAG sharing).  The budget bails it
+correctly; memoising the exact sub-results encountered during an approximate
+recursion would remove the blow-up (a noted follow-up).  *(Determinism check:
+the whole `dtree_bench` auto-chooser table is now bit-identical across runs --
+the min-fill heap and the degeneracy peel both break ties by node id, and the
+degeneracy is a graph invariant.  An earlier observed flip on `big_rare` was the
+budget calibration, since fixed by the per-path `kCostDTreeMsPerStep` split; the
+degeneracy peel's `unordered_set` element pick was also replaced by an ordered
+`std::set` so the proxy is provably deterministic, not merely invariant.)*
 
 ### 2. The SUM-safe FPTRAS (`AggFptrasMethod`)
 
@@ -297,7 +348,12 @@ arbitrary hierarchical depth. The genuine residuals:
   contributor).
 - **Cost-model refinements.** The `karp-luby` `S·m` cost is pessimistic for large
   `m`; the calibrated per-node ε-split (guarantee propagation, below) is the
-  cost-model-later seam.
+  cost-model-later seam.  *Note:* for methods whose cost is treewidth-driven and
+  thus not cheaply predictable (d-tree; next, tree-decomposition), the bench
+  showed cost-model refinement is a dead end -- **speculative execution** (a
+  per-method work budget set to the next-best method's cost, escalating on
+  overrun) is the chosen lever instead; see the d-tree "Cost open question --
+  resolved" note in item 1.
 - **Guarantee propagation** (decompose the whole-query `(ε,δ)` at
   **independence-certified gates only**): independent-OR `ε ≈ max(ε₁,ε₂)`,
   mutex-OR `max`, independent-AND `ε₁`; `1−δ = (1−δ₁)(1−δ₂)`. A `plus` whose

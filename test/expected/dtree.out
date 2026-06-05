@@ -21,6 +21,10 @@ det_not_sampler
 t
 (1 row)
 ERROR:  ProvSQL: method 'karp-luby': delta must be in (0, 1); delta = 0 (deterministic) is supported only on the 'relative' / 'additive' paths, which route to the d-tree or an exact method
+ERROR:  ProvSQL: d-tree: cost budget exceeded
+dtree_runs_unbudgeted
+t
+(1 row)
 remove_provenance
 
 (1 row)

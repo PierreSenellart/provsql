@@ -93,6 +93,7 @@ char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit:
 char *provsql_kcmcp_server = NULL; ///< Launch command for the managed KCMCP server (with a @c {endpoint} placeholder); controlled by the @c provsql.kcmcp_server GUC. Empty means no managed server is launched.
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
+int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subproblems before it bails (0 = off; the chooser auto-budgets at the next-best method's cost regardless); @c provsql.dtree_max_subproblems GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
@@ -759,9 +760,11 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       }
     } else if (r->rtekind == RTE_VALUES) {
       // Nothing to do, no provenance attribute in literal values
+#if PG_VERSION_NUM >= 120000
     } else if (r->rtekind == RTE_RESULT) {
       // Empty-FROM RTE (no provenance).  Also what the outer-join lowering
       // leaves behind when it neutralises an orphaned subquery arm.
+#endif
 #if PG_VERSION_NUM >= 180000
     } else if (r->rtekind == RTE_GROUP) {
       // Introduced in PostgreSQL 18, we already handle group by from
@@ -4466,15 +4469,17 @@ static bool provenance_in_sublink_walker(Node *node, void *data) {
  */
 static void remove_provsql_from_select(Query *q) {
   ListCell *lc;
+  ListCell *prev = NULL;
   int removed_resno = -1;
 
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME)) {
       removed_resno = te->resno;
-      q->targetList = list_delete_cell(q->targetList, lc);
+      q->targetList = my_list_delete_cell(q->targetList, lc, prev);
       break;
     }
+    prev = lc;
   }
 
   if (removed_resno < 0)
@@ -4978,8 +4983,19 @@ static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
  *  be processed) is turned into an inert RTE_RESULT. */
 static void oj_neutralize_orphan_arm(RangeTblEntry *rel) {
   if (rel->rtekind == RTE_SUBQUERY) {
+#if PG_VERSION_NUM >= 120000
     rel->rtekind = RTE_RESULT;
     rel->subquery = NULL;
+#else
+    /* No RTE_RESULT before PostgreSQL 12: leave an inert zero-column
+     * subquery (a bare SELECT) instead.  get_provenance_attributes
+     * recurses into it, finds no relations, and adds nothing. */
+    Query *empty = makeNode(Query);
+    empty->commandType = CMD_SELECT;
+    empty->canSetTag = true;
+    empty->jointree = makeFromExpr(NIL, NULL);
+    rel->subquery = empty;
+#endif
     rel->eref = makeAlias("*RESULT*", NIL);
 #if PG_VERSION_NUM >= 160000
     rel->perminfoindex = 0;
@@ -7025,15 +7041,42 @@ static bool oj_limit_count_is_one(Node *limitCount) {
  * share a @c (Q, @c corr) -- e.g. @c "(SELECT Q.x WHERE Q.k=R.k),
  * (SELECT Q.y WHERE Q.k=R.k)" -- in one pass.
  */
+/** @brief @c equal() on two single-RTE rtables, ignoring per-RTE ACL fields.
+ *
+ * Before PostgreSQL 16 the permission bookkeeping (@c requiredPerms,
+ * @c selectedCols, …) lived inside @c RangeTblEntry, so two sublink bodies
+ * over the same @c Q differing only in the selected value column would
+ * spuriously compare unequal (their @c selectedCols differ).  PG16 moved
+ * those fields out into @c Query.rteperminfos and a plain @c equal()
+ * suffices. */
+static bool oj_rtables_coalescible(List *rta, List *rtb) {
+#if PG_VERSION_NUM >= 160000
+  return equal(rta, rtb);
+#else
+  RangeTblEntry *a = (RangeTblEntry *)copyObject(linitial(rta));
+  RangeTblEntry *b = (RangeTblEntry *)copyObject(linitial(rtb));
+  a->requiredPerms = b->requiredPerms = 0;
+  a->checkAsUser = b->checkAsUser = InvalidOid;
+  a->selectedCols = b->selectedCols = NULL;
+  a->insertedCols = b->insertedCols = NULL;
+  a->updatedCols = b->updatedCols = NULL;
+#if PG_VERSION_NUM >= 120000
+  a->extraUpdatedCols = b->extraUpdatedCols = NULL;
+#endif
+  return equal(a, b);
+#endif
+}
+
 static bool oj_sub_bodies_coalescible(Query *a, Query *b) {
   if (a->hasAggs || b->hasAggs || a->distinctClause || b->distinctClause ||
       a->sortClause || b->sortClause || a->limitCount || b->limitCount ||
       a->limitOffset || b->limitOffset)
     return false;
   if (list_length(a->targetList) != 1 || list_length(b->targetList) != 1 ||
-      list_length(a->rtable) != 1)
+      list_length(a->rtable) != 1 || list_length(b->rtable) != 1)
     return false;
-  return equal(a->rtable, b->rtable) && equal(a->jointree, b->jointree);
+  return oj_rtables_coalescible(a->rtable, b->rtable) &&
+         equal(a->jointree, b->jointree);
 }
 
 /**
@@ -11130,6 +11173,24 @@ void _PG_init(void) {
                           INT_MAX,
                           PGC_USERSET,
                           0,
+                          NULL,
+                          NULL,
+                          NULL);
+
+  DefineCustomIntVariable("provsql.dtree_max_subproblems",
+                          "Hard cap on d-tree subproblems before it bails (0 = off).",
+                          "Debug / safety knob for the d-tree speculative-execution "
+                          "budget. The cost chooser already budgets the d-tree at the "
+                          "next-best method's estimated cost; when this is > 0 it adds "
+                          "a fixed hard cap on the number of d-tree subproblems, after "
+                          "which the method throws and the chooser escalates to the "
+                          "next method. 0 leaves only the automatic budget.",
+                          &provsql_dtree_max_subproblems,
+                          0,
+                          0,
+                          INT_MAX,
+                          PGC_USERSET,
+                          GUC_NO_SHOW_ALL,
                           NULL,
                           NULL,
                           NULL);

@@ -11,26 +11,43 @@
 --
 -- Reference auto-chooser picks (this machine, d4/c2d/dsharp available).  Every
 -- request lands on a fast method; together they exercise the WHOLE portfolio.
+-- Refreshed after (a) the d-tree was generalised off monotone DNF to arbitrary
+-- circuits -- so it is now a candidate on the CNF / cycle shapes and wins many
+-- approximate cells it previously could not enter -- and (b) speculative
+-- execution: the chooser budgets the d-tree (and tree-decomposition) at the
+-- next-best method's cost and escalates on overrun.
 --
---  circuit          exact           rel eps=.1      rel eps=.3      additive      det delta=0
---  readonce         independent     independent     independent     independent   independent
---  triangle         possible-worlds possible-worlds possible-worlds possible-worlds possible-worlds
---  cycle_common     tree-decomp     tree-decomp     d-tree          tree-decomp   tree-decomp
---  cycle_rare       tree-decomp     tree-decomp     d-tree          tree-decomp   tree-decomp
---  clique8          possible-worlds possible-worlds possible-worlds possible-worlds possible-worlds
---  clique14         d-tree          d-tree          d-tree          monte-carlo   d-tree
---  big_cycle/rare   tree-decomp     tree-decomp     d-tree          tree-decomp   tree-decomp
---  cnf              tree-decomp     tree-decomp     tree-decomp     tree-decomp   tree-decomp
---  nested/monus/cnf12 independent   independent     independent     independent   independent
---  cliqueCNF14      possible-worlds possible-worlds stopping-rule   monte-carlo   possible-worlds
---  cliqueCNF18      compilation:d4  compilation:d4  stopping-rule   monte-carlo   compilation:d4
---  sieve_fav        sieve           sieve           karp-luby       sieve         sieve
---  kl_fav           d-tree          d-tree          karp-luby       monte-carlo   d-tree
---  invfree          inversion-free  inversion-free  inversion-free  inversion-free inversion-free
+--  circuit       exact           rel eps=.1      rel eps=.3      additive      det delta=0
+--  readonce      independent     independent     independent     independent   independent
+--  triangle      possible-worlds possible-worlds possible-worlds possible-worlds possible-worlds
+--  cycle_common  tree-decomp     d-tree          d-tree          monte-carlo   d-tree
+--  cycle_rare    tree-decomp     d-tree          karp-luby       monte-carlo   d-tree
+--  clique8       possible-worlds possible-worlds possible-worlds possible-worlds possible-worlds
+--  clique14      d-tree          d-tree          d-tree          monte-carlo   d-tree
+--  big_cycle     tree-decomp     d-tree          d-tree          monte-carlo   d-tree
+--  big_rare      tree-decomp     compilation:d4  tree-decomp     monte-carlo   d-tree   [*]
+--  cnf           tree-decomp     d-tree          d-tree          monte-carlo   d-tree
+--  ladder        tree-decomp     tree-decomp     d-tree          tree-decomp   tree-decomp
+--  nested/monus/cnf12 independent independent    independent     independent   independent
+--  cliqueCNF14   possible-worlds d-tree          stopping-rule   monte-carlo   d-tree
+--  cliqueCNF18   compilation:d4  d-tree          stopping-rule   monte-carlo   d-tree
+--  sieve_fav     sieve           sieve           karp-luby       sieve         sieve
+--  kl_fav        d-tree          d-tree          karp-luby       monte-carlo   d-tree
+--  invfree       inversion-free  inversion-free  inversion-free  inversion-free inversion-free
+--
+-- [*] big_rare rel eps=.1 escalates d-tree -> compilation because the d-tree's
+-- *approximate* DNF path does not memoise (only the exact path writes the memo,
+-- since an early-stopped interval is width-dependent), so on this 160-cycle the
+-- approximate run does tens of thousands of subproblems where the exact run does
+-- a few hundred; the speculative budget rightly bails it.  This is deterministic
+-- (the whole auto-chooser table is bit-identical across runs): the degeneracy
+-- peel and the min-fill heap break ties by node id.  Memoising the exact
+-- sub-results encountered during an approximate recursion would let the d-tree
+-- handle this cell directly -- a noted follow-up, not a budget bug.
 --
 -- Reachability of every method: independent / possible-worlds / tree-decomp /
 -- d-tree / monte-carlo are common; sieve (sieve_fav), karp-luby + stopping-rule
--- (loose eps), compilation (cliqueCNF18), inversion-free (invfree).  The
+-- (loose eps), compilation (cliqueCNF18 exact), inversion-free (invfree).  The
 -- stopping-rule picks at loose eps are the documented 1/p corner (it is cheaper
 -- in the model but slow at runtime); at tight eps the chooser avoids it.
 \timing off

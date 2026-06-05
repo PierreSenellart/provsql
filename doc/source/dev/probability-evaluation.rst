@@ -313,6 +313,12 @@ Currently Supported Methods
        :cfunc:`TreeDecomposition::MAX_TREEWIDTH`) and uses
        :cfunc:`dDNNFTreeDecompositionBuilder` to construct a
        d-DNNF, then calls :cfunc:`dDNNF::probabilityEvaluation`.
+       **Speculative execution:** the cost estimate uses the degeneracy *lower*
+       bound, which under-costs; the min-fill build then discovers the *exact*
+       treewidth, so before the ``2^w`` d-DNNF step the method recomputes the
+       real cost and -- if it exceeds the next-best method's (``cost_budget``) --
+       throws so the chooser escalates (the ``MAX_TREEWIDTH`` cap remains the hard
+       ceiling).  By-name calls run unbounded.
    * - ``"d-tree"``
      - The Olteanu-Huang-Koch anytime interval-bounds engine
        (:cite:`DBLP:conf/icde/OlteanuHK10`, ``src/DTree.cpp``): a cheap
@@ -333,6 +339,16 @@ Currently Supported Methods
        default chain it competes for exact only on the monotone-DNF path (and
        where tree-decomposition bails); the general recursion serves the
        approximate / ``delta = 0`` paths and explicit by-name calls.
+       **Speculative execution:** because d-tree cost is treewidth-driven and not
+       predictable from cheap features (a calibration sweep confirmed depth /
+       ``S`` / ``N`` do not track it, and the approximate cost is nearly
+       ``eps``-independent), the chooser runs it under a *subproblem budget* set
+       to the next-best admissible method's estimated cost
+       (``EvalContext::cost_budget`` → a count via ``kCostDTreeMsPerStep``); a
+       counter in the recursion throws ``"cost budget exceeded"`` on overrun and
+       the chooser's ``catch`` escalates -- bounding wasted work at ~the safe
+       fallback's cost (deterministic, so selection is reproducible).  The debug
+       GUC ``provsql.dtree_max_subproblems`` adds a hard cap.
    * - ``"compilation"``
      - :cfunc:`BooleanCircuit::compilation` -- invokes the registered
        knowledge compiler named in the argument (``d4``, ``d4v2``,
