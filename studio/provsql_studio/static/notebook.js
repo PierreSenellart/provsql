@@ -493,12 +493,12 @@
       <div class="nb-cell__actions">
         <button type="button" data-act="up" title="Move up"><i class="fas fa-arrow-up"></i></button>
         <button type="button" data-act="down" title="Move down"><i class="fas fa-arrow-down"></i></button>
-        <button type="button" data-act="add-sql" title="Insert SQL cell below"><i class="fas fa-plus"></i></button>
-        <button type="button" data-act="add-md" title="Insert Markdown cell below"><i class="fab fa-markdown"></i></button>
+        <button type="button" data-act="del" title="Delete cell (command mode: dd, z undoes)"><i class="fas fa-trash"></i></button>
         ${cell.type === 'sql'
           ? `<button type="button" data-act="to-circuit" title="Open this query in Circuit mode"><i class="fas fa-project-diagram"></i></button>`
           : ''}
-        <button type="button" data-act="del" title="Delete cell"><i class="fas fa-trash"></i></button>
+        <button type="button" data-act="add-sql" title="Insert SQL cell below (command mode: b below, a above)"><i class="fas fa-plus"></i></button>
+        <button type="button" data-act="add-md" title="Insert Markdown cell below (command mode: m converts)"><i class="fab fa-markdown"></i></button>
       </div>`;
     wireCellDom(cell, div);
     return div;
@@ -1389,13 +1389,22 @@
     for (const c of cells) { updateGutter(c); renderOutputs(c); }
   }
 
+  // Set the notebook-level scheme AND the cross-mode session channel
+  // (ps.opt.provScheme) that Circuit mode's radio selector restores
+  // from, so a Notebook->Circuit switch keeps the active notebook's
+  // scheme. (Per-notebook metadata still wins when a tab/doc carries
+  // one; the channel reflects whatever is currently active.)
+  function setScheme(value) {
+    if (!['semiring', 'where', 'boolean'].includes(value)) return;
+    byId('nb-scheme').value = value;
+    try { sessionStorage.setItem('ps.opt.provScheme', value); } catch (e) {}
+  }
+
   function loadNotebook(doc) {
     const { loaded, scheme } = fromIpynb(doc);
     cells = loaded.length ? loaded : [newCell('sql')];
     execCounter = cells.reduce((m, c) => Math.max(m, c.count || 0), 0);
-    if (scheme && ['semiring', 'where', 'boolean'].includes(scheme)) {
-      byId('nb-scheme').value = scheme;
-    }
+    if (scheme) setScheme(scheme);
     renderAll();
   }
 
@@ -1526,7 +1535,10 @@
     });
     byId('nb-add-sql').addEventListener('click', () => { focusCell(appendCell('sql')); scheduleAutosave(); });
     byId('nb-add-md').addEventListener('click', () => { focusCell(appendCell('markdown')); scheduleAutosave(); });
-    byId('nb-scheme').addEventListener('change', scheduleAutosave);
+    byId('nb-scheme').addEventListener('change', () => {
+      setScheme(byId('nb-scheme').value);
+      scheduleAutosave();
+    });
     byId('nb-save').addEventListener('click', download);
     byId('nb-load').addEventListener('click', () => byId('nb-load-input').click());
     byId('nb-load-input').addEventListener('change', async () => {
@@ -1579,6 +1591,14 @@
     });
 
     wireTabBar();
+    // Inherit the session's scheme (the Circuit-mode pick) for fresh
+    // notebooks; tabs whose doc records a scheme override it below.
+    try {
+      const saved = sessionStorage.getItem('ps.opt.provScheme');
+      if (saved && ['semiring', 'where', 'boolean'].includes(saved)) {
+        byId('nb-scheme').value = saved;
+      }
+    } catch (e) { /* sessionStorage disabled */ }
     // The current database name anchors every binding decision; fetch
     // it before restoring tabs (one round-trip, also warms /api/conn).
     try {

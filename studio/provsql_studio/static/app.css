@@ -3008,8 +3008,12 @@ table thead th[data-sort="desc"]::after {
 }
 .nb-cell__actions {
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
+  /* Two columns so very short cells still fit all their actions:
+     Up / Down / Delete on the left, (Circuit /) +SQL / +MD on the
+     right (column-flow grid over the DOM order). */
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(3, auto);
   gap: 0.15rem;
   opacity: 0;
   transition: opacity 0.15s;

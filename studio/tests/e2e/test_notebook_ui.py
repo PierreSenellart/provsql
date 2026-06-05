@@ -435,7 +435,9 @@ def test_jupyter_keymap(page: Page, studio_url: str) -> None:
 
     # m on a non-empty SQL cell wraps the content in a ```sql fence
     # (rendered as a code block); y unwraps it, round-tripping the SQL.
-    page.locator(".nb-cell--sql").first.click()
+    # Click the gutter (not the editor: that would enter edit mode and
+    # swallow the keystroke).
+    page.locator(".nb-cell--sql").first.locator(".nb-cell__gutter").click()
     page.keyboard.press("m")
     converted = page.locator(".nb-cell--selected")
     expect(converted.locator(".nb-cell__md pre code")).to_contain_text(
@@ -604,3 +606,20 @@ def test_db_switch_opens_tab_bound_to_new_database(page: Page, studio_url: str) 
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({database: db})
         }).then(r => r.json())""", original_db)
+
+
+def test_scheme_carries_to_circuit_mode(page: Page, studio_url: str) -> None:
+    """Picking a provenance scheme in the notebook carries over when
+    switching to Circuit mode (shared ps.opt.provScheme channel), and
+    a Circuit-mode pick seeds fresh notebooks on the way back."""
+    _goto_notebook(page, studio_url)
+    page.locator("#nb-scheme").select_option("boolean")
+    page.locator(".ps-modeswitch__btn[data-mode='circuit']").click()
+    expect(page.locator("body")).to_have_class("mode-circuit", timeout=8000)
+    expect(page.locator(
+        "input[name='prov-scheme'][value='boolean']")).to_be_checked()
+
+    # And back: the notebook inherits the session's scheme.
+    page.locator(".ps-modeswitch__btn[data-mode='notebook']").click()
+    expect(page.locator("body")).to_have_class("mode-notebook", timeout=8000)
+    expect(page.locator("#nb-scheme")).to_have_value("boolean")
