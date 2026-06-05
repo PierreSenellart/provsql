@@ -79,3 +79,10 @@ Each plan document follows a consistent layout:
   alongside or after the first PyPI release (`studio-v1.0.0`):
   release plumbing, CI, Docker swap-over, in-app polish, and the
   Contributions / Time-travel modes scheduled for later versions.
+- [`studio-notebook-mode.md`](studio-notebook-mode.md) : detailed
+  plan for a Jupyter-style **Notebook mode** in Studio : Markdown +
+  SQL cells with inline results, a pinned stateful database session
+  (the “kernel”) with per-cell transactions, provenance-native
+  circuit / evaluation cells, nbformat-compatible `.ipynb`
+  save / load, seeded tutorial / case-study notebooks, and the
+  Playground (PGlite single-session) adaptation.

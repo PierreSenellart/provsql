@@ -52,13 +52,13 @@ plus per-cell click affordances.
   main modes for now since `update_provenance` is not yet mature
   enough to expose prominently.
 
-### Notebooks (small)
+### Notebooks
 
-- Save / load notebooks: query history is already persisted
-  (sessionStorage `ps.sql` carry-over + the History dropdown). The
-  remaining work is a "Download .sql" button next to the History
-  dropdown that exports the recent buffer, and a file-picker that
-  imports back into the query box. About 30 lines of front-end.
+- Superseded by [`studio-notebook-mode.md`](studio-notebook-mode.md)
+  (a full Jupyter-style notebook mode). Of the original small-scale
+  entry, the file-picker import half shipped as the query-box
+  load-SQL button; the "Download .sql" export half folds into the
+  notebook plan's save surface.
 
 ### Larger features
 
