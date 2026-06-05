@@ -345,6 +345,18 @@ def test_circuit_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> N
     scene = saved["outputs"][0]["data"]["application/vnd.provsql.scene+json"]
     assert len(scene["nodes"]) == 4
     assert "image/svg+xml" in saved["outputs"][0]["data"]
+    # The snapshot must be a SELF-SUFFICIENT SVG: external viewers
+    # (nbviewer, GitHub) see neither app.css nor an HTML context, so the
+    # painter inlines xmlns plus the presentation attributes that the
+    # stylesheet provides live (white node fill, purple strokes, centred
+    # labels, fill-less edges -- without which paths render as black
+    # blobs under SVG defaults).
+    svg = "".join(saved["outputs"][0]["data"]["image/svg+xml"])
+    assert svg.startswith("<svg")
+    assert 'xmlns="http://www.w3.org/2000/svg"' in svg
+    assert 'fill="none"' in svg          # edges
+    assert 'fill="#fff"' in svg          # node disks
+    assert 'text-anchor="middle"' in svg  # labels
     assert "-- circuit" in "".join(saved["source"])
 
     # Fresh page, load the file: the DAG re-paints without a kernel.

@@ -899,10 +899,20 @@
     const pad = 40;
     const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
     const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+    // Presentation attributes double the stylesheet below: SVG attributes
+    // lose to any CSS rule, so the live look is app.css's unchanged -- but
+    // the htmlSnapshot copy of this SVG (the .ipynb image/svg+xml bundle)
+    // renders standalone in external viewers (nbviewer, GitHub), which see
+    // neither app.css nor colors_and_type.css.  Hex values are the resolved
+    // --purple-500 / --purple-700 / --fg-muted.
     const svg = svgEl('svg', {
       class: 'nb-circ__svg',
+      // Explicit xmlns: innerHTML serialization omits it, and without it
+      // the snapshot is not a parseable standalone SVG document.
+      xmlns: 'http://www.w3.org/2000/svg',
       viewBox: `${minX} ${minY} ${maxX - minX} ${maxY - minY}`,
       preserveAspectRatio: 'xMidYMid meet',
+      'font-family': 'sans-serif',
     });
     // Cap the on-screen size while keeping the aspect ratio: small
     // scenes render 1:1-ish, large ones shrink to fit the cell.
@@ -928,6 +938,9 @@
       const bow = total > 1 ? ((parallelSeen[k] - 1) - (total - 1) / 2) * 18 : 0;
       svg.appendChild(svgEl('path', {
         class: 'edge',
+        fill: 'none',
+        stroke: '#5A3E8C',
+        'stroke-width': 1.6,
         d: `M ${from.x} ${from.y + 22} `
          + `C ${from.x + bow} ${from.y + 50}, `
          +   `${to.x + bow} ${to.y - 50}, `
@@ -938,6 +951,8 @@
         const len = Math.hypot(dx, dy) || 1;
         const t = svgEl('text', {
           class: 'edge-pos',
+          fill: '#8A7A9B',
+          'font-size': 8,
           x: (from.x + to.x) / 2 + bow + (-dy / len) * 9,
           y: (from.y + to.y) / 2 + (dx / len) * 9,
         });
@@ -950,10 +965,17 @@
         class: `node-group node--${n.type}` + (n.frontier ? ' is-frontier' : ''),
         transform: `translate(${n.x},${n.y})`,
       });
-      g.appendChild(svgEl('circle', { class: 'node-shape', r: 22 }));
+      g.appendChild(svgEl('circle', {
+        class: 'node-shape', r: 22,
+        fill: '#fff', stroke: '#6B4FA0', 'stroke-width': 2,
+      }));
       const label = String(n.label == null ? '' : n.label);
       const t = svgEl('text', {
         class: 'node-label',
+        fill: '#6B4FA0',
+        'font-weight': 600,
+        'text-anchor': 'middle',
+        'dominant-baseline': 'central',
         'font-size': label.length > 6 ? 9 : (label.length > 3 ? 11 : 14),
       });
       t.textContent = label;
