@@ -16,6 +16,8 @@
  * - **Predefined function OIDs (< 14)**: The @c F_COUNT_ANY,
  *   @c F_COUNT_, and @c F_SUM_INT4 macros were introduced in PostgreSQL
  *   14.  Stable OID values for older releases are defined here.
+ * - **Renamed function OID macros (< 12)**: @c F_ARRAY_AGG_ANYNONARRAY
+ *   is mapped back to its pre-PG12 name @c F_ARRAY_AGG.
  */
 #ifndef COMPATIBILITY_H
 #define COMPATIBILITY_H
@@ -95,6 +97,15 @@ List *list_insert_nth(List *list, int pos, void *datum);
  * were introduced in PostgreSQL 13; on PG 10-12 the alignment is passed as
  * the historical @c 'i' character. */
 #define TYPALIGN_INT 'i'
+#endif
+
+#if PG_VERSION_NUM < 120000
+/** @brief OID of the @c array_agg(anynonarray) aggregate (pre-PG 12).
+ * The @c F_ARRAY_AGG_ANYNONARRAY macro only exists since PostgreSQL 12,
+ * when @c fmgroids.h was regenerated to cover aggregates with
+ * overload-disambiguated names; before that, aggregates had no
+ * @c fmgroids.h entry at all.  Same stable OID. */
+#define F_ARRAY_AGG_ANYNONARRAY 2335
 #endif
 
 #endif /* COMPATIBILITY_H */
