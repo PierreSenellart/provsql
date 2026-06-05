@@ -101,7 +101,7 @@ INTERNAL_FUNCTIONS = {
     'agg_token_comp_agg_token',
     # Doxygen CREATE OPERATOR artefacts (<procedure>_<rightarg> shape).
     'agg_token_op_agg_token', 'agg_token_op_numeric', 'numeric_op_agg_token',
-    'agg_token_make', 'agg_value_gate', 'agg_token_value',
+    'agg_token_make', 'agg_value_gate', 'agg_token_value', 'agg_arith_make',
     # Recursive-CTE fixpoint driver: invoked by the planner hook
     # (lower_recursive_cte) when lowering a WITH RECURSIVE query, never
     # called directly by users.
