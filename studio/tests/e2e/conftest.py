@@ -52,6 +52,13 @@ def studio_url(test_dsn: str) -> str:
     # persisted config eagerly and lets it win over CLI args).
     with tempfile.TemporaryDirectory(prefix="provsql-studio-e2e-") as cfg_dir:
         env["PROVSQL_STUDIO_CONFIG_DIR"] = cfg_dir
+        # pytest-playwright tears the whole browser context down between
+        # tests, which never fires pagehide, so the notebook's
+        # kernel-closing beacon is lost and one kernel leaks per
+        # notebook test (a Playwright artifact: real tab closes deliver
+        # the beacon). Raise the cap so the leak cannot starve later
+        # tests; the server's idle GC remains the real-world backstop.
+        env["PROVSQL_STUDIO_MAX_KERNELS"] = "64"
         cmd = [
             sys.executable, "-m", "provsql_studio",
             "--host", "127.0.0.1",

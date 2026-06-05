@@ -593,52 +593,57 @@ def make_pool(dsn: str | None) -> ConnectionPool:
     Both settings are PGC_SUSET so they only stick for superusers; a
     non-superuser session still sees the cluster defaults (no harm done,
     we just lose the noise filter)."""
-    def _configure(conn):
-        # Disable psycopg3's auto-prepare. The default threshold (5)
-        # caches the query plan after the same SQL string has run that
-        # many times : but the cached plan locks in whatever
-        # provsql.where_provenance / update_provenance was active at
-        # prepare time, so subsequent SET LOCAL toggles silently no-op
-        # at the planner-hook level (the gates produced reflect the
-        # original wp/up choice). Studio runs ad-hoc user queries with
-        # varying toggles, so correctness wins over the marginal
-        # planning saving.
-        conn.prepare_threshold = None
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SET lc_messages = 'C'")
-                cur.execute("SET provsql.verbose_level = 0")
-                # Flip the agg_token output format to the underlying UUID
-                # for every studio session: result-table cells of type
-                # agg_token then expose the circuit root for click-
-                # through. The user-facing "value (*)" string is recovered
-                # per cell via provsql.agg_token_value_text(uuid).
-                # Older provsql versions don't know this GUC; the
-                # SAVEPOINT lets us swallow the resulting error without
-                # poisoning the rest of the configure block (cells then
-                # just stay as "value (*)" and aren't clickable).
-                cur.execute("SAVEPOINT _aggtok_guc")
-                try:
-                    cur.execute("SET provsql.aggtoken_text_as_uuid = on")
-                    cur.execute("RELEASE SAVEPOINT _aggtok_guc")
-                except Exception:
-                    cur.execute("ROLLBACK TO SAVEPOINT _aggtok_guc")
-                    cur.execute("RELEASE SAVEPOINT _aggtok_guc")
-            conn.commit()
-        except Exception:
-            # Don't refuse the connection just because we can't pin
-            # the defaults; the user-visible behaviour is still OK.
-            try:
-                conn.rollback()
-            except Exception:
-                pass
     return ConnectionPool(
         conninfo=dsn or "",
         min_size=1,
         max_size=8,
         open=True,
-        configure=_configure,
+        configure=configure_connection,
     )
+
+
+def configure_connection(conn: psycopg.Connection) -> None:
+    """Session-default setup shared by every Studio connection: the
+    pool's `configure` hook and the pinned notebook-kernel connections
+    (see `make_pool`'s docstring for the rationale of each setting)."""
+    # Disable psycopg3's auto-prepare. The default threshold (5)
+    # caches the query plan after the same SQL string has run that
+    # many times : but the cached plan locks in whatever
+    # provsql.where_provenance / update_provenance was active at
+    # prepare time, so subsequent SET LOCAL toggles silently no-op
+    # at the planner-hook level (the gates produced reflect the
+    # original wp/up choice). Studio runs ad-hoc user queries with
+    # varying toggles, so correctness wins over the marginal
+    # planning saving.
+    conn.prepare_threshold = None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET lc_messages = 'C'")
+            cur.execute("SET provsql.verbose_level = 0")
+            # Flip the agg_token output format to the underlying UUID
+            # for every studio session: result-table cells of type
+            # agg_token then expose the circuit root for click-
+            # through. The user-facing "value (*)" string is recovered
+            # per cell via provsql.agg_token_value_text(uuid).
+            # Older provsql versions don't know this GUC; the
+            # SAVEPOINT lets us swallow the resulting error without
+            # poisoning the rest of the configure block (cells then
+            # just stay as "value (*)" and aren't clickable).
+            cur.execute("SAVEPOINT _aggtok_guc")
+            try:
+                cur.execute("SET provsql.aggtoken_text_as_uuid = on")
+                cur.execute("RELEASE SAVEPOINT _aggtok_guc")
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT _aggtok_guc")
+                cur.execute("RELEASE SAVEPOINT _aggtok_guc")
+        conn.commit()
+    except Exception:
+        # Don't refuse the connection just because we can't pin
+        # the defaults; the user-visible behaviour is still OK.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 def list_databases(pool: ConnectionPool) -> list[str]:
@@ -1733,7 +1738,74 @@ def exec_batch(
     tool_search_path: str = "",
     max_result_rows: int | None = None,
 ) -> tuple[list[StatementResult], StatementResult | None, dict]:
-    """Run `statements` in a single transaction with SET LOCAL settings.
+    """Run `statements` on a pooled connection, in a single transaction.
+
+    Thin transaction-owning wrapper around :func:`exec_batch_on`, which
+    documents the return shape: the pool's connection context commits
+    on release, so one /api/exec request is one transaction. The
+    notebook kernel path calls :func:`exec_batch_on` directly with its
+    pinned connection instead, owning the per-cell transaction.
+    """
+    with pool.connection() as conn:
+        try:
+            return exec_batch_on(
+                conn,
+                statements,
+                statement_timeout=statement_timeout,
+                where_provenance=where_provenance,
+                update_provenance=update_provenance,
+                boolean_provenance=boolean_provenance,
+                wrap_last=wrap_last,
+                extra_gucs=extra_gucs,
+                on_pid=on_pid,
+                search_path=search_path,
+                tool_search_path=tool_search_path,
+                max_result_rows=max_result_rows,
+            )
+        finally:
+            # Safety net: a statement that broke off mid-protocol (e.g.
+            # a COPY TO STDOUT fed through execute()) leaves the
+            # connection ACTIVE; the pool's COMMIT on release would then
+            # die with "another command is already in progress", turning
+            # the SQL error we just caught into an opaque 500. Close the
+            # connection instead: Connection.__exit__ skips closed
+            # connections, the pool discards and replaces it, and the
+            # caught error result reaches the client. (The kernel path
+            # has its own counterpart: it closes the kernel and reports
+            # it dead.)
+            try:
+                if (not conn.closed
+                        and conn.pgconn.transaction_status
+                        == psycopg.pq.TransactionStatus.ACTIVE):
+                    conn.close()
+            except Exception:
+                pass
+
+
+def exec_batch_on(
+    conn: psycopg.Connection,
+    statements: list[str],
+    *,
+    statement_timeout: str,
+    where_provenance: bool,
+    update_provenance: bool = False,
+    boolean_provenance: bool = False,
+    wrap_last: bool,
+    extra_gucs: dict[str, str] | None = None,
+    on_pid=None,
+    search_path: str = "",
+    tool_search_path: str = "",
+    max_result_rows: int | None = None,
+) -> tuple[list[StatementResult], StatementResult | None, dict]:
+    """Run `statements` on `conn` with SET LOCAL settings.
+
+    Transaction boundaries belong to the caller: under
+    :func:`exec_batch` the pooled-connection context commits on release
+    (today's /api/exec semantics); the notebook kernel wraps each call
+    in an explicit per-cell `conn.transaction()`. Either way the
+    `SET LOCAL` prelude applies to exactly this batch. The caller is
+    also responsible for discarding a connection left ACTIVE by a
+    mid-protocol failure (see exec_batch's safety net).
 
     Returns (intermediate_errors, final_result, meta):
       * intermediate_errors is empty if every non-final statement succeeded;
@@ -1803,242 +1875,323 @@ def exec_batch(
             "message": "\n".join(parts),
         })
 
-    with pool.connection() as conn:
-        # Capture this connection's backend pid before we run anything the
-        # user can wait on, so /api/cancel/<id> can resolve the request id
-        # to a pid and fire pg_cancel_backend on a separate connection.
-        # Failure here is non-fatal: the batch still runs, but cancel
-        # won't have a target.
-        if on_pid is not None:
-            try:
-                with conn.cursor() as cur0:
-                    cur0.execute("SELECT pg_backend_pid()")
-                    on_pid(int(cur0.fetchone()[0]))
-            except psycopg.Error:
-                pass
-
-        conn.add_notice_handler(_on_notice)
-        # Use one transaction so SET LOCAL persists across all statements.
+    # Capture this connection's backend pid before we run anything the
+    # user can wait on, so /api/cancel/<id> can resolve the request id
+    # to a pid and fire pg_cancel_backend on a separate connection.
+    # Failure here is non-fatal: the batch still runs, but cancel
+    # won't have a target.
+    if on_pid is not None:
         try:
-            with conn.cursor() as cur:
+            with conn.cursor() as cur0:
+                cur0.execute("SELECT pg_backend_pid()")
+                on_pid(int(cur0.fetchone()[0]))
+        except psycopg.Error:
+            pass
+
+    conn.add_notice_handler(_on_notice)
+    # Use one transaction so SET LOCAL persists across all statements.
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SET LOCAL statement_timeout = {}").format(
+                    sql.Literal(statement_timeout)
+                )
+            )
+            # Pin provsql to the end of search_path for the batch
+            # (so its helpers are reachable unqualified as a fallback
+            # without shadowing user objects). When the Studio
+            # config provides a search_path override we also use it
+            # as the base; otherwise we read whatever the session
+            # already has and append provsql if missing. set_config
+            # parameterises the value so the user-supplied portion
+            # never reaches PG as raw SQL.
+            if (search_path or "").strip():
+                target_path = compose_search_path(search_path, "")
+            else:
+                cur.execute("SHOW search_path")
+                target_path = compose_search_path("", cur.fetchone()[0])
+            cur.execute(
+                "SELECT set_config('search_path', %s, true)",
+                (target_path,),
+            )
+            cur.execute(
+                "SET LOCAL provsql.where_provenance = "
+                + ("on" if where_provenance else "off")
+            )
+            cur.execute(
+                "SET LOCAL provsql.update_provenance = "
+                + ("on" if update_provenance else "off")
+            )
+            cur.execute(
+                "SET LOCAL provsql.boolean_provenance = "
+                + ("on" if boolean_provenance else "off")
+            )
+            # Studio always wants the classifier NOTICE for the
+            # user's outermost SELECT so the result-pane header
+            # can render the certified kind (TID / BID / OPAQUE)
+            # as a prov-* badge. Older extension versions don't
+            # know this GUC ; we wrap the SET LOCAL in a
+            # SAVEPOINT so the "unrecognized configuration
+            # parameter" error doesn't abort the surrounding
+            # transaction (Studio still works against pre-1.6.0
+            # servers, just without the badge).
+            cur.execute("SAVEPOINT classify_guc")
+            try:
                 cur.execute(
-                    sql.SQL("SET LOCAL statement_timeout = {}").format(
-                        sql.Literal(statement_timeout)
+                    "SET LOCAL provsql.classify_top_level = on"
+                )
+            except psycopg.errors.UndefinedObject:
+                cur.execute("ROLLBACK TO SAVEPOINT classify_guc")
+            else:
+                cur.execute("RELEASE SAVEPOINT classify_guc")
+            # provsql.tool_search_path: prepended to $PATH when
+            # provsql spawns external tools (d4 / c2d / weightmc /
+            # graph-easy). set_config parameterises the value so
+            # the user-supplied portion never reaches PG as raw SQL.
+            apply_tool_search_path(cur, tool_search_path)
+            # Config-panel GUCs (provsql.active, provsql.verbose_level)
+            # apply on top of the per-query toggles so the user can keep
+            # the rewriter off via the panel without having to remember
+            # it on every query.
+            for guc_name, guc_val in (extra_gucs or {}).items():
+                if guc_name not in _EXTRA_GUC_WHITELIST:
+                    continue
+                cur.execute(
+                    sql.SQL("SET LOCAL {} = {}").format(
+                        sql.Identifier(*guc_name.split(".")),
+                        sql.Literal(guc_val),
                     )
                 )
-                # Pin provsql to the end of search_path for the batch
-                # (so its helpers are reachable unqualified as a fallback
-                # without shadowing user objects). When the Studio
-                # config provides a search_path override we also use it
-                # as the base; otherwise we read whatever the session
-                # already has and append provsql if missing. set_config
-                # parameterises the value so the user-supplied portion
-                # never reaches PG as raw SQL.
-                if (search_path or "").strip():
-                    target_path = compose_search_path(search_path, "")
-                else:
-                    cur.execute("SHOW search_path")
-                    target_path = compose_search_path("", cur.fetchone()[0])
-                cur.execute(
-                    "SELECT set_config('search_path', %s, true)",
-                    (target_path,),
-                )
-                cur.execute(
-                    "SET LOCAL provsql.where_provenance = "
-                    + ("on" if where_provenance else "off")
-                )
-                cur.execute(
-                    "SET LOCAL provsql.update_provenance = "
-                    + ("on" if update_provenance else "off")
-                )
-                cur.execute(
-                    "SET LOCAL provsql.boolean_provenance = "
-                    + ("on" if boolean_provenance else "off")
-                )
-                # Studio always wants the classifier NOTICE for the
-                # user's outermost SELECT so the result-pane header
-                # can render the certified kind (TID / BID / OPAQUE)
-                # as a prov-* badge. Older extension versions don't
-                # know this GUC ; we wrap the SET LOCAL in a
-                # SAVEPOINT so the "unrecognized configuration
-                # parameter" error doesn't abort the surrounding
-                # transaction (Studio still works against pre-1.6.0
-                # servers, just without the badge).
-                cur.execute("SAVEPOINT classify_guc")
+
+            # Run prelude statements; halt on first error.
+            for stmt in prelude:
                 try:
-                    cur.execute(
-                        "SET LOCAL provsql.classify_top_level = on"
+                    _execute_statement(cur, stmt)
+                except psycopg.Error as e:
+                    intermediate.append(
+                        _user_error_result(e, meta, statement_timeout)
                     )
-                except psycopg.errors.UndefinedObject:
-                    cur.execute("ROLLBACK TO SAVEPOINT classify_guc")
-                else:
-                    cur.execute("RELEASE SAVEPOINT classify_guc")
-                # provsql.tool_search_path: prepended to $PATH when
-                # provsql spawns external tools (d4 / c2d / weightmc /
-                # graph-easy). set_config parameterises the value so
-                # the user-supplied portion never reaches PG as raw SQL.
-                apply_tool_search_path(cur, tool_search_path)
-                # Config-panel GUCs (provsql.active, provsql.verbose_level)
-                # apply on top of the per-query toggles so the user can keep
-                # the rewriter off via the panel without having to remember
-                # it on every query.
-                for guc_name, guc_val in (extra_gucs or {}).items():
-                    if guc_name not in _EXTRA_GUC_WHITELIST:
-                        continue
-                    cur.execute(
-                        sql.SQL("SET LOCAL {} = {}").format(
-                            sql.Identifier(*guc_name.split(".")),
-                            sql.Literal(guc_val),
-                        )
-                    )
+                    return intermediate, None, meta
 
-                # Run prelude statements; halt on first error.
-                for stmt in prelude:
+            # The wrap projection calls where_provenance() once per
+            # row. PG's executor is pull-based, so pushing the LIMIT
+            # into the outermost SELECT stops the projection after
+            # N+1 rows : without it, a `SELECT *` over 50k rows runs
+            # 50k where_provenance() calls server-side before a
+            # single byte reaches the client. The trailing cap_clause
+            # mirrors the fetchmany peek used in circuit mode (one
+            # extra row distinguishes "exactly N" from "at least N").
+            cap_clause = (
+                f" LIMIT {int(max_result_rows) + 1}"
+                if max_result_rows is not None and max_result_rows >= 0
+                else ""
+            )
+            wrapped_sql = (
+                f"SELECT *, "
+                f"provsql.provenance() AS __prov, "
+                f"provsql.where_provenance(provsql.provenance()) AS __wprov "
+                f"FROM ({last}) t"
+                f"{cap_clause}"
+            )
+
+            if wrap_last:
+                # If the user has bumped verbose_level high enough for
+                # the planner hook to fire NOTICEs, do a probe pass:
+                # run the user's literal SQL inside a read-only
+                # savepoint with capture enabled. Any rewriting notices
+                # collected here describe the user's query. Then
+                # rollback (discard results) and run the actual wrap
+                # with capture off so its where_provenance() ->
+                # identify_token() chain stays silent.
+                #
+                # transaction_read_only on the subtransaction protects
+                # us from queries that have side effects (writable
+                # CTEs, etc.); they error during the probe and we just
+                # discard the captured notices for that case.
+                if panel_verbose >= 20:
+                    cur.execute("SAVEPOINT verbose_probe")
+                    cur.execute("SET LOCAL transaction_read_only = on")
+                    probe_notices_at_start = len(meta["notices"])
                     try:
-                        _execute_statement(cur, stmt)
-                    except psycopg.Error as e:
-                        intermediate.append(
-                            _user_error_result(e, meta, statement_timeout)
-                        )
-                        return intermediate, None, meta
+                        cur.execute(last)
+                    except psycopg.Error:
+                        # Side effect hit the read-only barrier (or
+                        # query had a runtime error). Notices captured
+                        # before the failure are still valid (the
+                        # rewriting NOTICE fires at plan time).
+                        del meta["notices"][probe_notices_at_start:]
+                    cur.execute("ROLLBACK TO SAVEPOINT verbose_probe")
+                    cur.execute("RELEASE SAVEPOINT verbose_probe")
 
-                # The wrap projection calls where_provenance() once per
-                # row. PG's executor is pull-based, so pushing the LIMIT
-                # into the outermost SELECT stops the projection after
-                # N+1 rows : without it, a `SELECT *` over 50k rows runs
-                # 50k where_provenance() calls server-side before a
-                # single byte reaches the client. The trailing cap_clause
-                # mirrors the fetchmany peek used in circuit mode (one
-                # extra row distinguishes "exactly N" from "at least N").
-                cap_clause = (
-                    f" LIMIT {int(max_result_rows) + 1}"
-                    if max_result_rows is not None and max_result_rows >= 0
-                    else ""
-                )
-                wrapped_sql = (
-                    f"SELECT *, "
-                    f"provsql.provenance() AS __prov, "
-                    f"provsql.where_provenance(provsql.provenance()) AS __wprov "
-                    f"FROM ({last}) t"
-                    f"{cap_clause}"
-                )
-
-                if wrap_last:
-                    # If the user has bumped verbose_level high enough for
-                    # the planner hook to fire NOTICEs, do a probe pass:
-                    # run the user's literal SQL inside a read-only
-                    # savepoint with capture enabled. Any rewriting notices
-                    # collected here describe the user's query. Then
-                    # rollback (discard results) and run the actual wrap
-                    # with capture off so its where_provenance() ->
-                    # identify_token() chain stays silent.
-                    #
-                    # transaction_read_only on the subtransaction protects
-                    # us from queries that have side effects (writable
-                    # CTEs, etc.); they error during the probe and we just
-                    # discard the captured notices for that case.
-                    if panel_verbose >= 20:
-                        cur.execute("SAVEPOINT verbose_probe")
-                        cur.execute("SET LOCAL transaction_read_only = on")
-                        probe_notices_at_start = len(meta["notices"])
+                # Wrap phase: silence the notice handler so the wrap's
+                # internal helpers don't pollute the captured set.
+                capture[0] = False
+                cur.execute("SAVEPOINT before_wrap")
+                try:
+                    cur.execute(wrapped_sql)
+                except psycopg.Error as e:
+                    if _NO_PROV_MARKER in str(e):
+                        cur.execute("ROLLBACK TO SAVEPOINT before_wrap")
+                        meta["wrapped"] = False
+                        meta["notices"].append({
+                            "severity": "INFO",
+                            "message":
+                                "Source relation is not provenance-tracked; "
+                                "where-provenance highlights are unavailable. "
+                                "Run “SELECT add_provenance('…')” to enable.",
+                        })
+                        # Re-enable capture for the unwrapped retry :
+                        # this run IS the user's query (no probe ran
+                        # because the wrap failed before we got there).
+                        capture[0] = True
                         try:
                             cur.execute(last)
-                        except psycopg.Error:
-                            # Side effect hit the read-only barrier (or
-                            # query had a runtime error). Notices captured
-                            # before the failure are still valid (the
-                            # rewriting NOTICE fires at plan time).
-                            del meta["notices"][probe_notices_at_start:]
-                        cur.execute("ROLLBACK TO SAVEPOINT verbose_probe")
-                        cur.execute("RELEASE SAVEPOINT verbose_probe")
-
-                    # Wrap phase: silence the notice handler so the wrap's
-                    # internal helpers don't pollute the captured set.
-                    capture[0] = False
-                    cur.execute("SAVEPOINT before_wrap")
-                    try:
-                        cur.execute(wrapped_sql)
-                    except psycopg.Error as e:
-                        if _NO_PROV_MARKER in str(e):
-                            cur.execute("ROLLBACK TO SAVEPOINT before_wrap")
-                            meta["wrapped"] = False
-                            meta["notices"].append({
-                                "severity": "INFO",
-                                "message":
-                                    "Source relation is not provenance-tracked; "
-                                    "where-provenance highlights are unavailable. "
-                                    "Run “SELECT add_provenance('…')” to enable.",
-                            })
-                            # Re-enable capture for the unwrapped retry :
-                            # this run IS the user's query (no probe ran
-                            # because the wrap failed before we got there).
-                            capture[0] = True
-                            try:
-                                cur.execute(last)
-                            except psycopg.Error as e2:
-                                return [], _user_error_result(e2, meta, statement_timeout), meta
-                        else:
-                            return [], _user_error_result(e, meta, statement_timeout), meta
-                else:
-                    # No wrap (circuit mode or unwrappable last). The user's
-                    # query runs once with capture enabled : its planner-hook
-                    # notices describe the user's literal SQL.
-                    try:
-                        _execute_statement(cur, last)
-                    except psycopg.Error as e:
+                        except psycopg.Error as e2:
+                            return [], _user_error_result(e2, meta, statement_timeout), meta
+                    else:
                         return [], _user_error_result(e, meta, statement_timeout), meta
+            else:
+                # No wrap (circuit mode or unwrappable last). The user's
+                # query runs once with capture enabled : its planner-hook
+                # notices describe the user's literal SQL.
+                try:
+                    _execute_statement(cur, last)
+                except psycopg.Error as e:
+                    return [], _user_error_result(e, meta, statement_timeout), meta
 
-                # Post-processing pass : silence the notice handler so
-                # Studio-internal lookups (the per-column `_type_name`
-                # pg_type probe behind `_result_from_cursor`, the
-                # `_resolve_agg_display` agg_token name resolution) don't
-                # add their own classifier NOTICEs to the captured stream.
-                # Each of those lookups is a `SELECT ... FROM <tbl>`
-                # against an untracked catalog table, which the planner-
-                # hook classifier (when on) would tag as
-                # "TID (no provenance-tracked sources)". With Studio's
-                # "last NOTICE wins" pill logic, a single user query that
-                # introduced new column types would clobber the user's
-                # OPAQUE / BID verdict with a stale TID until the per-
-                # connection type-name cache warmed up.
-                capture[0] = False
-                final = _result_from_cursor(cur, max_rows=max_result_rows)
-                # If the result has any agg_token columns, resolve their
-                # underlying UUIDs back to "value (*)" display strings in
-                # one shot via provsql.agg_token_value_text. The pool
-                # session has aggtoken_text_as_uuid = on, so the cells
-                # arrived as bare UUIDs; the front-end uses agg_display
-                # to render the friendly form without losing the UUID
-                # click target.
-                if final.kind == "rows":
-                    final.agg_display = _resolve_agg_display(cur, final)
-        except psycopg.Error as e:
-            return [], _user_error_result(e, meta, statement_timeout), meta
-        finally:
-            # Connections come from a pool, so leaving the per-batch handler
-            # attached would accumulate one handler per request.
-            try:
-                conn.remove_notice_handler(_on_notice)
-            except Exception:
-                pass
-            # Safety net: a statement that broke off mid-protocol (e.g.
-            # a COPY fed through execute() on an older code path, or any
-            # future protocol desync) leaves the connection ACTIVE; the
-            # pool's COMMIT on release would then die with "another
-            # command is already in progress", turning the SQL error we
-            # just caught into an opaque 500. Close the connection
-            # instead: Connection.__exit__ skips closed connections, the
-            # pool discards and replaces it, and the caught error result
-            # reaches the client.
-            try:
-                if (not conn.closed
-                        and conn.pgconn.transaction_status
-                        == psycopg.pq.TransactionStatus.ACTIVE):
-                    conn.close()
-            except Exception:
-                pass
+            # Post-processing pass : silence the notice handler so
+            # Studio-internal lookups (the per-column `_type_name`
+            # pg_type probe behind `_result_from_cursor`, the
+            # `_resolve_agg_display` agg_token name resolution) don't
+            # add their own classifier NOTICEs to the captured stream.
+            # Each of those lookups is a `SELECT ... FROM <tbl>`
+            # against an untracked catalog table, which the planner-
+            # hook classifier (when on) would tag as
+            # "TID (no provenance-tracked sources)". With Studio's
+            # "last NOTICE wins" pill logic, a single user query that
+            # introduced new column types would clobber the user's
+            # OPAQUE / BID verdict with a stale TID until the per-
+            # connection type-name cache warmed up.
+            capture[0] = False
+            final = _result_from_cursor(cur, max_rows=max_result_rows)
+            # If the result has any agg_token columns, resolve their
+            # underlying UUIDs back to "value (*)" display strings in
+            # one shot via provsql.agg_token_value_text. The pool
+            # session has aggtoken_text_as_uuid = on, so the cells
+            # arrived as bare UUIDs; the front-end uses agg_display
+            # to render the friendly form without losing the UUID
+            # click target.
+            if final.kind == "rows":
+                final.agg_display = _resolve_agg_display(cur, final)
+    except psycopg.Error as e:
+        return [], _user_error_result(e, meta, statement_timeout), meta
+    finally:
+        # The connection outlives the batch (pool or pinned kernel), so
+        # leaving the per-batch handler attached would accumulate one
+        # handler per request.
+        try:
+            conn.remove_notice_handler(_on_notice)
+        except Exception:
+            pass
 
     return intermediate, final, meta
+
+
+def open_kernel_connection(dsn: str | None) -> psycopg.Connection:
+    """Open the pinned connection backing one notebook kernel.
+
+    Same session defaults as the pool's connections
+    (`configure_connection`), then flipped to autocommit so nothing
+    dangles between cells: each cell runs in an explicit
+    `conn.transaction()` inside `exec_kernel_cell`, and anything the
+    user commits there (or any session-scoped object: temp tables,
+    plain `SET`s, prepared statements) persists for the kernel's
+    lifetime -- the Jupyter-like state the notebook mode is about."""
+    conn = psycopg.connect(dsn or "")
+    configure_connection(conn)
+    conn.autocommit = True
+    return conn
+
+
+def exec_kernel_cell(
+    conn: psycopg.Connection,
+    statements: list[str],
+    *,
+    statement_timeout: str,
+    where_provenance: bool,
+    update_provenance: bool = False,
+    boolean_provenance: bool = False,
+    wrap_last: bool,
+    extra_gucs: dict[str, str] | None = None,
+    search_path: str = "",
+    tool_search_path: str = "",
+    max_result_rows: int | None = None,
+) -> tuple[list[StatementResult], StatementResult | None, dict, bool]:
+    """Run one notebook cell on a pinned kernel connection.
+
+    The cell executes inside its own transaction, preserving
+    `exec_batch_on`'s within-batch semantics verbatim (SET LOCAL
+    prelude, classifier savepoint, where-wrap, COPY blocks,
+    halt-on-first-error); a failed cell rolls back cleanly
+    (psycopg's transaction block turns the INERROR state into a
+    silent rollback) while committed cells persist for later ones.
+
+    Returns `(intermediate, final, meta, kernel_dead)`. `kernel_dead`
+    flags a connection left unusable -- wedged mid-protocol (e.g.
+    `COPY ... TO STDOUT` through execute()), broken socket, server
+    restart; the connection is closed here and the caller must
+    discard the kernel. A COMMIT-time SQL failure on a healthy
+    connection (e.g. a deferred constraint firing) is *not* death:
+    the transaction rolled back and the kernel lives on."""
+    result = None
+    try:
+        with conn.transaction():
+            result = exec_batch_on(
+                conn,
+                statements,
+                statement_timeout=statement_timeout,
+                where_provenance=where_provenance,
+                update_provenance=update_provenance,
+                boolean_provenance=boolean_provenance,
+                wrap_last=wrap_last,
+                extra_gucs=extra_gucs,
+                search_path=search_path,
+                tool_search_path=tool_search_path,
+                max_result_rows=max_result_rows,
+            )
+    except psycopg.Error as e:
+        # Raised at the transaction boundary. Distinguish a wedged /
+        # broken connection from a legitimate COMMIT-time failure by
+        # the connection's state.
+        dead = True
+        try:
+            dead = (conn.closed or conn.broken
+                    or conn.pgconn.transaction_status
+                    == psycopg.pq.TransactionStatus.ACTIVE)
+        except Exception:
+            pass
+        if dead:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        if result is not None:
+            intermediate, final, meta = result
+        else:
+            intermediate, final = [], None
+            meta = {"wrapped": False, "notices": []}
+        # Keep the cell's own error block when there is one (the
+        # commit failure is its consequence, not the story); surface
+        # the boundary error otherwise.
+        has_cell_error = (
+            (final is not None and final.kind == "error")
+            or any(r.kind == "error" for r in intermediate)
+        )
+        if not has_cell_error:
+            final = _user_error_result(e, meta, statement_timeout)
+        return intermediate, final, meta, dead
+    intermediate, final, meta = result
+    return intermediate, final, meta, False
 
 
 def _result_from_cursor(

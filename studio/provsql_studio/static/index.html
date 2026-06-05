@@ -20,6 +20,7 @@
     <div class="ps-modeswitch" id="modeswitch" role="tablist">
       <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="tab"><i class="fas fa-project-diagram"></i> Circuit</a>
       <a class="ps-modeswitch__btn" href="/where" data-mode="where" role="tab"><i class="fas fa-search-location"></i> Where</a>
+      <a class="ps-modeswitch__btn" href="/notebook" data-mode="notebook" role="tab"><i class="fas fa-book-open"></i> Notebook</a>
     </div>
     <span class="wp-nav__conn">
       <button type="button" class="wp-nav__connbtn" id="conn-dot"
@@ -423,6 +424,51 @@
         <span class="wp-legend-swatch"></span>
         Hover a cell above to highlight its <strong>where-provenance</strong> in the source table on the left.
       </p>
+    </div>
+
+    <!-- Notebook mode: replaces the query form + result pane inside the
+         same card (CSS toggles on body.mode-notebook). Toolbar + cell
+         list are rendered and wired by notebook.js. -->
+    <div class="nb" id="notebook-pane" hidden>
+      <div class="nb__toolbar" id="nb-toolbar">
+        <button type="button" class="wp-btn wp-btn--primary wp-btn--mini" id="nb-run"
+                title="Run the focused cell (Ctrl+Enter); Shift+Enter runs and advances">
+          <i class="fas fa-play"></i> Run</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-run-all"
+                title="Run every cell from the top"><i class="fas fa-forward"></i> Run all</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-interrupt" hidden
+                title="Cancel the running cell's query"><i class="fas fa-times-circle"></i> Interrupt</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-restart"
+                title="Restart the kernel: closes the pinned database session (temp tables, SETs, prepared statements are lost) and starts a fresh one">
+          <i class="fas fa-redo"></i> Restart kernel</button>
+        <span class="nb__toolbar-sep"></span>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-add-sql"
+                title="Append a SQL cell"><i class="fas fa-plus"></i> SQL</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-add-md"
+                title="Append a Markdown cell"><i class="fas fa-plus"></i> Markdown</button>
+        <span class="nb__toolbar-sep"></span>
+        <select class="nb__scheme" id="nb-scheme"
+                title="Provenance scheme applied to every cell (notebook-level default)">
+          <option value="semiring">Semiring</option>
+          <option value="where">Where</option>
+          <option value="boolean">Boolean</option>
+        </select>
+        <span class="nb__toolbar-sep"></span>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-save"
+                title="Download the notebook as a Jupyter-compatible .ipynb file">
+          <i class="fas fa-download"></i> Save</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-load"
+                title="Load a .ipynb notebook file"><i class="fas fa-folder-open"></i> Load</button>
+        <input type="file" id="nb-load-input" accept=".ipynb,application/json" hidden>
+        <span class="nb__toolbar-sep"></span>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-show-uuids"
+                aria-pressed="false" title="Show full UUIDs in results">
+          <i class="fas fa-fingerprint"></i></button>
+        <span class="nb__kernel" id="nb-kernel-chip" title="Kernel status">
+          <i class="fas fa-circle"></i> <span id="nb-kernel-label">no kernel</span>
+        </span>
+      </div>
+      <div class="nb__cells" id="nb-cells"></div>
     </div>
 
   </section>

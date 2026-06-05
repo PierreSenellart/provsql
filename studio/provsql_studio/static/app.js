@@ -6,7 +6,9 @@
    sessionStorage and offers a per-row "→ Circuit" jump in where mode. */
 
 (function () {
-  const mode = document.body.classList.contains('mode-circuit') ? 'circuit' : 'where';
+  const mode = document.body.classList.contains('mode-circuit') ? 'circuit'
+             : document.body.classList.contains('mode-notebook') ? 'notebook'
+             : 'where';
 
   // Metadata caches (schema panel, eval-strip mapping picker, eval-strip
   // custom-semiring optgroup) lazy-load once and would otherwise stay
@@ -366,9 +368,11 @@
     mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
     isRightAlignedType, matchesProvType, pushHistory,
   };
+  window.ProvsqlStudio.highlightSql = highlightSql;
 
-  if (mode === 'where') setupWhereMode();
-  else                  setupCircuitMode();
+  if (mode === 'where')         setupWhereMode();
+  else if (mode === 'notebook') setupNotebookMode();
+  else                          setupCircuitMode();
 
   // The setup call has to come AFTER the SQL_KEYWORDS const declaration
   // below: function declarations are hoisted but `const` is not, so calling
@@ -553,6 +557,30 @@
   }
   function setInputOnly(on) {
     sessionStorage.setItem(INPUT_ONLY_KEY, on ? '1' : '0');
+  }
+
+  async function setupNotebookMode() {
+    // The notebook keeps the where-mode relations sidebar (the natural
+    // companion while writing cells) and swaps the right card's query
+    // form + result pane for the cell list. All cell logic lives in
+    // notebook.js, lazy-loaded like circuit.js.
+    const form = document.querySelector('.wp-form');
+    if (form) form.hidden = true;
+    const resultPane = document.getElementById('result-pane');
+    if (resultPane) resultPane.hidden = true;
+    const pane = document.getElementById('notebook-pane');
+    if (pane) pane.hidden = false;
+    // The notebook renders its own compact sidebar (outline + one-line
+    // relation summaries) -- the where-mode full-table browser eats too
+    // much space next to a cell list.
+    const s = document.createElement('script');
+    s.src = '/static/notebook.js';
+    s.onload = () => {
+      if (window.ProvsqlNotebook && window.ProvsqlNotebook.init) {
+        window.ProvsqlNotebook.init(window.__provsqlStudio);
+      }
+    };
+    document.head.appendChild(s);
   }
 
   async function refreshRelations() {
@@ -1845,6 +1873,13 @@
     }
 
     function insertAtCursor(text) {
+      // Notebook mode has no shared #request box: route to the current
+      // (or a fresh) SQL cell instead.
+      if (document.body.classList.contains('mode-notebook')
+          && window.ProvsqlNotebook) {
+        window.ProvsqlNotebook.insertSql(text);
+        return;
+      }
       const ta = document.getElementById('request');
       if (!ta) return;
       const start = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
@@ -1861,6 +1896,11 @@
     // they generate a complete standalone query, so blow the previous
     // textarea content away rather than concatenate.
     function replaceQuery(text) {
+      if (document.body.classList.contains('mode-notebook')
+          && window.ProvsqlNotebook) {
+        window.ProvsqlNotebook.replaceSql(text);
+        return;
+      }
       const ta = document.getElementById('request');
       if (!ta) return;
       ta.value = text;
@@ -2554,116 +2594,14 @@ const CLASSIFIER_EXPLAINERS = {
 
 /* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
    and renders the response into the result section. */
-async function runQuery(ev) {
-  ev.preventDefault();
-
-  const env = window.__provsqlStudio || { mode: 'where', escapeHtml: s => s, escapeAttr: s => s, formatCell: v => v };
-  const sqlText = document.getElementById('request').value;
-  const head    = document.getElementById('result-head');
-  const body    = document.getElementById('result-body');
-  const count   = document.getElementById('result-count');
-  const time    = document.getElementById('result-time');
-
-  // Loading state.
-  body.innerHTML = `<tr><td style="opacity:.6; text-align:center; padding:1rem">Running…</td></tr>`;
-  count.textContent = '…';
-  time.textContent = '…';
-  // Clear the previous run's truncation hint and notice / error banners
-  // so they don't linger next to the new query's "running…" placeholder.
-  // renderError still writes into result-banners on a failed POST, so
-  // wiping here is safe : the success path repopulates them on render.
-  const truncMark = document.getElementById('result-truncated');
-  if (truncMark) {
-    truncMark.textContent = '';
-    truncMark.hidden = true;
-  }
-  const banners = document.getElementById('result-banners');
-  if (banners) banners.innerHTML = '';
-  const t0 = performance.now();
-
-  // Wipe any previous circuit so it doesn't linger next to the new query's
-  // result. The user may click a UUID cell in the new result to render a
-  // fresh DAG; until then the canvas should be empty.
-  if (env.mode === 'circuit') {
-    window.ProvsqlCircuit?.clearScene?.();
-  }
-
-  // Cancel-button wiring: tag the in-flight request so /api/cancel/<id>
-  // can resolve it back to the backend pid. The Send -> Cancel swap is
-  // deferred 100ms so very fast queries (which return before the timer
-  // fires) never flicker the row; clearTimeout in the finally branch
-  // cancels the swap, and the same finally restores Send unconditionally.
-  const requestId = (window.crypto && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const runBtn    = document.getElementById('run-btn');
-  const cancelBtn = document.getElementById('cancel-btn');
-  if (cancelBtn) {
-    cancelBtn.dataset.requestId = requestId;
-    cancelBtn.disabled = false;
-  }
-  const swapTimer = setTimeout(() => {
-    if (cancelBtn) cancelBtn.hidden = false;
-    if (runBtn)    runBtn.hidden    = true;
-  }, 100);
-
-  const upEl = document.getElementById('opt-update-prov');
-  const provSchemeEl = document.querySelector('input[name="prov-scheme"]:checked');
-  let resp;
-  try {
-    resp = await fetch('/api/exec', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sql: sqlText,
-        mode: env.mode,
-        prov_scheme: env.mode === 'where' ? 'where' : (provSchemeEl ? provSchemeEl.value : 'semiring'),
-        update_provenance: upEl ? upEl.checked : false,
-        request_id: requestId,
-      }),
-    });
-  } catch (e) {
-    renderError(`Network error: ${e.message}`);
-    return false;
-  } finally {
-    clearTimeout(swapTimer);
-    if (cancelBtn) cancelBtn.hidden = true;
-    if (runBtn)    runBtn.hidden    = false;
-  }
-  const dt = Math.round(performance.now() - t0);
-  time.textContent = dt;
-
-  if (!resp.ok) {
-    renderError(`HTTP ${resp.status}`);
-    return false;
-  }
-  const payload = await resp.json();
-  renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notices || []);
-
-  // Append the just-submitted query to the persistent history (skipping
-  // exact-duplicate consecutive entries). We do this regardless of the
-  // server's outcome so users can recall a query that errored to fix it.
-  if (env.pushHistory) env.pushHistory(sqlText);
-
-  // Record the just-run SQL so a subsequent mode/database switch knows
-  // whether the textarea content was actually executed (the carry handler
-  // compares this to the textarea value to decide whether to set the
-  // ran-flag, which gates auto-replay in the new mode).
-  try { sessionStorage.setItem('ps.lastRunSql', sqlText); } catch {}
-
-  // After every successful exec in where mode, re-fetch relations so
-  // add_provenance results show up live.
-  if (env.mode === 'where' && env.refreshRelations) env.refreshRelations();
-
-  // Mark all metadata caches dirty: the user may have just run a CREATE
-  // TABLE, add_provenance, create_provenance_mapping, or a CREATE
-  // FUNCTION that defines a new custom-semiring wrapper. Each panel
-  // re-fetches lazily on next open.
-  if (window.ProvsqlStudio?.metadata?.invalidateAll) {
-    window.ProvsqlStudio.metadata.invalidateAll();
-  }
-
-  return false;
+/* Block renderer factory: turns an /api/exec-shaped payload (blocks /
+   wrapped / notices) into DOM, against a caller-supplied set of target
+   elements. Extracted from runQuery so the notebook mode (one renderer
+   per cell, each with its own table/banner/count elements) reuses the
+   exact same rendering -- type-aware cells, UUID affordances, NOTICE
+   banners, classifier pill -- as the shared result pane. */
+function makeBlockRenderer(env, targets) {
+  const { head, body, count } = targets;
 
   // Render a single NOTICE / WARNING / ERROR / INFO banner. Severity drives
   // colour + icon; the literal severity tag is omitted (the visual style
@@ -2754,13 +2692,13 @@ async function runQuery(ev) {
     // Reset the truncation marker on every render; the rows branch
     // re-shows it when final.truncated. Status / error / empty paths
     // therefore never leak a stale "first N; more available" hint.
-    const truncMark = document.getElementById('result-truncated');
+    const truncMark = targets.truncated;
     if (truncMark) {
       truncMark.textContent = '';
       truncMark.hidden = true;
     }
 
-    const banners = document.getElementById('result-banners');
+    const banners = targets.banners;
     let bannerHtml = '';
     // Earlier-failed prelude statements: render each as an ERROR banner
     // alongside notices/warnings.
@@ -2971,7 +2909,7 @@ async function runQuery(ev) {
         return `<tr>${cells}${jumpBtn}</tr>`;
       }).join('');
       count.textContent = final.rows.length;
-      const truncated = document.getElementById('result-truncated');
+      const truncated = targets.truncated;
       if (truncated) {
         if (final.truncated && final.max_rows != null) {
           truncated.textContent = ` (first ${final.max_rows}; more available)`;
@@ -3006,7 +2944,7 @@ async function runQuery(ev) {
   }
 
   function renderError(msg) {
-    const banners = document.getElementById('result-banners');
+    const banners = targets.banners;
     if (banners) banners.innerHTML = renderDiag('ERROR', msg);
     head.innerHTML = '';
     body.innerHTML = '';
@@ -3056,4 +2994,127 @@ async function runQuery(ev) {
     out.push(s.slice(last));
     return out;
   }
+
+  return { renderBlocks, renderError, renderDiag };
+}
+window.ProvsqlStudio = window.ProvsqlStudio || {};
+window.ProvsqlStudio.makeBlockRenderer = makeBlockRenderer;
+
+async function runQuery(ev) {
+  ev.preventDefault();
+
+  const env = window.__provsqlStudio || { mode: 'where', escapeHtml: s => s, escapeAttr: s => s, formatCell: v => v };
+  const sqlText = document.getElementById('request').value;
+  const head    = document.getElementById('result-head');
+  const body    = document.getElementById('result-body');
+  const count   = document.getElementById('result-count');
+  const time    = document.getElementById('result-time');
+
+  // Loading state.
+  body.innerHTML = `<tr><td style="opacity:.6; text-align:center; padding:1rem">Running…</td></tr>`;
+  count.textContent = '…';
+  time.textContent = '…';
+  // Clear the previous run's truncation hint and notice / error banners
+  // so they don't linger next to the new query's "running…" placeholder.
+  // renderError still writes into result-banners on a failed POST, so
+  // wiping here is safe : the success path repopulates them on render.
+  const truncMark = document.getElementById('result-truncated');
+  if (truncMark) {
+    truncMark.textContent = '';
+    truncMark.hidden = true;
+  }
+  const banners = document.getElementById('result-banners');
+  if (banners) banners.innerHTML = '';
+  const t0 = performance.now();
+
+  const R = makeBlockRenderer(env, {
+    head, body, count,
+    banners: document.getElementById('result-banners'),
+    truncated: document.getElementById('result-truncated'),
+  });
+
+  // Wipe any previous circuit so it doesn't linger next to the new query's
+  // result. The user may click a UUID cell in the new result to render a
+  // fresh DAG; until then the canvas should be empty.
+  if (env.mode === 'circuit') {
+    window.ProvsqlCircuit?.clearScene?.();
+  }
+
+  // Cancel-button wiring: tag the in-flight request so /api/cancel/<id>
+  // can resolve it back to the backend pid. The Send -> Cancel swap is
+  // deferred 100ms so very fast queries (which return before the timer
+  // fires) never flicker the row; clearTimeout in the finally branch
+  // cancels the swap, and the same finally restores Send unconditionally.
+  const requestId = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const runBtn    = document.getElementById('run-btn');
+  const cancelBtn = document.getElementById('cancel-btn');
+  if (cancelBtn) {
+    cancelBtn.dataset.requestId = requestId;
+    cancelBtn.disabled = false;
+  }
+  const swapTimer = setTimeout(() => {
+    if (cancelBtn) cancelBtn.hidden = false;
+    if (runBtn)    runBtn.hidden    = true;
+  }, 100);
+
+  const upEl = document.getElementById('opt-update-prov');
+  const provSchemeEl = document.querySelector('input[name="prov-scheme"]:checked');
+  let resp;
+  try {
+    resp = await fetch('/api/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sql: sqlText,
+        mode: env.mode,
+        prov_scheme: env.mode === 'where' ? 'where' : (provSchemeEl ? provSchemeEl.value : 'semiring'),
+        update_provenance: upEl ? upEl.checked : false,
+        request_id: requestId,
+      }),
+    });
+  } catch (e) {
+    R.renderError(`Network error: ${e.message}`);
+    return false;
+  } finally {
+    clearTimeout(swapTimer);
+    if (cancelBtn) cancelBtn.hidden = true;
+    if (runBtn)    runBtn.hidden    = false;
+  }
+  const dt = Math.round(performance.now() - t0);
+  time.textContent = dt;
+
+  if (!resp.ok) {
+    R.renderError(`HTTP ${resp.status}`);
+    return false;
+  }
+  const payload = await resp.json();
+  R.renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notices || []);
+
+  // Append the just-submitted query to the persistent history (skipping
+  // exact-duplicate consecutive entries). We do this regardless of the
+  // server's outcome so users can recall a query that errored to fix it.
+  if (env.pushHistory) env.pushHistory(sqlText);
+
+  // Record the just-run SQL so a subsequent mode/database switch knows
+  // whether the textarea content was actually executed (the carry handler
+  // compares this to the textarea value to decide whether to set the
+  // ran-flag, which gates auto-replay in the new mode).
+  try { sessionStorage.setItem('ps.lastRunSql', sqlText); } catch {}
+
+  // After every successful exec in where mode, re-fetch relations so
+  // add_provenance results show up live.
+  if (env.mode === 'where' && env.refreshRelations) env.refreshRelations();
+
+  // Mark all metadata caches dirty: the user may have just run a CREATE
+  // TABLE, add_provenance, create_provenance_mapping, or a CREATE
+  // FUNCTION that defines a new custom-semiring wrapper. Each panel
+  // re-fetches lazily on next open.
+  if (window.ProvsqlStudio?.metadata?.invalidateAll) {
+    window.ProvsqlStudio.metadata.invalidateAll();
+  }
+
+  return false;
+
 }

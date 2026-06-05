@@ -180,8 +180,9 @@ em { font-style: italic; }
    server-side in _serve_shell, while a JS toggle would only fire once
    app.js parses : that delay is what produced the brief "Where"
    flash on /circuit. */
-body.mode-where   .ps-modeswitch__btn[data-mode="where"],
-body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
+body.mode-where    .ps-modeswitch__btn[data-mode="where"],
+body.mode-circuit  .ps-modeswitch__btn[data-mode="circuit"],
+body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
   background: var(--gold-500);
   color: var(--purple-900);
   font-weight: 600;
@@ -1056,13 +1057,26 @@ body.mode-circuit .ps-modeswitch__btn[data-mode="circuit"] {
 @media (max-width: 1080px) {
   .wp-shell { grid-template-columns: 1fr; }
 }
+/* Notebook mode: the sidebar is a slim outline + relation summary, so
+   give virtually all the width to the cell list -- and since 230px is
+   cheap, the single-column collapse only kicks in on genuinely narrow
+   screens (the generic 1080px breakpoint is for the two wide modes).
+   The higher specificity of this selector keeps it in charge between
+   700 and 1080px. */
+body.mode-notebook .wp-shell {
+  grid-template-columns: 230px minmax(0, 1fr);
+}
+@media (max-width: 700px) {
+  body.mode-notebook .wp-shell { grid-template-columns: 1fr; }
+}
 
 /* In where mode, pin the source-relations sidebar to the viewport so its
    highlighted (terracotta) cells are always visible regardless of how far
    the user has scrolled the result table. The sidebar gets its own scroll
    pane so its content (potentially many relations) is reachable without
    moving the result. The sticky offset clears the sticky nav. */
-body.mode-where #sidebar {
+body.mode-where #sidebar,
+body.mode-notebook #sidebar {
   position: sticky;
   top: 5rem;
   max-height: calc(100vh - 6rem);
@@ -1072,6 +1086,15 @@ body.mode-where #sidebar {
   /* Single-column layout: sticky would overlap the result, so disable. */
   body.mode-where #sidebar { position: static; max-height: none; }
 }
+@media (max-width: 700px) {
+  /* Notebook collapses to one column much later (230px sidebar). */
+  body.mode-notebook #sidebar { position: static; max-height: none; }
+}
+/* Notebook mode drops both card headers: the sidebar one repeats the
+   section titles below it, and the right card's title adds nothing
+   over the mode tab -- the cells deserve the vertical space. */
+body.mode-notebook #sidebar > .wp-card__hdr,
+body.mode-notebook .wp-card--query > .wp-card__hdr { display: none; }
 
 /* ───────── card ───────── */
 .wp-card {
@@ -2858,3 +2881,221 @@ table thead th[data-sort="desc"]::after {
 .wp-tools__status { margin: 0.5rem 0 0; font-size: 0.78rem; color: var(--purple-500); }
 .wp-tools__status.is-error { color: var(--terracotta-500); }
 .wp-tools__note { margin: 0.5rem 0 0; font-size: 0.76rem; color: var(--fg-muted); font-style: italic; }
+
+/* ──────────────── Notebook mode ──────────────── */
+/* The notebook pane replaces the query form + result pane inside the
+   shared right card (toggled by app.js's setupNotebookMode). Cells reuse
+   the wp-editor / wp-table look so SQL and results read the same as in
+   the other modes. */
+.nb__toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 0.8rem;
+}
+.nb__toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border-soft);
+  margin: 0 0.2rem;
+}
+.nb__scheme {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.3rem;
+}
+.nb__kernel {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+.nb__kernel i { font-size: 0.6rem; }
+.nb__kernel--none i     { color: var(--fg-muted); }
+.nb__kernel--starting i { color: var(--gold-500); }
+.nb__kernel--alive i    { color: #3a9d23; }
+.nb__kernel--dead i     { color: var(--terracotta-500); }
+.nb__kernel--dead       { color: var(--terracotta-500); font-weight: 600; }
+
+.nb-cell {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+  align-items: flex-start;
+}
+.nb-cell__gutter {
+  flex: 0 0 3.2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  padding-top: 0.45rem;
+}
+.nb-cell__count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--purple-500);
+  white-space: nowrap;
+}
+.nb-cell__run {
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  color: var(--purple-700);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+}
+.nb-cell__run:hover { background: var(--bg-canvas); color: var(--terracotta-500); }
+.nb-cell__main { flex: 1; min-width: 0; }
+.nb-cell__editor { border-left-color: var(--purple-300, #b9a7d0); }
+.nb-cell__ta {
+  resize: none;
+  overflow: hidden;
+  min-height: 34px;
+}
+.nb-cell__md {
+  border-left: 3px solid transparent;
+  padding: 0.3rem 0.85rem;
+  cursor: text;
+}
+.nb-cell--markdown:hover .nb-cell__md { border-left-color: var(--border-soft); }
+.nb-cell__md > :first-child { margin-top: 0; }
+.nb-cell__md > :last-child { margin-bottom: 0; }
+.nb-cell__md code {
+  background: var(--bg-code);
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+.nb-cell__md pre code { display: block; padding: 0.5em 0.7em; overflow-x: auto; }
+.nb-cell__md blockquote {
+  border-left: 3px solid var(--border-soft);
+  margin-left: 0;
+  padding-left: 0.8rem;
+  color: var(--fg-muted);
+}
+.nb-cell__mdta {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  padding: 0.3rem 0.85rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  resize: none;
+  overflow: hidden;
+}
+.nb-cell__actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.nb-cell:hover .nb-cell__actions,
+.nb-cell:focus-within .nb-cell__actions { opacity: 1; }
+.nb-cell__actions button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 0.68rem;
+  padding: 0.12rem 0.3rem;
+}
+.nb-cell__actions button:hover {
+  color: var(--terracotta-500);
+  border-color: var(--border-soft);
+  background: var(--bg-canvas);
+}
+.nb-out { margin-top: 0.4rem; }
+.nb-out__banners:empty { display: none; }
+.nb-out__tablewrap { max-height: 320px; overflow: auto; }
+.nb-out__meta {
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  margin-top: 0.25rem;
+}
+.nb-out__trunc { color: var(--terracotta-500); }
+
+/* Notebook sidebar: deliberately compact (outline + one-line relation
+   summaries); the full table contents live in Where mode and the
+   Schema panel. */
+.nb-side__section { margin-bottom: 1rem; }
+.nb-side__hdr {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--purple-700);
+  margin: 0 0 0.35rem;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 0.2rem;
+}
+.nb-side__empty {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  font-style: italic;
+  margin: 0;
+}
+.nb-side__outline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nb-side__h {
+  font-size: 0.78rem;
+  padding: 0.12rem 0;
+  cursor: pointer;
+  color: var(--purple-900);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-side__h:hover { color: var(--terracotta-500); }
+.nb-side__h--2 { padding-left: 0.7rem; }
+.nb-side__h--3 { padding-left: 1.4rem; }
+.nb-side__h--4, .nb-side__h--5, .nb-side__h--6 { padding-left: 2.1rem; }
+.nb-side__rels {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nb-side__rel { margin-bottom: 0.4rem; }
+.nb-side__relname {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--purple-900);
+  cursor: pointer;
+}
+.nb-side__relname:hover { color: var(--terracotta-500); text-decoration: underline; }
+.nb-side__cols {
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-cell--flash > .nb-cell__main {
+  animation: nb-flash 1.2s ease-out;
+}
+@keyframes nb-flash {
+  0% { background: var(--gold-100, #f7ecd1); }
+  100% { background: transparent; }
+}
+
+#nb-show-uuids[aria-pressed="true"] {
+  background: var(--gold-500);
+  color: var(--purple-900);
+}

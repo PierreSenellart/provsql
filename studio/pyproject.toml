@@ -69,4 +69,5 @@ provsql_studio = [
     "static/*.js",
     "static/img/*",
     "static/fonts/*",
+    "static/vendor/*",
 ]

@@ -290,6 +290,14 @@ Studio feature; the compatibility floor does not move.
    kernel sessions with run / run-all / interrupt / restart;
    per-cell results through the existing renderer; autosave +
    `.ipynb` download/load (outputs included); unit + e2e tests.
+   **Landed** (modulo user-guide docs, deferred to release): the
+   `exec_batch_on` refactor + `exec_kernel_cell` in `db.py`, the
+   kernel registry and `/api/nb/*` endpoints in `app.py` (idle GC,
+   cap, busy-409, wedge→kernel-dead, drop-all on connection switch),
+   `static/notebook.js` + the `/notebook` route and mode tab, the
+   `makeBlockRenderer` extraction from `runQuery`, vendored
+   `marked` + `DOMPurify` under `static/vendor/`,
+   `tests/test_notebook.py` and `tests/e2e/test_notebook_ui.py`.
 2. **Provenance-native increment**: circuit cells, evaluation cells,
    per-cell scheme options, “→ Circuit” affordance, seeded CS1
    notebook, deep links, HTML export.
