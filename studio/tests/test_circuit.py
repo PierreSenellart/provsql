@@ -17,11 +17,19 @@ import psycopg
 
 
 def _personnel_uuid(test_dsn: str, name: str) -> str:
-    """Read the provsql UUID for a personnel row by name."""
+    """Read the provsql UUID for a personnel row by name.
+
+    Goes through `provenance()` rather than selecting the `provsql`
+    column directly: the extension rejects queries whose output defines
+    a column named "provsql" by hand, and for a single-relation scan
+    the provenance token is the row's own UUID anyway."""
     with psycopg.connect(
         f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
     ) as conn, conn.cursor() as cur:
-        cur.execute("SELECT provsql::text FROM personnel WHERE name = %s", (name,))
+        cur.execute(
+            "SELECT provsql.provenance()::text FROM personnel WHERE name = %s",
+            (name,),
+        )
         row = cur.fetchone()
     assert row, f"personnel row {name!r} missing"
     return row[0]
@@ -494,6 +502,35 @@ def test_circuit_categorical_mulinput_label_shows_value(client, test_dsn):
         if n["type"] == "mulinput"
     )
     assert mul_labels == ["42", "7"], mul_labels  # alphabetical
+
+
+def test_circuit_value_label_compacts_precision(client, test_dsn):
+    """The HAVING rewrite normalises `count(*)*2 > 1` to a comparison
+    against 1/2 and stores the constant at full numeric precision
+    ("0.50000000000000000000").  The gate_value label must render the
+    compact "0.5", not the full-precision text that blows the circle
+    wide."""
+    import psycopg
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        autocommit=True,
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT provenance()::text FROM personnel"
+            " WHERE city='Paris' GROUP BY city HAVING count(*)*2 > 1"
+        )
+        row = cur.fetchone()
+    assert row
+    root = row[0]
+
+    resp = client.get(f"/api/circuit/{root}?depth=3")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+
+    value_labels = sorted(
+        n["label"] for n in scene["nodes"] if n["type"] == "value"
+    )
+    assert value_labels == ["0.5", "1"], value_labels
 
 
 def test_circuit_dirac_mixture_keeps_classic_shape(client, test_dsn):
