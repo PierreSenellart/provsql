@@ -56,7 +56,7 @@ struct Tolerance {
  * the chooser acquires one lazily only when no already-known method is cheaper
  * than acquiring it -- so a circuit the cheap methods resolve (read-once via
  * @c independent, certified via @c inversion-free) never pays for analysis that
- * could not change the decision.  Free/O(1) features (#inputs, an inversion-free
+ * could not change the decision.  Free/O(1) features (\#inputs, an inversion-free
  * certificate) are not modelled here -- they are read eagerly.
  *
  * @c DnfShape is a linear @c dnfShape walk.  @c TreewidthProxy is a cheap

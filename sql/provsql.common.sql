@@ -1910,7 +1910,7 @@ END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE
   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
--- agg_token <op> agg_token --------------------------------------------
+-- agg_token \<op\> agg_token --------------------------------------------
 /** @brief agg_token + agg_token (gate_arith PLUS). */
 CREATE OR REPLACE FUNCTION agg_token_plus(a agg_token, b agg_token)
   RETURNS agg_token AS
@@ -1951,7 +1951,7 @@ $$ SELECT provsql.agg_token_make(
      - provsql.agg_token_value(a)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
--- agg_token <op> numeric ----------------------------------------------
+-- agg_token \<op\> numeric ----------------------------------------------
 /** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
 CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
@@ -1984,7 +1984,7 @@ $$ SELECT provsql.agg_token_make(
      provsql.agg_token_value(a) / b); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
--- numeric <op> agg_token ----------------------------------------------
+-- numeric \<op\> agg_token ----------------------------------------------
 /** @brief numeric + agg_token. */
 CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
@@ -2181,7 +2181,7 @@ CREATE OPERATOR > (
 /**
  * @brief Placeholder comparison of two agg_token values (the diagonal)
  *
- * Never actually called; lets the parser accept agg_token <op> agg_token
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
  * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
  * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
  * also disambiguates `s = s2` (previously "operator is not unique"
@@ -3514,6 +3514,9 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
  * @param aggtype OID of the aggregate result type
  * @param val computed aggregate value
  * @param tokens array of provenance tokens being aggregated
+ * @param is_scalar true for a scalar (no GROUP BY) aggregation, whose
+ *        output row exists even when no tuple is present; stored in the
+ *        high bit of info2
  */
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,

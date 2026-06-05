@@ -52,3 +52,6 @@ HTML_COLORSTYLE_SAT    = 130
 HAVE_DOT               = YES
 CALL_GRAPH             = YES
 CALLER_GRAPH           = YES
+# provsql_utils.h is included (directly or transitively) by more than the
+# default 50 files; raise the cap so its included-by graph still renders.
+DOT_GRAPH_MAX_NODES    = 64

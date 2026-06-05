@@ -43,6 +43,9 @@ using mask_t=std::vector<bool>;
  *                  is an upset; the returned vector may be empty.
  * @param upset     Output: set to @c true if the set of valid worlds forms an
  *                  upset (upward-closed set), @c false otherwise.
+ * @param is_scalar Scalar (no GROUP BY) aggregation: the output row exists
+ *                  even in the empty world, so the empty subset is also
+ *                  tested against the predicate.
  * @return          Vector of bitmasks, one per valid world.
  */
 std::vector<mask_t> enumerate_valid_worlds(

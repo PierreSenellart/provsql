@@ -1129,6 +1129,7 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
  * @param agg_ref    The original @c Aggref node from the query.
  * @param prov_atts  List of provenance @c Var nodes.
  * @param op         Semiring operation (determines how tokens are combined).
+ * @param is_scalar  Aggregation has no GROUP BY (single always-present row).
  * @return  Provenance expression of type @c agg_token.
  */
 static Expr *make_aggregation_expression(const constants_t *constants,
@@ -3220,20 +3221,6 @@ static Node *wrap_agg_token_with_cast(FuncExpr *prov_agg,
 }
 
 /**
- * @brief Cast @c provenance_aggregate arguments of an operator or
- *        function when the formal parameter type requires it.
- *
- * For each argument in @p args that is a @c provenance_aggregate call,
- * check the corresponding formal parameter type of the parent function
- * @p parent_funcid.  If the formal type is polymorphic or @c agg_token
- * itself, the argument is left alone.  Otherwise a cast to the original
- * aggregate return type is inserted.
- *
- * @param args           Argument list to inspect (modified in place).
- * @param parent_funcid  OID of the parent function / operator implementor.
- * @param constants      Extension OID cache.
- */
-/**
  * @brief Wrap an @c agg_token expression in a cast to @p target_type.
  *
  * Companion to @c wrap_agg_token_with_cast for @c agg_token values that are
@@ -3265,6 +3252,20 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
   return arg; /* unreachable */
 }
 
+/**
+ * @brief Cast @c provenance_aggregate arguments of an operator or
+ *        function when the formal parameter type requires it.
+ *
+ * For each argument in @p args that is a @c provenance_aggregate call,
+ * check the corresponding formal parameter type of the parent function
+ * @p parent_funcid.  If the formal type is polymorphic or @c agg_token
+ * itself, the argument is left alone.  Otherwise a cast to the original
+ * aggregate return type is inserted.
+ *
+ * @param args           Argument list to inspect (modified in place).
+ * @param parent_funcid  OID of the parent function / operator implementor.
+ * @param constants      Extension OID cache.
+ */
 static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
                                       const constants_t *constants) {
   HeapTuple tp;
@@ -10097,19 +10098,6 @@ static void process_insert_select(const constants_t *constants, Query *q) {
  * ------------------------------------------------------------------------- */
 
 /**
- * @brief PostgreSQL planner hook — entry point for provenance rewriting.
- *
- * Replaces (or chains after) the standard planner.  For every CMD_SELECT
- * that involves at least one provenance-bearing relation or an explicit
- * @c provenance() call, rewrites the query via @c process_query before
- * handing the result to the standard planner.  Non-SELECT commands and
- * queries without provenance are passed through unchanged.
- * @param q              The query to plan.
- * @param cursorOptions  Cursor options bitmask.
- * @param boundParams    Pre-bound parameter values.
- * @return               The planned statement.
- */
-/**
  * @brief Walker: true if any @c Query in the tree defines a @c provsql column
  *        by hand.
  *
@@ -10160,6 +10148,19 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
  * user's plan, so they see depth >= 1 and skip the NOTICE. */
 static int provsql_executor_depth = 0;
 
+/**
+ * @brief PostgreSQL planner hook — entry point for provenance rewriting.
+ *
+ * Replaces (or chains after) the standard planner.  For every CMD_SELECT
+ * that involves at least one provenance-bearing relation or an explicit
+ * @c provenance() call, rewrites the query via @c process_query before
+ * handing the result to the standard planner.  Non-SELECT commands and
+ * queries without provenance are passed through unchanged.
+ * @param q              The query to plan.
+ * @param cursorOptions  Cursor options bitmask.
+ * @param boundParams    Pre-bound parameter values.
+ * @return               The planned statement.
+ */
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                                     const char *query_string,
