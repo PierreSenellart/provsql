@@ -457,6 +457,35 @@ def test_jupyter_keymap(page: Page, studio_url: str) -> None:
     expect(page.locator(".nb-cell--sql")).to_have_count(n_before + 1)
 
 
+def test_shift_enter_selects_next_without_editing(page: Page, studio_url: str) -> None:
+    """Shift+Enter follows Jupyter: run, then *select* the next cell in
+    command mode -- a following markdown cell stays rendered with its
+    editor closed. At the last cell, a fresh SQL cell is created below
+    and opened in edit mode (Jupyter's last-cell exception)."""
+    _goto_notebook(page, studio_url)
+    ta = _sql_cell_ta(page)
+    ta.fill("SELECT 1 AS one;")
+    _add_markdown_cell(page, "*a note*")
+    ta.focus()
+    page.keyboard.press("Shift+Enter")
+    # The SQL cell ran...
+    expect(page.locator(".nb-cell--sql").first.locator(".nb-out tbody tr"))\
+        .to_have_count(1, timeout=8000)
+    # ...and the markdown cell below is selected but NOT in edit mode:
+    # rendered view shown, source editor hidden, no focused textarea.
+    md = page.locator(".nb-cell--markdown").first
+    expect(md).to_have_class(re.compile(r"nb-cell--selected"))
+    expect(md.locator(".nb-cell__md")).to_be_visible()
+    expect(md.locator(".nb-cell__mdta")).to_be_hidden()
+    assert page.evaluate("document.activeElement.tagName") != "TEXTAREA"
+    # Shift+Enter again (command mode, last cell): a fresh SQL cell is
+    # created below and opened in edit mode.
+    page.keyboard.press("Shift+Enter")
+    expect(page.locator(".nb-cell--sql")).to_have_count(2)
+    expect(page.locator(".nb-cell--sql").last.locator(".nb-cell__ta"))\
+        .to_be_focused()
+
+
 def test_mode_roundtrip_returns_to_same_place(page: Page, studio_url: str) -> None:
     """Leaving for Circuit mode and coming back restores the notebook
     content (autosave), the selected cell, and the scroll position."""

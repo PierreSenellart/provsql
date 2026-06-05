@@ -605,7 +605,8 @@
           runCell(cell);
         } else if (e.shiftKey && e.key === 'Enter') {
           e.preventDefault();
-          runCell(cell).then(() => focusNextOrCreate(cell));
+          ta.blur();                     // Jupyter: drop to command mode
+          runSelectedThenAdvance(cell);
         } else if (e.altKey && e.key === 'Enter') {
           e.preventDefault();
           runAltEnter(cell);
@@ -816,12 +817,6 @@
     const ta = el.querySelector('.nb-cell__ta, .nb-cell__mdta:not([hidden])');
     if (ta) ta.focus();
     else el.querySelector('.nb-cell__md')?.dispatchEvent(new Event('dblclick'));
-  }
-
-  function focusNextOrCreate(cell) {
-    const idx = cells.indexOf(cell);
-    if (idx === cells.length - 1) appendCell('sql');
-    focusCell(cells[idx + 1]);
   }
 
   function appendCell(type, source) {
@@ -1497,14 +1492,18 @@
   }
 
   // Shift+Enter, Jupyter semantics: run (or render), then select the
-  // next cell, creating one at the end.
+  // next cell in command mode (never opening its editor). The one
+  // exception, also Jupyter's: at the last cell a fresh SQL cell is
+  // created below and opened in edit mode.
   async function runSelectedThenAdvance(cell) {
     if (cell.type === 'sql') await runCell(cell);
     else if (cell.type === 'circuit' && cell.token) await refreshCircuitCell(cell);
     else if (cell.type === 'eval' && cell.token) await runEvalCell(cell);
     const idx = cells.indexOf(cell);
-    if (idx === cells.length - 1) appendCell('sql');
+    const atEnd = idx === cells.length - 1;
+    if (atEnd) appendCell('sql');
     selectCell(cells[idx + 1]);
+    if (atEnd) editCell(cells[idx + 1]);
   }
 
   // Alt+Enter: run, then insert a fresh SQL cell below and edit it.
