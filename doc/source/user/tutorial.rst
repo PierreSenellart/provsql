@@ -231,13 +231,6 @@ Create a table ``consistent_s`` containing all sightings *except* those
 identified as contradictions. Display its content along with the provenance
 formula for each tuple.
 
-.. note::
-
-   ``NOT IN`` over a subquery joining several provenance-tracked
-   relations is not supported; use ``EXCEPT`` to express negation (as
-   in the solution below), or ``NOT EXISTS`` with the join expressed
-   as correlation.
-
 .. raw:: html
 
    <details>

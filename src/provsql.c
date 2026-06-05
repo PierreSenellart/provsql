@@ -5974,7 +5974,9 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
  * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
  *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
  *
- * Requires a single tracked base relation Q and a (correlated) WHERE, with none
+ * Requires a body FROM over tracked base relations -- a single relation Q, or
+ * an all-tracked comma-join that @c oj_wrap_body_from collapses downstream into
+ * one derived cross-product subquery -- and a (correlated) WHERE, with none
  * of the shapes @c decorrelate_scalar_sublinks rejects downstream (aggregates,
  * grouping, set ops, LIMIT, nested sublinks, CTEs).  The targetList is replaced
  * wholesale by @c count(*), so its width is irrelevant here.  @p corr_supplied
@@ -5984,19 +5986,29 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
 static bool predicate_subselect_decorrelatable(const constants_t *constants,
                                                Query *sub,
                                                bool corr_supplied) {
-  RangeTblEntry *qrte;
+  ListCell *lc;
   if (!IsA(sub, Query) || sub->commandType != CMD_SELECT)
     return false;
   if (sub->groupClause || sub->groupingSets || sub->hasAggs ||
       sub->distinctClause || sub->setOperations || sub->hasWindowFuncs ||
       sub->hasSubLinks || sub->limitCount || sub->limitOffset || sub->cteList ||
-      list_length(sub->rtable) != 1)
+      sub->rtable == NIL)
     return false;
   if (!sub->jointree || (!corr_supplied && !sub->jointree->quals))
     return false; /* an uncorrelated predicate has no Q key for count() */
-  qrte = list_nth_node(RangeTblEntry, sub->rtable, 0);
-  return qrte->rtekind == RTE_RELATION &&
-         oj_rte_has_provsql(constants, qrte);
+  /* Single tracked base relation, or an all-tracked comma-join (the
+   * multi-relation body is collapsed downstream by oj_wrap_body_from into one
+   * derived cross-product subquery D -- same preconditions checked here). */
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return false;
+  }
+  foreach (lc, sub->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false;
+  }
+  return true;
 }
 
 /**
@@ -6183,7 +6195,7 @@ static Node *extract_quantified_corr(SubLink *sl, bool *antijoin) {
  * @c NOT @c EXISTS / @c NOT @c IN) is replaced by the @c build_count_predicate
  * form, after which the scalar-subquery decorrelation lowers the count()
  * comparison to the @c "R ⟕ Q" semijoin / antijoin.  Conjuncts whose subselect is
- * not decorrelatable (untracked / multi-relation / uncorrelated) are left
+ * not decorrelatable (untracked / uncorrelated / non-comma-join) are left
  * untouched, so they hit the usual unsupported-subquery error.
  */
 static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {

@@ -44,8 +44,11 @@ The following SQL constructs are supported with full provenance tracking:
 * Subqueries outside ``FROM`` (``EXISTS``/``NOT EXISTS``,
   ``IN``/``NOT IN``, quantified comparisons such as ``= ANY`` or
   ``<> ALL``, scalar subqueries, ``ARRAY(SELECT …)``), correlated or
-  not, when the subquery body involves a single provenance-tracked
-  relation: they are internally decorrelated and rewritten
+  not: they are internally decorrelated and rewritten.  The subquery
+  body may involve a single provenance-tracked relation, or join
+  several of them as a comma-separated ``FROM`` list; e.g., ``NOT IN``
+  over a joined body carries the same antijoin provenance as the
+  equivalent ``EXCEPT``
 * ``GROUP BY``
 * ``SELECT DISTINCT`` (set semantics)
 * ``UNION`` and ``UNION ALL``
@@ -65,9 +68,12 @@ Unsupported SQL Features
 The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking:
 
-* **Subqueries outside FROM** whose body joins several
-  provenance-tracked relations (single-relation bodies are supported,
-  see above)
+* **Subqueries outside FROM** whose body uses explicit ``JOIN``
+  syntax (rewrite the body as a comma-separated ``FROM`` list with the
+  join condition in ``WHERE``) or ``LIMIT``/``OFFSET`` (it would pick
+  an order-dependent subset), or whose aggregate result is compared
+  against an outer column (comparison of the aggregate against a
+  constant is supported)
 * **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
   semantics), over cyclic data *without* ``provsql.boolean_provenance``, or on
   PostgreSQL versions before 15
@@ -87,9 +93,6 @@ will either raise an error or may cause incorrect provenance tracking:
   emitted whenever a window function appears in a provenance-tracked
   query
 
-For negation or exclusion over several provenance-tracked relations,
-use ``EXCEPT``, or ``NOT EXISTS`` with all but one relation reached
-through correlation, rather than ``NOT IN``.
 For unsupported correlated subqueries, ``LATERAL`` can be used as a
 workaround.
 For comparison or duplicate elimination on aggregate results, explicitly

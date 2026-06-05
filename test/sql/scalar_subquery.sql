@@ -960,3 +960,73 @@ DROP TABLE aa2;
 
 DROP TABLE aa_q;
 DROP TABLE aa_r;
+
+-- Part 26: IN / NOT IN / NOT EXISTS whose body joins SEVERAL tracked relations.
+-- predicate_subselect_decorrelatable accepts an all-tracked comma-join body;
+-- the count-predicate lowering then collapses it into one derived cross-product
+-- subquery D (oj_wrap_body_from), so the semijoin is R⊗⊕(Q1⊗Q2) and the
+-- antijoin R⊗(1⊖⊕(Q1⊗Q2)) -- the same provenance as the EXCEPT workaround.
+CREATE TABLE mp_r(a int, k int);
+CREATE TABLE mp_q1(a int, k int);
+CREATE TABLE mp_q2(k int);
+INSERT INTO mp_r VALUES (1,1),(2,2),(3,3);
+INSERT INTO mp_q1 VALUES (2,1),(4,2);  -- only (2,1) joins mp_q2
+INSERT INTO mp_q2 VALUES (1),(3);
+SELECT add_provenance('mp_r');
+SELECT add_provenance('mp_q1');
+SELECT add_provenance('mp_q2');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM mp_r;
+  PERFORM set_prob(provsql, 0.5) FROM mp_q1;
+  PERFORM set_prob(provsql, 0.5) FROM mp_q2;
+END $$;
+
+-- NOT IN: the body's only match is a=2, via mp_q1(2,1)⊗mp_q2(1) (p=0.25), so
+-- that row survives at 0.75 and the others at 1.
+CREATE TABLE mp1 AS
+  SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mp_r WHERE mp_r.a NOT IN (SELECT mp_q1.a FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+SELECT remove_provenance('mp1');
+SELECT a, p FROM mp1 ORDER BY a;
+DROP TABLE mp1;
+
+-- IN is the exact complement: a=2 -> 0.25, a=1,3 -> 0.
+CREATE TABLE mp2 AS
+  SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mp_r WHERE mp_r.a IN (SELECT mp_q1.a FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+SELECT remove_provenance('mp2');
+SELECT a, p FROM mp2 ORDER BY a;
+DROP TABLE mp2;
+
+-- NOT EXISTS with the membership expressed as correlation: same antijoin.
+CREATE TABLE mp3 AS
+  SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mp_r WHERE NOT EXISTS
+    (SELECT 1 FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k AND mp_q1.a = mp_r.a);
+SELECT remove_provenance('mp3');
+SELECT a, p FROM mp3 ORDER BY a;
+DROP TABLE mp3;
+
+-- The EXCEPT form computes the same probabilities (the historical workaround).
+CREATE TABLE mp4 AS
+  SELECT a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT a FROM mp_r EXCEPT
+        SELECT mp_q1.a FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k) e;
+SELECT remove_provenance('mp4');
+SELECT a, p FROM mp4 ORDER BY a;
+DROP TABLE mp4;
+
+-- Multi-column (row-wise) NOT IN over the multi-relation body: the testexpr
+-- correlation is the row comparison.  (2,1) is the only body row; it matches
+-- no (mp_r.a, mp_r.k), so every row survives at 1.
+CREATE TABLE mp5 AS
+  SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mp_r WHERE (mp_r.a, mp_r.k) NOT IN
+    (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+SELECT remove_provenance('mp5');
+SELECT a, p FROM mp5 ORDER BY a;
+DROP TABLE mp5;
+
+DROP TABLE mp_q2;
+DROP TABLE mp_q1;
+DROP TABLE mp_r;
