@@ -1,3 +1,6 @@
+.. nb:name: tutorial
+.. nb:database: tutorial
+
 Tutorial: Who Killed Daphine?
 ==============================
 
@@ -26,6 +29,8 @@ reliability through a psychological evaluation.
 **Your mission:** help the police discover who killed Daphine, using the
 power of provenance management and probabilistic databases.
 
+.. nb:skip
+
 .. note::
 
    The tutorial reads as a sequence of ``psql`` sessions, but every
@@ -34,6 +39,7 @@ power of provenance management and probabilistic databases.
    evaluation strip that drives the semiring and probability calls
    the tutorial introduces.
 
+.. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** Open the `tutorial database
@@ -48,6 +54,8 @@ power of provenance management and probabilistic databases.
 Setup
 -----
 
+.. nb:omit-begin
+
 This tutorial assumes a working ProvSQL installation (see
 :doc:`getting-provsql`). Download :download:`setup.sql <../../tutorial/setup.sql>`
 and load it into a fresh PostgreSQL database:
@@ -55,6 +63,11 @@ and load it into a fresh PostgreSQL database:
 .. code-block:: bash
 
     psql -d mydb -f setup.sql
+
+
+.. nb:omit-end
+
+.. nb:setup: ../../tutorial/setup.sql
 
 This creates four tables:
 
@@ -66,12 +79,20 @@ This creates four tables:
 Step 1: Explore the Database
 -----------------------------
 
+.. nb:omit-begin
+
 Familiarise yourself with the schema. In the ``psql`` client:
 
 .. code-block:: text
 
     \d
     \d sightings
+
+.. nb:omit-end
+
+.. nb:md: Get familiar with the tables, for example through Studio's Schema panel.
+
+.. nb:omit-begin
 
 At the start of every new session, set the search path so that ProvSQL
 functions can be called without the ``provsql.`` prefix:
@@ -83,6 +104,8 @@ functions can be called without the ``provsql.`` prefix:
 To make this persistent for the database (so you do not have to repeat
 it each session), run ``SELECT provsql.setup_search_path();`` once; see
 :ref:`search-path`.
+
+.. nb:omit-end
 
 Step 2: Build a Sightings Table
 --------------------------------
@@ -98,6 +121,7 @@ result in a new table ``s``.
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS s CASCADE;
     CREATE TABLE s AS
     SELECT
       time,
@@ -124,8 +148,11 @@ Activate provenance tracking on the table ``s`` using
     SELECT add_provenance('s');
 
 A hidden ``provsql`` column is added that holds a UUID provenance token for
-each tuple. Run a simple ``SELECT * FROM s`` – you will see this extra column
-in the output.
+each tuple. Run a simple query to see this extra column in the output:
+
+.. code-block:: postgresql
+
+    SELECT * FROM s;
 
 .. note::
 
@@ -139,6 +166,7 @@ name of the witness who made the sighting, using
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS witness_mapping;
     SELECT create_provenance_mapping('witness_mapping', 's', 'witness');
 
 The mapping is stored as an ordinary table – inspect it with
@@ -205,7 +233,10 @@ formula for each tuple.
 
 .. note::
 
-   ProvSQL does not support ``NOT IN``; use ``EXCEPT`` to express negation.
+   ``NOT IN`` over a subquery joining several provenance-tracked
+   relations is not supported; use ``EXCEPT`` to express negation (as
+   in the solution below), or ``NOT EXISTS`` with the join expressed
+   as correlation.
 
 .. raw:: html
 
@@ -214,6 +245,7 @@ formula for each tuple.
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS consistent_s CASCADE;
     CREATE TABLE consistent_s AS
     SELECT time, person, room FROM s
     EXCEPT
@@ -245,6 +277,7 @@ their provenance formula.
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS suspects CASCADE;
     CREATE TABLE suspects AS
     SELECT DISTINCT person
     FROM consistent_s
@@ -273,9 +306,10 @@ person is a suspect. Add an integer column ``count`` to ``s``, set it to
 
 .. code-block:: postgresql
 
-    ALTER TABLE s ADD COLUMN count int;
+    ALTER TABLE s ADD COLUMN IF NOT EXISTS count int;
     UPDATE s SET count = 1;
 
+    DROP TABLE IF EXISTS count_mapping;
     SELECT create_provenance_mapping('count_mapping', 's', 'count');
 
     SELECT *, sr_counting(provenance(), 'count_mapping') AS c
@@ -300,7 +334,7 @@ the probability of each provenance token using :sqlfunc:`set_prob`.
 
 .. code-block:: postgresql
 
-    ALTER TABLE s ADD COLUMN reliability float;
+    ALTER TABLE s ADD COLUMN IF NOT EXISTS reliability float;
 
     UPDATE s
     SET reliability = score

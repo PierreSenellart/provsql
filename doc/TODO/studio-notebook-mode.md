@@ -235,17 +235,22 @@ Studio feature; the compatibility floor does not move.
 
 ### 7. Seeded notebooks: tutorial and case studies
 
-- Ship the **tutorial as a notebook** (`tutorial.ipynb`): the prose
-  of `doc/source/user/tutorial.rst` interleaved with its queries,
-  pre-seeded; likewise, progressively, one notebook per case study.
-  Generation should be scripted (rst → notebook converter or a
-  hand-maintained source of truth with a CI check against the rst)
-  to avoid drift -- decide during implementation, start with CS1
-  hand-written to validate the format.
+- **Landed, generated from the .rst** (the drift question resolved in
+  favour of generation): `studio/scripts/rst2nb.py` converts the
+  annotated user-guide sources (`.. nb:<key>` rst comments: name /
+  database / setup-splice / skip / stop) into nbformat notebooks --
+  prose through pandoc (rst→gfm, admonitions as blockquotes, figures
+  dropped), `code-block:: postgresql` as SQL cells, the setup.sql
+  spliced as cells with COPY blocks kept whole. `make notebooks`
+  regenerates; the artifacts are committed under
+  `provsql_studio/notebooks/` and served by `GET /api/nb/examples`
+  (+ `/<name>`), surfaced as the toolbar's "Open example…" menu.
+  Tutorial + CS1/2/4/5/6/7 (CS3 unannotated: external GTFS data).
 - Studio gains an “Open example…” menu listing the bundled
   notebooks (packaged under `provsql_studio/notebooks/`).
-- Deep links extend to `?mode=notebook&nb=tutorial` (Playground) /
-  `/notebook?nb=tutorial` (local).
+- Deep links: `/notebook?nb=tutorial` landed (opens or reuses the
+  example's tab); the Playground `?mode=notebook&nb=` variant is
+  phase 3.
 
 ### 8. Playground specifics
 
@@ -359,8 +364,9 @@ Python-like mental model should hold literally).
    Evaluate button: compiled semiring or probability method + free-text
    arguments + optional mapping, invocation in `metadata.provsql`,
    result re-rendered from `application/vnd.provsql.eval+json`).
-   **Open**: per-cell scheme options, seeded CS1 notebook, deep links,
-   HTML export.
+   The seeded notebooks landed generated-from-rst (see §7) with the
+   `/notebook?nb=` deep link.
+   **Open**: per-cell scheme options, HTML export.
 3. **Playground + content**: Playground integration (shim
    `DISCARD ALL`, vendoring, web e2e), tutorial + remaining
    case-study notebooks with a drift check, docs screenshots.

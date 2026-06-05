@@ -1,3 +1,6 @@
+.. nb:name: cs7
+.. nb:database: cs7
+
 Case Study: Peer-Review Assignment and Knowledge Compilation
 ============================================================
 
@@ -10,6 +13,7 @@ compiler. It is driven through :doc:`ProvSQL Studio <studio>`, where the
 circuit, its CNF, the compiled d-DNNF, and the method comparison all sit
 side by side.
 
+.. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** Open the `cs7 database in the
@@ -73,6 +77,8 @@ co-experts who bid on the paper.
 Setup
 -----
 
+.. nb:omit-begin
+
 This case study assumes a working ProvSQL installation
 (see :doc:`getting-provsql`) and a running ProvSQL Studio session
 (see :doc:`studio`). Download
@@ -83,6 +89,11 @@ fresh database:
 
     createdb peer_review_demo
     psql -d peer_review_demo -f setup.sql
+
+
+.. nb:omit-end
+
+.. nb:setup: ../../casestudy7/setup.sql
 
 Confidences are seeded by the script (a per-row ``conf`` column fed to
 :sqlfunc:`set_prob`). Connect Studio to the fixture:
@@ -231,6 +242,7 @@ non-hierarchical, and ``independent`` **errors again** -- even with
 
 .. code-block:: postgresql
 
+    ALTER TABLE expertise DROP CONSTRAINT IF EXISTS expertise_pkey;
     ALTER TABLE expertise ADD PRIMARY KEY (reviewer);
 
 Step 3: Genuinely Hard
@@ -509,6 +521,8 @@ just probability.
 
 **Cyclic data needs Boolean provenance.** ``coreview`` is symmetric, so
 "who is reviewer ``r1`` connected to?" walks a cyclic graph:
+
+.. nb:scheme: boolean
 
 .. code-block:: postgresql
 

@@ -1,3 +1,6 @@
+.. nb:name: cs1
+.. nb:database: cs1
+
 Case Study: Intelligence Agency
 ===============================
 
@@ -7,6 +10,7 @@ custom semiring capability, where-provenance, probability computation
 with multiple algorithms, and circuit export through a
 security-classification scenario.
 
+.. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** Open the `cs1 database in the
@@ -37,6 +41,8 @@ from *unclassified* to *top secret*. Your tasks:
 Setup
 -----
 
+.. nb:omit-begin
+
 This case study assumes a working ProvSQL installation (see
 :doc:`getting-provsql`). Download :download:`setup.sql <../../casestudy1/setup.sql>`
 and load it into a fresh PostgreSQL database:
@@ -44,6 +50,11 @@ and load it into a fresh PostgreSQL database:
 .. code-block:: bash
 
     psql -d mydb -f setup.sql
+
+
+.. nb:omit-end
+
+.. nb:setup: ../../casestudy1/setup.sql
 
 This creates:
 
@@ -56,12 +67,16 @@ This creates:
 Step 1: Explore the Database
 -----------------------------
 
+.. nb:omit-begin
+
 At the start of every session, set the search path so that ProvSQL functions
 can be called without the ``provsql.`` prefix:
 
 .. code-block:: postgresql
 
     SET search_path TO public, provsql;
+
+.. nb:omit-end
 
 Inspect the ``personnel`` table:
 
@@ -83,6 +98,7 @@ provenance tokens can be labelled with agent names:
 .. code-block:: postgresql
 
     SELECT add_provenance('personnel');
+    DROP TABLE IF EXISTS personnel_name;
     SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
 
 After :sqlfunc:`add_provenance`, every row of ``personnel`` has a unique UUID
@@ -134,6 +150,7 @@ for type inference); its value is ignored:
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS personnel_level;
     SELECT create_provenance_mapping('personnel_level',
                                      'personnel', 'classification');
 
@@ -220,7 +237,7 @@ Assign each agent a probability equal to ``id / 10.0``:
 
 .. code-block:: postgresql
 
-    ALTER TABLE personnel ADD COLUMN probability DOUBLE PRECISION;
+    ALTER TABLE personnel ADD COLUMN IF NOT EXISTS probability DOUBLE PRECISION;
     UPDATE personnel SET probability = id / 10.0;
 
     DO $$ BEGIN
@@ -278,7 +295,8 @@ sampling gives an approximate answer:
 With 10 000 samples the result is accurate to roughly ±0.01
 (see `Margin of error <https://en.wikipedia.org/wiki/Margin_of_error>`_).
 Results will vary slightly between runs due to sampling.
-Use ``\timing`` in psql to compare the runtime against the exact method.
+Compare the runtime against the exact method (``\timing`` in psql,
+or the per-query timing Studio displays).
 
 
 Step 10: Probability – Knowledge Compiler
@@ -310,7 +328,8 @@ on large circuits of specific forms:
     ) t
     ORDER BY city;
 
-Compare the runtime with ``\timing`` against the possible-worlds and
+Compare the runtime (``\timing`` in psql, or Studio's per-query
+timing) against the possible-worlds and
 Monte Carlo methods. On this small example, the external knowledge
 compiler will be slower than the other methods: invoking an external
 process and compiling the circuit carries significant overhead that
@@ -372,6 +391,7 @@ To compare the three probability algorithms at scale, create a synthetic
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS matrix CASCADE;
     CREATE TABLE matrix AS
     SELECT ones.n + 10 * tens.n AS x,
            other.n + 10 * tens2.n AS y,
@@ -386,8 +406,8 @@ To compare the three probability algorithms at scale, create a synthetic
       PERFORM set_prob(provenance(), prob) FROM matrix;
     END $$;
 
-Now run the same path query with each method in turn (use ``\timing`` in
-psql to record runtimes):
+Now run the same path query with each method in turn, timing each
+(``\timing`` in psql, or Studio's per-query timing):
 
 .. code-block:: postgresql
 

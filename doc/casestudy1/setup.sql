@@ -6,11 +6,13 @@ CREATE EXTENSION IF NOT EXISTS provsql CASCADE;
 
 SET search_path TO public, provsql;
 
+DROP TYPE IF EXISTS classification_level CASCADE;
 CREATE TYPE classification_level AS ENUM (
     'unclassified', 'restricted', 'confidential', 'secret', 'top_secret',
     'unavailable'
 );
 
+DROP TABLE IF EXISTS personnel CASCADE;
 CREATE TABLE personnel (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -19,6 +21,7 @@ CREATE TABLE personnel (
     classification classification_level NOT NULL
 );
 
+TRUNCATE personnel;
 INSERT INTO personnel (name, position, city, classification) VALUES
     ('Juma',   'Director',     'Nairobi', 'unclassified'),
     ('Paul',   'Janitor',      'Nairobi', 'restricted'),

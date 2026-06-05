@@ -1,3 +1,9 @@
+.. cs4 is not generated as a Studio notebook (unlike the other case
+   studies): its setup loads external CSV files via psql's \copy,
+   which a self-contained .ipynb cannot ship. Like cs3 (external GTFS
+   download). The remaining nb: comment markers below are inert
+   without an nb:name and are kept in case the data is ever inlined.
+
 Case Study: Government Ministers Over Time
 ==========================================
 
@@ -7,6 +13,7 @@ Singaporean government ministers, demonstrating how provenance tracks
 the *validity interval* of every fact and supports time-travel,
 history, and data-modification undo.
 
+.. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** Open the `cs4 database in the
@@ -41,6 +48,8 @@ the time intervals during which the fact was true. Your tasks:
 Setup
 -----
 
+.. nb:omit-begin
+
 This case study assumes a working ProvSQL installation on PostgreSQL 14 or
 later (see :doc:`getting-provsql`).  The data files are included in the
 ProvSQL source distribution under ``doc/casestudy4/data/``.  Run the setup script from that
@@ -50,6 +59,11 @@ directory:
 
     cd /path/to/provsql/doc/casestudy4/data
     psql -d mydb -f ../setup.sql
+
+
+.. nb:omit-end
+
+.. nb:setup: ../../casestudy4/setup.sql
 
 This creates three tables:
 
@@ -70,12 +84,18 @@ The script also:
 Step 1: Explore the Database
 -----------------------------
 
+.. nb:omit-begin
+
 At the start of every session, set the search path and timezone:
 
 .. code-block:: postgresql
 
     SET search_path TO public, provsql;
     SET timezone TO 'UTC';
+
+.. nb:omit-end
+
+.. nb:sql: SET timezone TO 'UTC';
 
 Inspect the tables:
 

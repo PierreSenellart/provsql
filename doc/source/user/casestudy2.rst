@@ -1,9 +1,13 @@
+.. nb:name: cs2
+.. nb:database: cs2
+
 Case Study: Open Science Database
 =================================
 
 This tutorial introduces a broader set of ProvSQL features through a
 realistic scientific literature analysis scenario.
 
+.. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** Open the `cs2 database in the
@@ -43,6 +47,8 @@ Your tasks:
 Setup
 -----
 
+.. nb:omit-begin
+
 This tutorial assumes a working ProvSQL installation (see
 :doc:`getting-provsql`). Download :download:`setup.sql <../../casestudy2/setup.sql>`
 and load it into a fresh PostgreSQL database:
@@ -50,6 +56,11 @@ and load it into a fresh PostgreSQL database:
 .. code-block:: bash
 
     psql -d mydb -f setup.sql
+
+
+.. nb:omit-end
+
+.. nb:setup: ../../casestudy2/setup.sql
 
 This creates four tables:
 
@@ -67,12 +78,16 @@ Familiarise yourself with the data. The ``study_type`` column uses a PostgreSQL
 where ``no_evidence`` is the semiring 𝟘 (no derivation possible) and
 ``perfect_evidence`` is the semiring 𝟙 (neutral for ⊗=MIN: does not degrade quality chains).
 
+.. nb:omit-begin
+
 At the start of every session, set the search path so that ProvSQL functions
 can be called without the ``provsql.`` prefix:
 
 .. code-block:: postgresql
 
     SET search_path TO public, provsql;
+
+.. nb:omit-end
 
 Step 2: Enable Provenance and Join with Lookup Tables
 ------------------------------------------------------
@@ -100,7 +115,7 @@ and ``effect``.
 
 .. code-block:: postgresql
 
-    CREATE VIEW f AS
+    CREATE OR REPLACE VIEW f AS
       SELECT study.title    AS study,
              study.study_type,
              study.reliability,
@@ -132,6 +147,7 @@ to study titles, using the ``study`` column of ``f``:
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS study_mapping;
     SELECT create_provenance_mapping('study_mapping', 'f', 'study');
 
 Step 4: Identify Single-Source Claims
@@ -233,24 +249,26 @@ over the ``study_type`` column, and compute the evidence grade for every
 
 .. code-block:: postgresql
 
-    CREATE FUNCTION quality_plus_state(state study_quality, q study_quality)
+    CREATE OR REPLACE FUNCTION quality_plus_state(state study_quality, q study_quality)
       RETURNS study_quality AS $$
         SELECT GREATEST(state, q)
     $$ LANGUAGE SQL IMMUTABLE;
 
-    CREATE FUNCTION quality_times_state(state study_quality, q study_quality)
+    CREATE OR REPLACE FUNCTION quality_times_state(state study_quality, q study_quality)
       RETURNS study_quality AS $$
         SELECT LEAST(state, q)
     $$ LANGUAGE SQL IMMUTABLE;
 
+    DROP AGGREGATE IF EXISTS quality_plus(study_quality);
     CREATE AGGREGATE quality_plus(study_quality) (
       sfunc = quality_plus_state, stype = study_quality, initcond = 'no_evidence'
     );
+    DROP AGGREGATE IF EXISTS quality_times(study_quality);
     CREATE AGGREGATE quality_times(study_quality) (
       sfunc = quality_times_state, stype = study_quality, initcond = 'perfect_evidence'
     );
 
-    CREATE FUNCTION evidence_grade(token UUID, token2value regclass)
+    CREATE OR REPLACE FUNCTION evidence_grade(token UUID, token2value regclass)
       RETURNS study_quality AS $$
     BEGIN
       RETURN provenance_evaluate(
@@ -261,6 +279,7 @@ over the ``study_type`` column, and compute the evidence grade for every
     END
     $$ LANGUAGE plpgsql;
 
+    DROP TABLE IF EXISTS quality_mapping;
     SELECT create_provenance_mapping('quality_mapping', 'f', 'study_type');
 
     SELECT exposure, outcome, effect,
@@ -398,7 +417,7 @@ report it. Define the ``f_replicated`` view, which groups findings by
 
 .. code-block:: postgresql
 
-    CREATE VIEW f_replicated AS
+    CREATE OR REPLACE VIEW f_replicated AS
     SELECT exposure, outcome, effect FROM f
     GROUP BY exposure, outcome, effect
     HAVING COUNT(*) >= 2;
@@ -424,7 +443,8 @@ integer column ``cnt`` to ``finding`` (all values ``1``) and create a
 
 .. code-block:: postgresql
 
-    ALTER TABLE finding ADD COLUMN cnt int DEFAULT 1;
+    ALTER TABLE finding ADD COLUMN IF NOT EXISTS cnt int DEFAULT 1;
+    DROP TABLE IF EXISTS count_mapping;
     SELECT create_provenance_mapping('count_mapping', 'finding', 'cnt');
 
 Now query ``f_replicated`` using :sqlfunc:`sr_counting` to display,
@@ -651,9 +671,9 @@ Step 16: Arithmetic on Aggregate Results
 
 ProvSQL tracks provenance through SQL aggregates: ``COUNT``, ``SUM``, and
 similar produce *aggregate tokens* (``agg_token``) that record the underlying
-contributions. Plain SQL arithmetic (``*``, ``+``, …) on those aggregates
-still produces a meaningful number, but the resulting expression is no
-longer an aggregate token: only the surrounding group token is retained.
+contributions -- and arithmetic (``*``, ``+``, …) over those aggregates stays
+inside provenance: the result is itself an aggregate token whose circuit
+combines the operand aggregates.
 
 Compute a composite *evidence weight* per (exposure, outcome, effect) triple
 combining how many studies report it (``COUNT(*)``) with the highest
@@ -664,18 +684,21 @@ reliability among them (``MAX(reliability)``):
     SELECT exposure, outcome, effect,
            COUNT(*)           AS n_studies,
            MAX(reliability)   AS top_reliability,
-           COUNT(*) * MAX(reliability) AS evidence_weight
+           COUNT(*) * MAX(reliability) AS evidence_weight,
+           (COUNT(*) * MAX(reliability))::NUMERIC AS evidence_weight_value
     FROM f
     GROUP BY exposure, outcome, effect
-    ORDER BY evidence_weight DESC, exposure, outcome, effect;
+    ORDER BY evidence_weight_value, exposure, outcome, effect;
 
 .. note::
 
-   ProvSQL emits a warning when arithmetic is performed on an aggregate
-   token: the inner aggregate provenance (which studies contributed, with
-   what multiplicity) is dropped from the result. The *group* provenance –
-   the token associated with the (exposure, outcome, effect) triple – is
-   preserved and can still be used for :sqlfunc:`probability_evaluate`,
-   :sqlfunc:`shapley`, etc. on the group itself. This is the practical
-   boundary between what ProvSQL's circuits can express and what plain SQL
-   computation discards.
+   ``evidence_weight`` is an aggregate token: it can be inspected and
+   evaluated like any other provenance circuit, but it is not a plain
+   number. To get its *value*, cast it to ``NUMERIC`` as in
+   ``evidence_weight_value`` -- the cast extracts the computed number at
+   the price of losing the provenance, making it ordinary SQL data
+   again (usable in ``ORDER BY``, comparisons, further computation).
+   The group provenance -- the token associated with each
+   (exposure, outcome, effect) triple -- is unaffected and remains
+   available for :sqlfunc:`probability_evaluate`, :sqlfunc:`shapley`,
+   etc. on the group itself.

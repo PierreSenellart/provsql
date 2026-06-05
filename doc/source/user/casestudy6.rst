@@ -1,3 +1,6 @@
+.. nb:name: cs6
+.. nb:database: cs6
+
 Case Study: City Air-Quality Sensor Network
 ===========================================
 
@@ -12,6 +15,7 @@ below makes the rewriter, the simplifier, the analytic and
 Monte-Carlo paths, and conditional inference all visible in the
 canvas.
 
+.. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** This Studio-driven case study
@@ -70,6 +74,8 @@ Your tasks:
 Setup
 -----
 
+.. nb:omit-begin
+
 This case study assumes a working ProvSQL installation
 (see :doc:`getting-provsql`) and a running ProvSQL Studio
 session pointed at it (see :doc:`studio`). Download
@@ -80,6 +86,11 @@ into a fresh PostgreSQL database:
 
     createdb air_quality_demo
     psql -d air_quality_demo -f setup.sql
+
+
+.. nb:omit-end
+
+.. nb:setup: ../../casestudy6/setup.sql
 
 The script creates the schema below and seeds the random-variable
 readings via the constructors documented in

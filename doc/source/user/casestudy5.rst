@@ -1,3 +1,6 @@
+.. nb:name: cs5
+.. nb:database: cs5
+
 Case Study: Wildlife Photo Archive
 ==================================
 
@@ -8,6 +11,7 @@ photographs annotated by a species-detection model. It demonstrates the
 by probability versus thresholding, ``EXCEPT``, common table expressions, and
 :sqlfunc:`expected` aggregates.
 
+.. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** Open the `cs5 database in the
@@ -42,6 +46,8 @@ Your tasks:
 Setup
 -----
 
+.. nb:omit-begin
+
 This case study assumes a working ProvSQL installation (see
 :doc:`getting-provsql`). Download :download:`setup.sql <../../casestudy5/setup.sql>`
 and load it into a fresh PostgreSQL database:
@@ -49,6 +55,11 @@ and load it into a fresh PostgreSQL database:
 .. code-block:: bash
 
     psql -d mydb -f setup.sql
+
+
+.. nb:omit-end
+
+.. nb:setup: ../../casestudy5/setup.sql
 
 This creates three tables:
 
@@ -65,11 +76,15 @@ This creates three tables:
 Step 1: Explore the Database
 -----------------------------
 
+.. nb:omit-begin
+
 At the start of every session, set the search path:
 
 .. code-block:: postgresql
 
     SET search_path TO public, provsql;
+
+.. nb:omit-end
 
 Inspect the tables. Note that ``detection`` is *not* keyed on
 (``photo_id``, ``bbox_id``): a single bounding box can appear in
@@ -105,6 +120,7 @@ but nothing prevents us from constructing the table by hand:
 
 .. code-block:: postgresql
 
+    DROP TABLE IF EXISTS species_mapping;
     CREATE TABLE species_mapping AS
       SELECT s.name AS value, d.provsql AS provenance
       FROM detection d JOIN species s ON s.id = d.species_id;
@@ -202,11 +218,12 @@ reinstalls the ``provsql`` column itself, so also drop the old mapping
     DROP TABLE species_mapping;
     SELECT remove_provenance('detection');
 
-    ALTER TABLE detection ADD COLUMN photo_bbox text;
+    ALTER TABLE detection ADD COLUMN IF NOT EXISTS photo_bbox text;
     UPDATE detection SET photo_bbox = photo_id || '/' || bbox_id;
 
     SELECT repair_key('detection', 'photo_bbox');
 
+    DROP TABLE IF EXISTS species_mapping;
     CREATE TABLE species_mapping AS
       SELECT s.name AS value, d.provsql AS provenance
       FROM detection d JOIN species s ON s.id = d.species_id;

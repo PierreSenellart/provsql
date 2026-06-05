@@ -20,7 +20,7 @@ default:
 test: tdkc
 	bash -c "set -o pipefail && bash test/kcmcp/with-tdkc.sh make installcheck 2>&1 | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
 
-docs: sql/provsql.sql
+docs: sql/provsql.sql notebooks
 	cd doc/source && make html
 
 website: docs
@@ -84,6 +84,19 @@ studio:
 
 studio-lint:
 	cd studio && ruff check .
+
+# Regenerate the Studio example notebooks (tutorial + case studies)
+# from the annotated user-guide .rst sources. Also a prerequisite of
+# `make docs`, so editing an annotated .rst cannot leave the committed
+# .ipynb files under studio/provsql_studio/notebooks/ stale. Skipped
+# with a warning where pandoc is missing (e.g. the docs CI runner):
+# regeneration is a repo-maintenance step, not a docs artifact.
+notebooks:
+	@if command -v pandoc >/dev/null; then \
+		python3 studio/scripts/rst2nb.py; \
+	else \
+		echo "WARNING: pandoc not found; skipping example-notebook regeneration"; \
+	fi
 
 studio-test: studio-lint
 	# tests/web (browser/PGlite e2e) needs the assembled doc-root + headless
