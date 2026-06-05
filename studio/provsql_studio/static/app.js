@@ -239,6 +239,18 @@
     sessionStorage.removeItem('ps.sql.ran');
   }
   function carryQueryForSwitch() {
+    // Notebook mode carries the current cell's SQL (the hidden #request
+    // box is stale there); a cell that was executed on the kernel
+    // counts as "ran", so Circuit/Where mode auto-replays it under the
+    // same rule as a sent query.
+    if (mode === 'notebook' && window.ProvsqlNotebook
+        && window.ProvsqlNotebook.currentSqlForCarry) {
+      const cur = window.ProvsqlNotebook.currentSqlForCarry();
+      sessionStorage.setItem('ps.sql', cur.sql || '');
+      if (cur.sql && cur.ran) sessionStorage.setItem('ps.sql.ran', '1');
+      else sessionStorage.removeItem('ps.sql.ran');
+      return;
+    }
     const sql = document.getElementById('request').value;
     sessionStorage.setItem('ps.sql', sql);
     const lastRun = sessionStorage.getItem('ps.lastRunSql');
@@ -2124,7 +2136,13 @@
       });
     } else if (carry) {
       // No query but a preload UUID: render the circuit directly.
-      loadCircuit(carry);
+      // Deferred for the same TDZ reason as the ensureCircuitLib call
+      // above: setupCircuitMode runs synchronously during IIFE eval and
+      // loadCircuit reaches the let-declared _circuitLibPromise. The
+      // where->circuit jump never hit this branch (it always carries a
+      // query, so the .then() above ran after the IIFE); the notebook's
+      // circuit-cell jump carries only the UUID and does.
+      queueMicrotask(() => loadCircuit(carry));
     }
   }
 
@@ -2756,6 +2774,10 @@ function makeBlockRenderer(env, targets) {
       const allCols = final.columns;
       const isWhere   = env.mode === 'where';
       const isCircuit = env.mode === 'circuit';
+      // Notebook cells make UUID-ish values clickable too (the click
+      // inserts a circuit cell below, wired in notebook.js); only the
+      // single-UUID auto-render below stays circuit-mode-only.
+      const clickableUuid = isCircuit || env.mode === 'notebook';
       // The studio session has provsql.aggtoken_text_as_uuid = on, so
       // agg_token cells arrive as bare UUIDs. The server pre-resolves
       // each unique UUID's "value (*)" via agg_token_value_text and
@@ -2877,7 +2899,7 @@ function makeBlockRenderer(env, targets) {
           // random_variable is binary-coercible with uuid and its on-wire
           // text form is a bare UUID, so it click-throughs the same way
           // a uuid cell does.
-          if (isCircuit && (typeName === 'uuid' || typeName === 'random_variable') && value) {
+          if (clickableUuid && (typeName === 'uuid' || typeName === 'random_variable') && value) {
             extraCls  = ' is-clickable';
             extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
           }
@@ -2890,7 +2912,7 @@ function makeBlockRenderer(env, targets) {
           // circuit the cell points at without inspecting the DOM.
           let displayValue = value;
           if (typeName === 'agg_token' && value) {
-            if (isCircuit) {
+            if (clickableUuid) {
               extraCls  = (extraCls + ' is-clickable').trim();
               extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
               if (extraCls.length) extraCls = ' ' + extraCls;

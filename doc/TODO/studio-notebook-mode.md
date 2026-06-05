@@ -301,6 +301,17 @@ Studio feature; the compatibility floor does not move.
 2. **Provenance-native increment**: circuit cells, evaluation cells,
    per-cell scheme options, “→ Circuit” affordance, seeded CS1
    notebook, deep links, HTML export.
+   **Landed so far**: circuit cells (click a result UUID → snapshot
+   cell below, compact scene painter, no depth control -- consistent
+   with Circuit mode -- scene JSON + SVG in the `.ipynb`); both jumps
+   back to Circuit mode (per-SQL-cell carry action + circuit-cell
+   preload, fixing a pre-existing TDZ bug in the carry-without-query
+   path); the Jupyter command-mode keymap (Esc, a/b, dd, z, m/y with
+   ```sql fence wrap/unwrap, j/k, Enter, Shift/Ctrl/Alt+Enter);
+   mode-switch resume (selection + scroll restored, autosave flushed
+   on pagehide); ```sql highlighting in rendered Markdown.
+   **Open**: evaluation cells, per-cell scheme options, seeded CS1
+   notebook, deep links, HTML export.
 3. **Playground + content**: Playground integration (shim
    `DISCARD ALL`, vendoring, web e2e), tutorial + remaining
    case-study notebooks with a drift check, docs screenshots.

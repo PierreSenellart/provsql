@@ -3099,3 +3099,37 @@ table thead th[data-sort="desc"]::after {
   background: var(--gold-500);
   color: var(--purple-900);
 }
+
+/* Notebook circuit cells: header strip + the SVG snapshot painted by
+   notebook.js's compact scene renderer (reuses the .node-* / .edge
+   vocabulary above, so the snapshot reads like the Circuit canvas). */
+.nb-circ {
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--gold-500);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+}
+.nb-circ__hdr {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--purple-700);
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+.nb-circ__token { font-size: 0.78rem; }
+.nb-circ__jump { margin-left: auto; }
+.nb-circ__canvas {
+  padding: 0.5rem;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+
+/* Command-mode selection (Jupyter-style): the selected cell carries a
+   visible left rail; editors keep their own focus ring for edit mode. */
+.nb-cell--selected > .nb-cell__main {
+  box-shadow: -3px 0 0 0 var(--gold-500);
+  border-radius: 2px;
+}
