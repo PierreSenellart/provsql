@@ -256,7 +256,10 @@ Step 6: Unsupported Feature Checks
 
 Before proceeding, the function checks for:
 
-- **Sublinks** (``EXISTS``, ``IN``, scalar subqueries): not supported.
+- **Sublinks** (``EXISTS``, ``IN``, scalar subqueries) over a tracked
+  relation that the decorrelation pre-passes could not rewrite (in
+  practice, a body joining several provenance-tracked relations): not
+  supported.
 - ``DISTINCT ON``: not supported.
 - ``DISTINCT`` (plain): converted to ``GROUP BY`` via
   :cfunc:`transform_distinct_into_group_by`.

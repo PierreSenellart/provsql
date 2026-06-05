@@ -41,6 +41,11 @@ The following SQL constructs are supported with full provenance tracking:
   sound only for absorptive evaluation (probability / Boolean), not for
   multiplicity-counting semirings
 * Subqueries in the ``FROM`` clause (including deeply nested)
+* Subqueries outside ``FROM`` (``EXISTS``/``NOT EXISTS``,
+  ``IN``/``NOT IN``, quantified comparisons such as ``= ANY`` or
+  ``<> ALL``, scalar subqueries, ``ARRAY(SELECT …)``), correlated or
+  not, when the subquery body involves a single provenance-tracked
+  relation: they are internally decorrelated and rewritten
 * ``GROUP BY``
 * ``SELECT DISTINCT`` (set semantics)
 * ``UNION`` and ``UNION ALL``
@@ -60,8 +65,9 @@ Unsupported SQL Features
 The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking:
 
-* **Subqueries outside FROM:** ``EXISTS``, ``NOT EXISTS``,
-  ``IN``/``NOT IN`` subqueries, scalar subqueries in ``SELECT``
+* **Subqueries outside FROM** whose body joins several
+  provenance-tracked relations (single-relation bodies are supported,
+  see above)
 * **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
   semantics), over cyclic data *without* ``provsql.boolean_provenance``, or on
   PostgreSQL versions before 15
@@ -81,8 +87,11 @@ will either raise an error or may cause incorrect provenance tracking:
   emitted whenever a window function appears in a provenance-tracked
   query
 
-For negation or exclusion, use ``EXCEPT`` rather than ``NOT IN``.
-For correlated subqueries, ``LATERAL`` can be used as a workaround.
+For negation or exclusion over several provenance-tracked relations,
+use ``EXCEPT``, or ``NOT EXISTS`` with all but one relation reached
+through correlation, rather than ``NOT IN``.
+For unsupported correlated subqueries, ``LATERAL`` can be used as a
+workaround.
 For comparison or duplicate elimination on aggregate results, explicitly
 cast the aggregate column to its base type (e.g., ``cnt::bigint``),
 which extracts the value but loses the provenance information on that
