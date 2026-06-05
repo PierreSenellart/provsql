@@ -69,8 +69,97 @@ without the cost of exact compilation:
     SELECT person, (probability_bounds(provenance())).*
     FROM suspects;
 
+.. _probability-guarantees:
+
+Choosing a guarantee, not a method
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**In practice you do not pick a method.**  Ask for the *guarantee* you want and
+let ProvSQL choose how to compute it:
+
+- **exact** -- the default: ``probability_evaluate(provenance())`` returns the
+  true probability.
+- **relative** ``(ε, δ)`` --
+  ``probability_evaluate(provenance(), 'relative', 'epsilon=0.05,delta=0.01')``:
+  the estimate is within a factor ``1 ± ε`` of the true value with probability
+  ``1 − δ``.  The right choice for **rare events** (small probabilities), where an
+  absolute error bound would be meaningless.
+- **additive** ``(ε, δ)`` --
+  ``probability_evaluate(provenance(), 'additive', 'epsilon=0.05,delta=0.01')``:
+  the estimate is within ``ε`` of the true value (absolute) with probability
+  ``1 − δ``.
+
+A cost-based chooser then picks and runs the cheapest method that meets your
+request, per query, from the portfolio below.  Three things make this safe to
+rely on:
+
+- The tolerances **nest** (exact ⊂ relative ⊂ additive), so a ``relative`` or
+  ``additive`` request still returns the **exact** value whenever an exact method
+  is cheapest ("exact when cheaper") -- you never pay for approximation you did
+  not need.
+- The cost of a few methods is hard to predict from the circuit alone, so the
+  chooser runs each optimistic pick under a **budget and escalates automatically**
+  if it turns out slow -- a pathological circuit never hangs on the wrong method.
+- A ``δ = 0`` (no-failure) approximate request is honoured by a *deterministic*
+  method (the certified-bounds d-tree), not a sampler.
+
+So the method names in the next section are an **escape hatch** -- for forcing a
+specific algorithm, for ``EXPLAIN``-style understanding, or for the rare case
+where you know your circuits better than the cost model.  The table summarises
+where each shines; most users can skip it.
+
+.. list-table:: Where each method shines (the chooser picks for you)
+   :header-rows: 1
+   :widths: 22 18 60
+
+   * - Method
+     - Guarantee
+     - Best when (query / provenance circuit)
+   * - ``independent``
+     - exact
+     - Read-once lineage: self-join-free / hierarchical conjunctive queries, where
+       each input tuple is used at most once.  Linear time.
+   * - ``inversion-free``
+     - exact
+     - Safe (inversion-free) UCQs the planner certifies -- linear-time via a
+       structured d-DNNF even with self-joins.
+   * - ``possible-worlds``
+     - exact
+     - Very few input tuples (a couple of dozen at most): brute force over all
+       ``2^N`` worlds.
+   * - ``sieve``
+     - exact
+     - Few clauses: a small monotone-DNF lineage (inclusion-exclusion).
+   * - ``tree-decomposition``
+     - exact
+     - Low-treewidth lineage -- path-, cycle- or band-shaped join graphs; no
+       external tool needed.
+   * - ``d-tree``
+     - exact / certified bounds
+     - High-treewidth circuits where ``tree-decomposition`` bails; and the
+       **deterministic** approximate corner -- it returns a certified interval, so
+       it serves a ``δ = 0`` request.
+   * - ``compilation`` (``d4`` / ``c2d`` / …)
+     - exact
+     - Hard lineage with hidden structure a knowledge compiler can exploit;
+       last-resort, needs an external tool (see :doc:`knowledge-compilation`).
+   * - ``monte-carlo``
+     - additive ``(ε, δ)``
+     - Any circuit; cheap when the probability is not tiny.
+   * - ``karp-luby``
+     - relative ``(ε, δ)``
+     - Rare events (small ``p``) over a DNF, where additive error is uninformative.
+   * - ``stopping-rule``
+     - relative ``(ε, δ)``
+     - A universal relative estimator for any circuit -- including
+       random-variable and HAVING-aggregate lineage.
+
 Computation Methods
 ^^^^^^^^^^^^^^^^^^^^
+
+The methods below can be named explicitly as the second argument, but see
+:ref:`above <probability-guarantees>` -- normally you request a guarantee and the
+chooser selects among them.
 
 ``'independent'``
     Exact computation assuming all input tokens are mutually independent.
