@@ -62,20 +62,27 @@ def studio_url(test_dsn: str) -> str:
             "--search-path", "provsql_test",
             "--ignore-version",
         ]
-        proc = subprocess.Popen(
-            cmd, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        try:
-            _wait_until_up(base_url + "/")
-            yield base_url
-        finally:
-            proc.terminate()
+        # Server output goes to a file, NOT a PIPE: nothing ever read
+        # those pipes, so once werkzeug's per-request log lines filled
+        # the 64 KB buffer, every server thread blocked on its next
+        # write and the whole app stalled mid-suite (page.goto timeout
+        # in whichever test crossed the threshold).
+        log_path = os.path.join(cfg_dir, "studio-server.log")
+        with open(log_path, "wb") as log_f:
+            proc = subprocess.Popen(
+                cmd, env=env,
+                stdout=log_f, stderr=subprocess.STDOUT,
+            )
             try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+                _wait_until_up(base_url + "/")
+                yield base_url
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
 
 
 @pytest.fixture(scope="session")
