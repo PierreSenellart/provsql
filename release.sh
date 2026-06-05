@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# release.sh — Create a signed ProvSQL release
+# release.sh – Create a signed ProvSQL release
 #
 # Usage: ./release.sh <version>
 #   e.g. ./release.sh 1.0.0
@@ -125,7 +125,7 @@ for r in runs:
     if r['status'] == 'completed':
         print(r['conclusion'])
         sys.exit(0)
-# no completed run — check for in_progress
+# no completed run – check for in_progress
 for r in runs:
     if r['status'] in ('in_progress', 'queued', 'waiting'):
         print('pending')
@@ -149,14 +149,14 @@ if runs: print(runs[0].get('url',''))
       read -r -p "    Wait and re-check, skip this workflow check, or abort? [w/s/A] " CI_ACTION
       case "$CI_ACTION" in
         [Ww])
-          echo "    Waiting 60 s then re-checking — re-run release.sh when CI finishes."
+          echo "    Waiting 60 s then re-checking – re-run release.sh when CI finishes."
           exit 1
           ;;
         [Ss])
           echo "    Skipping CI check for '$WF'."
           ;;
         *)
-          die "Aborting — wait for CI to finish, then re-run release.sh."
+          die "Aborting – wait for CI to finish, then re-run release.sh."
           ;;
       esac
       ;;
@@ -164,7 +164,7 @@ if runs: print(runs[0].get('url',''))
       echo "  ? $WF: no run found for this commit (workflow may not have been triggered)"
       read -r -p "    Skip this workflow check or abort? [s/A] " CI_ACTION
       [[ "$CI_ACTION" =~ ^[Ss]$ ]] \
-        || die "Aborting — push your branch and wait for CI, then re-run release.sh."
+        || die "Aborting – push your branch and wait for CI, then re-run release.sh."
       ;;
     *)
       echo "  ✗ $WF: $CONCLUSION  ${URL}"
@@ -310,13 +310,13 @@ YAML
 cat "$RELEASES_FILE" >> "$TMP_YAML"
 mv "$TMP_YAML" "$RELEASES_FILE"
 
-# 6. Update CITATION.cff (top-level version and date-released only —
+# 6. Update CITATION.cff (top-level version and date-released only –
 #    anything under preferred-citation is indented and unaffected)
 
 sed -i "s/^version: .*/version: \"$VERSION\"/" CITATION.cff
 sed -i "s/^date-released: .*/date-released: \"$TODAY\"/" CITATION.cff
 
-# 6b. Update META.json (PGXN Meta Spec) — top-level "version" and
+# 6b. Update META.json (PGXN Meta Spec) – top-level "version" and
 #     the version under provides.provsql. Both are bare strings at
 #     predictable indents in the file we maintain, so sed is safe.
 sed -i "s/^   \"version\": \"[^\"]*\"/   \"version\": \"$VERSION\"/" META.json

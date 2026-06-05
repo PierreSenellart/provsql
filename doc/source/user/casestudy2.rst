@@ -13,7 +13,7 @@ realistic scientific literature analysis scenario.
    **Follow along in your browser, no install.** Open the `cs2 database in the
    ProvSQL Playground <https://provsql.org/playground/?db=cs2>`_ and run these
    queries as you read. The Playground bundles no external tools, so a step
-   that explicitly calls an external knowledge compiler (``d4``, ``c2d``, …) or
+   that explicitly calls an external knowledge compiler (``d4``, ``c2d``…) or
    the ``graph-easy`` ASCII renderer will not run there; the default
    probability methods still work (they use the built-in tree-decomposition
    compiler), as does everything else. See the
@@ -65,8 +65,8 @@ and load it into a fresh PostgreSQL database:
 This creates four tables:
 
 * ``study`` – 8 published studies with type and reliability score
-* ``exposure`` – 7 exposures (Coffee, Exercise, Red Meat, …)
-* ``outcome`` – 5 health outcomes (Cardiovascular Disease, …)
+* ``exposure`` – 7 exposures (Coffee, Exercise, Red Meat…)
+* ``outcome`` – 5 health outcomes (Cardiovascular Disease…)
 * ``finding`` – 25 study findings linking exposures to outcomes
 
 Step 1: Explore the Database
@@ -671,7 +671,7 @@ Step 16: Arithmetic on Aggregate Results
 
 ProvSQL tracks provenance through SQL aggregates: ``COUNT``, ``SUM``, and
 similar produce *aggregate tokens* (``agg_token``) that record the underlying
-contributions -- and arithmetic (``*``, ``+``, …) over those aggregates stays
+contributions -- and arithmetic (``*``, ``+``…) over those aggregates stays
 inside provenance: the result is itself an aggregate token whose circuit
 combines the operand aggregates.
 

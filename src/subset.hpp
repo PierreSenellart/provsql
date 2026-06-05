@@ -38,7 +38,7 @@ using mask_t=std::vector<bool>;
  * @param values    Aggregate contribution of each tuple (one value per tuple).
  * @param constant  The constant on the right-hand side of the comparison.
  * @param op        Comparison operator (=, ≠, <, ≤, >, ≥).
- * @param agg_kind  Aggregation function (SUM, COUNT, MIN, MAX, …).
+ * @param agg_kind  Aggregation function (SUM, COUNT, MIN, MAX…).
  * @param enumerate If @c false, only determine whether the set of valid worlds
  *                  is an upset; the returned vector may be empty.
  * @param upset     Output: set to @c true if the set of valid worlds forms an

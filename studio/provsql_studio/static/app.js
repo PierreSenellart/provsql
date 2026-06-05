@@ -2319,7 +2319,7 @@
           <select class="cv-eval__method" id="eval-method" hidden>
             <optgroup label="By guarantee">
               <option value="exact" class="cv-eval__opt-strong" title="Exact probability. The system picks the cheapest exact method (independent / possible-worlds / sieve / tree-decomposition / compilation); the method actually used is shown next to the result.">exact</option>
-              <option value="relative" class="cv-eval__opt-strong" title="Granted tolerance: a (1±ε) RELATIVE guarantee with confidence 1−δ. The system picks the mechanism — it returns an exact value when one is cheap, otherwise an FPRAS estimate. The method actually used is shown next to the result.">relative (1±ε)</option>
+              <option value="relative" class="cv-eval__opt-strong" title="Granted tolerance: a (1±ε) RELATIVE guarantee with confidence 1−δ. The system picks the mechanism – it returns an exact value when one is cheap, otherwise an FPRAS estimate. The method actually used is shown next to the result.">relative (1±ε)</option>
               <option value="additive" class="cv-eval__opt-strong" title="Granted tolerance: |estimate − p| ≤ ε ADDITIVE, confidence 1−δ. The sample count is independent of p, so it stays robust on rare events. Returns an exact value when one is cheap, otherwise Monte-Carlo.">additive (±ε)</option>
             </optgroup>
             <optgroup label="Exact">
@@ -2379,7 +2379,7 @@
           <input type="number" class="cv-eval__args" id="eval-args-dtree-eps" hidden
                  min="0" max="1" step="0.01" placeholder="ε (exact)"
                  autocomplete="off"
-                 title="Optional additive accuracy target ε for the d-tree: leave empty for the exact probability, or set ε in (0, 1] to stop the anytime recursion early at a CERTIFIED interval of half-width ≤ ε (|estimate − p| ≤ ε, with certainty — no failure probability).">
+                 title="Optional additive accuracy target ε for the d-tree: leave empty for the exact probability, or set ε in (0, 1] to stop the anytime recursion early at a CERTIFIED interval of half-width ≤ ε (|estimate − p| ≤ ε, with certainty – no failure probability).">
 
           <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
                  min="1" step="1" placeholder="bins" value="30"

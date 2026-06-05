@@ -129,7 +129,7 @@ SELECT remove_provenance('result_why');
 SELECT * FROM result_why ORDER BY exposure, outcome, effect;
 DROP TABLE result_why;
 
--- Step 6: Evidence grade semiring — best study type supporting a finding.
+-- Step 6: Evidence grade semiring – best study type supporting a finding.
 CREATE FUNCTION quality_plus_state(state study_quality, q study_quality)
   RETURNS study_quality AS $$
     SELECT GREATEST(state, q)
@@ -171,7 +171,7 @@ SELECT remove_provenance('result_grade');
 SELECT * FROM result_grade ORDER BY exposure, outcome, effect;
 DROP TABLE result_grade;
 
--- Step 7: Where-provenance on f — only finding columns are tracked
+-- Step 7: Where-provenance on f – only finding columns are tracked
 SET provsql.where_provenance = on;
 
 CREATE TABLE result_where_f AS
@@ -188,7 +188,7 @@ DROP TABLE result_where_f;
 
 SET provsql.where_provenance = off;
 
--- Step 8: Where-provenance on the base table — all finding columns tracked
+-- Step 8: Where-provenance on the base table – all finding columns tracked
 SET provsql.where_provenance = on;
 
 CREATE TABLE result_where AS
@@ -258,7 +258,7 @@ SELECT remove_provenance('result_replication');
 SELECT * FROM result_replication ORDER BY exposure, outcome, effect;
 DROP TABLE result_replication;
 
--- Step 13: Shapley values — expected contribution to replication probability
+-- Step 13: Shapley values – expected contribution to replication probability
 CREATE TABLE result_shapley AS
 SELECT fin.study,
        shapley(target.prov, fin.prov) AS sv
@@ -280,7 +280,7 @@ SELECT study, ROUND(sv::numeric, 4) AS sv
 FROM result_shapley ORDER BY sv DESC, study;
 DROP TABLE result_shapley;
 
--- Step 14: Banzhaf values — alternative game-theoretic contribution measure
+-- Step 14: Banzhaf values – alternative game-theoretic contribution measure
 CREATE TABLE result_banzhaf AS
 SELECT fin.study,
        banzhaf(target.prov, fin.prov) AS bv
@@ -302,7 +302,7 @@ SELECT study, ROUND(bv::numeric, 4) AS bv
 FROM result_banzhaf ORDER BY bv DESC, study;
 DROP TABLE result_banzhaf;
 
--- Step 15: shapley_all_vars — bulk Shapley computation, joined back to study names
+-- Step 15: shapley_all_vars – bulk Shapley computation, joined back to study names
 CREATE TABLE target_token AS
 SELECT provenance() AS prov
 FROM f_replicated
@@ -331,7 +331,7 @@ FROM result_banzhaf_all ORDER BY bv DESC, study;
 DROP TABLE result_banzhaf_all;
 DROP TABLE target_token;
 
--- Step 16: arithmetic on aggregate results — drops inner agg provenance,
+-- Step 16: arithmetic on aggregate results – drops inner agg provenance,
 -- preserves group provenance; ProvSQL warns on the agg_token cast.
 SET client_min_messages TO ERROR;
 CREATE TABLE result_agg_arith AS

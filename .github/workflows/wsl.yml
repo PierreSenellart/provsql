@@ -88,7 +88,7 @@ jobs:
       # \r in the redirect target, so /bin/sh tries to create the file at
       # "/tmp/provsql_tsp_test/graph-easy\r" and fails. The test is
       # validating PATH override behavior, which is environment-agnostic
-      # and already exercised on Linux/macOS — skip it here.
+      # and already exercised on Linux/macOS – skip it here.
       - run: "sed -i '/^test: tool_search_path/d' test/schedule"
       - run: pg_isready -t 30
       - run: sudo -u postgres bash test/kcmcp/with-tdkc.sh make installcheck || bash -c 'cat /tmp/tmp.provsql*/regression.diffs; false'

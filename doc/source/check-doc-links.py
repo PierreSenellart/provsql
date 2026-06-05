@@ -138,9 +138,9 @@ INTERNAL_FUNCTIONS = {
     'random_variable_in', 'random_variable_out',
     'random_variable_make',
     'is_finite_float8',
-    # (User-facing constructors for continuous random variables —
+    # (User-facing constructors for continuous random variables –
     # 'normal', 'uniform', 'exponential', 'erlang', 'as_random',
-    # 'mixture', 'categorical' — now promoted to _SQL_FUNC_MAP and
+    # 'mixture', 'categorical' – now promoted to _SQL_FUNC_MAP and
     # referenced from doc/source/user/continuous-distributions.rst.)
     # Continuous-distributions GUC variables (introspected by Doxygen
     # through the SQL `SET` / `RESET` documentation pages).
@@ -189,7 +189,7 @@ INTERNAL_FUNCTIONS = {
     # _SQL_FUNC_MAP, referenced from the continuous-distributions
     # user manual.)
     # SFUNC / FFUNC helpers behind the avg / sum / product RV
-    # aggregates — not called directly.
+    # aggregates – not called directly.
     'avg_rv_ffunc', 'sum_rv_sfunc', 'sum_rv_ffunc', 'product_rv_ffunc',
     # Internal C entry point behind the random_variable aggregates above.
     'rv_aggregate_semimod',

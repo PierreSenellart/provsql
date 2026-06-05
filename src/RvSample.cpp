@@ -77,7 +77,7 @@ rv_sample(PG_FUNCTION_ARGS)
        * 100% acceptance, no NOTICE on tight events like X > 9.5 over
        * U(0, 10) that the MC rejection path degrades on.  Falls
        * through to the MC rejection path for un-extractable shapes
-       * (Erlang, gate_arith composites, gate_mixture roots, …). */
+       * (Erlang, gate_arith composites, gate_mixture roots…). */
       auto direct = provsql::try_truncated_closed_form_sample(
                       gc, root_gate, event_gate, n);
       if (direct) {

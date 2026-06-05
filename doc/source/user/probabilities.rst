@@ -474,7 +474,7 @@ queries over TID or BID base tables, plus a number of extensions
 that recover safety for query shapes the raw hierarchical criterion
 would reject (FD-aware reductions driven by primary keys / NOT-NULL
 UNIQUE constraints, constant selections, transparent deterministic
-relations, certain self-joins, UCQs with disjoint branches, …); see
+relations, certain self-joins, UCQs with disjoint branches…); see
 :ref:`safe-query-rewriter` in the developer documentation for the
 full set.  Queries outside the
 recognised class are passed through unchanged: the GUC enables an
@@ -562,5 +562,5 @@ a hybrid evaluator falling back to analytical closed forms where
 applicable (RangeCheck for support-decidable comparators, exact
 CDFs for single-distribution :math:`\mathrm{gate\_cmp}`,
 family-closure simplification for linear combinations of
-normals, …). See :doc:`continuous-distributions` for the full
+normals…). See :doc:`continuous-distributions` for the full
 surface.

@@ -2662,7 +2662,7 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
  *
  * Sugar over the @c mixture(uuid, x, y) form: when the caller doesn't
  * care about reusing the Bernoulli token elsewhere in the circuit
- * (which is the common case &mdash; "give me a 0.3 / 0.7 weighted GMM,
+ * (which is the common case &ndash; "give me a 0.3 / 0.7 weighted GMM,
  * I don't need to share the coin"), this overload creates the
  * underlying @c gate_input on the fly with a fresh
  * @c uuid_generate_v4() token, pins @p p_value via @c set_prob, and

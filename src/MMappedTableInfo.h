@@ -40,7 +40,7 @@
  * BID tables (produced by @c repair_key) can have multi-column keys.
  * We store the column numbers inline in a fixed-size array so each
  * record is fixed-stride and @c MMappedVector can back the file
- * directly.  Sixteen is generous in practice — provenance-tracked
+ * directly.  Sixteen is generous in practice – provenance-tracked
  * tables rarely use composite keys wider than a handful of columns.
  * @c repair_key raises a clear error if a wider key is requested.
  */

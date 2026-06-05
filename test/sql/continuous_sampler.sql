@@ -95,7 +95,7 @@ BEGIN
 END $$;
 
 -- Same circuit, structurally-dependent variant: arith PLUS over the
--- *same* x twice gives 2x, and P(2x > 0) = P(x > 0) = 0.5 — but the
+-- *same* x twice gives 2x, and P(2x > 0) = P(x > 0) = 0.5 – but the
 -- per-iteration memoisation must produce the same x twice.
 DO $$
 DECLARE
@@ -118,7 +118,7 @@ BEGIN
 END $$;
 
 -- gate_arith TIMES, MINUS, DIV, NEG round-trip through the sampler.
--- We don't pin tight tolerances here — just sanity-check that the
+-- We don't pin tight tolerances here – just sanity-check that the
 -- branches don't throw and the result is a finite probability.
 DO $$
 DECLARE

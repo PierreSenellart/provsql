@@ -60,7 +60,7 @@ extern "C" {
  */
 typedef struct GateInformation
 {
-  gate_type type;            ///< Kind of gate (input, plus, times, …)
+  gate_type type;            ///< Kind of gate (input, plus, times…)
   unsigned nb_children;      ///< Number of children
   unsigned long children_idx;///< Start index of this gate's children in @c wires
   double prob;               ///< Associated probability (default 1.0)

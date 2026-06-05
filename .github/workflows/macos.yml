@@ -61,7 +61,7 @@ jobs:
     strategy:
       matrix:
         pg: [15, 18]
-    name: macOS — PostgreSQL ${{ matrix.pg }}
+    name: macOS – PostgreSQL ${{ matrix.pg }}
     runs-on: macos-latest
     steps:
       - run: brew update || true

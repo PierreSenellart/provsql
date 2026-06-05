@@ -425,7 +425,7 @@ decompose_linear_term(const GenericCircuit &gc, gate_t g)
  *
  * When every wire is a pure constant (all RV-side empty), the closure
  * is just the constant fold and we let the dedicated path handle it
- * &mdash; this routine returns @c false so the fixed-point loop
+ * &ndash; this routine returns @c false so the fixed-point loop
  * re-runs and the constant fold fires next.
  */
 bool try_normal_closure(GenericCircuit &gc, gate_t g)
@@ -1652,7 +1652,7 @@ void inline_fast_path(GenericCircuit &gc,
   /* Compute interval probabilities.  Try the analytical CDF first:
    * when the shared scalar is a bare @c gate_rv with a CDF
    * @c cdfAt understands, the interval probability is
-   * @c F(t_{i+1}) - F(t_i) exactly &mdash; no MC noise, no sampling.
+   * @c F(t_{i+1}) - F(t_i) exactly &ndash; no MC noise, no sampling.
    * This is the headline benefit of the fast path: shared bare-RV
    * groups land on the exact dependent truth and the resulting
    * Bernoulli probabilities propagate through tree-decomposition /

@@ -10,23 +10,23 @@
  * needed.
  *
  * Gate handling:
- * - @c gate_input (and @c gate_update) — Bernoulli draw at @c getProb,
+ * - @c gate_input (and @c gate_update) – Bernoulli draw at @c getProb,
  *   memoised per iteration (so the same input feeding two children
  *   produces the same draw).
- * - @c gate_plus / @c gate_times / @c gate_monus — Boolean OR / AND /
+ * - @c gate_plus / @c gate_times / @c gate_monus – Boolean OR / AND /
  *   AND-NOT.
- * - @c gate_zero / @c gate_one — false / true.
+ * - @c gate_zero / @c gate_one – false / true.
  * - @c gate_cmp with scalar (@c gate_rv / @c gate_arith / @c gate_value)
- *   children — compare two scalar samples per the comparison-operator
+ *   children – compare two scalar samples per the comparison-operator
  *   OID stored in @c info1.  Aggregate-vs-constant @c gate_cmp gates
  *   from HAVING semantics are handled by the existing
  *   @c BooleanCircuit path and are not reached here.
- * - @c gate_value — parse @c extra as @c float8.
- * - @c gate_rv — fresh draw from the distribution serialised in
+ * - @c gate_value – parse @c extra as @c float8.
+ * - @c gate_rv – fresh draw from the distribution serialised in
  *   @c extra (memoised per iteration so the SAME RV inside an
  *   arithmetic expression uses the same draw, per the thesis's
  *   SampleOne).
- * - @c gate_arith — recurse on scalar children, combine per the
+ * - @c gate_arith – recurse on scalar children, combine per the
  *   operator tag in @c info1 (@c provsql_arith_op enum: PLUS / TIMES
  *   are n-ary; MINUS / DIV are binary; NEG is unary).
  *

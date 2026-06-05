@@ -225,7 +225,7 @@ $$;
 -- ---------------------------------------------------------------------
 -- 8b. Closed-form-aware infeasibility short-circuit.
 --     For a bare gate_rv root with an event provably empty against
---     the RV's support (Uniform(0, 10) | X > 100 — the conjunct
+--     the RV's support (Uniform(0, 10) | X > 100 – the conjunct
 --     intersects to an empty interval), eventIsProvablyInfeasible
 --     spots it before any MC sampling.  Proof that the short-circuit
 --     fires: set provsql.rv_mc_samples = 0, which would otherwise

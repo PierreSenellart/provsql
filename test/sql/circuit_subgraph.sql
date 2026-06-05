@@ -34,7 +34,7 @@ ORDER BY depth, gate_type;
 -- present in the result, and parent.depth + 1 >= child.depth (equality
 -- on shortest-path edges, strict inequality on shortcut edges into a
 -- multi-parent child). The self-join here is a tree, so equality holds
--- everywhere — multi-parent inputs would relax the second column.
+-- everywhere – multi-parent inputs would relax the second column.
 WITH cs AS (
   SELECT s.* FROM cs_q, LATERAL provsql.circuit_subgraph(p) s
 )

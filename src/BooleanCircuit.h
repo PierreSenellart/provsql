@@ -510,7 +510,7 @@ dDNNF interpretAsDD(gate_t g) const;
  *
  * @param g       Root gate.
  * @param method  Compilation method name (e.g. "tree-decomposition",
- *                "d4", "c2d", …).
+ *                "d4", "c2d"…).
  * @param args    Additional arguments forwarded to the chosen method.
  * @return        The constructed @c dDNNF.
  */

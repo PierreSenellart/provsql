@@ -1,16 +1,16 @@
 # Probability evaluation: remaining work (d-trees, HAVING trichotomy, catalog)
 
-Open work only.  The built machinery — the method catalog + three-path chooser,
+Open work only.  The built machinery – the method catalog + three-path chooser,
 the d-tree engine (generalised to arbitrary `AND`/`OR`/`NOT`/`IN` circuits, under
 a speculative subproblem budget that also covers `tree-decomposition`), the
 HAVING marginal-vector evaluators, and the apx-safe `SUM`/`AVG`/`MIN`/`MAX`
-sampling route — is described in `doc/source/dev/probability-evaluation.rst`.
+sampling route – is described in `doc/source/dev/probability-evaluation.rst`.
 Anchor papers (all in `website/_bibliography/references.bib`): Olteanu, Huang &
 Koch (d-tree, ICDE 2010); Ré & Suciu (HAVING trichotomy, VLDB J. 2009); Souihli &
 Senellart (ProApproX portfolio, ICDE 2013).
 
-The three user-facing paths are tolerance grants — **exact ⊂ relative ⊂
-additive** — not algorithm picks; the chooser returns the cheapest *admissible*
+The three user-facing paths are tolerance grants – **exact ⊂ relative ⊂
+additive** – not algorithm picks; the chooser returns the cheapest *admissible*
 method.  Every method declares `guaranteeKind` / `isDeterministic` / `applicable`
 / `estimatedCost`, so new work below must fit that frame.
 
@@ -40,8 +40,8 @@ The apx-safe `SUM` / `AVG` / `MIN` / `MAX` corner is already covered
 *approximately* by direct world-sampling (the DKLR stopping rule over the
 surviving `gate_agg`), an FPRAS when `p ≥ 1/poly`.  What remains is the
 **rounding-based rejection FPTRAS** (Thm 9 / Alg 6.3.1) proper, whose value over
-that stopping rule is **rare-event efficiency** — a sample count that does not
-blow up as `p → 0`, via the rounded proposal's bounded acceptance ratio — plus
+that stopping rule is **rare-event efficiency** – a sample count that does not
+blow up as `p → 0`, via the rounded proposal's bounded acceptance ratio – plus
 the **MIN/MAX hard direction** on a safe skeleton.  Deciding skeleton safety
 here would re-use the rewriter's hierarchical analysis
 (`find_hierarchical_root_atoms`, `src/safe_query.c`); an unsafe skeleton is
@@ -50,15 +50,15 @@ hazardous (no FPTRAS, warn and fall back to additive MC).
 **ProvSQL is now well-positioned for this.** The marginal-vector engine
 (`AggMarginalEvaluator.cpp`) *is* the forward pass of Alg 5.2.1, and the world
 generator is literally that recursion run in reverse (piece 2 below); the
-hardest descent node — the Cartesian-product `⊗` split of a value-carrying
-branch-spanning SUM — needs the per-factor **joint `(sum, count)` distribution**,
+hardest descent node – the Cartesian-product `⊗` split of a value-carrying
+branch-spanning SUM – needs the per-factor **joint `(sum, count)` distribution**,
 which is exactly `sumCountPMF`, built this session for the branch-spanning work.
 So the one prerequisite that used to be missing is now in place.
 
 **But the gap it closes is narrow.** The rounding FPTRAS only beats the existing
 DKLR sampler on *safe-skeleton SUM with large-magnitude incommensurate values*
 (so the exact pseudo-poly path bails) **and** a *small target probability* (so
-DKLR's `Θ(1/p)` sample count is prohibitive) — the intersection of two corners
+DKLR's `Θ(1/p)` sample count is prohibitive) – the intersection of two corners
 each already handled. It is the sole place ProvSQL is provably weaker than the
 paper, but rarely the bottleneck in practice. Recommendation: keep deferred;
 implement only when that rare-event SUM corner actually bites.
@@ -76,7 +76,7 @@ Thm 9 / Alg 6.3.1, three pieces:
    route all to one branch). **This is the bottom-up `countPMF` / `sumPMF` /
    `sumCountPMF` / `decomposeProduct` recursion run in reverse** (same tree, same
    vectors, the draw descends instead of folding up). Two concrete hooks: (i) the
-   forward pass currently *discards* the per-node marginals — they must be
+   forward pass currently *discards* the per-node marginals – they must be
    retained as a lightweight `(combinator, child-PMFs, leaves)` tree (`O(circuit)`)
    or recomputed on the way down; (ii) the `⊗` split of a branch-spanning value
    draws against the per-factor joint from `sumCountPMF`. Alg 5.2.2 fills
@@ -90,7 +90,7 @@ New code `src/AggFptras.{h,cpp}`, consuming `AggMarginalEvaluator` internals
 
 | `(α, θ)` | safe skeleton | unsafe skeleton |
 |---|---|---|
-| `MIN ≤/<`, `MAX ≥/>` | FPTRAS (karp-luby) | **FPTRAS (karp-luby)** — gate-independent (`MAX≥k ⟺ ∃ present tuple, y≥k`, a UCQ; Thm 8) |
+| `MIN ≤/<`, `MAX ≥/>` | FPTRAS (karp-luby) | **FPTRAS (karp-luby)** – gate-independent (`MAX≥k ⟺ ∃ present tuple, y≥k`, a UCQ; Thm 8) |
 | `MIN ≥/>`, `MAX ≤/<` | FPTRAS (safe-plan) | hazardous |
 | `SUM <,≤,≥,>` | FPTRAS (rounding+sampling) | hazardous |
 | `SUM =,≠`, `AVG =,≠` | hazardous | hazardous |
@@ -105,7 +105,7 @@ Approximate coverage of these exists (item 2's sampling); the open work is the
 remaining **exact** (PTIME) coverage.  The laminar / cross-product engine covers
 COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
-- **Branch-spanning SUM** — both separable shapes are now exact in
+- **Branch-spanning SUM** – both separable shapes are now exact in
   `src/AggMarginalEvaluator.cpp`: *additively separable* (`sum(b+c)`,
   `sum(2b-c+1)`) folds the per-factor joint `(sum, count)` distributions
   (`sumCountPMF`, `recoverAdditiveSeparation`); *multiplicatively separable*
@@ -113,30 +113,30 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   a pivot identity that avoids explicit factorisation). Remaining: genuinely
   coupled values that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor;
   may be `#P`-hard, self-gates back to enumeration today).
-- **BID disjoint-block `⊥`** — the circuit-visible case is now exact for *every*
+- **BID disjoint-block `⊥`** – the circuit-visible case is now exact for *every*
   aggregate: a `repair_key` block surfaces as `gate_mulinput` contributors
   sharing a block-key child, so `runAggMarginalEvaluator` handles each block as
   a *categorical* (mutually exclusive, null arm Σp<1) independent of the TID
-  part — `COUNT` / `SUM` / `AVG` convolve its count / weighted-sum distribution,
+  part – `COUNT` / `SUM` / `AVG` convolve its count / weighted-sum distribution,
   `MIN` / `MAX` fold a per-block `1-Σ_{pred}p` factor into each `pAllAbsent`
   (`src/AggMarginalEvaluator.cpp`, pinned by `test/sql/having_bid.sql`). The one
-  residual is the genuinely **certificate-only** case — a *declared key on a
+  residual is the genuinely **certificate-only** case – a *declared key on a
   plain TID table*, where mutual exclusion lives in `block_key` metadata only
   (no `mulinput` in the circuit). That needs a `CERT_SAFE_AGG_PLAN` blob baked
   onto the `gate_agg` at the HAVING-lift site (`having_Expr_to_provenance_cmp`
   in `src/provsql.c`, via `src/safe_query_cert.{c,h}`), carried through
-  `CircuitFromMMap` — consuming, at probability time, the
+  `CircuitFromMMap` – consuming, at probability time, the
   `find_hierarchical_root_atoms` block structure that the rewriter already
   computes but the HAVING-lift currently discards.
-- **UNION/EXCEPT over a join that re-uses a base tuple** — `(R⋈S) UNION (R⋈T)` →
+- **UNION/EXCEPT over a join that re-uses a base tuple** – `(R⋈S) UNION (R⋈T)` →
   `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. The *independent* case (each
-  contributor's footprint private — the usual one) is now exact:
+  contributor's footprint private – the usual one) is now exact:
   `contributorExactMarginal` (`src/AggMarginalEvaluator.cpp`) computes the
   contributor's exact marginal by brute force over its private leaves and models
   it as an independent one-alternative block (reusing the BID categorical
   machinery), for every aggregate; pinned by `test/sql/having_union.sql`.
   Remaining: a base tuple shared *across* a group's contributors, which couples
-  them — the safe-query / read-once-rewriter problem, `#P`-hard in general.
+  them – the safe-query / read-once-rewriter problem, `#P`-hard in general.
 
 ## 4. Method-catalog follow-ups
 
@@ -151,11 +151,11 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   correlated component* (correlated cmps stay together and are sampled jointly;
   independent structure composes exactly). An exactly-cleared component
   contributes `ε=0`, loosening the budget for approximate siblings (the per-part
-  payoff). **`monus` propagation is not in the paper** — derive the
+  payoff). **`monus` propagation is not in the paper** – derive the
   `Pr(monus(a,b)) = Pr(a)(1−Pr(b))` ε-propagation and its unsound-under-sharing
   caveat.  This is also the principled fix for the `karp-luby` `S·m` cost being
   pessimistic for large `m` (the calibrated per-node ε-split).
-- **CircuitFeatures tier-2** — the treewidth proxy exists (`tw_proxy_`);
+- **CircuitFeatures tier-2** – the treewidth proxy exists (`tw_proxy_`);
   independence certificates remain to be cached lazily. Optional: expose a
   `provsql.methods` SQL view (name, guarantee kind, applicability) for Studio.
 
@@ -171,12 +171,12 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   The circuit has lost the query structure, so this means rediscovering a good
   order (the paper's SPROUT-vs-dtree gap); defer until the frequency heuristic is
   shown insufficient.
-- **`O(depth)` leaf-closing form** (Sec. V-D) — a constant-factor refinement of
+- **`O(depth)` leaf-closing form** (Sec. V-D) – a constant-factor refinement of
   the memoised recursion (the memo keys themselves are no longer the bottleneck).
 - **Paper benchmark.** `test/bench/dtree_bench.sql` exercises the full portfolio;
   the one shape not yet reproduced is the paper's social-network experiment (the
   **triangle** and **path-of-length-2** queries over a random graph of
-  tuple-independent edges, relative ε = 0.01) — d-tree should win by orders of
+  tuple-independent edges, relative ε = 0.01) – d-tree should win by orders of
   magnitude at high edge probabilities and track the sampler at small ones.
 
 ## Implementation observations

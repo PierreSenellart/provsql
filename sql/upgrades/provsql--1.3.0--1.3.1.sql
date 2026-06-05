@@ -127,7 +127,7 @@ END
 $$ LANGUAGE plpgsql;
 
 -- 4. Schema-qualify provsql.time_validity_view in temporal functions
---    (PostgreSQL 14+ only — the functions don't exist on pre-14).
+--    (PostgreSQL 14+ only – the functions don't exist on pre-14).
 
 DO $$
 BEGIN

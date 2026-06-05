@@ -10,7 +10,7 @@
  *   to declare the real function prototypes for those same names.  The
  *   resulting macro/declaration clash causes compilation errors.
  *
- * - @c port.h replaces the printf family (@c snprintf, @c sprintf, …) with
+ * - @c port.h replaces the printf family (@c snprintf, @c sprintf…) with
  *   @c pg_* macros for output consistency.  Any later-included C++ header
  *   that calls the @c std::-qualified functions then breaks -- e.g.
  *   @c boost/assert/source_location.hpp (Boost >= 1.79) calls

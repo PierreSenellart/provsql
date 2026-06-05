@@ -260,7 +260,7 @@ The `prov` argument on `expected` / `variance` / `moment` /
 `central_moment` / `support` / `rv_sample` / `rv_histogram` *is* a
 conditioning event: they compute `E[X^k | prov]` for both a
 `random_variable` and an `agg_token`. So conditional expectation,
-variance, sampling, and histograms of one scalar already work —
+variance, sampling, and histograms of one scalar already work –
 including the canonical truncation, the conditional-Value-at-Risk shape,
 and conditional moments of a discrete GROUP BY aggregate
 (`E[SUM(x) | event]`). This is the baseline §6.B.2 must lift from
@@ -268,8 +268,8 @@ and conditional moments of a discrete GROUP BY aggregate
 
 #### 6.A.2 Key / functional-dependency constraints via `repair_key`
 
-A hard key constraint — "at most one tuple per key", MarkoViews' weight-0
-denial view `V2` ("a person has one advisor") in its keyed special case —
+A hard key constraint – "at most one tuple per key", MarkoViews' weight-0
+denial view `V2` ("a person has one advisor") in its keyed special case –
 is `repair_key` today. It turns a table into mutually-exclusive,
 renormalised blocks, after which any `probability_evaluate` is implicitly
 conditioned on the FD holding. BID blocks (the TID/BID classifier in
@@ -283,7 +283,7 @@ does not cover.
 #### 6.B.1 Conditional probability of a discrete answer, `P(Q | C)`
 
 `probability_evaluate(token, method, arguments)` has **no** `prov`
-argument — the discrete twin of §6.A.1 is the missing piece. Today it is
+argument – the discrete twin of §6.A.1 is the missing piece. Today it is
 a clumsy two-call `P(Q ∧ C) / P(C)`, and nothing stops someone reaching
 for `monte_carlo` on a negative-weight (MarkoViews) circuit.
 
@@ -307,7 +307,7 @@ newly-observed certain facts.
 
 §6.A.1 conditions a *moment*; it cannot return a `random_variable` to
 store or compose. So **sequential Bayesian update is not expressible
-today** — each step needs the posterior as a first-class value. This is
+today** – each step needs the posterior as a first-class value. This is
 the core motivation for `gate_conditioned` and for materialised
 conditional tables.
 
@@ -335,7 +335,7 @@ WHERE patient_id = 1;
 #### 6.B.3 Arbitrary denial constraints, beyond keys
 
 `repair_key` (§6.A.2) covers key FDs only. A general denial constraint
-— "no two overlapping bookings", "an advisor must have been faculty" — is
+– "no two overlapping bookings", "an advisor must have been faculty" – is
 conditioning on an arbitrary UCQ no-violation event, the full MarkoViews
 `¬W`. There is no surface for it today; it wants the same
 `condition(token, no_violation_event)` plumbing as §6.B.1 with the
@@ -345,7 +345,7 @@ constraint circuit supplied by a helper.
 
 `shapley(token, var, …)` exists but has no conditioning argument. Once
 §6.B.2 lands, "which observation most shifted the posterior expected
-risk?" is `shapley` over a `gate_conditioned` root — connecting code over
+risk?" is `shapley` over a `gate_conditioned` root – connecting code over
 existing machinery, unique to a provenance-aware system
 (`continuous_distributions.md` §E.1).
 

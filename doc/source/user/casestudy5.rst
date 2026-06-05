@@ -17,7 +17,7 @@ by probability versus thresholding, ``EXCEPT``, common table expressions, and
    **Follow along in your browser, no install.** Open the `cs5 database in the
    ProvSQL Playground <https://provsql.org/playground/?db=cs5>`_ and run these
    queries as you read. The Playground bundles no external tools, so a step
-   that explicitly calls an external knowledge compiler (``d4``, ``c2d``, …) or
+   that explicitly calls an external knowledge compiler (``d4``, ``c2d``…) or
    the ``graph-easy`` ASCII renderer will not run there; the default
    probability methods still work (they use the built-in tree-decomposition
    compiler), as does everything else. See the
@@ -134,7 +134,7 @@ The ``CREATE TABLE AS`` query inherits a ``provsql`` column from
 ``(value, provenance)`` pair remains. Because the schema is fully
 under our control, we can populate the table from any expression –
 combine columns, filter rows, derive computed values – and any
-semiring-evaluation function (``sr_formula``, ``sr_why``, …) will
+semiring-evaluation function (``sr_formula``, ``sr_why``…) will
 happily consume the result.
 
 

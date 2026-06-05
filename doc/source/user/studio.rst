@@ -316,7 +316,7 @@ Semiring evaluation strip
 Below the canvas, the :doc:`semiring evaluation <semirings>` strip
 targets the pinned node (or, when no node is pinned, the root). The
 semiring select organises compiled entries into four sub-groups, with
-custom and "Other" entries below:
+custom and “Other” entries below:
 
 * **Compiled semirings**
 
@@ -413,8 +413,8 @@ See :doc:`knowledge-compilation` for the full pipeline.
 .. figure:: /_static/studio/kc-compiled-ddnnf.png
    :alt: The Studio circuit canvas showing a provenance circuit
          compiled to a Decision-DNNF by d4, with AND / OR / NOT and
-         input gates, and the evaluation strip set to "Compiled d-D
-         circuit / d4".
+         input gates, and the evaluation strip set to “Compiled d-D
+         circuit / d4”.
 
    Knowledge compilation in Circuit mode: the provenance circuit of a
    self-join, compiled to a d-DNNF by ``d4`` (here 13 gates / 18 edges
@@ -513,8 +513,8 @@ truncate individually and the Bernoulli weight rebalances by
 the ratio of arm masses; categorical outcomes outside the
 interval are dropped and surviving masses renormalise to 1;
 Diracs survive iff their value sits in the interval, and an
-infeasible event raises a clean "conditioning event is
-infeasible" error without running 100,000 wasted MC samples.
+infeasible event raises a clean “conditioning event is
+infeasible” error without running 100,000 wasted MC samples.
 
 The curve is computed server-side by
 :sqlfunc:`rv_analytical_curves`; shapes outside the closed-form
@@ -543,7 +543,7 @@ the right.
 
 The same group hosts a *Sample* entry that draws raw samples
 via :sqlfunc:`rv_sample`; the result renders as a collapsible
-panel with a six-value inline preview and a "show full list"
+panel with a six-value inline preview and a “show full list”
 expander. When the conditioning event's acceptance
 rate truncates the run below the requested ``n``, the panel
 surfaces an actionable hint pointing at ``provsql.rv_mc_samples``.

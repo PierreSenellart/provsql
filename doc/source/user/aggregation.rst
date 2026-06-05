@@ -182,7 +182,7 @@ absent. This is exact even when the group's elements are **not** mutually
 exclusive, and runs in :math:`O(N)` time per group (:math:`N` the group
 size) for any m-semiring.
 
-Comparing any other aggregate (``min``, ``max``, ``sum``, …) with a text
+Comparing any other aggregate (``min``, ``max``, ``sum``…) with a text
 constant is **not** implemented and raises an error, since its
 possible-world value is not decided occurrence by occurrence.
 

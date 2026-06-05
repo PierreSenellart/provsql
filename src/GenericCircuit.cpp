@@ -51,7 +51,7 @@ bool GenericCircuit::foldSemiringIdentities()
   /* Wrap the three phases in an outer fixpoint loop.  Phase 3's
    * substitutions can re-expose identity wires to a parent that
    * referenced the collapsed gate (a single-wire @c gate_times / plus
-   * whose sole wire was itself collapsed, a @c gate_zero absorber, …),
+   * whose sole wire was itself collapsed, a @c gate_zero absorber…),
    * which is a fresh Phase-1 opportunity.  @c createGenericCircuit
    * loads gates in BFS-from-root order (parents before children), so a
    * single pass through Phase 1 would propagate identity-collapse in

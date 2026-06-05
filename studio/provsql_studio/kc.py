@@ -723,7 +723,7 @@ def probability_benchmark(
 
     Each method runs inside its own savepoint so a per-method
     ``SET LOCAL statement_timeout`` and any error (timeout, missing
-    compiler, non-independent circuit, …) stay scoped to that method;
+    compiler, non-independent circuit…) stay scoped to that method;
     the next iteration continues with a fresh budget.
 
     Notices emitted by ProvSQL during any of the inner

@@ -85,7 +85,7 @@ Module Layout
        …) plus ``tests/e2e/`` Playwright smoke scenarios.
    * - ``scripts/``
      - Developer-facing demo loaders (``load_demo_temporal.sql``,
-       ``big_demo_queries.sql``, …). Not shipped in the wheel.
+       ``big_demo_queries.sql``…). Not shipped in the wheel.
    * - ``CHANGELOG.md``
      - Per-release notes consumed by ``studio-release.yml``: see
        :ref:`studio-releases`.
@@ -130,7 +130,7 @@ runtime, fonts are bundled).
      - Per-relation row dumps for the Where-mode sidebar
        (capped at ``--max-sidebar-rows``). Skips relations whose
        first ``provsql`` token is not an ``input`` gate when the
-       "Input gates only" toggle is on.
+       “Input gates only” toggle is on.
    * - ``/api/schema``
      - GET
      - Schema-panel data: every selectable relation with its
@@ -174,7 +174,7 @@ runtime, fonts are bundled).
    * - ``/api/custom_semirings``
      - GET
      - User-defined semiring wrappers discovered in the schema.
-       Drives the "Custom Semirings" optgroup in the eval strip.
+       Drives the “Custom Semirings” optgroup in the eval strip.
    * - ``/api/evaluate``
      - POST
      - Compiled-semiring evaluation against a pinned token. The
@@ -217,7 +217,7 @@ runtime, fonts are bundled).
      - POST
      - Drop every user schema in the connected database,
        reinstall provsql, and bounce the pool -- the nav-bar
-       "empty database" broom.
+       “empty database” broom.
 
 The write endpoints that mutate the database (``/api/set_prob``,
 ``/api/exec``, ``/api/nb/exec``, ``/api/databases``,

@@ -1,4 +1,4 @@
-# ProvSQL Random Variables — Feature Roadmap
+# ProvSQL Random Variables – Feature Roadmap
 
 A synthesis of the design discussion around the continuous random-variable
 surface shipped in ProvSQL 1.5.0: first-class `random_variable` columns,
@@ -33,7 +33,7 @@ The prioritisation uses four labels:
 | 5 | Multivariate Normal | Parametric distributions | Architectural |
 | 6 | Quantiles / inverse CDF | Expressivity completion | Quick win |
 | 7 | RV-vs-RV analytical comparisons | Expressivity completion | Quick win |
-| 8 | Function application (`log`, `exp`, …) | Expressivity completion | Mid-term |
+| 8 | Function application (`log`, `exp`…) | Expressivity completion | Mid-term |
 | 9 | Order-statistic aggregates (`MIN`, `MAX`, percentile) | Expressivity completion | Mid-term |
 | 10 | Information-theoretic primitives (entropy, KL, MI) | Expressivity completion | Mid-term |
 | 11 | Empirical samples gate | Data-driven distributions | Mid-term |
@@ -73,7 +73,7 @@ become correlated when their provenance formulas share a Boolean
 variable; two continuous RVs become correlated when their arithmetic
 expressions share a base `gate_rv`. The branch's `FootprintCache` is
 the continuous analog of "which Boolean variables does this provenance
-formula touch" — it tracks which base RVs each arithmetic subtree
+formula touch" – it tracks which base RVs each arithmetic subtree
 depends on, and the structural-independence shortcut on
 `gate_arith TIMES` is the continuous version of the disjoint-support
 optimisation in Boolean probability computation.
@@ -81,7 +81,7 @@ optimisation in Boolean probability computation.
 ### Where the analogy strains
 
 In the discrete case, shared Boolean variables suffice to compute joint
-probabilities by weighted model counting — the algebra is closed and
+probabilities by weighted model counting – the algebra is closed and
 clean. In the continuous case, shared base `gate_rv`s give you
 correlation, but whether you can *exploit it analytically* depends on
 the marginal families and the operations involved:
@@ -98,7 +98,7 @@ the marginal families and the operations involved:
   but the functions to apply are inverse CDFs of compound special
   functions. The simplifier loses sight of the joint structure
   immediately, the analytical paths in `AnalyticEvaluator` do not fire,
-  and evaluation falls back to MC — negating the analytical advantage
+  and evaluation falls back to MC – negating the analytical advantage
   that motivated base independence in the first place.
 
 ### Architectural choice
@@ -130,7 +130,7 @@ This creates a tension that does not really arise in the discrete case:
 
 In discrete PDBs, "independence of base events" refers to
 tuple-existence Bernoullis. In the continuous setting there are *two*
-layers — tuple existence (still Boolean provenance, still independent)
+layers – tuple existence (still Boolean provenance, still independent)
 *and* per-row RV value draws (independently drawn per row from per-row
 parametric distributions). Correlations across rows in the same column
 (autoregressive structure, time series; §D.3) and correlations across
@@ -138,7 +138,7 @@ columns in the same row (joint Normal returns on the same day) are
 both possible and both want first-class expression. The
 function-of-independents argument covers both, but the UI for "AAPL
 and MSFT are correlated within each trading day" is genuinely awkward
-without a primitive — the user has to set up a per-row hidden
+without a primitive – the user has to set up a per-row hidden
 auxiliary `gate_rv` that both columns reference, and the simplifier
 has to learn to recognise that pattern.
 
@@ -149,7 +149,7 @@ carry over in the strict mathematical sense and is worth preserving as
 the architectural backbone, so base `gate_rv` instances stay independent
 and correlation is in principle introduced through operations that share
 them. But `gate_copula` and `gate_mvnormal` (§D.2, §A.5) exist as
-recognised sugar — the gate type serves as a *handle* for the
+recognised sugar – the gate type serves as a *handle* for the
 simplifier and as ergonomic surface for the user. This preserves the
 discrete consensus philosophically while paying the UI and
 simplifier-engineering cost the continuous setting demands.
@@ -162,7 +162,7 @@ The branch supports Normal, Uniform, Exponential, Erlang, Categorical,
 Mixture, and Dirac. The following extend that set, prioritised by ratio
 of analytical leverage to implementation cost.
 
-### A.1 Gamma (and Chi-squared as a special case) — **[Quick win]**
+### A.1 Gamma (and Chi-squared as a special case) – **[Quick win]**
 
 Erlang is already Gamma with integer shape; the regularised lower
 incomplete gamma CDF is already in the codebase. Relaxing `k` to non-integer
@@ -188,7 +188,7 @@ first absorbs the migration of the four existing families with the
 test suite as the regression net, then exercises the new interface
 with Gamma before it has to absorb a wider family set.
 
-### A.2 Log-normal — **[Quick win]**
+### A.2 Log-normal – **[Quick win]**
 
 Composes with the existing Normal infrastructure: `log(X)` of a log-normal
 is Normal, so products of log-normals fold via Normal's linear-combination
@@ -208,7 +208,7 @@ SELECT expected(product(daily_return))
 FROM asset_returns WHERE asset = 'AAPL';
 ```
 
-### A.3 Beta — **[Mid-term]**
+### A.3 Beta – **[Mid-term]**
 
 Bounded support on `[0,1]`. CDF is the regularised incomplete beta, dual
 to the Gamma machinery. Conjugate with Bernoulli/binomial, pairing
@@ -223,14 +223,14 @@ INSERT INTO variant_ctr VALUES
   ('A', provsql.beta(45, 120)),
   ('B', provsql.beta(72, 88));
 
--- P(B beats A) — gate_cmp on two Betas; the closed form requires the
+-- P(B beats A) – gate_cmp on two Betas; the closed form requires the
 -- pairwise RV comparator work in §B.2 to stay analytical.
 SELECT probability_evaluate(provenance())
 FROM variant_ctr a, variant_ctr b
 WHERE a.variant = 'A' AND b.variant = 'B' AND b.ctr > a.ctr;
 ```
 
-### A.4 Discrete families: Poisson, Binomial, Geometric — **[Mid-term]**
+### A.4 Discrete families: Poisson, Binomial, Geometric – **[Mid-term]**
 
 Categorical handles fully-enumerated outcomes; these three are the
 analytical workhorses. Poisson sums close, fixed-`p` Binomial sums
@@ -254,10 +254,10 @@ SELECT expected(sum(arrivals))
 FROM store_traffic WHERE day = 'mon' AND hour BETWEEN 9 AND 11;
 ```
 
-### A.5 Multivariate Normal — **[Architectural]**
+### A.5 Multivariate Normal – **[Architectural]**
 
 Every operation closes: linear combinations of MVN are MVN, marginals
-are MVN, conditional of MVN given MVN is MVN. Unlocks correlation — the
+are MVN, conditional of MVN given MVN is MVN. Unlocks correlation – the
 single biggest expressive gap in the current setup.
 
 **Framing.** Per the hybrid position in §Theoretical backbone, MVN is
@@ -267,7 +267,7 @@ any MVN as a linear combination of independent base RVs, and the
 simplifier can recognise that pattern and fold linear combinations
 using the joint covariance. The MVN constructor therefore lands as a
 recognised sugar that compiles to operations on independent base
-`gate_rv`s — a *handle* for the simplifier and ergonomic surface for
+`gate_rv`s – a *handle* for the simplifier and ergonomic surface for
 the user, not a fundamentally new primitive.
 
 **Cost.** The `random_variable` type currently scalarises. MVN wants
@@ -299,7 +299,7 @@ FROM stocks WHERE trade_date = '2026-05-14';
 ### Cautions
 
 - **Cauchy and other stable distributions** are tempting (closure
-  under sum is rare) but have undefined moments — breaks the
+  under sum is rare) but have undefined moments – breaks the
   `Expectation` semiring contract. Either make moment evaluation
   partial or detect-and-error on those subtrees.
 - **Student's t and F** are quotients of RVs; really useful only once
@@ -313,7 +313,7 @@ FROM stocks WHERE trade_date = '2026-05-14';
 Cases where the analytical machinery has a natural fit but no current
 surface.
 
-### B.1 Quantiles and inverse CDF — **[Quick win]**
+### B.1 Quantiles and inverse CDF – **[Quick win]**
 
 Currently only `expected`, `variance`, `moment`, `central_moment`,
 `support` exist. Quantiles are a clear gap. Every closed-form family
@@ -323,7 +323,7 @@ via root-finding on the regularised incomplete special functions).
 Empirical samples just sort and look up.
 
 **Applicability.** Median, percentiles, Value-at-Risk, credible
-intervals — anywhere "what value would I exceed with probability p"
+intervals – anywhere "what value would I exceed with probability p"
 matters. Required for finance and risk applications.
 
 **UI.** Polymorphic dispatcher alongside `expected`:
@@ -340,23 +340,23 @@ becomes one virtual call regardless of family, instead of a fresh
 switch on `DistKind` paralleling the existing PDF/CDF/moment
 switches.
 
-### B.2 RV-vs-RV analytical comparisons — **[Quick win]**
+### B.2 RV-vs-RV analytical comparisons – **[Quick win]**
 
 `gate_cmp` handles `X < c` brilliantly. The Normal-Normal case
 `P(X<Y) = Φ((μ_Y − μ_X) / √(σ_X² + σ_Y²))` has landed (`normalDiffDecide`
 in `AnalyticEvaluator.cpp`). Remaining families still fall back to MC even
-when there's a clean form — Exponential-Exponential has
+when there's a clean form – Exponential-Exponential has
 `P(X<Y) = λ_X / (λ_X + λ_Y)`, and the other parametric pairs have
 analogous closed forms.
 
 **Applicability.** A/B tests, rankings, tournament probabilities, "which
-sensor is reading higher" — any "which is bigger" comparison.
+sensor is reading higher" – any "which is bigger" comparison.
 
 **UI.** No new surface; pairwise RV comparators are intercepted at plan
 time exactly like `X < c`. The work is adding lookup-table entries in
 `AnalyticEvaluator`.
 
-### B.3 Function application beyond +, −, ×, ÷ — **[Mid-term]**
+### B.3 Function application beyond +, −, ×, ÷ – **[Mid-term]**
 
 `gate_arith` covers arithmetic. There's no `log`, `exp`, `sqrt`, `abs`,
 `pow`, or general monotonic transform. This bites immediately:
@@ -376,7 +376,7 @@ SELECT expected(log(asset_return))   -- log of lognormal → Normal
 FROM positions;
 ```
 
-### B.4 Order-statistic aggregates — **[Mid-term]**
+### B.4 Order-statistic aggregates – **[Mid-term]**
 
 `MIN`, `MAX`, percentile aggregates over `random_variable` are listed as
 deferred in the 1.5.0 release notes. The theory is clean:
@@ -390,14 +390,14 @@ events, SLA tail-latency analysis.
 **UI.** No new syntax; promotes `MIN`/`MAX`/`percentile_cont` to RV-aware
 versions exactly like the existing `SUM`/`AVG`/`PRODUCT` aggregates.
 
-### B.5 Information-theoretic primitives — **[Mid-term]**
+### B.5 Information-theoretic primitives – **[Mid-term]**
 
 Entropy, KL divergence, mutual information aren't expressible. All have
 closed forms for major families (Normal-Normal KL is famously clean) and
 obvious MC fallbacks.
 
 **Applicability.** Model comparison, variable importance, feature
-selection — the language of ML evaluation.
+selection – the language of ML evaluation.
 
 **UI.**
 ```sql
@@ -417,16 +417,16 @@ specific constructors smooth the common cases.
 
 Under the §F.1 refactor, the empirical gates land as ordinary
 `Distribution` subclasses (`EmpiricalSamples`, `EmpiricalCdf`, `Gmm`)
-alongside the analytical ones — same virtual interface, same
+alongside the analytical ones – same virtual interface, same
 registry, but the `pdf`/`cdf`/`quantile`/`sample`/moment methods are
 backed by sorted arrays, piecewise-linear tables, or mixture
 dispatch instead of closed forms.  Call sites in the evaluators stay
 oblivious to which storage strategy a given gate uses.
 
-### C.1 GMM constructor — **[Quick win]**
+### C.1 GMM constructor – **[Quick win]**
 
 Gaussian mixtures decompose internally into `gate_mixture` over
-`gate_rv:normal` children — both already exist. A direct constructor
+`gate_rv:normal` children – both already exist. A direct constructor
 just packages the common pattern.
 
 **Applicability.** Output of EM-fitting routines, variational autoencoder
@@ -445,16 +445,16 @@ INSERT INTO customer_ltv VALUES (
 );
 ```
 
-### C.2 Empirical samples gate — **[Mid-term]**
+### C.2 Empirical samples gate – **[Mid-term]**
 
 A new `gate_empirical_samples(arr float8[])`. CDF via sorted-array
 binary search (compute once during the simplify-on-load pass), PDF via
 KDE on request. Comparisons against a constant become exact Bernoulli
-leaves immediately ("fraction of samples below c") — analytical, not MC,
+leaves immediately ("fraction of samples below c") – analytical, not MC,
 for that one variable. Moments come for free from the samples.
 
 **Applicability.** MCMC posteriors, variational inference samples,
-normalising-flow outputs, bootstrap distributions — anything an ML
+normalising-flow outputs, bootstrap distributions – anything an ML
 pipeline can dump as a sample bundle.
 
 **UI.**
@@ -471,7 +471,7 @@ FROM mcmc_chain
 GROUP BY param;
 ```
 
-### C.3 Empirical CDF gate — **[Mid-term]**
+### C.3 Empirical CDF gate – **[Mid-term]**
 
 A new `gate_empirical_cdf(grid float8[], cdf float8[])`. Piecewise-linear
 CDF table. Sampling is one inverse-CDF lookup; moments via numerical
@@ -491,12 +491,12 @@ INSERT INTO weather_forecast VALUES (
 );
 ```
 
-### C.4 Frozen-distribution snapshots — **[Mid-term]**
+### C.4 Frozen-distribution snapshots – **[Mid-term]**
 
 `provsql.snapshot(rv, n_samples => 10000)` materialises a complex
 `gate_arith` subtree as a frozen `gate_empirical_samples`. A deliberate
 trade of analytical fidelity for query-time performance. The provenance
-lineage of *which subtree was frozen and when* is preserved naturally —
+lineage of *which subtree was frozen and when* is preserved naturally –
 a side benefit unique to a provenance-aware system.
 
 **Applicability.** Hot paths where the same expensive composite RV is
@@ -515,7 +515,7 @@ WHERE expensive_to_evaluate;
 
 Larger architectural moves that open new classes of query.
 
-### D.1 Conditioning as a gate — **[Architectural]** — *moved*
+### D.1 Conditioning as a gate – **[Architectural]** – *moved*
 
 Conditioning grew large enough, and turned out to share enough with the
 discrete (MarkoViews) setting, that it now has its own plan:
@@ -525,9 +525,9 @@ placement (simplifier, RangeCheck, AnalyticEvaluator, Expectation,
 `FootprintCache` caveat), soft/weighted conditioning, and concrete use
 cases. Referenced below as "the conditioning gate" and from §E.1.
 
-### D.2 Correlation / copulas — **[Architectural]**
+### D.2 Correlation / copulas – **[Architectural]**
 
-The biggest expressive hole *practically*, though not theoretically —
+The biggest expressive hole *practically*, though not theoretically –
 see §Theoretical backbone. The current model treats RVs as independent
 unless they share leaves via `gate_arith`; in principle that is
 universal (Sklar + inverse Rosenblatt), but in practice non-Gaussian
@@ -552,7 +552,7 @@ t / Clayton / Gumbel copulas, each carrying:
 MVN (§A.5) is the Gaussian-copula special case where marginals are
 also Normal, and its Cholesky decomposition is the same kind of rule.
 
-**Interaction.** Coupled RVs are explicitly dependent — the
+**Interaction.** Coupled RVs are explicitly dependent – the
 `FootprintCache` structural-independence shortcut backs off, exactly
 as for conditioning. The footprint of a `gate_copula(X, Y, …)` is the
 union of `X`'s and `Y`'s footprints *plus* a shared auxiliary
@@ -576,7 +576,7 @@ FROM marginals;
 -- Or: full multivariate construction (the MVN route from §A.5)
 ```
 
-### D.3 Stochastic processes — **[Architectural]**
+### D.3 Stochastic processes – **[Architectural]**
 
 Nothing in the current model speaks to AR(1), random walks, Brownian
 motion, Markov chains. Hand-building via recursive CTE + conditioning
@@ -587,7 +587,7 @@ gates is possible but awkward and gives up analytical handling.
 correlated `gate_rv` chains using the §D.2 copula machinery.
 
 **Applicability.** Time-series forecasting, path-dependent financial
-options, queueing models, epidemiological compartment models — the
+options, queueing models, epidemiological compartment models – the
 provenance circuit already represents the dependency structure; what is
 missing is the language to construct chains compactly.
 
@@ -605,16 +605,16 @@ SELECT t, value FROM provsql.ar1(phi => 0.85, sigma => 0.2,
                                   x0 => 0.0, steps => 50);
 ```
 
-### D.4 Causal interventions (`do`-calculus) — **[Research]**
+### D.4 Causal interventions (`do`-calculus) – **[Research]**
 
 ProvSQL is unusually well-positioned here: the provenance circuit *is* a
 DAG, gates are explicit, and severing incoming edges is mechanically
 simple. A `provsql.intervene(rv, value)` gate replaces a sub-circuit
-with a fixed value while leaving downstream consumers in place — giving
+with a fixed value while leaving downstream consumers in place – giving
 you Pearl's `do(X := x)`.
 
 **Combined with conditioning (§D.1)**, that's observational vs
-interventional probability — the core counterfactual machinery. No
+interventional probability – the core counterfactual machinery. No
 other relational system offers this, and it places ProvSQL in
 conversation with the causal-inference literature.
 
@@ -629,11 +629,11 @@ FROM model
 WHERE provsql.intervene(X, 1.0) AND Y > threshold;
 ```
 
-### D.5 Probabilistic-circuit subsystem (distribution-valued gates) — **[Research, low priority]**
+### D.5 Probabilistic-circuit subsystem (distribution-valued gates) – **[Research, low priority]**
 
 The gate DAG plus the `gate_mixture` node make ProvSQL look one step away
 from hosting **probabilistic circuits** (PCs: arithmetic circuits / SPNs /
-PSDDs, in the Darwiche / Vergari–Choi–Peharz–Van den Broeck sense) — a
+PSDDs, in the Darwiche / Vergari–Choi–Peharz–Van den Broeck sense) – a
 mixture is a PC sum node, so surely we just add a product node and we have
 PCs. The reality is sharper, and worth recording so the analogy is not
 misused.
@@ -650,7 +650,7 @@ The two families meet only at ProvSQL's *output of compilation*: the
 compiled d-DNNF already **is** a deterministic, decomposable arithmetic
 circuit, and `dDNNF::probabilityEvaluation` already **is** the PC
 sum-product pass. On the discrete side, therefore, the "PC product" already
-exists — it is `gate_times` over disjoint variable scopes — and there is
+exists – it is `gate_times` over disjoint variable scopes – and there is
 nothing to add.
 
 **Where a product node is genuinely new is the continuous value layer, and
@@ -661,27 +661,27 @@ evaluates it as `π·E[x] + (1−π)·E[y]`). `gate_arith TIMES` also exists, bu
 it is **scalar multiplication** `X·Y` (a new RV, density via Mellin
 convolution), *not* a PC product. A PC product `p(X)·p(Y)` is a
 **factorization over disjoint scopes**: its value is a *joint distribution
-over a vector*, not a number — which the scalar-per-token typing cannot
+over a vector*, not a number – which the scalar-per-token typing cannot
 express. This is the same wall MVN (§A.5) and copulas (§D.2) hit:
 representing a *joint* rather than a draw.
 
 **And a gate is not a PC without the matching evaluation mode.** What makes
-a PC a PC is the query it answers — point density, marginals, MAP, via
+a PC a PC is the query it answers – point density, marginals, MAP, via
 sum-product over its structural invariants. ProvSQL's RV layer answers a
 *different* set: moments and `P(event)` via `Expectation` /
 `HybridEvaluator` / Monte Carlo. It never evaluates a joint density at an
 assignment or marginalizes by circuit recursion. A product gate without
-such an evaluator only gives the sampler independent children to draw — not
+such an evaluator only gives the sampler independent children to draw – not
 PC inference.
 
 So hosting PCs is a coherent **subsystem**, not a one-gate add. It needs:
 1. **scope-typed, distribution-valued gates** (a gate as `c: assignment →
-   ℝ≥0` over a scope), alongside the existing scalar-RV typing — the same
+   ℝ≥0` over a scope), alongside the existing scalar-RV typing – the same
    architectural move §A.5 / §D.2 require;
-2. **normalized leaves** evaluable both at a point and by integration —
+2. **normalized leaves** evaluable both at a point and by integration –
    `gate_rv` is most of the way there, and the GMM (§C.1) and
    empirical-distribution gates (§C.2–C.3) are exactly these leaves;
-3. a **third evaluation mode** — point/marginal evaluation, distinct from
+3. a **third evaluation mode** – point/marginal evaluation, distinct from
    both `evaluate<S>` (semiring, no assignment) and `Expectation` (moments).
 
 Then *sum (have it) + disjoint-scope product + normalized leaves* = a PC,
@@ -699,12 +699,12 @@ node buys nothing. Hence: low priority, and most naturally a by-product of
 
 ---
 
-## E. Provenance × probability — ProvSQL-specific directions
+## E. Provenance × probability – ProvSQL-specific directions
 
 Capabilities that exploit the provenance circuit specifically. Almost
 no other system can offer them.
 
-### E.1 Shapley over RV-valued payoffs — **[Research]**
+### E.1 Shapley over RV-valued payoffs – **[Research]**
 
 The existing Shapley/Banzhaf machinery over Boolean provenance
 generalises directly to "contribution of evidence atom *e* to posterior
@@ -712,7 +712,7 @@ moment *m*". With the conditioning gate (§D.1) plus the existing
 Shapley infrastructure, this is mostly *connecting code*, not new theory.
 
 **Applicability.** Explainable Bayesian inference in a relational
-setting — "which observations most shifted my posterior?" This is a
+setting – "which observations most shifted my posterior?" This is a
 publishable angle that builds on existing ProvSQL infrastructure rather
 than competing with PPL systems.
 
@@ -724,7 +724,7 @@ FROM posteriors, evidence_atoms
 WHERE patient_id = 1;
 ```
 
-### E.2 Provenance of sampled values — **[Research]**
+### E.2 Provenance of sampled values – **[Research]**
 
 When MC sampling fires, can a user ask "which gates' draws produced this
 sample"? Currently opaque. A per-sample provenance trace exposed via
@@ -742,11 +742,11 @@ FROM provsql.rv_sample_with_witness(loss_distribution, n => 1000)
 WHERE value > 1e6;     -- inspect the gates that drove the tail samples
 ```
 
-### E.3 Sampling under constraints with witness extraction — **[Research]**
+### E.3 Sampling under constraints with witness extraction – **[Research]**
 
 A close relative of E.2. Rejection sampling already happens for
 conditioning. The bool gate that *accepted* a sample is itself a
-provenance object — returning it alongside the sample lets users inspect
+provenance object – returning it alongside the sample lets users inspect
 the rejection witness, which is sometimes more informative than the
 sample itself.
 
@@ -760,7 +760,7 @@ edits to scattered switch statements.  None of them change the gate
 ABI or the on-disk encoding; they are correct iff the existing
 `test/` suite still passes.
 
-### F.1 Per-distribution class hierarchy in `src/distributions/` — **[Architectural, prerequisite for §§A.1–A.5, B.1, B.3–B.5, C.1–C.4]**
+### F.1 Per-distribution class hierarchy in `src/distributions/` – **[Architectural, prerequisite for §§A.1–A.5, B.1, B.3–B.5, C.1–C.4]**
 
 **The expression problem, in the small.** The current `gate_rv` family
 set (Normal, Uniform, Exponential, Erlang) is encoded as a `DistKind`
@@ -785,7 +785,7 @@ files; the patch is mostly mechanical but has to be reviewed in full
 each time because the cases interleave with non-family-specific logic.
 
 **Proposal.** A `src/distributions/` directory with one
-`<name>.{cpp,h}` per family — Normal, Uniform, Exponential, Erlang
+`<name>.{cpp,h}` per family – Normal, Uniform, Exponential, Erlang
 to start; Gamma, LogNormal, Beta, Poisson, Binomial, Geometric,
 EmpiricalSamples, EmpiricalCdf, Gmm as they land.  Each subclass of an
 abstract `Distribution` interface implements the methods the existing
@@ -795,7 +795,7 @@ call sites need:
   closed interval, discrete enumeration), encapsulating the bounds
   that `RangeCheck` currently reconstructs from `DistKind` cases.
 - `pdf(x)`, `cdf(x)`, `log_pdf(x)` for `AnalyticEvaluator`.
-- `quantile(p)` for §B.1, currently absent — landing it on the
+- `quantile(p)` for §B.1, currently absent – landing it on the
   interface makes the §B.1 dispatcher one virtual call.
 - `mean()`, `variance()`, `raw_moment(k)`, `central_moment(k)` for
   `Expectation`.
@@ -812,7 +812,7 @@ per-file-per-semiring layout in the companion Lean formalisation
 [`provenance-lean`](https://github.com/PierreSenellart/provenance-lean)),
 where each concrete provenance semiring lives in its own file and
 exposes the `SemiringWithMonus` instance the rest of the library
-consumes — the same expression-problem pressure, the same answer.
+consumes – the same expression-problem pressure, the same answer.
 
 **What the refactor does *not* absorb.** Single-class virtual dispatch
 captures *unary* operations on one distribution.  Pairwise and joint
@@ -820,9 +820,9 @@ behaviour does not fit cleanly, and trying to force it through the
 `Distribution` interface re-creates the row-major coupling the
 refactor was meant to dissolve:
 
-- **Family-closure folds** — Normal + Normal = Normal, Erlang sum
+- **Family-closure folds** – Normal + Normal = Normal, Erlang sum
   closure, fixed-`p` Binomial sum closure, Poisson sum closure,
-  exponential min closure — are intrinsically pairwise on
+  exponential min closure – are intrinsically pairwise on
   `(DistKind, DistKind)`.  These belong in a separate
   `ClosureRuleRegistry` consulted by the `HybridEvaluator` simplifier,
   keyed by family pair and arithmetic operator.  Per-family files can
@@ -838,8 +838,8 @@ refactor was meant to dissolve:
   one; the wrapper delegates to the wrapped family for the easy cases
   and falls back to a generic rejection path otherwise.
 
-Keeping these in dedicated registries — rather than over-loading the
-`Distribution` interface with multi-dispatch hacks — preserves the
+Keeping these in dedicated registries – rather than over-loading the
+`Distribution` interface with multi-dispatch hacks – preserves the
 single-responsibility property that makes the per-distribution files
 worth having in the first place.
 
@@ -851,7 +851,7 @@ unblocks.  Doing it *before* the Quick-wins batch (§A.1 Gamma,
 1. The four existing families migrate as a behaviour-preserving
    change, with the existing `test/` suite as the regression net.
 2. Gamma lands as the first proof-of-concept family under the new
-   layout — one file in `src/distributions/`, one registry entry, no
+   layout – one file in `src/distributions/`, one registry entry, no
    edits anywhere else.  Anything missing from the abstract interface
    surfaces here, while the cost of patching is still small.
 3. Every subsequent family inherits the cleaned-up cost profile.
@@ -865,7 +865,7 @@ registries lifted out of `HybridEvaluator.cpp` and the relevant
 `AnalyticEvaluator.cpp` paths.  No new functionality, no changes to
 the gate ABI or the on-disk text encoding.  The hardest design
 choices are the shape of the `Support` value and the boundary between
-`Distribution` methods and registry-held pairwise rules — both are
+`Distribution` methods and registry-held pairwise rules – both are
 internal and revisable.
 
 ---
@@ -916,8 +916,8 @@ architectural risk:
    Behaviour-preserving migration of the four existing families into
    `src/distributions/`, gated by the existing test suite.  Lands no
    user-visible feature; cuts the per-family cost of everything below.
-2. **Quick wins, in parallel.** Gamma (§A.1) — the proof-of-concept
-   for the new layout — together with Log-normal (§A.2), quantiles
+2. **Quick wins, in parallel.** Gamma (§A.1) – the proof-of-concept
+   for the new layout – together with Log-normal (§A.2), quantiles
    (§B.1), RV-vs-RV comparisons (§B.2), and GMM constructor (§C.1).
    All are small, mostly independent, and ship as one minor release.
 3. **Solid mid-term batch.** Beta (§A.3) and the discrete families

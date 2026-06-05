@@ -307,13 +307,13 @@ table through :sqlfunc:`tseytin_cnf_mapping`.
 
    The Tseytin CNF panel for the hard query. Studio annotates each
    ``c input`` line with the source tuple the variable stands for
-   (``bid(p6, r14)``, ``expertise(r14, t3)``, …), so a model or weighted
+   (``bid(p6, r14)``, ``expertise(r14, t3)``…), so a model or weighted
    count returned by an external tool reads back against the data.
 
 Step 5: Compile, Measure, Compare
 ---------------------------------
 
-Pick *Compiled d-D circuit* and a compiler (``d4``, ``c2d``, …): Studio
+Pick *Compiled d-D circuit* and a compiler (``d4``, ``c2d``…): Studio
 renders the d-DNNF on the canvas with a gates / edges / depth summary.
 :sqlfunc:`ddnnf_stats` exposes the same numbers as ``jsonb`` (node and
 edge counts, the AND/OR/NOT/input split, smoothness, depth, treewidth,

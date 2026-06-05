@@ -588,7 +588,7 @@ DROP TABLE ne_q;
 DROP TABLE ne_r;
 
 -- Part 16: an uncorrelated count(*) comparison in WHERE.  A predicate FALSE on
--- the empty group (count(*) >= k, = k for k>=1, …) is the safe HAVING-gate
+-- the empty group (count(*) >= k, = k for k>=1…) is the safe HAVING-gate
 -- (move_uncorrelated_where_predicates); one TRUE on the empty group (count(*)
 -- < k, <= k, = 0) is "NOT (a false-on-empty predicate)", so it routes through
 -- the same EXCEPT-ALL antijoin as NOT EXISTS -- otherwise the empty-Q world

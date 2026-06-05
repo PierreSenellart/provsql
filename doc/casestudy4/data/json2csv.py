@@ -4,7 +4,7 @@
 #
 # Usage:  python json2csv.py data.json
 # Output: CC_person.csv, CC_position.csv, CC_party.csv for each country code
-#         found in the data (e.g. FR_person.csv, SG_person.csv, …).
+#         found in the data (e.g. FR_person.csv, SG_person.csv…).
 
 import csv
 import json

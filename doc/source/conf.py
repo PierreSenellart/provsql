@@ -73,7 +73,7 @@ html_show_copyright = False
 html_show_sourcelink = False
 
 # ---------------------------------------------------------------------------
-# :sqlfunc:`name` role — renders function name as linked monospace code
+# :sqlfunc:`name` role – renders function name as linked monospace code
 # pointing to the Doxygen SQL API reference.
 # ---------------------------------------------------------------------------
 
@@ -181,12 +181,12 @@ _SQL_FUNC_MAP = {
 
 
 # ---------------------------------------------------------------------------
-# :cfunc:`name` role — renders function name as linked monospace code
+# :cfunc:`name` role – renders function name as linked monospace code
 # pointing to the Doxygen C/C++ API reference.
 # ---------------------------------------------------------------------------
 
 _C_FUNC_MAP = {
-    # provsql.c — planner hook and query rewriting
+    # provsql.c – planner hook and query rewriting
     '_PG_init':                  '/doxygen-c/html/provsql_8c.html#a29e1a0b0688ac19dbde93824e4ae1a59',
     '_PG_fini':                  '/doxygen-c/html/provsql_8c.html#a7192e52d759211f57ad66638304ea072',
     'provsql_planner':           '/doxygen-c/html/provsql_8c.html#aa8f430f67b70c269c4ba8cc5225b8a84',
@@ -247,16 +247,16 @@ _C_FUNC_MAP = {
     'MMappedCircuit::setTableAncestry': '/doxygen-c/html/classMMappedCircuit.html#a05f2d145c3f6919954a8c83cb8e17e24',
     # Per-relation metadata struct
     'ProvenanceTableInfo':          '/doxygen-c/html/structProvenanceTableInfo.html',
-    # provsql_utils.h — OID cache
+    # provsql_utils.h – OID cache
     'constants_t':               '/doxygen-c/html/structconstants__t.html',
     'get_constants':             '/doxygen-c/html/provsql__utils_8h.html#a75e7d48321cea0156f8ad4c039c877a0',
-    # provsql_mmap — background worker
+    # provsql_mmap – background worker
     'RegisterProvSQLMMapWorker': '/doxygen-c/html/provsql__mmap_8c.html#af31c1c517f22a6923f390b75d36506be',
     'provsql_mmap_worker':       '/doxygen-c/html/provsql__mmap_8h.html#a3f084145f583f08b2532c36a79925697',
     'initialize_provsql_mmap':   '/doxygen-c/html/MMappedCircuit_8cpp.html#aa0bba27d6f73596ef0972bb0541cc244',
     'provsql_mmap_main_loop':    '/doxygen-c/html/MMappedCircuit_8cpp.html#a9215628e0312d309db481dbd27c8dabe',
     'destroy_provsql_mmap':      '/doxygen-c/html/MMappedCircuit_8cpp.html#a77b47980f1cc7b3e38ad65e15bda8118',
-    # provsql_shmem — shared memory
+    # provsql_shmem – shared memory
     'provsql_shmem_request':     '/doxygen-c/html/provsql__shmem_8h.html#a6bd8422002b87f1cab0c60e4aa7a7101',
     'provsql_shmem_startup':     '/doxygen-c/html/provsql__shmem_8h.html#a7f431fc2ca237114d13ff1c19f7ab692',
     'provsql_shmem_lock_exclusive': '/doxygen-c/html/provsql__shmem_8h.html#a36adeebed75d77964c2886bf4718d8bc',

@@ -90,7 +90,7 @@
 
   // Gate types whose children carry a meaningful order: cmp's lhs/rhs,
   // monus's minuend/subtrahend, and agg : but agg only when the function
-  // is order-sensitive (array_agg, string_agg, json_agg, …). For
+  // is order-sensitive (array_agg, string_agg, json_agg…). For
   // sum/count/min/max/avg the result is independent of input order, so
   // the digits would be noise. semimod is omitted: its value/scalar
   // split is implied by gate type. eq has a single child so positional
@@ -1030,7 +1030,7 @@
     // the per-input order key and its rank within the shown scene.
     if (node.if_cert) {
       const c = node.if_cert;
-      html += `<dt>inversion-free</dt><dd>certified — `
+      html += `<dt>inversion-free</dt><dd>certified – `
            + `${escapeHtml(String(c.natoms))} atoms, `
            + `${escapeHtml(String(c.nclasses))} classes</dd>`;
       html += `<dt>variable order</dt><dd>root class `

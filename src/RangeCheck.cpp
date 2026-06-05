@@ -450,7 +450,7 @@ bool asRvVsConstCmp(const GenericCircuit &gc, gate_t cmp_gate,
   /* Recognise scalar-vs-constant cmps where the scalar side is a
    * bare gate_rv (the original use case for the per-cmp resolution
    * pass) or a gate_mixture (so the conditioning walker can extract
-   * intervals on mixture / categorical variables — value-vs-value
+   * intervals on mixture / categorical variables – value-vs-value
    * cmps are folded upstream by RangeCheck before they reach this
    * walker).  Dirac (gate_value) is never the scalar side of a
    * non-trivial cmp at this point; the value-vs-value pair would have
@@ -534,7 +534,7 @@ bool intervalEmpty(Interval i) { return i.lo > i.hi; }
  * which is sound for a superset bound on the conditional support.
  *
  * Cmps that do not interpret as `rv op const` (RV vs RV, arith on
- * either side, agg, …) are silently ignored; they belong to the
+ * either side, agg…) are silently ignored; they belong to the
  * conditioning event but don't constrain a single RV's interval.
  */
 void walkAndConjunctIntervals(
@@ -616,7 +616,7 @@ void walkAndConjunctIntervals(
  * (likewise), and other gate types break the AND chain.
  *
  * Cmps that this pass cannot interpret (RV vs RV, arith on either
- * side, agg, …) are simply ignored: skipping them is sound &ndash; we
+ * side, agg…) are simply ignored: skipping them is sound &ndash; we
  * just have fewer constraints, so we never falsely declare
  * infeasibility we cannot prove.
  */
@@ -1447,7 +1447,7 @@ bool eventIsProvablyInfeasible(const GenericCircuit &gc, gate_t root,
   if (!event_root.has_value()) return false;
   const auto et = gc.getGateType(*event_root);
   if (et == gate_one) return false;
-  /* RangeCheck folded the event to false upstream — universal
+  /* RangeCheck folded the event to false upstream – universal
    * signal, independent of root gate type (a constant scalar
    * value paired with an impossible cmp lands here too). */
   if (et == gate_zero) return true;
@@ -1476,7 +1476,7 @@ bool eventIsProvablyInfeasible(const GenericCircuit &gc, gate_t root,
  * outcome masses falling in the interval.  Dirac mass is 1 iff the
  * Dirac value sits in the interval, else 0.  Returns @c std::nullopt
  * when a leaf's spec defeats the closed-form CDF (e.g. non-integer
- * Erlang shape — @c cdfAt returns NaN there).
+ * Erlang shape – @c cdfAt returns NaN there).
  */
 static std::optional<double>
 shape_mass(const ClosedFormShape &s, double lo, double hi)

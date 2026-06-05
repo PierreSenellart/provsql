@@ -1,7 +1,7 @@
 /**
  * @file CmpEvaluatorCommon.h
  * @brief Shared machinery for the closed-form HAVING @c gate_cmp
- *        probability evaluators (Poisson-binomial COUNT, MIN / MAX, …).
+ *        probability evaluators (Poisson-binomial COUNT, MIN / MAX…).
  *
  * Every closed-form HAVING evaluator that runs as a probability-side
  * pre-pass (see @c probability_evaluate.cpp) shares three concerns:

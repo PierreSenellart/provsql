@@ -206,7 +206,7 @@
       const foreign = t.db && connDb && t.db !== connDb;
       const name = tabDisplayName(t);
       return `<span class="nb__tab${active ? ' nb__tab--active' : ''}"`
-        + ` data-tab="${escA(t.id)}" title="${escA(name)}${t.db ? ' — ' + escA(t.db) : ''}">`
+        + ` data-tab="${escA(t.id)}" title="${escA(name)}${t.db ? ' – ' + escA(t.db) : ''}">`
         + `<span class="nb__tab-name">${esc(name)}</span>`
         + (foreign ? `<span class="nb__tab-db">${esc(t.db)}</span>` : '')
         + `<button type="button" class="nb__tab-close" data-tab-close="${escA(t.id)}"`
@@ -361,7 +361,7 @@
 
   function kernelGone(reason) {
     kernel = null;
-    setKernelChip('dead', reason || 'kernel died — restart it');
+    setKernelChip('dead', reason || 'kernel died – restart it');
   }
 
   async function shutdownKernel() {
@@ -577,7 +577,7 @@
           ? `<button type="button" data-act="to-circuit" title="Open this query in Circuit mode"><i class="fas fa-project-diagram"></i></button>`
           : ''}
         ${cell.type === 'sql'
-          ? `<button type="button" data-act="scheme" title="Provenance scheme for this cell: ${cell.scheme || 'notebook default'} — click to cycle (default → semiring → where → boolean)"><i class="fas fa-sliders-h"></i></button>`
+          ? `<button type="button" data-act="scheme" title="Provenance scheme for this cell: ${cell.scheme || 'notebook default'} – click to cycle (default → semiring → where → boolean)"><i class="fas fa-sliders-h"></i></button>`
           : ''}
         <button type="button" data-act="add-sql" title="Insert SQL cell below (command mode: b below, a above)"><i class="fas fa-plus"></i></button>
         <button type="button" data-act="add-md" title="Insert Markdown cell below (command mode: m converts)"><i class="fab fa-markdown"></i></button>
@@ -806,7 +806,7 @@
     const btn = div.querySelector('[data-act="scheme"]');
     if (btn) {
       btn.title = `Provenance scheme for this cell: `
-        + `${cell.scheme || 'notebook default'} — click to cycle `
+        + `${cell.scheme || 'notebook default'} – click to cycle `
         + '(default → semiring → where → boolean)';
     }
     scheduleAutosave();
@@ -1123,7 +1123,7 @@
     const r = cell.result;
     if (r.error) {
       box.innerHTML = `<div class="wp-error"><i class="fas fa-exclamation-circle"></i> `
-        + `${esc(r.error)}${r.detail ? ' — ' + esc(r.detail) : ''}</div>`;
+        + `${esc(r.error)}${r.detail ? ' – ' + esc(r.detail) : ''}</div>`;
       return;
     }
     const value = (r.result == null) ? '(null)'
@@ -1598,7 +1598,7 @@
     cell.outputs = payload;
     cell.count = ++execCounter;
     if (payload.kernel_dead) {
-      kernelGone('kernel died — restart it');
+      kernelGone('kernel died – restart it');
       cell.count = null;
     }
     updateGutter(cell);

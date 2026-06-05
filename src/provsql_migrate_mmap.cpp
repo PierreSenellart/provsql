@@ -26,7 +26,7 @@
  * already exists.
  */
 
-/* Include libpq first — it provides Oid (unsigned int) via postgres_ext.h
+/* Include libpq first – it provides Oid (unsigned int) via postgres_ext.h
  * before any PostgreSQL server headers are pulled in. */
 #include <libpq-fe.h>
 
@@ -517,7 +517,7 @@ static void migrateDatabase(const OldCircuit &old, const std::string &pgdata,
     unsigned long wires_start = new_wires.size();
 
     for (auto &child : gd.children) {
-      /* Remap child UUID to its new index, stored as the UUID itself —
+      /* Remap child UUID to its new index, stored as the UUID itself –
        * wires still store UUIDs in both old and new format. */
       new_wires.push_back(child);
     }
@@ -572,7 +572,7 @@ int main(int argc, char **argv)
 
   struct stat st;
   if (stat((pgdata + "/provsql_gates.mmap").c_str(), &st) != 0) {
-    std::cerr << "No provsql_gates.mmap found in " << pgdata << " — nothing to migrate.\n";
+    std::cerr << "No provsql_gates.mmap found in " << pgdata << " – nothing to migrate.\n";
     return 0;
   }
 

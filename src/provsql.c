@@ -2467,7 +2467,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             RangeTblEntry *jrte_v = (RangeTblEntry *)lfirst(
               list_nth_cell(q->rtable, jav_v->varno - 1));
             if (jrte_v->rtekind == RTE_RELATION) {
-              /* Provenance-tracking check and varattno fix — same rationale
+              /* Provenance-tracking check and varattno fix – same rationale
                * as the RTE_RELATION branch above. */
               bool is_prov = false;
               int ncols_jrte = list_length(jrte_v->eref->colnames);
@@ -2655,7 +2655,7 @@ void strip_group_rte_pg18(Query *q) {
 }
 #endif
 
-/* Forward declaration — defined later but needed by rewrite_agg_distinct */
+/* Forward declaration – defined later but needed by rewrite_agg_distinct */
 static bool provenance_function_walker(Node *node, void *data);
 
 /**
@@ -2950,10 +2950,10 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         distinct_agg_tes = lappend(distinct_agg_tes, te);
     } else if (provenance_function_walker((Node *)te->expr,
                                           (void *)constants)) {
-      /* Expression contains provenance() — skip it, it will be
+      /* Expression contains provenance() – skip it, it will be
        * handled later by the provenance rewriter */
     } else {
-      /* Non-aggregate column — treat as GROUP BY key */
+      /* Non-aggregate column – treat as GROUP BY key */
       TargetEntry *te_copy = copyObject(te);
       te_copy->resjunk = false;
       groupby_tes = lappend(groupby_tes, te_copy);
@@ -4298,9 +4298,9 @@ static bool query_has_tracked_sublink(const constants_t *constants, Query *q) {
  *        factor or a direct operand of a comparison.
  *
  * These are exactly the positions the rewrite passes (@c rewrite_predicate_sublinks,
- * @c decorrelate_scalar_sublinks, …) consume.  A tracked sublink still in such a
+ * @c decorrelate_scalar_sublinks…) consume.  A tracked sublink still in such a
  * position after those passes is a genuinely unsupported @e direct form (a
- * @c GROUP @c BY body, a multi-relation @c EXISTS, …) that must raise the clean
+ * @c GROUP @c BY body, a multi-relation @c EXISTS…) that must raise the clean
  * error.  A tracked sublink anywhere @e else is nested inside an expression
  * (arithmetic, a function argument); those are let through with a warning instead
  * -- Postgres evaluates the sublink normally (correct value), the row keeps the
@@ -6213,7 +6213,7 @@ static bool normalize_quantified_aggregate_sublinks(
  * (@c *antijoin = false, operator kept); @c ALL is the universal dual, the
  * antijoin (@c *antijoin = true, operator negated -- @c "∀q. x op q" =
  * @c "¬∃q. x ¬op q").  Returns @c NULL for unsupported shapes (a @c RowCompareExpr,
- * a multi-column @c ALL, a bad paramid, …).
+ * a multi-column @c ALL, a bad paramid…).
  */
 static Node *extract_quantified_corr(SubLink *sl, bool *antijoin) {
   Query *sub = (Query *)sl->subselect;
@@ -6911,7 +6911,7 @@ static bool oj_zero_satisfies(Oid opno, Const *c) {
  *        the EXCEPT-ALL antijoin.
  *
  * Such a predicate is @c "NOT P" for a @c P that is FALSE on the empty group
- * (@c EXISTS, @c count(*) @c >= @c k, …), so it is the m-semiring antijoin
+ * (@c EXISTS, @c count(*) @c >= @c k…), so it is the m-semiring antijoin
  * @c "R ⊗ (1 ⊖ ⟦P⟧)".  We materialise @c ⟦P⟧ as the one-row HAVING-gated subquery
  * @c D = @c "SELECT 1 FROM Q [WHERE w] HAVING count(*) <negated op> const"
  * (count(*) always yields a row, so @c ⟦P⟧ is correctly captured even when the
@@ -7157,7 +7157,7 @@ static bool oj_limit_count_is_one(Node *limitCount) {
 /** @brief @c equal() on two single-RTE rtables, ignoring per-RTE ACL fields.
  *
  * Before PostgreSQL 16 the permission bookkeeping (@c requiredPerms,
- * @c selectedCols, …) lived inside @c RangeTblEntry, so two sublink bodies
+ * @c selectedCols…) lived inside @c RangeTblEntry, so two sublink bodies
  * over the same @c Q differing only in the selected value column would
  * spuriously compare unequal (their @c selectedCols differ).  PG16 moved
  * those fields out into @c Query.rteperminfos and a plain @c equal()
@@ -8052,7 +8052,7 @@ static void build_column_map(Query *q, int **columns, int *nbcols) {
 
       foreach (lc, r->eref->colnames) {
         if (!lfirst(lc)) {
-          /* Column without name — used e.g. when grouping by a discarded column */
+          /* Column without name – used e.g. when grouping by a discarded column */
           columns[i][j] = ++(*nbcols);
         } else {
           const char *v = strVal(lfirst(lc));
@@ -8679,7 +8679,7 @@ static bool retype_agg_var_walker(Node *node, retype_agg_var_ctx *ctx)
  *
  * The copy of the source RTE inside the subquery has its @c provsql column
  * renamed so the recursive @c process_query pass does not re-detect it as a
- * provenance source — the combined provenance is already captured by the
+ * provenance source – the combined provenance is already captured by the
  * subquery's exposed @c provsql target entry.
  *
  * @param q          Query to rewrite (modified in place).
@@ -8859,7 +8859,7 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
 
       te->expr = (Expr *)ge;
     } else if (attno == provsql_attno) {
-      /* provenance_times(get_children(sm)[1], t.provsql) — VARIADIC uuid[] */
+      /* provenance_times(get_children(sm)[1], t.provsql) – VARIADIC uuid[] */
       Var *sm_var = makeNode(Var);
       Var *prov_var = makeNode(Var);
       FuncExpr *gch, *pt;
@@ -8954,7 +8954,7 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
   /* PG 16+ moved permission info from RangeTblEntry into a separate
    * Query.rteperminfos list, indexed by RangeTblEntry.perminfoindex.
    * Our copy of src_rte kept its original perminfoindex, so the inner
-   * query needs a matching rteperminfos entry — without it, perminfoindex
+   * query needs a matching rteperminfos entry – without it, perminfoindex
    * dangles and the planner short-circuits the subquery. */
   if (inner_src->perminfoindex != 0) {
     RTEPermissionInfo *perminfo =
@@ -9814,7 +9814,7 @@ static Query *process_query(const constants_t *constants, Query *q,
 
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
       if (!stmt->all) {
-        /* Check if any branch has aggregates — non-ALL set operations
+        /* Check if any branch has aggregates – non-ALL set operations
          * on aggregate results are not supported because agg_token
          * lacks comparison operators for deduplication */
         ListCell *lc_rte;
@@ -9883,7 +9883,7 @@ static Query *process_query(const constants_t *constants, Query *q,
      * lineage intact and only attaches a transparent certificate + per-input
      * order markers, read back at probability evaluation.  So it is decoupled
      * from boolean_provenance and gated on its own knob (provsql.inversion_free,
-     * default on), run on THIS query — the one whose lineage we build — so the
+     * default on), run on THIS query – the one whose lineage we build – so the
      * certificate and markers align with the lineage by construction.  Only at
      * the outermost (top-level) root the user evaluates; never when the
      * read-once rewrite above already fired (that path returns early). */
@@ -9954,7 +9954,7 @@ static Query *process_query(const constants_t *constants, Query *q,
        * Postgres evaluates the sublink (the value is correct), the row keeps the
        * outer relation's provenance, and the subquery's data is treated as
        * certain.  A tracked sublink still in a direct position (a GROUP BY body, a
-       * multi-relation EXISTS, …) is a genuinely unsupported form and still errors. */
+       * multi-relation EXISTS…) is a genuinely unsupported form and still errors. */
       bool has_direct = false;
       List *nested = classify_remaining_sublinks(constants, q, &has_direct);
       if (has_direct || nested == NIL) {
@@ -10019,7 +10019,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     if (supported) {
       /* Sized here, after every rewrite that can grow q->rtable (scalar-
        * subquery decorrelation, ARRAY() lowering, outer-join lowering,
-       * EXCEPT / set-operation transforms, …).  Sizing it at the top of the
+       * EXCEPT / set-operation transforms…).  Sizing it at the top of the
        * provsql_active block under-allocated once those rewrites added RTEs,
        * and build_column_map then wrote past the end of the array. */
       columns_len = q->rtable->length;
@@ -10334,7 +10334,7 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
 static int provsql_executor_depth = 0;
 
 /**
- * @brief PostgreSQL planner hook — entry point for provenance rewriting.
+ * @brief PostgreSQL planner hook – entry point for provenance rewriting.
  *
  * Replaces (or chains after) the standard planner.  For every CMD_SELECT
  * that involves at least one provenance-bearing relation or an explicit
@@ -11336,7 +11336,7 @@ void _PG_init(void) {
 }
 
 /**
- * @brief Extension teardown — restores the planner and shmem hooks.
+ * @brief Extension teardown – restores the planner and shmem hooks.
  */
 void _PG_fini(void) {
   planner_hook        = prev_planner;

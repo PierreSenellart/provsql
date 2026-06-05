@@ -29,7 +29,7 @@ find which study demonstrates a given feature.
    <https://provsql.org/playground/>`_, the browser build of ProvSQL Studio,
    on a ready-made database; each chapter links straight to its own. The
    Playground bundles no external tools, so steps that explicitly call an
-   external knowledge compiler (``d4``, ``c2d``, …) or ``graph-easy`` do not
+   external knowledge compiler (``d4``, ``c2d``…) or ``graph-easy`` do not
    run there, but the built-in methods and everything else do. See the
    :ref:`Playground note <playground-note>`.
 

@@ -37,7 +37,7 @@
  *     Boolean filter does not fire and the scalar value otherwise.
  *
  * Any other gate type still raises: Boolean-valued gates fall under
- * @c probability_evaluate, and unsupported scalar shapes (delta, …)
+ * @c probability_evaluate, and unsupported scalar shapes (delta…)
  * have no defined sampling semantics.
  */
 extern "C" {

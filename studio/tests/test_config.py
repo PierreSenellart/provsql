@@ -216,7 +216,7 @@ def test_config_options_persist_across_app_restart(test_dsn, tmp_path, monkeypat
     cfg = app2.test_client().get("/api/config").get_json()
     assert cfg["options"]["max_circuit_depth"] == 6
     assert cfg["options"]["statement_timeout_seconds"] == 7
-    # The persisted values must drive the live app config too — that's
+    # The persisted values must drive the live app config too – that's
     # what the rest of the request pipeline reads.
     assert app2.config["MAX_CIRCUIT_DEPTH"] == 6
     assert app2.config["STATEMENT_TIMEOUT"] == "7s"

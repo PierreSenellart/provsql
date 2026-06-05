@@ -129,7 +129,7 @@ them and can identify the involved relations without our help.
 
 **Executor-depth gating.**  ProvSQL's rewriter inserts calls to
 PL/pgSQL helpers (``provenance_times``, ``provenance_plus``,
-``provenance_aggregate``, …) into the rewritten query.  Each of
+``provenance_aggregate``…) into the rewritten query.  Each of
 those helpers contains internal ``SELECT`` statements that PL/pgSQL
 plans on first invocation, and that planning fires the planner hook
 again.  Without a gate, the classifier would emit one extra

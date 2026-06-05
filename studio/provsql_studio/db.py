@@ -580,7 +580,7 @@ def make_pool(dsn: str | None) -> ConnectionPool:
 
     Every newly-opened connection is configured with two session-level
     defaults so Studio-internal queries (relation listing, conn info, db
-    switch, config show, circuit fetch, leaf resolve, …) stay quiet:
+    switch, config show, circuit fetch, leaf resolve…) stay quiet:
 
     * `lc_messages = 'C'` so PG diagnostics arrive in English regardless
       of the cluster locale.

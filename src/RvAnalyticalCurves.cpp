@@ -6,11 +6,11 @@
  * conditional) distribution rooted at @p token, or @c NULL when no
  * closed form applies.  The payload has up to three fields:
  *
- * - @c pdf — @p samples evenly-spaced @c {x, p} points covering the
+ * - @c pdf – @p samples evenly-spaced @c {x, p} points covering the
  *   continuous part of the distribution.  Absent for pure-discrete
  *   shapes (Dirac / categorical).
- * - @c cdf — same x grid as @c pdf, with cumulative probability.
- * - @c stems — point masses @c {x, p} produced by Dirac (@c gate_value
+ * - @c cdf – same x grid as @c pdf, with cumulative probability.
+ * - @c stems – point masses @c {x, p} produced by Dirac (@c gate_value
  *   wrapped as an @c as_random) or categorical roots, or by Dirac/
  *   categorical arms inside a Bernoulli mixture.  Weights propagate
  *   through nested mixtures (each ancestor's @c p / 1-p applies).

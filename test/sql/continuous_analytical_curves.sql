@@ -233,7 +233,7 @@ FROM pdf;
 -- arms get clipped to (x > 5); the Bernoulli weight reweights by
 -- the ratio of arm masses (the truncated_normal_left_arm has tiny
 -- mass to the right of 5, so the rebalanced p is dominated by the
--- right arm's mass — almost a pure Normal(10,1) restricted to x>5).
+-- right arm's mass – almost a pure Normal(10,1) restricted to x>5).
 WITH r AS (SELECT provsql.mixture(0.3, provsql.normal(0, 1),
                                         provsql.normal(10, 1)) AS m),
      ev AS (SELECT (m)::uuid AS tok,

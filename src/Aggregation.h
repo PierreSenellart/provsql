@@ -8,7 +8,7 @@
  * - @c ComparisonOperator: the six standard SQL comparison operators,
  *   used by @c gate_cmp gates in the circuit.
  * - @c AggregationOperator: the SQL aggregation functions that ProvSQL
- *   tracks provenance for (COUNT, SUM, MIN, MAX, AVG, AND, OR, …).
+ *   tracks provenance for (COUNT, SUM, MIN, MAX, AVG, AND, OR…).
  * - @c ValueType: the runtime type tag for aggregate values.
  * - @c AggValue: a tagged union holding one aggregate value of any
  *   supported type, built on @c std::variant.

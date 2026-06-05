@@ -109,7 +109,7 @@ Notebook mode (single-session mapping)
 --------------------------------------
 
 The notebook front-end and the ``/api/nb/*`` kernel endpoints run
-unmodified; what changes in the browser is what a "kernel" *is*. PGlite
+unmodified; what changes in the browser is what a “kernel” *is*. PGlite
 has one backend session shared by every shim connection object, so:
 
 * The pinned kernel connection and the request pool are the **same

@@ -50,7 +50,7 @@ Each plan document follows a consistent layout:
   [`safe-query-followups.md`](safe-query-followups.md).
 - [`safe-query-followups.md`](safe-query-followups.md) : deferred ideas
   bordering the `provsql.boolean_provenance` work -- further Boolean-only
-  optimisations (independent-subtree detection, Möbius / Monet, ...), the
+  optimisations (independent-subtree detection, Möbius / Monet…), the
   inversion-free `UCQ(OBDD)` extensions (UNION in a view, FD-aware orders),
   the planner-side `CERT_SAFE_AGG_PLAN` certificate for BID-disjoint
   HAVING, discrete `random_variable` extensions, and the

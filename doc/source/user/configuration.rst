@@ -87,7 +87,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     The classifier runs on the user's parsed ``Query`` before any
     rewriting and only on the user's outermost statement; PL/pgSQL
     helpers the rewriter calls into (``provenance_times``,
-    ``provenance_aggregate``, …) do not produce extra notices.
+    ``provenance_aggregate``…) do not produce extra notices.
 
     ProvSQL Studio enables this GUC automatically and renders the
     certified kind on the result-table provenance pill; see

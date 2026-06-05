@@ -9,7 +9,7 @@
  * The class is parameterised by a multirange type OID, so a single
  * implementation covers @c tstzmultirange (the temporal instance),
  * @c nummultirange (numeric validity ranges), and @c int4multirange
- * (integer page/line ranges) — and any other multirange type the user
+ * (integer page/line ranges) – and any other multirange type the user
  * happens to define.
  *
  * Operations:
