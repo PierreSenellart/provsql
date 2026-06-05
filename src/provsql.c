@@ -6099,6 +6099,108 @@ static Node *oj_param_repl_mut(Node *node, void *cx) {
   return expression_tree_mutator(node, oj_param_repl_mut, cx);
 }
 
+/** @brief Does the body's range table reach at least one provenance-tracked
+ *  relation?  Bodies over untracked relations only are left to PostgreSQL's
+ *  native sublink machinery. */
+static bool oj_body_has_tracked_relation(const constants_t *constants,
+                                         Query *body) {
+  ListCell *lc;
+  foreach (lc, body->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if ((r->rtekind == RTE_RELATION || r->rtekind == RTE_SUBQUERY) &&
+        oj_rte_has_provsql(constants, r))
+      return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Normalize quantified comparisons over a single bare-aggregate body
+ *        into plain scalar comparisons.
+ *
+ * An aggregate body without @c GROUP @c BY returns exactly one row, so
+ * @c "x op ANY (SELECT agg(..) …)" and @c "x op ALL (…)" are the scalar
+ * comparison @c "x op (SELECT agg(..) …)" (NULL semantics included), and a
+ * @c NOT-wrapped form (@c NOT @c IN) is the negator-operator comparison.  The
+ * conjunct's @c PARAM_SUBLINK placeholder is substituted by the
+ * @c EXPR_SUBLINK body, after which the scalar paths lower it: the
+ * HAVING-gated cross-joined subquery for a constant comparand
+ * (@c move_uncorrelated_where_predicates) or the @c "R ⟕ Q" decorrelation for
+ * an outer-column comparand (@c decorrelate_scalar_sublinks).  Runs before
+ * @c rewrite_uncorrelated_antijoin so a normalized count() comparison that is
+ * true on the empty body still gets the antijoin treatment there.
+ */
+static bool normalize_quantified_aggregate_sublinks(
+  const constants_t *constants, Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals)
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    Node *inner = c, *rewritten = NULL;
+    bool neg = false;
+
+    if (IsA(c, BoolExpr) && ((BoolExpr *)c)->boolop == NOT_EXPR &&
+        list_length(((BoolExpr *)c)->args) == 1) {
+      neg = true;
+      inner = (Node *)linitial(((BoolExpr *)c)->args);
+    }
+    if (IsA(inner, SubLink) &&
+        (((SubLink *)inner)->subLinkType == ANY_SUBLINK ||
+         ((SubLink *)inner)->subLinkType == ALL_SUBLINK) &&
+        IsA(((SubLink *)inner)->subselect, Query)) {
+      SubLink *sl = (SubLink *)inner;
+      Query *body = (Query *)sl->subselect;
+      if (body->commandType == CMD_SELECT && body->hasAggs &&
+          !body->groupClause && !body->groupingSets && !body->setOperations &&
+          !body->hasWindowFuncs && !body->hasSubLinks && !body->limitCount &&
+          !body->limitOffset && !body->cteList &&
+          list_length(body->targetList) == 1 &&
+          IsA(((TargetEntry *)linitial(body->targetList))->expr, Aggref) &&
+          sl->testexpr && IsA(sl->testexpr, OpExpr) &&
+          list_length(((OpExpr *)sl->testexpr)->args) == 2 &&
+          oj_body_has_tracked_relation(constants, body)) {
+        OpExpr *op = (OpExpr *)copyObject(sl->testexpr);
+        Oid opno = neg ? get_negator(op->opno) : op->opno;
+        if (OidIsValid(opno)) {
+          SubLink *esl = makeNode(SubLink);
+          oj_param_repl_ctx pc;
+          esl->subLinkType = EXPR_SUBLINK;
+          esl->testexpr = NULL;
+          esl->operName = NIL;
+          esl->subselect = (Node *)copyObject(body);
+          esl->location = -1;
+          op->opno = opno;
+          op->opfuncid = get_opcode(opno);
+          pc.paramid = 1;
+          pc.replacement = (Node *)esl;
+          rewritten = oj_param_repl_mut((Node *)op, &pc);
+        }
+      }
+    }
+    newconjs = lappend(newconjs, rewritten ? rewritten : c);
+    if (rewritten)
+      changed = true;
+  }
+
+  if (changed)
+    q->jointree->quals = (list_length(newconjs) == 1)
+                           ? (Node *)linitial(newconjs)
+                           : (Node *)makeBoolExpr(AND_EXPR, newconjs, -1);
+  return changed;
+}
+
 /**
  * @brief Build the per-row correlation for a quantified sublink (@c IN /
  *        @c op @c ANY / @c op @c ALL), setting @p *antijoin.
@@ -7306,14 +7408,22 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     }
   }
 
-  /* The correlation must reference some Q column (so count() has a key that is
-   * NULL on the null-padded antijoin rows). */
+  /* The correlation normally references some Q column (so count() has a key
+   * that is NULL on the null-padded antijoin rows).  A bare body with no
+   * Q-referencing WHERE at all is fine when it is a non-star aggregate --
+   * e.g. "(SELECT max(x) FROM Q) > R.col", whose comparison lifts to HAVING
+   * over the R ⟕ Q ON TRUE group below: such a body needs no key (no
+   * at-most-one-row gate, no count(*) -> count(Q.key) rewrite, and the
+   * aggregate ignores the null-padded row by itself).  Value bodies (count
+   * gates) and count(*) (key rewrite) do need a genuine Q column: decline. */
   scan.n_sublinks = 0;
   scan.target_varno = 1; /* Q is at index 1 inside the body */
   scan.found_var = NULL;
   if (sub->jointree->quals)
     oj_sublink_scan_walker(sub->jointree->quals, &scan);
-  if (scan.found_var == NULL)
+  if (scan.found_var == NULL &&
+      (!is_agg_body ||
+       ((Aggref *)((TargetEntry *)linitial(sub->targetList))->expr)->aggstar))
     return false;
 
   /* ---- Commit: pull Q up, build the LEFT JOIN, choose() + GROUP BY + count.
@@ -9667,6 +9777,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * "Subqueries not supported" guard further down. */
   if (provsql_active) {
     rewrite_array_sublinks(constants, q);
+    normalize_quantified_aggregate_sublinks(constants, q);
     rewrite_uncorrelated_antijoin(constants, q);
     rewrite_predicate_sublinks(constants, q);
     move_uncorrelated_where_predicates(constants, q);

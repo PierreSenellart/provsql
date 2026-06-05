@@ -1030,3 +1030,86 @@ DROP TABLE mp5;
 DROP TABLE mp_q2;
 DROP TABLE mp_q1;
 DROP TABLE mp_r;
+
+-- Part 27: UNcorrelated aggregate bodies compared against an OUTER column, and
+-- IN / NOT IN over a single bare-aggregate body.  A bare body (no Q-referencing
+-- WHERE) with a non-star aggregate decorrelates to the R ⟕ Q ON TRUE group with
+-- the comparison lifted to HAVING (no count key needed: the aggregate itself
+-- ignores the null-padded row); and since an aggregate body always returns
+-- exactly one row, "x op ANY/ALL (SELECT agg ..)" is first normalized to the
+-- scalar comparison "x op (SELECT agg ..)" (negator op under NOT), which also
+-- routes agg-vs-constant forms through the earlier uncorrelated passes.
+CREATE TABLE ao_r(a int);
+CREATE TABLE ao_q(a int);
+INSERT INTO ao_r VALUES (1),(2),(3);
+INSERT INTO ao_q VALUES (2),(4);
+SELECT add_provenance('ao_r');
+SELECT add_provenance('ao_q');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 1.0) FROM ao_r;
+  PERFORM set_prob(provsql, 0.5) FROM ao_q;
+END $$;
+
+-- max over the four ao_q worlds (each 0.25) is NULL / 2 / 4 / 4.
+-- max > a: a=1 -> 0.75, a=2 -> 0.5, a=3 -> 0.5.
+CREATE TABLE ao1 AS
+  SELECT ao_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ao_r WHERE (SELECT max(ao_q.a) FROM ao_q) > ao_r.a;
+SELECT remove_provenance('ao1');
+SELECT a, p FROM ao1 ORDER BY a;
+DROP TABLE ao1;
+
+-- NOT IN ≡ a <> max: a=1 -> 0.75, a=2 -> 0.5, a=3 -> 0.75 (NULL max excluded).
+CREATE TABLE ao2 AS
+  SELECT ao_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ao_r WHERE ao_r.a NOT IN (SELECT max(ao_q.a) FROM ao_q);
+SELECT remove_provenance('ao2');
+SELECT a, p FROM ao2 ORDER BY a;
+DROP TABLE ao2;
+
+-- IN ≡ a = max: only a=2 in the {2} world -> 0.25.
+CREATE TABLE ao3 AS
+  SELECT ao_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ao_r WHERE ao_r.a IN (SELECT max(ao_q.a) FROM ao_q);
+SELECT remove_provenance('ao3');
+SELECT a, p FROM ao3 ORDER BY a;
+DROP TABLE ao3;
+
+-- count(col) is a NON-star aggregate, so it takes the same path; counts over
+-- the worlds are 0/1/1/2.  count >= a: a=1 -> 0.75, a=2 -> 0.25, a=3 -> 0.
+CREATE TABLE ao4 AS
+  SELECT ao_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ao_r WHERE (SELECT count(ao_q.a) FROM ao_q) >= ao_r.a;
+SELECT remove_provenance('ao4');
+SELECT a, p FROM ao4 ORDER BY a;
+DROP TABLE ao4;
+
+-- The normalization also covers aggregate-vs-CONSTANT quantified forms, which
+-- then ride the uncorrelated passes; count(*)-true-on-empty stays exact
+-- because the normalization runs before rewrite_uncorrelated_antijoin.
+-- 0 IN (count(*)): true only on the empty world -> 0.25.
+CREATE TABLE ao5 AS
+  SELECT ao_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ao_r WHERE 0 IN (SELECT count(*) FROM ao_q) AND ao_r.a = 1;
+SELECT remove_provenance('ao5');
+SELECT a, p FROM ao5 ORDER BY a;
+DROP TABLE ao5;
+
+-- 1 NOT IN (count(*)): counts 0/1/1/2 -> true in the {} and {2,4} worlds -> 0.5.
+CREATE TABLE ao6 AS
+  SELECT ao_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ao_r WHERE 1 NOT IN (SELECT count(*) FROM ao_q) AND ao_r.a = 1;
+SELECT remove_provenance('ao6');
+SELECT a, p FROM ao6 ORDER BY a;
+DROP TABLE ao6;
+
+-- op ALL over the single-row aggregate body is the same scalar comparison.
+CREATE TABLE ao7 AS
+  SELECT ao_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ao_r WHERE ao_r.a < ALL (SELECT max(ao_q.a) FROM ao_q);
+SELECT remove_provenance('ao7');
+SELECT a, p FROM ao7 ORDER BY a;
+DROP TABLE ao7;
+
+DROP TABLE ao_q;
+DROP TABLE ao_r;

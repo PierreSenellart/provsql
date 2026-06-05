@@ -259,8 +259,8 @@ Before proceeding, the function checks for:
 - **Sublinks** (``EXISTS``, ``IN``, scalar subqueries) over a tracked
   relation that the decorrelation pre-passes could not rewrite (in
   practice, a body using explicit ``JOIN`` syntax or
-  ``LIMIT``/``OFFSET``, or an uncorrelated aggregate body compared
-  against an outer column): not supported.
+  ``LIMIT``/``OFFSET``, or a bare uncorrelated value / ``count(*)``
+  body compared against an outer column): not supported.
 - ``DISTINCT ON``: not supported.
 - ``DISTINCT`` (plain): converted to ``GROUP BY`` via
   :cfunc:`transform_distinct_into_group_by`.

@@ -579,3 +579,61 @@ a|p
 2|1.0000
 3|1.0000
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+1|0.7500
+2|0.5000
+3|0.5000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.7500
+2|0.5000
+3|0.7500
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.0000
+2|0.2500
+3|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.7500
+2|0.2500
+3|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+1|0.5000
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+1|0.7500
+2|0.5000
+3|0.5000
+(3 rows)
