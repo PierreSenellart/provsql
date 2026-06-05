@@ -2191,21 +2191,21 @@
               <option value="additive" class="cv-eval__opt-strong" title="Granted tolerance: |estimate − p| ≤ ε ADDITIVE, confidence 1−δ. The sample count is independent of p, so it stays robust on rare events. Returns an exact value when one is cheap, otherwise Monte-Carlo.">additive (±ε)</option>
             </optgroup>
             <optgroup label="Exact">
-              <option value="independent">independent</option>
-              <option value="possible-worlds">possible-worlds</option>
+              <option value="independent" title="Exact evaluation assuming all input tokens are mutually independent; linear-time, but errors if the circuit is not independent (a leaf reaches the root along two paths).">independent</option>
+              <option value="possible-worlds" title="Exact evaluation by exhaustive enumeration of all possible worlds: exponential in the number of input tokens, practical only for small circuits.">possible-worlds</option>
               <option value="sieve" title="Exact inclusion-exclusion over a monotone DNF (cost 2^m in the clause count m). Errors on non-DNF circuits.">sieve</option>
               <option value="d-tree" title="Deterministic anytime d-tree (Olteanu-Huang-Koch): exact probability by Shannon decomposition + independence, with memoisation. Also the engine behind the deterministic (δ=0) relative/additive paths, where it returns a CERTIFIED value interval. Monotone-DNF circuits only.">d-tree</option>
               <!-- shown only when the root carries an inversion-free
                    certificate; toggled in syncDropdownVisibility -->
-              <option value="inversion-free" hidden>inversion-free</option>
-              <option value="tree-decomposition">tree-decomposition</option>
-              <option value="compilation">compilation</option>
+              <option value="inversion-free" hidden title="Exact polynomial-time path for the inversion-free UCQ(OBDD) class (hierarchical, tuple-independent queries): builds a structured d-DNNF over a query-derived variable order, staying linear in the lineage. Offered only because the planner attached an inversion-free certificate to this root.">inversion-free</option>
+              <option value="tree-decomposition" title="Exact evaluation via a tree decomposition of the Boolean circuit, compiled in-process to a d-DNNF (no external tool). Fails if the treewidth exceeds the supported maximum.">tree-decomposition</option>
+              <option value="compilation" title="Exact evaluation by compiling the circuit to a d-DNNF with an external knowledge compiler (picked in the next dropdown), then evaluating the d-DNNF in linear time.">compilation</option>
             </optgroup>
             <optgroup label="Weighted model counting">
               <option value="wmc" title="Exact (Ganak / SharpSAT-TD / DPMC) or approximate (WeightMC), depending on the tool picked in the next dropdown.">wmc</option>
             </optgroup>
             <optgroup label="Approximate">
-              <option value="monte-carlo">monte-carlo</option>
+              <option value="monte-carlo" title="Monte-Carlo sampling: a fixed sample count, or an ADDITIVE (eps, delta) guarantee (|estimate − p| ≤ ε with confidence 1−δ, by Hoeffding). The absolute error makes it uninformative on rare events (p ≪ ε); use karp-luby there.">monte-carlo</option>
               <option value="karp-luby" title="Karp-Luby FPRAS for DNF-shaped (monotone OR-of-ANDs) circuits: a relative (eps, delta) guarantee whose sample count is independent of the probability, so it stays accurate on rare events. Errors on non-DNF circuits.">karp-luby</option>
               <option value="stopping-rule" title="Whole-circuit relative (ε, δ) FPRAS (Dagum–Karp-Luby-Ross stopping rule). Unlike karp-luby it works on ANY circuit, not just DNF; its sample count grows as 1/p.">stopping-rule</option>
             </optgroup>
