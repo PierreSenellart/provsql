@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstdint>
 #include <map>
 #include <numeric>
 #include <set>
@@ -119,6 +120,109 @@ static bool aggSubtreePrivate(GenericCircuit &gc, gate_t agg,
     if (ref[static_cast<std::size_t>(g)] != internalRef[g])
       return false;                      /* referenced from outside the subtree */
   }
+  return true;
+}
+
+/* Brute-force leaf cap for the exact private-contributor marginal. */
+constexpr unsigned kMaxContributorLeaves = 20;
+
+/* Exact marginal probability of a contributor (a semimod K side) that is a
+ * *private* Boolean sub-circuit over @c input leaves -- @c plus / @c times /
+ * @c monus and the @c one / @c zero constants -- even when it is *not*
+ * read-once internally.  This is the UNION / EXCEPT-over-a-shared-base-tuple
+ * shape: a contributor @c (r∧s)∨(r∧t) or @c (r∧s)∖(r∧t) repeats the joined
+ * leaf @c r, which @c contributorProb (read-once only) rejects.
+ *
+ * "Private" means every gate in the cone below the root is referenced only
+ * from within the cone (whole-circuit @c ref == the cone-internal reference
+ * count).  That single condition gives independence from every *other*
+ * contributor (their footprints are disjoint -- a shared leaf would have an
+ * external reference), so the contributor is an independent event whose exact
+ * probability the caller can treat as a one-alternative BID block.  Computed
+ * by brute force over the cone's distinct inputs (the internal sharing is
+ * resolved exactly; capped at @c kMaxContributorLeaves).  Returns false --
+ * caller bails to enumeration -- when the cone is not private (shared with
+ * another contributor: the genuinely #P-hard case), too large, or holds an
+ * unsupported gate. */
+static bool contributorExactMarginal(GenericCircuit &gc, gate_t g,
+                                     const std::vector<unsigned> &ref,
+                                     double &out)
+{
+  /* Iterative post-order over the cone; count cone-internal references. */
+  std::map<gate_t, unsigned> internalRef;
+  std::set<gate_t> seen;
+  std::vector<gate_t> order;                   /* children before parents */
+  std::vector<std::pair<gate_t, bool>> stk{{g, false}};
+  while (!stk.empty()) {
+    auto top = stk.back(); stk.pop_back();
+    gate_t x = top.first;
+    const auto t = gc.getGateType(x);
+    if (t != gate_one && t != gate_zero && t != gate_input &&
+        t != gate_times && t != gate_plus && t != gate_monus)
+      return false;                            /* unsupported gate in cone */
+    if (top.second) { order.push_back(x); continue; }
+    if (!seen.insert(x).second) continue;
+    stk.push_back({x, true});
+    if (t == gate_times || t == gate_plus || t == gate_monus)
+      for (gate_t c : gc.getWires(x)) {
+        ++internalRef[c];
+        stk.push_back({c, false});
+      }
+  }
+
+  /* Privacy: every non-constant cone gate but the root used only inside. */
+  for (gate_t x : seen) {
+    if (x == g) continue;                      /* root: ref checked by caller */
+    switch (gc.getGateType(x)) {
+      case gate_one: case gate_zero: continue;
+      default: break;
+    }
+    if (ref[static_cast<std::size_t>(x)] != internalRef[x]) return false;
+  }
+
+  /* Compact, pre-resolved representation for the inner loop. */
+  const int N = static_cast<int>(order.size());
+  std::map<gate_t, int> pos;
+  for (int i = 0; i < N; ++i) pos[order[i]] = i;
+  std::vector<gate_type> typ(N);
+  std::vector<std::vector<int>> childIdx(N);
+  std::vector<int> leafbit(N, -1);
+  std::vector<double> leafProb;
+  for (int i = 0; i < N; ++i) {
+    typ[i] = gc.getGateType(order[i]);
+    if (typ[i] == gate_input) {
+      leafbit[i] = static_cast<int>(leafProb.size());
+      leafProb.push_back(gc.getProb(order[i]));
+    } else {
+      for (gate_t c : gc.getWires(order[i])) childIdx[i].push_back(pos[c]);
+    }
+  }
+  const unsigned m = static_cast<unsigned>(leafProb.size());
+  if (m > kMaxContributorLeaves) return false;
+
+  /* Σ over assignments where the root is true of ∏ leaf marginals. */
+  std::vector<char> val(N);
+  double total = 0.0;
+  for (uint32_t mask = 0; mask < (1u << m); ++mask) {
+    for (int i = 0; i < N; ++i) {
+      switch (typ[i]) {
+        case gate_one:   val[i] = 1; break;
+        case gate_zero:  val[i] = 0; break;
+        case gate_input: val[i] = (mask >> leafbit[i]) & 1u; break;
+        case gate_times: { char v = 1; for (int c : childIdx[i]) v = v && val[c]; val[i] = v; break; }
+        case gate_plus:  { char v = 0; for (int c : childIdx[i]) v = v || val[c]; val[i] = v; break; }
+        case gate_monus: val[i] = val[childIdx[i][0]] && !val[childIdx[i][1]]; break;
+        default: return false;
+      }
+    }
+    if (val[N - 1]) {                          /* root is last in post-order */
+      double pr = 1.0;
+      for (unsigned b = 0; b < m; ++b)
+        pr *= (mask >> b) & 1u ? leafProb[b] : 1.0 - leafProb[b];
+      total += pr;
+    }
+  }
+  out = total;
   return true;
 }
 
@@ -1043,9 +1147,18 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
                                  static_cast<long>(match.ms[i])});
       } else {
         std::vector<gate_t> ls;
-        if (!parseProductContributor(gc, ks[i], ls)) { ok = false; break; }
-        leaves.push_back(std::move(ls));
-        tid_vals.push_back(static_cast<long>(match.ms[i]));
+        if (parseProductContributor(gc, ks[i], ls)) {
+          leaves.push_back(std::move(ls));
+          tid_vals.push_back(static_cast<long>(match.ms[i]));
+        } else {
+          /* Not a product (a UNION/EXCEPT contributor: gate_plus / gate_monus,
+           * non-read-once on a shared base tuple).  Exact iff its footprint is
+           * private -- then it is an independent event, modelled as a
+           * one-alternative BID block of its exact marginal. */
+          double pi;
+          if (!contributorExactMarginal(gc, ks[i], ref, pi)) { ok = false; break; }
+          blocks[ks[i]].push_back({pi, static_cast<long>(match.ms[i])});
+        }
       }
     }
     if (!ok) continue;

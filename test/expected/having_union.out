@@ -41,6 +41,49 @@ shape|g|p_off|p_on|diff
 except MAX>=50|1|0.0000|0.0000|0.000000
 except MAX>=50|2|0.5500|0.5500|0.000000
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+join-union COUNT>=2|1|0.1406|0.1406|0.000000
+join-union COUNT>=2|2|0.0000|0.0000|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join-union COUNT>=1|1|0.6094|0.6094|0.000000
+join-union COUNT>=1|2|0.3750|0.3750|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join-except COUNT>=1|1|0.2344|0.2344|0.000000
+join-except COUNT>=1|2|0.1250|0.1250|0.000000
+(2 rows)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 safe-join aggregate): provenance circuit reduced from 20 to 1 gates
+join_union_fires
+0.14063
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+shared-R COUNT>=2 (declines)|1|0.4219|0.4219|0.000000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

@@ -108,9 +108,14 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   planner's skeleton/block analysis (today diagnostic-only in
   `classify_having.c`).
 - **UNION/EXCEPT over a join that re-uses a base tuple** — `(R⋈S) UNION (R⋈T)` →
-  `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. Needs per-contributor
-  read-once factoring (`r∧(s∨t)`), the safe-query / read-once-rewriter problem,
-  `#P`-hard in general.
+  `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. The *independent* case (each
+  contributor's footprint private — the usual one) is now exact:
+  `contributorExactMarginal` (`src/AggMarginalEvaluator.cpp`) computes the
+  contributor's exact marginal by brute force over its private leaves and models
+  it as an independent one-alternative block (reusing the BID categorical
+  machinery), for every aggregate; pinned by `test/sql/having_union.sql`.
+  Remaining: a base tuple shared *across* a group's contributors, which couples
+  them — the safe-query / read-once-rewriter problem, `#P`-hard in general.
 
 ## 4. Method-catalog follow-ups
 

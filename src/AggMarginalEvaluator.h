@@ -68,6 +68,17 @@
  * plain TID table (mutual exclusion in @c block_key metadata only, no
  * @c mulinput): that would need a planner @c CERT_SAFE_AGG_PLAN.
  *
+ * **Non-read-once UNION / EXCEPT contributors.**  A @c UNION / @c EXCEPT over a
+ * join that re-uses a base tuple gives a contributor that is a @c gate_plus /
+ * @c gate_monus repeating the shared leaf -- @c (r∧s)∨(r∧t) or @c (r∧s)∖(r∧t)
+ * -- which @c contributorProb (read-once only) rejects.  When the contributor's
+ * footprint is *private* (so it is independent of every other contributor),
+ * @c contributorExactMarginal computes its exact marginal by brute force over
+ * its private leaves (the internal sharing resolved exactly) and the
+ * contributor is modelled as a one-alternative BID block -- an independent
+ * event -- reusing the categorical machinery above.  A base tuple shared
+ * *across* contributors of the same group is genuinely @f$\#P@f$-hard and bails.
+ *
  * Runs as a probability-side pre-pass in @c probability_evaluate.cpp, *after*
  * @c runCountCmpEvaluator (so the cheap flat path still wins where it
  * applies; this pass only ever sees the join-shaped cmps the flat pass left

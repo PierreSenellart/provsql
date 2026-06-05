@@ -671,6 +671,17 @@ circuit.  This is the value-0-present-vs-empty-group corner of
 enumeration; pinned by ``test/sql/having_bid.sql``.  The one residual is a
 declared key on a plain TID table (mutual exclusion in ``block_key`` metadata
 only, no ``mulinput``), which still falls back.
+
+Finally, a **UNION / EXCEPT over a join that re-uses a base tuple** yields a
+non-read-once contributor -- ``(r∧s)∨(r∧t)`` (a ``gate_plus``) or
+``(r∧s)∖(r∧t)`` (a ``gate_monus``) repeating the shared ``r`` -- which the
+read-once ``contributorProb`` rejects.  When the contributor's footprint is
+*private* (independent of every other contributor), ``contributorExactMarginal``
+computes its exact marginal by brute force over its private leaves (resolving
+the internal sharing exactly) and models it as an independent one-alternative
+block, reusing the categorical machinery; pinned by ``test/sql/having_union.sql``.
+A base tuple shared *across* a group's contributors is genuinely :math:`\#P`-hard
+and falls back to enumeration.
 :cfunc:`safe_query_skeleton_is_hierarchical` exposes the skeleton-safety
 axis.  The **HAVING classifier** (``src/classify_having.c``, GUC
 ``provsql.classify_having``, default off) combines the two: for each
