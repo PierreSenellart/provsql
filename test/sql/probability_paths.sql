@@ -70,11 +70,13 @@ SET provsql.last_eval_method='';
 SELECT abs(probability_evaluate(:shared,'additive','epsilon=0.02,delta=0.05') - 0.29) <= 0.05 AS additive_in_tol;
 SHOW provsql.last_eval_method;
 
--- Estimator fallback: when NO cheap exact method applies, the relative path falls
--- to the universal stopping rule and the additive path to fixed-sample monte-carlo.
--- Build a monotone CNF (AND of overlapping 4-var OR windows) over 24 inputs:
+-- A monotone CNF (AND of overlapping 4-var OR windows) over 24 inputs:
 -- 'independent' throws (shared vars), 'sieve' does not apply (CNF, not DNF), and
--- 2^24 possible-worlds is dearer than sampling -- so the cost chooser samples.
+-- 2^24 possible-worlds is dear.  The generalised d-tree (dtreeBoundsCircuit)
+-- recurses on this CNF directly and returns certified anytime bounds, so the
+-- cost chooser picks it for the approximate paths -- a delta-independent
+-- guarantee, cheaper here than tree-decomposition or sampling.  Either way the
+-- estimate stays within [0,1]; we assert that and report the chosen method.
 CREATE TABLE ppcnf(id int);
 INSERT INTO ppcnf SELECT generate_series(1,24);
 SELECT add_provenance('ppcnf');

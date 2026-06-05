@@ -1181,36 +1181,48 @@ public:
   // is auto-selected for deterministic / low-delta approximation and for exact
   // where the treewidth exceeds tree-decomposition's cap.
   std::vector<Feature> requiredFeatures() const override {
+    // DnfShape selects the optimised monotone-DNF clause path and supplies the
+    // clause count for the exact cost; a non-DNF circuit uses the general
+    // circuit recursion (dtreeBoundsCircuit), so the method is applicable either
+    // way -- the feature is a hint, not a gate.
     return {Feature::DnfShape};
   }
-  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
-    return ctx.dnf_ok_;
+  bool applicable(const EvalContext &, const Tolerance &) const override {
+    // Applies to any Boolean circuit; a multivalued (BID) circuit makes the
+    // general recursion throw and the chooser drops to the next method.
+    return true;
   }
   double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
-    if(!ctx.dnf_ok_)
-      return std::numeric_limits<double>::infinity();
     const double S = static_cast<double>(ctx.circuit_size);
-    // Approximate: the anytime early stop caps the work (and it is delta-
-    // independent); grows as eps tightens.  NB the treewidth proxy is NOT used
-    // -- it mispredicts this engine (cliques collapse fast under Shannon +
-    // subsumption, low-w cycles do not).
+    // Approximate (DNF or general circuit): the anytime early stop caps the work
+    // (and it is delta-independent); grows as eps tightens.  This is the d-tree's
+    // edge on a non-DNF circuit -- it returns certified bounds where the exact
+    // compilers would do full work.  NB the treewidth proxy is NOT used -- it
+    // mispredicts this engine (cliques collapse fast under Shannon + subsumption,
+    // low-w cycles do not).
     if(tol.kind != ToleranceKind::Exact && tol.epsilon > 0.)
       return kCostDTreeApprox * S / tol.epsilon;
     // Exact: memoised Shannon compilation, ~S*m.  Pessimistic vs tree-
     // decomposition (tighter constant) on low treewidth, so it is picked for
-    // exact only where tree-decomposition bails (treewidth above its cap).
+    // exact only where tree-decomposition bails (treewidth above its cap).  Only
+    // the monotone-DNF fast path competes for exact auto-selection; a non-DNF
+    // exact request leaves the well-understood compilers (tree-decomposition /
+    // d4 / possible-worlds) to choose, with the general recursion reachable
+    // by-name -- generalising the *shape* of the bounds engine without retuning
+    // the exact cost model (a separate item).
+    if(!ctx.dnf_ok_)
+      return std::numeric_limits<double>::infinity();
     const double m = static_cast<double>(ctx.dnf_num_clauses_ > 0
                                          ? ctx.dnf_num_clauses_ : 1);
     return kCostDTreeExact * S * m;
   }
   double evaluate(EvalContext &ctx, const Tolerance &tol) const override {
+    // Monotone-DNF circuits take the optimised clause path; everything else
+    // (negation / EXCEPT, nested AND/OR, arbitrary sharing) takes the general
+    // circuit recursion.  Both are the same Olteanu-Huang-Koch anytime engine.
     std::vector<gate_t> clause_roots;
     std::vector<std::set<gate_t> > supports;
-    if(!ctx.c.dnfShape(ctx.gate, clause_roots, supports))
-      provsql_error("method 'd-tree' applies only to a DNF-shaped circuit "
-                    "(a monotone OR-of-ANDs over input leaves); negation, "
-                    "comparison, aggregation, random-variable and "
-                    "multivalued-input gates are not supported");
+    const bool is_dnf = ctx.c.dnfShape(ctx.gate, clause_roots, supports);
     ctx.actual_method = "d-tree";
 
     // Effective tolerance: a relative/additive PATH supplies it via `tol`; an
@@ -1234,16 +1246,24 @@ public:
       max_width = 2. * eps;
     } else if(kind == ToleranceKind::Relative && eps > 0.) {
       // Relative eps: with p >= L (the cheap lower bound), a half-width <=
-      // eps*L gives |est - p| <= eps*L <= eps*p.
-      double l0, u0;
-      ctx.c.dnfBounds(supports, l0, u0);
+      // eps*L gives |est - p| <= eps*L <= eps*p.  The cheap lower bound is
+      // dnfBounds on the DNF path; on the general path it is the leaf bound the
+      // recursion returns for a trivially-wide target.
+      double l0;
+      if(is_dnf) {
+        double u0;
+        ctx.c.dnfBounds(supports, l0, u0);
+      } else {
+        l0 = provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, 1.0).lower;
+      }
       max_width = 2. * eps * l0;
     } else {
       max_width = 0.; // exact
     }
 
-    provsql::DTreeInterval iv =
-      provsql::dtreeBounds(ctx.c, std::move(supports), max_width);
+    provsql::DTreeInterval iv = is_dnf
+      ? provsql::dtreeBounds(ctx.c, std::move(supports), max_width)
+      : provsql::dtreeBoundsCircuit(ctx.c, ctx.gate, max_width);
     const double est = 0.5 * (iv.lower + iv.upper);
 
     // Deterministic certificate (delta = 0) whenever an approximation was
@@ -1796,11 +1816,28 @@ static Datum probability_evaluate_internal
       // fall back to the generic GenericCircuit estimator (the only option there),
       // exactly as before -- the stopping rule for 'relative', fixed-sample
       // monteCarloRV for 'additive'.
+      //
+      // A surviving sample-faithful HAVING comparator (SUM / AVG / MIN / MAX /
+      // COUNT, that the exact closed-form / marginal-vector pre-passes bailed
+      // on) is the apx-safe corner of the trichotomy: in practice only the
+      // first four ever bail (COUNT's value-support is small, always resolved
+      // exactly).  Building the Boolean view would force provsql_having's
+      // threshold-lineage expansion, which does not terminate for a large-
+      // magnitude / large-support aggregate.  For an APPROXIMATE (delta > 0)
+      // request we skip the Boolean build and sample the comparator directly via
+      // the GenericCircuit estimator (the gate_agg arm of the sampler) -- a sound
+      // (eps,delta) FPRAS, magnitude-independent.  An exact (delta == 0)
+      // 'relative' request still attempts the Boolean view (the expansion is the
+      // only exact route).  See circuitHasUnresolvedSampleableAgg for why COUNT
+      // is excluded.
+      const bool sampleable_agg =
+        provsql::circuitHasUnresolvedSampleableAgg(gc, gc_root);
       bool boolean_built = false;
       gate_t gate{};
       std::unordered_map<gate_t, gate_t> gc_to_bc;
       BooleanCircuit c;
-      if(!provsql::circuitHasRV(gc, gc_root)) {
+      if(!provsql::circuitHasRV(gc, gc_root)
+         && !(sampleable_agg && tol.delta > 0.)) {
         try {
           c = getBooleanCircuit(gc, token, gate, gc_to_bc);
           boolean_built = true;
@@ -1835,8 +1872,14 @@ static Datum probability_evaluate_internal
     } else if(method == "stopping-rule") {
       run_stopping_rule(gc, gc_root, parse_method_args(args), result,
                         actual_method);
-    } else if(method == "monte-carlo" && provsql::circuitHasRV(gc, gc_root)) {
-      // RV-aware (fixed-sample, additive) Monte Carlo.
+    } else if(method == "monte-carlo"
+              && (provsql::circuitHasRV(gc, gc_root)
+                  || provsql::circuitHasUnresolvedSampleableAgg(gc, gc_root))) {
+      // RV-aware (fixed-sample, additive) Monte Carlo.  Also the route for a
+      // surviving sample-faithful HAVING comparator (any aggregate -- the
+      // apx-safe corner): the sampler evaluates the gate_agg directly, so a
+      // large-magnitude aggregate is estimated without the non-terminating
+      // threshold-lineage expansion.
       unsigned long samples = monte_carlo_samples(parse_method_args(args));
       result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
     } else {

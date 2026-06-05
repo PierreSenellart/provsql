@@ -36,7 +36,7 @@ relative_estimates
 t
 (1 row)
 provsql.last_eval_method
-tree-decomposition
+d-tree
 (1 row)
 additive_estimates
 t

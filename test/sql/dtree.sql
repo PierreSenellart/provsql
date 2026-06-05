@@ -2,11 +2,14 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
--- The 'd-tree' method (src/DTree) refines the cheap leaf bound by independent-or
+-- The 'd-tree' method (src/DTree) refines the cheap leaf bound by independent
 -- decomposition and Shannon expansion: a deterministic anytime engine that is
 -- EXACT when run to a zero-width interval (the default, by name) and certified
--- additive when given an epsilon.  We assert invariants (equals the exact
--- baselines; within eps of exact) rather than brittle float values.
+-- additive when given an epsilon.  It applies to ANY Boolean circuit -- a
+-- monotone DNF takes an optimised clause path, while nested AND/OR (CNF) and
+-- negation (EXCEPT / monus, A AND NOT B) take the general circuit recursion
+-- (dtreeBoundsCircuit).  We assert invariants (equals the exact baselines;
+-- within eps of exact) rather than brittle float values.
 SET provsql.boolean_provenance = off;
 
 CREATE TABLE dt(id int);
@@ -28,10 +31,15 @@ BEGIN
   -- Read-once DNF (x1 x2)∨(x3 x4): disjoint, so the bound is already exact.
   PERFORM set_config('dt.ro', provenance_plus(ARRAY[
      provenance_times(x[1],x[2]), provenance_times(x[3],x[4])])::text, false);
-  -- Non-DNF: AND-of-ORs (x1∨x2)(x3∨x4).
+  -- Non-DNF: AND-of-ORs (x1∨x2)(x3∨x4) -- handled by the general recursion.
   PERFORM set_config('dt.cnf', provenance_times(
      provenance_plus(ARRAY[x[1],x[2]]),
      provenance_plus(ARRAY[x[3],x[4]]))::text, false);
+  -- Non-monotone: ((x1∨x2) EXCEPT x3) ∨ (x4 AND NOT x5), i.e. negation via monus
+  -- (A monus B = A AND NOT B), the case Phase 1 could not handle at all.
+  PERFORM set_config('dt.neg', provenance_plus(ARRAY[
+     provenance_monus(provenance_plus(ARRAY[x[1],x[2]]), x[3]),
+     provenance_monus(x[4], x[5])])::text, false);
   -- 8-cycle (treewidth 2, 8 clauses): the Shannon recursion reaches the same
   -- residual sub-paths along different branches, so this exercises the memoised
   -- shared-DAG path (Phase 2) and must still agree with the exact baseline.
@@ -65,8 +73,17 @@ SELECT abs(probability_evaluate(current_setting('dt.ent')::uuid,'d-tree','epsilo
          - probability_evaluate(current_setting('dt.ent')::uuid,'possible-worlds'))
          <= 0.05 AS add_within_eps;
 
--- Non-DNF circuit errors cleanly (the engine is DNF-restricted in Phase 1).
-SELECT probability_evaluate(current_setting('dt.cnf')::uuid,'d-tree');
+-- Non-DNF circuits (a CNF, and a non-monotone one with negation) are now handled
+-- by the general circuit recursion, exactly matching the possible-worlds baseline.
+SELECT abs(probability_evaluate(current_setting('dt.cnf')::uuid,'d-tree')
+         - probability_evaluate(current_setting('dt.cnf')::uuid,'possible-worlds'))
+         < 1e-9 AS cnf_eq_pw,
+       abs(probability_evaluate(current_setting('dt.neg')::uuid,'d-tree')
+         - probability_evaluate(current_setting('dt.neg')::uuid,'possible-worlds'))
+         < 1e-9 AS neg_eq_pw,
+       abs(probability_evaluate(current_setting('dt.neg')::uuid,'d-tree','epsilon=0.05')
+         - probability_evaluate(current_setting('dt.neg')::uuid,'possible-worlds'))
+         <= 0.05 AS neg_add_within_eps;
 
 -- Deterministic (delta=0) admissibility: an 'additive' request with delta=0
 -- excludes the (eps,delta) samplers, so the chooser settles on a DETERMINISTIC

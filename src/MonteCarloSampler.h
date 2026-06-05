@@ -108,6 +108,35 @@ double monteCarloRVStopping(const GenericCircuit &gc, gate_t root,
 bool circuitHasRV(const GenericCircuit &gc, gate_t root);
 
 /**
+ * @brief Whether a surviving @c gate_agg exists and every one is sample-faithful
+ *        (@c SUM / @c AVG / @c MIN / @c MAX / @c COUNT -- every aggregate the
+ *        sampler reproduces exactly).
+ *
+ * A @c gate_agg the exact closed-form / marginal-vector pre-passes did not fold
+ * into a Bernoulli @c gate_input marks a HAVING aggregate comparator whose exact
+ * resolution needs @c provsql_having's threshold-lineage expansion -- which does
+ * not terminate in practice for a large-magnitude / large-support aggregate
+ * (the dense @c kMaxSumRange and sparse @c kMaxSumSupport caps exceeded).  For
+ * an @c (eps,delta) request @c probability_evaluate uses this to route the
+ * circuit straight to the world-sampler (the @c gate_agg arm of @c evalScalar)
+ * -- a sound FPRAS for the apx-safe corner of the HAVING trichotomy -- instead
+ * of attempting the non-terminating Boolean expansion.
+ *
+ * The sampler's @c gate_agg arm pushes each kept contributor's value into the
+ * matching @c Aggregator, reproducing SQL semantics exactly: the value gate is
+ * the row's contribution (the summed term for @c SUM; the 0/1 indicator for
+ * @c COUNT, 0 for a NULL row so @c count(x) does not count NULLs; the compared
+ * value for @c AVG / @c MIN / @c MAX), so NULL rows are handled and an empty
+ * group finalises to the value the exact evaluator uses (0 for @c SUM / @c COUNT,
+ * NaN -> comparison false for the others), and @c gate_arith over them is covered
+ * too.  In practice only @c SUM / @c AVG / @c MIN / @c MAX ever reach here:
+ * @c COUNT's value-support is small (0/1 per row) so it is always resolved
+ * exactly and never bails -- but it is sample-faithful as well, so it is not
+ * excluded.
+ */
+bool circuitHasUnresolvedSampleableAgg(const GenericCircuit &gc, gate_t root);
+
+/**
  * @brief Estimate the joint distribution of @p cmps via Monte Carlo.
  *
  * For each of @p samples worlds, samples the underlying continuous

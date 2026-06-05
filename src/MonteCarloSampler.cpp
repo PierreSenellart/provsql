@@ -266,12 +266,16 @@ double Sampler::evalScalar(gate_t g)
       //
       // Type plan: we evaluate every numeric path in float8 to stay
       // inside evalScalar's return type.  COUNT is normalised by
-      // makeAggregator to SumAgg<long>, so we feed it 1L per kept row
-      // without evaluating the gate_one value child; SUM / AVG / MIN /
-      // MAX consume the value via evalScalar.  Empty groups finalise
-      // to NONE; we surface NaN, which compares false under IEEE on
-      // any subsequent gate_cmp -- the SQL convention for HAVING on
-      // an empty group.
+      // makeAggregator to SumAgg<long>, so each kept row contributes its
+      // value gate cast to long: that gate is 1 for an ordinary row and 0
+      // for a NULL one (count(x) does not count NULLs), so the sum of the
+      // kept values is exactly count(*) / count(x) -- faithful with no
+      // nullability check.  SUM / AVG / MIN / MAX consume the value via
+      // evalScalar directly.  Empty groups finalise to NONE; SUM / COUNT
+      // surface 0 (the additive identity, the ProvSQL empty-group
+      // convention) and AVG / MIN / MAX surface NaN, which compares false
+      // under IEEE on any subsequent gate_cmp -- the SQL convention for
+      // HAVING on an empty group.
       AggregationOperator op =
         getAggregationOperator(gc_.getInfos(g).first);
       std::unique_ptr<Aggregator> agg =
@@ -288,7 +292,7 @@ double Sampler::evalScalar(gate_t g)
         if(sm.size() != 2) continue;
         if(!evalBool(sm[0])) continue;
         if(op == AggregationOperator::COUNT) {
-          agg->add(AggValue(1L));
+          agg->add(AggValue(static_cast<long>(evalScalar(sm[1]))));
         } else {
           agg->add(AggValue(evalScalar(sm[1])));
         }
@@ -715,6 +719,49 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root)
     for(gate_t c : gc.getWires(g)) stack.push(c);
   }
   return false;
+}
+
+bool circuitHasUnresolvedSampleableAgg(const GenericCircuit &gc, gate_t root)
+{
+  // True iff a gate_agg survives the probability pre-passes AND every surviving
+  // one is sample-faithful: SUM / AVG / MIN / MAX / COUNT -- all the aggregates
+  // the sampler's gate_agg arm reproduces exactly.  That arm pushes each kept
+  // contributor's value into the matching Aggregator: the value gate is the
+  // row's contribution (the summed term for SUM; the 0/1 indicator for COUNT,
+  // 0 for a NULL row so count(x) does not count NULLs; the compared value for
+  // AVG / MIN / MAX), so NULL rows are handled and an empty group finalises to
+  // the value the exact HAVING evaluator uses (0 for SUM / COUNT, NaN ->
+  // comparison false for AVG / MIN / MAX).  An aggregate that bailed the exact
+  // evaluators (whose threshold-lineage expansion would otherwise not terminate
+  // for a large-magnitude / large-support aggregate) is then estimated by direct
+  // world sampling: the apx-safe corner of the HAVING trichotomy (Re & Suciu).
+  // gate_arith over such aggregates is covered (its gate_agg leaves are reached
+  // by the walk).  The explicit switch rejects any future aggregate operator the
+  // sampler does not yet handle.
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stack;
+  stack.push(root);
+  bool any = false;
+  while(!stack.empty()) {
+    gate_t g = stack.top();
+    stack.pop();
+    if(!seen.insert(g).second) continue;
+    if(gc.getGateType(g) == gate_agg) {
+      switch(getAggregationOperator(gc.getInfos(g).first)) {
+      case AggregationOperator::SUM:
+      case AggregationOperator::AVG:
+      case AggregationOperator::MIN:
+      case AggregationOperator::MAX:
+      case AggregationOperator::COUNT:
+        any = true;
+        break;
+      default:                       // an aggregate the sampler lacks: not routed
+        return false;
+      }
+    }
+    for(gate_t c : gc.getWires(g)) stack.push(c);
+  }
+  return any;
 }
 
 }  // namespace provsql

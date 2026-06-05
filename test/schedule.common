@@ -70,6 +70,7 @@ test: having_count_distinct
 test: scalar_empty_having
 test: having_sum_zero
 test: having_arithmetic
+test: having_agg_fptras
 test: insert_select_sublink
 test: last_eval_method
 

@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <set>
+#include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -24,6 +27,36 @@ namespace {
 using Clauses = std::vector<std::set<gate_t> >;
 
 /**
+ * @brief Order-sensitive hash of a @e canonical clause set.
+ *
+ * The memo only ever sees clause sets that @c recurse has already
+ * subsumption-reduced and sorted, so two logically equal residual DNFs have an
+ * identical @c Clauses representation (same clause order, each clause a sorted
+ * @c std::set) and therefore hash identically.  Collisions fall back to the
+ * vector/set @c operator== the @c unordered_map applies, so the hash needs only
+ * to be well-distributed, not perfect -- the lookup stays exact.  This replaces
+ * the former @c std::map whose @c O(log n) lookups each ran a lexicographic
+ * compare over @c vector<set<gate_t>> (the costly per-node key op flagged in the
+ * d-tree TODO); the hash makes lookups average @c O(clause-set size).
+ */
+struct ClausesHash {
+  std::size_t operator()(const Clauses &cls) const
+  {
+    std::size_t h = 1469598103934665603ull; // FNV-1a offset basis
+    std::hash<gate_t> gh;
+    for(const auto &cl : cls) {
+      std::size_t ch = 1099511628211ull;    // per-clause FNV prime seed
+      for(gate_t v : cl)
+        ch = ch * 31u + gh(v);
+      // boost::hash_combine-style mix so clause order matters and the
+      // per-clause hashes do not simply XOR-cancel.
+      h ^= ch + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+    }
+    return h;
+  }
+};
+
+/**
  * @brief Shared recursion state: the circuit and the subproblem memo.
  *
  * The memo turns the Shannon/independence recursion from a tree into a shared
@@ -38,11 +71,11 @@ using Clauses = std::vector<std::set<gate_t> >;
  * sound to reuse for @e any request (an exact value satisfies any width target),
  * but it is only ever WRITTEN on an exact request (@c max_width == 0), where the
  * whole recursion is exact -- an early-stopped interval is budget-dependent and
- * must not be cached.
+ * must not be cached.  Hashed (@c ClausesHash) for average-constant lookup.
  */
 struct DTreeContext {
   const BooleanCircuit &c;
-  std::map<Clauses, double> memo;
+  std::unordered_map<Clauses, double, ClausesHash> memo;
 };
 
 /**
@@ -229,6 +262,369 @@ DTreeInterval dtreeBounds(const BooleanCircuit &c, Clauses clauses,
 {
   DTreeContext ctx{c, {}};
   return recurse(ctx, std::move(clauses), max_width);
+}
+
+// ===========================================================================
+// General-circuit d-tree: the same anytime engine on the BooleanCircuit DAG
+// (AND / OR / NOT / IN), so it drops the monotone-DNF shape restriction.
+// ===========================================================================
+
+namespace {
+
+using Assignment = std::unordered_map<gate_t, bool>;
+
+/// Static cone of genuine variable inputs (probability strictly in (0,1)); the
+/// memo + the recursion state for the general-circuit d-tree.
+struct GenContext {
+  const BooleanCircuit &c;
+  std::unordered_map<gate_t, std::set<gate_t> > footprint;
+  std::unordered_map<std::string, double> exactMemo; // exact subproblem values
+};
+
+inline unsigned long gid(gate_t g)
+{
+  return static_cast<unsigned long>(
+    static_cast<std::underlying_type<gate_t>::type>(g));
+}
+
+/// Variable-input cone of @p g (inputs with probability in (0,1)).  Constant
+/// inputs (probability 0 / 1) carry no variable and are dropped.  Throws on a
+/// multivalued / undetermined gate so the caller falls back to another method.
+/// unordered_map references survive rehash, so holding a child's reference while
+/// inserting the parent is safe.
+const std::set<gate_t> &footprintOf(GenContext &ctx, gate_t g)
+{
+  auto it = ctx.footprint.find(g);
+  if(it != ctx.footprint.end())
+    return it->second;
+  std::set<gate_t> s;
+  switch(ctx.c.getGateType(g)) {
+  case BooleanGate::IN: {
+    const double p = ctx.c.getProb(g);
+    if(p > 0.0 && p < 1.0)
+      s.insert(g);
+    break;
+  }
+  case BooleanGate::AND:
+  case BooleanGate::OR:
+  case BooleanGate::NOT:
+    for(gate_t ch : ctx.c.getWires(g)) {
+      const auto &cs = footprintOf(ctx, ch);
+      s.insert(cs.begin(), cs.end());
+    }
+    break;
+  default: // MULIN / MULVAR / UNDETERMINED
+    throw CircuitException(
+      "d-tree: multivalued / undetermined gate not supported on the general "
+      "circuit path");
+  }
+  return ctx.footprint.emplace(g, std::move(s)).first->second;
+}
+
+/// Whether every variable in @p g's cone is assigned by @p A (so @p g has a
+/// definite truth value).
+bool determined(GenContext &ctx, gate_t g, const Assignment &A)
+{
+  for(gate_t v : footprintOf(ctx, g))
+    if(A.find(v) == A.end())
+      return false;
+  return true;
+}
+
+/// Truth value of a fully-determined gate under @p A.
+bool evalDet(GenContext &ctx, gate_t g, const Assignment &A)
+{
+  switch(ctx.c.getGateType(g)) {
+  case BooleanGate::IN: {
+    auto it = A.find(g);
+    if(it != A.end())
+      return it->second;
+    return ctx.c.getProb(g) >= 1.0; // a constant input (prob 0 or 1)
+  }
+  case BooleanGate::NOT:
+    return !evalDet(ctx, ctx.c.getWires(g)[0], A);
+  case BooleanGate::AND:
+    for(gate_t ch : ctx.c.getWires(g))
+      if(!evalDet(ctx, ch, A))
+        return false;
+    return true;
+  case BooleanGate::OR:
+    for(gate_t ch : ctx.c.getWires(g))
+      if(evalDet(ctx, ch, A))
+        return true;
+    return false;
+  default:
+    throw CircuitException("d-tree: unsupported gate in evalDet");
+  }
+}
+
+/// Partition @p live into groups whose free-variable footprints are pairwise
+/// disjoint (independent sub-formulas), preserving a deterministic order.
+std::vector<std::vector<gate_t> > genComponents(
+  GenContext &ctx, const std::vector<gate_t> &live, const Assignment &A)
+{
+  const size_t m = live.size();
+  std::vector<size_t> parent(m);
+  for(size_t i = 0; i < m; ++i)
+    parent[i] = i;
+  std::function<size_t(size_t)> find = [&](size_t x) {
+    while(parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  };
+  std::unordered_map<gate_t, size_t> owner; // first live index carrying a free var
+  for(size_t i = 0; i < m; ++i)
+    for(gate_t v : footprintOf(ctx, live[i])) {
+      if(A.find(v) != A.end())
+        continue; // assigned: not a shared free variable
+      auto it = owner.find(v);
+      if(it == owner.end())
+        owner.emplace(v, i);
+      else
+        parent[find(i)] = find(it->second);
+    }
+  std::map<size_t, std::vector<gate_t> > groups;
+  for(size_t i = 0; i < m; ++i)
+    groups[find(i)].push_back(live[i]);
+  std::vector<std::vector<gate_t> > out;
+  out.reserve(groups.size());
+  for(auto &kv : groups)
+    out.push_back(std::move(kv.second));
+  return out;
+}
+
+/// The free variable shared by the most members of @p live (ties -> smallest
+/// gate id), the Shannon-expansion pivot.
+gate_t genPivot(GenContext &ctx, const std::vector<gate_t> &live,
+                const Assignment &A)
+{
+  std::map<gate_t, size_t> freq; // ordered for a deterministic tie-break
+  for(gate_t c : live)
+    for(gate_t v : footprintOf(ctx, c))
+      if(A.find(v) == A.end())
+        ++freq[v];
+  gate_t best{};
+  size_t best_count = 0;
+  bool found = false;
+  for(const auto &kv : freq)
+    if(!found || kv.second > best_count) {
+      best = kv.first;
+      best_count = kv.second;
+      found = true;
+    }
+  return best;
+}
+
+DTreeInterval genBound(GenContext &ctx, gate_t g, const Assignment &A);
+
+/// Cheap sound interval of @c op over @p children under @p A: independent
+/// components compose exactly; within a component AND uses a Bonferroni lower /
+/// min upper and OR a max lower / union upper.  Generalises @c dnfBounds.
+DTreeInterval genBoundGroup(GenContext &ctx, BooleanGate op,
+                            const std::vector<gate_t> &children,
+                            const Assignment &A)
+{
+  auto comps = genComponents(ctx, children, A);
+  double L = (op == BooleanGate::AND) ? 1.0 : 1.0; // AND: prod L; OR: prod (1-L)
+  double U = 1.0;
+  for(const auto &comp : comps) {
+    double gL, gU;
+    if(comp.size() == 1) {
+      DTreeInterval b = genBound(ctx, comp[0], A);
+      gL = b.lower;
+      gU = b.upper;
+    } else if(op == BooleanGate::AND) {
+      double sumL = 0.0;
+      gU = 1.0;
+      for(gate_t c : comp) {
+        DTreeInterval b = genBound(ctx, c, A);
+        sumL += b.lower;
+        gU = std::min(gU, b.upper);
+      }
+      gL = sumL - (static_cast<double>(comp.size()) - 1.0); // Bonferroni
+      if(gL < 0.0) gL = 0.0;
+    } else { // OR
+      double sumU = 0.0;
+      gL = 0.0;
+      for(gate_t c : comp) {
+        DTreeInterval b = genBound(ctx, c, A);
+        sumU += b.upper;
+        gL = std::max(gL, b.lower);
+      }
+      gU = (sumU > 1.0) ? 1.0 : sumU; // union bound
+    }
+    if(op == BooleanGate::AND) { L *= gL; U *= gU; }
+    else { L *= (1.0 - gL); U *= (1.0 - gU); }
+  }
+  if(op == BooleanGate::AND)
+    return {L, U};
+  return {1.0 - L, 1.0 - U};
+}
+
+DTreeInterval genBound(GenContext &ctx, gate_t g, const Assignment &A)
+{
+  switch(ctx.c.getGateType(g)) {
+  case BooleanGate::IN: {
+    auto it = A.find(g);
+    if(it != A.end())
+      return {it->second ? 1.0 : 0.0, it->second ? 1.0 : 0.0};
+    double p = ctx.c.getProb(g);
+    if(p < 0.0) p = 0.0;
+    if(p > 1.0) p = 1.0;
+    return {p, p};
+  }
+  case BooleanGate::NOT: {
+    DTreeInterval b = genBound(ctx, ctx.c.getWires(g)[0], A);
+    return {1.0 - b.upper, 1.0 - b.lower};
+  }
+  case BooleanGate::AND:
+  case BooleanGate::OR:
+    return genBoundGroup(ctx, ctx.c.getGateType(g), ctx.c.getWires(g), A);
+  default:
+    throw CircuitException("d-tree: unsupported gate in genBound");
+  }
+}
+
+/// Key identifying an exact subproblem: the (op, child set, assignment over the
+/// children's footprint) it depends on.  @p single distinguishes a one-gate
+/// problem from a group with the same id.
+std::string exactKey(GenContext &ctx, char tag, BooleanGate op,
+                     const std::vector<gate_t> &gates, const Assignment &A)
+{
+  std::string k(1, tag);
+  k += (op == BooleanGate::AND) ? 'A' : 'O';
+  std::set<gate_t> footunion;
+  for(gate_t g : gates) {
+    k += ':';
+    k += std::to_string(gid(g));
+    const auto &fp = footprintOf(ctx, g);
+    footunion.insert(fp.begin(), fp.end());
+  }
+  k += '|';
+  for(gate_t v : footunion) { // std::set: ascending, canonical
+    auto it = A.find(v);
+    if(it != A.end()) {
+      k += std::to_string(gid(v));
+      k += it->second ? '=' : '#';
+    }
+  }
+  return k;
+}
+
+DTreeInterval genRefineGroup(GenContext &ctx, BooleanGate op,
+                             const std::vector<gate_t> &children,
+                             Assignment &A, double w);
+
+DTreeInterval genRefine(GenContext &ctx, gate_t g, Assignment &A, double w)
+{
+  check_stack_depth();
+  if(provsql_interrupted)
+    throw CircuitException("Interrupted");
+
+  if(determined(ctx, g, A)) {
+    double v = evalDet(ctx, g, A) ? 1.0 : 0.0;
+    return {v, v};
+  }
+  if(w > 0.0) {
+    DTreeInterval b = genBound(ctx, g, A);
+    if(b.upper - b.lower <= w)
+      return b;
+  }
+  switch(ctx.c.getGateType(g)) {
+  case BooleanGate::NOT: {
+    DTreeInterval r = genRefine(ctx, ctx.c.getWires(g)[0], A, w);
+    return {1.0 - r.upper, 1.0 - r.lower};
+  }
+  case BooleanGate::IN: {
+    const double p = ctx.c.getProb(g); // a single free variable
+    return {p, p};
+  }
+  case BooleanGate::AND:
+  case BooleanGate::OR:
+    return genRefineGroup(ctx, ctx.c.getGateType(g), ctx.c.getWires(g), A, w);
+  default:
+    throw CircuitException("d-tree: unsupported gate in genRefine");
+  }
+}
+
+DTreeInterval genRefineGroup(GenContext &ctx, BooleanGate op,
+                             const std::vector<gate_t> &children,
+                             Assignment &A, double w)
+{
+  check_stack_depth();
+  if(provsql_interrupted)
+    throw CircuitException("Interrupted");
+
+  // Drop children fixed by A (and short-circuit on an absorbing one).
+  std::vector<gate_t> live;
+  live.reserve(children.size());
+  for(gate_t c : children) {
+    if(determined(ctx, c, A)) {
+      bool v = evalDet(ctx, c, A);
+      if(op == BooleanGate::AND && !v) return {0.0, 0.0};
+      if(op == BooleanGate::OR && v) return {1.0, 1.0};
+      // AND-true / OR-false: the identity, drop it
+    } else {
+      live.push_back(c);
+    }
+  }
+  if(live.empty())
+    return (op == BooleanGate::AND) ? DTreeInterval{1.0, 1.0}
+                                    : DTreeInterval{0.0, 0.0};
+
+  const bool exact = (w <= 0.0);
+  std::sort(live.begin(), live.end());
+  std::string key;
+  if(exact) {
+    key = exactKey(ctx, 'G', op, live, A);
+    auto it = ctx.exactMemo.find(key);
+    if(it != ctx.exactMemo.end())
+      return {it->second, it->second};
+  }
+
+  DTreeInterval res;
+  auto comps = genComponents(ctx, live, A);
+  if(comps.size() > 1) {
+    const double w_sub = w / static_cast<double>(comps.size());
+    double L = 1.0, U = 1.0; // AND: prod; OR: prod of (1-.)
+    for(auto &comp : comps) {
+      DTreeInterval r = genRefineGroup(ctx, op, comp, A, w_sub);
+      if(op == BooleanGate::AND) { L *= r.lower; U *= r.upper; }
+      else { L *= (1.0 - r.lower); U *= (1.0 - r.upper); }
+    }
+    res = (op == BooleanGate::AND) ? DTreeInterval{L, U}
+                                   : DTreeInterval{1.0 - L, 1.0 - U};
+  } else if(live.size() == 1) {
+    res = genRefine(ctx, live[0], A, w);
+  } else {
+    if(w > 0.0) {
+      DTreeInterval b = genBoundGroup(ctx, op, live, A);
+      if(b.upper - b.lower <= w)
+        return b; // approximate: do not memoise an early-stopped interval
+    }
+    const gate_t x = genPivot(ctx, live, A);
+    const double px = ctx.c.getProb(x);
+    A[x] = true;
+    DTreeInterval r1 = genRefineGroup(ctx, op, live, A, w);
+    A[x] = false;
+    DTreeInterval r0 = genRefineGroup(ctx, op, live, A, w);
+    A.erase(x);
+    res = {px * r1.lower + (1.0 - px) * r0.lower,
+           px * r1.upper + (1.0 - px) * r0.upper};
+  }
+
+  if(exact)
+    ctx.exactMemo.emplace(key, res.lower); // exact: lower == upper
+  return res;
+}
+
+} // namespace
+
+DTreeInterval dtreeBoundsCircuit(const BooleanCircuit &c, gate_t root,
+                                 double max_width)
+{
+  GenContext ctx{c, {}, {}};
+  Assignment A;
+  return genRefine(ctx, root, A, max_width);
 }
 
 } // namespace provsql

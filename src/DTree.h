@@ -53,6 +53,36 @@ DTreeInterval dtreeBounds(const BooleanCircuit &c,
                           std::vector<std::set<gate_t> > clauses,
                           double max_width);
 
+/**
+ * @brief Certified probability interval of an @e arbitrary Boolean circuit,
+ *        refined to a target width (the d-tree generalised off monotone DNF).
+ *
+ * Same anytime engine as @c dtreeBounds, but recursing on the circuit DAG
+ * (@c AND / @c OR / @c NOT / @c IN) instead of a flat monotone-DNF clause set,
+ * so it applies to negation (@c EXCEPT / @c monus, encoded @c A AND NOT B),
+ * nested @c AND / @c OR (e.g. a CNF-shaped circuit), and arbitrary sharing.
+ *
+ * The cheap leaf bound generalises @c dnfBounds soundly to any gate: an
+ * independent-component split (children with disjoint free-variable footprints
+ * compose exactly), then a Bonferroni lower / min upper for @c AND, a max lower
+ * / union upper for @c OR, and a flip @c [1-U,1-L] for @c NOT.  It is refined by
+ * independent-component decomposition and Shannon expansion on the most frequent
+ * shared free variable until @c upper-lower <= @p max_width (0 = exact).  Every
+ * step keeps @c lower <= Pr <= upper (Shannon is an exact mixture; independence
+ * is over disjoint input cones, never overclaimed).
+ *
+ * Throws @c CircuitException on a multivalued (@c MULIN / @c MULVAR) or
+ * @c UNDETERMINED gate in the cone of @p root, so the caller falls back to
+ * another method on BID circuits.
+ *
+ * @param c          Circuit (gate types, wiring, input marginals).
+ * @param root       Root gate whose probability interval is computed.
+ * @param max_width  Absolute target for @c upper-lower (0 = exact).
+ * @return           A sound interval with @c lower <= Pr[root] <= upper.
+ */
+DTreeInterval dtreeBoundsCircuit(const BooleanCircuit &c, gate_t root,
+                                 double max_width);
+
 } // namespace provsql
 
 #endif

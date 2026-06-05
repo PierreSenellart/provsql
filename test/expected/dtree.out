@@ -11,7 +11,9 @@ t
 add_within_eps
 t
 (1 row)
-ERROR:  ProvSQL: method 'd-tree' applies only to a DNF-shaped circuit (a monotone OR-of-ANDs over input leaves); negation, comparison, aggregation, random-variable and multivalued-input gates are not supported
+cnf_eq_pw|neg_eq_pw|neg_add_within_eps
+t|t|t
+(1 row)
 det_within_eps
 t
 (1 row)
