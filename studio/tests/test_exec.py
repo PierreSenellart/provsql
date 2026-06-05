@@ -87,6 +87,55 @@ def test_syntax_error_returns_error_block(client):
     assert "syntax" in final["message"].lower()
 
 
+# ──────── COPY ... FROM stdin (dump-style data blocks) ────────
+
+
+def test_copy_from_stdin_block_loads_rows(client):
+    """Dump-style `COPY ... FROM stdin;` with inline data rows (pg_dump
+    output, the tutorial / case-study setup files) must load through the
+    COPY sub-protocol: cursor.execute() refuses COPY and leaves the
+    connection wedged in COPY state, which used to surface as a 500
+    ("another command is already in progress") on the pool's COMMIT."""
+    payload = post_exec(client, (
+        "CREATE TEMP TABLE copy_target(id int, name text) ON COMMIT DROP;\n"
+        "COPY copy_target (id, name) FROM stdin;\n"
+        "1\tAlice\n"
+        "2\tBob\n"
+        "\\.\n"
+        "SELECT count(*) AS n FROM copy_target;"
+    ), mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows", final
+    assert final["rows"][0][0] == 2
+
+
+def test_copy_from_stdin_as_final_statement_returns_status(client):
+    """A COPY block in final position renders as a status block (no
+    result set), like any DML."""
+    payload = post_exec(client, (
+        "CREATE TEMP TABLE copy_last(id int) ON COMMIT DROP;\n"
+        "COPY copy_last (id) FROM stdin;\n"
+        "1\n2\n3\n"
+        "\\."
+    ), mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "status", final
+    assert "COPY" in final["message"]
+
+
+def test_copy_to_stdout_yields_clean_error_not_500(client):
+    """COPY ... TO STDOUT is not supported (cursor.execute() refuses it)
+    but must yield the normal error block, and the wedged connection
+    must be discarded so the pool stays usable -- previously this was a
+    500 with the real error swallowed."""
+    payload = post_exec(client, "COPY personnel TO STDOUT", mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "error", final
+    # The next request gets a fresh / sane connection from the pool.
+    payload = post_exec(client, "SELECT 1 AS ok", mode="circuit")
+    assert payload["blocks"][-1]["kind"] == "rows"
+
+
 # ──────── multi-statement behaviour ────────
 
 

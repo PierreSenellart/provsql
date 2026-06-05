@@ -1084,10 +1084,39 @@ def _clamp_depth(raw, default_max: int) -> int:
 
 def _split_statements(sql_text: str) -> list[str]:
     """Split a SQL batch into individual statements. sqlparse handles
-    dollar-quoting, comments, and string literals correctly."""
+    dollar-quoting, comments, and string literals correctly -- but knows
+    nothing of the COPY sub-protocol, so dump-style `COPY ... FROM stdin;`
+    blocks (statement line, raw data rows, terminating `\\.` line, as
+    pg_dump writes them) are carved out first, each kept as a single
+    unit: the statement line with its data rows attached below and the
+    terminator dropped (db._execute_statement feeds the unit through
+    cursor.copy()). The carve-out is line-based, so a COPY-FROM-stdin
+    line *inside* a dollar-quoted body would be misdetected; acceptable
+    for hand-loaded scripts."""
     out: list[str] = []
-    for raw in sqlparse.split(sql_text):
-        stripped = raw.strip().rstrip(";").strip()
-        if stripped:
-            out.append(stripped)
+    plain: list[str] = []
+
+    def _flush_plain() -> None:
+        for raw in sqlparse.split("\n".join(plain)):
+            stripped = raw.strip().rstrip(";").strip()
+            if stripped:
+                out.append(stripped)
+        plain.clear()
+
+    lines = sql_text.splitlines()
+    i = 0
+    while i < len(lines):
+        if db.COPY_FROM_STDIN_RE.match(lines[i]):
+            _flush_plain()
+            block = [lines[i]]
+            i += 1
+            while i < len(lines) and lines[i].rstrip() != "\\.":
+                block.append(lines[i])
+                i += 1
+            i += 1  # skip the \. terminator
+            out.append("\n".join(block))
+        else:
+            plain.append(lines[i])
+            i += 1
+    _flush_plain()
     return out

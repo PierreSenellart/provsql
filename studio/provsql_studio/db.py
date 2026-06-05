@@ -1693,6 +1693,31 @@ def _resolve_compiled_semiring(
 _NO_PROV_MARKER = "called on a table without provenance"
 
 
+# Dump-style data-loading statement: `COPY <table> ... FROM stdin ...;`
+# sitting alone on its line, as pg_dump writes it. Matched both by
+# app._split_statements (which carves the statement plus its inline data
+# rows out of the batch as a single unit, dropping the `\.` terminator)
+# and by _execute_statement below (which routes such a unit through the
+# COPY sub-protocol -- cursor.execute() refuses COPY and, worse, leaves
+# the connection wedged in COPY state).
+COPY_FROM_STDIN_RE = re.compile(
+    r"^\s*COPY\s+.*\bFROM\s+stdin\b.*?;?\s*$", re.IGNORECASE)
+
+
+def _execute_statement(cur: psycopg.Cursor, stmt: str) -> None:
+    """cursor.execute(), except for COPY-FROM-stdin units from the
+    splitter (first line the COPY statement, remaining lines the raw
+    data rows -- text or csv, the protocol does not care), which run
+    through cursor.copy()."""
+    head, _, data = stmt.partition("\n")
+    if not COPY_FROM_STDIN_RE.match(head):
+        cur.execute(stmt)
+        return
+    with cur.copy(head.strip().rstrip(";")) as copy:
+        if data:
+            copy.write(data if data.endswith("\n") else data + "\n")
+
+
 def exec_batch(
     pool: ConnectionPool,
     statements: list[str],
@@ -1870,7 +1895,7 @@ def exec_batch(
                 # Run prelude statements; halt on first error.
                 for stmt in prelude:
                     try:
-                        cur.execute(stmt)
+                        _execute_statement(cur, stmt)
                     except psycopg.Error as e:
                         intermediate.append(
                             _user_error_result(e, meta, statement_timeout)
@@ -1959,7 +1984,7 @@ def exec_batch(
                     # query runs once with capture enabled : its planner-hook
                     # notices describe the user's literal SQL.
                     try:
-                        cur.execute(last)
+                        _execute_statement(cur, last)
                     except psycopg.Error as e:
                         return [], _user_error_result(e, meta, statement_timeout), meta
 
@@ -1994,6 +2019,22 @@ def exec_batch(
             # attached would accumulate one handler per request.
             try:
                 conn.remove_notice_handler(_on_notice)
+            except Exception:
+                pass
+            # Safety net: a statement that broke off mid-protocol (e.g.
+            # a COPY fed through execute() on an older code path, or any
+            # future protocol desync) leaves the connection ACTIVE; the
+            # pool's COMMIT on release would then die with "another
+            # command is already in progress", turning the SQL error we
+            # just caught into an opaque 500. Close the connection
+            # instead: Connection.__exit__ skips closed connections, the
+            # pool discards and replaces it, and the caught error result
+            # reaches the client.
+            try:
+                if (not conn.closed
+                        and conn.pgconn.transaction_status
+                        == psycopg.pq.TransactionStatus.ACTIVE):
+                    conn.close()
             except Exception:
                 pass
 
