@@ -12,13 +12,16 @@
 #include <utility>
 #include <vector>
 
+// Keep the Boost-including headers ahead of the PostgreSQL block: port.h
+// #defines snprintf to pg_snprintf, which breaks Boost headers (>= 1.79)
+// whose inline code calls std::snprintf (boost/assert/source_location.hpp).
+#include "BooleanCircuit.h"
+#include "DTree.h"
+
 extern "C" {
 #include "provsql_utils.h" // provsql_interrupted
 #include "miscadmin.h"     // check_stack_depth
 }
-
-#include "BooleanCircuit.h"
-#include "DTree.h"
 
 namespace provsql {
 

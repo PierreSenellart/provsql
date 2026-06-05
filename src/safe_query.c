@@ -41,6 +41,7 @@
 #include "optimizer/optimizer.h"
 #else
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
+#include "optimizer/var.h"              /* pull_var_clause, PVC_RECURSE_* */
 #endif
 #include "parser/parse_oper.h"
 #include "tcop/tcopprot.h"              /* pg_parse_query, pg_analyze_and_rewrite* */

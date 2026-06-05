@@ -1550,6 +1550,7 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 
   for (unsigned i = 0; i < 2; ++i) {
     Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
+    Node *agg_node = NULL;
 
     if (IsA(node, FuncExpr)) {
       FuncExpr *fe = (FuncExpr *)node;
@@ -1568,7 +1569,6 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
     // gate_arith.  Either way the result agg_token is cast to its UUID, so the
     // gate_cmp wraps the aggregate (or the gate_arith over aggregates); the
     // possible-worlds evaluator resolves it.
-    Node *agg_node = NULL;
     if (exprType(node) == constants->OID_TYPE_AGG_TOKEN) {
       agg_node = node;
     } else if (IsA(node, OpExpr) && expr_contains_agg(node, constants)) {
@@ -2571,6 +2571,7 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
     Var *v = (Var *)node;
     if (v->varno == ctx->group_rtindex) {
       Node *resolved = copyObject(list_nth(ctx->groupexprs, v->varattno - 1));
+#if PG_VERSION_NUM >= 160000
       /* Clear varnullingrels: the group-step nulling bits reference the
        * group_rtindex RTE which does not exist in the fresh inner query.
        * Leaving them set causes the planner to access simple_rel_array at
@@ -2578,6 +2579,7 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
        * "unrecognized RTE kind: 9". */
       if (IsA(resolved, Var))
         ((Var *)resolved)->varnullingrels = NULL;
+#endif
       return resolved;
     }
   }
@@ -5002,7 +5004,9 @@ static Node *oj_renum_mut(Node *node, void *cx) {
         if (v->varno == c->from[i]) {
           v = (Var *)copyObject(v);
           v->varno = c->to[i];
+#if PG_VERSION_NUM >= 160000
           v->varnullingrels = NULL;
+#endif
 #if PG_VERSION_NUM >= 130000
           v->varnosyn = 0;
           v->varattnosyn = 0;
@@ -5397,7 +5401,9 @@ static Node *oj_outer_remap(Node *node, void *cx) {
       else
         v->varattno = c->S_map[v->varattno];
       v->varno = c->new_idx;
+#if PG_VERSION_NUM >= 160000
       v->varnullingrels = NULL;
+#endif
 #if PG_VERSION_NUM >= 130000
       v->varnosyn = 0;
       v->varattnosyn = 0;
