@@ -100,10 +100,40 @@ aggregate in a moment function such as
 PostgreSQL on the surviving groups while ProvSQL still tracks the
 per-group provenance.
 
-Complex ``HAVING`` conditions that build a non-trivial expression on
-top of an ``agg_token`` aggregate result (e.g., arithmetic across
-multiple aggregates) are not fully supported and may produce
-incorrect results or an error.
+Arithmetic in HAVING
+~~~~~~~~~~~~~~~~~~~~~~
+
+``HAVING`` conditions that apply arithmetic to aggregate results are
+supported, with provenance and probabilities tracked correctly:
+
+.. code-block:: postgresql
+
+    -- constant arithmetic over a single aggregate
+    SELECT dept, provenance() FROM employees GROUP BY dept
+    HAVING sum(salary) + bonus > 100000;       -- folded to sum(salary) > 100000 - bonus
+
+    -- arithmetic across several aggregates, and constant/aggregate ratios
+    SELECT dept, provenance() FROM sales GROUP BY dept
+    HAVING sum(revenue) > sum(cost);           -- agg vs agg
+    SELECT dept, provenance() FROM sales GROUP BY dept
+    HAVING sum(revenue) * sum(margin) > 1000;  -- product of aggregates
+
+Constant arithmetic over a single aggregate is folded into the
+comparison threshold (``sum(x) + 1 > 16`` becomes ``sum(x) > 15``,
+flipping the operator for a negative multiplier); a distributive factor
+is pushed into the aggregate where possible (``sum(x) * 2`` becomes a
+clean aggregate over ``2*x``).  Comparisons that do not reduce to a
+single aggregate versus a constant -- aggregate versus aggregate,
+products of aggregates, a constant divided by an aggregate -- are
+resolved by an exact possible-worlds enumeration that is generic over
+every (m-)semiring, so ``sr_formula``, ``sr_why``, probabilities, and the
+rest all see the same valid-world annotation.
+
+Integer division follows SQL's truncation-toward-zero semantics rather
+than real division: ``HAVING sum(x) / 2 = 5`` is true for a group whose
+integer sum is ``10`` or ``11`` (both floor to ``5``), exactly as a plain
+PostgreSQL ``sum(x) / 2`` would.  Writing ``sum(x) / 2.0`` instead opts
+into real (numeric) division.
 
 The ``choose`` Aggregate
 -------------------------

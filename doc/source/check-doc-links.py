@@ -82,6 +82,26 @@ INTERNAL_FUNCTIONS = {
     'numeric_comp_agg_token',
     'agg_token_eq_text', 'agg_token_ne_text', 'agg_token_comp_text',
     'text_eq_agg_token', 'text_ne_agg_token', 'text_comp_agg_token',
+    # agg_token arithmetic and agg-vs-agg comparison operator backends:
+    # invoked through the SQL operators + - * / < <= = <> >= > on agg_token
+    # (used to lower HAVING arithmetic into gate_arith / gate_cmp), never
+    # called by name -- the user-facing surface is the aggregates and the
+    # comparison, not these procedures.  Mirrors the random_variable_* block
+    # below.  agg_token_make / agg_value_gate / agg_token_value are the
+    # internal helpers those operator bodies call.
+    'agg_token_plus', 'agg_token_minus', 'agg_token_times', 'agg_token_div',
+    'agg_token_neg',
+    'agg_token_plus_numeric', 'agg_token_minus_numeric',
+    'agg_token_times_numeric', 'agg_token_div_numeric',
+    'numeric_plus_agg_token', 'numeric_minus_agg_token',
+    'numeric_times_agg_token', 'numeric_div_agg_token',
+    'agg_token_eq_agg_token', 'agg_token_ne_agg_token',
+    'agg_token_lt_agg_token', 'agg_token_le_agg_token',
+    'agg_token_gt_agg_token', 'agg_token_ge_agg_token',
+    'agg_token_comp_agg_token',
+    # Doxygen CREATE OPERATOR artefacts (<procedure>_<rightarg> shape).
+    'agg_token_op_agg_token', 'agg_token_op_numeric', 'numeric_op_agg_token',
+    'agg_token_make', 'agg_value_gate', 'agg_token_value',
     # Recursive-CTE fixpoint driver: invoked by the planner hook
     # (lower_recursive_cte) when lowering a WITH RECURSIVE query, never
     # called directly by users.

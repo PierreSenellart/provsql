@@ -313,6 +313,26 @@ Currently Supported Methods
        :cfunc:`TreeDecomposition::MAX_TREEWIDTH`) and uses
        :cfunc:`dDNNFTreeDecompositionBuilder` to construct a
        d-DNNF, then calls :cfunc:`dDNNF::probabilityEvaluation`.
+   * - ``"d-tree"``
+     - The Olteanu-Huang-Koch anytime interval-bounds engine
+       (:cite:`DBLP:conf/icde/OlteanuHK10`, ``src/DTree.cpp``): a cheap
+       certified leaf bound refined by independent-component decomposition and
+       Shannon expansion until ``upper-lower <= max_width`` -- exact at width 0,
+       a certified additive / relative interval otherwise, and deterministic
+       (the only non-exact method admissible for a ``delta = 0`` request).  A
+       monotone DNF takes the optimised clause path ``dtreeBounds`` (leaf
+       bound ``BooleanCircuit::dnfBounds``); **any other circuit**
+       (negation / ``EXCEPT``, nested ``AND``/``OR``, arbitrary sharing) takes
+       the general DAG recursion ``dtreeBoundsCircuit``, whose leaf bound
+       generalises ``dnfBounds`` soundly to any gate -- independent components
+       (disjoint input cones) compose exactly, an entangled ``AND`` uses a
+       Bonferroni lower / ``min`` upper, an ``OR`` a ``max`` lower / union
+       upper, and ``NOT`` the exact flip ``[1-U, 1-L]``.  Exact mode adds
+       component memoisation over the canonical subproblem; a multivalued
+       (``MULIN`` / BID) gate makes it throw, so the chooser falls back.  In the
+       default chain it competes for exact only on the monotone-DNF path (and
+       where tree-decomposition bails); the general recursion serves the
+       approximate / ``delta = 0`` paths and explicit by-name calls.
    * - ``"compilation"``
      - :cfunc:`BooleanCircuit::compilation` -- invokes the registered
        knowledge compiler named in the argument (``d4``, ``d4v2``,
@@ -615,6 +635,38 @@ cell above -- safe / apx-safe / hazardous / open -- by pairing the static
 ``provsql.classify_top_level`` (read-only, top-level only) and is the
 diagnostic that tells a user whether a slow ``HAVING`` probability query is
 exactly tractable, approximable (route to karp-luby), or genuinely hard.
+
+**The apx-safe corner, in practice.**  ``runSumCmpEvaluator`` is
+*pseudo*-polynomial: it declines a ``SUM`` whose reachable range exceeds a
+cap (``kMaxSumRange``), and the sparse marginal-vector engine declines when
+the number of distinct aggregate values exceeds ``kMaxSumSupport``.  When
+*both* decline -- a large-magnitude aggregate over many incommensurate values
+-- the comparator survives, and its only exact route, ``provsql_having``'s
+threshold-lineage expansion, does not terminate in practice.  For an
+``(eps,delta)`` request (``relative`` / ``additive`` / ``monte-carlo``)
+:cfunc:`probability_evaluate_internal` detects this case with
+``circuitHasUnresolvedSampleableAgg`` and routes it straight to the
+GenericCircuit world-sampler (``src/MonteCarloSampler.cpp``) instead of
+building the (non-terminating) Boolean view: the ``relative`` path runs the
+DKLR stopping rule ``monteCarloRVStopping`` -- a relative FPRAS when
+``Pr >= 1/poly`` -- and ``additive`` / ``monte-carlo`` run fixed-sample
+:cfunc:`monteCarloRV`.  The sampler's ``gate_agg`` arm pushes each kept
+contributor's value into the matching aggregator, reproducing SQL semantics
+exactly for **every aggregate** -- the value gate is the row's contribution
+(the summed term for SUM; the ``0``/``1`` indicator for COUNT, ``0`` for a NULL
+row so ``count(x)`` does not count NULLs; the compared value for AVG / MIN /
+MAX), so NULL rows are handled and an empty group finalises to the value the
+exact evaluator uses (``0`` for SUM / COUNT, NaN -> comparison false for the
+others) -- and for ``gate_arith`` over them.  In practice only SUM / AVG /
+MIN / MAX ever reach here: COUNT's value-support is small (``0``/``1`` per row)
+so it is always resolved exactly and never bails -- but it is sample-faithful
+as well (the arm sums the contributor value gate, not a hard ``1``), so it is
+not excluded.  The exact (``delta = 0``) route is unchanged.  This realises the
+*apx-safe* corner of the trichotomy table above (and, since the sampler
+evaluates the aggregate per world regardless of join shape, the
+branch-spanning / shared-tuple residuals too); the rounding-based rejection
+FPTRAS (Thm 9) would add only rare-event sample efficiency.  Pinned by
+``test/sql/having_agg_fptras.sql``.
 
 
 .. _bids-and-multivalued-inputs:

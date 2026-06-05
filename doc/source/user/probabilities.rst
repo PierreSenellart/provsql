@@ -290,6 +290,28 @@ The following aggregate functions in ``HAVING`` are handled:
     GROUP BY dept
     HAVING COUNT(*) > 2;
 
+Arithmetic over these aggregates in ``HAVING`` (including comparisons
+between two aggregates and integer-division thresholds) is also handled;
+see :doc:`the aggregation chapter <aggregation>` for the supported forms
+and their semantics.
+
+An aggregate (``SUM``, ``AVG``, ``MIN`` or ``MAX``) whose possible values
+span a very large range cannot be evaluated exactly in reasonable time (the
+problem is *pseudo*-polynomial: exact cost grows with the magnitude of the
+values).  In that case ask for an approximate answer instead -- a
+``relative`` or ``additive`` guarantee -- and ProvSQL estimates the
+probability by sampling, which is independent of the value magnitude:
+
+.. code-block:: postgresql
+
+    SELECT probability_evaluate(provenance(), 'relative', 'epsilon=0.05,delta=0.01')
+    FROM orders GROUP BY region HAVING sum(amount_cents) > 100000000;
+
+This is the *approximable* corner of the Ré–Suciu HAVING trichotomy; the
+exact (default) call remains correct but may not terminate quickly on such a
+query.  (``COUNT`` rarely needs this -- its values are small, so it is almost
+always evaluated exactly.)
+
 Independent Tuples and Block-Independent Databases
 ----------------------------------------------------
 

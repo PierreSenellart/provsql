@@ -70,25 +70,53 @@ case). Every new method below must declare its `guaranteeKind` / `isDeterministi
 
 ### 1. d-tree on arbitrary circuits (drop the DNF restriction)
 
-The engine recurses only on **monotone-DNF** clause-support sets today
-(`requiredFeatures() = {DnfShape}`). Generalise it to the full Boolean-circuit
-surface:
+**Soundness of the current monotone-DNF engine audited (correct).** The three
+decompositions and their bounds were re-checked against Olteanu-Huang-Koch: the
+independent-OR child combination `{1 - prod(1-L_i), 1 - prod(1-U_i)}` brackets
+`P` correctly (monotonicity of `1 - prod(1-.)`), the Shannon mixture propagates
+bounds linearly so the interval width never exceeds the larger branch's, the
+leaf bound's `L = max bucket prob` / `U = min(1, sum bucket probs)` is the
+sound greedy disjoint-support partition, the additive (`U - L <= 2*eps`) and
+relative (`max_width = 2*eps*L0`) stopping tests are exact, and the memo is
+written only on the fully-exact recursion (so a cached value is reusable for any
+later width target). Independence is decided by disjoint clause supports
+(union-find), never overclaiming. Pinned by `test/sql/probability_bounds.sql`
+(brackets the exact value, errors cleanly off-DNF) and `test/sql/dtree.sql`
+(equals the exact baselines; within `eps` of exact). No change needed here.
 
-- **Read `⊗` / `⊙` off the gate structure directly** rather than from flat
-  clauses: a `plus` (resp. `times`) gate whose children have **disjoint
-  transitive input cones** is an independent-OR (resp. independent-AND). This
-  also lands the **`⊙` independent-AND factoring** deferred in Phase 1 (on flat
-  clause sets it needed Brayton/world-set factoring; on the gate DAG it is read
-  off `times` structure). The read-once case stays handled by the existing
-  `independent` method; `⊙` is the partial-factoring generalisation.
-- **Handle `NOT` / `monus`.** The leaf-bound monotonicity argument (sub-disjunction
-  lower bound, union upper bound) does not survive negation, so a non-monotone
-  leaf needs either one extra Shannon expansion toward monotone leaves, or a
-  coarser fallback bound.
-- **Non-DNF leaf bound.** The three decompositions, the propagation and the
-  stopping tests are representation-agnostic; only the leaf bound is DNF-specific.
-  A general leaf needs a substitute bound (Shannon-expand one more variable, or a
-  coarser interval).
+**Dropping the DNF restriction -- DONE** (`dtreeBoundsCircuit`, `src/DTree.cpp`).
+The anytime engine now recurses on the Boolean-circuit DAG (`AND` / `OR` / `NOT`
+/ `IN`) instead of a flat monotone-DNF clause set, so it handles negation
+(`EXCEPT` / `monus`, encoded `A AND NOT B`), nested `AND` / `OR` (CNF), and
+arbitrary sharing. All three sub-items below are addressed:
+
+- **`⊗` / `⊙` off the gate structure** -- `genComponents` partitions an `AND` /
+  `OR` gate's children by disjoint free-variable footprint (union-find over the
+  input cones); independent groups compose exactly (`∏` for `AND`,
+  `1-∏(1-·)` for `OR`).  This lands the `⊙` independent-AND factoring.
+- **`NOT` / `monus`** -- handled by the exact flip `[1-U, 1-L]` (bound) and
+  `Pr(¬g) = 1-Pr(g)` (Shannon), so no monotonicity assumption is needed.
+- **General leaf bound** -- the cheap bound generalises `dnfBounds` soundly to
+  any gate: independent components compose exactly, and *within* an entangled
+  component `AND` uses a Bonferroni lower / `min` upper and `OR` a `max` lower /
+  union upper (both valid under arbitrary dependence), with the `NOT` flip.
+
+Exact (Shannon + component decomposition + memo on the canonical
+`(op, child-set, restricted-assignment)` subproblem) and anytime (refine until
+`U-L <= max_width`) both validated against `possibleWorlds` on a structured
+battery and 400 random `AND`/`OR`/`NOT` circuits (0 exact mismatches, 0 bound
+violations); pinned by `test/sql/dtree.sql` (CNF + negation == possible-worlds).
+
+Wired into `DTreeBoundsMethod`: applicable to any circuit; a monotone DNF keeps
+the optimised clause fast path, everything else takes the general recursion.
+**Remaining (deliberately deferred, a cost-model item):** non-DNF *exact*
+auto-selection is costed `∞`, so tree-decomposition / d4 / possible-worlds stay
+preferred for exact and the general recursion is reached only by name or on the
+approximate / `delta=0` paths (where it competes on the delta-independent
+anytime cost -- e.g. it now wins the 24-input CNF relative case in
+`probability_paths.sql`).  A multivalued (`MULIN` / BID) circuit makes the
+general recursion throw, so the chooser falls back -- extending it to
+`gate_mulinput` is the other open piece.
 
 Decompositions and probabilities, for reference:
 
@@ -119,6 +147,47 @@ feature obviously predicts whether the DNF collapses, which is what running it
 tells you; speculative execution (a bounded attempt) may be the only honest plan.
 
 ### 2. The SUM-safe FPTRAS (`AggFptrasMethod`)
+
+**Update (apx-safe corner now handled by direct sampling, all aggregates but
+COUNT).** The practical gap this item targeted -- a large-magnitude /
+large-support HAVING comparator that bails *both* exact evaluators (the dense
+`SumCmpEvaluator`, range > `kMaxSumRange`, and the sparse marginal-vector engine,
+distinct values > `kMaxSumSupport`) -- is now resolved soundly for an
+`(eps,delta)` request. Such a comparator's exact route is `provsql_having`'s
+threshold-lineage expansion, which does **not terminate** in practice;
+`probability_evaluate` now detects the surviving comparator
+(`circuitHasUnresolvedSampleableAgg`, `src/MonteCarloSampler.cpp`) and routes
+`relative` / `additive` / `monte-carlo` straight to the world-sampler, whose
+`gate_agg` arm pushes each kept contributor's value into the matching aggregator.
+The `relative` path uses the DKLR stopping rule (`monteCarloRVStopping`) -- a
+relative FPRAS when `p >= 1/poly` -- giving exactly the apx-safe guarantee.
+Pinned by `test/sql/having_agg_fptras.sql` (SUM witness: 25 weights `2^0..2^24`,
+`sum >= 2^24` has exact probability `1/2` yet support `2^25`, so both caps are
+blown; plus AVG / MIN / MAX faithfulness checks, NULL rows included).
+
+**Faithful for every aggregate (SUM / AVG / MIN / MAX / COUNT).** The sampler
+reproduces SQL semantics for all of them, verified against the exact engine:
+each kept contributor's value gate is pushed into the matching aggregator (the
+summed term for SUM; the 0/1 indicator for COUNT, 0 for a NULL row so `count(x)`
+does not count NULLs; the compared value for AVG / MIN / MAX), so NULL rows are
+handled and an empty group finalises as the exact engine does (0 for SUM /
+COUNT, NaN -> false for the others). COUNT was made faithful by the one-line fix
+in the sampler's `gate_agg` arm -- add `(long)evalScalar(sm[1])` instead of the
+hard `1L` -- so it now distinguishes `count(*)` (all contributors value 1) from
+`count(x)` over a NULL-bearing column (the NULL rows carry value 0); pinned by
+the `count(*)` / `count(x)` cases in `having_agg_fptras.sql`. In practice only
+SUM / AVG / MIN / MAX ever reach the sampler: COUNT's value-support is small
+(0/1 per row), so the closed-form Poisson-binomial evaluator
+(`runCountCmpEvaluator`) always resolves it exactly and it never bails by
+magnitude -- but it is sample-faithful too, so `circuitHasUnresolvedSampleableAgg`
+admits all five. The exact (`delta = 0`) route is unchanged.
+
+What remains of this item is the **rounding-based rejection FPTRAS** (Thm 9 /
+Alg 6.3.1) proper, whose value over the stopping rule above is *rare-event
+efficiency* (a sample count that does not blow up as `p -> 0`, via the rounded
+proposal's bounded acceptance ratio). It is the research-grade,
+statistical-bias-sensitive piece; the sound, magnitude-independent coverage of
+the common case now exists without it.
 
 The apx-safe class of the trichotomy: SUM (and the MIN/MAX hard direction) over a
 **safe skeleton** has an FPTRAS where the exact engine bails (`kMaxSumSupport`,
@@ -160,6 +229,14 @@ collaborative implementation / review rather than autonomous coding.
 
 ### 3. HAVING marginal-vector engine: the residual shapes
 
+**Note (approximate coverage already exists for these residuals).** The
+direct-sampling route of item 2 evaluates the actual aggregate over each sampled
+world regardless of join laminarity, so the residuals below (branch-spanning
+SUM, UNION/EXCEPT re-using a base tuple) already get a sound `(eps,delta)`
+estimate on an approximate request: when the laminar engine bails, the surviving
+aggregate comparator is sampled. The items here are about the remaining
+**exact** (PTIME) coverage.
+
 The laminar / cross-product engine covers COUNT / SUM / MIN / MAX / AVG at
 arbitrary hierarchical depth. The genuine residuals:
 
@@ -187,7 +264,10 @@ arbitrary hierarchical depth. The genuine residuals:
 - **Lazy Boolean build.** RV / HAVING circuits with no Boolean view currently
   fall to a small top-level estimator outside the catalog. A true lazy Boolean
   build would fold even those into `chooseAndRun` so all three paths are
-  catalog-driven uniformly.
+  catalog-driven uniformly. *Partial:* the dispatch now also routes a surviving
+  sample-faithful HAVING comparator (any aggregate) to the GenericCircuit
+  sampler (item 2) instead of forcing a non-terminating Boolean build -- a step
+  toward this, though still outside the catalog.
 - **`MinMaxKarpLubyMethod`** (thin) — MIN/MAX easy direction (`MAX≥k` / `MIN≤k`)
   reduces to `P(∃ present tuple with y θ k)`, a monotone UCQ; hand the existing
   coverage FPRAS that small DNF, on **any** skeleton (Thm 8). The cheapest
@@ -235,8 +315,12 @@ arbitrary hierarchical depth. The genuine residuals:
 ### 5. RV probability transparency enrichments
 
 - Route the RV *probability* case `P(X<c)` through `stopping-rule`.
-- Decide always-on vs the current verbose-gated MC-fallback NOTICE (a one-line
-  change in `Expectation.cpp` `mc_samples_or_throw`).
+- MC-fallback NOTICE: **decided -- keep it gated at `provsql.verbose_level >= 5`**
+  (`Expectation.cpp` `mc_samples_or_throw`). A user who wants no Monte-Carlo
+  estimate for random variables sets `provsql.rv_mc_samples = 0`, which turns the
+  fallback into an exception instead of a silent estimate; the verbose-gated
+  NOTICE is the right default (no console noise at the normal level, full
+  disclosure for those who raise the level). No change.
 
 ### 6. d-tree research polish
 
@@ -245,10 +329,14 @@ arbitrary hierarchical depth. The genuine residuals:
   The circuit has lost the query structure, so this means rediscovering a good
   order (the paper's SPROUT-vs-dtree gap); defer until the frequency heuristic is
   shown insufficient.
-- **Cheaper memo keys** (a hash / fingerprint instead of `map<vector<set>>`) and
-  the `O(depth)` leaf-closing form (Sec. V-D). Constant-factor polish; the
-  current keys are why the memoised d-tree is still ~2× behind tree-decomposition
-  on bounded treewidth.
+- **Cheaper memo keys** — *done*: the subproblem memo is now a
+  `std::unordered_map<Clauses, double, ClausesHash>` (`src/DTree.cpp`) keyed by an
+  order-sensitive hash of the canonical (subsumption-reduced, sorted) clause set,
+  with the vector/set `operator==` resolving collisions, so lookups are
+  average-`O(clause-set size)` instead of the former `std::map`'s `O(log n)`
+  lexicographic compares over `vector<set<gate_t>>`. The remaining
+  constant-factor item is the `O(depth)` leaf-closing form (Sec. V-D); the keys
+  are no longer the bottleneck behind tree-decomposition on bounded treewidth.
 - **Paper benchmark.** `test/bench/dtree_bench.sql` exercises the full portfolio;
   the one shape not yet reproduced is the paper's social-network experiment (the
   **triangle** and **path-of-length-2** queries over a random graph of
@@ -257,16 +345,14 @@ arbitrary hierarchical depth. The genuine residuals:
 
 ### 7. Bibliography
 
-`website/_bibliography/references.bib` has the surrounding probabilistic-DB canon
-(`DalviS12`, `JhaS11`, `AmsterdamerDT11`, `GatterbauerS15`, the 2011 Suciu et al.
-textbook) but not the three papers this note is anchored on. Add, when the
-relevant item lands:
+*Done.* `website/_bibliography/references.bib` now carries all three anchor
+papers alongside the surrounding canon (`DalviS12`, `JhaS11`, `AmsterdamerDT11`,
+`GatterbauerS15`, the 2011 Suciu et al. textbook):
 
-- Olteanu, Huang & Koch 2010 (ICDE) — the d-tree;
-- Ré & Suciu 2009 (VLDB J.), optionally the DBPL 2007 conference version — the
-  HAVING trichotomy;
-- Souihli & Senellart 2013 (ICDE) — ProApproX, the portfolio + cost-model
-  principle behind the method catalog.
+- `DBLP:conf/icde/OlteanuHK10` — Olteanu, Huang & Koch 2010 (ICDE), the d-tree;
+- `DBLP:journals/vldb/ReS09` — Ré & Suciu 2009 (VLDB J.), the HAVING trichotomy;
+- `DBLP:conf/icde/SouihliS13` — Souihli & Senellart 2013 (ICDE), ProApproX, the
+  portfolio + cost-model principle behind the method catalog.
 
 ## Implementation observations
 
