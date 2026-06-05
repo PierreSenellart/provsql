@@ -2895,6 +2895,20 @@ table thead th[data-sort="desc"]::after {
   padding-bottom: 0.6rem;
   border-bottom: 1px solid var(--border-soft);
   margin-bottom: 0.8rem;
+  /* Stay in view while the cell list scrolls: stick right below the
+     sticky top nav (~4rem tall), on the card background so cells
+     don't show through. */
+  position: sticky;
+  top: 4.2rem;
+  z-index: 5;
+  background: var(--bg-elevated);
+  padding-top: 0.4rem;
+}
+/* Compact, uniform toolbar buttons: Run keeps the primary colour but
+   the same footprint as its neighbours. */
+.nb__toolbar .wp-btn {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.5rem;
 }
 .nb__toolbar-sep {
   width: 1px;
@@ -3133,3 +3147,87 @@ table thead th[data-sort="desc"]::after {
   box-shadow: -3px 0 0 0 var(--gold-500);
   border-radius: 2px;
 }
+
+/* Notebook tabs (one notebook per tab, each bound to a database). */
+.nb__tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 0.5rem;
+}
+.nb__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.4rem 0.25rem 0.6rem;
+  border: 1px solid var(--border-soft);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  cursor: pointer;
+  background: var(--bg-code);
+  max-width: 16rem;
+}
+.nb__tab--active {
+  background: var(--bg-canvas);
+  color: var(--purple-900);
+  font-weight: 600;
+  border-bottom: 1px solid var(--bg-canvas);
+  margin-bottom: -1px;
+}
+.nb__tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb__tab-db {
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  background: var(--gold-100, #f7ecd1);
+  color: var(--purple-700);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  white-space: nowrap;
+}
+.nb__tab-close {
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+}
+.nb__tab-close:hover { color: var(--terracotta-500); }
+.nb__tab-add {
+  background: transparent;
+  border: 1px dashed var(--border-soft);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.55rem;
+}
+.nb__tab-add:hover { color: var(--terracotta-500); }
+
+/* Database-binding banner under the tab bar. */
+.nb__banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  border: 1px solid var(--gold-500);
+  background: var(--gold-100, #f7ecd1);
+  color: var(--purple-900);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.6rem;
+}
+/* `display: flex` above would defeat the hidden attribute (the UA
+   stylesheet's display:none loses to any author display). */
+.nb__banner[hidden] { display: none; }

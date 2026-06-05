@@ -308,6 +308,27 @@ def create_app(
         info["studio_version"] = STUDIO_VERSION
         return jsonify(info)
 
+    @app.post("/api/databases")
+    def api_create_database():
+        """Create a database (and best-effort install provsql in it).
+        Backs the notebook binding banner's "create" action and the
+        DB-switcher's "New database" entry; the caller follows up with
+        POST /api/conn to switch to it."""
+        payload = request.get_json(silent=True) or {}
+        name = str(payload.get("name") or "").strip()
+        if not re.match(r"^[a-z_][a-z0-9_$]*$", name) or len(name) > 63:
+            return jsonify({"error": "invalid database name (lowercase "
+                                     "letters, digits, underscores)"}), 400
+        try:
+            warning = db.create_database(app.config["DSN"], name)
+        except psycopg.errors.DuplicateDatabase:
+            return jsonify({"error": f"database {name!r} already exists"}), 409
+        except psycopg.errors.InsufficientPrivilege as e:
+            return jsonify({"error": str(e).strip()}), 403
+        except psycopg.Error as e:
+            return jsonify({"error": str(e).strip()}), 400
+        return jsonify({"ok": True, "database": name, "warning": warning})
+
     @app.get("/api/databases")
     def api_databases():
         return jsonify(db.list_databases(get_pool()))

@@ -430,9 +430,11 @@
          same card (CSS toggles on body.mode-notebook). Toolbar + cell
          list are rendered and wired by notebook.js. -->
     <div class="nb" id="notebook-pane" hidden>
+      <div class="nb__tabs" id="nb-tabs"></div>
+      <div class="nb__banner" id="nb-binding-banner" hidden></div>
       <div class="nb__toolbar" id="nb-toolbar">
         <button type="button" class="wp-btn wp-btn--primary wp-btn--mini" id="nb-run"
-                title="Run the focused cell (Ctrl+Enter); Shift+Enter runs and advances">
+                title="Run the selected cell — Ctrl+Enter. Shift+Enter runs and advances; Alt+Enter runs and inserts a cell below. Esc enters command mode (a/b insert, dd delete, z undo, m/y convert, j/k move, Enter edit)">
           <i class="fas fa-play"></i> Run</button>
         <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-run-all"
                 title="Run every cell from the top"><i class="fas fa-forward"></i> Run all</button>
@@ -443,9 +445,9 @@
           <i class="fas fa-redo"></i> Restart kernel</button>
         <span class="nb__toolbar-sep"></span>
         <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-add-sql"
-                title="Append a SQL cell"><i class="fas fa-plus"></i> SQL</button>
+                title="Append a SQL cell (command mode: b inserts below, a above)"><i class="fas fa-plus"></i> SQL</button>
         <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-add-md"
-                title="Append a Markdown cell"><i class="fas fa-plus"></i> Markdown</button>
+                title="Append a Markdown cell (command mode: m converts the selected cell)"><i class="fas fa-plus"></i> Markdown</button>
         <span class="nb__toolbar-sep"></span>
         <select class="nb__scheme" id="nb-scheme"
                 title="Provenance scheme applied to every cell (notebook-level default)">

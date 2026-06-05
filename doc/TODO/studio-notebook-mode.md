@@ -37,6 +37,13 @@ shareable record of a session.
   needs. Listed as a possible follow-up.
 - **Scheduling / headless execution** (papermill-style): out of
   scope; `psql -f` covers batch needs.
+- **Parallel multi-database connections** (two kernels live on two
+  databases at once): the Playground's PGlite is single-connection by
+  construction (a second connection means a second WASM Postgres
+  instance), and natively it would need per-binding routing of every
+  auxiliary endpoint. Tabs multiplex *serially* over the single
+  active connection instead (see §8b); revisit only if cross-database
+  notebooks earn their keep, as a native-only opt-in.
 
 ## The mode in one paragraph
 
@@ -256,6 +263,41 @@ Studio feature; the compatibility floor does not move.
 - `build.sh` vendors the markdown renderer/sanitizer; the e2e
   zero-off-origin assertion keeps it honest.
 
+### 8b. Database bindings and tabs
+
+Unlike a Python notebook, a ProvSQL notebook is not the whole
+program: it runs against a *database* whose committed state persists
+beyond (and is shared outside) the notebook. The model:
+database = environment (interpreter + installed packages),
+kernel = running session, notebook = program text. Two usage
+patterns both matter -- analysis notebooks over an existing database
+(the binding to pre-existing data is the point) and self-contained /
+didactic notebooks that establish their own world (where the
+Python-like mental model should hold literally).
+
+- **Binding metadata**: `metadata.provsql.database` stamps which
+  database the notebook was authored against (name only, no
+  credentials) on every save.
+- **Tabs as bindings**: notebook mode has a tab bar; each tab is one
+  notebook plus its binding. Both deployments share a single ACTIVE
+  connection, so tabs multiplex serially; a tab whose binding is not
+  the live connection shows a banner -- *Switch to X* / *Create X* /
+  *Rebind to current* -- and never switches silently. Tab names
+  derive from the notebook's first level-1 Markdown heading (the
+  document names itself). Loading an `.ipynb` always opens a new
+  tab bound per its metadata; booting on a different database than
+  the active tab's binding activates (or creates) a tab bound to the
+  new database, keeping the old tab around.
+- **Database creation**: `POST /api/databases` creates a database
+  and best-effort installs the provsql extension in it, backing the
+  banner's create action -- the "scratch database" escape hatch that
+  makes hermetic notebook runs cheap.
+- **Self-establishing seeded notebooks**: the tutorial / case-study
+  notebooks open with their own idempotent setup cells (DDL,
+  `COPY ... FROM stdin` data, `add_provenance`), so
+  "create a fresh database, Run all" reproduces the whole study from
+  one file with no pre-seeded database.
+
 ### 9. Testing
 
 - **Unit** (`studio/tests/test_notebook.py`): session lifecycle
@@ -310,6 +352,9 @@ Studio feature; the compatibility floor does not move.
    ```sql fence wrap/unwrap, j/k, Enter, Shift/Ctrl/Alt+Enter);
    mode-switch resume (selection + scroll restored, autosave flushed
    on pagehide); ```sql highlighting in rendered Markdown.
+   **Also landed**: the §8b database-binding design -- tabs as
+   bindings (heading-derived names, per-tab kernels and resume
+   points), the binding banner, `POST /api/databases`.
    **Open**: evaluation cells, per-cell scheme options, seeded CS1
    notebook, deep links, HTML export.
 3. **Playground + content**: Playground integration (shim

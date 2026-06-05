@@ -18,6 +18,10 @@
   let mdLibs = null;       // promise for marked + DOMPurify
   let lastFocused = null;  // last cell whose editor had focus
   let schemaCache = null;  // /api/schema payload for the sidebar
+  let tabs = [];           // [{id, name, db, doc, kernel, resume}]
+  let activeTabId = null;
+  let connDb = null;       // current connection's database (from /api/conn)
+  let nextTabId = 1;
   let selected = null;     // command-mode selected cell (Jupyter-style)
   let lastDeleted = null;  // {cell, index} for the `z` undo
   let lastDKey = 0;        // timestamp of the previous lone `d` press
@@ -29,6 +33,252 @@
   function newCell(type, source) {
     return { id: 'c' + (nextCellId++), type, source: source || '',
              outputs: null, count: null, htmlSnapshot: null };
+  }
+
+  /* ──────── tabs as database bindings ──────── */
+  /* Each tab is one notebook plus the database it is bound to. Both
+     deployments share a single ACTIVE connection (the Playground's
+     PGlite cannot even open two), so tabs multiplex serially: a tab
+     whose binding differs from the live connection shows a banner
+     offering to switch (or to create the database, or to rebind);
+     activating it never switches silently. Loading an .ipynb opens a
+     new tab; booting on a different database than the active tab's
+     binding activates (or creates) a tab bound to it. Inactive tabs
+     park their notebook as an ipynb doc; their kernels stay alive
+     until the tab closes or the page unloads. */
+
+  function currentTab() {
+    return tabs.find((t) => t.id === activeTabId) || null;
+  }
+
+  function flushActiveTab() {
+    const tab = currentTab();
+    if (!tab) return;
+    tab.doc = toIpynb();
+    tab.kernel = kernel;
+    tab.resume = {
+      idx: selected ? cells.indexOf(selected) : -1,
+      scrollY: window.scrollY,
+    };
+  }
+
+  function persistTabs() {
+    flushActiveTab();
+    try {
+      localStorage.setItem('ps.nb.tabs', JSON.stringify({
+        active: activeTabId,
+        tabs: tabs.map((t) => ({ id: t.id, name: t.name, db: t.db,
+                                 doc: t.doc, resume: t.resume })),
+      }));
+    } catch (e) { /* quota / disabled */ }
+  }
+
+  function makeTab(name, db, doc) {
+    return { id: 't' + (nextTabId++), name: name || 'Untitled',
+             db: db || connDb || null, doc: doc || null,
+             kernel: null, resume: null };
+  }
+
+  function loadTabIntoView(tab) {
+    if (tab.doc) {
+      loadNotebook(tab.doc);
+    } else {
+      defaultNotebook();
+    }
+    kernel = tab.kernel || null;
+    if (kernel) setKernelChip('alive', `pid ${kernel.pid} · ${kernel.db}`);
+    else setKernelChip('none', 'no kernel');
+    if (tab.resume) {
+      if (Number.isInteger(tab.resume.idx) && tab.resume.idx >= 0
+          && tab.resume.idx < cells.length) {
+        selectCell(cells[tab.resume.idx], { scroll: false });
+      }
+      const y = tab.resume.scrollY;
+      if (Number.isFinite(y) && y > 0) {
+        requestAnimationFrame(() => requestAnimationFrame(
+          () => window.scrollTo(0, y)));
+      }
+    } else {
+      if (cells.length) selectCell(cells[0], { scroll: false });
+      window.scrollTo(0, 0);
+    }
+    renderTabBar();
+    updateBindingBanner();
+  }
+
+  function activateTab(id) {
+    if (id === activeTabId) return;
+    flushActiveTab();
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+    activeTabId = id;
+    loadTabIntoView(tab);
+    persistTabs();
+  }
+
+  function newTab(name, db, doc) {
+    flushActiveTab();
+    const tab = makeTab(name, db, doc);
+    tabs.push(tab);
+    activeTabId = tab.id;
+    loadTabIntoView(tab);
+    persistTabs();
+    return tab;
+  }
+
+  function closeTab(id) {
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    const tab = tabs[idx];
+    const nonTrivial = tab.doc
+      ? (tab.doc.cells || []).some((c) => String(
+          Array.isArray(c.source) ? c.source.join('') : c.source || '').trim())
+      : (id === activeTabId && cells.some((c) => (c.source || '').trim()));
+    if (nonTrivial && !window.confirm(`Close tab “${tab.name}”?`)) return;
+    if (tab.kernel) {
+      fetch(`/api/nb/session/${encodeURIComponent(tab.kernel.sessionId)}`,
+            { method: 'DELETE' }).catch(() => {});
+    }
+    tabs.splice(idx, 1);
+    if (id === activeTabId) {
+      activeTabId = null;
+      kernel = null;
+      if (tabs.length) activateTab(tabs[Math.max(0, idx - 1)].id);
+      else newTab();
+    } else {
+      renderTabBar();
+      persistTabs();
+    }
+  }
+
+  // A tab's display name is the first level-1 Markdown heading in its
+  // notebook (the document names itself, like a paper title); the
+  // stored name (file stem / "Untitled") is only the fallback.
+  function headingTabName(tab) {
+    const list = tab.id === activeTabId
+      ? cells.map((c) => ({ md: c.type === 'markdown', src: c.source || '' }))
+      : ((tab.doc && tab.doc.cells) || []).map((c) => ({
+          md: c.cell_type === 'markdown',
+          src: Array.isArray(c.source) ? c.source.join('') : (c.source || ''),
+        }));
+    for (const c of list) {
+      if (!c.md) continue;
+      let inFence = false;
+      for (const line of String(c.src).split('\n')) {
+        if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; continue; }
+        if (inFence) continue;
+        const m = line.match(/^#\s+(.+?)\s*#*\s*$/);
+        if (m) return m[1];
+      }
+    }
+    return null;
+  }
+
+  function tabDisplayName(tab) {
+    return headingTabName(tab) || tab.name;
+  }
+
+  function renderTabBar() {
+    const bar = byId('nb-tabs');
+    if (!bar) return;
+    const esc = env.escapeHtml, escA = env.escapeAttr;
+    bar.innerHTML = tabs.map((t) => {
+      const active = t.id === activeTabId;
+      const foreign = t.db && connDb && t.db !== connDb;
+      const name = tabDisplayName(t);
+      return `<span class="nb__tab${active ? ' nb__tab--active' : ''}"`
+        + ` data-tab="${escA(t.id)}" title="${escA(name)}${t.db ? ' — ' + escA(t.db) : ''}">`
+        + `<span class="nb__tab-name">${esc(name)}</span>`
+        + (foreign ? `<span class="nb__tab-db">${esc(t.db)}</span>` : '')
+        + `<button type="button" class="nb__tab-close" data-tab-close="${escA(t.id)}"`
+        + ` title="Close tab" aria-label="Close tab">×</button>`
+        + `</span>`;
+    }).join('')
+    + `<button type="button" class="nb__tab-add" id="nb-tab-add"`
+    + ` title="New notebook tab (bound to the current database)">+</button>`;
+  }
+
+  function wireTabBar() {
+    const bar = byId('nb-tabs');
+    if (!bar) return;
+    bar.addEventListener('click', (e) => {
+      const close = e.target.closest('[data-tab-close]');
+      if (close) {
+        closeTab(close.dataset.tabClose);
+        return;
+      }
+      if (e.target.closest('#nb-tab-add')) {
+        newTab();
+        return;
+      }
+      const tabEl = e.target.closest('[data-tab]');
+      if (tabEl) activateTab(tabEl.dataset.tab);
+    });
+  }
+
+  /* Binding banner: the active tab's database vs the live connection. */
+  function updateBindingBanner() {
+    const banner = byId('nb-binding-banner');
+    if (!banner) return;
+    const tab = currentTab();
+    const foreign = tab && tab.db && connDb && tab.db !== connDb;
+    banner.hidden = !foreign;
+    if (!foreign) { banner.innerHTML = ''; return; }
+    const esc = env.escapeHtml;
+    banner.innerHTML =
+      `<span class="nb__banner-msg"><i class="fas fa-database"></i> `
+      + `This notebook is bound to <strong>${esc(tab.db)}</strong>; `
+      + `you are connected to <strong>${esc(connDb)}</strong>.</span>`
+      + `<button type="button" class="wp-btn wp-btn--mini" id="nb-bind-switch">`
+      + `Switch to ${esc(tab.db)}</button> `
+      + `<button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-bind-create">`
+      + `Create ${esc(tab.db)}</button> `
+      + `<button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-bind-keep">`
+      + `Rebind to ${esc(connDb)}</button>`;
+    byId('nb-bind-switch').addEventListener('click', () => switchConnectionTo(tab.db));
+    byId('nb-bind-create').addEventListener('click', async () => {
+      const resp = await fetch('/api/databases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: tab.db }),
+      });
+      const payload = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        window.alert(payload.error || `HTTP ${resp.status}`);
+        return;
+      }
+      if (payload.warning) window.alert(payload.warning);
+      switchConnectionTo(tab.db);
+    });
+    byId('nb-bind-keep').addEventListener('click', () => {
+      tab.db = connDb;
+      persistTabs();
+      renderTabBar();
+      updateBindingBanner();
+    });
+  }
+
+  async function switchConnectionTo(dbname) {
+    // Persist first: the connection switch reloads the page (and kills
+    // every kernel server-side); on boot the active tab matches the new
+    // database, so the reconcile below leaves it in place.
+    persistTabs();
+    try {
+      const resp = await fetch('/api/conn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ database: dbname }),
+      });
+      if (!resp.ok) {
+        const payload = await resp.json().catch(() => ({}));
+        window.alert(payload.error || `HTTP ${resp.status}`);
+        return;
+      }
+    } catch (e) {
+      window.alert(`Network error: ${e.message}`);
+      return;
+    }
+    window.location.reload();
   }
 
   /* ──────── kernel client ──────── */
@@ -290,7 +540,9 @@
     } else if (cell.type === 'markdown') {
       const view = div.querySelector('.nb-cell__md');
       const ta = div.querySelector('.nb-cell__mdta');
+      let everEdited = false;
       const startEdit = () => {
+        everEdited = true;
         ta.value = cell.source;
         view.hidden = true;
         ta.hidden = false;
@@ -323,7 +575,13 @@
       // Fresh empty markdown cells drop straight into edit mode (the
       // "+ Markdown" flow); cells *converted* to markdown (the `m` key)
       // stay in command mode, like Jupyter, so the keymap keeps working.
-      if (!cell.source && !cell._noAutoEdit) requestAnimationFrame(startEdit);
+      // The everEdited guard stops the deferred auto-edit from
+      // REOPENING the editor when something else (focusCell's synthetic
+      // dblclick) already opened it and the user finished the edit
+      // within the same frame.
+      if (!cell.source && !cell._noAutoEdit) {
+        requestAnimationFrame(() => { if (!everEdited) startEdit(); });
+      }
       delete cell._noAutoEdit;
     }
 
@@ -1042,7 +1300,12 @@
         kernelspec: { name: 'provsql-studio', display_name: 'ProvSQL (SQL)',
                       language: 'sql' },
         language_info: { name: 'sql' },
-        provsql: { scheme: byId('nb-scheme').value },
+        provsql: {
+          scheme: byId('nb-scheme').value,
+          // The database binding: which environment this notebook was
+          // authored against (no credentials, just the name).
+          database: (currentTab() && currentTab().db) || connDb || undefined,
+        },
       },
       cells: cells.map((c) => {
         if (c.type === 'markdown') {
@@ -1138,90 +1401,99 @@
 
   /* ──────── persistence: download / file-load / autosave ──────── */
 
-  function download() {
-    const blob = new Blob([JSON.stringify(toIpynb(), null, 1)],
-                          { type: 'application/x-ipynb+json' });
+  async function download() {
+    const tab = currentTab();
+    const suggested = (((tab && tabDisplayName(tab)) || 'notebook')
+      .replace(/[^\w.-]+/g, '_')) + '.ipynb';
+    const json = JSON.stringify(toIpynb(), null, 1);
+    // Real save dialog (destination + filename) where the File System
+    // Access API exists (Chromium, secure context -- the Playground's
+    // main target). Elsewhere (Firefox, plain-http remote hosts) there
+    // is no scriptable picker: fall back to a classic download under
+    // the suggested name and let the browser's own "ask where to save"
+    // setting decide whether a dialog appears -- no prompt boxes.
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: suggested,
+          types: [{ description: 'Jupyter notebook',
+                    accept: { 'application/x-ipynb+json': ['.ipynb'] } }],
+        });
+        const w = await handle.createWritable();
+        await w.write(json);
+        await w.close();
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;  // user cancelled
+        // any other failure: fall through to the download path
+      }
+    }
+    const blob = new Blob([json], { type: 'application/x-ipynb+json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'notebook.ipynb';
+    a.download = suggested;
     a.click();
     URL.revokeObjectURL(a.href);
-  }
-
-  /* Mode-switch resume: leaving the page records where we were
-     (selected-cell index + window scroll); coming back restores both,
-     so a Circuit-mode detour returns to the same spot. Indices rather
-     than cell ids: ids are minted afresh when the autosave reloads. */
-  function saveResumePoint() {
-    try {
-      sessionStorage.setItem('ps.nb.resume', JSON.stringify({
-        idx: selected ? cells.indexOf(selected) : -1,
-        scrollY: window.scrollY,
-      }));
-    } catch (e) { /* sessionStorage disabled */ }
-  }
-
-  function restoreResumePoint() {
-    let r = null;
-    try { r = JSON.parse(sessionStorage.getItem('ps.nb.resume') || 'null'); }
-    catch (e) { r = null; }
-    if (!r) return;
-    if (Number.isInteger(r.idx) && r.idx >= 0 && r.idx < cells.length) {
-      selectCell(cells[r.idx], { scroll: false });
-    }
-    if (Number.isFinite(r.scrollY) && r.scrollY > 0) {
-      // Double-raf: the cell DOM (and any saved outputs) must have
-      // laid out before the offset means anything.
-      requestAnimationFrame(() => requestAnimationFrame(
-        () => window.scrollTo(0, r.scrollY)));
-    }
   }
 
   let autosaveTimer = null;
   function flushAutosave() {
     clearTimeout(autosaveTimer);
-    try {
-      localStorage.setItem('ps.nb.autosave', JSON.stringify(toIpynb()));
-    } catch (e) { /* quota / disabled */ }
+    persistTabs();
   }
   function scheduleAutosave() {
     clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
       // Every model change funnels through here, so the debounced tick
-      // doubles as the sidebar/outline refresh trigger.
+      // doubles as the sidebar/outline + tab-name refresh trigger.
       renderSidebar();
-      try {
-        localStorage.setItem('ps.nb.autosave', JSON.stringify(toIpynb()));
-      } catch (e) { /* quota / disabled: drafts just don't persist */ }
+      renderTabBar();
+      persistTabs();
     }, 500);
   }
 
-  function restoreAutosave() {
+  // Restore the persisted tab set. Returns true when something was
+  // restored; the single-notebook 'ps.nb.autosave' blob from before the
+  // tab era migrates into a lone tab.
+  function restoreTabs() {
+    let saved = null;
     try {
-      const raw = localStorage.getItem('ps.nb.autosave');
-      if (!raw) return false;
-      loadNotebook(JSON.parse(raw));
+      saved = JSON.parse(localStorage.getItem('ps.nb.tabs') || 'null');
+    } catch (e) { saved = null; }
+    if (!saved || !Array.isArray(saved.tabs) || !saved.tabs.length) {
+      let legacy = null;
+      try {
+        legacy = JSON.parse(localStorage.getItem('ps.nb.autosave') || 'null');
+      } catch (e) { legacy = null; }
+      if (!legacy) return false;
+      try { localStorage.removeItem('ps.nb.autosave'); } catch (e) {}
+      const db = (legacy.metadata && legacy.metadata.provsql
+                  && legacy.metadata.provsql.database) || connDb;
+      tabs = [makeTab('Untitled', db, legacy)];
+      activeTabId = tabs[0].id;
       return true;
-    } catch (e) {
-      return false;
     }
+    tabs = saved.tabs.map((t) => ({
+      id: t.id, name: t.name || 'Untitled', db: t.db || null,
+      doc: t.doc || null, kernel: null, resume: t.resume || null,
+    }));
+    nextTabId = tabs.reduce(
+      (m, t) => Math.max(m, parseInt(String(t.id).slice(1), 10) || 0), 0) + 1;
+    activeTabId = tabs.some((t) => t.id === saved.active)
+      ? saved.active : tabs[0].id;
+    return true;
   }
 
   /* ──────── boot ──────── */
 
   function defaultNotebook() {
-    cells = [
-      newCell('markdown',
-        '# ProvSQL notebook\n\nSQL cells run against a **stateful session**: '
-        + 'temp tables and `SET`s persist across cells until you restart the '
-        + 'kernel. Results render inline and save with the notebook '
-        + '(Jupyter-compatible `.ipynb`).'),
-      newCell('sql'),
-    ];
+    // A single empty SQL cell: no boilerplate Markdown, so fresh tabs
+    // stay "Untitled" until the user gives the notebook an H1 heading.
+    cells = [newCell('sql')];
     renderAll();
   }
 
-  function init(studioEnv) {
+  async function init(studioEnv) {
     env = studioEnv;
 
     // Result-table UUID / agg_token / random_variable cells carry
@@ -1263,8 +1535,16 @@
       input.value = '';
       if (!file) return;
       try {
-        loadNotebook(JSON.parse(await file.text()));
-        scheduleAutosave();
+        const doc = JSON.parse(await file.text());
+        // Validate before opening a tab for it.
+        fromIpynb(doc);
+        const name = file.name.replace(/\.ipynb$/i, '') || 'notebook';
+        const db = (doc.metadata && doc.metadata.provsql
+                    && doc.metadata.provsql.database) || connDb;
+        // A loaded notebook always lands in its own tab, bound to the
+        // database recorded in its metadata; the binding banner offers
+        // switch / create / rebind when that is not the live one.
+        newTab(name, db, doc);
       } catch (e) {
         window.alert(`Could not load ${file.name}: ${e.message}`);
       }
@@ -1275,11 +1555,14 @@
     window.addEventListener('pagehide', () => {
       // The debounced autosave may not have fired yet (e.g. a mode
       // switch right after an edit); write synchronously so nothing is
-      // lost on navigation.
+      // lost on navigation. flushAutosave -> persistTabs also records
+      // the per-tab resume point (selection + scroll).
       flushAutosave();
-      saveResumePoint();
-      if (kernel && navigator.sendBeacon) {
-        navigator.sendBeacon(`/api/nb/session/${kernel.sessionId}/close`);
+      if (navigator.sendBeacon) {
+        for (const t of tabs) {
+          const k = t.id === activeTabId ? kernel : t.kernel;
+          if (k) navigator.sendBeacon(`/api/nb/session/${k.sessionId}/close`);
+        }
       }
     });
 
@@ -1295,10 +1578,35 @@
       uuidBtn.setAttribute('aria-pressed', String(on));
     });
 
-    if (!restoreAutosave()) defaultNotebook();
-    if (cells.length) selectCell(cells[0], { scroll: false });
-    restoreResumePoint();
-    setKernelChip('none', 'no kernel');
+    wireTabBar();
+    // The current database name anchors every binding decision; fetch
+    // it before restoring tabs (one round-trip, also warms /api/conn).
+    try {
+      const resp = await fetch('/api/conn');
+      if (resp.ok) connDb = (await resp.json()).database || null;
+    } catch (e) { /* banner logic degrades to no-op without connDb */ }
+
+    if (!restoreTabs()) {
+      tabs = [makeTab('Untitled', connDb, null)];
+      activeTabId = tabs[0].id;
+    }
+    // Booting on a database different from the active tab's binding
+    // (the user switched databases elsewhere): activate the tab bound
+    // to the new database, or open a fresh one for it -- the previous
+    // tab stays, with its binding shown on the tab.
+    const active = currentTab();
+    if (active && active.db && connDb && active.db !== connDb) {
+      const match = tabs.find((t) => t.db === connDb);
+      if (match) {
+        activeTabId = match.id;
+      } else {
+        const t = makeTab('Untitled', connDb, null);
+        tabs.push(t);
+        activeTabId = t.id;
+      }
+    }
+    loadTabIntoView(currentTab());
+    persistTabs();
     refreshSidebarSchema();
   }
 

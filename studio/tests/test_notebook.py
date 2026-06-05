@@ -193,3 +193,37 @@ def test_connection_switch_drops_kernels(client, app):
     resp = client.post("/api/conn", json={"database": current_db})
     assert resp.status_code == 200, resp.data
     assert client.get(f"/api/nb/session/{sid}/status").status_code == 404
+
+
+# ──────── database creation (notebook binding "create" action) ────────
+
+
+def test_create_database_endpoint(client, test_dsn):
+    """POST /api/databases creates the database with provsql installed
+    (the binding banner's create action); duplicates 409, bad names 400."""
+    import psycopg
+    name = "provsql_nb_scratch_test"
+    admin = "dbname=postgres"
+    try:
+        resp = client.post("/api/databases", json={"name": name})
+        assert resp.status_code == 200, resp.data
+        payload = resp.get_json()
+        assert payload["ok"] is True and payload["database"] == name
+        # provsql was installed in the new database (warning is None).
+        assert payload["warning"] is None, payload["warning"]
+        params = psycopg.conninfo.conninfo_to_dict(test_dsn)
+        params["dbname"] = name
+        with psycopg.connect(psycopg.conninfo.make_conninfo(**params)) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM pg_extension WHERE extname='provsql'").fetchone()
+            assert row is not None
+
+        assert client.post("/api/databases",
+                           json={"name": name}).status_code == 409
+        assert client.post("/api/databases",
+                           json={"name": "no;injection"}).status_code == 400
+        assert client.post("/api/databases",
+                           json={"name": ""}).status_code == 400
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}"')

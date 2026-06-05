@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import psycopg
+import psycopg.conninfo
 from psycopg import sql
 from psycopg_pool import ConnectionPool
 
@@ -657,6 +658,31 @@ def list_databases(pool: ConnectionPool) -> list[str]:
             "ORDER BY datname"
         )
         return [r[0] for r in cur.fetchall()]
+
+
+def create_database(dsn: str | None, name: str) -> str | None:
+    """Create database `name` (requires CREATEDB) and best-effort install
+    the provsql extension in it, so a scratch database minted for a
+    notebook is immediately ready for provenance work.
+
+    Returns a warning string when the database was created but the
+    extension install failed (no install package, no preload, not
+    superuser, ...); the caller surfaces it and the user's own
+    `CREATE EXTENSION` / setup cells can still fix things up. Raises
+    `psycopg.Error` when the CREATE DATABASE itself fails."""
+    # CREATE DATABASE cannot run inside a transaction: autocommit, off-pool.
+    with psycopg.connect(dsn or "", autocommit=True) as conn:
+        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+
+    params = psycopg.conninfo.conninfo_to_dict(dsn or "")
+    params["dbname"] = name
+    try:
+        with psycopg.connect(psycopg.conninfo.make_conninfo(**params),
+                             autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS provsql CASCADE")
+    except psycopg.Error as e:
+        return f"database created, but installing provsql failed: {str(e).strip()}"
+    return None
 
 
 def _has_provsql_in_search_path(s: str) -> bool:

@@ -14,7 +14,8 @@ def _goto_notebook(page: Page, studio_url: str) -> None:
     expect(page.locator("body")).to_have_class("mode-notebook", timeout=5000)
     # Each test starts from a pristine default notebook, not a previous
     # test's autosaved draft.
-    page.evaluate("localStorage.removeItem('ps.nb.autosave')")
+    page.evaluate("localStorage.removeItem('ps.nb.autosave');"
+                  "localStorage.removeItem('ps.nb.tabs')")
     page.reload()
     expect(page.locator("#notebook-pane")).to_be_visible(timeout=5000)
 
@@ -27,13 +28,34 @@ def _run_focused(page: Page) -> None:
     page.locator("#nb-run").click()
 
 
+def _download_notebook(page: Page):
+    """Drive the save path deterministically: disable the
+    showSaveFilePicker branch (headless Chromium cannot show it) so the
+    classic download fallback fires."""
+    page.evaluate("window.showSaveFilePicker = undefined")
+    with page.expect_download() as dl:
+        page.locator("#nb-save").click()
+    return dl.value
+
+
 def test_notebook_mode_boots_with_default_cells(page: Page, studio_url: str) -> None:
     _goto_notebook(page, studio_url)
-    # Default notebook: one rendered markdown cell + one empty SQL cell.
-    expect(page.locator(".nb-cell--markdown .nb-cell__md h1")).to_contain_text(
-        "ProvSQL notebook", timeout=8000)  # marked.js lazy-loads
+    # Default notebook: a single empty SQL cell, no boilerplate
+    # markdown, so the fresh tab stays "Untitled".
     expect(page.locator(".nb-cell--sql")).to_have_count(1)
+    expect(page.locator(".nb-cell--markdown")).to_have_count(0)
+    expect(page.locator(".nb__tab--active")).to_contain_text("Untitled")
     expect(page.locator("#nb-kernel-label")).to_have_text("no kernel")
+
+
+def _add_markdown_cell(page: Page, text: str) -> None:
+    """Append a markdown cell via the toolbar and give it `text`. A
+    fresh empty markdown cell drops straight into edit mode."""
+    page.locator("#nb-add-md").click()
+    ta = page.locator(".nb-cell__mdta:not([hidden])").last
+    expect(ta).to_be_visible()
+    ta.fill(text)
+    ta.blur()
 
 
 def test_run_cell_renders_rows_and_starts_kernel(page: Page, studio_url: str) -> None:
@@ -93,23 +115,20 @@ def test_error_cell_shows_banner_kernel_survives(page: Page, studio_url: str) ->
 
 def test_markdown_cell_edit_and_render(page: Page, studio_url: str) -> None:
     _goto_notebook(page, studio_url)
+    _add_markdown_cell(page, "## Hello *notebook*")
     md = page.locator(".nb-cell--markdown").first
-    md.locator(".nb-cell__md").dblclick()
-    ta = md.locator(".nb-cell__mdta")
-    expect(ta).to_be_visible()
-    ta.fill("## Hello *notebook*")
-    ta.blur()
     expect(md.locator(".nb-cell__md h2")).to_contain_text("Hello", timeout=8000)
     expect(md.locator(".nb-cell__md em")).to_have_text("notebook")
+    # Double-click re-enters edit mode.
+    md.locator(".nb-cell__md").dblclick()
+    expect(md.locator(".nb-cell__mdta")).to_be_visible()
 
 
 def test_markdown_render_is_sanitized(page: Page, studio_url: str) -> None:
     _goto_notebook(page, studio_url)
+    _add_markdown_cell(page,
+                       'hi <img src=x onerror="window.__pwned = true"> there')
     md = page.locator(".nb-cell--markdown").first
-    md.locator(".nb-cell__md").dblclick()
-    ta = md.locator(".nb-cell__mdta")
-    ta.fill('hi <img src=x onerror="window.__pwned = true"> there')
-    ta.blur()
     expect(md.locator(".nb-cell__md")).to_contain_text("hi", timeout=8000)
     assert page.evaluate("window.__pwned") is None
 
@@ -124,9 +143,10 @@ def test_sidebar_is_compact_outline_plus_relations(page: Page, studio_url: str) 
     expect(page.locator("#sidebar-body .nb-side")).to_be_visible(timeout=8000)
     assert page.locator("#sidebar-body table").count() == 0
 
-    # The default markdown cell's heading shows up in the outline.
+    # Markdown headings show up in the outline.
+    _add_markdown_cell(page, "# My analysis")
     outline = page.locator(".nb-side__outline .nb-side__h")
-    expect(outline.first).to_have_text("ProvSQL notebook", timeout=8000)
+    expect(outline.first).to_have_text("My analysis", timeout=8000)
 
     # The personnel relation is listed with its prov pill and a compact
     # column line.
@@ -170,7 +190,8 @@ def test_schema_panel_fills_selected_cell_or_adds_one(
     # Case 2: fresh page, no SQL cell ever focused -> the prefill lands
     # in a freshly appended cell (the never-touched default cell is
     # left alone).
-    page.evaluate("localStorage.removeItem('ps.nb.autosave')")
+    page.evaluate("localStorage.removeItem('ps.nb.autosave');"
+                  "localStorage.removeItem('ps.nb.tabs')")
     page.reload()
     expect(page.locator(".nb-cell--sql")).to_have_count(1, timeout=5000)
     page.locator("#schema-btn").click()
@@ -216,14 +237,13 @@ def test_save_produces_valid_ipynb(page: Page, studio_url: str) -> None:
     cell = page.locator(".nb-cell--sql").first
     expect(cell.locator(".nb-out tbody tr")).to_have_count(1, timeout=8000)
 
-    with page.expect_download() as dl:
-        page.locator("#nb-save").click()
-    doc = json.loads(open(dl.value.path()).read())
+    dl = _download_notebook(page)
+    doc = json.loads(open(dl.path()).read())
     assert doc["nbformat"] == 4
     assert doc["metadata"]["kernelspec"]["name"] == "provsql-studio"
     types = [c["cell_type"] for c in doc["cells"]]
-    assert types == ["markdown", "code"]
-    code = doc["cells"][1]
+    assert types == ["code"]
+    code = doc["cells"][0]
     assert "SELECT 42 AS answer;" in "".join(code["source"])
     assert code["execution_count"] == 1
     out = code["outputs"][0]
@@ -315,9 +335,8 @@ def test_circuit_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> N
     expect(circ.locator(".nb-circ__svg .node-group")).to_have_count(
         4, timeout=8000)
 
-    with page.expect_download() as dl:
-        page.locator("#nb-save").click()
-    doc = json.loads(open(dl.value.path()).read())
+    dl = _download_notebook(page)
+    doc = json.loads(open(dl.path()).read())
     circ_cells = [c for c in doc["cells"]
                   if c.get("metadata", {}).get("provsql", {}).get("cell") == "circuit"]
     assert len(circ_cells) == 1
@@ -329,9 +348,10 @@ def test_circuit_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> N
     assert "-- circuit" in "".join(saved["source"])
 
     # Fresh page, load the file: the DAG re-paints without a kernel.
-    page.evaluate("localStorage.removeItem('ps.nb.autosave')")
+    page.evaluate("localStorage.removeItem('ps.nb.autosave');"
+                  "localStorage.removeItem('ps.nb.tabs')")
     page.reload()
-    page.locator("#nb-load-input").set_input_files(str(dl.value.path()))
+    page.locator("#nb-load-input").set_input_files(str(dl.path()))
     circ2 = page.locator(".nb-cell--circuit")
     expect(circ2.locator(".nb-circ__svg .node-group")).to_have_count(
         4, timeout=8000)
@@ -409,9 +429,9 @@ def test_jupyter_keymap(page: Page, studio_url: str) -> None:
 
     # m converts the selected SQL cell to markdown, y back to SQL.
     page.keyboard.press("m")
-    expect(page.locator(".nb-cell--markdown")).to_have_count(2)  # + default md
-    page.keyboard.press("y")
     expect(page.locator(".nb-cell--markdown")).to_have_count(1)
+    page.keyboard.press("y")
+    expect(page.locator(".nb-cell--markdown")).to_have_count(0)
 
     # m on a non-empty SQL cell wraps the content in a ```sql fence
     # (rendered as a code block); y unwraps it, round-tripping the SQL.
@@ -466,3 +486,121 @@ def test_mode_roundtrip_returns_to_same_place(page: Page, studio_url: str) -> No
     page.wait_for_timeout(300)  # double-raf scroll restore
     scroll_after = page.evaluate("window.scrollY")
     assert abs(scroll_after - scroll_before) < 60, (scroll_before, scroll_after)
+
+
+def test_tabs_create_switch_and_persist(page: Page, studio_url: str) -> None:
+    """The + button opens an independent notebook tab; switching tabs
+    preserves each tab's cells and outputs; the tab set survives a
+    reload."""
+    _goto_notebook(page, studio_url)
+    ta = _sql_cell_ta(page)
+    ta.fill("SELECT 1 AS first_tab;")
+    ta.focus()
+    _run_focused(page)
+    expect(page.locator(".nb-out tbody td").first).to_have_text("1", timeout=8000)
+
+    page.locator("#nb-tab-add").click()
+    expect(page.locator(".nb__tab")).to_have_count(2)
+    # Fresh tab: default notebook, no outputs.
+    expect(page.locator(".nb-out tbody td")).to_have_count(0)
+    ta2 = _sql_cell_ta(page)
+    ta2.fill("SELECT 2 AS second_tab;")
+
+    # Back to tab 1: content and rendered output are intact.
+    page.locator(".nb__tab").first.click()
+    expect(_sql_cell_ta(page)).to_have_value("SELECT 1 AS first_tab;")
+    expect(page.locator(".nb-out tbody td").first).to_have_text("1")
+
+    # Reload: both tabs come back, tab 1 active with its output.
+    page.reload()
+    expect(page.locator(".nb__tab")).to_have_count(2, timeout=8000)
+    expect(_sql_cell_ta(page)).to_have_value("SELECT 1 AS first_tab;")
+    expect(page.locator(".nb-out tbody td").first).to_have_text("1")
+
+    # Tabs name themselves from the first level-1 Markdown heading.
+    expect(page.locator(".nb__tab--active")).to_contain_text("Untitled")
+    _add_markdown_cell(page, "# Renamed via heading")
+    page.wait_for_timeout(700)  # autosave tick re-renders the bar
+    expect(page.locator(".nb__tab--active")).to_contain_text(
+        "Renamed via heading")
+
+
+def test_loaded_notebook_opens_new_tab_with_binding_banner(
+        page: Page, studio_url: str, tmp_path) -> None:
+    """Loading an .ipynb opens a new tab named after the file; a binding
+    to a database other than the live one raises the banner, and
+    'Rebind' adopts the current database."""
+    doc = {
+        "nbformat": 4, "nbformat_minor": 5,
+        "metadata": {"provsql": {"scheme": "semiring",
+                                 "database": "some_other_db"}},
+        "cells": [{"cell_type": "code", "execution_count": None,
+                   "metadata": {}, "source": ["SELECT 1;"], "outputs": []}],
+    }
+    nb = tmp_path / "myanalysis.ipynb"
+    nb.write_text(json.dumps(doc))
+
+    _goto_notebook(page, studio_url)
+    page.locator("#nb-load-input").set_input_files(str(nb))
+    # New tab, named after the file, with the foreign-db chip.
+    expect(page.locator(".nb__tab")).to_have_count(2)
+    active = page.locator(".nb__tab--active")
+    expect(active).to_contain_text("myanalysis")
+    expect(active.locator(".nb__tab-db")).to_have_text("some_other_db")
+
+    banner = page.locator("#nb-binding-banner")
+    expect(banner).to_be_visible()
+    expect(banner).to_contain_text("some_other_db")
+    banner.locator("#nb-bind-keep").click()
+    expect(banner).to_be_hidden()
+    expect(active.locator(".nb__tab-db")).to_have_count(0)
+
+
+def test_saved_notebook_stamps_database_binding(page: Page, studio_url: str) -> None:
+    _goto_notebook(page, studio_url)
+    current_db = page.evaluate(
+        "fetch('/api/conn').then(r => r.json()).then(c => c.database)")
+    dl = _download_notebook(page)
+    doc = json.loads(open(dl.path()).read())
+    assert doc["metadata"]["provsql"]["database"] == current_db
+
+
+def test_db_switch_opens_tab_bound_to_new_database(page: Page, studio_url: str) -> None:
+    """Switching the connection to another database boots the notebook
+    with a fresh tab bound to it; the old tab stays, showing its
+    binding."""
+    _goto_notebook(page, studio_url)
+    original_db = page.evaluate(
+        "fetch('/api/conn').then(r => r.json()).then(c => c.database)")
+    ta = _sql_cell_ta(page)
+    ta.fill("SELECT 'tab for ' || current_database();")
+    page.wait_for_timeout(700)  # let the autosave flush
+
+    try:
+        # Switch to the always-present postgres maintenance DB.
+        page.evaluate("""db => fetch('/api/conn', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({database: db})
+        }).then(r => r.json())""", "postgres")
+        page.reload()
+        expect(page.locator(".nb__tab")).to_have_count(2, timeout=8000)
+        # The new active tab is a fresh Untitled notebook bound to
+        # postgres.
+        active = page.locator(".nb__tab--active")
+        expect(active).to_contain_text("Untitled")
+        expect(page.locator("#nb-binding-banner")).to_be_hidden()
+        # The old tab still lists its binding (now foreign).
+        other = page.locator(".nb__tab").first
+        expect(other.locator(".nb__tab-db")).to_have_text(original_db)
+        # Activating the old tab raises the banner with a switch offer.
+        other.click()
+        banner = page.locator("#nb-binding-banner")
+        expect(banner).to_be_visible()
+        expect(banner.locator("#nb-bind-switch")).to_contain_text(original_db)
+    finally:
+        page.evaluate("""db => fetch('/api/conn', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({database: db})
+        }).then(r => r.json())""", original_db)
