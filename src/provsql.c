@@ -9545,7 +9545,8 @@ static Query *process_query(const constants_t *constants, Query *q,
   bool supported = true;
   bool group_by_rewrite = false;
   int nbcols = 0;
-  int **columns;
+  int **columns = NULL;
+  int columns_len = 0;
   unsigned i = 0;
   char *inv_cert = NULL;            /* serialised inversion-free certificate (root) */
   const InvFreeMarkerCtx *local_inv_ctx = NULL; /* this query's marker context */
@@ -9685,8 +9686,6 @@ static Query *process_query(const constants_t *constants, Query *q,
   }
 
   if(provsql_active) {
-    columns = (int **)palloc(q->rtable->length * sizeof(int *));
-
     if (q->setOperations) {
       // TODO: Nest set operations as subqueries in FROM,
       // so that we only do set operations on base tables
@@ -9895,8 +9894,16 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
     }
 
-    if (supported)
+    if (supported) {
+      /* Sized here, after every rewrite that can grow q->rtable (scalar-
+       * subquery decorrelation, ARRAY() lowering, outer-join lowering,
+       * EXCEPT / set-operation transforms, …).  Sizing it at the top of the
+       * provsql_active block under-allocated once those rewrites added RTEs,
+       * and build_column_map then wrote past the end of the array. */
+      columns_len = q->rtable->length;
+      columns = (int **)palloc0(columns_len * sizeof(int *));
       build_column_map(q, columns, &nbcols);
+    }
 
     if (supported) {
       Expr *provenance;
@@ -9998,7 +10005,10 @@ static Query *process_query(const constants_t *constants, Query *q,
         add_select_non_zero(constants, q, provenance);
     }
 
-    for (i = 0; i < q->rtable->length; ++i) {
+    /* columns is NULL when the query was not supported (build_column_map
+     * never ran); columns_len is its allocation-time length, in case a later
+     * step grew q->rtable again. */
+    for (i = 0; columns != NULL && i < (unsigned)columns_len; ++i) {
       if (columns[i])
         pfree(columns[i]);
     }
