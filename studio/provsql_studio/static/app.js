@@ -301,6 +301,38 @@
     ta.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
+  // Load-SQL button right under the eraser : reads a local .sql file
+  // into the textarea, replacing its content. The previous text is
+  // pushed to history first, so the same Alt+↑ recovery applies as for
+  // the eraser. The hidden file input's value is reset on every change
+  // so picking the same file twice in a row still fires the event.
+  const loadSqlInput = document.getElementById('load-sql-input');
+  document.getElementById('load-sql-btn')?.addEventListener('click', () => {
+    loadSqlInput?.click();
+  });
+  loadSqlInput?.addEventListener('change', async () => {
+    const file = loadSqlInput.files && loadSqlInput.files[0];
+    loadSqlInput.value = '';
+    if (!file) return;
+    const ta = document.getElementById('request');
+    if (!ta) return;
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      // Reading a just-picked local file essentially never fails
+      // (revoked permission, file deleted mid-pick); leave the box
+      // untouched rather than wiping it with nothing to show.
+      console.error(`Could not read ${file.name}:`, e);
+      return;
+    }
+    pushHistory(ta.value);
+    ta.value = text.replace(/\r\n/g, '\n');
+    ta.setSelectionRange(0, 0);
+    ta.focus();
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
   // Cancel button (sibling of the Send button, hidden by default; runQuery
   // unhides it for the duration of an in-flight POST /api/exec). Firing
   // POST /api/cancel/<id> in parallel reaches the server on a different

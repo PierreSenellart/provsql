@@ -58,6 +58,27 @@ def test_query_history_records_runs(page: Page, studio_url: str) -> None:
     expect(menu).to_contain_text("first_marker")
 
 
+def test_load_sql_file_fills_query_box(
+        page: Page, studio_url: str, tmp_path) -> None:
+    """The folder icon under the eraser loads a local .sql file into the
+    query box, replacing its content; the loaded query then runs."""
+    sql_file = tmp_path / "loaded.sql"
+    sql_file.write_text("SELECT name FROM personnel LIMIT 2;\n")
+
+    page.goto(studio_url + "/where")
+    page.locator("#request").fill("SELECT 'draft to be replaced';")
+    # The visible button proxies a click to the hidden file input;
+    # set_input_files drives the input directly, which fires the same
+    # `change` event as a user pick.
+    expect(page.locator("#load-sql-btn")).to_be_visible()
+    page.locator("#load-sql-input").set_input_files(str(sql_file))
+    expect(page.locator("#request")).to_have_value(
+        "SELECT name FROM personnel LIMIT 2;\n"
+    )
+    page.locator("#run-btn").click()
+    expect(page.locator("#result-count")).to_have_text("2", timeout=8000)
+
+
 def test_connection_editor_opens_and_validates(
     page: Page, studio_url: str
 ) -> None:

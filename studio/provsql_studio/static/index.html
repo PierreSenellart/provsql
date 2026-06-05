@@ -355,6 +355,12 @@
                   aria-label="Clear the query box">
             <i class="fas fa-eraser"></i>
           </button>
+          <button type="button" class="wp-editor__gutter-action" id="load-sql-btn"
+                  title="Load a SQL file into the query box"
+                  aria-label="Load a SQL file into the query box">
+            <i class="fas fa-folder-open"></i>
+          </button>
+          <input type="file" id="load-sql-input" accept=".sql,.txt,text/plain,application/sql" hidden>
         </div>
         <div class="wp-editor__panel">
           <pre class="wp-editor__hl" id="request-hl" aria-hidden="true"><code></code></pre>
