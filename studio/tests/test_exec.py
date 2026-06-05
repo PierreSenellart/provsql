@@ -437,3 +437,25 @@ def test_agg_display_absent_when_no_agg_columns(client):
     final = payload["blocks"][-1]
     assert final["kind"] == "rows"
     assert "agg_display" not in final
+
+
+def test_agg_arithmetic_cells_resolve_display(client):
+    """Arithmetic over aggregates yields gate_arith-rooted agg_tokens;
+    their cells must resolve to "value (*)" in agg_display like plain
+    aggregates do (the arith gate records its scalar in extra)."""
+    payload = post_exec(client, (
+        "SELECT city, 2.0 * COUNT(*) AS double_count "
+        "FROM personnel GROUP BY city ORDER BY city"
+    ), mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows"
+    col = next(i for i, c in enumerate(final["columns"])
+               if c["name"] == "double_count")
+    assert final["columns"][col]["type_name"] == "agg_token"
+    display = final.get("agg_display") or {}
+    for row in final["rows"]:
+        uuid = row[col]
+        assert display.get(uuid, "").endswith(" (*)"), (uuid, display.get(uuid))
+    # Berlin and New York have 2 personnel each, Paris 3.
+    values = sorted(display[r[col]] for r in final["rows"])
+    assert values == ["4.0 (*)", "4.0 (*)", "6.0 (*)"]

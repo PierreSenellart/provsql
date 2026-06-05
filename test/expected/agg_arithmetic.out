@@ -121,3 +121,11 @@ Berlin|Ellen, Susan (team)
 New York|John, Paul (team)
 Paris|Dave, Magdalen, Nancy (team)
 (3 rows)
+remove_provenance
+
+(1 row)
+disp
+11.0 (*)
+12.0 (*)
+6.0 (*)
+(3 rows)

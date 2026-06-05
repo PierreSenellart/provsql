@@ -660,6 +660,5403 @@ BEGIN
 END;
 $body$;
 
+
+-- Idempotent re-runs of add_provenance / create_provenance_mapping:
+-- both now NOTICE and return when their work is already done (notebook
+-- cells and setup scripts re-run freely). PG14+ and pre-14
+-- add_provenance bodies differ (statement-level update-provenance
+-- triggers), hence the version branch.
+
+DO $$
+BEGIN
+  IF current_setting('server_version_num')::int >= 140000 THEN
+    EXECUTE $sql$
+CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
+  RETURNS void AS
+$func$
+BEGIN
+  -- Idempotence: a second add_provenance on an already-tracked table is
+  -- a no-op with a NOTICE, so setup scripts and notebook cells can be
+  -- re-run freely.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % already has provenance tracking', _tbl;
+    RETURN;
+  END IF;
+  -- See the common-version body for the rationale of dropping the
+  -- column DEFAULT and UNIQUE in favour of provenance_guard + a
+  -- plain index.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
+  EXECUTE format(
+    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    _tbl);
+
+  EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %s REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %s REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
+
+  PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+END
+$func$ LANGUAGE plpgsql SECURITY DEFINER;
+    $sql$;
+  ELSE
+    EXECUTE $sql$
+CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
+  RETURNS void AS
+$func$
+BEGIN
+  -- Idempotence: a second add_provenance on an already-tracked table is
+  -- a no-op with a NOTICE, so setup scripts and notebook cells can be
+  -- re-run freely.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % already has provenance tracking', _tbl;
+    RETURN;
+  END IF;
+  -- No DEFAULT: the guard trigger mints the UUID, so the trigger can
+  -- distinguish "user omitted" (NULL) from "user supplied a value".
+  -- No UNIQUE: we no longer rely on it to keep the table TID -- the
+  -- guard does that semantically -- and a UNIQUE would reject the
+  -- legitimate cross-table UUID copy that just flips the table to
+  -- OPAQUE.  We keep a plain index for fast UUID-keyed lookups.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
+  EXECUTE format(
+    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  -- Seed the base-ancestor set to {self}: a base TID table's atoms
+  -- come from itself and no other relation.  CTAS-derived tables
+  -- inherit unions of source ancestor sets; that is handled by the
+  -- CTAS hook (a separate slice), not here.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+END
+$func$ LANGUAGE plpgsql SECURITY DEFINER;
+    $sql$;
+  END IF;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION create_provenance_mapping(
+  newtbl text,
+  oldtbl regclass,
+  att text,
+  preserve_case bool DEFAULT 'f'
+) RETURNS void AS
+$$
+DECLARE
+BEGIN
+  -- Idempotence: when the mapping table already exists, leave it alone
+  -- with a NOTICE (re-runnable setup scripts / notebook cells). Drop it
+  -- first to rebuild a stale mapping.
+  IF (CASE WHEN preserve_case THEN to_regclass(format('%I', newtbl))
+           ELSE to_regclass(newtbl) END) IS NOT NULL THEN
+    RAISE NOTICE 'mapping table % already exists', newtbl;
+    RETURN;
+  END IF;
+  -- ON COMMIT DROP only fires at COMMIT: several mapping creations in
+  -- one transaction (a notebook cell, a setup script run via psql -1)
+  -- would otherwise collide on the leftover temp table. The to_regclass
+  -- probe (rather than DROP IF EXISTS) keeps the first call NOTICE-free.
+  IF to_regclass('pg_temp.tmp_provsql') IS NOT NULL THEN
+    DROP TABLE tmp_provsql;
+  END IF;
+  EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %s', oldtbl);
+  ALTER TABLE tmp_provsql RENAME provsql TO provenance;
+  IF preserve_case THEN
+    EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
+    EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
+  ELSE
+    EXECUTE format('CREATE TABLE %s AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
+    EXECUTE format('CREATE INDEX ON %s(provenance)', newtbl);
+  END IF;
+END
+$$ LANGUAGE plpgsql;
+
+
+-- agg_token arithmetic now records the computed scalar in the
+-- gate_arith's extra (via agg_arith_make), and
+-- agg_token_value_text recovers the "value (*)" display for
+-- arith tokens like it does for agg ones (Studio result cells).
+
+CREATE OR REPLACE FUNCTION agg_arith_make(op int, children uuid[], val numeric)
+  RETURNS agg_token AS
+$$
+DECLARE
+  token uuid := provsql.provenance_arith(op, children);
+BEGIN
+  PERFORM provsql.set_extra(token, val::text);
+  RETURN provsql.agg_token_make(token, val);
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION agg_token_value_text(token UUID)
+  RETURNS text AS
+$$
+  SELECT CASE
+    -- agg gates: extra is set by aggregate evaluation; arith gates
+    -- (agg_token arithmetic): extra is recorded by agg_arith_make.
+    WHEN provsql.get_gate_type(token) IN ('agg', 'arith')
+      THEN provsql.get_extra(token) || ' (*)'
+    ELSE NULL
+  END;
+$$ LANGUAGE sql STABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
+     - provsql.agg_token_value(a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- agg_token \<op\> numeric ----------------------------------------------
+/** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) + b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - numeric. */
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_plus(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - agg_token (gate_arith MINUS). */
+CREATE OR REPLACE FUNCTION agg_token_minus(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * agg_token (gate_arith TIMES). */
+CREATE OR REPLACE FUNCTION agg_token_times(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / agg_token (gate_arith DIV). */
+CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief Unary -agg_token (gate_arith NEG). */
+CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
+     - provsql.agg_token_value(a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- agg_token \<op\> numeric ----------------------------------------------
+/** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) + b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - numeric. */
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_minus(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * agg_token (gate_arith TIMES). */
+CREATE OR REPLACE FUNCTION agg_token_times(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / agg_token (gate_arith DIV). */
+CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief Unary -agg_token (gate_arith NEG). */
+CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
+     - provsql.agg_token_value(a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- agg_token \<op\> numeric ----------------------------------------------
+/** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) + b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - numeric. */
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_times(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / agg_token (gate_arith DIV). */
+CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief Unary -agg_token (gate_arith NEG). */
+CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
+     - provsql.agg_token_value(a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- agg_token \<op\> numeric ----------------------------------------------
+/** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) + b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - numeric. */
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief Unary -agg_token (gate_arith NEG). */
+CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
+     - provsql.agg_token_value(a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- agg_token \<op\> numeric ----------------------------------------------
+/** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) + b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - numeric. */
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) + b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - numeric. */
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
+/** @brief Assignment cast from agg_token to double precision */
+CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to integer */
+CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to bigint */
+CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
+CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+
+/**
+ * @brief Placeholder comparison of agg_token with numeric
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and numeric values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of numeric with agg_token
+ *
+ * Symmetric to agg_token_comp_numeric; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+/** @brief SQL operator numeric < agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR < (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >,
+  NEGATOR    = >=
+);
+
+/** @brief SQL operator agg_token <= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+/** @brief SQL operator numeric <= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = >=,
+  NEGATOR    = >
+);
+
+/** @brief SQL operator agg_token = numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator numeric = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator numeric <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @brief SQL operator agg_token >= numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+/** @brief SQL operator numeric >= agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <=,
+  NEGATOR    = <
+);
+
+/** @brief SQL operator agg_token > numeric (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = agg_token,
+  RIGHTARG   = numeric,
+  PROCEDURE  = agg_token_comp_numeric,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+/** @brief SQL operator numeric > agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR > (
+  LEFTARG    = numeric,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = numeric_comp_agg_token,
+  COMMUTATOR = <,
+  NEGATOR    = <=
+);
+
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
+/** @} */
+
+/** @defgroup random_variable_type Type for continuous random variables
+ *
+ *  Custom type <tt>random_variable</tt>: a thin wrapper around a
+ *  provenance gate UUID, used to expose continuous probabilistic
+ *  c-tables in SQL.  The UUID indexes either a <tt>gate_rv</tt>
+ *  (an actual distribution) or a <tt>gate_value</tt> (a
+ *  zero-variance constant produced by <tt>provsql.as_random</tt>).
+ *  Binary-coercible with <tt>uuid</tt> (same 16-byte layout), so an
+ *  <tt>rv</tt>-typed expression flows directly into any function
+ *  expecting a uuid at zero runtime cost.
+ *
+ *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
+ *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
+ *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  Operator overloads
+ *  (<tt>+ - * /</tt> and the six comparators) are defined further
+ *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
+ *  callers that want a <tt>gate_cmp</tt> token without going through
+ *  the planner hook.
+ *  @{
+ */
+
+CREATE TYPE random_variable;
+
+/** @brief Input function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_in(cstring)
+  RETURNS random_variable
+  AS 'provsql','random_variable_in' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Output function for the random_variable type */
+CREATE OR REPLACE FUNCTION random_variable_out(random_variable)
+  RETURNS cstring
+  AS 'provsql','random_variable_out' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE TYPE random_variable (
+  internallength = 16,
+  input  = random_variable_in,
+  output = random_variable_out,
+  alignment = char
+);
+
+/** @brief Build a random_variable from a UUID (internal). */
+CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
+  RETURNS random_variable
+  AS 'provsql','random_variable_make' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Binary-coercible cast random_variable -> uuid.
+ *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
+ *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
+CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
+
+/**
+ * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
+ *
+ * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
+ * not for <tt>double precision</tt>; we use the inequality form,
+ * which works because PG defines <tt>NaN = NaN</tt> as <tt>TRUE</tt>
+ * for floats (so <tt>NaN <> 'NaN'::float8</tt> is <tt>FALSE</tt>).
+ */
+CREATE OR REPLACE FUNCTION is_finite_float8(x double precision)
+  RETURNS bool AS
+$$
+  SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
 -- 10. Refresh the cached OID lookups so a backend warmed under 1.8.0 picks
 --    up the new surface on its next get_constants() call.
 SELECT reset_constants_cache();

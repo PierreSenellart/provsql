@@ -1840,8 +1840,9 @@ CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLI
  * the circuit but loses the human-readable aggregate value. This
  * function takes such a UUID and returns the original @c "value (*)"
  * string by reading the gate's @c extra (set by aggregate evaluation
- * to the computed scalar). Returns @c NULL if @p token does not
- * resolve to an @c agg gate.
+ * for @c agg gates, and by @c agg_arith_make for the @c arith gates
+ * that agg_token arithmetic mints). Returns @c NULL if @p token does
+ * not resolve to an @c agg or @c arith gate.
  *
  * @param token UUID of an @c agg gate (typically obtained from an
  *              @c agg_token cell when @c aggtoken_text_as_uuid is on,
@@ -1851,7 +1852,9 @@ CREATE OR REPLACE FUNCTION agg_token_value_text(token UUID)
   RETURNS text AS
 $$
   SELECT CASE
-    WHEN provsql.get_gate_type(token) = 'agg'
+    -- agg gates: extra is set by aggregate evaluation; arith gates
+    -- (agg_token arithmetic): extra is recorded by agg_arith_make.
+    WHEN provsql.get_gate_type(token) IN ('agg', 'arith')
       THEN provsql.get_extra(token) || ' (*)'
     ELSE NULL
   END;
@@ -1937,44 +1940,60 @@ END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE
   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
+/** @brief Mint (or reuse) the gate_arith for an agg_token arithmetic
+ *  result and return the agg_token carrying it.
+ *
+ * Also records the computed scalar in the gate's @c extra -- exactly
+ * what aggregate evaluation does for @c agg gates -- so
+ * @c agg_token_value_text can recover the @c "value (*)" display from
+ * the bare UUID (as ProvSQL Studio does for result cells under
+ * @c provsql.aggtoken_text_as_uuid). The gate UUID is deterministic in
+ * (op, children), so re-recording the (identical) value is idempotent. */
+CREATE OR REPLACE FUNCTION agg_arith_make(op int, children uuid[], val numeric)
+  RETURNS agg_token AS
+$$
+DECLARE
+  token uuid := provsql.provenance_arith(op, children);
+BEGIN
+  PERFORM provsql.set_extra(token, val::text);
+  RETURN provsql.agg_token_make(token, val);
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
 -- agg_token \<op\> agg_token --------------------------------------------
 /** @brief agg_token + agg_token (gate_arith PLUS). */
 CREATE OR REPLACE FUNCTION agg_token_plus(a agg_token, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(0, ARRAY[(a)::uuid, (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, (b)::uuid],
      provsql.agg_token_value(a) + provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief agg_token - agg_token (gate_arith MINUS). */
 CREATE OR REPLACE FUNCTION agg_token_minus(a agg_token, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(2, ARRAY[(a)::uuid, (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, (b)::uuid],
      provsql.agg_token_value(a) - provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief agg_token * agg_token (gate_arith TIMES). */
 CREATE OR REPLACE FUNCTION agg_token_times(a agg_token, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(1, ARRAY[(a)::uuid, (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, (b)::uuid],
      provsql.agg_token_value(a) * provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief agg_token / agg_token (gate_arith DIV). */
 CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(3, ARRAY[(a)::uuid, (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
      provsql.agg_token_value(a) / provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief Unary -agg_token (gate_arith NEG). */
 CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(4, ARRAY[(a)::uuid]),
+$$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
      - provsql.agg_token_value(a)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
@@ -1982,32 +2001,28 @@ $$ SELECT provsql.agg_token_make(
 /** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
 CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)]),
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
      provsql.agg_token_value(a) + b); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief agg_token - numeric. */
 CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)]),
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
      provsql.agg_token_value(a) - b); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief agg_token * numeric. */
 CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)]),
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
      provsql.agg_token_value(a) * b); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief agg_token / numeric. */
 CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)]),
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
      provsql.agg_token_value(a) / b); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
@@ -2015,32 +2030,28 @@ $$ SELECT provsql.agg_token_make(
 /** @brief numeric + agg_token. */
 CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
      a + provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief numeric - agg_token. */
 CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
      a - provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief numeric * agg_token. */
 CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
      a * provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief numeric / agg_token. */
 CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_token_make(
-     provsql.provenance_arith(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid]),
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
      a / provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
