@@ -143,6 +143,7 @@ Setup and basics
    "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "", "✓"
    "``create_provenance_mapping_view``", "", "", "", "", "✓", "", "", ""
    "Hand-built mapping table", "", "", "", "", "", "✓", "", ""
+   "``setup_search_path``", "✓", "", "", "", "", "", "", ""
    "``provsql.active`` GUC", "", "", "", "", "", "", "", ""
    "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", ""
 
@@ -185,8 +186,10 @@ Aggregation
    "``string_agg`` / ``array_agg``", "", "", "", "", "", "", "", ""
    "``COUNT(DISTINCT …)``", "", "", "", "", "", "", "", ""
    "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", ""
+   "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", ""
    "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", ""
    "``choose`` aggregate", "", "", "", "", "", "", "", ""
+   "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", ""
 
 Circuit inspection
 ~~~~~~~~~~~~~~~~~~~
@@ -270,6 +273,12 @@ Probabilities
    "``'compilation'`` (d4 / c2d / dsharp / minic2d)", "(✓)", "✓", "", "", "", "", "", "✓"
    "``'inversion-free'`` method", "", "", "", "", "", "", "", "✓"
    "``'wmc'`` counters", "", "", "", "", "", "", "", "✓"
+   "``'d-tree'`` method (certified anytime bounds)", "", "", "", "", "", "", "", ""
+   "``'sieve'`` method (inclusion-exclusion)", "", "", "", "", "", "", "", ""
+   "``'karp-luby'`` method (relative FPRAS)", "", "", "", "", "", "", "", ""
+   "``'stopping-rule'`` method (additive FPRAS)", "", "", "", "", "", "", "", ""
+   "Guarantee request (``'relative'`` / ``'additive'``, cost-based chooser)", "", "", "", "", "", "", "", ""
+   "``probability_bounds`` (cheap lower / upper marginals)", "", "", "", "", "", "", "", ""
    "Studio benchmark panel", "", "", "", "", "", "", "", "✓"
    "``expected(COUNT/SUM/MIN/MAX)``", "", "", "", "", "", "✓", "✓", ""
    "``repair_key`` (block-independent, ``mulinput``)", "", "", "", "", "", "✓", "", "✓"
