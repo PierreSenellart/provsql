@@ -34,7 +34,11 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
 #include "executor/executor.h"
+#if PG_VERSION_NUM >= 120000
 #include "optimizer/optimizer.h"
+#else
+#include "optimizer/var.h"              /* contain_vars_of_level */
+#endif
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_node.h"

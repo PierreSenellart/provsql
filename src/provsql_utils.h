@@ -536,4 +536,13 @@ extern bool provsql_lookup_relation_keys(Oid relid,
 
 #include "provsql_error.h"
 
+#ifdef __cplusplus
+/* Neutralise the PostgreSQL macros (gettext family, port.h's printf-family
+ * replacements) that break STL / Boost headers included after this point;
+ * see c_cpp_compatibility.h.  Done here so every C++ translation unit that
+ * pulls in the PostgreSQL headers through provsql_utils.h is covered
+ * without having to mind its include order. */
+#include "c_cpp_compatibility.h"
+#endif
+
 #endif /* PROVSQL_UTILS_H */

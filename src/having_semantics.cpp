@@ -12,6 +12,7 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/lsyscache.h"
 }
+#include "c_cpp_compatibility.h"
 
 #include <climits>
 #include <string>

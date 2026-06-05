@@ -25,6 +25,7 @@
 extern "C" {
 #include "postgres.h"
 }
+#include "c_cpp_compatibility.h"
 
 #include <variant>
 #include <string>
