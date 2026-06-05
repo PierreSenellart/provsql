@@ -51,10 +51,19 @@
  * involved leaf is private to the cmp subtree).  A non-laminar shape -- e.g.
  * the triangle @c R(x,y),S(y,z),T(z,x) -- produces a multi-member block with
  * no common leaf at some level, which clears the soundness flag and falls the
- * cmp through to exact enumeration.  This circuit-only recursion already
- * covers the tuple-independent hierarchical class at any depth; a planner
- * @c CERT_SAFE_AGG_PLAN certificate is still needed only for shapes the
- * circuit cannot self-certify (e.g. BID disjoint-block @c ⊥ structure).
+ * cmp through to exact enumeration.  This circuit-only recursion covers the
+ * tuple-independent hierarchical class at any depth.
+ *
+ * **BID blocks (@c COUNT / @c SUM / @c AVG).**  A @c repair_key block surfaces
+ * in the circuit as a set of @c gate_mulinput contributors sharing a block-key
+ * child, mutually exclusive with per-alternative probabilities.  Such a
+ * contributor is recognised and the block handled as a *categorical* (at most
+ * one alternative present, the null arm Σp_i<1 contributing 0), independent of
+ * the TID part and of other blocks, so the two are convolved -- no planner
+ * certificate needed, since the block *is* visible in the circuit.  The
+ * residual genuinely certificate-only case is a declared key on a plain TID
+ * table (mutual exclusion in @c block_key metadata only, no @c mulinput): that
+ * would need a planner @c CERT_SAFE_AGG_PLAN.  BID @c MIN / @c MAX bail.
  *
  * Runs as a probability-side pre-pass in @c probability_evaluate.cpp, *after*
  * @c runCountCmpEvaluator (so the cheap flat path still wins where it

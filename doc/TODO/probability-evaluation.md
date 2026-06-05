@@ -92,15 +92,21 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   a pivot identity that avoids explicit factorisation). Remaining: genuinely
   coupled values that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor;
   may be `#P`-hard, self-gates back to enumeration today).
-- **BID disjoint-block `⊥`** — mutual exclusion from a key constraint is a
-  *semantic* fact that need not surface as circuit leaf-sharing, so it is the one
-  genuinely **certificate-only** structure (the circuit footprint oracle cannot
-  see it). Open spike: how BID-`⊥` block membership surfaces in the loaded
-  circuit (repair_key / mutually-exclusive inputs). If needed, bake a
-  `CERT_SAFE_AGG_PLAN` blob (the `find_hierarchical_root_atoms` block structure,
-  currently discarded) onto the `gate_agg` at the HAVING-lift site
-  (`having_Expr_to_provenance_cmp` in `src/provsql.c`, append-only via
-  `src/safe_query_cert.{c,h}`), carried through `CircuitFromMMap`.
+- **BID disjoint-block `⊥`** — the circuit-visible case is now exact: a
+  `repair_key` block surfaces as `gate_mulinput` contributors sharing a
+  block-key child, so `runAggMarginalEvaluator` handles each block as a
+  *categorical* (mutually exclusive, null arm Σp<1) convolved with the TID part,
+  for `COUNT` / `SUM` / `AVG` (`src/AggMarginalEvaluator.cpp`, pinned by
+  `test/sql/having_bid.sql`). Remaining: BID `MIN` / `MAX` (blockwise
+  `pAllAbsent` over value-thresholded alternatives), and the genuinely
+  **certificate-only** residual — a *declared key on a plain TID table*, where
+  mutual exclusion lives in `block_key` metadata only (no `mulinput` in the
+  circuit). That last one needs a `CERT_SAFE_AGG_PLAN` blob baked onto the
+  `gate_agg` at the HAVING-lift site (`having_Expr_to_provenance_cmp` in
+  `src/provsql.c`, via `src/safe_query_cert.{c,h}`), carried through
+  `CircuitFromMMap` — and would be the first load-bearing consumer of the
+  planner's skeleton/block analysis (today diagnostic-only in
+  `classify_having.c`).
 - **UNION/EXCEPT over a join that re-uses a base tuple** — `(R⋈S) UNION (R⋈T)` →
   `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. Needs per-contributor
   read-once factoring (`r∧(s∨t)`), the safe-query / read-once-rewriter problem,

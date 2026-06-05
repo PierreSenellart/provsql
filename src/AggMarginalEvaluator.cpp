@@ -1012,11 +1012,44 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
     if (ref[static_cast<std::size_t>(agg)] != 1) continue;
     bool ok = true;
 
-    /* Parse every contributor into its (flattened) leaf set. */
-    std::vector<std::vector<gate_t>> leaves(n);
-    for (std::size_t i = 0; i < n && ok; ++i)
-      if (!parseProductContributor(gc, ks[i], leaves[i])) ok = false;
+    /* Parse every contributor: either a plain product of independent
+     * @c gate_input leaves (TID, fed to the laminar / product recursion) or a
+     * single @c gate_mulinput -- one alternative of a mutually-exclusive BID
+     * block (e.g. @c repair_key), identified by its shared block-key child.
+     * A contributor mixing the two (a join onto a BID row) or holding several
+     * mulinputs is out of scope and bails to enumeration. */
+    std::vector<std::vector<gate_t>> leaves;     /* TID contributor leaf sets */
+    std::vector<long> tid_vals;                  /* per-TID value (match.ms, aligned) */
+    /* block key -> alternatives (prob, value).  A BID block is a categorical:
+     * at most one alternative present (Σp_i ≤ 1), the null arm contributes 0. */
+    std::map<gate_t, std::vector<std::pair<double, long>>> blocks;
+    for (std::size_t i = 0; i < n && ok; ++i) {
+      if (gc.getGateType(ks[i]) == gate_mulinput) {
+        const auto &ch = gc.getWires(ks[i]);
+        if (ch.size() != 1) { ok = false; break; }   /* not a block alternative */
+        blocks[ch[0]].push_back({gc.getProb(ks[i]),
+                                 static_cast<long>(match.ms[i])});
+      } else {
+        std::vector<gate_t> ls;
+        if (!parseProductContributor(gc, ks[i], ls)) { ok = false; break; }
+        leaves.push_back(std::move(ls));
+        tid_vals.push_back(static_cast<long>(match.ms[i]));
+      }
+    }
     if (!ok) continue;
+
+    /* Independence guard: a block key (shared by its alternatives) must not
+     * also surface as a TID leaf, which would couple the block to an
+     * independent contributor.  Distinct repair_key blocks already get
+     * distinct keys; cross-group sharing is caught by aggSubtreePrivate. */
+    {
+      std::set<gate_t> tidset;
+      for (const auto &ls : leaves) tidset.insert(ls.begin(), ls.end());
+      bool clash = false;
+      for (const auto &b : blocks)
+        if (tidset.count(b.first)) { clash = true; break; }
+      if (clash) continue;
+    }
 
     /* The cmp's randomness must be private to its agg subtree -- no gate
      * reachable from the agg referenced from outside it -- the soundness
@@ -1024,6 +1057,13 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
      * Subsumes the per-semimod ref==1 and per-leaf ref==cnt checks and
      * extends them to nested / shared product gates (subquery tuples). */
     if (!aggSubtreePrivate(gc, agg, ref)) continue;
+
+    /* Σ_i p_i of a BID block (clamped). */
+    auto blockMass = [](const std::vector<std::pair<double, long>> &alts) {
+      double psum = 0.0;
+      for (const auto &alt : alts) psum += alt.first;
+      return psum > 1.0 ? 1.0 : psum;
+    };
 
     /* Dispatch on the aggregate; each arm computes the exact probability
      * over the hierarchical (laminar) contributor structure, recursing
@@ -1041,6 +1081,12 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
       if (!all_one) continue;
       std::vector<double> total = countPMF(gc, leaves, ok);
       if (!ok) continue;
+      /* Each BID block adds 0 or 1 to the count (mutual exclusion): present
+       * w.p. Σp_i, absent w.p. 1-Σp_i; independent of the rest. */
+      for (const auto &b : blocks) {
+        double psum = blockMass(b.second);
+        total = convolve(total, std::vector<double>{1.0 - psum, psum});
+      }
       const bool is_scalar =
         (gc.getInfos(agg).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
       pr = prFromPMF(total, match.op, match.C, is_scalar);
@@ -1054,32 +1100,54 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
        * reach here -- a fractional HAVING-AVG constant is rejected upstream
        * before the cmp is even built. */
       const bool is_avg = (agg_kind == AggregationOperator::AVG);
+      auto shift = [&](long m) { return is_avg ? m - match.C : m; };
       std::vector<long> weights;
-      weights.reserve(match.ms.size());
+      weights.reserve(tid_vals.size());
       long lo = 0, hi = 0;
-      for (int m : match.ms) {
-        long w = is_avg ? (static_cast<long>(m) - match.C) : static_cast<long>(m);
+      for (long m : tid_vals) {
+        long w = shift(m);
         weights.push_back(w);
         if (w < 0) lo += w; else hi += w;
       }
+      for (const auto &b : blocks)
+        for (const auto &alt : b.second) {
+          long w = shift(alt.second);
+          if (w < 0) lo += w; else hi += w;
+        }
       /* Reachable-sum range cap (Remark 3 pseudo-polynomial caveat). */
       if (hi - lo + 1 > static_cast<long>(kMaxSumSupport)) continue;
       const long thr = is_avg ? 0 : match.C;
 
       std::map<long, double> dist = sumPMF(gc, leaves, std::move(weights), ok);
       if (!ok) continue;
+      /* Convolve each BID block's categorical (shifted) sum distribution. */
+      for (const auto &b : blocks) {
+        std::map<long, double> bpmf;
+        for (const auto &alt : b.second) bpmf[shift(alt.second)] += alt.first;
+        bpmf[0] += 1.0 - blockMass(b.second);     /* null outcome: sum 0 */
+        std::map<long, double> nd;
+        for (const auto &a : dist)
+          for (const auto &c : bpmf)
+            nd[a.first + c.first] += a.second * c.second;
+        if (nd.size() > kMaxSumSupport) { ok = false; break; }
+        dist.swap(nd);
+      }
+      if (!ok) continue;
       pr = 0.0;
       for (const auto &kv : dist)
         if (sumSatisfies(kv.first, match.op, thr)) pr += kv.second;
       /* Exclude the empty group: its (shifted) sum is 0, so subtract its
        * mass when 0 satisfies the predicate (a non-empty group that
-       * happens to sum to the threshold stays). */
+       * happens to sum to the threshold stays).  The empty world is all TID
+       * contributors absent AND every block in its null outcome. */
       if (sumSatisfies(0, match.op, thr)) {
         double emptyMass = pAllAbsent(gc, leaves, ok);
         if (!ok) continue;
+        for (const auto &b : blocks) emptyMass *= 1.0 - blockMass(b.second);
         pr -= emptyMass;
       }
     } else {  /* MIN or MAX */
+      if (!blocks.empty()) continue;       /* BID min/max: out of scope (bail) */
       pr = minMaxProb(gc, leaves, match.ms, agg_kind, match.op, match.C, ok);
       if (!ok) continue;
     }

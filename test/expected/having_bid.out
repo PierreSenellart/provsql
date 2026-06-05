@@ -1,0 +1,57 @@
+\set ECHO none
+repair_key
+
+(1 row)
+shape|p_off|p_on|diff
+z SUM < 5|0.5000|0.5000|0.000000
+(1 row)
+shape|p_off|p_on|diff
+z SUM = 0|0.5000|0.5000|0.000000
+(1 row)
+shape|p_off|p_on|diff
+z SUM >= 5|0.5000|0.5000|0.000000
+(1 row)
+shape|p_off|p_on|diff
+z AVG < 5|0.5000|0.5000|0.000000
+(1 row)
+shape|p_off|p_on|diff
+z COUNT < 2|1.0000|1.0000|0.000000
+(1 row)
+shape|p_off|p_on|diff
+z MIN < 5|0.5000|0.5000|0.000000
+(1 row)
+repair_key
+
+(1 row)
+shape|p_off|p_on|diff
+n SUM < 5|0.3000|0.3000|0.000000
+(1 row)
+shape|p_off|p_on|diff
+n COUNT >= 1|0.6000|0.6000|0.000000
+(1 row)
+repair_key
+
+(1 row)
+shape|p_off|p_on|diff
+xy SUM < 11|0.7500|0.7500|0.000000
+(1 row)
+shape|p_off|p_on|diff
+xy SUM <= 1|0.5000|0.5000|0.000000
+(1 row)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 safe-join aggregate): provenance circuit reduced from 12 to 1 gates
+z_fires
+0.5000
+(1 row)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 safe-join aggregate): provenance circuit reduced from 18 to 1 gates
+xy_fires
+0.7500
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
