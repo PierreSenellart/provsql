@@ -5033,3 +5033,14 @@ BEGIN
   END IF;
 END;
 $$;
+
+-- Final constants-cache refresh.  The planned SELECT statements earlier in
+-- this script (reset_constants_cache itself, the zero/one create_gate calls)
+-- make the installing session memoize the OID constants *mid-script*, while
+-- objects defined later (notably the choose aggregate, used by the
+-- scalar-subquery decorrelation) do not exist yet.  Their optional lookups
+-- then stay InvalidOid for the rest of the session, silently disabling the
+-- corresponding rewrites (e.g. IN/NOT IN over a tracked relation would raise
+-- "Subqueries ... not supported") until a new connection.  Refreshing here,
+-- after every object exists, repairs the installing session's cache.
+SELECT provsql.reset_constants_cache();

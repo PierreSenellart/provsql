@@ -628,3 +628,10 @@ SELECT create_provenance_mapping_view('time_validity_view', 'update_provenance',
 /** @} */
 
 SET search_path TO public;
+
+-- Final constants-cache refresh: same rationale as at the end of
+-- provsql.common.sql.  On PG14+ this file is appended after the common
+-- script, so this is the last statement of the generated install script;
+-- the refresh must come after every object has been created for the
+-- installing session's memoized constants to be complete.
+SELECT provsql.reset_constants_cache();
