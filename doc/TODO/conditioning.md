@@ -259,34 +259,12 @@ works now; §6.B is the gap the primitive closes.
 The `prov` argument on `expected` / `variance` / `moment` /
 `central_moment` / `support` / `rv_sample` / `rv_histogram` *is* a
 conditioning event: they compute `E[X^k | prov]` for both a
-`random_variable` and an `agg_token` (the C dispatcher documents exactly
-this). So conditional expectation, variance, sampling, and histograms of
-one scalar already work — including the canonical truncation and the
-conditional-Value-at-Risk / stress-test shape.
-
-```sql
-CREATE TABLE air_quality(sensor int, reading provsql.random_variable);
-INSERT INTO air_quality VALUES (1, provsql.normal(12.0, 4.0)) /* … */;
-
--- E[reading | reading >= 0]: a physical sensor cannot report a negative
--- concentration.  The same-RV comparator event is what RangeCheck folds
--- into a truncation.
-SELECT a.sensor,
-       expected(a.reading,
-                (SELECT provenance() FROM air_quality v
-                 WHERE v.sensor = a.sensor AND v.reading >= 0))
-FROM air_quality a;
-
--- Conditional VaR: expected loss given a market crash, and its tail
--- histogram, both via the same conditioning argument.
-SELECT expected(portfolio_loss, crash.tok),
-       rv_histogram(portfolio_loss, 30, crash.tok)
-FROM positions,
-     (SELECT provenance() AS tok FROM market WHERE index_return < -0.10) crash;
-```
-
-That `agg_token` also accepts `prov` means conditional moments of a
-discrete GROUP BY aggregate (`E[SUM(x) | event]`) work the same way.
+`random_variable` and an `agg_token`. So conditional expectation,
+variance, sampling, and histograms of one scalar already work —
+including the canonical truncation, the conditional-Value-at-Risk shape,
+and conditional moments of a discrete GROUP BY aggregate
+(`E[SUM(x) | event]`). This is the baseline §6.B.2 must lift from
+"moment only" to "a distribution that flows onward".
 
 #### 6.A.2 Key / functional-dependency constraints via `repair_key`
 
@@ -294,17 +272,11 @@ A hard key constraint — "at most one tuple per key", MarkoViews' weight-0
 denial view `V2` ("a person has one advisor") in its keyed special case —
 is `repair_key` today. It turns a table into mutually-exclusive,
 renormalised blocks, after which any `probability_evaluate` is implicitly
-conditioned on the FD holding.
-
-```sql
-SELECT repair_key('advisor_candidates', 'advisee');
--- each advisee's candidate advisors are now a BID block; downstream
--- probabilities are conditioned on "advisee -> advisor"
-```
-
-The TID/BID classifier in `classify_query.c` already separates
-mutual-exclusion (BID) from independence (TID); BID blocks are exactly
-the weight-0, single-attribute instance of constraint conditioning.
+conditioned on the FD holding. BID blocks (the TID/BID classifier in
+`classify_query.c` separates mutual-exclusion from independence) are
+exactly the weight-0, single-attribute instance of constraint
+conditioning; §6.B.3 is the general denial-constraint case `repair_key`
+does not cover.
 
 ### 6.B What needs the conditioning primitive
 

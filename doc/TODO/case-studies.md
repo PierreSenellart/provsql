@@ -71,19 +71,22 @@ case-study real estate:
   high-confidence filter, showing that inserted rows inherit source
   provenance rather than fresh tokens.
 
-### Future case study (CS7), blocked on upstream features
+### Future case study (UDFs / aggregate joins / `choose`)
 
-A new case study to be written once the corresponding ProvSQL features
-land. Targets:
+A new case study to be written. (The CS7 slot is now taken by
+*Peer-Review Assignment and Knowledge Compilation*, so this would be
+CS8.) Targets:
 
-- **UDFs**: provenance propagation through user-defined functions.
+- **UDFs**: provenance propagation through user-defined functions
+  (blocked: not yet supported).
 - **Joining on an aggregate value**: each row joined with the per-group
   aggregate it belongs to, provenance correctly tracked through the
-  aggregate.
+  aggregate (blocked: not yet supported).
 - **`choose` for UDF uncertainty**: when a UDF returns one of several
   candidate outputs, `choose` models the alternatives as mutually
   exclusive in the provenance circuit (analogous to `repair_key`'s role
-  in CS5, but for derived rather than ingested data).
+  in CS5, but for derived rather than ingested data). The `choose`
+  aggregate itself has shipped; the case study is still unwritten.
 
 ## Priorities
 
@@ -94,5 +97,6 @@ land. Targets:
 2. **Larger CS2 / CS4 extensions** : CS2 grows by five bullets and CS4
    adds a UPDATE / `undo` round-trip. These are the biggest single-CS
    coverage wins.
-3. **CS7** : blocked on the upstream features (UDFs, aggregate joins,
-   `choose`) landing in ProvSQL; revisit when those ship.
+3. **New UDF / aggregate-join case study** : still blocked on the
+   upstream features (UDF provenance, aggregate joins) landing in
+   ProvSQL; revisit when those ship.

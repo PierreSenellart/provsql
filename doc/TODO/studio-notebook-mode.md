@@ -8,8 +8,7 @@ mode architecture (`studio/provsql_studio/app.py` routes,
 `db.exec_batch`, the `app.js` mode switcher and result renderer, the
 `circuit.js` canvas) and on the Jupyter nbformat v4 specification for
 the on-disk format. Supersedes the “Notebooks (small)” entry of
-[`studio.md`](studio.md) (whose `.sql` import half shipped as the
-query-box load button; the export half folds into this plan).
+[`studio.md`](studio.md) (the export half folds into this plan).
 
 The pitch: the tutorial and case studies are *narratives* -- prose
 interleaved with queries whose outputs feed the next step. Today they

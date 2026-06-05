@@ -342,10 +342,12 @@ switches.
 
 ### B.2 RV-vs-RV analytical comparisons — **[Quick win]**
 
-`gate_cmp` handles `X < c` brilliantly. `X < Y` for two RVs goes to MC
-even when there's a clean form — Normal-Normal has
-`P(X<Y) = Φ((μ_Y − μ_X) / √(σ_X² + σ_Y²))`, Exponential-Exponential has
-`P(X<Y) = λ_X / (λ_X + λ_Y)`.
+`gate_cmp` handles `X < c` brilliantly. The Normal-Normal case
+`P(X<Y) = Φ((μ_Y − μ_X) / √(σ_X² + σ_Y²))` has landed (`normalDiffDecide`
+in `AnalyticEvaluator.cpp`). Remaining families still fall back to MC even
+when there's a clean form — Exponential-Exponential has
+`P(X<Y) = λ_X / (λ_X + λ_Y)`, and the other parametric pairs have
+analogous closed forms.
 
 **Applicability.** A/B tests, rankings, tournament probabilities, "which
 sensor is reading higher" — any "which is bigger" comparison.
@@ -506,15 +508,6 @@ UPDATE forecasts
 SET demand = provsql.snapshot(demand, n_samples => 10000)
 WHERE expensive_to_evaluate;
 ```
-
-### Callback gates — **explicitly not recommended**
-
-A `gate_callback(pl_function_oid)` that dispatches sampling/CDF queries
-to PL/Python or PL/R would buy live PyTorch/JAX/Stan integration, but it
-punctures parallel safety, breaks mmap snapshot semantics (the function
-can be redefined under you), and makes circuits non-portable. Worth
-offering as an escape hatch only; the sample-bundle route should be the
-default.
 
 ---
 

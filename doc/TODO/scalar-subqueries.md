@@ -1,124 +1,51 @@
 # Scalar subqueries: remaining unsupported forms
 
-## Why this note exists
-
-The bulk of the scalar-/correlated-subquery work is **done** and lives in the
+The bulk of scalar-/correlated-subquery support is implemented in the
 planner-hook rewrites in `src/provsql.c` (regression coverage in
-`test/sql/scalar_subquery.sql`, `having_grouped_column.sql`). What now ships:
+`test/sql/scalar_subquery.sql`, `having_grouped_column.sql`). This note tracks
+what is **still open**.
 
-- the **outer-join provenance root fix** (`LEFT`/`RIGHT`/`FULL` lowered to the
-  matched arm `⊎` the null-padded antijoin arm via ProvSQL's `−` / `NOT IN`
-  semantics) -- `lower_outer_joins`;
-- **correlated value** subqueries `(SELECT v FROM Q WHERE corr)` -> `R ⟕ Q`,
-  `GROUP BY R.*`, `choose(v)`, `HAVING count(Q.key) <= 1` (target-list position,
-  and WHERE comparisons lifted to `HAVING`, where a comparison adds
-  `count(Q.key) = 1` so the empty group is excluded) -- `decorrelate_scalar_sublinks`;
-- **aggregate-body** subqueries `(SELECT agg(v) FROM Q WHERE corr)` -> the
-  aggregate over the join group (no count gate; `count(*)` -> `count(Q.key)`);
-- **`SELECT DISTINCT` value body** `(SELECT DISTINCT Q.x FROM Q WHERE corr)` ->
-  the same `R ⟕ Q`, `GROUP BY R.*`, `choose(v)` decorrelation, but the
-  at-most-one-row gate counts distinct **values** instead of rows:
-  `HAVING count(DISTINCT v) <= 1` (and `= 1` for a WHERE comparison). This
-  admits "many matching rows, all the same value" (which `DISTINCT` collapses to
-  one) and still gates the worlds with more than one distinct value -- relies on
-  the COUNT(DISTINCT)-over-an-outer-join fix in `rewrite_agg_distinct`;
-- **`ORDER BY … LIMIT 1` value body** (argmax / "latest per group") ->
-  `choose(v ORDER BY key)` over the join group, no count gate (LIMIT 1 legally
-  takes the top of many rows) -- the body's junk sort-key targetList entries and
-  `sortClause` become the ordered `Aggref`'s order arguments;
-- **`EXISTS` / `IN` / `op ANY`** (semijoin) and **`NOT EXISTS` / `NOT IN` /
-  `op ALL`** (antijoin -- `∀q. x op q = ¬∃q. x ¬op q`), plus **row `IN`**
-  (`(a,b) IN (SELECT …)`, per-column conjuncts), rewritten to a correlated
-  `(SELECT count(*) …) >= 1` / `= 0` -- `rewrite_predicate_sublinks`,
-  `extract_quantified_corr`;
-- **`ARRAY(SELECT v FROM Q WHERE corr [ORDER BY key])`** -> `array_agg(v
-  [ORDER BY key])` over the group, with a `FILTER` dropping the null-padded row --
-  `rewrite_array_sublinks`.  A body `ORDER BY` moves inside the aggregate as an
-  ordered `array_agg` (its args = value + junk sort-key entries, `aggorder` = the
-  body's `sortClause`), the same technique as the LIMIT-1 argmax `choose`, so the
-  element order survives the regroup.  (An empty match yields a NULL-valued
-  `agg_token` rather than `{}` -- a pre-existing trait of the FILTER-based array
-  decorrelation, independent of the `ORDER BY`.)
-- **several correlated target-list sublinks sharing one `(Q, corr)`** `SELECT R.a,
-  (SELECT Q.x WHERE Q.k=R.k), (SELECT Q.y WHERE Q.k=R.k) FROM R` -- coalesced onto a
-  single `R ⟕ Q` group (one `count(Q.key) <= 1` gate, a `choose()` per sublink)
-  when every sublink is a direct value-body target entry with an identical body
-  bar the selected value -- `oj_sub_bodies_coalescible` + the `coalesce` arm of
-  `decorrelate_scalar_sublinks`;
-- an **uncorrelated value-body comparison in WHERE** `… WHERE (SELECT Q.x FROM Q) OP v`
-  -> a one-row HAVING-gated subquery `D = (SELECT 1 FROM Q HAVING (choose(x) OP v)
-  AND count(*) <= 1)` cross-joined into the FROM (gate `R ⊗ [choose(x) OP v]`,
-  empty / >1-row `Q` gated out) -- the value-body arm of
-  `move_uncorrelated_where_predicates`;
-- **multi-table bodies** `(SELECT v FROM Q1, Q2 WHERE …)`, collapsed into a
-  derived cross-product subquery -- `oj_wrap_body_from`;
-- **uncorrelated** target-list subqueries, moved into a cross-joined derived
-  aggregate in the outer FROM (value bodies as `choose(v)` + `HAVING count(*) <=
-  1`) -- `move_uncorrelated_sublinks_to_from`;
-- **uncorrelated `EXISTS`** and **uncorrelated aggregate comparisons in WHERE**
-  (`(SELECT count/max/… FROM Q) OP const`), pushed into a HAVING-gated one-row
-  subquery cross-joined into the FROM -- `move_uncorrelated_where_predicates`;
-- **uncorrelated `NOT EXISTS`** and **true-on-empty `count(*)` / `count(col)`
-  comparisons** (`(SELECT count(*) FROM Q) < k` / `<= k` / `= 0`), the m-semiring antijoin
-  `R ⊗ (1 ⊖ ⟦P⟧)` for the false-on-empty `P`; rewritten to the EXCEPT-ALL
-  difference `R EXCEPT ALL π_R(R × D)` with `D` the one-row HAVING-gated `P`
-  (multiplicity preserved) -- `rewrite_uncorrelated_antijoin`;
-- a **HAVING comparison of an aggregate against a grouped column** (per-group
-  variable RHS), wrapped like a constant in `having_OpExpr_to_provenance_cmp`;
-- a multi-table / auto-wrapped outer FROM, and an untracked outer relation;
-- a **sublink whose body touches no tracked relation** (over an untracked table,
-  or a constant/derived source): a deterministic condition/value (untracked data
-  is certain), passed straight through to Postgres with the row keeping its
-  provenance -- the "Subqueries not supported" error now fires only when a
-  sublink's body involves a tracked relation (`query_has_tracked_sublink`).
+## Nested scalar sublinks (passed through with a warning, provenance under-approximated)
 
-This note tracks what is **still rejected** (each with the clean
-`ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported` error, never a
-wrong answer) plus the one shape that is **passed through with a warning** rather
-than rejected.
-
-## Passed through with a warning (provenance under-approximated)
-
-A scalar (`EXPR_SUBLINK`) subquery **nested inside a larger expression** -- arithmetic
-or a function argument, so the sublink is neither a direct target-list entry nor a
-direct operand of a WHERE comparison -- is not decorrelatable by the current
-rewrites.  Rather than reject it, ProvSQL lets it through with a one-line
-`provsql_warning`:
+A scalar (`EXPR_SUBLINK`) subquery **nested inside a larger expression** --
+arithmetic or a function argument, so the sublink is neither a direct
+target-list entry nor a direct operand of a WHERE comparison -- is not
+decorrelatable by the current rewrites. Rather than reject it, ProvSQL lets it
+through with a one-line `provsql_warning`
+(`classify_remaining_sublinks` / `collect_direct_qual_sublinks`):
 
 | Form | Example |
 |---|---|
 | nested in a target-list expression | `SELECT R.a, (SELECT Q.x WHERE Q.k=R.k) + 1 FROM R` |
 | nested in a WHERE expression | `… WHERE (SELECT Q.x WHERE Q.k=R.k) + 1 > 50` |
 
-Postgres evaluates the sublink as ordinary SQL (the **value is correct**); the
-output row keeps **only the outer relation's provenance**, and the subquery's data
-is treated as certain.  This is an under-approximation, not a wrong answer, and a
-deliberate stop-gap until arithmetic over an `agg_token` is handled cleanly (it
-would need the `agg_token` to survive the surrounding operators).  The detector
-(`classify_remaining_sublinks` / `collect_direct_qual_sublinks`) distinguishes
-these nested positions from a tracked sublink still in a *direct* position (a
-`GROUP BY` body, a multi-relation `EXISTS`, …), which remains a hard error.
+The output row keeps **only the outer relation's provenance**; the subquery's
+data is treated as certain. This is an under-approximation, a deliberate
+stop-gap until arithmetic over an `agg_token` is handled cleanly in the
+decorrelation path (the `agg_token` would need to survive the surrounding
+operators so the nested sublink can be lifted into a `choose()` like a direct
+target entry).
 
-## Remaining unsupported forms (hard error)
+## Correlated sublinks over different `(Q, corr)`
 
-Tables below: `R(a, k)`, `Q(k, x)`, both provenance-tracked.
+```
+SELECT R.a, (SELECT … WHERE Q1.k=R.k) a1, (SELECT … WHERE Q2.k=R.a) a2 FROM R
+```
 
-| Form | Example | Why rejected | Extensible? |
-|---|---|---|---|
-| bare `LIMIT` / `OFFSET` body (no `ORDER BY`) | `(SELECT Q.x FROM Q WHERE Q.k=R.k LIMIT 1)` | Picks an arbitrary, non-deterministic row | no -- ill-defined without an order (`ORDER BY … LIMIT 1` IS tractable, see Priorities) |
-| `GROUP BY` body | `(SELECT sum(Q.x) FROM Q WHERE Q.k=R.k GROUP BY Q.k)` | Body grouping conflicts with the decorrelation's own `GROUP BY R.*` | hard |
-| Correlated sublinks over **different** `(Q, corr)` | `SELECT R.a, (SELECT … WHERE Q1.k=R.k) a1, (SELECT … WHERE Q2.k=R.a) a2 FROM R` | The same-`(Q, corr)` case now coalesces (see above); distinct bodies would each need their own LEFT JOIN, and a chain `R ⟕ Q1 ⟕ Q2` is not lowered by `lower_outer_joins` (it needs both join arms to be base `RangeTblRef`s) | yes -- generalise `lower_outer_joins` to a left-deep chain, or wrap-and-recurse per sublink |
+The same-`(Q, corr)` case coalesces onto one LEFT JOIN
+(`oj_sub_bodies_coalescible` + the `coalesce` arm of
+`decorrelate_scalar_sublinks`); distinct bodies would each need their own LEFT
+JOIN, and a chain `R ⟕ Q1 ⟕ Q2` is not lowered by `lower_outer_joins` (it needs
+both join arms to be base `RangeTblRef`s). The fix: generalise
+`lower_outer_joins` to a left-deep chain `R ⟕ Q1 ⟕ Q2 …`, or wrap-and-recurse
+that materialises each decorrelation as a derived `R'` before the next sublink.
 
-## Priorities
+## `GROUP BY` body (deferred)
 
-The genuinely-tractable next step:
+```
+(SELECT sum(Q.x) FROM Q WHERE Q.k=R.k GROUP BY Q.k)
+```
 
-1. **Correlated sublinks over different `(Q, corr)`** -- the same-`(Q, corr)` case
-   now coalesces onto one LEFT JOIN; distinct bodies need a separate LEFT JOIN
-   each, which requires either generalising `lower_outer_joins` to a left-deep
-   chain `R ⟕ Q1 ⟕ Q2 …` or a wrap-and-recurse that materialises each
-   decorrelation as a derived `R'` before the next sublink.
-
-A `GROUP BY` body and a bare (un-ordered) `LIMIT` are deferred: each needs
-genuinely new machinery (body-grouping or a deterministic row choice), not a
-reshaping of the existing rewrites.
+Body grouping conflicts with the decorrelation's own `GROUP BY R.*`. Currently a
+hard error (`ProvSQL: Subqueries … not supported`); needs genuinely new
+body-grouping machinery, not a reshaping of the existing rewrites.
