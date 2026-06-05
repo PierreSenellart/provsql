@@ -327,13 +327,14 @@ Python-like mental model should hold literally).
   screenshots (capture per the CLAUDE.md OS-level workflow);
   `doc/source/dev/`: a short architecture note (kernel registry,
   nbformat mapping) in the Studio/playground dev pages.
-- Release as **Studio 1.2.0** (independent stream; no extension
-  bump needed). Changelog entry per the release process;
-  compatibility table unchanged.
+- Release as the **next Studio minor** (1.2.0 when this plan was
+  written; the stream has since moved -- 1.5.0 as of June 2026).
+  Independent stream; no extension bump needed. Changelog entry per
+  the release process; compatibility table unchanged.
 
 ## Priorities
 
-1. **MVP (Studio 1.2.0)**: mode + cell list; Markdown and SQL cells;
+1. **MVP**: mode + cell list; Markdown and SQL cells;
    kernel sessions with run / run-all / interrupt / restart;
    per-cell results through the existing renderer; autosave +
    `.ipynb` download/load (outputs included); unit + e2e tests.
@@ -366,10 +367,28 @@ Python-like mental model should hold literally).
    result re-rendered from `application/vnd.provsql.eval+json`).
    The seeded notebooks landed generated-from-rst (see §7) with the
    `/notebook?nb=` deep link.
-   **Open**: per-cell scheme options, HTML export.
-3. **Playground + content**: Playground integration (shim
-   `DISCARD ALL`, vendoring, web e2e), tutorial + remaining
-   case-study notebooks with a drift check, docs screenshots.
+   **All landed**: per-cell scheme options landed (chip + cycle action,
+   honoured at run time). HTML export was **dropped**: the `.ipynb`
+   itself is the shareable static artifact -- outputs carry standard
+   MIME fallbacks (`text/html` tables, self-sufficient `image/svg+xml`
+   circuit snapshots with inlined presentation attributes,
+   `text/plain` eval results) that GitHub / nbviewer render directly,
+   and the Playground deep link covers the live-share case.
+3. **Playground + content** -- **landed**: the psycopg shim grew the
+   kernel surface (real BEGIN/COMMIT for `transaction()` on autocommit
+   connections, `close()` = `DISCARD ALL` + search_path restore,
+   `pq.TransactionStatus` / `closed` / `broken` / `dbname` /
+   `backend_pid`); the shell lists databases live from `pg_database`
+   (binding-banner Create works; Reset drops user databases too) and
+   mirrors the example notebooks into the Pyodide FS; `?nb=` deep links
+   imply notebook mode; child-boot bridges the pagehide kernel-close
+   `sendBeacon` and fixed 204 replies throwing in the fetch bridge;
+   `build.sh` vendors `static/notebook.js` + marked/DOMPurify;
+   `tests/web/test_notebook.py` covers cross-cell state, DISCARD-ALL
+   restart, and the seeded tutorial running end-to-end on WASM. The
+   notebooks' drift check runs in CI (`studio.yml` `notebooks` job,
+   pinned pandoc).
+   **Open**: docs screenshots (with the user-guide section, §10).
 4. **Later, if pulled**: chart cell for `rv_histogram` /
    `distribution-profile` outputs; variable templating; a real
    Jupyter kernel speaking to the same backend (would make the
