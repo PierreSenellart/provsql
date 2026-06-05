@@ -64,3 +64,16 @@ Dave|Paris|Dave
 Magdalen|Paris|Magdalen
 Nancy|Paris|Nancy
 (3 rows)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|formula
+1|a
+2|𝟙
+(2 rows)

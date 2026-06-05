@@ -42,3 +42,9 @@ WHERE attrelid ='personnel'::regclass AND attnum>1
 ORDER BY attname;
 
 SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
+
+-- Idempotence: re-running both is a NOTICE-and-no-op (notebook cells
+-- and setup scripts re-run freely), never an error.
+SELECT add_provenance('personnel');
+SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
+SELECT count(*) FROM personnel_name;

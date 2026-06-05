@@ -68,10 +68,18 @@ void initialize_provenance_mapping(
     char *value = SPI_getvalue(tuple, tupdesc, 1);
     char *uuid = SPI_getvalue(tuple, tupdesc, 2);
 
-    provenance_mapping[c.getGate(uuid)]=charp_to_value(value);
+    /* SPI_getvalue returns NULL for SQL NULLs (e.g. a temporal mapping
+     * row whose validity was never set). Such a row contributes no
+     * mapping entry -- the unmapped leaf falls back to the semiring's
+     * one() during evaluation -- and must not reach pfree, which
+     * crashes on NULL. */
+    if (value != NULL && uuid != NULL)
+      provenance_mapping[c.getGate(uuid)]=charp_to_value(value);
 
-    pfree(value);
-    pfree(uuid);
+    if (value != NULL)
+      pfree(value);
+    if (uuid != NULL)
+      pfree(uuid);
   }
   if(drop_table)
     SPI_exec(drop_temp_table, 0);

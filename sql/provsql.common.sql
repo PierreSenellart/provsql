@@ -444,6 +444,16 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
+  -- Idempotence: a second add_provenance on an already-tracked table is
+  -- a no-op with a NOTICE, so setup scripts and notebook cells can be
+  -- re-run freely.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % already has provenance tracking', _tbl;
+    RETURN;
+  END IF;
   -- No DEFAULT: the guard trigger mints the UUID, so the trigger can
   -- distinguish "user omitted" (NULL) from "user supplied a value".
   -- No UNIQUE: we no longer rely on it to keep the table TID -- the
@@ -656,6 +666,8 @@ CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
  *
  * Creates a new table mapping provenance tokens to values of a given
  * attribute, for use with semiring evaluation functions.
+ * Idempotent: if the mapping table already exists, raises a NOTICE and
+ * changes nothing (drop it first to rebuild).
  *
  * @param newtbl name of the mapping table to create
  * @param oldtbl source table with provenance tracking
@@ -671,6 +683,21 @@ CREATE OR REPLACE FUNCTION create_provenance_mapping(
 $$
 DECLARE
 BEGIN
+  -- Idempotence: when the mapping table already exists, leave it alone
+  -- with a NOTICE (re-runnable setup scripts / notebook cells). Drop it
+  -- first to rebuild a stale mapping.
+  IF (CASE WHEN preserve_case THEN to_regclass(format('%I', newtbl))
+           ELSE to_regclass(newtbl) END) IS NOT NULL THEN
+    RAISE NOTICE 'mapping table % already exists', newtbl;
+    RETURN;
+  END IF;
+  -- ON COMMIT DROP only fires at COMMIT: several mapping creations in
+  -- one transaction (a notebook cell, a setup script run via psql -1)
+  -- would otherwise collide on the leftover temp table. The to_regclass
+  -- probe (rather than DROP IF EXISTS) keeps the first call NOTICE-free.
+  IF to_regclass('pg_temp.tmp_provsql') IS NOT NULL THEN
+    DROP TABLE tmp_provsql;
+  END IF;
   EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %s', oldtbl);
   ALTER TABLE tmp_provsql RENAME provsql TO provenance;
   IF preserve_case THEN
@@ -4974,22 +5001,24 @@ SET search_path TO public;
 -- the configured session default (postgresql.conf / ALTER DATABASE / ALTER
 -- ROLE), unaffected by the SET search_path statements this script ran.
 -- CREATE EXTENSION raises client_min_messages to WARNING for the duration
--- of the script, so we lower it around the RAISE NOTICE and restore it.
+-- of the script, so we lower it around the RAISE NOTICE. SET LOCAL only:
+-- it unwinds by itself when CREATE EXTENSION's transaction ends. An
+-- explicit save/restore here would capture the WARNING clamp (already in
+-- force when this block runs) and restore *that* at session level,
+-- leaving the whole installing session with NOTICEs suppressed.
 DO $$
 DECLARE
   rp text;
   has_provsql boolean;
-  saved text := current_setting('client_min_messages');
 BEGIN
   SELECT reset_val INTO rp FROM pg_settings WHERE name = 'search_path';
   SELECT bool_or(btrim(btrim(p), '"') = 'provsql')
     INTO has_provsql
     FROM unnest(string_to_array(coalesce(rp, ''), ',')) AS p;
   IF NOT coalesce(has_provsql, false) THEN
-    SET client_min_messages = notice;
+    SET LOCAL client_min_messages = notice;
     RAISE NOTICE 'ProvSQL: schema "provsql" is not in your default search_path (currently: %).', rp;
     RAISE NOTICE 'ProvSQL operators and functions are resolved through search_path. Run "SELECT provsql.setup_search_path();" to add it, or set it manually (e.g. ALTER DATABASE % SET search_path = "$user", public, provsql).', quote_ident(current_database());
-    PERFORM set_config('client_min_messages', saved, false);
   END IF;
 END;
 $$;
