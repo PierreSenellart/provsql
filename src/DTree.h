@@ -47,6 +47,11 @@ struct DTreeInterval {
  * @param c          Circuit owning the input marginals (@c getProb).
  * @param clauses    The DNF as per-clause input-leaf supports (consumed).
  * @param max_width  Absolute target for @c upper-lower (0 = exact).
+ * @param budget     Subproblem (recursion-step) ceiling; 0 = unbounded.  On
+ *                   overrun a @c CircuitException is thrown so the caller's
+ *                   cost-based chooser escalates to another method.
+ * @param steps_out  If non-null, receives the number of recursion steps taken
+ *                   (for cost calibration).
  * @return           A sound interval with @c lower <= Pr[clauses] <= upper.
  */
 DTreeInterval dtreeBounds(const BooleanCircuit &c,
@@ -79,6 +84,11 @@ DTreeInterval dtreeBounds(const BooleanCircuit &c,
  * @param c          Circuit (gate types, wiring, input marginals).
  * @param root       Root gate whose probability interval is computed.
  * @param max_width  Absolute target for @c upper-lower (0 = exact).
+ * @param budget     Subproblem (recursion-step) ceiling; 0 = unbounded.  On
+ *                   overrun a @c CircuitException is thrown so the caller's
+ *                   cost-based chooser escalates to another method.
+ * @param steps_out  If non-null, receives the number of recursion steps taken
+ *                   (for cost calibration).
  * @return           A sound interval with @c lower <= Pr[root] <= upper.
  */
 DTreeInterval dtreeBoundsCircuit(const BooleanCircuit &c, gate_t root,

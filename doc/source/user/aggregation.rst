@@ -83,7 +83,7 @@ semantics, empty-group identities, and worked examples.
 HAVING
 ------
 
-Simple ``HAVING`` clauses are supported:
+``HAVING`` clauses are supported:
 
 .. code-block:: postgresql
 

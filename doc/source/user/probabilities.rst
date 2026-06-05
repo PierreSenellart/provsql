@@ -327,18 +327,16 @@ chooser selects among them.
         FROM suspects;
 
 Default strategy (no second argument)
-    ProvSQL tries each method in order until one succeeds:
-
-    1. **Independent evaluation** – used if the circuit is independent.
-    2. **Inversion-free** – used if the query carries an inversion-free
-       certificate (see the ``'inversion-free'`` method above). Controlled
-       by the ``provsql.inversion_free`` GUC (on by default).
-    3. **Tree decomposition** – used if the treewidth is within the
-       supported limit.
-    4. **Compilation** with the compiler named by
-       ``provsql.fallback_compiler`` (default ``'d4'``) – used as a
-       final fallback; requires that compiler to be installed. See
-       :doc:`configuration`.
+    With no method named, ``probability_evaluate(provenance())`` requests
+    the **exact** guarantee, and the cost-based chooser (see
+    :ref:`above <probability-guarantees>`) runs the cheapest exact method
+    applicable to the circuit: typically ``independent`` or
+    ``inversion-free`` for safe queries, ``tree-decomposition`` for
+    low-treewidth lineage, falling back to ``compilation`` with the
+    compiler named by ``provsql.fallback_compiler`` (default ``'d4'``,
+    see :doc:`configuration`) when no in-process method fits. Optimistic
+    picks run under a budget and escalate automatically, so a pathological
+    circuit never hangs on the wrong method.
 
 To time every method on one circuit and compare results side by side,
 use ProvSQL Studio's benchmark panel; see :doc:`studio`.

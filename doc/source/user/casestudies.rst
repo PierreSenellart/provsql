@@ -143,7 +143,7 @@ Setup and basics
    "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "", "✓"
    "``create_provenance_mapping_view``", "", "", "", "", "✓", "", "", ""
    "Hand-built mapping table", "", "", "", "", "", "✓", "", ""
-   "``setup_search_path``", "✓", "", "", "", "", "", "", ""
+   "``setup_search_path``", "(✓)", "", "", "", "", "", "", ""
    "``provsql.active`` GUC", "", "", "", "", "", "", "", ""
    "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", ""
 

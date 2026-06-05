@@ -280,11 +280,6 @@ The practical consequences when ``provsql`` is not on the path:
 
 All of these are loud, self-explanatory errors. The fix is always the
 same: put ``provsql`` on the ``search_path`` (or qualify the name).
-A related consequence of the assignment-level casts: passing a
-``random_variable`` straight to a ``uuid``-typed function (for example
-``rv_sample(v, 100)``) now needs an explicit ``v::uuid``; the polymorphic
-dispatchers ``expected`` / ``variance`` / ``moment`` / ``support`` accept
-``random_variable`` directly and are unaffected.
 
 The ``setup_search_path()`` helper
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
