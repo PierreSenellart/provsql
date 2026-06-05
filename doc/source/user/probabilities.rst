@@ -143,6 +143,12 @@ where each shines; most users can skip it.
      - exact
      - Hard lineage with hidden structure a knowledge compiler can exploit;
        last-resort, needs an external tool (see :doc:`knowledge-compilation`).
+   * - ``wmc`` (``ganak`` / ``sharpsat-td`` / ``dpmc`` / ``weightmc``)
+     - depends on tool
+     - Hard lineage better suited to a weighted model counter than to a d-DNNF
+       compiler; an alternative external-tool route to ``compilation``.  Exact for
+       ``ganak`` / ``sharpsat-td`` / ``dpmc``; ``weightmc`` is an approximate
+       ``(ε, δ)`` counter.
    * - ``monte-carlo``
      - additive ``(ε, δ)``
      - Any circuit; cheap when the probability is not tiny.
@@ -305,7 +311,9 @@ chooser selects among them.
     :doc:`knowledge-compilation`.
 
 ``'wmc'``
-    Exact (umbrella for weighted model counters) computation. The third
+    Weighted model counting (umbrella over several counters); the guarantee
+    depends on the chosen tool -- ``'ganak'`` / ``'sharpsat-td'`` / ``'dpmc'``
+    are exact, ``'weightmc'`` is an approximate ``(ε, δ)`` counter. The third
     argument selects the counter and its options as
     ``tool=<name>[,epsilon=E][,delta=D]`` (the legacy ``tool[;tool_args]`` form
     is still accepted): ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`,
