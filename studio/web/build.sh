@@ -78,10 +78,33 @@ import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
 subs = [("s.src = '/static/circuit.js'", "s.src = 'static/circuit.js'"),
+        ("s.src = '/static/notebook.js'", "s.src = 'static/notebook.js'"),
         ("window.location.href = '/circuit'", "window.location.href = '?mode=circuit'")]
 for old, new in subs:
     if old not in s:
         sys.exit("build.sh: app.js no longer contains %r (path-portability rewrite)" % old)
+    s = s.replace(old, new)
+open(p, "w", encoding="utf-8").write(s)
+PY
+
+# 1c. The notebook front-end (loaded on demand by app.js as
+#     static/notebook.js). Same path-portability treatment: its vendored
+#     markdown renderer loads and its jump-to-Circuit-mode navigations are
+#     root-absolute in the canonical source.
+mkdir -p static
+cp "$STATIC/notebook.js" static/notebook.js
+rm -rf static/vendor
+cp -RL "$STATIC/vendor" static/vendor
+python3 - static/notebook.js <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+subs = [("loadScript('/static/vendor/marked.min.js')", "loadScript('static/vendor/marked.min.js')"),
+        ("loadScript('/static/vendor/purify.min.js')", "loadScript('static/vendor/purify.min.js')"),
+        ("window.location.href = '/circuit'", "window.location.href = '?mode=circuit'")]
+for old, new in subs:
+    if old not in s:
+        sys.exit("build.sh: notebook.js no longer contains %r (path-portability rewrite)" % old)
     s = s.replace(old, new)
 open(p, "w", encoding="utf-8").write(s)
 PY
@@ -107,6 +130,7 @@ html = html.replace('<body class="mode-where">', '<body class="mode-circuit">')
 # path and need no server redirect.
 html = html.replace('href="/circuit"', 'href="?mode=circuit"')
 html = html.replace('href="/where"', 'href="?mode=where"')
+html = html.replace('href="/notebook"', 'href="?mode=notebook"')
 # The in-browser build is branded "ProvSQL Playground" (vs the installable
 # "ProvSQL Studio"); rebrand the title and the nav wordmark.
 html = html.replace("<title>ProvSQL Studio</title>", "<title>ProvSQL Playground</title>")
@@ -160,6 +184,17 @@ cp ./app.css    static/app.css
 rm -rf pkg
 mkdir pkg
 cp "$PKGSRC"/*.py pkg/
+# The bundled example notebooks (/api/nb/examples reads the package's
+# notebooks/ directory); shell-boot.js mirrors them into the Pyodide FS,
+# driven by the manifest written here.
+mkdir pkg/notebooks
+cp "$PKGSRC"/notebooks/*.ipynb pkg/notebooks/
+python3 - <<'PY'
+import json, os
+files = sorted(f for f in os.listdir("pkg/notebooks") if f.endswith(".ipynb"))
+json.dump(files, open("pkg/notebooks/manifest.json", "w"))
+print("  pkg/notebooks:", len(files), "example notebooks")
+PY
 
 # 5. The WASM artifacts from ../../wasm/ (only when (re)imported; otherwise the
 #    in-place pglite/ + provsql.tar.gz from a previous build are kept).
@@ -227,6 +262,10 @@ rows = [
   '<a href="https://github.com/andialbrecht/sqlparse">Andi Albrecht</a>'),
  ("Font Awesome 5 Free", ["MIT", "CC-BY-4.0", "OFL-1.1"], "shipped (vendored)",
   '<a href="https://fontawesome.com/">Fonticons, Inc.</a> – <a href="fontawesome/LICENSE.txt">fontawesome/LICENSE.txt</a>'),
+ ("marked (Markdown renderer, notebook cells)", ["MIT"], "shipped (vendored)",
+  '<a href="https://github.com/markedjs/marked">Christopher Jeffrey and contributors</a>'),
+ ("DOMPurify (HTML sanitizer, notebook cells)", ["Apache-2.0", "MPL-2.0"], "shipped (vendored)",
+  '<a href="https://github.com/cure53/DOMPurify">Cure53 / Dr.-Ing. Mario Heiderich</a>'),
  ("EB Garamond, Jost, Fira Code (brand fonts)", ["OFL-1.1"], "shipped",
   '<a href="fonts/OFL-EBGaramond.txt">EBGaramond</a>, '
   '<a href="fonts/OFL-Jost.txt">Jost</a>, '

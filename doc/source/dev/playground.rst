@@ -96,6 +96,45 @@ splitting each script into individual statements (PGlite runs a whole
 ``exec()`` as one transaction). A **Reset** button drops and re-seeds
 them.
 
+The shell reads the database list **live from** ``pg_database`` (manifest
+order first, then any extras alphabetically) rather than from the static
+manifest: the notebook binding banner's *Create X* action
+(``POST /api/databases``) flows through to the Python backend, whose
+``CREATE DATABASE`` runs on the shared session and so grows the cluster
+beyond the manifest. Such user-created databases get the extension
+installed by the per-open ``PREP`` on first switch, stay unseeded, and are
+dropped by Reset along with the seeded ones (no zombie notebook bindings).
+
+Notebook mode (single-session mapping)
+--------------------------------------
+
+The notebook front-end and the ``/api/nb/*`` kernel endpoints run
+unmodified; what changes in the browser is what a "kernel" *is*. PGlite
+has one backend session shared by every shim connection object, so:
+
+* The pinned kernel connection and the request pool are the **same
+  session**: kernel state (temp tables, ``SET``\ s) is visible to plain
+  API calls and to every other notebook tab's kernel, and vice versa.
+  Acceptable for a sandbox; tabs multiplex serially anyway.
+* **Kernel close / restart maps to** ``DISCARD ALL``: the native build
+  closes the pinned connection and opens a fresh one, which has no
+  single-session equivalent, so the shim's ``conn.close()`` issues
+  ``DISCARD ALL`` and restores the ``search_path`` the shell's per-open
+  ``PREP`` set. Restarting any tab's kernel therefore resets them all.
+* ``conn.transaction()`` on an **autocommit** connection (the per-cell
+  transaction in ``exec_kernel_cell``) opens a real ``BEGIN`` /
+  ``COMMIT`` block in the shim, mirroring psycopg; the non-autocommit
+  pool path keeps its SAVEPOINT-in-lazy-transaction mapping.
+* The pagehide kernel-close ``navigator.sendBeacon`` would hit the
+  static host and 404 (leaking kernels against ``MAX_KERNELS``);
+  ``child-boot.js`` reroutes ``/api/*`` beacons through the postMessage
+  bridge, fire-and-forget -- the shell outlives the iframe, so the close
+  completes even though the reply goes unread.
+* The bundled example notebooks are mirrored into the Pyodide FS at boot
+  (``pkg/notebooks/`` + manifest, written by ``build.sh``), where
+  ``/api/nb/examples`` finds them; a ``?nb=<name>`` deep link implies
+  notebook mode and opens that example.
+
 Self-hosted and path-portable
 -----------------------------
 
@@ -108,7 +147,8 @@ URL, so the result is a pure static bundle that runs unchanged at a server
 root or under a sub-path (``/playground/``), needs no rewrite rules, and
 works over ``file://``. A small ``index.html`` landing page gates on JSPI
 (browser support, the Firefox flag) and links to the shell (``app.html``);
-shared deep links (``?mode=`` / ``?db=`` / ``?q=``) forward straight to it.
+shared deep links (``?mode=`` / ``?db=`` / ``?q=`` / ``?nb=``) forward
+straight to it.
 
 Build, test, deploy
 -------------------

@@ -118,9 +118,13 @@ studio/web/                  # this dir is itself the doc-root
   app.js circuit.js          # copied from ../provsql_studio/static (unmodified)
   app.css colors_and_type.css fonts-face.css fonts/ img/
   pkg/                       # copy of ../provsql_studio/*.py (the unmodified backend)
+  pkg/notebooks/             # the bundled example notebooks + manifest.json;
+                             # shell-boot mirrors them into the Pyodide FS
   pglite/                    # the built @electric-sql/pglite dist (wasm/data/js + contrib)
   provsql.tar.gz             # the extension bundle
   static/circuit.js          # app.js loads /static/circuit.js  (hard-coded path)
+  static/notebook.js         # app.js loads /static/notebook.js (path-rewritten copy)
+  static/vendor/             # marked + DOMPurify (markdown cells)
   static/app.css             # circuit.js loads /static/app.css  (hard-coded path)
   casestudies/               # one DB per tutorial / case study + manifest.json
   build-casestudies.py       # converts doc/*/setup.sql into the above (tracked)
@@ -176,12 +180,29 @@ e.g. jump-to-circuit – must still resolve).
 ### Shareable links
 
 A view is fully captured in the URL query string:
-`?mode=circuit|where&db=<database>&q=<url-encoded SQL>`. Opening such a link
-lands on that database and mode with the query pre-filled and auto-run; the
-shell consumes `?db` and forwards `?mode`/`?q` to the iframe, where `child-boot`
-feeds the query into the same sessionStorage channel app.js uses for its
-mode-switch carry. The **Link** button in the nav copies the current database +
-mode + query box as one of these URLs, pointing at the shell (the top frame).
+`?mode=circuit|where|notebook&db=<database>&q=<url-encoded SQL>&nb=<example>`.
+Opening such a link lands on that database and mode with the query pre-filled
+and auto-run; the shell consumes `?db` and forwards `?mode`/`?q`/`?nb` to the
+iframe, where `child-boot` feeds the query into the same sessionStorage channel
+app.js uses for its mode-switch carry (`?nb=` opens the named bundled example
+notebook and implies notebook mode). The **Link** button in the nav copies the
+current database + mode + query box as one of these URLs, pointing at the shell
+(the top frame).
+
+### Notebook mode: the single-session mapping
+
+The notebook front-end and `/api/nb/*` endpoints run unmodified; PGlite's one
+shared backend session changes what a "kernel" is. The pinned kernel
+connection and the request pool are the same session (kernel state is visible
+across notebook tabs and plain API calls); kernel close/restart maps to
+`DISCARD ALL` + search_path restore in `psycopg_pglite.py` (so restarting any
+tab's kernel resets them all); the pagehide kernel-close `sendBeacon` is
+rerouted through the postMessage bridge by `child-boot.js` (a real beacon
+would 404 on the static host and leak the kernel against MAX_KERNELS). The
+binding banner's "Create X" works: `POST /api/databases` flows to the Python
+backend, whose CREATE DATABASE grows the shared cluster -- the shell lists
+databases live from pg_database, installs the extension on first switch (the
+per-open PREP), and Reset drops user-created databases too.
 
 ## CI/CD
 
