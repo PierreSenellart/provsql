@@ -3235,3 +3235,50 @@ table thead th[data-sort="desc"]::after {
 /* `display: flex` above would defeat the hidden attribute (the UA
    stylesheet's display:none loses to any author display). */
 .nb__banner[hidden] { display: none; }
+
+/* Notebook evaluation cells: one eval-strip invocation inline. */
+.nb-eval {
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--purple-500);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+}
+.nb-eval__hdr {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: var(--purple-700);
+  padding: 0.35rem 0.6rem;
+}
+.nb-eval__token { font-size: 0.78rem; }
+.nb-eval__semiring, .nb-eval__method, .nb-eval__mapping {
+  font-size: 0.75rem;
+  max-width: 11rem;
+}
+.nb-eval__args {
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  padding: 0.15rem 0.3rem;
+}
+.nb-eval__out {
+  border-top: 1px solid var(--border-soft);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+}
+.nb-eval__out[hidden] { display: none; }
+.nb-eval__value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--purple-900);
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.nb-eval__meta {
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}

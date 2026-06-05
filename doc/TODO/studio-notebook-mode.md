@@ -355,8 +355,12 @@ Python-like mental model should hold literally).
    **Also landed**: the §8b database-binding design -- tabs as
    bindings (heading-derived names, per-tab kernels and resume
    points), the binding banner, `POST /api/databases`.
-   **Open**: evaluation cells, per-cell scheme options, seeded CS1
-   notebook, deep links, HTML export.
+   Evaluation cells landed too (inserted from a circuit cell's
+   Evaluate button: compiled semiring or probability method + free-text
+   arguments + optional mapping, invocation in `metadata.provsql`,
+   result re-rendered from `application/vnd.provsql.eval+json`).
+   **Open**: per-cell scheme options, seeded CS1 notebook, deep links,
+   HTML export.
 3. **Playground + content**: Playground integration (shim
    `DISCARD ALL`, vendoring, web e2e), tutorial + remaining
    case-study notebooks with a drift check, docs screenshots.

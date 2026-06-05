@@ -461,6 +461,9 @@
         ${cell.type === 'circuit'
           ? `<button type="button" class="nb-cell__run" title="Re-fetch the circuit"><i class="fas fa-sync"></i></button>`
           : ''}
+        ${cell.type === 'eval'
+          ? `<button type="button" class="nb-cell__run" title="Run this evaluation (Ctrl+Enter)"><i class="fas fa-play"></i></button>`
+          : ''}
       </div>
       <div class="nb-cell__main">
         ${cell.type === 'circuit' ? `
@@ -468,11 +471,37 @@
             <div class="nb-circ__hdr">
               <i class="fas fa-project-diagram"></i>
               Circuit for <code class="nb-circ__token" title="${cell.token || ''}">${shortToken(cell.token)}</code>
+              <button type="button" class="nb-circ__eval wp-btn wp-btn--ghost wp-btn--mini"
+                      title="Insert an evaluation cell for this token below (semiring / probability)">
+                <i class="fas fa-bolt"></i> Evaluate</button>
               <button type="button" class="nb-circ__jump wp-btn wp-btn--ghost wp-btn--mini"
                       title="Open this token in Circuit mode (eval strip, expansion, inspector)">
                 <i class="fas fa-external-link-alt"></i> Circuit mode</button>
             </div>
             <div class="nb-circ__canvas"></div>
+          </div>
+        ` : ''}
+        ${cell.type === 'eval' ? `
+          <div class="nb-eval">
+            <div class="nb-eval__hdr">
+              <i class="fas fa-bolt"></i>
+              <code class="nb-eval__token" title="${cell.token || ''}">${shortToken(cell.token)}</code>
+              <select class="nb-eval__semiring" title="What to evaluate on this token">
+                ${EVAL_SEMIRINGS.map(([v, l]) =>
+                  `<option value="${v}"${v === cell.semiring ? ' selected' : ''}>${l}</option>`).join('')}
+              </select>
+              <select class="nb-eval__method" title="Probability method (see Circuit mode's eval strip for the full per-method controls)">
+                ${EVAL_METHODS.map((m) =>
+                  `<option value="${m}"${m === (cell.method || '') ? ' selected' : ''}>${m || '(default)'}</option>`).join('')}
+              </select>
+              <input type="text" class="nb-eval__args" placeholder="arguments (eps=…, samples=…)"
+                     title="Optional method arguments, key=value comma-separated (e.g. eps=0.05,delta=0.01 or a sample count)"
+                     value="${env.escapeAttr(cell.args || '')}">
+              <select class="nb-eval__mapping" title="Optional provenance mapping labelling the input tokens" hidden>
+                <option value="">(no mapping)</option>
+              </select>
+            </div>
+            <div class="nb-eval__out" hidden></div>
           </div>
         ` : ''}
         ${cell.type === 'sql' ? `
@@ -588,6 +617,9 @@
     if (cell.type === 'circuit') {
       div.querySelector('.nb-cell__run').addEventListener('click',
         () => refreshCircuitCell(cell));
+      div.querySelector('.nb-circ__eval').addEventListener('click', () => {
+        insertEvalAfter(cell, cell.token);
+      });
       div.querySelector('.nb-circ__jump').addEventListener('click', () => {
         // Same carry mechanism as the where-mode jump button: Circuit
         // mode preloads the token on arrival.
@@ -600,6 +632,45 @@
           const box = div.querySelector('.nb-circ__canvas');
           if (box) paintSceneInto(box, cell.scene);
         });
+      }
+    }
+
+    if (cell.type === 'eval') {
+      div.querySelector('.nb-cell__run').addEventListener('click',
+        () => runEvalCell(cell));
+      const sem = div.querySelector('.nb-eval__semiring');
+      const meth = div.querySelector('.nb-eval__method');
+      const args = div.querySelector('.nb-eval__args');
+      const map = div.querySelector('.nb-eval__mapping');
+      sem.addEventListener('change', () => {
+        cell.semiring = sem.value;
+        syncEvalControls(cell, div);
+        scheduleAutosave();
+      });
+      meth.addEventListener('change', () => {
+        cell.method = meth.value;
+        scheduleAutosave();
+      });
+      args.addEventListener('input', () => {
+        cell.args = args.value;
+        scheduleAutosave();
+      });
+      map.addEventListener('change', () => {
+        cell.mapping = map.value;
+        scheduleAutosave();
+      });
+      ensureMappings().then((maps) => {
+        for (const m of maps) {
+          const opt = document.createElement('option');
+          opt.value = m.qname;
+          opt.textContent = `${m.qname} (${m.value_type || '?'})`;
+          if (m.qname === cell.mapping) opt.selected = true;
+          map.appendChild(opt);
+        }
+      });
+      syncEvalControls(cell, div);
+      if (cell.result) {
+        requestAnimationFrame(() => renderEvalResult(cell));
       }
     }
 
@@ -856,6 +927,140 @@
     refreshCircuitCell(cell);
   }
 
+  /* ──────── evaluation cells ──────── */
+  /* An evaluation cell is one eval-strip invocation as a cell: token +
+     evaluation (compiled semiring or probability method) + optional
+     arguments / provenance mapping, with the result rendered inline
+     and the full invocation recorded in metadata.provsql so a saved
+     notebook replays it. The narrative form of "and the probability
+     of this answer is...". The rich control set (per-method epsilon /
+     delta fields, tool pickers, distribution cells) stays in Circuit
+     mode; the cell keeps a free-text arguments field instead. */
+
+  const EVAL_SEMIRINGS = [
+    ['probability', 'Probability'],
+    ['formula', 'Formula'],
+    ['boolexpr', 'Boolean expression'],
+    ['why', 'Why'],
+    ['which', 'Which'],
+    ['how', 'How'],
+    ['counting', 'Counting'],
+  ];
+  const EVAL_METHODS = [
+    '', 'exact', 'relative', 'additive', 'independent', 'possible-worlds',
+    'sieve', 'd-tree', 'tree-decomposition', 'compilation', 'wmc',
+    'monte-carlo', 'karp-luby', 'stopping-rule',
+  ];
+
+  let mappingsCache = null;   // /api/provenance_mappings payload
+
+  async function ensureMappings() {
+    if (mappingsCache) return mappingsCache;
+    try {
+      const resp = await fetch('/api/provenance_mappings');
+      if (resp.ok) mappingsCache = await resp.json();
+    } catch (e) { /* mapping picker just stays empty */ }
+    if (!mappingsCache) mappingsCache = [];
+    return mappingsCache;
+  }
+
+  function syncEvalControls(cell, el) {
+    const isProb = cell.semiring === 'probability';
+    el.querySelector('.nb-eval__method').hidden = !isProb;
+    el.querySelector('.nb-eval__mapping').hidden = isProb;
+    el.querySelector('.nb-eval__args').hidden = !isProb;
+  }
+
+  function renderEvalResult(cell) {
+    const el = cellEl(cell);
+    const box = el && el.querySelector('.nb-eval__out');
+    if (!box) return;
+    if (!cell.result) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    box.hidden = false;
+    const esc = env.escapeHtml;
+    const r = cell.result;
+    if (r.error) {
+      box.innerHTML = `<div class="wp-error"><i class="fas fa-exclamation-circle"></i> `
+        + `${esc(r.error)}${r.detail ? ' — ' + esc(r.detail) : ''}</div>`;
+      return;
+    }
+    const value = (r.result == null) ? '(null)'
+      : (typeof r.result === 'object' ? JSON.stringify(r.result, null, 1)
+                                      : String(r.result));
+    const multiline = value.includes('\n') || value.length > 100;
+    box.innerHTML =
+      (multiline
+        ? `<pre class="nb-eval__value">${esc(value)}</pre>`
+        : `<span class="nb-eval__value">${esc(value)}</span>`)
+      + (r.resolved_method
+          ? ` <span class="nb-eval__meta" title="Method the chooser actually used">via ${esc(r.resolved_method)}</span>`
+          : '')
+      + (cell.elapsed != null
+          ? ` <span class="nb-eval__meta">· ${esc(String(cell.elapsed))} ms</span>`
+          : '');
+    cell.htmlSnapshot = box.innerHTML;
+  }
+
+  async function runEvalCell(cell) {
+    const el = cellEl(cell);
+    const box = el && el.querySelector('.nb-eval__out');
+    if (box) { box.hidden = false; box.textContent = 'evaluating…'; }
+    const body = {
+      token: cell.token,
+      semiring: cell.semiring,
+    };
+    if (cell.semiring === 'probability') {
+      if (cell.method) body.method = cell.method;
+      if (cell.args) body.arguments = cell.args;
+    } else if (cell.mapping) {
+      body.mapping = cell.mapping;
+    }
+    const t0 = performance.now();
+    let payload;
+    try {
+      const resp = await fetch('/api/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      payload = await resp.json().catch(() => ({}));
+      if (!resp.ok && !payload.error) payload.error = `HTTP ${resp.status}`;
+    } catch (e) {
+      payload = { error: `Network error: ${e.message}` };
+    }
+    cell.elapsed = Math.round(performance.now() - t0);
+    cell.result = payload;
+    cell.count = ++execCounter;
+    updateGutter(cell);
+    renderEvalResult(cell);
+    scheduleAutosave();
+  }
+
+  // Insert an evaluation cell for `token` after `afterCell` (a circuit
+  // cell's "Evaluate" button).
+  function insertEvalAfter(afterCell, token) {
+    const idx = cells.indexOf(afterCell);
+    const cell = newCell('eval');
+    cell.token = token;
+    cell.semiring = 'probability';
+    cell.method = 'exact';
+    cell.args = '';
+    cell.mapping = '';
+    const pos = idx >= 0 ? idx + 1 : cells.length;
+    cells.splice(pos, 0, cell);
+    const anchorEl = idx >= 0 ? cellEl(afterCell) : null;
+    const dom = buildCellDom(cell);
+    if (anchorEl) anchorEl.after(dom);
+    else cellsEl().appendChild(dom);
+    selectCell(cell);
+    scheduleAutosave();
+    return cell;
+  }
+
   /* ──────── sidebar: outline + compact relations ──────── */
   /* The where-mode sidebar shows full table contents; next to a cell
      list that is wasted space. The notebook sidebar is deliberately
@@ -1082,7 +1287,8 @@
   // coming back to SQL drops the fence again when the whole cell is a
   // single fenced block, so m + y round-trips cleanly.
   function convertCell(cell, type) {
-    if (cell.type === type || cell.type === 'circuit') return;
+    if (cell.type === type || cell.type === 'circuit'
+        || cell.type === 'eval') return;
     if (type === 'markdown' && (cell.source || '').trim()) {
       cell.source = '```sql\n'
         + String(cell.source).replace(/\n+$/, '') + '\n```';
@@ -1156,6 +1362,7 @@
       e.preventDefault();
       if (selected.type === 'sql') runCell(selected);
       else if (selected.type === 'circuit') refreshCircuitCell(selected);
+      else if (selected.type === 'eval') runEvalCell(selected);
     } else if (e.key === 'Enter' && e.altKey) {
       e.preventDefault();
       runAltEnter(selected);
@@ -1171,6 +1378,7 @@
   async function runSelectedThenAdvance(cell) {
     if (cell.type === 'sql') await runCell(cell);
     else if (cell.type === 'circuit' && cell.token) await refreshCircuitCell(cell);
+    else if (cell.type === 'eval' && cell.token) await runEvalCell(cell);
     const idx = cells.indexOf(cell);
     if (idx === cells.length - 1) appendCell('sql');
     selectCell(cells[idx + 1]);
@@ -1263,6 +1471,10 @@
         if (cell.token) await refreshCircuitCell(cell);
         continue;
       }
+      if (cell.type === 'eval') {
+        if (cell.token) await runEvalCell(cell);
+        continue;
+      }
       if (cell.type !== 'sql' || !(cell.source || '').trim()) continue;
       await runCell(cell);
       // A dead kernel aborts the run: later cells would all fail the
@@ -1311,6 +1523,33 @@
         if (c.type === 'markdown') {
           return { cell_type: 'markdown', metadata: {}, source: toLines(c.source) };
         }
+        if (c.type === 'eval') {
+          const outputs = [];
+          if (c.result) {
+            const data = { 'application/vnd.provsql.eval+json': c.result };
+            if (!c.result.error && c.result.result != null) {
+              data['text/plain'] = toLines(
+                typeof c.result.result === 'object'
+                  ? JSON.stringify(c.result.result)
+                  : String(c.result.result));
+            }
+            outputs.push({ output_type: 'execute_result',
+                           execution_count: c.count, metadata: {}, data });
+          }
+          return {
+            cell_type: 'code', execution_count: c.count,
+            metadata: { provsql: {
+              cell: 'eval', token: c.token, semiring: c.semiring,
+              method: c.method || undefined, arguments: c.args || undefined,
+              mapping: c.mapping || undefined,
+            } },
+            source: toLines(
+              `-- evaluate ${c.semiring}`
+              + (c.semiring === 'probability' && c.method ? `/${c.method}` : '')
+              + ` on ${c.token}`),
+            outputs,
+          };
+        }
         if (c.type === 'circuit') {
           // A circuit cell is a code cell whose payload lives in
           // metadata.provsql; the SQL-comment source keeps external
@@ -1352,6 +1591,22 @@
     for (const c of doc.cells) {
       if (c.cell_type === 'markdown') {
         loaded.push(newCell('markdown', joinSource(c.source)));
+      } else if (c.cell_type === 'code'
+                 && c.metadata && c.metadata.provsql
+                 && c.metadata.provsql.cell === 'eval') {
+        const cell = newCell('eval');
+        const p = c.metadata.provsql;
+        cell.token = String(p.token || '');
+        cell.semiring = String(p.semiring || 'probability');
+        cell.method = String(p.method || '');
+        cell.args = String(p.arguments || '');
+        cell.mapping = String(p.mapping || '');
+        cell.count = (typeof c.execution_count === 'number') ? c.execution_count : null;
+        for (const o of (c.outputs || [])) {
+          const r = o && o.data && o.data['application/vnd.provsql.eval+json'];
+          if (r) { cell.result = r; break; }
+        }
+        loaded.push(cell);
       } else if (c.cell_type === 'code'
                  && c.metadata && c.metadata.provsql
                  && c.metadata.provsql.cell === 'circuit') {

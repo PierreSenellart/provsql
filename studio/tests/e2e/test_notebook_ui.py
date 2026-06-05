@@ -623,3 +623,80 @@ def test_scheme_carries_to_circuit_mode(page: Page, studio_url: str) -> None:
     page.locator(".ps-modeswitch__btn[data-mode='notebook']").click()
     expect(page.locator("body")).to_have_class("mode-notebook", timeout=8000)
     expect(page.locator("#nb-scheme")).to_have_value("boolean")
+
+
+def _make_circuit_cell(page: Page) -> None:
+    """SQL cell -> run -> click the result UUID -> circuit cell below.
+
+    Uses its own tiny table (not `personnel`: setting probabilities
+    there would leak into the unit tests sharing the session DB)."""
+    ta = _sql_cell_ta(page)
+    ta.fill("DROP TABLE IF EXISTS nb_eval_pts;\n"
+            "CREATE TABLE nb_eval_pts(city text);\n"
+            "INSERT INTO nb_eval_pts VALUES ('Paris'), ('Paris'), ('Paris');\n"
+            "SELECT provsql.add_provenance('nb_eval_pts');\n"
+            "SELECT provsql.set_prob(provsql, 0.5) FROM nb_eval_pts;\n"
+            "SELECT city, provsql.provenance() FROM "
+            "(SELECT DISTINCT city FROM nb_eval_pts) t;")
+    ta.focus()
+    _run_focused(page)
+    page.locator(".nb-cell--sql .nb-out [data-circuit-uuid]").first.click(
+        timeout=8000)
+    expect(page.locator(".nb-cell--circuit .nb-circ__svg")).to_be_visible(
+        timeout=8000)
+
+
+def test_eval_cell_probability_and_formula(page: Page, studio_url: str) -> None:
+    """The circuit cell's Evaluate button inserts an evaluation cell;
+    probability/exact on the 3-way Paris OR with p=0.5 inputs is
+    1 - 0.5^3 = 0.875; switching to the formula semiring re-evaluates
+    symbolically."""
+    _goto_notebook(page, studio_url)
+    _make_circuit_cell(page)
+    page.locator(".nb-circ__eval").click()
+    ev = page.locator(".nb-cell--eval")
+    expect(ev).to_have_count(1)
+    # Defaults: probability / exact. Run it (gutter play button).
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".nb-eval__value")).to_have_text("0.875", timeout=8000)
+    expect(ev.locator(".nb-eval__meta").first).to_contain_text("via")
+    expect(ev.locator(".nb-cell__count")).to_have_text(re.compile(r"\[\d+\]"))
+
+    # Boolean-expression semiring (mapping-free): symbolic OR over the
+    # three input gates, leaves as x<id> placeholders.
+    ev.locator(".nb-eval__semiring").select_option("boolexpr")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".nb-eval__value")).to_contain_text("∨", timeout=8000)
+
+
+def test_eval_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> None:
+    """Saved evaluation cells record the invocation in metadata and the
+    result in outputs; loading re-renders without re-evaluating."""
+    _goto_notebook(page, studio_url)
+    _make_circuit_cell(page)
+    page.locator(".nb-circ__eval").click()
+    ev = page.locator(".nb-cell--eval")
+    ev.locator(".nb-cell__run").click()
+    expect(ev.locator(".nb-eval__value")).to_have_text("0.875", timeout=8000)
+
+    dl = _download_notebook(page)
+    doc = json.loads(open(dl.path()).read())
+    evals = [c for c in doc["cells"]
+             if c.get("metadata", {}).get("provsql", {}).get("cell") == "eval"]
+    assert len(evals) == 1
+    meta = evals[0]["metadata"]["provsql"]
+    assert meta["semiring"] == "probability" and meta["method"] == "exact"
+    assert meta["token"]
+    out = evals[0]["outputs"][0]["data"]
+    assert out["application/vnd.provsql.eval+json"]["result"] == 0.875
+    assert "".join(out["text/plain"]) == "0.875"
+    assert "-- evaluate probability/exact" in "".join(evals[0]["source"])
+
+    # Fresh page, load: result renders with no kernel started.
+    page.evaluate("localStorage.removeItem('ps.nb.autosave');"
+                  "localStorage.removeItem('ps.nb.tabs')")
+    page.reload()
+    page.locator("#nb-load-input").set_input_files(str(dl.path()))
+    ev2 = page.locator(".nb-cell--eval")
+    expect(ev2.locator(".nb-eval__value")).to_have_text("0.875", timeout=8000)
+    expect(page.locator("#nb-kernel-label")).to_have_text("no kernel")
