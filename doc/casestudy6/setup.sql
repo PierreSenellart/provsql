@@ -16,12 +16,14 @@ DROP TABLE IF EXISTS calibration_status CASCADE;
 DROP TABLE IF EXISTS categories CASCADE;
 
 -- Four monitoring stations across two districts.
+DROP TABLE IF EXISTS stations CASCADE;
 CREATE TABLE stations (
   id        TEXT PRIMARY KEY,
   name      TEXT NOT NULL,
   district  TEXT NOT NULL
 );
 
+TRUNCATE stations;
 INSERT INTO stations VALUES
   ('s1', 'City Centre',         'centre'),
   ('s2', 'Riverside Park',      'centre'),
@@ -33,11 +35,13 @@ SELECT add_provenance('stations');
 -- Per-station calibration probability (Bernoulli).  The high-end and
 -- multi-pass units are well calibrated; the low-cost and drift-prone
 -- ones less so; the reference station is always in-spec.
+DROP TABLE IF EXISTS calibration_status CASCADE;
 CREATE TABLE calibration_status (
   station_id  TEXT PRIMARY KEY REFERENCES stations(id),
   p           DOUBLE PRECISION NOT NULL
 );
 
+TRUNCATE calibration_status;
 INSERT INTO calibration_status VALUES
   ('s1', 0.95),
   ('s2', 0.70),
@@ -47,12 +51,14 @@ INSERT INTO calibration_status VALUES
 SELECT add_provenance('calibration_status');
 
 -- Regulatory categories (deterministic, no provenance).
+DROP TABLE IF EXISTS categories CASCADE;
 CREATE TABLE categories (
   name  TEXT PRIMARY KEY,
   lo    DOUBLE PRECISION NOT NULL,
   hi    DOUBLE PRECISION NOT NULL
 );
 
+TRUNCATE categories;
 INSERT INTO categories VALUES
   ('Good',       0.0,    12.0),
   ('Moderate',   12.1,   35.0),
@@ -60,6 +66,7 @@ INSERT INTO categories VALUES
 
 -- Today's readings.  Five rows of pm25, one per (station, sample),
 -- exercising every distribution family plus the implicit numeric cast.
+DROP TABLE IF EXISTS readings CASCADE;
 CREATE TABLE readings (
   id          INTEGER PRIMARY KEY,
   station_id  TEXT NOT NULL REFERENCES stations(id),
@@ -67,6 +74,7 @@ CREATE TABLE readings (
   pm25        provsql.random_variable NOT NULL
 );
 
+TRUNCATE readings;
 INSERT INTO readings (id, station_id, ts, pm25) VALUES
   (1, 's1', '2026-05-12 08:00', provsql.normal(28.0, 2.0)),       -- high-end Gaussian
   (2, 's2', '2026-05-12 08:00', provsql.uniform(10.0, 22.0)),     -- low-cost uniform window
@@ -81,6 +89,7 @@ SELECT add_provenance('readings');
 
 -- Yesterday's batch, used for the UNION ALL step.  Same shape, slightly
 -- different distributions (a heatwave bumped the means).
+DROP TABLE IF EXISTS historical_readings CASCADE;
 CREATE TABLE historical_readings (
   id          INTEGER PRIMARY KEY,
   station_id  TEXT NOT NULL REFERENCES stations(id),
@@ -88,6 +97,7 @@ CREATE TABLE historical_readings (
   pm25        provsql.random_variable NOT NULL
 );
 
+TRUNCATE historical_readings;
 INSERT INTO historical_readings (id, station_id, ts, pm25) VALUES
   (1, 's1', '2026-05-11 08:00', provsql.normal(34.0, 2.5)),
   (2, 's2', '2026-05-11 08:00', provsql.uniform(15.0, 28.0)),
@@ -104,6 +114,7 @@ SELECT add_provenance('historical_readings');
 -- PROV-XML export can label leaves with station names rather than
 -- raw UUIDs.
 DROP TABLE IF EXISTS station_mapping;
+DROP TABLE IF EXISTS station_mapping CASCADE;
 CREATE TABLE station_mapping AS
   SELECT s.name AS value, r.provsql AS provenance
   FROM readings r JOIN stations s ON s.id = r.station_id;

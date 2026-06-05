@@ -73,7 +73,7 @@ html_show_copyright = False
 html_show_sourcelink = False
 
 # ---------------------------------------------------------------------------
-# :sqlfunc:`name` role — renders function name as linked monospace code
+# :sqlfunc:`name` role – renders function name as linked monospace code
 # pointing to the Doxygen SQL API reference.
 # ---------------------------------------------------------------------------
 
@@ -100,12 +100,14 @@ _SQL_FUNC_MAP = {
     'annotate':                 '/doxygen-sql/html/group__gate__manipulation.html#ga0222676920c50227c6cb304d9fec6057',
     'inversion_free_key':       '/doxygen-sql/html/group__gate__manipulation.html#gad694ac39c8517985d39ac6c5fff72d80',
     'provenance_guard':         '/doxygen-sql/html/group__table__management.html#ga82b3a444b6bd09a949375e1bb6210333',
-    'provenance_aggregate':     '/doxygen-sql/html/group__aggregate__provenance.html#ga05b57063566479cfcb7af3e0b361aef6',
+    'provenance_aggregate':     '/doxygen-sql/html/group__aggregate__provenance.html#ga84525ef02ef6429eda7664e050b83d69',
     'get_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#gad8d28be45c1fa36422538d51c7624ce5',
     'probability_evaluate':     '/doxygen-sql/html/group__probability.html#gabffa40fef0e37a75d39d4c39c4a1ec0f',
+    'probability_bounds':       '/doxygen-sql/html/group__probability.html#gad536a120029130da9a1baddf8fc9b137',
     'provenance_evaluate':      '/doxygen-sql/html/group__semiring__evaluation.html#gac2c8dfcd3eb924ad277d4dd9de05beb9',
     'aggregation_evaluate':     '/doxygen-sql/html/group__semiring__evaluation.html#gaa8a1ecbed9cc64fef68f1d90cd598bcc',
     'choose':                   '/doxygen-sql/html/group__choose__aggregate.html#ga97d3c5ea62acf16a07b53fbb31546b0e',
+    'explode_table':            '/doxygen-sql/html/group__choose__aggregate.html#ga7ac922b8e74a757c3ce1006c136145de',
     'shapley':                  '/doxygen-sql/html/group__probability.html#gaa123c9e2955d344d760bf3597dbf2a81',
     'shapley_all_vars':         '/doxygen-sql/html/group__probability.html#ga7e17cfee20ca3b3aa25245a20d47904f',
     'banzhaf':                  '/doxygen-sql/html/group__probability.html#gab6aafaefb4263c72df327525c6918083',
@@ -123,20 +125,20 @@ _SQL_FUNC_MAP = {
     'sr_lukasiewicz':           '/doxygen-sql/html/group__compiled__semirings.html#ga27ff464e570641a7b195ed3578a66ab1',
     'sr_minmax':                '/doxygen-sql/html/group__compiled__semirings.html#ga1861588ff5f551d207f332bccab4626c',
     'sr_maxmin':                '/doxygen-sql/html/group__compiled__semirings.html#gaebd28a3deead5cd455176f19a848e620',
-    'sr_temporal':              '/doxygen-sql/html/group__temporal__db.html#ga53665747f710e8bacbf9bb985420c173',
-    'sr_interval_num':          '/doxygen-sql/html/group__temporal__db.html#gaa35eca68f37290485c5319697b408d3a',
-    'sr_interval_int':          '/doxygen-sql/html/group__temporal__db.html#ga62d18db08c8b0b341d271ccad61f2c82',
+    'sr_temporal':              '/doxygen-sql/html/group__temporal__db.html#ga884ba7ff2679d63ff44b5634e9c5af89',
+    'sr_interval_num':          '/doxygen-sql/html/group__temporal__db.html#ga805597c0b6804fa1910834509953154d',
+    'sr_interval_int':          '/doxygen-sql/html/group__temporal__db.html#ga3f152bb9594200b9dab03f055dbb2af0',
     'to_provxml':               '/doxygen-sql/html/group__provenance__output.html#gacc9e8b2a47ade6f5c87c27f64b4707b1',
     'view_circuit':             '/doxygen-sql/html/group__provenance__output.html#ga1c6caf1bb91c0cfdfc56c33666d41897',
     'where_provenance':         '/doxygen-sql/html/group__provenance__output.html#ga6ddf85fea18edbd973c118020ff4551b',
     'repair_key':               '/doxygen-sql/html/group__table__management.html#gacfbe67438895e5f153b01bb9352cbc54',
-    'undo':                     '/doxygen-sql/html/group__temporal__db.html#ga0f47a56547d5a63e7d3fe18a0c1c5d00',
-    'replace_the_circuit':      '/doxygen-sql/html/group__temporal__db.html#gafe22f0ed3671613461298c2a35e6fdc7',
-    'union_tstzintervals':      '/doxygen-sql/html/group__temporal__db.html#ga2ba50d413598d163083ab577e53e844c',
-    'get_valid_time':           '/doxygen-sql/html/group__temporal__db.html#gaf71e0f3466ba453b0d27182b6f4b9ad0',
-    'timetravel':               '/doxygen-sql/html/group__temporal__db.html#ga73181ef9e1e7b5f293ae379414fe7d63',
-    'timeslice':                '/doxygen-sql/html/group__temporal__db.html#gaa3de6e26f960ee27e916a1c35fbb75f0',
-    'history':                  '/doxygen-sql/html/group__temporal__db.html#gac96504e5f0f7bf9da1dfc089cdbcdd21',
+    'undo':                     '/doxygen-sql/html/group__temporal__db.html#ga808c3503353ca13a655e898503acd598',
+    'replace_the_circuit':      '/doxygen-sql/html/group__temporal__db.html#gad9d68b2513dd923be53742cb2e6b8021',
+    'union_tstzintervals':      '/doxygen-sql/html/group__temporal__db.html#ga28ba21942d023d5fe179b8cb2e0d55be',
+    'get_valid_time':           '/doxygen-sql/html/group__temporal__db.html#gab915fa15f7eb16ed4cec41655808359f',
+    'timetravel':               '/doxygen-sql/html/group__temporal__db.html#ga6ed389de39a98235f8e0351f2b457134',
+    'timeslice':                '/doxygen-sql/html/group__temporal__db.html#gaf77a2208903bcbb2c16754f98000260d',
+    'history':                  '/doxygen-sql/html/group__temporal__db.html#gab47b9ac40705c16f21b8babc947c14b7',
     'agg_token_value_text':     '/doxygen-sql/html/group__agg__token__type.html#gadec6242b3b9213ae9dc16c1a15831b03',
     # Continuous-distribution constructors and aggregates
     'normal':                   '/doxygen-sql/html/group__random__variable__type.html#ga1a974bad82d83b110e9d158083b113ce',
@@ -170,7 +172,6 @@ _SQL_FUNC_MAP = {
     'set_tool_enabled':         '/doxygen-sql/html/group__provenance__output.html#ga64d2d1cecb8ea3dfbb24cad224c8c017',
     'set_tool_preference':      '/doxygen-sql/html/group__provenance__output.html#ga8dc5a0956b0f64ae75a74130a73075f9',
     'tree_decomposition_dot':   '/doxygen-sql/html/group__provenance__output.html#gafecf32e35b73af9cc4070973bcd98ead',
-    'probability_benchmark':    '/doxygen-sql/html/group__provenance__output.html#ga783a429f186c72359a9bddfc18311862',
     'tool_available':           '/doxygen-sql/html/group__provenance__output.html#ga4ae4f9f7a08be9333e78028fe10bd6cc',
     # Per-table provenance metadata + base-ancestor registry
     'set_ancestors':            '/doxygen-sql/html/group__table__management.html#ga003841a8da4d0184f7f0bc885fb6418b',
@@ -180,12 +181,12 @@ _SQL_FUNC_MAP = {
 
 
 # ---------------------------------------------------------------------------
-# :cfunc:`name` role — renders function name as linked monospace code
+# :cfunc:`name` role – renders function name as linked monospace code
 # pointing to the Doxygen C/C++ API reference.
 # ---------------------------------------------------------------------------
 
 _C_FUNC_MAP = {
-    # provsql.c — planner hook and query rewriting
+    # provsql.c – planner hook and query rewriting
     '_PG_init':                  '/doxygen-c/html/provsql_8c.html#a29e1a0b0688ac19dbde93824e4ae1a59',
     '_PG_fini':                  '/doxygen-c/html/provsql_8c.html#a7192e52d759211f57ad66638304ea072',
     'provsql_planner':           '/doxygen-c/html/provsql_8c.html#aa8f430f67b70c269c4ba8cc5225b8a84',
@@ -193,7 +194,7 @@ _C_FUNC_MAP = {
     'has_provenance':            '/doxygen-c/html/provsql_8c.html#af9a93235f73a9ae63ab01cf094d30372',
     'get_provenance_attributes': '/doxygen-c/html/provsql_8c.html#a0a178ec35f9a6d7a7476fe2291fb71e5',
     'make_provenance_expression':'/doxygen-c/html/provsql_8c.html#ace8a11f142b441b57b8753c8ad1290e1',
-    'make_aggregation_expression': '/doxygen-c/html/provsql_8c.html#abaae0dcfec89c61c6af4c309eb61c8b4',
+    'make_aggregation_expression': '/doxygen-c/html/provsql_8c.html#a03dfbabe195ae9be5b3c13f11b98ba42',
     'add_to_select':             '/doxygen-c/html/provsql_8c.html#a6fe52ea4c7f2cc8eb924135ebf239d85',
     'replace_provenance_function_by_expression': '/doxygen-c/html/provsql_8c.html#a3d5fee9c96595db519504978edba8683',
     'process_insert_select':     '/doxygen-c/html/provsql_8c.html#ac3ee0aa66fe553ba28a2bb2959a440ad',
@@ -222,7 +223,8 @@ _C_FUNC_MAP = {
     'try_classify_multi_source_tid':'/doxygen-c/html/classify__query_8c.html#a4808d385dcf66ea8cdec978fe1fa4b20',
     'resolve_through_group_rte':    '/doxygen-c/html/classify__query_8c.html#a8eee1d3eb92521c4c5695f06f8e6dab3',
     # safe_query.c -- safe-query rewriter + propagation pre-passes
-    'is_safe_query_candidate':      '/doxygen-c/html/safe__query_8c.html#ac10316179af1f20b8359d57daf2785d1',
+    'is_safe_query_candidate':      '/doxygen-c/html/safe__query_8c.html#a91df2747fa3cd9564c35997e464375c1',
+    'find_hierarchical_root_atoms': '/doxygen-c/html/safe__query_8c.html#a5bcf3bf32fe73c5efe394d3905863dd9',
     'compact_orphan_rtes':          '/doxygen-c/html/safe__query_8c.html#ac4aca5fe259074c262b928cd700f9bb8',
     # safe_query.c / provsql.c / probability_evaluate.cpp -- inversion-free path
     'detect_inversion_free':        '/doxygen-c/html/safe__query_8c.html#aca9d89ad57555f7370ff4ed6b2da3156',
@@ -245,16 +247,16 @@ _C_FUNC_MAP = {
     'MMappedCircuit::setTableAncestry': '/doxygen-c/html/classMMappedCircuit.html#a05f2d145c3f6919954a8c83cb8e17e24',
     # Per-relation metadata struct
     'ProvenanceTableInfo':          '/doxygen-c/html/structProvenanceTableInfo.html',
-    # provsql_utils.h — OID cache
+    # provsql_utils.h – OID cache
     'constants_t':               '/doxygen-c/html/structconstants__t.html',
     'get_constants':             '/doxygen-c/html/provsql__utils_8h.html#a75e7d48321cea0156f8ad4c039c877a0',
-    # provsql_mmap — background worker
+    # provsql_mmap – background worker
     'RegisterProvSQLMMapWorker': '/doxygen-c/html/provsql__mmap_8c.html#af31c1c517f22a6923f390b75d36506be',
     'provsql_mmap_worker':       '/doxygen-c/html/provsql__mmap_8h.html#a3f084145f583f08b2532c36a79925697',
     'initialize_provsql_mmap':   '/doxygen-c/html/MMappedCircuit_8cpp.html#aa0bba27d6f73596ef0972bb0541cc244',
     'provsql_mmap_main_loop':    '/doxygen-c/html/MMappedCircuit_8cpp.html#a9215628e0312d309db481dbd27c8dabe',
     'destroy_provsql_mmap':      '/doxygen-c/html/MMappedCircuit_8cpp.html#a77b47980f1cc7b3e38ad65e15bda8118',
-    # provsql_shmem — shared memory
+    # provsql_shmem – shared memory
     'provsql_shmem_request':     '/doxygen-c/html/provsql__shmem_8h.html#a6bd8422002b87f1cab0c60e4aa7a7101',
     'provsql_shmem_startup':     '/doxygen-c/html/provsql__shmem_8h.html#a7f431fc2ca237114d13ff1c19f7ab692',
     'provsql_shmem_lock_exclusive': '/doxygen-c/html/provsql__shmem_8h.html#a36adeebed75d77964c2886bf4718d8bc',
@@ -307,8 +309,11 @@ _C_FUNC_MAP = {
     'BooleanCircuit::independentEvaluation': '/doxygen-c/html/classBooleanCircuit.html#aec2e2de236b6ba8915e2088ae3bfa256',
     'BooleanCircuit::possibleWorlds':        '/doxygen-c/html/classBooleanCircuit.html#a211a22d87946d2c2878f5da2cd28109c',
     'BooleanCircuit::monteCarlo':            '/doxygen-c/html/classBooleanCircuit.html#a85ca1a4d91d62aa1b4660c42b31ceadd',
+    'BooleanCircuit::karpLuby':              '/doxygen-c/html/classBooleanCircuit.html#a655b427b6fec576d3085d36071d774b9',
+    'BooleanCircuit::karpLubyStopping':      '/doxygen-c/html/classBooleanCircuit.html#a2eab13cfe78e93d4e19e45de9bc79bdb',
+    'BooleanCircuit::dnfShape':              '/doxygen-c/html/classBooleanCircuit.html#ab7ce0b72211e82719f8dbdef7747daf4',
     'BooleanCircuit::wmcCount':              '/doxygen-c/html/classBooleanCircuit.html#a82366627e2e907cf56ae4b6d28812eb6',
-    'BooleanCircuit::compilation':           '/doxygen-c/html/classBooleanCircuit.html#ad3bc6b4c5643a25d46083bb72e1fb485',
+    'BooleanCircuit::compilation':           '/doxygen-c/html/classBooleanCircuit.html#a667b05ef1cfb933d2cae73692e761786',
     'BooleanCircuit::makeDD':                '/doxygen-c/html/classBooleanCircuit.html#a699b0537bdaf692ff18e36ad32064d6e',
     'dDNNF::probabilityEvaluation':          '/doxygen-c/html/classdDNNF.html#a3c62965b37ba9e45f59fee50f432eb6c',
     'dDNNF::shapley':                        '/doxygen-c/html/classdDNNF.html#a8f101e081f8e8a8c72b2379dfa9a001f',
@@ -329,7 +334,10 @@ _C_FUNC_MAP = {
     'runHybridDecomposer':                   '/doxygen-c/html/namespaceprovsql.html#af4b46c398f275b2dd56a4f6e543ccbb3',
     'runRangeCheck':                         '/doxygen-c/html/namespaceprovsql.html#a56791cfa12bc119d18cfe076800b7631',
     'runAnalyticEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#af6f2f8cf7272ec6aea45225c8ce24658',
+    'runAggMarginalEvaluator':               '/doxygen-c/html/namespaceprovsql.html#a1f4c8b0ac5459572c6d92050181e247f',
     'runCountCmpEvaluator':                  '/doxygen-c/html/namespaceprovsql.html#a202da174e018e993ce6e351f6c7119a1',
+    'runMinMaxCmpEvaluator':                 '/doxygen-c/html/namespaceprovsql.html#ab2bf8867a429b145000af10a18f4a88f',
+    'runSumCmpEvaluator':                    '/doxygen-c/html/namespaceprovsql.html#ae23e77472355e84f31973703ce94b153',
     'GenericCircuit::resolveCmpToBernoulli': '/doxygen-c/html/classGenericCircuit.html#aaeee2a77e24f089ef526797f4b1daff1',
     'BooleanCircuit::interpretAsDD':         '/doxygen-c/html/classBooleanCircuit.html#a16a0f5a4e7b3c65afd2cee3747cb1c9e',
     'BooleanCircuit::parsePaniniDD':         '/doxygen-c/html/classBooleanCircuit.html#a6193c5268eb21297ff2ffb7681e16580',

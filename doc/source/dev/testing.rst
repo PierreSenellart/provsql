@@ -71,6 +71,35 @@ The test runner creates a temporary database ``contrib_regression``,
 runs all tests from the schedule, compares actual output to expected,
 and reports differences.
 
+Upgrade-Chain Parity
+--------------------
+
+.. code-block:: bash
+
+   make upgrade-parity-test
+   # with psql options:
+   make upgrade-parity-test PSQL_ARGS=--port=5434
+
+``test/upgrade_parity.sh`` builds one database through
+``CREATE EXTENSION provsql VERSION '1.0.0'`` followed by
+``ALTER EXTENSION provsql UPDATE`` (exercising the whole chain of
+``sql/upgrades/`` scripts) and one through a direct
+``CREATE EXTENSION``, then diffs their catalogs: every function
+(signature, return type, body hash, volatility, security definer),
+aggregate, operator (with commutators), cast (with its context --
+implicit vs assignment), type, enum value, relation, and every
+extension member with its schema. Any difference means an upgrade
+script failed to replicate the installed surface and the check fails
+with the diff (``<`` = upgraded-only / stale, ``>`` = missing from
+the chain).
+
+This is the strong form of the ``extension_upgrade`` pg_regress
+canary, which smoke-tests a handful of features; run it before every
+release. It has caught missing objects, function-body drift, casts
+left at the wrong context, shell operators left unfilled by
+COMMUTATOR / NEGATOR forward references, and functions created in the
+wrong schema by a script lacking ``SET search_path``.
+
 
 Writing a New Test
 ------------------

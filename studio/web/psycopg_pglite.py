@@ -143,10 +143,13 @@ class _Cursor:
 
 
 class _Info:
-    """Stand-in for psycopg's `conn.info`; only server_version is consumed."""
+    """Stand-in for psycopg's `conn.info`; server_version and dbname (the
+    kernel-session reply reports which database the kernel is pinned to)
+    are the only fields consumed."""
 
     def __init__(self):
         self._sv = None
+        self._db = None
 
     @property
     def server_version(self):
@@ -158,11 +161,38 @@ class _Info:
                 self._sv = 170000
         return self._sv
 
+    @property
+    def dbname(self):
+        if self._db is None:
+            try:
+                _, rows, _, _ = _run("SELECT current_database()", None)
+                self._db = rows[0][0]
+            except Exception:
+                self._db = ""
+        return self._db
+
+    @property
+    def backend_pid(self):
+        # One single-process backend; the kernel chip and the cancel
+        # endpoint only display / compare this.
+        try:
+            _, rows, _, _ = _run("SELECT pg_backend_pid()", None)
+            return rows[0][0]
+        except Exception:
+            return 0
+
 
 class _Tx:
-    """psycopg-style `conn.transaction()` context manager, mapped onto a
-    SAVEPOINT inside the connection's lazy transaction.  force_rollback=True
-    always undoes the block (used for read-only probes)."""
+    """psycopg-style `conn.transaction()` context manager.
+
+    On a non-autocommit connection it maps onto a SAVEPOINT inside the
+    connection's lazy transaction (the pool-request shape db.py uses;
+    force_rollback=True always undoes the block, used for read-only
+    probes).  On an AUTOCOMMIT connection -- the pinned notebook-kernel
+    connections -- psycopg's transaction() opens a real transaction and
+    commits/rolls back at block exit; mirror that, otherwise the
+    SAVEPOINT would run outside any transaction and each cell would
+    silently lose its all-or-nothing semantics."""
 
     _n = [0]
 
@@ -170,8 +200,14 @@ class _Tx:
         self._conn = conn
         self._force = force_rollback
         self._sp = None
+        self._own = False
 
     def __enter__(self):
+        if self._conn.autocommit and not self._conn._in_tx:
+            self._own = True
+            self._conn._raw("BEGIN")
+            self._conn._in_tx = True
+            return self
         self._conn._ensure_tx()
         _Tx._n[0] += 1
         self._sp = "psy_sp_%d" % _Tx._n[0]
@@ -179,18 +215,38 @@ class _Tx:
         return self
 
     def __exit__(self, exc_t, exc_v, tb):
+        if self._own:
+            rollback = exc_t is not None or self._force
+            self._conn._raw("ROLLBACK" if rollback else "COMMIT")
+            self._conn._in_tx = False
+            return False
         if exc_t is not None or self._force:
             self._conn._raw("ROLLBACK TO SAVEPOINT " + self._sp)
         self._conn._raw("RELEASE SAVEPOINT " + self._sp)
         return False
 
 
+class _PGconn:
+    """Stand-in for psycopg's `conn.pgconn`; db.py's kernel-death check
+    reads transaction_status to tell a wedged connection (ACTIVE, stuck
+    mid-protocol) from a healthy post-rollback one.  The shim is never
+    wedged -- every query completes synchronously -- so report IDLE."""
+
+    @property
+    def transaction_status(self):
+        return psycopg.pq.TransactionStatus.IDLE
+
+
 class _Conn:
     def __init__(self):
         self.autocommit = False
+        self.closed = False
+        self.broken = False
+        self.prepare_threshold = None
         self._in_tx = False
         self._handlers = []
         self.info = _Info()
+        self.pgconn = _PGconn()
 
     def add_notice_handler(self, cb):
         self._handlers.append(cb)
@@ -251,7 +307,24 @@ class _Conn:
             self._in_tx = False
 
     def close(self):
-        pass
+        """Kernel restart / close, mapped onto the one shared session.
+
+        The native build closes the pinned kernel connection and opens a
+        fresh one; PGlite has a single backend session shared by every
+        connection object, so 'fresh' is expressed as DISCARD ALL: temp
+        tables, prepared statements and session GUCs go away -- including
+        the search_path the shell's per-open PREP set, which is restored
+        here (it must match shell-boot.js's PREP).  Single-session
+        caveat: kernel state is shared across notebook tabs, so closing
+        or restarting any kernel resets them all."""
+        if self.closed:
+            return
+        if self._in_tx:
+            self._raw("ROLLBACK")
+            self._in_tx = False
+        self._raw("DISCARD ALL")
+        self._raw("SET search_path TO public, provsql")
+        self.closed = True
 
 
 def _connect(*a, **k):
@@ -264,6 +337,18 @@ _errors = types.ModuleType("psycopg.errors")
 for _n in ("UndefinedFunction", "UndefinedObject", "InsufficientPrivilege", "SyntaxError"):
     setattr(_errors, _n, type(_n, (psycopg.Error,), {}))
 psycopg.errors = _errors
+
+# psycopg.pq.TransactionStatus: db.py's kernel-death check compares
+# conn.pgconn.transaction_status against ACTIVE (wedged mid-protocol).
+_pq = types.ModuleType("psycopg.pq")
+
+
+class _TransactionStatus:
+    IDLE, ACTIVE, INTRANS, INERROR, UNKNOWN = range(5)
+
+
+_pq.TransactionStatus = _TransactionStatus
+psycopg.pq = _pq
 
 _sql = types.ModuleType("psycopg.sql")
 
@@ -403,6 +488,7 @@ _subprocess.CompletedProcess = CompletedProcess
 for _name, _mod in [
     ("psycopg", psycopg),
     ("psycopg.errors", _errors),
+    ("psycopg.pq", _pq),
     ("psycopg.sql", _sql),
     ("psycopg.conninfo", _conninfo),
     ("psycopg_pool", _pool),

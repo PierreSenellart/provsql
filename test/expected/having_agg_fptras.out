@@ -1,0 +1,37 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+sum_relative_in_tol
+t
+(1 row)
+sum_additive_in_tol
+t
+(1 row)
+sum_monte_carlo_in_tol
+t
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+avg_mc_faithful
+t
+(1 row)
+min_mc_faithful
+t
+(1 row)
+max_mc_faithful
+t
+(1 row)
+count_star_mc_faithful
+t
+(1 row)
+count_col_mc_faithful
+t
+(1 row)
+remove_provenance
+
+(1 row)

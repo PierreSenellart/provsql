@@ -41,6 +41,16 @@ The following SQL constructs are supported with full provenance tracking:
   sound only for absorptive evaluation (probability / Boolean), not for
   multiplicity-counting semirings
 * Subqueries in the ``FROM`` clause (including deeply nested)
+* Subqueries outside ``FROM`` (``EXISTS``/``NOT EXISTS``,
+  ``IN``/``NOT IN``, quantified comparisons such as ``= ANY`` or
+  ``<> ALL``, scalar subqueries, ``ARRAY(SELECT …)``), correlated or
+  not: they are internally decorrelated and rewritten.  The subquery
+  body may involve a single provenance-tracked relation, or join
+  several of them as a comma-separated ``FROM`` list; e.g., ``NOT IN``
+  over a joined body carries the same antijoin provenance as the
+  equivalent ``EXCEPT``.  An aggregate body can be compared against a
+  constant or an outer column, including through ``IN``/``NOT IN``
+  (the single-row aggregate body makes these scalar comparisons)
 * ``GROUP BY``
 * ``SELECT DISTINCT`` (set semantics)
 * ``UNION`` and ``UNION ALL``
@@ -60,8 +70,14 @@ Unsupported SQL Features
 The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking:
 
-* **Subqueries outside FROM:** ``EXISTS``, ``NOT EXISTS``,
-  ``IN``/``NOT IN`` subqueries, scalar subqueries in ``SELECT``
+* **Subqueries outside FROM** whose body uses explicit ``JOIN``
+  syntax (rewrite the body as a comma-separated ``FROM`` list with the
+  join condition in ``WHERE``) or ``LIMIT``/``OFFSET`` (it would pick
+  an order-dependent subset); also, when an *uncorrelated* body with
+  no ``WHERE`` clause is compared against an outer column, only
+  non-star aggregate bodies are supported (``max(x)``, ``count(x)``,
+  …, including via ``IN``/``NOT IN``) -- a plain value body or
+  ``count(*)`` in that position is not
 * **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
   semantics), over cyclic data *without* ``provsql.boolean_provenance``, or on
   PostgreSQL versions before 15
@@ -81,8 +97,8 @@ will either raise an error or may cause incorrect provenance tracking:
   emitted whenever a window function appears in a provenance-tracked
   query
 
-For negation or exclusion, use ``EXCEPT`` rather than ``NOT IN``.
-For correlated subqueries, ``LATERAL`` can be used as a workaround.
+For unsupported correlated subqueries, ``LATERAL`` can be used as a
+workaround.
 For comparison or duplicate elimination on aggregate results, explicitly
 cast the aggregate column to its base type (e.g., ``cnt::bigint``),
 which extracts the value but loses the provenance information on that

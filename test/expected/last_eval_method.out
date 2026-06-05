@@ -1,0 +1,34 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+provsql.last_eval_method
+independent
+(1 row)
+provsql.last_eval_method
+monte-carlo
+(1 row)
+provsql.last_eval_method
+possible-worlds
+(1 row)
+provsql.last_eval_method
+independent
+(1 row)
+provsql.last_eval_method
+independent,possible-worlds
+(1 row)
+ran
+t
+(1 row)
+provsql.last_eval_method
+independent
+(1 row)
+ran
+t
+(1 row)
+provsql.last_eval_method
+tree-decomposition
+(1 row)
+remove_provenance
+
+(1 row)

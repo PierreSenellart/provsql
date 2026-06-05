@@ -3,6 +3,7 @@
 --   cd doc/casestudy4/data
 --   psql -d mydb -f setup.sql
 
+DROP TABLE IF EXISTS person CASCADE;
 CREATE TABLE person (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -11,6 +12,7 @@ CREATE TABLE person (
     death DATE
 );
 
+DROP TABLE IF EXISTS holds CASCADE;
 CREATE TABLE holds (
     id INTEGER REFERENCES person(id),
     position TEXT NOT NULL,
@@ -20,6 +22,7 @@ CREATE TABLE holds (
     PRIMARY KEY (id, position, start)
 );
 
+DROP TABLE IF EXISTS party CASCADE;
 CREATE TABLE party (
     id INTEGER,
     party TEXT NOT NULL,
@@ -38,8 +41,8 @@ CREATE TABLE party (
 -- regardless of the server timezone.
 SET timezone TO 'UTC';
 
-ALTER TABLE person ADD COLUMN validity tstzmultirange;
-ALTER TABLE holds  ADD COLUMN validity tstzmultirange;
+ALTER TABLE person ADD COLUMN IF NOT EXISTS validity tstzmultirange;
+ALTER TABLE holds  ADD COLUMN IF NOT EXISTS validity tstzmultirange;
 
 UPDATE person SET validity = tstzmultirange(tstzrange(birth, death));
 UPDATE holds  SET validity = tstzmultirange(tstzrange(start, until));
@@ -62,7 +65,7 @@ SELECT create_provenance_mapping_view('holds_validity',  'holds',  'validity');
 
 -- Extend the global time_validity_view to include both mappings
 ALTER VIEW provsql.time_validity_view RENAME TO time_validity_view_update;
-CREATE VIEW provsql.time_validity_view AS
+CREATE OR REPLACE VIEW provsql.time_validity_view AS
     SELECT * FROM provsql.time_validity_view_update
   UNION ALL
     SELECT * FROM person_validity
@@ -70,7 +73,7 @@ CREATE VIEW provsql.time_validity_view AS
     SELECT * FROM holds_validity;
 
 -- Convenience view joining person and holds
-CREATE VIEW person_position AS
+CREATE OR REPLACE VIEW person_position AS
 SELECT DISTINCT name, position
 FROM person JOIN holds ON person.id = holds.id
 WHERE country = 'FR';

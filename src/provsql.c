@@ -34,9 +34,17 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
 #include "executor/executor.h"
+#if PG_VERSION_NUM >= 120000
+#include "optimizer/optimizer.h"
+#else
+#include "optimizer/var.h"              /* contain_vars_of_level */
+#endif
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
+#include "parser/parse_node.h"
 #include "parser/parse_oper.h"
+#include "rewrite/rewriteManip.h"
+#include "parser/parse_relation.h"
 #include "utils/builtins.h"
 #include "parser/parsetree.h"
 #include "storage/lwlock.h"
@@ -77,12 +85,14 @@ static bool provsql_active = true; ///< @c true while ProvSQL query rewriting is
 bool provsql_where_provenance = false;
 static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+char *provsql_last_eval_method = NULL; ///< Last probability evaluation method(s) used; exposed via @c provsql.last_eval_method
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC. Superuser-only (@c PGC_SUSET): it dictates which directories the postgres OS user searches for executables, so a non-privileged role must not be able to point it at an attacker-controlled binary.
 char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit::makeDD as the final fallback after @c interpretAsDD and tree-decomposition both fail; controlled by the @c provsql.fallback_compiler GUC (default @c "d4")
 char *provsql_kcmcp_server = NULL; ///< Launch command for the managed KCMCP server (with a @c {endpoint} placeholder); controlled by the @c provsql.kcmcp_server GUC. Empty means no managed server is launched.
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
+int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subproblems before it bails (0 = off; the chooser auto-budgets at the next-best method's cost regardless); @c provsql.dtree_max_subproblems GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
@@ -749,6 +759,11 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       }
     } else if (r->rtekind == RTE_VALUES) {
       // Nothing to do, no provenance attribute in literal values
+#if PG_VERSION_NUM >= 120000
+    } else if (r->rtekind == RTE_RESULT) {
+      // Empty-FROM RTE (no provenance).  Also what the outer-join lowering
+      // leaves behind when it neutralises an orphaned subquery arm.
+#endif
 #if PG_VERSION_NUM >= 180000
     } else if (r->rtekind == RTE_GROUP) {
       // Introduced in PostgreSQL 18, we already handle group by from
@@ -1120,11 +1135,12 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
  * @param agg_ref    The original @c Aggref node from the query.
  * @param prov_atts  List of provenance @c Var nodes.
  * @param op         Semiring operation (determines how tokens are combined).
+ * @param is_scalar  Aggregation has no GROUP BY (single always-present row).
  * @return  Provenance expression of type @c agg_token.
  */
 static Expr *make_aggregation_expression(const constants_t *constants,
                                          Aggref *agg_ref, List *prov_atts,
-                                         semiring_operation op) {
+                                         semiring_operation op, bool is_scalar) {
   Expr *result;
   FuncExpr *expr, *expr_s;
   Aggref *agg = makeNode(Aggref);
@@ -1180,13 +1196,57 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     expr_s->funcresulttype = constants->OID_TYPE_UUID;
 
     // check the particular case of count
-    if (aggregation_function == F_COUNT_ ||
-        aggregation_function == F_COUNT_ANY) // count(*) or count(arg)
+    if (aggregation_function == F_COUNT_) // count(*): counts every row
     {
       Const *one = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
                              sizeof(int32), Int32GetDatum(1), false, true);
       expr_s->args = list_make2(one, expr);
       aggregation_function = F_SUM_INT4;
+    } else if (aggregation_function == F_COUNT_ANY) // count(expr)
+    {
+      /* count(expr) counts only rows where expr IS NOT NULL, but -- unlike the
+       * other aggregates -- an all-NULL group still has a defined result of 0
+       * (not NULL), so the row must stay PRESENT in the aggregate to carry the
+       * group's existence; it just contributes 0.  Pass the per-row value
+       * CASE WHEN expr IS NOT NULL THEN 1 ELSE 0 END: a NULL expr (e.g. the
+       * NULL-padded rows a LEFT JOIN manufactures) contributes 0 to the count
+       * yet keeps the group alive, so HAVING count(expr)=0 is correctly true.
+       * count(*) keeps the constant 1 above. */
+      Expr *arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
+      CaseExpr *ce = makeNode(CaseExpr);
+      CaseWhen *cw = makeNode(CaseWhen);
+      NullTest *nt = makeNode(NullTest);
+
+      nt->arg = (Expr *)arg;
+      nt->nulltesttype = IS_NOT_NULL;
+      nt->argisrow = false;
+      nt->location = -1;
+
+      cw->expr = (Expr *)nt;
+      cw->result = (Expr *)makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                                     sizeof(int32), Int32GetDatum(1), false,
+                                     true);
+      cw->location = -1;
+
+      ce->casetype = constants->OID_TYPE_INT;
+      ce->casecollid = InvalidOid;
+      ce->arg = NULL;
+      ce->args = list_make1(cw);
+      ce->defresult = (Expr *)makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                                        sizeof(int32), Int32GetDatum(0), false,
+                                        true);
+      ce->location = -1;
+
+      expr_s->args = list_make2(ce, expr);
+      /* Keep the gate's aggfnoid as count (NOT normalised to F_SUM_INT4 like
+       * count(*) is): the per-row CASE already makes the value 0/1 so the
+       * VALUE is the SUM of those, but preserving the COUNT identity tells the
+       * HAVING evaluators that the empty-group result is 0 (a real, comparable
+       * value) rather than NULL as a genuine sum would be.  This is what lets a
+       * scalar true-on-empty predicate (count(col)=0, <k, <=k) keep the
+       * all-absent world: enumerate_valid_worlds routes a COUNT with non-unit
+       * (0/1) values to the value-aware sum_dp with the empty world retained,
+       * while count(*) (all-unit) keeps using count_enum. */
     } else {
       expr_s->args =
         list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
@@ -1214,11 +1274,18 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     fn = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
                    Int32GetDatum(aggregation_function), false, true);
 
+    /* The aggregate result-type OID is passed clean (it is also the cast target
+     * when an agg_token is used in arithmetic, see wrap_agg_token_with_cast).
+     * The scalar-aggregation flag travels as a separate boolean argument;
+     * provenance_aggregate sets the high bit of the gate's info2 and folds the
+     * flag into the gate's content UUID. */
     typ = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
                     Int32GetDatum(agg_ref->aggtype), false, true);
 
     plus->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
-    plus->args = list_make4(fn, typ, agg_ref, agg);
+    plus->args = list_make5(fn, typ, agg_ref, agg,
+                            makeConst(BOOLOID, -1, InvalidOid, sizeof(bool),
+                                      BoolGetDatum(is_scalar), false, true));
     plus->location = -1;
 
     result = (Expr *)plus;
@@ -1238,6 +1305,219 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
 /* Forward declaration: defined alongside the other tree walkers
  * further down in the file. */
 static bool needs_having_lift(Node *havingQual, const constants_t *constants);
+static Node *peel_agg_casts(Node *n);
+static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants);
+
+/* ----------------------------------------------------------------------
+ * Normalising constant arithmetic over an aggregate in a comparison.
+ *
+ * A comparison such as `sum(x)+1 > 15`, `sum(x)*2 > 30`, or `-sum(x) > 5`
+ * is rewritten so the aggregate stands alone and the constant arithmetic is
+ * folded into the threshold (and the operator flipped where the arithmetic
+ * is monotone-decreasing): `sum(x) > 14`, `sum(x) > 15`, `sum(x) < -5`.
+ * The aggregate-comparison evaluators then resolve it as usual.  This is the
+ * "push arithmetic to data values" half of the agg_token arithmetic story.
+ * -------------------------------------------------------------------- */
+
+/** @brief Context for @c contains_agg_walker. */
+typedef struct contains_agg_ctx {
+  const constants_t *constants;
+  bool found;
+} contains_agg_ctx;
+
+static bool contains_agg_walker(Node *node, contains_agg_ctx *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var) &&
+      ((Var *)node)->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+    ctx->found = true;
+    return true;
+  }
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid ==
+        ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+    ctx->found = true;
+    return true;
+  }
+  return expression_tree_walker(node, contains_agg_walker, ctx);
+}
+
+/** @brief Whether an expression subtree references an aggregate (a bare
+ *  provenance_aggregate call or an agg_token Var). */
+static bool expr_contains_agg(Node *node, const constants_t *constants) {
+  contains_agg_ctx ctx = {constants, false};
+  contains_agg_walker(node, &ctx);
+  return ctx.found;
+}
+
+/** @brief Numeric value of a (possibly cast-wrapped) @c Const; false if the
+ *  node is not a non-NULL @c Const. */
+static bool const_as_double(Node *n, double *out) {
+  Const *c;
+  Oid outfunc;
+  bool isvarlena;
+  char *s;
+
+  n = peel_agg_casts(n);
+  if (n == NULL || !IsA(n, Const) || ((Const *)n)->constisnull)
+    return false;
+  c = (Const *)n;
+  getTypeOutputInfo(c->consttype, &outfunc, &isvarlena);
+  s = OidOutputFunctionCall(outfunc, c->constvalue);
+  *out = atof(s);
+  pfree(s);
+  return true;
+}
+
+/** @brief Build `l <op> r`, resolving the operator by name. */
+static Node *build_binop(const char *op, Node *l, Node *r) {
+  ParseState *p = make_parsestate(NULL);
+  Node *e = (Node *)make_op(p, list_make1(makeString(pstrdup(op))),
+                            l, r, NULL, -1);
+  free_parsestate(p);
+  return e;
+}
+
+/**
+ * @brief Fold constant arithmetic over an aggregate into the comparison
+ *        threshold.
+ *
+ * Given a comparison @c OpExpr one of whose sides is an aggregate wrapped in
+ * constant arithmetic (the other side being aggregate-free), returns an
+ * equivalent @c "bare_agg <op'> threshold'" @c OpExpr.  Returns @c NULL when
+ * the comparison has no aggregate, has aggregates on both sides (which cannot
+ * be folded into a scalar threshold), or uses an arithmetic shape we do not
+ * fold (e.g. a constant divided by the aggregate).
+ */
+static OpExpr *normalize_agg_comparison(OpExpr *cmp,
+                                        const constants_t *constants) {
+  Node *a, *b, *agg_side, *thr;
+  bool a_agg, b_agg;
+  Oid opno;
+  OpExpr *res;
+
+  if (list_length(cmp->args) != 2)
+    return NULL;
+  a = (Node *)linitial(cmp->args);
+  b = (Node *)lsecond(cmp->args);
+  a_agg = expr_contains_agg(a, constants);
+  b_agg = expr_contains_agg(b, constants);
+  if (a_agg == b_agg)  /* none, or aggregate on both sides */
+    return NULL;
+
+  opno = cmp->opno;
+  if (a_agg) {
+    agg_side = a; thr = b;
+  } else {
+    agg_side = b; thr = a;
+    opno = get_commutator(opno);  /* orient: aggregate on the left */
+    if (!OidIsValid(opno))
+      return NULL;
+  }
+
+  /* Conceptually `agg_side <opno> thr`; peel arithmetic from agg_side into
+   * thr until agg_side is a bare aggregate. */
+  for (;;) {
+    Node *peeled = peel_agg_casts(agg_side);
+    OpExpr *inner;
+    char *iname;
+    int nin;
+    bool flip = false;
+
+    if (peeled == NULL || !IsA(peeled, OpExpr)) {
+      agg_side = peeled;
+      break;
+    }
+    inner = (OpExpr *)peeled;
+    iname = get_opname(inner->opno);
+    if (iname == NULL)
+      return NULL;
+    nin = list_length(inner->args);
+
+    if (nin == 1 && strcmp(iname, "-") == 0) {           /* prefix -agg */
+      thr = build_binop("-", NULL, thr);                 /* -thr */
+      flip = true;
+      agg_side = (Node *)linitial(inner->args);
+    } else if (nin == 2) {
+      Node *x = (Node *)linitial(inner->args);
+      Node *y = (Node *)lsecond(inner->args);
+      bool x_agg = expr_contains_agg(x, constants);
+      bool y_agg = expr_contains_agg(y, constants);
+      Node *c;
+      bool agg_left;
+
+      if (x_agg == y_agg)  /* aggregate on both / neither side of inner op */
+        return NULL;
+      if (x_agg) { agg_side = x; c = y; agg_left = true; }
+      else       { agg_side = y; c = x; agg_left = false; }
+
+      if (strcmp(iname, "+") == 0) {
+        thr = build_binop("-", thr, c);                  /* agg+c: thr-c */
+      } else if (strcmp(iname, "-") == 0) {
+        if (agg_left)
+          thr = build_binop("+", thr, c);                /* agg-c: thr+c */
+        else {
+          thr = build_binop("-", c, thr);                /* c-agg: c-thr */
+          flip = true;
+        }
+      } else if (strcmp(iname, "/") == 0) {
+        /* agg/c <op> thr  <=>  agg <op> thr*c -- valid for REAL division
+         * only.  An integer (floored) division does not satisfy this
+         * equivalence, so leave it unfolded and let the possible-worlds
+         * enumeration evaluate it with the correct integer-division semantics.
+         * c/agg cannot be folded either way. */
+        Oid divtype = exprType(peeled);
+        double cv;
+        if (divtype == INT2OID || divtype == INT4OID || divtype == INT8OID)
+          return NULL;
+        if (!agg_left || !const_as_double(c, &cv) || cv == 0.0)
+          return NULL;
+        thr = build_binop("*", thr, c);
+        if (cv < 0.0)
+          flip = true;
+      } else if (strcmp(iname, "*") == 0) {
+        /* agg*c <op> thr  <=>  agg <op> thr/c (exact numeric division, so a
+         * non-integer threshold like 15.5 is preserved).  The aggregate
+         * comparison evaluator handles fractional and high-scale thresholds
+         * (minimal-scale via trailing-zero trimming on the fast DP path, and
+         * an exact-enumeration fallback otherwise). */
+        double cv;
+        Node *thr_num;
+        if (!const_as_double(c, &cv) || cv == 0.0)
+          return NULL;
+        thr_num = coerce_to_target_type(NULL, thr, exprType(thr),
+                                        NUMERICOID, -1, COERCION_EXPLICIT,
+                                        COERCE_EXPLICIT_CAST, -1);
+        if (thr_num == NULL)
+          return NULL;
+        thr = build_binop("/", thr_num, c);
+        if (cv < 0.0)
+          flip = true;
+      } else {
+        return NULL;
+      }
+    } else {
+      return NULL;
+    }
+
+    if (flip) {
+      opno = get_commutator(opno);
+      if (!OidIsValid(opno))
+        return NULL;
+    }
+  }
+
+  res = makeNode(OpExpr);
+  res->opno = opno;
+  res->opresulttype = BOOLOID;
+  res->opretset = false;
+  res->opcollid = InvalidOid;
+  res->inputcollid = cmp->inputcollid;
+  res->location = cmp->location;
+  res->args = list_make2(agg_side, thr);   /* aggregate on the left */
+  set_opfuncid(res);
+  return res;
+}
 
 /**
  * @brief Convert a comparison @c OpExpr on aggregate results into a
@@ -1246,7 +1526,9 @@ static bool needs_having_lift(Node *havingQual, const constants_t *constants);
  * Each argument of @p opExpr must be one of:
  * - A @c Var of type @c agg_token (or a @c FuncExpr implicit-cast wrapper
  *   around one) → cast to UUID via @c agg_token_to_uuid.
- * - A scalar @c Const → wrapped in @c provenance_semimod(const, gate_one()).
+ * - A scalar @c Const, or a bare grouped-column @c Var (necessarily a GROUP BY
+ *   key in a HAVING clause, hence constant within each group) → wrapped in
+ *   @c provenance_semimod(value, gate_one()).
  *
  * If @p negated is true the operator OID is replaced by its negator so that
  * NOT(a < b) becomes a >= b at the provenance level.
@@ -1260,10 +1542,21 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
   FuncExpr *cmpExpr;
   Node *arguments[2];
   Const *oid;
-  Oid opno = opExpr->opno;
+  Oid opno;
+
+  /* Fold any constant arithmetic over the aggregate into the threshold
+   * (e.g. sum(x)+1 > 15  ->  sum(x) > 14), so the comparison reduces to the
+   * bare-aggregate form the rest of this function and the evaluators expect. */
+  {
+    OpExpr *norm = normalize_agg_comparison(opExpr, constants);
+    if (norm != NULL)
+      opExpr = norm;
+  }
+  opno = opExpr->opno;
 
   for (unsigned i = 0; i < 2; ++i) {
     Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
+    Node *agg_node = NULL;
 
     if (IsA(node, FuncExpr)) {
       FuncExpr *fe = (FuncExpr *)node;
@@ -1274,53 +1567,54 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
       }
     }
 
-    if (IsA(node, FuncExpr)) {
-      FuncExpr *fe = (FuncExpr *)node;
-      if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-        // We need to add an explicit cast to UUID
-        FuncExpr *castToUUID = makeNode(FuncExpr);
+    // Identify the aggregate side.  It is either already agg_token-typed (a
+    // bare provenance_aggregate / agg_token Var, or agg_token arithmetic on a
+    // materialised column), or an arithmetic OpExpr over aggregates that still
+    // needs lowering to the native agg_token operators (e.g. the int8-typed
+    // sum(x)*sum(y) of a live HAVING) -- which try_swap_agg_arith turns into a
+    // gate_arith.  Either way the result agg_token is cast to its UUID, so the
+    // gate_cmp wraps the aggregate (or the gate_arith over aggregates); the
+    // possible-worlds evaluator resolves it.
+    if (exprType(node) == constants->OID_TYPE_AGG_TOKEN) {
+      agg_node = node;
+    } else if (IsA(node, OpExpr) && expr_contains_agg(node, constants)) {
+      Node *swapped = try_swap_agg_arith((OpExpr *)node, constants);
+      if (swapped != NULL &&
+          exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
+        agg_node = swapped;
+    }
 
-        castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
-        castToUUID->funcresulttype = constants->OID_TYPE_UUID;
-        castToUUID->args = list_make1(fe);
-        castToUUID->location = -1;
+    if (agg_node != NULL) {
+      // The aggregate side: add an explicit cast of the agg_token to UUID.
+      FuncExpr *castToUUID = makeNode(FuncExpr);
 
-        arguments[i] = (Node *)castToUUID;
-      } else {
-        provsql_error("cannot handle complex HAVING expressions");
-      }
-    } else if (IsA(node, Var)) {
-      Var *v = (Var *)node;
+      castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+      castToUUID->funcresulttype = constants->OID_TYPE_UUID;
+      castToUUID->args = list_make1(agg_node);
+      castToUUID->location = -1;
 
-      if (v->vartype == constants->OID_TYPE_AGG_TOKEN) {
-        // We need to add an explicit cast to UUID
-        FuncExpr *castToUUID = makeNode(FuncExpr);
-
-        castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
-        castToUUID->funcresulttype = constants->OID_TYPE_UUID;
-        castToUUID->args = list_make1(v);
-        castToUUID->location = -1;
-
-        arguments[i] = (Node *)castToUUID;
-      } else {
-        provsql_error("cannot handle complex HAVING expressions");
-      }
-    } else if (IsA(node, Const)) {
-      Const *literal = (Const *)node;
-      FuncExpr *oneExpr, *semimodExpr;
+      arguments[i] = (Node *)castToUUID;
+    } else if (!expr_contains_agg(node, constants)) {
+      // The value side: a literal, a bare grouped-column Var, or a constant
+      // arithmetic expression folded from the aggregate side by
+      // normalize_agg_comparison (e.g. the `15 - col` of sum(x)+col > 15).
+      // A non-agg_token Var in HAVING is necessarily a GROUP BY key, hence
+      // constant within each group, so any such aggregate-free expression is
+      // wrapped like a literal in a value gate carrying the (per-group) datum
+      // with certain provenance.
+      FuncExpr *oneExpr = makeNode(FuncExpr);
+      FuncExpr *semimodExpr = makeNode(FuncExpr);
 
       // gate_one() expression
-      oneExpr = makeNode(FuncExpr);
       oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
       oneExpr->funcresulttype = constants->OID_TYPE_UUID;
       oneExpr->args = NIL;
       oneExpr->location = -1;
 
-      // provenance_semimod(literal, gate_one())
-      semimodExpr = makeNode(FuncExpr);
+      // provenance_semimod(value, gate_one())
       semimodExpr->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
       semimodExpr->funcresulttype = constants->OID_TYPE_UUID;
-      semimodExpr->args = list_make2((Expr *)literal, (Expr *)oneExpr);
+      semimodExpr->args = list_make2((Expr *)node, (Expr *)oneExpr);
       semimodExpr->location = -1;
 
       arguments[i] = (Node *)semimodExpr;
@@ -1345,6 +1639,197 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
   cmpExpr->location = opExpr->location;
 
   return cmpExpr;
+}
+
+/**
+ * @brief Build @c "⊕(array_agg(K) FILTER (WHERE V IS [NOT] NULL))" -- the
+ *        per-row provenance @c ⊕ over just the value rows (@p filter @c =
+ *        @c IS_NOT_NULL) or just the null-valued rows (@p filter @c = @c IS_NULL)
+ *        of an aggregate's group.
+ *
+ * @p base_arr is the aggregate's @c array_agg(provenance_semimod(V, K)) Aggref;
+ * we copy it, swap its argument to @c K, and add the @c FILTER on @p V (the
+ * per-row aggregated value, NULL exactly when the row does not contribute).  The
+ * filtered @c array_agg is @c NULL (not an empty array) for a group with no row
+ * of the requested kind, so it is wrapped in @c COALESCE(..., '{}') -- the STRICT
+ * @c provenance_plus then yields @c gate_zero rather than NULL.
+ */
+static FuncExpr *having_null_filtered_plus(const constants_t *constants,
+                                           Aggref *base_arr, Node *V, Node *K,
+                                           NullTestType filter) {
+  Aggref *arr = (Aggref *)copyObject(base_arr);
+  TargetEntry *te = (TargetEntry *)linitial(arr->args);
+  NullTest *flt = makeNode(NullTest);
+  ArrayExpr *empty = makeNode(ArrayExpr);
+  CoalesceExpr *coal = makeNode(CoalesceExpr);
+  FuncExpr *plus = makeNode(FuncExpr);
+
+  te->expr = (Expr *)copyObject(K); /* array_agg(K) instead of the semimod */
+
+  /* The provenance array_agg never carries a user FILTER (make_aggregation_
+   * expression builds a fresh Aggref), so setting aggfilter directly is safe. */
+  flt->arg = (Expr *)copyObject(V);
+  flt->nulltesttype = filter;
+  flt->argisrow = false;
+  flt->location = -1;
+  arr->aggfilter = (Expr *)flt;
+
+  empty->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  empty->array_collid = InvalidOid;
+  empty->element_typeid = constants->OID_TYPE_UUID;
+  empty->elements = NIL;
+  empty->multidims = false;
+  empty->location = -1;
+
+  coal->coalescetype = constants->OID_TYPE_UUID_ARRAY;
+  coal->coalescecollid = InvalidOid;
+  coal->args = list_make2(arr, empty);
+  coal->location = -1;
+
+  plus->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
+  plus->funcresulttype = constants->OID_TYPE_UUID;
+  plus->funcvariadic = true;
+  plus->args = list_make1(coal);
+  plus->location = -1;
+  return plus;
+}
+
+/**
+ * @brief Convert a @c NullTest on an aggregate (@c agg IS [NOT] NULL) into a
+ *        provenance expression.
+ *
+ * @c sum / @c avg / @c min / @c max / @c array_agg / @c choose are NULL exactly
+ * when no value row contributes (every aggregated value absent or NULL).  Split
+ * the group's rows into value rows (@c V @c IS @c NOT @c NULL → tokens @c Kn, the
+ * rows the aggregate is defined over) and null-valued rows (@c V @c IS @c NULL →
+ * tokens @c Kz, present but not contributing).  Then:
+ *
+ * - @c IS @c NOT @c NULL → @c δ(⊕Kn): a value row is present.
+ * - @c IS @c NULL, scalar (no GROUP BY) → @c "1 ⊖ ⊕Kn": the single result row
+ *   always exists and is NULL exactly when no value row is present.
+ * - @c IS @c NULL, grouped → @c "δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn)": the group is present via a
+ *   null-valued row while no value row is present, so the aggregate is NULL.
+ *   (When the group has no null-valued rows @c Kz is empty and this collapses to
+ *   @c gate_zero, matching the pre-fix behaviour; the all-NULL-valued group, once
+ *   an unsupported edge, is now handled.)
+ *
+ * Splitting on @p V (not the whole-group @c ⊕) is what fixes both directions when
+ * null-valued rows are present: the old code used @c ⊕ over every row, so
+ * @c IS @c NOT @c NULL over-counted (a null-only world looked non-NULL) and
+ * grouped @c IS @c NULL was dropped entirely.
+ *
+ * The aggregate must be a direct @c provenance_aggregate call (an @c agg_token
+ * @c Var coming from a subquery exposes no token array and is rejected).
+ */
+static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
+                                               const constants_t *constants,
+                                               bool negated) {
+  Node *arg = (Node *)nt->arg;
+  FuncExpr *pa, *plusKn;
+  Node *V, *K;
+  Aggref *base_arr;
+  bool is_scalar;
+  NullTestType ntt;
+
+  /* Unwrap a single-argument implicit/explicit cast around the aggregate. */
+  if (IsA(arg, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)arg;
+    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+         fe->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(fe->args) == 1)
+      arg = (Node *)linitial(fe->args);
+  }
+  if (!IsA(arg, FuncExpr) ||
+      ((FuncExpr *)arg)->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+    provsql_error("HAVING IS [NOT] NULL is only supported directly on an "
+                  "aggregate of a provenance-tracked relation");
+  pa = (FuncExpr *)arg;
+
+  /* provenance_aggregate(aggfnoid, aggtype, Aggref, array_agg(semimods),
+   * is_scalar): the 5th argument is the scalar flag, the 4th is
+   * array_agg(provenance_semimod(V, K)).  Extract the per-row aggregated value V
+   * and provenance token K (the semimod's two arguments) -- V drives the value /
+   * null split, K is what we ⊕.  We need K rather than the semimod (which carries
+   * a value gate the probability and Boolean evaluators cannot walk). */
+  is_scalar = DatumGetBool(((Const *)list_nth(pa->args, 4))->constvalue);
+  {
+    Aggref *arr = (Aggref *)list_nth(pa->args, 3);
+    TargetEntry *te;
+    FuncExpr *sm;
+    if (!IsA(arr, Aggref) || list_length(arr->args) != 1)
+      provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
+    te = (TargetEntry *)linitial(arr->args);
+    if (!IsA(te->expr, FuncExpr) ||
+        ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD)
+      provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
+    sm = (FuncExpr *)te->expr;
+    V = (Node *)list_nth(sm->args, 0); /* per-row aggregated value */
+    K = (Node *)list_nth(sm->args, 1); /* per-row provenance token */
+    base_arr = arr;
+  }
+
+  ntt = nt->nulltesttype;
+  if (negated)
+    ntt = (ntt == IS_NULL) ? IS_NOT_NULL : IS_NULL;
+
+  /* ⊕Kn: the OR of the value-row tokens (V IS NOT NULL). */
+  plusKn = having_null_filtered_plus(constants, base_arr, V, K, IS_NOT_NULL);
+
+  if (ntt == IS_NOT_NULL) {
+    /* δ(⊕Kn): a value row is present. */
+    FuncExpr *delta = makeNode(FuncExpr);
+    delta->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+    delta->funcresulttype = constants->OID_TYPE_UUID;
+    delta->args = list_make1(plusKn);
+    delta->location = -1;
+    return delta;
+  }
+
+  /* IS NULL: no value row present, i.e. 1 ⊖ ⊕Kn. */
+  {
+    FuncExpr *one = makeNode(FuncExpr);
+    FuncExpr *monus = makeNode(FuncExpr);
+    one->funcid = constants->OID_FUNCTION_GATE_ONE;
+    one->funcresulttype = constants->OID_TYPE_UUID;
+    one->args = NIL;
+    one->location = -1;
+    monus->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+    monus->funcresulttype = constants->OID_TYPE_UUID;
+    monus->args = list_make2(one, plusKn); /* 1 ⊖ ⊕Kn */
+    monus->location = -1;
+
+    if (is_scalar)
+      return monus; /* the single result row always exists */
+
+    /* Grouped: the group must also be present, which -- given no value row --
+     * means a null-valued row is present: δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn). */
+    {
+      FuncExpr *plusKz =
+        having_null_filtered_plus(constants, base_arr, V, K, IS_NULL);
+      FuncExpr *deltaKz = makeNode(FuncExpr);
+      FuncExpr *times = makeNode(FuncExpr);
+      ArrayExpr *factors = makeNode(ArrayExpr);
+
+      deltaKz->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+      deltaKz->funcresulttype = constants->OID_TYPE_UUID;
+      deltaKz->args = list_make1(plusKz);
+      deltaKz->location = -1;
+
+      factors->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+      factors->array_collid = InvalidOid;
+      factors->element_typeid = constants->OID_TYPE_UUID;
+      factors->elements = list_make2(deltaKz, monus);
+      factors->multidims = false;
+      factors->location = -1;
+
+      times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+      times->funcresulttype = constants->OID_TYPE_UUID;
+      times->funcvariadic = true;
+      times->args = list_make1(factors);
+      times->location = -1;
+      return times;
+    }
+  }
 }
 
 /**
@@ -1416,6 +1901,8 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
     return having_BoolExpr_to_provenance((BoolExpr *)expr, constants, negated);
   else if (IsA(expr, OpExpr))
     return having_OpExpr_to_provenance_cmp((OpExpr *)expr, constants, negated);
+  else if (IsA(expr, NullTest))
+    return having_NullTest_to_provenance((NullTest *)expr, constants, negated);
   else
     provsql_error("Unknown structure within Boolean expression");
 }
@@ -1803,15 +2290,34 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                          needs_having_lift((Node *) q->havingQual, constants);
 
       if (aggregation && !lift_having) {
-        FuncExpr *deltaExpr = makeNode(FuncExpr);
+        if (q->groupClause == NIL && q->groupingSets == NIL) {
+          /* Scalar aggregation (no GROUP BY): the single result row always
+           * exists -- even over an empty input (count 0, sum/min/max NULL) -- so
+           * its existence provenance is gate_one (certain, 1_K in every semiring),
+           * NOT δ(⊕ tuples) which reads as "the input is non-empty".  The per-row
+           * value provenance lives in the agg_token; the "is this aggregate
+           * non-empty" condition is recovered separately (the agg_token moment /
+           * support functions exclude the empty world for NULL-on-empty
+           * aggregates).  δ collapses multiplicity for a *grouped* row, where the
+           * empty group is no row; for a scalar row that distinction does not
+           * apply. */
+          FuncExpr *oneExpr = makeNode(FuncExpr);
+          oneExpr->funcid = constants->OID_FUNCTION_GATE_ONE;
+          oneExpr->funcresulttype = constants->OID_TYPE_UUID;
+          oneExpr->args = NIL;
+          oneExpr->location = -1;
+          result = (Expr *)oneExpr;
+        } else {
+          FuncExpr *deltaExpr = makeNode(FuncExpr);
 
-        // adding the delta gate to the provenance circuit
-        deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
-        deltaExpr->args = list_make1(result);
-        deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
-        deltaExpr->location = -1;
+          // adding the delta gate to the provenance circuit
+          deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+          deltaExpr->args = list_make1(result);
+          deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
+          deltaExpr->location = -1;
 
-        result = (Expr *)deltaExpr;
+          result = (Expr *)deltaExpr;
+        }
       }
 
       if (lift_having) {
@@ -1961,7 +2467,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
             RangeTblEntry *jrte_v = (RangeTblEntry *)lfirst(
               list_nth_cell(q->rtable, jav_v->varno - 1));
             if (jrte_v->rtekind == RTE_RELATION) {
-              /* Provenance-tracking check and varattno fix — same rationale
+              /* Provenance-tracking check and varattno fix – same rationale
                * as the RTE_RELATION branch above. */
               bool is_prov = false;
               int ncols_jrte = list_length(jrte_v->eref->colnames);
@@ -2071,6 +2577,7 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
     Var *v = (Var *)node;
     if (v->varno == ctx->group_rtindex) {
       Node *resolved = copyObject(list_nth(ctx->groupexprs, v->varattno - 1));
+#if PG_VERSION_NUM >= 160000
       /* Clear varnullingrels: the group-step nulling bits reference the
        * group_rtindex RTE which does not exist in the fresh inner query.
        * Leaving them set causes the planner to access simple_rel_array at
@@ -2078,6 +2585,7 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
        * "unrecognized RTE kind: 9". */
       if (IsA(resolved, Var))
         ((Var *)resolved)->varnullingrels = NULL;
+#endif
       return resolved;
     }
   }
@@ -2134,10 +2642,20 @@ void strip_group_rte_pg18(Query *q) {
   if (q->jointree && q->jointree->quals)
     q->jointree->quals = resolve_group_rte_vars_mutator(
       q->jointree->quals, &grp_ctx);
+  /* HAVING too: when the GROUP BY key is a constant (e.g. GROUP BY 1, or
+   * any literal grouping expression), PostgreSQL 18 rewrites a matching
+   * literal on the other side of a HAVING comparison (HAVING count(*) = 1)
+   * into a grouped Var referencing the RTE_GROUP entry.  Left unresolved
+   * it reaches having_OpExpr_to_provenance_cmp as a bare Var and trips the
+   * "cannot handle complex HAVING expressions" bail; resolving it back to
+   * the underlying grouping expression restores the Const the converter
+   * expects. */
+  if (q->havingQual)
+    q->havingQual = resolve_group_rte_vars_mutator(q->havingQual, &grp_ctx);
 }
 #endif
 
-/* Forward declaration — defined later but needed by rewrite_agg_distinct */
+/* Forward declaration – defined later but needed by rewrite_agg_distinct */
 static bool provenance_function_walker(Node *node, void *data);
 
 /**
@@ -2318,6 +2836,65 @@ static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
   return outer;
 }
 
+/** @brief Collector for @c AGG(DISTINCT) Aggrefs inside a HAVING clause. */
+typedef struct having_distinct_ctx {
+  List *aggs;   ///< Aggref* nodes carrying @c aggdistinct, in traversal order
+} having_distinct_ctx;
+
+/**
+ * @brief Walker that collects @c AGG(DISTINCT) Aggrefs from an expression.
+ *
+ * Does not descend into an @c Aggref's own arguments, so the traversal order
+ * matches @c replace_having_distinct_mutator below (both stop at every
+ * @c Aggref), keeping the per-aggregate outer-subquery indices aligned.
+ */
+static bool collect_having_distinct_walker(Node *node, void *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Aggref)) {
+    Aggref *ar = (Aggref *) node;
+    if (list_length(ar->aggdistinct) > 0)
+      ((having_distinct_ctx *) ctx)->aggs =
+        lappend(((having_distinct_ctx *) ctx)->aggs, ar);
+    return false;  /* don't recurse into aggregate arguments */
+  }
+  return expression_tree_walker(node, collect_having_distinct_walker, ctx);
+}
+
+/** @brief Context for @c replace_having_distinct_mutator: next outer RT index. */
+typedef struct having_replace_ctx {
+  int next_rtindex;
+} having_replace_ctx;
+
+/**
+ * @brief Mutator that replaces each @c AGG(DISTINCT) Aggref in a HAVING
+ *        clause with @c Var(next_rtindex++, 1) -- the deduped count column of
+ *        its outer subquery (built in the same order by
+ *        @c rewrite_agg_distinct).  The @c Var is typed as the aggregate's
+ *        result so the surrounding comparison is intercepted by the HAVING
+ *        provenance path exactly as a non-DISTINCT count would be.
+ */
+static Node *replace_having_distinct_mutator(Node *node, void *ctx) {
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Aggref)) {
+    Aggref *ar = (Aggref *) node;
+    if (list_length(ar->aggdistinct) > 0) {
+      having_replace_ctx *c = (having_replace_ctx *) ctx;
+      Var *v = makeNode(Var);
+      v->varno     = c->next_rtindex++;
+      v->varattno  = 1;            /* agg result is col 1 of each outer */
+      v->vartype   = ar->aggtype;
+      v->vartypmod = -1;
+      v->varcollid = ar->aggcollid;
+      v->location  = -1;
+      return (Node *) v;
+    }
+    return node;  /* non-DISTINCT aggregate: leave for the normal HAVING path */
+  }
+  return expression_tree_mutator(node, replace_having_distinct_mutator, ctx);
+}
+
 /**
  * @brief Rewrite every @c AGG(DISTINCT key) in @p q using independent subqueries.
  *
@@ -2329,6 +2906,12 @@ static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
  * of one such subquery per aggregate, joined on the GROUP BY columns.
  * Non-DISTINCT aggregates are left untouched.
  *
+ * @c AGG(DISTINCT) aggregates appearing in the @c HAVING clause are handled
+ * the same way (one deduped outer per aggregate) and the @c HAVING Aggref is
+ * replaced by a @c Var to its outer's count column, so the comparison's
+ * provenance is built over the per-distinct-value rows rather than the raw
+ * tuples.
+ *
  * @param q            Query to inspect and possibly rewrite.
  * @param constants    Extension OID cache.
  * @return   Rewritten query, or @c NULL if no @c AGG(DISTINCT) was found.
@@ -2337,6 +2920,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
   List *distinct_agg_tes = NIL;
   List *groupby_tes = NIL;
   ListCell *lc;
+  having_distinct_ctx hctx = { NIL };
 
 #if PG_VERSION_NUM >= 180000
   /* In PostgreSQL 18, parseCheckAggregates() injects a virtual RTE_GROUP
@@ -2366,21 +2950,28 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         distinct_agg_tes = lappend(distinct_agg_tes, te);
     } else if (provenance_function_walker((Node *)te->expr,
                                           (void *)constants)) {
-      /* Expression contains provenance() — skip it, it will be
+      /* Expression contains provenance() – skip it, it will be
        * handled later by the provenance rewriter */
     } else {
-      /* Non-aggregate column — treat as GROUP BY key */
+      /* Non-aggregate column – treat as GROUP BY key */
       TargetEntry *te_copy = copyObject(te);
       te_copy->resjunk = false;
       groupby_tes = lappend(groupby_tes, te_copy);
     }
   }
 
-  if (distinct_agg_tes == NIL)
+  /* Also collect AGG(DISTINCT) aggregates from the HAVING clause; they are
+   * not TargetEntries, so they get their own list and a Var-replacement
+   * mutator below. */
+  if (q->havingQual != NULL)
+    collect_having_distinct_walker(q->havingQual, &hctx);
+
+  if (distinct_agg_tes == NIL && hctx.aggs == NIL)
     return NULL;
 
   {
-    int n_aggs = list_length(distinct_agg_tes);
+    int n_having = list_length(hctx.aggs);
+    int n_aggs = list_length(distinct_agg_tes) + n_having;
     int n_gb   = list_length(groupby_tes);
     List *outer_queries = NIL;
 
@@ -2412,8 +3003,34 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       }
     }
 
+    /* Build one inner + one outer query per HAVING-clause DISTINCT aggregate,
+     * appended after the target-list ones so their RT indices are the last
+     * n_having entries of the final from-list (matched by the mutator below). */
+    foreach (lc, hctx.aggs) {
+      Aggref *ar = lfirst(lc);
+      if(list_length(ar->args) != 1)
+        provsql_error("AGG(DISTINCT) with more than one argument is not supported");
+      else {
+        TargetEntry *syn = makeNode(TargetEntry);
+        Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
+        Query *inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
+        Query *outer;
+        syn->expr  = (Expr *) copyObject(ar);
+        syn->resno = 1;
+        outer = build_outer_for_distinct_key(syn, inner, n_gb, constants);
+        outer_queries = lappend(outer_queries, outer);
+      }
+    }
+
     {
-      /* One subquery RTE per outer query */
+      /* One subquery RTE per outer query.  They are appended to q->rtable, so
+       * their range-table indices start at the current rtable length -- which is
+       * NOT the from-list length when the FROM contains a JoinExpr (an outer
+       * join is one from-list item but several rtable slots).  Index everything
+       * off rtable_base, or the RangeTblRefs / Vars below would point at the base
+       * relations the join spans (e.g. "rel 2 already exists" for the join's
+       * right arm). */
+      int rtable_base = list_length(q->rtable);
       int i = 0;
       foreach (lc, outer_queries) {
         Query *oq = lfirst(lc);
@@ -2447,10 +3064,9 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       {
         FromExpr *jt = q->jointree;
         List *from_list = jt->fromlist;
-        unsigned fll = list_length(from_list);
         List *where_args = NIL;
 
-        for (i = fll+1; i <= fll+n_aggs; i++) {
+        for (i = rtable_base + 1; i <= rtable_base + n_aggs; i++) {
           RangeTblRef *rtr = makeNode(RangeTblRef);
           ListCell *lc2;
           unsigned j=0;
@@ -2509,7 +3125,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       /* Build final target list in original column order.
        * DISTINCT agg i → Var(i+1, 1);  GROUP BY col j → Var(1, 2+j). */
       {
-        int agg_idx   = list_length(q->jointree->fromlist) - n_aggs + 1;
+        int agg_idx   = rtable_base + 1;
         ListCell *lc2;
 
         foreach (lc2, q->targetList) {
@@ -2527,6 +3143,16 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         }
       }
 
+      /* Replace HAVING-clause DISTINCT aggregates with Vars to their outer
+       * subqueries -- the last n_having entries of the from-list, in the same
+       * order collect_having_distinct_walker visited them. */
+      if (n_having > 0) {
+        having_replace_ctx hrc;
+        /* HAVING outers are appended after the target-list ones. */
+        hrc.next_rtindex = rtable_base + (n_aggs - n_having) + 1;
+        q->havingQual = replace_having_distinct_mutator(q->havingQual, &hrc);
+      }
+
       return q;
     }
   }
@@ -2542,6 +3168,7 @@ typedef struct aggregation_mutator_context {
   List *prov_atts;              ///< List of provenance Var nodes
   semiring_operation op;        ///< Semiring operation for combining tokens
   const constants_t *constants; ///< Extension OID cache
+  bool is_scalar;               ///< Aggregation has no GROUP BY (single always-present row)
 } aggregation_mutator_context;
 
 /**
@@ -2559,7 +3186,8 @@ static Node *aggregation_mutator(Node *node, void *ctx) {
   if (IsA(node, Aggref)) {
     Aggref *ar_v = (Aggref *)node;
     return (Node *)make_aggregation_expression(context->constants, ar_v,
-                                               context->prov_atts, context->op);
+                                               context->prov_atts, context->op,
+                                               context->is_scalar);
   }
 
   return expression_tree_mutator(node, aggregation_mutator, ctx);
@@ -2601,6 +3229,38 @@ static Node *wrap_agg_token_with_cast(FuncExpr *prov_agg,
 }
 
 /**
+ * @brief Wrap an @c agg_token expression in a cast to @p target_type.
+ *
+ * Companion to @c wrap_agg_token_with_cast for @c agg_token values that are
+ * not a bare @c provenance_aggregate call (e.g. the result of @c agg_token
+ * arithmetic): the original aggregate type is not recoverable from the node,
+ * so we cast to the type the consuming context requires.
+ */
+static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
+                                    const constants_t *constants) {
+  CoercionPathType pathtype;
+  Oid castfuncid;
+
+  pathtype = find_coercion_pathway(target_type, constants->OID_TYPE_AGG_TOKEN,
+                                   COERCION_EXPLICIT, &castfuncid);
+  if (pathtype == COERCION_PATH_FUNC && OidIsValid(castfuncid)) {
+    FuncExpr *cast = makeNode(FuncExpr);
+    cast->funcid = castfuncid;
+    cast->funcresulttype = target_type;
+    cast->funcretset = false;
+    cast->funcvariadic = false;
+    cast->funcformat = COERCE_IMPLICIT_CAST;
+    cast->args = list_make1(arg);
+    cast->location = -1;
+    return (Node *)cast;
+  }
+
+  provsql_error("no cast from agg_token to %s for arithmetic on aggregate",
+                format_type_be(target_type));
+  return arg; /* unreachable */
+}
+
+/**
  * @brief Cast @c provenance_aggregate arguments of an operator or
  *        function when the formal parameter type requires it.
  *
@@ -2630,13 +3290,24 @@ static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
   foreach(lc, args) {
     Node *arg = lfirst(lc);
 
-    if (i < procForm->pronargs && IsA(arg, FuncExpr) &&
-        ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+    /* Any agg_token-typed argument (a bare provenance_aggregate, OR the
+     * result of agg_token arithmetic produced by try_swap_agg_arith) must
+     * be cast back to a scalar when the consuming function/operator does not
+     * itself accept agg_token: this is the boundary where an agg_token
+     * "bubbling up" through arithmetic meets a scalar context (e.g. ROUND,
+     * ORDER BY) and its provenance can no longer be carried.  A bare
+     * provenance_aggregate is cast to its own aggregate type; a swapped
+     * arithmetic result is cast to whatever the parent expects. */
+    if (i < procForm->pronargs && exprType(arg) == constants->OID_TYPE_AGG_TOKEN) {
       Oid formal_type = procForm->proargtypes.values[i];
 
       if (formal_type != constants->OID_TYPE_AGG_TOKEN &&
           !IsPolymorphicType(formal_type)) {
-        lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+        if (IsA(arg, FuncExpr) &&
+            ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+          lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+        else
+          lfirst(lc) = cast_agg_token_to_type(arg, formal_type, constants);
       }
     }
     i++;
@@ -2646,15 +3317,108 @@ static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
 }
 
 /**
+ * @brief Peel implicit/explicit cast FuncExprs and RelabelTypes that wrap a
+ *        single argument, returning the underlying expression.
+ *
+ * Used to see through the coercions the parser inserts around an aggregate
+ * (e.g. the @c int8->numeric cast in @c count(*)/2.0) so the underlying
+ * @c agg_token / @c provenance_aggregate can be recognised.
+ */
+static Node *peel_agg_casts(Node *n) {
+  for (;;) {
+    if (n != NULL && IsA(n, FuncExpr)) {
+      FuncExpr *fe = (FuncExpr *)n;
+      if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+           fe->funcformat == COERCE_EXPLICIT_CAST) &&
+          list_length(fe->args) == 1) {
+        n = (Node *)linitial(fe->args);
+        continue;
+      }
+    } else if (n != NULL && IsA(n, RelabelType)) {
+      n = (Node *)((RelabelType *)n)->arg;
+      continue;
+    }
+    return n;
+  }
+}
+
+/**
+ * @brief Rebuild an arithmetic operator over an aggregate so the result
+ *        stays an @c agg_token (provenance preserved).
+ *
+ * When an arithmetic operator (@c + @c - @c * @c /, or prefix unary @c -)
+ * has an @c agg_token operand (after peeling the parser's coercions), the
+ * default rewriting would cast that @c agg_token to its scalar aggregate
+ * type, silently dropping provenance.  Instead, we re-resolve the operator
+ * against the @c agg_token operand via @c make_op, which selects the native
+ * @c agg_token arithmetic operators -- the arithmetic is then recorded
+ * symbolically as a @c gate_arith over the operand provenance, exactly like
+ * arithmetic on @c random_variable.  Returns the rebuilt @c agg_token
+ * expression, or @c NULL if @p op is not arithmetic over an aggregate.
+ */
+static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
+  char *opname;
+  bool is_arith;
+  int nargs = list_length(op->args);
+  Node *l, *r, *lp, *rp;
+  ParseState *pstate;
+  Expr *newop;
+
+  if (nargs < 1 || nargs > 2)
+    return NULL;
+  opname = get_opname(op->opno);
+  if (opname == NULL)
+    return NULL;
+  is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
+             strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0;
+  if (!is_arith) {
+    pfree(opname);
+    return NULL;
+  }
+
+  if (nargs == 2) {
+    l = (Node *)linitial(op->args);
+    r = (Node *)lsecond(op->args);
+  } else {  /* prefix unary minus */
+    l = NULL;
+    r = (Node *)linitial(op->args);
+  }
+  lp = l ? peel_agg_casts(l) : NULL;
+  rp = peel_agg_casts(r);
+
+  if (!((lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN) ||
+        exprType(rp) == constants->OID_TYPE_AGG_TOKEN)) {
+    pfree(opname);
+    return NULL;
+  }
+
+  /* Feed make_op the peeled (uncast) operand wherever it exposes an
+   * agg_token, so resolution picks the agg_token operator; keep the
+   * original node for the non-agg operand to preserve its own coercions. */
+  if (lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN)
+    l = lp;
+  if (exprType(rp) == constants->OID_TYPE_AGG_TOKEN)
+    r = rp;
+
+  pstate = make_parsestate(NULL);
+  newop = make_op(pstate, list_make1(makeString(opname)), l, r, NULL, -1);
+  free_parsestate(pstate);
+  pfree(opname);
+  return (Node *)newop;
+}
+
+/**
  * @brief Tree-mutator that casts @c provenance_aggregate results back
  *        to the original aggregate return type where needed.
  *
  * After the aggregation mutator replaces Aggrefs with
  * @c provenance_aggregate calls (returning @c agg_token), this
  * post-processing step inserts casts where the surrounding expression
- * expects a different type (e.g. @c SUM(id)+1).  Arguments to
- * functions that accept @c agg_token or polymorphic types are left
- * alone.
+ * expects a different type (e.g. a non-arithmetic function over an
+ * aggregate).  Arithmetic over an aggregate is instead kept as an
+ * @c agg_token via @c try_swap_agg_arith so its provenance survives;
+ * arguments to functions that accept @c agg_token or polymorphic types
+ * are left alone.
  *
  * @param node Current expression tree node.
  * @param ctx  Pointer to the @c constants_t OID cache.
@@ -2672,6 +3436,9 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
 
   if (IsA(result, OpExpr)) {
     OpExpr *op = (OpExpr *)result;
+    Node *swapped = try_swap_agg_arith(op, constants);
+    if (swapped != NULL)
+      return swapped;
     set_opfuncid(op);
     maybe_cast_agg_token_args(op->args, op->opfuncid, constants);
   } else if (IsA(result, FuncExpr)) {
@@ -2681,6 +3448,120 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
   }
 
   return result;
+}
+
+/**
+ * @brief Push distributive constant arithmetic into an aggregate's argument.
+ *
+ * Rewrites `f(x) <op> c` to `f(x <op'> c)` when @c f distributes over the
+ * arithmetic, so the result is a clean aggregate over transformed per-row
+ * values rather than a @c gate_arith wrapping the aggregate.  Run before the
+ * aggregate is lowered, so the provenance machinery then builds an ordinary
+ * @c gate_agg.  Only the cases that distribute without flipping the aggregate
+ * and without integer-division rounding are handled (the rest fall through to
+ * the gate_arith path):
+ *   - sum, avg:  @c *c (either side), unary @c -;  avg also @c +c / @c -c.
+ *   - min, max:  @c +c (either side), @c -c (aggregate on the left).
+ * The transformed argument must keep the original argument's type (so the
+ * aggregate's function/type stay valid); otherwise no push happens.  Returns
+ * the rewritten @c Aggref, or @c NULL when @p op is not such a case.
+ */
+static Node *try_push_into_aggref(OpExpr *op, const constants_t *constants) {
+  char *opname = get_opname(op->opno);
+  int nargs = list_length(op->args);
+  Node *l = NULL, *r = NULL, *aggn = NULL, *cn = NULL, *old_arg, *new_arg = NULL;
+  Aggref *ar, *newar;
+  char *aggnm;
+  bool agg_left = true, plus, minus, times;
+  bool is_sum, is_avg, is_min, is_max;
+
+  if (opname == NULL)
+    return NULL;
+  plus  = strcmp(opname, "+") == 0;
+  minus = strcmp(opname, "-") == 0;
+  times = strcmp(opname, "*") == 0;
+  if (!(plus || minus || times))   /* division is skipped (rounding) */
+    return NULL;
+
+  if (nargs == 1) {                /* prefix unary minus */
+    if (!minus)
+      return NULL;
+    aggn = peel_agg_casts((Node *)linitial(op->args));
+  } else if (nargs == 2) {
+    l = peel_agg_casts((Node *)linitial(op->args));
+    r = peel_agg_casts((Node *)lsecond(op->args));
+    if (IsA(l, Aggref) && IsA(r, Const)) { aggn = l; cn = r; agg_left = true; }
+    else if (IsA(r, Aggref) && IsA(l, Const)) { aggn = r; cn = l; agg_left = false; }
+    else return NULL;
+  } else
+    return NULL;
+
+  if (!IsA(aggn, Aggref))
+    return NULL;
+  ar = (Aggref *)aggn;
+  /* Need a single ordinary argument: skip count(*) (aggstar), DISTINCT /
+   * FILTER / ORDER BY aggregates, and RV-returning aggregates. */
+  if (ar->aggstar || list_length(ar->args) != 1 ||
+      ar->aggdistinct != NIL || ar->aggfilter != NULL || ar->aggorder != NIL)
+    return NULL;
+  if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
+      ar->aggtype == constants->OID_TYPE_RANDOM_VARIABLE)
+    return NULL;
+
+  aggnm = get_func_name(ar->aggfnoid);
+  if (aggnm == NULL)
+    return NULL;
+  is_sum = strcmp(aggnm, "sum") == 0; is_avg = strcmp(aggnm, "avg") == 0;
+  is_min = strcmp(aggnm, "min") == 0; is_max = strcmp(aggnm, "max") == 0;
+  pfree(aggnm);
+  if (!(is_sum || is_avg || is_min || is_max))
+    return NULL;
+
+  old_arg = (Node *)((TargetEntry *)linitial(ar->args))->expr;
+
+  if (nargs == 1) {                            /* -f(x) */
+    if (is_sum || is_avg)
+      new_arg = build_binop("-", NULL, old_arg);          /* -x */
+  } else if (times) {                          /* f(x)*c, c*f(x) */
+    if (is_sum || is_avg)
+      new_arg = agg_left ? build_binop("*", old_arg, cn)
+                         : build_binop("*", cn, old_arg);
+  } else if (plus) {                           /* f(x)+c, c+f(x) */
+    if (is_avg || is_min || is_max)
+      new_arg = agg_left ? build_binop("+", old_arg, cn)
+                         : build_binop("+", cn, old_arg);
+  } else /* minus */ {
+    if (agg_left) {                            /* f(x)-c */
+      if (is_avg || is_min || is_max)
+        new_arg = build_binop("-", old_arg, cn);
+    } else {                                   /* c-f(x): only avg (no flip) */
+      if (is_avg)
+        new_arg = build_binop("-", cn, old_arg);
+    }
+  }
+  if (new_arg == NULL)
+    return NULL;
+
+  /* Keep the aggregate's argument type, so its function/return type stay valid. */
+  if (exprType(new_arg) != exprType(old_arg))
+    return NULL;
+
+  newar = (Aggref *)copyObject(ar);
+  ((TargetEntry *)linitial(newar->args))->expr = (Expr *)new_arg;
+  return (Node *)newar;
+}
+
+/** @brief Tree-mutator applying @c try_push_into_aggref bottom-up. */
+static Node *push_arith_into_agg_mutator(Node *node, void *ctx) {
+  if (node == NULL)
+    return NULL;
+  node = expression_tree_mutator(node, push_arith_into_agg_mutator, ctx);
+  if (IsA(node, OpExpr)) {
+    Node *pushed = try_push_into_aggref((OpExpr *)node, (const constants_t *)ctx);
+    if (pushed != NULL)
+      return pushed;
+  }
+  return node;
 }
 
 /**
@@ -2701,8 +3582,18 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
                                              Query *q, List *prov_atts,
                                              semiring_operation op) {
 
-  aggregation_mutator_context context = {prov_atts, op, constants};
+  /* A scalar aggregation (no GROUP BY / GROUPING SETS) yields a single,
+   * always-present result row; mark its agg gates so the value-aware evaluators
+   * treat the empty-input world as real (vs the "no row" of a grouped query). */
+  bool is_scalar = (q->groupClause == NIL && q->groupingSets == NIL);
+  aggregation_mutator_context context = {prov_atts, op, constants, is_scalar};
   ListCell *lc;
+
+  /* First push distributive constant arithmetic into aggregate arguments
+   * (sum(x)*2 -> sum(2*x)), so those become clean aggregates rather than a
+   * gate_arith over the aggregate. */
+  query_tree_mutator(q, push_arith_into_agg_mutator, (void *)constants,
+                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
 
   query_tree_mutator(q, aggregation_mutator, &context,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
@@ -3187,6 +4078,56 @@ static bool has_rv_or_provenance_call(Node *node, void *data) {
   return expression_tree_walker(node, has_rv_or_provenance_call, data);
 }
 
+/**
+ * @brief Walker (this query level only): true if an @c EXPR_SUBLINK whose body
+ *        is a decorrelatable value subquery over a provenance-tracked base
+ *        relation appears in an expression.
+ *
+ * Lets the planner gate engage for a scalar subquery over a tracked relation
+ * even when the OUTER query has no tracked relation -- decorrelate_scalar_
+ * sublinks then handles it (wrapping the untracked outer with a certain
+ * gate_one() provenance and warning that its tuple provenance is lost).  The
+ * shape conditions mirror decorrelate's subselect validation, so engagement
+ * implies the decorrelation succeeds (no engage-then-error regression); a
+ * non-decorrelatable scalar subquery still leaves the gate untouched and runs
+ * as plain SQL.  Does not descend into nested Query / SubLink subselects.
+ */
+static bool decorr_value_sublink_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subLinkType == EXPR_SUBLINK && sl->subselect &&
+        IsA(sl->subselect, Query)) {
+      Query *sub = (Query *)sl->subselect;
+      if (!sub->hasAggs && !sub->groupClause && !sub->groupingSets &&
+          !sub->distinctClause && !sub->setOperations && !sub->hasWindowFuncs &&
+          !sub->hasSubLinks && !sub->limitCount && !sub->limitOffset &&
+          !sub->cteList && list_length(sub->rtable) == 1 &&
+          list_length(sub->targetList) == 1 && sub->jointree &&
+          list_length(sub->jointree->fromlist) == 1 &&
+          IsA(linitial(sub->jointree->fromlist), RangeTblRef)) {
+        RangeTblEntry *qr = (RangeTblEntry *)linitial(sub->rtable);
+        if (qr->rtekind == RTE_RELATION) {
+          ListCell *lc;
+          AttrNumber a = 0;
+          foreach (lc, qr->eref->colnames) {
+            ++a;
+            if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) &&
+                get_atttype(qr->relid, a) == constants->OID_TYPE_UUID)
+              return true;
+          }
+        }
+      }
+    }
+    return false; /* do not descend into the subselect */
+  }
+  if (IsA(node, Query))
+    return false; /* nested queries are handled by has_provenance_walker */
+  return expression_tree_walker(node, decorr_value_sublink_walker, data);
+}
+
 static bool has_provenance_walker(Node *node, void *data) {
   const constants_t *constants = (const constants_t *)data;
   if (node == NULL)
@@ -3222,6 +4163,14 @@ static bool has_provenance_walker(Node *node, void *data) {
     if (has_rv_or_provenance_call((Node *)q->havingQual, data))
       return true;
     if (has_rv_or_provenance_call((Node *)q->returningList, data))
+      return true;
+
+    /* A decorrelatable value scalar subquery over a tracked relation engages
+     * the gate even with an untracked outer (handled with a warning). */
+    if (decorr_value_sublink_walker((Node *)q->targetList, data))
+      return true;
+    if (q->jointree &&
+        decorr_value_sublink_walker((Node *)q->jointree->quals, data))
       return true;
 
     foreach (rc, q->rtable) {
@@ -3290,6 +4239,256 @@ static bool has_provenance_walker(Node *node, void *data) {
  */
 static bool has_provenance(const constants_t *constants, Query *q) {
   return has_provenance_walker((Node *)q, (void *)constants);
+}
+
+/** @brief Context for @c sublink_over_tracked_walker. */
+typedef struct {
+  const constants_t *constants;
+  bool found;
+} sublink_tracked_ctx;
+
+/** @brief Walker: set @c found if a @c SubLink whose subselect (transitively)
+ *  involves a provenance-tracked relation is reached. */
+static bool sublink_over_tracked_walker(Node *node, void *cx) {
+  sublink_tracked_ctx *c = (sublink_tracked_ctx *)cx;
+  if (node == NULL || c->found)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query) &&
+        has_provenance(c->constants, (Query *)sl->subselect)) {
+      c->found = true;
+      return true;
+    }
+    /* Not tracked at this level: fall through to descend (the subselect, for
+     * nested sublinks, and the testexpr). */
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, sublink_over_tracked_walker, cx, 0);
+  return expression_tree_walker(node, sublink_over_tracked_walker, cx);
+}
+
+/**
+ * @brief Does any @c SubLink in @p q's own clauses have a subselect that
+ *        (transitively) involves a provenance-tracked relation?
+ *
+ * Distinguishes the @c "Subqueries not supported" cases (a sublink over a tracked
+ * @c Q, which needs the rewrite passes) from a harmless one whose body touches no
+ * tracked relation -- a deterministic filter/value (untracked data is certain, so
+ * the same in every possible world) that Postgres can evaluate directly, leaving
+ * the row's provenance unchanged.  Only @p q's own expressions are inspected, not
+ * its range table (the outer relation is tracked, and FROM subqueries get their
+ * own @c process_query pass).
+ */
+static bool query_has_tracked_sublink(const constants_t *constants, Query *q) {
+  sublink_tracked_ctx c;
+  c.constants = constants;
+  c.found = false;
+  sublink_over_tracked_walker((Node *)q->targetList, &c);
+  if (!c.found && q->jointree)
+    sublink_over_tracked_walker((Node *)q->jointree, &c);
+  if (!c.found && q->havingQual)
+    sublink_over_tracked_walker(q->havingQual, &c);
+  return c.found;
+}
+
+/**
+ * @brief Collect @c SubLink nodes sitting in a "direct", decorrelatable position:
+ *        a target-list entry that @e is the sublink, or a WHERE/HAVING boolean
+ *        factor or a direct operand of a comparison.
+ *
+ * These are exactly the positions the rewrite passes (@c rewrite_predicate_sublinks,
+ * @c decorrelate_scalar_sublinks…) consume.  A tracked sublink still in such a
+ * position after those passes is a genuinely unsupported @e direct form (a
+ * @c GROUP @c BY body, a multi-relation @c EXISTS…) that must raise the clean
+ * error.  A tracked sublink anywhere @e else is nested inside an expression
+ * (arithmetic, a function argument); those are let through with a warning instead
+ * -- Postgres evaluates the sublink normally (correct value), the row keeps the
+ * outer relation's provenance, and the subquery's data is treated as certain.
+ */
+static void collect_direct_qual_sublinks(Node *node, List **out) {
+  if (node == NULL)
+    return;
+  if (IsA(node, SubLink)) {
+    /* A bare sublink boolean factor (EXISTS / IN / NOT …). */
+    *out = lappend(*out, node);
+    return;
+  }
+  if (IsA(node, BoolExpr)) {
+    ListCell *lc;
+    foreach (lc, ((BoolExpr *)node)->args)
+      collect_direct_qual_sublinks((Node *)lfirst(lc), out);
+    return;
+  }
+  if (IsA(node, OpExpr)) {
+    /* A comparison whose direct operand is the sublink (a coercion in between is
+     * fine, but arithmetic is not -- that makes the sublink nested). */
+    ListCell *lc;
+    foreach (lc, ((OpExpr *)node)->args) {
+      Node *a = (Node *)lfirst(lc);
+      if (IsA(a, RelabelType))
+        a = (Node *)((RelabelType *)a)->arg;
+      if (IsA(a, SubLink))
+        *out = lappend(*out, a);
+    }
+    return;
+  }
+}
+
+/** @brief Context for @c sublink_classify_walker. */
+typedef struct {
+  const constants_t *constants;
+  List *direct;                 /* sublinks in a decorrelatable position */
+  List *nested;                 /* tracked EXPR_SUBLINKs nested in an expression */
+  bool has_unsupported_direct;  /* a tracked sublink in a direct position remains */
+} sublink_classify_ctx;
+
+/**
+ * @brief Walker classifying each tracked @c SubLink of a query as either a
+ *        still-unsupported @e direct form or an @e arithmetic-nested one.
+ *
+ * Stops descending at a tracked sublink (its subselect is Postgres' business once
+ * we decide to pass it through); keeps descending through untracked sublinks so a
+ * tracked one nested deeper is still found.
+ */
+static bool sublink_classify_walker(Node *node, void *cx) {
+  sublink_classify_ctx *c = (sublink_classify_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query) &&
+        has_provenance(c->constants, (Query *)sl->subselect)) {
+      if (list_member_ptr(c->direct, sl) || sl->subLinkType != EXPR_SUBLINK)
+        c->has_unsupported_direct = true;
+      else
+        c->nested = lappend(c->nested, sl);
+      return false; /* do not descend into a tracked sublink */
+    }
+    /* untracked: fall through to descend (a tracked one may be nested inside) */
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, sublink_classify_walker, cx, 0);
+  return expression_tree_walker(node, sublink_classify_walker, cx);
+}
+
+/**
+ * @brief Partition @p q's remaining tracked sublinks into unsupported-direct vs
+ *        arithmetic-nested.  Returns the list of nested @c SubLink nodes (for
+ *        warnings) and sets @p *has_direct if any unsupported direct form remains.
+ */
+static List *classify_remaining_sublinks(const constants_t *constants, Query *q,
+                                         bool *has_direct) {
+  sublink_classify_ctx c;
+  ListCell *lc;
+
+  c.constants = constants;
+  c.direct = NIL;
+  c.nested = NIL;
+  c.has_unsupported_direct = false;
+
+  /* Direct positions: a target entry that IS the sublink (a coercion allowed). */
+  foreach (lc, q->targetList) {
+    Node *e = (Node *)((TargetEntry *)lfirst(lc))->expr;
+    if (e && IsA(e, RelabelType))
+      e = (Node *)((RelabelType *)e)->arg;
+    if (e && IsA(e, SubLink))
+      c.direct = lappend(c.direct, e);
+  }
+  if (q->jointree && q->jointree->quals)
+    collect_direct_qual_sublinks(q->jointree->quals, &c.direct);
+  if (q->havingQual)
+    collect_direct_qual_sublinks(q->havingQual, &c.direct);
+
+  sublink_classify_walker((Node *)q->targetList, &c);
+  if (q->jointree)
+    sublink_classify_walker((Node *)q->jointree, &c);
+  if (q->havingQual)
+    sublink_classify_walker(q->havingQual, &c);
+
+  *has_direct = c.has_unsupported_direct;
+  return c.nested;
+}
+
+/**
+ * @brief Walker: true if @p node (descending through nested queries) contains
+ *        an explicit @c provenance() call.
+ */
+static bool calls_provenance_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid ==
+          ((const constants_t *)data)->OID_FUNCTION_PROVENANCE)
+    return true;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, calls_provenance_walker, data, 0);
+  return expression_tree_walker(node, calls_provenance_walker, data);
+}
+
+/**
+ * @brief Walker: true if a @c SubLink subselect calls @c provenance().
+ *
+ * A @c SubLink subselect (scalar / @c IN / @c EXISTS) is planned standalone, so
+ * it never goes through this hook -- a @c provenance() call inside one is never
+ * rewritten and falls through to its runtime stub (NULL or a misleading error).
+ * ProvSQL does not propagate provenance through a @c SubLink, so we detect the
+ * @c provenance() use up front and raise a clear error instead.
+ *
+ * Only the explicit @c provenance() call is flagged, not a mere read of a
+ * tracked relation's columns: @c (SELECT @c array_agg(provsql) @c FROM @c t) and
+ * other plain column reads inside a @c SubLink are legitimate and must keep
+ * working.  Tracked relations reached through the @c FROM clause
+ * (@c RTE_SUBQUERY) are fully supported and never reach this walker's @c SubLink
+ * arm.
+ */
+static bool provenance_in_sublink_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, provenance_in_sublink_walker, data, 0);
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subselect && IsA(sl->subselect, Query) &&
+        calls_provenance_walker(sl->subselect, data))
+      return true;
+  }
+  return expression_tree_walker(node, provenance_in_sublink_walker, data);
+}
+
+/**
+ * @brief Remove the auto-added @c provsql output column from a rewritten query.
+ *
+ * The inverse of @c add_to_select: drops the @c TargetEntry named
+ * @c PROVSQL_COLUMN_NAME and decrements the @c resno of every later entry, so
+ * the column numbering stays contiguous.  Used when a query was rewritten for
+ * its own provenance semantics (HAVING lifting, @c provenance() resolution) but
+ * the caller cannot store the provenance -- e.g. an @c INSERT @c ... @c SELECT
+ * whose target table has no provsql column.
+ */
+static void remove_provsql_from_select(Query *q) {
+  ListCell *lc;
+  ListCell *prev = NULL;
+  int removed_resno = -1;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME)) {
+      removed_resno = te->resno;
+      q->targetList = my_list_delete_cell(q->targetList, lc, prev);
+      break;
+    }
+    prev = lc;
+  }
+
+  if (removed_resno < 0)
+    return;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resno > removed_resno)
+      --te->resno;
+  }
 }
 
 /**
@@ -3572,6 +4771,3038 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
   return true;
 }
 
+/* -------------------------------------------------------------------------
+ * Outer-join lowering (LEFT JOIN)
+ *
+ * ProvSQL builds provenance by annotating the all-present instance, which is
+ * sound for monotone SPJU but WRONG for the non-monotone outer join: the
+ * null-padded row (r, NULL) of a LEFT JOIN appears only in the *smaller*
+ * worlds where the right side has no match for r, so for a left row that does
+ * match in the actual instance ProvSQL has nothing to annotate.  The
+ * RTE_JOIN arm of process_query historically treats LEFT/FULL/RIGHT exactly
+ * like INNER, emitting only the matched branch.
+ *
+ * The fix is a structural transform applied in the planner hook before
+ * provenance discovery.  R ⟕_θ S is rewritten as
+ *
+ *     ( SELECT R.cols, S.cols FROM R JOIN S ON θ )            -- matched (⊗)
+ *     UNION ALL                                               -- ⊎ (plus)
+ *     ( SELECT R.cols, NULL,…,NULL
+ *       FROM ( SELECT R.cols FROM R
+ *              EXCEPT ALL                                     -- ProvSQL's −
+ *              SELECT R.cols FROM R JOIN S ON θ ) )           --  R(r)⊗(1⊖⊕match)
+ *
+ * Both UNION ALL and EXCEPT ALL → − are native (process_set_operation_union /
+ * transform_except_into_join), so this code is pure parse-tree construction
+ * plus an outer Var remap: the recursive process_query passes over the
+ * constructed subqueries do all the provenance work.  The antijoin provenance
+ * R(r) ⊖ ⊕_match (R(r)⊗S(s)) that ProvSQL's EXCEPT (NOT-IN semantics) builds
+ * equals R(r) ⊗ (1 ⊖ ⊕_match S(s)), exactly the paper's null-padded branch.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Rename the @c provsql column in @p rel's @c eref so a later
+ *        @c get_provenance_attributes pass does not re-detect @p rel as a
+ *        provenance source.
+ *
+ * Used when a relation's provenance has already been captured elsewhere -- by
+ * an explode-style subquery (the aggregation rewrite) or, in the outer-join
+ * lowering, by the replacement UNION subquery, leaving the original base
+ * relation orphaned in the range table.  Renaming only the (unreferenced)
+ * @c eref entry is enough: detection matches on the @c eref colname.
+ */
+static void hide_provsql_colname(RangeTblEntry *rel) {
+  ListCell *lc;
+  foreach (lc, rel->eref->colnames) {
+    if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME)) {
+      lfirst(lc) = makeString(pstrdup("_provsql_inner"));
+      break;
+    }
+  }
+}
+
+/** @brief Per-relation user-column descriptor for the outer-join lowering. */
+typedef struct oj_cols {
+  int n;             ///< number of user (non-provsql, non-dropped) columns
+  AttrNumber *attno; ///< original attribute number in the base relation
+  Oid *type;         ///< column type OID
+  int32 *typmod;     ///< column typmod
+  Oid *coll;         ///< column collation OID
+  char **name;       ///< column name
+} oj_cols;
+
+/** @brief Collect the user columns (skipping @c provsql and dropped columns)
+ *         of an outer-join arm: a base relation or a subquery.  For a relation
+ *         the column @c attno is its catalog attribute number; for a subquery
+ *         it is the target entry's @c resno. */
+static void oj_collect_cols(const constants_t *constants, RangeTblEntry *rel,
+                            oj_cols *out) {
+  ListCell *lc;
+
+  if (rel->rtekind == RTE_SUBQUERY) {
+    int cap = list_length(rel->subquery->targetList);
+    out->attno  = (AttrNumber *)palloc(cap * sizeof(AttrNumber));
+    out->type   = (Oid *)palloc(cap * sizeof(Oid));
+    out->typmod = (int32 *)palloc(cap * sizeof(int32));
+    out->coll   = (Oid *)palloc(cap * sizeof(Oid));
+    out->name   = (char **)palloc(cap * sizeof(char *));
+    out->n = 0;
+    foreach (lc, rel->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resjunk)
+        continue;
+      if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME))
+        continue;
+      out->attno[out->n]  = te->resno;
+      out->type[out->n]   = exprType((Node *)te->expr);
+      out->typmod[out->n] = exprTypmod((Node *)te->expr);
+      out->coll[out->n]   = exprCollation((Node *)te->expr);
+      out->name[out->n]   = pstrdup(te->resname ? te->resname : "?column?");
+      ++out->n;
+    }
+    return;
+  }
+
+  {
+    AttrNumber attid = 0;
+    int cap = list_length(rel->eref->colnames);
+    out->attno  = (AttrNumber *)palloc(cap * sizeof(AttrNumber));
+    out->type   = (Oid *)palloc(cap * sizeof(Oid));
+    out->typmod = (int32 *)palloc(cap * sizeof(int32));
+    out->coll   = (Oid *)palloc(cap * sizeof(Oid));
+    out->name   = (char **)palloc(cap * sizeof(char *));
+    out->n = 0;
+    foreach (lc, rel->eref->colnames) {
+      const char *v = strVal(lfirst(lc));
+      Oid t;
+      int32 tm;
+      Oid c;
+      ++attid;
+      if (v[0] == '\0') /* dropped column */
+        continue;
+      if (!strcmp(v, PROVSQL_COLUMN_NAME))
+        continue;
+      get_atttypetypmodcoll(rel->relid, attid, &t, &tm, &c);
+      out->attno[out->n]  = attid;
+      out->type[out->n]   = t;
+      out->typmod[out->n] = tm;
+      out->coll[out->n]   = c;
+      out->name[out->n]   = pstrdup(v);
+      ++out->n;
+    }
+  }
+}
+
+/** @brief True if @p rel contributes provenance: a base relation with a
+ *         @c provsql UUID column, or a subquery over tracked relations. */
+static bool oj_rte_has_provsql(const constants_t *constants,
+                               RangeTblEntry *rel) {
+  ListCell *lc;
+  AttrNumber attid = 0;
+
+  if (rel->rtekind == RTE_SUBQUERY) {
+    if (rel->subquery == NULL)
+      return false;
+    if (has_provenance(constants, rel->subquery))
+      return true;
+    /* Also tracked if the subquery already exposes a provsql UUID column
+     * (e.g. the synthetic gate_one() column the wrap adds for an untracked
+     * outer). */
+    foreach (lc, rel->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (!te->resjunk && te->resname &&
+          !strcmp(te->resname, PROVSQL_COLUMN_NAME) &&
+          exprType((Node *)te->expr) == constants->OID_TYPE_UUID)
+        return true;
+    }
+    return false;
+  }
+
+  foreach (lc, rel->eref->colnames) {
+    ++attid;
+    if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) &&
+        get_atttype(rel->relid, attid) == constants->OID_TYPE_UUID)
+      return true;
+  }
+  return false;
+}
+
+/** @brief Wrap a constructed @c Query as an @c RTE_SUBQUERY, building its
+ *         @c eref->colnames from the (non-junk) target list. */
+static RangeTblEntry *oj_make_subquery_rte(Query *sub) {
+  RangeTblEntry *rte = makeNode(RangeTblEntry);
+  List *colnames = NIL;
+  ListCell *lc;
+
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    colnames = lappend(colnames,
+                       makeString(pstrdup(te->resname ? te->resname
+                                                      : "?column?")));
+  }
+
+  rte->rtekind  = RTE_SUBQUERY;
+  rte->subquery = sub;
+  rte->alias    = NULL;
+  rte->eref     = makeAlias("unnamed_subquery", colnames);
+  rte->lateral  = false;
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = 0;
+#endif
+  return rte;
+}
+
+/** @brief Copy an outer-join arm RTE into the range table of subquery @p sub.
+ *  A base relation carries its permission info (PG 16+); a subquery has no
+ *  direct permissions (its inner query keeps its own rteperminfos). */
+static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
+                                  RangeTblEntry *orig) {
+  RangeTblEntry *c = copyObject(orig);
+#if PG_VERSION_NUM >= 160000
+  if (orig->rtekind == RTE_RELATION && orig->perminfoindex != 0) {
+    RTEPermissionInfo *pi = getRTEPermissionInfo(outer->rteperminfos, orig);
+    sub->rteperminfos = lappend(sub->rteperminfos, copyObject(pi));
+    c->perminfoindex  = list_length(sub->rteperminfos);
+  } else {
+    c->perminfoindex = 0;
+  }
+#else
+  (void)outer;
+  (void)sub;
+#endif
+  return c;
+}
+
+/** @brief Neutralise an outer-join arm RTE left orphaned after the lowering so
+ *  get_provenance_attributes does not re-pick it up as a provenance source: a
+ *  base relation has its provsql column renamed; a subquery (which would still
+ *  be processed) is turned into an inert RTE_RESULT. */
+static void oj_neutralize_orphan_arm(RangeTblEntry *rel) {
+  if (rel->rtekind == RTE_SUBQUERY) {
+#if PG_VERSION_NUM >= 120000
+    rel->rtekind = RTE_RESULT;
+    rel->subquery = NULL;
+#else
+    /* No RTE_RESULT before PostgreSQL 12: leave an inert zero-column
+     * subquery (a bare SELECT) instead.  get_provenance_attributes
+     * recurses into it, finds no relations, and adds nothing. */
+    Query *empty = makeNode(Query);
+    empty->commandType = CMD_SELECT;
+    empty->canSetTag = true;
+    empty->jointree = makeFromExpr(NIL, NULL);
+    rel->subquery = empty;
+#endif
+    rel->eref = makeAlias("*RESULT*", NIL);
+#if PG_VERSION_NUM >= 160000
+    rel->perminfoindex = 0;
+#endif
+    return;
+  }
+  hide_provsql_colname(rel);
+}
+
+/** @brief Var-renumber context: map @c varno @c from[i] → @c to[i]. */
+typedef struct oj_renum_ctx {
+  int npairs;
+  Index from[2];
+  Index to[2];
+} oj_renum_ctx;
+
+static Node *oj_renum_mut(Node *node, void *cx) {
+  oj_renum_ctx *c = (oj_renum_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0) {
+      int i;
+      for (i = 0; i < c->npairs; ++i)
+        if (v->varno == c->from[i]) {
+          v = (Var *)copyObject(v);
+          v->varno = c->to[i];
+#if PG_VERSION_NUM >= 160000
+          v->varnullingrels = NULL;
+#endif
+#if PG_VERSION_NUM >= 130000
+          v->varnosyn = 0;
+          v->varattnosyn = 0;
+#endif
+          return (Node *)v;
+        }
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_renum_mut, cx);
+}
+
+/** @brief Build the inner-join scan subquery
+ *         @c "SELECT [R.cols][, S.cols] FROM R JOIN S ON θ".
+ *
+ *  Projects R's columns when @p select_r and S's columns when @p select_s, in
+ *  R-then-S order.  R is copied at index 1, S at index 2, the synthetic join
+ *  RTE at index 3; θ is copied and its base-relation varnos remapped
+ *  (R_idx→1, S_idx→2). */
+static Query *oj_build_join_query(const constants_t *constants, Query *outer,
+                                  RangeTblEntry *R, RangeTblEntry *S,
+                                  Index R_idx, Index S_idx, oj_cols *Rc,
+                                  oj_cols *Sc, Node *theta, bool select_r,
+                                  bool select_s) {
+  Query *sub = makeNode(Query);
+  RangeTblEntry *Rcopy, *Scopy, *jrte = makeNode(RangeTblEntry);
+  JoinExpr *je = makeNode(JoinExpr);
+  RangeTblRef *lr = makeNode(RangeTblRef), *rr = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL, *av = NIL, *lcols = NIL, *rcols = NIL, *cn = NIL;
+  Node *theta2;
+  oj_renum_ctx rctx;
+  int i;
+
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  Rcopy = oj_copy_rel(outer, sub, R);
+  Scopy = oj_copy_rel(outer, sub, S);
+
+  /* Synthetic join RTE: eref / joinaliasvars / joinleftcols / joinrightcols
+   * kept consistent so the ruleutils deparser does not segfault. */
+  for (i = 0; i < Rc->n; ++i) {
+    av = lappend(av, makeVar(1, Rc->attno[i], Rc->type[i], Rc->typmod[i],
+                             Rc->coll[i], 0));
+    lcols = lappend_int(lcols, Rc->attno[i]);
+    rcols = lappend_int(rcols, 0);
+    cn = lappend(cn, makeString(pstrdup(Rc->name[i])));
+  }
+  for (i = 0; i < Sc->n; ++i) {
+    av = lappend(av, makeVar(2, Sc->attno[i], Sc->type[i], Sc->typmod[i],
+                             Sc->coll[i], 0));
+    lcols = lappend_int(lcols, 0);
+    rcols = lappend_int(rcols, Sc->attno[i]);
+    cn = lappend(cn, makeString(pstrdup(Sc->name[i])));
+  }
+  jrte->rtekind = RTE_JOIN;
+  jrte->jointype = JOIN_INNER;
+  jrte->alias = NULL;
+  jrte->eref = makeAlias("unnamed_join", cn);
+  jrte->joinaliasvars = av;
+#if PG_VERSION_NUM >= 130000
+  jrte->joinleftcols = lcols;
+  jrte->joinrightcols = rcols;
+  jrte->joinmergedcols = 0;
+#endif
+  jrte->inFromCl = true;
+
+  sub->rtable = list_make3(Rcopy, Scopy, jrte);
+
+  rctx.npairs = 2;
+  rctx.from[0] = R_idx; rctx.to[0] = 1;
+  rctx.from[1] = S_idx; rctx.to[1] = 2;
+  theta2 = oj_renum_mut(copyObject(theta), &rctx);
+
+  lr->rtindex = 1;
+  rr->rtindex = 2;
+  je->jointype = JOIN_INNER;
+  je->larg = (Node *)lr;
+  je->rarg = (Node *)rr;
+  je->quals = theta2;
+  je->isNatural = false;
+  je->usingClause = NIL;
+  je->rtindex = 3;
+  fe->fromlist = list_make1(je);
+  sub->jointree = fe;
+
+  if (select_r)
+    for (i = 0; i < Rc->n; ++i) {
+      Var *v = makeVar(1, Rc->attno[i], Rc->type[i], Rc->typmod[i],
+                       Rc->coll[i], 0);
+      tl = lappend(tl, makeTargetEntry((Expr *)v, list_length(tl) + 1,
+                                       pstrdup(Rc->name[i]), false));
+    }
+  if (select_s)
+    for (i = 0; i < Sc->n; ++i) {
+      Var *v = makeVar(2, Sc->attno[i], Sc->type[i], Sc->typmod[i],
+                       Sc->coll[i], 0);
+      tl = lappend(tl, makeTargetEntry((Expr *)v, list_length(tl) + 1,
+                                       pstrdup(Sc->name[i]), false));
+    }
+  sub->targetList = tl;
+
+  return sub;
+}
+
+/** @brief Build the plain-scan subquery @c "SELECT R.cols FROM R". */
+static Query *oj_build_rel_query(const constants_t *constants, Query *outer,
+                                 RangeTblEntry *R, oj_cols *Rc) {
+  Query *sub = makeNode(Query);
+  RangeTblEntry *Rcopy;
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  int i;
+
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  Rcopy = oj_copy_rel(outer, sub, R);
+  sub->rtable = list_make1(Rcopy);
+  rtr->rtindex = 1;
+  fe->fromlist = list_make1(rtr);
+  sub->jointree = fe;
+
+  for (i = 0; i < Rc->n; ++i) {
+    Var *v = makeVar(1, Rc->attno[i], Rc->type[i], Rc->typmod[i], Rc->coll[i],
+                     0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, i + 1, pstrdup(Rc->name[i]),
+                                     false));
+  }
+  sub->targetList = tl;
+  return sub;
+}
+
+/** @brief Build the difference subquery for the kept side of an outer join:
+ *  @c "SELECT X.cols FROM X EXCEPT ALL SELECT X.cols FROM R JOIN S ON θ",
+ *  where X = R when @p keep_left, else S.
+ *
+ *  Processed natively as an EXCEPT (→ ProvSQL's −), yielding per distinct kept
+ *  tuple x the monus provenance X(x) ⊖ ⊕_match (R(r)⊗S(s)) =
+ *  X(x) ⊗ (1 ⊖ ⊕_match Y(y)) -- the null-padded antijoin branch of the join. */
+static Query *oj_build_diff(const constants_t *constants, Query *outer,
+                            RangeTblEntry *R, RangeTblEntry *S, Index R_idx,
+                            Index S_idx, oj_cols *Rc, oj_cols *Sc, Node *theta,
+                            bool keep_left) {
+  RangeTblEntry *kept_rel = keep_left ? R : S;
+  oj_cols *Kc = keep_left ? Rc : Sc;
+  Query *ls = oj_build_rel_query(constants, outer, kept_rel, Kc);
+  /* Matched-projection arm projects the kept side's columns only. */
+  Query *mp = oj_build_join_query(constants, outer, R, S, R_idx, S_idx, Rc, Sc,
+                                  theta, keep_left, !keep_left);
+  RangeTblEntry *ls_rte = oj_make_subquery_rte(ls);
+  RangeTblEntry *mp_rte = oj_make_subquery_rte(mp);
+  Query *D = makeNode(Query);
+  SetOperationStmt *so = makeNode(SetOperationStmt);
+  RangeTblRef *l = makeNode(RangeTblRef), *r = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  int i;
+
+  D->commandType = CMD_SELECT;
+  D->canSetTag = true;
+  D->rtable = list_make2(ls_rte, mp_rte);
+
+  l->rtindex = 1;
+  r->rtindex = 2;
+  so->op = SETOP_EXCEPT;
+  /* EXCEPT ALL = the pure multiset difference q₁−q₂ (NOT IN), which keeps every
+   * kept-side row with its multiplicity -- exactly the antijoin's null-padded
+   * rows.  group_set_difference_right_arm groups the matched-projection arm so
+   * the monus is X(x) ⊖ ⊕(R(r)⊗S(s)) = X(x) ⊗ (1 ⊖ ⊕ Y(y)). */
+  so->all = true;
+  so->larg = (Node *)l;
+  so->rarg = (Node *)r;
+  for (i = 0; i < Kc->n; ++i) {
+    so->colTypes = lappend_oid(so->colTypes, Kc->type[i]);
+    so->colTypmods = lappend_int(so->colTypmods, Kc->typmod[i]);
+    so->colCollations = lappend_oid(so->colCollations, Kc->coll[i]);
+  }
+  D->setOperations = (Node *)so;
+  fe->fromlist = NIL;
+  D->jointree = fe;
+
+  for (i = 0; i < Kc->n; ++i) {
+    Var *v = makeVar(1, i + 1, Kc->type[i], Kc->typmod[i], Kc->coll[i], 0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, i + 1, pstrdup(Kc->name[i]),
+                                     false));
+  }
+  D->targetList = tl;
+  return D;
+}
+
+/** @brief Build a null-padded antijoin arm in R-then-S column order.
+ *
+ *  For @p keep_left it emits the left-unmatched rows
+ *  @c "SELECT D.cols, NULL,…  FROM (R EXCEPT ALL R⋈S) D" (S columns NULL); for
+ *  the right side it emits @c "SELECT NULL,…, D.cols FROM (S EXCEPT ALL R⋈S) D"
+ *  (R columns NULL).  The kept side's columns come from the difference @c D
+ *  (which also carries the antijoin provenance); the other side is typed NULL
+ *  constants. */
+static Query *oj_build_antijoin(const constants_t *constants, Query *outer,
+                                RangeTblEntry *R, RangeTblEntry *S,
+                                Index R_idx, Index S_idx, oj_cols *Rc,
+                                oj_cols *Sc, Node *theta, bool keep_left) {
+  Query *D = oj_build_diff(constants, outer, R, S, R_idx, S_idx, Rc, Sc, theta,
+                           keep_left);
+  RangeTblEntry *D_rte = oj_make_subquery_rte(D);
+  Query *A = makeNode(Query);
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  int i, kept = 0; /* next column position in the difference D */
+
+  A->commandType = CMD_SELECT;
+  A->canSetTag = true;
+  A->rtable = list_make1(D_rte);
+  rtr->rtindex = 1;
+  fe->fromlist = list_make1(rtr);
+  A->jointree = fe;
+
+  /* R columns: from D when keep_left, else typed NULL. */
+  for (i = 0; i < Rc->n; ++i) {
+    Expr *e;
+    if (keep_left)
+      e = (Expr *)makeVar(1, ++kept, Rc->type[i], Rc->typmod[i], Rc->coll[i],
+                          0);
+    else
+      e = (Expr *)makeNullConst(Rc->type[i], Rc->typmod[i], Rc->coll[i]);
+    tl = lappend(tl, makeTargetEntry(e, list_length(tl) + 1,
+                                     pstrdup(Rc->name[i]), false));
+  }
+  /* S columns: typed NULL when keep_left, else from D. */
+  for (i = 0; i < Sc->n; ++i) {
+    Expr *e;
+    if (keep_left)
+      e = (Expr *)makeNullConst(Sc->type[i], Sc->typmod[i], Sc->coll[i]);
+    else
+      e = (Expr *)makeVar(1, ++kept, Sc->type[i], Sc->typmod[i], Sc->coll[i],
+                          0);
+    tl = lappend(tl, makeTargetEntry(e, list_length(tl) + 1,
+                                     pstrdup(Sc->name[i]), false));
+  }
+  A->targetList = tl;
+  return A;
+}
+
+/** @brief Build the column-type lists (R-then-S, user columns only) shared by
+ *         every set-operation node of the replacement union. */
+static void oj_build_coltype_lists(oj_cols *Rc, oj_cols *Sc, List **types,
+                                   List **typmods, List **collations) {
+  int i;
+  *types = *typmods = *collations = NIL;
+  for (i = 0; i < Rc->n; ++i) {
+    *types = lappend_oid(*types, Rc->type[i]);
+    *typmods = lappend_int(*typmods, Rc->typmod[i]);
+    *collations = lappend_oid(*collations, Rc->coll[i]);
+  }
+  for (i = 0; i < Sc->n; ++i) {
+    *types = lappend_oid(*types, Sc->type[i]);
+    *typmods = lappend_int(*typmods, Sc->typmod[i]);
+    *collations = lappend_oid(*collations, Sc->coll[i]);
+  }
+}
+
+/** @brief Build the UNION-ALL of the matched arm and the outer join's
+ *         antijoin arm(s): the full outer-join relation in R-then-S column
+ *         order with one combined @c provsql column.
+ *
+ *  @p jointype selects which null-padded antijoin branches are added:
+ *  @c JOIN_LEFT adds the left (R-kept) branch, @c JOIN_RIGHT the right
+ *  (S-kept) branch, @c JOIN_FULL both. */
+static Query *oj_build_union(const constants_t *constants, Query *outer,
+                             RangeTblEntry *R, RangeTblEntry *S, Index R_idx,
+                             Index S_idx, oj_cols *Rc, oj_cols *Sc, Node *theta,
+                             JoinType jointype) {
+  List *arms = NIL; /* list of arm Query* */
+  List *types, *typmods, *collations;
+  Query *Q = makeNode(Query);
+  FromExpr *fe = makeNode(FromExpr);
+  List *tl = NIL;
+  Node *tree;
+  ListCell *lc;
+  int i, pos = 0, k;
+
+  /* Matched arm (R ⋈ S), then the requested antijoin branches. */
+  arms = lappend(arms, oj_build_join_query(constants, outer, R, S, R_idx,
+                                           S_idx, Rc, Sc, theta, true, true));
+  if (jointype == JOIN_LEFT || jointype == JOIN_FULL)
+    arms = lappend(arms, oj_build_antijoin(constants, outer, R, S, R_idx,
+                                           S_idx, Rc, Sc, theta, true));
+  if (jointype == JOIN_RIGHT || jointype == JOIN_FULL)
+    arms = lappend(arms, oj_build_antijoin(constants, outer, R, S, R_idx,
+                                           S_idx, Rc, Sc, theta, false));
+
+  Q->commandType = CMD_SELECT;
+  Q->canSetTag = true;
+  foreach (lc, arms)
+    Q->rtable = lappend(Q->rtable, oj_make_subquery_rte((Query *)lfirst(lc)));
+
+  oj_build_coltype_lists(Rc, Sc, &types, &typmods, &collations);
+
+  /* Left-deep UNION ALL tree over the arm RTEs (indices 1..n).  Every
+   * SetOperationStmt node carries its own colTypes lists -- process_set_
+   * operation_union appends the UUID type to each node in place. */
+  {
+    RangeTblRef *first = makeNode(RangeTblRef);
+    first->rtindex = 1;
+    tree = (Node *)first;
+  }
+  for (k = 2; k <= list_length(arms); ++k) {
+    SetOperationStmt *so = makeNode(SetOperationStmt);
+    RangeTblRef *rtr = makeNode(RangeTblRef);
+    rtr->rtindex = k;
+    so->op = SETOP_UNION;
+    so->all = true;
+    so->larg = tree;
+    so->rarg = (Node *)rtr;
+    so->colTypes = list_copy(types);
+    so->colTypmods = list_copy(typmods);
+    so->colCollations = list_copy(collations);
+    tree = (Node *)so;
+  }
+  Q->setOperations = tree;
+  fe->fromlist = NIL;
+  Q->jointree = fe;
+
+  /* Leader target list: one Var per user column, referencing the first arm. */
+  for (i = 0; i < Rc->n; ++i) {
+    Var *v = makeVar(1, ++pos, Rc->type[i], Rc->typmod[i], Rc->coll[i], 0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, pos, pstrdup(Rc->name[i]),
+                                     false));
+  }
+  for (i = 0; i < Sc->n; ++i) {
+    Var *v = makeVar(1, ++pos, Sc->type[i], Sc->typmod[i], Sc->coll[i], 0);
+    tl = lappend(tl, makeTargetEntry((Expr *)v, pos, pstrdup(Sc->name[i]),
+                                     false));
+  }
+  Q->targetList = tl;
+  return Q;
+}
+
+/** @brief Walker context: detect a Var referencing the join RTE index. */
+typedef struct oj_joinref_ctx {
+  Index join_idx;
+} oj_joinref_ctx;
+
+static bool oj_joinref_walker(Node *node, void *cx) {
+  oj_joinref_ctx *c = (oj_joinref_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    return (v->varlevelsup == 0 && v->varno == c->join_idx);
+  }
+  return expression_tree_walker(node, oj_joinref_walker, cx);
+}
+
+/** @brief True if any outer Var references the join RTE directly (USING /
+ *         whole-row / alias.col references the conservative remap cannot
+ *         resolve through @c joinaliasvars yet). */
+static bool oj_refs_join_index(Query *q, Index join_idx) {
+  oj_joinref_ctx c;
+  c.join_idx = join_idx;
+  if (oj_joinref_walker((Node *)q->targetList, &c))
+    return true;
+  if (q->jointree && q->jointree->quals &&
+      oj_joinref_walker(q->jointree->quals, &c))
+    return true;
+  if (q->havingQual && oj_joinref_walker(q->havingQual, &c))
+    return true;
+  return false;
+}
+
+/** @brief Outer Var remap context for the LEFT-join lowering: base-relation
+ *         Vars (R_idx / S_idx) are retargeted to the new subquery (new_idx)
+ *         with their attribute number mapped to the subquery column position. */
+typedef struct oj_outer_ctx {
+  Index R_idx, S_idx, new_idx;
+  AttrNumber *R_map, *S_map;
+} oj_outer_ctx;
+
+static Node *oj_outer_remap(Node *node, void *cx) {
+  oj_outer_ctx *c = (oj_outer_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 &&
+        (v->varno == c->R_idx || v->varno == c->S_idx)) {
+      v = (Var *)copyObject(v);
+      if ((Index)((Var *)node)->varno == c->R_idx)
+        v->varattno = c->R_map[v->varattno];
+      else
+        v->varattno = c->S_map[v->varattno];
+      v->varno = c->new_idx;
+#if PG_VERSION_NUM >= 160000
+      v->varnullingrels = NULL;
+#endif
+#if PG_VERSION_NUM >= 130000
+      v->varnosyn = 0;
+      v->varattnosyn = 0;
+#endif
+      return (Node *)v;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_outer_remap, cx);
+}
+
+/**
+ * @brief Lower a top-level outer @c JOIN of two base relations into the
+ *        UNION-ALL of its matched and null-padded antijoin arms.
+ *
+ * Fires only on @c jointree->fromlist ==
+ * @c [JoinExpr(JOIN_LEFT|JOIN_RIGHT|JOIN_FULL, RTR, RTR)] whose arms are
+ * provenance-tracked base relations and where no outer Var references the join
+ * RTE directly.  Everything else falls through unchanged.  Returns @c true if
+ * the query was rewritten.
+ */
+static bool lower_outer_joins(const constants_t *constants, Query *q) {
+  JoinExpr *je;
+  RangeTblRef *lref, *rref;
+  Index R_idx, S_idx, join_idx;
+  RangeTblEntry *R_rte, *S_rte;
+  oj_cols Rc, Sc;
+  Node *theta;
+  Query *Q;
+  AttrNumber *R_map, *S_map;
+  int ncolR, ncolS, i;
+  oj_outer_ctx octx;
+
+  if (q->commandType != CMD_SELECT)
+    return false;
+  if (!q->jointree || list_length(q->jointree->fromlist) != 1)
+    return false;
+  if (!IsA(linitial(q->jointree->fromlist), JoinExpr))
+    return false;
+  je = (JoinExpr *)linitial(q->jointree->fromlist);
+  if (je->jointype != JOIN_LEFT && je->jointype != JOIN_RIGHT &&
+      je->jointype != JOIN_FULL)
+    return false;
+  if (!IsA(je->larg, RangeTblRef) || !IsA(je->rarg, RangeTblRef))
+    return false;
+
+  lref = (RangeTblRef *)je->larg;
+  rref = (RangeTblRef *)je->rarg;
+  R_idx = lref->rtindex;
+  S_idx = rref->rtindex;
+  join_idx = je->rtindex;
+  R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+  S_rte = list_nth_node(RangeTblEntry, q->rtable, S_idx - 1);
+
+  if ((R_rte->rtekind != RTE_RELATION && R_rte->rtekind != RTE_SUBQUERY) ||
+      (S_rte->rtekind != RTE_RELATION && S_rte->rtekind != RTE_SUBQUERY))
+    return false;
+  if ((R_rte->rtekind == RTE_SUBQUERY && R_rte->lateral) ||
+      (S_rte->rtekind == RTE_SUBQUERY && S_rte->lateral))
+    return false;
+  if (!oj_rte_has_provsql(constants, R_rte) ||
+      !oj_rte_has_provsql(constants, S_rte))
+    return false;
+  if (oj_refs_join_index(q, join_idx))
+    return false;
+
+#if PG_VERSION_NUM >= 180000
+  /* Flatten PG 18's synthetic RTE_GROUP so grouped-column Vars are base-
+   * relation Vars again, which the remap below can retarget. */
+  strip_group_rte_pg18(q);
+#endif
+
+  theta = je->quals;
+  oj_collect_cols(constants, R_rte, &Rc);
+  oj_collect_cols(constants, S_rte, &Sc);
+  ncolR = (R_rte->rtekind == RTE_SUBQUERY)
+            ? list_length(R_rte->subquery->targetList)
+            : list_length(R_rte->eref->colnames);
+  ncolS = (S_rte->rtekind == RTE_SUBQUERY)
+            ? list_length(S_rte->subquery->targetList)
+            : list_length(S_rte->eref->colnames);
+
+  Q = oj_build_union(constants, q, R_rte, S_rte, R_idx, S_idx, &Rc, &Sc, theta,
+                     je->jointype);
+
+  /* The combined provenance now lives in the replacement subquery Q.  The
+   * original arm RTEs are left orphaned in the outer range table; neutralise
+   * them so get_provenance_attributes does not pick them up again. */
+  oj_neutralize_orphan_arm(R_rte);
+  oj_neutralize_orphan_arm(S_rte);
+
+  R_map = (AttrNumber *)palloc0((ncolR + 1) * sizeof(AttrNumber));
+  S_map = (AttrNumber *)palloc0((ncolS + 1) * sizeof(AttrNumber));
+  for (i = 0; i < Rc.n; ++i)
+    R_map[Rc.attno[i]] = i + 1;
+  for (i = 0; i < Sc.n; ++i)
+    S_map[Sc.attno[i]] = Rc.n + i + 1;
+
+  /* Replace the JOIN RTE slot in place with the new subquery, reusing the
+   * join's range-table index for the outer reference.  Reusing the *join*
+   * slot (rather than the left relation's) leaves no orphaned RTE_JOIN in the
+   * range table -- an orphaned join RTE without a matching JoinExpr trips the
+   * planner ("so where are the outer joins?").  The two base-relation RTEs are
+   * left orphaned, which the planner tolerates (they are simply not scanned). */
+  {
+    RangeTblEntry *J_rte =
+      list_nth_node(RangeTblEntry, q->rtable, join_idx - 1);
+    List *cn = NIL;
+
+    J_rte->rtekind  = RTE_SUBQUERY;
+    J_rte->subquery = Q;
+    J_rte->jointype = JOIN_INNER;
+    J_rte->joinaliasvars = NIL;
+#if PG_VERSION_NUM >= 130000
+    J_rte->joinleftcols = NIL;
+    J_rte->joinrightcols = NIL;
+    J_rte->joinmergedcols = 0;
+#endif
+    J_rte->relid    = InvalidOid;
+    J_rte->relkind  = 0;
+#if PG_VERSION_NUM >= 120000
+    J_rte->rellockmode = 0;
+#endif
+    J_rte->inh      = false;
+    J_rte->lateral  = false;
+    J_rte->tablesample = NULL;
+#if PG_VERSION_NUM >= 160000
+    J_rte->perminfoindex = 0;
+#else
+    J_rte->selectedCols  = NULL;
+    J_rte->insertedCols  = NULL;
+    J_rte->updatedCols   = NULL;
+    J_rte->requiredPerms = ACL_SELECT;
+#endif
+    for (i = 0; i < Rc.n; ++i)
+      cn = lappend(cn, makeString(pstrdup(Rc.name[i])));
+    for (i = 0; i < Sc.n; ++i)
+      cn = lappend(cn, makeString(pstrdup(Sc.name[i])));
+    J_rte->eref = makeAlias("unnamed_subquery", cn);
+  }
+
+  {
+    RangeTblRef *newr = makeNode(RangeTblRef);
+    newr->rtindex = join_idx;
+    q->jointree->fromlist = list_make1(newr);
+  }
+
+  octx.R_idx = R_idx;
+  octx.S_idx = S_idx;
+  octx.new_idx = join_idx;
+  octx.R_map = R_map;
+  octx.S_map = S_map;
+  q->targetList = (List *)oj_outer_remap((Node *)q->targetList, &octx);
+  if (q->jointree->quals)
+    q->jointree->quals = oj_outer_remap(q->jointree->quals, &octx);
+  if (q->havingQual)
+    q->havingQual = oj_outer_remap(q->havingQual, &octx);
+
+  return true;
+}
+
+/* -------------------------------------------------------------------------
+ * Scalar-subquery decorrelation
+ *
+ * A correlated scalar subquery (SELECT Q.x FROM Q WHERE corr), used as a
+ * top-level target-list entry of a query whose FROM is a single tracked base
+ * relation R, is decorrelated to a LEFT JOIN:
+ *
+ *   SELECT R.cols, choose(Q.x)
+ *   FROM   R LEFT JOIN Q ON corr
+ *   GROUP BY R.cols
+ *   HAVING count(Q.key) <= 1
+ *
+ * The corrected outer-join lowering (lower_outer_joins, which runs next)
+ * supplies the 0-match NULL row, choose() picks the single matched value, and
+ * the count<=1 HAVING gates out the (SQL-illegal) >=2-match worlds -- no
+ * gate-level special case.  Anything outside this shape returns false and the
+ * caller's "Subqueries not supported" error still fires.
+ * ------------------------------------------------------------------------- */
+
+/** @brief Mutator: lift a scalar subquery's body into the outer query level.
+ *  Var(level 0, varno @c q_old) -> Var(level 0, varno @c q_new) [the pulled-up
+ *  Q]; the correlated outer Var(level 1) -> Var(level 0). */
+typedef struct oj_decorr_ctx {
+  Index q_old;
+  Index q_new;
+} oj_decorr_ctx;
+
+static Node *oj_decorr_var_mut(Node *node, void *cx) {
+  oj_decorr_ctx *c = (oj_decorr_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 1) {
+      v = (Var *)copyObject(v);
+      v->varlevelsup = 0;
+      return (Node *)v;
+    }
+    if (v->varlevelsup == 0 && v->varno == c->q_old) {
+      v = (Var *)copyObject(v);
+      v->varno = c->q_new;
+#if PG_VERSION_NUM >= 130000
+      v->varnosyn = 0;
+      v->varattnosyn = 0;
+#endif
+      return (Node *)v;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_decorr_var_mut, cx);
+}
+
+/** @brief Walker: count SubLink nodes (capturing the first), and capture a Var
+ *  referencing varno @p target_varno (level 0) -- used to find a Q column for
+ *  the count() key. */
+typedef struct oj_sublink_scan {
+  int n_sublinks;
+  SubLink *found_sublink;
+  Index target_varno; /* find any level-0 Var on this rel */
+  Var *found_var;
+} oj_sublink_scan;
+
+static bool oj_sublink_scan_walker(Node *node, void *cx) {
+  oj_sublink_scan *s = (oj_sublink_scan *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    s->n_sublinks++;
+    if (s->found_sublink == NULL)
+      s->found_sublink = (SubLink *)node;
+  }
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (s->found_var == NULL && v->varlevelsup == 0 &&
+        v->varno == s->target_varno)
+      s->found_var = v;
+  }
+  return expression_tree_walker(node, oj_sublink_scan_walker, cx);
+}
+
+/** @brief Mutator: replace the specific @c SubLink node @p target (by pointer)
+ *  with @p replacement. */
+typedef struct oj_sl_replace_ctx {
+  SubLink *target;
+  Node *replacement;
+} oj_sl_replace_ctx;
+
+static Node *oj_sl_replace_mut(Node *node, void *cx) {
+  oj_sl_replace_ctx *c = (oj_sl_replace_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (node == (Node *)c->target)
+    return c->replacement;
+  return expression_tree_mutator(node, oj_sl_replace_mut, cx);
+}
+
+/** @brief Walker: true if the subtree contains the specific SubLink @p cx. */
+static bool oj_contains_sublink_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (node == (Node *)cx)
+    return true;
+  return expression_tree_walker(node, oj_contains_sublink_walker, cx);
+}
+
+/** @brief Build an @c Aggref for a single-argument aggregate. */
+static Aggref *oj_make_aggref(Oid aggfnoid, Oid aggtype, Oid argtype,
+                              Expr *arg) {
+  Aggref *agg = makeNode(Aggref);
+  TargetEntry *te = makeNode(TargetEntry);
+  te->resno = 1;
+  te->expr = arg;
+  agg->aggfnoid = aggfnoid;
+  agg->aggtype = aggtype;
+  agg->aggtranstype = InvalidOid;
+  agg->aggargtypes = list_make1_oid(argtype);
+  agg->args = list_make1(te);
+  agg->aggkind = AGGKIND_NORMAL;
+  agg->aggsplit = AGGSPLIT_SIMPLE;
+  agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+  agg->aggno = agg->aggtransno = -1;
+#endif
+  return agg;
+}
+
+/**
+ * @brief Build @c "count(Q.key) <op> n" over the decorrelated LEFT-JOIN group.
+ *
+ * @p found_var is some Q column from the correlation (NULL on the null-padded
+ * antijoin rows, so it counts only genuine matches); it is re-pointed to the
+ * pulled-up Q at @p q_idx.  Used for the scalar-subquery at-most-one-row gate
+ * (@c "<= 1") and the WHERE-comparison non-empty gate (@c ">= 1").
+ */
+static OpExpr *oj_count_cmp(Var *found_var, Index q_idx, const char *opstr,
+                            int64 n) {
+  Var *qkey = (Var *)copyObject((Node *)found_var);
+  Aggref *cnt;
+  OpExpr *op = makeNode(OpExpr);
+  Oid o;
+
+  qkey->varno = q_idx;
+#if PG_VERSION_NUM >= 130000
+  qkey->varnosyn = 0;
+  qkey->varattnosyn = 0;
+#endif
+  cnt = oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype, (Expr *)qkey);
+
+  o = OpernameGetOprid(list_make1(makeString((char *)opstr)), INT8OID, INT8OID);
+  op->opno = o;
+  op->opfuncid = get_opcode(o);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = InvalidOid;
+  op->args = list_make2(cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                       Int64GetDatum(n), false, FLOAT8PASSBYVAL));
+  op->location = -1;
+  return op;
+}
+
+/** @brief Build @c "count(DISTINCT v) <op> n" -- the at-most-one-DISTINCT-value
+ *  gate of a @c "SELECT DISTINCT v" body (NULLs, on the null-padded antijoin
+ *  rows, are ignored by @c count, so an empty group counts 0). */
+static OpExpr *oj_count_distinct_cmp(Expr *valexpr, const char *opstr,
+                                     int64 n) {
+  Aggref *cnt = makeNode(Aggref);
+  TargetEntry *arg = makeTargetEntry((Expr *)copyObject((Node *)valexpr), 1,
+                                     NULL, false);
+  SortGroupClause *sgc = makeNode(SortGroupClause);
+  OpExpr *op = makeNode(OpExpr);
+  Oid o;
+
+  arg->ressortgroupref = 1;
+  sgc->tleSortGroupRef = 1;
+  get_sort_group_operators(exprType((Node *)valexpr), false, true, false,
+                           &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+
+  cnt->aggfnoid = F_COUNT_ANY;
+  cnt->aggtype = INT8OID;
+  cnt->aggtranstype = InvalidOid;
+  cnt->aggargtypes = list_make1_oid(exprType((Node *)valexpr));
+  cnt->args = list_make1(arg);
+  cnt->aggdistinct = list_make1(sgc);
+  cnt->aggkind = AGGKIND_NORMAL;
+  cnt->aggsplit = AGGSPLIT_SIMPLE;
+  cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+  cnt->aggno = cnt->aggtransno = -1;
+#endif
+
+  o = OpernameGetOprid(list_make1(makeString((char *)opstr)), INT8OID, INT8OID);
+  op->opno = o;
+  op->opfuncid = get_opcode(o);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = InvalidOid;
+  op->args = list_make2(cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                       Int64GetDatum(n), false, FLOAT8PASSBYVAL));
+  op->location = -1;
+  return op;
+}
+
+/** @brief Var-remap context for the FROM-wrapping pre-step: a Var at
+ *  @c target_level on relation @c varno / attribute @c varattno is retargeted to
+ *  @c newidx column @c pos[varno][varattno].  Descent into @c skip (the
+ *  SubLink) is suppressed. */
+typedef struct oj_wrap_ctx {
+  int target_level;
+  Index newidx;
+  int rtlen;
+  int **pos;       /* pos[varno][varattno] -> R' column (1-based), or 0 */
+  SubLink *skip;
+} oj_wrap_ctx;
+
+static Node *oj_wrap_remap_mut(Node *node, void *cx) {
+  oj_wrap_ctx *c = (oj_wrap_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (c->skip && node == (Node *)c->skip)
+    return node;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if ((int)v->varlevelsup == c->target_level && (int)v->varno >= 1 &&
+        (int)v->varno <= c->rtlen && c->pos[v->varno] != NULL &&
+        v->varattno >= 1 && c->pos[v->varno][v->varattno] > 0) {
+      Var *nv = (Var *)copyObject(v);
+      nv->varno = c->newidx;
+      nv->varattno = c->pos[v->varno][v->varattno];
+#if PG_VERSION_NUM >= 130000
+      nv->varnosyn = 0;
+      nv->varattnosyn = 0;
+#endif
+      return (Node *)nv;
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, oj_wrap_remap_mut, cx);
+}
+
+/**
+ * @brief Wrap a non-single-relation outer FROM into a derived subquery R' so a
+ *        scalar subquery can be decorrelated onto it.
+ *
+ * Builds R' = the outer FROM (all its base relations + join RTEs) with the
+ * non-subquery WHERE conjuncts, exposing every base-relation user column.  The
+ * outer query is rewritten to @c "FROM R'" with all references (the target
+ * list, the SubLink's correlation at level 1, and -- for a WHERE SubLink -- the
+ * conjunct that will move to HAVING) retargeted to R''s columns.  The FROM must
+ * consist only of base relations and join RTEs (no nested subqueries / VALUES /
+ * functions); returns @c false otherwise, leaving @p q untouched.
+ */
+static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
+                               SubLink *sl, bool in_where) {
+  int rtlen = list_length(q->rtable);
+  int **pos = (int **)palloc0((rtlen + 1) * sizeof(int *));
+  Query *Rp = makeNode(Query);
+  RangeTblEntry *rp_rte;
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  FromExpr *outer_fe = makeNode(FromExpr);
+  List *rp_tl = NIL;
+  Node *subquery_conj = NULL; /* the WHERE conjunct holding the SubLink */
+  List *kept_conj = NIL;
+  oj_wrap_ctx wc;
+  ListCell *lc;
+  int idx, posn = 0;
+  bool any_tracked = false;
+
+  /* Only base relations and join RTEs are supported in the wrapped FROM. */
+  idx = 0;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    ++idx;
+    if (r->rtekind == RTE_RELATION) {
+      if (oj_rte_has_provsql(constants, r))
+        any_tracked = true;
+    } else if (r->rtekind != RTE_JOIN) {
+      return false;
+    }
+  }
+
+  /* R' exposes every base-relation user column; record (rtindex,attno)->pos. */
+  idx = 0;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    oj_cols rc;
+    int j;
+    ++idx;
+    if (r->rtekind != RTE_RELATION)
+      continue;
+    oj_collect_cols(constants, r, &rc);
+    pos[idx] = (int *)palloc0((list_length(r->eref->colnames) + 1) * sizeof(int));
+    for (j = 0; j < rc.n; ++j) {
+      Var *v = makeVar(idx, rc.attno[j], rc.type[j], rc.typmod[j], rc.coll[j], 0);
+      rp_tl = lappend(rp_tl, makeTargetEntry((Expr *)v, ++posn,
+                                             pstrdup(rc.name[j]), false));
+      pos[idx][rc.attno[j]] = posn;
+    }
+  }
+
+  /* When no FROM relation is provenance-tracked, the outer tuples are certain
+   * (exactly like joining an untracked table): give R' a synthetic gate_one()
+   * provsql column so the decorrelation / outer-join lowering treat it as a
+   * certain-provenance arm.  No warning -- no provenance is lost, the outer
+   * simply contributes the identity and the subquery's provenance flows. */
+  if (!any_tracked) {
+    FuncExpr *one = makeNode(FuncExpr);
+    one->funcid = constants->OID_FUNCTION_GATE_ONE;
+    one->funcresulttype = constants->OID_TYPE_UUID;
+    one->args = NIL;
+    one->location = -1;
+    rp_tl = lappend(rp_tl, makeTargetEntry((Expr *)one, ++posn,
+                                           pstrdup(PROVSQL_COLUMN_NAME), false));
+  }
+
+  /* Split the WHERE: the conjunct holding the SubLink (for a WHERE SubLink)
+   * stays in the outer query (it becomes HAVING); the rest move into R'. */
+  if (q->jointree->quals) {
+    Node *quals = q->jointree->quals;
+    List *conjs = (IsA(quals, BoolExpr) &&
+                   ((BoolExpr *)quals)->boolop == AND_EXPR)
+                    ? ((BoolExpr *)quals)->args
+                    : list_make1(quals);
+    foreach (lc, conjs) {
+      Node *cnode = (Node *)lfirst(lc);
+      if (in_where && oj_contains_sublink_walker(cnode, sl))
+        subquery_conj = cnode;
+      else
+        kept_conj = lappend(kept_conj, cnode);
+    }
+  }
+
+  /* Build R'. */
+  Rp->commandType = CMD_SELECT;
+  Rp->canSetTag = true;
+  Rp->rtable = q->rtable;
+  Rp->jointree = makeNode(FromExpr);
+  Rp->jointree->fromlist = q->jointree->fromlist;
+  Rp->jointree->quals =
+    (kept_conj == NIL)
+      ? NULL
+      : (list_length(kept_conj) == 1 ? (Node *)linitial(kept_conj)
+                                     : (Node *)makeBoolExpr(AND_EXPR, kept_conj,
+                                                            -1));
+  Rp->targetList = rp_tl;
+#if PG_VERSION_NUM >= 160000
+  Rp->rteperminfos = q->rteperminfos;
+#endif
+
+  /* Retarget references to R': the outer target list (skipping the SubLink),
+   * the SubLink body's correlation (level 1), and the retained subquery
+   * conjunct (level 0). */
+  wc.newidx = 1;
+  wc.rtlen = rtlen;
+  wc.pos = pos;
+
+  wc.target_level = 0;
+  wc.skip = sl;
+  q->targetList = (List *)oj_wrap_remap_mut((Node *)q->targetList, &wc);
+  if (subquery_conj)
+    subquery_conj = oj_wrap_remap_mut(subquery_conj, &wc);
+
+  /* The SubLink body's correlated (level-1) references to the FROM relations
+   * become level-1 references to R'.  Walk its target list and quals directly
+   * (the mutator does not descend into a Query node). */
+  {
+    Query *sub = (Query *)sl->subselect;
+    wc.target_level = 1;
+    wc.skip = NULL;
+    sub->targetList = (List *)oj_wrap_remap_mut((Node *)sub->targetList, &wc);
+    if (sub->jointree && sub->jointree->quals)
+      sub->jointree->quals = oj_wrap_remap_mut(sub->jointree->quals, &wc);
+  }
+
+  /* Rebuild the outer query: FROM R', WHERE = the retained subquery conjunct. */
+  rp_rte = oj_make_subquery_rte(Rp);
+  q->rtable = list_make1(rp_rte);
+#if PG_VERSION_NUM >= 160000
+  q->rteperminfos = NIL;
+#endif
+  rtr->rtindex = 1;
+  outer_fe->fromlist = list_make1(rtr);
+  outer_fe->quals = subquery_conj;
+  q->jointree = outer_fe;
+  return true;
+}
+
+/**
+ * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
+ *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
+ *
+ * Requires a body FROM over tracked base relations -- a single relation Q, or
+ * an all-tracked comma-join that @c oj_wrap_body_from collapses downstream into
+ * one derived cross-product subquery -- and a (correlated) WHERE, with none
+ * of the shapes @c decorrelate_scalar_sublinks rejects downstream (aggregates,
+ * grouping, set ops, LIMIT, nested sublinks, CTEs).  The targetList is replaced
+ * wholesale by @c count(*), so its width is irrelevant here.  @p corr_supplied
+ * is set for @c IN / @c NOT @c IN, whose correlation comes from the testexpr and
+ * is ANDed into the (possibly empty) subselect WHERE by the caller.
+ */
+static bool predicate_subselect_decorrelatable(const constants_t *constants,
+                                               Query *sub,
+                                               bool corr_supplied) {
+  ListCell *lc;
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT)
+    return false;
+  if (sub->groupClause || sub->groupingSets || sub->hasAggs ||
+      sub->distinctClause || sub->setOperations || sub->hasWindowFuncs ||
+      sub->hasSubLinks || sub->limitCount || sub->limitOffset || sub->cteList ||
+      sub->rtable == NIL)
+    return false;
+  if (!sub->jointree || (!corr_supplied && !sub->jointree->quals))
+    return false; /* an uncorrelated predicate has no Q key for count() */
+  /* Single tracked base relation, or an all-tracked comma-join (the
+   * multi-relation body is collapsed downstream by oj_wrap_body_from into one
+   * derived cross-product subquery D -- same preconditions checked here). */
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return false;
+  }
+  foreach (lc, sub->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false;
+  }
+  return true;
+}
+
+/**
+ * @brief Turn a predicate subselect into the boolean @c "(SELECT count(*) FROM Q
+ *        WHERE corr) >= 1" (semijoin) or @c "... = 0" (antijoin).
+ *
+ * @c EXISTS / @c IN are existence tests (@c "⊕Q present"), so they are exactly
+ * @c "count(*) >= 1"; @c NOT @c EXISTS / @c NOT @c IN are their antijoin duals,
+ * @c "count(*) = 0".  Lowering them to a correlated count() comparison lets the
+ * aggregate-body arm of @c decorrelate_scalar_sublinks do the rest: it rewrites
+ * @c count(*) to @c count(Q.key) over the @c "R ⟕ Q" group (so the null-padded
+ * antijoin row is not counted) and lifts the comparison into @c HAVING -- i.e.
+ * the semijoin @c R⊗⊕Q and the antijoin @c R⊗(1⊖⊕Q) fall out of the existing
+ * outer-join lowering.
+ *
+ * @p extra_corr (for @c IN / @c NOT @c IN) is the @c "Q.col = x" correlation
+ * lifted out of the testexpr; it is ANDed into the subselect's WHERE.  @c EXISTS
+ * passes @c NULL, its correlation already living in the subselect.
+ */
+static Node *build_count_predicate(Query *subselect, Node *extra_corr,
+                                   bool antijoin) {
+  Query *sq = (Query *)copyObject(subselect);
+  Aggref *cnt = makeNode(Aggref);
+  SubLink *sl = makeNode(SubLink);
+  OpExpr *op = makeNode(OpExpr);
+  Oid o;
+
+  if (extra_corr)
+    sq->jointree->quals =
+      sq->jointree->quals
+        ? (Node *)makeBoolExpr(AND_EXPR,
+                               list_make2(sq->jointree->quals, extra_corr), -1)
+        : extra_corr;
+
+  cnt->aggfnoid = F_COUNT_; /* count(*) */
+  cnt->aggtype = INT8OID;
+  cnt->aggtranstype = InvalidOid;
+  cnt->aggargtypes = NIL;
+  cnt->args = NIL;
+  cnt->aggstar = true;
+  cnt->aggkind = AGGKIND_NORMAL;
+  cnt->aggsplit = AGGSPLIT_SIMPLE;
+  cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+  cnt->aggno = cnt->aggtransno = -1;
+#endif
+  sq->targetList =
+    list_make1(makeTargetEntry((Expr *)cnt, 1, pstrdup("count"), false));
+  sq->hasAggs = true;
+
+  sl->subLinkType = EXPR_SUBLINK;
+  sl->subselect = (Node *)sq;
+  sl->testexpr = NULL;
+  sl->operName = NIL;
+  sl->location = -1;
+
+  o = OpernameGetOprid(list_make1(makeString(antijoin ? "=" : ">=")), INT8OID,
+                       INT8OID);
+  op->opno = o;
+  op->opfuncid = get_opcode(o);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = InvalidOid;
+  op->args = list_make2(sl, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                      Int64GetDatum(antijoin ? 0 : 1), false,
+                                      FLOAT8PASSBYVAL));
+  op->location = -1;
+  return (Node *)op;
+}
+
+/** @brief Context for @c oj_param_repl_mut. */
+typedef struct {
+  int paramid;
+  Node *replacement;
+} oj_param_repl_ctx;
+
+/** @brief Replace every @c PARAM_SUBLINK with @p paramid by @p replacement. */
+static Node *oj_param_repl_mut(Node *node, void *cx) {
+  oj_param_repl_ctx *c = (oj_param_repl_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Param)) {
+    Param *p = (Param *)node;
+    if (p->paramkind == PARAM_SUBLINK && p->paramid == c->paramid)
+      return copyObject(c->replacement);
+    return node;
+  }
+  return expression_tree_mutator(node, oj_param_repl_mut, cx);
+}
+
+/** @brief Does the body's range table reach at least one provenance-tracked
+ *  relation?  Bodies over untracked relations only are left to PostgreSQL's
+ *  native sublink machinery. */
+static bool oj_body_has_tracked_relation(const constants_t *constants,
+                                         Query *body) {
+  ListCell *lc;
+  foreach (lc, body->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if ((r->rtekind == RTE_RELATION || r->rtekind == RTE_SUBQUERY) &&
+        oj_rte_has_provsql(constants, r))
+      return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Normalize quantified comparisons over a single bare-aggregate body
+ *        into plain scalar comparisons.
+ *
+ * An aggregate body without @c GROUP @c BY returns exactly one row, so
+ * @c "x op ANY (SELECT agg(..) …)" and @c "x op ALL (…)" are the scalar
+ * comparison @c "x op (SELECT agg(..) …)" (NULL semantics included), and a
+ * @c NOT-wrapped form (@c NOT @c IN) is the negator-operator comparison.  The
+ * conjunct's @c PARAM_SUBLINK placeholder is substituted by the
+ * @c EXPR_SUBLINK body, after which the scalar paths lower it: the
+ * HAVING-gated cross-joined subquery for a constant comparand
+ * (@c move_uncorrelated_where_predicates) or the @c "R ⟕ Q" decorrelation for
+ * an outer-column comparand (@c decorrelate_scalar_sublinks).  Runs before
+ * @c rewrite_uncorrelated_antijoin so a normalized count() comparison that is
+ * true on the empty body still gets the antijoin treatment there.
+ */
+static bool normalize_quantified_aggregate_sublinks(
+  const constants_t *constants, Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals)
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    Node *inner = c, *rewritten = NULL;
+    bool neg = false;
+
+    if (IsA(c, BoolExpr) && ((BoolExpr *)c)->boolop == NOT_EXPR &&
+        list_length(((BoolExpr *)c)->args) == 1) {
+      neg = true;
+      inner = (Node *)linitial(((BoolExpr *)c)->args);
+    }
+    if (IsA(inner, SubLink) &&
+        (((SubLink *)inner)->subLinkType == ANY_SUBLINK ||
+         ((SubLink *)inner)->subLinkType == ALL_SUBLINK) &&
+        IsA(((SubLink *)inner)->subselect, Query)) {
+      SubLink *sl = (SubLink *)inner;
+      Query *body = (Query *)sl->subselect;
+      if (body->commandType == CMD_SELECT && body->hasAggs &&
+          !body->groupClause && !body->groupingSets && !body->setOperations &&
+          !body->hasWindowFuncs && !body->hasSubLinks && !body->limitCount &&
+          !body->limitOffset && !body->cteList &&
+          list_length(body->targetList) == 1 &&
+          IsA(((TargetEntry *)linitial(body->targetList))->expr, Aggref) &&
+          sl->testexpr && IsA(sl->testexpr, OpExpr) &&
+          list_length(((OpExpr *)sl->testexpr)->args) == 2 &&
+          oj_body_has_tracked_relation(constants, body)) {
+        OpExpr *op = (OpExpr *)copyObject(sl->testexpr);
+        Oid opno = neg ? get_negator(op->opno) : op->opno;
+        if (OidIsValid(opno)) {
+          SubLink *esl = makeNode(SubLink);
+          oj_param_repl_ctx pc;
+          esl->subLinkType = EXPR_SUBLINK;
+          esl->testexpr = NULL;
+          esl->operName = NIL;
+          esl->subselect = (Node *)copyObject(body);
+          esl->location = -1;
+          op->opno = opno;
+          op->opfuncid = get_opcode(opno);
+          pc.paramid = 1;
+          pc.replacement = (Node *)esl;
+          rewritten = oj_param_repl_mut((Node *)op, &pc);
+        }
+      }
+    }
+    newconjs = lappend(newconjs, rewritten ? rewritten : c);
+    if (rewritten)
+      changed = true;
+  }
+
+  if (changed)
+    q->jointree->quals = (list_length(newconjs) == 1)
+                           ? (Node *)linitial(newconjs)
+                           : (Node *)makeBoolExpr(AND_EXPR, newconjs, -1);
+  return changed;
+}
+
+/**
+ * @brief Build the per-row correlation for a quantified sublink (@c IN /
+ *        @c op @c ANY / @c op @c ALL), setting @p *antijoin.
+ *
+ * The testexpr is @c "x op Param(subselect output)" (single column), or -- for a
+ * row @c IN -- a @c BoolExpr @c AND of per-column @c "xᵢ = Paramᵢ".  For each we
+ * copy the op, sink the outer operand one level, and substitute the subselect's
+ * paramid-th output column for the @c PARAM_SUBLINK placeholder, keeping any
+ * coercions (e.g. a @c varchar->text relabel) intact.  @c ANY is a semijoin
+ * (@c *antijoin = false, operator kept); @c ALL is the universal dual, the
+ * antijoin (@c *antijoin = true, operator negated -- @c "∀q. x op q" =
+ * @c "¬∃q. x ¬op q").  Returns @c NULL for unsupported shapes (a @c RowCompareExpr,
+ * a multi-column @c ALL, a bad paramid…).
+ */
+static Node *extract_quantified_corr(SubLink *sl, bool *antijoin) {
+  Query *sub = (Query *)sl->subselect;
+  List *opexprs, *conjs = NIL;
+  ListCell *lc;
+  bool negate_op;
+
+  /* ANY (IN, op ANY) is a semijoin: ∃q. x op q.  ALL (op ALL) is its universal
+   * dual: ∀q. x op q = ¬∃q. x ¬op q -- the antijoin, with the operator negated
+   * in the per-row correlation. */
+  if (sl->subLinkType == ANY_SUBLINK) {
+    *antijoin = false;
+    negate_op = false;
+  } else if (sl->subLinkType == ALL_SUBLINK) {
+    *antijoin = true;
+    negate_op = true;
+  } else {
+    return NULL;
+  }
+
+  /* The testexpr is a single "x op Param" (single-column), or -- only for a row
+   * IN -- a BoolExpr AND of per-column "xᵢ = Paramᵢ". */
+  if (IsA(sl->testexpr, OpExpr))
+    opexprs = list_make1(sl->testexpr);
+  else if (sl->subLinkType == ANY_SUBLINK && IsA(sl->testexpr, BoolExpr) &&
+           ((BoolExpr *)sl->testexpr)->boolop == AND_EXPR)
+    opexprs = ((BoolExpr *)sl->testexpr)->args;
+  else
+    return NULL;
+
+  foreach (lc, opexprs) {
+    OpExpr *oe = (OpExpr *)lfirst(lc);
+    Node *rhs, *qcol, *ci;
+    Param *p;
+    oj_param_repl_ctx ctx;
+
+    if (!IsA(oe, OpExpr) || list_length(oe->args) != 2)
+      return NULL;
+    rhs = (Node *)lsecond(oe->args);
+    if (IsA(rhs, RelabelType))
+      rhs = (Node *)((RelabelType *)rhs)->arg; /* varchar->text etc. */
+    if (!IsA(rhs, Param))
+      return NULL;
+    p = (Param *)rhs;
+    if (p->paramkind != PARAM_SUBLINK || p->paramid < 1 ||
+        p->paramid > list_length(sub->targetList))
+      return NULL;
+
+    /* Build "xᵢ <op'> Q.colᵢ": copy the testexpr op (negating it for ALL),
+     * sink the outer operand a level, and substitute the subselect's
+     * paramid-th output column for its PARAM_SUBLINK placeholder. */
+    ci = copyObject((Node *)oe);
+    if (negate_op) {
+      Oid neg = get_negator(((OpExpr *)ci)->opno);
+      if (!OidIsValid(neg))
+        return NULL;
+      ((OpExpr *)ci)->opno = neg;
+      ((OpExpr *)ci)->opfuncid = get_opcode(neg);
+    }
+    IncrementVarSublevelsUp(ci, 1, 0);
+    qcol = copyObject(
+      (Node *)((TargetEntry *)list_nth(sub->targetList, p->paramid - 1))->expr);
+    ctx.paramid = p->paramid;
+    ctx.replacement = qcol;
+    conjs = lappend(conjs, oj_param_repl_mut(ci, &ctx));
+  }
+
+  if (conjs == NIL)
+    return NULL;
+  return (list_length(conjs) == 1)
+           ? (Node *)linitial(conjs)
+           : (Node *)makeBoolExpr(AND_EXPR, conjs, -1);
+}
+
+/**
+ * @brief Rewrite top-level @c EXISTS / @c IN WHERE conjuncts (optionally negated)
+ *        over a single tracked relation into correlated @c count(*) comparisons.
+ *
+ * A pre-pass for @c decorrelate_scalar_sublinks: each qualifying conjunct (a
+ * bare @c EXISTS / @c IN sublink, or one wrapped in a single @c NOT -- i.e.
+ * @c NOT @c EXISTS / @c NOT @c IN) is replaced by the @c build_count_predicate
+ * form, after which the scalar-subquery decorrelation lowers the count()
+ * comparison to the @c "R ⟕ Q" semijoin / antijoin.  Conjuncts whose subselect is
+ * not decorrelatable (untracked / uncorrelated / non-comma-join) are left
+ * untouched, so they hit the usual unsupported-subquery error.
+ */
+static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals)
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    Node *inner = c, *rewritten = NULL;
+    bool neg = false;
+    SubLink *sl;
+
+    if (IsA(c, BoolExpr) && ((BoolExpr *)c)->boolop == NOT_EXPR &&
+        list_length(((BoolExpr *)c)->args) == 1) {
+      neg = true;
+      inner = (Node *)linitial(((BoolExpr *)c)->args);
+    }
+    if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
+      sl = (SubLink *)inner;
+      if (sl->subLinkType == EXISTS_SUBLINK &&
+          predicate_subselect_decorrelatable(constants,
+                                             (Query *)sl->subselect, false)) {
+        /* EXISTS / NOT EXISTS: correlation already in the subselect WHERE. */
+        rewritten =
+          build_count_predicate((Query *)sl->subselect, NULL, neg);
+      } else if (sl->subLinkType == ANY_SUBLINK ||
+                 sl->subLinkType == ALL_SUBLINK) {
+        /* IN / NOT IN / op ANY / op ALL: correlation lifted from the testexpr.
+         * ANY is a semijoin, ALL its antijoin dual; a wrapping NOT flips that. */
+        bool base_antijoin;
+        Node *corr = extract_quantified_corr(sl, &base_antijoin);
+        if (corr &&
+            predicate_subselect_decorrelatable(constants,
+                                               (Query *)sl->subselect, true))
+          rewritten = build_count_predicate((Query *)sl->subselect, corr,
+                                            base_antijoin ^ neg);
+      }
+    }
+    newconjs = lappend(newconjs, rewritten ? rewritten : c);
+    if (rewritten)
+      changed = true;
+  }
+
+  if (changed)
+    q->jointree->quals = (list_length(newconjs) == 1)
+                           ? (Node *)linitial(newconjs)
+                           : (Node *)makeBoolExpr(AND_EXPR, newconjs, -1);
+  return changed;
+}
+
+/**
+ * @brief Rewrite a top-level @c ARRAY(SELECT Q.col FROM Q WHERE corr) target-list
+ *        entry into the aggregate body @c (SELECT array_agg(Q.col) FROM Q WHERE
+ *        corr).
+ *
+ * A pre-pass for @c decorrelate_scalar_sublinks: an @c ARRAY_SUBLINK collects the
+ * correlated rows into an array, which is exactly @c array_agg over the group, so
+ * mutating it into an @c EXPR_SUBLINK aggregate body lets the aggregate arm lower
+ * it to @c array_agg(Q.col) over the @c "R ⟕ Q" group -- no @c count gate, since
+ * an array may have zero, one, or many elements.  Subselects that are not
+ * decorrelatable (untracked / multi-relation / uncorrelated) are left untouched.
+ */
+static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks)
+    return false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    SubLink *sl;
+    Query *sub;
+    TargetEntry *innerte;
+    Oid elemtype, arrtype;
+    oj_sublink_scan scan;
+    Aggref *agg;
+    NullTest *nt;
+
+    if (!IsA(te->expr, SubLink))
+      continue;
+    sl = (SubLink *)te->expr;
+    if (sl->subLinkType != ARRAY_SUBLINK || !IsA(sl->subselect, Query))
+      continue;
+    sub = (Query *)sl->subselect;
+    if (!predicate_subselect_decorrelatable(constants, sub, false))
+      continue;
+    /* Exactly one non-junk output column (the element value).  A body ORDER BY
+     * adds junk sort-key entries to the targetList; those become the ordered
+     * array_agg's extra args (see below), so they are allowed here. */
+    {
+      int nreal = 0;
+      ListCell *tlc;
+      foreach (tlc, sub->targetList)
+        if (!((TargetEntry *)lfirst(tlc))->resjunk)
+          ++nreal;
+      if (nreal != 1 || ((TargetEntry *)linitial(sub->targetList))->resjunk)
+        continue;
+    }
+
+    innerte = (TargetEntry *)linitial(sub->targetList);
+    elemtype = exprType((Node *)innerte->expr);
+    arrtype = get_array_type(elemtype);
+    if (!OidIsValid(arrtype))
+      continue; /* no array type for this element (e.g. a pseudo-type) */
+
+    /* A Q column from the correlation, to key the null-padded-row filter. */
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 1; /* Q is rtindex 1 in the subselect */
+    scan.found_var = NULL;
+    oj_sublink_scan_walker(sub->jointree->quals, &scan);
+    if (scan.found_var == NULL)
+      continue; /* uncorrelated: decorrelation would bail anyway */
+
+    if (sub->sortClause) {
+      /* ARRAY(SELECT v FROM Q WHERE corr ORDER BY key) -> the ordered aggregate
+       * array_agg(v ORDER BY key): the body's ORDER BY moves inside the
+       * aggregate (where it survives the regroup into the R ⟕ Q group), exactly
+       * as the LIMIT-1 argmax path does for choose().  The aggregate's args are
+       * the value plus the junk sort-key entries, its aggorder the body's
+       * sortClause; decorrelate's Var-remap pulls every arg's Q reference up to
+       * the joined Q. */
+      List *args = NIL, *argtypes = NIL;
+      ListCell *alc;
+      agg = makeNode(Aggref);
+      foreach (alc, sub->targetList) {
+        TargetEntry *ate = (TargetEntry *)copyObject(lfirst(alc));
+        args = lappend(args, ate);
+        argtypes = lappend_oid(argtypes, exprType((Node *)ate->expr));
+      }
+      agg->aggfnoid = F_ARRAY_AGG_ANYNONARRAY;
+      agg->aggtype = arrtype;
+      agg->aggtranstype = InvalidOid;
+      agg->aggargtypes = argtypes;
+      agg->args = args;
+      agg->aggorder = (List *)copyObject((Node *)sub->sortClause);
+      agg->aggkind = AGGKIND_NORMAL;
+      agg->aggsplit = AGGSPLIT_SIMPLE;
+      agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+      agg->aggno = agg->aggtransno = -1;
+#endif
+    } else {
+      agg = oj_make_aggref(F_ARRAY_AGG_ANYNONARRAY, arrtype, elemtype,
+                           innerte->expr);
+    }
+    /* array_agg keeps NULLs in its value, so the LEFT JOIN's null-padded
+     * antijoin row (Q key IS NULL) would inject a spurious NULL element.
+     * Filter it out; a genuinely-NULL matched element (Q key non-NULL) is still
+     * collected.  decorrelate's Var-remap retargets this Q key to the pulled-up
+     * Q just like the aggregate argument. */
+    nt = makeNode(NullTest);
+    nt->arg = (Expr *)copyObject((Node *)scan.found_var);
+    nt->nulltesttype = IS_NOT_NULL;
+    nt->argisrow = false;
+    nt->location = -1;
+    agg->aggfilter = (Expr *)nt;
+
+    /* The single body output is now the array_agg; the ORDER BY (if any) lives
+     * inside it, so the query-level sortClause and the junk sort-key targetList
+     * entries are dropped. */
+    sub->targetList = list_make1(makeTargetEntry(
+      (Expr *)agg, 1, innerte->resname ? pstrdup(innerte->resname) : NULL,
+      false));
+    sub->sortClause = NIL;
+    sub->hasAggs = true;
+    sl->subLinkType = EXPR_SUBLINK;
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * @brief Collapse a multi-table scalar-subquery body FROM into one derived
+ *        cross-product subquery @c D, so the decorrelation can treat the body as
+ *        @c "SELECT val FROM D WHERE W" with @c D a single tracked subquery.
+ *
+ * Mirror of @c oj_wrap_outer_from, but for the SubLink body: every body relation
+ * must be a tracked base relation and the FROM a comma-join.  @c D exposes every
+ * base user column (@c oj_collect_cols); the body's own (level-0) references are
+ * retargeted to @c D, while the correlated level-1 references to the outer query
+ * are left untouched.  The body WHERE @c W (correlation + inter-table join) stays
+ * in place: it becomes the @c "R LEFT JOIN D" ON clause, and @c get_provenance_attributes
+ * later processes @c D recursively, giving it the @c Q1 ⊗ … ⊗ Qn provenance.
+ */
+static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
+  int rtlen = list_length(sub->rtable);
+  int **pos;
+  Query *D = makeNode(Query);
+  RangeTblEntry *d_rte;
+  RangeTblRef *rtr = makeNode(RangeTblRef);
+  List *d_tl = NIL;
+  oj_wrap_ctx wc;
+  ListCell *lc;
+  int idx, posn = 0;
+
+  if (!sub->jointree || sub->jointree->fromlist == NIL)
+    return false;
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return false;
+  }
+  foreach (lc, sub->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false; /* only a plain comma-join, no explicit JoinExprs */
+  }
+
+  /* D exposes every base user column; record (rtindex,attno) -> D column. */
+  pos = (int **)palloc0((rtlen + 1) * sizeof(int *));
+  idx = 0;
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    oj_cols rc;
+    int j;
+    ++idx;
+    oj_collect_cols(constants, r, &rc);
+    pos[idx] =
+      (int *)palloc0((list_length(r->eref->colnames) + 1) * sizeof(int));
+    for (j = 0; j < rc.n; ++j) {
+      Var *v =
+        makeVar(idx, rc.attno[j], rc.type[j], rc.typmod[j], rc.coll[j], 0);
+      d_tl = lappend(d_tl, makeTargetEntry((Expr *)v, ++posn,
+                                           pstrdup(rc.name[j]), false));
+      pos[idx][rc.attno[j]] = posn;
+    }
+  }
+
+  /* D = SELECT <body base user cols> FROM <body fromlist> (cross product). */
+  D->commandType = CMD_SELECT;
+  D->canSetTag = true;
+  D->rtable = sub->rtable;
+  D->jointree = makeNode(FromExpr);
+  D->jointree->fromlist = sub->jointree->fromlist;
+  D->jointree->quals = NULL;
+  D->targetList = d_tl;
+#if PG_VERSION_NUM >= 160000
+  D->rteperminfos = sub->rteperminfos;
+#endif
+
+  /* Retarget the body's own (level-0) Vars to D; level-1 (outer) Vars stay. */
+  wc.newidx = 1;
+  wc.rtlen = rtlen;
+  wc.pos = pos;
+  wc.target_level = 0;
+  wc.skip = NULL;
+  sub->targetList = (List *)oj_wrap_remap_mut((Node *)sub->targetList, &wc);
+  if (sub->jointree->quals)
+    sub->jointree->quals = oj_wrap_remap_mut(sub->jointree->quals, &wc);
+
+  /* Rebuild the body over D. */
+  d_rte = oj_make_subquery_rte(D);
+  sub->rtable = list_make1(d_rte);
+#if PG_VERSION_NUM >= 160000
+  sub->rteperminfos = NIL;
+#endif
+  rtr->rtindex = 1;
+  sub->jointree->fromlist = list_make1(rtr);
+  return true;
+}
+
+/**
+ * @brief Build the derived single-row aggregate @c D for an UNcorrelated scalar
+ *        subquery body, to be cross-joined into the outer FROM.
+ *
+ * Aggregate body @c "SELECT agg(..) FROM Q [WHERE]" -> @c D is the body itself
+ * (always one row).  Value body @c "SELECT val FROM Q [WHERE]" -> @c D is
+ * @c "SELECT choose(val) FROM Q [WHERE] HAVING count(*) <= 1" -- one row, with
+ * the scalar subquery's at-most-one-row rule baked into the moved subquery.
+ * Returns @c NULL unless the body is an uncorrelated clean SELECT over tracked
+ * base relations (a comma-join is fine; @c D is then an inner join).
+ *
+ * Faithful to ProvSQL aggregates: an empty @c Q yields an empty group, hence a
+ * @c gate_zero row that drops out -- exactly what a hand-written derived
+ * aggregate does; the correlated path's 0-match NULL row is not reconstructed.
+ */
+static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
+                                                  Query *body) {
+  Query *D;
+  TargetEntry *vte;
+  ListCell *lc;
+
+  if (!IsA(body, Query) || body->commandType != CMD_SELECT)
+    return NULL;
+  if (body->groupClause || body->groupingSets || body->distinctClause ||
+      body->setOperations || body->hasWindowFuncs || body->hasSubLinks ||
+      body->limitCount || body->limitOffset || body->cteList ||
+      list_length(body->targetList) != 1)
+    return NULL;
+  if (!body->jointree || body->jointree->fromlist == NIL)
+    return NULL;
+  /* Correlated bodies are the LEFT-JOIN decorrelation's job, not this one. */
+  if (contain_vars_of_level((Node *)body->targetList, 1) ||
+      (body->jointree->quals && contain_vars_of_level(body->jointree->quals, 1)))
+    return NULL;
+  /* Every FROM relation must be a tracked base relation, so D is a processable
+   * tracked subquery (a comma-join is fine -- D is then an inner join). */
+  foreach (lc, body->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return NULL;
+  }
+  foreach (lc, body->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return NULL;
+  }
+
+  vte = (TargetEntry *)linitial(body->targetList);
+
+  if (body->hasAggs) {
+    /* Aggregate body: a single bare aggregate (one row, no grouping). */
+    if (!IsA(vte->expr, Aggref))
+      return NULL;
+    D = (Query *)copyObject(body);
+  } else {
+    /* Value body: pick the single value with choose(), gate the >1-row worlds
+     * with HAVING count(*) <= 1. */
+    Aggref *cnt;
+    OpExpr *le;
+    Oid le_op;
+
+    if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
+      return NULL;
+    D = (Query *)copyObject(body);
+    vte = (TargetEntry *)linitial(D->targetList);
+    vte->expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                       exprType((Node *)vte->expr),
+                                       exprType((Node *)vte->expr), vte->expr);
+    D->hasAggs = true;
+
+    cnt = makeNode(Aggref);
+    cnt->aggfnoid = F_COUNT_; /* count(*) */
+    cnt->aggtype = INT8OID;
+    cnt->aggtranstype = InvalidOid;
+    cnt->aggargtypes = NIL;
+    cnt->args = NIL;
+    cnt->aggstar = true;
+    cnt->aggkind = AGGKIND_NORMAL;
+    cnt->aggsplit = AGGSPLIT_SIMPLE;
+    cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+    cnt->aggno = cnt->aggtransno = -1;
+#endif
+    le = makeNode(OpExpr);
+    le_op = OpernameGetOprid(list_make1(makeString("<=")), INT8OID, INT8OID);
+    le->opno = le_op;
+    le->opfuncid = get_opcode(le_op);
+    le->opresulttype = BOOLOID;
+    le->opcollid = InvalidOid;
+    le->inputcollid = InvalidOid;
+    le->args = list_make2(cnt, makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                         Int64GetDatum(1), false,
+                                         FLOAT8PASSBYVAL));
+    le->location = -1;
+    D->havingQual = (Node *)le;
+  }
+  return D;
+}
+
+/** @brief Is @p sub an uncorrelated clean SELECT over tracked base relations (a
+ *  comma-join is fine)?  The targetList is not inspected (callers replace it). */
+static bool oj_uncorrelated_body_over_tracked(const constants_t *constants,
+                                              Query *sub) {
+  ListCell *lc;
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT)
+    return false;
+  if (sub->groupClause || sub->groupingSets || sub->distinctClause ||
+      sub->setOperations || sub->hasWindowFuncs || sub->hasSubLinks ||
+      sub->limitCount || sub->limitOffset || sub->cteList)
+    return false;
+  if (!sub->jointree || sub->jointree->fromlist == NIL)
+    return false;
+  if (contain_vars_of_level((Node *)sub->targetList, 1) ||
+      (sub->jointree->quals && contain_vars_of_level(sub->jointree->quals, 1)))
+    return false; /* correlated */
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+      return false;
+  }
+  foreach (lc, sub->jointree->fromlist) {
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false;
+  }
+  return true;
+}
+
+/** @brief A fresh @c count(*) @c Aggref (returns @c int8). */
+static Aggref *oj_make_count_star(void) {
+  Aggref *cnt = makeNode(Aggref);
+  cnt->aggfnoid = F_COUNT_;
+  cnt->aggtype = INT8OID;
+  cnt->aggtranstype = InvalidOid;
+  cnt->aggargtypes = NIL;
+  cnt->args = NIL;
+  cnt->aggstar = true;
+  cnt->aggkind = AGGKIND_NORMAL;
+  cnt->aggsplit = AGGSPLIT_SIMPLE;
+  cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+  cnt->aggno = cnt->aggtransno = -1;
+#endif
+  return cnt;
+}
+
+/** @brief Build the one-row @c "SELECT 1 FROM <body FROM> HAVING <pred>" gated
+ *  subquery: @p body supplies the FROM (and any uncorrelated WHERE), @p pred the
+ *  aggregate comparison that becomes its provenance. */
+static Query *oj_having_gated_subquery(Query *body, Node *pred) {
+  Query *D = (Query *)copyObject(body);
+  D->targetList = list_make1(makeTargetEntry(
+    (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32), Int32GetDatum(1),
+                      false, true),
+    1, pstrdup("exists"), false));
+  D->havingQual = pred;
+  D->hasAggs = true;
+  return D;
+}
+
+/**
+ * @brief Handle UNcorrelated @c EXISTS and uncorrelated aggregate comparisons in
+ *        WHERE by cross-joining a HAVING-gated one-row subquery.
+ *
+ * @c EXISTS (SELECT … FROM Q) -> @c "SELECT 1 FROM Q HAVING count(*) >= 1";
+ * @c "(SELECT agg(..) FROM Q) OP v" (v not referencing the outer) ->
+ * @c "SELECT 1 FROM Q HAVING agg(..) OP v".  The gated @c D is appended to the
+ * FROM, so the conjunct's truth becomes @c "R ⊗ [predicate]" -- ProvSQL's HAVING
+ * annotates (the one aggregate row is always materialised, gated), so no
+ * actual-instance row is needed.  Faithful to ProvSQL aggregates: the empty-Q
+ * world drops (so @c NOT @c EXISTS, satisfied only by the empty group, is left
+ * rejected).  Correlated predicates are handled by @c rewrite_predicate_sublinks.
+ */
+static bool move_uncorrelated_where_predicates(const constants_t *constants,
+                                               Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals)
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    Query *D = NULL;
+
+    if (IsA(c, SubLink) && ((SubLink *)c)->subLinkType == EXISTS_SUBLINK &&
+        IsA(((SubLink *)c)->subselect, Query) &&
+        oj_uncorrelated_body_over_tracked(constants,
+                                          (Query *)((SubLink *)c)->subselect)) {
+      /* EXISTS -> HAVING count(*) >= 1. */
+      OpExpr *ge = makeNode(OpExpr);
+      Oid o = OpernameGetOprid(list_make1(makeString(">=")), INT8OID, INT8OID);
+      ge->opno = o;
+      ge->opfuncid = get_opcode(o);
+      ge->opresulttype = BOOLOID;
+      ge->opcollid = InvalidOid;
+      ge->inputcollid = InvalidOid;
+      ge->args = list_make2(oj_make_count_star(),
+                            makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                      Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+      ge->location = -1;
+      D = oj_having_gated_subquery((Query *)((SubLink *)c)->subselect,
+                                   (Node *)ge);
+    } else if (IsA(c, OpExpr) && list_length(((OpExpr *)c)->args) == 2) {
+      OpExpr *op = (OpExpr *)c;
+      Node *l = (Node *)linitial(op->args), *r = (Node *)lsecond(op->args);
+      SubLink *sl = NULL;
+      Node *val = NULL;
+      bool sublink_left = false;
+
+      if (IsA(l, SubLink)) {
+        sl = (SubLink *)l;
+        val = r;
+        sublink_left = true;
+      } else if (IsA(r, SubLink)) {
+        sl = (SubLink *)r;
+        val = l;
+      }
+      if (sl != NULL && sl->subLinkType == EXPR_SUBLINK &&
+          IsA(sl->subselect, Query)) {
+        Query *sub = (Query *)sl->subselect;
+        if (sub->hasAggs && list_length(sub->targetList) == 1 &&
+            IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref) &&
+            oj_uncorrelated_body_over_tracked(constants, sub) &&
+            !contain_vars_of_level(val, 0)) {
+          /* (agg) OP v -> HAVING agg OP v, the aggregate copied from the body. */
+          Node *agg =
+            copyObject((Node *)((TargetEntry *)linitial(sub->targetList))->expr);
+          OpExpr *pred = (OpExpr *)copyObject((Node *)op);
+          pred->args = sublink_left ? list_make2(agg, copyObject(val))
+                                    : list_make2(copyObject(val), agg);
+          D = oj_having_gated_subquery(sub, (Node *)pred);
+        } else if (!sub->hasAggs && list_length(sub->targetList) == 1 &&
+                   !((TargetEntry *)linitial(sub->targetList))->resjunk &&
+                   OidIsValid(constants->OID_FUNCTION_CHOOSE) &&
+                   oj_uncorrelated_body_over_tracked(constants, sub) &&
+                   !contain_vars_of_level(val, 0)) {
+          /* (value) OP v -> HAVING (choose(value) OP v) AND count(*) <= 1.  The
+           * scalar subquery's single value is picked by choose() and compared;
+           * count(*) <= 1 enforces the at-most-one-row rule.  Empty Q gives
+           * choose() = NULL (the comparison is NULL, so the gated row drops --
+           * matching SQL's NULL-valued scalar subquery); the >1-row world (a SQL
+           * runtime error) is gated out by count(*) <= 1. */
+          Expr *bodyval = ((TargetEntry *)linitial(sub->targetList))->expr;
+          Aggref *ch = oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                      exprType((Node *)bodyval),
+                                      exprType((Node *)bodyval),
+                                      (Expr *)copyObject((Node *)bodyval));
+          OpExpr *cmp = (OpExpr *)copyObject((Node *)op);
+          Oid leo = OpernameGetOprid(list_make1(makeString("<=")), INT8OID,
+                                     INT8OID);
+          OpExpr *le1 = makeNode(OpExpr);
+
+          cmp->args = sublink_left ? list_make2(ch, copyObject(val))
+                                   : list_make2(copyObject(val), ch);
+          le1->opno = leo;
+          le1->opfuncid = get_opcode(leo);
+          le1->opresulttype = BOOLOID;
+          le1->opcollid = InvalidOid;
+          le1->inputcollid = InvalidOid;
+          le1->args =
+            list_make2(oj_make_count_star(),
+                       makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                 Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+          le1->location = -1;
+          D = oj_having_gated_subquery(
+            sub, (Node *)makeBoolExpr(AND_EXPR, list_make2(cmp, le1), -1));
+        }
+      }
+    }
+
+    if (D != NULL) {
+      RangeTblEntry *d_rte = oj_make_subquery_rte(D);
+      RangeTblRef *rtr = makeNode(RangeTblRef);
+      q->rtable = lappend(q->rtable, d_rte);
+      rtr->rtindex = list_length(q->rtable);
+      q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+      changed = true; /* the conjunct is now carried by D's HAVING gate */
+    } else {
+      newconjs = lappend(newconjs, c);
+    }
+  }
+
+  if (changed) {
+    oj_sublink_scan scan;
+    q->jointree->quals =
+      (newconjs == NIL)
+        ? NULL
+        : (list_length(newconjs) == 1 ? (Node *)linitial(newconjs)
+                                      : (Node *)makeBoolExpr(AND_EXPR, newconjs,
+                                                             -1));
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 0;
+    scan.found_var = NULL;
+    oj_sublink_scan_walker((Node *)q->targetList, &scan);
+    if (q->jointree->quals)
+      oj_sublink_scan_walker(q->jointree->quals, &scan);
+    if (scan.n_sublinks == 0)
+      q->hasSubLinks = false;
+  }
+  return changed;
+}
+
+/** @brief Build the @c "<cnt> <op> const" OpExpr for an antijoin's HAVING, where
+ *  @p cnt is a @c count aggregate (@c count(*) or @c count(col)). */
+static OpExpr *oj_count_const_cmp(Oid opno, Oid inputcollid, Aggref *cnt,
+                                  Node *constarg) {
+  OpExpr *op = makeNode(OpExpr);
+  op->opno = opno;
+  op->opfuncid = get_opcode(opno);
+  op->opresulttype = BOOLOID;
+  op->opcollid = InvalidOid;
+  op->inputcollid = inputcollid;
+  op->args = list_make2(cnt, copyObject(constarg));
+  op->location = -1;
+  return op;
+}
+
+/** @brief Does @c 0 satisfy the @c int8 comparison @c "0 <opno> c"?  Detects
+ *  @c count(*) predicates that hold on the empty group (so the HAVING-gate would
+ *  drop them and the antijoin construction is needed instead). */
+static bool oj_zero_satisfies(Oid opno, Const *c) {
+  return DatumGetBool(OidFunctionCall2Coll(get_opcode(opno), c->constcollid,
+                                           Int64GetDatum(0), c->constvalue));
+}
+
+/**
+ * @brief Rewrite an uncorrelated WHERE predicate that is satisfied by the empty
+ *        group -- @c NOT @c EXISTS, or @c "(SELECT count(*) FROM Q) <op> const"
+ *        with @c "0 <op> const" true (e.g. @c "< k", @c "<= k", @c "= 0") -- into
+ *        the EXCEPT-ALL antijoin.
+ *
+ * Such a predicate is @c "NOT P" for a @c P that is FALSE on the empty group
+ * (@c EXISTS, @c count(*) @c >= @c k…), so it is the m-semiring antijoin
+ * @c "R ⊗ (1 ⊖ ⟦P⟧)".  We materialise @c ⟦P⟧ as the one-row HAVING-gated subquery
+ * @c D = @c "SELECT 1 FROM Q [WHERE w] HAVING count(*) <negated op> const"
+ * (count(*) always yields a row, so @c ⟦P⟧ is correctly captured even when the
+ * group is empty), then take the difference @c "R EXCEPT ALL π_R(R × D)" via
+ * @c oj_build_diff -- ProvSQL's NOT-IN EXCEPT-ALL, giving each kept tuple
+ * @c "R(r) ⊖ (R(r) ⊗ ⟦P⟧) = R(r) ⊗ (1 ⊖ ⟦P⟧)", multiplicity preserved and correct
+ * in every semiring.
+ *
+ * Runs before @c rewrite_predicate_sublinks / @c move_uncorrelated_where_predicates:
+ * those would instead push the raw predicate into a HAVING-gate, whose empty
+ * group is @c gate_zero -- dropping exactly the world this predicate selects (a
+ * silent under-count: @c count(*)=0 → p=0, @c count(*)<2 → @c P(=1) not @c P(≤1)).
+ */
+static bool rewrite_uncorrelated_antijoin(const constants_t *constants,
+                                          Query *q) {
+  Node *quals;
+  List *conjs, *newconjs = NIL;
+  ListCell *lc;
+  RangeTblRef *r_ref;
+  RangeTblEntry *R_rte;
+  Index R_idx;
+  Query *q_body = NULL;  /* the uncorrelated Q body of the matched predicate */
+  Node *neg_having = NULL; /* the false-on-empty count(*) predicate for D */
+  Query *Diff;
+  RangeTblEntry *d_rte;
+  oj_cols Rc, Dc;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree ||
+      !q->jointree->quals || q->setOperations)
+    return false;
+  if (list_length(q->jointree->fromlist) != 1 ||
+      !IsA(linitial(q->jointree->fromlist), RangeTblRef))
+    return false;
+  r_ref = (RangeTblRef *)linitial(q->jointree->fromlist);
+  R_idx = r_ref->rtindex;
+  R_rte = list_nth_node(RangeTblEntry, q->rtable, R_idx - 1);
+  if (R_rte->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, R_rte))
+    return false;
+
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+
+    if (q_body == NULL && IsA(c, BoolExpr) &&
+        ((BoolExpr *)c)->boolop == NOT_EXPR &&
+        list_length(((BoolExpr *)c)->args) == 1) {
+      /* NOT EXISTS(Q)  ==  NOT (count(*) >= 1). */
+      Node *inner = (Node *)linitial(((BoolExpr *)c)->args);
+      if (IsA(inner, SubLink) &&
+          ((SubLink *)inner)->subLinkType == EXISTS_SUBLINK &&
+          IsA(((SubLink *)inner)->subselect, Query) &&
+          oj_uncorrelated_body_over_tracked(
+            constants, (Query *)((SubLink *)inner)->subselect)) {
+        Oid ge = OpernameGetOprid(list_make1(makeString(">=")), INT8OID,
+                                  INT8OID);
+        q_body = (Query *)((SubLink *)inner)->subselect;
+        neg_having = (Node *)oj_count_const_cmp(
+          ge, InvalidOid, oj_make_count_star(),
+          (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                            Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+        continue; /* drop this conjunct -- carried by the antijoin */
+      }
+    } else if (q_body == NULL && IsA(c, OpExpr) &&
+               list_length(((OpExpr *)c)->args) == 2) {
+      /* (SELECT count(*) FROM Q) <op> const, when 0 <op> const is true. */
+      OpExpr *op = (OpExpr *)c;
+      Node *l = (Node *)linitial(op->args), *r = (Node *)lsecond(op->args);
+      /* count(*) is int8 on the left (so 0::int8 is the right empty value for
+       * oj_zero_satisfies); the literal may be int4 or int8 (PG has cross-type
+       * int8/int4 comparison operators, so it is not coerced). */
+      if (IsA(l, SubLink) && IsA(r, Const) && !((Const *)r)->constisnull &&
+          exprType(l) == INT8OID) {
+        SubLink *sl = (SubLink *)l;
+        Oid neg;
+        if (sl->subLinkType == EXPR_SUBLINK && IsA(sl->subselect, Query)) {
+          Query *s = (Query *)sl->subselect;
+          TargetEntry *te = (list_length(s->targetList) == 1)
+                              ? (TargetEntry *)linitial(s->targetList)
+                              : NULL;
+          Aggref *cnt = (te && IsA(te->expr, Aggref)) ? (Aggref *)te->expr
+                                                      : NULL;
+          /* count(*) (F_COUNT_) or count(col) (F_COUNT_ANY): both return 0 on
+           * the empty group, so a predicate true at 0 needs the antijoin.  D's
+           * HAVING reuses the original count aggregate (so count(col)'s NULL
+           * semantics are preserved). */
+          if (cnt &&
+              (cnt->aggfnoid == F_COUNT_ || cnt->aggfnoid == F_COUNT_ANY) &&
+              oj_uncorrelated_body_over_tracked(constants, s) &&
+              oj_zero_satisfies(op->opno, (Const *)r) &&
+              OidIsValid((neg = get_negator(op->opno)))) {
+            q_body = s;
+            neg_having = (Node *)oj_count_const_cmp(
+              neg, op->inputcollid, (Aggref *)copyObject(cnt), r);
+            continue;
+          }
+        }
+      }
+    }
+    newconjs = lappend(newconjs, c);
+  }
+  if (q_body == NULL)
+    return false;
+
+  /* D = SELECT 1 FROM <Q body> HAVING <false-on-empty count(*) predicate>. */
+  d_rte = oj_make_subquery_rte(oj_having_gated_subquery(q_body, neg_having));
+  oj_collect_cols(constants, R_rte, &Rc);
+  oj_collect_cols(constants, d_rte, &Dc);
+
+  /* Diff = R EXCEPT ALL π_R(R × D)  =  R(r) ⊗ (1 ⊖ ⟦P⟧).  D is a self-contained
+   * subquery, so oj_build_diff copies it into the matched arm (no outer perms). */
+  Diff = oj_build_diff(constants, q, R_rte, d_rte, R_idx,
+                       R_idx /* S_idx unused: theta is NULL */, &Rc, &Dc, NULL,
+                       true /* keep_left */);
+  lfirst(list_nth_cell(q->rtable, R_idx - 1)) =
+    (void *)oj_make_subquery_rte(Diff);
+
+  q->jointree->quals =
+    (newconjs == NIL)
+      ? NULL
+      : (list_length(newconjs) == 1
+           ? (Node *)linitial(newconjs)
+           : (Node *)makeBoolExpr(AND_EXPR, newconjs, -1));
+  {
+    oj_sublink_scan scan;
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 0;
+    scan.found_var = NULL;
+    oj_sublink_scan_walker((Node *)q->targetList, &scan);
+    if (q->jointree->quals)
+      oj_sublink_scan_walker(q->jointree->quals, &scan);
+    if (scan.n_sublinks == 0)
+      q->hasSubLinks = false;
+  }
+  return true;
+}
+
+/**
+ * @brief Move uncorrelated scalar subqueries that are direct target-list entries
+ *        into a cross-joined derived aggregate in the outer FROM.
+ *
+ * An uncorrelated @c (SELECT agg/val FROM Q …) is a single constant value: it
+ * becomes a one-row derived table @c D (see @c oj_build_uncorrelated_from_subquery)
+ * appended to the FROM as a cross-join, and the target entry is replaced by a Var
+ * to @c D's column.  Restricted to a direct target-list entry so the (aggregate)
+ * @c agg_token flows straight to the output column: nesting it inside arithmetic
+ * would coerce the @c agg_token to a scalar and silently drop its provenance.
+ * Runs before @c decorrelate_scalar_sublinks; correlated sublinks (and ones in
+ * other positions) are left untouched for the remaining paths.
+ */
+static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
+                                               Query *q) {
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || !q->jointree)
+    return false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    SubLink *sl;
+    Query *D;
+    RangeTblEntry *d_rte;
+    RangeTblRef *rtr;
+    TargetEntry *dte;
+    Index d_idx;
+
+    if (!IsA(te->expr, SubLink))
+      continue;
+    sl = (SubLink *)te->expr;
+    if (sl->subLinkType != EXPR_SUBLINK || !IsA(sl->subselect, Query))
+      continue;
+    D = oj_build_uncorrelated_from_subquery(constants, (Query *)sl->subselect);
+    if (D == NULL)
+      continue;
+
+    d_rte = oj_make_subquery_rte(D);
+    rtr = makeNode(RangeTblRef);
+    dte = (TargetEntry *)linitial(D->targetList);
+    q->rtable = lappend(q->rtable, d_rte);
+    d_idx = list_length(q->rtable);
+    rtr->rtindex = d_idx;
+    q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+    te->expr = (Expr *)makeVar(d_idx, 1, exprType((Node *)dte->expr),
+                               exprTypmod((Node *)dte->expr),
+                               exprCollation((Node *)dte->expr), 0);
+    changed = true;
+  }
+
+  if (changed) {
+    oj_sublink_scan scan;
+    /* Some correlated sublinks may remain; clear hasSubLinks only if none do. */
+    scan.n_sublinks = 0;
+    scan.found_sublink = NULL;
+    scan.target_varno = 0;
+    scan.found_var = NULL;
+    oj_sublink_scan_walker((Node *)q->targetList, &scan);
+    if (q->jointree->quals)
+      oj_sublink_scan_walker(q->jointree->quals, &scan);
+    if (scan.n_sublinks == 0)
+      q->hasSubLinks = false;
+  }
+  return changed;
+}
+
+/** @brief Is @p limitCount the literal 1?  Unwraps the @c int4->int8 coercion
+ *  PostgreSQL wraps a @c "LIMIT 1" literal in. */
+static bool oj_limit_count_is_one(Node *limitCount) {
+  Node *n = limitCount;
+  Const *c;
+  if (n == NULL)
+    return false;
+  if (IsA(n, FuncExpr) && list_length(((FuncExpr *)n)->args) == 1)
+    n = (Node *)linitial(((FuncExpr *)n)->args);
+  if (IsA(n, RelabelType))
+    n = (Node *)((RelabelType *)n)->arg;
+  if (!IsA(n, Const) || ((Const *)n)->constisnull)
+    return false;
+  c = (Const *)n;
+  if (c->consttype == INT8OID)
+    return DatumGetInt64(c->constvalue) == 1;
+  if (c->consttype == INT4OID)
+    return DatumGetInt32(c->constvalue) == 1;
+  if (c->consttype == INT2OID)
+    return DatumGetInt16(c->constvalue) == 1;
+  return false;
+}
+
+/**
+ * @brief Can two scalar-subquery bodies share a single decorrelating LEFT JOIN?
+ *
+ * True when both are plain value bodies (no aggregate / DISTINCT / ORDER BY /
+ * LIMIT) over the same single relation @c Q with the same correlation @c WHERE,
+ * differing only in the one selected value.  Then a single @c "R ⟕ Q ON corr"
+ * group serves both: one @c count(Q.key) @c <= @c 1 gate, a @c choose() per
+ * sublink.  Used to decorrelate several correlated target-list sublinks that
+ * share a @c (Q, @c corr) -- e.g. @c "(SELECT Q.x WHERE Q.k=R.k),
+ * (SELECT Q.y WHERE Q.k=R.k)" -- in one pass.
+ */
+/** @brief @c equal() on two single-RTE rtables, ignoring per-RTE ACL fields.
+ *
+ * Before PostgreSQL 16 the permission bookkeeping (@c requiredPerms,
+ * @c selectedCols…) lived inside @c RangeTblEntry, so two sublink bodies
+ * over the same @c Q differing only in the selected value column would
+ * spuriously compare unequal (their @c selectedCols differ).  PG16 moved
+ * those fields out into @c Query.rteperminfos and a plain @c equal()
+ * suffices. */
+static bool oj_rtables_coalescible(List *rta, List *rtb) {
+#if PG_VERSION_NUM >= 160000
+  return equal(rta, rtb);
+#else
+  RangeTblEntry *a = (RangeTblEntry *)copyObject(linitial(rta));
+  RangeTblEntry *b = (RangeTblEntry *)copyObject(linitial(rtb));
+  a->requiredPerms = b->requiredPerms = 0;
+  a->checkAsUser = b->checkAsUser = InvalidOid;
+  a->selectedCols = b->selectedCols = NULL;
+  a->insertedCols = b->insertedCols = NULL;
+  a->updatedCols = b->updatedCols = NULL;
+#if PG_VERSION_NUM >= 120000
+  a->extraUpdatedCols = b->extraUpdatedCols = NULL;
+#endif
+  return equal(a, b);
+#endif
+}
+
+static bool oj_sub_bodies_coalescible(Query *a, Query *b) {
+  if (a->hasAggs || b->hasAggs || a->distinctClause || b->distinctClause ||
+      a->sortClause || b->sortClause || a->limitCount || b->limitCount ||
+      a->limitOffset || b->limitOffset)
+    return false;
+  if (list_length(a->targetList) != 1 || list_length(b->targetList) != 1 ||
+      list_length(a->rtable) != 1 || list_length(b->rtable) != 1)
+    return false;
+  return oj_rtables_coalescible(a->rtable, b->rtable) &&
+         equal(a->jointree, b->jointree);
+}
+
+/**
+ * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
+ *
+ * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
+ * relation R, with exactly one SubLink in the whole query, that SubLink being
+ * an @c EXPR_SUBLINK that is the direct expression of a target-list entry,
+ * whose body is @c "SELECT val FROM Q [WHERE corr]" over a single base relation
+ * Q referencing only Q (level 0) and R (level 1).  Returns @c true if the
+ * query was rewritten in place.
+ */
+static bool decorrelate_scalar_sublinks(const constants_t *constants,
+                                        Query *q) {
+  RangeTblRef *r_ref;
+  Index R_idx, Q_idx, join_idx;
+  RangeTblEntry *R_rte, *Q_rte_orig, *Q_copy, *jrte;
+  Query *sub;
+  SubLink *sl = NULL;
+  TargetEntry *sl_te = NULL;
+  Expr *valexpr;
+  Node *theta;
+  oj_cols Rc, Qc;
+  oj_decorr_ctx dctx;
+  oj_sublink_scan scan;
+  ListCell *lc;
+  int i, n_tl_sublinks = 0;
+  bool in_where = false;
+  bool is_agg_body = false;
+  bool is_limit1 = false; /* ORDER BY … LIMIT 1 value body: argmax via choose */
+  bool is_distinct = false; /* SELECT DISTINCT body: count(DISTINCT v) <= 1 gate */
+  bool coalesce = false; /* >1 target-list sublinks sharing one (Q, corr) */
+  List *co_sls = NIL, *co_tes = NIL; /* parallel: each sublink + its target entry */
+  Expr *repl_expr; /* what replaces the SubLink: choose(val) or the aggregate */
+
+  if (!OidIsValid(constants->OID_FUNCTION_CHOOSE))
+    return false;
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks)
+    return false;
+  if (q->groupClause || q->groupingSets || q->hasAggs || q->distinctClause ||
+      q->setOperations || q->havingQual || q->hasWindowFuncs)
+    return false;
+  if (!q->jointree || q->jointree->fromlist == NIL)
+    return false;
+
+  /* Exactly one SubLink in the whole query.  It is either the direct expr of a
+   * target-list entry (its value flows to choose()), or it sits inside a WHERE
+   * conjunct (a comparison that will be lifted to HAVING on choose()). */
+  scan.n_sublinks = 0;
+  scan.found_sublink = NULL;
+  scan.target_varno = 0;
+  scan.found_var = NULL;
+  oj_sublink_scan_walker((Node *)q->targetList, &scan);
+  n_tl_sublinks = scan.n_sublinks;
+  if (q->jointree->quals)
+    oj_sublink_scan_walker(q->jointree->quals, &scan);
+
+  /* Several correlated target-list sublinks sharing one (Q, corr) coalesce onto
+   * a single LEFT JOIN: every one a direct EXPR_SUBLINK target entry, all bodies
+   * coalescible (same Q + correlation, differing only in the value).  Then below
+   * builds one R ⟕ Q group with a choose() per sublink and a single count gate. */
+  if (scan.n_sublinks > 1) {
+    Query *rep = NULL;
+    if (n_tl_sublinks != scan.n_sublinks)
+      return false; /* a WHERE sublink in the mix: not coalescible */
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      SubLink *e;
+      if (te->expr == NULL || !IsA(te->expr, SubLink))
+        continue; /* plain column / expression: kept as a GROUP BY key below */
+      e = (SubLink *)te->expr;
+      if (e->subLinkType != EXPR_SUBLINK || !IsA(e->subselect, Query))
+        return false;
+      if (rep == NULL)
+        rep = (Query *)e->subselect;
+      else if (!oj_sub_bodies_coalescible(rep, (Query *)e->subselect))
+        return false;
+      co_sls = lappend(co_sls, e);
+      co_tes = lappend(co_tes, te);
+    }
+    /* All sublinks must be direct target entries (none nested in an expression). */
+    if (list_length(co_sls) != scan.n_sublinks)
+      return false;
+    coalesce = true;
+    sl = (SubLink *)linitial(co_sls);
+    sl_te = (TargetEntry *)linitial(co_tes);
+  } else {
+  if (scan.n_sublinks != 1)
+    return false;
+  sl = scan.found_sublink;
+  if (sl == NULL || sl->subLinkType != EXPR_SUBLINK ||
+      !IsA(sl->subselect, Query))
+    return false;
+
+  /* Is it a direct target-list entry?  Otherwise it must be in WHERE; a
+   * SubLink nested inside a target-list expression (arithmetic, comparison)
+   * is not supported. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->expr == (Expr *)sl) {
+      sl_te = te;
+      break;
+    }
+  }
+  if (sl_te == NULL) {
+    if (n_tl_sublinks > 0)
+      return false; /* nested in a target-list expression */
+    in_where = true;
+    /* A WHERE SubLink must be a direct operand of a comparison (its value is
+     * lifted to a HAVING cmp gate on choose()).  If it is nested inside
+     * arithmetic -- (SELECT …) + 1 > k -- the comparison cannot be lifted; bail
+     * so the caller passes the sublink through with a warning instead. */
+    {
+      List *direct = NIL;
+      collect_direct_qual_sublinks(q->jointree->quals, &direct);
+      if (!list_member_ptr(direct, sl))
+        return false;
+    }
+  }
+  } /* end single-sublink branch */
+
+  /* The body must be SELECT val FROM Q [WHERE corr], Q a single base rel, where
+   * val is either a plain value (decorrelated with choose() + count(...)<=1) or
+   * a single bare aggregate (decorrelated to that aggregate over the LEFT-JOIN
+   * group, no count gate).  LIMIT / OFFSET would pick a bounded, order-dependent
+   * subset and a CTE would be dropped; reject those. */
+  sub = (Query *)sl->subselect;
+  if (sub->commandType != CMD_SELECT || sub->groupClause ||
+      sub->groupingSets || sub->setOperations || sub->hasWindowFuncs ||
+      sub->hasSubLinks || sub->limitOffset || sub->cteList)
+    return false;
+  /* SELECT DISTINCT v: the at-most-one-row rule counts distinct VALUES, so the
+   * gate becomes count(DISTINCT v) <= 1 (admitting many rows of one value).  Not
+   * combined with an aggregate body or LIMIT. */
+  if (sub->distinctClause != NIL) {
+    if (sub->hasDistinctOn || sub->hasAggs || sub->limitCount)
+      return false;
+    is_distinct = true;
+  }
+  /* LIMIT: a bare LIMIT picks an arbitrary row (rejected), but an ORDER BY …
+   * LIMIT 1 value body is the argmax -- decorrelated to choose(val ORDER BY key)
+   * with no count gate (LIMIT 1 never errors on >1 rows). */
+  if (sub->limitCount) {
+    if (!sub->sortClause || sub->hasAggs ||
+        !oj_limit_count_is_one(sub->limitCount))
+      return false;
+    is_limit1 = true;
+  }
+  /* Exactly one non-junk output column (the scalar value); ORDER BY adds junk
+   * sort-key entries, which become the choose aggregate's order arguments. */
+  {
+    int nreal = 0;
+    ListCell *tlc;
+    foreach (tlc, sub->targetList)
+      if (!((TargetEntry *)lfirst(tlc))->resjunk)
+        ++nreal;
+    if (nreal != 1 || ((TargetEntry *)linitial(sub->targetList))->resjunk)
+      return false;
+  }
+  if (sub->hasAggs &&
+      !IsA(((TargetEntry *)linitial(sub->targetList))->expr, Aggref))
+    return false; /* aggregate body must be a single bare aggregate */
+  is_agg_body = sub->hasAggs;
+  if (!sub->jointree || sub->jointree->fromlist == NIL)
+    return false;
+  /* A multi-table body (Q1, Q2, … in FROM) is collapsed into a single derived
+   * cross-product subquery D, after which the body is "SELECT val FROM D WHERE
+   * W" -- the single-Q path below handles D exactly as it handles a subquery R. */
+  if (list_length(sub->rtable) != 1 && !oj_wrap_body_from(constants, sub))
+    return false;
+  if (list_length(sub->jointree->fromlist) != 1 ||
+      !IsA(linitial(sub->jointree->fromlist), RangeTblRef))
+    return false;
+  Q_rte_orig = list_nth_node(RangeTblEntry, sub->rtable, 0);
+  if ((Q_rte_orig->rtekind != RTE_RELATION &&
+       !(Q_rte_orig->rtekind == RTE_SUBQUERY && !Q_rte_orig->lateral)) ||
+      !oj_rte_has_provsql(constants, Q_rte_orig))
+    return false;
+
+  /* Determine R.  If the outer FROM is already a single tracked relation or
+   * (non-lateral) subquery, use it directly; otherwise wrap the whole FROM into
+   * a derived subquery R' (the subquery-arm lowering then handles R' LEFT JOIN
+   * Q either way). */
+  R_rte = NULL;
+  if (list_length(q->jointree->fromlist) == 1 &&
+      IsA(linitial(q->jointree->fromlist), RangeTblRef)) {
+    r_ref = (RangeTblRef *)linitial(q->jointree->fromlist);
+    R_rte = list_nth_node(RangeTblEntry, q->rtable, r_ref->rtindex - 1);
+    if ((R_rte->rtekind == RTE_RELATION ||
+         (R_rte->rtekind == RTE_SUBQUERY && !R_rte->lateral)) &&
+        oj_rte_has_provsql(constants, R_rte))
+      R_idx = r_ref->rtindex;
+    else
+      R_rte = NULL;
+  }
+  if (R_rte == NULL) {
+    /* The coalesce path re-finds many sublink target entries; the outer-FROM
+     * wrap only re-finds one.  Restrict coalesce to a single base R (the common
+     * case); a wrap-needing R with several sublinks stays for a later pass. */
+    if (coalesce)
+      return false;
+    if (!oj_wrap_outer_from(constants, q, sl, in_where))
+      return false;
+    R_idx = 1;
+    R_rte = list_nth_node(RangeTblEntry, q->rtable, 0);
+    sub = (Query *)sl->subselect; /* remapped in place by the wrap */
+    /* The wrap rebuilt the target list (the SubLink node itself is preserved),
+     * so re-find the target entry that still carries the SubLink. */
+    sl_te = NULL;
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->expr == (Expr *)sl) {
+        sl_te = te;
+        break;
+      }
+    }
+  }
+
+  /* The correlation normally references some Q column (so count() has a key
+   * that is NULL on the null-padded antijoin rows).  A bare body with no
+   * Q-referencing WHERE at all is fine when it is a non-star aggregate --
+   * e.g. "(SELECT max(x) FROM Q) > R.col", whose comparison lifts to HAVING
+   * over the R ⟕ Q ON TRUE group below: such a body needs no key (no
+   * at-most-one-row gate, no count(*) -> count(Q.key) rewrite, and the
+   * aggregate ignores the null-padded row by itself).  Value bodies (count
+   * gates) and count(*) (key rewrite) do need a genuine Q column: decline. */
+  scan.n_sublinks = 0;
+  scan.target_varno = 1; /* Q is at index 1 inside the body */
+  scan.found_var = NULL;
+  if (sub->jointree->quals)
+    oj_sublink_scan_walker(sub->jointree->quals, &scan);
+  if (scan.found_var == NULL &&
+      (!is_agg_body ||
+       ((Aggref *)((TargetEntry *)linitial(sub->targetList))->expr)->aggstar))
+    return false;
+
+  /* ---- Commit: pull Q up, build the LEFT JOIN, choose() + GROUP BY + count.
+   * R stays at R_idx, Q is appended (Q_idx), join RTE appended (join_idx). ---*/
+  oj_collect_cols(constants, R_rte, &Rc);
+  oj_collect_cols(constants, Q_rte_orig, &Qc);
+
+  Q_copy = copyObject(Q_rte_orig);
+#if PG_VERSION_NUM >= 160000
+  if (Q_rte_orig->perminfoindex != 0) {
+    RTEPermissionInfo *pi =
+      getRTEPermissionInfo(sub->rteperminfos, Q_rte_orig);
+    q->rteperminfos = lappend(q->rteperminfos, copyObject(pi));
+    Q_copy->perminfoindex = list_length(q->rteperminfos);
+  }
+#endif
+  q->rtable = lappend(q->rtable, Q_copy);
+  Q_idx = list_length(q->rtable);
+
+  /* Move the body's Vars to the outer level: Q(level0,1) -> (level0, Q_idx);
+   * correlated R(level1) -> (level0). */
+  dctx.q_old = 1;
+  dctx.q_new = Q_idx;
+  theta = oj_decorr_var_mut(copyObject(sub->jointree->quals), &dctx);
+  valexpr = (Expr *)oj_decorr_var_mut(
+    copyObject((Node *)((TargetEntry *)linitial(sub->targetList))->expr),
+    &dctx);
+
+  /* Build the synthetic join RTE (eref / joinaliasvars / left/right cols), the
+   * same bookkeeping the deparser needs as in oj_build_join_query. */
+  {
+    List *av = NIL, *lcols = NIL, *rcols = NIL, *cn = NIL;
+    jrte = makeNode(RangeTblEntry);
+    for (i = 0; i < Rc.n; ++i) {
+      av = lappend(av, makeVar(R_idx, Rc.attno[i], Rc.type[i], Rc.typmod[i],
+                               Rc.coll[i], 0));
+      lcols = lappend_int(lcols, Rc.attno[i]);
+      rcols = lappend_int(rcols, 0);
+      cn = lappend(cn, makeString(pstrdup(Rc.name[i])));
+    }
+    for (i = 0; i < Qc.n; ++i) {
+      av = lappend(av, makeVar(Q_idx, Qc.attno[i], Qc.type[i], Qc.typmod[i],
+                               Qc.coll[i], 0));
+      lcols = lappend_int(lcols, 0);
+      rcols = lappend_int(rcols, Qc.attno[i]);
+      cn = lappend(cn, makeString(pstrdup(Qc.name[i])));
+    }
+    jrte->rtekind = RTE_JOIN;
+    jrte->jointype = JOIN_LEFT;
+    jrte->alias = NULL;
+    jrte->eref = makeAlias("unnamed_join", cn);
+    jrte->joinaliasvars = av;
+#if PG_VERSION_NUM >= 130000
+    jrte->joinleftcols = lcols;
+    jrte->joinrightcols = rcols;
+    jrte->joinmergedcols = 0;
+#endif
+    jrte->inFromCl = true;
+    q->rtable = lappend(q->rtable, jrte);
+    join_idx = list_length(q->rtable);
+  }
+
+  {
+    JoinExpr *je = makeNode(JoinExpr);
+    RangeTblRef *lr = makeNode(RangeTblRef), *rr = makeNode(RangeTblRef);
+    lr->rtindex = R_idx;
+    rr->rtindex = Q_idx;
+    je->jointype = JOIN_LEFT;
+    je->larg = (Node *)lr;
+    je->rarg = (Node *)rr;
+    je->quals = theta;
+    je->isNatural = false;
+    je->usingClause = NIL;
+    je->rtindex = join_idx;
+    q->jointree->fromlist = list_make1(je);
+    /* Any pre-existing outer WHERE (over R, level 0) stays in jointree->quals.*/
+  }
+
+  /* What replaces the SubLink, over the LEFT-JOIN group:
+   *  - value body  -> choose(val) picks the single matched value;
+   *  - aggregate body -> the aggregate itself.  count(*) is rewritten to
+   *    count(Q.key) so the null-padded antijoin row (Q.key IS NULL) is not
+   *    counted -- an empty correlated group must give 0, not 1.
+   * For a target-list SubLink it replaces the entry directly; for a WHERE
+   * SubLink it is substituted into the conjunct, which moves to HAVING. */
+  if (is_agg_body) {
+    Aggref *agg = (Aggref *)valexpr; /* the remapped body aggregate */
+    if (agg->aggstar) {
+      Var *qkey = (Var *)copyObject(scan.found_var);
+      qkey->varno = Q_idx;
+#if PG_VERSION_NUM >= 130000
+      qkey->varnosyn = 0;
+      qkey->varattnosyn = 0;
+#endif
+      repl_expr = (Expr *)oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype,
+                                         (Expr *)qkey);
+    } else {
+      repl_expr = valexpr;
+    }
+  } else if (is_limit1) {
+    /* ORDER BY … LIMIT 1 = argmax: choose(val ORDER BY key).  The subselect's
+     * targetList (the value plus junk sort-key entries) and its sortClause map
+     * directly onto the ordered Aggref's args / aggorder; remap each arg's Q
+     * vars to the pulled-up Q.  No count gate -- LIMIT 1 always takes one row. */
+    Aggref *agg = makeNode(Aggref);
+    List *new_args = NIL;
+    ListCell *alc;
+    foreach (alc, sub->targetList) {
+      TargetEntry *te = (TargetEntry *)copyObject(lfirst(alc));
+      te->expr = (Expr *)oj_decorr_var_mut((Node *)te->expr, &dctx);
+      new_args = lappend(new_args, te);
+    }
+    agg->aggfnoid = constants->OID_FUNCTION_CHOOSE;
+    agg->aggtype = exprType((Node *)valexpr);
+    agg->aggtranstype = InvalidOid;
+    agg->aggargtypes = list_make1_oid(exprType((Node *)valexpr));
+    agg->args = new_args;
+    agg->aggorder = (List *)copyObject((Node *)sub->sortClause);
+    agg->aggkind = AGGKIND_NORMAL;
+    agg->aggsplit = AGGSPLIT_SIMPLE;
+    agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+    agg->aggno = agg->aggtransno = -1;
+#endif
+    repl_expr = (Expr *)agg;
+  } else {
+    repl_expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                       exprType((Node *)valexpr),
+                                       exprType((Node *)valexpr), valexpr);
+  }
+  if (coalesce) {
+    /* Each coalesced sublink gets its own choose() over the shared group: remap
+     * its body's value to the pulled-up Q and replace its target entry.  (The
+     * representative's repl_expr above is recomputed here as the first item, so
+     * the bodies all use the identical Q/correlation remap.) */
+    ListCell *la, *lb;
+    forboth(la, co_sls, lb, co_tes) {
+      SubLink *sli = (SubLink *)lfirst(la);
+      TargetEntry *tei = (TargetEntry *)lfirst(lb);
+      Expr *vi = (Expr *)oj_decorr_var_mut(
+        copyObject(
+          (Node *)((TargetEntry *)linitial(((Query *)sli->subselect)->targetList))
+            ->expr),
+        &dctx);
+      tei->expr = (Expr *)oj_make_aggref(constants->OID_FUNCTION_CHOOSE,
+                                         exprType((Node *)vi),
+                                         exprType((Node *)vi), vi);
+    }
+  } else if (!in_where)
+    sl_te->expr = repl_expr;
+
+  /* GROUP BY every R user column: each needs a target-list entry carrying a
+   * ressortgroupref plus a SortGroupClause. */
+  {
+    int sgref = 0;
+    /* Highest existing ressortgroupref, so new ones do not collide. */
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->ressortgroupref > sgref)
+        sgref = te->ressortgroupref;
+    }
+    for (i = 0; i < Rc.n; ++i) {
+      TargetEntry *gte = NULL;
+      SortGroupClause *sgc;
+      ListCell *lc2;
+
+      /* Reuse an existing target entry that already projects this R column. */
+      foreach (lc2, q->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc2);
+        if (IsA(te->expr, Var)) {
+          Var *v = (Var *)te->expr;
+          if (v->varlevelsup == 0 && v->varno == R_idx &&
+              v->varattno == Rc.attno[i]) {
+            gte = te;
+            break;
+          }
+        }
+      }
+      if (gte == NULL) {
+        Var *v = makeVar(R_idx, Rc.attno[i], Rc.type[i], Rc.typmod[i],
+                         Rc.coll[i], 0);
+        gte = makeTargetEntry((Expr *)v, list_length(q->targetList) + 1,
+                              pstrdup(Rc.name[i]), true /* resjunk */);
+        q->targetList = lappend(q->targetList, gte);
+      }
+      if (gte->ressortgroupref == 0)
+        gte->ressortgroupref = ++sgref;
+      sgc = makeNode(SortGroupClause);
+      sgc->tleSortGroupRef = gte->ressortgroupref;
+      get_sort_group_operators(Rc.type[i], false, true, false, &sgc->sortop,
+                               &sgc->eqop, NULL, &sgc->hashable);
+      q->groupClause = lappend(q->groupClause, sgc);
+    }
+  }
+
+  /* HAVING.  A value body adds count(Q.key) <= 1 (Q.key NULL on the null-padded
+   * antijoin rows), enforcing the scalar subquery's at-most-one-row rule; an
+   * aggregate body -- and an ORDER BY … LIMIT 1 (argmax) body, which legally
+   * takes the top of many rows -- needs no such gate.  When the SubLink came from
+   * a WHERE comparison, that conjunct (with the SubLink replaced) is ANDed in --
+   * a comparison on the aggregated value belongs in HAVING. */
+  {
+    List *having_conjuncts = NIL;
+
+    if (!is_agg_body && !is_limit1) {
+      /* SELECT DISTINCT v counts distinct VALUES (count(DISTINCT v) <= 1); a
+       * plain value body counts matching rows (count(Q.key) <= 1). */
+      having_conjuncts = list_make1(
+        is_distinct ? oj_count_distinct_cmp(valexpr, "<=", 1)
+                    : oj_count_cmp((Var *)scan.found_var, Q_idx, "<=", 1));
+      /* A WHERE comparison must test an actual subquery value, so the correlated
+       * group has to be non-empty: count(…) = 1, not merely <= 1.  An empty
+       * group would give a NULL comparison (the row is excluded), but the value
+       * gate over the all-NULL aggregate does not encode that, so the >= 1 gate
+       * supplies it.  (A target-list subquery keeps <= 1 only: zero matches is a
+       * legal NULL value, and the row still exists.) */
+      if (in_where)
+        having_conjuncts = lappend(
+          having_conjuncts,
+          is_distinct ? oj_count_distinct_cmp(valexpr, ">=", 1)
+                      : oj_count_cmp((Var *)scan.found_var, Q_idx, ">=", 1));
+    }
+
+    if (in_where) {
+      /* Split the WHERE AND-list: the conjunct holding the SubLink (with the
+       * SubLink -> repl_expr substitution) moves to HAVING; the rest stay. */
+      oj_sl_replace_ctx rc;
+      Node *quals = q->jointree->quals;
+      List *conjs =
+        (quals && IsA(quals, BoolExpr) &&
+         ((BoolExpr *)quals)->boolop == AND_EXPR)
+          ? ((BoolExpr *)quals)->args
+          : (quals ? list_make1(quals) : NIL);
+      List *kept = NIL;
+      ListCell *lc2;
+
+      rc.target = sl;
+      rc.replacement = (Node *)repl_expr;
+      foreach (lc2, conjs) {
+        Node *c = (Node *)lfirst(lc2);
+        if (oj_contains_sublink_walker(c, sl))
+          having_conjuncts =
+            lappend(having_conjuncts, oj_sl_replace_mut(c, &rc));
+        else
+          kept = lappend(kept, c);
+      }
+      q->jointree->quals =
+        (kept == NIL) ? NULL
+                      : (list_length(kept) == 1 ? (Node *)linitial(kept)
+                                                : (Node *)makeBoolExpr(
+                                                    AND_EXPR, kept, -1));
+    }
+
+    q->havingQual =
+      (having_conjuncts == NIL)
+        ? NULL
+        : (list_length(having_conjuncts) == 1
+             ? (Node *)linitial(having_conjuncts)
+             : (Node *)makeBoolExpr(AND_EXPR, having_conjuncts, -1));
+  }
+
+  q->hasAggs = true;
+  q->hasSubLinks = false;
+  return true;
+}
+
+/**
+ * @brief Group the right-hand arm of a set difference by all its columns so
+ *        the per-tuple right provenances ⊕-combine before the monus.
+ *
+ * ProvSQL's multiset difference implements the NOT-IN semantics of the ICDE
+ * 2026 paper (§IV-B):
+ * @code
+ *   ⟪q₁ − q₂⟫ = {{ (u, α ⊖ ⊕_{β : (u,β)∈q₂} β)  |  (u,α) ∈ q₁ }}
+ * @endcode
+ * The sum @c ⊕β ranges over ALL right tuples equal to @c u, so the right arm
+ * must be grouped by its columns first.  Without that,
+ * @c transform_except_into_join's bare @c LEFT @c JOIN emits one monus per
+ * matching right tuple (yielding @c ⊕(α⊖βᵢ) instead of @c α⊖⊕β) and inflates
+ * the result multiplicity -- the long-standing "add group by in the right-side
+ * table" gap.  Wrapping the still-raw right arm in
+ * @code
+ *   SELECT cols FROM (rarg) GROUP BY cols
+ * @endcode
+ * makes the later @c get_provenance_attributes / group-by pass build @c ⊕β per
+ * group and gives the right arm exactly one row per distinct @c u.
+ *
+ * Runs before provenance discovery, on the @c SETOP_EXCEPT query (for the
+ * non-ALL case, on the @c all=true inner set operation that
+ * @c rewrite_non_all_into_external_group_by leaves behind).  It applies equally
+ * to @c EXCEPT (@c ε(q₁−q₂)) and @c EXCEPT @c ALL (@c q₁−q₂): the only
+ * difference between them, duplicate elimination of the left arm, is handled
+ * separately by the non-ALL outer GROUP BY.
+ */
+static void group_set_difference_right_arm(const constants_t *constants,
+                                           Query *q) {
+  SetOperationStmt *so;
+  RangeTblRef *rarg_ref;
+  RangeTblEntry *rarg_rte;
+  Query *origB, *G;
+  RangeTblEntry *w_rte;
+  RangeTblRef *rtr;
+  FromExpr *fe;
+  List *tl = NIL;
+  ListCell *lc;
+  int colno = 0, sgref = 0;
+  bool any_group = false;
+
+  (void)constants;
+
+  if (q->setOperations == NULL || !IsA(q->setOperations, SetOperationStmt))
+    return;
+  so = (SetOperationStmt *)q->setOperations;
+  if (so->op != SETOP_EXCEPT)
+    return;
+  /* Chained difference (rarg is itself a SetOperationStmt) is rejected later
+   * by transform_except_into_join; leave it untouched here. */
+  if (!IsA(so->rarg, RangeTblRef))
+    return;
+  rarg_ref = (RangeTblRef *)so->rarg;
+  rarg_rte = list_nth_node(RangeTblEntry, q->rtable, rarg_ref->rtindex - 1);
+  if (rarg_rte->rtekind != RTE_SUBQUERY || rarg_rte->subquery == NULL)
+    return;
+  origB = rarg_rte->subquery;
+
+  /* Already a single-row-per-group shape?  (Our own outer-join antijoin builds
+   * the right arm pre-grouped.)  Re-grouping is harmless but pointless, so skip
+   * when the arm already carries a groupClause. */
+  if (origB->groupClause != NIL || origB->groupingSets != NIL)
+    return;
+
+  G = makeNode(Query);
+  G->commandType = CMD_SELECT;
+  G->canSetTag = true;
+  w_rte = oj_make_subquery_rte(origB);
+  G->rtable = list_make1(w_rte);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  fe = makeNode(FromExpr);
+  fe->fromlist = list_make1(rtr);
+  G->jointree = fe;
+
+  colno = 0;
+  foreach (lc, origB->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Var *v;
+    TargetEntry *nte;
+    SortGroupClause *sgc;
+    Oid coltype;
+
+    ++colno;
+    if (te->resjunk)
+      continue;
+
+    coltype = exprType((Node *)te->expr);
+    v = makeVar(1, colno, coltype, exprTypmod((Node *)te->expr),
+                exprCollation((Node *)te->expr), 0);
+    nte = makeTargetEntry((Expr *)v, list_length(tl) + 1,
+                          te->resname ? pstrdup(te->resname) : NULL, false);
+
+    /* Group by every column (a UUID provsql column would already have been
+     * rejected upstream; raw arms expose only value columns here). */
+    sgc = makeNode(SortGroupClause);
+    sgc->tleSortGroupRef = nte->ressortgroupref = ++sgref;
+    get_sort_group_operators(coltype, false, true, false, &sgc->sortop,
+                             &sgc->eqop, NULL, &sgc->hashable);
+    G->groupClause = lappend(G->groupClause, sgc);
+    any_group = true;
+
+    tl = lappend(tl, nte);
+  }
+  G->targetList = tl;
+
+  if (!any_group)
+    return; /* nothing to group on; leave the arm unchanged */
+
+  rarg_rte->subquery = G;
+}
+
 /**
  * @brief Recursively annotate a UNION tree with the provenance UUID type.
  *
@@ -3707,41 +7938,24 @@ static Node *add_to_havingQual(Node *havingQual, Expr *expr)
  */
 static bool check_selection_on_aggregate(OpExpr *op, const constants_t *constants)
 {
-  bool ok=true;
-  bool found_agg_token=false;
+  int agg_sides = 0;
 
   if(op->args->length != 2)
     return false;
 
   for(unsigned i=0; i<2; ++i) {
     Node *arg = lfirst(list_nth_cell(op->args, i));
-
-    // Check both arguments are either an aggtoken or a constant
-    // (possibly after a cast)
-    if((IsA(arg, Var) && ((Var*)arg)->vartype==constants->OID_TYPE_AGG_TOKEN)) {
-      found_agg_token=true;
-    } else if(IsA(arg, Const)) {
-    } else if(IsA(arg, FuncExpr)) {
-      FuncExpr *fe = (FuncExpr*) arg;
-      if(fe->funcformat != COERCE_IMPLICIT_CAST && fe->funcformat != COERCE_EXPLICIT_CAST) {
-        ok=false;
-        break;
-      }
-      if(fe->args->length != 1) {
-        ok=false;
-        break;
-      }
-      if(!IsA(lfirst(list_head(fe->args)), Const)) {
-        ok=false;
-        break;
-      }
-    } else {
-      ok=false;
-      break;
-    }
+    if(expr_contains_agg(arg, constants))
+      agg_sides++;
+    /* The other side may be any aggregate-free expression: the threshold. */
   }
 
-  return ok && found_agg_token;
+  /* At least one aggregate side.  Constant arithmetic over a single aggregate
+   * is folded into the threshold (normalize_agg_comparison); anything else
+   * (agg-vs-agg, products of aggregates, c/agg, ...) is resolved by the
+   * possible-worlds enumeration in having_semantics, which leaves the gate
+   * unresolved -- a clean error -- if it cannot handle the shape. */
+  return agg_sides >= 1;
 }
 
 /**
@@ -3831,14 +8045,14 @@ static void build_column_map(Query *q, int **columns, int *nbcols) {
     ListCell *lc;
 
     columns[i] = 0;
-    if (r->eref) {
+    if (r->eref && r->eref->colnames != NIL) {
       unsigned j = 0;
 
-      columns[i] = (int *)palloc(r->eref->colnames->length * sizeof(int));
+      columns[i] = (int *)palloc(list_length(r->eref->colnames) * sizeof(int));
 
       foreach (lc, r->eref->colnames) {
         if (!lfirst(lc)) {
-          /* Column without name — used e.g. when grouping by a discarded column */
+          /* Column without name – used e.g. when grouping by a discarded column */
           columns[i][j] = ++(*nbcols);
         } else {
           const char *v = strVal(lfirst(lc));
@@ -4170,6 +8384,12 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     return NULL;
 
   if (IsA(node, OpExpr)) {
+    /* Arithmetic over an agg_token Var (e.g. cnt+1 where cnt comes from a
+     * subquery aggregate) is kept as an agg_token (gate_arith) rather than
+     * cast to scalar, preserving provenance. */
+    Node *swapped = try_swap_agg_arith((OpExpr *)node, ctx->constants);
+    if (swapped != NULL)
+      return swapped;
     cast_agg_token_args(((OpExpr *)node)->args, ctx);
     return (Node *)node;
   }
@@ -4200,6 +8420,607 @@ static void insert_agg_token_casts(const constants_t *constants, Query *q) {
   insert_agg_token_casts_context ctx = {q, constants};
   query_tree_mutator(q, insert_agg_token_casts_mutator, &ctx,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+}
+
+/** @brief Context for @c join_qual_has_agg_token_walker. */
+typedef struct join_qual_agg_token_ctx {
+  const constants_t *constants; ///< Extension OID cache
+  Index *rteid;                 ///< Out: varno of the agg_token Var
+  AttrNumber *join_attno;       ///< Out: attno of the agg_token Var
+} join_qual_agg_token_ctx;
+
+static bool join_qual_has_agg_token_walker(Node *node,
+                                           join_qual_agg_token_ctx *ctx)
+{
+  if (node == NULL)
+    return false;
+  if (IsA(node, OpExpr)) {
+    OpExpr *oe = (OpExpr *) node;
+    Node *left = (Node *) linitial(oe->args);
+    Node *right = (Node *) lsecond(oe->args);
+
+    /* Unwrap casts */
+    if (IsA(left, FuncExpr) &&
+        (((FuncExpr *)left)->funcformat == COERCE_IMPLICIT_CAST ||
+         ((FuncExpr *)left)->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(((FuncExpr *)left)->args) == 1)
+      left = linitial(((FuncExpr *)left)->args);
+    if (IsA(right, FuncExpr) &&
+        (((FuncExpr *)right)->funcformat == COERCE_IMPLICIT_CAST ||
+         ((FuncExpr *)right)->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(((FuncExpr *)right)->args) == 1)
+      right = linitial(((FuncExpr *)right)->args);
+
+    if (IsA(left, Var) && IsA(right, Var)) {
+      Var *left_var = (Var *)left;
+      Var *right_var = (Var *)right;
+      if (left_var->vartype == ctx->constants->OID_TYPE_AGG_TOKEN &&
+          right_var->vartype != ctx->constants->OID_TYPE_AGG_TOKEN) {
+        *ctx->rteid = left_var->varno;
+        *ctx->join_attno = left_var->varattno;
+        return true;
+      }
+      if (right_var->vartype == ctx->constants->OID_TYPE_AGG_TOKEN &&
+          left_var->vartype != ctx->constants->OID_TYPE_AGG_TOKEN) {
+        *ctx->rteid = right_var->varno;
+        *ctx->join_attno = right_var->varattno;
+        return true;
+      }
+    }
+  }
+  return expression_tree_walker(node, join_qual_has_agg_token_walker,
+                                (void *) ctx);
+}
+
+/**
+ * @brief Return true if @p node contains an @c OpExpr that equates an
+ *        @c agg_token @c Var with a non-@c agg_token @c Var.
+ *
+ * On a match, writes the agg_token Var's @c varno and @c varattno to
+ * @p *rteid and @p *join_attno.  Used to detect JOIN conditions that
+ * require the @c rewrite_join_agg_token rewrite.
+ *
+ * @param node        Expression tree to inspect.
+ * @param constants   Extension OID cache.
+ * @param rteid       Out: varno of the agg_token Var (unchanged on miss).
+ * @param join_attno  Out: attno of the agg_token Var (unchanged on miss).
+ * @return            True iff such an @c OpExpr was found.
+ */
+static bool join_qual_has_agg_token(Node *node, const constants_t *constants,
+                                    Index *rteid, AttrNumber *join_attno)
+{
+  join_qual_agg_token_ctx ctx;
+  ctx.constants   = constants;
+  ctx.rteid       = rteid;
+  ctx.join_attno  = join_attno;
+  return join_qual_has_agg_token_walker(node, &ctx);
+}
+
+/**
+ * @brief Build an AST node for <tt>arr[idx]</tt> on a uuid[] expression.
+ *
+ * Wraps the version rename between @c ArrayRef (PG < 12) and
+ * @c SubscriptingRef (PG 12+), and the addition of @c refrestype (PG 14+).
+ *
+ * @param arr_expr   Expression evaluating to @c uuid[].
+ * @param index      1-based element position.
+ * @param constants  Extension OID cache.
+ * @return           Subscripting node with result type @c uuid.
+ */
+static Node *make_uuid_array_subscript(Node *arr_expr, int index,
+                                       const constants_t *constants)
+{
+  Const *idx = makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                         Int32GetDatum(index), false, true);
+#if PG_VERSION_NUM >= 120000
+  SubscriptingRef *sub = makeNode(SubscriptingRef);
+  sub->refcontainertype = constants->OID_TYPE_UUID_ARRAY;
+  sub->refelemtype      = constants->OID_TYPE_UUID;
+#if PG_VERSION_NUM >= 140000
+  sub->refrestype       = constants->OID_TYPE_UUID;
+#endif
+  sub->reftypmod        = -1;
+  sub->refcollid        = InvalidOid;
+  sub->refupperindexpr  = list_make1(idx);
+  sub->reflowerindexpr  = NIL;
+  sub->refexpr          = (Expr *)arr_expr;
+  sub->refassgnexpr     = NULL;
+  return (Node *)sub;
+#else
+  ArrayRef *sub = makeNode(ArrayRef);
+  sub->refarraytype     = constants->OID_TYPE_UUID_ARRAY;
+  sub->refelemtype      = constants->OID_TYPE_UUID;
+  sub->reftypmod        = -1;
+  sub->refcollid        = InvalidOid;
+  sub->refupperindexpr  = list_make1(idx);
+  sub->reflowerindexpr  = NIL;
+  sub->refexpr          = (Expr *)arr_expr;
+  sub->refassgnexpr     = NULL;
+  return (Node *)sub;
+#endif
+}
+
+/**
+ * @brief Context for @c retype_agg_var_walker.
+ *
+ * Identifies the Var location whose type must flip from @c agg_token
+ * to @c text after the source relation has been replaced by an
+ * explode-style subquery.
+ */
+typedef struct retype_agg_var_ctx {
+  Index rteid;                 ///< Varno of the replaced RTE
+  AttrNumber join_attno;       ///< Attno of the former agg_token column
+  const constants_t *constants;///< Extension OID cache
+} retype_agg_var_ctx;
+
+/**
+ * @brief Walker that retypes agg_token Vars to text and rewrites the
+ *        equality OpExpr to @c text = text with the non-agg side cast via I/O.
+ *
+ * Only affects Vars with @c varlevelsup == 0 matching @c (rteid, join_attno).
+ * Sibling-query subqueries are left untouched via @c QTW_IGNORE_RT_SUBQUERIES
+ * at the top-level call.
+ */
+static bool retype_agg_var_walker(Node *node, retype_agg_var_ctx *ctx)
+{
+  if (node == NULL)
+    return false;
+
+  if (IsA(node, OpExpr)) {
+    OpExpr *oe = (OpExpr *)node;
+    if (list_length(oe->args) == 2) {
+      Node *left  = (Node *)linitial(oe->args);
+      Node *right = (Node *)lsecond(oe->args);
+      Var  *agg_v = NULL;
+      bool agg_on_left = false;
+
+      if (IsA(left, Var)) {
+        Var *v = (Var *)left;
+        if (v->varlevelsup == 0 && v->varno == ctx->rteid &&
+            v->varattno == ctx->join_attno &&
+            v->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+          agg_v = v;
+          agg_on_left = true;
+        }
+      }
+      if (agg_v == NULL && IsA(right, Var)) {
+        Var *v = (Var *)right;
+        if (v->varlevelsup == 0 && v->varno == ctx->rteid &&
+            v->varattno == ctx->join_attno &&
+            v->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+          agg_v = v;
+        }
+      }
+
+      if (agg_v != NULL) {
+        Node *other = agg_on_left ? right : left;
+        Oid text_eq;
+        Operator opInfo;
+        Form_pg_operator opform;
+
+        agg_v->vartype   = TEXTOID;
+        agg_v->varcollid = DEFAULT_COLLATION_OID;
+
+        if (exprType(other) != TEXTOID) {
+          CoerceViaIO *c = makeNode(CoerceViaIO);
+          c->arg          = (Expr *)other;
+          c->resulttype   = TEXTOID;
+          c->resultcollid = DEFAULT_COLLATION_OID;
+          c->coerceformat = COERCE_EXPLICIT_CAST;
+          c->location     = -1;
+          other = (Node *)c;
+        }
+
+        if (agg_on_left)
+          oe->args = list_make2(agg_v, other);
+        else
+          oe->args = list_make2(other, agg_v);
+
+        text_eq = find_equality_operator(TEXTOID, TEXTOID);
+        if (!OidIsValid(text_eq))
+          provsql_error("rewrite_join_agg_token: text = text operator "
+                        "not found");
+        opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(text_eq));
+        if (!HeapTupleIsValid(opInfo))
+          provsql_error("rewrite_join_agg_token: could not look up "
+                        "text equality operator");
+        opform = (Form_pg_operator)GETSTRUCT(opInfo);
+        oe->opno         = text_eq;
+        oe->opfuncid     = opform->oprcode;
+        oe->opresulttype = opform->oprresult;
+        oe->inputcollid  = DEFAULT_COLLATION_OID;
+        ReleaseSysCache(opInfo);
+
+        /* Args handled; skip their subtree walk */
+        return false;
+      }
+    }
+  }
+
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 && v->varno == ctx->rteid &&
+        v->varattno == ctx->join_attno &&
+        v->vartype == ctx->constants->OID_TYPE_AGG_TOKEN) {
+      v->vartype   = TEXTOID;
+      v->varcollid = DEFAULT_COLLATION_OID;
+    }
+    return false;
+  }
+
+  if (IsA(node, Query)) {
+    /* Nested queries address a different rtable; do not descend. */
+    return false;
+  }
+
+  return expression_tree_walker(node, retype_agg_var_walker, (void *)ctx);
+}
+
+/**
+ * @brief Replace the source relation of an agg_token JOIN with an
+ *        explode-style subquery.
+ *
+ * Given a JOIN qual of the form @c rteid.join_attno = other where
+ * @c rteid.join_attno is of type @c agg_token, replaces the RTE at @p rteid
+ * in place with a subquery:
+ *
+ * @code{.sql}
+ *   SELECT t.col_1, ..., t.col_{join_attno-1},
+ *          get_extra(get_children(sm)[2])              AS <agg_col>,
+ *          ...,
+ *          provenance_times(get_children(sm)[1], t.provsql) AS provsql
+ *   FROM <t>, LATERAL unnest(get_children(t.<agg_col>)) AS sm
+ * @endcode
+ *
+ * The subquery preserves the original column order, so outer Vars still
+ * address the same attnos.  The outer query is then walked to retype Vars
+ * at (@p rteid, @p join_attno) from @c agg_token to @c text and rewrite the
+ * equality @c OpExpr to @c text = text (casting the other side via I/O).
+ *
+ * The copy of the source RTE inside the subquery has its @c provsql column
+ * renamed so the recursive @c process_query pass does not re-detect it as a
+ * provenance source – the combined provenance is already captured by the
+ * subquery's exposed @c provsql target entry.
+ *
+ * @param q          Query to rewrite (modified in place).
+ * @param constants  Extension OID cache.
+ * @param rteid      1-based varno of the RTE owning the agg_token column.
+ * @param join_attno 1-based attno of the agg_token column in that RTE.
+ * @return           The modified query.
+ */
+static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
+                                     Index rteid, AttrNumber join_attno)
+{
+  RangeTblEntry *src_rte = (RangeTblEntry *)list_nth(q->rtable, rteid - 1);
+  AttrNumber provsql_attno = 0;
+  AttrNumber attno;
+  ListCell *lc;
+  Query *inner;
+  RangeTblEntry *inner_src, *sm_rte;
+  RangeTblFunction *rtfunc;
+  FuncExpr *unnest_call, *get_children_of_agg, *agg_to_uuid;
+  Var *agg_var_in_inner;
+  Alias *sm_alias, *sm_eref;
+  RangeTblRef *inner_rtr1, *inner_rtr2;
+  FromExpr *inner_jt;
+  List *inner_tl = NIL;
+
+  if (src_rte->rtekind != RTE_RELATION && src_rte->rtekind != RTE_SUBQUERY)
+    provsql_error("rewrite_join_agg_token: source RTE kind %d not supported",
+                  (int)src_rte->rtekind);
+
+  /* Locate the provsql column of the source RTE. */
+  attno = 1;
+  foreach (lc, src_rte->eref->colnames) {
+    if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME)) {
+      provsql_attno = attno;
+      break;
+    }
+    ++attno;
+  }
+  if (provsql_attno == 0)
+    provsql_error("rewrite_join_agg_token: source relation has no "
+                  "provsql column");
+
+  /* --- Build the lateral RTE: unnest(get_children(agg_token_uuid(agg_var))) --- */
+
+  agg_var_in_inner = makeNode(Var);
+  agg_var_in_inner->varno     = 1;
+  agg_var_in_inner->varattno  = join_attno;
+  agg_var_in_inner->vartype   = constants->OID_TYPE_AGG_TOKEN;
+  agg_var_in_inner->varcollid = InvalidOid;
+  agg_var_in_inner->vartypmod = -1;
+  agg_var_in_inner->location  = -1;
+
+  agg_to_uuid = makeNode(FuncExpr);
+  agg_to_uuid->funcid         = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+  agg_to_uuid->funcresulttype = constants->OID_TYPE_UUID;
+  agg_to_uuid->funcretset     = false;
+  agg_to_uuid->funcvariadic   = false;
+  agg_to_uuid->funcformat     = COERCE_IMPLICIT_CAST;
+  agg_to_uuid->funccollid     = InvalidOid;
+  agg_to_uuid->inputcollid    = InvalidOid;
+  agg_to_uuid->args           = list_make1(agg_var_in_inner);
+  agg_to_uuid->location       = -1;
+
+  get_children_of_agg = makeNode(FuncExpr);
+  get_children_of_agg->funcid         = constants->OID_FUNCTION_GET_CHILDREN;
+  get_children_of_agg->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
+  get_children_of_agg->funcretset     = false;
+  get_children_of_agg->funcvariadic   = false;
+  get_children_of_agg->funcformat     = COERCE_EXPLICIT_CALL;
+  get_children_of_agg->funccollid     = InvalidOid;
+  get_children_of_agg->inputcollid    = InvalidOid;
+  get_children_of_agg->args           = list_make1(agg_to_uuid);
+  get_children_of_agg->location       = -1;
+
+  unnest_call = makeNode(FuncExpr);
+  unnest_call->funcid         = constants->OID_UNNEST;
+  unnest_call->funcresulttype = constants->OID_TYPE_UUID;
+  unnest_call->funcretset     = true;
+  unnest_call->funcvariadic   = false;
+  unnest_call->funcformat     = COERCE_EXPLICIT_CALL;
+  unnest_call->funccollid     = InvalidOid;
+  unnest_call->inputcollid    = InvalidOid;
+  unnest_call->args           = list_make1(get_children_of_agg);
+  unnest_call->location       = -1;
+
+  rtfunc = makeNode(RangeTblFunction);
+  rtfunc->funcexpr          = (Node *)unnest_call;
+  rtfunc->funccolcount      = 1;
+  rtfunc->funccolnames      = NIL;
+  rtfunc->funccoltypes      = NIL;
+  rtfunc->funccoltypmods    = NIL;
+  rtfunc->funccolcollations = NIL;
+  rtfunc->funcparams        = NULL;
+
+  sm_alias = makeNode(Alias);
+  sm_eref  = makeNode(Alias);
+  sm_alias->aliasname = "sm";
+  sm_eref->aliasname  = "sm";
+  sm_eref->colnames   = list_make1(makeString("sm"));
+
+  sm_rte = makeNode(RangeTblEntry);
+  sm_rte->rtekind        = RTE_FUNCTION;
+  sm_rte->functions      = list_make1(rtfunc);
+  sm_rte->funcordinality = false;
+  sm_rte->alias          = sm_alias;
+  sm_rte->eref           = sm_eref;
+  sm_rte->lateral        = true;
+  sm_rte->inFromCl       = true;
+#if PG_VERSION_NUM < 160000
+  sm_rte->requiredPerms = 0;
+#endif
+
+  /* --- Inner rtable RTE 1: the source relation (deep copy). --- */
+
+  inner_src = copyObject(src_rte);
+
+  /* Rename the provsql column in the inner RTE's eref so the recursive
+   * process_query pass does not re-detect it as a provenance source.  The
+   * combined provenance is already captured by the subquery's exposed
+   * provsql TargetEntry below. */
+  hide_provsql_colname(inner_src);
+
+  inner_rtr1 = makeNode(RangeTblRef);
+  inner_rtr1->rtindex = 1;
+  inner_rtr2 = makeNode(RangeTblRef);
+  inner_rtr2->rtindex = 2;
+  inner_jt = makeNode(FromExpr);
+  inner_jt->fromlist = list_make2(inner_rtr1, inner_rtr2);
+  inner_jt->quals    = NULL;
+
+  /* --- Target list of the inner subquery, preserving original column order. --- */
+
+  attno = 1;
+  foreach (lc, src_rte->eref->colnames) {
+    const char *colname = strVal(lfirst(lc));
+    TargetEntry *te = makeNode(TargetEntry);
+    te->resno   = attno;
+    te->resname = pstrdup(colname);
+    te->resjunk = false;
+
+    if (attno == join_attno) {
+      /* get_extra(get_children(sm)[2]) */
+      Var *sm_var = makeNode(Var);
+      FuncExpr *gch, *ge;
+      Node *subscript;
+
+      sm_var->varno     = 2;
+      sm_var->varattno  = 1;
+      sm_var->vartype   = constants->OID_TYPE_UUID;
+      sm_var->varcollid = InvalidOid;
+      sm_var->vartypmod = -1;
+      sm_var->location  = -1;
+
+      gch = makeNode(FuncExpr);
+      gch->funcid         = constants->OID_FUNCTION_GET_CHILDREN;
+      gch->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
+      gch->funcretset     = false;
+      gch->funcvariadic   = false;
+      gch->funcformat     = COERCE_EXPLICIT_CALL;
+      gch->funccollid     = InvalidOid;
+      gch->inputcollid    = InvalidOid;
+      gch->args           = list_make1(sm_var);
+      gch->location       = -1;
+
+      subscript = make_uuid_array_subscript((Node *)gch, 2, constants);
+
+      ge = makeNode(FuncExpr);
+      ge->funcid         = constants->OID_FUNCTION_GET_EXTRA;
+      ge->funcresulttype = TEXTOID;
+      ge->funcretset     = false;
+      ge->funcvariadic   = false;
+      ge->funcformat     = COERCE_EXPLICIT_CALL;
+      ge->funccollid     = DEFAULT_COLLATION_OID;
+      ge->inputcollid    = InvalidOid;
+      ge->args           = list_make1(subscript);
+      ge->location       = -1;
+
+      te->expr = (Expr *)ge;
+    } else if (attno == provsql_attno) {
+      /* provenance_times(get_children(sm)[1], t.provsql) – VARIADIC uuid[] */
+      Var *sm_var = makeNode(Var);
+      Var *prov_var = makeNode(Var);
+      FuncExpr *gch, *pt;
+      ArrayExpr *arr;
+      Node *subscript;
+
+      sm_var->varno     = 2;
+      sm_var->varattno  = 1;
+      sm_var->vartype   = constants->OID_TYPE_UUID;
+      sm_var->varcollid = InvalidOid;
+      sm_var->vartypmod = -1;
+      sm_var->location  = -1;
+
+      gch = makeNode(FuncExpr);
+      gch->funcid         = constants->OID_FUNCTION_GET_CHILDREN;
+      gch->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
+      gch->funcretset     = false;
+      gch->funcvariadic   = false;
+      gch->funcformat     = COERCE_EXPLICIT_CALL;
+      gch->funccollid     = InvalidOid;
+      gch->inputcollid    = InvalidOid;
+      gch->args           = list_make1(sm_var);
+      gch->location       = -1;
+
+      subscript = make_uuid_array_subscript((Node *)gch, 1, constants);
+
+      prov_var->varno     = 1;
+      prov_var->varattno  = provsql_attno;
+      prov_var->vartype   = constants->OID_TYPE_UUID;
+      prov_var->varcollid = InvalidOid;
+      prov_var->vartypmod = -1;
+      prov_var->location  = -1;
+
+      arr = makeNode(ArrayExpr);
+      arr->array_typeid   = constants->OID_TYPE_UUID_ARRAY;
+      arr->element_typeid = constants->OID_TYPE_UUID;
+      arr->elements       = list_make2(subscript, prov_var);
+      arr->location       = -1;
+
+      pt = makeNode(FuncExpr);
+      pt->funcid         = constants->OID_FUNCTION_PROVENANCE_TIMES;
+      pt->funcresulttype = constants->OID_TYPE_UUID;
+      pt->funcretset     = false;
+      pt->funcvariadic   = true;
+      pt->funcformat     = COERCE_EXPLICIT_CALL;
+      pt->funccollid     = InvalidOid;
+      pt->inputcollid    = InvalidOid;
+      pt->args           = list_make1(arr);
+      pt->location       = -1;
+
+      te->expr = (Expr *)pt;
+    } else {
+      /* Passthrough Var(1, attno). */
+      Var *v = makeNode(Var);
+      Oid vtype   = InvalidOid;
+      int32 vtypmod = -1;
+      Oid vcoll   = InvalidOid;
+
+      if (src_rte->rtekind == RTE_RELATION) {
+        get_atttypetypmodcoll(src_rte->relid, attno, &vtype, &vtypmod, &vcoll);
+      } else { /* RTE_SUBQUERY */
+        TargetEntry *sub_te =
+          (TargetEntry *)list_nth(src_rte->subquery->targetList, attno - 1);
+        vtype   = exprType((Node *)sub_te->expr);
+        vtypmod = exprTypmod((Node *)sub_te->expr);
+        vcoll   = exprCollation((Node *)sub_te->expr);
+      }
+
+      v->varno     = 1;
+      v->varattno  = attno;
+      v->vartype   = vtype;
+      v->varcollid = vcoll;
+      v->vartypmod = vtypmod;
+      v->location  = -1;
+      te->expr = (Expr *)v;
+    }
+
+    inner_tl = lappend(inner_tl, te);
+    ++attno;
+  }
+
+  inner = makeNode(Query);
+  inner->commandType = CMD_SELECT;
+  inner->canSetTag   = true;
+  inner->rtable      = list_make2(inner_src, sm_rte);
+  inner->jointree    = inner_jt;
+  inner->targetList  = inner_tl;
+  inner->hasAggs     = false;
+  inner->hasSubLinks = false;
+
+#if PG_VERSION_NUM >= 160000
+  /* PG 16+ moved permission info from RangeTblEntry into a separate
+   * Query.rteperminfos list, indexed by RangeTblEntry.perminfoindex.
+   * Our copy of src_rte kept its original perminfoindex, so the inner
+   * query needs a matching rteperminfos entry – without it, perminfoindex
+   * dangles and the planner short-circuits the subquery. */
+  if (inner_src->perminfoindex != 0) {
+    RTEPermissionInfo *perminfo =
+      getRTEPermissionInfo(q->rteperminfos, src_rte);
+    inner->rteperminfos = list_make1(copyObject(perminfo));
+    inner_src->perminfoindex = 1;
+  }
+#endif
+
+  /* --- Replace src_rte in place with the subquery; outer varnos unchanged. --- */
+
+  src_rte->rtekind     = RTE_SUBQUERY;
+  src_rte->subquery    = inner;
+  src_rte->relid       = InvalidOid;
+  src_rte->relkind     = 0;
+#if PG_VERSION_NUM >= 120000
+  src_rte->rellockmode = 0; /* field added in PG 12 */
+#endif
+  src_rte->inh         = false;
+  src_rte->lateral     = false;
+#if PG_VERSION_NUM >= 160000
+  src_rte->perminfoindex = 0;
+#else
+  src_rte->selectedCols  = NULL;
+  src_rte->insertedCols  = NULL;
+  src_rte->updatedCols   = NULL;
+  src_rte->requiredPerms = ACL_SELECT;
+#endif
+
+  /* Drop the "provsql" entry from the outer RTE's eref->colnames.
+   * get_provenance_attributes will scan the subquery's target list for
+   * a "provsql" TE and reinsert the colname at the matching position,
+   * keeping eref->colnames length in sync with the subquery's target
+   * list.  Without this, the pre-existing "provsql" entry (inherited
+   * from the original relation) plus the reinsertion would produce a
+   * 5-colname list for a 4-column subquery, which PostgreSQL rejects. */
+  {
+    ListCell *cell, *prev;
+    AttrNumber i;
+
+    prev = NULL;
+    i = 1;
+    for (cell = list_head(src_rte->eref->colnames); cell != NULL; ) {
+      if (i == provsql_attno) {
+        src_rte->eref->colnames =
+          my_list_delete_cell(src_rte->eref->colnames, cell, prev);
+        break;
+      }
+      prev = cell;
+      cell = my_lnext(src_rte->eref->colnames, cell);
+      ++i;
+    }
+  }
+
+  /* --- Retype outer Vars (rteid, join_attno) from agg_token to text and
+   *     rewrite the equality OpExpr to text = text. --- */
+  {
+    retype_agg_var_ctx ctx;
+    ctx.rteid      = rteid;
+    ctx.join_attno = join_attno;
+    ctx.constants  = constants;
+    query_tree_walker(q, retype_agg_var_walker, (void *)&ctx,
+                      QTW_IGNORE_RT_SUBQUERIES);
+  }
+
+  return q;
 }
 
 /**
@@ -4845,7 +9666,8 @@ static Query *process_query(const constants_t *constants, Query *q,
   bool supported = true;
   bool group_by_rewrite = false;
   int nbcols = 0;
-  int **columns;
+  int **columns = NULL;
+  int columns_len = 0;
   unsigned i = 0;
   char *inv_cert = NULL;            /* serialised inversion-free certificate (root) */
   const InvFreeMarkerCtx *local_inv_ctx = NULL; /* this query's marker context */
@@ -4949,6 +9771,29 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active)
     inline_ctes(q);
 
+  /* Decorrelate a top-level scalar subquery into a LEFT JOIN + choose() +
+   * GROUP BY + count<=1 HAVING.  Runs before lower_outer_joins so the LEFT JOIN
+   * it produces is lowered with correct outer-join provenance, and before the
+   * "Subqueries not supported" guard further down. */
+  if (provsql_active) {
+    rewrite_array_sublinks(constants, q);
+    normalize_quantified_aggregate_sublinks(constants, q);
+    rewrite_uncorrelated_antijoin(constants, q);
+    rewrite_predicate_sublinks(constants, q);
+    move_uncorrelated_where_predicates(constants, q);
+    move_uncorrelated_sublinks_to_from(constants, q);
+    decorrelate_scalar_sublinks(constants, q);
+  }
+
+  /* Lower a top-level outer JOIN (LEFT / RIGHT / FULL) of two base relations
+   * into the UNION-ALL of its matched and null-padded antijoin arms, so the
+   * non-monotone outer-join provenance (the 0-match world) is captured.  No-op
+   * on every other shape.  Runs before provenance discovery / set-op handling
+   * so the constructed UNION / EXCEPT subqueries are processed by the recursive
+   * passes. */
+  if (provsql_active)
+    lower_outer_joins(constants, q);
+
   {
     Bitmapset *removed_sortgrouprefs = NULL;
 
@@ -4963,15 +9808,13 @@ static Query *process_query(const constants_t *constants, Query *q,
   }
 
   if(provsql_active) {
-    columns = (int **)palloc(q->rtable->length * sizeof(int *));
-
     if (q->setOperations) {
       // TODO: Nest set operations as subqueries in FROM,
       // so that we only do set operations on base tables
 
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
       if (!stmt->all) {
-        /* Check if any branch has aggregates — non-ALL set operations
+        /* Check if any branch has aggregates – non-ALL set operations
          * on aggregate results are not supported because agg_token
          * lacks comparison operators for deduplication */
         ListCell *lc_rte;
@@ -4992,6 +9835,23 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (rewritten)
         return process_query(constants, rewritten, removed, wrap_root, top_level,
                              inv_ctx);
+    }
+
+    /* Rewrite any JOIN on an agg_token column before provenance
+     * discovery, so get_provenance_attributes sees the already-correct
+     * subquery with a proper provsql column. */
+    {
+      Index rteid;
+      AttrNumber join_attno;
+
+      if (join_qual_has_agg_token((Node *)q->jointree, constants, &rteid,
+                                  &join_attno))
+      {
+        Query *rewritten = rewrite_join_agg_token(q, constants, rteid, join_attno);
+        if (rewritten)
+          return process_query(constants, rewritten, removed, wrap_root,
+                               top_level, inv_ctx);
+      }
     }
 
     /* Opt-in safe-query optimisation slot: when on, try to rewrite
@@ -5023,7 +9883,7 @@ static Query *process_query(const constants_t *constants, Query *q,
      * lineage intact and only attaches a transparent certificate + per-input
      * order markers, read back at probability evaluation.  So it is decoupled
      * from boolean_provenance and gated on its own knob (provsql.inversion_free,
-     * default on), run on THIS query — the one whose lineage we build — so the
+     * default on), run on THIS query – the one whose lineage we build – so the
      * certificate and markers align with the lineage by construction.  Only at
      * the outermost (top-level) root the user evaluates; never when the
      * read-once rewrite above already fired (that path returns early). */
@@ -5044,6 +9904,12 @@ static Query *process_query(const constants_t *constants, Query *q,
        * if any marker fails to land on its input. */
       local_inv_ctx = build_inversion_free_ctx(constants, q, &inv_cert);
     }
+
+    /* Set difference (EXCEPT / EXCEPT ALL): group the right arm so the per-row
+     * right provenances ⊕-combine before the monus, giving the paper's NOT-IN
+     * semantics α ⊖ ⊕β.  Must run before get_provenance_attributes processes
+     * the arms. */
+    group_set_difference_right_arm(constants, q);
 
     // get_provenance_attributes will also recursively process subqueries
     // by calling process_query (threading each subquery's marker sub-context)
@@ -5077,9 +9943,28 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
     }
 
-    if (q->hasSubLinks) {
-      provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
-      supported = false;
+    if (q->hasSubLinks && query_has_tracked_sublink(constants, q)) {
+      /* Only sublinks over a provenance-tracked relation are unsupported; one
+       * whose body touches no tracked relation is a deterministic filter/value
+       * and is left for Postgres to evaluate (the row keeps R's provenance).
+       *
+       * Of the tracked ones, a scalar subquery nested inside a larger expression
+       * (arithmetic, a function argument) is not decorrelatable by the current
+       * rewrites, but rather than rejecting it we let it through with a warning:
+       * Postgres evaluates the sublink (the value is correct), the row keeps the
+       * outer relation's provenance, and the subquery's data is treated as
+       * certain.  A tracked sublink still in a direct position (a GROUP BY body, a
+       * multi-relation EXISTS…) is a genuinely unsupported form and still errors. */
+      bool has_direct = false;
+      List *nested = classify_remaining_sublinks(constants, q, &has_direct);
+      if (has_direct || nested == NIL) {
+        provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
+        supported = false;
+      } else {
+        provsql_warning(
+          "scalar subquery nested in an expression is not tracked; its data is "
+          "treated as certain and the result keeps only the outer provenance");
+      }
     }
 
     if (supported && q->distinctClause) {
@@ -5131,8 +10016,16 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
     }
 
-    if (supported)
+    if (supported) {
+      /* Sized here, after every rewrite that can grow q->rtable (scalar-
+       * subquery decorrelation, ARRAY() lowering, outer-join lowering,
+       * EXCEPT / set-operation transforms…).  Sizing it at the top of the
+       * provsql_active block under-allocated once those rewrites added RTEs,
+       * and build_column_map then wrote past the end of the array. */
+      columns_len = q->rtable->length;
+      columns = (int **)palloc0(columns_len * sizeof(int *));
       build_column_map(q, columns, &nbcols);
+    }
 
     if (supported) {
       Expr *provenance;
@@ -5234,7 +10127,10 @@ static Query *process_query(const constants_t *constants, Query *q,
         add_select_non_zero(constants, q, provenance);
     }
 
-    for (i = 0; i < q->rtable->length; ++i) {
+    /* columns is NULL when the query was not supported (build_column_map
+     * never ran); columns_len is its allocation-time length, in case a later
+     * step grew q->rtable again. */
+    for (i = 0; columns != NULL && i < (unsigned)columns_len; ++i) {
       if (columns[i])
         pfree(columns[i]);
     }
@@ -5283,6 +10179,21 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   if (src_rte == NULL)
     return;
 
+  /* Rewrite the source SELECT so its own provenance semantics -- HAVING
+   * lifting, provenance() resolution -- take effect.  This must run whether or
+   * not the target table is provenance-tracked: the old code returned early
+   * (warning, below) when the target had no provsql column, which left the
+   * SELECT's HAVING on the physical rows and provenance() unresolved, so the
+   * INSERT saw zero rows. */
+  {
+    bool *removed = NULL;
+    Query *new_subquery =
+      process_query(constants, src_rte->subquery, &removed, false, false, NULL);
+    if (new_subquery == NULL)
+      return;
+    src_rte->subquery = new_subquery;
+  }
+
   /* Check if the target table has a provsql column */
   tgt_rte = list_nth_node(RangeTblEntry, q->rtable, q->resultRelation - 1);
   if (tgt_rte->rtekind == RTE_RELATION) {
@@ -5296,6 +10207,11 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   }
 
   if (provsql_attno == 0) {
+    /* The target cannot store provenance.  The source SELECT was rewritten
+     * above (so it returns the right rows), but its auto-added provsql column
+     * has no target column to land in -- drop it so the INSERT's column
+     * mapping stays consistent, and warn that provenance is not propagated. */
+    remove_provsql_from_select(src_rte->subquery);
     provsql_warning("INSERT ... SELECT on provenance-tracked "
                     "tables: source provenance is not propagated "
                     "to inserted rows");
@@ -5316,30 +10232,18 @@ static void process_insert_select(const constants_t *constants, Query *q) {
     /* The target's provsql column is not in the INSERT's targetList
      * (no DEFAULT on the column since 1.6.0; the user did not name
      * the column either).  Synthesise a TE so we have something to
-     * substitute the source provsql Var into below.  Do NOT append it
-     * to the targetList yet: its expr is only known once the source
-     * Var has been resolved, and an early return before that point
-     * would leave a NULL-expr TargetEntry the planner later
-     * dereferences (segfault). */
+     * substitute the source provsql Var into below. */
     provsql_te = makeNode(TargetEntry);
     provsql_te->resno = provsql_attno;
     provsql_te->resname = pstrdup(PROVSQL_COLUMN_NAME);
     provsql_te_is_new = true;
   }
 
-  /* Rewrite the source SELECT to carry provenance */
+  /* Map the source's provsql column into the target's provsql column. */
   {
-    bool *removed = NULL;
-    Query *new_subquery = process_query(constants, src_rte->subquery, &removed, false, false, NULL);
     AttrNumber src_provsql_attno = 0;
 
-    if (new_subquery == NULL)
-      return;
-
-    src_rte->subquery = new_subquery;
-
-    /* Find the provsql column in the rewritten subquery, verify its type */
-    foreach (lc, new_subquery->targetList) {
+    foreach (lc, src_rte->subquery->targetList) {
       TargetEntry *te = (TargetEntry *)lfirst(lc);
       if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME) &&
           exprType((Node *)te->expr) == constants->OID_TYPE_UUID) {
@@ -5379,18 +10283,44 @@ static void process_insert_select(const constants_t *constants, Query *q) {
  * ------------------------------------------------------------------------- */
 
 /**
- * @brief PostgreSQL planner hook — entry point for provenance rewriting.
+ * @brief Walker: true if any @c Query in the tree defines a @c provsql column
+ *        by hand.
  *
- * Replaces (or chains after) the standard planner.  For every CMD_SELECT
- * that involves at least one provenance-bearing relation or an explicit
- * @c provenance() call, rewrites the query via @c process_query before
- * handing the result to the standard planner.  Non-SELECT commands and
- * queries without provenance are passed through unchanged.
- * @param q              The query to plan.
- * @param cursorOptions  Cursor options bitmask.
- * @param boundParams    Pre-bound parameter values.
- * @return               The planned statement.
+ * A non-junk target entry resnamed @c provsql whose expression is not a
+ * legitimate uuid-typed @c Var (the passthrough of a tracked relation's
+ * provsql column, which @c remove_provenance_attributes_select strips) is a
+ * hand-made provenance column -- e.g. @c "provenance() AS provsql" or
+ * @c "expr AS provsql".  It collides with the provenance column ProvSQL adds
+ * itself: the output column count desyncs and a later @c Var mis-binds to a
+ * non-uuid column, crashing @c get_gate_type when it dereferences the value as
+ * a pointer.
+ *
+ * Run once on the user's ORIGINAL query in the planner hook, before any
+ * rewriting, so the intermediate queries ProvSQL builds (which legitimately
+ * carry a provsql column) are never visited.
  */
+static bool query_defines_handmade_provsql(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resjunk || te->resname == NULL ||
+          strcmp(te->resname, PROVSQL_COLUMN_NAME))
+        continue;
+      if (IsA(te->expr, Var) &&
+          ((Var *)te->expr)->vartype == constants->OID_TYPE_UUID)
+        continue; /* legitimate passthrough of a real provsql column */
+      return true;
+    }
+    return query_tree_walker(q, query_defines_handmade_provsql, cx, 0);
+  }
+  return expression_tree_walker(node, query_defines_handmade_provsql, cx);
+}
+
 /** @brief Executor nesting depth.
  *
  * Tracks how deep we are inside @c Executor invocations.  Incremented
@@ -5403,6 +10333,19 @@ static void process_insert_select(const constants_t *constants, Query *q) {
  * user's plan, so they see depth >= 1 and skip the NOTICE. */
 static int provsql_executor_depth = 0;
 
+/**
+ * @brief PostgreSQL planner hook – entry point for provenance rewriting.
+ *
+ * Replaces (or chains after) the standard planner.  For every CMD_SELECT
+ * that involves at least one provenance-bearing relation or an explicit
+ * @c provenance() call, rewrites the query via @c process_query before
+ * handing the result to the standard planner.  Non-SELECT commands and
+ * queries without provenance are passed through unchanged.
+ * @param q              The query to plan.
+ * @param cursorOptions  Cursor options bitmask.
+ * @param boundParams    Pre-bound parameter values.
+ * @return               The planned statement.
+ */
 static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                                     const char *query_string,
@@ -5411,8 +10354,13 @@ static PlannedStmt *provsql_planner(Query *q,
                                     ParamListInfo boundParams) {
   if (q->commandType == CMD_INSERT && q->rtable && provsql_active) {
     const constants_t constants = get_constants(false);
-    if (constants.ok)
+    if (constants.ok) {
+      if (provenance_in_sublink_walker((Node *)q, (void *)&constants))
+        provsql_error("a subquery over a provenance-tracked relation cannot be "
+                      "used as a scalar subquery / IN / EXISTS expression; put "
+                      "it in the FROM clause instead");
       process_insert_select(&constants, q);
+    }
   } else if (q->commandType == CMD_SELECT) {
     /* No rtable check here: a FROM-less SELECT (e.g.
      *   SELECT 1 WHERE normal(0,1) > 2)
@@ -5421,6 +10369,16 @@ static PlannedStmt *provsql_planner(Query *q,
      * on FROM-less queries that have neither rv_cmp nor provenance(),
      * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
+
+    /* A subquery over a provenance-tracked relation used in an expression
+     * context (scalar subquery / IN / EXISTS) is not supported -- and would
+     * otherwise slip past has_provenance() (which does not descend into
+     * SubLinks) and leave provenance() to fail at runtime.  Flag it clearly. */
+    if (provsql_active && constants.ok &&
+        provenance_in_sublink_walker((Node *)q, (void *)&constants))
+      provsql_error("a subquery over a provenance-tracked relation cannot be "
+                    "used as a scalar subquery / IN / EXISTS expression; put "
+                    "it in the FROM clause instead");
 
     /* Query-time TID / BID / OPAQUE classifier.  Emits a NOTICE for
      * the user's outermost SELECT when the GUC is on.  Runs on the
@@ -5444,6 +10402,17 @@ static PlannedStmt *provsql_planner(Query *q,
       bool *removed = NULL;
       Query *new_query;
       clock_t begin = 0;
+
+      /* A user query may not define its own provsql column by hand; ProvSQL
+       * manages the provenance column itself.  Checked here, once, on the
+       * original query before any rewriting -- so the intermediate queries the
+       * rewriter builds (which legitimately carry a provsql column) are not
+       * flagged. */
+      if (provsql_active &&
+          query_defines_handmade_provsql((Node *)q, (void *)&constants))
+        provsql_error("a query may not define a column named \"%s\" by hand; "
+                      "ProvSQL manages the provenance column itself",
+                      PROVSQL_COLUMN_NAME);
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
@@ -6102,6 +11071,21 @@ void _PG_init(void) {
                              NULL,
                              NULL,
                              NULL);
+  DefineCustomStringVariable("provsql.last_eval_method",
+                             "Probability evaluation method(s) used by the most "
+                             "recent probability_evaluate call.",
+                             "Set automatically after each probability_evaluate "
+                             "call to the method that produced the result "
+                             "(comma-separated and deduplicated across calls in "
+                             "the session).  Useful to see which strategy the "
+                             "default auto-selection settled on.",
+                             &provsql_last_eval_method,
+                             "",
+                             PGC_USERSET,
+                             0,
+                             NULL,
+                             NULL,
+                             NULL);
   DefineCustomBoolVariable("provsql.simplify_on_load",
                            "Apply universal cmp-resolution passes when "
                            "loading a provenance circuit.",
@@ -6299,6 +11283,24 @@ void _PG_init(void) {
                           NULL,
                           NULL);
 
+  DefineCustomIntVariable("provsql.dtree_max_subproblems",
+                          "Hard cap on d-tree subproblems before it bails (0 = off).",
+                          "Debug / safety knob for the d-tree speculative-execution "
+                          "budget. The cost chooser already budgets the d-tree at the "
+                          "next-best method's estimated cost; when this is > 0 it adds "
+                          "a fixed hard cap on the number of d-tree subproblems, after "
+                          "which the method throws and the chooser escalates to the "
+                          "next method. 0 leaves only the automatic budget.",
+                          &provsql_dtree_max_subproblems,
+                          0,
+                          0,
+                          INT_MAX,
+                          PGC_USERSET,
+                          GUC_NO_SHOW_ALL,
+                          NULL,
+                          NULL,
+                          NULL);
+
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");
 
@@ -6334,7 +11336,7 @@ void _PG_init(void) {
 }
 
 /**
- * @brief Extension teardown — restores the planner and shmem hooks.
+ * @brief Extension teardown – restores the planner and shmem hooks.
  */
 void _PG_fini(void) {
   planner_hook        = prev_planner;

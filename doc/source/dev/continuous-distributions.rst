@@ -340,7 +340,7 @@ circuit, it runs:
    normal-family and uniform-family scaling rules apply),
    shift-and-scale of a single normal through mixtures and
    categoricals, single-child arith roots, semiring-identity drops
-   (``gate_one`` in TIMES, ``gate_zero`` in PLUS, …). The pass is
+   (``gate_one`` in TIMES, ``gate_zero`` in PLUS…). The pass is
    invariant-preserving: every transformation produces a
    semantically equivalent circuit. Out of scope: subtraction
    between two distinct continuous RVs of the same family

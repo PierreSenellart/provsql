@@ -22,12 +22,14 @@ const PKG = ['__init__.py', 'db.py', 'app.py', 'circuit.py', 'kc.py']
 const asset = (p) => new URL(p, import.meta.url)
 
 // Shareable deep links carry the whole view in the query string:
-//   ?mode=circuit|where  &db=<database>  &q=<url-encoded SQL>
-// The shell consumes ?db (it owns the connection) and forwards ?mode / ?q to
-// the iframe, where child-boot.js applies them.
+//   ?mode=circuit|where|notebook  &db=<database>  &q=<url-encoded SQL>
+//   &nb=<example notebook name>
+// The shell consumes ?db (it owns the connection) and forwards ?mode / ?q /
+// ?nb to the iframe, where child-boot.js applies them.
 const params = new URLSearchParams(location.search)
-const mode = params.get('mode') === 'where' ? 'where' : 'circuit'
+const mode = ['where', 'notebook'].includes(params.get('mode')) ? params.get('mode') : 'circuit'
 const linkedQuery = params.get('q')
+const linkedNotebook = params.get('nb')
 
 const boot = document.getElementById('studio-boot-status')
 const say = (m) => { if (boot) { boot.style.display = 'block'; boot.textContent = m } console.log('[shell-boot]', m) }
@@ -123,14 +125,17 @@ async function switchDb(name) {
     "SELECT coalesce(shobj_description(d.oid, 'pg_database'), '') = 'provsql-studio-seeded' AS commented,"
     + " to_regclass('public.__provsql_seeded') IS NOT NULL AS oldtable"
     + " FROM pg_database d WHERE d.datname = current_database()")).rows[0]
-  if (!mark.commented && !mark.oldtable) {
+  // Seed only manifest databases; a user-created database (the notebook
+  // binding banner's "Create X" escape hatch) has no seed file and stays
+  // empty -- PREP above already installed provsql in it.
+  const entry = manifest.find((m) => m.name === name)
+  if (!mark.commented && !mark.oldtable && entry) {
     say(`loading ${name}…`)
-    const entry = manifest.find((m) => m.name === name)
     const stmts = await (await fetch(asset(`./casestudies/${entry.file}`))).json()
     for (const s of stmts) await inst.exec(s)         // one stmt per exec: see build-casestudies.py
   }
   if (mark.oldtable) await inst.exec('DROP TABLE public.__provsql_seeded')
-  if (!mark.commented) await inst.exec(`COMMENT ON DATABASE ${name} IS 'provsql-studio-seeded'`)
+  if (!mark.commented) await inst.exec(`COMMENT ON DATABASE "${name.replace(/"/g, '""')}" IS 'provsql-studio-seeded'`)
   activeDb = name
   activePg = inst
   // Persist the choice so a fresh shell (a new tab, or after Reset) reopens the
@@ -181,6 +186,15 @@ py.FS.mkdir('/studio'); py.FS.mkdir('/studio/provsql_studio')
 for (const f of PKG) {
   py.FS.writeFile(`/studio/provsql_studio/${f}`, await (await fetch(asset(`./pkg/${f}`))).text())
 }
+// Bundled example notebooks: /api/nb/examples globs the package's notebooks/
+// directory (Path(__file__).parent / 'notebooks'), so mirror it into the
+// Pyodide FS. The manifest is written by build.sh next to the copies.
+py.FS.mkdir('/studio/provsql_studio/notebooks')
+const nbFiles = await (await fetch(asset('./pkg/notebooks/manifest.json'))).json()
+for (const f of nbFiles) {
+  py.FS.writeFile(`/studio/provsql_studio/notebooks/${f}`,
+    await (await fetch(asset(`./pkg/notebooks/${f}`))).text())
+}
 py.runPython(`
 import sys, json, traceback
 sys.path.insert(0, '/studio')
@@ -220,10 +234,25 @@ const callBackend = (method, path, body) => enqueue(() => handle.callPromising(m
 // rebuilds into a Response. Database list / switch are JS-layer concerns: each
 // tutorial / case study is a real database in the one cluster, reached by
 // reopening the active PGlite connection; the backend's DSN switching does not
-// apply.
+// apply. The list is read live from pg_database (not the static manifest)
+// because the notebook binding banner's "Create X" action (POST
+// /api/databases, which flows through to the Python backend and runs CREATE
+// DATABASE on the shared session) can grow the cluster beyond the manifest;
+// such databases are prepared (provsql installed) by PREP on first switch and
+// stay unseeded.
+const listDatabases = async () => {
+  const live = (await activePg.query(
+    "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'"
+  )).rows.map((r) => r.datname)
+  // Manifest order first (tutorial leads the connection chip), then any
+  // user-created databases alphabetically.
+  const m = manifest.map((x) => x.name).filter((n) => live.includes(n))
+  return m.concat(live.filter((n) => !m.includes(n)).sort())
+}
 async function dispatchApi(method, path, body) {
   if (path === '/api/databases' && method === 'GET') {
-    return { status: 200, body: JSON.stringify(manifest.map((m) => m.name)), ctype: 'application/json' }
+    return await enqueue(async () => (
+      { status: 200, body: JSON.stringify(await listDatabases()), ctype: 'application/json' }))
   }
   if (path.split('?')[0] === '/api/conn' && method === 'POST') {
     let target = null
@@ -232,20 +261,26 @@ async function dispatchApi(method, path, body) {
     // the reply already reflects the new database. The iframe reloads itself
     // afterwards; Pyodide / Flask stay warm.
     return await enqueue(async () => {
-      if (target && manifest.some((m) => m.name === target)) await switchDb(target)
+      if (target && (await listDatabases()).includes(target)) await switchDb(target)
       return JSON.parse(await handle.callPromising('GET', '/api/conn', ''))
     })
   }
   return JSON.parse(await callBackend(method, path, body || ''))
 }
 
-// Drop every database, rebuild the empty cluster, and reopen the default
-// (re-seeding it). Runs on the call chain so no query is in flight.
+// Drop every database -- the manifest ones AND any user-created ones (the
+// notebook binding banner's create action), so a Reset cannot leave zombie
+// bindings pointing at stale data -- rebuild the empty cluster, and reopen
+// the default (re-seeding it). Runs on the call chain so no query is in
+// flight.
 async function resetData() {
   return enqueue(async () => {
     if (activePg) { try { await activePg.close() } catch (_e) { /* ignore */ } activePg = null }
     const admin = await PGlite.create({ dataDir: DATADIR, extensions: EXT })
-    for (const m of manifest) await admin.exec(`DROP DATABASE IF EXISTS ${m.name}`)
+    const all = (await admin.query(
+      "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'"
+    )).rows.map((r) => r.datname)
+    for (const n of all) await admin.exec(`DROP DATABASE IF EXISTS "${n.replace(/"/g, '""')}"`)
     await admin.close()
     localStorage.removeItem('ps.activeDb')
     localStorage.removeItem('ps.clusterReady')
@@ -289,8 +324,11 @@ window.addEventListener('message', async (ev) => {
 // database is already open here (the UI reads it back via /api/conn).
 say('starting the Studio UI…')
 const uiUrl = new URL(asset('./ui.html'))
-uiUrl.searchParams.set('mode', mode)
+// A ?nb= deep link implies notebook mode unless the link says otherwise.
+uiUrl.searchParams.set('mode',
+  linkedNotebook != null && !params.get('mode') ? 'notebook' : mode)
 if (linkedQuery != null) uiUrl.searchParams.set('q', linkedQuery)
+if (linkedNotebook != null) uiUrl.searchParams.set('nb', linkedNotebook)
 ui.src = uiUrl.href
 ui.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0'
 document.body.appendChild(ui)

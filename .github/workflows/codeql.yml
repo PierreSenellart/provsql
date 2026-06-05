@@ -8,12 +8,12 @@ on:
   push:
     branches: [ "master" ]
     paths:
-      - 'src/*'
+      - 'src/**'
       - '.github/workflows/codeql.yml'
   pull_request:
     branches: [ "master" ]
     paths:
-      - 'src/*'
+      - 'src/**'
       - '.github/workflows/codeql.yml'
   schedule:
     - cron: '15 2 * * 1'

@@ -11,7 +11,7 @@
 // here.
 const asset = (p) => new URL(p, import.meta.url)
 const params = new URLSearchParams(location.search)
-const mode = params.get('mode') === 'where' ? 'where' : 'circuit'
+const mode = ['where', 'notebook'].includes(params.get('mode')) ? params.get('mode') : 'circuit'
 document.body.className = 'mode-' + mode
 // A linked query is handed to app.js through the same sessionStorage channel
 // its mode-switch "carry" uses: ps.sql fills the box, ps.sql.ran replays it.
@@ -72,9 +72,27 @@ window.fetch = async (input, init = {}) => {
     const method = (init.method || (typeof input !== 'string' && input.method) || 'GET').toUpperCase()
     const body = init.body != null ? String(init.body) : ''
     const out = await callShell(method, path, body)
-    return new Response(out.body, { status: out.status, headers: { 'Content-Type': out.ctype } })
+    // Null-body statuses (204 No Content -- e.g. the kernel DELETE -- 205,
+    // 304) reject any body, even '': Response construction throws otherwise.
+    const noBody = out.status === 204 || out.status === 205 || out.status === 304
+    return new Response(noBody ? null : out.body,
+                        { status: out.status, headers: { 'Content-Type': out.ctype } })
   }
   return realFetch(input, init)
+}
+// The notebook's pagehide kernel-close uses navigator.sendBeacon (a POST that
+// survives page teardown); a real beacon would hit the static host and 404,
+// leaking the kernel against MAX_KERNELS. Route /api/* beacons through the
+// same postMessage bridge, fire-and-forget -- the shell outlives this iframe,
+// so the request completes even though the reply goes unread.
+const realBeacon = navigator.sendBeacon ? navigator.sendBeacon.bind(navigator) : null
+navigator.sendBeacon = (url, data) => {
+  const path = String(url).replace(location.origin, '')
+  if (path.startsWith('/api/')) {
+    callShell('POST', path, data != null ? String(data) : '')
+    return true
+  }
+  return realBeacon ? realBeacon(url, data) : false
 }
 
 // Now load the unmodified frontend; it runs against the bridged backend.
@@ -107,7 +125,9 @@ document.getElementById('tools-panel')?.remove()
       let base = location
       try { if (window.top && window.top.location.href) base = window.top.location } catch (_e) { /* cross-origin top (file://): fall back */ }
       const u = new URL(base.origin + base.pathname)
-      u.searchParams.set('mode', document.body.classList.contains('mode-where') ? 'where' : 'circuit')
+      u.searchParams.set('mode',
+        document.body.classList.contains('mode-where') ? 'where'
+        : document.body.classList.contains('mode-notebook') ? 'notebook' : 'circuit')
       let db = null
       try { db = (await (await fetch('/api/conn')).json()).database } catch (_e) { /* ignore */ }
       if (db) u.searchParams.set('db', db)

@@ -80,6 +80,28 @@ INTERNAL_FUNCTIONS = {
     'numeric_lt_agg_token', 'numeric_le_agg_token',
     'numeric_gt_agg_token', 'numeric_ge_agg_token',
     'numeric_comp_agg_token',
+    'agg_token_eq_text', 'agg_token_ne_text', 'agg_token_comp_text',
+    'text_eq_agg_token', 'text_ne_agg_token', 'text_comp_agg_token',
+    # agg_token arithmetic and agg-vs-agg comparison operator backends:
+    # invoked through the SQL operators + - * / < <= = <> >= > on agg_token
+    # (used to lower HAVING arithmetic into gate_arith / gate_cmp), never
+    # called by name -- the user-facing surface is the aggregates and the
+    # comparison, not these procedures.  Mirrors the random_variable_* block
+    # below.  agg_token_make / agg_value_gate / agg_token_value are the
+    # internal helpers those operator bodies call.
+    'agg_token_plus', 'agg_token_minus', 'agg_token_times', 'agg_token_div',
+    'agg_token_neg',
+    'agg_token_plus_numeric', 'agg_token_minus_numeric',
+    'agg_token_times_numeric', 'agg_token_div_numeric',
+    'numeric_plus_agg_token', 'numeric_minus_agg_token',
+    'numeric_times_agg_token', 'numeric_div_agg_token',
+    'agg_token_eq_agg_token', 'agg_token_ne_agg_token',
+    'agg_token_lt_agg_token', 'agg_token_le_agg_token',
+    'agg_token_gt_agg_token', 'agg_token_ge_agg_token',
+    'agg_token_comp_agg_token',
+    # Doxygen CREATE OPERATOR artefacts (<procedure>_<rightarg> shape).
+    'agg_token_op_agg_token', 'agg_token_op_numeric', 'numeric_op_agg_token',
+    'agg_token_make', 'agg_value_gate', 'agg_token_value', 'agg_arith_make',
     # Recursive-CTE fixpoint driver: invoked by the planner hook
     # (lower_recursive_cte) when lowering a WITH RECURSIVE query, never
     # called directly by users.
@@ -116,9 +138,9 @@ INTERNAL_FUNCTIONS = {
     'random_variable_in', 'random_variable_out',
     'random_variable_make',
     'is_finite_float8',
-    # (User-facing constructors for continuous random variables —
+    # (User-facing constructors for continuous random variables –
     # 'normal', 'uniform', 'exponential', 'erlang', 'as_random',
-    # 'mixture', 'categorical' — now promoted to _SQL_FUNC_MAP and
+    # 'mixture', 'categorical' – now promoted to _SQL_FUNC_MAP and
     # referenced from doc/source/user/continuous-distributions.rst.)
     # Continuous-distributions GUC variables (introspected by Doxygen
     # through the SQL `SET` / `RESET` documentation pages).
@@ -167,7 +189,7 @@ INTERNAL_FUNCTIONS = {
     # _SQL_FUNC_MAP, referenced from the continuous-distributions
     # user manual.)
     # SFUNC / FFUNC helpers behind the avg / sum / product RV
-    # aggregates — not called directly.
+    # aggregates – not called directly.
     'avg_rv_ffunc', 'sum_rv_sfunc', 'sum_rv_ffunc', 'product_rv_ffunc',
     # Internal C entry point behind the random_variable aggregates above.
     'rv_aggregate_semimod',
@@ -175,12 +197,6 @@ INTERNAL_FUNCTIONS = {
     # URLs, 'c' from `@c provsql.c` / `@c src/provsql.c` filename references
     # in the recursive-CTE lowering doc comments.
     'org', 'sql', 'html', 'c',
-    # Internal per-method timing helper behind probability_benchmark
-    # (the user-facing helpers compile_to_ddnnf_dot, tseytin_cnf,
-    # tree_decomposition_dot, probability_benchmark, tool_available are
-    # now in _SQL_FUNC_MAP, referenced from the knowledge-compilation
-    # user-manual page).
-    '_probability_benchmark_one',
     # @param names from the knowledge-compilation helpers that Doxygen
     # surfaces as 'provsql.<name>' anchors. Not callable.
     'compilers', 'monte_carlo_samples', 'in_args', 'in_method', 'in_token',

@@ -1,0 +1,137 @@
+\set ECHO none
+NOTICE:  table "seh_t" does not exist, skipping
+add_provenance
+
+(1 row)
+NOTICE:  scalar HAVING count(*) = 0    p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING count(*) < 2    p=0.3125  (truth 0.3125)
+NOTICE:  scalar HAVING count(*) <= 1   p=0.3125  (truth 0.3125)
+NOTICE:  scalar HAVING count(*) >= 1   p=0.9375  (truth 0.9375)
+NOTICE:  scalar HAVING count(*) = 2    p=0.3750  (truth 0.3750)
+NOTICE:  scalar HAVING count(*) >= 0   p=1.0000  (truth 1.0000)
+NOTICE:  scalar HAVING count(*) > -1   p=1.0000  (truth 1.0000)
+NOTICE:  scalar HAVING count(*) <> 0   p=0.9375  (truth 0.9375)
+remove_provenance
+
+(1 row)
+shape|p
+count=0 cmp-on|0.0625
+(1 row)
+shape|p
+count=0 cmp-off|0.0625
+(1 row)
+shape|p
+count=0 mc (1dp)|0.1
+(1 row)
+NOTICE:  table "seh_g" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped count<2|1|0.5000
+grouped count<2|2|0.5000
+grouped count<2|3|0.5000
+(3 rows)
+NOTICE:  scalar HAVING sum(x) IS NULL        p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING max(x) IS NULL        p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING avg(x) IS NULL        p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING array_agg(x) IS NULL  p=0.0625  (truth 0.0625)
+NOTICE:  scalar HAVING max(x) IS NOT NULL    p=0.9375  (truth 0.9375)
+NOTICE:  scalar HAVING NOT (sum(x) IS NULL)  p=0.9375  (truth 0.9375)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped max IS NOT NULL|1|0.7500
+grouped max IS NOT NULL|2|0.5000
+grouped max IS NOT NULL|3|0.5000
+(3 rows)
+NOTICE:  table "seh_gnv" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped sum IS NULL|1|0.2500
+grouped sum IS NULL|2|0.7500
+grouped sum IS NULL|3|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped sum IS NOT NULL|1|0.5000
+grouped sum IS NOT NULL|2|0.0000
+grouped sum IS NOT NULL|3|0.5000
+(3 rows)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped max IS NULL cmp-off|1|0.2500
+grouped max IS NULL cmp-off|2|0.7500
+grouped max IS NULL cmp-off|3|0.0000
+(3 rows)
+NOTICE:  table "seh_c" does not exist, skipping
+add_provenance
+
+(1 row)
+NOTICE:  scalar HAVING count(x) = 0    p=0.2500  (truth 0.2500)
+NOTICE:  scalar HAVING count(x) < 1    p=0.2500  (truth 0.2500)
+NOTICE:  scalar HAVING count(x) <= 1   p=0.7500  (truth 0.7500)
+NOTICE:  scalar HAVING count(x) < 2    p=0.7500  (truth 0.7500)
+NOTICE:  scalar HAVING count(x) = 1    p=0.5000  (truth 0.5000)
+NOTICE:  scalar HAVING count(x) >= 1   p=0.7500  (truth 0.7500)
+NOTICE:  scalar HAVING count(x) <> 0   p=0.7500  (truth 0.7500)
+NOTICE:  scalar HAVING count(x) >= 0   p=1.0000  (truth 1.0000)
+NOTICE:  scalar HAVING count(*) = 0    p=0.0625  (truth 0.0625)
+remove_provenance
+
+(1 row)
+shape|p
+count(x)=0 cmp-on|0.2500
+(1 row)
+shape|p
+count(x)=0 cmp-off|0.2500
+(1 row)
+shape|ok
+count(x)=0 mc within 0.02|t
+(1 row)
+remove_provenance
+
+(1 row)
+shape|e
+expected(count(x))|1.0000
+(1 row)
+shape|lo|hi
+support(count(x))|0|2
+(1 row)
+NOTICE:  table "seh_cg" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p
+grouped count(x)=0|1|0.2500
+grouped count(x)=0|2|0.5000
+(2 rows)
+NOTICE:  table "seh_e" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|existence
+scalar count existence|1.0000
+(1 row)
+shape|e
+expected(min) conditional|14.8101
+(1 row)

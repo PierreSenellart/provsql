@@ -58,6 +58,27 @@ def test_query_history_records_runs(page: Page, studio_url: str) -> None:
     expect(menu).to_contain_text("first_marker")
 
 
+def test_load_sql_file_fills_query_box(
+        page: Page, studio_url: str, tmp_path) -> None:
+    """The folder icon under the eraser loads a local .sql file into the
+    query box, replacing its content; the loaded query then runs."""
+    sql_file = tmp_path / "loaded.sql"
+    sql_file.write_text("SELECT name FROM personnel LIMIT 2;\n")
+
+    page.goto(studio_url + "/where")
+    page.locator("#request").fill("SELECT 'draft to be replaced';")
+    # The visible button proxies a click to the hidden file input;
+    # set_input_files drives the input directly, which fires the same
+    # `change` event as a user pick.
+    expect(page.locator("#load-sql-btn")).to_be_visible()
+    page.locator("#load-sql-input").set_input_files(str(sql_file))
+    expect(page.locator("#request")).to_have_value(
+        "SELECT name FROM personnel LIMIT 2;\n"
+    )
+    page.locator("#run-btn").click()
+    expect(page.locator("#result-count")).to_have_text("2", timeout=8000)
+
+
 def test_connection_editor_opens_and_validates(
     page: Page, studio_url: str
 ) -> None:
@@ -115,6 +136,75 @@ def test_circuit_eval_strip_runs_boolexpr(
     page.locator("#eval-run").click()
     # Result span is non-empty once the request returns.
     expect(page.locator("#eval-result")).not_to_be_empty(timeout=8000)
+
+
+def test_circuit_eval_strip_karp_luby_options_and_bound(
+    page: Page, studio_url: str
+) -> None:
+    """Circuit mode, probability semiring, karp-luby: the dedicated
+    approximate-options control appears (defaulting to the (eps, delta) mode
+    for karp-luby), its samples/(eps,delta) toggle swaps the fields, and a run
+    reports a result plus the guarantee bound, rendered as a value interval
+    with the confidence and sample count.  A single-row personnel provenance is
+    a trivial DNF, so karp-luby applies."""
+    page.goto(studio_url + "/circuit")
+    _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
+    page.locator("#result-body tr").first.locator("td").last.click()
+    expect(page.locator("#eval-strip")).to_be_visible(timeout=8000)
+
+    page.locator("#eval-semiring").select_option(value="probability")
+    page.locator("#eval-method").select_option(value="karp-luby")
+
+    # karp-luby defaults to the (eps, delta) mode: epsilon shows, samples hidden.
+    expect(page.locator("#eval-approx-eps")).to_be_visible(timeout=8000)
+    expect(page.locator("#eval-args-mc")).to_be_hidden()
+    # The mode toggle swaps to a fixed sample count and back.
+    page.locator("#eval-approx-mode").select_option(value="samples")
+    expect(page.locator("#eval-args-mc")).to_be_visible()
+    expect(page.locator("#eval-approx-eps")).to_be_hidden()
+    page.locator("#eval-approx-mode").select_option(value="epsdelta")
+    expect(page.locator("#eval-approx-eps")).to_be_visible()
+
+    page.locator("#eval-run").click()
+    expect(page.locator("#eval-result")).to_have_attribute(
+        "data-kind", "ok", timeout=15000
+    )
+    # The bound slot renders the guarantee as a value interval (Pr ∈ [lo, hi])
+    # with the confidence and the sample count.
+    bound = page.locator("#eval-bound")
+    expect(bound).to_contain_text("Pr ∈", timeout=8000)
+    expect(bound).to_contain_text("samples")
+
+
+def test_circuit_eval_strip_dtree_epsilon_control(
+    page: Page, studio_url: str
+) -> None:
+    """Circuit mode, probability semiring, d-tree: the dedicated optional
+    epsilon control appears (and is the only arg control shown), and a run with
+    a set epsilon succeeds.  A single-row personnel provenance is a trivial
+    one-variable DNF, so the anytime interval collapses to the exact point
+    regardless of epsilon -- this test just exercises the control wiring (the
+    epsilon reaches buildProbArgs and the backend accepts it)."""
+    page.goto(studio_url + "/circuit")
+    _run_query_and_wait(page, "SELECT name FROM personnel LIMIT 3;", 3)
+    page.locator("#result-body tr").first.locator("td").last.click()
+    expect(page.locator("#eval-strip")).to_be_visible(timeout=8000)
+
+    page.locator("#eval-semiring").select_option(value="probability")
+    page.locator("#eval-method").select_option(value="d-tree")
+
+    # The optional epsilon control is the only arg control shown for d-tree;
+    # the approximate-options group and the compiler/wmc pickers stay hidden.
+    eps = page.locator("#eval-args-dtree-eps")
+    expect(eps).to_be_visible(timeout=8000)
+    expect(page.locator("#eval-args-approx")).to_be_hidden()
+    expect(page.locator("#eval-args-compiler")).to_be_hidden()
+
+    eps.fill("0.2")
+    page.locator("#eval-run").click()
+    expect(page.locator("#eval-result")).to_have_attribute(
+        "data-kind", "ok", timeout=15000
+    )
 
 
 def test_schema_panel_column_click_prefills_query(

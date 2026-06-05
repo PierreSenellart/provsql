@@ -1,0 +1,14 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+ro_lo|ro_hi|ro_exact
+0.396320|0.396320|0.396320
+(1 row)
+sh_lo|sh_hi|sh_exact|sound|nontrivial
+0.030000|0.050000|0.044000|t|t
+(1 row)
+ERROR:  ProvSQL: probability_bounds applies only to a DNF-shaped circuit (a monotone OR-of-ANDs over input leaves); negation, comparison, aggregation, random-variable and multivalued-input gates are not supported
+remove_provenance
+
+(1 row)

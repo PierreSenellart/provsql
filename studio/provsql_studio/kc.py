@@ -1,11 +1,10 @@
 """Backend for the Knowledge-Compilation demo helpers.
 
-Wraps the four SQL surfaces added in extension 1.7.0:
+Wraps the knowledge-compilation SQL surfaces added in extension 1.7.0:
 
 * ``provsql.tseytin_cnf(token, weighted)``
 * ``provsql.compile_to_ddnnf_dot(token, compiler)``
 * ``provsql.tree_decomposition_dot(token)``
-* ``provsql.probability_benchmark(token, samples, compilers)``
 
 For the two functions that emit GraphViz DOT we also render it to SVG
 through a local ``dot`` subprocess (the same binary Studio already uses
@@ -463,7 +462,14 @@ _INPROCESS_METHODS: tuple[tuple[str, str | None], ...] = (
     ("independent",        None),
     ("possible-worlds",    None),
     ("tree-decomposition", None),
+    # d-tree is the deterministic anytime engine: exact on DNF circuits (errors
+    # otherwise, recorded per row like independent / sieve / karp-luby).
+    ("d-tree",             None),
     ("monte-carlo",        None),
+    # karp-luby applies only to DNF-shaped circuits (it errors otherwise,
+    # recorded per row like independent / inversion-free); on those it shares
+    # the same sample budget as monte-carlo for an equal-effort comparison.
+    ("karp-luby",          None),
 )
 
 # In-process meta-routes offered in the compilation dropdown beyond the
@@ -707,18 +713,17 @@ def probability_benchmark(
 ) -> dict:
     """Time every probability-evaluation method and return rows + notices.
 
-    Mirrors the surface of ``provsql.probability_benchmark`` (see
-    ``sql/provsql.common.sql``) but drives the loop from Python so each
-    method gets its own ``SET LOCAL statement_timeout`` budget.  Two
-    PL/pgSQL limitations make per-row enforcement impossible from the
-    SQL helper: ``SET LOCAL statement_timeout`` inside a function does
-    not reset PG's per-statement timer, and ``EXCEPTION WHEN OTHERS``
-    does not catch ``query_canceled`` (57014), so the SQL version
-    aborts the whole table instead of recording one timeout row.
+    Drives the loop from Python so each method gets its own ``SET LOCAL
+    statement_timeout`` budget.  Two PL/pgSQL limitations make per-row
+    enforcement impossible in a SQL function: ``SET LOCAL
+    statement_timeout`` inside a function does not reset PG's
+    per-statement timer, and ``EXCEPTION WHEN OTHERS`` does not catch
+    ``query_canceled`` (57014), so a SQL version would abort the whole
+    table instead of recording one timeout row.
 
     Each method runs inside its own savepoint so a per-method
     ``SET LOCAL statement_timeout`` and any error (timeout, missing
-    compiler, non-independent circuit, …) stay scoped to that method;
+    compiler, non-independent circuit…) stay scoped to that method;
     the next iteration continues with a fresh budget.
 
     Notices emitted by ProvSQL during any of the inner
@@ -732,6 +737,12 @@ def probability_benchmark(
     def _on_notice(diag):
         msg = diag.message_primary or ""
         if "__prov" in msg or "__wprov" in msg:
+            return
+        # The extension emits a machine-readable approximation-guarantee
+        # NOTICE for each approximate method (rendered as a bound by the
+        # eval strip); it is noise in the benchmark's shared notice list,
+        # so drop it here.
+        if "approximation-guarantee:" in msg:
             return
         notices.append(msg)
 
@@ -782,7 +793,11 @@ def probability_benchmark(
                         "true)::int)::text, true)"
                     )
                 for method, args in runnable:
-                    call_args = str(samples) if method == "monte-carlo" else args
+                    # The sampling methods take the shared sample count; the
+                    # rest take their own (tool name, or none).
+                    call_args = (str(samples)
+                                 if method in ("monte-carlo", "karp-luby")
+                                 else args)
                     t0 = time.perf_counter()
                     probability: float | None = None
                     error: str | None = None

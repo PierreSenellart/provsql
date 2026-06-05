@@ -5,8 +5,10 @@ CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
 
 SET search_path TO public, provsql;
 
+DROP TYPE IF EXISTS study_quality CASCADE;
 CREATE TYPE study_quality AS ENUM ('no_evidence', 'case_report', 'observational', 'rct', 'meta_analysis', 'perfect_evidence');
 
+DROP TABLE IF EXISTS study CASCADE;
 CREATE TABLE study (
     id integer PRIMARY KEY,
     title text NOT NULL,
@@ -14,8 +16,11 @@ CREATE TABLE study (
     study_type study_quality NOT NULL,
     reliability double precision NOT NULL
 );
+DROP TABLE IF EXISTS exposure CASCADE;
 CREATE TABLE exposure (id integer PRIMARY KEY, name text NOT NULL);
+DROP TABLE IF EXISTS outcome CASCADE;
 CREATE TABLE outcome  (id integer PRIMARY KEY, name text NOT NULL);
+DROP TABLE IF EXISTS finding CASCADE;
 CREATE TABLE finding (
     id integer PRIMARY KEY,
     study_id integer NOT NULL,
@@ -25,6 +30,7 @@ CREATE TABLE finding (
     effect_size double precision
 );
 
+TRUNCATE study;
 COPY study (id, title, year, study_type, reliability) FROM stdin;
 1	Smith2018	2018	rct	0.92
 2	Johnson2020	2020	meta_analysis	0.98
@@ -36,6 +42,7 @@ COPY study (id, title, year, study_type, reliability) FROM stdin;
 8	Park2021	2021	rct	0.85
 \.
 
+TRUNCATE exposure;
 COPY exposure (id, name) FROM stdin;
 1	Coffee
 2	Exercise
@@ -46,6 +53,7 @@ COPY exposure (id, name) FROM stdin;
 7	Processed Food
 \.
 
+TRUNCATE outcome;
 COPY outcome (id, name) FROM stdin;
 1	Cardiovascular Disease
 2	Type 2 Diabetes
@@ -56,6 +64,7 @@ COPY outcome (id, name) FROM stdin;
 
 -- 25 findings; contradictions on Coffee→CVD and Alcohol→CVD;
 -- single-study claims on Aspirin→Cognitive Decline, Omega-3→CVD, Exercise→Inflammation.
+TRUNCATE finding;
 COPY finding (id, study_id, exposure_id, outcome_id, effect, effect_size) FROM stdin;
 1	5	1	1	harmful	1.3
 2	6	1	1	beneficial	0.85

@@ -52,7 +52,7 @@ SELECT lo, hi
            provsql.mixture(
              (SELECT t FROM p2),
              provsql.uniform(20, 30),
-             provsql.uniform(-5, -1)))));
+             provsql.uniform(-5, -1))))::uuid);
 
 -- E.  Mixture of constants: support is the pointwise hull
 --     {-1.5, 7.25} → (-1.5, 7.25).

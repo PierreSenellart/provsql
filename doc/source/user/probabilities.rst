@@ -50,14 +50,122 @@ result holds, given the assigned input probabilities:
     FROM suspects;
 
 The function accepts an optional second argument specifying the computation
-method, and an optional third argument for method-specific parameters.
+method, and an optional third argument for method-specific parameters. That
+third argument is a comma-separated ``key=value`` list (the keys accepted
+depend on the method); each method also keeps its historical shorthand (a bare
+sample count, a ``delta;epsilon`` pair …) as documented below.
 
 ProvSQL Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`
 exposes :sqlfunc:`probability_evaluate` interactively, with method
 and arguments selectors.
 
+When only a coarse estimate is needed, :sqlfunc:`probability_bounds`
+returns cheap lower and upper bounds on the marginal probability of a
+monotone-DNF token (as ``OUT`` parameters ``lower`` / ``upper``),
+without the cost of exact compilation:
+
+.. code-block:: postgresql
+
+    SELECT person, (probability_bounds(provenance())).*
+    FROM suspects;
+
+.. _probability-guarantees:
+
+Choosing a guarantee, not a method
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**In practice you do not pick a method.**  Ask for the *guarantee* you want and
+let ProvSQL choose how to compute it:
+
+- **exact** -- the default: ``probability_evaluate(provenance())`` returns the
+  true probability.
+- **relative** ``(ε, δ)`` --
+  ``probability_evaluate(provenance(), 'relative', 'epsilon=0.05,delta=0.01')``:
+  the estimate is within a factor ``1 ± ε`` of the true value with probability
+  ``1 − δ``.  The right choice for **rare events** (small probabilities), where an
+  absolute error bound would be meaningless.
+- **additive** ``(ε, δ)`` --
+  ``probability_evaluate(provenance(), 'additive', 'epsilon=0.05,delta=0.01')``:
+  the estimate is within ``ε`` of the true value (absolute) with probability
+  ``1 − δ``.
+
+A cost-based chooser then picks and runs the cheapest method that meets your
+request, per query, from the portfolio below.  Three things make this safe to
+rely on:
+
+- The tolerances **nest** (exact ⊂ relative ⊂ additive), so a ``relative`` or
+  ``additive`` request still returns the **exact** value whenever an exact method
+  is cheapest ("exact when cheaper") -- you never pay for approximation you did
+  not need.
+- The cost of a few methods is hard to predict from the circuit alone, so the
+  chooser runs each optimistic pick under a **budget and escalates automatically**
+  if it turns out slow -- a pathological circuit never hangs on the wrong method.
+- A ``δ = 0`` (no-failure) approximate request is honoured by a *deterministic*
+  method (the certified-bounds d-tree), not a sampler.
+
+So the method names in the next section are an **escape hatch** -- for forcing a
+specific algorithm, for ``EXPLAIN``-style understanding, or for the rare case
+where you know your circuits better than the cost model.  The table summarises
+where each shines; most users can skip it.
+
+.. list-table:: Where each method shines (the chooser picks for you)
+   :header-rows: 1
+   :widths: 22 18 60
+
+   * - Method
+     - Guarantee
+     - Best when (query / provenance circuit)
+   * - ``independent``
+     - exact
+     - Read-once lineage: self-join-free / hierarchical conjunctive queries, where
+       each input tuple is used at most once.  Linear time.
+   * - ``inversion-free``
+     - exact
+     - Safe (inversion-free) UCQs the planner certifies -- linear-time via a
+       structured d-DNNF even with self-joins.
+   * - ``possible-worlds``
+     - exact
+     - Very few input tuples (a couple of dozen at most): brute force over all
+       ``2^N`` worlds.
+   * - ``sieve``
+     - exact
+     - Few clauses: a small monotone-DNF lineage (inclusion-exclusion).
+   * - ``tree-decomposition``
+     - exact
+     - Low-treewidth lineage -- path-, cycle- or band-shaped join graphs; no
+       external tool needed.
+   * - ``d-tree``
+     - exact / certified bounds
+     - High-treewidth circuits where ``tree-decomposition`` bails; and the
+       **deterministic** approximate corner -- it returns a certified interval, so
+       it serves a ``δ = 0`` request.
+   * - ``compilation`` (``d4`` / ``c2d`` / …)
+     - exact
+     - Hard lineage with hidden structure a knowledge compiler can exploit;
+       last-resort, needs an external tool (see :doc:`knowledge-compilation`).
+   * - ``wmc`` (``ganak`` / ``sharpsat-td`` / ``dpmc`` / ``weightmc``)
+     - depends on tool
+     - Hard lineage better suited to a weighted model counter than to a d-DNNF
+       compiler; an alternative external-tool route to ``compilation``.  Exact for
+       ``ganak`` / ``sharpsat-td`` / ``dpmc``; ``weightmc`` is an approximate
+       ``(ε, δ)`` counter.
+   * - ``monte-carlo``
+     - additive ``(ε, δ)``
+     - Any circuit; cheap when the probability is not tiny.
+   * - ``karp-luby``
+     - relative ``(ε, δ)``
+     - Rare events (small ``p``) over a DNF, where additive error is uninformative.
+   * - ``stopping-rule``
+     - relative ``(ε, δ)``
+     - A universal relative estimator for any circuit -- including
+       random-variable and HAVING-aggregate lineage.
+
 Computation Methods
 ^^^^^^^^^^^^^^^^^^^^
+
+The methods below can be named explicitly as the second argument, but see
+:ref:`above <probability-guarantees>` -- normally you request a guarantee and the
+chooser selects among them.
 
 ``'independent'``
     Exact computation assuming all input tokens are mutually independent.
@@ -77,13 +185,73 @@ Computation Methods
         SELECT probability_evaluate(provenance(), 'possible-worlds') FROM suspects;
 
 ``'monte-carlo'``
-    Approximate computation by random sampling. The third argument sets the
-    number of samples (default: 1000):
+    Approximate computation by random sampling. The third argument is either a
+    fixed sample count (a bare integer or ``samples=N``) or an **additive**
+    ``(ε, δ)`` target ``epsilon=E[,delta=D][,max_samples=M]`` (default
+    ``eps=0.1, delta=0.05`` when omitted):
 
     .. code-block:: postgresql
 
         SELECT probability_evaluate(provenance(), 'monte-carlo', '10000')
         FROM suspects;
+        SELECT probability_evaluate(provenance(), 'monte-carlo', 'eps=0.01')
+        FROM suspects;
+
+    The ``(ε, δ)`` form guarantees that the estimate is within ``ε`` of the
+    true probability ``p`` (in **absolute** terms) with probability at least
+    ``1 − δ``, drawing ``N = ⌈ln(2/δ)/(2ε²)⌉`` samples (Hoeffding's
+    inequality); the count is independent of ``p``. Because the error is
+    *absolute*, an ``ε`` of, say, ``0.1`` is uninformative on a rare-event
+    output with ``p ≪ ε``; for a **relative**-error guarantee in that regime
+    use ``'karp-luby'``. Pin ``provsql.monte_carlo_seed`` for a reproducible
+    estimate.
+
+``'karp-luby'``
+    Approximate computation by the Karp-Luby fully-polynomial randomised
+    approximation scheme (FPRAS) for ``#DNF`` :cite:`DBLP:journals/jal/KarpLM89`.
+    It delivers a **relative** ``(ε, δ)`` guarantee -- the estimate is within a
+    *factor* ``1 ± ε`` of the true probability with probability at least
+    ``1 − δ`` -- at a sample count independent of that probability. This is the
+    guarantee that stays meaningful on rare-event outputs, where naive Monte
+    Carlo's *absolute* ``ε`` (see ``'monte-carlo'`` above) says nothing. It
+    applies to **DNF-shaped** circuits:
+    a monotone disjunction (top-level ``OR``) of conjunctions (``AND``) of
+    input leaves -- the lineage shape of a union of conjunctive queries over a
+    tuple-independent database. Leaves may be shared across clauses. The
+    method errors (it does not silently fall back) on any other shape:
+    negation (``EXCEPT``/``monus``), comparison (``HAVING``), aggregation,
+    random-variable, or multivalued (BID) gates.
+
+    The third argument selects a fixed sample count or an ``(ε, δ)`` accuracy
+    target (default ``epsilon=0.1, delta=0.05`` when omitted):
+
+    - ``samples=N`` (or a bare integer ``N``) -- a fixed number of sampling
+      rounds; deterministic runtime. The rounds are spread across the clauses
+      by *stratified* sampling (each clause gets a share proportional to its
+      probability), which tightens the estimate at a given budget compared with
+      drawing a clause at random each round.
+    - ``epsilon=E`` (alias ``eps=E``) -- relative-error target, served by a
+      *self-adjusting stopping rule*: the method samples only until the
+      estimate is provably within the target, so on outputs whose clauses
+      barely overlap it stops far short of the worst-case
+      ``⌈4(e−2)·m·ln(2/δ)/ε²⌉`` rounds over the ``m`` clauses.
+    - ``delta=D`` -- failure-probability target (only with ``epsilon``).
+    - ``max_samples=N`` -- caps the number of rounds (only with the adaptive
+      path), bounding the runtime for very small ``ε`` or large ``m``; if the
+      cap is hit before the target, the reported guarantee is downgraded to the
+      accuracy actually achieved.
+
+    .. code-block:: postgresql
+
+        -- fixed budget
+        SELECT probability_evaluate(provenance(), 'karp-luby', '100000')
+        FROM suspects;
+        -- (ε, δ) guarantee
+        SELECT probability_evaluate(provenance(), 'karp-luby', 'eps=0.05,delta=0.01')
+        FROM suspects;
+
+    ``samples`` is mutually exclusive with ``epsilon``/``delta``. Pin
+    ``provsql.monte_carlo_seed`` for a reproducible estimate.
 
 ``'tree-decomposition'``
     Exact computation via a tree decomposition of the Boolean circuit
@@ -143,10 +311,13 @@ Computation Methods
     :doc:`knowledge-compilation`.
 
 ``'wmc'``
-    Exact (umbrella for weighted model counters) computation. The third
-    argument is ``tool[;tool_args]`` and selects the counter:
-    ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`, ``'sharpsat-td'``
-    :cite:`DBLP:conf/cp/KorhonenJ21`, ``'dpmc'``
+    Weighted model counting (umbrella over several counters); the guarantee
+    depends on the chosen tool -- ``'ganak'`` / ``'sharpsat-td'`` / ``'dpmc'``
+    are exact, ``'weightmc'`` is an approximate ``(ε, δ)`` counter. The third
+    argument selects the counter and its options as
+    ``tool=<name>[,epsilon=E][,delta=D]`` (the legacy ``tool[;tool_args]`` form
+    is still accepted): ``'ganak'`` :cite:`DBLP:conf/ijcai/SharmaRSM19`,
+    ``'sharpsat-td'`` :cite:`DBLP:conf/cp/KorhonenJ21`, ``'dpmc'``
     :cite:`DBLP:conf/cp/DudekPV20`, or ``'weightmc'``. Same PATH /
     ``provsql.tool_search_path`` considerations as ``'compilation'``:
 
@@ -155,34 +326,20 @@ Computation Methods
         SELECT probability_evaluate(provenance(), 'wmc', 'ganak')
         FROM suspects;
 
-``'weightmc'``
-    Approximate weighted model counting using the external ``weightmc``
-    tool (alias for ``'wmc'``, ``'weightmc;...'``):
-
-    .. code-block:: postgresql
-
-        SELECT probability_evaluate(provenance(), 'weightmc')
-        FROM suspects;
-
-    Same PATH / ``provsql.tool_search_path`` considerations as
-    ``'compilation'``.
-
 Default strategy (no second argument)
-    ProvSQL tries each method in order until one succeeds:
-
-    1. **Independent evaluation** – used if the circuit is independent.
-    2. **Inversion-free** – used if the query carries an inversion-free
-       certificate (see the ``'inversion-free'`` method above). Controlled
-       by the ``provsql.inversion_free`` GUC (on by default).
-    3. **Tree decomposition** – used if the treewidth is within the
-       supported limit.
-    4. **Compilation** with the compiler named by
-       ``provsql.fallback_compiler`` (default ``'d4'``) – used as a
-       final fallback; requires that compiler to be installed. See
-       :doc:`configuration`.
+    With no method named, ``probability_evaluate(provenance())`` requests
+    the **exact** guarantee, and the cost-based chooser (see
+    :ref:`above <probability-guarantees>`) runs the cheapest exact method
+    applicable to the circuit: typically ``independent`` or
+    ``inversion-free`` for safe queries, ``tree-decomposition`` for
+    low-treewidth lineage, falling back to ``compilation`` with the
+    compiler named by ``provsql.fallback_compiler`` (default ``'d4'``,
+    see :doc:`configuration`) when no in-process method fits. Optimistic
+    picks run under a budget and escalate automatically, so a pathological
+    circuit never hangs on the wrong method.
 
 To time every method on one circuit and compare results side by side,
-use :sqlfunc:`probability_benchmark`; see :doc:`knowledge-compilation`.
+use ProvSQL Studio's benchmark panel; see :doc:`studio`.
 
 Expected Values of Aggregates
 -------------------------------
@@ -227,6 +384,28 @@ The following aggregate functions in ``HAVING`` are handled:
     FROM employees
     GROUP BY dept
     HAVING COUNT(*) > 2;
+
+Arithmetic over these aggregates in ``HAVING`` (including comparisons
+between two aggregates and integer-division thresholds) is also handled;
+see :doc:`the aggregation chapter <aggregation>` for the supported forms
+and their semantics.
+
+An aggregate (``SUM``, ``AVG``, ``MIN`` or ``MAX``) whose possible values
+span a very large range cannot be evaluated exactly in reasonable time (the
+problem is *pseudo*-polynomial: exact cost grows with the magnitude of the
+values).  In that case ask for an approximate answer instead -- a
+``relative`` or ``additive`` guarantee -- and ProvSQL estimates the
+probability by sampling, which is independent of the value magnitude:
+
+.. code-block:: postgresql
+
+    SELECT probability_evaluate(provenance(), 'relative', 'epsilon=0.05,delta=0.01')
+    FROM orders GROUP BY region HAVING sum(amount_cents) > 100000000;
+
+This is the *approximable* corner of the Ré–Suciu HAVING trichotomy; the
+exact (default) call remains correct but may not terminate quickly on such a
+query.  (``COUNT`` rarely needs this -- its values are small, so it is almost
+always evaluated exactly.)
 
 Independent Tuples and Block-Independent Databases
 ----------------------------------------------------
@@ -295,7 +474,7 @@ queries over TID or BID base tables, plus a number of extensions
 that recover safety for query shapes the raw hierarchical criterion
 would reject (FD-aware reductions driven by primary keys / NOT-NULL
 UNIQUE constraints, constant selections, transparent deterministic
-relations, certain self-joins, UCQs with disjoint branches, …); see
+relations, certain self-joins, UCQs with disjoint branches…); see
 :ref:`safe-query-rewriter` in the developer documentation for the
 full set.  Queries outside the
 recognised class are passed through unchanged: the GUC enables an
@@ -335,10 +514,40 @@ The shortcut fires automatically when its soundness preconditions
 are met: each per-row provenance must be a single ``gate_input``
 leaf and the group-level aggregate must not be shared with any
 other comparator.  It is transparent to the user; no GUC needs to
-be set.  Queries outside the supported shape (HAVING-SUM,
-HAVING-MIN/MAX, multi-cmp HAVING such as
-``COUNT(*) >= a AND COUNT(*) <= b``, or non-trivial per-row
-provenance from joins) fall through to the general HAVING path.
+be set.  Queries outside the supported shape (multi-cmp HAVING such
+as ``COUNT(*) >= a AND COUNT(*) <= b``) fall through to the general
+HAVING path.
+
+HAVING-MIN / MAX closed-form shortcut
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The same mechanism handles
+``GROUP BY g HAVING MIN(a) op c`` and ``MAX(a) op c`` (same six
+operators).  Here no Poisson-binomial DP is needed: ProvSQL
+partitions the group's rows on whether their value ``a`` satisfies the
+comparison against ``c`` and computes the probability as a product of
+the rows' presence probabilities, in ``O(N)`` per group.  For example
+``MAX(a) >= c`` holds iff at least one row with ``a >= c`` is present,
+with probability ``1 - ∏ (1 - p_i)`` over those rows; ``MIN(a) >= c``
+holds iff no row with ``a < c`` is present and the group is non-empty;
+all twelve ``(MIN|MAX, op)`` cases have analogous closed forms.  Like
+the COUNT shortcut it fires automatically and replaces the
+exponential possible-worlds enumeration the general path would
+otherwise run for these aggregates.
+
+HAVING-SUM closed-form shortcut
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``GROUP BY g HAVING SUM(a) op c`` (same six operators) is handled by a
+weighted-sum dynamic program: the distribution of the group's running
+sum over the present rows is built by convolution, and the probability
+is read off as the mass of the sums satisfying the comparison (with the
+empty group excluded).  This costs ``O(N × R)`` per group, where ``R``
+is the range of reachable sums.  Because ``R`` grows with the
+magnitude of the values, the shortcut is *pseudo*-polynomial and steps
+aside for the general path when the range is too wide; for the usual
+small-integer weights it replaces the exponential enumeration with a
+fast DP.
 
 Continuous Random Variables
 ----------------------------
@@ -353,5 +562,5 @@ a hybrid evaluator falling back to analytical closed forms where
 applicable (RangeCheck for support-decidable comparators, exact
 CDFs for single-distribution :math:`\mathrm{gate\_cmp}`,
 family-closure simplification for linear combinations of
-normals, …). See :doc:`continuous-distributions` for the full
+normals…). See :doc:`continuous-distributions` for the full
 surface.

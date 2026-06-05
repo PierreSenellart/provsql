@@ -11,6 +11,7 @@ on:
       - 'docker/**'
       - 'website/**'
       - 'studio/**'
+      - 'wasm/**'
       - 'test/bench/**'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/codeql.yml'
@@ -19,6 +20,7 @@ on:
       - '.github/workflows/studio.yml'
       - '.github/workflows/studio-release.yml'
       - '.github/workflows/wsl.yml'
+      - '.github/workflows/wasm.yml'
       - 'release.sh'
       - 'CITATION.cff'
       - 'LICENSE'
@@ -30,6 +32,7 @@ on:
       - 'docker/**'
       - 'website/**'
       - 'studio/**'
+      - 'wasm/**'
       - 'test/bench/**'
       - '.github/workflows/build_and_test.yml'
       - '.github/workflows/codeql.yml'
@@ -38,6 +41,7 @@ on:
       - '.github/workflows/studio.yml'
       - '.github/workflows/studio-release.yml'
       - '.github/workflows/wsl.yml'
+      - '.github/workflows/wasm.yml'
       - 'release.sh'
       - 'CITATION.cff'
       - 'LICENSE'
@@ -59,10 +63,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: /usr/local/bin/doxygen
-          key: doxygen-1.13.2-${{ runner.os }}
+          key: doxygen-1.16.1-${{ runner.os }}
       - if: steps.cache-doxygen.outputs.cache-hit != 'true'
         run: |
-          wget -q https://github.com/doxygen/doxygen/releases/download/Release_1_13_2/doxygen-1.13.2.linux.bin.tar.gz
-          tar xzf doxygen-1.13.2.linux.bin.tar.gz
-          cp doxygen-1.13.2/bin/doxygen /usr/local/bin/
+          wget -q https://github.com/doxygen/doxygen/releases/download/Release_1_16_1/doxygen-1.16.1.linux.bin.tar.gz
+          tar xzf doxygen-1.16.1.linux.bin.tar.gz
+          cp doxygen-1.16.1/bin/doxygen /usr/local/bin/
       - run: make docs

@@ -87,7 +87,7 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     The classifier runs on the user's parsed ``Query`` before any
     rewriting and only on the user's outermost statement; PL/pgSQL
     helpers the rewriter calls into (``provenance_times``,
-    ``provenance_aggregate``, …) do not produce extra notices.
+    ``provenance_aggregate``…) do not produce extra notices.
 
     ProvSQL Studio enables this GUC automatically and renders the
     certified kind on the result-table provenance pill; see
@@ -231,3 +231,76 @@ All variables above **except** ``provsql.tool_search_path`` and
 their own session without superuser privileges. ``provsql.tool_search_path``
 is superuser-only and ``provsql.kcmcp_server`` is config-file/reload-only, for
 the security reasons given in their entries above.
+
+.. _search-path:
+
+Schema and ``search_path``
+--------------------------
+
+ProvSQL installs all its types, functions, and operators into a schema
+named ``provsql``. Functions and operators are resolved through
+PostgreSQL's `search_path
+<https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATH>`_,
+so unless ``provsql`` is on the path you must qualify every name
+(``provsql.expected(...)``, ``OPERATOR(provsql.+)`` …). The convenient
+setup keeps ``provsql`` on the path so unqualified names just work:
+
+.. code-block:: postgresql
+
+    -- per database (persistent; affects new sessions):
+    ALTER DATABASE mydb SET search_path = "$user", public, provsql;
+
+    -- or for the current session only:
+    SET search_path TO "$user", public, provsql;
+
+What goes wrong without it
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Crucially, while functions and operators follow ``search_path``, **casts
+do not** -- a cast is bound to a type pair globally. When ``provsql`` is
+absent from the path an operator lookup does not necessarily fail:
+an implicit cast can reroute it to a built-in operator with different
+semantics. ProvSQL therefore keeps the cross-domain casts that could do
+this (``random_variable`` → ``uuid``, ``agg_token`` → ``numeric``) at
+*assignment* level rather than *implicit*, precisely so that such a
+misresolution becomes a clean error instead of a silent wrong result.
+The practical consequences when ``provsql`` is not on the path:
+
+* **Random-variable comparisons and arithmetic** (``v < w``, ``v + w``,
+  ``sum(v)`` over a ``random_variable`` column ``v``) raise
+  ``operator does not exist: provsql.random_variable …``.
+
+* **Aggregate-token comparisons** on a materialised ``agg_token`` column
+  (``WHERE s > 15``) likewise fail rather than silently comparing the
+  bare scalar value and losing the provenance conditioning.
+
+* **Plain ProvSQL function calls** (``expected(...)``, ``provenance()``,
+  the ``sr_*`` semiring evaluators, ``probability(...)`` …) raise
+  ``function … does not exist``.
+
+All of these are loud, self-explanatory errors. The fix is always the
+same: put ``provsql`` on the ``search_path`` (or qualify the name).
+
+The ``setup_search_path()`` helper
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``CREATE EXTENSION provsql`` prints a ``NOTICE`` when the database's
+default ``search_path`` does not include ``provsql``. The bundled
+helper does the edit for you:
+
+.. code-block:: postgresql
+
+    SELECT provsql.setup_search_path();
+
+It reads the database's current ``search_path`` setting, appends
+``provsql`` if it is not already present (never reordering or dropping
+the existing entries), and applies the result with ``ALTER DATABASE``.
+It is idempotent and reports what it did with a ``NOTICE``. Only **new**
+sessions pick up the change -- reconnect (or ``SET search_path`` in the
+current session) to use unqualified names right away. The caller must be
+the database owner or a superuser, and role-level ``search_path``
+settings (if any) take precedence over the database-level one and are
+left untouched.
+
+ProvSQL never edits your ``search_path`` on its own: ``CREATE EXTENSION``
+only advises, and ``setup_search_path()`` runs only when you call it.

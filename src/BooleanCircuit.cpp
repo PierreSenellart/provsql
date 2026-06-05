@@ -39,6 +39,7 @@ extern "C" {
 #include <vector>
 #include <stack>
 #include <functional>
+#include <algorithm>
 
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
@@ -64,6 +65,9 @@ constexpr const char *provsql_fallback_compiler = "d4";
 enum levels {ERROR, NOTICE};
 #define elog(level, ...) {fprintf(stderr, __VA_ARGS__); if(level==ERROR) exit(EXIT_FAILURE);}
 #define CHECK_FOR_INTERRUPTS() ((void)0)
+// The standalone tool has no PostgreSQL stack-depth governor; its deep
+// recursions (tree decomposition, d-DNNF) already run on heap stacks.
+#define check_stack_depth() ((void)0)
 #else
 extern "C" {
 #include "provsql_utils.h"
@@ -318,6 +322,7 @@ std::string BooleanCircuit::exportCircuit(gate_t root) const
 
 bool BooleanCircuit::evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const
 {
+  check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
   bool disjunction=false;
 
   switch(getGateType(g)) {
@@ -385,6 +390,441 @@ double BooleanCircuit::monteCarlo(gate_t g, unsigned samples) const
   }
 
   return success*1./samples;
+}
+
+bool BooleanCircuit::dnfShape(
+  gate_t g,
+  std::vector<gate_t> &clauses,
+  std::vector<std::set<gate_t> > &supports) const
+{
+  clauses.clear();
+  supports.clear();
+
+  // A top-level OR exposes one clause per child; anything else is a single
+  // clause rooted at g itself (regime (a): a bare AND-of-leaves or a lone
+  // input).
+  std::vector<gate_t> clause_roots;
+  if(getGateType(g)==BooleanGate::OR) {
+    for(auto c: getWires(g))
+      clause_roots.push_back(c);
+  } else {
+    clause_roots.push_back(g);
+  }
+
+  for(auto root: clause_roots) {
+    // Sweep the AND-only stratum below this clause root, collecting the
+    // reachable input leaves.  Any OR (nested disjunction), NOT
+    // (negation), or multivalued input below the root takes the circuit
+    // out of regimes (a)/(b): bail.
+    std::set<gate_t> support;
+    std::unordered_set<gate_t> seen;
+    std::stack<gate_t> st;
+    st.push(root);
+    while(!st.empty()) {
+      gate_t cur = st.top();
+      st.pop();
+      if(!seen.insert(cur).second)
+        continue;
+      switch(getGateType(cur)) {
+      case BooleanGate::IN:
+        support.insert(cur);
+        break;
+      case BooleanGate::AND:
+        for(auto s: getWires(cur))
+          st.push(s);
+        break;
+      default:
+        return false;
+      }
+    }
+    clauses.push_back(root);
+    supports.push_back(std::move(support));
+  }
+
+  return true;
+}
+
+bool BooleanCircuit::dnfShapeInfo(gate_t g, std::size_t &num_clauses) const
+{
+  // Clause count: children of a top-level OR, else a single clause rooted at g.
+  std::vector<gate_t> clause_roots;
+  if(getGateType(g)==BooleanGate::OR)
+    for(auto c: getWires(g))
+      clause_roots.push_back(c);
+  else
+    clause_roots.push_back(g);
+  num_clauses = clause_roots.size();
+
+  // Validate the AND-only strata below every clause root with ONE global
+  // visited-set (each gate's type is path-independent), so a shared subgraph is
+  // checked once and no per-clause supports are materialised.  O(circuit).
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> st;
+  for(auto r: clause_roots)
+    st.push(r);
+  while(!st.empty()) {
+    gate_t cur = st.top();
+    st.pop();
+    if(!seen.insert(cur).second)
+      continue;
+    switch(getGateType(cur)) {
+    case BooleanGate::IN:
+      break;
+    case BooleanGate::AND:
+      for(auto s: getWires(cur))
+        st.push(s);
+      break;
+    default:
+      return false;
+    }
+  }
+  return true;
+}
+
+namespace {
+
+/**
+ * Shared Karp-Luby sampler state derived from the per-clause supports:
+ * the per-clause probability @c p_i = product of its support-leaf marginals,
+ * the prefix sums for the O(log m) categorical clause draw, the union-bound
+ * total @c S = sum p_i (with @c Pr[F] <= S <= m*Pr[F]), and the set of leaves
+ * that can affect clause membership (only those need to be drawn each round).
+ */
+struct KarpLubyState {
+  std::vector<double> p;
+  std::vector<double> cumulative;
+  double S = 0.;
+  std::vector<gate_t> relevant;
+};
+
+KarpLubyState karpLubyState(
+  const BooleanCircuit &c,
+  const std::vector<std::set<gate_t> > &supports)
+{
+  KarpLubyState st;
+  const size_t m = supports.size();
+  st.p.resize(m);
+  st.cumulative.resize(m);
+  std::set<gate_t> rel;
+  for(size_t i=0; i<m; ++i) {
+    double pi = 1.;
+    for(gate_t leaf: supports[i]) {
+      pi *= c.getProb(leaf);
+      rel.insert(leaf);
+    }
+    st.p[i] = pi;
+    st.S += pi;
+    st.cumulative[i] = st.S;
+  }
+  st.relevant.assign(rel.begin(), rel.end());
+  return st;
+}
+
+/// Seed mt19937_64 from provsql.monte_carlo_seed exactly as monteCarlo, so a
+/// pinned seed makes the estimate reproducible for the regression tests.
+std::mt19937_64 karpLubySeededRNG()
+{
+  std::mt19937_64 rng;
+  if(provsql_monte_carlo_seed != -1) {
+    rng.seed(static_cast<uint64_t>(provsql_monte_carlo_seed));
+  } else {
+    std::random_device rd;
+    rng.seed((static_cast<uint64_t>(rd()) << 32) | rd());
+  }
+  return rng;
+}
+
+/// Draw a clause index with probability @c p_i / S using the prefix sums.
+size_t karpLubyDrawClause(const KarpLubyState &st,
+                          std::mt19937_64 &rng,
+                          std::uniform_real_distribution<double> &u01)
+{
+  double u = u01(rng) * st.S;
+  size_t i = static_cast<size_t>(
+    std::upper_bound(st.cumulative.begin(), st.cumulative.end(), u)
+    - st.cumulative.begin());
+  if(i >= st.cumulative.size())
+    i = st.cumulative.size() - 1;   // guard against u == S from rounding
+  return i;
+}
+
+/**
+ * One Karp-Luby coverage trial in clause @p i: sample an assignment of
+ * @c C_i (its support forced true, every other relevant leaf drawn from its
+ * marginal), then return whether @p i is the smallest-index clause the
+ * assignment satisfies -- the coverage rejection that divides the over-count
+ * @c S by the number of clauses covering each sampled world.  @p trueLeaves is
+ * reused across calls to avoid reallocating.
+ */
+bool karpLubyCovers(
+  const BooleanCircuit &c,
+  const std::vector<std::set<gate_t> > &supports,
+  const KarpLubyState &st, size_t i,
+  std::mt19937_64 &rng,
+  std::uniform_real_distribution<double> &u01,
+  std::unordered_set<gate_t> &trueLeaves)
+{
+  trueLeaves.clear();
+  for(gate_t leaf: st.relevant) {
+    if(supports[i].count(leaf) || u01(rng) < c.getProb(leaf))
+      trueLeaves.insert(leaf);
+  }
+  const size_t m = supports.size();
+  for(size_t j=0; j<m; ++j) {
+    bool sat = true;
+    for(gate_t leaf: supports[j]) {
+      if(trueLeaves.find(leaf)==trueLeaves.end()) { sat = false; break; }
+    }
+    if(sat)
+      return j==i;
+  }
+  return false;   // unreachable: clause i always covers its own forced support
+}
+
+} // anonymous namespace
+
+double BooleanCircuit::karpLuby(
+  const std::vector<gate_t> &clauses,
+  const std::vector<std::set<gate_t> > &supports,
+  unsigned long samples) const
+{
+  const size_t m = clauses.size();
+  if(m==0 || samples==0)
+    return 0.;
+
+  KarpLubyState st = karpLubyState(*this, supports);
+  if(st.S<=0.)
+    return 0.;
+
+  std::mt19937_64 rng = karpLubySeededRNG();
+  std::uniform_real_distribution<double> u01(0.0, 1.0);
+  std::unordered_set<gate_t> trueLeaves;
+
+  // Fewer rounds than clauses: too few to stratify (every clause needs at
+  // least one sample for its per-clause acceptance rate to be defined), so
+  // fall back to the unstratified categorical-draw estimator -- S times the
+  // overall acceptance ratio, still unbiased for any budget.
+  if(samples < m) {
+    unsigned long accepts = 0;
+    for(unsigned long s=0; s<samples; ++s) {
+      size_t i = karpLubyDrawClause(st, rng, u01);
+      if(karpLubyCovers(*this, supports, st, i, rng, u01, trueLeaves))
+        ++accepts;
+      if(provsql_interrupted)
+        throw CircuitException("Interrupted after "+std::to_string(s+1)+" samples");
+    }
+    return st.S * accepts / static_cast<double>(samples);
+  }
+
+  // Stratified allocation: n_i = 1 + proportional share of (samples - m) by
+  // p_i / S, with the leftover rounds handed to the largest fractional parts
+  // (largest-remainder rounding) so the n_i stay proportional and sum to
+  // exactly `samples`.  Estimating each clause's acceptance rate separately
+  // and combining sum_i p_i * rate_i removes the categorical-draw
+  // (between-strata) variance of the textbook estimator, tightening the
+  // estimate at the same budget by up to a factor m.
+  std::vector<unsigned long> n(m, 1);
+  const unsigned long rest = samples - m;
+  std::vector<double> frac(m);
+  unsigned long base_sum = 0;
+  for(size_t i=0; i<m; ++i) {
+    double want = static_cast<double>(rest) * st.p[i] / st.S;
+    unsigned long fl = static_cast<unsigned long>(want);
+    n[i] += fl;
+    base_sum += fl;
+    frac[i] = want - static_cast<double>(fl);
+  }
+  unsigned long leftover = rest - base_sum;
+  if(leftover > 0) {
+    std::vector<size_t> idx(m);
+    for(size_t i=0; i<m; ++i) idx[i] = i;
+    std::partial_sort(idx.begin(), idx.begin()+leftover, idx.end(),
+      [&](size_t a, size_t b){ return frac[a] > frac[b]; });
+    for(unsigned long k=0; k<leftover; ++k)
+      ++n[idx[k]];
+  }
+
+  double est = 0.;
+  for(size_t i=0; i<m; ++i) {
+    unsigned long accepts = 0;
+    for(unsigned long k=0; k<n[i]; ++k) {
+      if(karpLubyCovers(*this, supports, st, i, rng, u01, trueLeaves))
+        ++accepts;
+      if(provsql_interrupted)
+        throw CircuitException("Interrupted while sampling clause "
+                               +std::to_string(i));
+    }
+    est += st.p[i] * static_cast<double>(accepts) / static_cast<double>(n[i]);
+  }
+  return est;
+}
+
+double BooleanCircuit::karpLubyStopping(
+  const std::vector<gate_t> &clauses,
+  const std::vector<std::set<gate_t> > &supports,
+  double eps, double delta,
+  unsigned long max_samples,
+  unsigned long &samples_used,
+  bool &reached_target) const
+{
+  samples_used = 0;
+  reached_target = false;
+  const size_t m = clauses.size();
+  if(m==0 || max_samples==0)
+    return 0.;
+
+  KarpLubyState st = karpLubyState(*this, supports);
+  if(st.S<=0.)
+    return 0.;
+
+  // DKLR stopping threshold on the accept count: Y1 = 1 + (1+eps)*Y with
+  // Y = 4*(e-2)*ln(2/delta)/eps^2.  Sample coverage trials until the accept
+  // count reaches Y1 and return S*Y1/N (a relative (eps,delta) estimate of
+  // Pr[F]); the number of rounds N then adapts to the true acceptance
+  // probability Pr[F]/S in [1/m, 1] -- up to m times fewer rounds than the
+  // fixed bound when the clauses barely overlap.
+  const double e  = exp(1.0);
+  const double Y  = 4.0 * (e - 2.0) * log(2.0/delta) / (eps*eps);
+  const double Y1 = 1.0 + (1.0 + eps) * Y;
+
+  std::mt19937_64 rng = karpLubySeededRNG();
+  std::uniform_real_distribution<double> u01(0.0, 1.0);
+  std::unordered_set<gate_t> trueLeaves;
+
+  unsigned long accepts = 0;
+  for(unsigned long s=0; s<max_samples; ++s) {
+    size_t i = karpLubyDrawClause(st, rng, u01);
+    if(karpLubyCovers(*this, supports, st, i, rng, u01, trueLeaves)) {
+      ++accepts;
+      if(static_cast<double>(accepts) >= Y1) {
+        samples_used = s + 1;
+        reached_target = true;
+        return st.S * Y1 / static_cast<double>(samples_used);
+      }
+    }
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted after "+std::to_string(s+1)+" samples");
+  }
+
+  // Cap reached before the threshold: the (eps,delta) target is not met, so
+  // return the plain unbiased S*accepts/N estimate over the spent budget (the
+  // caller reports the weaker guarantee actually achieved).
+  samples_used = max_samples;
+  return st.S * static_cast<double>(accepts) / static_cast<double>(max_samples);
+}
+
+/// Largest clause count for which the 2^m sieve enumeration is admitted.
+static const size_t kSieveMaxClauses = 24;
+
+double BooleanCircuit::sieve(
+  const std::vector<gate_t> &clauses,
+  const std::vector<std::set<gate_t> > &supports) const
+{
+  const size_t m = clauses.size();
+  if(m == 0)
+    return 0.;
+  if(m > kSieveMaxClauses)
+    throw CircuitException(
+      "sieve: too many clauses (" + std::to_string(m) + " > "
+      + std::to_string(kSieveMaxClauses)
+      + "); inclusion-exclusion is 2^m -- use another method");
+
+  // Pr[∨ c_i] = Σ_{∅≠S} (-1)^{|S|+1} ∏_{leaf ∈ ∪supports(S)} getProb(leaf).
+  double total = 0.;
+  std::unordered_set<gate_t> u;
+  for(unsigned long long s = 1; s < (1ULL << m); ++s) {
+    u.clear();
+    int bits = 0;
+    for(size_t i = 0; i < m; ++i)
+      if(s & (1ULL << i)) {
+        ++bits;
+        for(gate_t leaf : supports[i])
+          u.insert(leaf);
+      }
+    double p = 1.;
+    for(gate_t leaf : u)
+      p *= getProb(leaf);
+    if(bits & 1) total += p; else total -= p;
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted");
+  }
+  return total;
+}
+
+void BooleanCircuit::dnfBounds(
+  const std::vector<std::set<gate_t> > &clauses,
+  double &lower, double &upper) const
+{
+  const size_t m = clauses.size();
+  if(m == 0) {
+    lower = upper = 0.;
+    return;
+  }
+
+  // Per-clause probability P(d) = ∏_{leaf ∈ clauses[d]} getProb(leaf) (an empty
+  // support is a constant-true clause, product over the empty set = 1).
+  std::vector<double> clause_prob(m);
+  for(size_t i = 0; i < m; ++i) {
+    double p = 1.;
+    for(gate_t leaf : clauses[i])
+      p *= getProb(leaf);
+    clause_prob[i] = p;
+  }
+
+  // Greedy partition into buckets of pairwise-independent clauses, clauses taken
+  // in descending marginal-probability order (the paper's improved heuristic).
+  std::vector<size_t> order(m);
+  for(size_t i = 0; i < m; ++i)
+    order[i] = i;
+  std::sort(order.begin(), order.end(),
+            [&](size_t a, size_t b) {
+              return clause_prob[a] > clause_prob[b];
+            });
+
+  // For each bucket: the union of its clauses' supports (to test independence in
+  // O(|support|) against the whole bucket at once -- disjoint from the union iff
+  // independent of every clause already in it) and its running independent-or
+  // probability 1 - ∏(1 - P(d)).
+  std::vector<std::set<gate_t> > bucket_support;
+  std::vector<double> bucket_prob;
+  for(size_t idx : order) {
+    const std::set<gate_t> &sup = clauses[idx];
+    size_t target = bucket_support.size();   // default: open a new bucket
+    for(size_t b = 0; b < bucket_support.size(); ++b) {
+      bool disjoint = true;
+      for(gate_t leaf : sup)
+        if(bucket_support[b].count(leaf)) {
+          disjoint = false;
+          break;
+        }
+      if(disjoint) {
+        target = b;
+        break;
+      }
+    }
+    if(target == bucket_support.size()) {
+      bucket_support.emplace_back();
+      bucket_prob.push_back(0.);
+    }
+    bucket_prob[target] =
+      1. - (1. - bucket_prob[target]) * (1. - clause_prob[idx]);
+    bucket_support[target].insert(sup.begin(), sup.end());
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted");
+  }
+
+  // lower = max bucket probability (each bucket is a sub-disjunction of Φ);
+  // upper = min(1, Σ bucket probabilities) (union bound over the buckets).
+  double L = 0., U = 0.;
+  for(double bp : bucket_prob) {
+    if(bp > L)
+      L = bp;
+    U += bp;
+  }
+  lower = L;
+  upper = (U > 1.) ? 1. : U;
 }
 
 double BooleanCircuit::possibleWorlds(gate_t g) const
@@ -780,7 +1220,8 @@ static std::string chooseCompiler() {
   return chosen.empty() ? std::string(fb) : chosen;
 }
 
-dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
+dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler,
+                                  std::string *resolved) const {
   // No compiler named: pick the highest-preference available one (symmetric
   // with the no-tool wmc path).  provsql.fallback_compiler is deliberately
   // not consulted here -- it governs only makeDD's last-resort fallback route.
@@ -811,6 +1252,8 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler) const {
             "Compiler '"+compiler+"' uses output parser '"+rec->parser
             +"', which compilation() does not implement");
   const std::string compiler_binary = rec->binary;
+  if(resolved)
+    *resolved = compiler; // the validated tool actually used (CLI or KCMCP)
 
   // KCMCP backend: compile over a warm socket server instead of spawning a
   // CLI tool.  The problem is sent as a native BC-S1.2 circuit when the record
@@ -1239,14 +1682,27 @@ double BooleanCircuit::wmcCount(gate_t g, const std::string &requested,
 #endif // external-tool compilation / counting (excluded from tdkc)
 
 double BooleanCircuit::independentEvaluationInternal(
-  gate_t g, std::set<gate_t> &seen) const
+  gate_t g, std::set<gate_t> &seen,
+  std::unordered_map<gate_t, double> &memo) const
 {
+  check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
+  // Memoised gates are variable-free (constant-only) -- returning the cached
+  // value is sound (it touched nothing in `seen`) and avoids re-traversing a
+  // shared constant subgraph.  A variable-bearing gate is never cached, so a
+  // second visit re-enters its subtree and throws on the repeated variable.
+  {
+    auto it = memo.find(g);
+    if(it != memo.end())
+      return it->second;
+  }
+  const std::size_t seen_before = seen.size();
+
   double result=1.;
 
   switch(getGateType(g)) {
   case BooleanGate::AND:
     for(const auto &c: getWires(g)) {
-      result*=independentEvaluationInternal(c, seen);
+      result*=independentEvaluationInternal(c, seen, memo);
     }
     break;
 
@@ -1275,7 +1731,7 @@ double BooleanCircuit::independentEvaluationInternal(
           mulin_seen.insert(p);
         }
       } else
-        groups[group] = independentEvaluationInternal(c, seen);
+        groups[group] = independentEvaluationInternal(c, seen, memo);
     }
 
     for(const auto [k, v]: groups)
@@ -1285,7 +1741,7 @@ double BooleanCircuit::independentEvaluationInternal(
   break;
 
   case BooleanGate::NOT:
-    result=1-independentEvaluationInternal(*getWires(g).begin(), seen);
+    result=1-independentEvaluationInternal(*getWires(g).begin(), seen, memo);
     break;
 
   case BooleanGate::IN:
@@ -1326,13 +1782,17 @@ double BooleanCircuit::independentEvaluationInternal(
     throw CircuitException("Bad gate");
   }
 
+  // Cache only if this gate consumed no variable (constant-only subgraph).
+  if(seen.size() == seen_before)
+    memo[g] = result;
   return result;
 }
 
 double BooleanCircuit::independentEvaluation(gate_t g) const
 {
   std::set<gate_t> seen;
-  return independentEvaluationInternal(g, seen);
+  std::unordered_map<gate_t, double> memo;
+  return independentEvaluationInternal(g, seen, memo);
 }
 
 void BooleanCircuit::setInfo(gate_t g, unsigned int i)
@@ -1429,6 +1889,7 @@ void BooleanCircuit::rewriteMultivaluedGates()
 }
 
 gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const {
+  check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
   gate_t dg{0};
 
   switch(getGateType(g)) {
@@ -1527,7 +1988,7 @@ dDNNF BooleanCircuit::makeDD(gate_t g, const std::string &method, const std::str
         TreeDecomposition td(*this);
         dd = dDNNFTreeDecompositionBuilder{
           *this, g, td}.build();
-        if(provsql_verbose>=20)
+        if(provsql_verbose>=25)
           provsql_notice("dD obtained by tree decomposition, %ld gates", dd.getNbGates());
       } catch(TreeDecompositionException &) {
         // Last-resort fallback: chooseCompiler() prefers

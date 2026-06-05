@@ -76,7 +76,7 @@ def test_conn_switch_rejects_missing_database_arg(client):
 
 
 def test_conn_switch_rejects_inaccessible_database(client):
-    # A database name almost certainly absent from the cluster — the server
+    # A database name almost certainly absent from the cluster – the server
     # must refuse without tearing the existing pool down.
     resp = client.post("/api/conn", json={"database": "no_such_db_xyzzy_12345"})
     assert resp.status_code == 403

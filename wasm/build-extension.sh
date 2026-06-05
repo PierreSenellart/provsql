@@ -12,7 +12,7 @@
 # Output: provsql-wasm/provsql.so (WASM side module) and provsql.tar.gz
 # (the PGlite extension bundle).  No libboost_serialization is needed: the
 # Boost-serialized circuit round-trip is compiled out under
-# PROVSQL_INPROCESS_STORE (see doc/TODO/wasm-browser-deployment.md §6).
+# PROVSQL_INPROCESS_STORE.
 set -u
 emcc --clear-cache >/dev/null 2>&1 || true
 
@@ -44,9 +44,18 @@ INC="-I$SRV -I$INT -I/boostinc -I. -Isrc"  # -I. for the few <src/X.h> angle inc
 CFILES=$(ls src/*.c)
 CPPFILES=$(ls src/*.cpp | grep -vE 'provsql_migrate_mmap|TreeDecompositionKnowledgeCompiler|kcmcp_server|dimacs_cnf')
 
+# Boost <= ~1.78 derives boost::hash_detail::hash_base from std::unary_function
+# unless BOOST_NO_CXX98_FUNCTION_BASE is set, but only auto-defines that macro
+# for the MSVC stdlib -- never for libc++.  emscripten's libc++ removed
+# std::unary_function in C++17, so CircuitCache.h (boost/multi_index hashed
+# index -> boost/functional/hash) fails to compile against an old host Boost.
+# Define it ourselves to select Boost's C++17-safe hash_base; harmless on
+# newer Boost (already set) and on the C files (they pull in no Boost).
+BOOST_CXX17_COMPAT="-DBOOST_NO_CXX98_FUNCTION_BASE"
+
 OBJS=""; FAIL=""
 for f in $CFILES;   do o="${f%.c}.o";   emcc            $PGLITE_CFLAGS $INC -c "$f" -o "$o" 2>"$o.err" && OBJS="$OBJS $o" || { FAIL="$FAIL $f"; echo "CC FAIL $f"; head -5 "$o.err"; }; done
-for f in $CPPFILES; do o="${f%.cpp}.o"; em++ -std=c++17 $PGLITE_CFLAGS $INC -c "$f" -o "$o" 2>"$o.err" && OBJS="$OBJS $o" || { FAIL="$FAIL $f"; echo "CXX FAIL $f"; head -5 "$o.err"; }; done
+for f in $CPPFILES; do o="${f%.cpp}.o"; em++ -std=c++17 $BOOST_CXX17_COMPAT $PGLITE_CFLAGS $INC -c "$f" -o "$o" 2>"$o.err" && OBJS="$OBJS $o" || { FAIL="$FAIL $f"; echo "CXX FAIL $f"; head -5 "$o.err"; }; done
 [ -n "$FAIL" ] && { echo "COMPILE FAILURES:$FAIL"; exit 1; }
 
 # Whole-archive libc++/libc++abi: the PGlite main module is pure C and
@@ -56,10 +65,13 @@ em++ $PGLITE_CFLAGS -sSIDE_MODULE=1 -sSUPPORT_LONGJMP=emscripten \
   $OBJS -o provsql.so 2>link.err || { echo "LINK FAILED"; tail -15 link.err; exit 1; }
 echo "built provsql.so: $(stat -c%s provsql.so) bytes"
 
-# Package the PGlite bundle (layout relative to WASM_PREFIX=/pglite).
-SQL=$(ls provsql--*.sql | head -1)
+# Package the PGlite bundle (layout relative to WASM_PREFIX=/pglite).  Ship ALL
+# provsql--*.sql: the base install script for the control's default_version plus
+# the cross-version upgrade paths.  (Packaging only the first alphabetically --
+# provsql--1.0.0.sql -- left CREATE EXTENSION with no script for the default
+# version, e.g. 1.9.0-dev.)
 rm -rf stage && mkdir -p stage/lib/postgresql stage/share/postgresql/extension
 cp provsql.so stage/lib/postgresql/provsql.so
-cp provsql.control "$SQL" stage/share/postgresql/extension/
+cp provsql.control provsql--*.sql stage/share/postgresql/extension/
 ( cd stage && tar -czf ../provsql.tar.gz $(find . -type f | sed 's|^\./||') )
 echo "packaged provsql.tar.gz:"; tar tzf provsql.tar.gz

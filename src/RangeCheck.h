@@ -147,7 +147,7 @@ matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
  * (return @c std::nullopt that just means "fall back to MC").
  *
  * Used by the conditional-moment dispatcher to raise an explicit
- * infeasibility error before falling through to MC rejection — MC
+ * infeasibility error before falling through to MC rejection – MC
  * would still detect the same condition by accepting 0 of N samples,
  * but the closed-form predicate spots it without ten thousand
  * wasted draws and emits a tighter message.
@@ -178,7 +178,7 @@ struct DiracShape {
  *
  * Matches a categorical-form @c gate_mixture
  * (@c isCategoricalMixture): the key @c gate_input is ignored (its
- * own probability is irrelevant — the mass is on the @c mulinputs),
+ * own probability is irrelevant – the mass is on the @c mulinputs),
  * each remaining wire contributes one @c {value, prob} pair.
  *
  * Unconditional only; conditioning on a categorical's value is

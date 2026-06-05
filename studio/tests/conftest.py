@@ -107,6 +107,13 @@ def app(test_dsn: str, tmp_path, monkeypatch):
     try:
         yield app
     finally:
+        kernels = app.extensions.get("provsql_kernels") or {}
+        close_all = kernels.get("close_all")
+        if close_all is not None:
+            try:
+                close_all()
+            except Exception:
+                pass
         pool = app.extensions.get("provsql_pool")
         if pool is not None:
             try:

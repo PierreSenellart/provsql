@@ -41,8 +41,10 @@
 #include "optimizer/optimizer.h"
 #else
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
+#include "optimizer/var.h"              /* pull_var_clause, PVC_RECURSE_* */
 #endif
 #include "parser/parse_oper.h"
+#include "tcop/tcopprot.h"              /* pg_parse_query, pg_analyze_and_rewrite* */
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
@@ -93,7 +95,8 @@ extern int provsql_verbose;             /* declared in provsql.c */
  * @return @c true iff @p q is a candidate for the safe-query rewrite.
  */
 static bool is_safe_query_candidate(const constants_t *constants, Query *q,
-                                    Bitmapset *approved_self_join_relids) {
+                                    Bitmapset *approved_self_join_relids,
+                                    bool for_skeleton) {
   ListCell *lc, *lc2;
   List *seen_relids = NIL;
 
@@ -120,8 +123,14 @@ static bool is_safe_query_candidate(const constants_t *constants, Query *q,
    * one of them so the rewrite is row-count-preserving in the user's
    * eye.  Both are encoded as @c SortGroupClause lists; either is
    * enough -- @c transform_distinct_into_group_by promotes the
-   * outer @c DISTINCT to a @c GROUP @c BY downstream of us. */
-  if (q->groupClause == NIL && q->distinctClause == NIL)
+   * outer @c DISTINCT to a @c GROUP @c BY downstream of us.
+   *
+   * In @p for_skeleton mode the caller is only asking whether the
+   * conjunctive skeleton is hierarchical (it never rewrites), so this
+   * row-count-preservation precondition does not apply: a bare
+   * @c SELECT-FROM-WHERE skeleton with no outer GROUP BY / DISTINCT is
+   * a legitimate question. */
+  if (!for_skeleton && q->groupClause == NIL && q->distinctClause == NIL)
     return false;
 
   /* All FROM entries must be base relations referenced via plain
@@ -5339,7 +5348,7 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
    * candidate gate skips its shared-relid bail for those. */
   {
     Bitmapset *approved = try_disjoint_constant_self_join_split(q);
-    if (!is_safe_query_candidate(constants, q, approved)) {
+    if (!is_safe_query_candidate(constants, q, approved, /*for_skeleton=*/false)) {
       if (approved)
         bms_free(approved);
       /* The read-once candidate gate refused (most often an un-rescued

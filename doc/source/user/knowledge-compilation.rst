@@ -371,42 +371,6 @@ circuit-depth notion: it tracks the deepest chain of operators between
 the node and the output, which is what governs evaluation cost and
 matches the depth a renderer would draw.
 
-Comparing probability methods
------------------------------
-
-:sqlfunc:`probability_benchmark` times every probability-evaluation
-method on a single circuit token and returns one row per method with
-its wall-clock duration and result. It runs ``independent``,
-``possible-worlds``, ``tree-decomposition``, ``monte-carlo``, each
-external compiler through the ``compilation`` method, and each weighted
-model counter under the ``wmc`` umbrella. Methods that cannot apply
-(an uninstalled compiler, a non-independent circuit, a treewidth
-blow-up, …) are captured per row in an ``error`` column rather than
-aborting the whole comparison.
-
-``probability_benchmark`` takes a concrete token, so feed it a literal
-UUID or one materialised in a plain table, exactly like
-:sqlfunc:`tseytin_cnf_mapping` above (and with the same restriction: do
-not call it inline over a provenance-tracked relation while
-``provsql.active`` is on):
-
-.. code-block:: postgresql
-
-    SET provsql.monte_carlo_seed = 42;   -- reproducible Monte-Carlo row
-
-    SELECT method, args,
-           ROUND(probability::numeric, 6) AS prob,
-           ROUND(milliseconds::numeric, 1) AS ms,
-           error
-    FROM probability_benchmark('00000000-0000-0000-0000-000000000000')
-    ORDER BY method, args NULLS FIRST;
-
-The exact methods agree to numerical precision; the approximate ones
-(``monte-carlo``, ``weightmc``) land within their confidence band. The
-second and third arguments tune the Monte-Carlo sample count (default
-``10000``) and the ``epsilon;delta`` forwarded to ``weightmc`` (default
-``'0.8;0.2'``).
-
 Checking tool availability
 --------------------------
 
@@ -432,12 +396,9 @@ browser. In Studio's :ref:`evaluation strip <studio-circuit-eval-strip>`,
 the same artifacts surface as inline panels: the DIMACS CNF, the
 compiled d-DNNF rendered beside the original circuit, the tree
 decomposition with its treewidth, and a one-click benchmark across all
-probability methods. Compilers that :sqlfunc:`tool_available` reports
-as missing are filtered out of the pickers, and the Studio benchmark
-skips those methods altogether: unlike the SQL
-:sqlfunc:`probability_benchmark`, which still emits a row per method and
-records the failure in its ``error`` column, their rows simply do not
-appear.
+probability methods (timing each method, with a per-method timeout, and
+skipping unavailable tools). Compilers that :sqlfunc:`tool_available`
+reports as missing are filtered out of the pickers.
 
 .. seealso::
 

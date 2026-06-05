@@ -21,8 +21,8 @@ J3|1|fired|0.300000|0.300000
 J3|2|fired|0.320000|0.320000
 (2 rows)
 scenario|x|rewriter|p_rew|p_base
-J4|1|refused|0.300000|0.300000
-J4|2|refused|0.320000|0.320000
+J4|1|refused|0.750000|0.750000
+J4|2|refused|0.500000|0.500000
 (2 rows)
 scenario|x|rewriter|p_rew|p_base
 J5|1|refused|0.300000|0.300000

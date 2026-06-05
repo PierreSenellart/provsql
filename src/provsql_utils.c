@@ -422,6 +422,23 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_AGG_TOKEN_UUID = get_provsql_func_oid("agg_token_uuid");
   CheckOid(OID_FUNCTION_AGG_TOKEN_UUID);
 
+  /* The next two are used by the agg_token JOIN query rewriting. */
+  constants.OID_FUNCTION_GET_CHILDREN = get_provsql_func_oid("get_children");
+  CheckOid(OID_FUNCTION_GET_CHILDREN);
+
+  constants.OID_FUNCTION_GET_EXTRA = get_provsql_func_oid("get_extra");
+  CheckOid(OID_FUNCTION_GET_EXTRA);
+
+  /* Pick the unnest(anyarray) overload explicitly; PG 14+ also has
+   * unnest(anymultirange), which get_func_oid would pick up first on
+   * some versions. */
+  {
+    Oid argtypes[1] = { ANYARRAYOID };
+    constants.OID_UNNEST = LookupFuncName(list_make1(makeString("unnest")),
+                                          1, argtypes, true);
+  }
+  CheckOid(OID_UNNEST);
+
   /* random_variable type and its operator procedures will ship in
    * 1.5.0.  Older schemas (notably the 1.0.0 baseline used by
    * extension_upgrade) do not have them.  Treat each lookup as
@@ -448,6 +465,11 @@ static constants_t initialize_constants(bool failure_if_not_possible)
    * surface (1.0.0 baseline used by extension_upgrade). */
   constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD =
     get_provsql_func_oid("rv_aggregate_semimod");
+
+  /* choose(anyelement): keeps the first non-NULL value of a group.  Used by
+   * the scalar-subquery decorrelation to pick the single matched value.
+   * Optional lookup (0 on schemas predating it). */
+  constants.OID_FUNCTION_CHOOSE = get_provsql_func_oid("choose");
 
   /* assume_boolean is installed by the 1.6.0 upgrade script.  Treat
    * its absence as a soft signal: on older schemas the safe-query

@@ -1,0 +1,55 @@
+\set ECHO none
+repair_key
+
+(1 row)
+pred|p
+sum < 5|0.500
+(1 row)
+pred|p
+sum <= 0|0.500
+(1 row)
+pred|p
+sum = 0|0.500
+(1 row)
+pred|p
+sum >= 0|1.000
+(1 row)
+pred|p
+sum > 0|0.500
+(1 row)
+pred|p
+sum >= 5|0.500
+(1 row)
+pred|p
+choose < 5|0.500
+(1 row)
+pred|p
+choose <= 0|0.500
+(1 row)
+pred|p
+choose = 0|0.500
+(1 row)
+pred|p
+choose >= 5|0.500
+(1 row)
+repair_key
+
+(1 row)
+pred|p
+X+Y < 11|0.750
+(1 row)
+pred|p
+X+Y <= 1|0.500
+(1 row)
+pred|p
+count < 2|1.000
+(1 row)
+pred|p
+count >= 1|1.000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

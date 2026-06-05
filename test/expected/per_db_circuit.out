@@ -1,4 +1,6 @@
 \set ECHO none
+NOTICE:  ProvSQL: schema "provsql" is not in your default search_path (currently: "$user", public).
+NOTICE:  ProvSQL operators and functions are resolved through search_path. Run "SELECT provsql.setup_search_path();" to add it, or set it manually (e.g. ALTER DATABASE provsql_test_aux SET search_path = "$user", public, provsql).
 add_provenance
 
 (1 row)

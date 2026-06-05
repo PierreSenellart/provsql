@@ -20,6 +20,7 @@
     <div class="ps-modeswitch" id="modeswitch" role="tablist">
       <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="tab"><i class="fas fa-project-diagram"></i> Circuit</a>
       <a class="ps-modeswitch__btn" href="/where" data-mode="where" role="tab"><i class="fas fa-search-location"></i> Where</a>
+      <a class="ps-modeswitch__btn" href="/notebook" data-mode="notebook" role="tab"><i class="fas fa-book-open"></i> Notebook</a>
     </div>
     <span class="wp-nav__conn">
       <button type="button" class="wp-nav__connbtn" id="conn-dot"
@@ -62,6 +63,7 @@
       </div>
     </span>
     <button type="button" class="wp-nav__link wp-nav__refresh" id="metadata-refresh-btn" title="Refresh schema, provenance mappings, and custom semirings" aria-label="Refresh metadata"><i class="fas fa-sync"></i></button>
+    <button type="button" class="wp-nav__link wp-nav__refresh" id="empty-db-btn" title="Empty the connected database: drop every user schema and start from a clean slate (the provsql extension survives)" aria-label="Empty database"><i class="fas fa-broom"></i></button>
     <span class="wp-nav__configwrap">
       <button type="button" class="wp-nav__link wp-nav__refresh" id="tools-btn"
               aria-haspopup="dialog" aria-expanded="false"
@@ -97,8 +99,8 @@
             <label class="wp-tools__field"><span>Kind
               <i class="fas fa-question-circle wp-tools__hint" title="cli: ProvSQL spawns this binary once per call.&#10;kcmcp: a warm socket server ProvSQL talks to over the KCMCP protocol."></i></span>
               <select id="tool-kind">
-                <option value="cli">cli &mdash; spawn a binary per call</option>
-                <option value="kcmcp">kcmcp &mdash; warm socket server</option>
+                <option value="cli">cli &ndash; spawn a binary per call</option>
+                <option value="kcmcp">kcmcp &ndash; warm socket server</option>
               </select></label>
             <div class="wp-tools__field"><span>Operations
               <i class="fas fa-question-circle wp-tools__hint" title="compile: knowledge compilation to a d-DNNF.&#10;wmc: weighted model counting.&#10;render: ASCII circuit drawing."></i></span>
@@ -117,8 +119,8 @@
             <label class="wp-tools__field" id="tool-conn-field" hidden><span>Connection
               <i class="fas fa-question-circle wp-tools__hint" title="Managed: ProvSQL launches and supervises the server (provsql.kcmcp_server).&#10;Endpoint: connect to a server you run."></i></span>
               <select id="tool-conn">
-                <option value="managed">Managed &mdash; ProvSQL launches the server</option>
-                <option value="endpoint">Endpoint &mdash; connect to a running server</option>
+                <option value="managed">Managed &ndash; ProvSQL launches the server</option>
+                <option value="endpoint">Endpoint &ndash; connect to a running server</option>
               </select></label>
             <label class="wp-tools__field" id="tool-endpoint-field" hidden><span>Address</span>
               <input type="text" id="tool-endpoint" autocomplete="off" spellcheck="false" placeholder="unix:/path or host:port"></label>
@@ -355,6 +357,12 @@
                   aria-label="Clear the query box">
             <i class="fas fa-eraser"></i>
           </button>
+          <button type="button" class="wp-editor__gutter-action" id="load-sql-btn"
+                  title="Load a SQL file into the query box"
+                  aria-label="Load a SQL file into the query box">
+            <i class="fas fa-folder-open"></i>
+          </button>
+          <input type="file" id="load-sql-input" accept=".sql,.txt,text/plain,application/sql" hidden>
         </div>
         <div class="wp-editor__panel">
           <pre class="wp-editor__hl" id="request-hl" aria-hidden="true"><code></code></pre>
@@ -404,7 +412,7 @@
     <div class="wp-result" id="result-pane">
       <header class="wp-result__hdr">
         <h3 class="wp-result__title">Query result</h3>
-        <span class="wp-result__meta"><span id="result-count">0</span> tuples<span id="result-truncated" class="wp-result__trunc" hidden></span> · evaluated in <span id="result-time">–</span> ms</span>
+        <span class="wp-result__meta"><span id="result-count">0</span> <span id="result-noun">tuples</span><span id="result-truncated" class="wp-result__trunc" hidden></span> · evaluated in <span id="result-time">–</span> ms</span>
       </header>
       <div id="result-banners"></div>
       <div class="wp-table-wrap">
@@ -417,6 +425,57 @@
         <span class="wp-legend-swatch"></span>
         Hover a cell above to highlight its <strong>where-provenance</strong> in the source table on the left.
       </p>
+    </div>
+
+    <!-- Notebook mode: replaces the query form + result pane inside the
+         same card (CSS toggles on body.mode-notebook). Toolbar + cell
+         list are rendered and wired by notebook.js. -->
+    <div class="nb" id="notebook-pane" hidden>
+      <div class="nb__tabs" id="nb-tabs"></div>
+      <div class="nb__banner" id="nb-binding-banner" hidden></div>
+      <div class="nb__toolbar" id="nb-toolbar">
+        <button type="button" class="wp-btn wp-btn--primary wp-btn--mini" id="nb-run"
+                title="Run the selected cell – Ctrl+Enter. Shift+Enter runs and advances; Alt+Enter runs and inserts a cell below. Esc enters command mode (a/b insert, dd delete, z undo, m/y convert, j/k move, Enter edit)">
+          <i class="fas fa-play"></i> Run</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-run-all"
+                title="Run every cell from the top"><i class="fas fa-forward"></i> Run all</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-interrupt" hidden
+                title="Cancel the running cell's query"><i class="fas fa-times-circle"></i> Interrupt</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-restart"
+                title="Restart the kernel: closes the pinned database session (temp tables, SETs, prepared statements are lost) and starts a fresh one">
+          <i class="fas fa-redo"></i> Restart kernel</button>
+        <span class="nb__toolbar-sep"></span>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-add-sql"
+                title="Append a SQL cell (command mode: b inserts below, a above)"><i class="fas fa-plus"></i> SQL</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-add-md"
+                title="Append a Markdown cell (command mode: m converts the selected cell)"><i class="fas fa-plus"></i> Markdown</button>
+        <span class="nb__toolbar-sep"></span>
+        <select class="nb__scheme" id="nb-scheme"
+                title="Provenance scheme applied to every cell (notebook-level default)">
+          <option value="semiring">Semiring</option>
+          <option value="where">Where</option>
+          <option value="boolean">Boolean</option>
+        </select>
+        <span class="nb__toolbar-sep"></span>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-save"
+                title="Download the notebook as a Jupyter-compatible .ipynb file">
+          <i class="fas fa-download"></i> Save</button>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-load"
+                title="Load a .ipynb notebook file"><i class="fas fa-folder-open"></i> Load</button>
+        <input type="file" id="nb-load-input" accept=".ipynb,application/json" hidden>
+        <select class="nb__example" id="nb-example"
+                title="Open a bundled example notebook (the tutorial and case studies from the user guide, generated from the same sources)">
+          <option value="">Open example…</option>
+        </select>
+        <span class="nb__toolbar-sep"></span>
+        <button type="button" class="wp-btn wp-btn--ghost wp-btn--mini" id="nb-show-uuids"
+                aria-pressed="false" title="Show full UUIDs in results">
+          <i class="fas fa-fingerprint"></i></button>
+        <span class="nb__kernel" id="nb-kernel-chip" title="Kernel status">
+          <i class="fas fa-circle"></i> <span id="nb-kernel-label">no kernel</span>
+        </span>
+      </div>
+      <div class="nb__cells" id="nb-cells"></div>
     </div>
 
   </section>

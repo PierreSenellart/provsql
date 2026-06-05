@@ -129,7 +129,7 @@ them and can identify the involved relations without our help.
 
 **Executor-depth gating.**  ProvSQL's rewriter inserts calls to
 PL/pgSQL helpers (``provenance_times``, ``provenance_plus``,
-``provenance_aggregate``, …) into the rewritten query.  Each of
+``provenance_aggregate``…) into the rewritten query.  Each of
 those helpers contains internal ``SELECT`` statements that PL/pgSQL
 plans on first invocation, and that planning fires the planner hook
 again.  Without a gate, the classifier would emit one extra
@@ -256,7 +256,11 @@ Step 6: Unsupported Feature Checks
 
 Before proceeding, the function checks for:
 
-- **Sublinks** (``EXISTS``, ``IN``, scalar subqueries): not supported.
+- **Sublinks** (``EXISTS``, ``IN``, scalar subqueries) over a tracked
+  relation that the decorrelation pre-passes could not rewrite (in
+  practice, a body using explicit ``JOIN`` syntax or
+  ``LIMIT``/``OFFSET``, or a bare uncorrelated value / ``count(*)``
+  body compared against an outer column): not supported.
 - ``DISTINCT ON``: not supported.
 - ``DISTINCT`` (plain): converted to ``GROUP BY`` via
   :cfunc:`transform_distinct_into_group_by`.

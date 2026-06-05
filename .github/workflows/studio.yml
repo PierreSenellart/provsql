@@ -12,12 +12,20 @@ on:
       - 'sql/provsql.common.sql'
       - 'sql/provsql.14.sql'
       - '.github/workflows/studio.yml'
+      # Sources of the generated example notebooks (the notebooks job):
+      # annotated user-guide chapters and the setup.sql they splice in.
+      - 'doc/source/user/*.rst'
+      - 'doc/tutorial/setup.sql'
+      - 'doc/casestudy*/setup.sql'
   pull_request:
     paths:
       - 'studio/**'
       - 'sql/provsql.common.sql'
       - 'sql/provsql.14.sql'
       - '.github/workflows/studio.yml'
+      - 'doc/source/user/*.rst'
+      - 'doc/tutorial/setup.sql'
+      - 'doc/casestudy*/setup.sql'
   workflow_dispatch:
 
 jobs:
@@ -32,6 +40,34 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
         working-directory: studio
+
+  notebooks:
+    name: 📓 example-notebook drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # The committed studio/provsql_studio/notebooks/*.ipynb are GENERATED
+      # from the annotated user-guide .rst (+ spliced setup.sql) by
+      # studio/scripts/rst2nb.py; they are committed because the PyPI wheel
+      # ships them. This job regenerates and fails on any diff, so the
+      # notebooks cannot silently drift from the documentation.
+      #
+      # pandoc is PINNED to the version the notebooks were generated with:
+      # its rst->gfm output changes across releases, so a runner-default
+      # pandoc would flag cosmetic prose differences as drift. When
+      # upgrading pandoc locally, regenerate all notebooks, commit, and
+      # bump this pin.
+      - name: Install pinned pandoc
+        run: |
+          curl -fsSL -o /tmp/pandoc.deb \
+            https://github.com/jgm/pandoc/releases/download/2.9.2.1/pandoc-2.9.2.1-1-amd64.deb
+          sudo dpkg -i /tmp/pandoc.deb
+          pandoc --version | head -1
+      - run: python3 studio/scripts/rst2nb.py
+      - name: Fail on drift
+        run: |
+          git diff --exit-code -- studio/provsql_studio/notebooks || {
+            echo '::error::example notebooks are stale: run `make notebooks` (or `make docs`) and commit studio/provsql_studio/notebooks/'; exit 1; }
 
   package:
     name: 📦 sdist + wheel + --help

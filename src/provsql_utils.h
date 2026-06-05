@@ -78,6 +78,24 @@ typedef enum gate_type {
 } gate_type;
 
 /**
+ * @brief Scalar-aggregation flag, stored in the upper bit of a @c gate_agg's
+ *        @c info2 (whose low 31 bits hold the aggregate result-type OID).
+ *
+ * Set by the query rewriter when the aggregation has no @c GROUP @c BY (a single
+ * always-present result row).  It tells the value-aware evaluators that the
+ * empty-input world is a real possible world (carrying the aggregate's
+ * empty-group value), rather than the "no row" of a grouped query.  Result-type
+ * OIDs never use bit 31, so the low 31 bits still recover the type via
+ * @c PROVSQL_AGG_TYPE_MASK.
+ *
+ * @warning The flag is folded into the gate's content UUID (see
+ * @c provenance_aggregate), so a scalar and a grouped aggregate over identical
+ * children stay distinct gates and their @c set_infos calls do not clobber.
+ */
+#define PROVSQL_AGG_SCALAR_FLAG 0x80000000u
+#define PROVSQL_AGG_TYPE_MASK   0x7FFFFFFFu
+
+/**
  * @brief Arithmetic operator tags used by @c gate_arith.
  *
  * Stored in the gate's @c info1 field.  Local enum (not a PostgreSQL
@@ -144,8 +162,12 @@ typedef struct constants_t {
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
+  Oid OID_FUNCTION_GET_CHILDREN; ///< OID of the get_children FUNCTION
+  Oid OID_FUNCTION_GET_EXTRA;    ///< OID of the get_extra FUNCTION
+  Oid OID_UNNEST; ///< OID of the unnest(anyarray) FUNCTION
   Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
+  Oid OID_FUNCTION_CHOOSE; ///< OID of the choose(anyelement) aggregate (keeps the first non-NULL value); used to decorrelate scalar subqueries into a LEFT JOIN + GROUP BY
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
    *
    *  Installed by the @c 1.5.0--1.6.0 upgrade script.  Wraps its child
@@ -231,6 +253,11 @@ extern bool provsql_where_provenance;
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
 
+/** Global variable holding the probability evaluation method(s) used by the
+ * most recent probability_evaluate call, exposed via the
+ * provsql.last_eval_method run-time configuration parameter. */
+extern char *provsql_last_eval_method;
+
 /** Global flag controlling agg_token text output: when true,
  * agg_token_out emits the underlying provenance UUID instead of the
  * default "value (*)" display string. Driven by the
@@ -288,6 +315,11 @@ extern int provsql_monte_carlo_seed;
  * than sampling.  Useful for callers that want to guarantee
  * analytical-only evaluation. */
 extern int provsql_rv_mc_samples;
+
+/* Debug/safety hard cap on d-tree subproblems before the method bails to the
+ * next (0 = off).  The chooser auto-budgets the d-tree at the next-best
+ * method's estimated cost regardless; this imposes an extra fixed cap. */
+extern int provsql_dtree_max_subproblems;
 
 /** @brief When @c true (default), every @c GenericCircuit returned by
  * @c getGenericCircuit is run through the universal cmp-resolution
@@ -508,5 +540,14 @@ extern bool provsql_lookup_relation_keys(Oid relid,
                                          ProvenanceRelationKeys *out);
 
 #include "provsql_error.h"
+
+#ifdef __cplusplus
+/* Neutralise the PostgreSQL macros (gettext family, port.h's printf-family
+ * replacements) that break STL / Boost headers included after this point;
+ * see c_cpp_compatibility.h.  Done here so every C++ translation unit that
+ * pulls in the PostgreSQL headers through provsql_utils.h is covered
+ * without having to mind its include order. */
+#include "c_cpp_compatibility.h"
+#endif
 
 #endif /* PROVSQL_UTILS_H */

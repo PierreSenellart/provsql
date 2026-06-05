@@ -10,23 +10,23 @@
  * needed.
  *
  * Gate handling:
- * - @c gate_input (and @c gate_update) — Bernoulli draw at @c getProb,
+ * - @c gate_input (and @c gate_update) – Bernoulli draw at @c getProb,
  *   memoised per iteration (so the same input feeding two children
  *   produces the same draw).
- * - @c gate_plus / @c gate_times / @c gate_monus — Boolean OR / AND /
+ * - @c gate_plus / @c gate_times / @c gate_monus – Boolean OR / AND /
  *   AND-NOT.
- * - @c gate_zero / @c gate_one — false / true.
+ * - @c gate_zero / @c gate_one – false / true.
  * - @c gate_cmp with scalar (@c gate_rv / @c gate_arith / @c gate_value)
- *   children — compare two scalar samples per the comparison-operator
+ *   children – compare two scalar samples per the comparison-operator
  *   OID stored in @c info1.  Aggregate-vs-constant @c gate_cmp gates
  *   from HAVING semantics are handled by the existing
  *   @c BooleanCircuit path and are not reached here.
- * - @c gate_value — parse @c extra as @c float8.
- * - @c gate_rv — fresh draw from the distribution serialised in
+ * - @c gate_value – parse @c extra as @c float8.
+ * - @c gate_rv – fresh draw from the distribution serialised in
  *   @c extra (memoised per iteration so the SAME RV inside an
  *   arithmetic expression uses the same draw, per the thesis's
  *   SampleOne).
- * - @c gate_arith — recurse on scalar children, combine per the
+ * - @c gate_arith – recurse on scalar children, combine per the
  *   operator tag in @c info1 (@c provsql_arith_op enum: PLUS / TIMES
  *   are n-ary; MINUS / DIV are binary; NEG is unary).
  *
@@ -65,12 +65,76 @@ namespace provsql {
 double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples);
 
 /**
+ * @brief Whole-circuit @c (eps,delta)-relative probability via the
+ *        Dagum-Karp-Luby-Ross stopping rule.
+ *
+ * The general-Bernoulli case of @c BooleanCircuit::karpLubyStopping, driven by
+ * the RV-aware @c Sampler's @c evalBool rather than by DNF coverage trials, so
+ * it applies to ANY circuit the sampler can evaluate (plain Boolean, continuous
+ * @c gate_rv, and HAVING @c gate_cmp / @c gate_agg) -- the universal relative
+ * estimator.  Draws whole-circuit worlds until the success count reaches the
+ * threshold @c Y1 = 1 + (1+eps)*4*(e-2)*ln(2/delta)/eps^2, then returns
+ * @c Y1/N: a relative @c (eps,delta) approximation of @c Pr[root].  The sample
+ * count @c N adapts to the true @c Pr[root] (expected @c Y1/Pr[root]), so the
+ * cost is polynomial precisely when @c Pr[root] is at least @c 1/poly.
+ *
+ * Sampling stops early at @p max_samples worlds; @p reached_target is then
+ * @c false and the return is the plain unbiased @c success/N mean over the
+ * spent budget (the relative target was not met -- the caller reports the
+ * weaker, additive guarantee actually achieved).
+ *
+ * @param gc              The circuit.
+ * @param root            Gate to evaluate as a Boolean event.
+ * @param eps             Target relative error (in @c (0,1]).
+ * @param delta           Target failure probability (in @c (0,1)).
+ * @param max_samples     Hard cap on the number of worlds drawn.
+ * @param samples_used    Output: worlds actually drawn.
+ * @param reached_target  Output: whether the threshold was reached before the
+ *                        cap (i.e. the relative guarantee holds).
+ * @return                The probability estimate.
+ */
+double monteCarloRVStopping(const GenericCircuit &gc, gate_t root,
+                            double eps, double delta,
+                            unsigned long max_samples,
+                            unsigned long &samples_used,
+                            bool &reached_target);
+
+/**
  * @brief Walk the circuit reachable from @p root looking for any @c gate_rv.
  *
  * Used by @c probability_evaluate to dispatch between the existing
  * @c BooleanCircuit path and the RV-aware sampler in this file.
  */
 bool circuitHasRV(const GenericCircuit &gc, gate_t root);
+
+/**
+ * @brief Whether a surviving @c gate_agg exists and every one is sample-faithful
+ *        (@c SUM / @c AVG / @c MIN / @c MAX / @c COUNT -- every aggregate the
+ *        sampler reproduces exactly).
+ *
+ * A @c gate_agg the exact closed-form / marginal-vector pre-passes did not fold
+ * into a Bernoulli @c gate_input marks a HAVING aggregate comparator whose exact
+ * resolution needs @c provsql_having's threshold-lineage expansion -- which does
+ * not terminate in practice for a large-magnitude / large-support aggregate
+ * (the dense @c kMaxSumRange and sparse @c kMaxSumSupport caps exceeded).  For
+ * an @c (eps,delta) request @c probability_evaluate uses this to route the
+ * circuit straight to the world-sampler (the @c gate_agg arm of @c evalScalar)
+ * -- a sound FPRAS for the apx-safe corner of the HAVING trichotomy -- instead
+ * of attempting the non-terminating Boolean expansion.
+ *
+ * The sampler's @c gate_agg arm pushes each kept contributor's value into the
+ * matching @c Aggregator, reproducing SQL semantics exactly: the value gate is
+ * the row's contribution (the summed term for @c SUM; the 0/1 indicator for
+ * @c COUNT, 0 for a NULL row so @c count(x) does not count NULLs; the compared
+ * value for @c AVG / @c MIN / @c MAX), so NULL rows are handled and an empty
+ * group finalises to the value the exact evaluator uses (0 for @c SUM / @c COUNT,
+ * NaN -> comparison false for the others), and @c gate_arith over them is covered
+ * too.  In practice only @c SUM / @c AVG / @c MIN / @c MAX ever reach here:
+ * @c COUNT's value-support is small (0/1 per row) so it is always resolved
+ * exactly and never bails -- but it is sample-faithful as well, so it is not
+ * excluded.
+ */
+bool circuitHasUnresolvedSampleableAgg(const GenericCircuit &gc, gate_t root);
 
 /**
  * @brief Estimate the joint distribution of @p cmps via Monte Carlo.

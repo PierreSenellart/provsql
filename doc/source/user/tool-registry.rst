@@ -139,7 +139,7 @@ server is unreachable.
 
 There are two ways to point a ``kcmcp`` tool at a server.
 
-**Endpoint mode** — connect to a server you run and supervise yourself, at a
+**Endpoint mode** – connect to a server you run and supervise yourself, at a
 fixed address (a local Unix socket, or ``host:port`` for a remote server):
 
 .. code-block:: postgresql
@@ -153,7 +153,7 @@ fixed address (a local Unix socket, or ``host:port`` for a remote server):
       endpoint      => 'unix:/run/provsql/kc.sock');
     SELECT probability_evaluate(t, 'compilation', 'kc-server') FROM mytable;
 
-**Managed mode** — let ProvSQL launch and supervise the server. Set
+**Managed mode** – let ProvSQL launch and supervise the server. Set
 :ref:`provsql.kcmcp_server <provsql-kcmcp-server>` to the launch command (with
 a ``{endpoint}`` placeholder); a supervisor background worker starts it,
 publishes its address, and restarts it if it exits. Register a tool whose

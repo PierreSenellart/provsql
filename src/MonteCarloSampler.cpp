@@ -266,12 +266,16 @@ double Sampler::evalScalar(gate_t g)
       //
       // Type plan: we evaluate every numeric path in float8 to stay
       // inside evalScalar's return type.  COUNT is normalised by
-      // makeAggregator to SumAgg<long>, so we feed it 1L per kept row
-      // without evaluating the gate_one value child; SUM / AVG / MIN /
-      // MAX consume the value via evalScalar.  Empty groups finalise
-      // to NONE; we surface NaN, which compares false under IEEE on
-      // any subsequent gate_cmp -- the SQL convention for HAVING on
-      // an empty group.
+      // makeAggregator to SumAgg<long>, so each kept row contributes its
+      // value gate cast to long: that gate is 1 for an ordinary row and 0
+      // for a NULL one (count(x) does not count NULLs), so the sum of the
+      // kept values is exactly count(*) / count(x) -- faithful with no
+      // nullability check.  SUM / AVG / MIN / MAX consume the value via
+      // evalScalar directly.  Empty groups finalise to NONE; SUM / COUNT
+      // surface 0 (the additive identity, the ProvSQL empty-group
+      // convention) and AVG / MIN / MAX surface NaN, which compares false
+      // under IEEE on any subsequent gate_cmp -- the SQL convention for
+      // HAVING on an empty group.
       AggregationOperator op =
         getAggregationOperator(gc_.getInfos(g).first);
       std::unique_ptr<Aggregator> agg =
@@ -288,7 +292,7 @@ double Sampler::evalScalar(gate_t g)
         if(sm.size() != 2) continue;
         if(!evalBool(sm[0])) continue;
         if(op == AggregationOperator::COUNT) {
-          agg->add(AggValue(1L));
+          agg->add(AggValue(static_cast<long>(evalScalar(sm[1]))));
         } else {
           agg->add(AggValue(evalScalar(sm[1])));
         }
@@ -416,6 +420,50 @@ double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples)
               "Interrupted after " + std::to_string(i + 1) + " samples");
   }
   return success * 1.0 / samples;
+}
+
+double monteCarloRVStopping(const GenericCircuit &gc, gate_t root,
+                            double eps, double delta,
+                            unsigned long max_samples,
+                            unsigned long &samples_used,
+                            bool &reached_target)
+{
+  samples_used = 0;
+  reached_target = false;
+  if(max_samples == 0)
+    return 0.;
+
+  // DKLR stopping threshold on the success count -- the S=1 Bernoulli case of
+  // BooleanCircuit::karpLubyStopping: draw whole-circuit worlds until the
+  // success count reaches Y1 and return Y1/N, a relative (eps,delta) estimate
+  // of Pr[root]; N adapts to the true Pr[root] (expected Y1/Pr[root]).
+  const double e  = std::exp(1.0);
+  const double Y  = 4.0 * (e - 2.0) * std::log(2.0 / delta) / (eps * eps);
+  const double Y1 = 1.0 + (1.0 + eps) * Y;
+
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  unsigned long success = 0;
+  for(unsigned long s = 0; s < max_samples; ++s) {
+    sampler.resetIteration();
+    if(sampler.evalBool(root)) {
+      ++success;
+      if(static_cast<double>(success) >= Y1) {
+        samples_used = s + 1;
+        reached_target = true;
+        return Y1 / static_cast<double>(samples_used);
+      }
+    }
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(s + 1) + " samples");
+  }
+
+  // Cap reached before the threshold: the relative target is not met, so return
+  // the plain unbiased mean over the spent budget.
+  samples_used = max_samples;
+  return static_cast<double>(success) / static_cast<double>(max_samples);
 }
 
 std::vector<double> monteCarloJointDistribution(
@@ -661,14 +709,59 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root)
     stack.pop();
     if(!seen.insert(g).second) continue;
     auto type = gc.getGateType(g);
-    // gate_arith too: it's exclusively a continuous-arithmetic
-    // composite, the BoolExpr semiring path has no rule for it.
-    // gate_mixture is structurally a compound RV root as well.
-    if(type == gate_rv || type == gate_arith || type == gate_mixture)
+    // A continuous random variable is signalled by a gate_rv leaf or a
+    // gate_mixture root.  gate_arith is NOT itself an RV marker: it is also
+    // arithmetic over aggregates (resolved by provsql_having's possible-worlds
+    // enumeration).  A genuine RV arithmetic gate_arith still reaches its
+    // gate_rv leaves through the child walk below, so it is caught.
+    if(type == gate_rv || type == gate_mixture)
       return true;
     for(gate_t c : gc.getWires(g)) stack.push(c);
   }
   return false;
+}
+
+bool circuitHasUnresolvedSampleableAgg(const GenericCircuit &gc, gate_t root)
+{
+  // True iff a gate_agg survives the probability pre-passes AND every surviving
+  // one is sample-faithful: SUM / AVG / MIN / MAX / COUNT -- all the aggregates
+  // the sampler's gate_agg arm reproduces exactly.  That arm pushes each kept
+  // contributor's value into the matching Aggregator: the value gate is the
+  // row's contribution (the summed term for SUM; the 0/1 indicator for COUNT,
+  // 0 for a NULL row so count(x) does not count NULLs; the compared value for
+  // AVG / MIN / MAX), so NULL rows are handled and an empty group finalises to
+  // the value the exact HAVING evaluator uses (0 for SUM / COUNT, NaN ->
+  // comparison false for AVG / MIN / MAX).  An aggregate that bailed the exact
+  // evaluators (whose threshold-lineage expansion would otherwise not terminate
+  // for a large-magnitude / large-support aggregate) is then estimated by direct
+  // world sampling: the apx-safe corner of the HAVING trichotomy (Re & Suciu).
+  // gate_arith over such aggregates is covered (its gate_agg leaves are reached
+  // by the walk).  The explicit switch rejects any future aggregate operator the
+  // sampler does not yet handle.
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stack;
+  stack.push(root);
+  bool any = false;
+  while(!stack.empty()) {
+    gate_t g = stack.top();
+    stack.pop();
+    if(!seen.insert(g).second) continue;
+    if(gc.getGateType(g) == gate_agg) {
+      switch(getAggregationOperator(gc.getInfos(g).first)) {
+      case AggregationOperator::SUM:
+      case AggregationOperator::AVG:
+      case AggregationOperator::MIN:
+      case AggregationOperator::MAX:
+      case AggregationOperator::COUNT:
+        any = true;
+        break;
+      default:                       // an aggregate the sampler lacks: not routed
+        return false;
+      }
+    }
+    for(gate_t c : gc.getWires(g)) stack.push(c);
+  }
+  return any;
 }
 
 }  // namespace provsql

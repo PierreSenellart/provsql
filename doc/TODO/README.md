@@ -18,53 +18,56 @@ Each plan document follows a consistent layout:
 
 - [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
   feasibility study for exploiting bounded treewidth of the input data
-  (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017),
-  with empirical probes. Findings: it is not a free lunch (a fixed
-  two-atom self-join already inflates circuit treewidth to `Theta(|I|)`
-  on treewidth-1 data), but the explosions are confined to high-degree
-  self-joins / cross-products, while local UCQs stay bounded and
-  recursive reachability on grids grows past the cap. d4 overtakes the
-  in-process tree-decomposition compiler at treewidth ~8-9. Concludes:
-  treewidth-conditioned dispatch (not a higher cap), extend
-  independent-product factoring for the relational pathologies, and a
-  decomposition-aligned (cycluit) construction for the recursive
-  fragment.
+  (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017).
+  Open: extend independent-product factoring for the relational
+  pathologies (threshold / separator recognition), a decomposition-aligned
+  (cycluit) construction for recursive reachability, the full
+  data-decomposition + tree-automaton pipeline, and a treewidth-aware
+  general m-semiring evaluator.
 - [`conditioning.md`](conditioning.md) : plan for a conditioning
   primitive, unifying discrete tuple-correlation (MarkoViews, Jha &
   Suciu PVLDB 2012) and continuous random variables as one operation at
-  two carriers. Extracts the conditioning-as-a-gate design from
-  `continuous_distributions.md` §D.1, folds in what MarkoViews teaches
-  (conditioning on a constraint circuit; the exact `P(Q ∧ C)/P(C)`
-  formula needing no discrete gate; exact-only under negative weights;
-  safety re-checked on the conditioned circuit), adds soft/weighted
-  conditioning, and grounds it all in concrete use cases.
+  two carriers -- the `gate_conditioned` design, conditional `P(Q|C)`, a
+  conditioned distribution that flows onward, arbitrary denial
+  constraints, Shapley over evidence, and soft/weighted conditioning.
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the five existing
-  case studies (CS1-CS5), plus a sketch of CS6 for upcoming features.
-- [`continuous_distributions.md`](continuous_distributions.md) : plan
-  for adding continuous probability distributions (Gaussian, uniform,
-  exponential, ...) to ProvSQL's pc-table model, anchored on Timothy
-  Leong's 2022 BSc thesis (NUS).
-- [`karp-luby-fpras.md`](karp-luby-fpras.md) : feasibility study for
-  adding a Karp-Luby FPRAS for `#DNF` (Karp-Luby 1985; KLM 1989; modern
-  hashing- and streaming-DNF variants) as an in-process probability
-  method. Closes a real gap -- the existing `'monte-carlo'` needs
-  `~ 1/p` samples for rare events and `'weightmc'` requires an external
-  SAT-based binary -- on positive UCQ-shaped lineage. Tier 1 covers
-  top-OR-over-AND-only sub-circuits (cross-clause leaf sharing fine,
-  no internal ORs in a clause; ~300 LOC): shape detector, dispatcher
-  branch, default `(eps, delta)` policy, tests, docs. Conditioned on a
-  short empirical probe of how often real ProvSQL outputs land in the
-  `m * p << 1` regime.
-- [`safe-query-followups.md`](safe-query-followups.md) : deferred
-  ideas surfaced during the `provsql.boolean_provenance` work --
-  further Boolean-only optimisations beyond the hierarchical-CQ
-  rewriter and `foldBooleanIdentities` (independent-subtree
-  detection, Möbius / Monet, ...), the layered HAVING-clause
-  optimisation plan, and the hierarchical-detector follow-ups
-  (FD-induced nested rewrite, soft keys, view-descent FD chases,
-  data-safe plans).
-- [`studio.md`](studio.md) : plan for ProvSQL Studio work landing
-  alongside or after the first PyPI release (`studio-v1.0.0`):
-  release plumbing, CI, Docker swap-over, in-app polish, and the
-  Contributions / Time-travel modes scheduled for later versions.
+  case studies (CS1-CS5), plus a future UDF / aggregate-join study (CS8).
+- [`continuous_distributions.md`](continuous_distributions.md) : roadmap
+  for extending the continuous random-variable surface beyond the shipped
+  Normal/Uniform/Exponential/Erlang/Categorical/Mixture baseline (further
+  parametric families, quantiles / function application / order
+  statistics, empirical & structural distributions, conditioning, copulas).
+- [`probability-evaluation.md`](probability-evaluation.md) : the
+  **remaining** probability-method-selection work, atop the now-landed
+  method catalog + three-path (exact / relative / additive) chooser:
+  the d-tree's remaining pieces (BID / multivalued circuits, non-DNF
+  exact auto-selection, memoising the approximate path), the SUM-safe
+  rounding FPTRAS, the exact residual HAVING shapes (branch-spanning SUM,
+  BID disjoint blocks, UNION/EXCEPT over a shared-tuple join), catalog
+  follow-ups (lazy Boolean build, guarantee propagation, independence-cert
+  cache), RV-probability transparency, and d-tree research polish. Borders
+  [`safe-query-followups.md`](safe-query-followups.md).
+- [`safe-query-followups.md`](safe-query-followups.md) : deferred ideas
+  bordering the `provsql.boolean_provenance` work -- further Boolean-only
+  optimisations (independent-subtree detection, Möbius / Monet…), the
+  inversion-free `UCQ(OBDD)` extensions (UNION in a view, FD-aware orders),
+  the planner-side `CERT_SAFE_AGG_PLAN` certificate for BID-disjoint
+  HAVING, discrete `random_variable` extensions, and the
+  hierarchical-detector follow-ups (FD-induced nested rewrite, soft keys,
+  view-descent FD chases, data-safe plans).
+- [`scalar-subqueries.md`](scalar-subqueries.md) : the remaining
+  unsupported scalar-/correlated-subquery forms -- scalar sublinks nested
+  in arithmetic (today a passthrough-with-warning; the decorrelation
+  follow-up needs agg_token arithmetic wired into the planner),
+  different-`(Q, corr)` multi-sublinks, and `GROUP BY` bodies.
+- [`studio.md`](studio.md) : open ProvSQL Studio work beyond v1.0 -- the
+  Contributions (Shapley / Banzhaf heat-map) and Time-travel / Temporal
+  modes, batch result-table evaluation, and multi-user demo deployment.
+- [`studio-notebook-mode.md`](studio-notebook-mode.md) : detailed
+  plan for a Jupyter-style **Notebook mode** in Studio : Markdown +
+  SQL cells with inline results, a pinned stateful database session
+  (the “kernel”) with per-cell transactions, provenance-native
+  circuit / evaluation cells, nbformat-compatible `.ipynb`
+  save / load, seeded tutorial / case-study notebooks, and the
+  Playground (PGlite single-session) adaptation.

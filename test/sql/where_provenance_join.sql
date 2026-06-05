@@ -23,10 +23,10 @@ INSERT INTO wpj_right VALUES (1,'one'),(2,'two'),(3,'three');
 SELECT add_provenance('wpj_right');
 
 /* Output columns, in order:
- *   1. l3       — wpj_left, varattno 3
- *   2. r2       — wpj_right, varattno 2
- *   3. l2       — wpj_left, varattno 2
- *   4. wprov    — function expression (no source)
+ *   1. l3       – wpj_left, varattno 3
+ *   2. r2       – wpj_right, varattno 2
+ *   3. l2       – wpj_left, varattno 2
+ *   4. wprov    – function expression (no source)
  *
  * The where-provenance for column 2 (r2) must report wpj_right::2,
  * not wpj_left::2 (which is what the buggy varattno-without-offset

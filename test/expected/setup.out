@@ -1,2 +1,6 @@
 \set ECHO none
 NOTICE:  installing required extension "uuid-ossp"
+NOTICE:  ProvSQL: schema "provsql" is not in your default search_path (currently: "$user", public).
+NOTICE:  ProvSQL operators and functions are resolved through search_path. Run "SELECT provsql.setup_search_path();" to add it, or set it manually (e.g. ALTER DATABASE contrib_regression SET search_path = "$user", public, provsql).
+NOTICE:  ProvSQL: schema "provsql" is not in your default search_path (currently: "$user", public).
+NOTICE:  ProvSQL operators and functions are resolved through search_path. Run "SELECT provsql.setup_search_path();" to add it, or set it manually (e.g. ALTER DATABASE contrib_regression SET search_path = "$user", public, provsql).

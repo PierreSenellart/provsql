@@ -1,0 +1,119 @@
+\set ECHO none
+NOTICE:  table "scmp_off" does not exist, skipping
+NOTICE:  table "scmp_on" does not exist, skipping
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+sum >= 8|Berlin|0.2800|0.2800|0.000000
+sum >= 8|New York|0.0000|0.0000|0.000000
+sum >= 8|Paris|0.4500|0.4500|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+sum > 8|Berlin|0.2800|0.2800|0.000000
+sum > 8|New York|0.0000|0.0000|0.000000
+sum > 8|Paris|0.3900|0.3900|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+sum <= 8|Berlin|0.5400|0.5400|0.000000
+sum <= 8|New York|0.2800|0.2800|0.000000
+sum <= 8|Paris|0.4700|0.4700|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+sum < 8|Berlin|0.5400|0.5400|0.000000
+sum < 8|New York|0.2800|0.2800|0.000000
+sum < 8|Paris|0.4100|0.4100|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+sum = 11|Berlin|0.2800|0.2800|0.000000
+sum = 11|New York|0.0000|0.0000|0.000000
+sum = 11|Paris|0.2100|0.2100|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+sum <> 11|Berlin|0.5400|0.5400|0.000000
+sum <> 11|New York|0.2800|0.2800|0.000000
+sum <> 11|Paris|0.6500|0.6500|0.000000
+(3 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|city|p_off|p_on|diff
+multi-cmp (must match off-path)|Berlin|0.8200|0.8200|0.000000
+multi-cmp (must match off-path)|New York|0.0000|0.0000|0.000000
+multi-cmp (must match off-path)|Paris|0.7100|0.7100|0.000000
+(3 rows)
+NOTICE:  table "scmp_r" does not exist, skipping
+NOTICE:  table "scmp_s" does not exist, skipping
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+product contributors|1|0.0900|0.0900|0.000000
+product contributors|2|0.0000|0.0000|0.000000
+(2 rows)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 weighted-sum): provenance circuit reduced from 20 to 1 gates
+remove_provenance
+
+(1 row)
+p_fires
+0.0900
+(1 row)
+NOTICE:  table "scmp_one" does not exist, skipping
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+shared leaf (must match off-path)|1|0.1750|0.1750|0.000000
+shared leaf (must match off-path)|2|0.0000|0.0000|0.000000
+(2 rows)

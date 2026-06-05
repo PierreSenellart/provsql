@@ -17,7 +17,7 @@
  *   while @c double @c precision / @c integer / @c bigint / @c text
  *   are @c ASSIGNMENT casts.
  *
- * All additions are new — no pre-existing objects are altered.  The
+ * All additions are new – no pre-existing objects are altered.  The
  * upgrade is therefore a pure additive change that cannot be re-run
  * (PostgreSQL's extension mechanism only fires this script once for
  * a given 1.0.0 → 1.1.0 transition).

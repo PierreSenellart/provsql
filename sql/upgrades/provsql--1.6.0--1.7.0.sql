@@ -40,6 +40,13 @@
  * @c probability_benchmark).
  */
 
+-- This script shipped without the SET below, so every function it
+-- creates landed in the session's default schema (typically public)
+-- instead of provsql; the 1.8.0 -> 1.9.0 script carries the corrective
+-- ALTER FUNCTION ... SET SCHEMA for databases upgraded with the old
+-- file.
+SET search_path TO provsql;
+
 -- ----------------------------------------------------------------------
 -- 1. Recursive-query fixpoint driver (called by lower_recursive_cte).
 -- ----------------------------------------------------------------------

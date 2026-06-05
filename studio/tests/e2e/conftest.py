@@ -52,6 +52,13 @@ def studio_url(test_dsn: str) -> str:
     # persisted config eagerly and lets it win over CLI args).
     with tempfile.TemporaryDirectory(prefix="provsql-studio-e2e-") as cfg_dir:
         env["PROVSQL_STUDIO_CONFIG_DIR"] = cfg_dir
+        # pytest-playwright tears the whole browser context down between
+        # tests, which never fires pagehide, so the notebook's
+        # kernel-closing beacon is lost and one kernel leaks per
+        # notebook test (a Playwright artifact: real tab closes deliver
+        # the beacon). Raise the cap so the leak cannot starve later
+        # tests; the server's idle GC remains the real-world backstop.
+        env["PROVSQL_STUDIO_MAX_KERNELS"] = "64"
         cmd = [
             sys.executable, "-m", "provsql_studio",
             "--host", "127.0.0.1",
@@ -62,20 +69,27 @@ def studio_url(test_dsn: str) -> str:
             "--search-path", "provsql_test",
             "--ignore-version",
         ]
-        proc = subprocess.Popen(
-            cmd, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        try:
-            _wait_until_up(base_url + "/")
-            yield base_url
-        finally:
-            proc.terminate()
+        # Server output goes to a file, NOT a PIPE: nothing ever read
+        # those pipes, so once werkzeug's per-request log lines filled
+        # the 64 KB buffer, every server thread blocked on its next
+        # write and the whole app stalled mid-suite (page.goto timeout
+        # in whichever test crossed the threshold).
+        log_path = os.path.join(cfg_dir, "studio-server.log")
+        with open(log_path, "wb") as log_f:
+            proc = subprocess.Popen(
+                cmd, env=env,
+                stdout=log_f, stderr=subprocess.STDOUT,
+            )
             try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+                _wait_until_up(base_url + "/")
+                yield base_url
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
 
 
 @pytest.fixture(scope="session")

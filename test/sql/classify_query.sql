@@ -219,8 +219,7 @@ SELECT g FROM cq_r19 ORDER BY g;
 -- sets promotes to TID with the cumulative source list.  Anything
 -- else (UNION DISTINCT, INTERSECT, EXCEPT, mixed leg kinds, or
 -- overlapping leg sources) falls back to OPAQUE.  UNION ALL of
--- compatible BID legs is deliberately deferred ; see
--- doc/TODO/safe-query-followups.md.
+-- compatible BID legs is deliberately deferred.
 
 -- (20) Disjoint TIDs : the union is TID with both sources listed.
 CREATE TEMP TABLE cq_r20 AS

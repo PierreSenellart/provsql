@@ -96,10 +96,18 @@ gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const;
 /**
  * @brief Recursive helper for @c independentEvaluation().
  * @param g     Current gate to evaluate.
- * @param seen  Set of gates already evaluated (for memoisation).
+ * @param seen  Set of variable gates (IN / MULVAR) already consumed; a second
+ *              occurrence means the circuit is not read-once.
+ * @param memo  Memoised probability of variable-free (constant-only) gates, so a
+ *              shared constant subgraph is evaluated once -- this is what keeps
+ *              the whole evaluation @c O(circuit) rather than re-traversing
+ *              shared subgraphs.  Variable-bearing gates are never memoised (a
+ *              re-visit must reach @p seen and throw).
  * @return      Probability at gate @p g.
  */
-double independentEvaluationInternal(gate_t g, std::set<gate_t> &seen) const;
+double independentEvaluationInternal(
+  gate_t g, std::set<gate_t> &seen,
+  std::unordered_map<gate_t, double> &memo) const;
 /**
  * @brief Recursive helper for @c rewriteMultivaluedGates().
  * @param muls              Gates in the MULVAR group being rewritten.
@@ -237,10 +245,15 @@ double possibleWorlds(gate_t g) const;
  * subprocess, and parses the resulting d-DNNF.
  *
  * @param g         Root gate.
- * @param compiler  Command to invoke (e.g. "d4", "c2d", "minic2d").
+ * @param compiler  Command to invoke (e.g. "d4", "c2d", "minic2d").  Empty
+ *                  auto-selects the highest-preference available tool.
+ * @param resolved  If non-null, set to the tool actually used (after the
+ *                  empty -> auto-select resolution), so callers can report
+ *                  WHICH compiler ran rather than just "compilation".
  * @return          The compiled @c dDNNF.
  */
-dDNNF compilation(gate_t g, std::string compiler) const;
+dDNNF compilation(gate_t g, std::string compiler,
+                  std::string *resolved = nullptr) const;
 
 /**
  * @brief Parse a c2d/d4 NNF stream into a @c dDNNF over this circuit's input
@@ -268,6 +281,178 @@ dDNNF parseDDNNF(std::istream &in,
  * @return         Estimated probability.
  */
 double monteCarlo(gate_t g, unsigned samples) const;
+
+/**
+ * @brief Detect the DNF shape the Karp-Luby FPRAS requires.
+ *
+ * Recognises the two tractable regimes: (a) a single AND-of-leaves
+ * clause, or (b) a top-level @c OR whose every child is an AND-only
+ * sub-circuit over @c IN leaves (no @c OR below the root, no @c NOT, no
+ * multivalued input).  Cross-clause leaf sharing is allowed and is the
+ * normal Karp-Luby setting.
+ *
+ * On success, @p clauses receives one root per top-level disjunct (or the
+ * singleton root @p g in regime (a)) and @p supports[i] the set of @c IN
+ * leaves reachable from @p clauses[i] through its AND-only stratum -- the
+ * support determines @c Pr[C_i] (the product of leaf marginals) and the
+ * conditional sampler.
+ *
+ * @param g         Root gate.
+ * @param clauses   Output: the top-level clause roots.
+ * @param supports  Output: per-clause set of reachable @c IN leaves.
+ * @return          @c true iff the circuit is DNF-shaped (regime (a)/(b)).
+ */
+bool dnfShape(gate_t g,
+              std::vector<gate_t> &clauses,
+              std::vector<std::set<gate_t> > &supports) const;
+
+/**
+ * @brief Cheap shape test: is the circuit DNF-shaped, and how many clauses?
+ *
+ * The @c O(circuit) half of @c dnfShape -- validates the OR-of-ANDs-of-leaves
+ * shape with a single global visited-set (no per-clause re-walk) and returns the
+ * clause count, WITHOUT materialising the per-clause supports (whose total size
+ * can be @c O(m*N)).  Used by the chooser to rank @c sieve; the supports are
+ * built only if @c sieve / @c karp-luby actually runs (via @c dnfShape).
+ *
+ * @param g            Root gate.
+ * @param num_clauses  Output: number of top-level clauses.
+ * @return             @c true iff DNF-shaped.
+ */
+bool dnfShapeInfo(gate_t g, std::size_t &num_clauses) const;
+
+/**
+ * @brief Karp-Luby FPRAS estimate of a DNF-shaped circuit's probability
+ *        (fixed sample budget, stratified).
+ *
+ * Implements the Karp-Luby coverage estimator for the DNF-counting problem
+ * (@c \#DNF) under tuple-independent inputs: with @c p_i the product of the
+ * marginals of @p supports[i] and @c S the sum of the @c p_i (so @c S in
+ * @c [Pr[F], m*Pr[F]]), the estimator over clause @c i samples a satisfying
+ * assignment of @c C_i (its support forced true, every other leaf drawn from
+ * its marginal), finds the smallest clause index @c j the assignment
+ * satisfies, and accepts iff @c j == i; @c Pr[F] is then @c sum_i p_i times
+ * the per-clause acceptance rate.  The acceptance probability is @c Pr[F]/S in
+ * @c [1/m, 1], so the sample count for an @c (eps,delta) guarantee is
+ * independent of @c Pr[F], unlike naive Monte Carlo.
+ *
+ * The @p samples rounds are spread across clauses by *stratified* allocation
+ * (@c n_i proportional to @c p_i/S, every clause sampled at least once),
+ * estimating each clause's acceptance rate separately and combining
+ * @c sum_i p_i * acceptRate_i.  This removes the variance of the categorical
+ * clause draw used by the textbook estimator (between-strata variance),
+ * tightening the estimate at the same budget by up to a factor @c m.  When
+ * @p samples @c < @c m there are too few rounds for one per clause, so the
+ * method falls back to the unstratified categorical-draw estimator (still
+ * unbiased for any budget).
+ *
+ * The @p clauses / @p supports are those returned by @c dnfShape.  The
+ * @c mt19937_64 is seeded from @c provsql.monte_carlo_seed exactly as
+ * @c monteCarlo, so the estimate is reproducible under a pinned seed.
+ *
+ * @param clauses   Top-level clause roots (from @c dnfShape).
+ * @param supports  Per-clause reachable @c IN leaves (from @c dnfShape).
+ * @param samples   Resolved number of sampling rounds.
+ * @return          The Karp-Luby probability estimate.
+ */
+double karpLuby(const std::vector<gate_t> &clauses,
+                const std::vector<std::set<gate_t> > &supports,
+                unsigned long samples) const;
+
+/**
+ * @brief Exact probability of a monotone DNF by inclusion-exclusion (sieve).
+ *
+ * @c Pr[∨_i c_i] = Σ_{∅≠S⊆clauses} (-1)^{|S|+1} Pr[∧_{i∈S} c_i].  Each clause is
+ * a conjunction of positive input leaves, so the conjunction of a set @c S of
+ * clauses is the AND of the union of their supports, and over independent
+ * inputs @c Pr[∧_{i∈S} c_i] = ∏_{leaf ∈ ∪supports(S)} getProb(leaf).  Exact, and
+ * @c O(2^m) in the clause count @c m -- the portfolio member to pick when @c m
+ * is small (a handful of clauses), where it beats the general compilers.
+ *
+ * @p clauses / @p supports are those returned by @c dnfShape (monotone DNF over
+ * input leaves).  Throws when @c m exceeds @c kSieveMaxClauses (the @c 2^m
+ * enumeration would be impractical) so the caller can pick another method.
+ *
+ * @param clauses   Top-level clause roots (from @c dnfShape).
+ * @param supports  Per-clause reachable @c IN leaves (from @c dnfShape).
+ * @return          The exact probability.
+ */
+double sieve(const std::vector<gate_t> &clauses,
+             const std::vector<std::set<gate_t> > &supports) const;
+
+/**
+ * @brief Cheap certified probability interval @c [lower,upper] of a monotone
+ *        DNF, without compiling it (Olteanu-Huang-Koch d-tree leaf bound).
+ *
+ * Implements the @c Independent heuristic of Olteanu, Huang & Koch,
+ * "Approximate Confidence Computation in Probabilistic Databases" (ICDE 2010,
+ * Fig. 3).  The clauses are greedily partitioned into @e buckets of pairwise
+ * independent clauses (disjoint supports), clauses taken in descending
+ * marginal-probability order so the most probable clauses anchor the buckets.
+ * Each bucket's clauses are mutually independent, so its probability is the
+ * independent-or @c 1-∏(1-P(d)) with @c P(d)=∏_{leaf∈supports[d]} getProb(leaf).
+ * Then, since @c Φ is the disjunction of all buckets:
+ *
+ * - @c lower = max_i P(B_i): a sub-disjunction is a lower bound;
+ * - @c upper = min(1, Σ_i P(B_i)): the union bound.
+ *
+ * Both bounds are sound for @e any partition (the greedy one only affects
+ * tightness), so @c lower ≤ Pr[Φ] ≤ upper always holds.  When the clauses are
+ * mutually independent (disjoint supports) they all land in a single bucket and
+ * @c lower=upper=Pr[Φ], i.e. the interval collapses to the exact value.
+ * @c O(m^2) in the clause count @c m.
+ *
+ * A monotone DNF is fully determined (for probability) by its per-clause input
+ * supports, so this takes only the @c supports (the @c set per clause returned
+ * by @c dnfShape, or a cofactor's residual clause set in the @c DTree engine);
+ * the clause root gates are not needed.
+ *
+ * @param clauses  Per-clause input-leaf supports (a monotone DNF as a set of
+ *                 clauses, each a set of @c IN leaves).
+ * @param lower    [out] Certified lower bound on @c Pr[Φ].
+ * @param upper    [out] Certified upper bound on @c Pr[Φ].
+ */
+void dnfBounds(const std::vector<std::set<gate_t> > &clauses,
+               double &lower, double &upper) const;
+
+/**
+ * @brief Karp-Luby FPRAS with the self-adjusting stopping rule (adaptive
+ *        sample count for a relative @c (eps,delta) guarantee).
+ *
+ * The Dagum-Karp-Luby-Ross stopping rule (SICOMP 2000, the optimal form of
+ * the Karp-Luby-Madras 1989 self-adjusting rule): rather than fixing the
+ * number of rounds from the worst-case acceptance probability @c 1/m, draw
+ * coverage trials (clause @c i with probability @c p_i/S, then the
+ * smallest-index coverage test of @c karpLuby) until the *accept count*
+ * reaches the deterministic threshold
+ * @c Y1 = 1 + (1+eps) * 4*(e-2)*ln(2/delta)/eps^2, then return
+ * @c S * Y1 / N over the @c N rounds actually run.  That estimate is a
+ * relative @c (eps,delta) approximation of @c Pr[F], and @c N adapts to the
+ * true acceptance probability @c Pr[F]/S (expected @c N is @c Y1*S/Pr[F],
+ * i.e. up to @c m times fewer rounds than the fixed bound when the clauses
+ * barely overlap).
+ *
+ * Sampling stops early at @p max_samples rounds; @p reached_target is then
+ * @c false and the return is the plain unbiased @c S*accepts/N estimate over
+ * the spent budget (the @c (eps,delta) target was not met -- the caller
+ * reports the weaker guarantee actually achieved).
+ *
+ * @param clauses         Top-level clause roots (from @c dnfShape).
+ * @param supports        Per-clause reachable @c IN leaves (from @c dnfShape).
+ * @param eps             Target relative error (in @c (0,1]).
+ * @param delta           Target failure probability (in @c (0,1)).
+ * @param max_samples     Hard cap on the number of rounds.
+ * @param samples_used    Output: rounds actually run.
+ * @param reached_target  Output: whether the stopping threshold was reached
+ *                        before @p max_samples (i.e. the guarantee holds).
+ * @return                The Karp-Luby probability estimate.
+ */
+double karpLubyStopping(const std::vector<gate_t> &clauses,
+                        const std::vector<std::set<gate_t> > &supports,
+                        double eps, double delta,
+                        unsigned long max_samples,
+                        unsigned long &samples_used,
+                        bool &reached_target) const;
 
 /**
  * @brief Weighted model counting through a registered external counter.
@@ -325,7 +510,7 @@ dDNNF interpretAsDD(gate_t g) const;
  *
  * @param g       Root gate.
  * @param method  Compilation method name (e.g. "tree-decomposition",
- *                "d4", "c2d", …).
+ *                "d4", "c2d"…).
  * @param args    Additional arguments forwarded to the chosen method.
  * @return        The constructed @c dDNNF.
  */

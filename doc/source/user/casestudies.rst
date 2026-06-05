@@ -29,7 +29,7 @@ find which study demonstrates a given feature.
    <https://provsql.org/playground/>`_, the browser build of ProvSQL Studio,
    on a ready-made database; each chapter links straight to its own. The
    Playground bundles no external tools, so steps that explicitly call an
-   external knowledge compiler (``d4``, ``c2d``, …) or ``graph-easy`` do not
+   external knowledge compiler (``d4``, ``c2d``…) or ``graph-easy`` do not
    run there, but the built-in methods and everything else do. See the
    :ref:`Playground note <playground-note>`.
 
@@ -143,6 +143,7 @@ Setup and basics
    "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "", "✓"
    "``create_provenance_mapping_view``", "", "", "", "", "✓", "", "", ""
    "Hand-built mapping table", "", "", "", "", "", "✓", "", ""
+   "``setup_search_path``", "(✓)", "", "", "", "", "", "", ""
    "``provsql.active`` GUC", "", "", "", "", "", "", "", ""
    "``gate_one`` / ``gate_zero`` (semiring constants)", "", "", "", "", "", "", "", ""
 
@@ -185,8 +186,10 @@ Aggregation
    "``string_agg`` / ``array_agg``", "", "", "", "", "", "", "", ""
    "``COUNT(DISTINCT …)``", "", "", "", "", "", "", "", ""
    "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", ""
+   "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", ""
    "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", ""
    "``choose`` aggregate", "", "", "", "", "", "", "", ""
+   "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", ""
 
 Circuit inspection
 ~~~~~~~~~~~~~~~~~~~
@@ -269,8 +272,14 @@ Probabilities
    "``'tree-decomposition'`` method", "(✓)", "✓", "", "", "", "✓", "✓", "✓"
    "``'compilation'`` (d4 / c2d / dsharp / minic2d)", "(✓)", "✓", "", "", "", "", "", "✓"
    "``'inversion-free'`` method", "", "", "", "", "", "", "", "✓"
-   "``'weightmc'`` method", "", "", "", "", "", "", "", "✓"
-   "``probability_benchmark``", "", "", "", "", "", "", "", "✓"
+   "``'wmc'`` counters", "", "", "", "", "", "", "", "✓"
+   "``'d-tree'`` method (certified anytime bounds)", "", "", "", "", "", "", "", ""
+   "``'sieve'`` method (inclusion-exclusion)", "", "", "", "", "", "", "", ""
+   "``'karp-luby'`` method (relative FPRAS)", "", "", "", "", "", "", "", ""
+   "``'stopping-rule'`` method (additive FPRAS)", "", "", "", "", "", "", "", ""
+   "Guarantee request (``'relative'`` / ``'additive'``, cost-based chooser)", "", "", "", "", "", "", "", ""
+   "``probability_bounds`` (cheap lower / upper marginals)", "", "", "", "", "", "", "", ""
+   "Studio benchmark panel", "", "", "", "", "", "", "", "✓"
    "``expected(COUNT/SUM/MIN/MAX)``", "", "", "", "", "", "✓", "✓", ""
    "``repair_key`` (block-independent, ``mulinput``)", "", "", "", "", "", "✓", "", "✓"
    "``provsql.monte_carlo_seed`` GUC", "", "", "", "", "", "", "✓", ""

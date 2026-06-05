@@ -271,7 +271,32 @@ Currently Supported Methods
        of all :math:`2^n` worlds; capped at 64 inputs.
    * - ``"monte-carlo"``
      - :cfunc:`BooleanCircuit::monteCarlo` -- approximate via random
-       sampling; takes sample count as argument.
+       sampling.  The argument is a fixed count (``samples=N`` or a bare
+       integer) or an *additive* ``(eps,delta)`` target, for which
+       ``N = ceil(ln(2/delta)/(2*eps^2))`` (Hoeffding, independent of the
+       estimated probability).
+   * - ``"karp-luby"``
+     - The Karp-Luby ``#DNF`` FPRAS, whose sample complexity is independent
+       of the estimated probability (accurate on rare events, unlike naive
+       Monte Carlo).  :cfunc:`BooleanCircuit::dnfShape` first checks the
+       circuit is a monotone OR-of-ANDs over input leaves (cross-clause leaf
+       sharing allowed) and extracts the clause supports; the dispatcher
+       errors, rather than falling back, on any other shape.  Two estimators,
+       selected by the argument (``evaluate_karp_luby`` does the routing):
+       a fixed ``samples=N`` runs the *stratified* fixed-budget estimator
+       :cfunc:`BooleanCircuit::karpLuby` (rounds allocated across clauses
+       proportionally to :math:`p_i/S`, removing the categorical clause-draw
+       variance); an adaptive ``epsilon=E[,delta=D][,max_samples=M]`` target
+       (default ``epsilon=0.1, delta=0.05``) runs the Dagum-Karp-Luby-Ross
+       self-adjusting *stopping rule* :cfunc:`BooleanCircuit::karpLubyStopping`
+       (sample until the accept count reaches
+       :math:`\Upsilon_1 = 1+(1+\epsilon)\,4(e-2)\ln(2/\delta)/\epsilon^2`,
+       so the round count adapts to the true acceptance probability
+       :math:`\Pr[F]/S \in [1/m,1]` -- up to ``m`` times fewer rounds than the
+       fixed worst-case bound).  The cap defaults to that fixed bound
+       (:math:`\lceil\Upsilon_1 m\rceil`); reaching it before the target
+       downgrades the guarantee to the relative ``eps`` achieved at the spent
+       budget.
    * - ``"wmc"``
      - :cfunc:`BooleanCircuit::wmcCount` -- weighted model counting
        via the registered counter named in the argument
@@ -280,12 +305,50 @@ Currently Supported Methods
        named it selects the highest-preference available counter.
    * - ``"weightmc"``
      - Backward-compatible alias for ``"wmc"`` with the ``weightmc``
-       tool; takes ``delta;epsilon`` as argument.
+       tool.  Takes ``epsilon=E[,delta=D]`` (validated through the same
+       ``parse_eps_delta`` as the sampling methods) or, as a legacy alias,
+       the ``delta;epsilon`` pair.
    * - ``"tree-decomposition"``
      - Builds a :cfunc:`TreeDecomposition` (bounded by
        :cfunc:`TreeDecomposition::MAX_TREEWIDTH`) and uses
        :cfunc:`dDNNFTreeDecompositionBuilder` to construct a
        d-DNNF, then calls :cfunc:`dDNNF::probabilityEvaluation`.
+       **Speculative execution:** the cost estimate uses the degeneracy *lower*
+       bound, which under-costs; the min-fill build then discovers the *exact*
+       treewidth, so before the ``2^w`` d-DNNF step the method recomputes the
+       real cost and -- if it exceeds the next-best method's (``cost_budget``) --
+       throws so the chooser escalates (the ``MAX_TREEWIDTH`` cap remains the hard
+       ceiling).  By-name calls run unbounded.
+   * - ``"d-tree"``
+     - The Olteanu-Huang-Koch anytime interval-bounds engine
+       (:cite:`DBLP:conf/icde/OlteanuHK10`, ``src/DTree.cpp``): a cheap
+       certified leaf bound refined by independent-component decomposition and
+       Shannon expansion until ``upper-lower <= max_width`` -- exact at width 0,
+       a certified additive / relative interval otherwise, and deterministic
+       (the only non-exact method admissible for a ``delta = 0`` request).  A
+       monotone DNF takes the optimised clause path ``dtreeBounds`` (leaf
+       bound ``BooleanCircuit::dnfBounds``); **any other circuit**
+       (negation / ``EXCEPT``, nested ``AND``/``OR``, arbitrary sharing) takes
+       the general DAG recursion ``dtreeBoundsCircuit``, whose leaf bound
+       generalises ``dnfBounds`` soundly to any gate -- independent components
+       (disjoint input cones) compose exactly, an entangled ``AND`` uses a
+       Bonferroni lower / ``min`` upper, an ``OR`` a ``max`` lower / union
+       upper, and ``NOT`` the exact flip ``[1-U, 1-L]``.  Exact mode adds
+       component memoisation over the canonical subproblem; a multivalued
+       (``MULIN`` / BID) gate makes it throw, so the chooser falls back.  In the
+       default chain it competes for exact only on the monotone-DNF path (and
+       where tree-decomposition bails); the general recursion serves the
+       approximate / ``delta = 0`` paths and explicit by-name calls.
+       **Speculative execution:** because d-tree cost is treewidth-driven and not
+       predictable from cheap features (a calibration sweep confirmed depth /
+       ``S`` / ``N`` do not track it, and the approximate cost is nearly
+       ``eps``-independent), the chooser runs it under a *subproblem budget* set
+       to the next-best admissible method's estimated cost
+       (``EvalContext::cost_budget`` → a count via ``kCostDTreeMsPerStep``); a
+       counter in the recursion throws ``"cost budget exceeded"`` on overrun and
+       the chooser's ``catch`` escalates -- bounding wasted work at ~the safe
+       fallback's cost (deterministic, so selection is reproducible).  The debug
+       GUC ``provsql.dtree_max_subproblems`` adds a hard cap.
    * - ``"compilation"``
      - :cfunc:`BooleanCircuit::compilation` -- invokes the registered
        knowledge compiler named in the argument (``d4``, ``d4v2``,
@@ -316,6 +379,37 @@ a :cfunc:`dDNNF` has been produced, probability evaluation is a
 single linear-time pass
 (:cfunc:`dDNNF::probabilityEvaluation`), because the d-DNNF
 structure guarantees decomposability and determinism.
+
+Approximation-guarantee NOTICE
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The approximate methods (``monte-carlo``, ``karp-luby``, and ``weightmc`` /
+``wmc`` with an approximate counter) return an estimate that carries an
+``(eps, delta)`` error guarantee.  ``probability_evaluate.cpp`` surfaces it as a
+single machine-readable NOTICE so a UI can render it without re-deriving the
+bound:
+
+.. code-block:: text
+
+   ProvSQL: approximation-guarantee: kind=<relative|additive> eps=<E> \
+       [delta=<D>] [samples=<N>] [clauses=<M>] [tool=<name>]
+
+emitted by the ``emit_guarantee`` helper.  ``kind=relative`` is a
+multiplicative guarantee (the estimate is within a factor ``1 ± eps`` of the
+true probability with probability at least ``1 - delta``), used by
+``karp-luby`` (over ``M`` clauses) and the approximate weighted counters;
+``kind=additive`` is the absolute Hoeffding bound (``|estimate - p| <= eps``)
+used by ``monte-carlo``.  ``samples`` is the actual sample count: a fixed
+budget, the Hoeffding count on ``monte-carlo``'s adaptive path, or -- for
+``karp-luby``'s stopping rule -- the number of rounds the run actually took
+before the accept count crossed the threshold.  The fields are omitted when
+not applicable (no ``delta`` for the weighted counters, no ``samples`` /
+``clauses`` for the external tools).
+
+The NOTICE is gated on ``provsql.verbose_level >= 5`` so plain SQL evaluation
+and the regression suite stay quiet; ProvSQL Studio raises the level to 5 for
+evaluation and parses the NOTICE into the eval-strip bound, but its probability
+benchmark drops it (it is per-method UI metadata, not a benchmark row).
 
 Cmp-Probability Pre-Passes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -363,14 +457,267 @@ The chain (in order) :
   dispatches on the smaller side of ``C`` (lower tail directly,
   or upper tail via inverted Bernoullis) for ``O(N x min(C, N -
   C))`` total cost per cmp.  See ``src/CountCmpEvaluator.{h,cpp}``.
+- :cfunc:`runMinMaxCmpEvaluator` (same gate
+  ``provsql.cmp_probability_evaluation``) : recognises HAVING
+  ``gate_cmp(gate_agg(MIN|MAX, semimod children), gate_value(C))`` and
+  replaces the cmp with a Bernoulli carrying the closed-form
+  ``Pr(MIN/MAX(a) op C)``.  Where the COUNT path needs a Poisson-binomial
+  DP, MIN / MAX need none : partition the children on their per-row value
+  ``m_i`` against ``C``, and the answer is a product of ``(1 - p_i)``
+  factors (``MAX >= C`` is ``1 - prod(1 - p_i)`` over ``m_i >= C``,
+  ``MIN >= C`` is ``prod(1 - p_i)`` over ``m_i < C`` times the non-empty
+  factor, and so on for all twelve ``(MIN|MAX, op)`` combinations, the
+  empty group excluded as in COUNT).  Same shape match and independence
+  certification as :cfunc:`runCountCmpEvaluator` -- both share
+  ``src/CmpEvaluatorCommon.{h,cpp}`` (``matchAggCmp`` /
+  ``computeRefCounts`` / ``contributorProb``).  See
+  ``src/MinMaxCmpEvaluator.{h,cpp}``.
+- :cfunc:`runSumCmpEvaluator` (same gate
+  ``provsql.cmp_probability_evaluation``) : recognises HAVING
+  ``gate_cmp(gate_agg(SUM, semimod children), gate_value(C))`` and
+  replaces the cmp with a Bernoulli carrying ``Pr(SUM(a) op C)``.  The
+  running sum of the present rows' integer weights ``m_i`` is a weighted
+  Poisson-binomial ; its full distribution ``dp[s] = Pr(sum = s)`` is
+  built by a subset-sum convolution over the reachable range
+  ``[sum of negative m_i, sum of positive m_i]``, and the answer is
+  ``sum_{s : s op C} dp[s]`` minus the empty-group world (whose empty sum
+  is ``0``).  Cost ``O(N x R)`` with ``R`` the range -- *pseudo*-polynomial
+  (``R`` is linear in the weight magnitudes, hence exponential in their
+  bit-length), so the pass declines above a range cap and falls back to
+  the general path.  Same shape match and independence certification as
+  the COUNT / MIN-MAX evaluators (shared ``CmpEvaluatorCommon``).  See
+  ``src/SumCmpEvaluator.{h,cpp}``.
 
-Adding another closed-form cmp resolver (MIN / MAX / SUM, future
-discrete-RV distributions…) follows the same shape : a
-``runXxxEvaluator`` function that walks ``gate_cmp`` gates, checks
-shape + independence, computes the probability, calls
+Adding another closed-form cmp resolver (future discrete-RV
+distributions…) follows the same shape : a ``runXxxEvaluator`` function
+that walks ``gate_cmp`` gates, checks shape + independence (reusing
+``CmpEvaluatorCommon``), computes the probability, calls
 :cfunc:`GenericCircuit::resolveCmpToBernoulli`.  Gate it on
 ``provsql.cmp_probability_evaluation`` so all such evaluators
 share one diagnostic switch.
+
+
+.. _having-trichotomy-complexity:
+
+HAVING Query Complexity: the Ré–Suciu Trichotomy
+------------------------------------------------
+
+The closed-form HAVING evaluators above
+(:cfunc:`runCountCmpEvaluator`, :cfunc:`runMinMaxCmpEvaluator`,
+:cfunc:`runSumCmpEvaluator`) realise the tractable corner of a complexity
+classification due to Ré and Suciu :cite:`DBLP:journals/vldb/ReS09` for a
+``HAVING`` predicate ``α(y) θ k`` over a tuple-independent probabilistic
+database, with ``α ∈ {MIN, MAX, COUNT, SUM, AVG, COUNT(DISTINCT)}`` and
+``θ ∈ {=, ≠, <, ≤, >, ≥}``.  This section is the standing reference for
+that classification; it outlives any single evaluator.
+
+Two safety properties drive everything:
+
+- **Skeleton safety** -- whether ``sk(Q)``, the conjunctive query feeding
+  the aggregate (the ``FROM`` / ``WHERE`` body with the group-by and
+  aggregated variables as head), is a self-join-free hierarchical CQ
+  (Dalvi–Suciu safe, :cite:`DBLP:journals/jacm/DalviS12`) -- the same
+  property the safe-query rewriter detects (:cfunc:`find_hierarchical_root_atoms`
+  in ``src/safe_query.c``).
+- **α-safety** -- a stricter, per-aggregate *plan* property.  For
+  ``MIN`` / ``MAX`` / ``COUNT`` it coincides with skeleton safety; for
+  ``SUM`` / ``AVG`` (Def. 15) and ``COUNT(DISTINCT)`` (Def. 14) it is
+  strictly stronger (e.g. even a single-table ``SUM`` is #P-hard --
+  Prop. 5).
+
+The classification is best read as **two layers**.
+
+**Layer 1 -- exact computation -- is complement-symmetric.**  Because
+``Pr(α ≠ k) = Pr(nonempty) − Pr(α = k)`` and likewise
+``Pr(α < k) = Pr(nonempty) − Pr(α ≥ k)``,
+``Pr(α ≤ k) = Pr(nonempty) − Pr(α > k)`` -- with ``Pr(nonempty)``
+trivially poly -- each operator has the *same exact complexity as its
+complement* (:cite:`DBLP:journals/vldb/ReS09`, p. 1102).  So ``=`` ≡ ``≠``,
+``<`` ≡ ``≥``, ``≤`` ≡ ``>``, and the exact verdict depends only on the
+aggregate's safety, not on ``θ``:
+
+.. list-table:: Layer 1 -- exact evaluation (all six operators, including ``≠``)
+   :header-rows: 1
+   :widths: 30 36 34
+
+   * - Aggregate
+     - ``sk(Q)`` safe
+     - ``sk(Q)`` not safe
+   * - ``EXISTS``
+     - P (read-once; safe-query rewriter)
+     - #P-hard
+   * - ``MIN`` / ``MAX`` / ``COUNT``
+     - P (Thm 1)
+     - #P-hard (Thm 2)
+   * - ``COUNT(DISTINCT)``
+     - P if CD-safe, else #P-hard (Thm 3/4)
+     - #P-hard (Thm 4)
+   * - ``SUM`` / ``AVG``
+     - P if α-safe, else #P-hard (Thm 5/6, Prop 5)
+     - #P-hard (Thm 6)
+
+**Layer 2 -- approximation -- applies only where exact is #P-hard, and is
+direction-asymmetric.**  An FPTRAS gives *relative* error, and a relative
+approximation of ``p`` is not one of ``1 − p`` (a rare event near 0 is the
+hard one), so complements with identical exact complexity get different
+approximation verdicts.  This is the trichotomy proper -- *safe* /
+*apx-safe* (an FPTRAS exists) / *hazardous* (no FPRAS):
+
+.. list-table:: Layer 2 -- approximation overlay (only when exact is #P-hard)
+   :header-rows: 1
+   :widths: 44 30 26
+
+   * - ``(α, θ)``
+     - verdict
+     - reference
+   * - ``EXISTS`` (third class empty)
+     - apx-safe (always; karp-luby)
+     - p. 1093
+   * - ``MIN`` ``<,≤`` · ``MAX`` ``>,≥``
+     - apx-safe (any unsafe ``sk``)
+     - Thm 8
+   * - ``MIN`` ``>,≥,=`` · ``MAX`` ``<,≤,=``
+     - hazardous
+     - Lemma 8 / Thm 11
+   * - ``COUNT`` ``<,≤,=``
+     - apx-safe / hazardous (decidable)
+     - Thm 11
+   * - ``COUNT`` ``>,≥``
+     - open
+     - pp. 1094, 1111
+   * - ``SUM`` ``<,≤,>,≥`` (``sk`` safe, not SUM-safe)
+     - apx-safe
+     - Thm 10
+   * - ``SUM`` ``<,≤`` (``sk`` unsafe)
+     - hazardous
+     - Thm 11
+   * - ``SUM`` ``>,≥`` (``sk`` unsafe)
+     - open
+     - p. 1094
+   * - ``SUM`` ``=``
+     - hazardous
+     - p. 1091
+   * - ``AVG`` (all ``θ``), ``COUNT(DISTINCT)`` (all ``θ``)
+     - open (§6 covers only MIN/MAX/SUM)
+     - p. 1107
+   * - any ``≠``
+     - open (excluded from the approximation analysis)
+     - p. 1110
+
+Reading the two layers together (the source figure is Fig. 7, p. 1111,
+tabulating MIN/MAX/COUNT):
+
+- ``≠`` is **not** open for *exact* computation -- it equals ``=`` -- but
+  *is* unclassified for approximation (the paper omits ``≠`` from §6,
+  p. 1110).
+- ``=`` lies in ``Θ≤ ∩ Θ≥`` (``Θ≤ = {≤,<,=}``, ``Θ≥ = {≥,>,=}``); for
+  ``MIN`` / ``MAX`` it resolves to the hazardous side because Thm 8 (the
+  only *blanket* FPTRAS) lists only the one-sided operators.
+- ``MIN`` / ``MAX`` unsafe verdicts are blanket (Thm 8 / Lemma 8);
+  ``COUNT`` / ``SUM`` with ``Θ≤`` are per-query decidable (Thm 11);
+  ``COUNT`` / ``SUM`` with ``{≥, >}`` and unsafe ``sk`` are open.
+- The trichotomy is proven "for many" -- not all -- ``(α, θ)`` pairs
+  (p. 1093); the open cells above are precisely that gap.
+
+**EXISTS is the degenerate baseline, and ProvSQL already implements all of
+it.**  The paper's sixth aggregate, ``EXISTS``, only tests group
+non-emptiness -- i.e. the plain Boolean conjunctive query -- so it carries
+no operator at all and its third (hazardous) class is *empty*: every
+Boolean CQ has an FPTRAS (p. 1093).  In ProvSQL this is not a ``gate_cmp``
+case but the **default provenance** of any grouped / projected tuple: the
+``gate_plus`` (OR) over the contributing tuples' tokens, whose probability
+is just ``Pr(lineage is true)``.  Its ``HAVING`` form ``COUNT(*) >= 1`` is
+provably true on any non-empty group and is collapsed straight back to
+that OR by the always-true rewriter (``runHavingAlwaysTrueRewriter`` ->
+``GenericCircuit::resolveCmpToPlusOfKGates``).  So ``EXISTS`` is covered
+end-to-end by the core pipeline -- safe-query rewriter then
+``independentEvaluation`` when ``sk(Q)`` is safe (P), tree-decomposition /
+d4 when it is not (#P-hard exact), and karp-luby for the always-available
+FPTRAS (apx-safe) -- with no dedicated HAVING evaluator.  It is the
+baseline the other five aggregates generalise.
+
+**What ProvSQL implements.**  The closed-form pre-passes
+(:cfunc:`runCountCmpEvaluator` / :cfunc:`runMinMaxCmpEvaluator` /
+:cfunc:`runSumCmpEvaluator`) compute the **P / α-safe** corner *exactly*
+for independent private contributors (the read-once independence
+certification in ``CmpEvaluatorCommon``, a sufficient condition for
+α-safety on a per-instance basis).  :cfunc:`runAggMarginalEvaluator`
+(``src/AggMarginalEvaluator.cpp``) extends this exact corner to the
+*hierarchical (laminar) join*: a recursive marginal-vector engine that, at
+each level, factors a block's common root event (the ``⊥`` mixture),
+convolves independent blocks (``⊛⁺``), and at a common-less **Cartesian
+product** node ``R(a),S(a,b),T(a,c)`` multiplies the per-factor counts.
+There a ``SUM`` whose value lives on one factor is ``S_f · M``; a
+*branch-spanning* but **additively separable** value (e.g. ``sum(b+c)``) is
+``Σ_f sum_f · ∏_{g≠f} cnt_g``, folded exactly from the per-factor *joint*
+``(sum,count)`` distributions (``sumCountPMF``); a **multiplicatively
+separable** value (e.g. ``sum(b*c)``) is ``∏_f sum_f``, the product of the
+per-factor weighted sums (``mulSeparableSumPMF``, via a pivot identity so no
+explicit factorisation is needed).  A value that is neither (``sum(b*c+b+c)``)
+and a non-laminar shape (the triangle) self-gate back to enumeration.  Pinned
+by ``test/sql/having_safe_join_{count,agg}.sql``.
+
+The same evaluator also covers **BID blocks** for every aggregate
+(``COUNT`` / ``SUM`` / ``AVG`` / ``MIN`` / ``MAX``): a ``repair_key`` block
+surfaces as ``gate_mulinput`` contributors sharing a block-key child (mutually
+exclusive, per-alternative probabilities), so each block is handled as a
+*categorical* (at most one alternative present, the null arm contributing 0),
+independent of the TID part.  ``COUNT`` / ``SUM`` / ``AVG`` convolve the
+block's count / weighted-sum distribution; ``MIN`` / ``MAX`` fold a per-block
+factor ``1-Σ_{pred} p_alt`` into each ``pAllAbsent`` over a value-thresholded
+subset.  No planner certificate is needed, since the block *is* visible in the
+circuit.  This is the value-0-present-vs-empty-group corner of
+``test/sql/having_sum_zero.sql``, now exercised exactly rather than by
+enumeration; pinned by ``test/sql/having_bid.sql``.  The one residual is a
+declared key on a plain TID table (mutual exclusion in ``block_key`` metadata
+only, no ``mulinput``), which still falls back.
+
+Finally, a **UNION / EXCEPT over a join that re-uses a base tuple** yields a
+non-read-once contributor -- ``(r∧s)∨(r∧t)`` (a ``gate_plus``) or
+``(r∧s)∖(r∧t)`` (a ``gate_monus``) repeating the shared ``r`` -- which the
+read-once ``contributorProb`` rejects.  When the contributor's footprint is
+*private* (independent of every other contributor), ``contributorExactMarginal``
+computes its exact marginal by brute force over its private leaves (resolving
+the internal sharing exactly) and models it as an independent one-alternative
+block, reusing the categorical machinery; pinned by ``test/sql/having_union.sql``.
+A base tuple shared *across* a group's contributors is genuinely :math:`\#P`-hard
+and falls back to enumeration.
+
+The trichotomy classification above is the standing complexity reference; ProvSQL
+acts on it only through the evaluators (the exact corner) and the sampler (the
+apx-safe corner), not through any read-only verdict surface.
+
+**The apx-safe corner, in practice.**  ``runSumCmpEvaluator`` is
+*pseudo*-polynomial: it declines a ``SUM`` whose reachable range exceeds a
+cap (``kMaxSumRange``), and the sparse marginal-vector engine declines when
+the number of distinct aggregate values exceeds ``kMaxSumSupport``.  When
+*both* decline -- a large-magnitude aggregate over many incommensurate values
+-- the comparator survives, and its only exact route, ``provsql_having``'s
+threshold-lineage expansion, does not terminate in practice.  For an
+``(eps,delta)`` request (``relative`` / ``additive`` / ``monte-carlo``)
+:cfunc:`probability_evaluate_internal` detects this case with
+``circuitHasUnresolvedSampleableAgg`` and routes it straight to the
+GenericCircuit world-sampler (``src/MonteCarloSampler.cpp``) instead of
+building the (non-terminating) Boolean view: the ``relative`` path runs the
+DKLR stopping rule ``monteCarloRVStopping`` -- a relative FPRAS when
+``Pr >= 1/poly`` -- and ``additive`` / ``monte-carlo`` run fixed-sample
+:cfunc:`monteCarloRV`.  The sampler's ``gate_agg`` arm pushes each kept
+contributor's value into the matching aggregator, reproducing SQL semantics
+exactly for **every aggregate** -- the value gate is the row's contribution
+(the summed term for SUM; the ``0``/``1`` indicator for COUNT, ``0`` for a NULL
+row so ``count(x)`` does not count NULLs; the compared value for AVG / MIN /
+MAX), so NULL rows are handled and an empty group finalises to the value the
+exact evaluator uses (``0`` for SUM / COUNT, NaN -> comparison false for the
+others) -- and for ``gate_arith`` over them.  In practice only SUM / AVG /
+MIN / MAX ever reach here: COUNT's value-support is small (``0``/``1`` per row)
+so it is always resolved exactly and never bails -- but it is sample-faithful
+as well (the arm sums the contributor value gate, not a hard ``1``), so it is
+not excluded.  The exact (``delta = 0``) route is unchanged.  This realises the
+*apx-safe* corner of the trichotomy table above (and, since the sampler
+evaluates the aggregate per world regardless of join shape, the
+branch-spanning / shared-tuple residuals too); the rounding-based rejection
+FPTRAS (Thm 9) would add only rare-event sample efficiency.  Pinned by
+``test/sql/having_agg_fptras.sql``.
 
 
 .. _bids-and-multivalued-inputs:

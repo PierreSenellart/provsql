@@ -29,6 +29,16 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
+  -- Idempotence: a second add_provenance on an already-tracked table is
+  -- a no-op with a NOTICE, so setup scripts and notebook cells can be
+  -- re-run freely.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % already has provenance tracking', _tbl;
+    RETURN;
+  END IF;
   -- See the common-version body for the rationale of dropping the
   -- column DEFAULT and UNIQUE in favour of provenance_guard + a
   -- plain index.
@@ -618,3 +628,10 @@ SELECT create_provenance_mapping_view('time_validity_view', 'update_provenance',
 /** @} */
 
 SET search_path TO public;
+
+-- Final constants-cache refresh: same rationale as at the end of
+-- provsql.common.sql.  On PG14+ this file is appended after the common
+-- script, so this is the last statement of the generated install script;
+-- the refresh must come after every object has been created for the
+-- installing session's memoized constants to be complete.
+SELECT provsql.reset_constants_cache();

@@ -26,8 +26,8 @@ RUN apt-get update &&\
     apt-get -y install postgresql-common ca-certificates curl gnupg &&\
     /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y &&\
     apt-get -y install \
-        build-essential git mercurial unzip \
-        libc6-i386 libgmp-dev libboost-dev libboost-serialization-dev \
+        build-essential cmake git mercurial unzip \
+        libc6-i386 libgmp-dev libmpfr-dev libboost-dev libboost-serialization-dev \
         zlib1g-dev iproute2 \
         postgresql-${PSQL_VERSION} postgresql-server-dev-${PSQL_VERSION} \
         python3 python3-pip python3-venv \
@@ -64,6 +64,28 @@ RUN cd /tmp &&\
     mv weightmc /tmp/tools &&\
     chmod a+x /tmp/tools/weightmc
 
+# TOOL ganak (modern weighted/projected model counter). The full from-source
+# build pulls in CryptoMiniSat / Arjun / SBVA / cadical, so we use the
+# upstream prebuilt static binary instead.
+RUN cd /tmp &&\
+    curl -L -o ganak.tar.gz \
+      https://github.com/meelgroup/ganak/releases/download/release/v2.6.2/ganak-v2.6.2-linux-amd64.tar.gz &&\
+    mkdir ganak-dl &&\
+    tar xzf ganak.tar.gz -C ganak-dl &&\
+    find ganak-dl -type f -name ganak -exec mv {} /tmp/tools/ganak \; &&\
+    chmod a+x /tmp/tools/ganak
+
+# TOOL sharpsat-td (+ its flow_cutter_pace17 helper). setupdev.sh builds both
+# into bin/; the registry invokes the counter as `sharpsat-td`, so rename the
+# `sharpSAT` binary accordingly. Needs cmake + GMP + MPFR (installed above).
+RUN cd /tmp &&\
+    git clone https://github.com/Laakeri/sharpsat-td.git &&\
+    cd sharpsat-td &&\
+    ./setupdev.sh static &&\
+    mv bin/sharpSAT /tmp/tools/sharpsat-td &&\
+    mv bin/flow_cutter_pace17 /tmp/tools/ &&\
+    chmod a+x /tmp/tools/sharpsat-td /tmp/tools/flow_cutter_pace17
+
 # mv the additional tools
 RUN bash -c "mv /tmp/tools/* /usr/local/bin"
 
@@ -93,16 +115,25 @@ EXPOSE 5432
 RUN make install
 
 USER postgres
-#create a db test
+# Create the demo databases: the tutorial and case-study databases that the
+# ProvSQL Playground ships, so Studio's database switcher offers the same set
+# (and `CREATE EXTENSION provsql` in each is the build-time check that the
+# extension loads). casestudy3 is omitted (its GTFS data is a large separate
+# download). Each doc/<dir>/setup.sql self-installs provsql and loads its data;
+# casestudy4 reads CSVs via \copy relative to its data/ directory, so psql is
+# run with the study's data dir (when present) as the CWD.
 RUN /etc/init.d/postgresql start &&\
     pg_isready -t 30 &&\
     createuser -s test &&\
-    createdb test &&\
-    psql -f /opt/provsql/test/sql/setup.sql test test  &&\
-    psql -f /opt/provsql/test/sql/add_provenance.sql test test &&\
-    psql -f /opt/provsql/test/sql/formula.sql test test  &&\
-    psql -f /opt/provsql/test/sql/sr_minmax.sql test test &&\
-    psql -c "ALTER ROLE test SET search_path TO public, provsql";
+    psql -c "ALTER ROLE test SET search_path TO public, provsql" &&\
+    for s in tutorial:tutorial cs1:casestudy1 cs2:casestudy2 cs4:casestudy4 \
+             cs5:casestudy5 cs6:casestudy6 cs7:casestudy7; do \
+      name="${s%%:*}"; dir="/opt/provsql/doc/${s##*:}"; \
+      datadir="$dir"; [ -d "$dir/data" ] && datadir="$dir/data"; \
+      createdb -O test "$name" &&\
+      ( cd "$datadir" && psql -v ON_ERROR_STOP=1 -U test -d "$name" \
+          -f "$dir/setup.sql" ) || exit 1; \
+    done
 
 ############################## FINISHING THE DOCKER  ##############################
 

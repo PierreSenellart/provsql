@@ -93,9 +93,12 @@ SELECT 'J3' AS scenario, * FROM ij_probe(
   $$ SELECT a.x FROM ij_a a CROSS JOIN ij_b b WHERE a.x = b.x $$);
 
 -- ---------------------------------------------------------------
--- (J4) LEFT OUTER JOIN.  NULL-padding rows break per-row TID, so
--- the pre-pass refuses to flatten and the candidate gate refuses
--- on the still-present JoinExpr.
+-- (J4) LEFT OUTER JOIN.  The outer-join lowering rewrites it into
+-- the UNION of its matched and null-padded antijoin arms before the
+-- safe-query pre-pass runs, so the candidate gate refuses on that
+-- (now set-op) shape.  Probabilities are the correct LEFT-JOIN group
+-- existence values P(some left row in the group): x=1 -> 1-0.5^2 =
+-- 0.75, x=2 -> P(a2) = 0.5 (not the old inner-join 0.30 / 0.32).
 -- ---------------------------------------------------------------
 SELECT 'J4' AS scenario, * FROM ij_probe(
   $$ SELECT a.x FROM ij_a a LEFT JOIN ij_b b ON a.x = b.x $$);

@@ -9,7 +9,12 @@ test: add_provenance
 test: remove_add_provenance
 
 # Basic checks
-test: provenance_in_from identify_token subquery create_provenance_mapping
+# identify_token scans every provenance-tracked relation in the database, so it
+# must not run concurrently with tests that create/drop such relations (e.g.
+# subquery's subquery_result): a dropped-but-still-catalogued table makes its
+# dynamic "SELECT * FROM <rel>" fail. Keep it on its own serial line.
+test: provenance_in_from subquery create_provenance_mapping
+test: identify_token
 test: circuit_subgraph
 test: simplify_identities
 test: resolve_input
@@ -31,6 +36,9 @@ test: deterministic union_all union nested_union union_nary distinct group_by_pr
 test: cte
 test: active
 test: aggregation
+test: aggregate_null
+test: outer_join
+test: scalar_subquery
 test: agg_distinct agg_order_by agg_arithmetic
 test: agg_token_text_as_uuid
 test: create_as
@@ -40,6 +48,7 @@ test: having_on_aggregation
 test: formula_on_having
 test: where_on_aggregation
 test: choose
+test: agg_token_text
 test: empty_count
 
 # Adding probabilities
@@ -49,14 +58,22 @@ test: probability_setup
 test: viewing_setup
 
 # Probability computation using internal methods
-test: possible_worlds monte_carlo
+test: possible_worlds monte_carlo karp_luby stopping_rule sieve probability_paths probability_bounds dtree
 
 # Regression: SUM and AVG over the same children must produce
 # distinct agg gates (the aggfnoid is part of the gate UUID).
 test: agg_uuid_aggfnoid
 
 # Complex test relying on probabilities
-test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation having_always_true
+test: sr_boolexpr probability_having probability_having_avg_min_max having_boolean_connectors count_cmp_optimisation min_max_cmp_optimisation sum_cmp_optimisation having_safe_join_count having_safe_join_agg having_numeric having_union having_group_by_const having_grouped_column having_always_true
+test: having_count_distinct
+test: scalar_empty_having
+test: having_sum_zero
+test: having_bid
+test: having_arithmetic
+test: having_agg_fptras
+test: insert_select_sublink
+test: last_eval_method
 
 # Probability computation using external software
 test: d4 dsharp weightmc c2d minic2d
@@ -69,9 +86,8 @@ test: treedec_simple treedec treedec_mulinput default_probability_evaluate indep
 test: expected
 test: large_circuit
 
-# Knowledge-compilation demo helpers (DOT/CNF surfaces +
-# probability_benchmark)
-test: tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 compile_to_ddnnf_nnf ddnnf_stats probability_benchmark tool_available circuit_subgraph_depth fallback_compiler_guc
+# Knowledge-compilation demo helpers (DOT/CNF surfaces)
+test: tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 compile_to_ddnnf_nnf ddnnf_stats tool_available circuit_subgraph_depth fallback_compiler_guc
 
 # Expected Shapley and Banzhaf value computation
 test: shapley
@@ -130,6 +146,7 @@ test: continuous_rangecheck
 test: continuous_rangecheck_having
 test: continuous_analytic
 test: continuous_expectation
+test: continuous_mc_transparency
 test: continuous_conditioning
 test: continuous_support
 test: continuous_hybrid

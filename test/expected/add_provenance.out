@@ -18,3 +18,14 @@ provsql
 create_provenance_mapping
 
 (1 row)
+NOTICE:  table personnel already has provenance tracking
+add_provenance
+
+(1 row)
+NOTICE:  mapping table personnel_name already exists
+create_provenance_mapping
+
+(1 row)
+count
+7
+(1 row)

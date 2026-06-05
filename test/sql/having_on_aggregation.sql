@@ -123,6 +123,10 @@ FROM result_complex_having;
 
 DROP TABLE result_complex_having;
 
+-- Scalar (no GROUP BY) count: count(*) < 4 is true on the empty group (0 < 4),
+-- and a scalar aggregation always produces one row, so the empty world (no
+-- same-city pairs present) is a real witness -- the empty set {} -- alongside the
+-- non-empty <4-pair worlds.  (A grouped count would instead drop the empty group.)
 CREATE TABLE result_join_having_why_count_lt4 AS
 SELECT
   COUNT(*),

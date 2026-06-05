@@ -1,4 +1,4 @@
-# ProvSQL — "Provence" Design Theme
+# ProvSQL – "Provence" Design Theme
 
 A complete color and typography specification for the ProvSQL PostgreSQL extension branding.
 
@@ -8,8 +8,8 @@ A complete color and typography specification for the ProvSQL PostgreSQL extensi
 
 ### In the logo
 The wordmark is set in **EB Garamond semibold italic**, split into two color spans:
-- *Prov* — Golden Yellow `#E8B84B` (accent), drawing attention to the distinctive provenance prefix
-- *SQL* — Deep Plum `#2A1850` (primary text), receding slightly into the lavender cylinder
+- *Prov* – Golden Yellow `#E8B84B` (accent), drawing attention to the distinctive provenance prefix
+- *SQL* – Deep Plum `#2A1850` (primary text), receding slightly into the lavender cylinder
 
 ### Outside the logo (running text, titles, headings)
 Write **ProvSQL** as plain text, no special styling required. The name is one word, mixed case, no space, no hyphen.
@@ -31,7 +31,7 @@ When used as a standalone title element, ProvSQL may be set in EB Garamond semib
 
 ### Never do
 - Do not write "ProvenanceSQL", "Prov-SQL", "prov_sql", or "PROVSQL".
-- Do not apply the two-color split in body text — it is reserved for logo/display use.
+- Do not apply the two-color split in body text – it is reserved for logo/display use.
 
 ---
 
@@ -44,8 +44,8 @@ When used as a standalone title element, ProvSQL may be set in EB Garamond semib
 | Background       | Pale Lilac       | `#F4F0FA` |
 | Surface          | Soft Lavender    | `#EDE8F7` |
 | Border           | Light Mauve      | `#D6CCF0` |
-| Text — Primary   | Deep Plum        | `#2A1850` |
-| Text — Secondary | Dusty Mauve      | `#8A7A9B` |
+| Text – Primary   | Deep Plum        | `#2A1850` |
+| Text – Secondary | Dusty Mauve      | `#8A7A9B` |
 | Highlight        | Warm Terracotta  | `#C4664A` |
 | Code text        | Dark Violet      | `#5A3E8C` |
 | Code background  | Pale Violet      | `#E8E0F8` |
@@ -84,9 +84,9 @@ Download the font files from their canonical sources and place them in your proj
 
 | Typeface    | Source                                                  | Files needed                                      |
 |-------------|---------------------------------------------------------|---------------------------------------------------|
-| EB Garamond | https://github.com/octaviopardo/EBGaramond             | `EBGaramond-Regular`, `Italic`, `SemiBold`, `SemiBoldItalic` — `.woff2` + `.woff` |
-| Jost        | https://github.com/indestructible-type/Jost             | `Jost-Light`, `Regular`, `Medium`, `SemiBold` — `.woff2` + `.woff` |
-| Fira Code   | https://github.com/tonsky/FiraCode                      | `FiraCode-Regular`, `Medium` — `.woff2` + `.woff` |
+| EB Garamond | https://github.com/octaviopardo/EBGaramond             | `EBGaramond-Regular`, `Italic`, `SemiBold`, `SemiBoldItalic` – `.woff2` + `.woff` |
+| Jost        | https://github.com/indestructible-type/Jost             | `Jost-Light`, `Regular`, `Medium`, `SemiBold` – `.woff2` + `.woff` |
+| Fira Code   | https://github.com/tonsky/FiraCode                      | `FiraCode-Regular`, `Medium` – `.woff2` + `.woff` |
 
 Prefer `.woff2` for all modern browsers; include `.woff` as a fallback for older ones. You do not need `.ttf` or `.otf` for web use.
 

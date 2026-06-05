@@ -148,7 +148,7 @@ CREATE TABLE species_mapping AS
 SELECT remove_provenance('species_mapping');
 CREATE INDEX ON species_mapping(provenance);
 
--- Step 3: VALUES clause — provenance propagates from detection through join
+-- Step 3: VALUES clause – provenance propagates from detection through join
 CREATE TABLE result_cs5_values AS
 SELECT v.label, p.id,
        sr_formula(provenance(), 'species_mapping') AS formula
@@ -252,7 +252,7 @@ SELECT remove_provenance('result_cs5_threshold');
 SELECT id FROM result_cs5_threshold ORDER BY id;
 DROP TABLE result_cs5_threshold;
 
--- Step 8: EXCEPT — Red Deer minus Domestic Dog, with monus discount
+-- Step 8: EXCEPT – Red Deer minus Domestic Dog, with monus discount
 CREATE TABLE result_cs5_except AS
 SELECT p.id,
     ROUND(probability_evaluate(provenance(), 'tree-decomposition')::numeric, 4) AS prob
@@ -270,7 +270,7 @@ WHERE id IN (9, 14, 22)  -- contrast dog-affected (9, 14) vs clean (22)
 ORDER BY id;
 DROP TABLE result_cs5_except;
 
--- Step 9: CTE — deer AND fox AND no dogs, ranked by probability
+-- Step 9: CTE – deer AND fox AND no dogs, ranked by probability
 CREATE TABLE result_cs5_cte AS
 WITH deer_and_fox AS (
   SELECT d1.photo_id

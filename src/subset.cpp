@@ -53,16 +53,16 @@ static std::vector<mask_t> all_worlds(const std::vector<long> &values)
 
 static void append_range(std::vector<mask_t> &out,
                          const std::vector<std::vector<mask_t> > &dp,
-                         int lo,
-                         int hi)
+                         long long lo,
+                         long long hi)
 {
   if (dp.empty()) return;
-  const int J = static_cast<int>(dp.size())-1;
-  lo = std::max(lo, 0);
+  const long long J = static_cast<long long>(dp.size())-1;
+  lo = std::max(lo, 0LL);
   hi = std::min(hi, J);
   if (lo>hi) return;
 
-  for (int j = lo; j <= hi; ++j) {
+  for (long long j = lo; j <= hi; ++j) {
     out.insert(out.end(), dp[j].begin(), dp[j].end());
   }
 }
@@ -72,7 +72,7 @@ class DPException : public std::exception {};
 /** @brief Return the minimum of two values. */
 #define MIN(x,y) ((x)<(y)?(x):(y))
 
-static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> sum_dp(const std::vector<long> &values, long C, ComparisonOperator op, bool absorptive, bool &upset, bool keep_empty=false)
 {
   const std::size_t n = values.size();
 
@@ -80,8 +80,8 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, Compar
 
   // We first deal with NEQ by combining LT and GT
   if(op == ComparisonOperator::NE) {
-    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOperator::LT, absorptive, upset);
-    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOperator::GT, absorptive, upset);
+    std::vector<mask_t> lt= sum_dp(values, C, ComparisonOperator::LT, absorptive, upset, keep_empty);
+    std::vector<mask_t> gt= sum_dp(values, C, ComparisonOperator::GT, absorptive, upset, keep_empty);
     R.reserve(lt.size()+gt.size());
     R.insert(R.end(),lt.begin(),lt.end());
     R.insert(R.end(),gt.begin(),gt.end());
@@ -89,7 +89,7 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, Compar
   }
 
   long long T=0;
-  for (int w: values) {
+  for (long w: values) {
     if (w < 0)
       throw DPException();
     T+=w;
@@ -118,19 +118,27 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, Compar
 
   assert(J>=0);
 
+  // The DP is pseudo-polynomial: it allocates one bucket per integer in
+  // [0, J].  A large J (huge aggregate values, or a high-scale decimal grid)
+  // would make that array impractical -- bail out so the caller falls back to
+  // exact subset enumeration, which is magnitude-independent.
+  static const long long SUM_DP_MAX_J = 10000000LL;
+  if (J > SUM_DP_MAX_J)
+    throw DPException();
+
   std::vector<std::vector<mask_t> > dp(static_cast<std::size_t>(J) + 1);
   dp[0].push_back(mask_t(n)); // dp[0] <- {emptyset}
 
-  int pref_sum=0;
+  long long pref_sum=0;
 
   for (std::size_t i=0; i<n; ++i)
   {
-    const int w=values[i];
+    const long w=values[i];
     pref_sum+=w;
-    const int j_max=MIN(J,pref_sum);
+    const long long j_max=MIN(J,pref_sum);
 
-    for (int j = j_max; j >= w; --j) {
-      const int p = j - w;
+    for (long long j = j_max; j >= w; --j) {
+      const long long p = j - w;
       if(absorptive && ((op==ComparisonOperator::GT && p>C) ||
                         (op==ComparisonOperator::GE && p>=C))) {
         upset=true;
@@ -156,7 +164,7 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, Compar
 
 
   case ComparisonOperator::LT:
-    append_range(R,dp,1,C-1);
+    append_range(R,dp,0,C-1);
     break;
 
   case ComparisonOperator::GE:
@@ -164,11 +172,47 @@ static std::vector<mask_t> sum_dp(const std::vector<long> &values, int C, Compar
     break;
 
   case ComparisonOperator::LE:
-    append_range(R,dp,1,C);
+    append_range(R,dp,0,C);
     break;
 
   case ComparisonOperator::NE: // case already processed
     assert(false);
+  }
+
+  // dp[0] holds the empty world together with every non-empty world whose
+  // present tuples all sum to 0 (value 0 being SUM's additive identity).  A
+  // HAVING predicate is never satisfied by the empty group, but those value-0
+  // worlds are legitimate non-empty worlds and must be kept -- cf. the ValidSum
+  // proof, which removes only the single world {emptyset} from the selected
+  // range.  So the <, <= (and =, when C=0) ranges above include dp[0], and we
+  // drop only the all-absent mask here.  Skipping all of dp[0] instead (the old
+  // `lo=1`) silently dropped, e.g., a BID-block choice of a value-0 tuple under
+  // `sum < k`.
+  R.erase(std::remove_if(R.begin(), R.end(),
+            [](const mask_t &m) {
+              for(size_t i=0; i<m.size(); ++i) if(m[i]) return false;
+              return true;
+            }),
+          R.end());
+
+  // keep_empty marks a SCALAR COUNT enumerated through this value-aware DP
+  // (count(col) with NULL contributors, whose 0/1 values make COUNT a SUM of
+  // indicators).  Unlike a genuine SUM -- empty group SQL NULL, so the empty
+  // world never satisfies -- a COUNT's empty group has the real value 0, so the
+  // all-absent world is a legitimate possible world: re-add it exactly when 0
+  // satisfies the predicate (a true-on-empty bound: = 0, < k, <= k, <> k!=0).
+  if (keep_empty) {
+    bool zero_sat = false;
+    switch(op) {
+    case ComparisonOperator::EQ: zero_sat = (C == 0); break;
+    case ComparisonOperator::NE: zero_sat = (C != 0); break;
+    case ComparisonOperator::LT: zero_sat = (0 <  C); break;
+    case ComparisonOperator::LE: zero_sat = (0 <= C); break;
+    case ComparisonOperator::GT: zero_sat = (0 >  C); break;
+    case ComparisonOperator::GE: zero_sat = (0 >= C); break;
+    }
+    if (zero_sat)
+      R.push_back(mask_t(n));
   }
 
   return R;
@@ -198,54 +242,61 @@ static void combinations(std::size_t start,
   combinations(start + 1, k_left - 1, mask, out);
 }
 
-static std::vector<mask_t> count_enum(const std::vector<long> &values, int m, ComparisonOperator op, bool absorptive, bool &upset)
+static std::vector<mask_t> count_enum(const std::vector<long> &values, long m, ComparisonOperator op, bool absorptive, bool &upset, bool is_scalar)
 {
   const int n = static_cast<int>(values.size());
   std::vector<mask_t> out;
 
-  auto add_exact_k = [&](int k) {
+  auto add_exact_k = [&](long k) {
                        if (k < 0 || k > n) return;
-                       combinations(0, k, mask_t(n), out);
+                       combinations(0, static_cast<int>(k), mask_t(n), out);
                      };
+
+  /* The lowest count a group can have: 1 for a grouped aggregate (the empty
+   * group is no row, so a HAVING predicate is never evaluated on it -- the
+   * count >= 0 / count > -K family collapses to "non-empty" rather than to a
+   * tautology), but 0 for a SCALAR aggregate (no GROUP BY), whose single result
+   * row always exists with the empty input contributing count 0.  Folding the
+   * empty world into each branch's bound (rather than appending it afterwards)
+   * keeps it consistent with the upset / minimal-witness structure: for the GE
+   * upset, count >= 0 then has minimal witness {} and is correctly a tautology;
+   * the empty subset is annotated by the caller as one ⊗ (𝟙 ⊖ ⊕(tuples)). */
+  const long lo = is_scalar ? 0 : 1;
 
   switch (op)
   {
   case ComparisonOperator::EQ:
-    if(m!=0) add_exact_k(m);
+    if (m >= lo) add_exact_k(m);
     break;
 
   case ComparisonOperator::GT:
     ++m;
     [[fallthrough]];
-  case ComparisonOperator::GE:
-    /* Skip the empty subset, mirroring the // Skip empty world rule
-     * in @c all_worlds and @c enumerate_exhaustive: a HAVING
-     * predicate on an empty group is undefined in SQL semantics
-     * (the group does not exist, so HAVING is not evaluated), so
-     * the @c count >= 0 / @c count > -K family must collapse to
-     * "group is non-empty" rather than to a universal tautology
-     * (probability 1 in every world).  Equivalently, m is clamped
-     * to at least 1 here. */
-    if (m < 1) m = 1;
-    if(absorptive) {
-      upset=true;
-      add_exact_k(m);
+  case ComparisonOperator::GE: {
+    /* count >= m : minimal present count is max(m, lo). */
+    const long mink = std::max(m, lo);
+    if (absorptive) {
+      upset = true;
+      add_exact_k(mink);
     } else
-      for (int k = m; k <= n; ++k) add_exact_k(k);
+      for (long k = mink; k <= n; ++k) add_exact_k(k);
     break;
+  }
 
   case ComparisonOperator::LT:
     --m;
     [[fallthrough]];
   case ComparisonOperator::LE:
-    for (int k = 1; k <= m; ++k) add_exact_k(k);
+    /* count <= m : worlds k in [lo, m] (empty world k=0 included for a scalar
+     * aggregate iff m >= 0). */
+    for (long k = lo; k <= m; ++k) add_exact_k(k);
     break;
 
   case ComparisonOperator::NE:
-    for (int k = 1; k <= n; ++k)
-    {
+    /* count != m : every world in [lo, n] except k = m (the scalar empty world
+     * k=0 is included iff m != 0). */
+    for (long k = lo; k <= n; ++k)
       if (k != m) add_exact_k(k);
-    }
     break;
   }
 
@@ -287,7 +338,7 @@ static bool compare(I a, ComparisonOperator op, J b) {
  */
 bool evaluate(const std::vector<long>& values,
               const std::vector<bool>& mask,
-              int constant, ComparisonOperator op,
+              long constant, ComparisonOperator op,
               std::unique_ptr<Aggregator> aggregator)
 {
   for (std::size_t i = 0; i < values.size(); ++i) {
@@ -306,6 +357,26 @@ bool evaluate(const std::vector<long>& values,
   }
 }
 
+bool agg_cmp_holds_in_world(
+  const std::vector<long> &values,
+  const mask_t &present,
+  long constant,
+  ComparisonOperator op,
+  AggregationOperator agg_kind)
+{
+  // Empty-group exclusion: an all-absent group does not exist, so HAVING is
+  // never satisfied on it (the one edge convention a sampler must reproduce to
+  // match the expansion).
+  bool any = false;
+  for (bool b : present)
+    if (b) { any = true; break; }
+  if (!any)
+    return false;
+
+  return evaluate(values, present, constant, op,
+                  makeAggregator(agg_kind, ValueType::INT));
+}
+
 /**
  * @brief Enumerate all subsets satisfying a HAVING predicate by exhaustive search.
  * @param values      Input values.
@@ -318,7 +389,7 @@ bool evaluate(const std::vector<long>& values,
  */
 std::vector<mask_t> enumerate_exhaustive(
   const std::vector<long> &values,
-  int constant,
+  long constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
   bool absorptive,
@@ -331,10 +402,8 @@ std::vector<mask_t> enumerate_exhaustive(
 
   bool all_worlds = true;
 
-  while(increment(mask)) { // Skipping empty world
-    auto aggregator = makeAggregator(agg_kind, ValueType::INT);
-
-    if(evaluate(values, mask, constant, op, std::move(aggregator)))
+  while(increment(mask)) { // Skipping empty world (handled by agg_cmp_holds_in_world too)
+    if(agg_cmp_holds_in_world(values, mask, constant, op, agg_kind))
       worlds.push_back(mask);
     else
       all_worlds=false;
@@ -355,15 +424,33 @@ std::vector<mask_t> enumerate_exhaustive(
 
 std::vector<mask_t> enumerate_valid_worlds(
   const std::vector<long> &values,
-  int constant,
+  long constant,
   ComparisonOperator op,
   AggregationOperator agg_kind,
   bool absorptive,
-  bool &upset
+  bool &upset,
+  bool is_scalar
   )
 {
-  if (agg_kind == AggregationOperator::COUNT)
-    return count_enum(values,constant,op, absorptive, upset);
+  if (agg_kind == AggregationOperator::COUNT) {
+    /* count(*) (every contributor's value is the unit 1) is pure cardinality:
+     * count_enum enumerates by subset size and folds the scalar empty world via
+     * its lo bound.  count(col) keeps the COUNT identity but carries per-row 0/1
+     * values (0 for a NULL-valued / null-padded row that still keeps the group
+     * alive); cardinality would wrongly count the 0-valued rows, so route it to
+     * the value-aware sum_dp -- with keep_empty=is_scalar, since a scalar
+     * count(col)'s empty group is the real value 0 (not SQL NULL like a sum). */
+    bool all_one = true;
+    for (long v : values) if (v != 1) { all_one = false; break; }
+    if (all_one)
+      return count_enum(values,constant,op, absorptive, upset, is_scalar);
+    try {
+      return sum_dp(values, constant, op, absorptive, upset, /*keep_empty=*/is_scalar);
+    } catch(DPException &e) {
+      // 0/1 values are non-negative, so this never throws; fall back defensively.
+      return enumerate_exhaustive(values, constant, op, agg_kind, absorptive, upset);
+    }
+  }
 
   if(agg_kind == AggregationOperator::SUM)
     try {

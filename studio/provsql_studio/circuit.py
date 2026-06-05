@@ -72,7 +72,8 @@ def _gate_label(row: dict) -> str:
     payload that's more informative than a generic glyph:
       * agg: info1_name is the aggregate function's `proname` (e.g. "sum")
       * cmp: info1_name is the operator's `oprname` (e.g. ">", "<>")
-      * value: extra is the scalar text-encoded by `set_extra`
+      * value: extra is the scalar text-encoded by `set_extra`,
+        shortened to four significant figures when numeric
     Truncate so anything longer than the node circle can fit collapses to
     "<n chars>…"; the full payload is still available in the inspector
     via the info1 / extra fields.
@@ -93,14 +94,14 @@ def _gate_label(row: dict) -> str:
         # does for the same operators in the editor.
         return _truncate(_CMP_GLYPH.get(row["info1_name"], row["info1_name"]))
     if t == "value" and row.get("extra"):
-        return row["extra"]
+        return _format_value_label(row["extra"])
     if t == "mulinput" and row.get("extra"):
         # Categorical mixture's mulinputs carry the outcome value in
         # extra (vs repair_key's mulinputs which leave it empty and
         # encode the value-index in info1).  Render the outcome value
         # inline so the categorical block's payload is visible at a
         # glance, mirroring gate_value's treatment.
-        return _truncate(row["extra"])
+        return _format_value_label(row["extra"])
     if t == "rv" and row.get("extra"):
         return _format_rv_label(row["extra"])
     if t == "arith":
@@ -177,6 +178,24 @@ def _format_prob_label(p: float) -> str:
         return f"{pct:.1e}%"
     s = f"{pct:.2f}".rstrip("0").rstrip(".")
     return s + "%"
+
+
+def _format_value_label(extra: str) -> str:
+    """Render the in-circle label for a gate_value (or a categorical
+    mulinput) from its scalar `extra` text.
+
+    The HAVING rewrite stores normalised constants at full numeric
+    precision: `count(*)*2 > 1` lands as "0.50000000000000000000",
+    which rendered verbatim blows the circle wide. Shorten numeric
+    payloads to four significant figures, like gate_rv parameters;
+    anything non-numeric falls back to plain truncation. The exact
+    stored text is still surfaced by the inspector under `extra`.
+    """
+    s = str(extra).strip()
+    try:
+        return f"{float(s):.4g}"
+    except ValueError:
+        return _truncate(s)
 
 
 def _format_rv_label(extra: str) -> str:

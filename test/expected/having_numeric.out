@@ -1,0 +1,67 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+shape|g|p
+num SUM>=6|1|0.3750
+num SUM>=6|2|0.5000
+(2 rows)
+shape|g|p
+num SUM>=6.5|1|0.3750
+num SUM>=6.5|2|0.5000
+(2 rows)
+shape|g|p
+num MAX>=4|1|0.5000
+num MAX>=4|2|0.5000
+(2 rows)
+shape|g|p
+num MIN<=3|1|0.7500
+num MIN<=3|2|0.0000
+(2 rows)
+shape|g|p
+num AVG>=3.5|1|0.2500
+num AVG>=3.5|2|0.5000
+(2 rows)
+shape|g|p
+num SUM=9.75|1|0.1250
+num SUM=9.75|2|0.0000
+(2 rows)
+shape|g|p
+flt SUM>=6|1|0.3750
+flt SUM>=6|2|0.5000
+(2 rows)
+shape|g|p
+flt MAX>=4.25|1|0.5000
+flt MAX>=4.25|2|0.5000
+(2 rows)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+shape|g|p_off|p_on|diff
+join SUM(b)>=6|1|0.2947|0.2947|0.000000
+join SUM(b)>=6|2|0.0993|0.0993|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join SUM(b)>=5.5|1|0.3595|0.3595|0.000000
+join SUM(b)>=5.5|2|0.2114|0.2114|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join MAX(b)>=3.25|1|0.6612|0.6612|0.000000
+join MAX(b)>=3.25|2|0.3843|0.3843|0.000000
+(2 rows)
+shape|g|p_off|p_on|diff
+join AVG(b)>=2.5|1|0.4258|0.4258|0.000000
+join AVG(b)>=2.5|2|0.2753|0.2753|0.000000
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

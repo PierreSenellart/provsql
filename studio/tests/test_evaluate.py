@@ -476,7 +476,7 @@ def test_evaluate_minmax_rejects_non_enum_mapping(client, mapping):
 def counting_mapping(client):
     """Counting / boolean semirings need a typed mapping (the value
     column's type is consumed by the C semiring evaluator). We map every
-    personnel row to 1 — sr_counting then sums to the row count, and
+    personnel row to 1 – sr_counting then sums to the row count, and
     sr_boolean treats a non-zero entry as TRUE."""
     setup = (
         "DROP TABLE IF EXISTS personnel_ones;"

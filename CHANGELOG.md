@@ -332,7 +332,7 @@ linear time by the existing `'independent'` method.
   component rewriter synthesises the missing intra-group
   equality so the inner wraps preserve per-x granularity.
 - **Refuse unsound semirings** -- semirings that do not admit a
-  homomorphism from Boolean functions (counting, formula, …)
+  homomorphism from Boolean functions (counting, formula…)
   raise on `assumed_boolean` -rooted circuits ; `boolean`,
   `boolexpr`, `which`, `why`, `how`, the tropical / Viterbi /
   Łukasiewicz / min-max / interval-union evaluators are allowed.
@@ -671,8 +671,8 @@ universally-infeasible truncated subtree short-circuits to a
 `NaN`-typed Dirac so downstream evaluators do not fire MC blindly.
 On top of the moment fast paths, `rv_sample` and `rv_histogram`
 take an inverse-CDF fast path on bare `gate_rv` conditional
-events — Uniform / Exponential by memoryless inverse, Normal by
-Beasley-Springer-Moro — bypassing MC entirely when the gate is a
+events – Uniform / Exponential by memoryless inverse, Normal by
+Beasley-Springer-Moro – bypassing MC entirely when the gate is a
 single recognised distribution under a closed-form truncation.
 Anything outside the closed-form table falls back to MC
 rejection sampling at `provsql.rv_mc_samples`; a `NOTICE` (or,
@@ -919,7 +919,7 @@ uses them to render Circuit mode:
   `(relation regclass, row_data jsonb)` for the source row whose
   `provsql` column equals `uuid`, by enumerating every
   provenance-tracked relation.  Returns zero rows for non-input gates
-  (`plus`, `times`, `agg`, …).
+  (`plus`, `times`, `agg`…).
 
 ### `agg_token` rendering and the `aggtoken_text_as_uuid` GUC
 
@@ -1391,7 +1391,7 @@ the groundwork for long-term archival and citation.
   GitHub now shows a **Cite this repository** button that emits
   BibTeX and APA for the ICDE 2026 paper.
 
-- **Software Heritage** archival is active — the full repository
+- **Software Heritage** archival is active – the full repository
   history is continuously preserved at archive.softwareheritage.org.
 
 - **Zenodo integration** enabled: starting with this release, every

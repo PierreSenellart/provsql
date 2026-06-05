@@ -22,7 +22,7 @@
  * `provsql.aggtoken_text_as_uuid`) are registered C-side by
  * `_PG_init` and need no SQL.
  *
- * The mmap circuit format is unchanged from 1.3.0 — no migration
+ * The mmap circuit format is unchanged from 1.3.0 – no migration
  * required.  The PG14-only block at the bottom replaces the legacy
  * `union_tstzintervals_{plus,times,monus,plus_state,times_state}`
  * helpers (subsumed by `sr_temporal`) and updates `timetravel`,
@@ -65,7 +65,7 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
--- 2. agg_token_out: STABLE (was IMMUTABLE) — output now depends on
+-- 2. agg_token_out: STABLE (was IMMUTABLE) – output now depends on
 --    the provsql.aggtoken_text_as_uuid GUC.
 
 CREATE OR REPLACE FUNCTION agg_token_out(agg_token)

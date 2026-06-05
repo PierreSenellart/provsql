@@ -44,7 +44,7 @@ using namespace boost::multi_index;
 struct CircuitCacheInfos
 {
   pg_uuid_t token;               ///< UUID identifying this gate
-  gate_type type;                ///< Kind of gate (input, plus, times, …)
+  gate_type type;                ///< Kind of gate (input, plus, times…)
   std::vector<pg_uuid_t> children; ///< Ordered list of child gate UUIDs
 
   /**

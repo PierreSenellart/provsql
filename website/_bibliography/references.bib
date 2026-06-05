@@ -189,6 +189,79 @@
     hierarchicality check operating on the FD closure.},
 }
 
+@article{DBLP:journals/vldb/ReS09,
+  author       = {Christopher R{\'e} and
+                  Dan Suciu},
+  title        = {The trichotomy of {HAVING} queries on a probabilistic database},
+  journal      = {{VLDB} J.},
+  volume       = {18},
+  number       = {5},
+  pages        = {1091--1116},
+  year         = {2009},
+  doi          = {10.1007/s00778-009-0151-4},
+  keyword      = {provsql-foundation},
+  annote       = {Classifies the complexity of evaluating a HAVING predicate
+    aggregate(y) theta k over a tuple-independent probabilistic database, for
+    aggregate in {EXISTS, MIN, MAX, COUNT, SUM, AVG, COUNT(DISTINCT)} and theta a
+    comparison. Exact evaluation is complement-symmetric and depends only on a
+    per-aggregate "alpha-safety" plan property (equal to skeleton-safety for
+    MIN/MAX/COUNT): PTIME if alpha-safe, else #P-hard. Approximation is direction-
+    asymmetric (relative-error FPTRAS of p is not one of 1-p), yielding the
+    trichotomy safe / apx-safe (an FPTRAS exists) / hazardous (no FPRAS). The
+    conference version (DBPL 2007) covers the exact dichotomy; this journal version
+    adds the approximation results. ProvSQL's closed-form HAVING-COUNT / MIN-MAX / SUM
+    probability evaluators realise the alpha-safe (PTIME-exact) corner for independent
+    contributors, and the skeleton-safety detector exposes the alpha-safety axis. See
+    doc/source/dev/probability-evaluation.rst for the per-(aggregate, theta) table.},
+}
+
+@inproceedings{DBLP:conf/icde/OlteanuHK10,
+  author       = {Dan Olteanu and
+                  Jiewen Huang and
+                  Christoph Koch},
+  title        = {Approximate confidence computation in probabilistic databases},
+  booktitle    = {Proceedings of the 26th International Conference on Data Engineering,
+                  {ICDE} 2010, March 1-6, 2010, Long Beach, California, {USA}},
+  pages        = {145--156},
+  publisher    = {{IEEE} Computer Society},
+  year         = {2010},
+  doi          = {10.1109/ICDE.2010.5447826},
+  keyword      = {provsql-foundation},
+  annote       = {Introduces the d-tree, an anytime decomposition for computing
+    interval bounds on the probability of a propositional lineage formula: each
+    node is an independent-or, independent-and, or Shannon-expansion of its
+    sub-formula, and a cheap per-leaf bound (the "independent" heuristic of
+    Fig. 3) is tightened by recursing into the widest interval until the additive
+    or relative target is met. Bounds are valid at every node (Prop. 5.1/5.4), so
+    the recursion can stop early with a certified interval. ProvSQL's d-tree
+    engine (src/DTree.cpp, the "d-tree" probability method) implements this over
+    the materialised circuit's monotone-DNF lineage, memoised over the shared DAG
+    so bounded-treewidth lineage stays polynomial; it serves the high-treewidth
+    exact corner and the deterministic / low-delta approximate paths.},
+}
+
+@inproceedings{DBLP:conf/icde/SouihliS13,
+  author       = {Asma Souihli and
+                  Pierre Senellart},
+  title        = {Optimizing approximations of {DNF} query lineage in probabilistic {XML}},
+  booktitle    = {29th {IEEE} International Conference on Data Engineering, {ICDE}
+                  2013, Brisbane, Australia, April 8-12, 2013},
+  pages        = {721--732},
+  publisher    = {{IEEE} Computer Society},
+  year         = {2013},
+  doi          = {10.1109/ICDE.2013.6544869},
+  keyword      = {provsql-foundation},
+  annote       = {The ProApproX query processor: rather than committing to a single
+    confidence-computation algorithm, it maintains a portfolio of exact and
+    approximate methods (naive, Monte-Carlo / Karp-Luby style samplers, compilation)
+    and a cost model that picks, per lineage formula and per requested
+    (epsilon, delta) tolerance, the cheapest method expected to meet the bound. This
+    portfolio + cost-model principle is the design behind ProvSQL's probability
+    method catalog (src/ProbabilityMethod.h, the chooseAndRun three-path chooser in
+    src/probability_evaluate.cpp): tolerance grants (exact / relative / additive)
+    nest, and the chooser returns the cheapest admissible member.},
+}
+
 @article{DBLP:journals/pvldb/GatterbauerS15,
   author       = {Wolfgang Gatterbauer and
                   Dan Suciu},
@@ -280,6 +353,29 @@
     Relevant to ProvSQL because it explains why a knowledge compiler working on the
     materialized circuit alone cannot in general recover the tractability a
     query-level analysis exposes.},
+}
+
+@article{DBLP:journals/jal/KarpLM89,
+  author       = {Richard M. Karp and
+                  Michael Luby and
+                  Neal Madras},
+  title        = {Monte-Carlo Approximation Algorithms for Enumeration Problems},
+  journal      = {J. Algorithms},
+  volume       = {10},
+  number       = {3},
+  pages        = {429--448},
+  year         = {1989},
+  doi          = {10.1016/0196-6774(89)90038-2},
+  annote       = {The fully-polynomial randomised approximation scheme (FPRAS) for
+    {\#}DNF -- estimating the probability that a positive DNF formula holds under
+    independent inputs -- with the tight O(m/eps^2 log 1/delta) sample-complexity
+    analysis (m clauses). Each round draws a clause with probability proportional to
+    its own probability, samples a satisfying assignment, and accepts only if the
+    clause is the first the assignment covers; the acceptance probability is
+    Pr[F]/S in [1/m, 1], so the sample count is independent of Pr[F]. ProvSQL's
+    'karp-luby' probability method applies it to DNF-shaped provenance circuits (the
+    lineage of a union of conjunctive queries over a tuple-independent database),
+    where it stays accurate on rare-event outputs that defeat naive Monte Carlo.},
 }
 
 @inproceedings{DBLP:conf/ecai/Darwiche04,

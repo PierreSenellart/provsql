@@ -6,7 +6,9 @@
    sessionStorage and offers a per-row "→ Circuit" jump in where mode. */
 
 (function () {
-  const mode = document.body.classList.contains('mode-circuit') ? 'circuit' : 'where';
+  const mode = document.body.classList.contains('mode-circuit') ? 'circuit'
+             : document.body.classList.contains('mode-notebook') ? 'notebook'
+             : 'where';
 
   // Metadata caches (schema panel, eval-strip mapping picker, eval-strip
   // custom-semiring optgroup) lazy-load once and would otherwise stay
@@ -105,29 +107,34 @@
   };
   const _toolLabel = (name) => TOOL_LABELS[name] || name;
 
-  // Rebuild a <select> from catalog entries [{name, available}].  An
-  // unavailable tool stays listed but disabled (and labelled "not on PATH")
-  // so it is discoverable yet not selectable; the selection is kept if still
-  // available, else moved to the first available option.  A `change` event
-  // fires so dependent UI updates.
+  // Rebuild a <select> from catalog entries [{name, available}].  A tool
+  // the backend cannot reach (not on the resolved PATH) is dropped
+  // entirely -- offering it would only set the user up for a guaranteed
+  // run-time error; the Tools panel remains the discovery surface for
+  // registered-but-missing tools.  The selection is kept if still listed,
+  // else moved to the first available option.  A `change` event fires so
+  // dependent UI updates.
   function _rebuildSelect(selectEl, entries) {
     const prev = selectEl.value;
+    const avail = entries.filter((e) => e.available);
     selectEl.replaceChildren();
-    let firstAvail = null;
-    let prevStillAvail = false;
-    for (const e of entries) {
+    for (const e of avail) {
       const opt = document.createElement('option');
       opt.value = e.name;
-      opt.textContent = e.available ? _toolLabel(e.name)
-                                    : `${_toolLabel(e.name)} (not on PATH)`;
-      if (!e.available) opt.disabled = true;
-      else if (firstAvail === null) firstAvail = e.name;
-      if (e.name === prev && e.available) prevStillAvail = true;
+      opt.textContent = _toolLabel(e.name);
       selectEl.appendChild(opt);
     }
-    selectEl.value = prevStillAvail ? prev
-      : (firstAvail !== null ? firstAvail
-         : (entries.length ? entries[0].name : ''));
+    if (!avail.length) {
+      // Nothing usable: show a disabled placeholder rather than an empty
+      // box, so the strip explains itself.
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(no tool available)';
+      opt.disabled = true;
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = avail.some((e) => e.name === prev) ? prev
+      : (avail.length ? avail[0].name : '');
     selectEl.dispatchEvent(new Event('change'));
   }
 
@@ -232,6 +239,18 @@
     sessionStorage.removeItem('ps.sql.ran');
   }
   function carryQueryForSwitch() {
+    // Notebook mode carries the current cell's SQL (the hidden #request
+    // box is stale there); a cell that was executed on the kernel
+    // counts as "ran", so Circuit/Where mode auto-replays it under the
+    // same rule as a sent query.
+    if (mode === 'notebook' && window.ProvsqlNotebook
+        && window.ProvsqlNotebook.currentSqlForCarry) {
+      const cur = window.ProvsqlNotebook.currentSqlForCarry();
+      sessionStorage.setItem('ps.sql', cur.sql || '');
+      if (cur.sql && cur.ran) sessionStorage.setItem('ps.sql.ran', '1');
+      else sessionStorage.removeItem('ps.sql.ran');
+      return;
+    }
     const sql = document.getElementById('request').value;
     sessionStorage.setItem('ps.sql', sql);
     const lastRun = sessionStorage.getItem('ps.lastRunSql');
@@ -249,6 +268,11 @@
   // setup can fire it after the result table renders.
   const preloadCircuitUuid = sessionStorage.getItem('ps.preloadCircuit');
   sessionStorage.removeItem('ps.preloadCircuit');
+  // Optional companion to the preload: the row's provenance gate, so
+  // the eval strip's "Conditioned by" presets exactly as it would on an
+  // in-mode click (set by the notebook's circuit-cell jump).
+  const preloadCircuitRowProv = sessionStorage.getItem('ps.preloadCircuitRowProv');
+  sessionStorage.removeItem('ps.preloadCircuitRowProv');
 
   // GUC toggles. In where mode, where_provenance is forced on (the wrap
   // calls where_provenance(...) and would otherwise return all-empty); the
@@ -265,6 +289,35 @@
   setupConfigPanel();
   setupSchemaPanel();
   setupToolsPanel();
+
+  // Nav-bar "empty database" (broom): drop every user schema in the
+  // connected DB after an explicit, name-bearing confirm. Backed by
+  // POST /api/database/empty; the page reloads onto the clean slate
+  // (kernels were closed server-side, caches dropped).
+  document.getElementById('empty-db-btn')?.addEventListener('click', async () => {
+    let dbName = '';
+    try {
+      const resp = await fetch('/api/conn');
+      if (resp.ok) dbName = (await resp.json()).database || '';
+    } catch (e) { /* confirm below still names the action */ }
+    if (!window.confirm(
+        `Empty the database${dbName ? ` “${dbName}”` : ''}?\n\n`
+        + 'This drops EVERY user schema (tables, views, mappings, '
+        + 'functions) and cannot be undone. The provsql extension '
+        + 'itself survives.')) return;
+    try {
+      const resp = await fetch('/api/database/empty', { method: 'POST' });
+      const payload = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        window.alert(payload.error || `HTTP ${resp.status}`);
+        return;
+      }
+    } catch (e) {
+      window.alert(`Network error: ${e.message}`);
+      return;
+    }
+    window.location.reload();
+  });
 
   // ⌘ / Ctrl+Enter submits the query form. Alt+↑/Alt+↓ steps through the
   // saved query history without opening the dropdown.
@@ -291,6 +344,38 @@
     if (!ta) return;
     pushHistory(ta.value);
     ta.value = '';
+    ta.setSelectionRange(0, 0);
+    ta.focus();
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  // Load-SQL button right under the eraser : reads a local .sql file
+  // into the textarea, replacing its content. The previous text is
+  // pushed to history first, so the same Alt+↑ recovery applies as for
+  // the eraser. The hidden file input's value is reset on every change
+  // so picking the same file twice in a row still fires the event.
+  const loadSqlInput = document.getElementById('load-sql-input');
+  document.getElementById('load-sql-btn')?.addEventListener('click', () => {
+    loadSqlInput?.click();
+  });
+  loadSqlInput?.addEventListener('change', async () => {
+    const file = loadSqlInput.files && loadSqlInput.files[0];
+    loadSqlInput.value = '';
+    if (!file) return;
+    const ta = document.getElementById('request');
+    if (!ta) return;
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      // Reading a just-picked local file essentially never fails
+      // (revoked permission, file deleted mid-pick); leave the box
+      // untouched rather than wiping it with nothing to show.
+      console.error(`Could not read ${file.name}:`, e);
+      return;
+    }
+    pushHistory(ta.value);
+    ta.value = text.replace(/\r\n/g, '\n');
     ta.setSelectionRange(0, 0);
     ta.focus();
     ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -329,9 +414,11 @@
     mode, refreshRelations, escapeHtml, escapeAttr, formatCell,
     isRightAlignedType, matchesProvType, pushHistory,
   };
+  window.ProvsqlStudio.highlightSql = highlightSql;
 
-  if (mode === 'where') setupWhereMode();
-  else                  setupCircuitMode();
+  if (mode === 'where')         setupWhereMode();
+  else if (mode === 'notebook') setupNotebookMode();
+  else                          setupCircuitMode();
 
   // The setup call has to come AFTER the SQL_KEYWORDS const declaration
   // below: function declarations are hoisted but `const` is not, so calling
@@ -518,6 +605,30 @@
     sessionStorage.setItem(INPUT_ONLY_KEY, on ? '1' : '0');
   }
 
+  async function setupNotebookMode() {
+    // The notebook keeps the where-mode relations sidebar (the natural
+    // companion while writing cells) and swaps the right card's query
+    // form + result pane for the cell list. All cell logic lives in
+    // notebook.js, lazy-loaded like circuit.js.
+    const form = document.querySelector('.wp-form');
+    if (form) form.hidden = true;
+    const resultPane = document.getElementById('result-pane');
+    if (resultPane) resultPane.hidden = true;
+    const pane = document.getElementById('notebook-pane');
+    if (pane) pane.hidden = false;
+    // The notebook renders its own compact sidebar (outline + one-line
+    // relation summaries) -- the where-mode full-table browser eats too
+    // much space next to a cell list.
+    const s = document.createElement('script');
+    s.src = '/static/notebook.js';
+    s.onload = () => {
+      if (window.ProvsqlNotebook && window.ProvsqlNotebook.init) {
+        window.ProvsqlNotebook.init(window.__provsqlStudio);
+      }
+    };
+    document.head.appendChild(s);
+  }
+
   async function refreshRelations() {
     let relations;
     try {
@@ -594,7 +705,7 @@
           }
           return `${shown}+ tuples (capped)`;
         }
-        return `${shown} tuples`;
+        return `${shown} tuple${shown === 1 ? '' : 's'}`;
       })();
       return `
       <section class="wp-relation" id="${escapeAttr(sectionId(rel.regclass))}">
@@ -1024,12 +1135,18 @@
         }
         if (fallback) {
           // Populate from the live registry's compile tools (no hardcoded
-          // list); unavailable ones are listed but disabled.
+          // list); unavailable ones are dropped, except the current GUC
+          // value (a compiler the admin set but that is not installed),
+          // which is kept -- disabled and labelled -- so the select still
+          // reflects the actual setting.
           const cat = await refreshToolAvailability();
           const compile = (cat && cat.compile) || [];
+          const current = eff['provsql.fallback_compiler']
+            ? String(eff['provsql.fallback_compiler']) : '';
           if (compile.length) {
             fallback.replaceChildren();
             for (const t of compile) {
+              if (!t.available && t.name !== current) continue;
               const opt = document.createElement('option');
               opt.value = t.name;
               opt.textContent = t.available ? _toolLabel(t.name)
@@ -1038,11 +1155,7 @@
               fallback.appendChild(opt);
             }
           }
-          // Reflect the current GUC value even if it is an option we just
-          // disabled (a compiler the admin set but that is not installed).
-          if (eff['provsql.fallback_compiler']) {
-            fallback.value = String(eff['provsql.fallback_compiler']);
-          }
+          if (current) fallback.value = current;
         }
         const opts = cfg.options || {};
         if (depth && opts.max_circuit_depth != null) {
@@ -1806,6 +1919,13 @@
     }
 
     function insertAtCursor(text) {
+      // Notebook mode has no shared #request box: route to the current
+      // (or a fresh) SQL cell instead.
+      if (document.body.classList.contains('mode-notebook')
+          && window.ProvsqlNotebook) {
+        window.ProvsqlNotebook.insertSql(text);
+        return;
+      }
       const ta = document.getElementById('request');
       if (!ta) return;
       const start = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
@@ -1822,6 +1942,11 @@
     // they generate a complete standalone query, so blow the previous
     // textarea content away rather than concatenate.
     function replaceQuery(text) {
+      if (document.body.classList.contains('mode-notebook')
+          && window.ProvsqlNotebook) {
+        window.ProvsqlNotebook.replaceSql(text);
+        return;
+      }
       const ta = document.getElementById('request');
       if (!ta) return;
       ta.value = text;
@@ -2041,11 +2166,18 @@
       (carriedRan || carry) && document.getElementById('request').value.trim();
     if (shouldReplay) {
       runQuery({ preventDefault() {} }).then(() => {
-        if (carry) loadCircuit(carry);
+        if (carry) loadCircuit(carry, { rowProv: preloadCircuitRowProv || '' });
       });
     } else if (carry) {
       // No query but a preload UUID: render the circuit directly.
-      loadCircuit(carry);
+      // Deferred for the same TDZ reason as the ensureCircuitLib call
+      // above: setupCircuitMode runs synchronously during IIFE eval and
+      // loadCircuit reaches the let-declared _circuitLibPromise. The
+      // where->circuit jump never hit this branch (it always carries a
+      // query, so the .then() above ran after the IIFE); the notebook's
+      // circuit-cell jump carries only the UUID and does.
+      queueMicrotask(() => loadCircuit(carry,
+        { rowProv: preloadCircuitRowProv || '' }));
     }
   }
 
@@ -2185,26 +2317,54 @@
           </select>
           <span class="cv-eval__hint" id="eval-mapping-hint" hidden></span>
           <select class="cv-eval__method" id="eval-method" hidden>
+            <optgroup label="By guarantee">
+              <option value="exact" class="cv-eval__opt-strong" title="Exact probability. The system picks the cheapest exact method (independent / possible-worlds / sieve / tree-decomposition / compilation); the method actually used is shown next to the result.">exact</option>
+              <option value="relative" class="cv-eval__opt-strong" title="Granted tolerance: a (1±ε) RELATIVE guarantee with confidence 1−δ. The system picks the mechanism – it returns an exact value when one is cheap, otherwise an FPRAS estimate. The method actually used is shown next to the result.">relative (1±ε)</option>
+              <option value="additive" class="cv-eval__opt-strong" title="Granted tolerance: |estimate − p| ≤ ε ADDITIVE, confidence 1−δ. The sample count is independent of p, so it stays robust on rare events. Returns an exact value when one is cheap, otherwise Monte-Carlo.">additive (±ε)</option>
+            </optgroup>
             <optgroup label="Exact">
-              <option value="">(default)</option>
-              <option value="independent">independent</option>
-              <option value="possible-worlds">possible-worlds</option>
+              <option value="independent" title="Exact evaluation assuming all input tokens are mutually independent; linear-time, but errors if the circuit is not independent (a leaf reaches the root along two paths).">independent</option>
+              <option value="possible-worlds" title="Exact evaluation by exhaustive enumeration of all possible worlds: exponential in the number of input tokens, practical only for small circuits.">possible-worlds</option>
+              <option value="sieve" title="Exact inclusion-exclusion over a monotone DNF (cost 2^m in the clause count m). Errors on non-DNF circuits.">sieve</option>
+              <option value="d-tree" title="Deterministic anytime d-tree (Olteanu-Huang-Koch): exact probability by Shannon decomposition + independence, with memoisation. Also the engine behind the deterministic (δ=0) relative/additive paths, where it returns a CERTIFIED value interval. Monotone-DNF circuits only.">d-tree</option>
               <!-- shown only when the root carries an inversion-free
                    certificate; toggled in syncDropdownVisibility -->
-              <option value="inversion-free" hidden>inversion-free</option>
-              <option value="tree-decomposition">tree-decomposition</option>
-              <option value="compilation">compilation</option>
+              <option value="inversion-free" hidden title="Exact polynomial-time path for the inversion-free UCQ(OBDD) class (hierarchical, tuple-independent queries): builds a structured d-DNNF over a query-derived variable order, staying linear in the lineage. Offered only because the planner attached an inversion-free certificate to this root.">inversion-free</option>
+              <option value="tree-decomposition" title="Exact evaluation via a tree decomposition of the Boolean circuit, compiled in-process to a d-DNNF (no external tool). Fails if the treewidth exceeds the supported maximum.">tree-decomposition</option>
+              <option value="compilation" title="Exact evaluation by compiling the circuit to a d-DNNF with an external knowledge compiler (picked in the next dropdown), then evaluating the d-DNNF in linear time.">compilation</option>
             </optgroup>
             <optgroup label="Weighted model counting">
               <option value="wmc" title="Exact (Ganak / SharpSAT-TD / DPMC) or approximate (WeightMC), depending on the tool picked in the next dropdown.">wmc</option>
             </optgroup>
             <optgroup label="Approximate">
-              <option value="monte-carlo">monte-carlo</option>
+              <option value="monte-carlo" title="Monte-Carlo sampling: a fixed sample count, or an ADDITIVE (eps, delta) guarantee (|estimate − p| ≤ ε with confidence 1−δ, by Hoeffding). The absolute error makes it uninformative on rare events (p ≪ ε); use karp-luby there.">monte-carlo</option>
+              <option value="karp-luby" title="Karp-Luby FPRAS for DNF-shaped (monotone OR-of-ANDs) circuits: a relative (eps, delta) guarantee whose sample count is independent of the probability, so it stays accurate on rare events. Errors on non-DNF circuits.">karp-luby</option>
+              <option value="stopping-rule" title="Whole-circuit relative (ε, δ) FPRAS (Dagum–Karp-Luby-Ross stopping rule). Unlike karp-luby it works on ANY circuit, not just DNF; its sample count grows as 1/p.">stopping-rule</option>
             </optgroup>
           </select>
-          <input type="number" class="cv-eval__args" id="eval-args-mc" hidden
+          <span class="cv-eval__approx" id="eval-args-approx" hidden>
+            <select class="cv-eval__method cv-eval__approx-mode" id="eval-approx-mode"
+                    title="Accuracy target: a fixed sample count, or an (eps, delta) error guarantee (relative for karp-luby, additive for monte-carlo).">
+              <option value="samples">samples</option>
+              <option value="epsdelta">ε, δ</option>
+            </select>
+            <input type="number" class="cv-eval__args" id="eval-args-mc"
+                   min="1" step="1" placeholder="samples" value="10000"
+                   autocomplete="off" title="Number of samples">
+            <span class="cv-eval__approx-ed" id="eval-approx-ed" hidden>
+              <label class="cv-eval__approx-lbl">ε
+                <input type="number" id="eval-approx-eps" min="0" max="1"
+                       step="0.01" value="0.1" autocomplete="off"
+                       title="Error target ε, in (0, 1]"></label>
+              <label class="cv-eval__approx-lbl">δ
+                <input type="number" id="eval-approx-delta" min="0" max="1"
+                       step="0.01" value="0.05" autocomplete="off"
+                       title="Failure probability δ, in (0, 1)"></label>
+            </span>
+          </span>
+          <input type="number" class="cv-eval__args" id="eval-args-bench-samples" hidden
                  min="1" step="1" placeholder="samples" value="10000"
-                 autocomplete="off" title="Monte-Carlo sample count">
+                 autocomplete="off" title="Sample count used by the benchmark's sampling methods (monte-carlo and karp-luby)">
           <select class="cv-eval__args" id="eval-args-compiler" hidden
                   title="How to obtain the d-D circuit: a registered external compiler, the in-process tree-decomposition builder, direct interpretation of the Boolean circuit as a d-D, or the default makeDD fallback chain (interpretAsDD → tree-decomposition → fallback compiler). The external compilers are populated from the live tool registry; the in-process routes below always apply.">
             <option value="tree-decomposition">tree-decomposition</option>
@@ -2216,6 +2376,11 @@
           </select>
           <select class="cv-eval__args" id="eval-args-wmc-tool" hidden
                   title="Which weighted model counter to invoke (populated from the live tool registry); leave unset to let ProvSQL pick the highest-preference available one."></select>
+          <input type="number" class="cv-eval__args" id="eval-args-dtree-eps" hidden
+                 min="0" max="1" step="0.01" placeholder="ε (exact)"
+                 autocomplete="off"
+                 title="Optional additive accuracy target ε for the d-tree: leave empty for the exact probability, or set ε in (0, 1] to stop the anytime recursion early at a CERTIFIED interval of half-width ≤ ε (|estimate − p| ≤ ε, with certainty – no failure probability).">
+
           <input type="number" class="cv-eval__args" id="eval-args-bins" hidden
                  min="1" step="1" placeholder="bins" value="30"
                  autocomplete="off" title="Histogram bin count for the distribution profile">
@@ -2482,116 +2647,20 @@ const CLASSIFIER_EXPLAINERS = {
 
 /* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
    and renders the response into the result section. */
-async function runQuery(ev) {
-  ev.preventDefault();
-
-  const env = window.__provsqlStudio || { mode: 'where', escapeHtml: s => s, escapeAttr: s => s, formatCell: v => v };
-  const sqlText = document.getElementById('request').value;
-  const head    = document.getElementById('result-head');
-  const body    = document.getElementById('result-body');
-  const count   = document.getElementById('result-count');
-  const time    = document.getElementById('result-time');
-
-  // Loading state.
-  body.innerHTML = `<tr><td style="opacity:.6; text-align:center; padding:1rem">Running…</td></tr>`;
-  count.textContent = '…';
-  time.textContent = '…';
-  // Clear the previous run's truncation hint and notice / error banners
-  // so they don't linger next to the new query's "running…" placeholder.
-  // renderError still writes into result-banners on a failed POST, so
-  // wiping here is safe : the success path repopulates them on render.
-  const truncMark = document.getElementById('result-truncated');
-  if (truncMark) {
-    truncMark.textContent = '';
-    truncMark.hidden = true;
-  }
-  const banners = document.getElementById('result-banners');
-  if (banners) banners.innerHTML = '';
-  const t0 = performance.now();
-
-  // Wipe any previous circuit so it doesn't linger next to the new query's
-  // result. The user may click a UUID cell in the new result to render a
-  // fresh DAG; until then the canvas should be empty.
-  if (env.mode === 'circuit') {
-    window.ProvsqlCircuit?.clearScene?.();
-  }
-
-  // Cancel-button wiring: tag the in-flight request so /api/cancel/<id>
-  // can resolve it back to the backend pid. The Send -> Cancel swap is
-  // deferred 100ms so very fast queries (which return before the timer
-  // fires) never flicker the row; clearTimeout in the finally branch
-  // cancels the swap, and the same finally restores Send unconditionally.
-  const requestId = (window.crypto && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const runBtn    = document.getElementById('run-btn');
-  const cancelBtn = document.getElementById('cancel-btn');
-  if (cancelBtn) {
-    cancelBtn.dataset.requestId = requestId;
-    cancelBtn.disabled = false;
-  }
-  const swapTimer = setTimeout(() => {
-    if (cancelBtn) cancelBtn.hidden = false;
-    if (runBtn)    runBtn.hidden    = true;
-  }, 100);
-
-  const upEl = document.getElementById('opt-update-prov');
-  const provSchemeEl = document.querySelector('input[name="prov-scheme"]:checked');
-  let resp;
-  try {
-    resp = await fetch('/api/exec', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sql: sqlText,
-        mode: env.mode,
-        prov_scheme: env.mode === 'where' ? 'where' : (provSchemeEl ? provSchemeEl.value : 'semiring'),
-        update_provenance: upEl ? upEl.checked : false,
-        request_id: requestId,
-      }),
-    });
-  } catch (e) {
-    renderError(`Network error: ${e.message}`);
-    return false;
-  } finally {
-    clearTimeout(swapTimer);
-    if (cancelBtn) cancelBtn.hidden = true;
-    if (runBtn)    runBtn.hidden    = false;
-  }
-  const dt = Math.round(performance.now() - t0);
-  time.textContent = dt;
-
-  if (!resp.ok) {
-    renderError(`HTTP ${resp.status}`);
-    return false;
-  }
-  const payload = await resp.json();
-  renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notices || []);
-
-  // Append the just-submitted query to the persistent history (skipping
-  // exact-duplicate consecutive entries). We do this regardless of the
-  // server's outcome so users can recall a query that errored to fix it.
-  if (env.pushHistory) env.pushHistory(sqlText);
-
-  // Record the just-run SQL so a subsequent mode/database switch knows
-  // whether the textarea content was actually executed (the carry handler
-  // compares this to the textarea value to decide whether to set the
-  // ran-flag, which gates auto-replay in the new mode).
-  try { sessionStorage.setItem('ps.lastRunSql', sqlText); } catch {}
-
-  // After every successful exec in where mode, re-fetch relations so
-  // add_provenance results show up live.
-  if (env.mode === 'where' && env.refreshRelations) env.refreshRelations();
-
-  // Mark all metadata caches dirty: the user may have just run a CREATE
-  // TABLE, add_provenance, create_provenance_mapping, or a CREATE
-  // FUNCTION that defines a new custom-semiring wrapper. Each panel
-  // re-fetches lazily on next open.
-  if (window.ProvsqlStudio?.metadata?.invalidateAll) {
-    window.ProvsqlStudio.metadata.invalidateAll();
-  }
-
-  return false;
+/* Block renderer factory: turns an /api/exec-shaped payload (blocks /
+   wrapped / notices) into DOM, against a caller-supplied set of target
+   elements. Extracted from runQuery so the notebook mode (one renderer
+   per cell, each with its own table/banner/count elements) reuses the
+   exact same rendering -- type-aware cells, UUID affordances, NOTICE
+   banners, classifier pill -- as the shared result pane. */
+function makeBlockRenderer(env, targets) {
+  const { head, body, count } = targets;
+  // Keep the count element purely numeric (tests and callers read it as a
+  // number); the singular/plural noun lives in its own optional element.
+  const setCount = (n) => {
+    count.textContent = n;
+    if (targets.noun) targets.noun.textContent = n === 1 ? 'tuple' : 'tuples';
+  };
 
   // Render a single NOTICE / WARNING / ERROR / INFO banner. Severity drives
   // colour + icon; the literal severity tag is omitted (the visual style
@@ -2682,13 +2751,13 @@ async function runQuery(ev) {
     // Reset the truncation marker on every render; the rows branch
     // re-shows it when final.truncated. Status / error / empty paths
     // therefore never leak a stale "first N; more available" hint.
-    const truncMark = document.getElementById('result-truncated');
+    const truncMark = targets.truncated;
     if (truncMark) {
       truncMark.textContent = '';
       truncMark.hidden = true;
     }
 
-    const banners = document.getElementById('result-banners');
+    const banners = targets.banners;
     let bannerHtml = '';
     // Earlier-failed prelude statements: render each as an ERROR banner
     // alongside notices/warnings.
@@ -2719,7 +2788,7 @@ async function runQuery(ev) {
     if (!final) {
       head.innerHTML = '';
       body.innerHTML = '<tr><td style="opacity:.6">(no statements)</td></tr>';
-      count.textContent = 0;
+      setCount(0);
       return;
     }
 
@@ -2733,19 +2802,23 @@ async function runQuery(ev) {
       }
       head.innerHTML = '';
       body.innerHTML = '';
-      count.textContent = 0;
+      setCount(0);
       return;
     }
     if (final.kind === 'status') {
       head.innerHTML = '';
-      body.innerHTML = `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} tuples affected` : ''}</td></tr>`;
-      count.textContent = final.rowcount != null ? final.rowcount : 0;
+      body.innerHTML = `<tr><td>${env.escapeHtml(final.message)}${final.rowcount != null ? ` · ${final.rowcount} tuple${final.rowcount === 1 ? '' : 's'} affected` : ''}</td></tr>`;
+      setCount(final.rowcount != null ? final.rowcount : 0);
       return;
     }
     if (final.kind === 'rows') {
       const allCols = final.columns;
       const isWhere   = env.mode === 'where';
       const isCircuit = env.mode === 'circuit';
+      // Notebook cells make UUID-ish values clickable too (the click
+      // inserts a circuit cell below, wired in notebook.js); only the
+      // single-UUID auto-render below stays circuit-mode-only.
+      const clickableUuid = isCircuit || env.mode === 'notebook';
       // The studio session has provsql.aggtoken_text_as_uuid = on, so
       // agg_token cells arrive as bare UUIDs. The server pre-resolves
       // each unique UUID's "value (*)" via agg_token_value_text and
@@ -2867,9 +2940,10 @@ async function runQuery(ev) {
           // random_variable is binary-coercible with uuid and its on-wire
           // text form is a bare UUID, so it click-throughs the same way
           // a uuid cell does.
-          if (isCircuit && (typeName === 'uuid' || typeName === 'random_variable') && value) {
+          if (clickableUuid && (typeName === 'uuid' || typeName === 'random_variable') && value) {
             extraCls  = ' is-clickable';
-            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
+            extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`
+                      + ` data-token-kind="${env.escapeAttr(typeName)}"${rowProvAttr}`;
           }
           // agg_token cells: their on-wire text is the underlying UUID
           // (because provsql.aggtoken_text_as_uuid is on for studio
@@ -2880,9 +2954,10 @@ async function runQuery(ev) {
           // circuit the cell points at without inspecting the DOM.
           let displayValue = value;
           if (typeName === 'agg_token' && value) {
-            if (isCircuit) {
+            if (clickableUuid) {
               extraCls  = (extraCls + ' is-clickable').trim();
-              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"${rowProvAttr}`;
+              extraAttr = ` data-circuit-uuid="${env.escapeAttr(String(value))}"`
+                        + ` data-token-kind="agg_token"${rowProvAttr}`;
               if (extraCls.length) extraCls = ' ' + extraCls;
             }
             extraAttr += ` title="${env.escapeAttr(String(value))}"`;
@@ -2898,8 +2973,8 @@ async function runQuery(ev) {
           : '';
         return `<tr>${cells}${jumpBtn}</tr>`;
       }).join('');
-      count.textContent = final.rows.length;
-      const truncated = document.getElementById('result-truncated');
+      setCount(final.rows.length);
+      const truncated = targets.truncated;
       if (truncated) {
         if (final.truncated && final.max_rows != null) {
           truncated.textContent = ` (first ${final.max_rows}; more available)`;
@@ -2934,7 +3009,7 @@ async function runQuery(ev) {
   }
 
   function renderError(msg) {
-    const banners = document.getElementById('result-banners');
+    const banners = targets.banners;
     if (banners) banners.innerHTML = renderDiag('ERROR', msg);
     head.innerHTML = '';
     body.innerHTML = '';
@@ -2984,4 +3059,128 @@ async function runQuery(ev) {
     out.push(s.slice(last));
     return out;
   }
+
+  return { renderBlocks, renderError, renderDiag };
+}
+window.ProvsqlStudio = window.ProvsqlStudio || {};
+window.ProvsqlStudio.makeBlockRenderer = makeBlockRenderer;
+
+async function runQuery(ev) {
+  ev.preventDefault();
+
+  const env = window.__provsqlStudio || { mode: 'where', escapeHtml: s => s, escapeAttr: s => s, formatCell: v => v };
+  const sqlText = document.getElementById('request').value;
+  const head    = document.getElementById('result-head');
+  const body    = document.getElementById('result-body');
+  const count   = document.getElementById('result-count');
+  const time    = document.getElementById('result-time');
+
+  // Loading state.
+  body.innerHTML = `<tr><td style="opacity:.6; text-align:center; padding:1rem">Running…</td></tr>`;
+  count.textContent = '…';
+  time.textContent = '…';
+  // Clear the previous run's truncation hint and notice / error banners
+  // so they don't linger next to the new query's "running…" placeholder.
+  // renderError still writes into result-banners on a failed POST, so
+  // wiping here is safe : the success path repopulates them on render.
+  const truncMark = document.getElementById('result-truncated');
+  if (truncMark) {
+    truncMark.textContent = '';
+    truncMark.hidden = true;
+  }
+  const banners = document.getElementById('result-banners');
+  if (banners) banners.innerHTML = '';
+  const t0 = performance.now();
+
+  const R = makeBlockRenderer(env, {
+    head, body, count,
+    noun: document.getElementById('result-noun'),
+    banners: document.getElementById('result-banners'),
+    truncated: document.getElementById('result-truncated'),
+  });
+
+  // Wipe any previous circuit so it doesn't linger next to the new query's
+  // result. The user may click a UUID cell in the new result to render a
+  // fresh DAG; until then the canvas should be empty.
+  if (env.mode === 'circuit') {
+    window.ProvsqlCircuit?.clearScene?.();
+  }
+
+  // Cancel-button wiring: tag the in-flight request so /api/cancel/<id>
+  // can resolve it back to the backend pid. The Send -> Cancel swap is
+  // deferred 100ms so very fast queries (which return before the timer
+  // fires) never flicker the row; clearTimeout in the finally branch
+  // cancels the swap, and the same finally restores Send unconditionally.
+  const requestId = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const runBtn    = document.getElementById('run-btn');
+  const cancelBtn = document.getElementById('cancel-btn');
+  if (cancelBtn) {
+    cancelBtn.dataset.requestId = requestId;
+    cancelBtn.disabled = false;
+  }
+  const swapTimer = setTimeout(() => {
+    if (cancelBtn) cancelBtn.hidden = false;
+    if (runBtn)    runBtn.hidden    = true;
+  }, 100);
+
+  const upEl = document.getElementById('opt-update-prov');
+  const provSchemeEl = document.querySelector('input[name="prov-scheme"]:checked');
+  let resp;
+  try {
+    resp = await fetch('/api/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sql: sqlText,
+        mode: env.mode,
+        prov_scheme: env.mode === 'where' ? 'where' : (provSchemeEl ? provSchemeEl.value : 'semiring'),
+        update_provenance: upEl ? upEl.checked : false,
+        request_id: requestId,
+      }),
+    });
+  } catch (e) {
+    R.renderError(`Network error: ${e.message}`);
+    return false;
+  } finally {
+    clearTimeout(swapTimer);
+    if (cancelBtn) cancelBtn.hidden = true;
+    if (runBtn)    runBtn.hidden    = false;
+  }
+  const dt = Math.round(performance.now() - t0);
+  time.textContent = dt;
+
+  if (!resp.ok) {
+    R.renderError(`HTTP ${resp.status}`);
+    return false;
+  }
+  const payload = await resp.json();
+  R.renderBlocks(payload.blocks || [], !!payload.wrapped, payload.notices || []);
+
+  // Append the just-submitted query to the persistent history (skipping
+  // exact-duplicate consecutive entries). We do this regardless of the
+  // server's outcome so users can recall a query that errored to fix it.
+  if (env.pushHistory) env.pushHistory(sqlText);
+
+  // Record the just-run SQL so a subsequent mode/database switch knows
+  // whether the textarea content was actually executed (the carry handler
+  // compares this to the textarea value to decide whether to set the
+  // ran-flag, which gates auto-replay in the new mode).
+  try { sessionStorage.setItem('ps.lastRunSql', sqlText); } catch {}
+
+  // After every successful exec in where mode, re-fetch relations so
+  // add_provenance results show up live.
+  if (env.mode === 'where' && env.refreshRelations) env.refreshRelations();
+
+  // Mark all metadata caches dirty: the user may have just run a CREATE
+  // TABLE, add_provenance, create_provenance_mapping, or a CREATE
+  // FUNCTION that defines a new custom-semiring wrapper. Each panel
+  // re-fetches lazily on next open.
+  if (window.ProvsqlStudio?.metadata?.invalidateAll) {
+    window.ProvsqlStudio.metadata.invalidateAll();
+  }
+
+  return false;
+
 }

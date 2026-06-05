@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a new feature for ProvSQL or ProvSQL Studio (semiring, evaluation method, SQL coverage, UI improvement, ...)
+about: Suggest a new feature for ProvSQL or ProvSQL Studio (semiring, evaluation method, SQL coverage, UI improvement…)
 title: ''
 labels: enhancement
 ---

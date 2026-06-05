@@ -87,6 +87,55 @@ def test_syntax_error_returns_error_block(client):
     assert "syntax" in final["message"].lower()
 
 
+# ──────── COPY ... FROM stdin (dump-style data blocks) ────────
+
+
+def test_copy_from_stdin_block_loads_rows(client):
+    """Dump-style `COPY ... FROM stdin;` with inline data rows (pg_dump
+    output, the tutorial / case-study setup files) must load through the
+    COPY sub-protocol: cursor.execute() refuses COPY and leaves the
+    connection wedged in COPY state, which used to surface as a 500
+    ("another command is already in progress") on the pool's COMMIT."""
+    payload = post_exec(client, (
+        "CREATE TEMP TABLE copy_target(id int, name text) ON COMMIT DROP;\n"
+        "COPY copy_target (id, name) FROM stdin;\n"
+        "1\tAlice\n"
+        "2\tBob\n"
+        "\\.\n"
+        "SELECT count(*) AS n FROM copy_target;"
+    ), mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows", final
+    assert final["rows"][0][0] == 2
+
+
+def test_copy_from_stdin_as_final_statement_returns_status(client):
+    """A COPY block in final position renders as a status block (no
+    result set), like any DML."""
+    payload = post_exec(client, (
+        "CREATE TEMP TABLE copy_last(id int) ON COMMIT DROP;\n"
+        "COPY copy_last (id) FROM stdin;\n"
+        "1\n2\n3\n"
+        "\\."
+    ), mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "status", final
+    assert "COPY" in final["message"]
+
+
+def test_copy_to_stdout_yields_clean_error_not_500(client):
+    """COPY ... TO STDOUT is not supported (cursor.execute() refuses it)
+    but must yield the normal error block, and the wedged connection
+    must be discarded so the pool stays usable -- previously this was a
+    500 with the real error swallowed."""
+    payload = post_exec(client, "COPY personnel TO STDOUT", mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "error", final
+    # The next request gets a fresh / sane connection from the pool.
+    payload = post_exec(client, "SELECT 1 AS ok", mode="circuit")
+    assert payload["blocks"][-1]["kind"] == "rows"
+
+
 # ──────── multi-statement behaviour ────────
 
 
@@ -306,7 +355,7 @@ def test_where_mode_falls_back_when_no_provenance_relation(client):
 def test_where_provenance_toggle_survives_auto_prepare(client):
     """psycopg3 auto-prepares a query after `prepare_threshold` (default 5)
     executions, freezing whatever planner-hook decisions the FIRST plan
-    made — including the gates produced for `provsql.where_provenance`.
+    made – including the gates produced for `provsql.where_provenance`.
     The pool's `_configure` disables auto-prepare so SET LOCAL toggles
     keep reaching the planner. This test runs the same SELECT eleven
     times (well past the default threshold), alternating wp on/off, and
@@ -388,3 +437,25 @@ def test_agg_display_absent_when_no_agg_columns(client):
     final = payload["blocks"][-1]
     assert final["kind"] == "rows"
     assert "agg_display" not in final
+
+
+def test_agg_arithmetic_cells_resolve_display(client):
+    """Arithmetic over aggregates yields gate_arith-rooted agg_tokens;
+    their cells must resolve to "value (*)" in agg_display like plain
+    aggregates do (the arith gate records its scalar in extra)."""
+    payload = post_exec(client, (
+        "SELECT city, 2.0 * COUNT(*) AS double_count "
+        "FROM personnel GROUP BY city ORDER BY city"
+    ), mode="circuit")
+    final = payload["blocks"][-1]
+    assert final["kind"] == "rows"
+    col = next(i for i, c in enumerate(final["columns"])
+               if c["name"] == "double_count")
+    assert final["columns"][col]["type_name"] == "agg_token"
+    display = final.get("agg_display") or {}
+    for row in final["rows"]:
+        uuid = row[col]
+        assert display.get(uuid, "").endswith(" (*)"), (uuid, display.get(uuid))
+    # Berlin and New York have 2 personnel each, Paris 3.
+    values = sorted(display[r[col]] for r in final["rows"])
+    assert values == ["4.0 (*)", "4.0 (*)", "6.0 (*)"]

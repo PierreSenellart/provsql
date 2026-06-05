@@ -90,7 +90,7 @@
 
   // Gate types whose children carry a meaningful order: cmp's lhs/rhs,
   // monus's minuend/subtrahend, and agg : but agg only when the function
-  // is order-sensitive (array_agg, string_agg, json_agg, …). For
+  // is order-sensitive (array_agg, string_agg, json_agg…). For
   // sum/count/min/max/avg the result is independent of input order, so
   // the digits would be noise. semimod is omitted: its value/scalar
   // split is implied by gate type. eq has a single child so positional
@@ -1030,7 +1030,7 @@
     // the per-input order key and its rank within the shown scene.
     if (node.if_cert) {
       const c = node.if_cert;
-      html += `<dt>inversion-free</dt><dd>certified — `
+      html += `<dt>inversion-free</dt><dd>certified – `
            + `${escapeHtml(String(c.natoms))} atoms, `
            + `${escapeHtml(String(c.nclasses))} classes</dd>`;
       html += `<dt>variable order</dt><dd>root class `
@@ -1711,17 +1711,74 @@
     return String(value);
   }
 
-  // For each probability method that takes an `arguments` value, point
-  // at the dedicated control. Each control keeps its own state (so the
-  // user's MC sample count survives a round-trip through compilation
-  // and back) and offers an input shape that matches the expected value:
-  // a number field for samples, a dropdown of ProvSQL-known compilers,
-  // a free-form text field pre-filled with the WeightMC defaults.
+  // For each probability method that takes an `arguments` value, point at
+  // the dedicated control. monte-carlo and karp-luby share the approximate-
+  // options group (a samples/(eps,delta) mode toggle and the matching number
+  // fields); compilation uses the compiler dropdown; wmc uses the tool
+  // dropdown (plus an epsilon field, shown only for approximate counters).
+  // buildProbArgs assembles the key=value `arguments` string from whichever
+  // group is in play.
   const _PROB_ARG_CONTROL = {
-    'monte-carlo': 'eval-args-mc',
-    'compilation': 'eval-args-compiler',
-    'wmc':         'eval-args-wmc-tool',
+    'monte-carlo':   'eval-args-approx',
+    'karp-luby':     'eval-args-approx',
+    // The tolerance paths take the same (eps, delta) target as the approximate
+    // methods (the chooser decides the mechanism).
+    'relative':      'eval-args-approx',
+    'additive':      'eval-args-approx',
+    'stopping-rule': 'eval-args-approx',
+    'compilation':   'eval-args-compiler',
+    'wmc':           'eval-args-wmc-tool',
+    // d-tree takes an optional additive ε (empty = exact); a set ε turns the
+    // anytime recursion into a deterministic certified interval.
+    'd-tree':        'eval-args-dtree-eps',
   };
+  // Weighted-model-counting tools whose estimate carries a relative (eps)
+  // guarantee; for these the eval strip shows the epsilon field.
+  const _APPROX_WMC_TOOLS = new Set(['weightmc', 'approxmc']);
+
+  // Assemble the key=value `arguments` string for a probability method from
+  // its dedicated eval-strip control(s); empty means "send no arguments".
+  // Module-level (not inside initEvalStrip) so runEvaluation can call it.
+  function buildProbArgs(method) {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    // The tolerance paths (relative / additive) and the adaptive relative FPRAS
+    // (stopping-rule) take only an (eps, δ) target -- never a fixed sample count
+    // (the samples toggle is hidden for them; relative / stopping-rule even
+    // error on a fixed count).
+    if (method === 'relative' || method === 'additive'
+        || method === 'stopping-rule') {
+      const parts = [];
+      if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
+      if (val('eval-approx-delta')) parts.push('delta=' + val('eval-approx-delta'));
+      return parts.join(',');
+    }
+    if (method === 'monte-carlo' || method === 'karp-luby') {
+      if (document.getElementById('eval-approx-mode')?.value === 'epsdelta') {
+        const parts = [];
+        if (val('eval-approx-eps'))   parts.push('eps='   + val('eval-approx-eps'));
+        if (val('eval-approx-delta')) parts.push('delta=' + val('eval-approx-delta'));
+        return parts.join(',');
+      }
+      const n = val('eval-args-mc');
+      return n ? 'samples=' + n : '';
+    }
+    if (method === 'wmc') {
+      const tool = val('eval-args-wmc-tool');
+      const parts = [];
+      if (tool) parts.push('tool=' + tool);
+      if (_APPROX_WMC_TOOLS.has(tool) && val('eval-args-wmc-eps'))
+        parts.push('epsilon=' + val('eval-args-wmc-eps'));
+      return parts.join(',');
+    }
+    if (method === 'compilation') return val('eval-args-compiler');
+    // d-tree: an empty ε means the exact probability (no arguments); a set ε
+    // requests an additive certified interval of half-width ε.
+    if (method === 'd-tree') {
+      const e = val('eval-args-dtree-eps');
+      return e ? 'epsilon=' + e : '';
+    }
+    return '';
+  }
 
   // Build the "Compiled Semirings" sub-optgroups from the registry and
   // splice them into the <select> ahead of "Custom Semirings" / "Other".
@@ -1812,6 +1869,8 @@
     // unhides whichever the current semiring needs.
     const argControls = [
       ...Object.values(_PROB_ARG_CONTROL),
+      'eval-args-wmc-eps',
+      'eval-args-bench-samples',
       'eval-args-bins',
       'eval-args-moment-k',
       'eval-args-moment-central',
@@ -1945,7 +2004,7 @@
       if (ifOpt) {
         ifOpt.hidden = !sceneIsIf;
         ifOpt.disabled = ifOpt.hidden;
-        if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = '';
+        if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = 'exact';
       }
       const comp = document.getElementById('eval-args-compiler');
       const ifComp = comp && comp.querySelector('option[value="inversion-free"]');
@@ -1983,6 +2042,42 @@
     window.ProvsqlStudio = window.ProvsqlStudio || {};
     window.ProvsqlStudio.refilterForTarget = refilterForTarget;
 
+    // Within the approximate-options group, show the samples field or the
+    // (eps, delta) fields according to the mode toggle.
+    function syncApproxMode() {
+      const mode = document.getElementById('eval-approx-mode');
+      const mc   = document.getElementById('eval-args-mc');
+      const ed   = document.getElementById('eval-approx-ed');
+      if (!mode) return;
+      // The tolerance paths (relative / additive) and the adaptive relative
+      // FPRAS (stopping-rule) accept only an (eps, delta) target -- a fixed
+      // sample count is meaningless (relative / stopping-rule even error on
+      // one).  Hide the samples-vs-(eps,delta) toggle and the count input for
+      // them, pinning the (eps, delta) fields.
+      const edOnly = ['relative', 'additive', 'stopping-rule'].includes(meth.value);
+      if (edOnly) mode.value = 'epsdelta';
+      mode.hidden = edOnly;
+      const eps = mode.value === 'epsdelta';
+      if (mc) mc.hidden = eps || edOnly;
+      if (ed) ed.hidden = !eps;
+    }
+
+    // On a probability-method change, pick the mode that suits the method
+    // (a fixed count for monte-carlo, the (eps, delta) guarantee for
+    // karp-luby), then re-sync the controls.
+    function onMethodChange() {
+      const mode = document.getElementById('eval-approx-mode');
+      if (mode) {
+        // The tolerance paths and the relative FPRASes are naturally expressed
+        // as an (eps, delta) target; monte-carlo defaults to a fixed count.
+        if (meth.value === 'karp-luby' || meth.value === 'relative'
+            || meth.value === 'additive' || meth.value === 'stopping-rule')
+          mode.value = 'epsdelta';
+        else if (meth.value === 'monte-carlo') mode.value = 'samples';
+      }
+      syncControls();
+    }
+
     function syncControls() {
       syncDropdownVisibility();
       const v = sel.value;
@@ -1998,6 +2093,16 @@
       if (v === 'probability') {
         const id = _PROB_ARG_CONTROL[meth.value];
         if (id) wantedIds.add(id);
+        // wmc: reveal the epsilon field only when the chosen tool is an
+        // approximate counter (weightmc / approxmc).
+        if (meth.value === 'wmc') {
+          const tool = document.getElementById('eval-args-wmc-tool');
+          if (tool && _APPROX_WMC_TOOLS.has(tool.value))
+            wantedIds.add('eval-args-wmc-eps');
+        }
+        // Keep the approximate-options group's samples vs (eps,delta) fields
+        // consistent with its mode toggle whenever the group is shown.
+        syncApproxMode();
       } else if (v === 'distribution-profile') {
         wantedIds.add('eval-args-bins');
       } else if (v === 'moment') {
@@ -2018,7 +2123,7 @@
       if (v === 'kc-ddnnf' || v === 'kc-nnf') {
         wantedIds.add('eval-args-compiler');
       } else if (v === 'kc-benchmark') {
-        wantedIds.add('eval-args-mc');
+        wantedIds.add('eval-args-bench-samples');
       }
       // Compiler dropdown: kc-ddnnf and kc-nnf accept the three
       // in-process routes (tree-decomposition / interpret-as-dd /
@@ -2262,19 +2367,29 @@
     });
     // Method change also affects whether the args input is shown / what
     // its placeholder reads.
-    meth.addEventListener('change', syncControls);
+    meth.addEventListener('change', onMethodChange);
+    document.getElementById('eval-approx-mode')
+      ?.addEventListener('change', syncApproxMode);
+    // The wmc epsilon field appears only for approximate tools, so a tool
+    // change must re-run the control sweep.
+    document.getElementById('eval-args-wmc-tool')
+      ?.addEventListener('change', syncControls);
     run.addEventListener('click', runEvaluation);
     // Enter inside a text / number argument field fires Run, matching
-    // the form-submit convention.  Skip <select> controls (e.g. the
-    // compilation method picker) where Enter natively confirms the
-    // current option rather than committing the surrounding form.
+    // the form-submit convention.  Descend into container controls (e.g.
+    // the approximate-options group and the "Condition on" group) so their
+    // inner inputs are covered too.  Skip <select> controls where Enter
+    // natively confirms the current option rather than committing the form.
     for (const ctrl of argControls) {
-      if (ctrl.tagName !== 'INPUT') continue;
-      ctrl.addEventListener('keydown', (ev) => {
-        if (ev.key !== 'Enter') return;
-        ev.preventDefault();
-        if (!run.disabled) runEvaluation();
-      });
+      const inputs = ctrl.tagName === 'INPUT'
+        ? [ctrl] : ctrl.querySelectorAll('input');
+      for (const inp of inputs) {
+        inp.addEventListener('keydown', (ev) => {
+          if (ev.key !== 'Enter') return;
+          ev.preventDefault();
+          if (!run.disabled) runEvaluation();
+        });
+      }
     }
     // Drop the auto-preset marker as soon as the user types into the
     // "Condition on" input so a subsequent pin change within the same
@@ -2339,7 +2454,7 @@
   //   * kc-cnf       : no args, weighted=true.
   //   * kc-ddnnf     : eval-args-compiler.
   //   * kc-td        : no args.
-  //   * kc-benchmark : eval-args-mc (samples) + eval-args-compiler.
+  //   * kc-benchmark : eval-args-bench-samples (Monte-Carlo sample count).
 
   // Swap the main canvas to a KC-built scene (compiled d-DNNF / TD).
   // Save the existing scene + drag offsets so restoreKcScene can put
@@ -2394,7 +2509,7 @@
       return `/api/kc/td?token=${enc(token)}`;
     }
     if (kind === 'kc-benchmark') {
-      const samples = document.getElementById('eval-args-mc')?.value || '10000';
+      const samples = document.getElementById('eval-args-bench-samples')?.value || '10000';
       return `/api/kc/benchmark?token=${enc(token)}&samples=${enc(samples)}`;
     }
     return null;
@@ -2890,17 +3005,14 @@
     }
     if (!isKc && semiring === 'probability') {
       body.method = meth.value || '';
-      // Pull the argument from whichever per-method control is wired up
-      // (number field for monte-carlo, compiler dropdown for
-      // compilation, text field for weightmc). Methods that ignore args
-      // (independent / tree-decomposition / possible-worlds / default)
-      // have no entry here, so we just don't send `arguments`.
-      const ctrlId = _PROB_ARG_CONTROL[meth.value];
-      if (ctrlId) {
-        const ctrl = document.getElementById(ctrlId);
-        const a = (ctrl?.value || '').trim();
-        if (a) body.arguments = a;
-      }
+      // Assemble the key=value `arguments` from the method's dedicated
+      // control(s): the approximate-options group (samples or eps,delta) for
+      // monte-carlo / karp-luby, the tool (+ optional epsilon) for wmc, the
+      // compiler for compilation. Exact methods (independent /
+      // tree-decomposition / possible-worlds / default) return '' and send no
+      // arguments.
+      const a = buildProbArgs(meth.value);
+      if (a) body.arguments = a;
     } else if (semiring === 'distribution-profile') {
       // The backend reads `arguments` as the histogram bin count.
       const bins = (document.getElementById('eval-args-bins')?.value || '').trim();
@@ -3104,31 +3216,55 @@
           : `${data.kind} value`;
       }
       }
-      // Surface any NOTICE messages the backend captured during this
-      // evaluation. ProvSQL emits one when its probability-side
-      // pre-pass shortcuts a gate_cmp before the requested method's
-      // tool ever sees it (so the reported method may have run on a
-      // pre-decided circuit). The notice block uses the same ProvSQL
-      // badge as error banners but with a warning icon + goldenrod
-      // background; rendered inline under the result chip.
-      if (!isKc && Array.isArray(data.notices) && data.notices.length) {
-        const notice = document.getElementById('eval-notice');
+      // Surface the NOTICE messages the backend captured during this
+      // evaluation. Two kinds matter here:
+      //   * the structured "approximation-guarantee" NOTICE the extension
+      //     emits for every approximate method (karp-luby / monte-carlo /
+      //     weightmc); we pull it out and render the (eps, delta) bound in
+      //     the dedicated #eval-bound slot;
+      //   * everything else (e.g. the gate_cmp-shortcut warning), shown in
+      //     the notice banner with the ProvSQL badge + warning icon.
+      const notice = document.getElementById('eval-notice');
+      if (!isKc && semiring === 'probability') {
+        const guar = parseGuaranteeNotice(data.notices);
+        // Show the method the chooser actually used when it is informative:
+        // for the tolerance paths / default the request names no algorithm, and
+        // any time the resolved method differs from the one requested (e.g. a
+        // 'relative' request that resolved to an exact method when one was
+        // cheap -> shown as exact, with no approximation bound).
+        if (bound) {
+          const requested = body.method || '';
+          const resolved = data.resolved_method || '';
+          const showVia = resolved &&
+            (['', 'exact', 'default', 'relative', 'additive'].includes(requested)
+             || resolved !== requested);
+          const via = showVia ? `via ${resolved}` : '';
+          const est = typeof data.result === 'number' ? data.result : NaN;
+          const g = guar ? renderGuarantee(guar, est) : '';
+          bound.textContent = via && g ? `${via} · ${g}`
+                            : via       ? via
+                            : g;
+          bound.title = showVia && !g
+            ? 'Exact value: the requested tolerance was met exactly because an '
+              + 'exact method was cheap enough'
+            : '';
+        }
+        const rest = Array.isArray(data.notices)
+          ? data.notices.filter(m => !/approximation-guarantee:/.test(m || ''))
+          : [];
+        if (notice) {
+          if (rest.length) {
+            notice.innerHTML = renderEvalNotice(rest);
+            notice.hidden = false;
+          } else {
+            notice.innerHTML = '';
+            notice.hidden = true;
+          }
+        }
+      } else if (!isKc && Array.isArray(data.notices) && data.notices.length) {
         if (notice) {
           notice.innerHTML = renderEvalNotice(data.notices);
           notice.hidden = false;
-        }
-      }
-      // Monte-Carlo: append a Hoeffding-style 95% absolute-error bound
-      // ε = sqrt(ln(2/α) / (2N))  (α = 0.05)
-      // The bound is distribution-free and only depends on the sample
-      // count, so we read it back from the args input. Other methods are
-      // exact (or have their own internal bounds), so no annotation.
-      if (!isKc && semiring === 'probability' && body.method === 'monte-carlo') {
-        const n = parseInt(body.arguments || '', 10);
-        if (Number.isFinite(n) && n > 0) {
-          const eps = Math.sqrt(Math.log(40) / (2 * n));
-          if (bound) bound.textContent =
-            `(± ${eps.toFixed(eps < 0.01 ? 4 : 3)} with 95% probability)`;
         }
       }
     } catch (e) {
@@ -4014,6 +4150,64 @@
          + `<i class="fas fa-exclamation-triangle"></i> `
          + `${formatted}`
          + `</div>`;
+  }
+
+  // Parse the extension's machine-readable approximation-guarantee NOTICE
+  // ("ProvSQL: approximation-guarantee: kind=... eps=... delta=... [samples=]
+  // [clauses=] [tool=]"), emitted for every approximate method at
+  // verbose_level >= 5 (which Studio sets for evaluation). Returns the parsed
+  // key/value object, or null if no such notice is present.
+  function parseGuaranteeNotice(messages) {
+    for (const raw of (Array.isArray(messages) ? messages : [])) {
+      const m = (raw || '').match(/approximation-guarantee:\s*(.*)$/);
+      if (!m) continue;
+      const kv = {};
+      m[1].trim().split(/\s+/).forEach(tok => {
+        const i = tok.indexOf('=');
+        if (i > 0) kv[tok.slice(0, i)] = tok.slice(i + 1);
+      });
+      return kv;
+    }
+    return null;
+  }
+
+  // Render a parsed guarantee UNIFORMLY as the value interval [lo, hi] the true
+  // probability is guaranteed to lie in, given the point estimate -- whether the
+  // guarantee is additive, relative, or the d-tree's deterministic bound.  This
+  // is more intuitive than "± ε" / "relative error ≤ ε%": the user reads the
+  // actual range of possible values directly.
+  //   additive: |est − p| ≤ ε        => p ∈ [est − ε, est + ε]
+  //   relative: |est − p| ≤ ε·p       => p ∈ [est/(1+ε), est/(1−ε)]
+  // δ (when present) gives the confidence 1−δ; δ = 0 is deterministic (certain).
+  // The optional sample count / tool name are appended for context.
+  function renderGuarantee(kv, estimate) {
+    if (!kv) return '';
+    const eps = parseFloat(kv.eps);
+    if (!Number.isFinite(eps) || !(typeof estimate === 'number')
+        || !Number.isFinite(estimate)) return '';
+    let lo, hi;
+    if (kv.kind === 'additive') { lo = estimate - eps; hi = estimate + eps; }
+    else if (kv.kind === 'relative') {
+      lo = estimate / (1 + eps);
+      hi = eps < 1 ? estimate / (1 - eps) : 1;
+    } else return '';
+    lo = Math.max(0, lo);
+    hi = Math.min(1, hi);
+    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+      ? window.ProvsqlStudio.getProbDecimals() : 4;
+    const delta = kv.delta != null ? parseFloat(kv.delta) : NaN;
+    // delta == 0 is a DETERMINISTIC guarantee (the d-tree's certified interval):
+    // the bound holds with certainty, so say so rather than "prob ≥ 100%".
+    const conf = !Number.isFinite(delta) ? ''
+      : delta <= 0 ? ', certain'
+      : `, prob ≥ ${(100 * (1 - delta)).toFixed(delta < 0.01 ? 1 : 0)}%`;
+    // Report the actual sample count when the method is sample-based (the
+    // adaptive (eps, delta) path derives it, so it is informative); weighted
+    // counters carry no sample count.
+    const n = kv.samples != null ? parseInt(kv.samples, 10) : NaN;
+    const smp = Number.isFinite(n) && n > 0 ? `, ${n.toLocaleString()} samples` : '';
+    const tool = kv.tool ? ` [${kv.tool}]` : '';
+    return `(Pr ∈ [${lo.toFixed(dec)}, ${hi.toFixed(dec)}]${conf}${smp})${tool}`;
   }
 
   function shortUuid(u) {

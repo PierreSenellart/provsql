@@ -1,0 +1,31 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|k|p
+count=k|1|0.5000
+count=k|2|0.2500
+count=k|3|0.1250
+(3 rows)
+remove_provenance
+
+(1 row)
+shape|k|p
+k=count|1|0.5000
+k=count|2|0.2500
+k=count|3|0.1250
+(3 rows)
+remove_provenance
+
+(1 row)
+shape|k|p
+max=k|1|0.0000
+max=k|2|0.0000
+max=k|3|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)

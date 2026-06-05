@@ -21,9 +21,12 @@ Routes:
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
 import threading
+import time
 import uuid as uuid_mod
 from pathlib import Path
 
@@ -120,6 +123,18 @@ def create_app(
         "lock": threading.Lock(),
         "by_id": {},  # request_id -> pg_backend_pid
     }
+    # Notebook kernels: pinned connections with Jupyter-like session
+    # state (temp tables, plain SETs) surviving across cells. Each
+    # entry holds its own lock so cells on one kernel serialize while
+    # different kernels run concurrently. See db.open_kernel_connection
+    # / db.exec_kernel_cell and doc/TODO/studio-notebook-mode.md §2.
+    app.extensions["provsql_kernels"] = {
+        "lock": threading.Lock(),
+        "by_id": {},  # session_id -> kernel entry dict
+    }
+    app.config.setdefault(
+        "MAX_KERNELS", int(os.environ.get("PROVSQL_STUDIO_MAX_KERNELS", "4")))
+    app.config.setdefault("KERNEL_IDLE_TIMEOUT", 1800.0)  # seconds
     layout_cache = circuit_mod.LayoutCache()
 
     # Routes read the live pool through this getter so swapping the pool
@@ -157,6 +172,10 @@ def create_app(
     @app.get("/circuit")
     def circuit_shell():
         return _serve_shell("circuit")
+
+    @app.get("/notebook")
+    def notebook_shell():
+        return _serve_shell("notebook")
 
     @app.get("/static/<path:filename>")
     def static_file(filename: str):
@@ -273,6 +292,9 @@ def create_app(
         old_pool = app.extensions["provsql_pool"]
         app.extensions["provsql_pool"] = new_pool
         app.config["DSN"] = new_dsn
+        # Every notebook kernel is pinned to the old DSN; drop them all
+        # (the front-end restarts its kernel after a connection switch).
+        close_all_kernels()
         # The "no DB picked" hint reappears whenever we land on the
         # postgres maintenance DB by default (here when the user
         # supplied a DSN without a dbname). For an explicit dbname or a
@@ -286,6 +308,53 @@ def create_app(
         info = db.conn_info(new_pool)
         info["studio_version"] = STUDIO_VERSION
         return jsonify(info)
+
+    @app.post("/api/database/empty")
+    def api_empty_database():
+        """Drop every user schema in the connected database and recreate
+        an empty public (the provsql extension survives). The front-end
+        nav button confirms twice before calling this."""
+        try:
+            dropped = db.empty_database(get_pool())
+        except psycopg.errors.InsufficientPrivilege as e:
+            return jsonify({"error": str(e).strip()}), 403
+        except psycopg.Error as e:
+            return jsonify({"error": str(e).strip()}), 400
+        # Everything schema-shaped just changed -- including the
+        # extension itself (dropped and reinstalled), so pooled
+        # backends hold stale per-session caches (gate-type OIDs,
+        # prepared lookups). Swap in a fresh pool like a connection
+        # switch does, and drop the kernels and layout cache.
+        old_pool = app.extensions["provsql_pool"]
+        app.extensions["provsql_pool"] = db.make_pool(app.config["DSN"])
+        try:
+            old_pool.close()
+        except Exception:
+            pass
+        layout_cache._store.clear()
+        close_all_kernels()
+        return jsonify({"ok": True, "dropped_schemas": dropped})
+
+    @app.post("/api/databases")
+    def api_create_database():
+        """Create a database (and best-effort install provsql in it).
+        Backs the notebook binding banner's "create" action and the
+        DB-switcher's "New database" entry; the caller follows up with
+        POST /api/conn to switch to it."""
+        payload = request.get_json(silent=True) or {}
+        name = str(payload.get("name") or "").strip()
+        if not re.match(r"^[a-z_][a-z0-9_$]*$", name) or len(name) > 63:
+            return jsonify({"error": "invalid database name (lowercase "
+                                     "letters, digits, underscores)"}), 400
+        try:
+            warning = db.create_database(app.config["DSN"], name)
+        except psycopg.errors.DuplicateDatabase:
+            return jsonify({"error": f"database {name!r} already exists"}), 409
+        except psycopg.errors.InsufficientPrivilege as e:
+            return jsonify({"error": str(e).strip()}), 403
+        except psycopg.Error as e:
+            return jsonify({"error": str(e).strip()}), 400
+        return jsonify({"ok": True, "database": name, "warning": warning})
 
     @app.get("/api/databases")
     def api_databases():
@@ -427,6 +496,246 @@ def create_app(
                 "ok": False,
                 "reason": str(e).strip(),
             }), 500
+
+    # ──────── notebook kernels ────────
+
+    def _kernels():
+        return app.extensions["provsql_kernels"]
+
+    def _close_kernel_entry(entry) -> None:
+        try:
+            entry["conn"].close()
+        except Exception:
+            pass
+
+    def _gc_kernels() -> None:
+        """Drop kernels idle past KERNEL_IDLE_TIMEOUT. Called lazily on
+        every kernel-touching request -- no background thread needed at
+        Studio's scale; an abandoned kernel lingers only until the next
+        notebook interaction."""
+        kernels = _kernels()
+        now = time.monotonic()
+        timeout = float(app.config["KERNEL_IDLE_TIMEOUT"])
+        with kernels["lock"]:
+            stale = [
+                sid for sid, e in kernels["by_id"].items()
+                if now - e["last_used"] > timeout
+            ]
+            entries = [kernels["by_id"].pop(sid) for sid in stale]
+        for e in entries:
+            _close_kernel_entry(e)
+
+    def close_all_kernels() -> None:
+        """Connection switch / shutdown: every kernel is bound to the
+        old DSN, so drop them all; the front-end restarts its kernel."""
+        kernels = _kernels()
+        with kernels["lock"]:
+            entries = list(kernels["by_id"].values())
+            kernels["by_id"].clear()
+        for e in entries:
+            _close_kernel_entry(e)
+
+    # Reachable from outside the factory (test teardown, future CLI
+    # shutdown hook) without going through a route.
+    app.extensions["provsql_kernels"]["close_all"] = close_all_kernels
+
+    @app.post("/api/nb/session")
+    def api_nb_session_create():
+        _gc_kernels()
+        kernels = _kernels()
+        with kernels["lock"]:
+            if len(kernels["by_id"]) >= int(app.config["MAX_KERNELS"]):
+                return jsonify({
+                    "error": "kernel limit reached; close another "
+                             "notebook session (or restart one) first",
+                }), 429
+        try:
+            conn = db.open_kernel_connection(app.config["DSN"])
+        except psycopg.Error as e:
+            return jsonify({"error": str(e).strip()}), 502
+        session_id = uuid_mod.uuid4().hex
+        entry = {
+            "id": session_id,
+            "conn": conn,
+            "lock": threading.Lock(),
+            "dsn": app.config["DSN"],
+            "db": conn.info.dbname,
+            "pid": conn.info.backend_pid,
+            "created": time.monotonic(),
+            "last_used": time.monotonic(),
+        }
+        with kernels["lock"]:
+            kernels["by_id"][session_id] = entry
+        return jsonify({
+            "session_id": session_id,
+            "pid": entry["pid"],
+            "db": entry["db"],
+        })
+
+    def _delete_kernel(session_id: str):
+        kernels = _kernels()
+        with kernels["lock"]:
+            entry = kernels["by_id"].pop(session_id, None)
+        if entry is None:
+            return jsonify({"error": "unknown notebook session"}), 404
+        _close_kernel_entry(entry)
+        return "", 204
+
+    @app.delete("/api/nb/session/<session_id>")
+    def api_nb_session_delete(session_id: str):
+        return _delete_kernel(session_id)
+
+    @app.post("/api/nb/session/<session_id>/close")
+    def api_nb_session_close(session_id: str):
+        # navigator.sendBeacon can only POST; same semantics as DELETE.
+        return _delete_kernel(session_id)
+
+    @app.get("/api/nb/session/<session_id>/status")
+    def api_nb_session_status(session_id: str):
+        kernels = _kernels()
+        with kernels["lock"]:
+            entry = kernels["by_id"].get(session_id)
+        if entry is None:
+            return jsonify({"alive": False, "reason": "unknown session"}), 404
+        conn = entry["conn"]
+        alive = not (conn.closed or conn.broken)
+        return jsonify({
+            "alive": alive,
+            "pid": entry["pid"],
+            "db": entry["db"],
+            "idle_seconds": time.monotonic() - entry["last_used"],
+        })
+
+    _NOTEBOOKS_DIR = Path(__file__).resolve().parent / "notebooks"
+    _EXAMPLE_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
+
+    @app.get("/api/nb/examples")
+    def api_nb_examples():
+        """The bundled example notebooks (tutorial / case studies),
+        generated from the user guide by studio/scripts/rst2nb.py.
+        Returns [{name, title, database}] for the Open-example menu."""
+        out = []
+        # The tutorial leads; the case studies follow in name order.
+        ordered = sorted(_NOTEBOOKS_DIR.glob("*.ipynb"),
+                         key=lambda f: (f.stem != "tutorial", f.stem))
+        for f in ordered:
+            try:
+                doc = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            title = f.stem
+            for c in doc.get("cells", []):
+                if c.get("cell_type") != "markdown":
+                    continue
+                m = re.search(r"^#\s+(.+?)\s*$",
+                              "".join(c.get("source") or []), re.M)
+                if m:
+                    title = m.group(1)
+                break
+            meta = (doc.get("metadata") or {}).get("provsql") or {}
+            out.append({"name": f.stem, "title": title,
+                        "database": meta.get("database")})
+        return jsonify(out)
+
+    @app.get("/api/nb/examples/<name>")
+    def api_nb_example(name: str):
+        if not _EXAMPLE_NAME_RE.match(name):
+            return jsonify({"error": "invalid example name"}), 400
+        f = _NOTEBOOKS_DIR / f"{name}.ipynb"
+        if not f.is_file():
+            return jsonify({"error": f"no example named {name!r}"}), 404
+        return app.response_class(f.read_text(),
+                                  mimetype="application/x-ipynb+json")
+
+    @app.post("/api/nb/exec")
+    def api_nb_exec():
+        """Run one notebook cell on its kernel. Response shape matches
+        /api/exec (blocks / wrapped / notices) plus `kernel_dead`, so
+        the front-end reuses the same renderer."""
+        _gc_kernels()
+        payload = request.get_json(silent=True) or {}
+        session_id = str(payload.get("session_id") or "").strip()
+        sql_text = payload.get("sql", "")
+        request_id = str(payload.get("request_id") or "").strip()
+
+        kernels = _kernels()
+        with kernels["lock"]:
+            entry = kernels["by_id"].get(session_id)
+        if entry is None:
+            return jsonify({
+                "error": "unknown or expired notebook session",
+                "kernel_dead": True,
+            }), 404
+        if entry["conn"].closed or entry["conn"].broken:
+            _delete_kernel(session_id)
+            return jsonify({
+                "error": "the kernel's connection is gone "
+                         "(server restart?); restart the kernel",
+                "kernel_dead": True,
+            }), 409
+
+        statements = _split_statements(sql_text)
+        if not statements:
+            return jsonify({"blocks": [], "wrapped": False, "notices": [],
+                            "kernel_dead": False})
+        last = statements[-1]
+
+        # Same three-way provenance-scheme dispatch as /api/exec; the
+        # notebook sends it per cell (notebook-level default applied
+        # client-side).
+        prov_scheme = (payload.get("prov_scheme") or "semiring").lower()
+        if prov_scheme not in ("boolean", "semiring", "where"):
+            prov_scheme = "semiring"
+        where_prov = prov_scheme == "where"
+        boolean_prov = prov_scheme == "boolean"
+        wrap_last = where_prov and bool(_WRAPPABLE_RE.match(last))
+        update_prov = bool(payload.get("update_provenance", False))
+
+        # Serialize cells per kernel; concurrent submissions (another
+        # tab) get an explicit busy rather than queueing server-side.
+        if not entry["lock"].acquire(blocking=False):
+            return jsonify({"error": "kernel busy: a cell is already "
+                                     "running", "kernel_busy": True}), 409
+        try:
+            entry["last_used"] = time.monotonic()
+            inflight = app.extensions["provsql_inflight"]
+            if request_id:
+                with inflight["lock"]:
+                    inflight["by_id"][request_id] = entry["pid"]
+            try:
+                intermediate, final, meta, dead = db.exec_kernel_cell(
+                    entry["conn"],
+                    statements,
+                    statement_timeout=app.config["STATEMENT_TIMEOUT"],
+                    where_provenance=where_prov,
+                    update_provenance=update_prov,
+                    boolean_provenance=boolean_prov,
+                    wrap_last=wrap_last,
+                    extra_gucs=_backend_gucs(),
+                    search_path=app.config.get("SEARCH_PATH", ""),
+                    tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
+                    max_result_rows=int(app.config["MAX_RESULT_ROWS"]),
+                )
+            finally:
+                if request_id:
+                    with inflight["lock"]:
+                        inflight["by_id"].pop(request_id, None)
+            entry["last_used"] = time.monotonic()
+        finally:
+            entry["lock"].release()
+        if dead:
+            with kernels["lock"]:
+                kernels["by_id"].pop(session_id, None)
+
+        blocks = [r.to_dict() for r in intermediate]
+        if final is not None:
+            blocks.append(final.to_dict())
+        return jsonify({
+            "blocks": blocks,
+            "wrapped": meta["wrapped"],
+            "notices": meta.get("notices", []),
+            "kernel_dead": dead,
+        })
 
     @app.get("/api/circuit/<token>")
     def api_circuit(token: str):
@@ -1084,10 +1393,39 @@ def _clamp_depth(raw, default_max: int) -> int:
 
 def _split_statements(sql_text: str) -> list[str]:
     """Split a SQL batch into individual statements. sqlparse handles
-    dollar-quoting, comments, and string literals correctly."""
+    dollar-quoting, comments, and string literals correctly -- but knows
+    nothing of the COPY sub-protocol, so dump-style `COPY ... FROM stdin;`
+    blocks (statement line, raw data rows, terminating `\\.` line, as
+    pg_dump writes them) are carved out first, each kept as a single
+    unit: the statement line with its data rows attached below and the
+    terminator dropped (db._execute_statement feeds the unit through
+    cursor.copy()). The carve-out is line-based, so a COPY-FROM-stdin
+    line *inside* a dollar-quoted body would be misdetected; acceptable
+    for hand-loaded scripts."""
     out: list[str] = []
-    for raw in sqlparse.split(sql_text):
-        stripped = raw.strip().rstrip(";").strip()
-        if stripped:
-            out.append(stripped)
+    plain: list[str] = []
+
+    def _flush_plain() -> None:
+        for raw in sqlparse.split("\n".join(plain)):
+            stripped = raw.strip().rstrip(";").strip()
+            if stripped:
+                out.append(stripped)
+        plain.clear()
+
+    lines = sql_text.splitlines()
+    i = 0
+    while i < len(lines):
+        if db.COPY_FROM_STDIN_RE.match(lines[i]):
+            _flush_plain()
+            block = [lines[i]]
+            i += 1
+            while i < len(lines) and lines[i].rstrip() != "\\.":
+                block.append(lines[i])
+                i += 1
+            i += 1  # skip the \. terminator
+            out.append("\n".join(block))
+        else:
+            plain.append(lines[i])
+            i += 1
+    _flush_plain()
     return out

@@ -1,14 +1,9 @@
 # Studio: features and integration beyond v1.0
 
-Plan for Studio work landing after the first public release.
-Studio 1.0.0 shipped to PyPI alongside ProvSQL 1.4.0 in May 2026;
-the user guide at `doc/source/user/studio.rst` documents the
-compatibility matrix, version streams, and CLI flags. This file
-now carries only the "Beyond v1.0" backlog (new inspection modes,
-notebook integrations, larger features, implementation
-observations). The Stage 0–5 bring-up notes that lived in
-`studio/TODO.md` and the v1.0-blocking checklist that lived in
-this file have both been retired into git history.
+Backlog for Studio work (new inspection modes, larger features,
+implementation observations). The user guide at
+`doc/source/user/studio.rst` documents the compatibility matrix,
+version streams, and CLI flags.
 
 ## Out of scope
 
@@ -16,6 +11,8 @@ The following are documented elsewhere and do not need a TODO entry:
 
 - Compiled-semiring proposals: covered by `compiled-semirings.md`.
 - Tutorial / case-study coverage gaps: covered by `case-studies.md`.
+- A full Jupyter-style notebook mode: covered by
+  `studio-notebook-mode.md`.
 
 ## Beyond v1.0
 
@@ -52,14 +49,6 @@ plus per-cell click affordances.
   main modes for now since `update_provenance` is not yet mature
   enough to expose prominently.
 
-### Notebooks (small)
-
-- Save / load notebooks: query history is already persisted
-  (sessionStorage `ps.sql` carry-over + the History dropdown). The
-  remaining work is a "Download .sql" button next to the History
-  dropdown that exports the recent buffer, and a file-picker that
-  imports back into the query box. About 30 lines of front-end.
-
 ### Larger features
 
 - **Result-table evaluation extension**: run the selected semiring
@@ -67,11 +56,6 @@ plus per-cell click affordances.
   per-row value. Today the eval strip evaluates one node at a time;
   this would batch-evaluate all UUIDs in the displayed `provsql`
   column.
-- **Knowledge-compilation view**: render the d-DNNF compiled from a
-  circuit, not just the raw provenance DAG. Surfaces what
-  `provenance_evaluate_compiled` actually consumes and makes
-  probability evaluation legible. Could ship as a sub-mode toggled
-  from the circuit-mode toolbar (`Π`-shaped circuit ↔ d-DNNF view).
 - **Multi-user demo deployment**: per-browser-session isolation in
   a single Docker container so a conference audience can each hit
   `localhost:8000` against a hosted instance.
@@ -89,10 +73,3 @@ plus per-cell click affordances.
   extension would call. The extension batch-evaluates the displayed
   UUID column instead of one node, but the back-end dispatch is
   identical.
-- **Independent versioning**: Studio releases as `studio-vX.Y.Z`
-  on PyPI; the extension stays on `vX.Y.Z` on PGXN. Compatibility
-  surfaced via a startup check
-  (`SELECT extversion FROM pg_extension WHERE extname = 'provsql'`)
-  that refuses to start if the installed extension is older than
-  Studio's minimum requirement, plus the matrix in
-  `doc/source/user/studio.rst`.

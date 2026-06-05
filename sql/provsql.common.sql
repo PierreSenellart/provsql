@@ -444,6 +444,16 @@ CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
 $$
 BEGIN
+  -- Idempotence: a second add_provenance on an already-tracked table is
+  -- a no-op with a NOTICE, so setup scripts and notebook cells can be
+  -- re-run freely.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % already has provenance tracking', _tbl;
+    RETURN;
+  END IF;
   -- No DEFAULT: the guard trigger mints the UUID, so the trigger can
   -- distinguish "user omitted" (NULL) from "user supplied a value".
   -- No UNIQUE: we no longer rely on it to keep the table TID -- the
@@ -656,6 +666,8 @@ CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
  *
  * Creates a new table mapping provenance tokens to values of a given
  * attribute, for use with semiring evaluation functions.
+ * Idempotent: if the mapping table already exists, raises a NOTICE and
+ * changes nothing (drop it first to rebuild).
  *
  * @param newtbl name of the mapping table to create
  * @param oldtbl source table with provenance tracking
@@ -671,6 +683,21 @@ CREATE OR REPLACE FUNCTION create_provenance_mapping(
 $$
 DECLARE
 BEGIN
+  -- Idempotence: when the mapping table already exists, leave it alone
+  -- with a NOTICE (re-runnable setup scripts / notebook cells). Drop it
+  -- first to rebuild a stale mapping.
+  IF (CASE WHEN preserve_case THEN to_regclass(format('%I', newtbl))
+           ELSE to_regclass(newtbl) END) IS NOT NULL THEN
+    RAISE NOTICE 'mapping table % already exists', newtbl;
+    RETURN;
+  END IF;
+  -- ON COMMIT DROP only fires at COMMIT: several mapping creations in
+  -- one transaction (a notebook cell, a setup script run via psql -1)
+  -- would otherwise collide on the leftover temp table. The to_regclass
+  -- probe (rather than DROP IF EXISTS) keeps the first call NOTICE-free.
+  IF to_regclass('pg_temp.tmp_provsql') IS NOT NULL THEN
+    DROP TABLE tmp_provsql;
+  END IF;
   EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %s', oldtbl);
   ALTER TABLE tmp_provsql RENAME provsql TO provenance;
   IF preserve_case THEN
@@ -1813,8 +1840,9 @@ CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLI
  * the circuit but loses the human-readable aggregate value. This
  * function takes such a UUID and returns the original @c "value (*)"
  * string by reading the gate's @c extra (set by aggregate evaluation
- * to the computed scalar). Returns @c NULL if @p token does not
- * resolve to an @c agg gate.
+ * for @c agg gates, and by @c agg_arith_make for the @c arith gates
+ * that agg_token arithmetic mints). Returns @c NULL if @p token does
+ * not resolve to an @c agg or @c arith gate.
  *
  * @param token UUID of an @c agg gate (typically obtained from an
  *              @c agg_token cell when @c aggtoken_text_as_uuid is on,
@@ -1824,7 +1852,9 @@ CREATE OR REPLACE FUNCTION agg_token_value_text(token UUID)
   RETURNS text AS
 $$
   SELECT CASE
-    WHEN provsql.get_gate_type(token) = 'agg'
+    -- agg gates: extra is set by aggregate evaluation; arith gates
+    -- (agg_token arithmetic): extra is recorded by agg_arith_make.
+    WHEN provsql.get_gate_type(token) IN ('agg', 'arith')
       THEN provsql.get_extra(token) || ' (*)'
     ELSE NULL
   END;
@@ -1855,8 +1885,193 @@ CREATE OR REPLACE FUNCTION agg_token_to_text(agg_token)
   RETURNS text
   AS 'provsql','agg_token_to_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-/** @brief Implicit PostgreSQL cast from agg_token to numeric (enables arithmetic on aggregates) */
-CREATE CAST (agg_token AS numeric) WITH FUNCTION agg_token_to_numeric(agg_token) AS IMPLICIT;
+/** @brief Assignment cast from agg_token to numeric (extracts the scalar
+ *  value, dropping provenance).  ASSIGNMENT, not IMPLICIT: provenance-
+ *  preserving arithmetic on aggregates is provided by the native
+ *  agg_token operators below, so an implicit numeric coercion would only
+ *  silently steal `s + 1` away from them (and reroute it differently
+ *  depending on whether provsql is in search_path).  Write `s::numeric`
+ *  to opt into the lossy scalar. */
+CREATE CAST (agg_token AS numeric) WITH FUNCTION agg_token_to_numeric(agg_token) AS ASSIGNMENT;
+
+-- ---------------------------------------------------------------------
+-- Arithmetic on aggregates (agg_token)
+--
+-- Mirrors the random_variable arithmetic surface: the operators build a
+-- `gate_arith` over the operand provenance UUIDs (via provenance_arith,
+-- info1 = PROVSQL_ARITH_*), so the arithmetic is recorded symbolically
+-- in the circuit and can be resolved when a comparison (gate_cmp) over
+-- the result is evaluated.  Unlike random_variable (a bare UUID), an
+-- agg_token also carries a running scalar value, so each operator
+-- additionally computes the resulting value and bundles it back with the
+-- new gate.
+-- ---------------------------------------------------------------------
+
+/** @brief Running value of an agg_token as numeric, without the
+ *  provenance-loss warning the public cast emits (internal use). */
+CREATE OR REPLACE FUNCTION agg_token_value(agg_token)
+  RETURNS numeric
+  AS 'provsql','agg_token_value' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Bundle a provenance gate UUID with a running value into an
+ *  agg_token (inverse of the agg_token_uuid / agg_token_value
+ *  accessors). */
+CREATE OR REPLACE FUNCTION agg_token_make(tok uuid, val numeric)
+  RETURNS agg_token AS
+$$
+  SELECT format('( %s , %s )', tok::text, val::text)::provsql.agg_token;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+/** @brief Lift a scalar numeric constant into a gate_value leaf and
+ *  return its UUID, so it can be a child of a gate_arith (the agg-side
+ *  analogue of as_random for random_variable). */
+CREATE OR REPLACE FUNCTION agg_value_gate(v numeric)
+  RETURNS uuid AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('value', v::text));
+BEGIN
+  PERFORM provsql.create_gate(token, 'value');
+  PERFORM provsql.set_extra(token, v::text);
+  RETURN token;
+END
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+/** @brief Mint (or reuse) the gate_arith for an agg_token arithmetic
+ *  result and return the agg_token carrying it.
+ *
+ * Also records the computed scalar in the gate's @c extra -- exactly
+ * what aggregate evaluation does for @c agg gates -- so
+ * @c agg_token_value_text can recover the @c "value (*)" display from
+ * the bare UUID (as ProvSQL Studio does for result cells under
+ * @c provsql.aggtoken_text_as_uuid). The gate UUID is deterministic in
+ * (op, children), so re-recording the (identical) value is idempotent. */
+CREATE OR REPLACE FUNCTION agg_arith_make(op int, children uuid[], val numeric)
+  RETURNS agg_token AS
+$$
+DECLARE
+  token uuid := provsql.provenance_arith(op, children);
+BEGIN
+  PERFORM provsql.set_extra(token, val::text);
+  RETURN provsql.agg_token_make(token, val);
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+-- agg_token \<op\> agg_token --------------------------------------------
+/** @brief agg_token + agg_token (gate_arith PLUS). */
+CREATE OR REPLACE FUNCTION agg_token_plus(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - agg_token (gate_arith MINUS). */
+CREATE OR REPLACE FUNCTION agg_token_minus(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * agg_token (gate_arith TIMES). */
+CREATE OR REPLACE FUNCTION agg_token_times(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / agg_token (gate_arith DIV). */
+CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
+     provsql.agg_token_value(a) / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief Unary -agg_token (gate_arith NEG). */
+CREATE OR REPLACE FUNCTION agg_token_neg(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
+     - provsql.agg_token_value(a)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- agg_token \<op\> numeric ----------------------------------------------
+/** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
+CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) + b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token - numeric. */
+CREATE OR REPLACE FUNCTION agg_token_minus_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) - b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token * numeric. */
+CREATE OR REPLACE FUNCTION agg_token_times_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) * b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric. */
+CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) / b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- numeric \<op\> agg_token ----------------------------------------------
+/** @brief numeric + agg_token. */
+CREATE OR REPLACE FUNCTION numeric_plus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(0, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a + provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric - agg_token. */
+CREATE OR REPLACE FUNCTION numeric_minus_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(2, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a - provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric * agg_token. */
+CREATE OR REPLACE FUNCTION numeric_times_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a * provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token. */
+CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     a / provsql.agg_token_value(b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- Operator declarations -----------------------------------------------
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
+CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+
+CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_plus_numeric,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_minus_numeric);
+CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_times_numeric, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=numeric, PROCEDURE=agg_token_div_numeric);
+
+CREATE OPERATOR + (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_plus_agg_token,  COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_minus_agg_token);
+CREATE OPERATOR * (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_times_agg_token, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG=numeric, RIGHTARG=agg_token, PROCEDURE=numeric_div_agg_token);
+
 /** @brief Assignment cast from agg_token to double precision */
 CREATE CAST (agg_token AS double precision) WITH FUNCTION agg_token_to_float8(agg_token) AS ASSIGNMENT;
 /** @brief Assignment cast from agg_token to integer */
@@ -2001,6 +2216,123 @@ CREATE OPERATOR > (
   NEGATOR    = <=
 );
 
+/**
+ * @brief Placeholder comparison of two agg_token values (the diagonal)
+ *
+ * Never actually called; lets the parser accept agg_token \<op\> agg_token
+ * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
+ * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
+ * also disambiguates `s = s2` (previously "operator is not unique"
+ * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token < agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR < (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >, NEGATOR = >=
+);
+/** @brief SQL operator agg_token <= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = >=, NEGATOR = >
+);
+/** @brief SQL operator agg_token > agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR > (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <, NEGATOR = <=
+);
+/** @brief SQL operator agg_token >= agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR >= (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <=, NEGATOR = <
+);
+/** @brief SQL operator agg_token = agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR = (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = =, NEGATOR = <>
+);
+/** @brief SQL operator agg_token <> agg_token (placeholder rewritten at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_comp_agg_token,
+  COMMUTATOR = <>, NEGATOR = =
+);
+
+/**
+ * @brief Placeholder comparison of agg_token with text
+ *
+ * This function is never actually called; it exists so the SQL parser
+ * accepts comparison operators between agg_token and text values.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/**
+ * @brief Placeholder comparison of text with agg_token
+ *
+ * Symmetric to agg_token_comp_text; never actually called.
+ * The ProvSQL query rewriter replaces these comparisons at plan time.
+ */
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+END;
+$$;
+
+/** @brief SQL operator agg_token = text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+/** @brief SQL operator text = agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR = (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = =,
+  NEGATOR    = <>
+);
+
+/** @brief SQL operator agg_token <> text (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = agg_token,
+  RIGHTARG   = text,
+  PROCEDURE  = agg_token_comp_text,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+/** @brief SQL operator text <> agg_token (placeholder rewritten by ProvSQL at plan time) */
+CREATE OPERATOR <> (
+  LEFTARG    = text,
+  RIGHTARG   = agg_token,
+  PROCEDURE  = text_comp_agg_token,
+  COMMUTATOR = <>,
+  NEGATOR    = =
+);
+
 /** @} */
 
 /** @defgroup random_variable_type Type for continuous random variables
@@ -2052,10 +2384,15 @@ CREATE OR REPLACE FUNCTION random_variable_make(tok uuid)
 /** @brief Binary-coercible cast random_variable -> uuid.
  *  A random_variable is byte-for-byte a pg_uuid_t (alignment char,
  *  length 16), so WITHOUT FUNCTION lets PostgreSQL reinterpret the
- *  bytes at zero runtime cost.  The cast is IMPLICIT so a `provsql`
- *  column or any random_variable expression flows directly into any
- *  function expecting a uuid. */
-CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS IMPLICIT;
+ *  bytes at zero runtime cost.  The cast is ASSIGNMENT (not IMPLICIT):
+ *  an implicit cross-domain cast would silently reroute a comparison
+ *  such as `v < w` to `uuid < uuid` (raw byte comparison) whenever
+ *  `provsql` is not in search_path, since operators are resolved
+ *  through search_path but casts are not.  Demoting to ASSIGNMENT
+ *  turns that silent wrong result into a clean parse error.  Passing a
+ *  random_variable to a uuid-taking function now needs an explicit
+ *  `v::uuid` (function resolution never applies assignment casts). */
+CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
 CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
 
 /**
@@ -2325,7 +2662,7 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
  *
  * Sugar over the @c mixture(uuid, x, y) form: when the caller doesn't
  * care about reusing the Bernoulli token elsewhere in the circuit
- * (which is the common case &mdash; "give me a 0.3 / 0.7 weighted GMM,
+ * (which is the common case &ndash; "give me a 0.3 / 0.7 weighted GMM,
  * I don't need to share the coin"), this overload creates the
  * underlying @c gate_input on the fly with a fresh
  * @c uuid_generate_v4() token, pins @p p_value via @c set_prob, and
@@ -3215,12 +3552,16 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
  * @param aggtype OID of the aggregate result type
  * @param val computed aggregate value
  * @param tokens array of provenance tokens being aggregated
+ * @param is_scalar true for a scalar (no GROUP BY) aggregation, whose
+ *        output row exists even when no tuple is present; stored in the
+ *        high bit of info2
  */
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
     aggtype integer,
     val anyelement,
-    tokens uuid[])
+    tokens uuid[],
+    is_scalar boolean DEFAULT false)
   RETURNS agg_token AS
 $$
 DECLARE
@@ -3228,6 +3569,10 @@ DECLARE
   agg_tok uuid;
   agg_val varchar;
 BEGIN
+  -- Drop the NULL placeholders array_agg keeps for rows that did not produce a
+  -- semimod gate (provenance_semimod returns NULL for a NULL aggregated value),
+  -- so a NULL input never participates in the aggregate.
+  tokens := array_remove(tokens, NULL);
   c:=COALESCE(array_length(tokens, 1), 0);
 
   agg_val = CAST(val as VARCHAR);
@@ -3239,12 +3584,19 @@ BEGIN
     -- same children would otherwise collapse to a single gate, and
     -- their concurrent set_infos calls would overwrite each other's
     -- aggregation operator (resulting in the wrong agg_kind being
-    -- read by provsql_having under cross-backend contention).
+    -- read by provsql_having under cross-backend contention).  The
+    -- scalar-aggregation flag must likewise be hashed: a scalar and a
+    -- grouped aggregate over identical children carry different info2 and
+    -- must stay distinct gates, else the concurrent set_infos calls would
+    -- clobber the flag.  The flag is stored in the high bit of info2 (the
+    -- low 31 bits keep the result-type OID); aggtype itself is passed clean
+    -- so the agg_token->scalar cast still finds a valid type.
     agg_tok := uuid_generate_v5(
       uuid_ns_provsql(),
-      concat('agg',aggfnoid,tokens));
+      concat('agg',aggfnoid,tokens,CASE WHEN is_scalar THEN 'S' ELSE '' END));
     PERFORM create_gate(agg_tok, 'agg', tokens);
-    PERFORM set_infos(agg_tok, aggfnoid, aggtype);
+    PERFORM set_infos(agg_tok, aggfnoid,
+                      CASE WHEN is_scalar THEN aggtype | (-2147483648) ELSE aggtype END);
     PERFORM set_extra(agg_tok, agg_val);
   END IF;
 
@@ -3268,6 +3620,14 @@ DECLARE
   semimod_token uuid;
   value_token uuid;
 BEGIN
+  -- A NULL value means this row does not participate in the aggregate (SQL
+  -- aggregates ignore NULL inputs; only count(*) counts rows unconditionally,
+  -- and it passes a constant 1 here).  Produce no semimod gate so the row is
+  -- skipped when provenance_aggregate builds the agg gate.
+  IF val IS NULL THEN
+    RETURN NULL;
+  END IF;
+
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
     INTO value_token;
   SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
@@ -3309,6 +3669,19 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C STABLE;
+
+/**
+ * @brief Cheap certified probability interval of a DNF-shaped circuit.
+ *
+ * Returns @c [lower,upper] with @c lower <= probability_evaluate(token) <=
+ * @c upper, computed without compiling the circuit (the Olteanu-Huang d-tree
+ * leaf bound).  Errors when @p token is not a monotone DNF over input leaves.
+ */
+CREATE OR REPLACE FUNCTION probability_bounds(
+  token UUID,
+  OUT lower DOUBLE PRECISION,
+  OUT upper DOUBLE PRECISION) AS
+  'provsql','probability_bounds' LANGUAGE C STABLE;
 
 /**
  * @brief Compute the expected value of a probabilistic scalar
@@ -3428,7 +3801,11 @@ BEGIN
   child_pairs := get_children(token);
   n := COALESCE(array_length(child_pairs, 1), 0);
 
-  IF aggregation_function = 'sum' THEN
+  IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+    -- count(col) keeps the COUNT identity at the gate level but its value is a
+    -- SUM of per-row 0/1 indicators, so its moments are computed exactly like
+    -- SUM (and its empty group is the real value 0, like SUM).  count(*)
+    -- arrives here as 'sum' (it normalises to F_SUM_INT4); count(col) as 'count'.
     -- Trivial empty aggregation: SUM = 0, so SUM^k = 0 for k >= 1.
     -- Note: agg_token semantics treat the "no row included" world as
     -- SUM = 0, so this stays consistent with k = 1 (= expected()).
@@ -3487,36 +3864,49 @@ BEGIN
                   ELSE 1
                 END;
 
-    -- ±Infinity sink: positive probability of "no row included" makes
-    -- MIN = +Inf and MAX = -Inf.  For MIN^k that's +Inf for any k>=1;
-    -- for MAX^k it's (-1)^k * (+Inf) = ±Inf depending on k's parity.
+    -- MIN/MAX over the empty input world are NULL (no elements), not ±Infinity:
+    -- SQL returns one row with a NULL value.  The moment is therefore CONDITIONAL
+    -- on the aggregate being defined (non-empty) -- the empty world is excluded
+    -- and the result renormalised by P(prov AND non-empty).  (count, whose empty
+    -- value 0 is a real value, keeps the empty world; sum keeps it too, as 0.)
+    IF n = 0 THEN
+      RETURN NULL;  -- structurally empty: MIN/MAX undefined
+    END IF;
+
+    -- Numerator E[MIN^k . 1{prov AND non-empty}] (the rank sum naturally omits
+    -- the empty world, since every term requires a present token).
     WITH tok_value AS (
       SELECT (get_children(c))[1] AS tok,
              (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
                * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
       FROM UNNEST(child_pairs) AS c
-    ) SELECT probability_evaluate(provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))))
-        FROM tok_value
-        INTO total_probability;
+    ) SELECT sign_max * COALESCE(SUM(p * power(v, k)), 0) FROM (
+        SELECT t1.v AS v,
+          probability_evaluate(
+            CASE WHEN prov = gate_one()
+                 THEN provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                       provenance_plus(ARRAY_AGG(t2.tok)))
+                 ELSE provenance_times(prov,
+                        provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                         provenance_plus(ARRAY_AGG(t2.tok)))) END,
+            method, arguments) AS p
+        FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
+        GROUP BY t1.v) tmp
+      INTO total;
 
-    IF total_probability > epsilon() THEN
-      total := sign_max * 'Infinity'::float8;
-    ELSE
-      WITH tok_value AS (
-        SELECT (get_children(c))[1] AS tok,
-               (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
-                 * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
-        FROM UNNEST(child_pairs) AS c
-      ) SELECT sign_max * SUM(p * power(v, k)) FROM (
-          SELECT t1.v AS v,
-            probability_evaluate(
-              provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
-                               provenance_plus(ARRAY_AGG(t2.tok))),
-              method, arguments) AS p
-          FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
-          GROUP BY t1.v) tmp
-        INTO total;
+    -- Denominator P(prov AND non-empty) = P(prov (x) (+) tokens).
+    SELECT probability_evaluate(
+             CASE WHEN prov = gate_one()
+                  THEN provenance_plus(ARRAY_AGG(tok))
+                  ELSE provenance_times(prov, provenance_plus(ARRAY_AGG(tok))) END,
+             method, arguments)
+      FROM (SELECT (get_children(c))[1] AS tok FROM UNNEST(child_pairs) AS c) s
+      INTO total_probability;
+
+    IF total_probability <= epsilon() THEN
+      RETURN NULL;  -- never defined under prov: MIN/MAX undefined
     END IF;
+    RETURN total / total_probability;  -- already conditional; skip generic norm
   ELSE
     RAISE EXCEPTION USING MESSAGE=
       'Cannot compute moment for aggregation function ' || aggregation_function;
@@ -3647,8 +4037,9 @@ CREATE OR REPLACE FUNCTION rv_support(
  *   point support @f$[c, c]@f$.  Lets callers ask for the support
  *   of a literal without round-tripping through @c as_random.
  * - <b>@c random_variable / bare @c uuid</b> (any provenance gate
- *   token, including the implicit @c random_variable @c -> @c uuid
- *   cast): routes to @c rv_support, which propagates distribution
+ *   token; the @c random_variable branch reinterprets the value via
+ *   the binary-coercible @c random_variable @c -> @c uuid cast):
+ *   routes to @c rv_support, which propagates distribution
  *   supports (uniform exact, exponential @c [0,+∞), normal
  *   @c (-∞,+∞)) through @c gate_arith via interval arithmetic.
  *   @c gate_value gives the same @f$[c, c]@f$ point support as the
@@ -3703,8 +4094,9 @@ BEGIN
     RETURN;
   END IF;
 
-  -- random_variable has an IMPLICIT cast to uuid, so a single
-  -- rv_support call covers both shapes.  rv_support handles
+  -- random_variable is binary-coercible to uuid (explicit cast
+  -- below), so a single rv_support call covers both shapes.
+  -- rv_support handles
   -- gate_value (point), gate_rv (distribution), gate_arith
   -- (propagated), and falls back to the conservative all-real
   -- interval for any other gate kind.  Conditioning on prov is not
@@ -3730,7 +4122,9 @@ BEGIN
       INTO aggregation_function;
     child_pairs := get_children(input::agg_token);
 
-    IF aggregation_function = 'sum' THEN
+    IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+      -- count(col) is a SUM of per-row 0/1 indicators (empty group = 0), so its
+      -- support is computed like SUM; count(*) arrives as 'sum'.
       -- Empty agg_token: SUM is identically 0.
       IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
         lo := 0; hi := 0; RETURN;
@@ -3740,36 +4134,18 @@ BEGIN
         FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
               FROM unnest(child_pairs) AS c) sub;
     ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
-      -- Empty agg_token: MIN = +Infinity, MAX = -Infinity (the
-      -- empty-set conventions used by `expected`).
+      -- MIN/MAX over the empty input world are NULL, not ±Infinity (matching the
+      -- moment surface): the empty world carries no value, so the support is just
+      -- the range of the per-row values [min(v), max(v)].  A structurally empty
+      -- aggregate has no defined value at all -> NULL support.
       IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
-        IF aggregation_function = 'min' THEN
-          lo := 'Infinity'::float8; hi := 'Infinity'::float8;
-        ELSE
-          lo := '-Infinity'::float8; hi := '-Infinity'::float8;
-        END IF;
-        RETURN;
+        lo := NULL; hi := NULL; RETURN;
       END IF;
 
-      WITH tok_value AS (
-        SELECT (get_children(c))[1] AS tok,
-               CAST(get_extra((get_children(c))[2]) AS float8) AS v
-        FROM UNNEST(child_pairs) AS c
-      )
-      SELECT min(v), max(v),
-             probability_evaluate(
-               provenance_monus(prov, provenance_plus(ARRAY_AGG(tok))),
-               method, arguments)
-        INTO lo, hi, total_probability
-        FROM tok_value;
-
-      IF total_probability > epsilon() THEN
-        IF aggregation_function = 'min' THEN
-          hi := 'Infinity'::float8;
-        ELSE
-          lo := '-Infinity'::float8;
-        END IF;
-      END IF;
+      SELECT min(v), max(v)
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM UNNEST(child_pairs) AS c) sub;
     ELSE
       RAISE EXCEPTION USING MESSAGE=
         'Cannot compute support for aggregation function ' || aggregation_function;
@@ -4212,100 +4588,6 @@ REVOKE ALL ON FUNCTION set_tool_enabled(TEXT, BOOLEAN) FROM PUBLIC;
 REVOKE ALL ON FUNCTION set_tool_preference(TEXT, INT) FROM PUBLIC;
 
 /**
- * @brief Time a single probability_evaluate call and return one row
- *
- * Helper for @c probability_benchmark. Returns the wall-clock
- * duration of one @c probability_evaluate invocation along with its
- * result; on error, fills @c probability with NULL and @c error with
- * SQLERRM.
- */
-CREATE OR REPLACE FUNCTION _probability_benchmark_one(
-  in_token UUID, in_method TEXT, in_args TEXT = NULL)
-RETURNS TABLE (
-  method TEXT, args TEXT,
-  probability DOUBLE PRECISION,
-  milliseconds DOUBLE PRECISION,
-  error TEXT) AS $$
-DECLARE
-  t0 TIMESTAMPTZ;
-  p DOUBLE PRECISION;
-BEGIN
-  t0 := clock_timestamp();
-  BEGIN
-    p := provsql.probability_evaluate(in_token, in_method, in_args);
-    method := in_method;
-    args := in_args;
-    probability := p;
-    milliseconds := EXTRACT(EPOCH FROM clock_timestamp() - t0) * 1000;
-    error := NULL;
-  EXCEPTION WHEN OTHERS THEN
-    method := in_method;
-    args := in_args;
-    probability := NULL;
-    milliseconds := EXTRACT(EPOCH FROM clock_timestamp() - t0) * 1000;
-    error := SQLERRM;
-  END;
-  RETURN NEXT;
-END;
-$$ LANGUAGE plpgsql;
-
-/**
- * @brief Time every probability-evaluation method on a single circuit token
- *
- * Runs @c probability_evaluate against every method ProvSQL exposes:
- * @c independent, @c possible-worlds, @c tree-decomposition,
- * @c monte-carlo (with @c monte_carlo_samples samples), each of the
- * four external compilers (@c d4 / @c c2d / @c minic2d / @c dsharp)
- * via the @c compilation method, and @c weightmc with
- * @c weightmc_args. Errors (uninstalled compiler, non-independent
- * circuit, treewidth blowup, ...) are captured per row through the
- * @c _probability_benchmark_one helper so the comparison table is
- * always complete and the caller never has to surround the call
- * with @c BEGIN / @c EXCEPTION.
- *
- * @param token                root provenance token
- * @param monte_carlo_samples  Monte-Carlo sample count
- * @param weightmc_args        epsilon;delta forwarded to @c weightmc
- */
-CREATE OR REPLACE FUNCTION probability_benchmark(
-  token UUID,
-  monte_carlo_samples INT = 10000,
-  weightmc_args TEXT = '0.8;0.2')
-RETURNS TABLE (
-  method TEXT, args TEXT,
-  probability DOUBLE PRECISION,
-  milliseconds DOUBLE PRECISION,
-  error TEXT) AS $$
-BEGIN
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'independent');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'possible-worlds');
-  -- Only on a query certified inversion-free (its root carries the
-  -- certificate as a 'C'-prefixed annotation): the explicit method errors
-  -- otherwise, so we skip the row rather than record a spurious error.
-  IF provsql.get_gate_type(token) = 'annotation'
-     AND left(provsql.get_extra(token), 1) = 'C' THEN
-    RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'inversion-free');
-  END IF;
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'tree-decomposition');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
-    token, 'monte-carlo', monte_carlo_samples::text);
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'd4');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'd4v2');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'c2d');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'minic2d');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'dsharp');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-obdd');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-obdd-and');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'compilation', 'panini-decdnnf');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(
-    token, 'wmc', 'weightmc;' || weightmc_args);
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'wmc', 'ganak');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'wmc', 'sharpsat-td');
-  RETURN QUERY SELECT * FROM provsql._probability_benchmark_one(token, 'wmc', 'dpmc');
-END;
-$$ LANGUAGE plpgsql;
-
-/**
  * @brief Return an XML representation of the provenance circuit
  *
  * @param token root provenance token
@@ -4607,8 +4889,158 @@ CREATE AGGREGATE choose(ANYELEMENT) (
   STYPE = ANYELEMENT
 );
 
+/** @brief Explodes a table column containing aggregated provenance into multiple rows.
+ *
+ *  For each row in the input table, this function unnests the children of the
+ *  specified aggregate token column and produces one output row per child.
+ *  It reconstructs the corresponding value and provenance (`provsql`) for
+ *  each resulting row.
+ *
+ *  The original table is replaced by the transformed table.
+ *
+ *  @param _tbl Name of the table to transform.
+ *  @param agg_token Name of the column containing the aggregate to explode.
+ */
+CREATE OR REPLACE FUNCTION explode_table(_tbl text, agg_token text)
+RETURNS void AS $$
+DECLARE
+  _nsp text;
+BEGIN
+    -- Resolve the schema actually holding _tbl so the rebuilt table is
+    -- recreated in place (the provsql helper functions are schema-qualified
+    -- so this works whatever the caller's search_path is).
+    SELECT n.nspname INTO _nsp
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.oid = _tbl::regclass;
+
+    EXECUTE format('
+    CREATE TABLE %1$I.temp_exploded AS
+    SELECT
+        %2$I.*,
+        provsql.get_extra(children[2]) AS new_t,
+        provsql.provenance_times(children[1], provsql) AS new_provsql
+    FROM %1$I.%2$I,
+    LATERAL (
+        SELECT provsql.get_children(sm) AS children
+        FROM UNNEST(provsql.get_children(%3$I)) AS sm
+    ) AS sub', _nsp, _tbl, agg_token);
+    EXECUTE format('DROP TABLE %I.%I', _nsp, _tbl);
+    EXECUTE format('ALTER TABLE %I.temp_exploded DROP COLUMN %I, DROP COLUMN provsql', _nsp, agg_token);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME COLUMN new_t TO %I', _nsp, agg_token);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME COLUMN new_provsql TO provsql', _nsp);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME TO %I', _nsp, _tbl);
+END;
+$$ LANGUAGE plpgsql;
+
 /** @} */
+
+/**
+ * @brief Append @c provsql to this database's default search_path, if missing.
+ *
+ * ProvSQL's operators and functions live in the @c provsql schema and
+ * are resolved through @c search_path.  When @c provsql is absent from
+ * the path some surfaces fail with a clear error (RV/agg_token
+ * arithmetic), but others can be silently misrouted by an implicit
+ * cross-domain cast.  This helper makes the common case painless: it
+ * reads the current <em>database-level</em> search_path setting from
+ * @c pg_db_role_setting, appends @c provsql if not already present
+ * (never replacing or reordering the existing entries), and applies the
+ * result with @c ALTER @c DATABASE.  It is idempotent and emits a
+ * @c NOTICE describing what it did.
+ *
+ * Only @b new sessions pick up the change; the calling session keeps its
+ * current path.  Role-level settings (if any) take precedence over the
+ * database-level setting and are left untouched.  The caller must be the
+ * database owner or a superuser (the privilege model of @c ALTER
+ * @c DATABASE).  Returns the resulting search_path value.
+ */
+CREATE OR REPLACE FUNCTION setup_search_path()
+  RETURNS text
+  LANGUAGE plpgsql AS $$
+DECLARE
+  db        text := current_database();
+  cfg       text[];
+  cur       text;        -- existing database-level search_path value
+  new_path  text;
+BEGIN
+  -- setrole = 0 selects the database-wide default, not a per-role override.
+  SELECT s.setconfig INTO cfg
+    FROM pg_db_role_setting s
+    JOIN pg_database d ON d.oid = s.setdatabase
+   WHERE d.datname = db AND s.setrole = 0;
+
+  IF cfg IS NOT NULL THEN
+    SELECT substr(e, length('search_path=') + 1) INTO cur
+      FROM unnest(cfg) AS e
+     WHERE e LIKE 'search_path=%';
+  END IF;
+
+  IF cur IS NULL THEN
+    -- No database-level search_path at all: install the documented
+    -- default with provsql appended.
+    new_path := '"$user", public, provsql';
+    EXECUTE format('ALTER DATABASE %I SET search_path = %s', db, new_path);
+    RAISE NOTICE 'ProvSQL: set search_path = % for database "%" (no previous database-level setting). Only new sessions are affected.',
+      new_path, db;
+    RETURN new_path;
+  END IF;
+
+  -- Already contains provsql as a path element?  Idempotent no-op.
+  IF EXISTS (
+       SELECT 1 FROM unnest(string_to_array(cur, ',')) AS p
+        WHERE btrim(btrim(p), '"') = 'provsql')
+  THEN
+    RAISE NOTICE 'ProvSQL: search_path for database "%" already contains provsql (= %); no change.',
+      db, cur;
+    RETURN cur;
+  END IF;
+
+  new_path := cur || ', provsql';
+  EXECUTE format('ALTER DATABASE %I SET search_path = %s', db, new_path);
+  RAISE NOTICE 'ProvSQL: appended provsql to search_path for database "%" (now: %). Only new sessions are affected.',
+    db, new_path;
+  RETURN new_path;
+END;
+$$;
 
 GRANT USAGE ON SCHEMA provsql TO PUBLIC;
 
 SET search_path TO public;
+
+-- Installation-time advisory: if provsql is not in the database's default
+-- search_path, point the user at setup_search_path().  reset_val reflects
+-- the configured session default (postgresql.conf / ALTER DATABASE / ALTER
+-- ROLE), unaffected by the SET search_path statements this script ran.
+-- CREATE EXTENSION raises client_min_messages to WARNING for the duration
+-- of the script, so we lower it around the RAISE NOTICE. SET LOCAL only:
+-- it unwinds by itself when CREATE EXTENSION's transaction ends. An
+-- explicit save/restore here would capture the WARNING clamp (already in
+-- force when this block runs) and restore *that* at session level,
+-- leaving the whole installing session with NOTICEs suppressed.
+DO $$
+DECLARE
+  rp text;
+  has_provsql boolean;
+BEGIN
+  SELECT reset_val INTO rp FROM pg_settings WHERE name = 'search_path';
+  SELECT bool_or(btrim(btrim(p), '"') = 'provsql')
+    INTO has_provsql
+    FROM unnest(string_to_array(coalesce(rp, ''), ',')) AS p;
+  IF NOT coalesce(has_provsql, false) THEN
+    SET LOCAL client_min_messages = notice;
+    RAISE NOTICE 'ProvSQL: schema "provsql" is not in your default search_path (currently: %).', rp;
+    RAISE NOTICE 'ProvSQL operators and functions are resolved through search_path. Run "SELECT provsql.setup_search_path();" to add it, or set it manually (e.g. ALTER DATABASE % SET search_path = "$user", public, provsql).', quote_ident(current_database());
+  END IF;
+END;
+$$;
+
+-- Final constants-cache refresh.  The planned SELECT statements earlier in
+-- this script (reset_constants_cache itself, the zero/one create_gate calls)
+-- make the installing session memoize the OID constants *mid-script*, while
+-- objects defined later (notably the choose aggregate, used by the
+-- scalar-subquery decorrelation) do not exist yet.  Their optional lookups
+-- then stay InvalidOid for the rest of the session, silently disabling the
+-- corresponding rewrites (e.g. IN/NOT IN over a tracked relation would raise
+-- "Subqueries ... not supported") until a new connection.  Refreshing here,
+-- after every object exists, repairs the installing session's cache.
+SELECT provsql.reset_constants_cache();

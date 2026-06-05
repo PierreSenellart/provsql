@@ -16,11 +16,11 @@ SET search_path TO provsql_test, provsql;
 --
 --   q :- R(x), S(x, y), T(y),  with PRIMARY KEY (x) on S.
 --
--- Without the PK-FD pass: atoms(x)={R,S}, atoms(y)={S,T} — neither
--- nested nor disjoint — non-hierarchical → bail.  With the PK-FD
+-- Without the PK-FD pass: atoms(x)={R,S}, atoms(y)={S,T} – neither
+-- nested nor disjoint – non-hierarchical → bail.  With the PK-FD
 -- pass: the PK on @c S.x induces @c S.x @c → @c S.y, so @c S drops
 -- from atoms(y); the FD-aware atom-sets are @c {R,S} and @c {T},
--- disjoint — hierarchical via a per-atom anchor (@c R and @c S
+-- disjoint – hierarchical via a per-atom anchor (@c R and @c S
 -- anchor on class @c x, @c T on class @c y; the rewriter exposes
 -- both classes as slots on @c S).
 

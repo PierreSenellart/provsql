@@ -94,3 +94,15 @@ CREATE TABLE agg_arith6 AS
 SELECT remove_provenance('agg_arith6');
 SELECT * FROM agg_arith6 ORDER BY city;
 DROP TABLE agg_arith6;
+
+-- The arith gate records its computed scalar in extra (agg_arith_make),
+-- so agg_token_value_text recovers the "value (*)" display from the
+-- bare UUID for arithmetic results, as it does for plain aggregates
+-- (this is what Studio renders in result tables).
+CREATE TABLE agg_arith_disp AS
+  SELECT city, 2.0 * COUNT(*) + MAX(id) AS expr
+    FROM personnel GROUP BY city;
+SELECT remove_provenance('agg_arith_disp');
+SELECT provsql.agg_token_value_text(provsql.agg_token_uuid(expr)) AS disp
+FROM agg_arith_disp ORDER BY 1;
+DROP TABLE agg_arith_disp;

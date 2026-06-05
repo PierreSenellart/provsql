@@ -139,6 +139,20 @@ Installation
    The ``CASCADE`` keyword automatically installs the required
    ``uuid-ossp`` extension if it is not already present.
 
+5. Make sure ``provsql`` is in your ``search_path``. ProvSQL's
+   operators and functions live in the ``provsql`` schema and are
+   resolved through ``search_path`` (see :ref:`search-path` for what
+   goes wrong without it). ``CREATE EXTENSION`` prints a ``NOTICE``
+   if it is missing; the easiest fix is the bundled helper:
+
+   .. code-block:: postgresql
+
+       SELECT provsql.setup_search_path();
+
+   which appends ``provsql`` to the database's ``search_path`` (only
+   new sessions are affected). See :ref:`search-path` for the manual
+   alternative and the details.
+
 Upgrading an Existing Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -289,21 +303,35 @@ Docker Container
 ----------------
 
 For a quick trial without any local installation, a demonstration Docker
-container is available. It is full-featured except for ``c2d`` and
-``minic2d`` support:
+container is available. Alongside the extension and a pre-installed ProvSQL
+Studio it bundles a set of the optional external tools: the ``d4`` and
+``dsharp`` knowledge compilers, the ``ganak``, ``sharpsat-td`` and
+``weightmc`` weighted model counters, and ``graph-easy`` for ASCII circuit
+rendering.
 
 .. code-block:: bash
 
-    docker run inriavalda/provsql
+    docker run -p 5433:5432 -p 8001:8000 inriavalda/provsql
 
-To use a specific release version:
+The ``-p host:container`` flags publish the container's PostgreSQL (5432) and
+ProvSQL Studio (8000) on host ports of your choice, which works uniformly
+across native Docker, Docker Desktop, and rootless podman. The example maps
+them to ``5433`` and ``8001`` to avoid clashing with a PostgreSQL or Studio
+you may already run locally on the default ``5432`` / ``8000``; pick whatever
+free host ports you like. To use a specific release version:
 
 .. code-block:: bash
 
-    docker run inriavalda/provsql:X.Y.Z
+    docker run -p 5433:5432 -p 8001:8000 inriavalda/provsql:X.Y.Z
 
-Follow the on-screen instructions to connect to the PostgreSQL server
-inside the container with a PostgreSQL client.
+Connect with a PostgreSQL client (``psql -h localhost -p 5433 tutorial test``)
+or open Studio at ``http://localhost:8001`` (matching the host ports you
+chose); the container also prints these instructions on startup.
+
+The image is seeded with the same tutorial and case-study databases as the
+ProvSQL Playground (``tutorial``, ``cs1``, ``cs2``, ``cs4``–``cs7``). Studio
+lands on ``tutorial``; switch between them from its connection chip, or point
+``psql`` at any of them (e.g. ``psql -h localhost -p 5433 cs1 test``).
 
 ProvSQL Studio
 --------------

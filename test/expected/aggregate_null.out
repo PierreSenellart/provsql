@@ -1,0 +1,40 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|s|mn|mx|av|cv|cs
+1|30 (*)|10 (*)|20 (*)|15.0000000000000000 (*)|2 (*)|3 (*)
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+having|p
+count(q.k)=0|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+having|p
+count(q.k)>=1|0.7500
+(1 row)
+remove_provenance
+
+(1 row)
+having|p
+count(q.k)<=1|0.7500
+(1 row)
+remove_provenance
+
+(1 row)
+having|p
+count(*)<=1|0.7500
+(1 row)

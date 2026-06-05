@@ -110,7 +110,15 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
 
   switch (type) {
     case gate_value:
-      result = Interval::point(parseDoubleStrict(gc.getExtra(g)));
+      /* A value RangeCheck cannot read as a double (e.g. a text constant
+       * from an agg_token = text comparison) carries no numeric interval
+       * constraint: leave it unconstrained rather than aborting the whole
+       * load-time pass.  Mirrors the "undecidable -> all()" default. */
+      try {
+        result = Interval::point(parseDoubleStrict(gc.getExtra(g)));
+      } catch (const CircuitException &) {
+        result = Interval::all();
+      }
       break;
     case gate_rv: {
       auto spec = parse_distribution_spec(gc.getExtra(g));
@@ -442,7 +450,7 @@ bool asRvVsConstCmp(const GenericCircuit &gc, gate_t cmp_gate,
   /* Recognise scalar-vs-constant cmps where the scalar side is a
    * bare gate_rv (the original use case for the per-cmp resolution
    * pass) or a gate_mixture (so the conditioning walker can extract
-   * intervals on mixture / categorical variables — value-vs-value
+   * intervals on mixture / categorical variables – value-vs-value
    * cmps are folded upstream by RangeCheck before they reach this
    * walker).  Dirac (gate_value) is never the scalar side of a
    * non-trivial cmp at this point; the value-vs-value pair would have
@@ -526,7 +534,7 @@ bool intervalEmpty(Interval i) { return i.lo > i.hi; }
  * which is sound for a superset bound on the conditional support.
  *
  * Cmps that do not interpret as `rv op const` (RV vs RV, arith on
- * either side, agg, …) are silently ignored; they belong to the
+ * either side, agg…) are silently ignored; they belong to the
  * conditioning event but don't constrain a single RV's interval.
  */
 void walkAndConjunctIntervals(
@@ -608,7 +616,7 @@ void walkAndConjunctIntervals(
  * (likewise), and other gate types break the AND chain.
  *
  * Cmps that this pass cannot interpret (RV vs RV, arith on either
- * side, agg, …) are simply ignored: skipping them is sound &ndash; we
+ * side, agg…) are simply ignored: skipping them is sound &ndash; we
  * just have fewer constraints, so we never falsely declare
  * infeasibility we cannot prove.
  */
@@ -1146,6 +1154,18 @@ unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc)
       continue;
     }
 
+    /* Scalar aggregation (no GROUP BY): the single result row always exists, so
+     * a tautological predicate (count >= 0, count > -K, ...) is gate_one --
+     * probability 1, including the empty-input world.  The "group is non-empty"
+     * rewrite below is the grouped semantics (the empty group is no row), which
+     * is exactly the empty-world over-credit the doc comment on
+     * decideAggVsConstCmp warns against; for a scalar agg that world is real. */
+    if ((gc.getInfos(agg_side).second & PROVSQL_AGG_SCALAR_FLAG) != 0) {
+      gc.resolveCmpToBernoulli(c, 1.0);
+      ++resolved;
+      continue;
+    }
+
     /* Gather the per-row K-gates from the agg's semimod children. */
     std::vector<gate_t> ks;
     bool shape_ok = true;
@@ -1427,7 +1447,7 @@ bool eventIsProvablyInfeasible(const GenericCircuit &gc, gate_t root,
   if (!event_root.has_value()) return false;
   const auto et = gc.getGateType(*event_root);
   if (et == gate_one) return false;
-  /* RangeCheck folded the event to false upstream — universal
+  /* RangeCheck folded the event to false upstream – universal
    * signal, independent of root gate type (a constant scalar
    * value paired with an impossible cmp lands here too). */
   if (et == gate_zero) return true;
@@ -1456,7 +1476,7 @@ bool eventIsProvablyInfeasible(const GenericCircuit &gc, gate_t root,
  * outcome masses falling in the interval.  Dirac mass is 1 iff the
  * Dirac value sits in the interval, else 0.  Returns @c std::nullopt
  * when a leaf's spec defeats the closed-form CDF (e.g. non-integer
- * Erlang shape — @c cdfAt returns NaN there).
+ * Erlang shape – @c cdfAt returns NaN there).
  */
 static std::optional<double>
 shape_mass(const ClosedFormShape &s, double lo, double hi)

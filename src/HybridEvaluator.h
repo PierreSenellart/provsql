@@ -20,7 +20,7 @@
  * The simplifier rewrites @c gate_arith gates in-place using closure
  * rules that preserve the gate's scalar value in every world:
  * - Constant folding of @c gate_arith subtrees over only @c gate_value
- *   leaves &mdash; collapses to a single @c gate_value.
+ *   leaves &ndash; collapses to a single @c gate_value.
  * - Multiplicative zero short-circuit: @c TIMES with any constant-zero
  *   wire becomes @c gate_value:0, regardless of the other (possibly
  *   non-constant) wires.
@@ -134,7 +134,7 @@ unsigned runConstantFold(GenericCircuit &gc);
  * residual comparators whose two sides are an entirely continuous
  * island (subtree of @c gate_value, @c gate_rv, @c gate_arith with
  * no Boolean structure underneath) but whose specific shape is not
- * one the analytic CDF resolver handles &mdash; e.g.
+ * one the analytic CDF resolver handles &ndash; e.g.
  * <tt>Normal + Uniform &gt; 0</tt>, heterogeneous-rate sums of
  * exponentials, or other compositions the simplifier could not fold
  * to a bare distribution leaf.

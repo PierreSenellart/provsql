@@ -26,3 +26,7 @@ studio/dist/
 
 # Release-notes draft, fed to release.sh's $EDITOR step
 RELEASE_NOTES_*.md
+
+# WASM build tree: the pglite clone + matched-build artefacts produced by
+# `make wasm` (wasm/build-wasm.sh, WASM_BUILD_DIR default). Heavy, regenerable.
+wasm/.build/

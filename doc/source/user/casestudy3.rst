@@ -56,7 +56,7 @@ and run it from the directory containing the four GTFS files:
 
 This creates four tables:
 
-* ``routes`` – transit lines (RER A, B, M1, bus 91, …)
+* ``routes`` – transit lines (RER A, B, M1, bus 91…)
 * ``stops`` – individual stop points with GPS coordinates and a
   ``wheelchair_boarding`` flag
 * ``trips`` – individual scheduled journeys, each with a

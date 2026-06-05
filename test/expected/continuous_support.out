@@ -41,8 +41,8 @@ NOTICE:  agg_sum_support_lo=-20
 NOTICE:  agg_sum_support_hi=40
 NOTICE:  agg_min_support_lo=-20
 NOTICE:  agg_min_support_hi=30
-NOTICE:  agg_min_uncond_lo=-20, hi=Infinity
-NOTICE:  agg_max_uncond_lo=-Infinity, hi=30
+NOTICE:  agg_min_uncond_lo=-20, hi=30
+NOTICE:  agg_max_uncond_lo=-20, hi=30
 NOTICE:  agg_min_cond_lo=-20, hi=30
 NOTICE:  agg_max_cond_lo=-20, hi=30
 NOTICE:  agg_avg_support_raises_specific=t

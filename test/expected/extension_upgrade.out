@@ -57,3 +57,12 @@ annotation
 tool_registry_seeded
 t
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+scalar_count_col_empty_world
+0.5000
+(1 row)

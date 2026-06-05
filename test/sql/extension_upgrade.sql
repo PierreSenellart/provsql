@@ -127,9 +127,31 @@ SELECT tool_available('provsql-no-such-tool') AS bogus_tool_available;
 SELECT get_gate_type(annotate(gate_one(), 'cert')) AS annotation_gate_type;
 SELECT count(*) > 0 AS tool_registry_seeded FROM tools;
 
+-- 1.9.0 surface check: empty-group-faithful scalar aggregation.  A scalar (no
+-- GROUP BY) aggregate now calls the 5-argument provenance_aggregate (the
+-- scalar-aggregation flag), so this query would fail outright ("function
+-- provenance_aggregate(...) does not exist") if the upgrade left the old 4-arg
+-- function.  count(col) skips NULL inputs (the NULL-skipping provenance_semimod)
+-- but its empty group is the real value 0, so a scalar HAVING count(col)=0
+-- includes the all-absent world.  Over {10, NULL} @ p=0.5: count(x)=0 holds
+-- exactly when the non-NULL row 10 is absent (the NULL row is free, present or
+-- not), so the probability is P(10 absent)=0.5 -- NOT 0.25 (which is what
+-- dropping the empty world would give).  Exercises the 5-arg provenance_aggregate,
+-- the NULL-skip semimod, and the count(col) value-aware HAVING enumeration.
+CREATE TABLE upgrade_cnt (x int);
+INSERT INTO upgrade_cnt VALUES (10), (NULL);
+SELECT add_provenance('upgrade_cnt');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM upgrade_cnt; END $$;
+CREATE TABLE upgrade_cnt_r AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM upgrade_cnt HAVING count(x) = 0;
+SELECT remove_provenance('upgrade_cnt_r');
+SELECT p AS scalar_count_col_empty_world FROM upgrade_cnt_r;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
-           upgrade_smoke_right, upgrade_safe_q, upgrade_kc;
+           upgrade_smoke_right, upgrade_safe_q, upgrade_kc,
+           upgrade_cnt, upgrade_cnt_r;
 RESET client_min_messages;
 
 \else

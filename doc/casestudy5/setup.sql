@@ -9,6 +9,7 @@ CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
 
 SET search_path TO public, provsql;
 
+DROP TABLE IF EXISTS photo CASCADE;
 CREATE TABLE photo (
     id integer PRIMARY KEY,
     station text NOT NULL,
@@ -16,12 +17,14 @@ CREATE TABLE photo (
     filename text NOT NULL
 );
 
+DROP TABLE IF EXISTS species CASCADE;
 CREATE TABLE species (
     id integer PRIMARY KEY,
     name text NOT NULL,
     category text NOT NULL  -- 'mammal', 'bird', 'reptile'
 );
 
+DROP TABLE IF EXISTS detection CASCADE;
 CREATE TABLE detection (
     photo_id   integer NOT NULL,
     bbox_id    integer NOT NULL,
@@ -29,6 +32,7 @@ CREATE TABLE detection (
     confidence double precision NOT NULL
 );
 
+TRUNCATE photo;
 COPY photo (id, station, date, filename) FROM stdin;
 1	Loch Torridon	2024-06-15	LT-20240615-0001.jpg
 2	Loch Torridon	2024-06-15	LT-20240615-0002.jpg
@@ -62,6 +66,7 @@ COPY photo (id, station, date, filename) FROM stdin;
 30	Cairngorms	2024-10-01	CG-20241001-0001.jpg
 \.
 
+TRUNCATE species;
 COPY species (id, name, category) FROM stdin;
 1	Red Deer	mammal
 2	Roe Deer	mammal
@@ -86,6 +91,7 @@ COPY species (id, name, category) FROM stdin;
 -- Photo 9: deer + high-confidence dog (excluded from "deer, no dogs").
 -- Photo 14: deer + low-confidence near-miss dog (interesting EXCEPT case).
 -- Photo 22: ambiguous box plus several clear ones (mixed herd at Rannoch).
+TRUNCATE detection;
 COPY detection (photo_id, bbox_id, species_id, confidence) FROM stdin;
 1	1	1	0.78
 1	2	1	0.65

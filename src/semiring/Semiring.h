@@ -168,7 +168,7 @@ virtual value_type semimod(value_type x, value_type s) const {
 /**
  * @brief Evaluate an aggregation gate.
  *
- * @param op  The aggregation function (COUNT, SUM, MIN, …).
+ * @param op  The aggregation function (COUNT, SUM, MIN…).
  * @param s   List of child semiring values to aggregate.
  * @return    The aggregated value.
  * @throws SemiringException if not overridden.

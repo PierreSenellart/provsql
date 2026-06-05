@@ -36,7 +36,7 @@ SELECT abs(expected(rv, rv_cmp_gt(rv, as_random(3))) - ref.mean_ref) < 1e-12
 WITH r AS (SELECT provsql.normal(0, 1) AS rv)
 SELECT s.lo = 3 AS trunc_normal_lo_eq_3,
        s.hi = 'Infinity'::float8 AS trunc_normal_hi_inf
-  FROM r, provsql.rv_support(rv, rv_cmp_gt(rv, as_random(3))) s;
+  FROM r, provsql.rv_support(rv::uuid, rv_cmp_gt(rv, as_random(3))) s;
 
 -- ---------------------------------------------------------------------
 -- 2. Truncated Uniform with two cmps (AND-conjunct walker).
@@ -57,7 +57,7 @@ BEGIN
   RAISE NOTICE 'trunc_uniform_variance=%',
     abs(provsql.variance(rv, ev) - 4.0/3.0) < 1e-12;
   RAISE NOTICE 'trunc_uniform_support=%',
-    (SELECT s.lo = 3 AND s.hi = 7 FROM provsql.rv_support(rv, ev) s);
+    (SELECT s.lo = 3 AND s.hi = 7 FROM provsql.rv_support(rv::uuid, ev) s);
 END
 $$;
 
@@ -161,7 +161,7 @@ WITH r AS (SELECT provsql.uniform(0, 10) AS rv),
          FROM r
      )
 SELECT bool_and(v > 3 AND v < 7) AS samples_in_truncation
-  FROM s, provsql.rv_sample(rv, 100, ev) AS v;
+  FROM s, provsql.rv_sample(rv::uuid, 100, ev) AS v;
 
 -- Histogram bin edges line up with the truncated support.
 WITH r AS (SELECT provsql.uniform(0, 10) AS rv),
@@ -176,7 +176,7 @@ SELECT (h.first_bin_lo)::numeric = 3 AS hist_lo_eq_3,
   FROM s,
        LATERAL (
          WITH bins AS (
-           SELECT jsonb_array_elements(provsql.rv_histogram(rv, 10, ev)) AS b
+           SELECT jsonb_array_elements(provsql.rv_histogram(rv::uuid, 10, ev)) AS b
          )
          SELECT (SELECT (b->>'bin_lo')::float8 FROM bins LIMIT 1) AS first_bin_lo,
                 (SELECT (b->>'bin_hi')::float8 FROM bins
@@ -225,7 +225,7 @@ $$;
 -- ---------------------------------------------------------------------
 -- 8b. Closed-form-aware infeasibility short-circuit.
 --     For a bare gate_rv root with an event provably empty against
---     the RV's support (Uniform(0, 10) | X > 100 — the conjunct
+--     the RV's support (Uniform(0, 10) | X > 100 – the conjunct
 --     intersects to an empty interval), eventIsProvablyInfeasible
 --     spots it before any MC sampling.  Proof that the short-circuit
 --     fires: set provsql.rv_mc_samples = 0, which would otherwise
@@ -304,7 +304,7 @@ WITH r AS (SELECT provsql.normal(0, 1) AS rv),
      )
 SELECT s.lo = 3 AS support_lo_eq_3,
        s.hi = 'Infinity'::float8 AS support_hi_inf
-  FROM ev, provsql.rv_support(rv, wrapped) s;
+  FROM ev, provsql.rv_support(rv::uuid, wrapped) s;
 
 -- 9c. δ around an AND-conjunction: the walker must descend through δ
 -- AND recurse into the inner gate_times to collect both cmps.
@@ -338,7 +338,7 @@ WITH r AS (SELECT provsql.uniform(0, 10) AS rv),
          FROM r
      )
 SELECT bool_and(v > 3 AND v < 7) AS rv_sample_respects_delta_event
-  FROM s, provsql.rv_sample(rv, 100, wrapped) AS v;
+  FROM s, provsql.rv_sample(rv::uuid, 100, wrapped) AS v;
 
 -- Histogram bin edges line up with the truncated support under δ.
 WITH r AS (SELECT provsql.uniform(0, 10) AS rv),
@@ -354,7 +354,7 @@ SELECT (h.first_bin_lo)::numeric = 3 AS hist_lo_eq_3,
   FROM s,
        LATERAL (
          WITH bins AS (
-           SELECT jsonb_array_elements(provsql.rv_histogram(rv, 10, wrapped)) AS b
+           SELECT jsonb_array_elements(provsql.rv_histogram(rv::uuid, 10, wrapped)) AS b
          )
          SELECT (SELECT (b->>'bin_lo')::float8 FROM bins LIMIT 1) AS first_bin_lo,
                 (SELECT (b->>'bin_hi')::float8 FROM bins

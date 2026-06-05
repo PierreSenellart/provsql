@@ -5,6 +5,7 @@ CREATE EXTENSION IF NOT EXISTS provsql WITH SCHEMA public;
 
 -- Example tables
 
+DROP TABLE IF EXISTS public.person CASCADE;
 CREATE TABLE public.person (
     id integer NOT NULL,
     name text NOT NULL,
@@ -12,17 +13,20 @@ CREATE TABLE public.person (
     height smallint
 );
 
+DROP TABLE IF EXISTS public.reliability CASCADE;
 CREATE TABLE public.reliability (
     person integer NOT NULL,
     score double precision NOT NULL
 );
 
+DROP TABLE IF EXISTS public.room CASCADE;
 CREATE TABLE public.room (
     id integer NOT NULL,
     name text NOT NULL,
     area smallint
 );
 
+DROP TABLE IF EXISTS public.sightings CASCADE;
 CREATE TABLE public.sightings (
     "time" time without time zone NOT NULL,
     person integer NOT NULL,
@@ -30,6 +34,7 @@ CREATE TABLE public.sightings (
     witness integer
 );
 
+TRUNCATE public.person;
 COPY public.person (id, name, date_of_birth, height) FROM stdin;
 0	Titus	1969-04-03	163
 1	Norah	1983-10-15	194
@@ -53,6 +58,7 @@ COPY public.person (id, name, date_of_birth, height) FROM stdin;
 19	Kyra	1966-05-04	202
 \.
 
+TRUNCATE public.reliability;
 COPY public.reliability (person, score) FROM stdin;
 0	0.23828493492944236
 1	0.657319818187148019
@@ -75,6 +81,7 @@ COPY public.reliability (person, score) FROM stdin;
 19	0.681836780693319988
 \.
 
+TRUNCATE public.room;
 COPY public.room (id, name, area) FROM stdin;
 0	Dining room	23
 1	Blue bedroom	20
@@ -88,6 +95,7 @@ COPY public.room (id, name, area) FROM stdin;
 9	Library	27
 \.
 
+TRUNCATE public.sightings;
 COPY public.sightings ("time", person, room, witness) FROM stdin;
 02:30:00	19	8	0
 05:00:00	11	9	0
@@ -299,23 +307,30 @@ COPY public.sightings ("time", person, room, witness) FROM stdin;
 15:30:00	5	5	19
 \.
 
+ALTER TABLE ONLY public.person DROP CONSTRAINT IF EXISTS person_pkey;
 ALTER TABLE ONLY public.person
     ADD CONSTRAINT person_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.reliability DROP CONSTRAINT IF EXISTS reliability_pkey;
 ALTER TABLE ONLY public.reliability
     ADD CONSTRAINT reliability_pkey PRIMARY KEY (person);
 
+ALTER TABLE ONLY public.room DROP CONSTRAINT IF EXISTS room_pkey;
 ALTER TABLE ONLY public.room
     ADD CONSTRAINT room_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.reliability DROP CONSTRAINT IF EXISTS reliability_person_fkey;
 ALTER TABLE ONLY public.reliability
     ADD CONSTRAINT reliability_person_fkey FOREIGN KEY (person) REFERENCES public.person(id);
 
+ALTER TABLE ONLY public.sightings DROP CONSTRAINT IF EXISTS sightings_person_fkey;
 ALTER TABLE ONLY public.sightings
     ADD CONSTRAINT sightings_person_fkey FOREIGN KEY (person) REFERENCES public.person(id);
 
+ALTER TABLE ONLY public.sightings DROP CONSTRAINT IF EXISTS sightings_room_fkey;
 ALTER TABLE ONLY public.sightings
     ADD CONSTRAINT sightings_room_fkey FOREIGN KEY (room) REFERENCES public.room(id);
 
+ALTER TABLE ONLY public.sightings DROP CONSTRAINT IF EXISTS sightings_witness_fkey;
 ALTER TABLE ONLY public.sightings
     ADD CONSTRAINT sightings_witness_fkey FOREIGN KEY (witness) REFERENCES public.person(id);

@@ -35,6 +35,7 @@ DROP TABLE IF EXISTS bid_label, expertise_label, topic_of_label,
                      extends_label, coreview_label;
 
 -- Dimension tables (deterministic, no provenance).
+DROP TABLE IF EXISTS reviewers CASCADE;
 CREATE TABLE reviewers (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 INSERT INTO reviewers VALUES
   ('r1','Alice'), ('r2','Bob'),   ('r3','Carol'), ('r4','Dave'),
@@ -42,6 +43,7 @@ INSERT INTO reviewers VALUES
   ('r9','Ivan'),  ('r10','Judy'), ('r11','Karl'), ('r12','Lara'),
   ('r13','Mona'), ('r14','Nick');
 
+DROP TABLE IF EXISTS papers CASCADE;
 CREATE TABLE papers (id TEXT PRIMARY KEY, title TEXT NOT NULL);
 INSERT INTO papers VALUES
   ('p1', 'A Provenance Circuit Calculus'),
@@ -52,6 +54,7 @@ INSERT INTO papers VALUES
   ('p6', 'Knowledge Compilation in Practice'),
   ('p7', 'Repair-Key Semantics for Assignments');
 
+DROP TABLE IF EXISTS topics CASCADE;
 CREATE TABLE topics (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 INSERT INTO topics VALUES
   ('t1','databases'), ('t2','logic'), ('t3','systems'), ('t4','theory');
@@ -59,6 +62,7 @@ INSERT INTO topics VALUES
 -- bid(reviewer, paper): the reviewer offered to review the paper; conf
 -- is how firm the bid is.  Several databases-experts bid on p1, which is
 -- what makes p1's coverage interesting.
+DROP TABLE IF EXISTS bid CASCADE;
 CREATE TABLE bid (
   reviewer TEXT NOT NULL REFERENCES reviewers(id),
   paper    TEXT NOT NULL REFERENCES papers(id),
@@ -92,6 +96,7 @@ SELECT set_prob(provenance(), conf) FROM bid;
 -- query stops being safe.  Several reviewers share each area on purpose
 -- (five in databases), so a paper's coverage lineage is genuinely
 -- entangled (the same topic_of leaf is shared across co-experts).
+DROP TABLE IF EXISTS expertise CASCADE;
 CREATE TABLE expertise (
   reviewer TEXT NOT NULL REFERENCES reviewers(id),
   topic    TEXT NOT NULL REFERENCES topics(id),
@@ -111,6 +116,7 @@ SELECT set_prob(provenance(), conf) FROM expertise;
 -- topic_of(paper, topic): the paper is about the topic.  Papers overlap
 -- on topics (p1, p2, p4, p6 all touch databases), which is what couples
 -- their coverage when the paper variable is left free.
+DROP TABLE IF EXISTS topic_of CASCADE;
 CREATE TABLE topic_of (
   paper TEXT NOT NULL REFERENCES papers(id),
   topic TEXT NOT NULL REFERENCES topics(id),
@@ -135,6 +141,7 @@ SELECT set_prob(provenance(), conf) FROM topic_of;
 -- the recursive "what does p transitively build on?" query is read-once
 -- per ancestor and works for any semiring (used in the recursive section
 -- with sr_formula and probability).  Requires PostgreSQL 15+ to query.
+DROP TABLE IF EXISTS extends CASCADE;
 CREATE TABLE extends (
   citing TEXT NOT NULL REFERENCES papers(id),
   cited  TEXT NOT NULL REFERENCES papers(id),
@@ -155,6 +162,7 @@ SELECT set_prob(provenance(), conf) FROM extends;
 -- connected to?" query only terminates under provsql.boolean_provenance,
 -- where it computes connection *reliability* (a network-reliability /
 -- #P-hard flavour).  Requires PostgreSQL 15+ to query.
+DROP TABLE IF EXISTS coreview CASCADE;
 CREATE TABLE coreview (
   a    TEXT NOT NULL REFERENCES reviewers(id),
   b    TEXT NOT NULL REFERENCES reviewers(id),
@@ -177,6 +185,7 @@ SELECT set_prob(provenance(), conf) FROM coreview;
 -- assigned to.  repair_key on `reviewer` makes the rows for one reviewer
 -- mutually exclusive (each reviewer ends up on exactly one paper), so a
 -- query over this table carries correlated provenance.
+DROP TABLE IF EXISTS assignment CASCADE;
 CREATE TABLE assignment (
   reviewer TEXT NOT NULL REFERENCES reviewers(id),
   paper    TEXT NOT NULL REFERENCES papers(id)
@@ -204,6 +213,9 @@ SELECT repair_key('assignment', 'reviewer');
 -- Olga has no `expertise` row and the submission papers carry no
 -- `topic_of`, so none of this data reaches the coverage / recursive
 -- queries (which all join through expertise / topic_of / the graphs).
+DELETE FROM bid WHERE reviewer = 'r15';
+DELETE FROM papers WHERE id LIKE 'q%';
+DELETE FROM reviewers WHERE id = 'r15';
 INSERT INTO reviewers VALUES ('r15','Olga');
 INSERT INTO papers SELECT 'q'||to_char(g,'FM00'), format('Submission %s', g)
   FROM generate_series(1,24) g;
@@ -212,6 +224,7 @@ INSERT INTO bid(reviewer, paper, conf, lbl)
   FROM papers p WHERE p.id LIKE 'q%';
 SELECT set_prob(provenance(), 0.5) FROM bid WHERE reviewer = 'r15';
 
+DROP TABLE IF EXISTS recommend CASCADE;
 CREATE TABLE recommend (
   reviewer TEXT NOT NULL REFERENCES reviewers(id),
   paper    TEXT NOT NULL REFERENCES papers(id),
@@ -226,6 +239,7 @@ SELECT set_prob(provenance(), 0.4) FROM recommend;
 SELECT create_provenance_mapping('recommend_label', 'recommend', 'lbl');
 ALTER TABLE recommend DROP COLUMN lbl;
 
+DROP TABLE IF EXISTS champion CASCADE;
 CREATE TABLE champion (
   reviewer TEXT NOT NULL REFERENCES reviewers(id),
   paper    TEXT NOT NULL REFERENCES papers(id),
@@ -254,6 +268,7 @@ SELECT create_provenance_mapping('coreview_label', 'coreview', 'lbl');
 -- text-based semiring (sr_formula / sr_why / sr_how) can name the leaves of
 -- a query spanning several relations through one mapping argument, rather
 -- than picking the relation-specific mapping each time.
+DROP TABLE IF EXISTS label CASCADE;
 CREATE TABLE label AS
             SELECT value, provenance FROM bid_label
   UNION ALL SELECT value, provenance FROM expertise_label
