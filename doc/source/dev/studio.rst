@@ -190,9 +190,38 @@ runtime, fonts are bundled).
        options + GUC overrides). POST validates each field via
        :func:`provsql_studio.db.validate_panel_option` before
        persisting; rejection comes back inline.
+   * - ``/api/nb/session`` (+ ``/<id>``, ``/<id>/close``,
+       ``/<id>/status``)
+     - POST / DELETE / GET
+     - Notebook-kernel lifecycle: create a pinned session (429 at
+       the ``MAX_KERNELS`` cap), delete it (``/close`` is the
+       ``sendBeacon``-able POST twin used on pagehide), poll
+       liveness. See `Notebook Kernels`_.
+   * - ``/api/nb/exec``
+     - POST
+     - Run one notebook cell on its kernel: ``exec_batch_on``
+       semantics inside a per-cell transaction, per-cell GUC
+       overrides (the provenance-scheme chip), 409 when the
+       kernel is mid-cell, ``kernel_dead`` flagged when the
+       connection is left unusable.
+   * - ``/api/nb/examples`` (+ ``/<name>``)
+     - GET
+     - The bundled example notebooks (generated from the user
+       guide): list with titles, and the raw ``.ipynb`` document.
+   * - ``/api/databases``
+     - POST
+     - Create a database and best-effort install the provsql
+       extension in it; backs the binding banner's *Create*
+       action.
+   * - ``/api/database/empty``
+     - POST
+     - Drop every user schema in the connected database,
+       reinstall provsql, and bounce the pool -- the nav-bar
+       "empty database" broom.
 
-The two write endpoints that mutate the database
-(``/api/set_prob``, ``/api/exec``) trust the connecting role for
+The write endpoints that mutate the database (``/api/set_prob``,
+``/api/exec``, ``/api/nb/exec``, ``/api/databases``,
+``/api/database/empty``) trust the connecting role for
 authorization: Studio does not enforce a read-only PostgreSQL
 role itself. Connect with the privileges your workflow expects.
 
@@ -200,10 +229,12 @@ role itself. Connect with the privileges your workflow expects.
 Frontend
 --------
 
-The single ``index.html`` is rendered identically for both modes;
+The single ``index.html`` is rendered identically for every mode;
 ``app.js`` reads ``document.body.classList`` to discover the active
 mode and lazy-loads ``circuit.js`` only when the body carries
-``mode-circuit``.
+``mode-circuit`` and ``notebook.js`` (plus the vendored
+marked + DOMPurify Markdown renderer under ``static/vendor/``) only
+under ``mode-notebook``.
 
 A small ``window.__provsqlStudio`` shared-state object exposes the
 current mode and a few utilities (``escapeHtml`` / ``escapeAttr`` /
@@ -264,6 +295,57 @@ circuit whose folded shape may have changed.
 ``SET LOCAL`` scopes the change to the transaction so a parallel
 request on the same connection cannot see the override.
 
+
+Notebook Kernels
+----------------
+
+Notebook mode replaces the per-request pool checkout with a **pinned
+connection per kernel**. ``db.open_kernel_connection`` opens it with
+the same session defaults as the pool (``configure_connection``) and
+flips it to autocommit: nothing dangles *between* cells, while
+anything a cell commits -- and any session-scoped object: temporary
+tables, plain ``SET`` s, prepared statements -- persists for the
+kernel's lifetime. That is the Jupyter state model with the database
+session in the interpreter's role.
+
+``db.exec_kernel_cell`` runs one cell inside ``conn.transaction()``,
+reusing ``exec_batch_on`` verbatim (``SET LOCAL`` prelude including
+the per-cell scheme override, classifier savepoint, where-wrap, COPY
+blocks, halt-on-first-error), so cell semantics match the query box
+exactly; a failed cell rolls back cleanly while earlier committed
+cells persist. At the transaction boundary it distinguishes a *dead*
+kernel (wedged mid-protocol, broken socket -- detected via
+``conn.closed`` / ``conn.broken`` / ``pgconn.transaction_status``)
+from a legitimate COMMIT-time failure: only the former closes the
+connection and tells the front-end to discard the kernel.
+
+The registry in ``app.extensions["provsql_kernels"]`` maps session
+ids to entries ``{conn, lock, dsn, db, pid, last_used}``. Each entry
+has its own lock, so cells on one kernel serialize (a concurrent
+``/api/nb/exec`` gets a 409 ``kernel_busy``) while different kernels
+run concurrently. Kernels idle past ``KERNEL_IDLE_TIMEOUT`` are
+garbage-collected lazily on the next kernel-touching request; a
+connection switch drops them all (they are pinned to the old DSN).
+``MAX_KERNELS`` caps the registry (429 on create); the front-end
+closes its kernel on pagehide via ``navigator.sendBeacon`` to the
+POST twin ``/api/nb/session/<id>/close``.
+
+The ``.ipynb`` mapping is nbformat v4: SQL cells are ``code`` cells
+whose outputs carry the block list under
+``application/vnd.provsql.blocks+json`` plus a ``text/html`` snapshot
+for external viewers; circuit cells are ``code`` cells with a
+SQL-comment source, the scene JSON under
+``application/vnd.provsql.scene+json`` and a self-contained
+``image/svg+xml`` snapshot; evaluation cells record their invocation
+in ``metadata.provsql`` and the result under
+``application/vnd.provsql.eval+json`` plus ``text/plain``. Studio
+re-renders from the ``vnd.provsql`` payloads and never consumes the
+viewer fallbacks; GitHub / nbviewer do the opposite. The notebook's
+database binding is ``metadata.provsql.database`` (name only).
+
+In the Playground, kernels map onto the single shared PGlite session;
+see :doc:`playground` for the single-session caveats (restart as
+``DISCARD ALL``, the beacon bridge, examples in the Pyodide FS).
 
 Config Persistence
 ------------------

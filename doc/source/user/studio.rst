@@ -4,7 +4,7 @@ ProvSQL Studio
 ProvSQL Studio is a Python-backed web UI for the ProvSQL extension. It
 runs as a separate package, connects to any PostgreSQL database with
 ProvSQL installed, and lets you inspect provenance interactively
-through two complementary inspection modes:
+through three complementary modes:
 
 * **Circuit mode** renders the provenance directed acyclic graph
   (DAG) behind a result's UUID or aggregate token, with frontier
@@ -13,9 +13,12 @@ through two complementary inspection modes:
 * **Where mode** highlights the source cells that contributed to each
   output value, against the live content of the provenance-tracked
   relations.
+* **Notebook mode** is a Jupyter-style notebook -- SQL, Markdown,
+  circuit and evaluation cells over a persistent database session --
+  saved and loaded as standard ``.ipynb`` files.
 
 A schema panel, a configuration panel, and a mode-switcher round out
-the UI; all three are described below.
+the UI; all are described below.
 
 .. _playground-note:
 
@@ -649,6 +652,190 @@ silently drops the wrap and surfaces an INFO banner instead of
 raising. This is the right default for case-study scripts that do
 bulk setup before the first interesting ``SELECT``.
 
+.. _studio-notebook-mode:
+
+Notebook mode
+-------------
+
+Notebook mode is a Jupyter-style notebook over your ProvSQL database:
+an ordered list of cells -- SQL, Markdown, circuit snapshots, semiring
+evaluations -- executed against a persistent database session (the
+*kernel*) and saved as a standard ``.ipynb`` file. It is the right
+mode for narrated, replayable analyses: the bundled tutorial and case
+studies (see `Example notebooks`_) are notebooks.
+
+.. figure:: /_static/studio/notebook-mode.png
+   :alt: Studio Notebook mode showing the executed tutorial notebook;
+         tab bar, toolbar with the kernel chip, outline sidebar, and
+         rendered Markdown and SQL cells.
+
+   Notebook mode with the bundled tutorial open: the tab bar (one tab
+   per notebook), the toolbar with the kernel chip, and the compact
+   outline/relations sidebar.
+
+Cells and the kernel
+^^^^^^^^^^^^^^^^^^^^
+
+**SQL cells** run on the notebook's kernel: a dedicated database
+session that persists across cells, so temporary tables, ``SET``
+commands, and prepared statements made by one cell are visible to the
+next -- the Jupyter state model, with the database session playing the
+part of the Python interpreter. Each cell executes in its own
+transaction: a failed cell rolls back cleanly (the error lands in the
+cell's output) while previously committed cells persist. Execution
+counters (``[1]``, ``[2]``, …) track what ran on the current kernel,
+and results render through the same table renderer as the query box --
+provenance pills, clickable UUID cells and all.
+
+The kernel starts lazily on the first run and its chip in the toolbar
+shows the backend pid and database. :guilabel:`Run all` executes the
+cells top to bottom; :guilabel:`Interrupt` cancels the statement in
+flight; :guilabel:`Restart kernel` discards the session (temporary
+tables and session ``SET`` s are lost, counters reset), which is the
+clean-slate button when state has drifted. Idle kernels are dropped
+server-side after a timeout, and a connection switch drops them all;
+the front-end simply starts a fresh kernel on the next run.
+
+**Markdown cells** render GitHub-flavoured Markdown; fenced code
+blocks tagged ``sql`` get the same syntax highlighting as the SQL
+editors. Double-click (or press :kbd:`Enter`) to edit, click away (or
+:kbd:`Esc`) to render.
+
+Keyboard shortcuts
+^^^^^^^^^^^^^^^^^^
+
+The keymap follows Jupyter's two-mode model: *command mode* acts on
+the selected cell (highlighted border), *edit mode* types into it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Key
+     - Action
+   * - :kbd:`Enter` / :kbd:`Esc`
+     - Enter / leave edit mode on the selected cell.
+   * - :kbd:`Ctrl+Enter`
+     - Run the cell (render, for a Markdown cell), stay on it.
+   * - :kbd:`Shift+Enter`
+     - Run, then select the next cell; at the last cell, create a
+       fresh SQL cell below and edit it.
+   * - :kbd:`Alt+Enter`
+     - Run, then insert a fresh SQL cell below and edit it.
+   * - :kbd:`a` / :kbd:`b`
+     - Insert a SQL cell above / below.
+   * - :kbd:`d d` / :kbd:`z`
+     - Delete the selected cell / undo the deletion.
+   * - :kbd:`m` / :kbd:`y`
+     - Convert to Markdown / back to SQL. A non-empty SQL source is
+       wrapped in an ``sql``-tagged code fence on the way to Markdown
+       and unwrapped on the way back.
+   * - :kbd:`j` / :kbd:`k` (or arrows)
+     - Select the next / previous cell.
+
+Circuit and evaluation cells
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Clicking a provenance UUID in a result inserts a **circuit cell**
+below the query: a snapshot of the provenance DAG behind that token,
+painted with the same gate glyphs as Circuit mode (no depth control --
+the fetch is capped like Circuit mode's initial render). Clicking a
+different UUID retargets the same cell; the :guilabel:`Circuit mode`
+button jumps to the full canvas (frontier expansion, inspector,
+evaluation strip) preloaded with the token.
+
+For a plain provenance token, the circuit cell offers
+:guilabel:`Evaluate`, which inserts an **evaluation cell**: a compiled
+semiring or probability method, optional free-text arguments and
+provenance mapping, run against the cell's token. The invocation and
+its result are saved with the notebook, so a loaded notebook shows its
+evaluations without recomputing them. (Aggregate and
+random-variable tokens get no Evaluate button: their dedicated
+dispatch -- distribution profiles, moments, aggregate inspection --
+lives in Circuit mode, one jump away.)
+
+.. figure:: /_static/studio/notebook-circuit-cell.png
+   :alt: A circuit cell showing a small plus-rooted DAG with monus and
+         input gates, and below it an evaluation cell with the exact
+         probability of the token.
+
+   A circuit cell (one suspect's provenance in the tutorial) and its
+   evaluation cell: probability/exact on the pinned token.
+
+Provenance scheme
+^^^^^^^^^^^^^^^^^
+
+The toolbar's :guilabel:`Provenance scheme` selector is the notebook's
+default (the same three-way switch as the query box, see
+`Per-query toggles`_); each SQL cell can override it with the small
+scheme chip in its actions, cycled per cell and honoured at run time.
+Per-cell overrides are what make mixed notebooks work -- e.g. one
+recursive-CTE cell running under the Boolean scheme inside an
+otherwise standard-provenance notebook.
+
+Tabs and database bindings
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A notebook is not the whole program: it runs against a *database*
+whose state persists beyond it. Every notebook is therefore **bound**
+to the database it was authored against (recorded in the ``.ipynb``
+metadata -- the name only, never credentials), and the tab bar shows
+one tab per open notebook, named after its first level-1 Markdown
+heading. Loading a notebook always opens a new tab, bound per its
+metadata.
+
+When a tab's binding differs from the live connection, a banner says
+so and offers the three sensible moves -- switch the connection to the
+bound database, create it if it does not exist (the scratch-database
+escape hatch for hermetic runs), or rebind the notebook to the current
+database. Nothing switches silently.
+
+.. figure:: /_static/studio/notebook-binding-banner.png
+   :alt: The binding banner reading 'This notebook is bound to cs1;
+         you are connected to tutorial', with Switch and Rebind
+         buttons.
+
+   The binding banner: this notebook expects ``cs1`` but the
+   connection is on ``tutorial``.
+
+Saving, loading, autosave
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:guilabel:`Save` downloads the notebook as an nbformat-v4 ``.ipynb``
+-- directly openable in Jupyter-aware tooling. Cell outputs are
+included with standard MIME fallbacks (HTML tables, self-contained
+SVG circuit snapshots, plain-text evaluation results), so GitHub and
+nbviewer render a saved notebook as a readable static document;
+Studio itself re-renders from richer payloads stored alongside under
+``application/vnd.provsql.*`` keys. :guilabel:`Load` opens an
+``.ipynb`` in a new tab. Between saves, every tab autosaves to the
+browser's local storage, surviving reloads and mode switches.
+
+.. _studio-example-notebooks:
+
+Example notebooks
+^^^^^^^^^^^^^^^^^
+
+The :guilabel:`Open example…` menu lists the bundled notebooks: this
+manual's tutorial and case studies, generated from the same sources as
+the chapters you are reading. Each is self-establishing -- it opens
+with idempotent setup cells (schema, data, ``add_provenance``) -- so
+*create a fresh database, Run all* reproduces the whole study from one
+file. The ``/notebook?nb=<name>`` deep link opens an example directly.
+
+Notebook mode in the Playground
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Notebook mode works in the :ref:`Playground <playground-note>`, with
+one caveat: the in-browser PostgreSQL has a single session, shared by
+every notebook tab's kernel and by the other API calls. Kernel state
+is therefore visible across tabs, and restarting any kernel (mapped
+onto ``DISCARD ALL``) resets them all. The binding banner's
+database-creation action works there too, and
+``?nb=<name>`` deep links open the bundled examples --
+e.g. `provsql.org/playground/?nb=tutorial
+<https://provsql.org/playground/?nb=tutorial>`_.
+
 .. _studio-schema-panel:
 
 Schema panel
@@ -822,8 +1009,9 @@ the panel read-only.
 Mode-switching
 --------------
 
-The mode tabs in the top nav switch between Where and Circuit. A
-switch carries the current SQL forward via ``sessionStorage``; it
+The mode tabs in the top nav switch between Where, Circuit, and
+Notebook. A switch carries the current SQL forward via
+``sessionStorage`` (in Notebook mode, the selected cell's SQL); it
 auto-replays only when the user just ran the query, so unrun drafts
 and plain reloads never auto-execute (important for side-effecting
 statements like :sqlfunc:`add_provenance`).
@@ -831,7 +1019,10 @@ statements like :sqlfunc:`add_provenance`).
 In Where mode, every result row gets a :guilabel:`→ Circuit` button that
 switches to Circuit mode and pre-loads the circuit for that row's
 provenance UUID, so a hover-and-trace exploration can cross over to
-the DAG without retyping the query.
+the DAG without retyping the query. In Notebook mode, the per-cell
+:guilabel:`open in Circuit mode` action and the circuit cells'
+:guilabel:`Circuit mode` button do the same; switching back returns
+to the same notebook, selection and scroll position included.
 
 Limitations
 -----------
