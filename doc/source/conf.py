@@ -2,7 +2,7 @@ project = 'ProvSQL'
 copyright = '2025, Pierre Senellart'
 author = 'Pierre Senellart'
 
-extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton', 'sphinx.ext.imgmath']
+extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton', 'sphinx.ext.imgmath', 'sphinx_sitemap']
 
 # Render math at build time as SVG via LaTeX + dvisvgm rather than
 # letting Sphinx's default MathJax handler fetch
@@ -50,6 +50,13 @@ class PDFLinkStyle(UnsrtStyle):
 register_plugin('pybtex.style.formatting', 'pdf_link', PDFLinkStyle)
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+
+# Canonical URL of the deployed docs: makes Sphinx emit
+# <link rel="canonical"> on every page and anchors the sitemap that
+# sphinx_sitemap generates (referenced from the website's robots.txt).
+html_baseurl = 'https://provsql.org/docs/'
+sitemap_url_scheme = '{link}'
+sitemap_excludes = ['search.html', 'genindex.html']
 
 html_theme = 'sphinx_rtd_theme'
 html_theme_options = {

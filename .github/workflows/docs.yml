@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: apt update
-      - run: apt -y install python3-breathe python3-sphinx-rtd-theme python3-sphinx-copybutton python3-pybtex python3-sphinxcontrib.bibtex graphviz wget postgresql-server-dev-all
+      - run: apt -y install python3-breathe python3-sphinx-rtd-theme python3-sphinx-copybutton python3-sphinx-sitemap python3-pybtex python3-sphinxcontrib.bibtex graphviz wget postgresql-server-dev-all
       - name: Cache Doxygen
         id: cache-doxygen
         uses: actions/cache@v5

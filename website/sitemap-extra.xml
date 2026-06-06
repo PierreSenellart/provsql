@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-maintained sitemap for the parts of provsql.org that neither
+     jekyll-sitemap (Jekyll pages only) nor sphinx_sitemap (the /docs/
+     tree) covers: the Playground (deployed separately by
+     `make deploy-playground`) and the Doxygen reference landing pages. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url>
+<loc>https://provsql.org/playground/</loc>
+</url>
+<url>
+<loc>https://provsql.org/doxygen-sql/html/index.html</loc>
+</url>
+<url>
+<loc>https://provsql.org/doxygen-c/html/index.html</loc>
+</url>
+</urlset>

@@ -1,0 +1,3 @@
+Sitemap: https://provsql.org/sitemap.xml
+Sitemap: https://provsql.org/docs/sitemap.xml
+Sitemap: https://provsql.org/sitemap-extra.xml
