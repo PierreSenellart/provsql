@@ -97,3 +97,16 @@ def browser_context_args(browser_context_args):
     # Pin a deterministic viewport so layout-sensitive selectors stay stable
     # across hosts; matches the desktop breakpoint the UI is designed for.
     return {**browser_context_args, "viewport": {"width": 1400, "height": 900}}
+
+
+@pytest.fixture
+def context(context):
+    # CI runners share two cores between PostgreSQL, the Flask dev server,
+    # and Chromium, so a navigation that pays Studio's schema introspection
+    # can legitimately exceed Playwright's 30 s default -- observed as
+    # sporadic one-off Page.goto timeouts in otherwise green matrix cells.
+    # 90 s turns that flake into slack without masking real hangs (the
+    # job-level timeout still bounds the damage). Set on the context so
+    # every page derived from it inherits the value.
+    context.set_default_navigation_timeout(90_000)
+    return context
