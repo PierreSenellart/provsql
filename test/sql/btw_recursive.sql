@@ -267,6 +267,64 @@ DROP TABLE btwr_bid_r2;
 DROP TABLE btwr_bid_r;
 DROP TABLE btwr_bid;
 
+-- Join-defined edges: the recursive arm may join a derived edge
+-- subquery; each derived edge's token is a conjunction of base tuples,
+-- accepted when the supports are pairwise disjoint (the compound
+-- probability is the product).  Hop graph f(src,k) x g(k,dst),
+-- one-to-one on k: reach(2) = 0.9*0.7 = 0.63, reach(3) = 0.63*0.48.
+CREATE TABLE btwr_f(src int, k int, p float8);
+CREATE TABLE btwr_g(k int, dst int, p float8);
+INSERT INTO btwr_f VALUES (1,10,0.9),(2,20,0.8);
+INSERT INTO btwr_g VALUES (10,2,0.7),(20,3,0.6);
+SELECT add_provenance('btwr_f');
+SELECT add_provenance('btwr_g');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM btwr_f; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM btwr_g; END $$;
+CREATE TABLE btwr_jr AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst
+      FROM (SELECT f.src, g.dst FROM btwr_f f JOIN btwr_g g ON f.k = g.k) e
+      JOIN reach r ON e.src = r.node
+  )
+  SELECT node, round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_jr');
+SELECT * FROM btwr_jr ORDER BY node;
+-- Overlapping supports (a base tuple shared by two derived edges) are
+-- correlated: the route falls back, with a notice under verbosity 10.
+SET provsql.verbose_level = 10;
+CREATE TABLE btwr_f1(src int, k int);
+CREATE TABLE btwr_g2(k int, dst int);
+INSERT INTO btwr_f1 VALUES (1,10);
+INSERT INTO btwr_g2 VALUES (10,3),(10,4);
+SELECT add_provenance('btwr_f1');
+SELECT add_provenance('btwr_g2');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM btwr_f1; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM btwr_g2; END $$;
+CREATE TABLE btwr_jo AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst
+      FROM (SELECT f.src, g.dst FROM btwr_f1 f JOIN btwr_g2 g ON f.k = g.k) e
+      JOIN reach r ON e.src = r.node
+  )
+  SELECT node,
+         round(probability_evaluate(provenance(),'possible-worlds')::numeric, 6)
+           AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_jo');
+SELECT * FROM btwr_jo ORDER BY node;
+SET provsql.verbose_level = 0;
+DROP TABLE btwr_jo;
+DROP TABLE btwr_g2;
+DROP TABLE btwr_f1;
+DROP TABLE btwr_jr;
+DROP TABLE btwr_g;
+DROP TABLE btwr_f;
+
 -- Fallback: data treewidth above the cap (K14) falls back to the
 -- generic fixpoint, with a notice under provsql.verbose_level >= 10;
 -- the query still answers (acyclic orientation, so eval_recursive

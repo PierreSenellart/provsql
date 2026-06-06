@@ -141,6 +141,37 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
   RETURNS SETOF record AS
   'provsql','reachability_materialize' LANGUAGE C VOLATILE;
 
+
+/**
+ * @brief Input leaves of a conjunction-shaped provenance token (internal)
+ *
+ * Descends a token's circuit through the conjunctive gate types
+ * (@c times, and the pass-through @c project / @c eq where-provenance
+ * wrappers) down to @c input leaves.  Returns the distinct leaves, or
+ * NULL when the circuit contains any other gate type (a disjunctive or
+ * aggregate shape, which is not a conjunction of independent tuples).
+ * Used by the reachability gathering to accept join-defined edges:
+ * a derived edge whose token is a pure conjunction of base tuples.
+ *
+ * @param token the provenance token
+ */
+CREATE OR REPLACE FUNCTION token_conjunctive_leaves(token uuid)
+  RETURNS uuid[] AS
+$$
+WITH RECURSIVE walk(g) AS (
+  SELECT token
+  UNION
+  SELECT c FROM walk w, unnest(provsql.get_children(w.g)) AS c
+  WHERE provsql.get_gate_type(w.g) IN ('times', 'project', 'eq')
+)
+SELECT CASE WHEN bool_and(provsql.get_gate_type(g)
+                          IN ('times', 'project', 'eq', 'input'))
+            THEN array_agg(DISTINCT g)
+                   FILTER (WHERE provsql.get_gate_type(g) = 'input')
+            ELSE NULL END
+FROM walk;
+$$ LANGUAGE sql STABLE;
+
 /**
  * @brief Gather the edges of a tracked relation in the columnar form
  * expected by reachability_evaluate (internal)
@@ -163,6 +194,9 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
  *        relation's columns (SQL text, deparsed by the rewriter from
  *        the recursive arm's WHERE clause), restricting which edges
  *        participate
+ * @param rel_sql deparsed edge subquery to gather from instead of
+ *        @p rel (join-defined edges); the tokens are then conjunctions
+ *        of base tuples, validated for shape and disjoint supports
  *
  * The @c vertices output maps the dense IDs back to the original
  * vertex values (as text, 1-indexed), for callers that need to label
@@ -174,6 +208,7 @@ CREATE OR REPLACE FUNCTION gather_reachability_edges(
   IN destination_attribute TEXT,
   IN extra_vertices TEXT[],
   IN edge_quals TEXT DEFAULT NULL,
+  IN rel_sql TEXT DEFAULT NULL,
   OUT sources INT[],
   OUT destinations INT[],
   OUT tokens UUID[],
@@ -191,17 +226,53 @@ BEGIN
   DROP TABLE IF EXISTS provsql_reachability_edges_tmp;
   EXECUTE format(
     'CREATE TEMP TABLE provsql_reachability_edges_tmp AS '
-    || 'SELECT %1$I::text AS u, %2$I::text AS v, provenance() AS token '
+    || 'SELECT %1$I::text AS u, %2$I::text AS v, provsql.provenance() AS token '
     || 'FROM %3$s WHERE %1$I IS NOT NULL AND %2$I IS NOT NULL%4$s',
-    source_attribute, destination_attribute, rel,
+    source_attribute, destination_attribute,
+    CASE WHEN rel_sql IS NULL THEN rel::text
+         ELSE '(' || rel_sql || ') AS provsql_edge_subquery' END,
     CASE WHEN edge_quals IS NULL THEN ''
          ELSE ' AND (' || edge_quals || ')' END);
-  PERFORM remove_provenance('provsql_reachability_edges_tmp');
+  PERFORM provsql.remove_provenance('provsql_reachability_edges_tmp');
 
   IF EXISTS (SELECT 1 FROM provsql_reachability_edges_tmp
-             WHERE get_gate_type(token) NOT IN ('input', 'mulinput')) THEN
+             WHERE provsql.get_gate_type(token) NOT IN ('input', 'mulinput', 'times',
+                                                'project', 'eq')) THEN
     DROP TABLE provsql_reachability_edges_tmp;
-    RAISE EXCEPTION 'reachability: the provenance of % must consist of base input or repair_key tokens; views or query results are not supported', rel;
+    RAISE EXCEPTION 'reachability: the provenance of % must consist of base input, repair_key, or conjunctive join tokens', coalesce(rel::text, 'the edge query');
+  END IF;
+
+  -- Conjunction-shaped (join-defined) tokens: each must be a pure
+  -- conjunction of base tuples, and the supports must be pairwise
+  -- disjoint across all edge tokens (otherwise two edges would be
+  -- correlated, breaking the independence the compilation relies on);
+  -- the compound probability is the product over the support.  The
+  -- support table is created unconditionally (empty without compound
+  -- tokens): the aggregation below references it at plan time.
+  DROP TABLE IF EXISTS provsql_reachability_support_tmp;
+  CREATE TEMP TABLE provsql_reachability_support_tmp AS
+    SELECT t.token, l.leaf
+    FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp
+          WHERE provsql.get_gate_type(token) IN ('times', 'project', 'eq')) t,
+         LATERAL unnest(provsql.token_conjunctive_leaves(t.token)) AS l(leaf);
+  IF EXISTS (SELECT 1
+             FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp) t
+             WHERE provsql.get_gate_type(t.token) IN ('times', 'project', 'eq')
+               AND provsql.token_conjunctive_leaves(t.token) IS NULL) THEN
+    DROP TABLE provsql_reachability_support_tmp;
+    DROP TABLE provsql_reachability_edges_tmp;
+    RAISE EXCEPTION 'reachability: a join-defined edge token is not a pure conjunction of base tuples';
+  END IF;
+  IF EXISTS (SELECT 1 FROM (
+               SELECT leaf FROM provsql_reachability_support_tmp
+               UNION ALL
+               SELECT DISTINCT token FROM provsql_reachability_edges_tmp
+               WHERE provsql.get_gate_type(token) = 'input'
+             ) all_leaves
+             GROUP BY leaf HAVING count(*) > 1) THEN
+    DROP TABLE provsql_reachability_support_tmp;
+    DROP TABLE provsql_reachability_edges_tmp;
+    RAISE EXCEPTION 'reachability: join-defined edges share base tuples (their supports overlap), so they are not independent';
   END IF;
 
   WITH verts AS (
@@ -211,12 +282,19 @@ BEGIN
   ids AS (
     SELECT x, (row_number() OVER (ORDER BY x))::int AS id FROM verts)
   SELECT array_agg(iu.id), array_agg(iv.id),
-         array_agg(e.token), array_agg(coalesce(get_prob(e.token), 1.0)),
-         array_agg(CASE WHEN get_gate_type(e.token) = 'mulinput'
-                        THEN (get_children(e.token))[1]
+         array_agg(e.token),
+         array_agg(CASE WHEN provsql.get_gate_type(e.token) IN ('times','project','eq')
+                        THEN (SELECT CASE WHEN bool_or(coalesce(provsql.get_prob(s.leaf),1.0) = 0)
+                                          THEN 0.0
+                                          ELSE exp(sum(ln(coalesce(provsql.get_prob(s.leaf),1.0)))) END
+                              FROM provsql_reachability_support_tmp s
+                              WHERE s.token = e.token)
+                        ELSE coalesce(provsql.get_prob(e.token), 1.0) END),
+         array_agg(CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                        THEN (provsql.get_children(e.token))[1]
                         ELSE '00000000-0000-0000-0000-000000000000'::uuid END),
-         array_agg(CASE WHEN get_gate_type(e.token) = 'mulinput'
-                        THEN (get_infos(e.token)).info1 ELSE 0 END),
+         array_agg(CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                        THEN (provsql.get_infos(e.token)).info1 ELSE 0 END),
          (SELECT array_agg(i.id ORDER BY ev.ord)
             FROM unnest(extra_vertices) WITH ORDINALITY AS ev(x, ord)
             JOIN ids i ON i.x = ev.x),
@@ -228,8 +306,12 @@ BEGIN
     JOIN ids iv ON iv.x = e.v;
 
   DROP TABLE provsql_reachability_edges_tmp;
+  DROP TABLE IF EXISTS provsql_reachability_support_tmp;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messages = warning;
+-- No SET search_path: the deparsed edge subquery (and the regclass
+-- rendering) must resolve against the caller's search_path; the ProvSQL
+-- calls above are schema-qualified instead.
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
 
 
 /**
@@ -327,6 +409,9 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
  *        tracked sources form a probabilistic source set, untracked
  *        ones are certain
  * @param source_rel_attribute the source relation's vertex column
+ * @param edge_sql deparsed edge subquery when the recursive arm joins a
+ *        derived (join-defined) edge relation instead of a base one;
+ *        NULL for the regclass form
  */
 CREATE OR REPLACE FUNCTION eval_reachability(
   edge_rel regclass,
@@ -341,7 +426,8 @@ CREATE OR REPLACE FUNCTION eval_reachability(
   body_sql text,
   edge_quals text DEFAULT NULL,
   source_rel regclass DEFAULT NULL,
-  source_rel_attribute text DEFAULT NULL)
+  source_rel_attribute text DEFAULT NULL,
+  edge_sql text DEFAULT NULL)
   RETURNS void AS
 $$
 DECLARE
@@ -373,7 +459,7 @@ BEGIN
 
     e := provsql.gather_reachability_edges(edge_rel, source_attribute,
                                            destination_attribute,
-                                           sv, edge_quals);
+                                           sv, edge_quals, edge_sql);
     IF to_regclass(work_name) IS NOT NULL THEN
       EXECUTE format('DROP TABLE %I', work_name);
     END IF;
@@ -386,7 +472,7 @@ BEGIN
             e.block_keys, e.block_indices, e.extra_ids, st, sp, directed;
     IF verbosity >= 20 THEN
       RAISE NOTICE 'ProvSQL: recursive CTE "%" compiled along a tree decomposition of %',
-        work_name, edge_rel;
+        work_name, coalesce(edge_rel::text, 'the join-defined edge query');
     END IF;
   EXCEPTION WHEN OTHERS THEN
     IF verbosity >= 10 THEN

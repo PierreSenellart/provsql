@@ -202,9 +202,22 @@ design (June 2026):
    columnar `reachability_evaluate` forms remain as internal/testing
    surfaces.
 
-Remaining staged extensions: join-defined graphs
--- disjoint supports certified by keys/FDs as compound variables first, the
-faithful variables-in-the-decomposition DP (late-branching states) after.
+#### Join-defined graphs: the disjoint-support half is implemented
+
+The recursive arm may join a derived edge subquery (an inlined view
+included): the rewriter deparses it, the gathering walks each derived
+token's circuit through the conjunctive gate types (`times` / `project` /
+`eq`) to its input leaves (`token_conjunctive_leaves`), accepts the edge
+as a compound variable when every token is a pure conjunction and the
+supports are pairwise disjoint across edges (probability = product over
+the support; the compound token itself is the literal, so the materialised
+circuit references it directly and the island evaluator's uncertified
+fallback evaluates it read-once), and otherwise raises -- which the driver
+turns into the usual fallback, exercised by the overlapping-support test.
+The *shared-support* half (the faithful variables-in-the-decomposition DP
+with late-branching states, where tractability depends on how widely
+tuples are shared) remains the open extension, along with static
+certification of disjointness from keys/FDs to skip the dynamic walk.
 
 #### BID blocks: implemented
 

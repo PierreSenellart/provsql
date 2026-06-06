@@ -479,6 +479,13 @@ true endpoint is one of several candidates) compiles as a single
 (k+1)-way deterministic branching, preserving the block-independent
 semantics exactly.
 
+The recursive arm may even join a *derived* edge relation – a subquery
+or view over several tracked tables.  Each derived edge then
+participates as a compound event (the conjunction of its base tuples),
+accepted when the derived edges' supports are pairwise disjoint – e.g.
+a one-to-one join; edges sharing a base tuple are correlated, and the
+query falls back to the generic evaluation.
+
 The emitted circuits are *deterministic and decomposable by
 construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
 persisted **certificate** of that property (readable with

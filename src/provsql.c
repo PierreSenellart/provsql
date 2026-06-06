@@ -398,6 +398,8 @@ typedef struct ReachabilityShape {
   AttrNumber source_attno; /**< Vertex column of the source relation. */
   bool directed;          /**< false for the undirected (CASE/IN) shape. */
   char *edge_quals;       /**< Deparsed extra quals over edge columns, or NULL. */
+  char *edge_sql;         /**< Deparsed edge subquery (join-defined edges), or NULL. */
+  List *edge_rte_colnames; /**< Output column names of the edge subquery. */
 } ReachabilityShape;
 
 /** @brief Context for @c reach_varnos_walker(): set of varnos seen. */
@@ -614,36 +616,60 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
       rec->groupingSets != NIL)
     return false;
   i = 0;
-  foreach(lc, rec->rtable) {
-    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
-    ++i;
-    switch (r->rtekind) {
-    case RTE_RELATION:
-      if (edge_rti != 0 || r->relkind != RELKIND_RELATION)
+  {
+    RangeTblEntry *edge_rte = NULL;
+    foreach(lc, rec->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+      ++i;
+      switch (r->rtekind) {
+      case RTE_RELATION:
+        if (edge_rti != 0 || r->relkind != RELKIND_RELATION)
+          return false;
+        edge_rti = i;
+        edge_rte = r;
+        out->relid = r->relid;
+        break;
+      case RTE_SUBQUERY:
+        /* A derived (join-defined) edge relation: deparsed and gathered
+         * as a subquery; its tokens are validated dynamically by the
+         * gathering (conjunctions of base tuples with pairwise disjoint
+         * supports), and any unsupported provenance shape falls back at
+         * run time.  An inlined view lands here too. */
+        if (edge_rti != 0 || r->subquery == NULL)
+          return false;
+        edge_rti = i;
+        edge_rte = r;
+        out->relid = InvalidOid;
+        out->edge_sql = pg_get_querydef(copyObject(r->subquery), false);
+        break;
+      case RTE_CTE:
+        if (cte_rti != 0 || !r->self_reference ||
+            strcmp(r->ctename, cte->ctename) != 0)
+          return false;
+        cte_rti = i;
+        break;
+      case RTE_JOIN:
+        break;
+      default:
         return false;
-      edge_rti = i;
-      out->relid = r->relid;
-      break;
-    case RTE_CTE:
-      if (cte_rti != 0 || !r->self_reference ||
-          strcmp(r->ctename, cte->ctename) != 0)
-        return false;
-      cte_rti = i;
-      break;
-    case RTE_JOIN:
-      break;
-    default:
+      }
+    }
+    if (edge_rti == 0 || cte_rti == 0)
       return false;
+
+    if (OidIsValid(out->relid)) {
+      /* The edge relation must be provenance-tracked (a provsql UUID
+       * column). */
+      prov_attno = get_attnum(out->relid, PROVSQL_COLUMN_NAME);
+      if (prov_attno == InvalidAttrNumber ||
+          get_atttype(out->relid, prov_attno) != constants->OID_TYPE_UUID)
+        return false;
+    } else {
+      prov_attno = InvalidAttrNumber;
+      /* Column names of the subquery's output, for the gathering. */
+      out->edge_rte_colnames = edge_rte->eref->colnames;
     }
   }
-  if (edge_rti == 0 || cte_rti == 0)
-    return false;
-
-  /* The edge relation must be provenance-tracked (a provsql UUID column). */
-  prov_attno = get_attnum(out->relid, PROVSQL_COLUMN_NAME);
-  if (prov_attno == InvalidAttrNumber ||
-      get_atttype(out->relid, prov_attno) != constants->OID_TYPE_UUID)
-    return false;
 
   /* Quals: one qual touching the recursive table (the join: a single
    * equality in the directed shape, a two-way disjunction in the
@@ -677,6 +703,8 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
     }
     if (join_qual == NULL)
       return false;
+    if (edge_only != NIL && !OidIsValid(out->relid))
+      return false;   /* extra filters on a subquery edge: not deparsable here */
     if (edge_only != NIL) {
       /* Deparse the filters against the bare relation, for the
        * edge-gathering query (whose FROM is the relation itself). */
@@ -941,19 +969,37 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
    * and falls back to eval_recursive on any failure. */
   initStringInfo(&call);
   {
-    ReachabilityShape shape = {InvalidOid, 0, 0, NULL, InvalidOid, 0, true, NULL};
+    ReachabilityShape shape = {InvalidOid, 0, 0, NULL, InvalidOid, 0, true,
+                               NULL, NULL, NIL};
     constants_t constants = get_constants(true);
     if (provsql_boolean_provenance &&
         detect_reachability_cte(cte, cteq, &constants, &shape)) {
-      char *src_name = get_attname(shape.relid, shape.src_attno, false);
-      char *dst_name = get_attname(shape.relid, shape.dst_attno, false);
+      char *src_name;
+      char *dst_name;
       char *coltype = format_type_be(lfirst_oid(list_head(cte->ctecoltypes)));
+      StringInfoData relarg;
+      if (OidIsValid(shape.relid)) {
+        src_name = get_attname(shape.relid, shape.src_attno, false);
+        dst_name = get_attname(shape.relid, shape.dst_attno, false);
+      } else {
+        src_name = strVal(list_nth(shape.edge_rte_colnames,
+                                   shape.src_attno - 1));
+        dst_name = strVal(list_nth(shape.edge_rte_colnames,
+                                   shape.dst_attno - 1));
+      }
+      initStringInfo(&relarg);
+      if (OidIsValid(shape.relid))
+        appendStringInfo(&relarg, "%u::pg_catalog.regclass", shape.relid);
+      else
+        appendStringInfoString(&relarg, "NULL::pg_catalog.regclass");
       if (provsql_verbose >= 20)
         provsql_notice("Recursive CTE '%s' recognised as reachability over %s",
-                       cte->ctename, get_rel_name(shape.relid));
+                       cte->ctename,
+                       OidIsValid(shape.relid) ? get_rel_name(shape.relid)
+                                               : "a join-defined edge query");
       appendStringInfo(&call,
-                       "SELECT provsql.eval_reachability(%u::pg_catalog.regclass, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s",
-                       shape.relid,
+                       "SELECT provsql.eval_reachability(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s",
+                       relarg.data,
                        quote_literal_cstr(src_name),
                        quote_literal_cstr(dst_name),
                        shape.source_text
@@ -971,7 +1017,10 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
                                  false);
         appendStringInfo(&call, ", %u::pg_catalog.regclass, %s",
                          shape.source_relid, quote_literal_cstr(satt));
-      }
+      } else if (shape.edge_sql != NULL)
+        appendStringInfoString(&call, ", NULL, NULL");
+      if (shape.edge_sql != NULL)
+        appendStringInfo(&call, ", %s", quote_literal_cstr(shape.edge_sql));
       appendStringInfoString(&call, ")");
     } else {
       appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",

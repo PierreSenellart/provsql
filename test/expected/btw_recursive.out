@@ -142,6 +142,35 @@ t
 add_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|prob
+1|1.000000
+2|0.630000
+3|0.302400
+(3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: reachability route for "reach" fell back to the generic fixpoint (reachability: join-defined edges share base tuples (their supports overlap), so they are not independent)
+remove_provenance
+
+(1 row)
+node|prob
+1|1.000000
+3|0.250000
+4|0.250000
+(3 rows)
+add_provenance
+
+(1 row)
 NOTICE:  ProvSQL: reachability route for "reach" fell back to the generic fixpoint (ProvSQL: reachability: data treewidth exceeds the supported limit (10))
 remove_provenance
 

@@ -63,10 +63,10 @@ INTERNAL_FUNCTIONS = {
     # jsonb backing function for the tseytin_cnf_mapping SRF; users call
     # tseytin_cnf_mapping (which is in _SQL_FUNC_MAP), not this directly.
     'tseytin_cnf_mapping_json',
-    # edge-gathering helper behind reachability_probability /
-    # reachability_compile_stats (both in _SQL_FUNC_MAP); users call the
-    # wrappers, not this directly.
-    'gather_reachability_edges',
+    # gathering / validation helpers behind the rewriter's reachability
+    # route (eval_reachability); users never call these directly.
+    'gather_reachability_edges', 'gather_reachability_sources',
+    'token_conjunctive_leaves',
     # Triggers
     'insert_statement_trigger',
     'update_statement_trigger', 'delete_statement_trigger',
