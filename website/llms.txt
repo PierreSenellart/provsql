@@ -1,0 +1,54 @@
+# ProvSQL
+
+> ProvSQL is a free, open-source (MIT) PostgreSQL extension that adds
+> semiring provenance and uncertainty management to SQL queries. It
+> transparently rewrites queries to track which input tuples contribute
+> to each result, then evaluates the provenance in any user-chosen
+> semiring: Boolean reachability, counting, why/how/where-provenance,
+> probability (probabilistic databases, including continuous random
+> variables), Shapley and Banzhaf values, temporal validity, and more.
+> A companion web UI, ProvSQL Studio, provides interactive provenance
+> inspection; the ProvSQL Playground runs the entire system in the
+> browser via WebAssembly.
+
+Capabilities have grown substantially since the 2018 VLDB demo paper:
+current ProvSQL supports inner and outer joins, subqueries, aggregation
+with HAVING, set operations, CTEs including WITH RECURSIVE, data
+modifications (INSERT/UPDATE/DELETE), window-function pass-through, and
+continuous probability distributions. The authoritative, current
+reference is the documentation below.
+
+## Documentation
+
+- [Introduction](https://provsql.org/docs/user/introduction.html): concepts and capabilities
+- [Installation](https://provsql.org/docs/user/getting-provsql.html): from source, PGXN, Docker; license
+- [Tutorial](https://provsql.org/docs/user/tutorial.html): hands-on first steps
+- [Querying](https://provsql.org/docs/user/querying.html): supported SQL features
+- [Semirings](https://provsql.org/docs/user/semirings.html): available provenance semirings
+- [Probabilities](https://provsql.org/docs/user/probabilities.html): probabilistic-database evaluation methods
+- [Continuous distributions](https://provsql.org/docs/user/continuous-distributions.html): random-variable columns
+- [Shapley and Banzhaf values](https://provsql.org/docs/user/shapley.html)
+- [Where-provenance](https://provsql.org/docs/user/where-provenance.html)
+- [Aggregation](https://provsql.org/docs/user/aggregation.html): aggregate provenance
+- [ProvSQL Studio](https://provsql.org/docs/user/studio.html): web UI and notebooks
+- [Case studies](https://provsql.org/docs/user/casestudies.html): extended worked examples
+
+## Software
+
+- [GitHub repository](https://github.com/PierreSenellart/provsql): source code, README, issues
+- [ProvSQL Playground](https://provsql.org/playground/): full system in the browser, no install
+- [Docker image](https://hub.docker.com/r/inriavalda/provsql)
+- [PGXN distribution](https://pgxn.org/dist/provsql/)
+- [provsql-studio on PyPI](https://pypi.org/project/provsql-studio/)
+
+## Research
+
+- [ProvSQL system paper (ICDE 2026)](https://arxiv.org/abs/2504.12058): current description of the system
+- [Publications](https://provsql.org/publications/): full list of related research
+
+## Optional
+
+- [Developer guide](https://provsql.org/docs/dev/introduction.html): internal architecture
+- [SQL API reference](https://provsql.org/doxygen-sql/html/index.html)
+- [C/C++ API reference](https://provsql.org/doxygen-c/html/index.html)
+- [Releases](https://provsql.org/releases/): version history
