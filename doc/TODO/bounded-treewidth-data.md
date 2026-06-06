@@ -206,8 +206,7 @@ Remaining staged extensions, in order: multi-source base arm over a source
 relation (`SELECT v FROM sources` -- a virtual super-source with arcs gated
 by the source rows' tokens when tracked, certain arcs otherwise; the
 compiler needs a "certain arc" notion, the detection a relation-shaped base
-arm, the driver a second gather); per-relation decomposition caching
-with write invalidation; BID edge blocks as multivalued (k+1)-way branching
+arm, the driver a second gather); BID edge blocks as multivalued (k+1)-way branching
 (endpoint co-location joins the treewidth condition); join-defined graphs
 -- disjoint supports certified by keys/FDs as compound variables first, the
 faithful variables-in-the-decomposition DP (late-branching states) after.
@@ -225,6 +224,24 @@ and supercritical random graphs (n=20000, m=60k/100k: 45/51 ms abort vs
 compilation by a linear pass (~0.1-0.2 s at 300k edges).  The probe is
 therefore not wired into the compiler; the `Graph` overload stays for the
 chooser-style uses where the bound is wanted without an attempt.
+
+#### Decomposition caching: measured, redirected to a creation cache
+
+Per-relation caching of the min-fill decomposition was the plan, but the
+measurement undercuts it: on bounded-treewidth data the decomposition is
+3-4% of `compileAll` (10 ms of 284 ms at 30k edges, 106 ms of 3.3 s at
+300k) -- min-fill is only expensive on circuit-shaped graphs near the cap,
+not on genuinely treelike data.  What repeat queries actually pay for is
+the gate-creation IPC of re-materialising an unchanged circuit, and
+content addressing makes that cache trivial: the materialiser now keeps a
+per-backend set of tokens it has already created (sound: the store is
+append-only and the worker pipe ordered; bounded by a clear-past-cap, which
+only costs re-sending idempotent creates).  Warm repeat of the 30k-edge
+integrated query: ~5.6 s -> ~5.2 s.  The remaining warm profile is the
+edge gathering (~0.6 s: per-token `get_prob` / `get_gate_type` round
+trips, batchable into an array call if it ever matters), the evaluation's
+circuit load (~1.6 s), and the driver's temp-table work -- none of which a
+decomposition cache would touch.
 
 #### Non-recursive queries: what the new infrastructure changes
 

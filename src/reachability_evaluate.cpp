@@ -270,7 +270,17 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
   const dDNNF &dd, const std::vector<gate_t> &roots)
 {
   std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> uuid_of;
-  std::unordered_set<std::string> created;
+  /* Tokens this backend has already materialised, across calls: the
+   * store is append-only and the worker pipe is ordered, so a create
+   * this backend has sent once never needs re-sending -- re-running a
+   * reachability query on unchanged data then skips the whole gate IPC
+   * (the dominant cost of a warm materialisation; content-addressed
+   * UUIDs make the key).  Per-backend, bounded: past the cap the set is
+   * cleared, which only costs re-sending idempotent creates. */
+  static std::unordered_set<std::string> created;
+  constexpr std::size_t kCreatedCap = 4u << 20;
+  if (created.size() > kCreatedCap)
+    created.clear();
   pg_uuid_t one_uuid;
   bool have_one = false;
 
