@@ -1,10 +1,11 @@
 title: ProvSQL
 subtitle: Provenance for PostgreSQL
+# Default meta / og description for pages without their own; kept in
+# the 110-160 character range recommended for search snippets.
 description: >-
-  ProvSQL is a PostgreSQL extension that adds semiring provenance and
-  uncertainty management to PostgreSQL, enabling computation of probabilities,
-  Shapley values, and various semiring evaluations. Free and open-source
-  software under the MIT license.
+  ProvSQL adds semiring provenance and uncertainty management to
+  PostgreSQL: probabilities, Shapley values, semiring evaluations.
+  Free and open-source (MIT).
 url: "https://provsql.org"
 baseurl: ""
 repository: "PierreSenellart/provsql"
@@ -23,9 +24,10 @@ social:
     - https://pierre.senellart.com/
 
 # Default social-card image (og:image / twitter:image in the theme's
-# seo.html); 1920x976 matches the ~1.91:1 card ratio. Override per page
-# with `header.og_image` in the front matter.
-og_image: /assets/images/studio/circuit-mode.png
+# seo.html): a 1200x630 crop of the circuit-mode screenshot, the size
+# social platforms recommend. Override per page with `header.og_image`
+# in the front matter.
+og_image: /assets/images/social-card.png
 og_image_alt: "ProvSQL Studio rendering the provenance circuit of a SQL query result"
 
 theme: minimal-mistakes-jekyll

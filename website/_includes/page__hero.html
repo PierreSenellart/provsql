@@ -32,7 +32,9 @@
               {% if paginator and site.paginate_show_page_num %}
                 {{ site.title }}{% unless paginator.page == 1 %} {{ site.data.ui-text[locale].page | default: "Page" }} {{ paginator.page }}{% endunless %}
               {% else %}
-                {{ page.title | default: site.title | markdownify | remove: "<p>" | remove: "</p>" }}
+                {% comment %} header.title lets a page carry a long SEO/og title
+                   while the hero displays a short one (front page) {% endcomment %}
+                {{ page.header.title | default: page.title | default: site.title | markdownify | remove: "<p>" | remove: "</p>" }}
               {% endif %}
             </h1>
             {% if page.tagline %}
