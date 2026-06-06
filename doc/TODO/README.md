@@ -19,11 +19,15 @@ Each plan document follows a consistent layout:
 - [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
   feasibility study for exploiting bounded treewidth of the input data
   (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017).
-  Open: extend independent-product factoring for the relational
-  pathologies (threshold / separator recognition), a decomposition-aligned
-  (cycluit) construction for recursive reachability, the full
-  data-decomposition + tree-automaton pipeline, and a treewidth-aware
-  general m-semiring evaluator.
+  The Route C seed has landed: `reachability_probability`, exact
+  two-terminal network reliability compiled along a tree decomposition
+  of the data graph, linear-time on bounded-treewidth (including
+  cyclic) graphs.  Open: `WITH RECURSIVE` shape recognition onto that
+  compiler, a token-producing variant, edge Shapley values, the
+  independent-product factoring for the relational pathologies
+  (threshold / separator recognition), the full data-decomposition +
+  tree-automaton pipeline, and a treewidth-aware general m-semiring
+  evaluator.
 - [`conditioning.md`](conditioning.md) : plan for a conditioning
   primitive, unifying discrete tuple-correlation (MarkoViews, Jha &
   Suciu PVLDB 2012) and continuous random variables as one operation at

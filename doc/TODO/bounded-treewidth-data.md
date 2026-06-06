@@ -84,6 +84,120 @@ Scope only if a real workload exhibits it.
 
 ### Route C -- recursive / reachability on bounded-treewidth graphs (recommended seed)
 
+**Status: the seed below is implemented** (1.10.0-dev). `ReachabilityCompiler`
+(`src/ReachabilityCompiler.{h,cpp}`) compiles s-t reachability over a
+probabilistic `edge` relation along a min-fill tree decomposition of the *data*
+graph (`TreeDecomposition` gained a public `Graph` constructor with an
+elimination-bag map; `Graph` a builder for arbitrary node/edge sets).  The
+construction is the bag-state dynamic program whose state is the
+transitively-closed reachability relation over bag ∪ {s, t}; its transitions
+emit a d-DNNF **directly** -- states are mutually exclusive and exhaustive, so
+the OR gates are deterministic by construction; each edge variable is
+introduced at a unique bag, so the AND gates are decomposable by construction
+-- which is then evaluated by the existing `dDNNF::probabilityEvaluation`.  No
+knowledge-compilation step, no circuit-treewidth cap: `MAX_TREEWIDTH` now
+bounds the *data* treewidth, which is exactly the assumption.  SQL surface:
+`reachability_probability(rel, src_att, dst_att, source, target, directed)`
+and `reachability_compile_stats(...)` over a tracked edge relation (plus the
+columnar `reachability_evaluate` they delegate to).  Directed reachability and
+undirected connectivity are both supported (the relation-based state makes the
+undirected case the directed one with both arcs -- no `Bell(k+1)` partition
+machinery), and **cyclic data is handled natively**, with no
+`boolean_provenance` value-fixpoint.  Differentially tested against
+possible-worlds enumeration; regression test `btw_reachability`.
+
+Measured on 2×n ladders (`tw(I)=2`): the d-DNNF is linear (~46 gates per rung,
+≤10 DP states throughout), 300k edges compile + evaluate exactly in seconds,
+while the lineage route crosses `MAX_TREEWIDTH` from n=14 (~40 edges) on, and
+the cyclic/undirected case exceeds two minutes via the boolean fixpoint
+already at n=10 (28 edges) against ~4 ms here.
+
+A design deviation from the cycluit plan: the recursion's fixpoint is
+evaluated *inside the DP state* (the transitive closure of the bag relation),
+so the emitted circuit stays an acyclic d-DNNF -- the cyclic-provenance
+(cycluit) semantics is not needed for this query family.
+
+#### Agreed v1 plan: planner integration replacing the dedicated function
+
+The dedicated `reachability_probability` surface is the wrong interface: the
+technique must surface through the **normal ProvSQL query rewriter**.  Agreed
+design (June 2026):
+
+1. **Boolean only, hence GUC-gated.**  The construction computes the Boolean
+   function (mutually exclusive states, negated edge literals); general
+   semirings are out (cyclic recursion has no finite provenance outside
+   absorptive semantics anyway; the semiring thread below is a separate axis).
+   The integration therefore activates only under
+   `provsql.boolean_provenance = on` -- coherently, the only regime where
+   `eval_recursive` accepts cyclic data today.
+2. **Detection in `lower_recursive_cte`, decision fully at plan time.**  The
+   method catalog cannot arbitrate between construction routes: the fork
+   happens before any artefact exists, and the lineage route's cost is
+   unknowable without running the fixpoint.  One-sided plan-time rule: GUC on
+   + shape match (base arm = constant source, recursive arm = single
+   equi-join of a tracked *base* relation with the recursive table, optional
+   deterministic quals on edge columns) + cheap degeneracy lower-bound probe
+   on the data graph; then *attempt* the decomposition route under its hard
+   caps and **fall back to `eval_recursive`** on any failure
+   (`TreeDecompositionException`, state bound), preserving today's behaviour
+   exactly.  Catalog facts replace per-row checks: a base tracked relation
+   has fresh independent `input` tokens by construction; `repair_key` /
+   `mulinput` relations are refused (v1); directionality is read off the
+   query shape, not reverse-engineered from token sharing.
+3. **Tokens, not numbers: all-targets construction.**  One bottom-up pass
+   (per-subtree state tables) plus one top-down pass (rest-of-graph tables),
+   reading each vertex at its elimination bag, yields the reachability
+   circuit of *every* vertex in linear total size -- one ordinary provenance
+   token per `reach` row, no per-target recompilation.  Everything downstream
+   (`probability_evaluate`, `sr_formula`, Shapley, composition) then works
+   unchanged.
+4. **Materialisation without new gate types.**  The d-DNNF is stored with
+   `plus` / `times` gates and `NOT x` encoded as `monus(one, x)` (the Boolean
+   reading already evaluates it as such).  Gate UUIDs are content-addressed
+   with the standard v5 recipes, so identical sub-circuits dedup across
+   constructions and re-running the query on unchanged data re-derives the
+   same gates (idempotent `createGate` doubles as a cache).
+5. **The d-DNNF certificate.**  Per-gate marking in the (gate-type-specific)
+   `info1` field, value 1: on `gate_plus` "deterministic" (children mutually
+   exclusive), on `gate_times` "decomposable" (children variable-disjoint).
+   Free space-wise, backward compatible (absence = uncertified), and sound
+   under content-addressing: the mark asserts a property of the gate's
+   children, a global semantic fact that remains true however the gate is
+   later re-derived.  Trust model as for the inversion-free certificate.
+6. **`independent` evaluates certified circuits** (no new catalog method): a
+   certified d-DNNF is the generalisation of read-once, so marked OR = sum
+   (mutual exclusivity replaces variable-disjointness), marked AND = product.
+   Island discipline for sound mixing: each certified island is walked with
+   island-local memoisation and registers its inputs in the global seen set;
+   cross-island or certified/uncertified entanglement throws and the chooser
+   escalates.  Compositions of certified islands over disjoint inputs (e.g.
+   reach events on different graphs under a read-once skeleton) evaluate
+   linearly for free.
+7. **`interpretAsDD` honours the marks too**: marked OR copied as a native
+   deterministic OR (no De Morgan rewriting), same island discipline, NOT
+   only over inputs checked.  This opens the whole d-DNNF-artefact surface
+   to certified circuits -- `shapley` / `banzhaf` (edge criticality on
+   reliability networks), `compile_to_ddnnf*`, `ddnnf_stats`, conditioning --
+   linearly and without external compilers, through the existing `makeDD`
+   ladder which already tries `interpret-as-dd` first.
+8. **Surface rework.**  The user-facing `reachability_probability` /
+   `reachability_compile_stats(regclass, ...)` wrappers are removed; the
+   columnar `reachability_evaluate` forms remain as internal/testing
+   surfaces.
+
+Staged extensions after v1, in order: undirected recursive shape
+(`r.node IN (e.src, e.dst)` with a `CASE` head); multi-source base arm over a
+tracked source relation (probabilistic super-source); deterministic
+edge-column quals (if not already in v1); Shapley/stats demos over reach
+tokens; BID edge blocks as multivalued (k+1)-way branching (endpoint
+co-location joins the treewidth condition); join-defined graphs -- disjoint
+supports certified by keys/FDs as compound variables first, the faithful
+variables-in-the-decomposition DP (late-branching states) after.  Then, a
+detailed look at **non-recursive** queries helped by the data decomposition
+(the relational pathologies of the intro and Route 3's threshold case).
+
+The original analysis follows.
+
 Implement the decomposition-aligned (cycluit) construction for **one** scenario
 where the automaton is trivial and the payoff is real: reachability /
 linear-recursive queries over a bounded-treewidth graph relation -- the cycluit
@@ -256,7 +370,9 @@ cyclic-provenance (cycluit) semantics for Route C is genuinely uncharted.
 1. **Route C** (recursive / reachability on bounded-treewidth graphs) -- the only
    place treewidth genuinely *grows* with `|I|` at constant `tw(I)`; the automaton
    is trivial; it composes with the in-flight recursive-query work. The
-   substantive build.
+   substantive build.  **Done** (the two-terminal reliability seed; see the
+   status note in Route C).  Follow-ups: `WITH RECURSIVE` shape recognition,
+   token output, edge Shapley values.
 2. **Factoring lever (route 3), `costar` threshold half** -- structural
    detection; scope only if a real workload exhibits it.
 3. **Route A** (full automaton) -- deferred until the factoring lever proves
