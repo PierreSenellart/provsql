@@ -147,6 +147,14 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   for (const auto &var : variables)
     graph.add_edge(var.u, var.v);
 
+  /* No degeneracy pre-probe here, deliberately: it was implemented and
+   * measured (TreeDecomposition::degeneracyLowerBound now accepts a
+   * Graph for that purpose), but min-fill's own abort -- the first
+   * elimination whose neighbourhood exceeds the cap -- rejects every
+   * adversarial family tried (cliques, supercritical random graphs) at
+   * least as fast as the O(V+E) peel, while an always-on probe would tax
+   * every *accepted* compilation by a linear pass.  See the
+   * bounded-treewidth TODO for the numbers. */
   std::unordered_map<unsigned long, bag_t> elimination_bag;
   const TreeDecomposition td(std::move(graph), &elimination_bag);
   result.stats.data_treewidth = td.getTreewidth();

@@ -58,8 +58,14 @@ extern "C" {
 unsigned TreeDecomposition::degeneracyLowerBound(const BooleanCircuit &bc,
                                                  unsigned &max_degree)
 {
-  max_degree = 0;
   Graph graph(bc);
+  return degeneracyLowerBound(graph, max_degree);
+}
+
+unsigned TreeDecomposition::degeneracyLowerBound(const Graph &graph,
+                                                 unsigned &max_degree)
+{
+  max_degree = 0;
   const auto &nodes = graph.get_nodes();
   if(nodes.empty())
     return 0;

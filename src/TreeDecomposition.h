@@ -262,6 +262,21 @@ static unsigned degeneracyLowerBound(const BooleanCircuit &bc,
                                      unsigned &max_degree);
 
 /**
+ * @brief Degeneracy lower bound over an arbitrary graph.
+ *
+ * Core of the @c BooleanCircuit overload (which builds the primal graph
+ * and delegates), usable directly on a data graph -- e.g. the
+ * reachability compiler probes the edge relation's graph with it before
+ * paying for the min-fill construction.  The graph is not mutated.
+ *
+ * @param graph        The graph.
+ * @param max_degree   Output: the maximum degree.
+ * @return             A lower bound on the graph's treewidth.
+ */
+static unsigned degeneracyLowerBound(const Graph &graph,
+                                     unsigned &max_degree);
+
+/**
  * @brief Restructure the tree into the friendly normal form.
  *
  * Reroots the tree at the bag that covers the circuit's root gate

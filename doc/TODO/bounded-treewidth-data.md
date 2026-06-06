@@ -206,13 +206,25 @@ Remaining staged extensions, in order: multi-source base arm over a source
 relation (`SELECT v FROM sources` -- a virtual super-source with arcs gated
 by the source rows' tokens when tracked, certain arcs otherwise; the
 compiler needs a "certain arc" notion, the detection a relation-shaped base
-arm, the driver a second gather); a degeneracy lower-bound probe on the
-data graph before the min-fill attempt (cheap fail-fast, reusing
-`degeneracyLowerBound` over a `Graph`); per-relation decomposition caching
+arm, the driver a second gather); per-relation decomposition caching
 with write invalidation; BID edge blocks as multivalued (k+1)-way branching
 (endpoint co-location joins the treewidth condition); join-defined graphs
 -- disjoint supports certified by keys/FDs as compound variables first, the
 faithful variables-in-the-decomposition DP (late-branching states) after.
+
+#### Degeneracy pre-probe: implemented, measured, not enabled
+
+`TreeDecomposition::degeneracyLowerBound` now has a `Graph` overload (the
+`BooleanCircuit` one delegates), so probing a data graph before min-fill is
+a one-liner.  Measured, the probe never wins: graphs above the cap hand
+min-fill a high-fill node almost immediately, so its own abort is at least
+as fast as the O(V+E) peel on every adversarial family tried -- cliques
+(K200: 0 ms abort vs 8 ms probe; K500: 7 ms vs 39 ms; K1000 probe 248 ms)
+and supercritical random graphs (n=20000, m=60k/100k: 45/51 ms abort vs
+62/78 ms probe) -- while an always-on probe taxes every *accepted*
+compilation by a linear pass (~0.1-0.2 s at 300k edges).  The probe is
+therefore not wired into the compiler; the `Graph` overload stays for the
+chooser-style uses where the bound is wanted without an attempt.
 
 #### Non-recursive queries: what the new infrastructure changes
 
