@@ -22,7 +22,7 @@ help:
 # "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
 %: Makefile
 	# Verify Python dependencies meet minimum versions
-	python3 -c "from importlib.metadata import version; assert version('sphinx')>='8'; assert version('sphinx-rtd-theme')>='3'; assert version('sphinxcontrib-bibtex')>='2.4'; import pybtex; import sphinx_sitemap"
+	python3 -c "from importlib.metadata import version; assert version('sphinx')>='8'; assert version('sphinx-rtd-theme')>='3'; assert version('sphinxcontrib-bibtex')>='2.4'; import pybtex; import sphinx_sitemap; import sphinxext.opengraph"
 	# Copy branding assets for Sphinx
 	cp $(BRANDING)/logo.png    _static/logo.png
 	cp $(BRANDING)/favicon.ico _static/favicon.ico

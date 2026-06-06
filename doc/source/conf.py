@@ -2,7 +2,7 @@ project = 'ProvSQL'
 copyright = '2025, Pierre Senellart'
 author = 'Pierre Senellart'
 
-extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton', 'sphinx.ext.imgmath', 'sphinx_sitemap']
+extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 'sphinx_copybutton', 'sphinx.ext.imgmath', 'sphinx_sitemap', 'sphinxext.opengraph']
 
 # Render math at build time as SVG via LaTeX + dvisvgm rather than
 # letting Sphinx's default MathJax handler fetch
@@ -57,6 +57,18 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 html_baseurl = 'https://provsql.org/docs/'
 sitemap_url_scheme = '{link}'
 sitemap_excludes = ['search.html', 'genindex.html']
+
+# Explicit title: the default is "<project> <release> documentation" and
+# the docs are deployed continuously, so a baked-in release would go
+# stale (and an empty one yields "ProvSQL  documentation").
+html_title = 'ProvSQL documentation'
+
+# Per-page Open Graph tags + <meta name="description"> (auto-extracted
+# from each page's first paragraph) for search-engine and social embeds.
+ogp_site_url = 'https://provsql.org/docs/'
+ogp_site_name = 'ProvSQL documentation'
+ogp_image = 'https://provsql.org/docs/_static/logo.png'
+ogp_enable_meta_description = True
 
 html_theme = 'sphinx_rtd_theme'
 html_theme_options = {
