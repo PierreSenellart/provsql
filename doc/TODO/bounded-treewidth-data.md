@@ -96,10 +96,11 @@ the OR gates are deterministic by construction; each edge variable is
 introduced at a unique bag, so the AND gates are decomposable by construction
 -- which is then evaluated by the existing `dDNNF::probabilityEvaluation`.  No
 knowledge-compilation step, no circuit-treewidth cap: `MAX_TREEWIDTH` now
-bounds the *data* treewidth, which is exactly the assumption.  SQL surface:
-`reachability_probability(rel, src_att, dst_att, source, target, directed)`
-and `reachability_compile_stats(...)` over a tracked edge relation (plus the
-columnar `reachability_evaluate` they delegate to).  Directed reachability and
+bounds the *data* treewidth, which is exactly the assumption.  (The dedicated
+`reachability_probability(rel, ...)` wrappers this seed first shipped with
+were replaced by the planner integration of the v1 plan below; the columnar
+`reachability_evaluate` / `reachability_compile_stats` forms remain as
+internal/testing surfaces.)  Directed reachability and
 undirected connectivity are both supported (the relation-based state makes the
 undirected case the directed one with both arcs -- no `Bell(k+1)` partition
 machinery), and **cyclic data is handled natively**, with no
@@ -118,6 +119,22 @@ so the emitted circuit stays an acyclic d-DNNF -- the cyclic-provenance
 (cycluit) semantics is not needed for this query family.
 
 #### Agreed v1 plan: planner integration replacing the dedicated function
+
+**Status: implemented**, including the first staged extensions.  Everything
+below is in the tree: the certificate (5), `independent` (6) and
+`interpret-as-dd` (7) consumers (with iterative island walks, and an
+iterative `GenericCircuit::evaluate`, since certified circuits are as deep
+as the data), the all-targets construction (3), the content-addressed
+materialisation (4) -- plus, in the load path, certificate round-tripping
+through `createGenericCircuit` -- the rewriter detection with plan-time
+fallback (2), and the surface rework (8).  Of the staged extensions, the
+undirected (CASE / `IN`) shape and deterministic edge-column filters are
+done; multi-source base arms and the rest are still open (below).
+Measured end to end through the plain recursive query: a directed 2x10000
+ladder (29998 probabilistic edges) answers exactly in ~5.4 s, the
+undirected *cyclic* 2x1000 ladder in ~0.3 s -- against >120 s at 28 edges
+for the boolean-fixpoint route.  Tests `btw_reachability` (columnar) and
+`btw_recursive` (integrated, PG15+).
 
 The dedicated `reachability_probability` surface is the wrong interface: the
 technique must surface through the **normal ProvSQL query rewriter**.  Agreed
@@ -185,16 +202,65 @@ design (June 2026):
    columnar `reachability_evaluate` forms remain as internal/testing
    surfaces.
 
-Staged extensions after v1, in order: undirected recursive shape
-(`r.node IN (e.src, e.dst)` with a `CASE` head); multi-source base arm over a
-tracked source relation (probabilistic super-source); deterministic
-edge-column quals (if not already in v1); Shapley/stats demos over reach
-tokens; BID edge blocks as multivalued (k+1)-way branching (endpoint
-co-location joins the treewidth condition); join-defined graphs -- disjoint
-supports certified by keys/FDs as compound variables first, the faithful
-variables-in-the-decomposition DP (late-branching states) after.  Then, a
-detailed look at **non-recursive** queries helped by the data decomposition
-(the relational pathologies of the intro and Route 3's threshold case).
+Remaining staged extensions, in order: multi-source base arm over a source
+relation (`SELECT v FROM sources` -- a virtual super-source with arcs gated
+by the source rows' tokens when tracked, certain arcs otherwise; the
+compiler needs a "certain arc" notion, the detection a relation-shaped base
+arm, the driver a second gather); a degeneracy lower-bound probe on the
+data graph before the min-fill attempt (cheap fail-fast, reusing
+`degeneracyLowerBound` over a `Graph`); per-relation decomposition caching
+with write invalidation; BID edge blocks as multivalued (k+1)-way branching
+(endpoint co-location joins the treewidth condition); join-defined graphs
+-- disjoint supports certified by keys/FDs as compound variables first, the
+faithful variables-in-the-decomposition DP (late-branching states) after.
+
+#### Non-recursive queries: what the new infrastructure changes
+
+The relational pathologies of the introduction, revisited with the v1
+machinery in place:
+
+- **Cross products** (`SELECT DISTINCT 1 FROM e a, e b`): already served --
+  the independent-product factoring and the Boolean fold cover the
+  disjoint and absorption-reachable shapes, as noted above.
+- **The `costar` threshold half** (the in-star self-join, "at least two of
+  `n` edges true"): the *function* is a symmetric threshold, and its
+  textbook linear-size circuit -- the running counter capped at `k` -- is a
+  **certified d-DNNF by construction** (the counter states partition the
+  worlds; each variable branches deterministically once).  Two
+  consequences.  First, the equivalent `HAVING count(*) >= k` formulation
+  is *already* exactly evaluated in polynomial time by the
+  `CountCmpEvaluator` DP, so the pathology only bites when the workload
+  insists on the self-join form; route 3 is therefore purely a
+  *recognition* problem (rewrite the self-join-through-a-centre shape to
+  the counting form), and stays deferred until a workload exhibits it.
+  Second, when it is recognised, the emitted counter circuit should carry
+  the d-DNNF certificate, making the result a first-class token evaluable
+  by `independent` -- the certificate is the missing output channel route 3
+  previously lacked.
+- **Fixed-length path patterns** (self-join chains
+  `e a, e b [, e c] WHERE a.dst = b.src ...` with `DISTINCT` projection,
+  i.e. bounded-hop reachability): these are the non-recursive queries
+  where the *data* decomposition genuinely helps, and they need no
+  automaton compilation -- the reachability DP extends by capping the
+  relation with path lengths (entries in `{0..L, infinity}` instead of
+  bits), a `(L+2)`-fold state blow-up for hop bound `L`.  The natural
+  detection is on the recursive side anyway (a depth-bounded recursive
+  CTE, or the self-join chain rewritten to one), making this the cleanest
+  next *query family* for the existing compiler.
+- **Multi-terminal variants** (Steiner / k-terminal reliability, "all of
+  these nodes pairwise connected"): same DP with the terminal set forced
+  into the domains; the acceptance condition reads several bits instead of
+  one.  Expressible today only as dedicated calls (no natural SQL shape),
+  so the columnar surface is the place to expose them if a use case
+  appears.
+- **Route A (general MSO / CQ over treelike data)** remains the research
+  bet, but its integration cost has dropped: the provenance-emitting
+  automaton run no longer needs new evaluator machinery -- it only has to
+  *mark its gates* (deterministic state ORs, decomposable transition ANDs)
+  and materialise through the same content-addressed channel, and the
+  whole evaluation and artefact surface (chooser, `independent`,
+  `interpret-as-dd`, Shapley) picks the result up.  What is still missing
+  is exactly the query-to-automaton compiler, as before.
 
 The original analysis follows.
 

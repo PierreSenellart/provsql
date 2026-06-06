@@ -19,15 +19,18 @@ Each plan document follows a consistent layout:
 - [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
   feasibility study for exploiting bounded treewidth of the input data
   (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017).
-  The Route C seed has landed: `reachability_probability`, exact
-  two-terminal network reliability compiled along a tree decomposition
-  of the data graph, linear-time on bounded-treewidth (including
-  cyclic) graphs.  Open: `WITH RECURSIVE` shape recognition onto that
-  compiler, a token-producing variant, edge Shapley values, the
-  independent-product factoring for the relational pathologies
-  (threshold / separator recognition), the full data-decomposition +
-  tree-automaton pipeline, and a treewidth-aware general m-semiring
-  evaluator.
+  Route C has landed end to end: under `provsql.boolean_provenance`,
+  the query rewriter recognises recursive reachability (directed,
+  undirected, edge-filtered) over a tracked edge relation and compiles
+  every reachable vertex's provenance along a tree decomposition of
+  the data graph into certified d-DNNF tokens (linear size, cyclic
+  graphs native, plan-time fallback to the generic fixpoint), which
+  the standard surface evaluates linearly (`independent`,
+  `interpret-as-dd`, Shapley).  Open: multi-source base arms,
+  bounded-hop patterns, BID blocks, join-defined graphs, the full
+  data-decomposition + tree-automaton pipeline (now cheaper: emitted
+  gates only need the d-DNNF certificate), and a treewidth-aware
+  general m-semiring evaluator.
 - [`conditioning.md`](conditioning.md) : plan for a conditioning
   primitive, unifying discrete tuple-correlation (MarkoViews, Jha &
   Suciu PVLDB 2012) and continuous random variables as one operation at
