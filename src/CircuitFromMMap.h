@@ -71,6 +71,28 @@ BooleanCircuit getBooleanCircuit(
  */
 GenericCircuit getGenericCircuit(pg_uuid_t token);
 
+/**
+ * @brief Propagate the per-gate d-DNNF certificate from @p gc to @p c.
+ *
+ * For every @c gate_plus / @c gate_times of @p gc carrying the
+ * @c DNNF_CERT_INFO mark whose BoolExpr image in @p c is an OR / AND
+ * gate (the zero/one shortcuts of @c GenericCircuit::evaluate may map a
+ * gate to a constant instead, in which case the mark is moot), set the
+ * mark on the image, so @c independentEvaluation() and
+ * @c interpretAsDD() can exploit determinism / decomposability.
+ * Requires @p gc_to_bc to cover internal gates, which
+ * @c GenericCircuit::evaluate guarantees (it memoises every visited
+ * gate).
+ *
+ * @param gc        Source generic circuit.
+ * @param gc_to_bc  Gate mapping produced by the BoolExpr evaluation.
+ * @param c         Target Boolean circuit.
+ */
+void propagateDNNFCertificate(
+  const GenericCircuit &gc,
+  const std::unordered_map<gate_t, gate_t> &gc_to_bc,
+  BooleanCircuit &c);
+
 class dDNNF;
 /**
  * @brief Compile a query certified inversion-free to its structured d-DNNF.

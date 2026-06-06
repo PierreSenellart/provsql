@@ -100,8 +100,26 @@ BooleanCircuit getBooleanCircuit(
   semiring::BoolExpr semiring(c);
   provsql_having(gc, ggate, gc_to_bc, semiring);
   gate=gc.evaluate(ggate, gc_to_bc, semiring);
+  propagateDNNFCertificate(gc, gc_to_bc, c);
 
   return c;
+}
+
+void propagateDNNFCertificate(
+  const GenericCircuit &gc,
+  const std::unordered_map<gate_t, gate_t> &gc_to_bc,
+  BooleanCircuit &c)
+{
+  for(const auto &[u, b]: gc_to_bc) {
+    const auto t = gc.getGateType(u);
+    if((t != gate_plus && t != gate_times) ||
+       gc.getInfos(u).first != DNNF_CERT_INFO)
+      continue;
+    const auto bt = c.getGateType(b);
+    if((t == gate_plus && bt == BooleanGate::OR) ||
+       (t == gate_times && bt == BooleanGate::AND))
+      c.setInfo(b, DNNF_CERT_INFO);
+  }
 }
 
 BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)

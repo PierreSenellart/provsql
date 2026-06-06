@@ -614,15 +614,36 @@ friend class boost::serialization::access;
  * its semiring value via @p provenance_mapping, and combining the results
  * using the semiring operations.
  *
+ * Every computed gate is memoised into @p provenance_mapping (a gate's
+ * semiring value is a pure function of the gate, so reuse is always
+ * sound): shared sub-DAGs are evaluated once, and gate-creating
+ * semirings (BoolExpr, formula) preserve the sharing structurally.
+ * After the call the mapping therefore covers every visited gate, not
+ * only the pre-seeded inputs.
+ *
  * @tparam S                  A concrete @c semiring::Semiring subclass.
  * @param g                   Root gate of the sub-circuit to evaluate.
- * @param provenance_mapping  Map from input gate IDs to semiring values.
+ * @param provenance_mapping  Map from input gate IDs to semiring values;
+ *                            also serves as the memoisation table.
  * @param semiring            Semiring instance providing @c zero(), @c one(),
  *                            @c plus(), @c times(), etc.
  * @return                    The semiring value of the circuit at gate @p g.
  */
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> = 0>
 typename S::value_type evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const;
+
+private:
+/**
+ * @brief Unmemoised body of @c evaluate(); called only on a memo miss.
+ *
+ * @tparam S                  A concrete @c semiring::Semiring subclass.
+ * @param g                   Root gate of the sub-circuit to evaluate.
+ * @param provenance_mapping  Memoisation table shared with @c evaluate().
+ * @param semiring            Semiring instance.
+ * @return                    The semiring value of the circuit at gate @p g.
+ */
+template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> = 0>
+typename S::value_type evaluateImpl(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const;
 };
 
 #endif /* GENERIC_CIRCUIT_H */

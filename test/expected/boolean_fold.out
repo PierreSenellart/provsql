@@ -2,6 +2,9 @@
 add_provenance
 
 (1 row)
+shared_root_p_ind_nofold
+0.750000000
+(1 row)
 shared_root_p_ind
 0.750000000
 (1 row)

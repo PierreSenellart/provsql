@@ -45,20 +45,17 @@ BEGIN
   PERFORM set_config('bf.shared_root', root::text, false);
 END $$;
 
--- Without folding, independent refuses (not read-once).
+-- Even without folding, independent succeeds on this shape: the
+-- BoolExpr conversion memoises shared gates (GenericCircuit::evaluate),
+-- so the duplicated child reaches BoolExpr.times as one value and its
+-- (absorptive-by-design) dedup collapses x AND x structurally -- valid
+-- for the probability carrier irrespective of the GUC.  Non-Boolean
+-- semirings are unaffected (counting still squares the value); the
+-- boolean_assumed discipline below concerns those, not probability.
 SET provsql.boolean_provenance = off;
-DO $$ DECLARE raised boolean := false;
-BEGIN
-  BEGIN
-    PERFORM probability_evaluate(
-      current_setting('bf.shared_root')::uuid, 'independent');
-  EXCEPTION WHEN OTHERS THEN raised := true;
-  END;
-  IF NOT raised THEN
-    RAISE EXCEPTION 'expected ''independent'' to refuse the non-read-once '
-                    'circuit with boolean_provenance = off';
-  END IF;
-END $$;
+SELECT round(probability_evaluate(
+                current_setting('bf.shared_root')::uuid, 'independent')
+              ::numeric, 9) AS shared_root_p_ind_nofold;
 
 -- With folding, idempotence collapses the duplicate plus(u, v) child,
 -- the in-memory boolean_assumed flag fires on the root, and

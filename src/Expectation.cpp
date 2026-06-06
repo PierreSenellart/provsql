@@ -50,6 +50,7 @@ double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot)
   }
   semiring::BoolExpr semiring(c);
   gate_t bcRoot = gc.evaluate(boolRoot, gc_to_bc, semiring);
+  propagateDNNFCertificate(gc, gc_to_bc, c);
 
   try {
     return c.independentEvaluation(bcRoot);

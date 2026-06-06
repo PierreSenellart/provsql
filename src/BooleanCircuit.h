@@ -65,6 +65,23 @@ enum class BooleanGate {
 class dDNNF;
 
 /**
+ * @brief d-DNNF certificate value for the (gate-type-specific) per-gate
+ *        info field.
+ *
+ * On an OR (@c gate_plus) gate, info = @c DNNF_CERT_INFO asserts
+ * **determinism**: the children are mutually exclusive.  On an AND
+ * (@c gate_times) gate it asserts **decomposability**: the children
+ * mention disjoint sets of variables.  Both are semantic properties of
+ * the gate's (content-addressed) children, so a truthfully-set mark
+ * remains true however the gate is later re-derived.  Set by
+ * constructions that establish the property structurally (the
+ * decomposition-aligned reachability compilation); trusted by
+ * @c independentEvaluation() and @c interpretAsDD(), the same trust
+ * model as the planner-asserted inversion-free certificate.
+ */
+constexpr unsigned DNNF_CERT_INFO = 1;
+
+/**
  * @brief Boolean circuit for provenance formula evaluation.
  *
  * Inherits the gate/wire infrastructure from @c Circuit<BooleanGate> and
@@ -87,12 +104,21 @@ bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
 
 /**
  * @brief Recursive helper for @c interpretAsDD().
- * @param g     Current gate to process.
- * @param seen  Set of gates already visited (prevents re-processing).
- * @param dd    The d-DNNF being constructed.
- * @return      Gate ID in @p dd corresponding to @p g.
+ *
+ * @param g       Current gate to process.
+ * @param seen    Set of variable gates already consumed (read-once check
+ *                in the uncertified region; per-island registration in
+ *                certified regions).
+ * @param dd      The d-DNNF being constructed.
+ * @param island  Island-local memoisation (source gate to @p dd gate) for
+ *                the certified region being walked, or @c nullptr in the
+ *                uncertified region.  Within an island, shared sub-DAGs
+ *                map to shared @p dd gates and each variable registers in
+ *                @p seen once; sharing across islands re-walks and throws.
+ * @return        Gate ID in @p dd corresponding to @p g.
  */
-gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const;
+gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd,
+                             std::unordered_map<gate_t, gate_t> *island) const;
 /**
  * @brief Recursive helper for @c independentEvaluation().
  * @param g     Current gate to evaluate.
@@ -103,11 +129,39 @@ gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const;
  *              the whole evaluation @c O(circuit) rather than re-traversing
  *              shared subgraphs.  Variable-bearing gates are never memoised (a
  *              re-visit must reach @p seen and throw).
+ * @param island  Island-local memoisation for the certified (d-DNNF-marked)
+ *                region being walked, or @c nullptr in the uncertified
+ *                region.  A certified gate reached from the uncertified
+ *                region starts a maximal island: inside it every gate is
+ *                memoised (sharing is licensed by the certificate) and each
+ *                variable still registers once in @p seen, so entanglement
+ *                with the outside -- or with another island -- throws like a
+ *                read-once violation.
  * @return      Probability at gate @p g.
  */
 double independentEvaluationInternal(
   gate_t g, std::set<gate_t> &seen,
-  std::unordered_map<gate_t, double> &memo) const;
+  std::unordered_map<gate_t, double> &memo,
+  std::unordered_map<gate_t, double> *island) const;
+
+public:
+/**
+ * @brief Is gate @p g certified by the d-DNNF per-gate marking?
+ *
+ * @c true iff @p g is an OR marked deterministic or an AND marked
+ * decomposable (info = @c DNNF_CERT_INFO); see @c DNNF_CERT_INFO for the
+ * semantics and trust model.
+ *
+ * @param g  Gate to test.
+ * @return   Whether the gate carries the d-DNNF certificate.
+ */
+bool isDNNFCertified(gate_t g) const {
+  const auto t = getGateType(g);
+  return (t == BooleanGate::AND || t == BooleanGate::OR) &&
+         getInfo(g) == DNNF_CERT_INFO;
+}
+
+private:
 /**
  * @brief Recursive helper for @c rewriteMultivaluedGates().
  * @param muls              Gates in the MULVAR group being rewritten.

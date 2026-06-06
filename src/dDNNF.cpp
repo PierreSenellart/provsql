@@ -180,7 +180,12 @@ double dDNNF::probabilityEvaluation() const
           partial_value = getProb(g);
           break;
         case BooleanGate::NOT:
-          partial_value = 1-getProb(*getWires(g).begin());
+          // Placeholder; the complement is taken when the child's value
+          // comes back (NOT gates descend into their child like AND/OR,
+          // so a NOT over an internal gate -- e.g. the De Morgan
+          // structures interpretAsDD builds for uncertified ORs -- is
+          // evaluated correctly, not read as 1 - prob-array-default).
+          partial_value = 0;
           break;
         case BooleanGate::AND:
           partial_value = 1;
@@ -194,12 +199,14 @@ double dDNNF::probabilityEvaluation() const
       } else {
         if(getGateType(g) == BooleanGate::AND) {
           partial_value *= child_value;
+        } else if(getGateType(g) == BooleanGate::NOT) {
+          partial_value = 1-child_value;
         } else {   // BooleanGate::OR
           partial_value += child_value;
         }
       }
 
-      if(getGateType(g)!=BooleanGate::NOT && children_processed<getWires(g).size()) {
+      if(children_processed<getWires(g).size()) {
         stack.emplace(RecursionParams{g,children_processed+1,partial_value});
         stack.emplace(RecursionParams{getWires(g)[children_processed],0,0.});
       } else {

@@ -145,7 +145,12 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
   // 3. Gate-emission helpers.
   // ------------------------------------------------------------------
   const gate_t invalid_gate{static_cast<std::underlying_type<gate_t>::type>(-1)};
+  // Every emitted OR is deterministic and every emitted AND decomposable
+  // *by construction*; mark them with the d-DNNF certificate so the
+  // certificate-aware consumers (independentEvaluation, interpretAsDD)
+  // can evaluate the circuit linearly.
   const gate_t true_gate = dd.setGate(BooleanGate::AND); // empty AND = true
+  dd.setInfo(true_gate, DNNF_CERT_INFO);
 
   std::vector<gate_t> var_in(variables.size(), invalid_gate);
   std::vector<gate_t> var_not(variables.size(), invalid_gate);
@@ -168,6 +173,7 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
                    if (b == true_gate)
                      return a;
                    gate_t g = dd.setGate(BooleanGate::AND);
+                   dd.setInfo(g, DNNF_CERT_INFO);
                    dd.addWire(g, a);
                    dd.addWire(g, b);
                    return g;
@@ -190,6 +196,7 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
                         // Deterministic OR: the contributions partition the
                         // worlds inducing this state.
                         gate_t g = dd.setGate(BooleanGate::OR);
+                        dd.setInfo(g, DNNF_CERT_INFO);
                         for (gate_t c : entry.second)
                           dd.addWire(g, c);
                         t.emplace(entry.first, g);
@@ -388,12 +395,14 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
       accepting.push_back(entry.second);
 
   gate_t output;
-  if (accepting.empty())
+  if (accepting.empty()) {
     output = dd.setGate(BooleanGate::OR); // empty OR = false
-  else if (accepting.size() == 1)
+    dd.setInfo(output, DNNF_CERT_INFO);
+  } else if (accepting.size() == 1)
     output = accepting[0];
   else {
     output = dd.setGate(BooleanGate::OR);
+    dd.setInfo(output, DNNF_CERT_INFO);
     for (gate_t g : accepting)
       dd.addWire(output, g);
   }
