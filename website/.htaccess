@@ -4,4 +4,6 @@ Redirect permanent /temporal_demo /docs/user/casestudy4.html
 
 # Legacy image-retrieval demo, long dead (503) yet still indexed by
 # search engines; send visitors and crawlers to the demos page instead.
-Redirect permanent /coco /demos/
+# RedirectMatch, not Redirect: the latter is prefix-matching and would
+# map /coco/<page> onto a nonexistent /demos/<page>.
+RedirectMatch permanent ^/coco(/.*)?$ /demos/
