@@ -75,30 +75,46 @@ int checkedArrayLength(ArrayType *arr, const char *what)
  * @param fcinfo  PostgreSQL function-call info.
  * @return        The decoded edge rows.
  */
-std::vector<ReachabilityCompiler::EdgeRow> edgesFromArgs(FunctionCallInfo fcinfo)
+std::vector<ReachabilityCompiler::EdgeRow> edgesFromArgs(
+  FunctionCallInfo fcinfo, int block_args_at = -1)
 {
   ArrayType *srcs   = PG_ARGISNULL(0) ? NULL : PG_GETARG_ARRAYTYPE_P(0);
   ArrayType *dsts   = PG_ARGISNULL(1) ? NULL : PG_GETARG_ARRAYTYPE_P(1);
   ArrayType *tokens = PG_ARGISNULL(2) ? NULL : PG_GETARG_ARRAYTYPE_P(2);
   ArrayType *probs  = PG_ARGISNULL(3) ? NULL : PG_GETARG_ARRAYTYPE_P(3);
+  ArrayType *bkeys  = NULL;
+  ArrayType *bidx   = NULL;
+  if (block_args_at >= 0) {
+    bkeys = PG_ARGISNULL(block_args_at) ? NULL
+            : PG_GETARG_ARRAYTYPE_P(block_args_at);
+    bidx  = PG_ARGISNULL(block_args_at+1) ? NULL
+            : PG_GETARG_ARRAYTYPE_P(block_args_at+1);
+  }
 
   const int n = checkedArrayLength(srcs, "sources");
   if (checkedArrayLength(dsts, "destinations") != n ||
       checkedArrayLength(tokens, "tokens") != n ||
       checkedArrayLength(probs, "probabilities") != n)
     provsql_error("reachability: edge arrays must have the same length");
+  if (bkeys != NULL &&
+      (checkedArrayLength(bkeys, "block keys") != n ||
+       checkedArrayLength(bidx, "block indices") != n))
+    provsql_error("reachability: edge arrays must have the same length");
 
   std::vector<ReachabilityCompiler::EdgeRow> rows;
   rows.reserve(n);
 
   if (n > 0) {
-    /* All four element types are fixed-length and NULL-free (checked
-     * above), so the data areas are packed and can be read directly,
-     * as create_gate does for uuid[]. */
+    /* All element types are fixed-length and NULL-free (checked above),
+     * so the data areas are packed and can be read directly, as
+     * create_gate does for uuid[]. */
     const int32 *src_data = (const int32 *) ARR_DATA_PTR(srcs);
     const int32 *dst_data = (const int32 *) ARR_DATA_PTR(dsts);
     const pg_uuid_t *token_data = (const pg_uuid_t *) ARR_DATA_PTR(tokens);
     const float8 *prob_data = (const float8 *) ARR_DATA_PTR(probs);
+    const pg_uuid_t *bkey_data =
+      bkeys ? (const pg_uuid_t *) ARR_DATA_PTR(bkeys) : NULL;
+    const int32 *bidx_data = bidx ? (const int32 *) ARR_DATA_PTR(bidx) : NULL;
 
     for (int i = 0; i < n; ++i) {
       ReachabilityCompiler::EdgeRow row;
@@ -109,6 +125,16 @@ std::vector<ReachabilityCompiler::EdgeRow> edgesFromArgs(FunctionCallInfo fcinfo
       if (row.prob < 0. || row.prob > 1.)
         provsql_error("reachability: edge probability %f out of [0,1]",
                       row.prob);
+      if (bkey_data) {
+        bool nil = true;
+        for (int b = 0; b < 16; ++b)
+          if (bkey_data[i].data[b] != 0)
+            nil = false;
+        if (!nil) {
+          row.block_key = uuid2string(bkey_data[i]);
+          row.block_index = static_cast<unsigned>(bidx_data[i]);
+        }
+      }
       rows.push_back(std::move(row));
     }
   }
@@ -319,7 +345,10 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
 
     const auto t = dd.getGateType(g);
 
-    if (t == BooleanGate::IN) {
+    if (t == BooleanGate::IN || t == BooleanGate::MULIN) {
+      // Existing tokens (edge / source tuples, BID alternatives): never
+      // re-created; a MULIN is a leaf here (its key-variable child lives
+      // in the store already).
       uuid_of[g] = string2uuid(dd.getUUID(g));
       stack.pop_back();
       continue;
@@ -460,9 +489,11 @@ Datum reachability_compile_stats(PG_FUNCTION_ARGS)
  *        materialisation.
  *
  * Arguments: @c srcs @c int[], @c dsts @c int[], @c tokens @c uuid[],
- * @c probs @c float8[], @c source_vertices @c int[], @c source_tokens
- * @c uuid[] (the nil UUID marking a certain source), @c source_probs
- * @c float8[], @c directed @c boolean.
+ * @c probs @c float8[], @c block_keys @c uuid[] (nil = independent
+ * tuple; otherwise the BID key variable grouping mutually exclusive
+ * alternatives) and @c block_indices @c int[], @c source_vertices
+ * @c int[], @c source_tokens @c uuid[] (the nil UUID marking a certain
+ * source), @c source_probs @c float8[], @c directed @c boolean.
  * Returns: one @c (vertex, token) row per vertex reachable in the
  * all-edges-present world, @c token being the materialised certified
  * provenance circuit of "some present source reaches the vertex".  This
@@ -471,20 +502,20 @@ Datum reachability_compile_stats(PG_FUNCTION_ARGS)
 Datum reachability_materialize(PG_FUNCTION_ARGS)
 {
   try {
-    if (PG_ARGISNULL(7))
+    if (PG_ARGISNULL(9))
       provsql_error("reachability: directed must not be NULL");
 
-    auto rows = edgesFromArgs(fcinfo);
-    const bool directed = PG_GETARG_BOOL(7);
+    auto rows = edgesFromArgs(fcinfo, 4);
+    const bool directed = PG_GETARG_BOOL(9);
 
     /* Sources: parallel arrays of vertices, tokens and probabilities; the
      * nil UUID marks a *certain* source (an untracked source relation, or
      * the constant base arm of the recursive shape). */
     std::vector<ReachabilityCompiler::SourceArc> sources;
     {
-      ArrayType *sv = PG_ARGISNULL(4) ? NULL : PG_GETARG_ARRAYTYPE_P(4);
-      ArrayType *st = PG_ARGISNULL(5) ? NULL : PG_GETARG_ARRAYTYPE_P(5);
-      ArrayType *sp = PG_ARGISNULL(6) ? NULL : PG_GETARG_ARRAYTYPE_P(6);
+      ArrayType *sv = PG_ARGISNULL(6) ? NULL : PG_GETARG_ARRAYTYPE_P(6);
+      ArrayType *st = PG_ARGISNULL(7) ? NULL : PG_GETARG_ARRAYTYPE_P(7);
+      ArrayType *sp = PG_ARGISNULL(8) ? NULL : PG_GETARG_ARRAYTYPE_P(8);
       const int ns = checkedArrayLength(sv, "source vertices");
       if (checkedArrayLength(st, "source tokens") != ns ||
           checkedArrayLength(sp, "source probabilities") != ns)

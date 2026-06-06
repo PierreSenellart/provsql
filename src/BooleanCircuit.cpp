@@ -1807,6 +1807,11 @@ double BooleanCircuit::evaluateCertifiedIsland(
   // (sharing is licensed by the certificate), and the explicit post-order
   // stack keeps the walk safe on circuits as deep as the data.
   std::unordered_map<gate_t, double> val;
+  // Key variables of MULIN gates already registered within this island: a
+  // BID block's alternatives share their key variable by design (they are
+  // mutually exclusive outcomes appearing under deterministic ORs), so
+  // only the first registers globally.
+  std::unordered_set<gate_t> island_mulvars;
   std::vector<gate_t> stack{root};
 
   while(!stack.empty()) {
@@ -1833,9 +1838,11 @@ double BooleanCircuit::evaluateCertifiedIsland(
     }
     if(t == BooleanGate::MULIN) {
       auto child = *getWires(g).begin();
-      if(seen.find(child) != seen.end())
-        throw CircuitException("Not an independent circuit");
-      seen.insert(child);
+      if(island_mulvars.insert(child).second) {
+        if(seen.find(child) != seen.end())
+          throw CircuitException("Not an independent circuit");
+        seen.insert(child);
+      }
       val[g] = getProb(g);
       stack.pop_back();
       continue;

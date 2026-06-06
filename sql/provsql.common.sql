@@ -4386,6 +4386,10 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
  * @param destinations destination vertex of each edge
  * @param tokens provenance token of each edge tuple
  * @param probabilities probability of each edge tuple
+ * @param block_keys per-edge BID key variable (nil UUID = independent
+ *        tuple; alternatives sharing a key are mutually exclusive, e.g.
+ *        from repair_key)
+ * @param block_indices per-edge outcome index within its block
  * @param source_vertices the source vertices
  * @param source_tokens per-source provenance token (nil UUID = certain)
  * @param source_probabilities per-source probability
@@ -4396,6 +4400,8 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
   IN destinations INT[],
   IN tokens UUID[],
   IN probabilities DOUBLE PRECISION[],
+  IN block_keys UUID[],
+  IN block_indices INT[],
   IN source_vertices INT[],
   IN source_tokens UUID[],
   IN source_probabilities DOUBLE PRECISION[],
@@ -4442,6 +4448,8 @@ CREATE OR REPLACE FUNCTION gather_reachability_edges(
   OUT destinations INT[],
   OUT tokens UUID[],
   OUT probabilities DOUBLE PRECISION[],
+  OUT block_keys UUID[],
+  OUT block_indices INT[],
   OUT extra_ids INT[],
   OUT vertices TEXT[])
 AS
@@ -4461,9 +4469,9 @@ BEGIN
   PERFORM remove_provenance('provsql_reachability_edges_tmp');
 
   IF EXISTS (SELECT 1 FROM provsql_reachability_edges_tmp
-             WHERE get_gate_type(token) <> 'input') THEN
+             WHERE get_gate_type(token) NOT IN ('input', 'mulinput')) THEN
     DROP TABLE provsql_reachability_edges_tmp;
-    RAISE EXCEPTION 'reachability: the provenance of % must consist of base input tokens (independent tuples); views or query results are not supported', rel;
+    RAISE EXCEPTION 'reachability: the provenance of % must consist of base input or repair_key tokens; views or query results are not supported', rel;
   END IF;
 
   WITH verts AS (
@@ -4474,12 +4482,17 @@ BEGIN
     SELECT x, (row_number() OVER (ORDER BY x))::int AS id FROM verts)
   SELECT array_agg(iu.id), array_agg(iv.id),
          array_agg(e.token), array_agg(coalesce(get_prob(e.token), 1.0)),
+         array_agg(CASE WHEN get_gate_type(e.token) = 'mulinput'
+                        THEN (get_children(e.token))[1]
+                        ELSE '00000000-0000-0000-0000-000000000000'::uuid END),
+         array_agg(CASE WHEN get_gate_type(e.token) = 'mulinput'
+                        THEN (get_infos(e.token)).info1 ELSE 0 END),
          (SELECT array_agg(i.id ORDER BY ev.ord)
             FROM unnest(extra_vertices) WITH ORDINALITY AS ev(x, ord)
             JOIN ids i ON i.x = ev.x),
          (SELECT array_agg(x ORDER BY id) FROM ids)
-    INTO sources, destinations, tokens, probabilities, extra_ids,
-         vertices
+    INTO sources, destinations, tokens, probabilities, block_keys,
+         block_indices, extra_ids, vertices
     FROM provsql_reachability_edges_tmp e
     JOIN ids iu ON iu.x = e.u
     JOIN ids iv ON iv.x = e.v;
@@ -4637,10 +4650,10 @@ BEGIN
     EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
     EXECUTE format(
       'INSERT INTO %I SELECT ($1::text[])[m.vertex]::%s, m.token '
-      || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7, $8, $9) m',
+      || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7, $8, $9, $10, $11) m',
       work_name, coltype)
       USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
-            e.extra_ids, st, sp, directed;
+            e.block_keys, e.block_indices, e.extra_ids, st, sp, directed;
     IF verbosity >= 20 THEN
       RAISE NOTICE 'ProvSQL: recursive CTE "%" compiled along a tree decomposition of %',
         work_name, edge_rel;

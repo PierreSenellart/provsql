@@ -473,6 +473,12 @@ source participates with its tuple's probability (a probabilistic
 source set: "reachable from some present source"); an untracked
 relation gives certain sources.
 
+Edge relations prepared with :sqlfunc:`repair_key` work too: a block
+of mutually exclusive alternative edges (say, an uncertain road whose
+true endpoint is one of several candidates) compiles as a single
+(k+1)-way deterministic branching, preserving the block-independent
+semantics exactly.
+
 The emitted circuits are *deterministic and decomposable by
 construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
 persisted **certificate** of that property (readable with

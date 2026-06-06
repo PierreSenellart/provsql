@@ -115,6 +115,30 @@ node|prob
 3|1.000000
 4|1.000000
 (3 rows)
+repair_key
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|prob
+1|1.000000
+2|0.500000
+3|0.500000
+4|1.000000
+(4 rows)
+remove_provenance
+
+(1 row)
+bid_independent
+1.000000
+(1 row)
+remove_provenance
+
+(1 row)
+bid_routes_agree
+t
+(1 row)
 add_provenance
 
 (1 row)

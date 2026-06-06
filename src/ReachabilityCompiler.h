@@ -87,6 +87,8 @@ struct EdgeRow {
   unsigned long dst;   ///< Destination vertex ID.
   std::string token;   ///< Provenance token (UUID) of the edge tuple.
   double prob;         ///< Probability of the edge tuple.
+  std::string block_key;     ///< Block-independent (BID) key variable (UUID) when the tuple is a @c mulinput alternative (e.g. from @c repair_key); empty for an independent tuple.
+  unsigned block_index = 0;  ///< Outcome index within the block (the @c mulinput gate's info).
 };
 
 /** @brief Structural statistics of a compilation, for diagnostics and tests. */

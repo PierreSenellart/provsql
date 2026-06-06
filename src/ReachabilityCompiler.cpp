@@ -69,6 +69,24 @@ struct EdgeVariable {
   double prob;          ///< Tuple probability (unused when certain).
 };
 
+/** @brief One alternative of a BID block: an arc present iff its @c mulinput outcome is drawn. */
+struct BlockAlternative {
+  unsigned long u;      ///< First endpoint.
+  unsigned long v;      ///< Second endpoint.
+  bool arc_uv;          ///< Arc u -> v in this outcome.
+  bool arc_vu;          ///< Arc v -> u in this outcome.
+  std::string token;    ///< The @c mulinput token (the outcome's literal).
+  double prob;          ///< Outcome probability.
+  unsigned index;       ///< Outcome index within the block.
+};
+
+/** @brief A block of mutually exclusive arc alternatives (one @c repair_key block). */
+struct EdgeBlock {
+  std::string key;                          ///< The block's key variable (MULVAR UUID).
+  std::vector<BlockAlternative> alts;       ///< The alternatives.
+  std::vector<unsigned long> endpoints;     ///< Distinct non-self-loop endpoints (must share a bag).
+};
+
 } // namespace
 
 ReachabilityCompiler::Rel ReachabilityCompiler::transitiveClosure(Rel r, int d)
@@ -121,11 +139,55 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   // Self-loops never affect reachability and are dropped.
   // ------------------------------------------------------------------
   std::vector<EdgeVariable> variables;
+  std::vector<EdgeBlock> blocks;
   {
+    // BID blocks first: rows carrying a block key are mutually exclusive
+    // alternatives of one (k+1)-way variable; their tokens must not be
+    // shared with anything else, and a pure self-loop alternative keeps
+    // its probability mass but contributes no arc.
+    std::unordered_map<std::string, std::size_t> key_to_block;
+    std::unordered_set<std::string> block_tokens;
+    for (const auto &row : rows) {
+      if (row.block_key.empty())
+        continue;
+      auto [it, fresh] = key_to_block.try_emplace(row.block_key, blocks.size());
+      if (fresh) {
+        EdgeBlock blk;
+        blk.key = row.block_key;
+        blocks.push_back(std::move(blk));
+      }
+      EdgeBlock &blk = blocks[it->second];
+      if (!block_tokens.insert(row.token).second)
+        throw ReachabilityCompilerException(
+                "provenance token " + row.token +
+                " appears on several block alternatives");
+      BlockAlternative alt;
+      alt.u = row.src;
+      alt.v = row.dst;
+      alt.arc_uv = (row.src != row.dst);
+      alt.arc_vu = (row.src != row.dst) && !directed;
+      alt.token = row.token;
+      alt.prob = row.prob;
+      alt.index = row.block_index;
+      if (row.src != row.dst) {
+        for (unsigned long e : {row.src, row.dst})
+          if (std::find(blk.endpoints.begin(), blk.endpoints.end(), e) ==
+              blk.endpoints.end())
+            blk.endpoints.push_back(e);
+      }
+      blk.alts.push_back(std::move(alt));
+    }
+
     std::unordered_map<std::string, std::size_t> token_to_var;
     for (const auto &row : rows) {
+      if (!row.block_key.empty())
+        continue; // handled above
       if (row.src == row.dst)
         continue; // self-loop, irrelevant to reachability
+      if (block_tokens.find(row.token) != block_tokens.end())
+        throw ReachabilityCompilerException(
+                "provenance token " + row.token +
+                " is shared between a block alternative and an edge");
 
       auto it = token_to_var.find(row.token);
       if (it == token_to_var.end()) {
@@ -203,6 +265,7 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   for (const auto &var : variables)
     if (!var.certain)
       ++result.stats.nb_variables;
+  result.stats.nb_variables += blocks.size();
 
   // ------------------------------------------------------------------
   // 2. Tree decomposition of the data graph (vertices: all endpoints
@@ -215,6 +278,17 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
     graph.add_node(*only_target);
   for (const auto &var : variables)
     graph.add_edge(var.u, var.v);
+  for (const auto &blk : blocks) {
+    // All endpoints of a block must share a bag (the whole block is
+    // introduced at once): force it with a clique.  This is the honest
+    // treewidth condition for BID data -- a block spanning many distant
+    // vertices genuinely raises the width.
+    for (std::size_t i = 0; i < blk.endpoints.size(); ++i)
+      for (std::size_t j = i+1; j < blk.endpoints.size(); ++j)
+        graph.add_edge(blk.endpoints[i], blk.endpoints[j]);
+    if (blk.endpoints.size() == 1)
+      graph.add_node(blk.endpoints[0]);
+  }
 
   /* No degeneracy pre-probe here, deliberately: it was implemented and
    * measured (TreeDecomposition::degeneracyLowerBound now accepts a
@@ -240,6 +314,22 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
     bag_t bv = elimination_bag.at(variables[i].v);
     bag_t b = bag_index(bu) < bag_index(bv) ? bu : bv;
     variables_at_bag[bag_index(b)].push_back(i);
+  }
+  // A block is introduced at the bag of its earliest-eliminated endpoint,
+  // which (by the clique above and the elimination invariant) contains
+  // every endpoint of the block.  A block with no real arc is irrelevant
+  // to reachability and is skipped entirely.
+  std::vector<std::vector<std::size_t> > blocks_at_bag(nb_bags);
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    if (blocks[i].endpoints.empty())
+      continue;
+    bag_t best = elimination_bag.at(blocks[i].endpoints[0]);
+    for (unsigned long e : blocks[i].endpoints) {
+      bag_t be = elimination_bag.at(e);
+      if (bag_index(be) < bag_index(best))
+        best = be;
+    }
+    blocks_at_bag[bag_index(best)].push_back(i);
   }
 
   // Read points: every vertex is read at its elimination bag (which
@@ -279,6 +369,41 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                    }
                    return var_not[i];
                  };
+  std::vector<gate_t> block_mulvar(blocks.size(), invalid_gate);
+  std::vector<std::vector<gate_t> > block_mulin(blocks.size());
+  std::vector<gate_t> block_none(blocks.size(), invalid_gate);
+  auto mulinGate = [&](std::size_t bi, std::size_t ai) {
+                     if (block_mulin[bi].empty())
+                       block_mulin[bi].assign(blocks[bi].alts.size(),
+                                              invalid_gate);
+                     if (block_mulin[bi][ai] == invalid_gate) {
+                       if (block_mulvar[bi] == invalid_gate)
+                         block_mulvar[bi] =
+                           dd.setGate(blocks[bi].key, BooleanGate::MULVAR);
+                       const auto &alt = blocks[bi].alts[ai];
+                       gate_t m = dd.setGate(alt.token, BooleanGate::MULIN,
+                                             alt.prob);
+                       dd.setInfo(m, alt.index);
+                       dd.addWire(m, block_mulvar[bi]);
+                       block_mulin[bi][ai] = m;
+                     }
+                     return block_mulin[bi][ai];
+                   };
+  auto noneGate = [&](std::size_t bi) {
+                    if (block_none[bi] == invalid_gate) {
+                      // "No alternative drawn": NOT over the (deterministic:
+                      // the alternatives are mutually exclusive) OR of the
+                      // block's mulinput literals; probability 1 - sum p_i.
+                      gate_t o = dd.setGate(BooleanGate::OR);
+                      dd.setInfo(o, DNNF_CERT_INFO);
+                      for (std::size_t ai = 0; ai < blocks[bi].alts.size(); ++ai)
+                        dd.addWire(o, mulinGate(bi, ai));
+                      gate_t n = dd.setGate(BooleanGate::NOT);
+                      dd.addWire(n, o);
+                      block_none[bi] = n;
+                    }
+                    return block_none[bi];
+                  };
   auto andGate = [&](gate_t a, gate_t b) {
                    if (a == true_gate)
                      return b;
@@ -459,6 +584,45 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                             acc[entry.first].push_back(
                               andGate(entry.second, notGate(vi)));
                           }
+                        }
+                        table = finalize(acc);
+                      }
+                      for (std::size_t bi : blocks_at_bag[b]) {
+                        const EdgeBlock &blk = blocks[bi];
+                        Accumulator acc;
+                        for (const auto &entry : table) {
+                          // (k+1)-way deterministic branching: one outcome
+                          // per alternative (its arcs applied, gated by its
+                          // mulinput literal) plus the none outcome.  If no
+                          // outcome can change the relation, the block is
+                          // irrelevant for these worlds.
+                          std::vector<Rel> outs(blk.alts.size());
+                          bool all_same = true;
+                          for (std::size_t ai = 0; ai < blk.alts.size(); ++ai) {
+                            Rel present = entry.first;
+                            const auto &alt = blk.alts[ai];
+                            if (alt.arc_uv || alt.arc_vu) {
+                              const int pu = positionIn(domain, alt.u);
+                              const int pv = positionIn(domain, alt.v);
+                              if (alt.arc_uv)
+                                present.set(pu*MAXD + pv);
+                              if (alt.arc_vu)
+                                present.set(pv*MAXD + pu);
+                              present = transitiveClosure(present, d);
+                            }
+                            outs[ai] = present;
+                            if (present != entry.first)
+                              all_same = false;
+                          }
+                          if (all_same) {
+                            acc[entry.first].push_back(entry.second);
+                            continue;
+                          }
+                          acc[entry.first].push_back(
+                            andGate(entry.second, noneGate(bi)));
+                          for (std::size_t ai = 0; ai < blk.alts.size(); ++ai)
+                            acc[outs[ai]].push_back(
+                              andGate(entry.second, mulinGate(bi, ai)));
                         }
                         table = finalize(acc);
                       }

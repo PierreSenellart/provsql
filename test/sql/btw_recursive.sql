@@ -215,6 +215,58 @@ DROP TABLE btwr_usrc;
 DROP TABLE btwr_msrc;
 DROP TABLE btwr_medge;
 
+-- BID blocks: repair_key alternatives are compiled as one (k+1)-way
+-- deterministic branching per block.  Node 1's outgoing edge goes to 2
+-- xor to 3 (uniform repair_key block); both lead to 4:
+-- reach(2)=reach(3)=0.5, reach(4)=1.
+CREATE TABLE btwr_bid(src int, dst int);
+INSERT INTO btwr_bid VALUES (1,2),(1,3),(2,4),(3,4);
+SELECT repair_key('btwr_bid', 'src');
+SET provsql.last_eval_method = '';
+CREATE TABLE btwr_bid_r AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwr_bid e JOIN reach r ON e.src = r.node
+  )
+  SELECT node, round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_bid_r');
+SELECT * FROM btwr_bid_r ORDER BY node;
+-- The explicit linear method handles the mulinput literals.
+CREATE TABLE btwr_bid_x AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwr_bid e JOIN reach r ON e.src = r.node
+  )
+  SELECT node, provenance() pv FROM reach;
+SELECT remove_provenance('btwr_bid_x');
+SELECT round(probability_evaluate(pv, 'independent')::numeric, 6)
+  AS bid_independent
+FROM btwr_bid_x WHERE node = 4;
+DROP TABLE btwr_bid_x;
+-- The generic fixpoint agrees.
+SET provsql.boolean_provenance = off;
+CREATE TABLE btwr_bid_r2 AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwr_bid e JOIN reach r ON e.src = r.node
+  )
+  SELECT node,
+         round(probability_evaluate(provenance(),'possible-worlds')::numeric, 6)
+           AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_bid_r2');
+SELECT NOT EXISTS ((TABLE btwr_bid_r EXCEPT TABLE btwr_bid_r2)
+                   UNION ALL (TABLE btwr_bid_r2 EXCEPT TABLE btwr_bid_r))
+  AS bid_routes_agree;
+SET provsql.boolean_provenance = on;
+DROP TABLE btwr_bid_r2;
+DROP TABLE btwr_bid_r;
+DROP TABLE btwr_bid;
+
 -- Fallback: data treewidth above the cap (K14) falls back to the
 -- generic fixpoint, with a notice under provsql.verbose_level >= 10;
 -- the query still answers (acyclic orientation, so eval_recursive

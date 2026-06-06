@@ -202,10 +202,28 @@ design (June 2026):
    columnar `reachability_evaluate` forms remain as internal/testing
    surfaces.
 
-Remaining staged extensions, in order: BID edge blocks as multivalued (k+1)-way branching
-(endpoint co-location joins the treewidth condition); join-defined graphs
+Remaining staged extensions: join-defined graphs
 -- disjoint supports certified by keys/FDs as compound variables first, the
 faithful variables-in-the-decomposition DP (late-branching states) after.
+
+#### BID blocks: implemented
+
+`repair_key` edge relations compile natively: the gathering classifies
+`mulinput` tokens by their key variable, and each block becomes one
+(k+1)-way deterministic branching in the DP -- per alternative, the arcs
+applied and the outcome gated by its `mulinput` literal; the none outcome
+(probability `1 - sum p_i`, weight zero under exactly-one `repair_key`
+semantics) gated by `monus(one, plus(mulins))` with the plus *marked
+deterministic* (the alternatives are mutually exclusive by construction).
+Endpoint co-location is forced by a clique among each block's endpoints in
+the decomposed graph -- the honest treewidth condition for BID data.  The
+certified-island evaluator registers a block's key variable once per
+island, so the linear `independent` route covers BID circuits.
+Differentially tested (200 random mixed instances incl. sub-stochastic
+blocks) against outcome-enumerating brute force, and in-database against
+the generic fixpoint; a 1000-vertex ladder whose every rung is a two-way
+`repair_key` block evaluates exactly in ~0.3 s through the plain recursive
+query.
 
 #### Multi-source base arms: implemented
 
