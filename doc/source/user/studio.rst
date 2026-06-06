@@ -13,12 +13,14 @@ through three complementary modes:
 * **Where mode** highlights the source cells that contributed to each
   output value, against the live content of the provenance-tracked
   relations.
-* **Notebook mode** is a Jupyter-style notebook -- SQL, Markdown,
+* **Notebook mode** is a `Jupyter <https://jupyter.org/>`_-style
+  notebook -- SQL, Markdown,
   circuit and evaluation cells over a persistent database session --
   saved and loaded as standard ``.ipynb`` files.
 
 A schema panel, a configuration panel, and a mode-switcher round out
-the UI; all are described below.
+the UI; all are described below. Throughout the UI, :fa:`question-circle`
+help icons deep-link into the relevant section of this manual.
 
 .. _playground-note:
 
@@ -31,13 +33,14 @@ the UI; all are described below.
    tutorial and case-study databases. It needs a recent browser with
    WebAssembly JSPI; the landing page lists current browser support.
    Because the browser cannot launch external programs, the external
-   knowledge compilers (d4, c2d, miniC2D, dsharp, weightmc) and graph-easy
-   are not available there: probability uses the built-in
-   tree-decomposition compiler, and everything else works.
+   knowledge compilers and model counters, as well as graph-easy for
+   :sqlfunc:`view_circuit`, are not available there: probability uses
+   the built-in tree-decomposition compiler, and everything else works.
 
-Studio is a query-and-inspect tool, not a database loader. Bulk
-fixture loads (``psql -d mydb -f setup.sql``) still go through
-``psql``; Studio takes over once the data is in place.
+Studio combines well with ``psql``: bulk fixture loads
+(``psql -d mydb -f setup.sql``) can go through ``psql`` before Studio
+takes over, or live in the setup cells of a notebook (see
+`Notebook mode`_).
 
 .. _studio-installation:
 
@@ -94,7 +97,7 @@ the bind address and port with ``--host`` and ``--port``).
 In-page connection editor
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-A plug icon next to the connection-status dot in the top navigation
+A plug icon (:fa:`plug`) next to the connection-status dot in the top navigation
 opens a pop-up panel where you can paste a DSN. Studio
 probes the new DSN with ``SELECT 1`` before swapping pools, so a typo
 or wrong password leaves the existing connection up and surfaces the
@@ -109,6 +112,12 @@ database on the current server; pick one and the page reloads onto
 it. The query box is wiped on switch (the previous query rarely
 makes sense against a different database) but is pushed onto the
 history first, so **Alt+↑** recovers it.
+
+Two utility buttons sit nearby in the top nav: :fa:`sync` refreshes
+Studio's cached metadata (schema, provenance mappings, custom
+semirings) after changes made outside the Studio session, and
+:fa:`broom` empties the connected database, dropping every user
+schema for a clean slate (the ``provsql`` extension survives).
 
 .. _studio-connecting-search-path:
 
@@ -130,20 +139,56 @@ accepts arbitrary SQL, including DDL (``CREATE TABLE``), DML
 Connect Studio with a role that has the privileges your workflow
 expects.
 
+.. _studio-circuit-mode:
+
+Circuit mode
+------------
+
+Circuit mode is the visual counterpart to :sqlfunc:`view_circuit`
+and the programmatic walks via :sqlfunc:`get_gate_type`,
+:sqlfunc:`get_children`, and :sqlfunc:`identify_token`. The query
+runs unwrapped, so the ``provsql`` UUID column and any ``agg_token``
+cells appear in the result table as raw values; clicking one renders
+its provenance DAG in the sidebar.
+
+.. figure:: /_static/studio/circuit-mode.png
+   :alt: Studio Circuit mode showing a small DISTINCT-circuit with the
+         input-gate inspector open and the stored probability
+         visible.
+
+   Circuit mode: a ``DISTINCT`` query renders a ``⊕``-rooted DAG.
+   Pinning an input gate opens the inspector with its metadata and
+   the stored probability, click-to-edit.
+
+Hovering a node lights up its subtree; clicking pins it and opens
+the inspector panel. Drag a node to reposition it; the offset is
+preserved across frontier expansions and reset on every fresh
+circuit load. A :fa:`undo` :guilabel:`Reset node positions` toolbar button undoes all
+drag-to-move offsets at once. Wheel-to-zoom is supported on the
+canvas (with :fa:`search-minus` / :fa:`search-plus` zoom buttons in
+the toolbar), and a :fa:`expand` :guilabel:`Fit to screen` button resets zoom and pan. A
+:fa:`expand-arrows-alt` :guilabel:`Fullscreen` toggle pins the canvas to the
+browser window (Esc exits), and a :fa:`fingerprint` :guilabel:`Show UUIDs`
+toggle expands the abbreviated UUIDs -- in the result table, on the
+canvas, and in the inspector -- to their full form.
+
 .. _studio-query-box:
 
 Query box
----------
+^^^^^^^^^
 
 The query box is a syntax-highlighted SQL editor: PostgreSQL
 keywords, strings, comments, and identifiers are coloured inline.
 
 Submit the current batch with **Ctrl+Enter** (or **⌘+Enter** on
-macOS) inside the query box, or by clicking the :guilabel:`Send query` button
-next to it.
+macOS) inside the query box, or by clicking the :fa:`bolt` :guilabel:`Send query` button
+next to it. While a batch is running, :guilabel:`Send query` gives way
+to a :fa:`times-circle` :guilabel:`Cancel` button that interrupts the
+statement in flight. Two gutter actions on the editor clear the query
+box (:fa:`eraser`) and load a ``.sql`` file into it (:fa:`folder-open`).
 
 Past queries are kept in a session history. **Alt+↑** and **Alt+↓**
-step through them in place; the :guilabel:`History` button opens a list view
+step through them in place; the :fa:`history` :guilabel:`History` button opens a list view
 of recent queries to pick from.
 
 The query box accepts multiple semicolon-separated statements;
@@ -181,7 +226,7 @@ the underlying ``NOTICE`` carries.
 .. _studio-query-toggles:
 
 Per-query toggles
-^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~
 
 A three-way :guilabel:`Provenance scheme` switch next to the
 query box selects which provenance behaviour the connection runs
@@ -213,35 +258,6 @@ scheme and freely user-controllable.
 
 Both the scheme and the checkbox are sent to the server alongside
 each query.
-
-.. _studio-circuit-mode:
-
-Circuit mode
-------------
-
-Circuit mode is the visual counterpart to :sqlfunc:`view_circuit`
-and the programmatic walks via :sqlfunc:`get_gate_type`,
-:sqlfunc:`get_children`, and :sqlfunc:`identify_token`. The query
-runs unwrapped, so the ``provsql`` UUID column and any ``agg_token``
-cells appear in the result table as raw values; clicking one renders
-its provenance DAG in the sidebar.
-
-.. figure:: /_static/studio/circuit-mode.png
-   :alt: Studio Circuit mode showing a small DISTINCT-circuit with the
-         input-gate inspector open and the stored probability
-         visible.
-
-   Circuit mode: a ``DISTINCT`` query renders a ``⊕``-rooted DAG.
-   Pinning an input gate opens the inspector with its metadata and
-   the stored probability, click-to-edit.
-
-Hovering a node lights up its subtree; clicking pins it and opens
-the inspector panel. Drag a node to reposition it; the offset is
-preserved across frontier expansions and reset on every fresh
-circuit load. A :guilabel:`Reset node positions` toolbar button undoes all
-drag-to-move offsets at once. Wheel-to-zoom is supported on the
-canvas, and a :guilabel:`Fit to screen` button resets zoom and pan. A
-:guilabel:`Fullscreen` toggle pins the canvas to the browser window (Esc exits).
 
 .. _studio-circuit-example:
 
@@ -375,7 +391,7 @@ semiring entries filter to mappings whose value type matches the
 wrapper's return type. Mismatches are surfaced before the round-trip
 as ``(no compatible mappings : expected …)`` in the picker.
 
-:guilabel:`Run` reports the result inline along with the runtime. For an
+:fa:`play` :guilabel:`Run` reports the result inline along with the runtime. For an
 approximate method the strip also shows the ``(ε, δ)`` error bound ProvSQL
 reports for that run: a *relative* error bound (the estimate is within a factor
 ``1 ± ε`` of the true probability) for ``karp-luby`` and the weighted counters,
@@ -385,8 +401,8 @@ shown as ``relative error ≤ 10%, prob ≥ 95%``; and an *additive* bound (a
 ``monte-carlo``, shown as ``± 0.0136 absolute, prob ≥ 95%``. The sample-based
 methods also report the actual sample count (informative on the adaptive
 ``(ε, δ)`` path, where ProvSQL derives it), e.g. ``…, 2,120 samples``.
-:guilabel:`Clear` wipes the result so a verbose Why or Formula output does
-not obscure the canvas; :guilabel:`Copy` writes the just-rendered payload
+:fa:`eraser` :guilabel:`Clear` wipes the result so a verbose Why or Formula output does
+not obscure the canvas; :fa:`clipboard` :guilabel:`Copy` writes the just-rendered payload
 (with full precision for probability, regardless of the rounded
 display) to the clipboard.
 
@@ -403,9 +419,9 @@ the tree decomposition with its treewidth
 (:sqlfunc:`tree_decomposition_dot`); the *Probability* group adds a
 :guilabel:`Probability benchmark` that times every method (with a
 per-method timeout, skipping unavailable tools). Selecting one and pressing
-:guilabel:`Run` produces the artifact directly: the d-D circuit and the
-tree decomposition take over the main canvas (a toolbar :guilabel:`back`
-button restores the original provenance circuit), while the CNF and NNF
+:fa:`play` :guilabel:`Run` produces the artifact directly: the d-D circuit and the
+tree decomposition take over the main canvas (a toolbar :fa:`arrow-left`
+:guilabel:`back` button restores the original provenance circuit), while the CNF and NNF
 render as text panels. Compilers that are not installed on the server
 are filtered out of the compiler picker (via :sqlfunc:`tool_available`).
 See :doc:`knowledge-compilation` for the full pipeline.
@@ -419,7 +435,7 @@ See :doc:`knowledge-compilation` for the full pipeline.
    Knowledge compilation in Circuit mode: the provenance circuit of a
    self-join, compiled to a d-DNNF by ``d4`` (here 13 gates / 18 edges
    / depth 6). The canvas subtitle reports the compiled size and target
-   language; the :guilabel:`back` arrow in the toolbar restores the
+   language; the :fa:`arrow-left` :guilabel:`back` arrow in the toolbar restores the
    original provenance circuit.
 
 The d-DNNF and tree-decomposition canvases pin and inspect like the
@@ -563,7 +579,8 @@ provenance UUID, when populated, every distribution-shaped
 evaluation (profile, sample, moment, support) routes through the
 conditional path. Clicking a result-table cell auto-presets the
 field to the row's provenance UUID, with a :guilabel:`Conditioned
-by:` badge visible underneath the input. Clicking the active
+by:` :fa:`link` :guilabel:`row prov` badge visible underneath the
+input. Clicking the active
 badge clears the conditioning and reverts to the unconditional
 answer; clicking the muted badge restores the row provenance.
 Manual edits stick within a row and reset on row navigation.
@@ -602,9 +619,11 @@ Where mode
 ----------
 
 Where mode is the visual counterpart to :sqlfunc:`where_provenance`
-(see :doc:`where-provenance`). It enables ``provsql.where_provenance``
-on the connection and wraps every ``SELECT`` so the result carries
-the where-provenance of each output value. Hovering a result cell highlights the source cells (in
+(see :doc:`where-provenance`). Queries are typed into the same
+`Query box`_ as in Circuit mode. Where mode enables
+``provsql.where_provenance`` on the connection and wraps every
+``SELECT`` so the result carries the where-provenance of each output
+value. Hovering a result cell highlights the source cells (in
 the sidebar) that contributed to it. No explicit
 :sqlfunc:`where_provenance` call is required.
 
@@ -623,9 +642,9 @@ materialise in full (default 100 rows, tunable in
 hides relations whose first ``provsql`` token is not an ``input``
 gate, so derived materialisations do not crowd the panel.
 
-Each result row gets a :guilabel:`→ Circuit` button that switches to Circuit
-mode and pre-loads the provenance DAG of that row's token; see
-`Mode-switching`_.
+Each result row gets a :fa:`project-diagram` :guilabel:`Circuit` button that
+switches to Circuit mode and pre-loads the provenance DAG of that
+row's token; see `Mode-switching`_.
 
 .. _studio-where-example:
 
@@ -688,13 +707,23 @@ and results render through the same table renderer as the query box --
 provenance pills, clickable UUID cells and all.
 
 The kernel starts lazily on the first run and its chip in the toolbar
-shows the backend pid and database. :guilabel:`Run all` executes the
-cells top to bottom; :guilabel:`Interrupt` cancels the statement in
-flight; :guilabel:`Restart kernel` discards the session (temporary
+shows the backend pid and database. :fa:`play` :guilabel:`Run` runs the
+selected cell; :fa:`forward` :guilabel:`Run all` executes the
+cells top to bottom; :fa:`times-circle` :guilabel:`Interrupt` cancels the statement in
+flight; :fa:`redo` :guilabel:`Restart kernel` discards the session (temporary
 tables and session ``SET`` s are lost, counters reset), which is the
 clean-slate button when state has drifted. Idle kernels are dropped
 server-side after a timeout, and a connection switch drops them all;
 the front-end simply starts a fresh kernel on the next run.
+
+The toolbar also appends fresh cells (:fa:`plus` :guilabel:`SQL` /
+:fa:`plus` :guilabel:`Markdown`) and, as in Circuit mode, expands
+abbreviated UUIDs in cell results to their full form
+(:fa:`fingerprint`). Each cell carries its own :fa:`play` run button
+and an action row: move it up / down (:fa:`arrow-up` /
+:fa:`arrow-down`), delete it (:fa:`trash`), insert a SQL
+(:fa:`plus`) or Markdown (:fa:`fab markdown`) cell below, plus the
+per-cell scheme chip and Circuit-mode jump described below.
 
 **Markdown cells** render GitHub-flavoured Markdown; fenced code
 blocks tagged ``sql`` get the same syntax highlighting as the SQL
@@ -740,12 +769,13 @@ Clicking a provenance UUID in a result inserts a **circuit cell**
 below the query: a snapshot of the provenance DAG behind that token,
 painted with the same gate glyphs as Circuit mode (no depth control --
 the fetch is capped like Circuit mode's initial render). Clicking a
-different UUID retargets the same cell; the :guilabel:`Circuit mode`
-button jumps to the full canvas (frontier expansion, inspector,
+different UUID retargets the same cell, and :fa:`sync` re-fetches the
+snapshot against the live circuit; the :fa:`external-link-alt`
+:guilabel:`Circuit mode` button jumps to the full canvas (frontier expansion, inspector,
 evaluation strip) preloaded with the token.
 
 For a plain provenance token, the circuit cell offers
-:guilabel:`Evaluate`, which inserts an **evaluation cell**: a compiled
+:fa:`bolt` :guilabel:`Evaluate`, which inserts an **evaluation cell**: a compiled
 semiring or probability method, optional free-text arguments and
 provenance mapping, run against the cell's token. The invocation and
 its result are saved with the notebook, so a loaded notebook shows its
@@ -768,7 +798,8 @@ Provenance scheme
 The toolbar's :guilabel:`Provenance scheme` selector is the notebook's
 default (the same three-way switch as the query box, see
 `Per-query toggles`_); each SQL cell can override it with the small
-scheme chip in its actions, cycled per cell and honoured at run time.
+:fa:`sliders-h` scheme chip in its actions, cycled per cell and
+honoured at run time.
 Per-cell overrides are what make mixed notebooks work -- e.g. one
 recursive-CTE cell running under the Boolean scheme inside an
 otherwise standard-provenance notebook.
@@ -801,13 +832,13 @@ database. Nothing switches silently.
 Saving, loading, autosave
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-:guilabel:`Save` downloads the notebook as an nbformat-v4 ``.ipynb``
+:fa:`download` :guilabel:`Save` downloads the notebook as an nbformat-v4 ``.ipynb``
 -- directly openable in Jupyter-aware tooling. Cell outputs are
 included with standard MIME fallbacks (HTML tables, self-contained
 SVG circuit snapshots, plain-text evaluation results), so GitHub and
 nbviewer render a saved notebook as a readable static document;
 Studio itself re-renders from richer payloads stored alongside under
-``application/vnd.provsql.*`` keys. :guilabel:`Load` opens an
+``application/vnd.provsql.*`` keys. :fa:`folder-open` :guilabel:`Load` opens an
 ``.ipynb`` in a new tab. Between saves, every tab autosaves to the
 browser's local storage, surviving reloads and mode switches.
 
@@ -820,8 +851,11 @@ The :guilabel:`Open example…` menu lists the bundled notebooks: this
 manual's tutorial and case studies, generated from the same sources as
 the chapters you are reading. Each is self-establishing -- it opens
 with idempotent setup cells (schema, data, ``add_provenance``) -- so
-*create a fresh database, Run all* reproduces the whole study from one
-file. The ``/notebook?nb=<name>`` deep link opens an example directly.
+running it top to bottom on a fresh database reproduces the whole
+study from one file: open the example, let the binding banner create
+the bound database if it does not exist yet (see `Tabs and database
+bindings`_), and press :fa:`forward` :guilabel:`Run all`. The
+``/notebook?nb=<name>`` deep link opens an example directly.
 
 Notebook mode in the Playground
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -841,8 +875,8 @@ e.g. `provsql.org/playground/?nb=tutorial
 Schema panel
 ------------
 
-A button in the top nav opens a searchable pop-up panel listing every
-``SELECT``-able relation. Each gets one of two relation-level
+A :fa:`table` :guilabel:`Schema` button in the top nav opens a
+searchable pop-up panel listing every ``SELECT``-able relation. Each gets one of two relation-level
 pills:
 
 .. figure:: /_static/studio/schema-panel.png
@@ -899,8 +933,8 @@ on :sc:`rv` and :sc:`agg` columns, since their values are circuit
 references rather than scalars and a mapping built from them
 would not label input gates meaningfully.
 
-On any provenance-eligible plain table, :guilabel:`+ prov` and
-:guilabel:`− prov` action chips prefill ``SELECT add_provenance(...)``
+On any provenance-eligible plain table, :fa:`plus` :guilabel:`prov` and
+:fa:`minus` :guilabel:`prov` action chips prefill ``SELECT add_provenance(...)``
 / ``SELECT remove_provenance(...)``. They are hidden on views
 (regular and materialised) and on foreign tables, since the
 underlying ``ALTER TABLE ADD COLUMN`` does not work on those
@@ -971,8 +1005,9 @@ the CLI wins on startup, the panel writes back to the JSON.
 Tools panel
 -----------
 
-A tools button (the wrench-and-screwdriver icon) in the top nav, left of the
-Config cog, opens the **external-tool registry** -- the same ``provsql.tools``
+A tools button (the wrench-and-screwdriver icon, :fa:`tools`) in the top nav,
+left of the Config cog (:fa:`cog`), opens the **external-tool registry** --
+the same ``provsql.tools``
 catalog the compilation and weighted-counting dropdowns draw from (see
 :doc:`/user/tool-registry`).
 
@@ -983,9 +1018,9 @@ when its endpoint is configured), its name, a ``cli`` / ``kcmcp`` badge, and
 its endpoint or executable.
 
 A superuser may manage the registry in place: edit a tool's preference
-(higher is selected first), toggle it on or off, **edit** it (the pencil
-reopens the form pre-filled), or unregister it (the cross). **Register a
-tool** opens the same form. Picking the *Kind* swaps the relevant fields: a
+(higher is selected first), toggle it on or off, **edit** it (the :fa:`pen`
+pencil reopens the form pre-filled), or unregister it (the :fa:`times`
+cross). :fa:`plus` :guilabel:`Register a tool` opens the same form. Picking the *Kind* swaps the relevant fields: a
 ``cli`` tool takes an executable and a command template; a ``kcmcp`` tool (a
 warm :doc:`KCMCP </dev/kc-server-protocol>` server) takes a *Connection* --
 either *Managed* (ProvSQL launches and supervises it via
@@ -1009,19 +1044,21 @@ the panel read-only.
 Mode-switching
 --------------
 
-The mode tabs in the top nav switch between Where, Circuit, and
-Notebook. A switch carries the current SQL forward via
+The mode tabs in the top nav switch between :fa:`search-location`
+Where, :fa:`project-diagram` Circuit, and :fa:`book-open` Notebook. A switch carries the current SQL forward via
 ``sessionStorage`` (in Notebook mode, the selected cell's SQL); it
 auto-replays only when the user just ran the query, so unrun drafts
 and plain reloads never auto-execute (important for side-effecting
 statements like :sqlfunc:`add_provenance`).
 
-In Where mode, every result row gets a :guilabel:`→ Circuit` button that
+In Where mode, every result row gets a :fa:`project-diagram`
+:guilabel:`Circuit` button that
 switches to Circuit mode and pre-loads the circuit for that row's
 provenance UUID, so a hover-and-trace exploration can cross over to
 the DAG without retyping the query. In Notebook mode, the per-cell
-:guilabel:`open in Circuit mode` action and the circuit cells'
-:guilabel:`Circuit mode` button do the same; switching back returns
+:fa:`project-diagram` :guilabel:`open in Circuit mode` action and the
+circuit cells' :fa:`external-link-alt` :guilabel:`Circuit mode` button
+do the same; switching back returns
 to the same notebook, selection and scroll position included.
 
 Limitations
@@ -1035,7 +1072,7 @@ Limitations
 * **Verbose semiring outputs are unbounded**: ``formula``, ``how``,
   ``why``, ``which``, and ``PROV-XML export`` can return multi-megabyte
   strings on large circuits. Compute time is bounded by
-  ``statement_timeout``; output size is not. Use :guilabel:`Clear` after a
+  ``statement_timeout``; output size is not. Use :fa:`eraser` :guilabel:`Clear` after a
   bulky run, or evaluate against a pinned subnode to scope the
   output.
 
@@ -1134,7 +1171,7 @@ extension version.
        ``.ipynb`` save / load with viewer-ready output fallbacks, the
        bundled tutorial / case-study example notebooks
        (``/notebook?nb=<name>``), and Playground support. Also a
-       nav-bar action to empty the connected database, and ``agg_token``
+       nav-bar action (:fa:`broom`) to empty the connected database, and ``agg_token``
        arithmetic results rendered as *value (\*)* like plain aggregate
        tokens. Backed by extension features introduced in 1.9.0: the
        idempotent :sqlfunc:`add_provenance` /

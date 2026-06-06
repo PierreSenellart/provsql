@@ -60,7 +60,12 @@ html_theme_options = {
 html_static_path = ['_static']
 html_logo    = '_static/logo.png'
 html_favicon = '_static/favicon.ico'
-html_css_files = ['custom.css']
+html_css_files = [
+    'custom.css',
+    # Font Awesome, same release as Studio's index.html: the :fa: role
+    # mirrors the icons Studio shows on its buttons and actions.
+    'https://use.fontawesome.com/releases/v5.15.4/css/all.css',
+]
 html_js_files = [
     ('jquery.js', {'priority': 100}),  # sphinx-rtd-theme requires jQuery
     'back-to-site.js',
@@ -421,6 +426,17 @@ def setup(app):
     def sc_role(name, rawtext, text, lineno, inliner, options=None, content=None):
         return [nodes.inline(rawtext, text, classes=['smallcaps'])], []
 
+    # :fa:`bolt` -- an inline Font Awesome icon mirroring the icon Studio
+    # shows on the corresponding button or action (the FA stylesheet is
+    # pulled in via html_css_files).  HTML-only; other builders drop it.
+    def fa_role(name, rawtext, text, lineno, inliner, options=None, content=None):
+        # :fa:`bolt` is solid; an explicit style prefix selects another
+        # FA style, e.g. :fa:`fab markdown` for the brand icon.
+        parts = text.split()
+        style, icon = parts if len(parts) == 2 else ('fas', parts[0])
+        html = '<i class="%s fa-%s" aria-hidden="true"></i>' % (style, icon)
+        return [nodes.raw(rawtext, html, format='html')], []
+
     # :msg:`HELLO` -- a KCMCP message-type name, rendered as monospace
     # (like a literal) and hyperlinked to the section describing that
     # message type.  Same-page fragment links to the `.. _kcmcp-...:`
@@ -455,5 +471,6 @@ def setup(app):
     app.add_role('cfile', cfile_role)
     app.add_role('sqlfile', sqlfile_role)
     app.add_role('sc', sc_role)
+    app.add_role('fa', fa_role)
     app.add_role('msg', msg_role)
     return {'version': '0.1', 'parallel_read_safe': True}
