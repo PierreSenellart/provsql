@@ -121,6 +121,16 @@ annotated databases, relational algebra semantics, and aggregation – have
 been formally verified in Lean 4.
 See the [Lean formalization](/lean/) page for details.
 
+## License {#license}
+
+[![MIT License](https://img.shields.io/github/license/PierreSenellart/provsql)](https://github.com/PierreSenellart/provsql/blob/master/LICENSE)
+
+ProvSQL is free, open-source software, distributed under the permissive
+[MIT License](https://github.com/PierreSenellart/provsql/blob/master/LICENSE).
+You are free to use, modify, and redistribute it, including in commercial
+and proprietary settings, as long as the copyright notice is preserved.
+[Contributions](/contributors/) are welcome.
+
 ## Archival and Citation {#archival}
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19512786.svg)](https://doi.org/10.5281/zenodo.19512786)

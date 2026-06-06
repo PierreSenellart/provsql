@@ -21,6 +21,9 @@ through three complementary modes:
 A schema panel, a configuration panel, and a mode-switcher round out
 the UI; all are described below. Throughout the UI, :fa:`question-circle`
 help icons deep-link into the relevant section of this manual.
+Like the extension, Studio is free, open-source software distributed
+under the `MIT License
+<https://github.com/PierreSenellart/provsql/blob/master/studio/LICENSE>`_.
 
 .. _playground-note:
 

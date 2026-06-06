@@ -10,6 +10,9 @@ reachability, counting, probability, Shapley values, and more.
 A companion Python web UI, **ProvSQL Studio**, provides interactive
 provenance inspection on top of any ProvSQL-enabled database.
 
+Both are free, open-source software distributed under the `MIT License
+<https://github.com/PierreSenellart/provsql/blob/master/LICENSE>`_.
+
 This documentation is organized into four parts:
 
 * The :ref:`user-guide` explains how to install, configure, and use

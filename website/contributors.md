@@ -21,7 +21,9 @@ ProvSQL has been developed primarily within the [Valda](https://team.inria.fr/va
 - {% if member.url %}[**{{ member.name }}**]({{ member.url }}){% else %}**{{ member.name }}**{% endif %}{% if member.affiliation %} – {% if member.affiliation_url %}[{{ member.affiliation }}]({{ member.affiliation_url }}){% else %}{{ member.affiliation }}{% endif %}{% if member.location %}, {{ member.location }}{% endif %}{% endif %}
 {%- endfor %}
 
-*Contributions are welcome. See the
+*ProvSQL is free, open-source software under the
+[MIT license](https://github.com/PierreSenellart/provsql/blob/master/LICENSE);
+contributions are welcome. See the
 [GitHub repository](https://github.com/PierreSenellart/provsql) to get involved.*
 
 ## Grants
