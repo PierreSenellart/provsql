@@ -58,7 +58,10 @@ Mapping:
     around them stands alone); raw:: html blocks too (the docs'
     <details> spoiler wrappers: a notebook shows solutions inline)
 
-Requires pandoc on PATH (any 2.x).
+Requires pandoc on PATH; the committed notebooks are generated with the
+version pinned in .github/workflows/studio.yml (pandoc's rst -> gfm
+rendering changes across releases, so the drift job fails on output
+from any other version).
 """
 from __future__ import annotations
 
