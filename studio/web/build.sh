@@ -160,10 +160,23 @@ cat > app.html <<'HTML'
 <style>
   html, body { margin: 0; height: 100%; background: #0f1115 }
   #studio-ui { position: fixed; inset: 0; width: 100%; height: 100%; border: 0 }
+  /* Modal busy overlay: covers (and blocks) the whole UI during boot, a
+     database switch and a Reset; shell-boot.js shows it via say() and hides
+     it when the child posts "ready". */
+  #studio-boot-overlay { position: fixed; inset: 0; z-index: 99999;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; background: rgba(15, 17, 21, .85);
+    color: #d7dae0; font: 13px ui-monospace, monospace }
+  #studio-boot-overlay .spin { width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid #2a2f3a; border-top-color: #d7dae0;
+    animation: psspin .9s linear infinite }
+  @keyframes psspin { to { transform: rotate(360deg) } }
+  #studio-boot-status { max-width: 80%; text-align: center;
+    padding: 6px 12px; border-radius: 4px }
 </style>
 </head>
 <body>
-<div id="studio-boot-status" style="position:fixed;top:0;left:0;right:0;background:#0f1115;color:#d7dae0;font:13px ui-monospace,monospace;padding:6px 12px;z-index:99999">loading ProvSQL Studio (WASM)…</div>
+<div id="studio-boot-overlay"><div class="spin"></div><div id="studio-boot-status">loading ProvSQL Studio (WASM)…</div></div>
 <script type="module" src="shell-boot.js"></script>
 </body>
 </html>

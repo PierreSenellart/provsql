@@ -74,6 +74,9 @@ def test_landing_gates_on_jspi(browser, web_server) -> None:
         page.goto(web_server + "/", wait_until="domcontentloaded")
         assert page.locator("#studio-boot-status").count() == 0   # not the app
         assert page.locator("#launch").get_attribute("href") == "app.html"
+        # The newcomer funnel: a tutorial CTA next to the launch button.
+        assert page.locator("#launch-tutorial").get_attribute("href") \
+            == "app.html?nb=tutorial"
         body = page.locator("body").inner_text()
         assert "JSPI" in body and "Firefox" in body
         assert not page.locator("#jspi-warn").is_visible()        # headless Chromium has JSPI
@@ -84,13 +87,15 @@ def test_landing_gates_on_jspi(browser, web_server) -> None:
 def test_portable_under_subpath(browser, subpath_server) -> None:
     """The build works unchanged under a sub-path (provsql.org/playground/):
     boots with the root served as 404, loads circuit.js via its relative path,
-    and the mode anchors resolve under the sub-path."""
+    and the mode anchors resolve under the sub-path. Explicit ?mode=circuit:
+    circuit.js loads eagerly only in circuit mode, and a bare first visit
+    defaults to the tutorial notebook."""
     ctx = browser.new_context()
     page = ctx.new_page()
     responses: dict[str, int] = {}
     page.on("response", lambda r: responses.__setitem__(r.url, r.status))
     try:
-        page.goto(subpath_server + "/app.html", wait_until="domcontentloaded")
+        page.goto(subpath_server + "/app.html?mode=circuit", wait_until="domcontentloaded")
         page.wait_for_selector("#studio-boot-status", state="hidden", timeout=240000)
         # circuit.js was loaded from /playground/static/ (the relativised path),
         # by app.js running inside the /playground/ui.html iframe.
@@ -245,12 +250,56 @@ def test_deep_link_applies_db_mode_and_query(open_studio) -> None:
     expect(f.locator("#result-count")).to_have_text("2", timeout=20000)
 
 
+def test_first_visit_defaults_to_tutorial_notebook(open_studio) -> None:
+    """A bare app.html on a first visit (no deep-link params, no ps.activeDb
+    marker in localStorage) opens the tutorial notebook, so a newcomer lands
+    on runnable, explained cells instead of an empty circuit-mode query box."""
+    page = open_studio()  # fresh storage, no params
+    f = ui(page)
+    expect(f.locator("body")).to_have_class("mode-notebook", timeout=10000)
+    expect(f.locator(".nb__tab--active")).to_contain_text(
+        re.compile("tutorial", re.I), timeout=60000)
+
+
+def test_returning_visit_keeps_plain_default(open_studio) -> None:
+    """With the been-here-before marker set, a bare app.html boots the plain
+    circuit mode on the last-used database, not the tutorial notebook."""
+    page = open_studio(db="tutorial")
+    expect(ui(page).locator("body")).to_have_class("mode-circuit", timeout=10000)
+
+
+def test_run_sanitizes_invisible_unicode(cs7_page: Page) -> None:
+    """SQL that reaches runQuery with NBSPs / zero-width characters (e.g. via
+    a programmatic fill or a ?q= deep link) is cleaned before execution; the
+    textarea is rewritten in place so what ran is what is shown."""
+    f = ui(cs7_page)
+    f.locator("#request").fill("SELECT\u00a042\u00a0AS\u00a0n;\u200b")
+    f.locator("#run-btn").click()
+    expect(f.locator("#result-count")).to_have_text("1", timeout=20000)
+    expect(f.locator("#request")).to_have_value("SELECT 42 AS n;")
+
+
+def test_paste_sanitizes_invisible_unicode(cs7_page: Page) -> None:
+    """The paste hook rewrites the textarea as soon as dirty text arrives
+    (inputType insertFromPaste), without waiting for a run."""
+    cleaned = ui(cs7_page).evaluate(
+        """() => {
+            const ta = document.getElementById('request');
+            ta.value = 'SELECT\\u00a01\\u00a0AS\\ufeffx;\\ufffc';
+            ta.setSelectionRange(ta.value.length, ta.value.length);
+            ta.dispatchEvent(new InputEvent('input',
+                {inputType: 'insertFromPaste', bubbles: true}));
+            return ta.value;
+        }""")
+    assert cleaned == "SELECT 1 ASx;"
+
+
 def test_mode_switch_keeps_backend_warm(open_studio) -> None:
     """The point of the shell + iframe split: a mode switch reloads only the
     iframe, not the WASM backend. Mark the shell's window, switch circuit ->
     where, and the marker must survive (a full-page reload would clear it),
     proving Pyodide + PGlite were not re-initialised."""
-    page = open_studio()  # tutorial, circuit mode
+    page = open_studio(db="tutorial")  # marker set: returning-visitor circuit mode
     page.evaluate("window.__shell_warm = 'kept'")
     f = ui(page)
     expect(f.locator("body")).to_have_class("mode-circuit", timeout=5000)
@@ -268,8 +317,10 @@ def test_mode_switch_keeps_backend_warm(open_studio) -> None:
 
 def test_database_switch(open_studio) -> None:
     """Switch from the default tutorial DB to cs1 via the switcher and confirm
-    the active database actually changed (survives the reload the UI does)."""
-    page = open_studio()  # default: tutorial
+    the active database actually changed (survives the reload the UI does).
+    The shell's modal busy overlay must cover the UI for the whole switch
+    (reopen + first-open seeding + iframe reload) and drop on ready."""
+    page = open_studio(db="tutorial")  # marker set: returning-visitor circuit mode
     assert _api(page, "GET", "/api/conn")["json"]["database"] == "tutorial"
 
     f = ui(page)
@@ -280,6 +331,12 @@ def test_database_switch(open_studio) -> None:
     # navigation, then re-resolve the frame.
     with page.expect_event("framenavigated", lambda fr: fr.name == "studio-ui", timeout=60000):
         f.locator("#dbmenu li[data-db='cs1']").click()
+        # cs1 is unseeded in this fresh context, so the switch is slow enough
+        # for the overlay to be observably up while the iframe still shows the
+        # old database.
+        expect(page.locator("#studio-boot-overlay")).to_be_visible(timeout=10000)
+    # The fresh child posted ready: the overlay is gone.
+    expect(page.locator("#studio-boot-overlay")).to_be_hidden(timeout=60000)
 
     assert _api(page, "GET", "/api/conn")["json"]["database"] == "cs1"
     # cs1's signature table is present.
@@ -290,7 +347,7 @@ def test_database_switch(open_studio) -> None:
 
 def test_reset_restores_pristine_data(open_studio) -> None:
     """Edit a seeded database, hit Reset, and confirm the change is gone."""
-    page = open_studio()  # tutorial
+    page = open_studio(db="tutorial")
     # Insert an intruder row, then confirm it's there.
     _api(page, "POST", "/api/exec",
          {"sql": "INSERT INTO person(id, name) VALUES (999, 'Intruder')",

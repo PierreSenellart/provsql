@@ -114,7 +114,7 @@ is git-ignored. The assembled doc-root:
 studio/web/                  # this dir is itself the doc-root
   index.html                 # GENERATED landing (= landing.html): JSPI gate + Launch
   landing.html               # the landing source (tracked)
-  app.html                   # GENERATED shell: boot-status bar + shell-boot.js + iframe
+  app.html                   # GENERATED shell: modal busy overlay + shell-boot.js + iframe
   shell-boot.js              # owns the warm backend (PGlite + Pyodide), mounts ui.html
   ui.html                    # GENERATED UI page: the Studio frontend + child-boot.js
   child-boot.js              # /api/* -> shell bridge, injects app.js, WASM-only UI bits
@@ -155,10 +155,18 @@ shell to drop and re-seed every database.
 
 A bare visit hits **index.html**, a small static landing that explains the
 **JSPI requirement** (browser support, and the Firefox `about:config` flag)
-and links to the shell (**app.html**). It feature-detects JSPI: shared deep
-links (`?mode=`/`?db=`/`?q=`) are forwarded straight to the app when JSPI is
+and links to the shell (**app.html**), with a second CTA straight to the
+interactive tutorial (`app.html?nb=tutorial`) and per-case-study notebook
+links. It feature-detects JSPI: shared deep links
+(`?mode=`/`?db=`/`?q=`/`?nb=`) are forwarded straight to the app when JSPI is
 present, and otherwise the landing is shown so the user sees the requirement
 instead of a silent hang.
+
+A **first visit** on a bare app.html URL (no deep-link params, no
+`ps.activeDb` marker in localStorage – `switchDb` sets it on every boot, so
+it doubles as the been-here-before flag) opens the **tutorial notebook**
+instead of an empty circuit-mode query box; returning visitors get the plain
+default (circuit mode on the last-used database).
 
 ### Designed for a dumb static host
 
@@ -181,6 +189,14 @@ A **mode switch** reloads only the iframe and a **database switch** reopens
 just PGlite, so the heavy backend is not re-initialised; the DB is persisted to
 IndexedDB so its provenance circuit survives (a token carried across a switch –
 e.g. jump-to-circuit – must still resolve).
+
+While the backend is not interactive – initial boot, a database switch (with
+its possible first-open seeding) and a Reset – the shell shows a **modal busy
+overlay** (`#studio-boot-overlay` in app.html: spinner + status text) that
+covers and blocks the whole UI; `say()` raises it, the child's `ready`
+message (posted on every iframe load) drops it, and a switch failure drops it
+explicitly since no reload will follow. Boot errors turn its status text red
+in place.
 
 ### Shareable links
 

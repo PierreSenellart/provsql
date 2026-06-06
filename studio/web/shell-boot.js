@@ -27,17 +27,33 @@ const asset = (p) => new URL(p, import.meta.url)
 // The shell consumes ?db (it owns the connection) and forwards ?mode / ?q /
 // ?nb to the iframe, where child-boot.js applies them.
 const params = new URLSearchParams(location.search)
+// First visit on a bare URL: open the tutorial notebook rather than an empty
+// circuit-mode query box, so a newcomer lands on runnable, explained cells.
+// ps.activeDb doubles as the been-here-before marker (switchDb sets it on
+// every boot), so returning visitors keep the plain default; any deep-link
+// param means the caller asked for something specific and wins.
+if (!params.has('mode') && !params.has('db') && !params.has('q') && !params.has('nb')
+    && !localStorage.getItem('ps.activeDb')) {
+  params.set('nb', 'tutorial')
+}
 const mode = ['where', 'notebook'].includes(params.get('mode')) ? params.get('mode') : 'circuit'
 const linkedQuery = params.get('q')
 const linkedNotebook = params.get('nb')
 
+// The busy indicator is a modal overlay (app.html): it covers and blocks the
+// whole UI while the backend is not interactive -- initial boot, a database
+// switch (with its possible first-open seeding) and a Reset -- so a user
+// cannot click into a UI whose backend is mid-reopen. say() shows it; the
+// child's "ready" message (posted on every iframe load) hides it.
+const bootOverlay = document.getElementById('studio-boot-overlay')
 const boot = document.getElementById('studio-boot-status')
-const say = (m) => { if (boot) { boot.style.display = 'block'; boot.textContent = m } console.log('[shell-boot]', m) }
-// Surface a boot failure in the status bar rather than leaving it stuck on the
+const showBusy = (on) => { if (bootOverlay) bootOverlay.style.display = on ? 'flex' : 'none' }
+const say = (m) => { if (boot) { showBusy(true); boot.textContent = m } console.log('[shell-boot]', m) }
+// Surface a boot failure in the overlay rather than leaving it stuck on the
 // last say(): a rejected top-level await otherwise reads as a silent hang.
 const fail = (e) => {
   const m = (e && (e.stack || e.message)) || String(e)
-  if (boot) { boot.style.display = 'block'; boot.style.background = '#5a1111'; boot.textContent = 'boot error: ' + m }
+  if (boot) { showBusy(true); boot.style.background = '#5a1111'; boot.textContent = 'boot error: ' + m }
   console.error('[shell-boot]', e)
 }
 window.addEventListener('unhandledrejection', (ev) => fail(ev.reason))
@@ -276,9 +292,15 @@ async function dispatchApi(method, path, body) {
     try { target = JSON.parse(body || '{}').database } catch (_e) { /* ignore */ }
     // Switch in place (no shell reload) and read back conn_info atomically, so
     // the reply already reflects the new database. The iframe reloads itself
-    // afterwards; Pyodide / Flask stay warm.
+    // afterwards; Pyodide / Flask stay warm. The busy overlay goes up for the
+    // whole span -- switch, possible first-open seeding, iframe reload -- and
+    // comes down on the fresh child's "ready"; on a switch failure it is
+    // dropped here, since no reload (hence no "ready") will follow.
     return await enqueue(async () => {
-      if (target && (await listDatabases()).includes(target)) await switchDb(target)
+      if (target && (await listDatabases()).includes(target)) {
+        say(`switching to ${target}…`)
+        try { await switchDb(target) } catch (e) { showBusy(false); throw e }
+      }
       return JSON.parse(await handle.callPromising('GET', '/api/conn', ''))
     })
   }
@@ -319,7 +341,7 @@ window.addEventListener('message', async (ev) => {
   if (ev.source !== ui.contentWindow) return
   const d = ev.data
   if (!d || typeof d !== 'object') return
-  if (d.type === 'ready') { if (boot) boot.style.display = 'none'; return }
+  if (d.type === 'ready') { showBusy(false); return }
   if (d.type === 'reset') {
     say('resetting databases…')
     try { await resetData() } catch (e) { fail(e); return }

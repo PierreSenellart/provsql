@@ -48,6 +48,12 @@ both. JSPI runs only in the shell (the top frame); the iframe needs none.
 Each iframe load tags its messages with an epoch, so a reply that straddles
 a reload cannot resolve the wrong request in the fresh child.
 
+While the backend is not interactive -- initial boot, a database switch
+(with its possible first-open seeding) and a Reset -- the shell shows a
+modal busy overlay (spinner + status text, in ``app.html``) that covers
+and blocks the whole UI; the child's ``ready`` message, posted on every
+iframe load, drops it.
+
 Architecture
 ------------
 
@@ -84,8 +90,8 @@ Architecture
 * **Graphviz** (``@hpcc-js/wasm-graphviz``) replaces the ``dot``
   subprocess the circuit/tree-decomposition renderers shell out to.
 * External knowledge compilers (d4, c2d, weightmc…) cannot run (no
-  subprocesses), so the tool registry is disabled; probability uses the
-  in-process tree-decomposition compiler.
+  subprocesses), so the tool registry is disabled; probability
+  evaluation relies on ProvSQL's built-in methods only.
 
 Databases
 ---------
@@ -150,9 +156,14 @@ against their own module URL and the shell mounts ``ui.html`` by a relative
 URL, so the result is a pure static bundle that runs unchanged at a server
 root or under a sub-path (``/playground/``), needs no rewrite rules, and
 works over ``file://``. A small ``index.html`` landing page gates on JSPI
-(browser support, the Firefox flag) and links to the shell (``app.html``);
-shared deep links (``?mode=`` / ``?db=`` / ``?q=`` / ``?nb=``) forward
-straight to it.
+(browser support, the Firefox flag) and links to the shell (``app.html``),
+with a second CTA straight to the tutorial notebook
+(``app.html?nb=tutorial``) and per-case-study notebook links; shared deep
+links (``?mode=`` / ``?db=`` / ``?q=`` / ``?nb=``) forward straight to the
+shell. A first visit on a bare ``app.html`` URL (no deep-link parameter,
+no ``ps.activeDb`` marker in localStorage) opens the tutorial notebook
+rather than an empty circuit-mode query box; returning visitors get the
+plain default.
 
 Build, test, deploy
 -------------------
