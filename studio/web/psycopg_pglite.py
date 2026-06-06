@@ -313,10 +313,11 @@ class _Conn:
         fresh one; PGlite has a single backend session shared by every
         connection object, so 'fresh' is expressed as DISCARD ALL: temp
         tables, prepared statements and session GUCs go away -- including
-        the search_path the shell's per-open PREP set, which is restored
-        here (it must match shell-boot.js's PREP).  Single-session
-        caveat: kernel state is shared across notebook tabs, so closing
-        or restarting any kernel resets them all."""
+        the search_path and the agg_token output format the shell's
+        per-open PREP set, which are restored here (they must match
+        shell-boot.js's PREP).  Single-session caveat: kernel state is
+        shared across notebook tabs, so closing or restarting any kernel
+        resets them all."""
         if self.closed:
             return
         if self._in_tx:
@@ -324,6 +325,7 @@ class _Conn:
             self._in_tx = False
         self._raw("DISCARD ALL")
         self._raw("SET search_path TO public, provsql")
+        self._raw("SET provsql.aggtoken_text_as_uuid = on")
         self.closed = True
 
 

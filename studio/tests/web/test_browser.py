@@ -7,6 +7,7 @@ the in-browser API surface, database switching, and the Reset button.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import quote, unquote_plus
 
 from playwright.sync_api import Frame, Page, expect
@@ -130,6 +131,25 @@ def test_core_query_and_circuit(cs7_page: Page) -> None:
     f.locator("#eval-semiring").select_option(value="boolexpr")
     f.locator("#eval-run").click()
     expect(f.locator("#eval-result")).not_to_be_empty(timeout=20000)
+
+
+def test_agg_token_cells_carry_uuid_after_db_switch(cs7_page: Page) -> None:
+    """agg_token result cells must expose their circuit UUID (the
+    click-through handle) even though opening a database reopens the one
+    PGlite session: db.py's per-connection configure SETs
+    provsql.aggtoken_text_as_uuid on Python connection objects that
+    outlive the session, so the shell's per-open PREP (and the shim's
+    close()) must re-apply it -- without that, agg cells render as
+    "value (*)" and are not clickable."""
+    f = ui(cs7_page)
+    f.locator("#request").fill(
+        "SELECT paper, count(*) FROM bid GROUP BY paper ORDER BY paper LIMIT 1;")
+    f.locator("#run-btn").click()
+    expect(f.locator("#result-count")).to_have_text("1", timeout=20000)
+    cell = f.locator("#result-body tr").first \
+        .locator("td[data-token-kind='agg_token']")
+    uuid = cell.get_attribute("data-circuit-uuid") or ""
+    assert re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid), uuid
 
 
 def test_database_list_is_the_case_studies(cs7_page: Page) -> None:

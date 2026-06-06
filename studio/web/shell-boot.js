@@ -68,6 +68,13 @@ const PREP = [
   'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"',
   'CREATE EXTENSION IF NOT EXISTS provsql CASCADE',
   'SET search_path TO public, provsql',
+  // Studio's per-connection configure (db.py) sets this GUC so agg_token
+  // result cells carry their circuit UUID and are click-throughable, but
+  // it runs on the Python connection objects, whose lifetime does not
+  // match the one PGlite session: a database switch reopens the session
+  // and would silently lose the setting. Re-apply it on every open (the
+  // shim's close() restores it after DISCARD ALL for the same reason).
+  'SET provsql.aggtoken_text_as_uuid = on',
   `DO $$ DECLARE r record; BEGIN
      IF to_regclass('provsql.tools') IS NOT NULL THEN
        FOR r IN SELECT name FROM provsql.tools WHERE enabled LOOP
