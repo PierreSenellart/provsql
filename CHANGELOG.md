@@ -5,6 +5,135 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.9.0] - 2026-06-06
+
+ProvSQL 1.9.0 brings broad support for subqueries outside FROM and for
+outer joins, a redesigned probability engine built around a method
+catalog with a cost-based chooser and user-requested guarantees, exact
+probability evaluation for a wide range of HAVING aggregate
+comparisons, SQL-faithful empty-group and NULL aggregation semantics,
+native arithmetic on aggregation results, and a WebAssembly build that
+powers the in-browser ProvSQL Playground.
+
+#### Subqueries and outer joins
+
+- **Subqueries outside FROM.** `EXISTS`/`NOT EXISTS`, `IN`/`NOT IN`,
+  quantified comparisons (`op ANY` / `op ALL`, row `IN`), scalar
+  subqueries, and `ARRAY(SELECT ...)`, correlated or not, are now
+  internally decorrelated and rewritten with the proper (m-)semiring
+  provenance: value bodies through `choose()` with an
+  at-most-one-row gate, aggregate bodies (`count`, `sum`, `avg`,
+  `min`, `max`) through the aggregate over the outer-join group,
+  semijoins and antijoins through count-predicate lowerings (so
+  `NOT IN` carries the same antijoin provenance as the equivalent
+  `EXCEPT`). The subquery body may involve a single
+  provenance-tracked relation or join several as a comma-separated
+  FROM list; `SELECT DISTINCT` bodies, `ORDER BY ... LIMIT 1`
+  (argmax) bodies, several coalesced subqueries, aggregate bodies
+  compared against outer columns, and untracked outer FROMs are all
+  handled. Bodies touching no tracked relation pass through to
+  PostgreSQL untouched.
+- **Outer joins.** `LEFT`, `RIGHT` and `FULL` joins are lowered to
+  their matched and null-padded antijoin arms, capturing the
+  non-monotone 0-match world; `EXCEPT` / `EXCEPT ALL` provenance is
+  corrected to NOT-IN semantics.
+- **SQL-faithful aggregate NULL handling.** `count(expr)`, `sum`,
+  `min`, `max` and `avg` now ignore NULL inputs as SQL requires;
+  `count(*)` still counts rows.
+
+#### Probability evaluation
+
+- **Method catalog and cost chooser.** Probability-method dispatch is
+  rebuilt as a catalog of strategies under a unified cost-based
+  chooser (a lazy uniform-cost search over feature-acquisition and
+  method-execution costs, with calibrated constants and speculative
+  execution that budgets a candidate at the next-best method's cost
+  and escalates on overrun).
+- **Guarantee-first evaluation.** Request `exact`, relative
+  `(eps, delta)`, or additive `(eps, delta)` and let the chooser pick
+  the cheapest admissible method; every approximate method shares one
+  `key=value` argument grammar and emits a machine-readable
+  approximation-guarantee NOTICE. The new `provsql.last_eval_method`
+  GUC reports what actually ran, down to the resolved external tool
+  (`compilation:d4`, `wmc:ganak`).
+- **New methods.** `karp-luby` (the DNF FPRAS, with the
+  Dagum-Karp-Luby-Ross self-adjusting stopping rule and stratified
+  sampling), `stopping-rule` (whole-circuit relative-error FPRAS),
+  `sieve` (exact inclusion-exclusion over monotone DNFs), and
+  `d-tree` (anytime probability interval bounds after
+  Olteanu-Huang-Koch, on arbitrary circuits, with the new
+  `probability_bounds` SQL function).
+- **Exact HAVING aggregate probabilities.** Closed-form and exact
+  evaluators for `HAVING` comparisons over `COUNT`, `SUM`, `MIN`,
+  `MAX` and `AVG`: safe (hierarchical) joins at arbitrary depth,
+  cross-product joins, `repair_key` BID blocks, branch-spanning sums
+  over UNION/EXCEPT contributors, numeric/float aggregates via
+  decimal scale-to-integer, constant arithmetic folded into the
+  threshold, and comparisons combining several aggregates resolved by
+  possible-worlds enumeration. `COUNT(DISTINCT ...)` in HAVING is fixed, and aggregates that no
+  exact arm covers fall back to an approximation-safe sampling route
+  rather than erroring.
+
+#### Aggregation semantics and arithmetic
+
+- **Empty groups, SQL-faithfully.** Scalar (ungrouped) aggregations
+  are now tagged in the circuit so true-on-empty predicates
+  (`count(*) = 0`, `sum(x) IS NULL`…) evaluate correctly in every
+  possible world; `count(col)` with NULLs, `HAVING ... IS [NOT] NULL`
+  on groups with NULL-valued rows, and moments/support of `agg_token`
+  `min`/`max` (conditioned on a non-empty group, so they stay finite)
+  are all handled.
+- **Arithmetic on aggregation results.** `agg_token` gains native
+  `+ - * /`, unary `-`, and aggregate-vs-aggregate comparisons,
+  building `gate_arith` circuits that carry the computed value (so
+  query results still display `value (*)`), with comparisons over the
+  results evaluated exactly where possible.
+
+#### SQL surface and usability
+
+- `add_provenance` and `create_provenance_mapping` are idempotent
+  (NOTICE-and-return when already done).
+- New `setup_search_path()` helper plus an installation-time advisory
+  when `provsql` is missing from the default `search_path`; the
+  `random_variable` to `uuid` cast is demoted to ASSIGNMENT so it no
+  longer shadows operator resolution.
+- The SQL `probability_benchmark` helper (added in 1.7.0) is removed;
+  ProvSQL Studio's per-tool-timeout probability benchmark supersedes
+  it.
+- Sessions that run `CREATE EXTENSION provsql` themselves no longer
+  end up with a stale constants cache that silently disabled the
+  subquery rewrites until reconnect.
+- `provenance()` inside a subquery expression now raises a clear
+  error, and hand-made `provsql` columns are rejected instead of
+  crashing.
+
+#### ProvSQL in the browser
+
+- The extension compiles to WebAssembly and runs inside
+  [PGlite](https://pglite.dev/) entirely client-side: a single-process
+  circuit store (`PROVSQL_INPROCESS_STORE`) replaces the background
+  worker and shared memory, and subprocess-free builds
+  (`PROVSQL_NO_SUBPROCESS`) fall back to the in-process compiler. This
+  powers the **ProvSQL Playground**
+  ([provsql.org/playground](https://provsql.org/playground/)): the
+  full ProvSQL Studio, including its new notebook mode, with no
+  installation. Reproducible build under `wasm/`, driven by
+  `make wasm` / `make playground`.
+
+#### Docker image
+
+- The demonstration image now bundles the ganak and sharpsat-td
+  weighted model counters and ships the tutorial and case-study
+  databases pre-seeded (switchable from Studio's connection chip).
+
+#### Robustness
+
+- Fixed a heap overflow in the where-provenance column map (the
+  long-standing flaky macOS crash), a backend segfault on NULL
+  provenance-mapping values, and pathological-circuit recursion now
+  errors cleanly via stack-depth guards instead of crashing the
+  backend.
+
 ## [1.8.0] - 2026-05-27
 
 ProvSQL 1.8.0 expands the knowledge-compilation backend with an
