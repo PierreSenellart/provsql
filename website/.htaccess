@@ -1,3 +1,7 @@
 ErrorDocument 404 /404.html
 
 Redirect permanent /temporal_demo /docs/user/casestudy4.html
+
+# Legacy image-retrieval demo, long dead (503) yet still indexed by
+# search engines; send visitors and crawlers to the demos page instead.
+Redirect permanent /coco /demos/
