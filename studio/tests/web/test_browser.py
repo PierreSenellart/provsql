@@ -152,6 +152,35 @@ def test_agg_token_cells_carry_uuid_after_db_switch(cs7_page: Page) -> None:
     assert re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", uuid), uuid
 
 
+def test_kernel_ddl_lands_in_public_schema(cs7_page: Page) -> None:
+    """An unqualified CREATE TABLE in a notebook cell must create the
+    table in `public`, where the Schema panel sees it. The app-level
+    search_path override reaches every cell as SET LOCAL verbatim, so
+    with `provsql` listed first the table would silently land in the
+    provsql schema instead (the Schema panel excludes provsql, so a
+    seeded notebook's DROP+CREATE setup would leave the database
+    looking empty)."""
+    info = _api(cs7_page, "GET", "/api/conn")["json"]
+    assert info["search_path"].split(",")[0].strip() == "public", info
+
+    ses = _api(cs7_page, "POST", "/api/nb/session", {})["json"]
+    sid = ses["session_id"]
+    try:
+        out = _api(cs7_page, "POST", "/api/nb/exec", {
+            "session_id": sid,
+            "sql": "CREATE TABLE web_e2e_nbddl (i int)"})
+        assert out["status"] == 200 and not out["json"].get("kernel_dead"), out
+        schema = _api(cs7_page, "GET", "/api/schema")["json"]
+        match = [t for t in schema if t["table"] == "web_e2e_nbddl"]
+        assert match and match[0]["schema"] == "public", \
+            [f"{t['schema']}.{t['table']}" for t in schema]
+    finally:
+        _api(cs7_page, "POST", "/api/nb/exec", {
+            "session_id": sid,
+            "sql": "DROP TABLE IF EXISTS web_e2e_nbddl"})
+        _api(cs7_page, "POST", f"/api/nb/session/{sid}/close", {})
+
+
 def test_database_list_is_the_case_studies(cs7_page: Page) -> None:
     out = _api(cs7_page, "GET", "/api/databases")
     assert out["status"] == 200

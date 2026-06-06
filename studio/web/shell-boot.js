@@ -206,7 +206,12 @@ py.runPython(`
 import sys, json, traceback
 sys.path.insert(0, '/studio')
 from provsql_studio.app import create_app
-_app = create_app(search_path='provsql, public')
+# public must come FIRST: this override reaches every request and cell
+# as SET LOCAL search_path verbatim, so with provsql first an
+# unqualified CREATE TABLE would land in the provsql schema -- hidden
+# from the Schema panel (which excludes provsql) and shadowed for
+# qualified access. Mirrors PREP's session default.
+_app = create_app(search_path='public, provsql')
 _app.config['PROPAGATE_EXCEPTIONS'] = True
 _client = _app.test_client()
 def handle(method, path, body_json):
