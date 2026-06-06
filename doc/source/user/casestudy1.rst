@@ -4,7 +4,8 @@
 Case Study: Intelligence Agency
 ===============================
 
-This case study, largely extending the scenario introduced in
+This case study, largely extending the scenario introduced when
+ProvSQL was first presented
 :cite:`DBLP:journals/pvldb/SenellartJMR18`, demonstrates ProvSQL's
 custom semiring capability, where-provenance, probability computation
 with multiple algorithms, and circuit export through a
@@ -310,7 +311,8 @@ Step 10: Probability – Knowledge Compiler
    This step requires an external knowledge compiler such as ``d4`` or
    ``dsharp`` to be installed and on your ``PATH`` (or in a directory
    listed in the ``provsql.tool_search_path`` GUC, see
-   :doc:`configuration`). Skip it if neither is available.
+   :doc:`the configuration chapter <configuration>`). Skip it if
+   neither is available.
 
 A knowledge compiler converts the provenance circuit to a *d-DNNF*
 representation, which enables efficient exact probability evaluation

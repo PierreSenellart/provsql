@@ -73,7 +73,9 @@ SENTINEL = "NBCELLxSPLITx"  # survives pandoc as a plain paragraph
 
 NB_DIRECTIVE_RE = re.compile(r"^\.\. nb:([a-z-]+)(?::\s*(.*))?\s*$")
 CODE_BLOCK_RE = re.compile(r"^(\s*)\.\. code-block::\s*(\S+)\s*$")
-ADMONITION_RE = re.compile(r"^\.\. (note|tip|warning|important|caution)::\s*$")
+ADMONITION_RE = re.compile(
+    r"^\.\. (note|tip|warning|important|caution|hint|seealso)::\s*$")
+ADMONITION_LABELS = {"seealso": "See also"}
 FIGURE_RE = re.compile(r"^\.\. (figure|image|raw)::")
 COPY_STDIN_RE = re.compile(r"^\s*COPY\s.+\bFROM\s+stdin\b.*;\s*$", re.IGNORECASE)
 
@@ -267,7 +269,7 @@ def parse_rst(path: Path) -> tuple[dict, list[tuple[str, str]]] | None:
                 skip_next = False
                 i = j
                 continue
-            label = m.group(1).capitalize()
+            label = ADMONITION_LABELS.get(m.group(1), m.group(1).capitalize())
             prose.append("")
             prose.append(f"**{label}:**")
             prose.append("")
@@ -302,6 +304,19 @@ def rst_prose_to_markdown_cells(prose_segments: list[str]) -> list[str]:
     parts = [p.strip() for p in re.split(rf"^{SENTINEL}$", out, flags=re.M)]
     # pandoc litter that adds nothing in a notebook context
     parts = [re.sub(r"^<!-- end list -->$", "", p, flags=re.M) for p in parts]
+    # Sphinx roles pandoc cannot resolve. Explicit-target references
+    # (:ref:`Step 13 <step-13-shapley>`, :doc:`the Studio chapter
+    # <studio>`) keep their target in the output; render just the link
+    # text, as the docs do. Bare-target :doc:/:ref: come out
+    # indistinguishable from inline code, so the .rst sources give a
+    # readable explicit title to every such reference that reaches a
+    # notebook.
+    parts = [re.sub(r"`([^`<>]+?)\s<[\w./-]+>`(?!_)",
+                    lambda m: " ".join(m.group(1).split()), p)
+             for p in parts]
+    # :cite: keys come out as bare DBLP:... tokens; drop them (the
+    # surrounding prose is phrased to carry the reference on its own).
+    parts = [re.sub(r"\s*\bDBLP:[\w/-]+", "", p) for p in parts]
     return parts
 
 

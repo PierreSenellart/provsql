@@ -5,7 +5,8 @@ Case Study: Peer-Review Assignment and Knowledge Compilation
 ============================================================
 
 This case study looks at ProvSQL from the angle of **knowledge
-compilation** (see :doc:`knowledge-compilation`): how the *shape* of a
+compilation** (see :doc:`the knowledge-compilation chapter
+<knowledge-compilation>`): how the *shape* of a
 SQL query, **together with the keys the schema declares**, determines the
 shape of the Boolean provenance circuit it produces, and how that, in
 turn, decides which probability method is cheap and which needs a full
@@ -27,7 +28,7 @@ side by side.
    in-process side of the comparison is fully reproducible there. See the
    :ref:`Playground note <playground-note>`.
 
-The thread running through the chapter is a single coverage question
+The thread running through the case study is a single coverage question
 asked three ways over the **same data**:
 
 * asked so that it is **safe by shape** (hierarchical) -- read-once,
@@ -38,7 +39,7 @@ asked three ways over the **same data**:
   `#P-hard <https://en.wikipedia.org/wiki/%E2%99%AFP>`__ and a real
   compiler earns its keep.
 
-These three are the first rungs of a ladder, none recursive. The chapter
+These three are the first rungs of a ladder, none recursive. The case study
 then climbs the rest, all over the same instance: a ``HAVING count(*)``
 query that a probability-side pre-pass resolves before any compiler runs;
 a self-join that is **inversion-free** -- hard to every circuit-level
@@ -98,13 +99,21 @@ fresh database:
 .. nb:setup: ../../casestudy7/setup.sql
 
 Confidences are seeded by the script (a per-row ``conf`` column fed to
-:sqlfunc:`set_prob`). Connect Studio to the fixture:
+:sqlfunc:`set_prob`).
+
+.. nb:omit-begin
+
+Connect Studio to the fixture:
 
 .. code-block:: bash
 
     provsql-studio --dsn postgresql:///peer_review_demo
 
-and open `http://127.0.0.1:8000/ <http://127.0.0.1:8000/>`_. The schema
+and open `http://127.0.0.1:8000/ <http://127.0.0.1:8000/>`_.
+
+.. nb:omit-end
+
+The schema
 panel tags every relation added with :sqlfunc:`add_provenance` with a
 :sc:`prov-tid` pill -- their tuples are independent -- ``assignment``
 (set up with :sqlfunc:`repair_key`) with a :sc:`prov-bid` pill marking it
@@ -396,8 +405,9 @@ whose lineage is **not** read-once -- so ``independent`` rejects it, and a
 generic compiler treats it as hard -- yet whose *shape* admits a
 linear-size `OBDD <https://en.wikipedia.org/wiki/Binary_decision_diagram>`__.
 ProvSQL recognises this **inversion-free** class
-:cite:`DBLP:conf/icdt/JhaS11` (the ``inversion-free`` method in
-:doc:`probabilities`) at planning time and
+:cite:`DBLP:conf/icdt/JhaS11` (the ``inversion-free`` method described
+in :doc:`the chapter on probabilities <probabilities>`) at planning
+time and
 evaluates it with a structured d-DNNF built over a query-derived variable
 order, instead of reaching for a compiler.
 
@@ -560,8 +570,10 @@ Boolean) but not for multiplicity-counting semirings.
 
 .. seealso::
 
-   - :doc:`knowledge-compilation` for the full pipeline and every
-     function used here.
-   - :doc:`probabilities` for the probability methods.
-   - :cite:`DBLP:series/synthesis/2011Suciu` for the theory of safe
+   - :doc:`The knowledge-compilation chapter <knowledge-compilation>`
+     for the full pipeline and every function used here.
+   - :doc:`The chapter on probabilities <probabilities>` for the
+     probability methods.
+   - The *Probabilistic Databases* synthesis lecture
+     :cite:`DBLP:series/synthesis/2011Suciu` for the theory of safe
      queries and the dichotomy.

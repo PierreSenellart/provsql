@@ -4,7 +4,7 @@
 Case Study: Open Science Database
 =================================
 
-This tutorial introduces a broader set of ProvSQL features through a
+This case study introduces a broader set of ProvSQL features through a
 realistic scientific literature analysis scenario.
 
 .. nb:skip
@@ -29,7 +29,7 @@ The Scenario
 
 .. warning::
 
-   All studies, findings, and reliability scores in this tutorial are
+   All studies, findings, and reliability scores in this case study are
    **entirely fictional** and created solely to illustrate ProvSQL features.
    They do not correspond to real published research and convey no medical
    or scientific knowledge.
@@ -235,7 +235,8 @@ Step 6: Evidence Grade Semiring
 --------------------------------
 
 Define a custom *evidence grade* semiring over ``study_quality``
-(see :ref:`custom-semirings` for a full description of the mechanism):
+(see :ref:`the section on custom semirings <custom-semirings>` for a
+full description of the mechanism):
 
 * **⊕ = MAX** (best quality among alternative derivations)
 * **⊗ = MIN** (weakest quality in a chain of derivations)
@@ -523,7 +524,8 @@ Step 13: Shapley Values
 Shapley values measure each study's marginal contribution to the *replication*
 probability of a finding. Because probabilities are set on the input tuples,
 :sqlfunc:`shapley` computes *expected* Shapley values in the probabilistic
-sense (see :doc:`shapley`). A key property of expected Shapley values is that
+sense (see :doc:`the chapter on Shapley values <shapley>`). A key
+property of expected Shapley values is that
 they sum to the probability of the query result – here, the replication
 probability computed in Step 12.
 
@@ -578,7 +580,8 @@ study's contribution. Unlike Shapley values, which average marginal
 contributions over all orderings of the players, Banzhaf values average over
 all *subsets* of the other players. This makes the computation simpler (no
 ordering weights) and often faster in practice. Like Shapley values, they are
-computed in the probabilistic sense (see :doc:`shapley`), but they do not
+computed in the probabilistic sense (see :doc:`the chapter on Shapley
+values <shapley>`), but they do not
 satisfy the efficiency axiom: they are not constrained to sum to the
 probability of the query result.
 

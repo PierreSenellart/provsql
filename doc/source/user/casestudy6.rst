@@ -5,8 +5,10 @@ Case Study: City Air-Quality Sensor Network
 ===========================================
 
 This case study demonstrates ProvSQL's continuous-distribution
-surface (see :doc:`continuous-distributions`) end-to-end through
-ProvSQL Studio (see :doc:`studio`). It is the first case study
+surface (see :doc:`the chapter on continuous distributions
+<continuous-distributions>`) end-to-end through
+ProvSQL Studio (see :doc:`the Studio chapter <studio>`). It is the
+first case study
 driven primarily by Studio rather than ``psql``: random variables
 benefit far more from interactive visualisation – PDFs, CDFs,
 mixture DAG layouts, conditional histograms, simplifier
@@ -95,8 +97,9 @@ into a fresh PostgreSQL database:
 .. nb:setup: ../../casestudy6/setup.sql
 
 The script creates the schema below and seeds the random-variable
-readings via the constructors documented in
-:doc:`continuous-distributions`. It is five tables:
+readings via the constructors documented in :doc:`the chapter on
+continuous distributions <continuous-distributions>`. It is five
+tables:
 
 * ``stations(id, name, district)`` – four monitoring stations
   across two districts, provenance-tracked.
@@ -113,6 +116,8 @@ readings via the constructors documented in
 * ``historical_readings(...)`` – same shape as ``readings``,
   populated from yesterday's batch.
 
+.. nb:omit-begin
+
 Connect Studio to the fixture:
 
 .. code-block:: bash
@@ -120,7 +125,11 @@ Connect Studio to the fixture:
     provsql-studio --dsn postgresql:///air_quality_demo
 
 and open `http://127.0.0.1:8000/ <http://127.0.0.1:8000/>`_ in a
-browser. The schema panel lists the fixture's six relations: the
+browser.
+
+.. nb:omit-end
+
+The schema panel lists the fixture's six relations: the
 four provenance-tracked tables (``stations``,
 ``calibration_status``, ``readings``, ``historical_readings``)
 carry the purple :sc:`prov` pill, ``categories`` is plain, and
@@ -209,7 +218,8 @@ the ``gate_cmp``); the cmp's child link reaches into the
 ``gate_rv`` from Step 1.
 
 The eval strip's :sqlfunc:`probability_evaluate` entry exposes the
-five compiled methods (see :doc:`probabilities`). Pick
+five compiled methods (see :doc:`the chapter on probabilities
+<probabilities>`). Pick
 ``monte-carlo`` and set ``n = 10000``; the panel returns the
 probability with a Hoeffding confidence band. Pin
 ``provsql.monte_carlo_seed = 42`` in the Config panel and re-run:
@@ -492,7 +502,8 @@ Step 10: Independent vs Monte Carlo
 
 For threshold queries whose contributing rows have structurally
 independent provenance, the ``'independent'`` probability method
-(see :doc:`probabilities`) is *exact* and far cheaper than Monte
+(see :doc:`the chapter on probabilities <probabilities>`) is *exact*
+and far cheaper than Monte
 Carlo. Compare the three available exact methods against
 ``monte-carlo`` on the Step 2 query:
 
@@ -510,5 +521,6 @@ method against the same pinned subnode shows the analytic
 value to full precision, while ``monte-carlo`` returns a
 Hoeffding-bounded estimate that tightens as ``n`` grows.
 
-See :doc:`continuous-distributions` for the full surface and
-:doc:`studio` for the Studio reference.
+See :doc:`the chapter on continuous distributions
+<continuous-distributions>` for the full surface and
+:doc:`the Studio chapter <studio>` for the Studio reference.
