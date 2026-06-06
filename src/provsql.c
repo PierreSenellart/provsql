@@ -388,6 +388,248 @@ static Query *lookup_lowered_cte(List *lowered, const char *name) {
 }
 
 #if PG_VERSION_NUM >= 150000
+/** @brief Output of @c detect_reachability_cte(): the recognised shape's pieces. */
+typedef struct ReachabilityShape {
+  Oid relid;              /**< Edge relation. */
+  AttrNumber src_attno;   /**< Source-vertex column of the edge relation. */
+  AttrNumber dst_attno;   /**< Destination-vertex column. */
+  char *source_text;      /**< Base arm's constant, rendered as text. */
+} ReachabilityShape;
+
+/** @brief Strip @c RelabelType decorations off an expression. */
+static Node *reach_strip(Node *n) {
+  while (n != NULL && IsA(n, RelabelType))
+    n = (Node *) ((RelabelType *) n)->arg;
+  return n;
+}
+
+/**
+ * @brief Collect every qual of a join tree into @p quals, flattening AND.
+ *
+ * Only inner joins are in scope; any outer join flips @p ok to false.
+ */
+static void reach_collect_quals(Node *jtnode, List **quals, bool *ok) {
+  if (jtnode == NULL || !*ok)
+    return;
+  if (IsA(jtnode, FromExpr)) {
+    FromExpr *f = (FromExpr *) jtnode;
+    ListCell *lc;
+    foreach(lc, f->fromlist)
+      reach_collect_quals((Node *) lfirst(lc), quals, ok);
+    if (f->quals)
+      *quals = list_concat(*quals, make_ands_implicit((Expr *) f->quals));
+  } else if (IsA(jtnode, JoinExpr)) {
+    JoinExpr *j = (JoinExpr *) jtnode;
+    if (j->jointype != JOIN_INNER) {
+      *ok = false;
+      return;
+    }
+    reach_collect_quals(j->larg, quals, ok);
+    reach_collect_quals(j->rarg, quals, ok);
+    if (j->quals)
+      *quals = list_concat(*quals, make_ands_implicit((Expr *) j->quals));
+  }
+  /* RangeTblRef: nothing to collect */
+}
+
+/** @brief Return the single non-junk target entry of @p q, or NULL. */
+static TargetEntry *reach_single_tle(Query *q) {
+  TargetEntry *res = NULL;
+  ListCell *lc;
+  foreach(lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (res != NULL)
+      return NULL;
+    res = te;
+  }
+  return res;
+}
+
+/**
+ * @brief Recognise the linear reachability shape of a recursive CTE.
+ *
+ * Accepted (in either arm order, with either qual orientation):
+ *
+ *   WITH RECURSIVE reach(v) AS (
+ *       SELECT <constant>
+ *     UNION
+ *       SELECT e.<dst> FROM <edge> e JOIN reach r ON e.<src> = r.v
+ *   )
+ *
+ * where @c <edge> is a provenance-tracked base relation (a @c provsql
+ * UUID column), the recursive arm has no other clauses, and the single
+ * join qual is a mergejoinable equality between an edge column and the
+ * CTE's (single) column.  The caller has already checked the UNION
+ * (set) shape and the @c provsql.boolean_provenance gate.
+ *
+ * @param cte        The recursive CTE.
+ * @param cteq       Its query (a UNION of two subquery arms).
+ * @param constants  OID constants (for the UUID type check).
+ * @param out        Output: the recognised pieces.
+ * @return           Whether the shape was recognised.
+ */
+static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
+                                    const constants_t *constants,
+                                    ReachabilityShape *out) {
+  SetOperationStmt *so = (SetOperationStmt *) cteq->setOperations;
+  Query *arms[2];
+  Query *base = NULL, *rec = NULL;
+  Index edge_rti = 0, cte_rti = 0;
+  TargetEntry *tle;
+  Var *target_var;
+  List *quals = NIL;
+  bool ok = true;
+  OpExpr *eq;
+  Var *va, *vb, *edge_var, *cte_var;
+  AttrNumber prov_attno;
+  int i;
+  ListCell *lc;
+
+  if (list_length(cte->ctecolnames) != 1)
+    return false;
+
+  if (!IsA(so->larg, RangeTblRef) || !IsA(so->rarg, RangeTblRef))
+    return false;
+  for (i = 0; i < 2; ++i) {
+    RangeTblRef *rtr = (RangeTblRef *) (i == 0 ? so->larg : so->rarg);
+    RangeTblEntry *r = rt_fetch(rtr->rtindex, cteq->rtable);
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+      return false;
+    arms[i] = r->subquery;
+  }
+
+  /* Identify the recursive arm: the one with the self-reference. */
+  for (i = 0; i < 2; ++i) {
+    bool has_self = false;
+    foreach(lc, arms[i]->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+      if (r->rtekind == RTE_CTE && r->self_reference &&
+          strcmp(r->ctename, cte->ctename) == 0)
+        has_self = true;
+    }
+    if (has_self) {
+      if (rec != NULL)
+        return false;
+      rec = arms[i];
+    } else {
+      if (base != NULL)
+        return false;
+      base = arms[i];
+    }
+  }
+  if (base == NULL || rec == NULL)
+    return false;
+
+  /* Base arm: SELECT <constant>, no FROM, no other clauses. */
+  if (base->jointree == NULL || base->jointree->fromlist != NIL ||
+      base->jointree->quals != NULL ||
+      base->setOperations != NULL || base->hasAggs || base->hasSubLinks ||
+      base->hasTargetSRFs || base->groupClause != NIL ||
+      base->distinctClause != NIL)
+    return false;
+  tle = reach_single_tle(base);
+  if (tle == NULL)
+    return false;
+  {
+    Node *bexpr = reach_strip((Node *) tle->expr);
+    Const *c;
+    Oid outfunc;
+    bool varlena;
+    if (bexpr == NULL || !IsA(bexpr, Const))
+      return false;
+    c = (Const *) bexpr;
+    if (c->constisnull)
+      return false;
+    getTypeOutputInfo(c->consttype, &outfunc, &varlena);
+    out->source_text = OidOutputFunctionCall(outfunc, c->constvalue);
+  }
+
+  /* Recursive arm: single tracked base relation joined with the CTE. */
+  if (rec->hasAggs || rec->hasWindowFuncs || rec->hasSubLinks ||
+      rec->hasTargetSRFs || rec->groupClause != NIL ||
+      rec->distinctClause != NIL || rec->sortClause != NIL ||
+      rec->havingQual != NULL || rec->limitOffset != NULL ||
+      rec->limitCount != NULL || rec->setOperations != NULL ||
+      rec->groupingSets != NIL)
+    return false;
+  i = 0;
+  foreach(lc, rec->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    ++i;
+    switch (r->rtekind) {
+    case RTE_RELATION:
+      if (edge_rti != 0 || r->relkind != RELKIND_RELATION)
+        return false;
+      edge_rti = i;
+      out->relid = r->relid;
+      break;
+    case RTE_CTE:
+      if (cte_rti != 0 || !r->self_reference ||
+          strcmp(r->ctename, cte->ctename) != 0)
+        return false;
+      cte_rti = i;
+      break;
+    case RTE_JOIN:
+      break;
+    default:
+      return false;
+    }
+  }
+  if (edge_rti == 0 || cte_rti == 0)
+    return false;
+
+  /* The edge relation must be provenance-tracked (a provsql UUID column). */
+  prov_attno = get_attnum(out->relid, PROVSQL_COLUMN_NAME);
+  if (prov_attno == InvalidAttrNumber ||
+      get_atttype(out->relid, prov_attno) != constants->OID_TYPE_UUID)
+    return false;
+
+  /* Target: a single edge-relation column (the destination vertex). */
+  tle = reach_single_tle(rec);
+  if (tle == NULL)
+    return false;
+  target_var = (Var *) reach_strip((Node *) tle->expr);
+  if (target_var == NULL || !IsA(target_var, Var) ||
+      target_var->varno != edge_rti || target_var->varlevelsup != 0 ||
+      target_var->varattno <= 0 || target_var->varattno == prov_attno)
+    return false;
+  out->dst_attno = target_var->varattno;
+
+  /* Quals: exactly one mergejoinable equality between an edge column and
+   * the CTE's column. */
+  reach_collect_quals((Node *) rec->jointree, &quals, &ok);
+  if (!ok || list_length(quals) != 1)
+    return false;
+  if (!IsA(linitial(quals), OpExpr))
+    return false;
+  eq = (OpExpr *) linitial(quals);
+  if (list_length(eq->args) != 2)
+    return false;
+  va = (Var *) reach_strip((Node *) linitial(eq->args));
+  vb = (Var *) reach_strip((Node *) lsecond(eq->args));
+  if (va == NULL || vb == NULL || !IsA(va, Var) || !IsA(vb, Var) ||
+      va->varlevelsup != 0 || vb->varlevelsup != 0)
+    return false;
+  if (!op_mergejoinable(eq->opno, exprType((Node *) linitial(eq->args))))
+    return false;
+  if (va->varno == edge_rti && vb->varno == cte_rti)
+    edge_var = va, cte_var = vb;
+  else if (vb->varno == edge_rti && va->varno == cte_rti)
+    edge_var = vb, cte_var = va;
+  else
+    return false;
+  if (cte_var->varattno != 1 || edge_var->varattno <= 0 ||
+      edge_var->varattno == prov_attno)
+    return false;
+  out->src_attno = edge_var->varattno;
+
+  return true;
+}
+#endif
+
+#if PG_VERSION_NUM >= 150000
 /**
  * @brief Lower a recursive CTE to a provenance-aware fixpoint (PROTOTYPE).
  *
@@ -469,13 +711,45 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
     provsql_notice("Lowering recursive CTE '%s':\n body   = %s\n coldef = %s",
                    cte->ctename, body_text, coldef.data);
 
-  /* Drive the fixpoint now, leaving a tracked temp table `ctename`. */
+  /* Drive the fixpoint now, leaving a tracked temp table `ctename`.
+   *
+   * Under provsql.boolean_provenance, a CTE matching the linear
+   * reachability shape over a tracked base edge relation routes to the
+   * decomposition-aligned driver, which compiles one certified provenance
+   * circuit per reachable vertex along a tree decomposition of the data
+   * graph (linear-size for bounded data treewidth, cyclic data included)
+   * and falls back to eval_recursive on any failure. */
   initStringInfo(&call);
-  appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
-                   quote_literal_cstr(body_text),
-                   quote_literal_cstr(cte->ctename),
-                   quote_literal_cstr(cols.data),
-                   quote_literal_cstr(coldef.data));
+  {
+    ReachabilityShape shape = {InvalidOid, 0, 0, NULL};
+    constants_t constants = get_constants(true);
+    if (provsql_boolean_provenance &&
+        detect_reachability_cte(cte, cteq, &constants, &shape)) {
+      char *src_name = get_attname(shape.relid, shape.src_attno, false);
+      char *dst_name = get_attname(shape.relid, shape.dst_attno, false);
+      char *coltype = format_type_be(lfirst_oid(list_head(cte->ctecoltypes)));
+      if (provsql_verbose >= 20)
+        provsql_notice("Recursive CTE '%s' recognised as reachability over %s",
+                       cte->ctename, get_rel_name(shape.relid));
+      appendStringInfo(&call,
+                       "SELECT provsql.eval_reachability(%u::pg_catalog.regclass, %s, %s, %s, true, %s, %s, %s, %s, %s)",
+                       shape.relid,
+                       quote_literal_cstr(src_name),
+                       quote_literal_cstr(dst_name),
+                       quote_literal_cstr(shape.source_text),
+                       quote_literal_cstr(cte->ctename),
+                       quote_literal_cstr(cols.data),
+                       quote_literal_cstr(coldef.data),
+                       quote_literal_cstr(coltype),
+                       quote_literal_cstr(body_text));
+    } else {
+      appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
+                       quote_literal_cstr(body_text),
+                       quote_literal_cstr(cte->ctename),
+                       quote_literal_cstr(cols.data),
+                       quote_literal_cstr(coldef.data));
+    }
+  }
   if ((rc = SPI_connect()) != SPI_OK_CONNECT)
     provsql_error("Recursive CTE lowering: SPI_connect failed (%d)", rc);
   rc = SPI_execute(call.data, false, 0);

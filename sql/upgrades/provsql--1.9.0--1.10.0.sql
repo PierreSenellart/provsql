@@ -140,6 +140,10 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
  * @param destination_attribute name of the destination-vertex column
  * @param source_value source vertex, as text
  * @param target_value target vertex, as text
+ *
+ * The @c vertices output maps the dense IDs back to the original
+ * vertex values (as text, 1-indexed), for callers that need to label
+ * per-vertex results.
  */
 CREATE OR REPLACE FUNCTION gather_reachability_edges(
   IN rel regclass,
@@ -152,7 +156,8 @@ CREATE OR REPLACE FUNCTION gather_reachability_edges(
   OUT tokens UUID[],
   OUT probabilities DOUBLE PRECISION[],
   OUT source_id INT,
-  OUT target_id INT)
+  OUT target_id INT,
+  OUT vertices TEXT[])
 AS
 $$
 BEGIN
@@ -183,8 +188,10 @@ BEGIN
   SELECT array_agg(iu.id), array_agg(iv.id),
          array_agg(e.token), array_agg(coalesce(get_prob(e.token), 1.0)),
          (SELECT id FROM ids WHERE x = source_value),
-         (SELECT id FROM ids WHERE x = target_value)
-    INTO sources, destinations, tokens, probabilities, source_id, target_id
+         (SELECT id FROM ids WHERE x = target_value),
+         (SELECT array_agg(x ORDER BY id) FROM ids)
+    INTO sources, destinations, tokens, probabilities, source_id, target_id,
+         vertices
     FROM provsql_reachability_edges_tmp e
     JOIN ids iu ON iu.x = e.u
     JOIN ids iv ON iv.x = e.v;
@@ -192,6 +199,78 @@ BEGIN
   DROP TABLE provsql_reachability_edges_tmp;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messages = warning;
+
+/**
+ * @brief Fixpoint driver for the recursive reachability shape:
+ * decomposition-aligned compilation with fallback to eval_recursive
+ *
+ * Called (at plan time, over SPI) by the recursive-CTE lowering when
+ * @c provsql.boolean_provenance is on and the CTE matches the linear
+ * reachability shape over a tracked base edge relation.  Attempts the
+ * decomposition-aligned route -- gather the edges, compile every
+ * reachable vertex's certified provenance circuit along a tree
+ * decomposition of the data graph, materialise them, and fill the
+ * working table with one tokenised row per reachable vertex.  On any
+ * failure (data treewidth above the cap, per-node state bound, edges
+ * that are not independent base tuples...), falls back to the generic
+ * @c eval_recursive() fixpoint, preserving its behaviour exactly.
+ *
+ * @param edge_rel the provenance-tracked edge relation
+ * @param source_attribute name of the source-vertex column
+ * @param destination_attribute name of the destination-vertex column
+ * @param source_value the base arm's constant, as text
+ * @param directed if false, each edge can be traversed both ways
+ * @param work_name name of the working temp table (the CTE name)
+ * @param colnames comma-separated user column names (for the fallback)
+ * @param coldef column definitions of the working table
+ * @param coltype type of the CTE's single column
+ * @param body_sql deparsed CTE body (for the fallback)
+ */
+CREATE OR REPLACE FUNCTION eval_reachability(
+  edge_rel regclass,
+  source_attribute text,
+  destination_attribute text,
+  source_value text,
+  directed boolean,
+  work_name text,
+  colnames text,
+  coldef text,
+  coltype text,
+  body_sql text)
+  RETURNS void AS
+$$
+DECLARE
+  e record;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  BEGIN
+    e := gather_reachability_edges(edge_rel, source_attribute,
+                                   destination_attribute,
+                                   source_value, source_value);
+    IF to_regclass(work_name) IS NOT NULL THEN
+      EXECUTE format('DROP TABLE %I', work_name);
+    END IF;
+    EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+    EXECUTE format(
+      'INSERT INTO %I SELECT ($1::text[])[m.vertex]::%s, m.token '
+      || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7) m',
+      work_name, coltype)
+      USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
+            e.source_id, directed;
+    IF verbosity >= 20 THEN
+      RAISE NOTICE 'ProvSQL: recursive CTE "%" compiled along a tree decomposition of %',
+        work_name, edge_rel;
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    IF verbosity >= 10 THEN
+      RAISE NOTICE 'ProvSQL: reachability route for "%" fell back to the generic fixpoint (%)',
+        work_name, SQLERRM;
+    END IF;
+    PERFORM provsql.eval_recursive(body_sql, work_name, colnames, coldef);
+  END;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public;
+
 
 /**
  * @brief Exact reachability probability over a provenance-tracked edge
