@@ -79,6 +79,42 @@ def test_load_sql_file_fills_query_box(
     expect(page.locator("#result-count")).to_have_text("2", timeout=8000)
 
 
+def test_invisible_unicode_is_sanitized(page: Page, studio_url: str,
+                                        tmp_path) -> None:
+    """Invisible Unicode smuggled in by rich-text copy (NBSP, zero-width
+    space, BOM, object replacement character) is cleaned before the query
+    runs -- on the paste hook, on the run path, and on a loaded file --
+    instead of dying on PostgreSQL's `syntax error at or near "￼"`."""
+    page.goto(studio_url + "/where")
+
+    # Paste hook: dirty text arriving as insertFromPaste is rewritten at once.
+    cleaned = page.evaluate(
+        """() => {
+            const ta = document.getElementById('request');
+            ta.value = 'SELECT\\u00a0\\u00a042 AS n;\\ufffc';
+            ta.setSelectionRange(ta.value.length, ta.value.length);
+            ta.dispatchEvent(new InputEvent('input',
+                {inputType: 'insertFromPaste', bubbles: true}));
+            return ta.value;
+        }""")
+    assert cleaned == "SELECT  42 AS n;"
+
+    # Run path (covers ?q= deep links and programmatic fills): cleaned in
+    # place before execution, and the query succeeds.
+    page.locator("#request").fill(
+        "SELECT\u00a0name\u00a0FROM\u00a0personnel\u00a0LIMIT\u00a01;\u200b")
+    page.locator("#run-btn").click()
+    expect(page.locator("#result-count")).to_have_text("1", timeout=8000)
+    expect(page.locator("#request")).to_have_value(
+        "SELECT name FROM personnel LIMIT 1;")
+
+    # Loaded file: a BOM-prefixed file is cleaned on its way in.
+    sql_file = tmp_path / "bom.sql"
+    sql_file.write_text("\ufeffSELECT 1;\n")
+    page.locator("#load-sql-input").set_input_files(str(sql_file))
+    expect(page.locator("#request")).to_have_value("SELECT 1;\n")
+
+
 def test_connection_editor_opens_and_validates(
     page: Page, studio_url: str
 ) -> None:

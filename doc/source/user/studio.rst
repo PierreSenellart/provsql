@@ -842,7 +842,9 @@ SVG circuit snapshots, plain-text evaluation results), so GitHub and
 nbviewer render a saved notebook as a readable static document;
 Studio itself re-renders from richer payloads stored alongside under
 ``application/vnd.provsql.*`` keys. :fa:`folder-open` :guilabel:`Load` opens an
-``.ipynb`` in a new tab. Between saves, every tab autosaves to the
+``.ipynb`` in a new tab; it also accepts a ``.sql`` file (a fixture
+script, a ``pg_dump`` dump…), appended to the current notebook as one
+ready-to-run SQL cell. Between saves, every tab autosaves to the
 browser's local storage, surviving reloads and mode switches.
 
 .. _studio-example-notebooks:
