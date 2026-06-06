@@ -35,150 +35,197 @@ extern "C" {
 template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> >
 typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const
 {
-  const auto it = provenance_mapping.find(g);
-  if(it != provenance_mapping.end())
-    return it->second;
+  /* Iterative post-order evaluation with @p provenance_mapping doubling as
+   * the memoisation table.  Provenance circuits can be as deep as the data
+   * (a recursive fixpoint's times/plus chain, the decomposition-aligned
+   * reachability circuits of path-like graphs), so recursion on wires
+   * would overflow the C stack -- the previous implementation turned that
+   * into a "stack depth limit exceeded" error at a few thousand levels;
+   * the explicit stack removes the ceiling altogether.  Every computed
+   * gate is memoised (a gate's semiring value is a pure function of the
+   * gate), so shared sub-DAGs are evaluated once and gate-creating
+   * semirings (BoolExpr, formula) preserve the sharing structurally. */
+  std::vector<gate_t> stack{g};
 
-  auto result = evaluateImpl<S>(g, provenance_mapping, semiring);
-  provenance_mapping.emplace(g, result);
-  return result;
-}
+  while(!stack.empty()) {
+    const gate_t u = stack.back();
 
-template<typename S, std::enable_if_t<std::is_base_of_v<semiring::Semiring<typename S::value_type>, S>, int> >
-typename S::value_type GenericCircuit::evaluateImpl(gate_t g, std::unordered_map<gate_t, typename S::value_type> &provenance_mapping, S semiring) const
-{
-  /* Recurses on circuit wires (depth = circuit depth).  A pathological
-   * provenance circuit -- e.g. a deep times/plus chain from a recursive
-   * query -- would otherwise overflow the C stack and crash the backend;
-   * check_stack_depth() turns that into a clean "stack depth limit
-   * exceeded" ERROR honouring max_stack_depth. */
-  check_stack_depth();
-
-  /* In-memory Boolean-assumption marker (set by
-   * @c foldBooleanIdentities on gates whose wires were rewritten
-   * under a Boolean-only rule).  Mirrors the @c gate_assumed_boolean
-   * structural-marker check below but applies to gates that keep
-   * their original type (the rule mutated their wires in place ;
-   * the persistent mmap was not touched).  Same compatibility
-   * predicate, same failure mode. */
-  if(isBooleanAssumed(g) && !semiring.compatibleWithBooleanRewrite())
-    throw CircuitException(
-            "The requested semiring does not admit a homomorphism "
-            "from Boolean functions; this gate's wires were rewritten "
-            "under a Boolean-only rule (typically idempotence or "
-            "plus-with-one absorber by foldBooleanIdentities, gated "
-            "on provsql.boolean_provenance = on) and the evaluation "
-            "is unsound under this semiring.  Re-run with "
-            "provsql.boolean_provenance = off, or pick a "
-            "Boolean-compatible semiring (boolean, boolexpr, "
-            "formula, ...).");
-
-  auto t = getGateType(g);
-
-  switch(t) {
-  case gate_one:
-  case gate_input:
-  case gate_update:
-  case gate_mulinput:
-    // If not in provenance mapping, return no provenance (one of the semiring)
-    return semiring.one();
-
-  case gate_zero:
-    return semiring.zero();
-
-  case gate_plus:
-  case gate_times:
-  case gate_monus: {
-    auto children = getWires(g);
-    std::vector<typename S::value_type> childrenResult;
-    std::transform(children.begin(), children.end(), std::back_inserter(childrenResult), [&](auto u) {
-        return evaluate<S>(u, provenance_mapping, semiring);
-      });
-    if(t==gate_plus) {
-      childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.zero()),
-                           childrenResult.end());
-      return semiring.plus(childrenResult);
-    } else if(t==gate_times) {
-      for(const auto &c: childrenResult) {
-        if(c==semiring.zero())
-          return semiring.zero();
-      }
-      childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.one()),
-                           childrenResult.end());
-      return semiring.times(childrenResult);
-    } else {
-      if(childrenResult[0]==semiring.zero() || childrenResult[0]==childrenResult[1])
-        return semiring.zero();
-      else
-        return semiring.monus(childrenResult[0], childrenResult[1]);
+    if(provenance_mapping.find(u) != provenance_mapping.end()) {
+      stack.pop_back();
+      continue;
     }
-  }
 
-  case gate_delta:
-    return semiring.delta(evaluate<S>(getWires(g)[0], provenance_mapping, semiring));
-
-  case gate_project:
-  case gate_eq:
-  case gate_annotation:
-    // Where-provenance gates and the transparent annotation wrapper: evaluate
-    // straight through to the single child (identity for every semiring).  The
-    // annotation's extra string is inert metadata at evaluation time.
-    return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
-
-  case gate_assumed_boolean:
-    /* Structural marker: the wrapped sub-circuit was computed under a
-     * Boolean-provenance assumption (e.g. the safe-query rewrite
-     * collapses derivation multiplicities into a single Boolean
-     * witness).  Identity for semirings whose evaluation factors
-     * through a homomorphism from Boolean functions; fatal for the
-     * rest, since otherwise we would silently return a value the
-     * semiring's semantics does not justify. */
-    if(!semiring.compatibleWithBooleanRewrite())
+    /* In-memory Boolean-assumption marker (set by
+     * @c foldBooleanIdentities on gates whose wires were rewritten
+     * under a Boolean-only rule).  Mirrors the @c gate_assumed_boolean
+     * structural-marker check below but applies to gates that keep
+     * their original type (the rule mutated their wires in place ;
+     * the persistent mmap was not touched).  Same compatibility
+     * predicate, same failure mode. */
+    if(isBooleanAssumed(u) && !semiring.compatibleWithBooleanRewrite())
       throw CircuitException(
               "The requested semiring does not admit a homomorphism "
-              "from Boolean functions; the wrapped sub-circuit was "
-              "computed under a Boolean-provenance assumption "
-              "(typically by the safe-query rewrite, "
-              "provsql.boolean_provenance = on) and the evaluation is "
-              "unsound under this semiring.  Re-run the query with "
+              "from Boolean functions; this gate's wires were rewritten "
+              "under a Boolean-only rule (typically idempotence or "
+              "plus-with-one absorber by foldBooleanIdentities, gated "
+              "on provsql.boolean_provenance = on) and the evaluation "
+              "is unsound under this semiring.  Re-run with "
               "provsql.boolean_provenance = off, or pick a "
               "Boolean-compatible semiring (boolean, boolexpr, "
               "formula, ...).");
-    return evaluate<S>(getWires(g)[0], provenance_mapping, semiring);
 
-  case gate_cmp:
-  {
-    bool ok;
-    ComparisonOperator op = cmpOpFromOid(getInfos(g).first, ok);
-    if(!ok)
-      throw CircuitException(
-              "Comparison operator OID " +
-              std::to_string(getInfos(g).first) +
-              " not supported");
+    const auto t = getGateType(u);
 
-    return semiring.cmp(evaluate<S>(getWires(g)[0], provenance_mapping, semiring), op, evaluate<S>(getWires(g)[1], provenance_mapping, semiring));
+    /* Leaves. */
+    switch(t) {
+    case gate_one:
+    case gate_input:
+    case gate_update:
+    case gate_mulinput:
+      // If not in provenance mapping, return no provenance (one of the semiring)
+      provenance_mapping.emplace(u, semiring.one());
+      stack.pop_back();
+      continue;
+    case gate_zero:
+      provenance_mapping.emplace(u, semiring.zero());
+      stack.pop_back();
+      continue;
+    case gate_value:
+      provenance_mapping.emplace(u, semiring.value(getExtra(u)));
+      stack.pop_back();
+      continue;
+    case gate_assumed_boolean:
+      /* Structural marker: the wrapped sub-circuit was computed under a
+       * Boolean-provenance assumption (e.g. the safe-query rewrite
+       * collapses derivation multiplicities into a single Boolean
+       * witness).  Identity for semirings whose evaluation factors
+       * through a homomorphism from Boolean functions; fatal for the
+       * rest, since otherwise we would silently return a value the
+       * semiring's semantics does not justify. */
+      if(!semiring.compatibleWithBooleanRewrite())
+        throw CircuitException(
+                "The requested semiring does not admit a homomorphism "
+                "from Boolean functions; the wrapped sub-circuit was "
+                "computed under a Boolean-provenance assumption "
+                "(typically by the safe-query rewrite, "
+                "provsql.boolean_provenance = on) and the evaluation is "
+                "unsound under this semiring.  Re-run the query with "
+                "provsql.boolean_provenance = off, or pick a "
+                "Boolean-compatible semiring (boolean, boolexpr, "
+                "formula, ...).");
+      break;
+    case gate_cmp:
+    {
+      bool ok;
+      cmpOpFromOid(getInfos(u).first, ok);
+      if(!ok)
+        throw CircuitException(
+                "Comparison operator OID " +
+                std::to_string(getInfos(u).first) +
+                " not supported");
+      break;
+    }
+    default:
+      break;
+    }
+
+    /* Internal gate: make sure every child is computed first. */
+    {
+      bool ready = true;
+      for(const auto &c : getWires(u))
+        if(provenance_mapping.find(c) == provenance_mapping.end()) {
+          stack.push_back(c);
+          ready = false;
+        }
+      if(!ready)
+        continue;
+    }
+
+    const auto childValue = [&](int i) -> const typename S::value_type & {
+                              return provenance_mapping.at(getWires(u)[i]);
+                            };
+
+    switch(t) {
+    case gate_plus:
+    case gate_times:
+    case gate_monus: {
+      std::vector<typename S::value_type> childrenResult;
+      for(const auto &c : getWires(u))
+        childrenResult.push_back(provenance_mapping.at(c));
+      if(t==gate_plus) {
+        childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.zero()),
+                             childrenResult.end());
+        provenance_mapping.emplace(u, semiring.plus(childrenResult));
+      } else if(t==gate_times) {
+        bool zero = false;
+        for(const auto &c: childrenResult) {
+          if(c==semiring.zero()) {
+            zero = true;
+            break;
+          }
+        }
+        if(zero)
+          provenance_mapping.emplace(u, semiring.zero());
+        else {
+          childrenResult.erase(std::remove(std::begin(childrenResult), std::end(childrenResult), semiring.one()),
+                               childrenResult.end());
+          provenance_mapping.emplace(u, semiring.times(childrenResult));
+        }
+      } else {
+        if(childrenResult[0]==semiring.zero() || childrenResult[0]==childrenResult[1])
+          provenance_mapping.emplace(u, semiring.zero());
+        else
+          provenance_mapping.emplace(u, semiring.monus(childrenResult[0], childrenResult[1]));
+      }
+      break;
+    }
+
+    case gate_delta:
+      provenance_mapping.emplace(u, semiring.delta(childValue(0)));
+      break;
+
+    case gate_project:
+    case gate_eq:
+    case gate_annotation:
+    case gate_assumed_boolean:
+      // Where-provenance gates, the transparent annotation wrapper and the
+      // (compatibility-checked above) Boolean-assumption marker: identity
+      // for every admissible semiring.  The annotation's extra string is
+      // inert metadata at evaluation time.
+      provenance_mapping.emplace(u, childValue(0));
+      break;
+
+    case gate_cmp:
+    {
+      bool ok;
+      ComparisonOperator op = cmpOpFromOid(getInfos(u).first, ok);
+      provenance_mapping.emplace(u, semiring.cmp(childValue(0), op, childValue(1)));
+      break;
+    }
+
+    case gate_semimod:
+      provenance_mapping.emplace(u, semiring.semimod(childValue(0), childValue(1)));
+      break;
+
+    case gate_agg:
+    {
+      auto infos = getInfos(u);
+
+      AggregationOperator op = getAggregationOperator(infos.first);
+
+      std::vector<typename S::value_type> vec;
+      for(const auto &c : getWires(u))
+        vec.push_back(provenance_mapping.at(c));
+      provenance_mapping.emplace(u, semiring.agg(op, vec));
+      break;
+    }
+
+    default:
+      throw CircuitException("Invalid gate type for semiring evaluation");
+    }
+
+    stack.pop_back();
   }
 
-  case gate_semimod:
-    return semiring.semimod(evaluate<S>(getWires(g)[0], provenance_mapping, semiring), evaluate<S>(getWires(g)[1], provenance_mapping, semiring));
-
-  case gate_agg:
-  {
-    auto infos = getInfos(g);
-
-    AggregationOperator op = getAggregationOperator(infos.first);
-
-    std::vector<typename S::value_type> vec;
-    for(auto it = getWires(g).begin(); it!=getWires(g).end(); ++it)
-      vec.push_back(evaluate<S>(*it, provenance_mapping, semiring));
-    return semiring.agg(op, vec);
-    break;
-  }
-
-  case gate_value:
-    return semiring.value(getExtra(g));
-
-  default:
-    throw CircuitException("Invalid gate type for semiring evaluation");
-  }
+  return provenance_mapping.at(g);
 }
