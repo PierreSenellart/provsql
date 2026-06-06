@@ -4,7 +4,7 @@
 The defining property under test is Jupyter-like session state: a temp
 table created in one cell is visible in the next, an error cell rolls
 back without killing the kernel, and a restart (delete + create) wipes
-the state. See doc/TODO/studio-notebook-mode.md §2.
+the state.
 """
 from __future__ import annotations
 

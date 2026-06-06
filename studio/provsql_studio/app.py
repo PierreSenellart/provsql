@@ -127,7 +127,7 @@ def create_app(
     # state (temp tables, plain SETs) surviving across cells. Each
     # entry holds its own lock so cells on one kernel serialize while
     # different kernels run concurrently. See db.open_kernel_connection
-    # / db.exec_kernel_cell and doc/TODO/studio-notebook-mode.md §2.
+    # / db.exec_kernel_cell.
     app.extensions["provsql_kernels"] = {
         "lock": threading.Lock(),
         "by_id": {},  # session_id -> kernel entry dict

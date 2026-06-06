@@ -1,20 +1,15 @@
-# Studio: features and integration beyond v1.0
+# Studio: open features and integration work
 
 Backlog for Studio work (new inspection modes, larger features,
-implementation observations). The user guide at
+notebook polish, implementation observations). The user guide at
 `doc/source/user/studio.rst` documents the compatibility matrix,
 version streams, and CLI flags.
 
 ## Out of scope
 
-The following are documented elsewhere and do not need a TODO entry:
-
-- Compiled-semiring proposals: covered by `compiled-semirings.md`.
 - Tutorial / case-study coverage gaps: covered by `case-studies.md`.
-- A full Jupyter-style notebook mode: covered by
-  `studio-notebook-mode.md`.
 
-## Beyond v1.0
+## Plan
 
 ### New inspection modes
 
@@ -25,7 +20,7 @@ plus per-cell click affordances.
 #### Contributions mode
 
 - Heat-map of per-input Shapley / Banzhaf contributions for the
-  current result. The mode switcher gains a third tab; the sidebar
+  current result. The mode switcher gains a new tab; the sidebar
   lists input gates with mapping-resolved labels and a per-input
   contribution bar; result-table rows get a "→ Contributions"
   affordance similar to the existing "→ Circuit".
@@ -40,7 +35,9 @@ plus per-cell click affordances.
 - Dedicated chrome for the temporal SRFs `timeslice` / `history` /
   `timetravel` (CS4 §3–5). Sidebar = view picker + date / window /
   column-filter that composes the SRF call; the result table
-  renders the SRF output.
+  renders the SRF output. (The temporal *semiring* evaluation,
+  `sr_temporal`, is already in the eval-strip dropdown; this mode is
+  about the SRF surface.)
 - Motivation: the SRF call shape (`... AS (cols ...)`) plus the
   date / window / filter inputs warrant their own chrome rather
   than a generic eval-strip mini-panel.
@@ -59,6 +56,19 @@ plus per-cell click affordances.
 - **Multi-user demo deployment**: per-browser-session isolation in
   a single Docker container so a conference audience can each hit
   `localhost:8000` against a hosted instance.
+
+### Notebook-mode polish
+
+Small leftovers from the Notebook-mode plan, deferred from its MVP:
+
+- **Collapse / clear cell output**: per-cell actions to fold a bulky
+  output away or drop it (today output is removed only by re-running
+  or deleting the cell).
+- **Run from here**: run the selected cell and everything below it,
+  complementing the existing Run / Run all.
+- **Per-cell result-row cap**: the row cap is notebook-level only; a
+  per-cell override (recorded in `metadata.provsql`) would let one
+  wide cell coexist with a tight default.
 
 ## Implementation observations
 

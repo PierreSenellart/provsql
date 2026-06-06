@@ -31,8 +31,9 @@ Each plan document follows a consistent layout:
   conditioned distribution that flows onward, arbitrary denial
   constraints, Shapley over evidence, and soft/weighted conditioning.
 - [`case-studies.md`](case-studies.md) : plan for closing the
-  feature-coverage gaps in the user tutorial and the five existing
-  case studies (CS1-CS5), plus a future UDF / aggregate-join study (CS8).
+  feature-coverage gaps in the user tutorial and the existing case
+  studies by extending CS1-CS5, plus a future UDF / aggregate-join
+  study (CS8).
 - [`continuous_distributions.md`](continuous_distributions.md) : roadmap
   for extending the continuous random-variable surface beyond the shipped
   Normal/Uniform/Exponential/Erlang/Categorical/Mixture baseline (further
@@ -59,15 +60,10 @@ Each plan document follows a consistent layout:
 - [`scalar-subqueries.md`](scalar-subqueries.md) : the remaining
   unsupported scalar-/correlated-subquery forms -- scalar sublinks nested
   in arithmetic (today a passthrough-with-warning; the decorrelation
-  follow-up needs agg_token arithmetic wired into the planner),
+  follow-up now has its `agg_token`-arithmetic prerequisite in place),
   different-`(Q, corr)` multi-sublinks, and `GROUP BY` bodies.
-- [`studio.md`](studio.md) : open ProvSQL Studio work beyond v1.0 -- the
+- [`studio.md`](studio.md) : open ProvSQL Studio work -- the
   Contributions (Shapley / Banzhaf heat-map) and Time-travel / Temporal
-  modes, batch result-table evaluation, and multi-user demo deployment.
-- [`studio-notebook-mode.md`](studio-notebook-mode.md) : detailed
-  plan for a Jupyter-style **Notebook mode** in Studio : Markdown +
-  SQL cells with inline results, a pinned stateful database session
-  (the “kernel”) with per-cell transactions, provenance-native
-  circuit / evaluation cells, nbformat-compatible `.ipynb`
-  save / load, seeded tutorial / case-study notebooks, and the
-  Playground (PGlite single-session) adaptation.
+  modes, batch result-table evaluation, multi-user demo deployment,
+  and Notebook-mode polish (collapse / clear output, run-from-here,
+  per-cell row cap).

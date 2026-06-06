@@ -3,10 +3,11 @@
 The feature-coverage matrix in the rendered user guide
 (`doc/source/user/casestudies.rst`, section *Feature coverage matrix*)
 lists user-guide features that are not exercised by the tutorial or any
-of the six existing case studies. This file plans how to close that gap,
-by extending CS1-CS5 where the existing scenario fits. CS6 (City
+of the seven existing case studies. This file plans how to close that
+gap, by extending CS1-CS5 where the existing scenario fits. CS6 (City
 Air-Quality Sensor Network) already covers the continuous-distribution
-surface end-to-end.
+surface end-to-end, and CS7 (Peer-Review Assignment and Knowledge
+Compilation) the knowledge-compilation and safe-query surface.
 
 ## Out of scope
 

@@ -5,7 +5,7 @@
    renderer as the shared result pane (app.js makeBlockRenderer).
    Persistence: Jupyter nbformat v4 (.ipynb) download / load, plus a
    localStorage autosave of the working draft. See
-   doc/TODO/studio-notebook-mode.md. */
+   the Notebook-mode section of doc/source/user/studio.rst. */
 (function () {
   'use strict';
 

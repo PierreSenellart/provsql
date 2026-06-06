@@ -21,10 +21,12 @@ through with a one-line `provsql_warning`
 
 The output row keeps **only the outer relation's provenance**; the subquery's
 data is treated as certain. This is an under-approximation, a deliberate
-stop-gap until arithmetic over an `agg_token` is handled cleanly in the
-decorrelation path (the `agg_token` would need to survive the surrounding
-operators so the nested sublink can be lifted into a `choose()` like a direct
-target entry).
+stop-gap. The missing prerequisite has since shipped: native `agg_token`
+arithmetic (`+ - * /`, unary `-`) builds `gate_arith` tokens with a tracked
+running value (`test/sql/agg_arithmetic.sql`). What remains is wiring it into
+the decorrelation path, so the `agg_token` survives the surrounding operators
+and the nested sublink can be lifted into a `choose()` like a direct target
+entry.
 
 ## Correlated sublinks over different `(Q, corr)`
 

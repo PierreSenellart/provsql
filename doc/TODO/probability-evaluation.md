@@ -52,7 +52,7 @@ hazardous (no FPTRAS, warn and fall back to additive MC).
 generator is literally that recursion run in reverse (piece 2 below); the
 hardest descent node – the Cartesian-product `⊗` split of a value-carrying
 branch-spanning SUM – needs the per-factor **joint `(sum, count)` distribution**,
-which is exactly `sumCountPMF`, built this session for the branch-spanning work.
+which is exactly the `sumCountPMF` built for the branch-spanning work.
 So the one prerequisite that used to be missing is now in place.
 
 **But the gap it closes is narrow.** The rounding FPTRAS only beats the existing
