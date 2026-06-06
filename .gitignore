@@ -30,3 +30,8 @@ RELEASE_NOTES_*.md
 # WASM build tree: the pglite clone + matched-build artefacts produced by
 # `make wasm` (wasm/build-wasm.sh, WASM_BUILD_DIR default). Heavy, regenerable.
 wasm/.build/
+
+# Coding-agent instruction files: local tooling, never versioned
+CLAUDE.md
+CLAUDE.local.md
+.claude/
