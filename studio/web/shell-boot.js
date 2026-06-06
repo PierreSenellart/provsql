@@ -158,12 +158,17 @@ await switchDb(
   : DEFAULT_DB)
 
 // async PGlite bridge (the shim's run_sync target) -> the active database.
-globalThis.pgQuery = async (sql, qparams) => {
+// A non-null copyData string becomes the per-query `blob` option: PGlite
+// exposes it as the virtual file '/dev/blob', which the shim's cursor.copy()
+// targets to run dump-style `COPY ... FROM stdin` units (notebook setup
+// cells, pasted pg_dump output) without the COPY sub-protocol.
+globalThis.pgQuery = async (sql, qparams, copyData) => {
   const notices = []
+  const opts = { onNotice: n => notices.push({ severity: n.severity || 'NOTICE', message_primary: n.message || '',
+                                               message_detail: n.detail || '', message_hint: n.hint || '' }) }
+  if (copyData != null) opts.blob = new Blob([copyData])
   try {
-    const r = await activePg.query(sql, qparams ? Array.from(qparams) : [],
-      { onNotice: n => notices.push({ severity: n.severity || 'NOTICE', message_primary: n.message || '',
-                                      message_detail: n.detail || '', message_hint: n.hint || '' }) })
+    const r = await activePg.query(sql, qparams ? Array.from(qparams) : [], opts)
     return { ok: true, rows: r.rows, fields: r.fields, affected: r.affectedRows ?? 0, notices }
   } catch (e) { return { ok: false, message: String(e.message || e), notices } }
 }

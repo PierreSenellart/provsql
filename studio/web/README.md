@@ -54,6 +54,11 @@ ui.html app.js ─fetch('/api/exec')→ child-boot bridge ─postMessage→ shel
 - **Unchanged:** `app.py`, `db.py`, `circuit.py`, and `static/` – the whole
   Studio. The only new, stable code is the **fake `psycopg`** module, the
   `fetch`→`test_client` bridge, and the shell/child boot pair.
+- Dump-style `COPY … FROM stdin` units (notebook setup cells, pasted pg_dump
+  output) work: db.py routes them through `cursor.copy()`, which the shim
+  maps onto a single `COPY … FROM '/dev/blob'` with the written rows as
+  PGlite's per-query `blob` option (PGlite speaks no COPY sub-protocol over
+  `query()`).
 - **psycopg shim surface** (all `db.py` uses): `ConnectionPool.connection()`
   → `conn.cursor()` → `execute` / `fetch{all,one,many}` / `description` /
   `rowcount`; `sql.SQL` / `sql.Identifier.format()`; `psycopg.errors.*`

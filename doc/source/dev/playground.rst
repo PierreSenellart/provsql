@@ -23,7 +23,11 @@ re-implementation to maintain. The browser-specific code is small and
 stable:
 
 * a fake ``psycopg`` / ``psycopg_pool`` module (``psycopg_pglite.py``)
-  backed by an in-page PGlite;
+  backed by an in-page PGlite -- including ``cursor.copy()``, which maps
+  the dump-style ``COPY … FROM stdin`` units ``db.py`` carves out of
+  batches (notebook setup cells, pasted ``pg_dump`` output) onto a single
+  ``COPY … FROM '/dev/blob'`` with the data as PGlite's per-query
+  ``blob`` option;
 * a fake ``subprocess`` (in the same file) that routes ``dot`` to a WASM
   Graphviz;
 * a ``fetch`` → Flask ``test_client`` bridge, split across the shell /
