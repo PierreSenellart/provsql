@@ -14,6 +14,78 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.5.0] - 2026-06-05
+
+Companion release for ProvSQL extension 1.9.0. Two headline features:
+**Notebook mode**, a Jupyter-style notebook over a ProvSQL database,
+and the **ProvSQL Playground**, the full Studio running entirely in
+the browser over PostgreSQL+ProvSQL compiled to WebAssembly. The
+evaluation strip also gains the extension's guarantee-first
+probability surface. Requires extension **>= 1.9.0**.
+
+### Highlights
+
+- **Notebook mode.** A third mode alongside Circuit and Where: an
+  ordered list of cells (SQL, Markdown, circuit snapshots, semiring /
+  probability evaluations) executed against a pinned kernel session
+  with Jupyter state semantics: temp tables and `SET`s persist across
+  cells, each cell runs in its own transaction, restart gives a clean
+  slate. Includes the Jupyter two-mode keymap (Esc / Enter, a/b, dd/z,
+  m/y, Shift/Ctrl/Alt+Enter), Markdown rendering with `sql`-fenced
+  highlighting (vendored marked + DOMPurify), per-cell
+  provenance-scheme overrides, an outline + compact-relations sidebar,
+  and round-trips to Circuit mode that restore selection and scroll.
+- **Tabs as database bindings.** Each notebook tab is bound to the
+  database it was authored against (stamped in the `.ipynb`
+  metadata); a binding mismatch shows a banner offering switch /
+  create / rebind, never switching silently. `POST /api/databases`
+  backs the create action, and a nav-bar action empties the connected
+  database (drop user schemas, reinstall provsql).
+- **`.ipynb` save / load.** Notebooks are nbformat-v4 files: outputs
+  carry standard MIME fallbacks (HTML tables, self-sufficient SVG
+  circuit snapshots, plain-text eval results) so GitHub and nbviewer
+  render them directly, while Studio re-renders from richer
+  `application/vnd.provsql.*` payloads. Tabs autosave to browser
+  storage between explicit saves.
+- **Bundled example notebooks.** The user-guide tutorial and case
+  studies ship as self-establishing notebooks (idempotent setup cells:
+  create a fresh database, Run all, get the whole study), generated
+  from the documentation sources by `studio/scripts/rst2nb.py` with a
+  CI drift check, opened from the `Open example...` menu or a
+  `/notebook?nb=<name>` deep link.
+- **ProvSQL Playground.** The unmodified Studio Python (Flask +
+  psycopg + sqlparse) runs client-side in Pyodide over PGlite
+  (PostgreSQL+ProvSQL in WebAssembly), published as static files at
+  [provsql.org/playground](https://provsql.org/playground/): no
+  install, fully self-hosted (no CDN at run time), with the tutorial
+  and case-study databases pre-seeded, a Reset button, shareable
+  `?mode=&db=&q=&nb=` deep links, and notebook mode included (kernel
+  restart maps to `DISCARD ALL` on the single shared session). A
+  shell-page/iframe split keeps the WASM backend warm across mode and
+  database switches. Browser support is gated on WebAssembly JSPI.
+- **Guarantee-first probability evaluation.** The eval strip leads
+  with the extension 1.9.0 exact / relative / additive guarantee
+  paths, adds the `karp-luby` and `d-tree` methods (with an
+  (eps,delta) vs samples toggle for the approximate methods), renders
+  the returned guarantee as a bound or value interval with the actual
+  sample count, surfaces the resolved method (down to
+  `compilation:d4` / `wmc:ganak`), and includes karp-luby in the
+  probability benchmark.
+
+### Improvements
+
+- Tool-backed compiler / counter pickers and the fallback-compiler
+  config row hide tools that are not available on the backend instead
+  of listing dead options; the probability-method dropdown has hover
+  tips for every entry.
+- A folder icon under the eraser loads a `.sql` file into the query
+  box; dump-style `COPY ... FROM stdin` blocks run through the COPY
+  sub-protocol, so `pg_dump` outputs paste and run as-is.
+- Numeric `value` / `mulinput` gate labels compact to 4 significant
+  figures; tuple counts pluralize (`1 tuple`).
+- Result cells holding `agg_token` arithmetic results display
+  `value (*)` like plain aggregate tokens (requires extension 1.9.0).
+
 ## [1.4.0] - 2026-05-27
 
 Companion release for ProvSQL extension 1.8.0. Brings the extension's
