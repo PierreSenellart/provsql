@@ -202,14 +202,25 @@ design (June 2026):
    columnar `reachability_evaluate` forms remain as internal/testing
    surfaces.
 
-Remaining staged extensions, in order: multi-source base arm over a source
-relation (`SELECT v FROM sources` -- a virtual super-source with arcs gated
-by the source rows' tokens when tracked, certain arcs otherwise; the
-compiler needs a "certain arc" notion, the detection a relation-shaped base
-arm, the driver a second gather); BID edge blocks as multivalued (k+1)-way branching
+Remaining staged extensions, in order: BID edge blocks as multivalued (k+1)-way branching
 (endpoint co-location joins the treewidth condition); join-defined graphs
 -- disjoint supports certified by keys/FDs as compound variables first, the
 faithful variables-in-the-decomposition DP (late-branching states) after.
+
+#### Multi-source base arms: implemented
+
+`SELECT v FROM sources` base arms are recognised and compiled: the compiler
+gained certain (ungated) arcs and a virtual super-source whose arcs to the
+sources are gated by the source tuples' tokens when the source relation is
+tracked (probabilistic source sets) and certain otherwise; the gathering
+maps sources into the shared dense-ID space, and `reachability_materialize`
+takes the source arrays (nil UUID = certain).  Differentially tested (200
+random instances, every vertex, mixed certain/probabilistic sources)
+against brute force, and in-database against the generic fixpoint route on
+the same query.  The implementation surfaced a real compiler bug: `join`'s
+trivial-table shortcut tested only `gate == TRUE`, which dropped the
+relation of single-state TRUE tables that certain arcs produce -- the
+identity-relation check now closes it.
 
 #### Degeneracy pre-probe: implemented, measured, not enabled
 

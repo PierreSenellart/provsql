@@ -467,6 +467,12 @@ relation's columns alone – restrict which edges participate:
     ... SELECT e.dst FROM link e JOIN reach r ON e.src = r.node
         WHERE e.capacity >= 10 ...
 
+The base arm may also be a relation, ``SELECT v FROM sources`` – a
+*source set*.  When ``sources`` is itself provenance-tracked, each
+source participates with its tuple's probability (a probabilistic
+source set: "reachable from some present source"); an untracked
+relation gives certain sources.
+
 The emitted circuits are *deterministic and decomposable by
 construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
 persisted **certificate** of that property (readable with

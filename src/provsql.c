@@ -393,7 +393,9 @@ typedef struct ReachabilityShape {
   Oid relid;              /**< Edge relation. */
   AttrNumber src_attno;   /**< Source-vertex column of the edge relation. */
   AttrNumber dst_attno;   /**< Destination-vertex column. */
-  char *source_text;      /**< Base arm's constant, rendered as text. */
+  char *source_text;      /**< Base arm's constant, rendered as text (constant form). */
+  Oid source_relid;       /**< Base arm's source relation (multi-source form), or InvalidOid. */
+  AttrNumber source_attno; /**< Vertex column of the source relation. */
   bool directed;          /**< false for the undirected (CASE/IN) shape. */
   char *edge_quals;       /**< Deparsed extra quals over edge columns, or NULL. */
 } ReachabilityShape;
@@ -546,17 +548,18 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
   if (base == NULL || rec == NULL)
     return false;
 
-  /* Base arm: SELECT <constant>, no FROM, no other clauses. */
-  if (base->jointree == NULL || base->jointree->fromlist != NIL ||
-      base->jointree->quals != NULL ||
-      base->setOperations != NULL || base->hasAggs || base->hasSubLinks ||
+  /* Base arm: either SELECT <constant> (no FROM), or
+   * SELECT <column> FROM <relation> -- a (possibly probabilistic when
+   * tracked) source set; no other clauses in both forms. */
+  if (base->setOperations != NULL || base->hasAggs || base->hasSubLinks ||
       base->hasTargetSRFs || base->groupClause != NIL ||
-      base->distinctClause != NIL)
+      base->distinctClause != NIL || base->jointree == NULL ||
+      base->jointree->quals != NULL)
     return false;
   tle = reach_single_tle(base);
   if (tle == NULL)
     return false;
-  {
+  if (base->jointree->fromlist == NIL) {
     Node *bexpr = reach_strip((Node *) tle->expr);
     Const *c;
     Oid outfunc;
@@ -568,6 +571,38 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
       return false;
     getTypeOutputInfo(c->consttype, &outfunc, &varlena);
     out->source_text = OidOutputFunctionCall(outfunc, c->constvalue);
+  } else {
+    RangeTblEntry *srel = NULL;
+    Index srel_rti = 0;
+    Var *sv;
+    Index rti = 0;
+    if (list_length(base->jointree->fromlist) != 1 ||
+        !IsA(linitial(base->jointree->fromlist), RangeTblRef))
+      return false;
+    foreach(lc, base->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+      ++rti;
+      if (r->rtekind != RTE_RELATION || r->relkind != RELKIND_RELATION)
+        return false;
+      if (srel != NULL)
+        return false;
+      srel = r;
+      srel_rti = rti;
+    }
+    if (srel == NULL)
+      return false;
+    sv = (Var *) reach_strip((Node *) tle->expr);
+    if (sv == NULL || !IsA(sv, Var) || sv->varno != srel_rti ||
+        sv->varlevelsup != 0 || sv->varattno <= 0)
+      return false;
+    /* Do not take the provsql column itself as the vertex. */
+    {
+      AttrNumber sprov = get_attnum(srel->relid, PROVSQL_COLUMN_NAME);
+      if (sprov != InvalidAttrNumber && sv->varattno == sprov)
+        return false;
+    }
+    out->source_relid = srel->relid;
+    out->source_attno = sv->varattno;
   }
 
   /* Recursive arm: single tracked base relation joined with the CTE. */
@@ -906,7 +941,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
    * and falls back to eval_recursive on any failure. */
   initStringInfo(&call);
   {
-    ReachabilityShape shape = {InvalidOid, 0, 0, NULL, true, NULL};
+    ReachabilityShape shape = {InvalidOid, 0, 0, NULL, InvalidOid, 0, true, NULL};
     constants_t constants = get_constants(true);
     if (provsql_boolean_provenance &&
         detect_reachability_cte(cte, cteq, &constants, &shape)) {
@@ -917,11 +952,12 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
         provsql_notice("Recursive CTE '%s' recognised as reachability over %s",
                        cte->ctename, get_rel_name(shape.relid));
       appendStringInfo(&call,
-                       "SELECT provsql.eval_reachability(%u::pg_catalog.regclass, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                       "SELECT provsql.eval_reachability(%u::pg_catalog.regclass, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s",
                        shape.relid,
                        quote_literal_cstr(src_name),
                        quote_literal_cstr(dst_name),
-                       quote_literal_cstr(shape.source_text),
+                       shape.source_text
+                         ? quote_literal_cstr(shape.source_text) : "NULL",
                        shape.directed ? "true" : "false",
                        quote_literal_cstr(cte->ctename),
                        quote_literal_cstr(cols.data),
@@ -930,6 +966,13 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
                        quote_literal_cstr(body_text),
                        shape.edge_quals
                          ? quote_literal_cstr(shape.edge_quals) : "NULL");
+      if (OidIsValid(shape.source_relid)) {
+        char *satt = get_attname(shape.source_relid, shape.source_attno,
+                                 false);
+        appendStringInfo(&call, ", %u::pg_catalog.regclass, %s",
+                         shape.source_relid, quote_literal_cstr(satt));
+      }
+      appendStringInfoString(&call, ")");
     } else {
       appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
                        quote_literal_cstr(body_text),

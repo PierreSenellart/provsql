@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 /* The DP loops are the runtime hot spots on large instances; keep the
@@ -63,8 +64,9 @@ struct EdgeVariable {
   unsigned long v;      ///< Second endpoint.
   bool arc_uv;          ///< Arc u -> v present when the variable is true.
   bool arc_vu;          ///< Arc v -> u present when the variable is true.
-  std::string token;    ///< Provenance token (UUID).
-  double prob;          ///< Tuple probability.
+  bool certain = false; ///< Always-present arc(s): no gating variable (super-source arcs of untracked / constant sources).
+  std::string token;    ///< Provenance token (UUID; empty when certain).
+  double prob;          ///< Tuple probability (unused when certain).
 };
 
 } // namespace
@@ -87,10 +89,27 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   unsigned long source,
   bool directed,
   std::size_t max_states,
-  const unsigned long *only_target)
+  const unsigned long *only_target,
+  const std::vector<SourceArc> *multi_sources)
 {
   AllResult result;
   dDNNF &dd = result.dd;
+
+  // Multi-source mode: reachability is from a virtual super-source whose
+  // arcs to the given sources are ordinary (or certain) directed edge
+  // variables; everything downstream is the single-source DP.  The
+  // super-source gets an ID above every real vertex.
+  unsigned long super_source = 0;
+  if (multi_sources) {
+    if (multi_sources->empty())
+      throw ReachabilityCompilerException("no sources given");
+    for (const auto &row : rows)
+      super_source = std::max({super_source, row.src, row.dst});
+    for (const auto &sa : *multi_sources)
+      super_source = std::max(super_source, sa.vertex);
+    ++super_source;
+    source = super_source;
+  }
 
   // ------------------------------------------------------------------
   // 1. Group rows into edge variables (one per provenance token).
@@ -133,7 +152,57 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
       }
     }
   }
-  result.stats.nb_variables = variables.size();
+  if (multi_sources) {
+    // Source arcs: super-source -> vertex, gated by the source tuple's
+    // token (one variable per token; a duplicate token must target the
+    // same vertex) or always present for certain sources (dedup'd).  A
+    // token sharing with an *edge* variable would couple the source to
+    // an edge and break decomposability: rejected.
+    std::unordered_set<std::string> edge_tokens;
+    for (const auto &var : variables)
+      if (!var.certain)
+        edge_tokens.insert(var.token);
+    std::unordered_map<std::string, std::size_t> token_to_var;
+    std::unordered_set<unsigned long> certain_done;
+    for (const auto &sa : *multi_sources) {
+      if (sa.certain) {
+        if (!certain_done.insert(sa.vertex).second)
+          continue;
+        EdgeVariable var;
+        var.u = super_source;
+        var.v = sa.vertex;
+        var.arc_uv = true;
+        var.arc_vu = false;
+        var.certain = true;
+        variables.push_back(var);
+      } else {
+        if (edge_tokens.find(sa.token) != edge_tokens.end())
+          throw ReachabilityCompilerException(
+                  "provenance token " + sa.token +
+                  " is shared between a source and an edge");
+        auto it = token_to_var.find(sa.token);
+        if (it != token_to_var.end()) {
+          if (variables[it->second].v != sa.vertex)
+            throw ReachabilityCompilerException(
+                    "provenance token " + sa.token +
+                    " is shared by sources with different vertices");
+          continue;
+        }
+        EdgeVariable var;
+        var.u = super_source;
+        var.v = sa.vertex;
+        var.arc_uv = true;
+        var.arc_vu = false;
+        var.token = sa.token;
+        var.prob = sa.prob;
+        token_to_var[sa.token] = variables.size();
+        variables.push_back(var);
+      }
+    }
+  }
+  for (const auto &var : variables)
+    if (!var.certain)
+      ++result.stats.nb_variables;
 
   // ------------------------------------------------------------------
   // 2. Tree decomposition of the data graph (vertices: all endpoints
@@ -176,9 +245,12 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   // Read points: every vertex is read at its elimination bag (which
   // contains it); a single-target compilation reads only that vertex.
   std::vector<std::vector<unsigned long> > reads_at_bag(nb_bags);
-  for (const auto &[v, b] : elimination_bag)
+  for (const auto &[v, b] : elimination_bag) {
+    if (multi_sources && v == super_source)
+      continue;   // the virtual super-source is not a user vertex
     if (!only_target || v == *only_target)
       reads_at_bag[bag_index(b)].push_back(v);
+  }
 
   // ------------------------------------------------------------------
   // 3. Gate-emission helpers.
@@ -285,8 +357,14 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                         return Table{{identityOn(static_cast<int>(domain.size())),
                                       true_gate}};
                       };
-  auto isTrivial = [&](const Table &t) {
-                     return t.size() == 1 && t.begin()->second == true_gate;
+  auto isTrivial = [&](const Table &t, int d) {
+                     // A table is a join identity only if it is the single
+                     // always-true *identity-relation* state: a certain arc
+                     // produces single-state TRUE tables whose relation is
+                     // not the identity, and dropping those in join() would
+                     // lose the arc.
+                     return t.size() == 1 && t.begin()->second == true_gate &&
+                            t.begin()->first == identityOn(d);
                    };
 
   // Re-express a table over another domain: forget the vertices that
@@ -328,9 +406,9 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   // the two parts only alternates through domain vertices (the bag
   // separates them), hence the closure of the union.
   auto join = [&](const Table &t1, const Table &t2, int d) {
-                if (isTrivial(t1))
+                if (isTrivial(t1, d))
                   return t2;
-                if (isTrivial(t2))
+                if (isTrivial(t2, d))
                   return t1;
                 Accumulator acc;
                 for (const auto &left : t1)
@@ -361,6 +439,14 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                             present.set(pv*MAXD + pu);
                           present = transitiveClosure(present, d);
 
+                          if (var.certain) {
+                            // Always-present arc: every world of this state
+                            // moves to the augmented relation, no branching
+                            // (states may merge; their gates stay mutually
+                            // exclusive).
+                            acc[present].push_back(entry.second);
+                            continue;
+                          }
                           if (present == entry.first) {
                             // The edge cannot change reachability in these
                             // worlds: its value is irrelevant, keep the gate
@@ -539,7 +625,17 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
   bool directed,
   std::size_t max_states)
 {
-  return compileAllInternal(rows, source, directed, max_states, nullptr);
+  return compileAllInternal(rows, source, directed, max_states, nullptr,
+                            nullptr);
+}
+
+ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
+  const std::vector<EdgeRow> &rows,
+  const std::vector<SourceArc> &sources,
+  bool directed,
+  std::size_t max_states)
+{
+  return compileAllInternal(rows, 0, directed, max_states, nullptr, &sources);
 }
 
 ReachabilityCompiler::Result ReachabilityCompiler::compile(
@@ -550,7 +646,7 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
   std::size_t max_states)
 {
   AllResult all = compileAllInternal(rows, source, directed, max_states,
-                                     &target);
+                                     &target, nullptr);
   Result result;
   result.stats = all.stats;
 

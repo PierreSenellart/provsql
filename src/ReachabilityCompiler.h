@@ -118,6 +118,22 @@ struct AllResult {
 };
 
 /**
+ * @brief One source of a multi-source compilation.
+ *
+ * Modelled as an arc from a virtual super-source to @c vertex: gated by
+ * the source tuple's provenance @c token when the source relation is
+ * tracked (a *probabilistic source set*), always present when
+ * @c certain (untracked sources, or the constant base arm of the
+ * recursive shape).
+ */
+struct SourceArc {
+  unsigned long vertex;   ///< Source vertex.
+  std::string token;      ///< Provenance token of the source tuple (unused when certain).
+  double prob;            ///< Source-tuple probability (unused when certain).
+  bool certain;           ///< Always-present source (no gating variable).
+};
+
+/**
  * @brief Default bound on the number of DP states at a single
  *        decomposition node.
  *
@@ -175,6 +191,27 @@ static AllResult compileAll(const std::vector<EdgeRow> &rows,
                             bool directed,
                             std::size_t max_states = DEFAULT_MAX_STATES);
 
+/**
+ * @brief Multi-source variant of @c compileAll().
+ *
+ * Reachability is from a virtual super-source whose arcs to the
+ * @p sources are gated by the source tuples' tokens (or always present
+ * for certain sources); a vertex's circuit therefore computes "some
+ * present source reaches it".  Everything else is as in
+ * @c compileAll(); the super-source itself is not reported in the
+ * roots.
+ *
+ * @param rows        Edge tuples.
+ * @param sources     Source arcs (at least one).
+ * @param directed    If @c false, every edge contributes both arcs.
+ * @param max_states  Bound on the DP state count per node.
+ * @return            The shared d-DNNF, per-vertex roots, statistics.
+ */
+static AllResult compileAll(const std::vector<EdgeRow> &rows,
+                            const std::vector<SourceArc> &sources,
+                            bool directed,
+                            std::size_t max_states = DEFAULT_MAX_STATES);
+
 private:
 /**
  * @brief Shared implementation of @c compile() / @c compileAll().
@@ -192,7 +229,8 @@ static AllResult compileAllInternal(const std::vector<EdgeRow> &rows,
                                     unsigned long source,
                                     bool directed,
                                     std::size_t max_states,
-                                    const unsigned long *only_target);
+                                    const unsigned long *only_target,
+                                    const std::vector<SourceArc> *multi_sources);
 /** @brief Maximum size of a DP domain: a bag (@c MAX_TREEWIDTH+1) plus the two terminals. */
 static constexpr int MAXD = TreeDecomposition::MAX_TREEWIDTH+3;
 

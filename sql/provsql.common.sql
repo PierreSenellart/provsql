@@ -4371,19 +4371,24 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
  *
  * All-targets variant of @c reachability_evaluate(): compiles, along a
  * tree decomposition of the data graph, one certified provenance
- * circuit per vertex reachable from @p source in the all-edges-present
+ * circuit per vertex reachable from some source in the all-edges-present
  * world, materialises the (shared, linear-size) circuits in the
  * provenance store -- @c plus / @c times gates carrying the d-DNNF
  * certificate, negated edges as @c monus(one, edge) -- and returns one
- * @c (vertex, token) row per such vertex.  This is the engine behind
- * the rewriter's recursive-reachability route; the returned tokens are
- * ordinary provenance tokens usable with the whole evaluation surface.
+ * @c (vertex, token) row per such vertex.  Sources form a possibly
+ * *probabilistic source set*: each source arc is gated by the source
+ * tuple's token, the nil UUID marking a certain (always present)
+ * source.  This is the engine behind the rewriter's
+ * recursive-reachability route; the returned tokens are ordinary
+ * provenance tokens usable with the whole evaluation surface.
  *
  * @param sources source vertex of each edge (dense integer IDs)
  * @param destinations destination vertex of each edge
  * @param tokens provenance token of each edge tuple
  * @param probabilities probability of each edge tuple
- * @param source the vertex reachability starts from
+ * @param source_vertices the source vertices
+ * @param source_tokens per-source provenance token (nil UUID = certain)
+ * @param source_probabilities per-source probability
  * @param directed if false, each edge can be traversed both ways
  */
 CREATE OR REPLACE FUNCTION reachability_materialize(
@@ -4391,7 +4396,9 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
   IN destinations INT[],
   IN tokens UUID[],
   IN probabilities DOUBLE PRECISION[],
-  IN source INT,
+  IN source_vertices INT[],
+  IN source_tokens UUID[],
+  IN source_probabilities DOUBLE PRECISION[],
   IN directed BOOLEAN,
   OUT vertex INT,
   OUT token UUID)
@@ -4412,8 +4419,10 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
  * @param rel the provenance-tracked edge relation
  * @param source_attribute name of the source-vertex column
  * @param destination_attribute name of the destination-vertex column
- * @param source_value source vertex, as text
- * @param target_value target vertex, as text
+ * @param extra_vertices vertex values (as text) that must be part of
+ *        the dense ID space even when they touch no edge -- the source
+ *        set in particular; their IDs come back in @c extra_ids
+ *        (aligned with the input)
  * @param edge_quals optional deterministic filter over the edge
  *        relation's columns (SQL text, deparsed by the rewriter from
  *        the recursive arm's WHERE clause), restricting which edges
@@ -4427,15 +4436,13 @@ CREATE OR REPLACE FUNCTION gather_reachability_edges(
   IN rel regclass,
   IN source_attribute TEXT,
   IN destination_attribute TEXT,
-  IN source_value TEXT,
-  IN target_value TEXT,
+  IN extra_vertices TEXT[],
   IN edge_quals TEXT DEFAULT NULL,
   OUT sources INT[],
   OUT destinations INT[],
   OUT tokens UUID[],
   OUT probabilities DOUBLE PRECISION[],
-  OUT source_id INT,
-  OUT target_id INT,
+  OUT extra_ids INT[],
   OUT vertices TEXT[])
 AS
 $$
@@ -4459,25 +4466,89 @@ BEGIN
     RAISE EXCEPTION 'reachability: the provenance of % must consist of base input tokens (independent tuples); views or query results are not supported', rel;
   END IF;
 
-  WITH vertices AS (
+  WITH verts AS (
     SELECT u AS x FROM provsql_reachability_edges_tmp
     UNION SELECT v FROM provsql_reachability_edges_tmp
-    UNION SELECT source_value
-    UNION SELECT target_value),
+    UNION SELECT unnest(extra_vertices)),
   ids AS (
-    SELECT x, (row_number() OVER (ORDER BY x))::int AS id FROM vertices)
+    SELECT x, (row_number() OVER (ORDER BY x))::int AS id FROM verts)
   SELECT array_agg(iu.id), array_agg(iv.id),
          array_agg(e.token), array_agg(coalesce(get_prob(e.token), 1.0)),
-         (SELECT id FROM ids WHERE x = source_value),
-         (SELECT id FROM ids WHERE x = target_value),
+         (SELECT array_agg(i.id ORDER BY ev.ord)
+            FROM unnest(extra_vertices) WITH ORDINALITY AS ev(x, ord)
+            JOIN ids i ON i.x = ev.x),
          (SELECT array_agg(x ORDER BY id) FROM ids)
-    INTO sources, destinations, tokens, probabilities, source_id, target_id,
+    INTO sources, destinations, tokens, probabilities, extra_ids,
          vertices
     FROM provsql_reachability_edges_tmp e
     JOIN ids iu ON iu.x = e.u
     JOIN ids iv ON iv.x = e.v;
 
   DROP TABLE provsql_reachability_edges_tmp;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messages = warning;
+
+
+/**
+ * @brief Gather a source relation's vertices, tokens and probabilities
+ * (internal)
+ *
+ * For a provenance-tracked source relation, every tuple must carry a
+ * base @c input token (a *probabilistic source set*); for an untracked
+ * relation the sources are certain and the tokens come back as the nil
+ * UUID.  Vertex values are returned as text, for the shared dense-ID
+ * mapping of @c gather_reachability_edges().
+ *
+ * @param rel the source relation
+ * @param source_attribute name of the vertex column
+ */
+CREATE OR REPLACE FUNCTION gather_reachability_sources(
+  IN rel regclass,
+  IN source_attribute TEXT,
+  OUT source_values TEXT[],
+  OUT source_tokens UUID[],
+  OUT source_probabilities DOUBLE PRECISION[])
+AS
+$$
+DECLARE
+  tracked boolean;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = rel AND attname = 'provsql'
+      AND atttypid = 'uuid'::regtype AND NOT attisdropped)
+  INTO tracked;
+
+  DROP TABLE IF EXISTS provsql_reachability_sources_tmp;
+  IF tracked THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_reachability_sources_tmp AS '
+      || 'SELECT %1$I::text AS x, provenance() AS token '
+      || 'FROM %2$s WHERE %1$I IS NOT NULL',
+      source_attribute, rel);
+    PERFORM remove_provenance('provsql_reachability_sources_tmp');
+    IF EXISTS (SELECT 1 FROM provsql_reachability_sources_tmp
+               WHERE get_gate_type(token) <> 'input') THEN
+      DROP TABLE provsql_reachability_sources_tmp;
+      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input tokens (independent tuples); views or query results are not supported', rel;
+    END IF;
+    SELECT array_agg(x), array_agg(token),
+           array_agg(coalesce(get_prob(token), 1.0))
+      INTO source_values, source_tokens, source_probabilities
+      FROM provsql_reachability_sources_tmp;
+    DROP TABLE provsql_reachability_sources_tmp;
+  ELSE
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_reachability_sources_tmp AS '
+      || 'SELECT DISTINCT %1$I::text AS x FROM %2$s WHERE %1$I IS NOT NULL',
+      source_attribute, rel);
+    SELECT array_agg(x),
+           array_agg('00000000-0000-0000-0000-000000000000'::uuid),
+           array_agg(1.0::float8)
+      INTO source_values, source_tokens, source_probabilities
+      FROM provsql_reachability_sources_tmp;
+    DROP TABLE provsql_reachability_sources_tmp;
+  END IF;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messages = warning;
 
@@ -4508,6 +4579,11 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
  * @param body_sql deparsed CTE body (for the fallback)
  * @param edge_quals optional deterministic filter over edge columns
  *        (deparsed from the recursive arm's WHERE clause)
+ * @param source_rel source relation of a multi-source base arm
+ *        (@c SELECT col FROM sources), NULL for the constant form;
+ *        tracked sources form a probabilistic source set, untracked
+ *        ones are certain
+ * @param source_rel_attribute the source relation's vertex column
  */
 CREATE OR REPLACE FUNCTION eval_reachability(
   edge_rel regclass,
@@ -4520,28 +4596,51 @@ CREATE OR REPLACE FUNCTION eval_reachability(
   coldef text,
   coltype text,
   body_sql text,
-  edge_quals text DEFAULT NULL)
+  edge_quals text DEFAULT NULL,
+  source_rel regclass DEFAULT NULL,
+  source_rel_attribute text DEFAULT NULL)
   RETURNS void AS
 $$
 DECLARE
   e record;
+  sv text[];
+  st uuid[];
+  sp double precision[];
   verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
 BEGIN
   BEGIN
+    IF source_rel IS NOT NULL THEN
+      -- Multi-source: gather the source relation (probabilistic when
+      -- tracked, certain otherwise).
+      SELECT g.source_values, g.source_tokens, g.source_probabilities
+        INTO sv, st, sp
+        FROM provsql.gather_reachability_sources(source_rel,
+                                                 source_rel_attribute) g;
+      IF sv IS NULL THEN
+        sv := ARRAY[]::text[];
+        st := ARRAY[]::uuid[];
+        sp := ARRAY[]::float8[];
+      END IF;
+    ELSE
+      -- Constant base arm: one certain source.
+      sv := ARRAY[source_value];
+      st := ARRAY['00000000-0000-0000-0000-000000000000'::uuid];
+      sp := ARRAY[1.0::float8];
+    END IF;
+
     e := provsql.gather_reachability_edges(edge_rel, source_attribute,
                                            destination_attribute,
-                                           source_value, source_value,
-                                           edge_quals);
+                                           sv, edge_quals);
     IF to_regclass(work_name) IS NOT NULL THEN
       EXECUTE format('DROP TABLE %I', work_name);
     END IF;
     EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
     EXECUTE format(
       'INSERT INTO %I SELECT ($1::text[])[m.vertex]::%s, m.token '
-      || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7) m',
+      || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7, $8, $9) m',
       work_name, coltype)
       USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
-            e.source_id, directed;
+            e.extra_ids, st, sp, directed;
     IF verbosity >= 20 THEN
       RAISE NOTICE 'ProvSQL: recursive CTE "%" compiled along a tree decomposition of %',
         work_name, edge_rel;
@@ -4554,9 +4653,6 @@ BEGIN
     PERFORM provsql.eval_recursive(body_sql, work_name, colnames, coldef);
   END;
 END
--- No SET search_path here: the fallback re-executes the deparsed CTE body,
--- whose relation references resolve against the caller's search_path (the
--- few ProvSQL calls above are schema-qualified instead).
 $$ LANGUAGE plpgsql;
 
 

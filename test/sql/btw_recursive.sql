@@ -154,6 +154,67 @@ SELECT * FROM btwr_w_r ORDER BY node;
 DROP TABLE btwr_w_r;
 DROP TABLE btwr_w;
 
+-- Multi-source base arm: SELECT v FROM sources.  Tracked sources form a
+-- probabilistic source set (arcs from a virtual super-source gated by
+-- the source tuples); untracked sources are certain.  Chain with
+-- certain edges and sources {1 (p=.5), 3 (p=.5)}:
+-- reach(1)=reach(2)=.5, reach(3)=reach(4)=1-(1-.5)^2=.75.
+CREATE TABLE btwr_medge(src int, dst int);
+INSERT INTO btwr_medge VALUES (1,2),(2,3),(3,4);
+SELECT add_provenance('btwr_medge');
+CREATE TABLE btwr_msrc(v int, p float8);
+INSERT INTO btwr_msrc VALUES (1,0.5),(3,0.5);
+SELECT add_provenance('btwr_msrc');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM btwr_msrc; END $$;
+SET provsql.last_eval_method = '';
+CREATE TABLE btwr_mr AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT v FROM btwr_msrc
+    UNION
+      SELECT e.dst FROM btwr_medge e JOIN reach r ON e.src = r.node
+  )
+  SELECT node, round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_mr');
+SELECT * FROM btwr_mr ORDER BY node;
+SHOW provsql.last_eval_method;
+-- The same query through the generic fixpoint (GUC off) must agree.
+SET provsql.boolean_provenance = off;
+CREATE TABLE btwr_mr2 AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT v FROM btwr_msrc
+    UNION
+      SELECT e.dst FROM btwr_medge e JOIN reach r ON e.src = r.node
+  )
+  SELECT node,
+         round(probability_evaluate(provenance(),'possible-worlds')::numeric, 6)
+           AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_mr2');
+SELECT NOT EXISTS ((TABLE btwr_mr EXCEPT TABLE btwr_mr2)
+                   UNION ALL (TABLE btwr_mr2 EXCEPT TABLE btwr_mr))
+  AS routes_agree;
+SET provsql.boolean_provenance = on;
+DROP TABLE btwr_mr2;
+DROP TABLE btwr_mr;
+-- Untracked sources are certain.
+CREATE TABLE btwr_usrc(v int);
+INSERT INTO btwr_usrc VALUES (2);
+CREATE TABLE btwr_ur AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT v FROM btwr_usrc
+    UNION
+      SELECT e.dst FROM btwr_medge e JOIN reach r ON e.src = r.node
+  )
+  SELECT node, round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_ur');
+SELECT * FROM btwr_ur ORDER BY node;
+DROP TABLE btwr_ur;
+DROP TABLE btwr_usrc;
+DROP TABLE btwr_msrc;
+DROP TABLE btwr_medge;
+
 -- Fallback: data treewidth above the cap (K14) falls back to the
 -- generic fixpoint, with a notice under provsql.verbose_level >= 10;
 -- the query still answers (acyclic orientation, so eval_recursive

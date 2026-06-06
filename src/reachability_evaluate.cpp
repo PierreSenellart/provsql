@@ -460,26 +460,62 @@ Datum reachability_compile_stats(PG_FUNCTION_ARGS)
  *        materialisation.
  *
  * Arguments: @c srcs @c int[], @c dsts @c int[], @c tokens @c uuid[],
- * @c probs @c float8[], @c source @c int, @c directed @c boolean.
+ * @c probs @c float8[], @c source_vertices @c int[], @c source_tokens
+ * @c uuid[] (the nil UUID marking a certain source), @c source_probs
+ * @c float8[], @c directed @c boolean.
  * Returns: one @c (vertex, token) row per vertex reachable in the
  * all-edges-present world, @c token being the materialised certified
- * provenance circuit of "vertex is reachable from source".  This is the
- * engine behind the rewriter's recursive-reachability route.
+ * provenance circuit of "some present source reaches the vertex".  This
+ * is the engine behind the rewriter's recursive-reachability route.
  */
 Datum reachability_materialize(PG_FUNCTION_ARGS)
 {
   try {
-    for (int i = 4; i < 6; ++i)
-      if (PG_ARGISNULL(i))
-        provsql_error("reachability: source and directed must not be NULL");
+    if (PG_ARGISNULL(7))
+      provsql_error("reachability: directed must not be NULL");
 
     auto rows = edgesFromArgs(fcinfo);
-    const unsigned long source = static_cast<unsigned long>(PG_GETARG_INT32(4));
-    const bool directed = PG_GETARG_BOOL(5);
+    const bool directed = PG_GETARG_BOOL(7);
+
+    /* Sources: parallel arrays of vertices, tokens and probabilities; the
+     * nil UUID marks a *certain* source (an untracked source relation, or
+     * the constant base arm of the recursive shape). */
+    std::vector<ReachabilityCompiler::SourceArc> sources;
+    {
+      ArrayType *sv = PG_ARGISNULL(4) ? NULL : PG_GETARG_ARRAYTYPE_P(4);
+      ArrayType *st = PG_ARGISNULL(5) ? NULL : PG_GETARG_ARRAYTYPE_P(5);
+      ArrayType *sp = PG_ARGISNULL(6) ? NULL : PG_GETARG_ARRAYTYPE_P(6);
+      const int ns = checkedArrayLength(sv, "source vertices");
+      if (checkedArrayLength(st, "source tokens") != ns ||
+          checkedArrayLength(sp, "source probabilities") != ns)
+        provsql_error("reachability: source arrays must have the same length");
+      if (ns == 0)
+        provsql_error("reachability: at least one source is required");
+      const int32 *v_data = (const int32 *) ARR_DATA_PTR(sv);
+      const pg_uuid_t *t_data = (const pg_uuid_t *) ARR_DATA_PTR(st);
+      const float8 *p_data = (const float8 *) ARR_DATA_PTR(sp);
+      sources.reserve(ns);
+      for (int i = 0; i < ns; ++i) {
+        ReachabilityCompiler::SourceArc sa;
+        sa.vertex = static_cast<unsigned long>(v_data[i]);
+        bool nil = true;
+        for (int b = 0; b < 16; ++b)
+          if (t_data[i].data[b] != 0)
+            nil = false;
+        sa.certain = nil;
+        if (!nil)
+          sa.token = uuid2string(t_data[i]);
+        sa.prob = p_data[i];
+        if (sa.prob < 0. || sa.prob > 1.)
+          provsql_error("reachability: source probability %f out of [0,1]",
+                        sa.prob);
+        sources.push_back(std::move(sa));
+      }
+    }
 
     ReachabilityCompiler::AllResult all;
     try {
-      all = ReachabilityCompiler::compileAll(rows, source, directed);
+      all = ReachabilityCompiler::compileAll(rows, sources, directed);
     } catch (TreeDecompositionException &) {
       provsql_error(
         "reachability: data treewidth exceeds the supported limit (%d)",
