@@ -64,6 +64,28 @@ c|0.250000
 add_provenance
 
 (1 row)
+remove_provenance
+
+(1 row)
+node|prob
+a|1.000000
+b|0.625000
+c|0.625000
+(3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|prob
+1|1.000000
+2|0.900000
+3|0.720000
+(3 rows)
+add_provenance
+
+(1 row)
 NOTICE:  ProvSQL: reachability route for "reach" fell back to the generic fixpoint (ProvSQL: reachability: data treewidth exceeds the supported limit (10))
 remove_provenance
 

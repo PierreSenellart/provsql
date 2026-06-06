@@ -111,6 +111,49 @@ SELECT * FROM btwr_txt_r ORDER BY node;
 DROP TABLE btwr_txt_r;
 DROP TABLE btwr_txt;
 
+-- Undirected connectivity, the natural CASE shape: the rewriter
+-- recognises r.node IN (e.src, e.dst) with the matching CASE head and
+-- compiles with bidirectional edges.  Undirected triangle:
+-- P(a ~ c) = P(ac) + (1 - P(ac)) P(ab) P(bc) = 0.625.
+CREATE TABLE btwr_tri(f text, t text);
+INSERT INTO btwr_tri VALUES ('a','b'), ('b','c'), ('a','c');
+SELECT add_provenance('btwr_tri');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM btwr_tri; END $$;
+CREATE TABLE btwr_tri_r AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 'a'::text
+    UNION
+      SELECT CASE WHEN e.f = r.node THEN e.t ELSE e.f END
+      FROM btwr_tri e JOIN reach r ON r.node IN (e.f, e.t)
+  )
+  SELECT node, round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_tri_r');
+SELECT * FROM btwr_tri_r ORDER BY node;
+DROP TABLE btwr_tri_r;
+DROP TABLE btwr_tri;
+
+-- Deterministic filters over edge columns fold into the compiled route:
+-- with WHERE e.w >= 5 the low-weight shortcut is excluded, so
+-- reach(3) = 0.9 * 0.8 = 0.72.
+CREATE TABLE btwr_w(src int, dst int, w int, p float8);
+INSERT INTO btwr_w VALUES (1,2,5,0.9), (2,3,5,0.8), (1,3,1,0.5);
+SELECT add_provenance('btwr_w');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM btwr_w; END $$;
+CREATE TABLE btwr_w_r AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwr_w e JOIN reach r ON e.src = r.node
+      WHERE e.w >= 5
+  )
+  SELECT node, round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM reach;
+SELECT remove_provenance('btwr_w_r');
+SELECT * FROM btwr_w_r ORDER BY node;
+DROP TABLE btwr_w_r;
+DROP TABLE btwr_w;
+
 -- Fallback: data treewidth above the cap (K14) falls back to the
 -- generic fixpoint, with a notice under provsql.verbose_level >= 10;
 -- the query still answers (acyclic orientation, so eval_recursive

@@ -394,7 +394,30 @@ typedef struct ReachabilityShape {
   AttrNumber src_attno;   /**< Source-vertex column of the edge relation. */
   AttrNumber dst_attno;   /**< Destination-vertex column. */
   char *source_text;      /**< Base arm's constant, rendered as text. */
+  bool directed;          /**< false for the undirected (CASE/IN) shape. */
+  char *edge_quals;       /**< Deparsed extra quals over edge columns, or NULL. */
 } ReachabilityShape;
+
+/** @brief Context for @c reach_varnos_walker(): set of varnos seen. */
+typedef struct ReachVarnosCtx {
+  Bitmapset *varnos;   /**< Accumulated varnos (level-0 Vars). */
+  bool other;          /**< Found an upper-level Var or other disqualifier. */
+} ReachVarnosCtx;
+
+/** @brief expression_tree_walker collecting level-0 varnos. */
+static bool reach_varnos_walker(Node *node, ReachVarnosCtx *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup != 0)
+      ctx->other = true;
+    else
+      ctx->varnos = bms_add_member(ctx->varnos, v->varno);
+    return false;
+  }
+  return expression_tree_walker(node, reach_varnos_walker, (void *) ctx);
+}
 
 /** @brief Strip @c RelabelType decorations off an expression. */
 static Node *reach_strip(Node *n) {
@@ -481,6 +504,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
   Var *target_var;
   List *quals = NIL;
   bool ok = true;
+  Node *join_qual;
   OpExpr *eq;
   Var *va, *vb, *edge_var, *cte_var;
   AttrNumber prov_attno;
@@ -586,46 +610,207 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
       get_atttype(out->relid, prov_attno) != constants->OID_TYPE_UUID)
     return false;
 
-  /* Target: a single edge-relation column (the destination vertex). */
+  /* Quals: one qual touching the recursive table (the join: a single
+   * equality in the directed shape, a two-way disjunction in the
+   * undirected one), plus optionally deterministic filters over edge
+   * columns alone (folded into the edge gathering). */
+  reach_collect_quals((Node *) rec->jointree, &quals, &ok);
+  if (!ok)
+    return false;
+  {
+    List *edge_only = NIL;
+    join_qual = NULL;
+    foreach(lc, quals) {
+      Node *q = (Node *) lfirst(lc);
+      ReachVarnosCtx vctx = {NULL, false};
+      reach_varnos_walker(q, &vctx);
+      if (vctx.other)
+        return false;
+      if (bms_is_member(cte_rti, vctx.varnos)) {
+        /* Touches the recursive table: must be THE join qual. */
+        if (join_qual != NULL)
+          return false;
+        join_qual = q;
+      } else if (bms_is_subset(vctx.varnos, bms_make_singleton(edge_rti))) {
+        /* Edge columns (or constants) only: a row filter, kept if
+         * deterministic. */
+        if (contain_volatile_functions(q))
+          return false;
+        edge_only = lappend(edge_only, q);
+      } else
+        return false;
+    }
+    if (join_qual == NULL)
+      return false;
+    if (edge_only != NIL) {
+      /* Deparse the filters against the bare relation, for the
+       * edge-gathering query (whose FROM is the relation itself). */
+      Node *conj = (Node *) make_ands_explicit(edge_only);
+      List *dpcontext;
+      conj = copyObject(conj);
+      ChangeVarNodes(conj, edge_rti, 1, 0);
+      dpcontext = deparse_context_for(get_rel_name(out->relid), out->relid);
+      out->edge_quals = deparse_expression(conj, dpcontext, false, false);
+    }
+  }
+
+  /* Target + join qual, directed shape: SELECT e.dst ... ON e.src = r.v. */
   tle = reach_single_tle(rec);
   if (tle == NULL)
     return false;
-  target_var = (Var *) reach_strip((Node *) tle->expr);
-  if (target_var == NULL || !IsA(target_var, Var) ||
-      target_var->varno != edge_rti || target_var->varlevelsup != 0 ||
-      target_var->varattno <= 0 || target_var->varattno == prov_attno)
-    return false;
-  out->dst_attno = target_var->varattno;
+  {
+    Node *texpr = reach_strip((Node *) tle->expr);
+    if (texpr != NULL && IsA(texpr, Var)) {
+      target_var = (Var *) texpr;
+      if (target_var->varno != edge_rti || target_var->varlevelsup != 0 ||
+          target_var->varattno <= 0 || target_var->varattno == prov_attno)
+        return false;
+      out->dst_attno = target_var->varattno;
 
-  /* Quals: exactly one mergejoinable equality between an edge column and
-   * the CTE's column. */
-  reach_collect_quals((Node *) rec->jointree, &quals, &ok);
-  if (!ok || list_length(quals) != 1)
-    return false;
-  if (!IsA(linitial(quals), OpExpr))
-    return false;
-  eq = (OpExpr *) linitial(quals);
-  if (list_length(eq->args) != 2)
-    return false;
-  va = (Var *) reach_strip((Node *) linitial(eq->args));
-  vb = (Var *) reach_strip((Node *) lsecond(eq->args));
-  if (va == NULL || vb == NULL || !IsA(va, Var) || !IsA(vb, Var) ||
-      va->varlevelsup != 0 || vb->varlevelsup != 0)
-    return false;
-  if (!op_mergejoinable(eq->opno, exprType((Node *) linitial(eq->args))))
-    return false;
-  if (va->varno == edge_rti && vb->varno == cte_rti)
-    edge_var = va, cte_var = vb;
-  else if (vb->varno == edge_rti && va->varno == cte_rti)
-    edge_var = vb, cte_var = va;
-  else
-    return false;
-  if (cte_var->varattno != 1 || edge_var->varattno <= 0 ||
-      edge_var->varattno == prov_attno)
-    return false;
-  out->src_attno = edge_var->varattno;
+      if (!IsA(join_qual, OpExpr))
+        return false;
+      eq = (OpExpr *) join_qual;
+      if (list_length(eq->args) != 2)
+        return false;
+      va = (Var *) reach_strip((Node *) linitial(eq->args));
+      vb = (Var *) reach_strip((Node *) lsecond(eq->args));
+      if (va == NULL || vb == NULL || !IsA(va, Var) || !IsA(vb, Var) ||
+          va->varlevelsup != 0 || vb->varlevelsup != 0)
+        return false;
+      if (!op_mergejoinable(eq->opno, exprType((Node *) linitial(eq->args))))
+        return false;
+      if (va->varno == edge_rti && vb->varno == cte_rti)
+        edge_var = va, cte_var = vb;
+      else if (vb->varno == edge_rti && va->varno == cte_rti)
+        edge_var = vb, cte_var = va;
+      else
+        return false;
+      if (cte_var->varattno != 1 || edge_var->varattno <= 0 ||
+          edge_var->varattno == prov_attno)
+        return false;
+      out->src_attno = edge_var->varattno;
+      out->directed = true;
+      return true;
+    }
 
-  return true;
+    /* Undirected shape:
+     *   SELECT CASE WHEN e.a = r.v THEN e.b ELSE e.a END
+     *   ... ON r.v IN (e.a, e.b)
+     * The join qual is the two-way disjunction (an OR of two equalities,
+     * or a ScalarArrayOpExpr over an explicit two-element array). */
+    if (texpr != NULL && IsA(texpr, CaseExpr)) {
+      CaseExpr *ce = (CaseExpr *) texpr;
+      CaseWhen *cw;
+      OpExpr *weq;
+      Var *wa, *wb, *wedge, *wcte, *res, *def;
+      AttrNumber col_a, col_b;
+
+      if (ce->arg != NULL || list_length(ce->args) != 1 ||
+          ce->defresult == NULL)
+        return false;
+      cw = (CaseWhen *) linitial(ce->args);
+      if (!IsA(cw->expr, OpExpr))
+        return false;
+      weq = (OpExpr *) cw->expr;
+      if (list_length(weq->args) != 2 ||
+          !op_mergejoinable(weq->opno, exprType((Node *) linitial(weq->args))))
+        return false;
+      wa = (Var *) reach_strip((Node *) linitial(weq->args));
+      wb = (Var *) reach_strip((Node *) lsecond(weq->args));
+      if (wa == NULL || wb == NULL || !IsA(wa, Var) || !IsA(wb, Var) ||
+          wa->varlevelsup != 0 || wb->varlevelsup != 0)
+        return false;
+      if (wa->varno == edge_rti && wb->varno == cte_rti)
+        wedge = wa, wcte = wb;
+      else if (wb->varno == edge_rti && wa->varno == cte_rti)
+        wedge = wb, wcte = wa;
+      else
+        return false;
+      if (wcte->varattno != 1)
+        return false;
+      res = (Var *) reach_strip((Node *) cw->result);
+      def = (Var *) reach_strip((Node *) ce->defresult);
+      if (res == NULL || def == NULL || !IsA(res, Var) || !IsA(def, Var) ||
+          res->varno != edge_rti || def->varno != edge_rti ||
+          res->varlevelsup != 0 || def->varlevelsup != 0)
+        return false;
+      /* WHEN e.X = r.v THEN e.Y ELSE e.X: the tested column is also the
+       * default. */
+      col_a = wedge->varattno;     /* X */
+      col_b = res->varattno;       /* Y */
+      if (def->varattno != col_a || col_a == col_b ||
+          col_a <= 0 || col_b <= 0 ||
+          col_a == prov_attno || col_b == prov_attno)
+        return false;
+
+      /* The join disjunction must test r.v against exactly {e.X, e.Y}. */
+      {
+        AttrNumber got[2] = {0, 0};
+        int n = 0;
+        if (IsA(join_qual, BoolExpr) &&
+            ((BoolExpr *) join_qual)->boolop == OR_EXPR &&
+            list_length(((BoolExpr *) join_qual)->args) == 2) {
+          ListCell *olc;
+          foreach(olc, ((BoolExpr *) join_qual)->args) {
+            OpExpr *oeq = (OpExpr *) lfirst(olc);
+            Var *oa, *ob, *oedge, *octe;
+            if (!IsA(oeq, OpExpr) || list_length(oeq->args) != 2 ||
+                !op_mergejoinable(oeq->opno,
+                                  exprType((Node *) linitial(oeq->args))))
+              return false;
+            oa = (Var *) reach_strip((Node *) linitial(oeq->args));
+            ob = (Var *) reach_strip((Node *) lsecond(oeq->args));
+            if (oa == NULL || ob == NULL || !IsA(oa, Var) || !IsA(ob, Var))
+              return false;
+            if (oa->varno == edge_rti && ob->varno == cte_rti)
+              oedge = oa, octe = ob;
+            else if (ob->varno == edge_rti && oa->varno == cte_rti)
+              oedge = ob, octe = oa;
+            else
+              return false;
+            if (octe->varattno != 1 || n >= 2)
+              return false;
+            got[n++] = oedge->varattno;
+          }
+        } else if (IsA(join_qual, ScalarArrayOpExpr)) {
+          ScalarArrayOpExpr *sao = (ScalarArrayOpExpr *) join_qual;
+          Var *scte;
+          ArrayExpr *arr;
+          ListCell *alc;
+          if (!sao->useOr || list_length(sao->args) != 2 ||
+              !op_mergejoinable(sao->opno,
+                                exprType((Node *) linitial(sao->args))))
+            return false;
+          scte = (Var *) reach_strip((Node *) linitial(sao->args));
+          if (scte == NULL || !IsA(scte, Var) || scte->varno != cte_rti ||
+              scte->varattno != 1)
+            return false;
+          arr = (ArrayExpr *) reach_strip((Node *) lsecond(sao->args));
+          if (arr == NULL || !IsA(arr, ArrayExpr) ||
+              list_length(arr->elements) != 2)
+            return false;
+          foreach(alc, arr->elements) {
+            Var *ev = (Var *) reach_strip((Node *) lfirst(alc));
+            if (ev == NULL || !IsA(ev, Var) || ev->varno != edge_rti ||
+                n >= 2)
+              return false;
+            got[n++] = ev->varattno;
+          }
+        } else
+          return false;
+        if (n != 2 ||
+            !((got[0] == col_a && got[1] == col_b) ||
+              (got[0] == col_b && got[1] == col_a)))
+          return false;
+      }
+
+      out->src_attno = col_a;
+      out->dst_attno = col_b;
+      out->directed = false;
+      return true;
+    }
+  }
+  return false;
 }
 #endif
 
@@ -721,7 +906,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
    * and falls back to eval_recursive on any failure. */
   initStringInfo(&call);
   {
-    ReachabilityShape shape = {InvalidOid, 0, 0, NULL};
+    ReachabilityShape shape = {InvalidOid, 0, 0, NULL, true, NULL};
     constants_t constants = get_constants(true);
     if (provsql_boolean_provenance &&
         detect_reachability_cte(cte, cteq, &constants, &shape)) {
@@ -732,16 +917,19 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
         provsql_notice("Recursive CTE '%s' recognised as reachability over %s",
                        cte->ctename, get_rel_name(shape.relid));
       appendStringInfo(&call,
-                       "SELECT provsql.eval_reachability(%u::pg_catalog.regclass, %s, %s, %s, true, %s, %s, %s, %s, %s)",
+                       "SELECT provsql.eval_reachability(%u::pg_catalog.regclass, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                        shape.relid,
                        quote_literal_cstr(src_name),
                        quote_literal_cstr(dst_name),
                        quote_literal_cstr(shape.source_text),
+                       shape.directed ? "true" : "false",
                        quote_literal_cstr(cte->ctename),
                        quote_literal_cstr(cols.data),
                        quote_literal_cstr(coldef.data),
                        quote_literal_cstr(coltype),
-                       quote_literal_cstr(body_text));
+                       quote_literal_cstr(body_text),
+                       shape.edge_quals
+                         ? quote_literal_cstr(shape.edge_quals) : "NULL");
     } else {
       appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
                        quote_literal_cstr(body_text),

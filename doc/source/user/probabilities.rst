@@ -446,6 +446,27 @@ graph – one provenance circuit per reachable vertex, in linear total
 size.  Cyclic graphs are handled natively and the computation is
 exact; vertex columns of any type work (values are compared as text).
 
+Two variations of the shape are recognised as well.  *Undirected
+connectivity* is the natural symmetric traversal:
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE reach(node) AS (
+        SELECT 1
+      UNION
+        SELECT CASE WHEN e.src = r.node THEN e.dst ELSE e.src END
+        FROM link e JOIN reach r ON r.node IN (e.src, e.dst)
+    )
+    SELECT node, probability_evaluate(provenance()) FROM reach;
+
+and *deterministic edge filters* – a ``WHERE`` clause over the edge
+relation's columns alone – restrict which edges participate:
+
+.. code-block:: postgresql
+
+    ... SELECT e.dst FROM link e JOIN reach r ON e.src = r.node
+        WHERE e.capacity >= 10 ...
+
 The emitted circuits are *deterministic and decomposable by
 construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
 persisted **certificate** of that property (readable with

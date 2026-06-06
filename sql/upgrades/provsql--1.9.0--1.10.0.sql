@@ -144,6 +144,10 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
  * @param destination_attribute name of the destination-vertex column
  * @param source_value source vertex, as text
  * @param target_value target vertex, as text
+ * @param edge_quals optional deterministic filter over the edge
+ *        relation's columns (SQL text, deparsed by the rewriter from
+ *        the recursive arm's WHERE clause), restricting which edges
+ *        participate
  *
  * The @c vertices output maps the dense IDs back to the original
  * vertex values (as text, 1-indexed), for callers that need to label
@@ -155,6 +159,7 @@ CREATE OR REPLACE FUNCTION gather_reachability_edges(
   IN destination_attribute TEXT,
   IN source_value TEXT,
   IN target_value TEXT,
+  IN edge_quals TEXT DEFAULT NULL,
   OUT sources INT[],
   OUT destinations INT[],
   OUT tokens UUID[],
@@ -172,8 +177,10 @@ BEGIN
   EXECUTE format(
     'CREATE TEMP TABLE provsql_reachability_edges_tmp AS '
     || 'SELECT %1$I::text AS u, %2$I::text AS v, provenance() AS token '
-    || 'FROM %3$s WHERE %1$I IS NOT NULL AND %2$I IS NOT NULL',
-    source_attribute, destination_attribute, rel);
+    || 'FROM %3$s WHERE %1$I IS NOT NULL AND %2$I IS NOT NULL%4$s',
+    source_attribute, destination_attribute, rel,
+    CASE WHEN edge_quals IS NULL THEN ''
+         ELSE ' AND (' || edge_quals || ')' END);
   PERFORM remove_provenance('provsql_reachability_edges_tmp');
 
   IF EXISTS (SELECT 1 FROM provsql_reachability_edges_tmp
@@ -229,6 +236,8 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
  * @param coldef column definitions of the working table
  * @param coltype type of the CTE's single column
  * @param body_sql deparsed CTE body (for the fallback)
+ * @param edge_quals optional deterministic filter over edge columns
+ *        (deparsed from the recursive arm's WHERE clause)
  */
 CREATE OR REPLACE FUNCTION eval_reachability(
   edge_rel regclass,
@@ -240,7 +249,8 @@ CREATE OR REPLACE FUNCTION eval_reachability(
   colnames text,
   coldef text,
   coltype text,
-  body_sql text)
+  body_sql text,
+  edge_quals text DEFAULT NULL)
   RETURNS void AS
 $$
 DECLARE
@@ -250,7 +260,8 @@ BEGIN
   BEGIN
     e := provsql.gather_reachability_edges(edge_rel, source_attribute,
                                            destination_attribute,
-                                           source_value, source_value);
+                                           source_value, source_value,
+                                           edge_quals);
     IF to_regclass(work_name) IS NOT NULL THEN
       EXECUTE format('DROP TABLE %I', work_name);
     END IF;
