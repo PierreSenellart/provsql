@@ -613,6 +613,30 @@
     third axis. ProvSQL exposes it via <code>probability_evaluate(..., 'wmc', 'dpmc')</code>.},
 }
 
+@inproceedings{DBLP:conf/icalp/AmarilliBS15,
+  author       = {Antoine Amarilli and
+                  Pierre Bourhis and
+                  Pierre Senellart},
+  title        = {Provenance Circuits for Trees and Treelike Instances},
+  booktitle    = {Automata, Languages, and Programming - 42nd International Colloquium,
+                  {ICALP} 2015, Kyoto, Japan, July 6-10, 2015, Proceedings, Part {II}},
+  series       = {Lecture Notes in Computer Science},
+  pages        = {56--68},
+  publisher    = {Springer},
+  year         = {2015},
+  doi          = {10.1007/978-3-662-47666-6_5},
+  keyword      = {provsql-foundation},
+  annote       = {The provenance refinement of Courcelle's theorem: for a fixed
+    MSO query over an instance of bounded treewidth, a provenance circuit of
+    treewidth independent of the instance size can be built in linear time
+    along a tree decomposition of the data. ProvSQL's
+    <code>reachability_probability</code> implements this construction for
+    two-terminal network reliability: the s-t reachability query is compiled
+    along a tree decomposition of the edge relation's graph into a d-DNNF of
+    linear size, giving exact linear-time evaluation of a \#P-hard problem on
+    bounded-treewidth probabilistic graphs.},
+}
+
 % ---------------------------------------------------------------------------
 % Papers about ProvSQL
 % ---------------------------------------------------------------------------

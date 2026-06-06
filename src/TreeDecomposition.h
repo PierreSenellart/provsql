@@ -34,6 +34,7 @@
 
 #include "flat_set.hpp"
 #include "BooleanCircuit.h"
+#include "Graph.h"
 
 // Forward declaration for friend
 class dDNNFTreeDecompositionBuilder;
@@ -116,15 +117,6 @@ Bag &getBag(bag_t b)
   return bags[static_cast<std::underlying_type<bag_t>::type>(b)];
 }
 /**
- * @brief Const access to bag @p b.
- * @param b  Bag identifier.
- * @return   Const reference to the bag's gate set.
- */
-const Bag &getBag(bag_t b) const
-{
-  return bags[static_cast<std::underlying_type<bag_t>::type>(b)];
-}
-/**
  * @brief Mutable access to the children of bag @p b.
  * @param b  Bag identifier.
  * @return   Reference to the vector of child bag IDs.
@@ -132,24 +124,6 @@ const Bag &getBag(bag_t b) const
 std::vector<bag_t> &getChildren(bag_t b)
 {
   return children[static_cast<std::underlying_type<bag_t>::type>(b)];
-}
-/**
- * @brief Const access to the children of bag @p b.
- * @param b  Bag identifier.
- * @return   Const reference to the vector of child bag IDs.
- */
-const std::vector<bag_t> &getChildren(bag_t b) const
-{
-  return children[static_cast<std::underlying_type<bag_t>::type>(b)];
-}
-/**
- * @brief Return the parent of bag @p b.
- * @param b  Bag identifier.
- * @return   Parent bag identifier.
- */
-bag_t getParent(bag_t b) const
-{
-  return parent[static_cast<std::underlying_type<bag_t>::type>(b)];
 }
 /**
  * @brief Set the parent of bag @p b to @p p.
@@ -172,6 +146,75 @@ public:
  * @param bc  The Boolean circuit to decompose.
  */
 TreeDecomposition(const BooleanCircuit &bc);
+
+/**
+ * @brief Compute a tree decomposition of an arbitrary undirected graph.
+ *
+ * Same min-fill elimination ordering heuristic as the
+ * @c BooleanCircuit constructor (which delegates here), but over a
+ * caller-supplied @c Graph -- e.g. the Gaifman graph of a relational
+ * instance, when exploiting bounded-treewidth *data* rather than a
+ * bounded-treewidth circuit.  Bag elements are then the graph's node
+ * IDs (wrapped in @c gate_t).  Throws @c TreeDecompositionException
+ * if the computed treewidth exceeds @c MAX_TREEWIDTH.
+ *
+ * @param graph            The graph to decompose (consumed: the
+ *                         elimination process empties it).
+ * @param elimination_bag  If non-null, receives for every node the bag
+ *                         created when that node was eliminated (nodes
+ *                         remaining after the elimination loop map to
+ *                         the final root bag).  By the elimination
+ *                         invariant, for every edge @c (u,v) of the
+ *                         graph the earlier-eliminated endpoint's bag
+ *                         contains both @c u and @c v, which gives a
+ *                         constant-time edge-to-bag assignment.
+ */
+TreeDecomposition(Graph graph,
+                  std::unordered_map<unsigned long, bag_t> *elimination_bag = nullptr);
+
+/**
+ * @brief Const access to bag @p b.
+ * @param b  Bag identifier.
+ * @return   Const reference to the bag's gate set.
+ */
+const Bag &getBag(bag_t b) const
+{
+  return bags[static_cast<std::underlying_type<bag_t>::type>(b)];
+}
+/**
+ * @brief Const access to the children of bag @p b.
+ * @param b  Bag identifier.
+ * @return   Const reference to the vector of child bag IDs.
+ */
+const std::vector<bag_t> &getChildren(bag_t b) const
+{
+  return children[static_cast<std::underlying_type<bag_t>::type>(b)];
+}
+/**
+ * @brief Return the parent of bag @p b.
+ * @param b  Bag identifier.
+ * @return   Parent bag identifier.
+ */
+bag_t getParent(bag_t b) const
+{
+  return parent[static_cast<std::underlying_type<bag_t>::type>(b)];
+}
+/**
+ * @brief Return the root bag of the decomposition.
+ * @return Root bag identifier.
+ */
+bag_t getRoot() const
+{
+  return root;
+}
+/**
+ * @brief Return the number of bags in the decomposition.
+ * @return Bag count.
+ */
+std::size_t getNbBags() const
+{
+  return bags.size();
+}
 
 /**
  * @brief Parse a tree decomposition from a stream (PACE challenge format).

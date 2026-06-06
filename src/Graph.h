@@ -37,6 +37,9 @@ std::unordered_set<unsigned long> node_set; ///< Set of all node IDs
 unsigned long num_edges = 0; ///< Current edge count
 
 public:
+/** @brief Construct an empty graph, to be populated with @c add_node() / @c add_edge(). */
+Graph() = default;
+
 /**
  * @brief Construct the primal graph of a @c BooleanCircuit.
  *

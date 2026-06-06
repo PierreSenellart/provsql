@@ -372,11 +372,15 @@ std::istream& operator>>(std::istream& in, TreeDecomposition &td)
   return in;
 }
 
-// Taken and adapted from https://github.com/smaniu/treewidth
 TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc)
+  : TreeDecomposition(Graph(bc))
 {
-  Graph graph(bc);
-      
+}
+
+// Taken and adapted from https://github.com/smaniu/treewidth
+TreeDecomposition::TreeDecomposition(
+  Graph graph, std::unordered_map<unsigned long, bag_t> *elimination_bag)
+{
   PermutationStrategy strategy;
 
   strategy.init_permutation(graph);
@@ -417,6 +421,8 @@ TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc)
     }
     bag.insert(gate_t{node});
       
+    if(elimination_bag)
+      (*elimination_bag)[node] = bag_id;
     bag_ids[gate_t{node}] = bag_id++;
 
     bags.push_back(bag);
@@ -426,9 +432,11 @@ TreeDecomposition::TreeDecomposition(const BooleanCircuit &bc)
     throw TreeDecompositionException();
 
   if(graph.number_nodes()>0) {
-    Bag remaining_bag; 
+    Bag remaining_bag;
     for(auto n: graph.get_nodes()) {
       remaining_bag.insert(gate_t{n});
+      if(elimination_bag)
+        (*elimination_bag)[n] = bag_t{bags.size()};
     }
     bags.push_back(remaining_bag);
   }

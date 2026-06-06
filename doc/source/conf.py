@@ -128,6 +128,12 @@ _SQL_FUNC_MAP = {
     'get_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#gad8d28be45c1fa36422538d51c7624ce5',
     'probability_evaluate':     '/doxygen-sql/html/group__probability.html#gabffa40fef0e37a75d39d4c39c4a1ec0f',
     'probability_bounds':       '/doxygen-sql/html/group__probability.html#gad536a120029130da9a1baddf8fc9b137',
+    # Two-terminal network reliability on bounded-treewidth data; the
+    # _stats anchor is the user-facing regclass overload (the columnar
+    # INT[] overload is gaa70b6ed1220dfe47f74565259b69cfb7).
+    'reachability_probability': '/doxygen-sql/html/group__probability.html#ga3d68df8f3f97610c62fbce79184f307d',
+    'reachability_compile_stats': '/doxygen-sql/html/group__probability.html#gae26103d08cd5720c94fe09c957514f01',
+    'reachability_evaluate':    '/doxygen-sql/html/group__probability.html#ga30e5fb592c2a0a72f3d237583341f4f2',
     'provenance_evaluate':      '/doxygen-sql/html/group__semiring__evaluation.html#gac2c8dfcd3eb924ad277d4dd9de05beb9',
     'aggregation_evaluate':     '/doxygen-sql/html/group__semiring__evaluation.html#gaa8a1ecbed9cc64fef68f1d90cd598bcc',
     'choose':                   '/doxygen-sql/html/group__choose__aggregate.html#ga97d3c5ea62acf16a07b53fbb31546b0e',
