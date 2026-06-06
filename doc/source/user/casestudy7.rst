@@ -16,12 +16,14 @@ side by side.
 .. nb:skip
 .. tip::
 
-   **Follow along in your browser, no install.** Open the `cs7 database in the
-   ProvSQL Playground <https://provsql.org/playground/?db=cs7>`_ and follow the
-   Studio steps as you read. This chapter compares probability methods,
-   including exact compilation through an *external* compiler (``d4``): those
-   external-tool steps will not run in the Playground, which bundles none. The
-   built-in tree-decomposition compiler (and everything else) does work, so the
+   **Follow along in your browser, no install.** Open this case study `as a
+   runnable notebook in the ProvSQL Playground
+   <https://provsql.org/playground/?nb=cs7>`_, or open the bare `cs7 database
+   <https://provsql.org/playground/?db=cs7>`_ and follow the Studio steps as
+   you read. This chapter compares probability methods, including exact
+   compilation through an *external* compiler (``d4``): those external-tool
+   steps will not run in the Playground, which bundles none. The built-in
+   tree-decomposition compiler (and everything else) does work, so the
    in-process side of the comparison is fully reproducible there. See the
    :ref:`Playground note <playground-note>`.
 

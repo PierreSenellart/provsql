@@ -13,11 +13,14 @@ security-classification scenario.
 .. nb:skip
 .. tip::
 
-   **Follow along in your browser, no install.** Open the `cs1 database in the
-   ProvSQL Playground <https://provsql.org/playground/?db=cs1>`_ and run these
-   queries as you read. The Playground bundles no external tools, so a step
-   that explicitly calls an external knowledge compiler (``d4``, ``c2d``…) or
-   the ``graph-easy`` ASCII renderer (:sqlfunc:`view_circuit`) will not run
+   **Follow along in your browser, no install.** Open this case study `as a
+   runnable notebook in the ProvSQL Playground
+   <https://provsql.org/playground/?nb=cs1>`_ -- every query below is a cell,
+   and the opening cells set up the database for you -- or open the bare `cs1
+   database <https://provsql.org/playground/?db=cs1>`_ and run the queries as
+   you read. The Playground bundles no external tools, so a step that
+   explicitly calls an external knowledge compiler (``d4``, ``c2d``…) or the
+   ``graph-easy`` ASCII renderer (:sqlfunc:`view_circuit`) will not run
    there; the default probability methods still work (they use the built-in
    tree-decomposition compiler), as does everything else. See the
    :ref:`Playground note <playground-note>`.

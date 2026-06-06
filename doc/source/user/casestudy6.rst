@@ -19,9 +19,11 @@ canvas.
 .. tip::
 
    **Follow along in your browser, no install.** This Studio-driven case study
-   runs in full in the `cs6 database in the ProvSQL Playground
-   <https://provsql.org/playground/?db=cs6>`_: the continuous-distribution
-   surface (analytic moments and Monte Carlo) needs no external tools. See the
+   runs in full in the ProvSQL Playground: open it `as a runnable notebook
+   <https://provsql.org/playground/?nb=cs6>`_, or open the bare `cs6 database
+   <https://provsql.org/playground/?db=cs6>`_ and follow the Studio steps as
+   you read; the continuous-distribution surface (analytic moments and Monte
+   Carlo) needs no external tools. See the
    :ref:`Playground note <playground-note>`.
 
 The Scenario

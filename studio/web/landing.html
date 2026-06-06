@@ -121,11 +121,13 @@
   </div>
 
 <script>
-  // JSPI feature detection. Shared deep links (?mode/?db/?q) go straight to the
-  // app when JSPI is available; otherwise we always show this page so the user
-  // sees the requirement instead of a silent hang.
+  // JSPI feature detection. Shared deep links (?mode/?db/?q/?nb) go straight to
+  // the app when JSPI is available; otherwise we always show this page so the
+  // user sees the requirement instead of a silent hang. The Launch button
+  // carries the query string either way, so a deep link survives the landing.
   var jspi = typeof WebAssembly !== 'undefined' && typeof WebAssembly.Suspending === 'function';
-  var hasAppParams = /[?&](mode|db|q)=/.test(location.search);
+  var hasAppParams = /[?&](mode|db|q|nb)=/.test(location.search);
+  document.getElementById('launch').href = 'app.html' + location.search;
   if (jspi && hasAppParams) {
     location.replace('app.html' + location.search);
   } else if (!jspi) {

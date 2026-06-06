@@ -27,11 +27,12 @@ find which study demonstrates a given feature.
    **No install required.** Every case study here except case study 3 (whose
    GTFS dataset is too large to bundle) runs in the `ProvSQL Playground
    <https://provsql.org/playground/>`_, the browser build of ProvSQL Studio,
-   on a ready-made database; each chapter links straight to its own. The
-   Playground bundles no external tools, so steps that explicitly call an
-   external knowledge compiler (``d4``, ``c2d``…) or ``graph-easy`` do not
-   run there, but the built-in methods and everything else do. See the
-   :ref:`Playground note <playground-note>`.
+   on a ready-made database -- and all but case studies 3 and 4 also ship as
+   :ref:`runnable notebooks <studio-example-notebooks>`; each chapter links
+   straight to what it has. The Playground bundles no external tools, so
+   steps that explicitly call an external knowledge compiler (``d4``,
+   ``c2d``…) or ``graph-easy`` do not run there, but the built-in methods
+   and everything else do. See the :ref:`Playground note <playground-note>`.
 
 What each case study covers
 ---------------------------
