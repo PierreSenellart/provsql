@@ -10,6 +10,24 @@ baseurl: ""
 repository: "PierreSenellart/provsql"
 github_username: PierreSenellart
 
+# Site author (meta name="author") and identity for the theme's
+# schema.html JSON-LD (without social.name it emits a degenerate
+# {"@type": "Person", "name": null}).
+author:
+  name: Pierre Senellart
+  url: https://pierre.senellart.com/
+social:
+  name: Pierre Senellart
+  links:
+    - https://github.com/PierreSenellart
+    - https://pierre.senellart.com/
+
+# Default social-card image (og:image / twitter:image in the theme's
+# seo.html); 1920x976 matches the ~1.91:1 card ratio. Override per page
+# with `header.og_image` in the front matter.
+og_image: /assets/images/studio/circuit-mode.png
+og_image_alt: "ProvSQL Studio rendering the provenance circuit of a SQL query result"
+
 theme: minimal-mistakes-jekyll
 minimal_mistakes_skin: "provsql"
 logo: "/assets/images/logo.png"

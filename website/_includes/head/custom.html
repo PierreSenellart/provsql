@@ -1,3 +1,31 @@
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
 <link rel="apple-touch-icon" href="/assets/images/logo.png">
 <script src="/assets/js/lightbox.js" defer></script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": ["SoftwareApplication", "SoftwareSourceCode"],
+  "name": "ProvSQL",
+  "description": {{ site.description | strip | jsonify }},
+  "url": "https://provsql.org/",
+  "image": "https://provsql.org/assets/images/studio/circuit-mode.png",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS, Windows (WSL)",
+  "softwareRequirements": "PostgreSQL",
+  "programmingLanguage": ["C", "C++", "SQL", "Python"],
+  "license": "https://spdx.org/licenses/MIT.html",
+  "codeRepository": "https://github.com/PierreSenellart/provsql",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+  "author": {
+    "@type": "Person",
+    "name": "Pierre Senellart",
+    "url": "https://pierre.senellart.com/"
+  },
+  "sameAs": [
+    "https://github.com/PierreSenellart/provsql",
+    "https://pgxn.org/dist/provsql/",
+    "https://hub.docker.com/r/inriavalda/provsql",
+    "https://doi.org/10.5281/zenodo.19512786"
+  ]
+}
+</script>
