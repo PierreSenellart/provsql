@@ -14,5 +14,6 @@ test/kcmcp/*.sh       text eol=lf
 branding/       export-ignore
 docker/         export-ignore
 website/        export-ignore
+wasm/           export-ignore
 release.sh      export-ignore
 .dockerignore   export-ignore
