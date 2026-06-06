@@ -173,7 +173,7 @@ The second argument names the compiler. ProvSQL ships bindings for:
     DPLL-style compiler built on sharpSAT :cite:`DBLP:conf/ai/MuiseMBH12`.
 ``'panini-obdd'``, ``'panini-obdd-and'``, ``'panini-decdnnf'``
     Three target languages of KCBox's Panini compiler
-    :cite:`KCBoxPanini`:
+    :cite:`DBLP:conf/cav/LaiMY25`:
 
     * ``OBDD`` is the canonical `ordered Boolean decision diagram
       <https://en.wikipedia.org/wiki/Binary_decision_diagram>`_, a strict

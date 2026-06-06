@@ -294,7 +294,7 @@ chooser selects among them.
     external tool, then evaluating the d-DNNF. The third argument names the
     tool: ``'d4'`` (default), ``'d4v2'``, ``'c2d'``, ``'dsharp'``,
     ``'minic2d'``, or one of the Panini target languages from KCBox
-    :cite:`KCBoxPanini`,
+    :cite:`DBLP:conf/cav/LaiMY25`,
     ``'panini-obdd'``, ``'panini-obdd-and'``
     :cite:`DBLP:journals/jair/LaiLY17`, ``'panini-decdnnf'``:
 

@@ -119,7 +119,7 @@
   keyword      = {provsql-foundation},
   annote       = {Establishes the complexity dichotomy for probabilistic query evaluation over
     tuple-independent databases: every union of conjunctive queries is either in PTIME
-    (computable by a "safe plan" using extensional probability propagation) or
+    (computable by a “safe plan” using extensional probability propagation) or
     #P-hard. The safe class includes hierarchical CQs, which admit a read-once
     rewriting. ProvSQL's safe-query rewriter (the
     provsql.boolean_provenance optimisation) implements the read-once rewriting for
@@ -181,7 +181,7 @@
   annote       = {Introduces the safe-plan framework for probabilistic query evaluation: a
     syntactic characterisation of conjunctive queries whose probability is computable in
     PTIME by an extensional plan, together with the induced functional dependencies set
-    Gamma_p(q) that lets the framework recognise more queries as safe. Constant selections
+    Γ<sub>p</sub>(q) that lets the framework recognise more queries as safe. Constant selections
     induce empty-determinant FDs (used by ProvSQL's constant-selection elimination) and
     primary keys induce schema FDs (used by the PK-FD pass). The textbook treatment is in
     Suciu, Olteanu, Re and Koch 2011, chapter 4. ProvSQL's FD-aware safe-query rewriter
@@ -201,18 +201,18 @@
   doi          = {10.1007/s00778-009-0151-4},
   keyword      = {provsql-foundation},
   annote       = {Classifies the complexity of evaluating a HAVING predicate
-    aggregate(y) theta k over a tuple-independent probabilistic database, for
-    aggregate in {EXISTS, MIN, MAX, COUNT, SUM, AVG, COUNT(DISTINCT)} and theta a
+    aggregate(y) θ k over a tuple-independent probabilistic database, for
+    aggregate in {EXISTS, MIN, MAX, COUNT, SUM, AVG, COUNT(DISTINCT)} and θ a
     comparison. Exact evaluation is complement-symmetric and depends only on a
-    per-aggregate "alpha-safety" plan property (equal to skeleton-safety for
-    MIN/MAX/COUNT): PTIME if alpha-safe, else #P-hard. Approximation is direction-
-    asymmetric (relative-error FPTRAS of p is not one of 1-p), yielding the
+    per-aggregate “α-safety” plan property (equal to skeleton-safety for
+    MIN/MAX/COUNT): PTIME if α-safe, else #P-hard. Approximation is direction-
+    asymmetric (relative-error FPTRAS of p is not one of 1 − p), yielding the
     trichotomy safe / apx-safe (an FPTRAS exists) / hazardous (no FPRAS). The
     conference version (DBPL 2007) covers the exact dichotomy; this journal version
     adds the approximation results. ProvSQL's closed-form HAVING-COUNT / MIN-MAX / SUM
-    probability evaluators realise the alpha-safe (PTIME-exact) corner for independent
-    contributors, and the skeleton-safety detector exposes the alpha-safety axis. See
-    doc/source/dev/probability-evaluation.rst for the per-(aggregate, theta) table.},
+    probability evaluators realise the α-safe (PTIME-exact) corner for independent
+    contributors, and the skeleton-safety detector exposes the α-safety axis. See <a href="/docs/dev/probability-evaluation.html">the probability-evaluation
+    developer documentation</a> for the per-(aggregate, θ) table.},
 }
 
 @inproceedings{DBLP:conf/icde/OlteanuHK10,
@@ -230,14 +230,14 @@
   annote       = {Introduces the d-tree, an anytime decomposition for computing
     interval bounds on the probability of a propositional lineage formula: each
     node is an independent-or, independent-and, or Shannon-expansion of its
-    sub-formula, and a cheap per-leaf bound (the "independent" heuristic of
+    sub-formula, and a cheap per-leaf bound (the “independent” heuristic of
     Fig. 3) is tightened by recursing into the widest interval until the additive
     or relative target is met. Bounds are valid at every node (Prop. 5.1/5.4), so
-    the recursion can stop early with a certified interval. ProvSQL's d-tree
-    engine (src/DTree.cpp, the "d-tree" probability method) implements this over
+    the recursion can stop early with a certified interval. ProvSQL's “d-tree”
+    probability method implements this over
     the materialised circuit's monotone-DNF lineage, memoised over the shared DAG
     so bounded-treewidth lineage stays polynomial; it serves the high-treewidth
-    exact corner and the deterministic / low-delta approximate paths.},
+    exact corner and the deterministic / low-δ approximate paths.},
 }
 
 @inproceedings{DBLP:conf/icde/SouihliS13,
@@ -255,11 +255,11 @@
     confidence-computation algorithm, it maintains a portfolio of exact and
     approximate methods (naive, Monte-Carlo / Karp-Luby style samplers, compilation)
     and a cost model that picks, per lineage formula and per requested
-    (epsilon, delta) tolerance, the cheapest method expected to meet the bound. This
-    portfolio + cost-model principle is the design behind ProvSQL's probability
-    method catalog (src/ProbabilityMethod.h, the chooseAndRun three-path chooser in
-    src/probability_evaluate.cpp): tolerance grants (exact / relative / additive)
-    nest, and the chooser returns the cheapest admissible member.},
+    (ε, δ) tolerance, the cheapest method expected to meet the bound. This
+    portfolio + cost-model principle is the design behind ProvSQL's
+    probability-method catalog and its cost-based chooser: tolerance grants
+    (exact / relative / additive) nest, and the chooser returns the cheapest
+    admissible member.},
 }
 
 @article{DBLP:journals/pvldb/GatterbauerS15,
@@ -368,7 +368,7 @@
   doi          = {10.1016/0196-6774(89)90038-2},
   annote       = {The fully-polynomial randomised approximation scheme (FPRAS) for
     {\#}DNF -- estimating the probability that a positive DNF formula holds under
-    independent inputs -- with the tight O(m/eps^2 log 1/delta) sample-complexity
+    independent inputs -- with the tight O(m/ε² log 1/δ) sample-complexity
     analysis (m clauses). Each round draws a clause with probability proportional to
     its own probability, samples a satisfying assignment, and accepts only if the
     clause is the first the assignment covers; the acceptance probability is
@@ -389,11 +389,11 @@
   publisher    = {{IOS} Press},
   year         = {2004},
   keyword      = {provsql-foundation},
-  annote       = {Introduces the c2d compiler, which translates {CNF} formulas into
+  annote       = {Introduces the <a href="http://reasoning.cs.ucla.edu/c2d/">c2d</a> compiler, which translates {CNF} formulas into
     deterministic decomposable {NNF} (specifically, Decision-{DNNF}) under the guidance
     of a decomposition tree (dtree). ProvSQL invokes c2d as one of the external
-    knowledge compilers behind @c probability_evaluate(..., 'compilation', 'c2d') and
-    behind the Studio "Compile" feature.},
+    knowledge compilers behind <code>probability_evaluate(..., 'compilation', 'c2d')</code> and
+    behind the Studio “Compile” feature.},
 }
 
 @inproceedings{DBLP:conf/ijcai/Darwiche11,
@@ -429,12 +429,12 @@
   pages        = {356--361},
   publisher    = {Springer},
   year         = {2012},
-  doi          = {10.1007/978-3-642-30353-1\_36},
+  doi          = {10.1007/978-3-642-30353-1_36},
   keyword      = {provsql-foundation},
-  annote       = {The Dsharp compiler: a top-down {DPLL}-style {CNF} to Decision-{DNNF}
+  annote       = {The <a href="https://github.com/QuMuLab/dsharp">Dsharp</a> compiler: a top-down {DPLL}-style {CNF} to Decision-{DNNF}
     compiler built on the sharp{SAT} model counter, with component caching as the
     key efficiency mechanism. ProvSQL exposes Dsharp as one of the external compilers
-    behind @c probability_evaluate(..., 'compilation', 'dsharp').},
+    behind <code>probability_evaluate(..., 'compilation', 'dsharp')</code>.},
 }
 
 @inproceedings{DBLP:conf/ijcai/OztokD15,
@@ -448,7 +448,7 @@
   publisher    = {{AAAI} Press},
   year         = {2015},
   keyword      = {provsql-foundation},
-  annote       = {Introduces miniC2D, a top-down {CNF}-to-{SDD} compiler. The paper
+  annote       = {Introduces <a href="http://reasoning.cs.ucla.edu/minic2d/">miniC2D</a>, a top-down {CNF}-to-{SDD} compiler. The paper
     isolates a subclass of {SDDs} called Decision-{SDDs} that admit a top-down
     compilation strategy analogous to that of c2d / Dsharp. ProvSQL invokes miniC2D
     as the structural-target external compiler in its probability evaluation pipeline.},
@@ -466,12 +466,13 @@
   year         = {2017},
   doi          = {10.24963/ijcai.2017/93},
   keyword      = {provsql-foundation},
-  annote       = {Introduces d4, a top-down {CNF}-to-Decision-{DNNF} compiler with
+  annote       = {Introduces <a href="https://github.com/crillab/d4">d4</a>, a top-down {CNF}-to-Decision-{DNNF} compiler with
     dynamic hypergraph decomposition, component caching and conflict-driven
     backtracking. The paper unifies the descriptions of c2d, Dsharp and d4 as
     Decision-{DNNF} compilers and reports significant size and runtime improvements
     over its predecessors. ProvSQL uses d4 as the default external compiler behind
-    @c probability_evaluate(..., 'compilation') and in the @c makeDD fallback chain.},
+    <code>probability_evaluate(..., 'compilation')</code> and as the final
+    fallback of its compilation pipeline.},
 }
 
 @inproceedings{LagniezM21d4v2,
@@ -485,11 +486,11 @@
   url          = {https://hal.science/hal-04252723},
   pdf          = {https://hal.science/hal-04252723v1/file/abstract-wks-model-counting.pdf},
   keyword      = {provsql-foundation},
-  annote       = {Workshop note from the d4 authors describing d4 2.0 (a.k.a.
+  annote       = {Workshop note from the d4 authors describing <a href="https://github.com/crillab/d4v2">d4 2.0</a> (a.k.a.
     d4v2): a rewrite of the d4 Decision-{DNNF} compiler with improved
     caching, a library-first architecture and tree-decomposition-guided
     branching heuristics by default. ProvSQL exposes d4v2 as the 'd4v2'
-    compiler option via @c probability_evaluate(..., 'compilation', 'd4v2')
+    compiler option via <code>probability_evaluate(..., 'compilation', 'd4v2')</code>
     and the Studio compile dropdown.},
 }
 
@@ -511,35 +512,35 @@
     in the knowledge-compilation map; this paper defines a strict
     super-language that retains many of {OBDDs}' tractability properties
     while admitting more compact circuits. ProvSQL exposes Panini's
-    @c OBDD and @c OBDD[AND] target languages via the 'panini-obdd' /
+    {OBDD} and {OBDD[AND]} target languages via the 'panini-obdd' /
     'panini-obdd-and' compiler options.},
 }
 
-@misc{KCBoxPanini,
+@inproceedings{DBLP:conf/cav/LaiMY25,
   author       = {Yong Lai and
-                  Dayou Liu and
                   Kuldeep S. Meel and
-                  Mate Soos and
-                  Roland H. C. Yap and
-                  Minghao Yin},
-  title        = {Panini: a knowledge-compilation toolkit (KCBox)},
-  howpublished = {\url{https://github.com/meelgroup/KCBox}},
-  year         = {2024},
+                  Roland H. C. Yap},
+  editor       = {Ruzica Piskac and
+                  Zvonimir Rakamaric},
+  title        = {Panini: An Efficient and Flexible Knowledge Compiler},
+  booktitle    = {Computer Aided Verification - 37th International Conference, {CAV}
+                  2025, Zagreb, Croatia, July 23-25, 2025, Proceedings, Part {III}},
+  series       = {Lecture Notes in Computer Science},
+  pages        = {92--105},
+  publisher    = {Springer},
+  year         = {2025},
+  doi          = {10.1007/978-3-031-98682-6_6},
   keyword      = {provsql-foundation},
-  annote       = {Panini is the knowledge-compilation tool in the {KCBox}
-    toolbox developed by the Meel group. It compiles {CNF} formulas into
-    one of five target languages: {OBDD}, {OBDD[AND]}, Decision-{DNNF},
-    R2-D2 (a restricted Decision-{DNNF}), or {CCDD}. ProvSQL exposes
-    the first three through the 'panini-obdd' / 'panini-obdd-and' /
-    'panini-decdnnf' compiler options of @c probability_evaluate and
-    the Studio compile dropdown; R2-D2 and {CCDD} are intentionally
-    omitted because both emit {K} (kernelize) nodes that break
-    decomposability. Decisions on input variables are translated to
-    the standard d-DNNF @c OR(AND(v, t), AND(NOT v, f)) shape;
-    decisions on Tseytin auxiliaries are projected to @c OR(t, f)
-    (the two branches have disjoint input-support by Tseytin
-    determinism, so the input-projected OR stays sound under
-    @c dDNNF::probabilityEvaluation).},
+  annote       = {Introduces Panini, the knowledge-compilation tool of the
+    <a href="https://github.com/meelgroup/KCBox">KCBox toolbox</a> developed
+    by the Meel group. It compiles {CNF} formulas into one of five target
+    languages: {OBDD}, {OBDD[AND]}, Decision-{DNNF}, R2-D2 (a restricted
+    Decision-{DNNF}), or {CCDD}. ProvSQL exposes the first three through the
+    'panini-obdd' / 'panini-obdd-and' / 'panini-decdnnf' compiler options of
+    <code>probability_evaluate</code> and the Studio compile dropdown; R2-D2
+    and {CCDD} are intentionally omitted because both emit kernelize nodes
+    that break decomposability. Panini's output is translated to standard
+    d-DNNF form for probability evaluation.},
 }
 
 @inproceedings{DBLP:conf/ijcai/SharmaRSM19,
@@ -556,12 +557,12 @@
   year         = {2019},
   doi          = {10.24963/IJCAI.2019/163},
   keyword      = {provsql-foundation},
-  annote       = {Introduces Ganak, an exact (probabilistically-cached)
+  annote       = {Introduces <a href="https://github.com/meelgroup/ganak">Ganak</a>, an exact (probabilistically-cached)
     model counter that won every track of the 2024 and 2025 Model
     Counting Competitions. Ganak reads weighted DIMACS in the {MCC}
-    2024 format (@c "c p weight <lit> <w> 0" lines) and reports the
-    count on @c "c s exact ..." lines. ProvSQL invokes Ganak via
-    @c probability_evaluate(..., 'wmc', 'ganak'), with Tseytin'd CNF +
+    2024 format (<code>c p weight &lt;lit&gt; &lt;w&gt; 0</code> lines) and reports the
+    count on <code>c s exact ...</code> lines. ProvSQL invokes Ganak via
+    <code>probability_evaluate(..., 'wmc', 'ganak')</code>, with Tseytin'd CNF +
     appended weight lines for each input gate.},
 }
 
@@ -579,13 +580,13 @@
   year         = {2021},
   doi          = {10.4230/LIPICS.CP.2021.8},
   keyword      = {provsql-foundation},
-  annote       = {Introduces SharpSAT-TD: an exact (weighted) model counter
+  annote       = {Introduces <a href="https://github.com/Laakeri/sharpsat-td">SharpSAT-TD</a>: an exact (weighted) model counter
     built on SharpSAT that uses tree-decomposition guided decision
     heuristics. Conceptually parallel to ProvSQL's in-process
     tree-decomposition d-DNNF builder, but as a stand-alone SOTA exact
-    counter. ProvSQL invokes it via @c probability_evaluate(..., 'wmc',
-    'sharpsat-td'), with the @c sharpsat-td and @c flow_cutter_pace17
-    binaries on @c PATH.},
+    counter. ProvSQL invokes it via <code>probability_evaluate(..., 'wmc',
+    'sharpsat-td')</code>, with the <code>sharpsat-td</code> and <code>flow_cutter_pace17</code>
+    binaries on <code>PATH</code>.},
 }
 
 @inproceedings{DBLP:conf/cp/DudekPV20,
@@ -601,16 +602,15 @@
   pages        = {211--230},
   publisher    = {Springer},
   year         = {2020},
-  doi          = {10.1007/978-3-030-58475-7\_13},
+  doi          = {10.1007/978-3-030-58475-7_13},
   keyword      = {provsql-foundation},
-  annote       = {Introduces DPMC: an exact weighted model counter that
-    runs as a two-stage pipeline. A planner (@c htb) produces a
-    project-join tree from the {CNF}; an executor (@c dmc) traverses
+  annote       = {Introduces <a href="https://github.com/vardigroup/DPMC">DPMC</a>: an exact weighted model counter that
+    runs as a two-stage pipeline. A planner (<code>htb</code>) produces a
+    project-join tree from the {CNF}; an executor (<code>dmc</code>) traverses
     the tree using Algebraic Decision Diagrams ({ADDs}) to compute the
     count. Algorithmically distinct from the search-based exact
     counters (Ganak / SharpSAT-TD), giving the benchmark table a
-    third axis. ProvSQL exposes it via @c probability_evaluate(..., 'wmc',
-    'dpmc').},
+    third axis. ProvSQL exposes it via <code>probability_evaluate(..., 'wmc', 'dpmc')</code>.},
 }
 
 % ---------------------------------------------------------------------------
@@ -698,7 +698,7 @@
   annote       = {Extends ProvSQL to track provenance for data modification operations (INSERT,
     UPDATE, DELETE) by introducing monus gates for deleted tuples and times gates for
     inserted ones. Demonstrates the utility of update provenance by implementing
-    temporal database features---time travel, history tracking, and undo---using the
+    temporal database features -- time travel, history tracking, and undo -- using the
     union-of-intervals m-semiring.},
 }
 
@@ -740,7 +740,7 @@
   pdf          = {https://pierre.senellart.com/publications/amarilli2019connecting.pdf},
   keyword      = {provsql-paper},
   annote       = {Establishes formal connections between knowledge compilation classes (OBDDs,
-    d-DNNFs, SDDs, ...) and graph width parameters (treewidth, pathwidth, cliquewidth).
+    d-DNNFs, SDDs…) and graph width parameters (treewidth, pathwidth, cliquewidth).
     Section 5.1 of this paper provides the algorithm directly implemented in ProvSQL's
     internal tree-decomposition-based knowledge compiler (tdkc), which converts
     a provenance circuit into a d-DNNF for tractable probability evaluation.},
