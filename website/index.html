@@ -21,9 +21,11 @@ feature_row:
     image_path: /assets/images/query-rewriting.png
     alt: "Diagram of a query Q rewritten into Q-hat by ProvSQL's planner hook, then evaluated by PostgreSQL with provenance UUIDs in the result."
     excerpt: >
-      SQL queries are automatically rewritten to track provenance circuits,
-      across joins, aggregation, set operations, CTEs, and recursive queries
-      (`WITH RECURSIVE`). No changes to your schema or application code required.
+      SQL queries are automatically rewritten to track provenance circuits –
+      across inner and outer joins, subqueries anywhere (`EXISTS`, `IN`,
+      quantified and scalar comparisons), aggregation, set operations, CTEs,
+      and recursive queries (`WITH RECURSIVE`). No changes to your schema or
+      application code required.
     url: "/overview/#query-rewriting"
     btn_label: "Learn more"
     btn_class: "btn--primary"
@@ -38,20 +40,30 @@ feature_row:
     url: "/docs/user/semirings.html"
     btn_label: "Semiring docs"
     btn_class: "btn--primary"
+  - title: "Aggregate Provenance"
+    image_path: /assets/images/aggregation.png
+    alt: "ProvSQL Studio Circuit-mode screenshot: the provenance DAG of a GROUP BY query, with an aggregation gate combining semimodule children."
+    excerpt: >
+      Aggregation results carry provenance too: `agg_token` values record
+      symbolically how a `SUM`, `COUNT`, `MIN`/`MAX`, or `AVG` depends on
+      base tuples, support further arithmetic, evaluate in any m-semiring,
+      and give exact probabilities to `HAVING` predicates – with
+      SQL-faithful empty-group and `NULL` semantics.
+    url: "/docs/user/aggregation.html"
+    btn_label: "Aggregation docs"
+    btn_class: "btn--primary"
   - title: "Probabilistic Databases"
     image_path: /assets/images/probabilities.png
     alt: "ProvSQL Studio screenshot: a small provenance circuit with the evaluation strip's Probability-method dropdown open, listing the exact (independent, possible-worlds, tree-decomposition, compilation) and approximate (monte-carlo, weightmc) backends."
     excerpt: >
-      Compute tuple-independent probabilities of query answers via
-      independent-circuit evaluation, tree decomposition, d-DNNF
-      knowledge compilation, Monte Carlo, or weighted model counting.
-      Inspect every intermediate artifact (CNF, compiled d-DNNF, tree
-      decomposition) or benchmark all methods at once. An opt-in
-      planner-side rewrite recognises hierarchical
-      conjunctive queries (and a family of FD-aware extensions) and
-      routes them through the linear-time independent evaluator; the
-      inversion-free class of queries compiles directly to a
-      linear-size d-DNNF.
+      Attach probabilities to input tuples and get the probability of every
+      query answer. Ask for a *guarantee* – exact, or additive / relative
+      `(ε, δ)` – and a cost-based chooser runs the cheapest method that
+      meets it: independent evaluation, tree decomposition, d-DNNF
+      knowledge compilation, certified-bounds d-trees, sieve, Monte Carlo,
+      Karp-Luby, or weighted model counting. Tractable classes
+      (hierarchical, FD-aware, inversion-free queries) are recognised at
+      the planner and evaluated in linear time.
     url: "/docs/user/probabilities.html"
     btn_label: "Probability docs"
     btn_class: "btn--primary"
@@ -77,17 +89,74 @@ feature_row:
     url: "/docs/user/shapley.html"
     btn_label: "Shapley docs"
     btn_class: "btn--primary"
+  - title: "Where-Provenance"
+    image_path: /assets/images/studio/where-mode.png
+    alt: "ProvSQL Studio Where-mode screenshot: hovering an output cell highlights the source-table cells it was copied from."
+    excerpt: >
+      Column-level provenance: track which source *cells* – not just which
+      rows – each output value was copied or derived from, through
+      projections and equijoins. Studio's Where mode shows it live: hover
+      an output cell to highlight its origins.
+    url: "/docs/user/where-provenance.html"
+    btn_label: "Where-provenance docs"
+    btn_class: "btn--primary"
+  - title: "Temporal &amp; Update Provenance"
+    image_path: /assets/images/temporal.png
+    alt: "ProvSQL temporal query: per-tuple validity intervals computed through the interval-union semiring."
+    excerpt: >
+      Provenance of data modifications: `INSERT` / `UPDATE` / `DELETE` are
+      tracked as update gates, enabling audit and undo. Combined with the
+      interval-union semiring, validity timestamps turn a
+      provenance-tracked database into a temporal one – time-travel
+      queries included.
+    url: "/docs/user/temporal.html"
+    btn_label: "Temporal docs"
+    btn_class: "btn--primary"
+  - title: "Lean Formalization"
+    image_path: /assets/images/lean.png
+    alt: "Rendered Lean 4 documentation of the provenance formalization, showing a machine-checked correctness theorem."
+    excerpt: >
+      The algebraic core – m-semirings, annotated databases,
+      relational-algebra and aggregation semantics, query rewriting,
+      circuits and probability – is formally verified in Lean 4, with
+      machine-checked theorems backing ProvSQL's architecture.
+    url: "/lean/"
+    btn_label: "Lean formalization"
+    btn_class: "btn--primary"
   - title: "ProvSQL Studio"
     image_path: /assets/images/studio/circuit-mode.png
     alt: "ProvSQL Studio Circuit-mode screenshot showing a provenance DAG with a pinned input gate."
     excerpt: >
-      A web UI for provenance inspection: render the circuit DAG behind any
-      result token, evaluate any compiled semiring on a pinned subnode, and
-      hover output cells to highlight the source rows that produced them.
-      Available on PyPI as
+      A web UI for provenance inspection, in three modes: render the
+      circuit DAG behind any result token and evaluate any compiled
+      semiring on a pinned subnode, hover output cells to highlight the
+      source rows that produced them, or work in notebooks. Available on
+      PyPI as
       [`provsql-studio`](https://pypi.org/project/provsql-studio/).
     url: "/docs/user/studio.html"
     btn_label: "Studio docs"
+    btn_class: "btn--primary"
+  - title: "Notebooks"
+    image_path: /assets/images/studio/notebook-mode.png
+    alt: "ProvSQL Studio Notebook-mode screenshot: the executed tutorial notebook with SQL and Markdown cells and the kernel chip in the toolbar."
+    excerpt: >
+      Jupyter-style notebooks over a ProvSQL database: SQL, Markdown,
+      circuit, and evaluation cells, per-cell provenance schemes, saved
+      and loaded as standard `.ipynb` files. The tutorial and the case
+      studies ship as runnable example notebooks.
+    url: "/docs/user/studio.html#notebook-mode"
+    btn_label: "Notebook docs"
+    btn_class: "btn--primary"
+  - title: "ProvSQL Playground"
+    image_path: /assets/images/playground.png
+    alt: "ProvSQL Playground screenshot: Studio's notebook mode running entirely in the browser over PostgreSQL compiled to WebAssembly."
+    excerpt: >
+      The whole system in your browser: PostgreSQL with ProvSQL compiled
+      to WebAssembly, Studio running on top – no install, no server,
+      nothing leaves the page. Pre-loaded databases and runnable
+      notebooks for the tutorial and the case studies.
+    url: "/playground/"
+    btn_label: "Open the Playground"
     btn_class: "btn--primary"
 feature_row2:
   - title: "SQL API"

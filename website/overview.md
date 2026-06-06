@@ -30,12 +30,18 @@ every query involving such tables and rewrites it to compute a provenance
 circuit over those UUIDs, appending the result UUID to the SELECT list.
 
 The rewriter handles:
-- SELECT-FROM-WHERE, JOIN, nested subqueries
-- GROUP BY, SELECT DISTINCT
-- UNION / UNION ALL / EXCEPT
+- SELECT-FROM-WHERE, inner and outer JOIN, `LATERAL`
+- Subqueries in `FROM` (including deeply nested) and outside `FROM`
+  (`EXISTS` / `NOT EXISTS`, `IN` / `NOT IN`, quantified comparisons such
+  as `= ANY`, scalar subqueries), correlated or not
+- GROUP BY, aggregation (including `FILTER` clauses), HAVING, SELECT DISTINCT
+- UNION / UNION ALL / EXCEPT / EXCEPT ALL
 - VALUES
 - Common table expressions (`WITH`), including `WITH RECURSIVE` on PostgreSQL 15+
 - UPDATE / INSERT / DELETE (when `provsql.update_provenance` is enabled)
+
+See the [supported-features list](/docs/user/querying.html#supported-sql-features)
+in the user documentation for the precise scope.
 
 ## Semiring Evaluation {#semirings}
 
@@ -56,16 +62,34 @@ each input tuple with `set_prob()`, and the provenance circuit becomes
 the lineage formula whose probability is the marginal probability of the
 query answer. ProvSQL computes it exactly (by independent-circuit
 evaluation, tree decomposition, or d-DNNF knowledge compilation through
-an external compiler) or approximately (by Monte Carlo sampling or
-weighted model counting). Because exact probability computation is
-#P-hard in general, an opt-in planner-side rewrite recognises tractable
-query classes – hierarchical conjunctive queries, a family of FD-aware
-extensions, and the broader inversion-free class – and evaluates them in
-linear time. Inputs may also be [continuous random
+an external compiler) or approximately with `(ε, δ)` guarantees (Monte
+Carlo, Karp-Luby, stopping-rule, sieve, certified-bounds d-trees, or
+weighted model counting). In practice you do not pick a method: you ask
+for the guarantee you want – exact, or additive / relative `(ε, δ)` –
+and a cost-based chooser runs the cheapest method that meets it,
+escalating automatically under a budget. Because exact probability
+computation is #P-hard in general, an opt-in planner-side rewrite
+recognises tractable query classes – hierarchical conjunctive queries, a
+family of FD-aware extensions, and the broader inversion-free class –
+and evaluates them in linear time. Inputs may also be [continuous random
 variables](/docs/user/continuous-distributions.html) (Normal, Uniform,
 Exponential, Erlang, and mixtures), with expectations and moments
 computed analytically or by Monte Carlo. See the
 [probability documentation](/docs/user/probabilities.html).
+
+## Aggregation, Updates, and Time {#aggregation}
+
+Aggregation results carry provenance through **m-semimodules**:
+`agg_token` values record symbolically how a `SUM`, `COUNT`,
+`MIN`/`MAX`, or `AVG` depends on base tuples, support further
+arithmetic, evaluate in any m-semiring, and give exact probabilities to
+`HAVING` predicates. See the [aggregation
+documentation](/docs/user/aggregation.html). Data modifications
+(`INSERT` / `UPDATE` / `DELETE`) can themselves be
+[provenance-tracked](/docs/user/data-modification.html), enabling audit
+and undo; combined with the interval-union semiring, validity
+timestamps turn a provenance-tracked database into a [temporal
+database](/docs/user/temporal.html), time-travel queries included.
 
 ## ProvSQL Studio {#studio}
 
@@ -73,11 +97,22 @@ computed analytically or by Monte Carlo. See the
 inspection that pairs with the extension. It runs as a separate Python
 package (on PyPI as
 [`provsql-studio`](https://pypi.org/project/provsql-studio/)), connects
-to any ProvSQL-enabled PostgreSQL database, and offers two complementary
-modes: a **Circuit** view that renders the provenance DAG behind a
-result token with on-the-fly semiring evaluation on any pinned subnode,
-and a **Where** view that highlights, on hover, the source cells that
-contributed to each output value.
+to any ProvSQL-enabled PostgreSQL database, and offers three
+complementary modes: a **Circuit** view that renders the provenance DAG
+behind a result token with on-the-fly semiring evaluation on any pinned
+subnode, a **Where** view that highlights, on hover, the source cells
+that contributed to each output value, and a **Notebook** mode –
+Jupyter-style notebooks with SQL, Markdown, circuit, and evaluation
+cells, saved and loaded as standard `.ipynb` files. The tutorial and
+case studies of the documentation ship as runnable example notebooks.
+
+## ProvSQL Playground {#playground}
+
+The [ProvSQL Playground](/playground/) is the whole system running in
+your browser: PostgreSQL with ProvSQL compiled to WebAssembly (via
+PGlite), with the unmodified Studio Python on top (via Pyodide) – no
+install, no server, nothing leaves the page. It comes pre-loaded with
+databases and runnable notebooks for the tutorial and the case studies.
 
 ## Lean Formalization {#lean}
 
