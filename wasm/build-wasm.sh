@@ -88,8 +88,21 @@ else
   echo "==> WASM core already built (dist/bin/pglite.wasm present); skipping" \
        "the core build -- set WASM_REBUILD_CORE=1 to force it"
 fi
+# Stage the extension sources from scratch: provsql-wasm/ holds nothing
+# precious (build-extension.sh recompiles every object each run), and a
+# leftover tree would make `cp -r` nest the fresh src/ *inside* the stale one
+# (building old code against new SQL) and let install scripts from older
+# version names linger into the tarball.
+rm -rf "$PG/provsql-wasm"
 mkdir -p "$PG/provsql-wasm"
 cp -r "$REPO/src" "$PG/provsql-wasm/src"
+# Drop the native build artifacts that ride along with the repo's src/ (step 1
+# leaves host-ELF *.o there, possibly including orphans whose source has been
+# deleted): relink-pglite.sh derives provsql.imports from an llvm-nm sweep of
+# src/*.o, which must see exactly the emcc-produced objects -- a stale native
+# object can inject undefined symbols that no longer exist anywhere (fatal at
+# the pglite relink) or mask genuinely needed imports with its defined ones.
+find "$PG/provsql-wasm/src" -name '*.o' -delete
 cp "$REPO"/sql/provsql--*.sql "$PG/provsql-wasm/"
 cp "$REPO/provsql.control" "$PG/provsql-wasm/"
 cp "$REPO/wasm/build-extension.sh" "$REPO/wasm/relink-pglite.sh" "$PG/"
