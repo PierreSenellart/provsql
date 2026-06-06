@@ -4,10 +4,31 @@
  *
  * See @c ReachabilityCompiler.h for the construction's design and the
  * structural argument (determinism and decomposability by construction).
- * The implementation is a single bottom-up pass over a min-fill tree
- * decomposition of the data graph, with an explicit stack (decompositions
- * of path-like data are themselves path-like, so recursion depth would be
- * linear in the data).
+ *
+ * The shared implementation makes two sweeps over a min-fill tree
+ * decomposition of the data graph, both with explicit stacks
+ * (decompositions of path-like data are themselves path-like, so
+ * recursion depth would be linear in the data):
+ *
+ * - **bottom-up**: for every node, the table mapping each reachable
+ *   *below state* -- the transitively-closed reachability relation over
+ *   the node's domain induced by the edges introduced in its subtree --
+ *   to the gate computing "the subtree edges induce exactly this state";
+ * - **top-down**: symmetrically, the *above state* tables over the edges
+ *   introduced outside the subtree, derived from the parent's above
+ *   table joined with the sibling subtrees' below tables (prefix/suffix
+ *   joins keep this linear in the node arity) and the parent's local
+ *   edges.
+ *
+ * The domain of every node is its bag plus the source vertex
+ * (equivalently, the DP runs on the decomposition with the source added
+ * to every bag, still a valid decomposition of width at most tw+1).
+ * Each vertex is then read at its elimination bag: below and above
+ * states partition the worlds by their disjoint edge sets, so "the
+ * closure of (below ∪ above) connects the source to the vertex" is a
+ * deterministic OR over decomposable AND pairs -- one linear-size
+ * certified d-DNNF whose gates are shared across all the per-vertex
+ * roots.
  */
 #include "ReachabilityCompiler.h"
 
@@ -50,8 +71,8 @@ struct EdgeVariable {
 
 ReachabilityCompiler::Rel ReachabilityCompiler::transitiveClosure(Rel r, int d)
 {
-  // Warshall over the first d positions; d <= MAXD = 13, so this is a
-  // small constant amount of work per call.
+  // Warshall over the first d positions; d <= MAXD, so this is a small
+  // constant amount of work per call.
   for (int k = 0; k < d; ++k)
     for (int i = 0; i < d; ++i)
       if (r[i*MAXD + k])
@@ -61,14 +82,14 @@ ReachabilityCompiler::Rel ReachabilityCompiler::transitiveClosure(Rel r, int d)
   return r;
 }
 
-ReachabilityCompiler::Result ReachabilityCompiler::compile(
+ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   const std::vector<EdgeRow> &rows,
   unsigned long source,
-  unsigned long target,
   bool directed,
-  std::size_t max_states)
+  std::size_t max_states,
+  const unsigned long *only_target)
 {
-  Result result;
+  AllResult result;
   dDNNF &dd = result.dd;
 
   // ------------------------------------------------------------------
@@ -116,11 +137,13 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
 
   // ------------------------------------------------------------------
   // 2. Tree decomposition of the data graph (vertices: all endpoints
-  //    plus the two terminals), by min-fill elimination.
+  //    plus the source, plus an explicitly requested target so an
+  //    isolated target is legal), by min-fill elimination.
   // ------------------------------------------------------------------
   Graph graph;
   graph.add_node(source);
-  graph.add_node(target);
+  if (only_target)
+    graph.add_node(*only_target);
   for (const auto &var : variables)
     graph.add_edge(var.u, var.v);
 
@@ -128,12 +151,13 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
   const TreeDecomposition td(std::move(graph), &elimination_bag);
   result.stats.data_treewidth = td.getTreewidth();
   result.stats.nb_bags = td.getNbBags();
+  const std::size_t nb_bags = td.getNbBags();
 
   // Each variable is introduced at exactly one node: the bag created
   // when the earlier-eliminated endpoint was eliminated contains both
   // endpoints (elimination invariant), and a unique introduction point
   // is what makes the emitted AND gates decomposable.
-  std::vector<std::vector<std::size_t> > variables_at_bag(td.getNbBags());
+  std::vector<std::vector<std::size_t> > variables_at_bag(nb_bags);
   for (std::size_t i = 0; i < variables.size(); ++i) {
     bag_t bu = elimination_bag.at(variables[i].u);
     bag_t bv = elimination_bag.at(variables[i].v);
@@ -141,14 +165,22 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
     variables_at_bag[bag_index(b)].push_back(i);
   }
 
+  // Read points: every vertex is read at its elimination bag (which
+  // contains it); a single-target compilation reads only that vertex.
+  std::vector<std::vector<unsigned long> > reads_at_bag(nb_bags);
+  for (const auto &[v, b] : elimination_bag)
+    if (!only_target || v == *only_target)
+      reads_at_bag[bag_index(b)].push_back(v);
+
   // ------------------------------------------------------------------
   // 3. Gate-emission helpers.
-  // ------------------------------------------------------------------
-  const gate_t invalid_gate{static_cast<std::underlying_type<gate_t>::type>(-1)};
+  //
   // Every emitted OR is deterministic and every emitted AND decomposable
   // *by construction*; mark them with the d-DNNF certificate so the
   // certificate-aware consumers (independentEvaluation, interpretAsDD)
   // can evaluate the circuit linearly.
+  // ------------------------------------------------------------------
+  const gate_t invalid_gate{static_cast<std::underlying_type<gate_t>::type>(-1)};
   const gate_t true_gate = dd.setGate(BooleanGate::AND); // empty AND = true
   dd.setInfo(true_gate, DNNF_CERT_INFO);
 
@@ -180,8 +212,8 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
                  };
 
   // A DP table maps each reachable state (a closed relation over the
-  // node's domain) to the gate computing "the processed valuation
-  // induces exactly this state"; an accumulator collects the (mutually
+  // node's domain) to the gate computing "this part's valuation induces
+  // exactly this state"; an accumulator collects the (mutually
   // exclusive) contributions to each state before they are OR-ed.
   using Table = std::unordered_map<Rel, gate_t>;
   using Accumulator = std::unordered_map<Rel, std::vector<gate_t> >;
@@ -203,26 +235,33 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
                       }
                     }
                     acc.clear();
+                    result.stats.max_states =
+                      std::max(result.stats.max_states, t.size());
+                    if (t.size() > max_states)
+                      throw ReachabilityCompilerException(
+                              "state space exceeds the per-node bound (" +
+                              std::to_string(max_states) +
+                              "); the data treewidth is too large for "
+                              "reachability compilation");
                     return t;
                   };
 
   // ------------------------------------------------------------------
-  // 4. Domains.  The DP works over the decomposition obtained by adding
-  //    the two terminals to every bag (still a valid tree decomposition,
-  //    of width at most tw+2), so each node's domain is its bag plus
-  //    {s, t} and the (s -> t) bit of a state is meaningful at the root.
+  // 4. Domains.  Every node's domain is its bag plus the source (the DP
+  //    runs on the decomposition with the source added to every bag,
+  //    still a valid tree decomposition).
   // ------------------------------------------------------------------
-  auto domainOf = [&](bag_t b) {
-                    std::vector<unsigned long> d;
-                    d.reserve(td.getBag(b).size()+2);
-                    for (gate_t g : td.getBag(b))
-                      d.push_back(static_cast<std::underlying_type<gate_t>::type>(g));
-                    d.push_back(source);
-                    d.push_back(target);
-                    std::sort(d.begin(), d.end());
-                    d.erase(std::unique(d.begin(), d.end()), d.end());
-                    return d;
-                  };
+  std::vector<std::vector<unsigned long> > domains(nb_bags);
+  for (std::size_t b = 0; b < nb_bags; ++b) {
+    auto &d = domains[b];
+    d.reserve(td.getBag(bag_t{b}).size()+1);
+    for (gate_t g : td.getBag(bag_t{b}))
+      d.push_back(static_cast<std::underlying_type<gate_t>::type>(g));
+    d.push_back(source);
+    std::sort(d.begin(), d.end());
+    d.erase(std::unique(d.begin(), d.end()), d.end());
+  }
+
   auto positionIn = [](const std::vector<unsigned long> &domain, unsigned long v) {
                       return static_cast<int>(
                         std::lower_bound(domain.begin(), domain.end(), v) -
@@ -234,16 +273,25 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
                         r.set(i*MAXD + i);
                       return r;
                     };
+  auto trivialTable = [&](const std::vector<unsigned long> &domain) {
+                        return Table{{identityOn(static_cast<int>(domain.size())),
+                                      true_gate}};
+                      };
+  auto isTrivial = [&](const Table &t) {
+                     return t.size() == 1 && t.begin()->second == true_gate;
+                   };
 
-  // Lift a child table to the parent's domain: forget the vertices that
-  // leave the bag (restriction of a closed relation stays closed; any
-  // path through a forgotten vertex between surviving vertices was
-  // already recorded by closure) and introduce the fresh ones with
-  // identity only.  States may collapse, hence the accumulator.
-  auto lift = [&](const Table &child, const std::vector<unsigned long> &from,
+  // Re-express a table over another domain: forget the vertices that
+  // leave (restriction of a closed relation stays closed; any path
+  // through a forgotten vertex between surviving vertices was already
+  // recorded by closure) and introduce the fresh ones with identity
+  // only.  States may collapse, hence the accumulator.
+  auto lift = [&](const Table &t, const std::vector<unsigned long> &from,
                   const std::vector<unsigned long> &to) {
-                int df = static_cast<int>(from.size());
-                int dt = static_cast<int>(to.size());
+                if (from == to)
+                  return t;
+                const int df = static_cast<int>(from.size());
+                const int dt = static_cast<int>(to.size());
                 std::vector<int> map(from.size());
                 for (int i = 0; i < df; ++i) {
                   auto it = std::lower_bound(to.begin(), to.end(), from[i]);
@@ -252,7 +300,7 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
                 }
                 const Rel id = identityOn(dt);
                 Accumulator acc;
-                for (const auto &entry : child) {
+                for (const auto &entry : t) {
                   Rel r = id;
                   for (int i = 0; i < df; ++i) {
                     if (map[i] < 0)
@@ -266,148 +314,253 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
                 return finalize(acc);
               };
 
-  auto checkStateBound = [&](std::size_t n) {
-                           result.stats.max_states = std::max(result.stats.max_states, n);
-                           if (n > max_states)
-                             throw ReachabilityCompilerException(
-                                     "state space exceeds the per-node bound (" +
-                                     std::to_string(max_states) +
-                                     "); the data treewidth is too large for "
-                                     "reachability compilation");
-                         };
+  // Join two tables over the same domain, covering disjoint edge sets:
+  // pairs of states are mutually exclusive (deterministic ORs) and the
+  // gates variable-disjoint (decomposable ANDs); reachability across
+  // the two parts only alternates through domain vertices (the bag
+  // separates them), hence the closure of the union.
+  auto join = [&](const Table &t1, const Table &t2, int d) {
+                if (isTrivial(t1))
+                  return t2;
+                if (isTrivial(t2))
+                  return t1;
+                Accumulator acc;
+                for (const auto &left : t1)
+                  for (const auto &right : t2) {
+                    CHECK_FOR_INTERRUPTS();
+                    Rel r = transitiveClosure(left.first | right.first, d);
+                    acc[r].push_back(andGate(left.second, right.second));
+                  }
+                return finalize(acc);
+              };
+
+  // Introduce the edge variables assigned to bag b into a table over
+  // that bag's domain.
+  auto applyEdges = [&](Table table, std::size_t b) {
+                      const auto &domain = domains[b];
+                      const int d = static_cast<int>(domain.size());
+                      for (std::size_t vi : variables_at_bag[b]) {
+                        const EdgeVariable &var = variables[vi];
+                        const int pu = positionIn(domain, var.u);
+                        const int pv = positionIn(domain, var.v);
+
+                        Accumulator acc;
+                        for (const auto &entry : table) {
+                          Rel present = entry.first;
+                          if (var.arc_uv)
+                            present.set(pu*MAXD + pv);
+                          if (var.arc_vu)
+                            present.set(pv*MAXD + pu);
+                          present = transitiveClosure(present, d);
+
+                          if (present == entry.first) {
+                            // The edge cannot change reachability in these
+                            // worlds: its value is irrelevant, keep the gate
+                            // as is (the OR of the two cofactors would
+                            // simplify to it anyway).
+                            acc[entry.first].push_back(entry.second);
+                          } else {
+                            acc[present].push_back(
+                              andGate(entry.second, inGate(vi)));
+                            acc[entry.first].push_back(
+                              andGate(entry.second, notGate(vi)));
+                          }
+                        }
+                        table = finalize(acc);
+                      }
+                      return table;
+                    };
 
   // ------------------------------------------------------------------
-  // 5. Bottom-up DP over the decomposition, explicit stack.
+  // 5. Bottom-up sweep: below[b] = state table of bag b's subtree
+  //    (children joined, local edges applied), retained for the
+  //    top-down sweep and the reads.
   // ------------------------------------------------------------------
-  struct Frame {
-    bag_t bag;
-    std::size_t next_child = 0;
-    Table table;            // join of the already-merged children, lifted here
-    bool has_table = false;
-    explicit Frame(bag_t b) : bag(b) {
+  std::vector<Table> below(nb_bags);
+  {
+    struct Frame {
+      bag_t bag;
+      std::size_t next_child = 0;
+      Table table;
+      bool has_table = false;
+      explicit Frame(bag_t b) : bag(b) {
+      }
+    };
+
+    std::vector<Frame> stack;
+    stack.push_back(Frame(td.getRoot()));
+
+    while (!stack.empty()) {
+      Frame &frame = stack.back();
+      const auto &children = td.getChildren(frame.bag);
+
+      if (frame.next_child < children.size()) {
+        bag_t c = children[frame.next_child++];
+        stack.push_back(Frame(c));
+        continue;
+      }
+
+      CHECK_FOR_INTERRUPTS();
+
+      const std::size_t b = bag_index(frame.bag);
+      Table table = frame.has_table ? std::move(frame.table)
+                    : trivialTable(domains[b]);
+      below[b] = applyEdges(std::move(table), b);
+
+      if (stack.size() == 1) {
+        stack.pop_back();
+        break;
+      }
+
+      // Merge into the parent's partial join.
+      Frame &parent = stack[stack.size()-2];
+      const std::size_t pb = bag_index(parent.bag);
+      Table lifted = lift(below[b], domains[b], domains[pb]);
+      if (!parent.has_table) {
+        parent.table = std::move(lifted);
+        parent.has_table = true;
+      } else {
+        parent.table = join(parent.table, lifted,
+                            static_cast<int>(domains[pb].size()));
+      }
+      stack.pop_back();
     }
-  };
+  }
 
-  std::vector<Frame> stack;
-  stack.push_back(Frame{td.getRoot()});
+  // ------------------------------------------------------------------
+  // 6. Top-down sweep and reads.  above[b] covers exactly the edges
+  //    introduced outside bag b's subtree; for a child c of b,
+  //    above(c) = lift( applyEdges_b( above(b) ⊗ siblings' below ) ).
+  //    Reads at b pair below[b] with above[b]: the closure of the union
+  //    is the full-graph reachability relation over b's domain.
+  // ------------------------------------------------------------------
+  std::unordered_map<unsigned long, gate_t> vertex_root;
+  {
+    std::vector<Table> above(nb_bags);
+    const std::size_t rb = bag_index(td.getRoot());
+    above[rb] = trivialTable(domains[rb]);
 
-  Table root_table;
-  std::vector<unsigned long> root_domain;
+    std::vector<bag_t> stack{td.getRoot()};
+    while (!stack.empty()) {
+      const bag_t nu = stack.back();
+      stack.pop_back();
+      CHECK_FOR_INTERRUPTS();
+      const std::size_t b = bag_index(nu);
+      const int d = static_cast<int>(domains[b].size());
 
-  while (!stack.empty()) {
-    Frame &frame = stack.back();
-    const auto &children = td.getChildren(frame.bag);
-
-    if (frame.next_child < children.size()) {
-      bag_t c = children[frame.next_child++];
-      stack.push_back(Frame{c});
-      continue;
-    }
-
-    CHECK_FOR_INTERRUPTS();
-
-    // All children merged; finish this node.
-    std::vector<unsigned long> domain = domainOf(frame.bag);
-    const int d = static_cast<int>(domain.size());
-
-    Table table = frame.has_table
-                  ? std::move(frame.table)
-                  : Table{{identityOn(d), true_gate}};
-
-    // Introduce the edge variables assigned to this bag.
-    for (std::size_t vi : variables_at_bag[bag_index(frame.bag)]) {
-      const EdgeVariable &var = variables[vi];
-      const int pu = positionIn(domain, var.u);
-      const int pv = positionIn(domain, var.v);
-
-      Accumulator acc;
-      for (const auto &entry : table) {
-        Rel present = entry.first;
-        if (var.arc_uv)
-          present.set(pu*MAXD + pv);
-        if (var.arc_vu)
-          present.set(pv*MAXD + pu);
-        present = transitiveClosure(present, d);
-
-        if (present == entry.first) {
-          // The edge cannot change reachability in these worlds: its
-          // value is irrelevant, keep the gate as is (the OR of the
-          // two cofactors would simplify to it anyway).
-          acc[entry.first].push_back(entry.second);
-        } else {
-          acc[present].push_back(andGate(entry.second, inGate(vi)));
-          acc[entry.first].push_back(andGate(entry.second, notGate(vi)));
+      // Reads: for every (below, above) state pair, the closure of the
+      // union; the pairs partition the worlds, so each vertex's OR over
+      // its accepting pairs is deterministic.
+      if (!reads_at_bag[b].empty()) {
+        const int ps = positionIn(domains[b], source);
+        std::unordered_map<unsigned long, std::vector<gate_t> > accepting;
+        for (const auto &[R, g] : below[b])
+          for (const auto &[A, h] : above[b]) {
+            CHECK_FOR_INTERRUPTS();
+            const Rel closed = transitiveClosure(R | A, d);
+            gate_t pair_gate = invalid_gate;   // lazily created, shared
+            for (unsigned long v : reads_at_bag[b]) {
+              if (!closed[ps*MAXD + positionIn(domains[b], v)])
+                continue;
+              if (pair_gate == invalid_gate)
+                pair_gate = andGate(g, h);
+              accepting[v].push_back(pair_gate);
+            }
+          }
+        for (auto &[v, gates] : accepting) {
+          if (gates.size() == 1)
+            vertex_root[v] = gates[0];
+          else {
+            gate_t o = dd.setGate(BooleanGate::OR);
+            dd.setInfo(o, DNNF_CERT_INFO);
+            for (gate_t g : gates)
+              dd.addWire(o, g);
+            vertex_root[v] = o;
+          }
         }
       }
-      table = finalize(acc);
-      checkStateBound(table.size());
-    }
 
-    // Hand the finished table to the parent (or keep it if root).
-    if (stack.size() == 1) {
-      root_table = std::move(table);
-      root_domain = std::move(domain);
-      stack.pop_back();
+      // Children: prefix/suffix joins of the lifted sibling tables keep
+      // this linear in the arity.
+      const auto &children = td.getChildren(nu);
+      const std::size_t m = children.size();
+      if (m > 0) {
+        std::vector<Table> lifted(m);
+        for (std::size_t i = 0; i < m; ++i)
+          lifted[i] = lift(below[bag_index(children[i])],
+                           domains[bag_index(children[i])], domains[b]);
+
+        std::vector<Table> prefix(m+1), suffix(m+1);
+        prefix[0] = trivialTable(domains[b]);
+        for (std::size_t i = 0; i < m; ++i)
+          prefix[i+1] = join(prefix[i], lifted[i], d);
+        suffix[m] = trivialTable(domains[b]);
+        for (std::size_t i = m; i-- > 0; )
+          suffix[i] = join(lifted[i], suffix[i+1], d);
+
+        for (std::size_t i = 0; i < m; ++i) {
+          Table siblings = join(prefix[i], suffix[i+1], d);
+          Table a = applyEdges(join(above[b], siblings, d), b);
+          const std::size_t cb = bag_index(children[i]);
+          above[cb] = lift(a, domains[b], domains[cb]);
+          stack.push_back(children[i]);
+        }
+      }
+
+      // above[b] is no longer needed (children got theirs, reads done).
+      above[b] = Table();
+    }
+  }
+
+  result.roots.reserve(vertex_root.size());
+  for (const auto &[v, g] : vertex_root)
+    result.roots.push_back(VertexRoot{v, g});
+  std::sort(result.roots.begin(), result.roots.end(),
+            [](const VertexRoot &a, const VertexRoot &b) {
+    return a.vertex < b.vertex;
+  });
+
+  dd.setRoot(true_gate);   // single-target callers re-point this
+  result.stats.nb_gates = dd.getNbGates();
+  return result;
+}
+
+ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
+  const std::vector<EdgeRow> &rows,
+  unsigned long source,
+  bool directed,
+  std::size_t max_states)
+{
+  return compileAllInternal(rows, source, directed, max_states, nullptr);
+}
+
+ReachabilityCompiler::Result ReachabilityCompiler::compile(
+  const std::vector<EdgeRow> &rows,
+  unsigned long source,
+  unsigned long target,
+  bool directed,
+  std::size_t max_states)
+{
+  AllResult all = compileAllInternal(rows, source, directed, max_states,
+                                     &target);
+  Result result;
+  result.stats = all.stats;
+
+  gate_t root{0};
+  bool found = false;
+  for (const auto &vr : all.roots)
+    if (vr.vertex == target) {
+      root = vr.root;
+      found = true;
       break;
     }
-
-    Frame &parent = stack[stack.size()-2];
-    std::vector<unsigned long> parent_domain = domainOf(parent.bag);
-    Table lifted = lift(table, domain, parent_domain);
-    checkStateBound(lifted.size());
-
-    if (!parent.has_table) {
-      parent.table = std::move(lifted);
-      parent.has_table = true;
-    } else {
-      // Join: the two subtrees' variable sets are disjoint (each
-      // variable has a unique introduction bag), so the AND gates are
-      // decomposable; pairs of child states are mutually exclusive, so
-      // the resulting ORs stay deterministic.  Reachability across the
-      // two processed parts only alternates through domain vertices
-      // (the bag separates the parts), hence the closure of the union.
-      const int dp = static_cast<int>(parent_domain.size());
-      Accumulator acc;
-      for (const auto &left : parent.table)
-        for (const auto &right : lifted) {
-          CHECK_FOR_INTERRUPTS();
-          Rel r = transitiveClosure(left.first | right.first, dp);
-          acc[r].push_back(andGate(left.second, right.second));
-        }
-      parent.table = finalize(acc);
-      checkStateBound(parent.table.size());
-    }
-
-    stack.pop_back();
+  if (!found) {
+    // The target is certainly unreachable: constant false.
+    root = all.dd.setGate(BooleanGate::OR);
+    all.dd.setInfo(root, DNNF_CERT_INFO);
+    result.stats.nb_gates = all.dd.getNbGates();
   }
-
-  // ------------------------------------------------------------------
-  // 6. Output: t reachable from s iff the root state has the (s -> t)
-  //    bit; the accepting states are mutually exclusive, so the final
-  //    OR is deterministic.
-  // ------------------------------------------------------------------
-  const int ps = positionIn(root_domain, source);
-  const int pt = positionIn(root_domain, target);
-
-  std::vector<gate_t> accepting;
-  for (const auto &entry : root_table)
-    if (entry.first[ps*MAXD + pt])
-      accepting.push_back(entry.second);
-
-  gate_t output;
-  if (accepting.empty()) {
-    output = dd.setGate(BooleanGate::OR); // empty OR = false
-    dd.setInfo(output, DNNF_CERT_INFO);
-  } else if (accepting.size() == 1)
-    output = accepting[0];
-  else {
-    output = dd.setGate(BooleanGate::OR);
-    dd.setInfo(output, DNNF_CERT_INFO);
-    for (gate_t g : accepting)
-      dd.addWire(output, g);
-  }
-  dd.setRoot(output);
-
-  result.stats.nb_gates = dd.getNbGates();
+  all.dd.setRoot(root);
+  result.dd = std::move(all.dd);
   return result;
 }

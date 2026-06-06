@@ -728,6 +728,13 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
        || type==gate_cmp  || type==gate_arith) {
       auto [info1, info2] = getInfos(uuid);
       result.setInfos(id, info1, info2);
+    } else if(type==gate_plus || type==gate_times) {
+      /* The d-DNNF certificate (DNNF_CERT_INFO in info1: deterministic
+       * plus / decomposable times).  Copied only when set, so unmarked
+       * gates do not bloat the in-memory infos map with zeros. */
+      auto [info1, info2] = getInfos(uuid);
+      if(info1 != 0 || info2 != 0)
+        result.setInfos(id, info1, info2);
     }
 
     if(type==gate_project || type==gate_value || type==gate_agg

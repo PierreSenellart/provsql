@@ -1683,18 +1683,9 @@ double BooleanCircuit::wmcCount(gate_t g, const std::string &requested,
 
 double BooleanCircuit::independentEvaluationInternal(
   gate_t g, std::set<gate_t> &seen,
-  std::unordered_map<gate_t, double> &memo,
-  std::unordered_map<gate_t, double> *island) const
+  std::unordered_map<gate_t, double> &memo) const
 {
   check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
-  // Island-local memo first: within a certified d-DNNF island, sharing is
-  // licensed by the certificate, so every gate is cached and a re-visit
-  // returns the cached value without re-registering its variables.
-  if(island) {
-    auto it = island->find(g);
-    if(it != island->end())
-      return it->second;
-  }
   // Memoised gates are variable-free (constant-only) -- returning the cached
   // value is sound (it touched nothing in `seen`) and avoids re-traversing a
   // shared constant subgraph.  A variable-bearing gate is never cached, so a
@@ -1705,16 +1696,14 @@ double BooleanCircuit::independentEvaluationInternal(
       return it->second;
   }
 
-  // A certified gate (see DNNF_CERT_INFO) reached from the uncertified
-  // region starts a maximal island.  A certified gate reached from a
-  // *different* island, or a second time from the uncertified region,
-  // starts a fresh island and re-walks: its variables then hit `seen` and
-  // the evaluation throws -- entanglement across islands is conservatively
-  // rejected, exactly like a read-once violation.
-  std::unordered_map<gate_t, double> fresh_island;
-  const bool certified = isDNNFCertified(g);
-  if(island == nullptr && certified)
-    island = &fresh_island;
+  // A certified gate (see DNNF_CERT_INFO) opens a maximal island, walked
+  // iteratively (certified circuits can be as deep as the data).  A
+  // certified gate reached a second time -- from another island or from
+  // the uncertified region -- is re-walked: its variables then hit `seen`
+  // and the evaluation throws, so entanglement across islands is
+  // conservatively rejected, exactly like a read-once violation.
+  if(isDNNFCertified(g))
+    return evaluateCertifiedIsland(g, seen, memo);
 
   const std::size_t seen_before = seen.size();
 
@@ -1723,25 +1712,11 @@ double BooleanCircuit::independentEvaluationInternal(
   switch(getGateType(g)) {
   case BooleanGate::AND:
     for(const auto &c: getWires(g)) {
-      // Certified decomposable AND: the certificate replaces the read-once
-      // discipline (children mention disjoint variables by assertion), so
-      // the island memo flows through.  An uncertified AND applies the
-      // standard rules; its certified children start their own islands.
-      result*=independentEvaluationInternal(c, seen, memo,
-                                            certified ? island : nullptr);
+      result*=independentEvaluationInternal(c, seen, memo);
     }
     break;
 
   case BooleanGate::OR:
-    if(certified) {
-      // Certified deterministic OR: children are mutually exclusive by
-      // assertion, so the probability is the plain sum and children may
-      // share variables freely (within the island).
-      result = 0.;
-      for(const auto &c: getWires(g))
-        result += independentEvaluationInternal(c, seen, memo, island);
-      break;
-    }
   {
     // We collect probability among each group of children, where we
     // group MULIN gates with the same key var together
@@ -1766,7 +1741,7 @@ double BooleanCircuit::independentEvaluationInternal(
           mulin_seen.insert(p);
         }
       } else
-        groups[group] = independentEvaluationInternal(c, seen, memo, nullptr);
+        groups[group] = independentEvaluationInternal(c, seen, memo);
     }
 
     for(const auto [k, v]: groups)
@@ -1776,8 +1751,7 @@ double BooleanCircuit::independentEvaluationInternal(
   break;
 
   case BooleanGate::NOT:
-    result=1-independentEvaluationInternal(*getWires(g).begin(), seen, memo,
-                                           island);
+    result=1-independentEvaluationInternal(*getWires(g).begin(), seen, memo);
     break;
 
   case BooleanGate::IN:
@@ -1821,19 +1795,98 @@ double BooleanCircuit::independentEvaluationInternal(
   // Cache only if this gate consumed no variable (constant-only subgraph).
   if(seen.size() == seen_before)
     memo[g] = result;
-  // Within an island every gate is cached: re-visits through licensed
-  // sharing return the value without re-walking (and without spuriously
-  // re-registering variables).
-  if(island)
-    (*island)[g] = result;
   return result;
+}
+
+double BooleanCircuit::evaluateCertifiedIsland(
+  gate_t root, std::set<gate_t> &seen,
+  std::unordered_map<gate_t, double> &memo) const
+{
+  const std::size_t seen_before = seen.size();
+  // Island-local values: within the island every gate is computed once
+  // (sharing is licensed by the certificate), and the explicit post-order
+  // stack keeps the walk safe on circuits as deep as the data.
+  std::unordered_map<gate_t, double> val;
+  std::vector<gate_t> stack{root};
+
+  while(!stack.empty()) {
+    const gate_t g = stack.back();
+    if(val.find(g) != val.end()) {
+      stack.pop_back();
+      continue;
+    }
+
+    const auto t = getGateType(g);
+
+    if(t == BooleanGate::IN) {
+      // Same constant-leaf exemption as the read-once walk: a 0/1 leaf
+      // carries no Boolean variable.
+      const double p = getProb(g);
+      if(p != 0.0 && p != 1.0) {
+        if(seen.find(g) != seen.end())
+          throw CircuitException("Not an independent circuit");
+        seen.insert(g);
+      }
+      val[g] = p;
+      stack.pop_back();
+      continue;
+    }
+    if(t == BooleanGate::MULIN) {
+      auto child = *getWires(g).begin();
+      if(seen.find(child) != seen.end())
+        throw CircuitException("Not an independent circuit");
+      seen.insert(child);
+      val[g] = getProb(g);
+      stack.pop_back();
+      continue;
+    }
+    if(t != BooleanGate::NOT && !isDNNFCertified(g)) {
+      // Uncertified gate inside the island: standard read-once rules (its
+      // own certified descendants open fresh sub-islands).
+      val[g] = independentEvaluationInternal(g, seen, memo);
+      stack.pop_back();
+      continue;
+    }
+
+    bool ready = true;
+    for(const auto &c: getWires(g))
+      if(val.find(c) == val.end()) {
+        stack.push_back(c);
+        ready = false;
+      }
+    if(!ready)
+      continue;
+
+    double result;
+    if(t == BooleanGate::NOT)
+      result = 1 - val[getWires(g)[0]];
+    else if(t == BooleanGate::AND) {
+      // Certified decomposable AND: product.
+      result = 1.;
+      for(const auto &c: getWires(g))
+        result *= val[c];
+    } else {
+      // Certified deterministic OR: plain sum (mutual exclusivity).
+      result = 0.;
+      for(const auto &c: getWires(g))
+        result += val[c];
+    }
+    val[g] = result;
+    stack.pop_back();
+  }
+
+  // Same global-memo rule as the recursive walk: cache only when the
+  // island consumed no variable.
+  if(seen.size() == seen_before)
+    memo[root] = val[root];
+  return val[root];
 }
 
 double BooleanCircuit::independentEvaluation(gate_t g) const
 {
   std::set<gate_t> seen;
   std::unordered_map<gate_t, double> memo;
-  return independentEvaluationInternal(g, seen, memo, nullptr);
+  return independentEvaluationInternal(g, seen, memo);
 }
 
 void BooleanCircuit::setInfo(gate_t g, unsigned int i)
@@ -1929,36 +1982,23 @@ void BooleanCircuit::rewriteMultivaluedGates()
   }
 }
 
-gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd,
-                                             std::unordered_map<gate_t, gate_t> *island) const {
+gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const {
   check_stack_depth(); // recurses on wires; guard deep circuits (see GenericCircuit::evaluate)
-  // Island-local memo: within a certified d-DNNF island, sharing is licensed
-  // by the certificate; a shared sub-circuit maps to a shared dd gate.
-  if(island) {
-    auto it = island->find(g);
-    if(it != island->end())
-      return it->second;
-  }
 
-  // Same island discipline as independentEvaluationInternal: a certified
-  // gate reached from the uncertified region starts a maximal island;
-  // sharing across islands re-walks, hits `seen` and throws.
-  std::unordered_map<gate_t, gate_t> fresh_island;
-  const bool certified = isDNNFCertified(g);
-  if(island == nullptr && certified)
-    island = &fresh_island;
+  // A certified gate (see DNNF_CERT_INFO) opens a maximal island, copied
+  // iteratively with native deterministic ORs; the recursion only walks
+  // the uncertified region.
+  if(isDNNFCertified(g))
+    return interpretCertifiedIsland(g, seen, dd);
 
   gate_t dg{0};
 
   switch(getGateType(g)) {
   case BooleanGate::AND:
   {
-    // A certified decomposable AND copies under the island memo (children
-    // may share certified sub-circuits); an uncertified AND keeps the
-    // read-once discipline, its certified children starting fresh islands.
     dg = dd.setGate(BooleanGate::AND);
     for(const auto &c: getWires(g)) {
-      auto dc = interpretAsDDInternal(c, seen, dd, certified ? island : nullptr);
+      auto dc = interpretAsDDInternal(c, seen, dd);
       dd.addWire(dg, dc);
     }
   }
@@ -1966,21 +2006,11 @@ gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, d
 
   case BooleanGate::OR:
   {
-    if(certified) {
-      // Certified deterministic OR: copy natively -- this is exactly the
-      // OR a d-DNNF wants -- instead of the De Morgan independent-or
-      // rewriting below, which is only justified (and only needed) when
-      // the children are merely variable-disjoint.
-      dg = dd.setGate(BooleanGate::OR);
-      for(const auto &c: getWires(g))
-        dd.addWire(dg, interpretAsDDInternal(c, seen, dd, island));
-      break;
-    }
     dg = dd.setGate(BooleanGate::NOT);
     auto dng = dd.setGate(BooleanGate::AND);
     dd.addWire(dg, dng);
     for(const auto &c: getWires(g)) {
-      auto dc = interpretAsDDInternal(c, seen, dd, nullptr);
+      auto dc = interpretAsDDInternal(c, seen, dd);
       auto dnc = dd.setGate(BooleanGate::NOT);
       dd.addWire(dnc, dc);
       dd.addWire(dng, dnc);
@@ -1991,7 +2021,7 @@ gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, d
   case BooleanGate::NOT:
   {
     dg = dd.setGate(BooleanGate::NOT);
-    auto dc = interpretAsDDInternal(getWires(g)[0], seen, dd, island);
+    auto dc = interpretAsDDInternal(getWires(g)[0], seen, dd);
     dd.addWire(dg, dc);
   }
   break;
@@ -2012,9 +2042,71 @@ gate_t BooleanCircuit::interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, d
     throw CircuitException("Unsupported gate in interpretAsDD");
   }
 
-  if(island)
-    (*island)[g] = dg;
   return dg;
+}
+
+gate_t BooleanCircuit::interpretCertifiedIsland(gate_t root,
+                                                std::set<gate_t> &seen,
+                                                dDNNF &dd) const
+{
+  // Same iterative island walk as evaluateCertifiedIsland, building dd
+  // gates instead of probabilities; shared sub-circuits map to shared dd
+  // gates, and the copied gates keep their certificate so the produced
+  // artefact remains self-describing.
+  std::unordered_map<gate_t, gate_t> val;
+  std::vector<gate_t> stack{root};
+
+  while(!stack.empty()) {
+    const gate_t g = stack.back();
+    if(val.find(g) != val.end()) {
+      stack.pop_back();
+      continue;
+    }
+
+    const auto t = getGateType(g);
+
+    if(t == BooleanGate::IN) {
+      if(seen.find(g) != seen.end())
+        throw CircuitException("Not an independent circuit");
+      seen.insert(g);
+      val[g] = getUUID(g).empty()
+               ? dd.setGate(BooleanGate::IN, getProb(g))
+               : dd.setGate(getUUID(g), BooleanGate::IN, getProb(g));
+      stack.pop_back();
+      continue;
+    }
+    if(t != BooleanGate::NOT && !isDNNFCertified(g)) {
+      // Uncertified gate inside the island: standard rules (its own
+      // certified descendants open fresh sub-islands).
+      val[g] = interpretAsDDInternal(g, seen, dd);
+      stack.pop_back();
+      continue;
+    }
+
+    bool ready = true;
+    for(const auto &c: getWires(g))
+      if(val.find(c) == val.end()) {
+        stack.push_back(c);
+        ready = false;
+      }
+    if(!ready)
+      continue;
+
+    gate_t dg;
+    if(t == BooleanGate::NOT) {
+      dg = dd.setGate(BooleanGate::NOT);
+      dd.addWire(dg, val[getWires(g)[0]]);
+    } else {
+      dg = dd.setGate(t);
+      dd.setInfo(dg, DNNF_CERT_INFO);
+      for(const auto &c: getWires(g))
+        dd.addWire(dg, val[c]);
+    }
+    val[g] = dg;
+    stack.pop_back();
+  }
+
+  return val[root];
 }
 
 dDNNF BooleanCircuit::interpretAsDD(gate_t g) const
@@ -2022,7 +2114,7 @@ dDNNF BooleanCircuit::interpretAsDD(gate_t g) const
   dDNNF dd;
   std::set<gate_t> seen;
 
-  dd.setRoot(interpretAsDDInternal(g, seen, dd, nullptr));
+  dd.setRoot(interpretAsDDInternal(g, seen, dd));
 
   // The OR-as-NOT(AND(NOT, ...)) De Morgan rewriting above introduces
   // many redundant NOT-NOT pairs and single-child AND/OR gates that the

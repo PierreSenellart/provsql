@@ -105,22 +105,42 @@ bool evaluate(gate_t g, const std::unordered_set<gate_t> &sampled) const;
 /**
  * @brief Recursive helper for @c interpretAsDD().
  *
- * @param g       Current gate to process.
- * @param seen    Set of variable gates already consumed (read-once check
- *                in the uncertified region; per-island registration in
- *                certified regions).
- * @param dd      The d-DNNF being constructed.
- * @param island  Island-local memoisation (source gate to @p dd gate) for
- *                the certified region being walked, or @c nullptr in the
- *                uncertified region.  Within an island, shared sub-DAGs
- *                map to shared @p dd gates and each variable registers in
- *                @p seen once; sharing across islands re-walks and throws.
- * @return        Gate ID in @p dd corresponding to @p g.
+ * A certified (d-DNNF-marked) gate is handed to
+ * @c interpretCertifiedIsland(); the recursion only walks the
+ * uncertified region.
+ *
+ * @param g     Current gate to process.
+ * @param seen  Set of variable gates already consumed (read-once check in
+ *              the uncertified region; per-island registration inside
+ *              certified islands).
+ * @param dd    The d-DNNF being constructed.
+ * @return      Gate ID in @p dd corresponding to @p g.
  */
-gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd,
-                             std::unordered_map<gate_t, gate_t> *island) const;
+gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd) const;
+/**
+ * @brief Iteratively copy a certified island into @p dd.
+ *
+ * Island twin of @c evaluateCertifiedIsland() (same discipline, same
+ * iterative post-order): certified ORs are copied as native
+ * deterministic ORs (no De Morgan rewriting), certified ANDs as-is,
+ * shared sub-DAGs map to shared @p dd gates.  An uncertified AND/OR
+ * inside the island falls back to @c interpretAsDDInternal().
+ *
+ * @param root  Certified gate the island is rooted at.
+ * @param seen  Global variable registration (see
+ *              @c evaluateCertifiedIsland()).
+ * @param dd    The d-DNNF being constructed.
+ * @return      Gate ID in @p dd corresponding to @p root.
+ */
+gate_t interpretCertifiedIsland(gate_t root, std::set<gate_t> &seen,
+                                dDNNF &dd) const;
 /**
  * @brief Recursive helper for @c independentEvaluation().
+ *
+ * A certified (d-DNNF-marked) gate is handed to
+ * @c evaluateCertifiedIsland(); the recursion only walks the
+ * uncertified region.
+ *
  * @param g     Current gate to evaluate.
  * @param seen  Set of variable gates (IN / MULVAR) already consumed; a second
  *              occurrence means the circuit is not read-once.
@@ -129,20 +149,36 @@ gate_t interpretAsDDInternal(gate_t g, std::set<gate_t> &seen, dDNNF &dd,
  *              the whole evaluation @c O(circuit) rather than re-traversing
  *              shared subgraphs.  Variable-bearing gates are never memoised (a
  *              re-visit must reach @p seen and throw).
- * @param island  Island-local memoisation for the certified (d-DNNF-marked)
- *                region being walked, or @c nullptr in the uncertified
- *                region.  A certified gate reached from the uncertified
- *                region starts a maximal island: inside it every gate is
- *                memoised (sharing is licensed by the certificate) and each
- *                variable still registers once in @p seen, so entanglement
- *                with the outside -- or with another island -- throws like a
- *                read-once violation.
  * @return      Probability at gate @p g.
  */
 double independentEvaluationInternal(
   gate_t g, std::set<gate_t> &seen,
-  std::unordered_map<gate_t, double> &memo,
-  std::unordered_map<gate_t, double> *island) const;
+  std::unordered_map<gate_t, double> &memo) const;
+/**
+ * @brief Iteratively evaluate a certified d-DNNF island.
+ *
+ * Walks the maximal region of certified AND/OR gates (plus the NOT and
+ * input gates they reach) under @p root with an explicit post-order
+ * stack -- certified circuits can be as deep as the data (e.g. the
+ * decomposition-aligned reachability circuits of path-like graphs), so
+ * recursion would overflow the stack.  Within the island every gate is
+ * computed once (sharing is licensed by the certificate): certified OR
+ * = sum (determinism), certified AND = product (decomposability), and
+ * each variable registers once in @p seen, so entanglement with the
+ * outside -- or with another island -- throws like a read-once
+ * violation.  An uncertified AND/OR inside the island falls back to
+ * @c independentEvaluationInternal() (standard read-once rules).
+ *
+ * @param root  Certified gate the island is rooted at.
+ * @param seen  Global variable registration shared with the uncertified
+ *              region.
+ * @param memo  Constant-only global memo (used by the uncertified
+ *              fallback).
+ * @return      Probability at @p root.
+ */
+double evaluateCertifiedIsland(
+  gate_t root, std::set<gate_t> &seen,
+  std::unordered_map<gate_t, double> &memo) const;
 
 public:
 /**

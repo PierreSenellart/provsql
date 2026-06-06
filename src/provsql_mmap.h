@@ -79,6 +79,34 @@ void provsql_mmap_main_loop(void);
  */
 void provsql_mmap_dispatch(char c, Oid db_oid);
 
+/**
+ * @brief Create a gate from in-extension C/C++ code (cache + worker IPC).
+ *
+ * Internal entry point behind the SQL-callable @c create_gate(), without
+ * Datum marshalling or gate-type-OID lookups; idempotent on
+ * already-mapped tokens.
+ *
+ * @param token          UUID of the gate.
+ * @param type           Gate type.
+ * @param nb_children    Number of children.
+ * @param children_data  Child UUIDs (may be NULL when @p nb_children is 0).
+ */
+void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
+                                  unsigned nb_children,
+                                  const pg_uuid_t *children_data);
+
+/**
+ * @brief Set a gate's info fields from in-extension C/C++ code.
+ *
+ * Internal entry point behind the SQL-callable @c set_infos().
+ *
+ * @param token  UUID of the gate.
+ * @param info1  First (gate-type-specific) info value.
+ * @param info2  Second info value.
+ */
+void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
+                                unsigned info2);
+
 #ifdef PROVSQL_INPROCESS_STORE
 
 /**

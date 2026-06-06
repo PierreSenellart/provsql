@@ -203,6 +203,104 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
   PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
 }
 
+/** @brief Internal entry point behind create_gate(): cache + worker IPC.
+ *
+ * Factored out of the SQL-callable wrapper so in-extension C/C++ code
+ * (e.g. the decomposition-aligned reachability materialiser) can create
+ * gates without Datum marshalling or gate-type-OID lookups.  Same
+ * semantics: write-through to the per-session cache, then the C message
+ * to the background worker; MMappedCircuit::createGate is idempotent on
+ * already-mapped tokens. */
+void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
+                                  unsigned nb_children,
+                                  const pg_uuid_t *children_data)
+{
+  /* Populate the per-session cache, but unconditionally fall through to
+   * the worker IPC: a cache hit only proves "this token has been seen
+   * in this session before" (e.g. by get_gate_type returning the
+   * gate_input lazy default for an unknown token) -- not "the worker
+   * already has a gate for it". Skipping the IPC on a cache hit caused
+   * silently-dropped create_gate calls under concurrent backends.
+   * MMappedCircuit::createGate is idempotent on already-mapped tokens. */
+  circuit_cache_create_gate(*token, type, nb_children, children_data);
+
+  STARTWRITEM();
+  ADDWRITEM("C", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(token, pg_uuid_t);
+  ADDWRITEM(&type, gate_type);
+  ADDWRITEM(&nb_children, unsigned);
+
+#ifdef PROVSQL_INPROCESS_STORE
+  /* The in-memory FIFO has no PIPE_BUF atomicity limit: always send the
+     gate and all its children as a single message. */
+  if(1) {
+#else
+  if(PIPE_BUF-bufferpos>nb_children*sizeof(pg_uuid_t)) {
+#endif
+    // Enough space in the buffer for an atomic write, no need of
+    // exclusive locks
+
+    for(unsigned i=0; i<nb_children; ++i)
+      ADDWRITEM(&children_data[i], pg_uuid_t);
+
+    provsql_shmem_lock_shared();
+    if(!SENDWRITEM()) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot write to pipe (message type C)");
+    }
+    provsql_shmem_unlock();
+  }
+#ifndef PROVSQL_INPROCESS_STORE
+  else {
+    // Not enough space in buffer, pipe write won't be atomic, we need to
+    // make several writes and use locks
+    unsigned children_per_batch = PIPE_BUF/sizeof(pg_uuid_t);
+
+    provsql_shmem_lock_exclusive();
+
+    if(!SENDWRITEM()) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot write to pipe (message type C)");
+    }
+
+    for(unsigned j=0; j<1+(nb_children-1)/children_per_batch; ++j) {
+      STARTWRITEM();
+
+      for(unsigned i=j*children_per_batch; i<(j+1)*children_per_batch && i<nb_children; ++i) {
+        ADDWRITEM(&children_data[i], pg_uuid_t);
+      }
+
+      if(!SENDWRITEM()) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot write to pipe (message type C)");
+      }
+    }
+
+    provsql_shmem_unlock();
+  }
+#endif
+}
+
+/** @brief Internal entry point behind set_infos(): worker IPC only. */
+void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
+                                unsigned info2)
+{
+  STARTWRITEM();
+  ADDWRITEM("I", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(token, pg_uuid_t);
+  ADDWRITEM(&info1, unsigned);
+  ADDWRITEM(&info2, unsigned);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type I)");
+  }
+  provsql_shmem_unlock();
+}
+
 PG_FUNCTION_INFO_V1(create_gate);
 /** @brief PostgreSQL-callable wrapper for create_gate(). */
 Datum create_gate(PG_FUNCTION_ARGS)
@@ -242,71 +340,7 @@ Datum create_gate(PG_FUNCTION_ARGS)
   else
     children_data = NULL;
 
-  /* Populate the per-session cache, but unconditionally fall through to
-   * the worker IPC: a cache hit only proves "this token has been seen
-   * in this session before" (e.g. by get_gate_type returning the
-   * gate_input lazy default for an unknown token) -- not "the worker
-   * already has a gate for it". Skipping the IPC on a cache hit caused
-   * silently-dropped create_gate calls under concurrent backends.
-   * MMappedCircuit::createGate is idempotent on already-mapped tokens. */
-  circuit_cache_create_gate(*token, type, nb_children, children_data);
-
-  STARTWRITEM();
-  ADDWRITEM("C", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(token, pg_uuid_t);
-  ADDWRITEM(&type, gate_type);
-  ADDWRITEM(&nb_children, unsigned);
-
-#ifdef PROVSQL_INPROCESS_STORE
-  /* The in-memory FIFO has no PIPE_BUF atomicity limit: always send the
-     gate and all its children as a single message. */
-  if(1) {
-#else
-  if(PIPE_BUF-bufferpos>nb_children*sizeof(pg_uuid_t)) {
-#endif
-    // Enough space in the buffer for an atomic write, no need of
-    // exclusive locks
-
-    for(int i=0; i<nb_children; ++i)
-      ADDWRITEM(&children_data[i], pg_uuid_t);
-
-    provsql_shmem_lock_shared();
-    if(!SENDWRITEM()) {
-      provsql_shmem_unlock();
-      provsql_error("Cannot write to pipe (message type C)");
-    }
-    provsql_shmem_unlock();
-  }
-#ifndef PROVSQL_INPROCESS_STORE
-  else {
-    // Not enough space in buffer, pipe write won't be atomic, we need to
-    // make several writes and use locks
-    unsigned children_per_batch = PIPE_BUF/sizeof(pg_uuid_t);
-
-    provsql_shmem_lock_exclusive();
-
-    if(!SENDWRITEM()) {
-      provsql_shmem_unlock();
-      provsql_error("Cannot write to pipe (message type C)");
-    }
-
-    for(unsigned j=0; j<1+(nb_children-1)/children_per_batch; ++j) {
-      STARTWRITEM();
-
-      for(unsigned i=j*children_per_batch; i<(j+1)*children_per_batch && i<nb_children; ++i) {
-        ADDWRITEM(&children_data[i], pg_uuid_t);
-      }
-
-      if(!SENDWRITEM()) {
-        provsql_shmem_unlock();
-        provsql_error("Cannot write to pipe (message type C)");
-      }
-    }
-
-    provsql_shmem_unlock();
-  }
-#endif
+  provsql_internal_create_gate(token, type, nb_children, children_data);
 
   PG_RETURN_VOID();
 }
@@ -355,19 +389,7 @@ Datum set_infos(PG_FUNCTION_ARGS)
   if(PG_ARGISNULL(2))
     info2=0;
 
-  STARTWRITEM();
-  ADDWRITEM("I", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(token, pg_uuid_t);
-  ADDWRITEM(&info1, unsigned);
-  ADDWRITEM(&info2, unsigned);
-
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe (message type I)");
-  }
-  provsql_shmem_unlock();
+  provsql_internal_set_infos(token, info1, info2);
 
   PG_RETURN_VOID();
 }

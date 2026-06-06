@@ -104,6 +104,19 @@ struct Result {
   Stats stats;   ///< Compilation statistics.
 };
 
+/** @brief One vertex's reachability circuit in an all-targets compilation. */
+struct VertexRoot {
+  unsigned long vertex;   ///< Vertex ID.
+  gate_t root;            ///< Root of "vertex is reachable from the source" in the shared d-DNNF.
+};
+
+/** @brief An all-targets compilation: one shared d-DNNF, one root per reachable vertex. */
+struct AllResult {
+  dDNNF dd;                        ///< Shared circuit (gates are reused across vertices).
+  std::vector<VertexRoot> roots;   ///< One entry per vertex reachable in the all-edges-present world (including the source itself, with a constant-true root).
+  Stats stats;                     ///< Compilation statistics.
+};
+
 /**
  * @brief Default bound on the number of DP states at a single
  *        decomposition node.
@@ -136,7 +149,50 @@ static Result compile(const std::vector<EdgeRow> &rows,
                       bool directed,
                       std::size_t max_states = DEFAULT_MAX_STATES);
 
+/**
+ * @brief Compile the reachability circuits of **every** vertex in one pass.
+ *
+ * Two sweeps over the tree decomposition -- bottom-up per-subtree state
+ * tables, then a top-down "rest of the graph" pass -- yield, for each
+ * vertex read at its elimination bag, the deterministic OR over
+ * compatible (below, above) state pairs whose closure connects the
+ * source to it.  Total circuit size stays linear in the number of edges
+ * for fixed data treewidth: gates are shared across the per-vertex
+ * roots.  This matches the semantics of the recursive-query relation
+ * @c reach: one root per vertex reachable in the all-edges-present
+ * world (vertices certainly unreachable are omitted).
+ *
+ * @param rows        Edge tuples (vertex IDs, provenance token, probability).
+ * @param source      Source vertex @c s.
+ * @param directed    If @c false, every edge contributes both arcs.
+ * @param max_states  Bound on the DP state count per node.
+ * @return            The shared d-DNNF, per-vertex roots, statistics.
+ * @throws TreeDecompositionException / ReachabilityCompilerException as
+ *         for @c compile().
+ */
+static AllResult compileAll(const std::vector<EdgeRow> &rows,
+                            unsigned long source,
+                            bool directed,
+                            std::size_t max_states = DEFAULT_MAX_STATES);
+
 private:
+/**
+ * @brief Shared implementation of @c compile() / @c compileAll().
+ *
+ * @param rows         Edge tuples.
+ * @param source       Source vertex.
+ * @param directed     If @c false, every edge contributes both arcs.
+ * @param max_states   Bound on the DP state count per node.
+ * @param only_target  When set: ensure the vertex exists in the graph
+ *                     (an isolated target is legal) and emit a root for
+ *                     it alone, skipping the other vertices' reads.
+ * @return             The shared d-DNNF, per-vertex roots, statistics.
+ */
+static AllResult compileAllInternal(const std::vector<EdgeRow> &rows,
+                                    unsigned long source,
+                                    bool directed,
+                                    std::size_t max_states,
+                                    const unsigned long *only_target);
 /** @brief Maximum size of a DP domain: a bag (@c MAX_TREEWIDTH+1) plus the two terminals. */
 static constexpr int MAXD = TreeDecomposition::MAX_TREEWIDTH+3;
 

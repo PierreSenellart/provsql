@@ -4363,6 +4363,40 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
   AS 'provsql','reachability_compile_stats'
   LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
+
+/**
+ * @brief Compile and materialise the reachability provenance of every
+ * vertex (columnar form, internal)
+ *
+ * All-targets variant of @c reachability_evaluate(): compiles, along a
+ * tree decomposition of the data graph, one certified provenance
+ * circuit per vertex reachable from @p source in the all-edges-present
+ * world, materialises the (shared, linear-size) circuits in the
+ * provenance store -- @c plus / @c times gates carrying the d-DNNF
+ * certificate, negated edges as @c monus(one, edge) -- and returns one
+ * @c (vertex, token) row per such vertex.  This is the engine behind
+ * the rewriter's recursive-reachability route; the returned tokens are
+ * ordinary provenance tokens usable with the whole evaluation surface.
+ *
+ * @param sources source vertex of each edge (dense integer IDs)
+ * @param destinations destination vertex of each edge
+ * @param tokens provenance token of each edge tuple
+ * @param probabilities probability of each edge tuple
+ * @param source the vertex reachability starts from
+ * @param directed if false, each edge can be traversed both ways
+ */
+CREATE OR REPLACE FUNCTION reachability_materialize(
+  IN sources INT[],
+  IN destinations INT[],
+  IN tokens UUID[],
+  IN probabilities DOUBLE PRECISION[],
+  IN source INT,
+  IN directed BOOLEAN,
+  OUT vertex INT,
+  OUT token UUID)
+  RETURNS SETOF record AS
+  'provsql','reachability_materialize' LANGUAGE C VOLATILE;
+
 /**
  * @brief Gather the edges of a tracked relation in the columnar form
  * expected by reachability_evaluate (internal)

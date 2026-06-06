@@ -50,7 +50,7 @@
  *         already present in the cache (regardless of whether its
  *         contents were upgraded).
  */
-bool circuit_cache_create_gate(pg_uuid_t token, gate_type type, unsigned nb_children, pg_uuid_t *children);
+bool circuit_cache_create_gate(pg_uuid_t token, gate_type type, unsigned nb_children, const pg_uuid_t *children);
 
 /**
  * @brief Retrieve the children of a cached gate.
