@@ -1,0 +1,88 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|prob
+1|1.000000
+2|0.900000
+3|0.860000
+4|0.801800
+(4 rows)
+provsql.last_eval_method
+independent
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|gate|certified
+1|plus|1
+2|plus|1
+3|times|1
+(3 rows)
+interpret_as_dd_works
+t
+(1 row)
+remove_provenance
+
+(1 row)
+src|dst|edge_shapley
+1|2|0.360000
+2|3|0.360000
+(2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|reliability
+1|1.000000
+2|0.900000
+3|0.720000
+4|0.741600
+(4 rows)
+provsql.last_eval_method
+independent
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|prob
+a|1.000000
+b|0.500000
+c|0.250000
+(3 rows)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: reachability route for "reach" fell back to the generic fixpoint (ProvSQL: reachability: data treewidth exceeds the supported limit (10))
+remove_provenance
+
+(1 row)
+k14_reachable
+14
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+filtered_shape
+3
+(1 row)
+remove_provenance
+
+(1 row)
+guc_off
+3
+(1 row)

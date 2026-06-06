@@ -128,11 +128,10 @@ _SQL_FUNC_MAP = {
     'get_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#gad8d28be45c1fa36422538d51c7624ce5',
     'probability_evaluate':     '/doxygen-sql/html/group__probability.html#gabffa40fef0e37a75d39d4c39c4a1ec0f',
     'probability_bounds':       '/doxygen-sql/html/group__probability.html#gad536a120029130da9a1baddf8fc9b137',
-    # Two-terminal network reliability on bounded-treewidth data; the
-    # _stats anchor is the user-facing regclass overload (the columnar
-    # INT[] overload is gaa70b6ed1220dfe47f74565259b69cfb7).
-    'reachability_probability': '/doxygen-sql/html/group__probability.html#ga3d68df8f3f97610c62fbce79184f307d',
-    'reachability_compile_stats': '/doxygen-sql/html/group__probability.html#gae26103d08cd5720c94fe09c957514f01',
+    # Two-terminal network reliability on bounded-treewidth data
+    # (columnar internals; the user-facing route is WITH RECURSIVE under
+    # provsql.boolean_provenance).
+    'reachability_compile_stats': '/doxygen-sql/html/group__probability.html#gaa70b6ed1220dfe47f74565259b69cfb7',
     'reachability_evaluate':    '/doxygen-sql/html/group__probability.html#ga30e5fb592c2a0a72f3d237583341f4f2',
     'provenance_evaluate':      '/doxygen-sql/html/group__semiring__evaluation.html#gac2c8dfcd3eb924ad277d4dd9de05beb9',
     'aggregation_evaluate':     '/doxygen-sql/html/group__semiring__evaluation.html#gaa8a1ecbed9cc64fef68f1d90cd598bcc',
@@ -378,7 +377,7 @@ _C_FUNC_MAP = {
     # CircuitCache
     'CircuitCache':                          '/doxygen-c/html/classCircuitCache.html',
     'CircuitCache::insert':                  '/doxygen-c/html/classCircuitCache.html#a9485b5217b632c047ab95e6aaf70f819',
-    'circuit_cache_create_gate':             '/doxygen-c/html/circuit__cache_8h.html#a6b4f0989a71a5a3c4e9f9fe0c7be9387',
+    'circuit_cache_create_gate':             '/doxygen-c/html/circuit__cache_8h.html#a2210995d5ce3cd7f3d160abc8f8e1acf',
     'circuit_cache_get_type':                '/doxygen-c/html/circuit__cache_8h.html#a02ad2ad53de11ae321b83c29854d5f77',
     'circuit_cache_get_children':            '/doxygen-c/html/circuit__cache_8h.html#a0a088536b890aa34c75b319f4484ee03',
     # probability_evaluate.cpp

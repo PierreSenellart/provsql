@@ -1,57 +1,9 @@
 \set ECHO none
-add_provenance
-
-(1 row)
-diamond_directed
-0.801800
-(1 row)
-remove_provenance
-
-(1 row)
-possible_worlds
-0.801800
-(1 row)
-diamond_undirected
-0.809000
-(1 row)
-diamond_reverse
-0.000000
-(1 row)
-source_equals_target
-1.000000
-(1 row)
-isolated_target
-0.000000
-(1 row)
-data_treewidth|nb_variables|bags_bounded|states_bounded|gates_bounded|probability
-2|5|t|t|t|0.801800
-(1 row)
-add_provenance
-
-(1 row)
-cyclic_directed
-0.741600
-(1 row)
-add_provenance
-
-(1 row)
 series_20|expected
 0.121577|0.121577
 (1 row)
-add_provenance
-
-(1 row)
-certain_chain
-1.000000
-(1 row)
-add_provenance
-
-(1 row)
 parallel_3
 0.875000
-(1 row)
-add_provenance
-
 (1 row)
 triangle_undirected
 0.625000
@@ -59,22 +11,18 @@ triangle_undirected
 triangle_reverse_pairs
 0.625000
 (1 row)
-add_provenance
-
+cyclic_directed
+0.741600
+(1 row)
+source_equals_target
+1.000000
+(1 row)
+no_edges
+0.000000
 (1 row)
 data_treewidth|nb_variables|gates_linear|states_bounded|probability
 2|88|t|t|0.445459
 (1 row)
-add_provenance
-
-(1 row)
-ERROR:  reachability: the provenance of provsql_test.btw_view must consist of base input tokens (independent tuples); views or query results are not supported
-add_provenance
-
-(1 row)
 ERROR:  ProvSQL: reachability: data treewidth exceeds the supported limit (10)
 ERROR:  ProvSQL: reachability: provenance token 11111111-1111-1111-1111-111111111111 is shared by edges with different endpoints
-add_provenance
-
-(1 row)
-ERROR:  reachability_probability: source and target must not be NULL
+ERROR:  ProvSQL: reachability: edge arrays must have the same length

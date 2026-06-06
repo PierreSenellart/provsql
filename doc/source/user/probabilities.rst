@@ -412,70 +412,80 @@ Network Reliability on Bounded-Treewidth Graphs
 
 All the methods above evaluate the provenance circuit that ProvSQL
 builds along the relational query plan.  For one important query
-family, ProvSQL can instead build the circuit **along a tree
-decomposition of the data itself**, following the provenance
-refinement of Courcelle's theorem
-:cite:`DBLP:conf/icalp/AmarilliBS15`: *two-terminal network
-reliability*, the probability that a target vertex is reachable from a
-source vertex in a probabilistic graph.  This problem is #P-hard in
-general and not even expressible in non-recursive SQL, but it becomes
-solvable in time *linear in the number of edges* when the graph has
-bounded treewidth – a property of many real networks (series-parallel
-and outerplanar networks, transit and utility networks, workflow
-graphs…).
+family, ProvSQL instead builds the circuit **along a tree decomposition
+of the data itself**, following the provenance refinement of
+Courcelle's theorem :cite:`DBLP:conf/icalp/AmarilliBS15`:
+*two-terminal network reliability*, the probability that a vertex is
+reachable from a source in a probabilistic graph.  This problem is
+#P-hard in general, but becomes solvable in time *linear in the number
+of edges* when the graph has bounded treewidth – a property of many
+real networks (series-parallel and outerplanar networks, transit and
+utility networks, workflow graphs…).
 
-Given a provenance-tracked edge relation whose tuples carry
-probabilities, :sqlfunc:`reachability_probability` computes the exact
-reliability:
-
-.. code-block:: postgresql
-
-    CREATE TABLE link(src int, dst int, p double precision);
-    -- ... INSERT the network ...
-    SELECT add_provenance('link');
-    SELECT set_prob(provenance(), p) FROM link;
-
-    -- Probability that node 42 is reachable from node 1, each link
-    -- failing independently:
-    SELECT reachability_probability('link', 'src', 'dst', 1, 42);
-
-    -- Undirected reading of the same relation:
-    SELECT reachability_probability('link', 'src', 'dst', 1, 42, false);
-
-Vertices are compared as text, so any vertex column type works (cast
-string literals explicitly, e.g. ``'a'::text``).  Cyclic graphs are
-handled natively – no ``provsql.boolean_provenance`` fixpoint is
-involved – and the computation is exact.  The construction is a
-dynamic program over a tree decomposition of the graph that directly
-emits a d-DNNF (deterministic and decomposable *by construction*),
-which is then evaluated in linear time; the treewidth cap of the
-``tree-decomposition`` method (see :doc:`knowledge-compilation`)
-applies here to the *data* treewidth instead, which is exactly the
-tractability assumption.  Edge tuples
-must be independent base tuples (a view or query result with derived
-provenance is rejected).
-
-:sqlfunc:`reachability_compile_stats` returns, along with the
-probability, the structural statistics that substantiate the
-guarantee – the data treewidth found, the number of decomposition
-bags, the maximal number of dynamic-programming states, and the size
-of the emitted d-DNNF, linear in the number of edges for fixed
-treewidth:
+The interface is an ordinary recursive reachability query.  Under
+``provsql.boolean_provenance = on`` (the construction computes the
+Boolean function of the lineage, so it lives in the same regime that
+already governs recursion on cyclic data), the query rewriter
+recognises the shape
 
 .. code-block:: postgresql
 
-    SELECT * FROM reachability_compile_stats('link', 'src', 'dst', 1, 42);
+    SET provsql.boolean_provenance = on;
 
-For workloads that already have the graph in columnar form (or
-synthetic edges that are not stored in a table), the lower-level
-:sqlfunc:`reachability_evaluate` takes parallel arrays of sources,
+    WITH RECURSIVE reach(node) AS (
+        SELECT 1                                  -- the source vertex
+      UNION
+        SELECT e.dst FROM link e JOIN reach r ON e.src = r.node
+    )
+    SELECT node, probability_evaluate(provenance())
+    FROM reach WHERE node = 42;
+
+over a provenance-tracked base relation ``link`` whose tuples carry
+probabilities, and compiles – along a tree decomposition of the edge
+graph – one provenance circuit per reachable vertex, in linear total
+size.  Cyclic graphs are handled natively and the computation is
+exact; vertex columns of any type work (values are compared as text).
+
+The emitted circuits are *deterministic and decomposable by
+construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
+persisted **certificate** of that property (readable with
+:sqlfunc:`get_infos`).  Downstream, the certificate is what makes the
+tokens cheap: :sqlfunc:`probability_evaluate`'s cost-based chooser
+settles on the linear exact ``independent`` method (which trusts
+certified gates the way it trusts read-once structure), and the
+d-DNNF artefact surface – ``interpret-as-dd`` compilation,
+:sqlfunc:`ddnnf_stats`, :sqlfunc:`shapley` and :sqlfunc:`banzhaf` –
+works on them without external compilers.  Shapley values of the edge
+tuples give a principled *edge criticality* analysis of the network:
+
+.. code-block:: postgresql
+
+    SELECT src, dst, shapley(reach_token, provenance()) AS criticality
+    FROM link;
+
+When the route cannot apply – the data treewidth exceeds the supported
+limit (the same cap as the ``tree-decomposition`` method, here applied
+to the *data* treewidth, which is exactly the tractability
+assumption), the edge tuples are not independent base tuples, or the
+CTE deviates from the recognised shape – the query silently falls back
+to the generic recursive-fixpoint evaluation, preserving its behaviour
+exactly; set ``provsql.verbose_level`` to at least 10 to get a notice
+when the fallback fires, or 20 to confirm the compiled route.
+
+For workloads that already have the graph in columnar form, the
+internal entry points :sqlfunc:`reachability_evaluate` (the
+probability of one target) and :sqlfunc:`reachability_compile_stats`
+(the probability plus the structural statistics substantiating the
+linear-size guarantee: data treewidth, decomposition size, maximal
+state count, d-DNNF size) take parallel arrays of sources,
 destinations, provenance tokens and probabilities directly.
 
-On a 2×n ladder network (treewidth 2), this evaluates 300,000
-probabilistic edges exactly in seconds, where evaluating the
-equivalent recursive query's lineage crosses the circuit-treewidth cap
-at a few dozen edges, and the undirected case exceeds minutes already
-at thirty edges.
+On a 2×n ladder network (treewidth 2), the integrated route answers
+exactly over 1,500 probabilistic edges in under 200 ms end to end,
+and the columnar form compiles 300,000 edges in seconds – where
+evaluating the equivalent recursive query's lineage crosses the
+circuit-treewidth cap at a few dozen edges, and the cyclic/undirected
+case exceeds minutes already at thirty edges.
 
 Independent Tuples and Block-Independent Databases
 ----------------------------------------------------

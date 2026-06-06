@@ -106,10 +106,12 @@ INTERNAL_FUNCTIONS = {
     # Doxygen CREATE OPERATOR artefacts (<procedure>_<rightarg> shape).
     'agg_token_op_agg_token', 'agg_token_op_numeric', 'numeric_op_agg_token',
     'agg_token_make', 'agg_value_gate', 'agg_token_value', 'agg_arith_make',
-    # Recursive-CTE fixpoint driver: invoked by the planner hook
+    # Recursive-CTE fixpoint drivers: invoked by the planner hook
     # (lower_recursive_cte) when lowering a WITH RECURSIVE query, never
-    # called directly by users.
-    'eval_recursive',
+    # called directly by users.  eval_reachability is the
+    # decomposition-aligned route (bounded-treewidth data), backed by
+    # reachability_materialize.
+    'eval_recursive', 'eval_reachability', 'reachability_materialize',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',

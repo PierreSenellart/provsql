@@ -3,11 +3,14 @@
 --
 -- New SQL surface since 1.9.0:
 --   * exact two-terminal network reliability on bounded-treewidth data,
---     compiled along a tree decomposition of the data graph:
---     reachability_probability / reachability_compile_stats over a
---     provenance-tracked edge relation, their columnar C-backed forms
---     reachability_evaluate / reachability_compile_stats, and the
---     internal gather_reachability_edges helper.
+--     compiled along a tree decomposition of the data graph.  The
+--     user-facing route is the ordinary WITH RECURSIVE reachability
+--     query under provsql.boolean_provenance, which the query rewriter
+--     lowers through the new eval_reachability driver (with fallback to
+--     eval_recursive); the surface here is that driver, the
+--     reachability_materialize / reachability_evaluate /
+--     reachability_compile_stats columnar internals, and the
+--     gather_reachability_edges helper.
 -- ----------------------------------------------------------------------
 
 SET search_path TO provsql;
@@ -30,9 +33,10 @@ SET search_path TO provsql;
  * Edges are independent events.  Two array positions may share a token
  * only if they are mutual reverses (the natural encoding of an
  * undirected edge in a directed edge relation); they are then treated
- * as a single bidirectional edge.  Most users should prefer the
- * @c reachability_probability() wrapper over a provenance-tracked edge
- * relation.
+ * as a single bidirectional edge.  This is an internal/testing surface:
+ * the user-facing route is a plain @c WITH @c RECURSIVE reachability
+ * query under @c provsql.boolean_provenance, which the query rewriter
+ * compiles through @c eval_reachability() / @c reachability_materialize().
  *
  * @param sources source vertex of each edge (dense integer IDs)
  * @param destinations destination vertex of each edge
@@ -244,9 +248,9 @@ DECLARE
   verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
 BEGIN
   BEGIN
-    e := gather_reachability_edges(edge_rel, source_attribute,
-                                   destination_attribute,
-                                   source_value, source_value);
+    e := provsql.gather_reachability_edges(edge_rel, source_attribute,
+                                           destination_attribute,
+                                           source_value, source_value);
     IF to_regclass(work_name) IS NOT NULL THEN
       EXECUTE format('DROP TABLE %I', work_name);
     END IF;
@@ -269,108 +273,10 @@ BEGIN
     PERFORM provsql.eval_recursive(body_sql, work_name, colnames, coldef);
   END;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public;
+-- No SET search_path here: the fallback re-executes the deparsed CTE body,
+-- whose relation references resolve against the caller's search_path (the
+-- few ProvSQL calls above are schema-qualified instead).
+$$ LANGUAGE plpgsql;
 
 
-/**
- * @brief Exact reachability probability over a provenance-tracked edge
- * relation with bounded-treewidth data
- *
- * Probability that @p target is reachable from @p source through the
- * edges of @p rel (two-terminal network reliability), each edge tuple
- * being an independent event with the probability assigned by
- * @c set_prob().  The computation runs in time linear in the number of
- * edges when the graph has bounded treewidth, by compiling the query
- * along a tree decomposition of the data graph -- including on cyclic
- * graphs, out of reach of the WITH RECURSIVE provenance fixpoint.
- * Fails when the data treewidth exceeds the supported limit.
- *
- * Vertices are compared as text, so any vertex column type works
- * (string literals must be cast explicitly, e.g. 'a'::text, for
- * PostgreSQL's polymorphic-type resolution).  An
- * undirected graph can be given either as a directed relation queried
- * with @p directed = false, or as pairs of mutual-reverse tuples
- * sharing their provenance token.
- *
- * @param rel the provenance-tracked edge relation
- * @param source_attribute name of the source-vertex column
- * @param destination_attribute name of the destination-vertex column
- * @param source the vertex reachability starts from
- * @param target the vertex whose reachability is evaluated
- * @param directed if false, each edge can be traversed both ways
- */
-CREATE OR REPLACE FUNCTION reachability_probability(
-  rel regclass,
-  source_attribute TEXT,
-  destination_attribute TEXT,
-  source ANYELEMENT,
-  target ANYELEMENT,
-  directed BOOLEAN DEFAULT TRUE)
-  RETURNS DOUBLE PRECISION AS
-$$
-DECLARE
-  e record;
-BEGIN
-  IF source IS NULL OR target IS NULL THEN
-    RAISE EXCEPTION 'reachability_probability: source and target must not be NULL';
-  END IF;
-  e := gather_reachability_edges(rel, source_attribute,
-                                 destination_attribute,
-                                 source::text, target::text);
-  RETURN reachability_evaluate(e.sources, e.destinations, e.tokens,
-                               e.probabilities, e.source_id, e.target_id,
-                               directed);
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public;
-
-/**
- * @brief Reachability probability plus compilation statistics over a
- * provenance-tracked edge relation
- *
- * Same as @c reachability_probability(), additionally returning the
- * structural statistics of the compilation (data treewidth, number of
- * decomposition bags, maximum dynamic-programming state count, d-DNNF
- * size, number of edge variables); see the columnar
- * @c reachability_compile_stats().
- *
- * @param rel the provenance-tracked edge relation
- * @param source_attribute name of the source-vertex column
- * @param destination_attribute name of the destination-vertex column
- * @param source the vertex reachability starts from
- * @param target the vertex whose reachability is evaluated
- * @param directed if false, each edge can be traversed both ways
- */
-CREATE OR REPLACE FUNCTION reachability_compile_stats(
-  IN rel regclass,
-  IN source_attribute TEXT,
-  IN destination_attribute TEXT,
-  IN source ANYELEMENT,
-  IN target ANYELEMENT,
-  IN directed BOOLEAN DEFAULT TRUE,
-  OUT probability DOUBLE PRECISION,
-  OUT data_treewidth INT,
-  OUT nb_bags BIGINT,
-  OUT max_states BIGINT,
-  OUT nb_gates BIGINT,
-  OUT nb_variables BIGINT)
-AS
-$$
-DECLARE
-  e record;
-BEGIN
-  IF source IS NULL OR target IS NULL THEN
-    RAISE EXCEPTION 'reachability_compile_stats: source and target must not be NULL';
-  END IF;
-  e := gather_reachability_edges(rel, source_attribute,
-                                 destination_attribute,
-                                 source::text, target::text);
-  SELECT s.probability, s.data_treewidth, s.nb_bags, s.max_states,
-         s.nb_gates, s.nb_variables
-    INTO probability, data_treewidth, nb_bags, max_states,
-         nb_gates, nb_variables
-    FROM reachability_compile_stats(e.sources, e.destinations, e.tokens,
-                                    e.probabilities, e.source_id,
-                                    e.target_id, directed) AS s;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public;
 
