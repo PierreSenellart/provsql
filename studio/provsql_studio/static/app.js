@@ -10,6 +10,14 @@
              : document.body.classList.contains('mode-notebook') ? 'notebook'
              : 'where';
 
+  // The nav help icon deep-links into the current mode's section of the
+  // Studio chapter (the static href in index.html points at the chapter
+  // top as the no-JS fallback).
+  const helpBtn = document.getElementById('help-btn');
+  if (helpBtn) {
+    helpBtn.href = 'https://provsql.org/docs/user/studio.html#studio-' + mode + '-mode';
+  }
+
   // Metadata caches (schema panel, eval-strip mapping picker, eval-strip
   // custom-semiring optgroup) lazy-load once and would otherwise stay
   // stale for the lifetime of the page. We mark them dirty after every
