@@ -82,4 +82,54 @@ DROP TABLE absr_d;
 DROP TABLE absr_dag;
 DROP TABLE absr_edge;
 
+-- Absorptive folds: under the 'absorptive' class the load-time
+-- simplification applies the rules sound in every absorptive semiring
+-- (plus-idempotence, plus-with-one, plus-absorbs-times), marking the
+-- rewritten gates; the value is unchanged for absorptive evaluations
+-- and refused for the rest -- including when the fold collapses the
+-- marked gate onto a preloaded input leaf.
+CREATE TABLE absf_a(x int, c float8);
+CREATE TABLE absf_b(x int, c float8);
+INSERT INTO absf_a VALUES (1, 2.0);
+INSERT INTO absf_b VALUES (1, 10.0);
+SELECT add_provenance('absf_a');
+SELECT add_provenance('absf_b');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM absf_a; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM absf_b; END $$;
+SELECT create_provenance_mapping('absf_amap', 'absf_a', 'c');
+SELECT create_provenance_mapping('absf_bmap', 'absf_b', 'c');
+CREATE TABLE absf_map AS TABLE absf_amap UNION ALL TABLE absf_bmap;
+
+-- plus(a, times(a, b)): 2 + 2*10 = 22 under 'semiring' counting...
+SET provsql.provenance = 'semiring';
+CREATE TABLE absf_u AS
+  SELECT x FROM absf_a
+  UNION SELECT absf_a.x FROM absf_a JOIN absf_b ON absf_a.x = absf_b.x;
+CREATE TABLE absf_u_p AS
+  SELECT x, sr_counting(provenance(), 'absf_map') AS cnt
+  FROM absf_u GROUP BY x, provenance();
+SELECT remove_provenance('absf_u_p');
+SELECT * FROM absf_u_p;
+DROP TABLE absf_u_p;
+-- ... while under 'absorptive' the fold absorbs the times into its
+-- dominating sibling: min-plus reads the (identical) min-cost, and
+-- counting refuses the folded gate rather than returning 2.
+SET provsql.provenance = 'absorptive';
+CREATE TABLE absf_u_t AS
+  SELECT x, sr_tropical(provenance(), 'absf_map', nonnegative => true)
+    AS min_cost
+  FROM absf_u GROUP BY x, provenance();
+SELECT remove_provenance('absf_u_t');
+SELECT * FROM absf_u_t;
+DROP TABLE absf_u_t;
+SELECT x, sr_counting(provenance(), 'absf_map') AS must_refuse
+FROM absf_u GROUP BY x, provenance();
+SELECT remove_provenance('absf_u');
+DROP TABLE absf_u;
+DROP TABLE absf_map;
+DROP TABLE absf_amap;
+DROP TABLE absf_bmap;
+DROP TABLE absf_a;
+DROP TABLE absf_b;
+
 RESET provsql.provenance;

@@ -43,3 +43,32 @@ node|root_type|nb_derivations
 2|input|1
 3|plus|2
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+x|cnt
+1|22
+(1 row)
+remove_provenance
+
+(1 row)
+x|min_cost
+1|2
+(1 row)
+ERROR:  ProvSQL: provenance_evaluate_compiled: The requested semiring is not absorptive; this gate's wires were rewritten under an absorptive rule (plus-idempotence, plus-with-one absorber or plus-absorbs-times, applied under the 'absorptive' or 'boolean' provenance class) and the evaluation is unsound under this semiring.  Re-run under the 'semiring' provenance class, or pick an absorptive semiring (probability, boolean, nonnegative tropical, ...).
+CONTEXT:  PL/pgSQL function sr_counting(anyelement,regclass) line 3 at RETURN
+remove_provenance
+
+(1 row)

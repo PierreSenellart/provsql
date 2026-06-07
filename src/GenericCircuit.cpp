@@ -183,13 +183,15 @@ bool GenericCircuit::foldSemiringIdentities()
       auto uit = id2uuid.find(g);
       if (uit != id2uuid.end()) uuid2id[uit->second] = target;
       if (boolean_assumed_gates.count(g)) boolean_assumed_gates.insert(target);
+      if (absorptive_assumed_gates.count(g))
+        absorptive_assumed_gates.insert(target);
     }
   }
 
   return ever;
 }
 
-bool GenericCircuit::applyBooleanRuleSweep()
+bool GenericCircuit::applyFoldRuleSweep(bool boolean_level)
 {
   GenericCircuit &gc = *this;
   bool fired = false;
@@ -199,12 +201,19 @@ bool GenericCircuit::applyBooleanRuleSweep()
     auto t = gc.getGateType(g);
     if (t != gate_plus && t != gate_times) continue;
 
-    bool any_rule_fired = false;
+    /* Which class of rule fired on this gate decides the side-band
+     * marker: the absorptive rules are sound in every absorptive
+     * semiring (1 + a = 1, hence a + a = a and a + ab = a), while
+     * times-idempotence and times-absorbs-plus genuinely need the
+     * Boolean interpretation (both fail in tropical). */
+    bool absorptive_rule_fired = false;
+    bool boolean_rule_fired = false;
 
-    /* Rule B1 : idempotence (Boolean-only, unsound in Counting,
-     * Tropical, Viterbi, ...).  Drop repeated child wires
-     * preserving order of first occurrence. */
-    {
+    /* Rule 1 : idempotence.  a + a = a is absorptive
+     * (a + a*1 = a); a * a = a is Boolean-only (tropical: a + a = 2a).
+     * Drop repeated child wires preserving order of first
+     * occurrence. */
+    if (t == gate_plus || boolean_level) {
       auto &wires = gc.getWires(g);
       std::unordered_set<gate_t> seen;
       std::vector<gate_t> deduped;
@@ -214,11 +223,15 @@ bool GenericCircuit::applyBooleanRuleSweep()
       }
       if (deduped.size() != wires.size()) {
         wires = std::move(deduped);
-        any_rule_fired = true;
+        if (t == gate_plus)
+          absorptive_rule_fired = true;
+        else
+          boolean_rule_fired = true;
       }
     }
 
-    /* Rule B2 : plus-with-one absorber (Boolean-only).  Collapse
+    /* Rule 2 : plus-with-one absorber (the defining absorptive
+     * identity 1 + a = 1).  Collapse
      * @c gate_plus(..., @c gate_one, ...) directly to @c gate_one,
      * preserving @p g's UUID. */
     if (t == gate_plus) {
@@ -231,13 +244,16 @@ bool GenericCircuit::applyBooleanRuleSweep()
         gc.setWires(g, std::vector<gate_t>{});
         infos.erase(g);
         extra.erase(g);
-        any_rule_fired = true;
+        absorptive_rule_fired = true;
       }
     }
 
-    /* Rule B3 : absorption (Boolean-only).
+    /* Rule 3 : absorption.
      *   gate_plus (x, gate_times(x, y, ...), ...)  ->  gate_plus (x, ...)
+     *     -- the defining absorptive identity a + ab = a;
      *   gate_times(x, gate_plus (x, y, ...), ...)  ->  gate_times(x, ...)
+     *     -- the lattice dual, Boolean-only (tropical:
+     *        x + min(x, y) != x in general).
      * The absorbed times / plus child is dominated by its sibling
      * @c x present in the parent's children set.  Implemented as a
      * single pass : build a set view of the parent's children, then
@@ -251,7 +267,7 @@ bool GenericCircuit::applyBooleanRuleSweep()
      * rewritten to @c x by @c foldSemiringIdentities) : the joint
      * fixpoint in @c foldBooleanIdentities re-runs this sweep after
      * each collapse so the exposed literal is seen on the next pass. */
-    if (t == gate_plus || t == gate_times) {
+    if (t == gate_plus || boolean_level) {
       const gate_type opposite = (t == gate_plus) ? gate_times : gate_plus;
       const auto &wires_now = gc.getWires(g);
       if (wires_now.size() >= 2) {
@@ -275,15 +291,20 @@ bool GenericCircuit::applyBooleanRuleSweep()
         }
         if (dropped) {
           gc.setWires(g, std::move(kept));
-          any_rule_fired = true;
+          if (t == gate_plus)
+            absorptive_rule_fired = true;
+          else
+            boolean_rule_fired = true;
         }
       }
     }
 
-    if (any_rule_fired) {
+    if (absorptive_rule_fired)
+      markAbsorptiveAssumed(g);
+    if (boolean_rule_fired)
       markBooleanAssumed(g);
+    if (absorptive_rule_fired || boolean_rule_fired)
       fired = true;
-    }
   }
   return fired;
 }
@@ -309,7 +330,18 @@ void GenericCircuit::foldBooleanIdentities()
    * is O(circuit depth) and each sweep is linear in the circuit size. */
   bool changed = true;
   while (changed) {
-    changed = applyBooleanRuleSweep();
+    changed = applyFoldRuleSweep(true);
+    changed |= foldSemiringIdentities();
+  }
+}
+
+void GenericCircuit::foldAbsorptiveIdentities()
+{
+  /* Same joint fixpoint as foldBooleanIdentities, restricted to the
+   * rules sound in every absorptive semiring; see the header note. */
+  bool changed = true;
+  while (changed) {
+    changed = applyFoldRuleSweep(false);
     changed |= foldSemiringIdentities();
   }
 }

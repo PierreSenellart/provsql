@@ -43,14 +43,22 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
         Circuits may additionally be sound only for *absorptive*
         semirings (those where :math:`1 \oplus a = 1`: probability,
         Boolean, min-plus over nonnegative costs, Viterbi…).
-        Concretely, a recursive query over **cyclic** data stops at the
-        absorptive value fixpoint -- once every minimal,
-        tuple-repetition-free derivation is covered, the longer
-        (cyclic) ones being absorbed -- instead of failing; the
-        resulting tokens carry the ``'absorptive'`` assumption marker,
-        and non-absorptive evaluations (counting, why-provenance --
-        genuinely infinite on cyclic data) refuse them.  After Deutch,
-        Milo, Roy & Tannen (ICDT 2014).
+        Concretely:
+
+        * a recursive query over **cyclic** data stops at the
+          absorptive value fixpoint -- once every minimal,
+          tuple-repetition-free derivation is covered, the longer
+          (cyclic) ones being absorbed -- instead of failing; the
+          resulting tokens carry the ``'absorptive'`` assumption
+          marker, and non-absorptive evaluations (counting,
+          why-provenance -- genuinely infinite on cyclic data) refuse
+          them.  After Deutch, Milo, Roy & Tannen (ICDT 2014).
+        * at circuit-load time, the simplification rules sound in every
+          absorptive semiring apply -- plus-idempotence
+          (:math:`a \oplus a = a`), the plus-with-one absorber
+          (:math:`1 \oplus a = 1`) and plus-absorbs-times
+          (:math:`a \oplus a \otimes b = a`) -- with the rewritten
+          gates marked so that non-absorptive evaluation refuses them.
 
     ``'boolean'``
         Implies ``'absorptive'``, and additionally enables every
@@ -69,11 +77,12 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
           decomposition of the data graph into certified d-DNNFs (see
           :doc:`probabilities`).
 
-        * **Load-time Boolean-only circuit simplification.**  When a
-          circuit is loaded from the mmap store,
-          ``foldBooleanIdentities`` applies rewrites that hold for
-          Boolean functions but not in counting / tropical / Viterbi /
-          …: idempotence, plus-with-one absorption, and absorption.
+        * **Load-time Boolean-only circuit simplification.**  On top
+          of the ``'absorptive'`` rules above, the rewrites that hold
+          for Boolean functions but not in general absorptive
+          semirings: times-idempotence (:math:`a \otimes a = a`,
+          which fails in min-plus) and times-absorbs-plus
+          (:math:`a \otimes (a \oplus b) = a`, the lattice dual).
           Independent of
           :ref:`provsql.simplify_on_load <provsql-simplify-on-load>`.
 

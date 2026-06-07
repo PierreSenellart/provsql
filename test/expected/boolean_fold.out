@@ -11,7 +11,7 @@ shared_root_p_ind
 shared_root_simplified_type|shared_root_boolean_assumed
 plus|true
 (1 row)
-one_root_simplified_type|one_root_boolean_assumed
+one_root_simplified_type|one_root_absorptive_assumed
 one|true
 (1 row)
 one_root_p_ind

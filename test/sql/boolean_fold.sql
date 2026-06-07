@@ -92,10 +92,11 @@ SET provsql.provenance = 'semiring';
 
 -- ----------------------------------------------------------------------
 -- (2) Plus-with-one absorber.  gate_plus(u, gate_one()) collapses to
---     gate_one once boolean_provenance is on ; the gate keeps its
---     UUID, foldSemiringIdentities mutates its type to gate_one, and
---     the boolean_assumed flag is set so non-Boolean-compatible
---     semirings refuse.
+--     gate_one once the provenance class allows it ; the gate keeps
+--     its UUID, foldSemiringIdentities mutates its type to gate_one,
+--     and -- plus-with-one being the defining *absorptive* identity --
+--     the absorptive_assumed flag is set so non-absorptive semirings
+--     refuse.
 -- ----------------------------------------------------------------------
 DO $$
 DECLARE u uuid; root uuid;
@@ -112,7 +113,7 @@ SELECT (simplified_circuit_subgraph(
          ->0->>'gate_type') AS one_root_simplified_type,
        (simplified_circuit_subgraph(
           current_setting('bf.one_root')::uuid, 2)
-         ->0->>'boolean_assumed') AS one_root_boolean_assumed;
+         ->0->>'absorptive_assumed') AS one_root_absorptive_assumed;
 -- After folding the wrapper sits over a gate_one ; probability is 1.
 SELECT round(probability_evaluate(
                 current_setting('bf.one_root')::uuid, 'independent')

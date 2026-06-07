@@ -50,10 +50,11 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
   while(!stack.empty()) {
     const gate_t u = stack.back();
 
-    if(provenance_mapping.find(u) != provenance_mapping.end()) {
-      stack.pop_back();
-      continue;
-    }
+    /* The side-band assumption checks run BEFORE the memoisation
+     * lookup: input leaves are preloaded into @p provenance_mapping
+     * from the mapping table, and a fold collapse can redirect a
+     * marked gate onto such a leaf -- the marker must still refuse
+     * incompatible semirings there. */
 
     /* In-memory Boolean-assumption marker (set by
      * @c foldBooleanIdentities on gates whose wires were rewritten
@@ -66,13 +67,35 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       throw CircuitException(
               "The requested semiring does not admit a homomorphism "
               "from Boolean functions; this gate's wires were rewritten "
-              "under a Boolean-only rule (typically idempotence or "
-              "plus-with-one absorber by foldBooleanIdentities, gated "
-              "on provsql.boolean_provenance = on) and the evaluation "
-              "is unsound under this semiring.  Re-run with "
-              "provsql.boolean_provenance = off, or pick a "
-              "Boolean-compatible semiring (boolean, boolexpr, "
-              "formula, ...).");
+              "under a Boolean-only rule (times-idempotence or "
+              "times-absorbs-plus, applied under the 'boolean' "
+              "provenance class) and the evaluation is unsound under "
+              "this semiring.  Re-run under a more general provenance "
+              "class, or pick a Boolean-compatible semiring (boolean, "
+              "boolexpr, formula, ...).");
+
+    /* In-memory absorptive-assumption marker (set by the absorptive
+     * fold rules: plus-idempotence, plus-with-one absorber,
+     * plus-absorbs-times).  Sound in every absorptive semiring; a
+     * semiring tolerating the stronger Boolean rewrite tolerates this
+     * weaker, Boolean-function-preserving one as well. */
+    if(isAbsorptiveAssumed(u) && !semiring.absorptive()
+       && !semiring.compatibleWithBooleanRewrite())
+      throw CircuitException(
+              "The requested semiring is not absorptive; this gate's "
+              "wires were rewritten under an absorptive rule "
+              "(plus-idempotence, plus-with-one absorber or "
+              "plus-absorbs-times, applied under the 'absorptive' or "
+              "'boolean' provenance class) and the evaluation is "
+              "unsound under this semiring.  Re-run under the "
+              "'semiring' provenance class, or pick an absorptive "
+              "semiring (probability, boolean, nonnegative "
+              "tropical, ...).");
+
+    if(provenance_mapping.find(u) != provenance_mapping.end()) {
+      stack.pop_back();
+      continue;
+    }
 
     const auto t = getGateType(u);
 

@@ -52,7 +52,8 @@ std::map<gate_t, std::pair<unsigned,unsigned> > infos; ///< Per-gate (info1, inf
 std::map<gate_t, std::string> extra;                   ///< Per-gate string extras
 std::set<gate_t> inputs;                               ///< Set of input (leaf) gate IDs
 std::vector<double> prob;                              ///< Per-gate probability values
-std::set<gate_t> boolean_assumed_gates;                ///< Side-band Boolean-assumption marker set by @c foldBooleanIdentities ; an evaluator visiting a gate in this set refuses to proceed under a semiring that does not admit a homomorphism from Boolean functions.  In-memory only ; never persisted to mmap.  Distinct from the @c gate_assumed enum (used by the safe-query rewriter to encode the same restriction at the persistent layer).
+std::set<gate_t> boolean_assumed_gates;                ///< Side-band Boolean-assumption marker set by the Boolean-only fold rules ; an evaluator visiting a gate in this set refuses to proceed under a semiring that does not admit a homomorphism from Boolean functions.  In-memory only ; never persisted to mmap.  Distinct from the @c gate_assumed enum (used by the safe-query rewriter to encode the same restriction at the persistent layer).
+std::set<gate_t> absorptive_assumed_gates;             ///< Side-band absorptive-assumption marker set by the absorptive fold rules (plus-idempotence, plus-with-one absorber, plus-absorbs-times -- sound in every absorptive semiring) ; an evaluator visiting a gate in this set refuses unless the semiring is absorptive or tolerates the (stronger) Boolean rewrite.  In-memory only.
 
 public:
 /**
@@ -316,45 +317,61 @@ void resolveToRv(gate_t g, const std::string &s) {
 bool foldSemiringIdentities();
 
 /**
- * @brief Apply Boolean-only simplification rules to @c gate_plus and
- *        @c gate_times.  Each rule fires by mutating the gate's
- *        wires in place AND adding the gate to
- *        @c boolean_assumed_gates so semiring evaluators that do
- *        not admit a homomorphism from Boolean functions refuse to
- *        proceed.
+ * @brief Apply the Boolean-only AND the absorptive simplification rules
+ *        to @c gate_plus and @c gate_times, to a joint fixpoint with
+ *        @c foldSemiringIdentities.
  *
- * Rules :
- *   - @b Idempotence  : @c gate_plus(a, a, b) → @c gate_plus(a, b),
- *     @c gate_times(a, a, b) → @c gate_times(a, b).  Child dedup by
- *     gate id ; preserves first-occurrence order.
- *   - @b Plus-with-one @b absorber  :
- *     @c gate_plus(..., @c gate_one, ...) → @c gate_one (rewires to
- *     an empty plus then collapses to @c gate_one).
+ * The rule set splits by the semiring class that justifies each rule:
+ *
+ *   - @b Absorptive @b rules (sound in every absorptive semiring,
+ *     i.e. whenever @f$1 \oplus a = 1@f$; gates marked
+ *     absorptive-assumed):
+ *     plus-idempotence @c gate_plus(a, a, b) → @c gate_plus(a, b)
+ *     (@f$a \oplus a = a \oplus a \cdot 1 = a@f$);
+ *     plus-with-one absorber @c gate_plus(…, @c gate_one, …) →
+ *     @c gate_one; plus-absorbs-times
+ *     @c gate_plus(x, gate_times(x, y, …), …) → @c gate_plus(x, …)
+ *     (@f$a \oplus a b = a@f$, the defining identity).
+ *   - @b Boolean-only @b rules (gates marked Boolean-assumed):
+ *     times-idempotence @c gate_times(a, a, b) → @c gate_times(a, b)
+ *     (fails in tropical: @f$a + a = 2a@f$); times-absorbs-plus
+ *     @c gate_times(x, gate_plus(x, y, …), …) → @c gate_times(x, …)
+ *     (the lattice dual, also unsound in tropical).
  *
  * Operates on the in-memory @c GenericCircuit only ; the persistent
  * mmap store is never mutated, and the gate's UUID-to-@c gate_t
  * mapping survives so callers indexing by the original UUID still
- * find it.  Interleaves the Boolean rule sweep
- * (@c applyBooleanRuleSweep) with @c foldSemiringIdentities to a JOINT
- * fixpoint, so an absorption whose dominating literal is only exposed
- * by a single-wire collapse still fires; the result is a circuit on
- * which no Boolean-or-semiring identity rule applies.
+ * find it.  Interleaves the rule sweep (@c applyFoldRuleSweep) with
+ * @c foldSemiringIdentities to a JOINT fixpoint, so an absorption
+ * whose dominating literal is only exposed by a single-wire collapse
+ * still fires; the result is a circuit on which no enabled rule
+ * applies.
  */
 void foldBooleanIdentities();
 
 /**
- * @brief One pass of the Boolean-only rules (idempotence, plus-with-one,
- *        absorption) over every @c gate_plus / @c gate_times.
+ * @brief Absorptive-rules-only variant of @c foldBooleanIdentities():
+ *        the joint fixpoint of the absorptive fold rules with
+ *        @c foldSemiringIdentities, leaving the Boolean-only rules
+ *        (times-idempotence, times-absorbs-plus) unapplied.  Used at
+ *        circuit-load time under the @c 'absorptive' provenance class.
+ */
+void foldAbsorptiveIdentities();
+
+/**
+ * @brief One pass of the fold rules over every @c gate_plus /
+ *        @c gate_times.
  *
- * Helper for @c foldBooleanIdentities' joint-fixpoint loop : applies
- * each rule in place, marking touched gates Boolean-assumed, and reports
- * whether any rule fired so the caller knows whether to iterate.  Not a
- * fixpoint on its own (it does a single sweep) ; the caller re-runs it,
- * interleaved with @c foldSemiringIdentities, until neither changes.
+ * Helper for the joint-fixpoint loops : applies each enabled rule in
+ * place, marking touched gates absorptive- or Boolean-assumed
+ * according to which rule fired, and reports whether any rule fired so
+ * the caller knows whether to iterate.  Not a fixpoint on its own (it
+ * does a single sweep).
  *
+ * @param boolean_level  Also apply the Boolean-only rules.
  * @return @c true if any rule fired during the sweep.
  */
-bool applyBooleanRuleSweep();
+bool applyFoldRuleSweep(bool boolean_level);
 
 /**
  * @brief Mark gate @p g as Boolean-assumed (in-memory side band).
@@ -367,6 +384,21 @@ void markBooleanAssumed(gate_t g) { boolean_assumed_gates.insert(g); }
 /** @brief Report whether @p g carries the Boolean-assumption flag. */
 bool isBooleanAssumed(gate_t g) const {
   return boolean_assumed_gates.count(g) > 0;
+}
+
+/**
+ * @brief Mark gate @p g as absorptive-assumed (in-memory side band).
+ *        Visited by every @c evaluate\<S\> traversal : if @p g is in
+ *        the set, the visit requires @c S::absorptive() or
+ *        @c S::compatibleWithBooleanRewrite() (a semiring tolerating
+ *        the stronger Boolean rewrite tolerates the weaker absorptive
+ *        one) and throws a @c CircuitException otherwise.
+ */
+void markAbsorptiveAssumed(gate_t g) { absorptive_assumed_gates.insert(g); }
+
+/** @brief Report whether @p g carries the absorptive-assumption flag. */
+bool isAbsorptiveAssumed(gate_t g) const {
+  return absorptive_assumed_gates.count(g) > 0;
 }
 
 /**

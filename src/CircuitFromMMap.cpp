@@ -153,15 +153,19 @@ static void applyLoadTimeSimplification(GenericCircuit &gc)
     provsql::runConstantFold(gc);
     gc.foldSemiringIdentities();
   }
-  /* Boolean-only simplification (idempotence, plus-with-one absorber)
-   * is gated on the umbrella 'boolean' provenance class (provsql.provenance GUC) : every
-   * Boolean-only optimisation enables on the same switch.  The wrap
-   * each rule application emits (gate_assumed) is the
-   * load-time signal to the evaluator that non-Boolean-compatible
-   * semirings must refuse.  Independent of simplify_on_load: dropping
-   * the universal passes does not drop the Boolean ones. */
+  /* Class-gated simplification, independent of simplify_on_load
+   * (dropping the universal passes does not drop these).  Under the
+   * 'boolean' provenance class the full rule set applies
+   * (times-idempotence and times-absorbs-plus included); under
+   * 'absorptive', only the rules sound in every absorptive semiring
+   * (plus-idempotence, plus-with-one absorber, plus-absorbs-times).
+   * Each rule application marks the gate in the matching in-memory
+   * side-band set, the load-time signal to the evaluator that
+   * semirings outside the rule's class must refuse. */
   if (provsql_boolean_provenance) {
     gc.foldBooleanIdentities();
+  } else if (provsql_absorptive_provenance) {
+    gc.foldAbsorptiveIdentities();
   }
 }
 

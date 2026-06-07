@@ -143,6 +143,9 @@ emit_node_row(std::ostringstream &out,
   if (gc.isBooleanAssumed(g)) {
     out << ",\"boolean_assumed\":true";
   }
+  if (gc.isAbsorptiveAssumed(g)) {
+    out << ",\"absorptive_assumed\":true";
+  }
   out << ",\"depth\":" << depth;
   out << '}';
 }
