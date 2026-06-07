@@ -55,6 +55,14 @@ void initialize_provenance_mapping(
   bool drop_table
   )
 {
+  /* Collect the rows as text while connected, parse only after
+   * SPI_finish: the converter may allocate pass-by-reference values
+   * (e.g. multirange Datums for the interval-union semirings), and
+   * anything allocated while connected lives in the SPI procedure
+   * memory context, which SPI_finish destroys -- the mapping must
+   * survive into circuit evaluation. */
+  std::vector<std::pair<std::string, std::string> > rows;
+  rows.reserve(SPI_processed);
   for (uint64 i = 0; i < SPI_processed; i++) {
     HeapTuple tuple = SPI_tuptable->vals[i];
     TupleDesc tupdesc = SPI_tuptable->tupdesc;
@@ -62,7 +70,6 @@ void initialize_provenance_mapping(
     if (SPI_gettypeid(tupdesc, 2) != constants.OID_TYPE_UUID) {
       SPI_finish();
       throw CircuitException("Invalid type for provenance mapping attribute");
-      continue;
     }
 
     char *value = SPI_getvalue(tuple, tupdesc, 1);
@@ -74,7 +81,7 @@ void initialize_provenance_mapping(
      * one() during evaluation -- and must not reach pfree, which
      * crashes on NULL. */
     if (value != NULL && uuid != NULL)
-      provenance_mapping[c.getGate(uuid)]=charp_to_value(value);
+      rows.emplace_back(uuid, value);
 
     if (value != NULL)
       pfree(value);
@@ -84,6 +91,9 @@ void initialize_provenance_mapping(
   if(drop_table)
     SPI_exec(drop_temp_table, 0);
   SPI_finish();
+
+  for (const auto &[uuid, value] : rows)
+    provenance_mapping[c.getGate(uuid)] = charp_to_value(value.c_str());
 }
 
 #endif /* PROVENANCE_EVALUATE_COMPILED_HPP */

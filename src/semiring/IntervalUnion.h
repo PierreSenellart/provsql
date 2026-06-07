@@ -62,28 +62,45 @@ namespace semiring {
  * by a multirange type OID.
  *
  * Each gate evaluates to a multirange Datum allocated in the current
- * memory context.  The class caches function OIDs and the zero/one
- * Datum values in its constructor so that operations dispatch cheaply
- * during circuit traversal.
+ * memory context.  The class caches the input-function OIDs in its
+ * constructor and the zero/one Datum values lazily on first use, so
+ * that operations dispatch cheaply during circuit traversal.
  */
 class IntervalUnion : public semiring::Semiring<Datum>
 {
 Oid in_func;
 Oid typioparam;
-Datum cached_zero;
-Datum cached_one;
+/* The zero/one Datums are built lazily, on first use *during
+ * evaluation*: the semiring object itself is constructed while the
+ * SPI connection that fetched the leaf mapping is still open, and a
+ * multirange Datum allocated then would live in the SPI procedure
+ * memory context, destroyed by SPI_finish before evaluation reads
+ * it. */
+mutable Datum cached_zero = 0;
+mutable Datum cached_one = 0;
+mutable bool cached = false;
+
+void ensureCache() const {
+  if (!cached) {
+    cached_zero = OidInputFunctionCall(
+      in_func, const_cast<char *>("{}"), typioparam, -1);
+    cached_one = OidInputFunctionCall(
+      in_func, const_cast<char *>("{(,)}"), typioparam, -1);
+    cached = true;
+  }
+}
 
 public:
 explicit IntervalUnion(Oid multirange_oid) {
   getTypeInputInfo(multirange_oid, &in_func, &typioparam);
-  cached_zero = OidInputFunctionCall(in_func, const_cast<char *>("{}"), typioparam, -1);
-  cached_one = OidInputFunctionCall(in_func, const_cast<char *>("{(,)}"), typioparam, -1);
 }
 
 virtual value_type zero() const override {
+  ensureCache();
   return cached_zero;
 }
 virtual value_type one() const override {
+  ensureCache();
   return cached_one;
 }
 virtual value_type plus(const std::vector<value_type> &v) const override {
