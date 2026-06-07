@@ -253,6 +253,40 @@ trivial-table shortcut tested only `gate == TRUE`, which dropped the
 relation of single-state TRUE tables that certain arcs produce -- the
 identity-relation check now closes it.
 
+#### Table-characterisation registry: consulted
+
+The gathering now reads `get_table_info` before inspecting any row.  A
+relation the registry certifies as TID skips per-row gate introspection
+entirely (tokens are known base inputs, block keys nil); a BID relation
+gets its block keys *from the registered key columns* -- a v5 UUID over
+the key values, computed inside the gathering CTAS while the columns
+are in scope -- with a single `get_gate_type` per row only to separate
+`mulinput` alternatives from independent rows added by plain `INSERT`
+after `repair_key` (the registry keeps the BID kind for those, and the
+mixed case is exact -- tested against possible worlds).  Source
+relations symmetrically: TID skips the input-gate check, BID raises
+immediately (block-correlated source sets are not expressible as
+independent super-source arcs), surfacing as the usual clean fallback
+notice.  Derived, unregistered, or subquery-defined edges keep the
+fully dynamic per-token path (shape validation, conjunctive supports),
+untouched beneath as the safety net; the C compiler's shared-token
+check guards all paths regardless.  A pleasant consequence of the
+lineage classifier: a CTAS that lifts the `provsql` column verbatim
+from a TID source is itself certified TID, so derived snapshot tables
+ride the fast path too.  Measured on the 30k-edge ladder: gathering
+~0.6 s -> ~0.45 s, integrated query ~2.8 s end-to-end.
+
+*Deliberately deferred*: ancestry-based static disjointness
+certification (rejecting or accepting join-defined edge relations by
+`get_ancestors` overlap).  Ancestor overlap is the wrong granularity --
+two derived edge relations over the same base table can still have
+pairwise disjoint supports (the join-key test is per *tuple*, not per
+relation) -- so a static rejection would be strictly more conservative
+than the dynamic check the route already runs, and a static acceptance
+would still need the per-tuple conjunctive-shape walk for the block
+keys and probabilities.  Ancestry stays what it is elsewhere: the safe
+rewriter's concern.
+
 #### Degeneracy pre-probe: implemented, measured, not enabled
 
 `TreeDecomposition::degeneracyLowerBound` now has a `Graph` overload (the
@@ -283,7 +317,8 @@ integrated query: ~5.6 s -> ~5.2 s.  The remaining warm profile is the
 edge gathering (~0.6 s: per-token `get_prob` / `get_gate_type` round
 trips, batchable into an array call if it ever matters), the evaluation's
 circuit load (~1.6 s), and the driver's temp-table work -- none of which a
-decomposition cache would touch.
+decomposition cache would touch.  (The gathering cost has since been
+cut by the registry consultation below.)
 
 #### Non-recursive queries: what the new infrastructure changes
 

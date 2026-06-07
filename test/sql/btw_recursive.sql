@@ -265,6 +265,51 @@ SELECT NOT EXISTS ((TABLE btwr_bid_r EXCEPT TABLE btwr_bid_r2)
 SET provsql.boolean_provenance = on;
 DROP TABLE btwr_bid_r2;
 DROP TABLE btwr_bid_r;
+
+-- The table-characterisation registry steers the gathering:
+-- add_provenance relations are certified TID (per-row gate
+-- introspection skipped), repair_key relations BID (block keys derived
+-- from the registered key columns).
+SELECT (get_table_info('btwr_edge'::regclass::oid)).kind AS edge_kind;
+SELECT (get_table_info('btwr_bid'::regclass::oid)).kind AS bid_kind;
+-- A plain INSERT into a BID relation adds an ordinary independent row
+-- alongside the blocks; the characterisation stays BID and the
+-- gathering classifies row by row.  reach(5) = reach(4) * 0.5 = 0.5.
+INSERT INTO btwr_bid VALUES (4,5);
+SELECT (get_table_info('btwr_bid'::regclass::oid)).kind AS mixed_kind;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM btwr_bid WHERE src = 4; END $$;
+CREATE TABLE btwr_bid_m AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwr_bid e JOIN reach r ON e.src = r.node
+  )
+  SELECT node, provenance() pv FROM reach;
+SELECT remove_provenance('btwr_bid_m');
+-- The certificate on every root proves the compiled route ran.
+SELECT node, round(probability_evaluate(pv)::numeric, 6) AS prob,
+       (get_infos(pv)).info1 AS certified
+FROM btwr_bid_m ORDER BY node;
+DROP TABLE btwr_bid_m;
+-- A BID relation cannot serve as a probabilistic source set (its
+-- tuples are block-correlated): the route rejects it and falls back,
+-- with a notice under verbosity 10.
+SET provsql.verbose_level = 10;
+CREATE TABLE btwr_bsrc(v int);
+INSERT INTO btwr_bsrc VALUES (1),(2);
+SELECT repair_key('btwr_bsrc', '');
+CREATE TABLE btwr_bsrc_r AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT v FROM btwr_bsrc
+    UNION
+      SELECT e.dst FROM btwr_bid e JOIN reach r ON e.src = r.node
+  )
+  SELECT node FROM reach;
+SELECT remove_provenance('btwr_bsrc_r');
+SELECT count(*) AS bid_source_fallback FROM btwr_bsrc_r;
+SET provsql.verbose_level = 0;
+DROP TABLE btwr_bsrc_r;
+DROP TABLE btwr_bsrc;
 DROP TABLE btwr_bid;
 
 -- Join-defined edges: the recursive arm may join a derived edge

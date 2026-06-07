@@ -471,7 +471,9 @@ The base arm may also be a relation, ``SELECT v FROM sources`` – a
 *source set*.  When ``sources`` is itself provenance-tracked, each
 source participates with its tuple's probability (a probabilistic
 source set: "reachable from some present source"); an untracked
-relation gives certain sources.
+relation gives certain sources.  A :sqlfunc:`repair_key` source
+relation is rejected (its tuples are block-correlated, not an
+independent source set) and the query falls back.
 
 Edge relations prepared with :sqlfunc:`repair_key` work too: a block
 of mutually exclusive alternative edges (say, an uncertain road whose

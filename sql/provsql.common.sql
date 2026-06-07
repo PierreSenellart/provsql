@@ -4489,91 +4489,161 @@ CREATE OR REPLACE FUNCTION gather_reachability_edges(
   OUT vertices TEXT[])
 AS
 $$
+DECLARE
+  tkind text;
+  bkey_expr text;
+  sel_probs text;
+  sel_bkeys text;
+  sel_bidx text;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
 BEGIN
+  -- Consult the per-table characterisation registry (TID / BID / OPAQUE,
+  -- maintained by add_provenance / repair_key and the CTAS lineage hook):
+  -- a TID relation is certified all-independent-inputs, a BID relation
+  -- holds input or mulinput rows with the block structure given by the
+  -- registry's key columns.  Derived (OPAQUE), unregistered, or
+  -- subquery-defined edges take the fully dynamic per-token path.
+  IF rel IS NOT NULL AND rel_sql IS NULL THEN
+    tkind := (provsql.get_table_info(rel::oid)).kind;
+  END IF;
+  IF tkind NOT IN ('tid', 'bid') THEN
+    tkind := NULL;
+  END IF;
+  IF tkind = 'bid' THEN
+    SELECT string_agg(quote_ident(a.attname) || '::text', ' || '','' || '
+                      ORDER BY k.ord)
+      INTO bkey_expr
+      FROM unnest((provsql.get_table_info(rel::oid)).block_key)
+             WITH ORDINALITY AS k(attnum, ord)
+      JOIN pg_attribute a ON a.attrelid = rel AND a.attnum = k.attnum;
+    -- An empty registry key means the whole table is one block.
+    bkey_expr := coalesce(bkey_expr, quote_literal(''));
+  END IF;
+  IF tkind IS NOT NULL AND verbosity >= 20 THEN
+    -- The function-level client_min_messages = warning (which silences
+    -- the CTAS / DROP TABLE chatter) would also swallow this notice;
+    -- lift it for the one RAISE.  The function-level SET restores the
+    -- caller's value at exit regardless.
+    PERFORM set_config('client_min_messages', 'notice', true);
+    RAISE NOTICE 'ProvSQL: catalog characterises % as %', rel, upper(tkind);
+    PERFORM set_config('client_min_messages', 'warning', true);
+  END IF;
+
   -- Materialize the edges with their tokens; the planner hook resolves
   -- provenance() over the tracked relation, and remove_provenance strips
   -- the automatic provsql column so the later aggregation is plain SQL.
+  -- For a BID relation the synthetic per-block key (a v5 UUID over the
+  -- registry key columns' values) is computed here, while the columns
+  -- are in scope.
   DROP TABLE IF EXISTS provsql_reachability_edges_tmp;
   EXECUTE format(
     'CREATE TEMP TABLE provsql_reachability_edges_tmp AS '
-    || 'SELECT %1$I::text AS u, %2$I::text AS v, provsql.provenance() AS token '
+    || 'SELECT %1$I::text AS u, %2$I::text AS v, provsql.provenance() AS token%5$s '
     || 'FROM %3$s WHERE %1$I IS NOT NULL AND %2$I IS NOT NULL%4$s',
     source_attribute, destination_attribute,
     CASE WHEN rel_sql IS NULL THEN rel::text
          ELSE '(' || rel_sql || ') AS provsql_edge_subquery' END,
     CASE WHEN edge_quals IS NULL THEN ''
-         ELSE ' AND (' || edge_quals || ')' END);
+         ELSE ' AND (' || edge_quals || ')' END,
+    CASE WHEN tkind = 'bid'
+         THEN ', public.uuid_generate_v5(provsql.uuid_ns_provsql(), '
+              || quote_literal('bidblock' || rel::text || ':')
+              || ' || ' || bkey_expr || ') AS bkey'
+         ELSE ', NULL::uuid AS bkey' END);
   PERFORM provsql.remove_provenance('provsql_reachability_edges_tmp');
 
-  IF EXISTS (SELECT 1 FROM provsql_reachability_edges_tmp
-             WHERE provsql.get_gate_type(token) NOT IN ('input', 'mulinput', 'times',
-                                                'project', 'eq')) THEN
-    DROP TABLE provsql_reachability_edges_tmp;
-    RAISE EXCEPTION 'reachability: the provenance of % must consist of base input, repair_key, or conjunctive join tokens', coalesce(rel::text, 'the edge query');
-  END IF;
-
-  -- Conjunction-shaped (join-defined) tokens: each must be a pure
-  -- conjunction of base tuples, and the supports must be pairwise
-  -- disjoint across all edge tokens (otherwise two edges would be
-  -- correlated, breaking the independence the compilation relies on);
-  -- the compound probability is the product over the support.  The
-  -- support table is created unconditionally (empty without compound
-  -- tokens): the aggregation below references it at plan time.
   DROP TABLE IF EXISTS provsql_reachability_support_tmp;
-  CREATE TEMP TABLE provsql_reachability_support_tmp AS
-    SELECT t.token, l.leaf
-    FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp
-          WHERE provsql.get_gate_type(token) IN ('times', 'project', 'eq')) t,
-         LATERAL unnest(provsql.token_conjunctive_leaves(t.token)) AS l(leaf);
-  IF EXISTS (SELECT 1
-             FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp) t
-             WHERE provsql.get_gate_type(t.token) IN ('times', 'project', 'eq')
-               AND provsql.token_conjunctive_leaves(t.token) IS NULL) THEN
-    DROP TABLE provsql_reachability_support_tmp;
-    DROP TABLE provsql_reachability_edges_tmp;
-    RAISE EXCEPTION 'reachability: a join-defined edge token is not a pure conjunction of base tuples';
-  END IF;
-  IF EXISTS (SELECT 1 FROM (
-               SELECT leaf FROM provsql_reachability_support_tmp
-               UNION ALL
-               SELECT DISTINCT token FROM provsql_reachability_edges_tmp
-               WHERE provsql.get_gate_type(token) = 'input'
-             ) all_leaves
-             GROUP BY leaf HAVING count(*) > 1) THEN
-    DROP TABLE provsql_reachability_support_tmp;
-    DROP TABLE provsql_reachability_edges_tmp;
-    RAISE EXCEPTION 'reachability: join-defined edges share base tuples (their supports overlap), so they are not independent';
+  IF tkind IS NULL THEN
+    -- Dynamic path: validate the token shapes and, for conjunction-shaped
+    -- (join-defined) tokens, the pairwise disjointness of their supports.
+    IF EXISTS (SELECT 1 FROM provsql_reachability_edges_tmp
+               WHERE provsql.get_gate_type(token) NOT IN ('input', 'mulinput', 'times',
+                                                  'project', 'eq')) THEN
+      DROP TABLE provsql_reachability_edges_tmp;
+      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input, repair_key, or conjunctive join tokens', coalesce(rel::text, 'the edge query');
+    END IF;
+    CREATE TEMP TABLE provsql_reachability_support_tmp AS
+      SELECT t.token, l.leaf
+      FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp
+            WHERE provsql.get_gate_type(token) IN ('times', 'project', 'eq')) t,
+           LATERAL unnest(provsql.token_conjunctive_leaves(t.token)) AS l(leaf);
+    IF EXISTS (SELECT 1
+               FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp) t
+               WHERE provsql.get_gate_type(t.token) IN ('times', 'project', 'eq')
+                 AND provsql.token_conjunctive_leaves(t.token) IS NULL) THEN
+      DROP TABLE provsql_reachability_support_tmp;
+      DROP TABLE provsql_reachability_edges_tmp;
+      RAISE EXCEPTION 'reachability: a join-defined edge token is not a pure conjunction of base tuples';
+    END IF;
+    IF EXISTS (SELECT 1 FROM (
+                 SELECT leaf FROM provsql_reachability_support_tmp
+                 UNION ALL
+                 SELECT DISTINCT token FROM provsql_reachability_edges_tmp
+                 WHERE provsql.get_gate_type(token) = 'input'
+               ) all_leaves
+               GROUP BY leaf HAVING count(*) > 1) THEN
+      DROP TABLE provsql_reachability_support_tmp;
+      DROP TABLE provsql_reachability_edges_tmp;
+      RAISE EXCEPTION 'reachability: join-defined edges share base tuples (their supports overlap), so they are not independent';
+    END IF;
   END IF;
 
-  WITH verts AS (
-    SELECT u AS x FROM provsql_reachability_edges_tmp
-    UNION SELECT v FROM provsql_reachability_edges_tmp
-    UNION SELECT unnest(extra_vertices)),
-  ids AS (
-    SELECT x, (row_number() OVER (ORDER BY x))::int AS id FROM verts)
-  SELECT array_agg(iu.id), array_agg(iv.id),
-         array_agg(e.token),
-         array_agg(CASE WHEN provsql.get_gate_type(e.token) IN ('times','project','eq')
-                        THEN (SELECT CASE WHEN bool_or(coalesce(provsql.get_prob(s.leaf),1.0) = 0)
-                                          THEN 0.0
-                                          ELSE exp(sum(ln(coalesce(provsql.get_prob(s.leaf),1.0)))) END
-                              FROM provsql_reachability_support_tmp s
-                              WHERE s.token = e.token)
-                        ELSE coalesce(provsql.get_prob(e.token), 1.0) END),
-         array_agg(CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
-                        THEN (provsql.get_children(e.token))[1]
-                        ELSE '00000000-0000-0000-0000-000000000000'::uuid END),
-         array_agg(CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
-                        THEN (provsql.get_infos(e.token)).info1 ELSE 0 END),
-         (SELECT array_agg(i.id ORDER BY ev.ord)
-            FROM unnest(extra_vertices) WITH ORDINALITY AS ev(x, ord)
-            JOIN ids i ON i.x = ev.x),
-         (SELECT array_agg(x ORDER BY id) FROM ids)
+  -- Per-kind classification expressions for the final aggregation: a TID
+  -- relation needs no per-row gate introspection at all; a BID relation
+  -- one get_gate_type per row (the input/mulinput split), block keys from
+  -- the precomputed column-derived key and indices by numbering within
+  -- the block; the dynamic path reads the gates.
+  IF tkind = 'tid' THEN
+    sel_probs := 'coalesce(provsql.get_prob(e.token), 1.0)';
+    sel_bkeys := $sql$'00000000-0000-0000-0000-000000000000'::uuid$sql$;
+    sel_bidx  := '0';
+  ELSIF tkind = 'bid' THEN
+    sel_probs := 'coalesce(provsql.get_prob(e.token), 1.0)';
+    sel_bkeys := $sql$CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                      THEN e.bkey
+                      ELSE '00000000-0000-0000-0000-000000000000'::uuid END$sql$;
+    sel_bidx  := 'e.bidx';
+  ELSE
+    sel_probs := $sql$CASE WHEN provsql.get_gate_type(e.token) IN ('times','project','eq')
+                      THEN (SELECT CASE WHEN bool_or(coalesce(provsql.get_prob(s.leaf),1.0) = 0)
+                                        THEN 0.0
+                                        ELSE exp(sum(ln(coalesce(provsql.get_prob(s.leaf),1.0)))) END
+                            FROM provsql_reachability_support_tmp s
+                            WHERE s.token = e.token)
+                      ELSE coalesce(provsql.get_prob(e.token), 1.0) END$sql$;
+    sel_bkeys := $sql$CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                      THEN (provsql.get_children(e.token))[1]
+                      ELSE '00000000-0000-0000-0000-000000000000'::uuid END$sql$;
+    sel_bidx  := $sql$CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                      THEN (provsql.get_infos(e.token)).info1 ELSE 0 END$sql$;
+  END IF;
+
+  EXECUTE format(
+    $sql$
+    WITH verts AS (
+      SELECT u AS x FROM provsql_reachability_edges_tmp
+      UNION SELECT v FROM provsql_reachability_edges_tmp
+      UNION SELECT unnest($1)),
+    ids AS (
+      SELECT x, (row_number() OVER (ORDER BY x))::int AS id FROM verts)
+    SELECT array_agg(iu.id), array_agg(iv.id),
+           array_agg(e.token),
+           array_agg(%s),
+           array_agg(%s),
+           array_agg(%s),
+           (SELECT array_agg(i.id ORDER BY ev.ord)
+              FROM unnest($1) WITH ORDINALITY AS ev(x, ord)
+              JOIN ids i ON i.x = ev.x),
+           (SELECT array_agg(x ORDER BY id) FROM ids)
+      FROM (SELECT t.*,
+                   (row_number() OVER (PARTITION BY t.bkey))::int AS bidx
+            FROM provsql_reachability_edges_tmp t) e
+      JOIN ids iu ON iu.x = e.u
+      JOIN ids iv ON iv.x = e.v
+    $sql$, sel_probs, sel_bkeys, sel_bidx)
     INTO sources, destinations, tokens, probabilities, block_keys,
          block_indices, extra_ids, vertices
-    FROM provsql_reachability_edges_tmp e
-    JOIN ids iu ON iu.x = e.u
-    JOIN ids iv ON iv.x = e.v;
+    USING extra_vertices;
 
   DROP TABLE provsql_reachability_edges_tmp;
   DROP TABLE IF EXISTS provsql_reachability_support_tmp;
@@ -4607,12 +4677,24 @@ AS
 $$
 DECLARE
   tracked boolean;
+  tkind text;
 BEGIN
   SELECT EXISTS (
     SELECT 1 FROM pg_attribute
     WHERE attrelid = rel AND attname = 'provsql'
       AND atttypid = 'uuid'::regtype AND NOT attisdropped)
   INTO tracked;
+
+  -- Registry consultation: a TID source relation is certified
+  -- all-base-input, so the per-row gate check can be skipped; a BID one
+  -- holds block-correlated tuples, which a probabilistic source set
+  -- cannot model -- reject it before gathering anything.
+  IF tracked THEN
+    tkind := (get_table_info(rel::oid)).kind;
+    IF tkind = 'bid' THEN
+      RAISE EXCEPTION 'reachability: % is block-independent (repair_key); block-correlated source sets are not supported', rel;
+    END IF;
+  END IF;
 
   DROP TABLE IF EXISTS provsql_reachability_sources_tmp;
   IF tracked THEN
@@ -4622,8 +4704,9 @@ BEGIN
       || 'FROM %2$s WHERE %1$I IS NOT NULL',
       source_attribute, rel);
     PERFORM remove_provenance('provsql_reachability_sources_tmp');
-    IF EXISTS (SELECT 1 FROM provsql_reachability_sources_tmp
-               WHERE get_gate_type(token) <> 'input') THEN
+    IF tkind IS DISTINCT FROM 'tid'
+       AND EXISTS (SELECT 1 FROM provsql_reachability_sources_tmp
+                   WHERE get_gate_type(token) <> 'input') THEN
       DROP TABLE provsql_reachability_sources_tmp;
       RAISE EXCEPTION 'reachability: the provenance of % must consist of base input tokens (independent tuples); views or query results are not supported', rel;
     END IF;
