@@ -205,6 +205,12 @@ in the circuit.  Single-source shortest distances over thousands of
 probabilistic edges, hop-bounded variants (the min cost of reaching a
 vertex within :math:`k` hops) and per-region minima (through a
 ``GROUP BY`` over a joined member relation) all stay on this route.
+The same holds for every absorptive semiring on this page:
+:sqlfunc:`sr_viterbi` gives the most reliable path,
+:sqlfunc:`sr_maxmin` the widest path, :sqlfunc:`sr_lukasiewicz` the
+best fuzzy path, and :sqlfunc:`sr_temporal` the exact set of instants
+at which a vertex is reachable from edges carrying validity
+multiranges (see :doc:`temporal`).
 
 Viterbi Semiring (m-semiring)
 ------------------------------

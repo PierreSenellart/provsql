@@ -66,3 +66,22 @@ CONTEXT:  PL/pgSQL function sr_counting(anyelement,regclass) line 3 at RETURN
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|most_reliable|widest|fuzzy|valid
+4|0.720000|medium|0.700000|{["2020-02-01 00:00:00+00","2020-03-01 00:00:00+00"),["2020-05-01 00:00:00+00","2020-10-01 00:00:00+00")}
+5|0.720000|medium|0.700000|{["2020-02-01 00:00:00+00","2020-03-01 00:00:00+00"),["2020-05-01 00:00:00+00","2020-10-01 00:00:00+00")}
+(2 rows)

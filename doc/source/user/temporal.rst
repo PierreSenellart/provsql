@@ -78,6 +78,26 @@ type. ProvSQL Studio surfaces them as a single
 the kernel selected automatically from the chosen mapping's value
 type; see :doc:`studio`.
 
+The interval-union semiring is absorptive, so it also evaluates
+recursive queries under the ``'absorptive'`` provenance class (see
+:ref:`provsql-provenance-class`) – including *temporal reachability*:
+over a graph whose edges carry validity multiranges, an ordinary
+recursive reachability query (compiled along a tree decomposition of
+the data on bounded-treewidth graphs, cyclic data included; see
+:doc:`probabilities`) evaluates with :sqlfunc:`sr_temporal` to
+exactly the set of instants at which each vertex is reachable:
+
+.. code-block:: postgresql
+
+    SET provsql.provenance = 'absorptive';
+    WITH RECURSIVE reach(node) AS (
+        SELECT 1
+      UNION
+        SELECT e.dst FROM link e JOIN reach r ON e.src = r.node
+    )
+    SELECT node, sr_temporal(provenance(), 'validity_mapping')
+    FROM reach;
+
 Temporal Query Functions
 -------------------------
 

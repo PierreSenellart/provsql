@@ -136,5 +136,53 @@ DROP TABLE btwt_g;
 DROP TABLE btwt_regions;
 DROP TABLE btwt_dia;
 
+-- Every absorptive semiring reads the same routed circuits exactly,
+-- not just min-plus: most-reliable path (Viterbi), widest path
+-- (max-min over an enum), fuzzy best path (Lukasiewicz), and temporal
+-- reachability (interval union, whose monus is a genuine set
+-- difference).  Diamond 1->{2,3}->4->5 plus a never-valid cycle edge
+-- 5->1; edge 4->5 is fully reliable / top capacity / always valid, so
+-- its negation hits each semiring's NOT-kill corner (the killed
+-- worlds are dominated by their supersets).
+SET TIME ZONE 'UTC';
+SET datestyle = 'iso';
+CREATE TYPE btwt_cap AS ENUM ('low','medium','high');
+CREATE TABLE btwt_net(src int, dst int, rel float8, cap btwt_cap,
+                      valid tstzmultirange);
+INSERT INTO btwt_net VALUES
+  (1,2, 0.9,  'high',   '{[2020-01-01,2020-10-01)}'),
+  (2,4, 0.8,  'medium', '{[2020-05-01,2021-08-01)}'),
+  (1,3, 0.5,  'low',    '{[2020-01-01,2020-03-01)}'),
+  (3,4, 0.99, 'high',   '{[2020-02-01,2020-08-01)}'),
+  (4,5, 1.0,  'high',   '{(,)}'),
+  (5,1, 0.5,  'low',    '{}');
+SELECT add_provenance('btwt_net');
+DO $$ BEGIN PERFORM set_prob(provenance(), rel) FROM btwt_net; END $$;
+SELECT create_provenance_mapping('btwt_rel', 'btwt_net', 'rel');
+SELECT create_provenance_mapping('btwt_cap_map', 'btwt_net', 'cap');
+SELECT create_provenance_mapping('btwt_valid', 'btwt_net', 'valid');
+CREATE TABLE btwt_n AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwt_net e JOIN reach r ON e.src = r.node
+  )
+  SELECT node, provenance() pv FROM reach;
+SELECT remove_provenance('btwt_n');
+-- To 4: most reliable = max(.9*.8, .5*.99) = .72; widest =
+-- max(min(high,medium), min(low,high)) = medium; fuzzy =
+-- max(.9+.8-1, .5+.99-1) = .7; valid = [05-01,10-01) U [02-01,03-01).
+-- To 5: the fully-reliable / top / always-valid edge is neutral.
+SELECT node,
+       round(sr_viterbi(pv, 'btwt_rel')::numeric, 6) AS most_reliable,
+       sr_maxmin(pv, 'btwt_cap_map', 'low'::btwt_cap) AS widest,
+       round(sr_lukasiewicz(pv, 'btwt_rel')::numeric, 6) AS fuzzy,
+       sr_temporal(pv, 'btwt_valid') AS valid
+FROM btwt_n WHERE node IN (4, 5) ORDER BY node;
+DROP TABLE btwt_n;
+DROP TABLE btwt_net;
+DROP TABLE btwt_cap_map;
+DROP TYPE btwt_cap;
+
 SET provsql.provenance = 'semiring';
 RESET provsql.provenance;

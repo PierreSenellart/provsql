@@ -584,12 +584,18 @@ circuit:
 The bounded-hop variant prices walks under a hop budget (a
 constrained shortest path that plain Dijkstra does not answer
 directly), and the cross-vertex aggregation gives per-region minima.
-To keep the unsound evaluations out, the materialised tokens carry
-the ``'absorptive'`` assumption marker (:sqlfunc:`get_gate_type`
-reports the root as ``assumed``): counting and why-provenance –
-genuinely infinite on cyclic recursion – refuse loudly instead of
-returning a silently wrong value, while probability and the
-absorptive semirings (see :doc:`semirings`) pass through.
+The other absorptive semirings read the same tokens: the
+most-reliable path (:sqlfunc:`sr_viterbi`), the widest path
+(:sqlfunc:`sr_maxmin` over a capacity enum), fuzzy best paths
+(:sqlfunc:`sr_lukasiewicz`), and *temporal reachability* – when each
+edge carries a validity multirange, :sqlfunc:`sr_temporal` returns
+exactly the instants at which the vertex is reachable (see
+:doc:`temporal`).  To keep the unsound evaluations out, the
+materialised tokens carry the ``'absorptive'`` assumption marker
+(:sqlfunc:`get_gate_type` reports the root as ``assumed``): counting
+and why-provenance – genuinely infinite on cyclic recursion – refuse
+loudly instead of returning a silently wrong value, while probability
+and the absorptive semirings (see :doc:`semirings`) pass through.
 
 When the route cannot apply – the data treewidth exceeds the supported
 limit (the same cap as the ``tree-decomposition`` method, here applied

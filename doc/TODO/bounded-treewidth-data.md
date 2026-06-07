@@ -154,7 +154,10 @@ design (June 2026):
    absorption (`1 ⊕ a = 1`) erases the rest, so the value is the image of
    the Sorp provenance; differentially validated for nonnegative min-plus
    (including cost-0 edges, whose negation's native `monus(one, x)` kills
-   only worlds dominated by their free-edge supersets at equal cost).  The
+   only worlds dominated by their free-edge supersets at equal cost) and
+   for Viterbi, Łukasiewicz, max-min and a Boolean set lattice whose monus
+   is a genuine complement (the interval-union case: pointwise-exact, so
+   `sr_temporal` computes temporal reachability).  The
    materialised roots are wrapped in `assume(·, 'absorptive')` (created in
    the C materialisers, the hops canonicals keyed on the wrapped tokens),
    so counting / why-provenance refuse loudly while probability and the
