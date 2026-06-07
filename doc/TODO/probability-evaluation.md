@@ -140,6 +140,24 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
 ## 4. Method-catalog follow-ups
 
+- **Creator-marked deterministic ORs for HAVING enumerations.** The
+  Boolean circuits that `having_Expr_to_provenance_cmp` builds are ORs
+  over "the group's aggregate takes value v" / "exactly this subset
+  present" outcomes -- mutually exclusive by construction (an aggregate
+  has one value per world), with variable-disjoint ANDs inside: actual
+  d-DNNFs, just unmarked.  Stamping `DNNF_CERT_INFO` on them at
+  creation (the same persisted certificate the bounded-treewidth
+  reachability route uses, consumed by `independent` /
+  `interpret-as-dd`) would give the *circuit-route* evaluation of
+  HAVING tokens exact linear coverage wherever the enumeration is
+  small -- complementary to the marginal-vector engine (which works on
+  the `gate_agg` side) and to item 2's samplers (which remain the
+  answer when the enumeration explodes).  Same dual pattern as the
+  reachability certificates: creator-marked here; a cheap *verified*
+  variant also exists for ORs whose children are `mulinput` literals of
+  one key variable with distinct indices (unions of `repair_key`
+  alternatives), checkable in one pass over the children at evaluation
+  time.
 - **Lazy Boolean build.** RV / HAVING circuits with no Boolean view fall to a
   small top-level estimator outside the catalog (the surviving-aggregate sampler
   routing of item 2 is a partial step). A true lazy Boolean build would fold even

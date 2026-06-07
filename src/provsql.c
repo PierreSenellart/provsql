@@ -400,6 +400,10 @@ typedef struct ReachabilityShape {
   char *edge_quals;       /**< Deparsed extra quals over edge columns, or NULL. */
   char *edge_sql;         /**< Deparsed edge subquery (join-defined edges), or NULL. */
   List *edge_rte_colnames; /**< Output column names of the edge subquery. */
+  int hop_bound;          /**< Maximum walk length (hop-counting shape), or -1. */
+  int hop_seed;           /**< Base arm's hop constant (hop-counting shape). */
+  int hops_position;      /**< 1-based CTE position of the hop column, or 0. */
+  int node_position;      /**< 1-based CTE position of the vertex column. */
 } ReachabilityShape;
 
 /** @brief Context for @c reach_varnos_walker(): set of varnos seen. */
@@ -474,6 +478,113 @@ static TargetEntry *reach_single_tle(Query *q) {
   return res;
 }
 
+/** @brief Collect the two non-junk target entries of @p q by resno (1, 2). */
+static bool reach_two_tles(Query *q, TargetEntry *out[2]) {
+  ListCell *lc;
+  out[0] = out[1] = NULL;
+  foreach(lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (te->resno < 1 || te->resno > 2 || out[te->resno - 1] != NULL)
+      return false;
+    out[te->resno - 1] = te;
+  }
+  return out[0] != NULL && out[1] != NULL;
+}
+
+/** @brief Read an integer Const of int2/int4/int8 type into @p value. */
+static bool reach_int_const(Node *n, int64 *value) {
+  Const *c = (Const *) reach_strip(n);
+  if (c == NULL || !IsA(c, Const) || c->constisnull)
+    return false;
+  switch (c->consttype) {
+  case INT2OID:
+    *value = DatumGetInt16(c->constvalue);
+    return true;
+  case INT4OID:
+    *value = DatumGetInt32(c->constvalue);
+    return true;
+  case INT8OID:
+    *value = DatumGetInt64(c->constvalue);
+    return true;
+  default:
+    return false;
+  }
+}
+
+/**
+ * @brief Recognise a hop-counter increment: @c r.hops + 1 over the
+ *        recursive table's column @p resno (the counter must increment
+ *        its own column).
+ */
+static bool reach_is_hop_increment(Node *n, Index cte_rti, AttrNumber resno) {
+  OpExpr *op = (OpExpr *) reach_strip(n);
+  Var *v = NULL;
+  int64 one;
+  char *opname;
+  bool is_plus;
+  if (op == NULL || !IsA(op, OpExpr) || list_length(op->args) != 2)
+    return false;
+  opname = get_opname(op->opno);
+  is_plus = opname != NULL && strcmp(opname, "+") == 0;
+  if (opname)
+    pfree(opname);
+  if (!is_plus)
+    return false;
+  if (reach_int_const((Node *) lsecond(op->args), &one))
+    v = (Var *) reach_strip((Node *) linitial(op->args));
+  else if (reach_int_const((Node *) linitial(op->args), &one))
+    v = (Var *) reach_strip((Node *) lsecond(op->args));
+  else
+    return false;
+  if (one != 1 || v == NULL || !IsA(v, Var))
+    return false;
+  return v->varno == cte_rti && v->varlevelsup == 0 && v->varattno == resno;
+}
+
+/**
+ * @brief Recognise a hop-bound qual -- @c r.hops < B or @c r.hops <= B
+ *        (either orientation) over the recursive table's column
+ *        @p hops_pos -- and return the bound and its strictness.
+ */
+static bool reach_is_hop_bound(Node *n, Index cte_rti, AttrNumber hops_pos,
+                               int64 *bound, bool *strict) {
+  OpExpr *op = (OpExpr *) reach_strip(n);
+  Var *v;
+  char *opname;
+  bool var_first;
+  if (op == NULL || !IsA(op, OpExpr) || list_length(op->args) != 2)
+    return false;
+  v = (Var *) reach_strip((Node *) linitial(op->args));
+  if (v != NULL && IsA(v, Var) &&
+      reach_int_const((Node *) lsecond(op->args), bound))
+    var_first = true;
+  else {
+    v = (Var *) reach_strip((Node *) lsecond(op->args));
+    if (v == NULL || !IsA(v, Var) ||
+        !reach_int_const((Node *) linitial(op->args), bound))
+      return false;
+    var_first = false;
+  }
+  if (v->varno != cte_rti || v->varlevelsup != 0 || v->varattno != hops_pos)
+    return false;
+  opname = get_opname(op->opno);
+  if (opname == NULL)
+    return false;
+  /* var < B / var <= B; B > var / B >= var are the same bounds. */
+  if (strcmp(opname, var_first ? "<" : ">") == 0)
+    *strict = true;
+  else if (strcmp(opname, var_first ? "<=" : ">=") == 0)
+    *strict = false;
+  else {
+    pfree(opname);
+    return false;
+  }
+  pfree(opname);
+  return true;
+}
+
 /**
  * @brief Recognise the linear reachability shape of a recursive CTE.
  *
@@ -490,6 +601,21 @@ static TargetEntry *reach_single_tle(Query *q) {
  * join qual is a mergejoinable equality between an edge column and the
  * CTE's (single) column.  The caller has already checked the UNION
  * (set) shape and the @c provsql.boolean_provenance gate.
+ *
+ * The *hop-counting* variant adds a counter column (in either CTE
+ * position):
+ *
+ *   WITH RECURSIVE reach(v, hops) AS (
+ *       SELECT <constant>, <int constant>
+ *     UNION
+ *       SELECT e.<dst>, r.hops + 1 FROM <edge> e JOIN reach r
+ *       ON e.<src> = r.v WHERE r.hops < <int constant>
+ *   )
+ *
+ * with @c <= accepted too; the bound qual is mandatory (an unbounded
+ * counter never reaches a fixpoint on cyclic data) and the maximum
+ * walk length it implies must not exceed the compiler's cap.  The
+ * multi-source and undirected (CASE/IN) forms compose with it.
  *
  * @param cte        The recursive CTE.
  * @param cteq       Its query (a UNION of two subquery arms).
@@ -514,8 +640,16 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
   AttrNumber prov_attno;
   int i;
   ListCell *lc;
+  bool hops_mode;
+  AttrNumber node_pos = 1, hops_pos = 0;
+  TargetEntry *base_tles[2], *rec_tles[2];
+  int64 hop_seed = 0;
 
-  if (list_length(cte->ctecolnames) != 1)
+  if (list_length(cte->ctecolnames) == 1)
+    hops_mode = false;
+  else if (list_length(cte->ctecolnames) == 2)
+    hops_mode = true;
+  else
     return false;
 
   if (!IsA(so->larg, RangeTblRef) || !IsA(so->rarg, RangeTblRef))
@@ -528,27 +662,59 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
     arms[i] = r->subquery;
   }
 
-  /* Identify the recursive arm: the one with the self-reference. */
-  for (i = 0; i < 2; ++i) {
-    bool has_self = false;
-    foreach(lc, arms[i]->rtable) {
-      RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
-      if (r->rtekind == RTE_CTE && r->self_reference &&
-          strcmp(r->ctename, cte->ctename) == 0)
-        has_self = true;
+  /* Identify the recursive arm: the one with the self-reference (whose
+   * range-table index the hop analysis below needs early). */
+  {
+    Index rec_self_rti = 0;
+    for (i = 0; i < 2; ++i) {
+      bool has_self = false;
+      Index rti = 0, self_rti = 0;
+      foreach(lc, arms[i]->rtable) {
+        RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+        ++rti;
+        if (r->rtekind == RTE_CTE && r->self_reference &&
+            strcmp(r->ctename, cte->ctename) == 0) {
+          has_self = true;
+          self_rti = rti;
+        }
+      }
+      if (has_self) {
+        if (rec != NULL)
+          return false;
+        rec = arms[i];
+        rec_self_rti = self_rti;
+      } else {
+        if (base != NULL)
+          return false;
+        base = arms[i];
+      }
     }
-    if (has_self) {
-      if (rec != NULL)
+    if (base == NULL || rec == NULL)
+      return false;
+
+    if (hops_mode) {
+      /* Identify the counter column: exactly one recursive-arm target
+       * entry of the form r.hops + 1 over its own column; the node
+       * column is the other one.  The base arm seeds the counter with
+       * an integer constant in the matching position. */
+      int n_inc = 0;
+      if (!reach_two_tles(rec, rec_tles) || !reach_two_tles(base, base_tles))
         return false;
-      rec = arms[i];
-    } else {
-      if (base != NULL)
+      for (i = 0; i < 2; ++i)
+        if (reach_is_hop_increment((Node *) rec_tles[i]->expr, rec_self_rti,
+                                   (AttrNumber) (i + 1))) {
+          hops_pos = (AttrNumber) (i + 1);
+          ++n_inc;
+        }
+      if (n_inc != 1)
         return false;
-      base = arms[i];
+      node_pos = (AttrNumber) (3 - hops_pos);
+      if (!reach_int_const((Node *) base_tles[hops_pos - 1]->expr, &hop_seed))
+        return false;
+      if (hop_seed < PG_INT32_MIN/2 || hop_seed > PG_INT32_MAX/2)
+        return false;
     }
   }
-  if (base == NULL || rec == NULL)
-    return false;
 
   /* Base arm: either SELECT <constant> (no FROM), or
    * SELECT <column> FROM <relation> -- a (possibly probabilistic when
@@ -558,7 +724,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
       base->distinctClause != NIL || base->jointree == NULL ||
       base->jointree->quals != NULL)
     return false;
-  tle = reach_single_tle(base);
+  tle = hops_mode ? base_tles[node_pos - 1] : reach_single_tle(base);
   if (tle == NULL)
     return false;
   if (base->jointree->fromlist == NIL) {
@@ -680,6 +846,9 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
     return false;
   {
     List *edge_only = NIL;
+    bool have_bound = false;
+    int64 bound = 0;
+    bool strict = false;
     join_qual = NULL;
     foreach(lc, quals) {
       Node *q = (Node *) lfirst(lc);
@@ -688,10 +857,15 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
       if (vctx.other)
         return false;
       if (bms_is_member(cte_rti, vctx.varnos)) {
-        /* Touches the recursive table: must be THE join qual. */
-        if (join_qual != NULL)
+        /* Touches the recursive table: the hop bound (hop-counting
+         * shape, at most once) or THE join qual. */
+        if (hops_mode && !have_bound &&
+            reach_is_hop_bound(q, cte_rti, hops_pos, &bound, &strict))
+          have_bound = true;
+        else if (join_qual == NULL)
+          join_qual = q;
+        else
           return false;
-        join_qual = q;
       } else if (bms_is_subset(vctx.varnos, bms_make_singleton(edge_rti))) {
         /* Edge columns (or constants) only: a row filter, kept if
          * deterministic. */
@@ -703,6 +877,23 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
     }
     if (join_qual == NULL)
       return false;
+    if (hops_mode) {
+      /* The bound is mandatory: an unbounded counter has no fixpoint on
+       * cyclic data.  hops < B allows B - seed recursive steps,
+       * hops <= B one more; a bound below the seed allows none. */
+      int64 max_len;
+      if (!have_bound)
+        return false;
+      max_len = bound - hop_seed + (strict ? 0 : 1);
+      if (max_len < 0)
+        max_len = 0;
+      if (max_len > 62)   /* ReachabilityCompiler::MAX_HOP_BOUND */
+        return false;
+      out->hop_bound = (int) max_len;
+      out->hop_seed = (int) hop_seed;
+      out->hops_position = hops_pos;
+    }
+    out->node_position = node_pos;
     if (edge_only != NIL && !OidIsValid(out->relid))
       return false;   /* extra filters on a subquery edge: not deparsable here */
     if (edge_only != NIL) {
@@ -718,7 +909,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
   }
 
   /* Target + join qual, directed shape: SELECT e.dst ... ON e.src = r.v. */
-  tle = reach_single_tle(rec);
+  tle = hops_mode ? rec_tles[node_pos - 1] : reach_single_tle(rec);
   if (tle == NULL)
     return false;
   {
@@ -748,7 +939,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
         edge_var = vb, cte_var = va;
       else
         return false;
-      if (cte_var->varattno != 1 || edge_var->varattno <= 0 ||
+      if (cte_var->varattno != node_pos || edge_var->varattno <= 0 ||
           edge_var->varattno == prov_attno)
         return false;
       out->src_attno = edge_var->varattno;
@@ -789,7 +980,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
         wedge = wb, wcte = wa;
       else
         return false;
-      if (wcte->varattno != 1)
+      if (wcte->varattno != node_pos)
         return false;
       res = (Var *) reach_strip((Node *) cw->result);
       def = (Var *) reach_strip((Node *) ce->defresult);
@@ -831,7 +1022,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
               oedge = ob, octe = oa;
             else
               return false;
-            if (octe->varattno != 1 || n >= 2)
+            if (octe->varattno != node_pos || n >= 2)
               return false;
             got[n++] = oedge->varattno;
           }
@@ -846,7 +1037,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
             return false;
           scte = (Var *) reach_strip((Node *) linitial(sao->args));
           if (scte == NULL || !IsA(scte, Var) || scte->varno != cte_rti ||
-              scte->varattno != 1)
+              scte->varattno != node_pos)
             return false;
           arr = (ArrayExpr *) reach_strip((Node *) lsecond(sao->args));
           if (arr == NULL || !IsA(arr, ArrayExpr) ||
@@ -970,13 +1161,14 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
   initStringInfo(&call);
   {
     ReachabilityShape shape = {InvalidOid, 0, 0, NULL, InvalidOid, 0, true,
-                               NULL, NULL, NIL};
+                               NULL, NULL, NIL, -1, 0, 0, 1};
     constants_t constants = get_constants(true);
     if (provsql_boolean_provenance &&
         detect_reachability_cte(cte, cteq, &constants, &shape)) {
       char *src_name;
       char *dst_name;
-      char *coltype = format_type_be(lfirst_oid(list_head(cte->ctecoltypes)));
+      char *coltype = format_type_be(
+        list_nth_oid(cte->ctecoltypes, shape.node_position - 1));
       StringInfoData relarg;
       if (OidIsValid(shape.relid)) {
         src_name = get_attname(shape.relid, shape.src_attno, false);
@@ -1021,6 +1213,11 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
         appendStringInfoString(&call, ", NULL, NULL");
       if (shape.edge_sql != NULL)
         appendStringInfo(&call, ", %s", quote_literal_cstr(shape.edge_sql));
+      if (shape.hop_bound >= 0)
+        appendStringInfo(&call,
+                         ", hop_bound => %d, hop_seed => %d, hops_position => %d",
+                         shape.hop_bound, shape.hop_seed,
+                         shape.hops_position);
       appendStringInfoString(&call, ")");
     } else {
       appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",

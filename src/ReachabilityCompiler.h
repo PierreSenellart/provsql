@@ -42,7 +42,6 @@
 #ifndef REACHABILITY_COMPILER_H
 #define REACHABILITY_COMPILER_H
 
-#include <bitset>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -119,6 +118,32 @@ struct AllResult {
   Stats stats;                     ///< Compilation statistics.
 };
 
+/** @brief One (vertex, walk length) circuit of a bounded-hop compilation. */
+struct VertexHopRoot {
+  unsigned long vertex;   ///< Vertex ID.
+  unsigned hops;          ///< Exact walk length (number of edges).
+  gate_t root;            ///< Root of "some walk of exactly this many edges connects the source to the vertex".
+};
+
+/**
+ * @brief A bounded-hop all-targets compilation.
+ *
+ * One root per (vertex, walk length) pair achievable in the
+ * all-edges-present world -- matching the rows the generic recursive
+ * fixpoint derives for a hop-counting CTE, whose row @c (v,h)
+ * provenance is "some *walk* of exactly @c h edges" (walks, not paths:
+ * a cycle on the way pumps achievable lengths) -- plus, per vertex, the
+ * root of "some walk of at most the bound", which a hop-counting query
+ * deduplicating away the hop column computes as the OR of the
+ * per-length roots.
+ */
+struct AllHopsResult {
+  dDNNF dd;                              ///< Shared circuit.
+  std::vector<VertexHopRoot> roots;      ///< Per (vertex, exact length) roots.
+  std::vector<VertexRoot> within_roots;  ///< Per-vertex "within the bound" roots.
+  Stats stats;                           ///< Compilation statistics.
+};
+
 /**
  * @brief One source of a multi-source compilation.
  *
@@ -145,6 +170,14 @@ struct SourceArc {
  * guard keeps compilation from exhausting memory on adversarial data.
  */
 static constexpr std::size_t DEFAULT_MAX_STATES = 100000;
+
+/**
+ * @brief Maximum supported hop bound for @c compileAllHops().
+ *
+ * Length sets are bitmasks over walk lengths @c 0..bound in a 64-bit
+ * word; the driver falls back to the generic fixpoint above this.
+ */
+static constexpr unsigned MAX_HOP_BOUND = 62;
 
 /**
  * @brief Compile s-t reachability over @p rows into a d-DNNF.
@@ -214,44 +247,50 @@ static AllResult compileAll(const std::vector<EdgeRow> &rows,
                             bool directed,
                             std::size_t max_states = DEFAULT_MAX_STATES);
 
-private:
 /**
- * @brief Shared implementation of @c compile() / @c compileAll().
+ * @brief Bounded-hop variant of @c compileAll(): per-(vertex, exact
+ *        walk length) circuits for every length up to @p hop_bound.
  *
- * @param rows         Edge tuples.
- * @param source       Source vertex.
- * @param directed     If @c false, every edge contributes both arcs.
- * @param max_states   Bound on the DP state count per node.
- * @param only_target  When set: ensure the vertex exists in the graph
- *                     (an isolated target is legal) and emit a root for
- *                     it alone, skipping the other vertices' reads.
- * @return             The shared d-DNNF, per-vertex roots, statistics.
+ * Same DP, richer state: the relation entries are *sets of achievable
+ * walk lengths* (bitmasks capped at @p hop_bound) instead of single
+ * reachability bits, composed in the capped min-plus-set semiring
+ * (Kleene closure with diagonal star).  States still partition the
+ * worlds of the introduced edge variables, so determinism and
+ * decomposability hold by the same argument; the price is the larger
+ * state space, guarded by @p max_states as before.
+ *
+ * @param rows        Edge tuples.
+ * @param source      Source vertex.
+ * @param directed    If @c false, every edge contributes both arcs.
+ * @param hop_bound   Maximum walk length (at most @c MAX_HOP_BOUND).
+ * @param max_states  Bound on the DP state count per node.
+ * @return            The shared d-DNNF, per-(vertex, length) and
+ *                    per-vertex within-bound roots, statistics.
  */
-static AllResult compileAllInternal(const std::vector<EdgeRow> &rows,
+static AllHopsResult compileAllHops(const std::vector<EdgeRow> &rows,
                                     unsigned long source,
                                     bool directed,
-                                    std::size_t max_states,
-                                    const unsigned long *only_target,
-                                    const std::vector<SourceArc> *multi_sources);
-/** @brief Maximum size of a DP domain: a bag (@c MAX_TREEWIDTH+1) plus the two terminals. */
-static constexpr int MAXD = TreeDecomposition::MAX_TREEWIDTH+3;
+                                    unsigned hop_bound,
+                                    std::size_t max_states = DEFAULT_MAX_STATES);
 
 /**
- * @brief A reachability relation over a DP domain, as a bitset.
+ * @brief Multi-source bounded-hop compilation.
  *
- * Bit @c i*MAXD+j is set iff the domain's @c j-th vertex is reachable
- * from its @c i-th vertex within the processed part of the graph.
- * Always reflexive and transitively closed.
+ * The virtual super-source's arcs contribute walk length zero, so the
+ * reported lengths count edges of the underlying graph only.
+ *
+ * @param rows        Edge tuples.
+ * @param sources     Source arcs (at least one).
+ * @param directed    If @c false, every edge contributes both arcs.
+ * @param hop_bound   Maximum walk length (at most @c MAX_HOP_BOUND).
+ * @param max_states  Bound on the DP state count per node.
+ * @return            As the single-source overload.
  */
-using Rel = std::bitset<MAXD*MAXD>;
-
-/**
- * @brief Transitive closure of @p r over the first @p d domain positions.
- * @param r  Relation to close.
- * @param d  Domain size.
- * @return   The closed relation.
- */
-static Rel transitiveClosure(Rel r, int d);
+static AllHopsResult compileAllHops(const std::vector<EdgeRow> &rows,
+                                    const std::vector<SourceArc> &sources,
+                                    bool directed,
+                                    unsigned hop_bound,
+                                    std::size_t max_states = DEFAULT_MAX_STATES);
 };
 
 #endif /* REACHABILITY_COMPILER_H */

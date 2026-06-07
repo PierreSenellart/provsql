@@ -8,12 +8,74 @@
 --     query under provsql.boolean_provenance, which the query rewriter
 --     lowers through the new eval_reachability driver (with fallback to
 --     eval_recursive); the surface here is that driver, the
---     reachability_materialize / reachability_evaluate /
---     reachability_compile_stats columnar internals, and the
---     gather_reachability_edges helper.
+--     reachability_materialize / reachability_materialize_hops /
+--     reachability_evaluate / reachability_compile_stats columnar
+--     internals, and the gather_reachability_edges helper.
+--   * a canonical-address probe in provenance_plus, serving the
+--     pre-created within-bound gates of the bounded-hop route.
 -- ----------------------------------------------------------------------
 
 SET search_path TO provsql;
+
+/**
+ * @brief Create a plus (sum) gate from an array of provenance tokens
+ *
+ * Filters out NULL and zero-gates; returns gate_zero() if all tokens
+ * are trivial, or a single token if only one remains.  Before creating
+ * a gate, probes the *canonical* address of the multiset -- a dedicated
+ * v5 recipe namespace over the sorted tokens (plus is commutative), in
+ * which this function never creates anything, so a gate found there is
+ * always a deliberate pre-creation computing the same sum.  That is the
+ * bounded-hop reachability route's hook: it plants, at the canonical
+ * address of a vertex's per-length tokens, a certified gate over its
+ * native within-bound circuit, keeping the natural hop-discarding query
+ * on the linear evaluation route.  Absent a canonical gate, the
+ * historical order-dependent recipe is used unchanged, so ordinary plus
+ * gates (and their formula rendering) are untouched.
+ */
+CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
+  RETURNS UUID AS
+$$
+DECLARE
+  c INTEGER;
+  plus_token uuid;
+  filtered_tokens uuid[];
+  canonical uuid;
+BEGIN
+  SELECT array_agg(t) FROM unnest(tokens) t
+  WHERE t IS NOT NULL AND t <> gate_zero()
+  INTO filtered_tokens;
+
+  c:=array_length(filtered_tokens, 1);
+
+  IF c = 0 THEN
+    plus_token := gate_zero();
+  ELSIF c = 1 THEN
+    plus_token := filtered_tokens[1];
+  ELSE
+    -- Computed separately from the filtering aggregate above: an ORDER
+    -- BY aggregate there would make the planner feed *both* aggregates
+    -- sorted input, scrambling the stored (aggregation-order) children.
+    SELECT uuid_generate_v5(uuid_ns_provsql(),
+                            concat('plus-canonical', array_agg(t ORDER BY t)))
+    FROM unnest(filtered_tokens) t
+    INTO canonical;
+    IF get_gate_type(canonical) = 'plus' THEN
+      -- A deliberate pre-creation at the canonical address: same
+      -- children, same sum.
+      plus_token := canonical;
+    ELSE
+      plus_token := uuid_generate_v5(
+        uuid_ns_provsql(),
+        concat('plus', filtered_tokens));
+
+      PERFORM create_gate(plus_token, 'plus', filtered_tokens);
+    END IF;
+  END IF;
+
+  RETURN plus_token;
+END
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Exact reachability probability over bounded-treewidth data
@@ -140,6 +202,53 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
   OUT token UUID)
   RETURNS SETOF record AS
   'provsql','reachability_materialize' LANGUAGE C VOLATILE;
+
+
+/**
+ * @brief Bounded-hop variant of @c reachability_materialize() (internal)
+ *
+ * Compiles, along a tree decomposition of the data graph, one certified
+ * provenance circuit per (vertex, walk length) pair achievable within
+ * @p hop_bound edges -- the rows a hop-counting recursive CTE derives,
+ * row @c (v,h) meaning "some *walk* of exactly @c h edges connects a
+ * present source to @c v" -- and returns them as @c (vertex, hops,
+ * token) with @p hop_seed added to the lengths (the CTE base arm's hop
+ * constant).  Also pre-creates, per vertex, the certified gate that a
+ * hop-discarding query's deduplication will address, wired to the
+ * compilation's native within-bound root, so the natural "within k
+ * hops" probability evaluates through the linear certified route.
+ *
+ * @param sources source vertex of each edge (dense integer IDs)
+ * @param destinations destination vertex of each edge
+ * @param tokens provenance token of each edge tuple
+ * @param probabilities probability of each edge tuple
+ * @param block_keys per-edge BID key variable (nil UUID = independent)
+ * @param block_indices per-edge outcome index within its block
+ * @param source_vertices the source vertices
+ * @param source_tokens per-source provenance token (nil UUID = certain)
+ * @param source_probabilities per-source probability
+ * @param directed if false, each edge can be traversed both ways
+ * @param hop_bound maximum walk length
+ * @param hop_seed hop value of the base arm (added to reported lengths)
+ */
+CREATE OR REPLACE FUNCTION reachability_materialize_hops(
+  IN sources INT[],
+  IN destinations INT[],
+  IN tokens UUID[],
+  IN probabilities DOUBLE PRECISION[],
+  IN block_keys UUID[],
+  IN block_indices INT[],
+  IN source_vertices INT[],
+  IN source_tokens UUID[],
+  IN source_probabilities DOUBLE PRECISION[],
+  IN directed BOOLEAN,
+  IN hop_bound INT,
+  IN hop_seed INT,
+  OUT vertex INT,
+  OUT hops INT,
+  OUT token UUID)
+  RETURNS SETOF record AS
+  'provsql','reachability_materialize_hops' LANGUAGE C VOLATILE;
 
 
 /**
@@ -495,6 +604,11 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
  * @param edge_sql deparsed edge subquery when the recursive arm joins a
  *        derived (join-defined) edge relation instead of a base one;
  *        NULL for the regclass form
+ * @param hop_bound maximum number of recursive steps for the
+ *        hop-counting CTE shape (NULL for plain reachability)
+ * @param hop_seed the base arm's hop constant (hop-counting shape)
+ * @param hops_position 1-based position of the hop column among the
+ *        CTE's two columns (hop-counting shape)
  */
 CREATE OR REPLACE FUNCTION eval_reachability(
   edge_rel regclass,
@@ -510,7 +624,10 @@ CREATE OR REPLACE FUNCTION eval_reachability(
   edge_quals text DEFAULT NULL,
   source_rel regclass DEFAULT NULL,
   source_rel_attribute text DEFAULT NULL,
-  edge_sql text DEFAULT NULL)
+  edge_sql text DEFAULT NULL,
+  hop_bound int DEFAULT NULL,
+  hop_seed int DEFAULT NULL,
+  hops_position int DEFAULT NULL)
   RETURNS void AS
 $$
 DECLARE
@@ -547,12 +664,27 @@ BEGIN
       EXECUTE format('DROP TABLE %I', work_name);
     END IF;
     EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
-    EXECUTE format(
-      'INSERT INTO %I SELECT ($1::text[])[m.vertex]::%s, m.token '
-      || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7, $8, $9, $10, $11) m',
-      work_name, coltype)
-      USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
-            e.block_keys, e.block_indices, e.extra_ids, st, sp, directed;
+    IF hop_bound IS NULL THEN
+      EXECUTE format(
+        'INSERT INTO %I SELECT ($1::text[])[m.vertex]::%s, m.token '
+        || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7, $8, $9, $10, $11) m',
+        work_name, coltype)
+        USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
+              e.block_keys, e.block_indices, e.extra_ids, st, sp, directed;
+    ELSE
+      -- Hop-counting shape: one row per (vertex, walk length), the hop
+      -- column in its CTE position.
+      EXECUTE format(
+        'INSERT INTO %I SELECT %s, m.token '
+        || 'FROM provsql.reachability_materialize_hops($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) m',
+        work_name,
+        CASE WHEN hops_position = 1
+             THEN format('m.hops, ($1::text[])[m.vertex]::%s', coltype)
+             ELSE format('($1::text[])[m.vertex]::%s, m.hops', coltype) END)
+        USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
+              e.block_keys, e.block_indices, e.extra_ids, st, sp, directed,
+              hop_bound, hop_seed;
+    END IF;
     IF verbosity >= 20 THEN
       RAISE NOTICE 'ProvSQL: recursive CTE "%" compiled along a tree decomposition of %',
         work_name, coalesce(edge_rel::text, 'the join-defined edge query');

@@ -11,9 +11,9 @@
  * recursion depth would be linear in the data):
  *
  * - **bottom-up**: for every node, the table mapping each reachable
- *   *below state* -- the transitively-closed reachability relation over
- *   the node's domain induced by the edges introduced in its subtree --
- *   to the gate computing "the subtree edges induce exactly this state";
+ *   *below state* -- the state over the node's domain induced by the
+ *   edges introduced in its subtree -- to the gate computing "the
+ *   subtree edges induce exactly this state";
  * - **top-down**: symmetrically, the *above state* tables over the edges
  *   introduced outside the subtree, derived from the parent's above
  *   table joined with the sibling subtrees' below tables (prefix/suffix
@@ -24,15 +24,33 @@
  * (equivalently, the DP runs on the decomposition with the source added
  * to every bag, still a valid decomposition of width at most tw+1).
  * Each vertex is then read at its elimination bag: below and above
- * states partition the worlds by their disjoint edge sets, so "the
- * closure of (below ∪ above) connects the source to the vertex" is a
+ * states partition the worlds by their disjoint edge sets, so the
+ * acceptance test over the combination of the two states is a
  * deterministic OR over decomposable AND pairs -- one linear-size
  * certified d-DNNF whose gates are shared across all the per-vertex
  * roots.
+ *
+ * The DP scaffold is generic over the *state algebra* (the @c Ops
+ * template parameter below).  Two instantiations:
+ *
+ * - @c BoolOps -- plain reachability: the state is the transitively
+ *   closed reachability relation over the domain (a bitset), composed
+ *   by Warshall closure.  This is the historical behaviour.
+ * - @c HopOps -- bounded-hop reachability: each relation entry is the
+ *   *set of achievable walk lengths* up to the hop bound (a bitmask),
+ *   composed in the capped min-plus-set semiring by the algebraic-path
+ *   (Floyd-Warshall-Kleene) algorithm with diagonal star.  Worlds still
+ *   map to exactly one state, so states partition worlds and every
+ *   emitted OR remains deterministic; each edge variable is still
+ *   introduced at one node, so ANDs remain decomposable.
  */
 #include "ReachabilityCompiler.h"
 
 #include <algorithm>
+#include <array>
+#include <bitset>
+#include <cstdint>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -58,6 +76,9 @@ inline std::size_t bag_index(bag_t b)
   return static_cast<std::underlying_type<bag_t>::type>(b);
 }
 
+/** @brief Maximum size of a DP domain: a bag (@c MAX_TREEWIDTH+1) plus the two terminals. */
+constexpr int MAXD = TreeDecomposition::MAX_TREEWIDTH+3;
+
 /** @brief One edge variable: a provenance token gating one or two arcs between two vertices. */
 struct EdgeVariable {
   unsigned long u;      ///< First endpoint.
@@ -65,6 +86,7 @@ struct EdgeVariable {
   bool arc_uv;          ///< Arc u -> v present when the variable is true.
   bool arc_vu;          ///< Arc v -> u present when the variable is true.
   bool certain = false; ///< Always-present arc(s): no gating variable (super-source arcs of untracked / constant sources).
+  unsigned weight = 1;  ///< Walk-length contribution (0 for super-source arcs; only the hop mode reads it).
   std::string token;    ///< Provenance token (UUID; empty when certain).
   double prob;          ///< Tuple probability (unused when certain).
 };
@@ -87,31 +109,230 @@ struct EdgeBlock {
   std::vector<unsigned long> endpoints;     ///< Distinct non-self-loop endpoints (must share a bag).
 };
 
-} // namespace
+// ---------------------------------------------------------------------
+// State algebras.
+// ---------------------------------------------------------------------
 
-ReachabilityCompiler::Rel ReachabilityCompiler::transitiveClosure(Rel r, int d)
-{
-  // Warshall over the first d positions; d <= MAXD, so this is a small
-  // constant amount of work per call.
-  for (int k = 0; k < d; ++k)
+/**
+ * @brief Plain-reachability state algebra.
+ *
+ * The state is a reachability relation over the first @c d domain
+ * positions, as a bitset: bit @c i*MAXD+j set iff position @c j is
+ * reachable from position @c i within the processed part of the graph.
+ * Always reflexive and transitively closed.
+ */
+struct BoolOps {
+  static constexpr bool tracks_lengths = false;
+  using State = std::bitset<MAXD*MAXD>;
+  using Entry = bool;
+  /** @brief Hash functor (delegates to @c std::hash of the bitset). */
+  struct Hash {
+    std::size_t operator()(const State &s) const noexcept {
+      return std::hash<State>()(s);
+    }
+  };
+
+  /** @brief The identity (reflexive, empty) relation over @p d positions. */
+  State identity(int d) const {
+    State r;
     for (int i = 0; i < d; ++i)
-      if (r[i*MAXD + k])
-        for (int j = 0; j < d; ++j)
-          if (r[k*MAXD + j])
-            r.set(i*MAXD + j);
-  return r;
-}
+      r.set(i*MAXD + i);
+    return r;
+  }
+  /** @brief Warshall transitive closure over the first @p d positions, in place. */
+  void close(State &r, int d) const {
+    for (int k = 0; k < d; ++k)
+      for (int i = 0; i < d; ++i)
+        if (r[i*MAXD + k])
+          for (int j = 0; j < d; ++j)
+            if (r[k*MAXD + j])
+              r.set(i*MAXD + j);
+  }
+  /** @brief Entrywise union of @p b into @p a (caller closes afterwards). */
+  void unite(State &a, const State &b) const {
+    a |= b;
+  }
+  /** @brief Record the arc @p pu -> @p pv (weight is a hop-mode concept). */
+  void addArc(State &s, int pu, int pv, unsigned /*weight*/) const {
+    s.set(pu*MAXD + pv);
+  }
+  /** @brief Read entry (@p i, @p j). */
+  Entry get(const State &s, int i, int j) const {
+    return s[i*MAXD + j];
+  }
+  /** @brief Whether an entry carries no information. */
+  static bool emptyEntry(Entry e) {
+    return !e;
+  }
+  /** @brief Merge an entry into (@p i, @p j) (used by domain re-expression). */
+  void merge(State &s, int i, int j, Entry /*e*/) const {
+    s.set(i*MAXD + j);
+  }
+};
 
-ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
-  const std::vector<EdgeRow> &rows,
-  unsigned long source,
-  bool directed,
-  std::size_t max_states,
-  const unsigned long *only_target,
-  const std::vector<SourceArc> *multi_sources)
+/**
+ * @brief Bounded-hop state algebra.
+ *
+ * Each relation entry is the set of achievable walk lengths between two
+ * domain positions within the processed part of the graph, as a bitmask
+ * over lengths @c 0..bound (so the diagonal carries bit 0).  Entries
+ * compose by capped Minkowski sum -- @c mink(a,b) is the set of sums of
+ * a length in @p a and one in @p b, lengths above the bound dropped --
+ * and the closure is the algebraic-path (Kleene) algorithm with the
+ * diagonal star, exact in this finite idempotent semiring.
+ */
+struct HopOps {
+  static constexpr bool tracks_lengths = true;
+  using Entry = std::uint64_t;
+  /** @brief A matrix of length-set bitmasks (unused cells stay zero). */
+  struct State {
+    std::array<Entry, MAXD*MAXD> m;
+    State() : m{} {
+    }
+    bool operator==(const State &o) const {
+      return m == o.m;
+    }
+  };
+  /** @brief FNV-1a over the matrix words. */
+  struct Hash {
+    std::size_t operator()(const State &s) const noexcept {
+      std::uint64_t h = 1469598103934665603ull;
+      for (Entry e : s.m) {
+        h ^= e;
+        h *= 1099511628211ull;
+      }
+      return static_cast<std::size_t>(h);
+    }
+  };
+
+  Entry full;   ///< Mask of representable lengths: bits 0..bound.
+
+  /** @brief Construct for walk lengths up to @p bound (at most 62). */
+  explicit HopOps(unsigned bound)
+    : full(bound >= 63 ? ~Entry(0) : ((Entry(1) << (bound+1)) - 1)) {
+  }
+
+  /** @brief Capped Minkowski sum of two length sets. */
+  Entry mink(Entry a, Entry b) const {
+    Entry r = 0;
+    while (b) {
+      const int s = __builtin_ctzll(b);
+      b &= b - 1;
+      r |= (a << s);
+    }
+    return r & full;
+  }
+  /** @brief Kleene star of a diagonal length set (always contains 0). */
+  Entry star(Entry diag) const {
+    Entry s = 1;
+    for (;;) {
+      const Entry ns = s | mink(s, diag);
+      if (ns == s)
+        return s;
+      s = ns;
+    }
+  }
+
+  /** @brief Identity: length 0 on the diagonal, nothing elsewhere. */
+  State identity(int d) const {
+    State r;
+    for (int i = 0; i < d; ++i)
+      r.m[i*MAXD + i] = 1;
+    return r;
+  }
+  /**
+   * @brief Algebraic-path closure over the first @p d positions, in place.
+   *
+   * Standard Floyd-Warshall-Kleene: for each pivot @c k,
+   * @c r[i][j] |= r[i][k] * star(r[k][k]) * r[k][j], reading the pivot
+   * row and column as snapshots from before the pass.
+   */
+  void close(State &r, int d) const {
+    Entry col[MAXD], row[MAXD];
+    for (int k = 0; k < d; ++k) {
+      const Entry sk = star(r.m[k*MAXD + k]);
+      for (int i = 0; i < d; ++i) {
+        col[i] = r.m[i*MAXD + k];
+        row[i] = mink(sk, r.m[k*MAXD + i]);
+      }
+      for (int i = 0; i < d; ++i) {
+        if (!col[i])
+          continue;
+        for (int j = 0; j < d; ++j)
+          if (row[j])
+            r.m[i*MAXD + j] |= mink(col[i], row[j]);
+      }
+    }
+  }
+  /** @brief Entrywise union of @p b into @p a (caller closes afterwards). */
+  void unite(State &a, const State &b) const {
+    for (std::size_t i = 0; i < a.m.size(); ++i)
+      a.m[i] |= b.m[i];
+  }
+  /** @brief Record an arc of walk length @p weight (a no-op above the bound). */
+  void addArc(State &s, int pu, int pv, unsigned weight) const {
+    const Entry b = (weight < 64) ? (Entry(1) << weight) & full : 0;
+    s.m[pu*MAXD + pv] |= b;
+  }
+  /** @brief Read entry (@p i, @p j). */
+  Entry get(const State &s, int i, int j) const {
+    return s.m[i*MAXD + j];
+  }
+  /** @brief Whether an entry carries no information. */
+  static bool emptyEntry(Entry e) {
+    return e == 0;
+  }
+  /** @brief Merge an entry into (@p i, @p j) (used by domain re-expression). */
+  void merge(State &s, int i, int j, Entry e) const {
+    s.m[i*MAXD + j] |= e;
+  }
+};
+
+// ---------------------------------------------------------------------
+// The generic DP.
+// ---------------------------------------------------------------------
+
+/**
+ * @brief Run the decomposition-aligned DP and report the per-vertex reads.
+ *
+ * Shared scaffold of @c compileAll() / @c compileAllHops(): groups the
+ * rows into edge variables and BID blocks, decomposes the data graph,
+ * makes the bottom-up and top-down sweeps, and at every vertex's
+ * elimination bag calls @p onRead once per accepting (below, above)
+ * state pair with the pair's combined relation entry (source row,
+ * vertex column) and the pair's AND gate.  The pairs partition the
+ * worlds, so any OR the caller builds over a fixed predicate of the
+ * reported entries is deterministic.
+ *
+ * @param rows           Edge tuples.
+ * @param source         Source vertex (ignored in multi-source mode).
+ * @param directed       If @c false, every edge contributes both arcs.
+ * @param max_states     Bound on the DP state count per node.
+ * @param only_target    When set: ensure the vertex exists in the graph
+ *                       (an isolated target is legal) and read it alone.
+ * @param multi_sources  When set: virtual super-source mode.
+ * @param ops            The state algebra.
+ * @param dd             Output circuit (gates are emitted into it).
+ * @param stats          Output statistics.
+ * @param onRead         Read callback: @c (vertex, entry, pair_gate).
+ * @return               The constant-true gate (the empty AND).
+ */
+template<class Ops, class ReadSink>
+gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
+                         unsigned long source,
+                         bool directed,
+                         std::size_t max_states,
+                         const unsigned long *only_target,
+                         const std::vector<ReachabilityCompiler::SourceArc> *multi_sources,
+                         const Ops &ops,
+                         dDNNF &dd,
+                         ReachabilityCompiler::Stats &stats,
+                         ReadSink onRead)
 {
-  AllResult result;
-  dDNNF &dd = result.dd;
+  using State = typename Ops::State;
+  using Table = std::unordered_map<State, gate_t, typename Ops::Hash>;
+  using Accumulator = std::unordered_map<State, std::vector<gate_t>,
+                                         typename Ops::Hash>;
 
   // Multi-source mode: reachability is from a virtual super-source whose
   // arcs to the given sources are ordinary (or certain) directed edge
@@ -136,7 +357,10 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   // of an undirected edge in a directed edge relation and becomes one
   // bidirectional variable; any other sharing would break the
   // independence (and decomposability) assumptions, so it is rejected.
-  // Self-loops never affect reachability and are dropped.
+  // Self-loops never affect plain reachability and are dropped there,
+  // but they *do* pump walk lengths -- the recursive fixpoint derives
+  // (v, h+1) from a self-loop at v -- so the hop mode keeps them as
+  // ordinary weight-1 arcs.
   // ------------------------------------------------------------------
   std::vector<EdgeVariable> variables;
   std::vector<EdgeBlock> blocks;
@@ -164,12 +388,19 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
       BlockAlternative alt;
       alt.u = row.src;
       alt.v = row.dst;
-      alt.arc_uv = (row.src != row.dst);
-      alt.arc_vu = (row.src != row.dst) && !directed;
+      if (row.src != row.dst) {
+        alt.arc_uv = true;
+        alt.arc_vu = !directed;
+      } else {
+        // A self-loop alternative is a pure probability-mass outcome for
+        // plain reachability, but a length-pumping arc in hop mode.
+        alt.arc_uv = Ops::tracks_lengths;
+        alt.arc_vu = false;
+      }
       alt.token = row.token;
       alt.prob = row.prob;
       alt.index = row.block_index;
-      if (row.src != row.dst) {
+      if (alt.arc_uv || alt.arc_vu) {
         for (unsigned long e : {row.src, row.dst})
           if (std::find(blk.endpoints.begin(), blk.endpoints.end(), e) ==
               blk.endpoints.end())
@@ -182,8 +413,8 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
     for (const auto &row : rows) {
       if (!row.block_key.empty())
         continue; // handled above
-      if (row.src == row.dst)
-        continue; // self-loop, irrelevant to reachability
+      if (row.src == row.dst && !Ops::tracks_lengths)
+        continue; // self-loop, irrelevant to plain reachability
       if (block_tokens.find(row.token) != block_tokens.end())
         throw ReachabilityCompilerException(
                 "provenance token " + row.token +
@@ -195,7 +426,7 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
         var.u = row.src;
         var.v = row.dst;
         var.arc_uv = true;
-        var.arc_vu = !directed;
+        var.arc_vu = !directed && row.src != row.dst;
         var.token = row.token;
         var.prob = row.prob;
         token_to_var[row.token] = variables.size();
@@ -219,7 +450,8 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
     // token (one variable per token; a duplicate token must target the
     // same vertex) or always present for certain sources (dedup'd).  A
     // token sharing with an *edge* variable would couple the source to
-    // an edge and break decomposability: rejected.
+    // an edge and break decomposability: rejected.  Source arcs carry
+    // walk length zero: the reported lengths count graph edges only.
     std::unordered_set<std::string> edge_tokens;
     for (const auto &var : variables)
       if (!var.certain)
@@ -236,6 +468,7 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
         var.arc_uv = true;
         var.arc_vu = false;
         var.certain = true;
+        var.weight = 0;
         variables.push_back(var);
       } else {
         if (edge_tokens.find(sa.token) != edge_tokens.end())
@@ -255,6 +488,7 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
         var.v = sa.vertex;
         var.arc_uv = true;
         var.arc_vu = false;
+        var.weight = 0;
         var.token = sa.token;
         var.prob = sa.prob;
         token_to_var[sa.token] = variables.size();
@@ -264,8 +498,8 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   }
   for (const auto &var : variables)
     if (!var.certain)
-      ++result.stats.nb_variables;
-  result.stats.nb_variables += blocks.size();
+      ++stats.nb_variables;
+  stats.nb_variables += blocks.size();
 
   // ------------------------------------------------------------------
   // 2. Tree decomposition of the data graph (vertices: all endpoints
@@ -276,8 +510,12 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   graph.add_node(source);
   if (only_target)
     graph.add_node(*only_target);
-  for (const auto &var : variables)
-    graph.add_edge(var.u, var.v);
+  for (const auto &var : variables) {
+    if (var.u != var.v)
+      graph.add_edge(var.u, var.v);
+    else
+      graph.add_node(var.u);   // hop-mode self-loop: no Gaifman edge
+  }
   for (const auto &blk : blocks) {
     // All endpoints of a block must share a bag (the whole block is
     // introduced at once): force it with a clique.  This is the honest
@@ -300,8 +538,8 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
    * bounded-treewidth TODO for the numbers. */
   std::unordered_map<unsigned long, bag_t> elimination_bag;
   const TreeDecomposition td(std::move(graph), &elimination_bag);
-  result.stats.data_treewidth = td.getTreewidth();
-  result.stats.nb_bags = td.getNbBags();
+  stats.data_treewidth = td.getTreewidth();
+  stats.nb_bags = td.getNbBags();
   const std::size_t nb_bags = td.getNbBags();
 
   // Each variable is introduced at exactly one node: the bag created
@@ -416,13 +654,10 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                    return g;
                  };
 
-  // A DP table maps each reachable state (a closed relation over the
-  // node's domain) to the gate computing "this part's valuation induces
-  // exactly this state"; an accumulator collects the (mutually
-  // exclusive) contributions to each state before they are OR-ed.
-  using Table = std::unordered_map<Rel, gate_t>;
-  using Accumulator = std::unordered_map<Rel, std::vector<gate_t> >;
-
+  // A DP table maps each reachable state over the node's domain to the
+  // gate computing "this part's valuation induces exactly this state";
+  // an accumulator collects the (mutually exclusive) contributions to
+  // each state before they are OR-ed.
   auto finalize = [&](Accumulator &acc) {
                     Table t;
                     t.reserve(acc.size());
@@ -440,8 +675,7 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                       }
                     }
                     acc.clear();
-                    result.stats.max_states =
-                      std::max(result.stats.max_states, t.size());
+                    stats.max_states = std::max(stats.max_states, t.size());
                     if (t.size() > max_states)
                       throw ReachabilityCompilerException(
                               "state space exceeds the per-node bound (" +
@@ -472,28 +706,22 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                         std::lower_bound(domain.begin(), domain.end(), v) -
                         domain.begin());
                     };
-  auto identityOn = [](int d) {
-                      Rel r;
-                      for (int i = 0; i < d; ++i)
-                        r.set(i*MAXD + i);
-                      return r;
-                    };
   auto trivialTable = [&](const std::vector<unsigned long> &domain) {
-                        return Table{{identityOn(static_cast<int>(domain.size())),
+                        return Table{{ops.identity(static_cast<int>(domain.size())),
                                       true_gate}};
                       };
   auto isTrivial = [&](const Table &t, int d) {
                      // A table is a join identity only if it is the single
-                     // always-true *identity-relation* state: a certain arc
-                     // produces single-state TRUE tables whose relation is
+                     // always-true *identity-state* entry: a certain arc
+                     // produces single-state TRUE tables whose state is
                      // not the identity, and dropping those in join() would
                      // lose the arc.
                      return t.size() == 1 && t.begin()->second == true_gate &&
-                            t.begin()->first == identityOn(d);
+                            t.begin()->first == ops.identity(d);
                    };
 
   // Re-express a table over another domain: forget the vertices that
-  // leave (restriction of a closed relation stays closed; any path
+  // leave (restriction of a closed state stays closed; any walk
   // through a forgotten vertex between surviving vertices was already
   // recorded by closure) and introduce the fresh ones with identity
   // only.  States may collapse, hence the accumulator.
@@ -509,16 +737,20 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                   map[i] = (it != to.end() && *it == from[i])
                            ? static_cast<int>(it - to.begin()) : -1;
                 }
-                const Rel id = identityOn(dt);
+                const State id = ops.identity(dt);
                 Accumulator acc;
                 for (const auto &entry : t) {
-                  Rel r = id;
+                  State r = id;
                   for (int i = 0; i < df; ++i) {
                     if (map[i] < 0)
                       continue;
-                    for (int j = 0; j < df; ++j)
-                      if (map[j] >= 0 && entry.first[i*MAXD + j])
-                        r.set(map[i]*MAXD + map[j]);
+                    for (int j = 0; j < df; ++j) {
+                      if (map[j] < 0)
+                        continue;
+                      const auto e = ops.get(entry.first, i, j);
+                      if (!Ops::emptyEntry(e))
+                        ops.merge(r, map[i], map[j], e);
+                    }
                   }
                   acc[r].push_back(entry.second);
                 }
@@ -527,9 +759,9 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
 
   // Join two tables over the same domain, covering disjoint edge sets:
   // pairs of states are mutually exclusive (deterministic ORs) and the
-  // gates variable-disjoint (decomposable ANDs); reachability across
-  // the two parts only alternates through domain vertices (the bag
-  // separates them), hence the closure of the union.
+  // gates variable-disjoint (decomposable ANDs); walks across the two
+  // parts only alternate through domain vertices (the bag separates
+  // them), hence the closure of the union.
   auto join = [&](const Table &t1, const Table &t2, int d) {
                 if (isTrivial(t1, d))
                   return t2;
@@ -539,8 +771,11 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                 for (const auto &left : t1)
                   for (const auto &right : t2) {
                     CHECK_FOR_INTERRUPTS();
-                    Rel r = transitiveClosure(left.first | right.first, d);
-                    acc[r].push_back(andGate(left.second, right.second));
+                    State r = left.first;
+                    ops.unite(r, right.first);
+                    ops.close(r, d);
+                    acc[std::move(r)].push_back(andGate(left.second,
+                                                        right.second));
                   }
                 return finalize(acc);
               };
@@ -557,23 +792,23 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
 
                         Accumulator acc;
                         for (const auto &entry : table) {
-                          Rel present = entry.first;
+                          State present = entry.first;
                           if (var.arc_uv)
-                            present.set(pu*MAXD + pv);
+                            ops.addArc(present, pu, pv, var.weight);
                           if (var.arc_vu)
-                            present.set(pv*MAXD + pu);
-                          present = transitiveClosure(present, d);
+                            ops.addArc(present, pv, pu, var.weight);
+                          ops.close(present, d);
 
                           if (var.certain) {
                             // Always-present arc: every world of this state
-                            // moves to the augmented relation, no branching
+                            // moves to the augmented state, no branching
                             // (states may merge; their gates stay mutually
                             // exclusive).
                             acc[present].push_back(entry.second);
                             continue;
                           }
                           if (present == entry.first) {
-                            // The edge cannot change reachability in these
+                            // The edge cannot change the state in these
                             // worlds: its value is irrelevant, keep the gate
                             // as is (the OR of the two cofactors would
                             // simplify to it anyway).
@@ -594,24 +829,24 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
                           // (k+1)-way deterministic branching: one outcome
                           // per alternative (its arcs applied, gated by its
                           // mulinput literal) plus the none outcome.  If no
-                          // outcome can change the relation, the block is
+                          // outcome can change the state, the block is
                           // irrelevant for these worlds.
-                          std::vector<Rel> outs(blk.alts.size());
+                          std::vector<State> outs(blk.alts.size());
                           bool all_same = true;
                           for (std::size_t ai = 0; ai < blk.alts.size(); ++ai) {
-                            Rel present = entry.first;
+                            State present = entry.first;
                             const auto &alt = blk.alts[ai];
                             if (alt.arc_uv || alt.arc_vu) {
                               const int pu = positionIn(domain, alt.u);
                               const int pv = positionIn(domain, alt.v);
                               if (alt.arc_uv)
-                                present.set(pu*MAXD + pv);
+                                ops.addArc(present, pu, pv, 1);
                               if (alt.arc_vu)
-                                present.set(pv*MAXD + pu);
-                              present = transitiveClosure(present, d);
+                                ops.addArc(present, pv, pu, 1);
+                              ops.close(present, d);
                             }
                             outs[ai] = present;
-                            if (present != entry.first)
+                            if (!(present == entry.first))
                               all_same = false;
                           }
                           if (all_same) {
@@ -690,9 +925,8 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
   //    introduced outside bag b's subtree; for a child c of b,
   //    above(c) = lift( applyEdges_b( above(b) ⊗ siblings' below ) ).
   //    Reads at b pair below[b] with above[b]: the closure of the union
-  //    is the full-graph reachability relation over b's domain.
+  //    is the full-graph state over b's domain.
   // ------------------------------------------------------------------
-  std::unordered_map<unsigned long, gate_t> vertex_root;
   {
     std::vector<Table> above(nb_bags);
     const std::size_t rb = bag_index(td.getRoot());
@@ -707,35 +941,26 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
       const int d = static_cast<int>(domains[b].size());
 
       // Reads: for every (below, above) state pair, the closure of the
-      // union; the pairs partition the worlds, so each vertex's OR over
-      // its accepting pairs is deterministic.
+      // union; the pairs partition the worlds, so any OR the sink
+      // builds over a fixed predicate of the entries is deterministic.
       if (!reads_at_bag[b].empty()) {
         const int ps = positionIn(domains[b], source);
-        std::unordered_map<unsigned long, std::vector<gate_t> > accepting;
         for (const auto &[R, g] : below[b])
           for (const auto &[A, h] : above[b]) {
             CHECK_FOR_INTERRUPTS();
-            const Rel closed = transitiveClosure(R | A, d);
+            State closed = R;
+            ops.unite(closed, A);
+            ops.close(closed, d);
             gate_t pair_gate = invalid_gate;   // lazily created, shared
             for (unsigned long v : reads_at_bag[b]) {
-              if (!closed[ps*MAXD + positionIn(domains[b], v)])
+              const auto e = ops.get(closed, ps, positionIn(domains[b], v));
+              if (Ops::emptyEntry(e))
                 continue;
               if (pair_gate == invalid_gate)
                 pair_gate = andGate(g, h);
-              accepting[v].push_back(pair_gate);
+              onRead(v, e, pair_gate);
             }
           }
-        for (auto &[v, gates] : accepting) {
-          if (gates.size() == 1)
-            vertex_root[v] = gates[0];
-          else {
-            gate_t o = dd.setGate(BooleanGate::OR);
-            dd.setInfo(o, DNNF_CERT_INFO);
-            for (gate_t g : gates)
-              dd.addWire(o, g);
-            vertex_root[v] = o;
-          }
-        }
       }
 
       // Children: prefix/suffix joins of the lifted sibling tables keep
@@ -770,18 +995,122 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAllInternal(
     }
   }
 
-  result.roots.reserve(vertex_root.size());
-  for (const auto &[v, g] : vertex_root)
-    result.roots.push_back(VertexRoot{v, g});
-  std::sort(result.roots.begin(), result.roots.end(),
-            [](const VertexRoot &a, const VertexRoot &b) {
-    return a.vertex < b.vertex;
+  stats.nb_gates = dd.getNbGates();
+  return true_gate;
+}
+
+/**
+ * @brief Build a deterministic OR over @p gates (or pass a single gate
+ *        through), with the d-DNNF certificate.
+ */
+gate_t finalizeRoot(dDNNF &dd, const std::vector<gate_t> &gates)
+{
+  if (gates.size() == 1)
+    return gates[0];
+  gate_t o = dd.setGate(BooleanGate::OR);
+  dd.setInfo(o, DNNF_CERT_INFO);
+  for (gate_t g : gates)
+    dd.addWire(o, g);
+  return o;
+}
+
+/**
+ * @brief Shared implementation of the two @c compileAllHops() overloads.
+ */
+ReachabilityCompiler::AllHopsResult compileAllHopsInternal(
+  const std::vector<ReachabilityCompiler::EdgeRow> &rows,
+  unsigned long source,
+  bool directed,
+  unsigned hop_bound,
+  std::size_t max_states,
+  const std::vector<ReachabilityCompiler::SourceArc> *multi_sources)
+{
+  if (hop_bound > ReachabilityCompiler::MAX_HOP_BOUND)
+    throw ReachabilityCompilerException(
+            "hop bound exceeds the supported maximum (" +
+            std::to_string(ReachabilityCompiler::MAX_HOP_BOUND) + ")");
+
+  ReachabilityCompiler::AllHopsResult result;
+  dDNNF &dd = result.dd;
+  const HopOps ops(hop_bound);
+
+  // Per-(vertex, length) and per-vertex accumulators; the pairs reported
+  // by the DP partition the worlds, so each OR built below is
+  // deterministic.  Ordered maps make the output order deterministic.
+  std::map<std::pair<unsigned long, unsigned>, std::vector<gate_t> > hop_acc;
+  std::map<unsigned long, std::vector<gate_t> > within_acc;
+
+  const gate_t true_gate = runReachabilityDP(
+    rows, source, directed, max_states, nullptr, multi_sources, ops, dd,
+    result.stats,
+    [&](unsigned long v, HopOps::Entry mask, gate_t pair_gate) {
+    within_acc[v].push_back(pair_gate);
+    while (mask) {
+      const unsigned h = static_cast<unsigned>(__builtin_ctzll(mask));
+      mask &= mask - 1;
+      hop_acc[{v, h}].push_back(pair_gate);
+    }
   });
+
+  result.roots.reserve(hop_acc.size());
+  for (const auto &[key, gates] : hop_acc)
+    result.roots.push_back(
+      ReachabilityCompiler::VertexHopRoot{key.first, key.second,
+                                          finalizeRoot(dd, gates)});
+  result.within_roots.reserve(within_acc.size());
+  for (const auto &[v, gates] : within_acc)
+    result.within_roots.push_back(
+      ReachabilityCompiler::VertexRoot{v, finalizeRoot(dd, gates)});
+
+  dd.setRoot(true_gate);
+  result.stats.nb_gates = dd.getNbGates();
+  return result;
+}
+
+/**
+ * @brief Shared implementation of @c compile() / @c compileAll().
+ *
+ * @param rows           Edge tuples.
+ * @param source         Source vertex.
+ * @param directed       If @c false, every edge contributes both arcs.
+ * @param max_states     Bound on the DP state count per node.
+ * @param only_target    When set: ensure the vertex exists in the graph
+ *                       (an isolated target is legal) and emit a root for
+ *                       it alone, skipping the other vertices' reads.
+ * @param multi_sources  When set: virtual super-source mode.
+ * @return               The shared d-DNNF, per-vertex roots, statistics.
+ */
+ReachabilityCompiler::AllResult compileAllBoolInternal(
+  const std::vector<ReachabilityCompiler::EdgeRow> &rows,
+  unsigned long source,
+  bool directed,
+  std::size_t max_states,
+  const unsigned long *only_target,
+  const std::vector<ReachabilityCompiler::SourceArc> *multi_sources)
+{
+  ReachabilityCompiler::AllResult result;
+  dDNNF &dd = result.dd;
+  const BoolOps ops;
+
+  std::map<unsigned long, std::vector<gate_t> > accepting;
+  const gate_t true_gate = runReachabilityDP(
+    rows, source, directed, max_states, only_target, multi_sources, ops, dd,
+    result.stats,
+    [&](unsigned long v, BoolOps::Entry, gate_t pair_gate) {
+    accepting[v].push_back(pair_gate);
+  });
+
+  result.roots.reserve(accepting.size());
+  for (const auto &[v, gates] : accepting)
+    result.roots.push_back(
+      ReachabilityCompiler::VertexRoot{v, finalizeRoot(dd, gates)});
 
   dd.setRoot(true_gate);   // single-target callers re-point this
   result.stats.nb_gates = dd.getNbGates();
   return result;
 }
+
+} // namespace
 
 ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
   const std::vector<EdgeRow> &rows,
@@ -789,8 +1118,8 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
   bool directed,
   std::size_t max_states)
 {
-  return compileAllInternal(rows, source, directed, max_states, nullptr,
-                            nullptr);
+  return compileAllBoolInternal(rows, source, directed, max_states, nullptr,
+                                nullptr);
 }
 
 ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
@@ -799,7 +1128,30 @@ ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
   bool directed,
   std::size_t max_states)
 {
-  return compileAllInternal(rows, 0, directed, max_states, nullptr, &sources);
+  return compileAllBoolInternal(rows, 0, directed, max_states, nullptr,
+                                &sources);
+}
+
+ReachabilityCompiler::AllHopsResult ReachabilityCompiler::compileAllHops(
+  const std::vector<EdgeRow> &rows,
+  unsigned long source,
+  bool directed,
+  unsigned hop_bound,
+  std::size_t max_states)
+{
+  return compileAllHopsInternal(rows, source, directed, hop_bound, max_states,
+                                nullptr);
+}
+
+ReachabilityCompiler::AllHopsResult ReachabilityCompiler::compileAllHops(
+  const std::vector<EdgeRow> &rows,
+  const std::vector<SourceArc> &sources,
+  bool directed,
+  unsigned hop_bound,
+  std::size_t max_states)
+{
+  return compileAllHopsInternal(rows, 0, directed, hop_bound, max_states,
+                                &sources);
 }
 
 ReachabilityCompiler::Result ReachabilityCompiler::compile(
@@ -809,8 +1161,8 @@ ReachabilityCompiler::Result ReachabilityCompiler::compile(
   bool directed,
   std::size_t max_states)
 {
-  AllResult all = compileAllInternal(rows, source, directed, max_states,
-                                     &target, nullptr);
+  AllResult all = compileAllBoolInternal(rows, source, directed, max_states,
+                                         &target, nullptr);
   Result result;
   result.stats = all.stats;
 

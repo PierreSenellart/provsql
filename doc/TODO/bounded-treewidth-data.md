@@ -287,6 +287,71 @@ would still need the per-tuple conjunctive-shape walk for the block
 keys and probabilities.  Ancestry stays what it is elsewhere: the safe
 rewriter's concern.
 
+#### Bounded-hop reachability: implemented
+
+The hop-counting CTE shape -- a counter column seeded by an integer
+constant, incremented in the recursive arm, bounded by a mandatory
+`WHERE r.hops < B` / `<= B` qual (either column order, any seed; the
+bound is required because an unbounded counter has no fixpoint on
+cyclic data) -- compiles through the same DP with a richer state
+algebra: relation entries refine from reachability bits to *sets of
+achievable walk lengths* up to the bound (bitmasks, cap 62), composed
+in the capped Minkowski semiring by algebraic-path closure with
+diagonal star.  The scaffold is one template over the state ops
+(`BoolOps` / `HopOps` in `ReachabilityCompiler.cpp`); worlds still map
+to exactly one state, so the determinism/decomposability argument and
+the certificate carry over verbatim.  Row `(v, h)` faithfully matches
+the generic fixpoint: "some *walk* of exactly h edges" (cycles pump
+lengths; self-loops, droppable for plain reachability, are kept as
+weight-1 arcs here precisely because the fixpoint derives `(v, h+1)`
+from them).  Multi-source arcs contribute length 0; the undirected,
+filtered, BID and multi-source variants compose with the counter.
+Differentially tested (400 random instances, per-(v,h) *and*
+within-bound, against world-enumerating brute force) and in-database
+against the generic fixpoint.  Scaling on the 2xN undirected cyclic
+ladder (p=.9): `max_states` is independent of N -- 143 at L=15, 408 at
+L=30, a function of (treewidth, bound) only -- gates linear in N
+(228k at N=1000 to 2.07M at N=10000), compile 0.39 s to 3.7 s, 0.73 s
+end-to-end through SQL at N=1000.
+
+The natural follow-up query -- `SELECT node FROM reach GROUP BY node`,
+"which nodes are within k hops" -- ORs each vertex's per-length tokens,
+which are *correlated* (lengths share edges): unmarkable as
+deterministic (the certified evaluator would sum overlapping children)
+and otherwise generic-evaluation territory.  But the DP natively owns a
+deterministic circuit for the same Boolean function (the OR over
+mutually exclusive (below, above) pairs with a nonempty length set,
+i.e. the decomposition by world-class rather than by length), so the
+materialiser *pre-creates the gate the deduplication will address*:
+at `uuid5('plus-canonical{sorted per-length tokens}')`, a certified
+single-child plus over the within-bound root.  `provenance_plus`
+probes that canonical address before creating anything and never
+creates under it, so a hit is always a deliberate plant and ordinary
+plus gates are byte-identical to before.  Two rejected designs, for
+the record: sorting `provenance_plus` recipes globally (canonical, but
+gate sharing then couples formula rendering across queries through the
+shared store, run-randomly -- the suite caught it), and probing the
+plain sorted recipe (ordinary creations occupy it by coincidence, 50%
+for pairs).  Also fixed en route: computing `array_agg(t)` and
+`array_agg(t ORDER BY t)` in one SELECT makes the planner feed *both*
+aggregates sorted input, scrambling the stored children order.
+
+*Open, cross-vertex aggregations*: ORs of route tokens across vertices
+("is some node of region R reachable", `GROUP BY` over a join with
+reach) are correlated and uncovered by both routes -- the pre-creation
+preconditions fail (the multiset is user-chosen, and "reach any of S"
+is not an OR over one bag's pair family).  The plausible answer is an
+*S-bit compilation*: the same DP with the state extended by a "some
+S-vertex already reached" bit, giving certified reach-any-of-S roots
+(and, with one bit per terminal, k-terminal/Steiner reliability from
+the multi-terminal note below), planted per group by a rewrite-time
+detection of the aggregation shape.  *Other reuse candidates for the
+canonical-address machinery*: a times-canonical analogue serving
+factored forms if Route 3 materialises; canonical agg-gate addressing
+for commutative aggregates (pure dedup -- only if duplicate agg gates
+show up in profiles).  The general rule learned: planted gates must
+live in namespaces ordinary creation never touches.
+
 #### Degeneracy pre-probe: implemented, measured, not enabled
 
 `TreeDecomposition::degeneracyLowerBound` now has a `Graph` overload (the
@@ -345,14 +410,14 @@ machinery in place:
   previously lacked.
 - **Fixed-length path patterns** (self-join chains
   `e a, e b [, e c] WHERE a.dst = b.src ...` with `DISTINCT` projection,
-  i.e. bounded-hop reachability): these are the non-recursive queries
-  where the *data* decomposition genuinely helps, and they need no
-  automaton compilation -- the reachability DP extends by capping the
-  relation with path lengths (entries in `{0..L, infinity}` instead of
-  bits), a `(L+2)`-fold state blow-up for hop bound `L`.  The natural
-  detection is on the recursive side anyway (a depth-bounded recursive
-  CTE, or the self-join chain rewritten to one), making this the cleanest
-  next *query family* for the existing compiler.
+  i.e. bounded-hop reachability): **done on the recursive side** -- the
+  depth-bounded recursive CTE is recognised and compiled with
+  walk-length-set states (see "Bounded-hop reachability: implemented"
+  above; the state refinement landed as length *sets*, not capped
+  minima, to match the fixpoint's exact-length row semantics).  What
+  remains of this bullet is the non-recursive trigger: rewriting a
+  self-join chain into the depth-bounded CTE shape (or detecting it
+  directly), worthwhile only if such chains show up in real workloads.
 - **Multi-terminal variants** (Steiner / k-terminal reliability, "all of
   these nodes pairwise connected"): same DP with the terminal set forced
   into the domains; the acceptance condition reads several bits instead of
@@ -542,9 +607,13 @@ cyclic-provenance (cycluit) semantics for Route C is genuinely uncharted.
 1. **Route C** (recursive / reachability on bounded-treewidth graphs) -- the only
    place treewidth genuinely *grows* with `|I|` at constant `tw(I)`; the automaton
    is trivial; it composes with the in-flight recursive-query work. The
-   substantive build.  **Done** (the two-terminal reliability seed; see the
-   status note in Route C).  Follow-ups: `WITH RECURSIVE` shape recognition,
-   token output, edge Shapley values.
+   substantive build.  **Done**, including the one-time follow-ups
+   (`WITH RECURSIVE` shape recognition, token output, edge Shapley
+   values) and the extension round: multi-source, BID blocks,
+   join-defined edges, registry consultation, bounded hops.  Remaining
+   Route C items are listed in their status notes (shared-support
+   join-defined graphs, cross-vertex aggregations / S-bit compilation,
+   non-recursive triggers).
 2. **Factoring lever (route 3), `costar` threshold half** -- structural
    detection; scope only if a real workload exhibits it.
 3. **Route A** (full automaton) -- deferred until the factoring lever proves

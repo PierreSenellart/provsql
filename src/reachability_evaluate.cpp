@@ -38,6 +38,7 @@ extern "C" {
 PG_FUNCTION_INFO_V1(reachability_evaluate);
 PG_FUNCTION_INFO_V1(reachability_compile_stats);
 PG_FUNCTION_INFO_V1(reachability_materialize);
+PG_FUNCTION_INFO_V1(reachability_materialize_hops);
 }
 
 #include "c_cpp_compatibility.h"
@@ -140,6 +141,51 @@ std::vector<ReachabilityCompiler::EdgeRow> edgesFromArgs(
   }
 
   return rows;
+}
+
+/**
+ * @brief Decode the source-arc arrays (three consecutive arguments
+ *        starting at @p base): vertices, tokens (nil = certain) and
+ *        probabilities.
+ *
+ * @param fcinfo  PostgreSQL function-call info.
+ * @param base    Index of the source-vertices argument.
+ * @return        The decoded source arcs.
+ */
+std::vector<ReachabilityCompiler::SourceArc> sourcesFromArgs(
+  FunctionCallInfo fcinfo, int base)
+{
+  std::vector<ReachabilityCompiler::SourceArc> sources;
+  ArrayType *sv = PG_ARGISNULL(base) ? NULL : PG_GETARG_ARRAYTYPE_P(base);
+  ArrayType *st = PG_ARGISNULL(base+1) ? NULL : PG_GETARG_ARRAYTYPE_P(base+1);
+  ArrayType *sp = PG_ARGISNULL(base+2) ? NULL : PG_GETARG_ARRAYTYPE_P(base+2);
+  const int ns = checkedArrayLength(sv, "source vertices");
+  if (checkedArrayLength(st, "source tokens") != ns ||
+      checkedArrayLength(sp, "source probabilities") != ns)
+    provsql_error("reachability: source arrays must have the same length");
+  if (ns == 0)
+    provsql_error("reachability: at least one source is required");
+  const int32 *v_data = (const int32 *) ARR_DATA_PTR(sv);
+  const pg_uuid_t *t_data = (const pg_uuid_t *) ARR_DATA_PTR(st);
+  const float8 *p_data = (const float8 *) ARR_DATA_PTR(sp);
+  sources.reserve(ns);
+  for (int i = 0; i < ns; ++i) {
+    ReachabilityCompiler::SourceArc sa;
+    sa.vertex = static_cast<unsigned long>(v_data[i]);
+    bool nil = true;
+    for (int b = 0; b < 16; ++b)
+      if (t_data[i].data[b] != 0)
+        nil = false;
+    sa.certain = nil;
+    if (!nil)
+      sa.token = uuid2string(t_data[i]);
+    sa.prob = p_data[i];
+    if (sa.prob < 0. || sa.prob > 1.)
+      provsql_error("reachability: source probability %f out of [0,1]",
+                    sa.prob);
+    sources.push_back(std::move(sa));
+  }
+  return sources;
 }
 
 /**
@@ -511,38 +557,7 @@ Datum reachability_materialize(PG_FUNCTION_ARGS)
     /* Sources: parallel arrays of vertices, tokens and probabilities; the
      * nil UUID marks a *certain* source (an untracked source relation, or
      * the constant base arm of the recursive shape). */
-    std::vector<ReachabilityCompiler::SourceArc> sources;
-    {
-      ArrayType *sv = PG_ARGISNULL(6) ? NULL : PG_GETARG_ARRAYTYPE_P(6);
-      ArrayType *st = PG_ARGISNULL(7) ? NULL : PG_GETARG_ARRAYTYPE_P(7);
-      ArrayType *sp = PG_ARGISNULL(8) ? NULL : PG_GETARG_ARRAYTYPE_P(8);
-      const int ns = checkedArrayLength(sv, "source vertices");
-      if (checkedArrayLength(st, "source tokens") != ns ||
-          checkedArrayLength(sp, "source probabilities") != ns)
-        provsql_error("reachability: source arrays must have the same length");
-      if (ns == 0)
-        provsql_error("reachability: at least one source is required");
-      const int32 *v_data = (const int32 *) ARR_DATA_PTR(sv);
-      const pg_uuid_t *t_data = (const pg_uuid_t *) ARR_DATA_PTR(st);
-      const float8 *p_data = (const float8 *) ARR_DATA_PTR(sp);
-      sources.reserve(ns);
-      for (int i = 0; i < ns; ++i) {
-        ReachabilityCompiler::SourceArc sa;
-        sa.vertex = static_cast<unsigned long>(v_data[i]);
-        bool nil = true;
-        for (int b = 0; b < 16; ++b)
-          if (t_data[i].data[b] != 0)
-            nil = false;
-        sa.certain = nil;
-        if (!nil)
-          sa.token = uuid2string(t_data[i]);
-        sa.prob = p_data[i];
-        if (sa.prob < 0. || sa.prob > 1.)
-          provsql_error("reachability: source probability %f out of [0,1]",
-                        sa.prob);
-        sources.push_back(std::move(sa));
-      }
-    }
+    const auto sources = sourcesFromArgs(fcinfo, 6);
 
     ReachabilityCompiler::AllResult all;
     try {
@@ -592,6 +607,134 @@ Datum reachability_materialize(PG_FUNCTION_ARGS)
     provsql_error("reachability_materialize: %s", e.what());
   } catch (...) {
     provsql_error("reachability_materialize: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable entry point: bounded-hop all-targets
+ *        compilation and materialisation.
+ *
+ * Arguments 0..9 as @c reachability_materialize, then @c hop_bound
+ * @c int (maximum walk length) and @c hop_seed @c int (the recursive
+ * CTE's base-arm hop constant, added to the reported lengths).
+ * Returns: one @c (vertex, hops, token) row per (vertex, walk length)
+ * pair achievable in the all-edges-present world -- matching the rows
+ * the generic fixpoint derives for the hop-counting CTE shape, with
+ * @c token the materialised certified circuit of "some present source
+ * reaches the vertex by a walk of exactly this many edges".
+ *
+ * Additionally pre-creates, for every vertex with at least two length
+ * rows, the gate a hop-discarding query's deduplication will mint --
+ * @c uuid5('plus{sorted tokens}') over the vertex's length tokens
+ * (multiset, as @c provenance_plus aggregates them) -- as a certified
+ * single-child @c plus over the DP's native within-bound root, which
+ * computes the same Boolean function as that OR but *deterministically
+ * by construction*.  The natural "is the vertex within k hops" query
+ * thus evaluates through the linear certified route instead of falling
+ * back to generic knowledge compilation over correlated per-length
+ * tokens; the pre-created gate is content-addressed, so the rewriter's
+ * later @c create_gate of the same UUID is an idempotent no-op.
+ */
+Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
+{
+  try {
+    if (PG_ARGISNULL(9) || PG_ARGISNULL(10) || PG_ARGISNULL(11))
+      provsql_error(
+        "reachability: directed, hop_bound and hop_seed must not be NULL");
+
+    auto rows = edgesFromArgs(fcinfo, 4);
+    const bool directed = PG_GETARG_BOOL(9);
+    const int32 hop_bound = PG_GETARG_INT32(10);
+    const int32 hop_seed = PG_GETARG_INT32(11);
+    if (hop_bound < 0 ||
+        static_cast<unsigned>(hop_bound) > ReachabilityCompiler::MAX_HOP_BOUND)
+      provsql_error("reachability: hop bound %d out of [0,%u]",
+                    hop_bound, ReachabilityCompiler::MAX_HOP_BOUND);
+
+    const auto sources = sourcesFromArgs(fcinfo, 6);
+
+    ReachabilityCompiler::AllHopsResult all;
+    try {
+      all = ReachabilityCompiler::compileAllHops(
+        rows, sources, directed, static_cast<unsigned>(hop_bound));
+    } catch (TreeDecompositionException &) {
+      provsql_error(
+        "reachability: data treewidth exceeds the supported limit (%d)",
+        TreeDecomposition::MAX_TREEWIDTH);
+    }
+
+    std::vector<gate_t> roots;
+    roots.reserve(all.roots.size() + all.within_roots.size());
+    for (const auto &vr : all.roots)
+      roots.push_back(vr.root);
+    for (const auto &vr : all.within_roots)
+      roots.push_back(vr.root);
+    const auto uuid_of = materializeCertifiedDD(all.dd, roots);
+
+    /* Dedup pre-creation: per vertex, the multiset of its length tokens,
+     * sorted as text, addressed in the dedicated "plus-canonical" recipe
+     * namespace that provenance_plus probes (and never creates under, so
+     * a hit there is always a deliberate pre-creation). */
+    {
+      std::unordered_map<unsigned long, std::vector<std::string> > by_vertex;
+      for (const auto &vr : all.roots)
+        by_vertex[vr.vertex].push_back(uuid2string(uuid_of.at(vr.root)));
+      for (const auto &vr : all.within_roots) {
+        auto it = by_vertex.find(vr.vertex);
+        if (it == by_vertex.end() || it->second.size() < 2)
+          continue;
+        std::vector<std::string> texts = it->second;
+        std::sort(texts.begin(), texts.end());
+        std::string name = "plus-canonical{";
+        for (std::size_t i = 0; i < texts.size(); ++i) {
+          if (i)
+            name += ",";
+          name += texts[i];
+        }
+        name += "}";
+        const pg_uuid_t dedup = uuidV5(name);
+        const pg_uuid_t within = uuid_of.at(vr.root);
+        provsql_internal_create_gate(&dedup, gate_plus, 1, &within);
+        provsql_internal_set_infos(&dedup, DNNF_CERT_INFO, 0);
+      }
+    }
+
+    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+    MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+    MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+    TupleDesc tupdesc;
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE) {
+      MemoryContextSwitchTo(oldcontext);
+      provsql_error(
+        "reachability_materialize_hops: function must return a row type");
+    }
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    Tuplestorestate *tupstore = tuplestore_begin_heap(
+      rsinfo->allowedModes & SFRM_Materialize_Random, false, work_mem);
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+    rsinfo->setDesc = tupdesc;
+
+    for (const auto &vr : all.roots) {
+      Datum values[3];
+      bool nulls[3] = {false, false, false};
+      values[0] = Int32GetDatum(static_cast<int32>(vr.vertex));
+      values[1] = Int32GetDatum(hop_seed + static_cast<int32>(vr.hops));
+      pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
+      *u = uuid_of.at(vr.root);
+      values[2] = UUIDPGetDatum(u);
+      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+
+    MemoryContextSwitchTo(oldcontext);
+    return (Datum) 0;
+  } catch (const std::exception &e) {
+    provsql_error("reachability_materialize_hops: %s", e.what());
+  } catch (...) {
+    provsql_error("reachability_materialize_hops: unknown exception");
   }
   PG_RETURN_NULL();
 }

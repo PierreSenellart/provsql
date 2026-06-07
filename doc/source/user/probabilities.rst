@@ -488,6 +488,43 @@ accepted when the derived edges' supports are pairwise disjoint – e.g.
 a one-to-one join; edges sharing a base tuple are correlated, and the
 query falls back to the generic evaluation.
 
+*Bounded-hop reachability* is recognised as well: a hop-counting CTE
+whose counter column is seeded by an integer constant, incremented in
+the recursive arm, and bounded by a (mandatory) ``WHERE`` qual –
+
+.. code-block:: postgresql
+
+    WITH RECURSIVE reach(node, hops) AS (
+        SELECT 1, 0
+      UNION
+        SELECT e.dst, r.hops + 1
+        FROM link e JOIN reach r ON e.src = r.node
+        WHERE r.hops < 4
+    )
+    SELECT node, hops, probability_evaluate(provenance()) FROM reach;
+
+Row ``(v, h)`` carries the provenance of "some *walk* of exactly
+``h`` edges connects the source to ``v``" – walks, not simple paths,
+matching the recursive fixpoint's semantics: a cycle on the way pumps
+the achievable lengths, and the compilation (whose states refine from
+reachability relations to sets of achievable walk lengths) accounts
+for that exactly, on cyclic data too.  Both ``<`` and ``<=`` bounds,
+either column order, any integer seed, and the undirected, filtered,
+multi-source and ``repair_key`` variants compose with the counter.
+The natural follow-up – "which nodes are *within* k hops", obtained
+by deduplicating the hop column away –
+
+.. code-block:: postgresql
+
+    ... SELECT node FROM reach GROUP BY node;
+
+stays on the fast route: the OR of a vertex's per-length tokens is
+correlated (lengths share edges), but the compilation pre-creates,
+at the very gate address this deduplication computes, a certified
+equivalent built from its native within-bound circuit, so
+:sqlfunc:`probability_evaluate` still settles on the linear exact
+method.
+
 The emitted circuits are *deterministic and decomposable by
 construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
 persisted **certificate** of that property (readable with
