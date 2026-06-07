@@ -998,30 +998,50 @@ _INTERVAL_KERNELS = {
 # `test/sql/safe_query_semiring.sql` (which exercises one tagged token
 # against each semiring) ; if the C++ side ever flips a value, that
 # test will fail and this dict must be updated.
+#
+# `absorptive`: mirrors the C++ `semiring::*::absorptive()` predicate.
+# A persistent `gate_assumed` wrapper labelled 'absorptive' (a cyclic
+# recursive query truncated at the absorptive value fixpoint) is only
+# sound for absorptive semirings; the in-memory absorptive-fold marker
+# additionally tolerates Boolean-rewrite-compatible semirings (the
+# folds preserve the Boolean function).  Same drift rule:
+# `test/sql/absorptive_recursion.sql` pins the refusals.
 _COMPILED_SEMIRINGS: dict[str, dict] = {
     # Boolean & symbolic.
     "boolexpr": {"func": "sr_boolexpr", "needs_mapping": False, "types": None,
-                 "boolean_rewrite_compatible": True},
+                 "boolean_rewrite_compatible": True, "absorptive": True},
     "boolean":  {"func": "sr_boolean",  "types": ("boolean",),
-                 "boolean_rewrite_compatible": True},
+                 "boolean_rewrite_compatible": True, "absorptive": True},
     "formula":  {"func": "sr_formula",  "types": None,
-                 "boolean_rewrite_compatible": True},
+                 "boolean_rewrite_compatible": True, "absorptive": False},
     # Lineage.
     "why":      {"func": "sr_why",      "types": None,
-                 "boolean_rewrite_compatible": False},
+                 "boolean_rewrite_compatible": False, "absorptive": False},
     "which":    {"func": "sr_which",    "types": None,
-                 "boolean_rewrite_compatible": False},
+                 "boolean_rewrite_compatible": False, "absorptive": False},
     "how":      {"func": "sr_how",      "types": None,
-                 "boolean_rewrite_compatible": False},
+                 "boolean_rewrite_compatible": False, "absorptive": False},
     # Numeric / scoring.
     "counting":    {"func": "sr_counting",    "types": _NUMERIC_TYPES,
-                    "boolean_rewrite_compatible": False},
+                    "boolean_rewrite_compatible": False,
+                    "absorptive": False},
     "tropical":    {"func": "sr_tropical",    "types": _NUMERIC_TYPES,
-                    "boolean_rewrite_compatible": False},
+                    "boolean_rewrite_compatible": False,
+                    "absorptive": False},
+    # Min-plus restricted to nonnegative costs: absorptive, so it
+    # accepts truncated cyclic-recursion tokens (exact min-cost
+    # reachability on cyclic data); negative costs are rejected by the
+    # kernel.  Dispatches to sr_tropical(..., nonnegative => true).
+    "tropical-nonneg": {"func": "sr_tropical", "types": _NUMERIC_TYPES,
+                        "nonneg": True,
+                        "boolean_rewrite_compatible": False,
+                        "absorptive": True},
     "viterbi":     {"func": "sr_viterbi",     "types": _NUMERIC_TYPES,
-                    "boolean_rewrite_compatible": False},
+                    "boolean_rewrite_compatible": False,
+                    "absorptive": True},
     "lukasiewicz": {"func": "sr_lukasiewicz", "types": _NUMERIC_TYPES,
-                    "boolean_rewrite_compatible": False},
+                    "boolean_rewrite_compatible": False,
+                    "absorptive": True},
     # Interval-valued (PG14+ multirange family). `func` is None: the
     # kernel is picked at evaluation time from the mapping's value type.
     "interval-union": {
@@ -1029,6 +1049,7 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
         "types": tuple(_INTERVAL_KERNELS.keys()),
         "min_pg": 140000,
         "boolean_rewrite_compatible": True,
+        "absorptive": True,
     },
     # User-enum carrier. `accepts_enum: True` filters to mappings whose
     # `value` column is any user-defined enum (typtype = 'e'); the
@@ -1037,9 +1058,9 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
     # enum, used only for type inference; the dispatch synthesises one
     # via `enum_first(NULL::<base_type>)`.
     "minmax": {"func": "sr_minmax", "accepts_enum": True,
-               "boolean_rewrite_compatible": False},
+               "boolean_rewrite_compatible": False, "absorptive": True},
     "maxmin": {"func": "sr_maxmin", "accepts_enum": True,
-               "boolean_rewrite_compatible": False},
+               "boolean_rewrite_compatible": False, "absorptive": True},
 }
 # probability_evaluate accepts these methods (see src/probability_evaluate.cpp).
 # Of these, `monte-carlo` requires a sample count as `arguments`; `compilation`
@@ -1539,6 +1560,11 @@ def evaluate_circuit(
                 fn, sql.Literal(token), sql.Literal(mapping),
                 sql.SQL(base_type),
             )
+        elif spec.get("nonneg"):
+            # The nonnegative (absorptive) min-plus variant.
+            sql_stmt = sql.SQL(
+                "SELECT {}({}::uuid, {}::regclass, true)"
+            ).format(fn, sql.Literal(token), sql.Literal(mapping))
         else:
             sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
                 fn, sql.Literal(token), sql.Literal(mapping)

@@ -90,6 +90,34 @@ def test_compiled_registry_has_boolean_rewrite_flag():
     assert compat == {"boolexpr", "boolean", "formula", "interval-union"}, compat
 
 
+def test_compiled_registry_has_absorptive_flag():
+    """Every entry in db._COMPILED_SEMIRINGS must declare `absorptive`;
+    the truthy set must match the C++ semiring::*::absorptive() = true
+    semirings (tropical-nonneg dispatches to semiring::TropicalNonneg).
+    Same drift rule as the boolean flag above; the extension-side
+    refusals are pinned by test/sql/absorptive_recursion.sql."""
+    from provsql_studio.db import _COMPILED_SEMIRINGS
+
+    missing = [
+        name for name, spec in _COMPILED_SEMIRINGS.items()
+        if "absorptive" not in spec
+    ]
+    assert not missing, f"registry entries missing the flag: {missing}"
+    bad_type = [
+        name for name, spec in _COMPILED_SEMIRINGS.items()
+        if not isinstance(spec["absorptive"], bool)
+    ]
+    assert not bad_type, f"non-bool flag: {bad_type}"
+    absorptive = {
+        name for name, spec in _COMPILED_SEMIRINGS.items()
+        if spec["absorptive"]
+    }
+    assert absorptive == {
+        "boolexpr", "boolean", "tropical-nonneg", "viterbi",
+        "lukasiewicz", "interval-union", "minmax", "maxmin",
+    }, absorptive
+
+
 # ──────── prov_scheme → planner-hook GUC ────────
 
 

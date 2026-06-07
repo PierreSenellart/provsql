@@ -360,6 +360,8 @@ def _fetch_subgraph(
             "         (e->>'prob')::float8 AS prob,"
             "         coalesce((e->>'boolean_assumed')::boolean, false)"
             "                              AS boolean_assumed,"
+            "         coalesce((e->>'absorptive_assumed')::boolean, false)"
+            "                              AS absorptive_folded,"
             "         (e->>'depth')::int  AS depth"
             "  FROM jsonb_array_elements("
             "         provsql.simplified_circuit_subgraph(%s::uuid, %s::int)) AS e"
@@ -376,6 +378,7 @@ def _fetch_subgraph(
             "            ELSE NULL END AS info2_name,"
             "       cs.prob,"
             "       cs.boolean_assumed,"
+            "       cs.absorptive_folded,"
             "       cs.depth "
             "FROM src cs"
         )
@@ -393,6 +396,7 @@ def _fetch_subgraph(
             "            ELSE NULL END AS info2_name, "
             "       provsql.get_prob(cs.node)::float8 AS prob, "
             "       false AS boolean_assumed, "
+            "       false AS absorptive_folded, "
             "       cs.depth "
             "FROM provsql.circuit_subgraph(%s::uuid, %s::int) AS cs"
         )
@@ -429,7 +433,7 @@ def _fetch_subgraph(
             raise
         for (node, parent, child_pos, gate_type, info1, info2, extra,
              info1_name, info2_name, prob, boolean_assumed,
-             d) in cur.fetchall():
+             absorptive_folded, d) in cur.fetchall():
             out.append({
                 "node": node,
                 "parent": parent,
@@ -442,6 +446,7 @@ def _fetch_subgraph(
                 "info2_name": info2_name,
                 "prob": prob,
                 "boolean_assumed": bool(boolean_assumed),
+                "absorptive_folded": bool(absorptive_folded),
                 "depth": d,
             })
         # Decide which gate_input rows are tracked-table inputs (their
@@ -598,8 +603,11 @@ def _elide_markers(
     scene, rewiring parents straight to the surviving descendant and recording
     which markers that descendant carries so the front-end can badge it.
 
-    ``gate_assumed`` records a Boolean-only assumption (B badge), added
-    by the safe-query rewriter / Boolean-identity folding.  A
+    ``gate_assumed`` records an evaluation assumption named by its
+    ``extra`` label: ``'boolean'`` (the historical default when the
+    label is absent; B badge), added by the safe-query rewriter, or
+    ``'absorptive'`` (A badge), added by the cyclic-recursion
+    truncation.  A
     ``gate_annotation`` carries the inversion-free certificate on a result root
     (``C``-prefixed ``extra``) or a per-input order key on a leaf
     (``K``-prefixed) -- the IF badge plus inspector detail.  Either kind is a
@@ -612,7 +620,8 @@ def _elide_markers(
 
     Returns the rewritten rows, the new scene root, and a
     ``{node_id: marker dict}`` map, where the marker dict may hold
-    ``boolean_assumed``, ``inversion_free``, ``if_cert`` and ``if_key``.
+    ``boolean_assumed``, ``absorptive_assumed``, ``inversion_free``,
+    ``if_cert`` and ``if_key``.
     """
     WRAP = ("assumed", "annotation")
     by_id = {r["node"]: r for r in rows}
@@ -648,7 +657,10 @@ def _elide_markers(
         surv = unwind(child)
         m = markers.setdefault(surv, {})
         if kind == "assumed":
-            m["boolean_assumed"] = True
+            if (by_id[w].get("extra") or "boolean") == "absorptive":
+                m["absorptive_assumed"] = True
+            else:
+                m["boolean_assumed"] = True
         else:
             m["inversion_free"] = True
             extra = by_id[w].get("extra")
@@ -771,6 +783,19 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
                 bool(r.get("boolean_assumed"))
                 or node_markers.get(r["node"], {}).get("boolean_assumed", False)
             ),
+            # Absorptive assumption, two distinct strengths :
+            #   - absorptive_assumed : an elided persistent
+            #     gate_assumed wrapper labelled 'absorptive' (the
+            #     cyclic-recursion truncation).  Only absorptive
+            #     semirings are sound.
+            #   - absorptive_folded : the in-memory absorptive-fold
+            #     side-band flag forwarded by
+            #     simplified_circuit_subgraph.  Absorptive semirings
+            #     AND Boolean-rewrite-compatible ones are sound (the
+            #     folds preserve the Boolean function).
+            "absorptive_assumed": node_markers.get(
+                r["node"], {}).get("absorptive_assumed", False),
+            "absorptive_folded": bool(r.get("absorptive_folded")),
             # Inversion-free marker: an elided gate_annotation wrapper above this
             # gate (IF badge).  if_cert is the certificate recipe summary on a
             # result root; if_key is the per-input order key + scene rank on a

@@ -309,12 +309,20 @@ probability: clicking the value swaps it for a number input, Enter
 sends a :sqlfunc:`set_prob` to the server, Esc or clicking elsewhere cancels.
 Out-of-range values and ProvSQL errors land inline.
 
-A ``gate_assumed_boolean`` wrapper (added by the safe-query
-rewriter or by the load-time Boolean-identity folding when
-the provenance class is ``'boolean'``) is rendered as a small
-:sc:`B` badge stamped on top of its child gate rather than as a
-separate node, since structurally it is a marker rather than a
-distinct operation.
+A ``gate_assumed`` wrapper labelled ``'boolean'`` (added by the
+safe-query rewriter when the provenance class is ``'boolean'``) is
+rendered as a small :sc:`B` badge stamped on top of its child gate
+rather than as a separate node, since structurally it is a marker
+rather than a distinct operation; the load-time Boolean-only folds
+stamp the same badge on the gates they rewrite.  A wrapper labelled
+``'absorptive'`` (a cyclic recursive query truncated at the
+absorptive value fixpoint), or the load-time absorptive folds, stamp
+an amber :sc:`A` badge instead.  Either badge narrows the evaluation
+strip's semiring menu to the options that are sound on the marked
+gate -- only absorptive semirings for a truncated recursion root
+(including ``Tropical (min-plus, nonnegative)``, which computes
+exact min-cost reachability there), absorptive or Boolean-compatible
+ones for fold-marked gates.
 
 The inversion-free certificate (a ``gate_annotation`` wrapper on a
 certified result root, see :doc:`probabilities`) is likewise elided
