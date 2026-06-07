@@ -295,3 +295,52 @@ def test_circuit_no_marker_when_no_wrapper(client, test_dsn):
         assert not marked, marked
     finally:
         client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
+
+
+# ──────── absorptive marker + d-DNNF certificate rendering ────────
+
+
+def test_circuit_marks_absorptive_wrapper_and_certificates(client, test_dsn):
+    """An 'absorptive'-labelled gate_assumed wrapper (cyclic recursion
+    truncated at the value fixpoint) must elide like the boolean one,
+    stamping its child with `absorptive_assumed = True`; and a plus /
+    times gate carrying the persisted d-DNNF certificate (info1 = 1)
+    must surface `dnnf_certified = True` so the canvas can stamp the
+    D badge."""
+    import uuid as uuidlib
+
+    import psycopg
+
+    with psycopg.connect(test_dsn) as conn, conn.cursor() as cur:
+        cur.execute("SET search_path TO public, provsql")
+        # Two fresh Bernoulli inputs, a certified deterministic plus
+        # over them, wrapped in an 'absorptive'-labelled marker.
+        a, b = str(uuidlib.uuid4()), str(uuidlib.uuid4())
+        for u in (a, b):
+            cur.execute("SELECT provsql.create_gate(%s, 'input')", (u,))
+            cur.execute("SELECT provsql.set_prob(%s::uuid, 0.5)", (u,))
+        plus = str(uuidlib.uuid4())
+        cur.execute(
+            "SELECT provsql.create_gate(%s, 'plus', ARRAY[%s, %s]::uuid[])",
+            (plus, a, b))
+        cur.execute("SELECT provsql.set_infos(%s::uuid, 1)", (plus,))
+        cur.execute(
+            "SELECT provsql.provenance_assume(%s::uuid, 'absorptive')",
+            (plus,))
+        wrapper = cur.fetchone()[0]
+        conn.commit()
+
+    scene = client.get(f"/api/circuit/{wrapper}").get_json()
+    ids = {n["id"]: n for n in scene["nodes"]}
+    assert str(wrapper) not in ids
+    root = ids[scene["root"]]
+    assert root["id"] == plus
+    assert root["absorptive_assumed"] is True
+    assert root.get("boolean_assumed") in (False, None)
+    assert root["dnnf_certified"] is True
+    # The eval strip must keep evaluating the original wrapper token.
+    assert scene["eval_root"] == str(wrapper)
+    # The certificate flag must not leak onto uncertified gates.
+    for n in scene["nodes"]:
+        if n["id"] != plus:
+            assert not n.get("dnnf_certified"), n

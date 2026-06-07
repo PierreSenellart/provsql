@@ -28,6 +28,10 @@
     rv:       'Random variable: continuous distribution leaf',
     arith:    'Arithmetic gate: scalar operation over child gates',
     mixture:  'Mixture (Mix): Bernoulli-weighted choice between two scalar RV branches, or a categorical block (key + N mulinput outcomes)',
+    assumed:  'Assumption marker: the wrapped subcircuit is sound only '
+            + 'under the named evaluation assumption (boolean / absorptive)',
+    annotation: 'Annotation wrapper: query-level metadata (inversion-free '
+            + 'certificate / input order key)',
     'kc-and':   'AND gate',
     'kc-or':    'OR gate',
     'kc-not':   'NOT gate',
@@ -471,6 +475,7 @@
                 + (n.boolean_assumed ? ' is-boolean-assumed' : '')
                 + (n.absorptive_assumed || n.absorptive_folded
                    ? ' is-absorptive-assumed' : '')
+                + (n.dnnf_certified ? ' is-dnnf-certified' : '')
                 + (n.if_cert ? ' is-inversion-free' : '');
       const p = nodePos(n);
       const g = svgEl('g', { class: cls, 'data-id': n.id, transform: `translate(${p.x},${p.y})` });
@@ -583,6 +588,50 @@
         aGroup.appendChild(aa);
         aGroup.appendChild(at);
         g.appendChild(aGroup);
+      }
+      // d-DNNF certificate (info1 = 1 on a plus / times gate, emitted
+      // by the bounded-treewidth reachability route and the certified
+      // HAVING enumerations): a certified plus is *deterministic*
+      // (children mutually exclusive), a certified times *decomposable*
+      // (children over disjoint variables).  Green "D" badge
+      // bottom-right; the certificate is what routes
+      // probability_evaluate's chooser to the linear exact
+      // 'independent' method on these subcircuits.
+      if (n.dnnf_certified) {
+        const dGroup = svgEl('g', { class: 'dnnf-certified-marker' });
+        const tip = svgEl('title');
+        tip.textContent = (n.type === 'plus')
+          ? ('Certified deterministic \u2295: this gate carries the '
+             + 'd-DNNF certificate -- its children are mutually '
+             + 'exclusive events by construction, so probabilities sum. '
+             + 'Certified subcircuits evaluate exactly in linear time '
+             + 'via the \u2018independent\u2019 method and convert '
+             + 'natively in interpret-as-dd.')
+          : ('Certified decomposable \u2297: this gate carries the '
+             + 'd-DNNF certificate -- its children mention disjoint '
+             + 'variables by construction, so probabilities multiply. '
+             + 'Certified subcircuits evaluate exactly in linear time '
+             + 'via the \u2018independent\u2019 method and convert '
+             + 'natively in interpret-as-dd.');
+        dGroup.appendChild(tip);
+        const dc = svgEl('circle', {
+          class: 'dnnf-certified-badge',
+          cx: 16, cy: 18, r: 7,
+          fill: 'var(--green-700, #15803d)',
+          stroke: 'var(--green-900, #14532d)',
+        });
+        const dt2 = svgEl('text', {
+          x: 16, y: 18,
+          'text-anchor': 'middle',
+          'dominant-baseline': 'central',
+          'font-size': 9,
+          'font-weight': '700',
+          fill: 'var(--fg-on-dark)',
+        });
+        dt2.textContent = 'D';
+        dGroup.appendChild(dc);
+        dGroup.appendChild(dt2);
+        g.appendChild(dGroup);
       }
       // Inversion-free marker : the gate_annotation carrying the certificate
       // (on the certified result root) is elided server-side and its child
@@ -3440,6 +3489,15 @@
     } else if (t === 'cmp') {
       const op = node.info1_name || node.info1;
       if (op != null) out.push({ label: 'operator', value: op });
+    } else if (t === 'plus' || t === 'times') {
+      // info1 = 1 on plus / times is the persisted d-DNNF certificate.
+      if (node.dnnf_certified) {
+        out.push({
+          label: 'd-DNNF certificate',
+          value: t === 'plus' ? 'deterministic (children mutually exclusive)'
+                              : 'decomposable (children variable-disjoint)',
+        });
+      }
     } else if (t === 'eq') {
       // info1 / info2 are attribute indices for the two equijoin sides.
       if (node.info1 != null) out.push({ label: 'left attr',  value: node.info1 });

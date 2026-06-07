@@ -40,6 +40,11 @@ _GATE_LABEL = {
     "rv":       "ξ",
     "arith":    "α",
     "mixture":  "Mix",
+    # An assumption wrapper normally elides into a badge on its child
+    # (_elide_markers); it renders as its own node only when its child
+    # lies beyond the scene frontier.
+    "assumed":  "∴",
+    "annotation": "@",
 }
 
 # PROVSQL_ARITH_* enum tags (src/provsql_utils.h) → in-circle glyph. The
@@ -796,6 +801,18 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             "absorptive_assumed": node_markers.get(
                 r["node"], {}).get("absorptive_assumed", False),
             "absorptive_folded": bool(r.get("absorptive_folded")),
+            # The persisted d-DNNF certificate (DNNF_CERT_INFO = 1 in
+            # info1 of a plus / times gate): a certified plus is
+            # *deterministic* (children are mutually exclusive), a
+            # certified times *decomposable* (children mention disjoint
+            # variables).  Emitted by the bounded-treewidth
+            # reachability route and the certified HAVING
+            # enumerations; consumed by the linear 'independent'
+            # evaluator and interpret-as-dd.
+            "dnnf_certified": (
+                r["gate_type"] in ("plus", "times")
+                and str(r.get("info1")) == "1"
+            ),
             # Inversion-free marker: an elided gate_annotation wrapper above this
             # gate (IF badge).  if_cert is the certificate recipe summary on a
             # result root; if_key is the per-input order key + scene rank on a
