@@ -336,21 +336,40 @@ for pairs).  Also fixed en route: computing `array_agg(t)` and
 `array_agg(t ORDER BY t)` in one SELECT makes the planner feed *both*
 aggregates sorted input, scrambling the stored children order.
 
-*Open, cross-vertex aggregations*: ORs of route tokens across vertices
-("is some node of region R reachable", `GROUP BY` over a join with
-reach) are correlated and uncovered by both routes -- the pre-creation
-preconditions fail (the multiset is user-chosen, and "reach any of S"
-is not an OR over one bag's pair family).  The plausible answer is an
-*S-bit compilation*: the same DP with the state extended by a "some
-S-vertex already reached" bit, giving certified reach-any-of-S roots
-(and, with one bit per terminal, k-terminal/Steiner reliability from
-the multi-terminal note below), planted per group by a rewrite-time
-detection of the aggregation shape.  *Other reuse candidates for the
-canonical-address machinery*: a times-canonical analogue serving
-factored forms if Route 3 materialises; canonical agg-gate addressing
-for commutative aggregates (pure dedup -- only if duplicate agg gates
-show up in profiles).  The general rule learned: planted gates must
-live in namespaces ordinary creation never touches.
+*Cross-vertex aggregations: implemented* (the S-bit compilation).
+`compileAnyReach` extends the DP state by one bit per domain position
+-- "reaches some S-vertex within the part", the Courcelle congruence
+for the existential query: seeded by domain membership, propagated
+backwards by closure, folded for free under forgetting -- and reads
+the single acceptance bit off the root's below-table, so one bottom-up
+sweep suffices (no top-down pass).  The lowering detects, before CTE
+inlining, the outer shape `GROUP BY T.g` over `reach JOIN T ON node =
+T.a` (single grouping column of a single joined *untracked* relation,
+one join equality, no other quals; PG 18's synthetic RTE_GROUP is
+resolved through `groupexprs`), and plants, per multi-member group,
+the certified any-member circuit at the canonical address of the
+group's token multiset (`plant_reach_any_groups`, best-effort with
+fallback notices).  Differentially tested (400 random instances incl.
+BID blocks and probabilistic sources -- which exposed a vertex-id
+collision between a caller-supplied set member and the virtual
+super-source, fixed by intersecting the set with the edge/source
+universe); pinned in-database by `btw_anyreach` (region reliability
+exact vs possible-worlds, tracked-member skip).  Cost: one compilation
+pass per group at planning (~1.1 s/group on the 30k-edge ladder with
+100 regions; the warm created-token cache dedupes the shared below
+structure across groups).  *Open*: a shared sweep computing all
+groups' bits at once (the naive product state explodes; per-group
+passes are linear in the group count); k-terminal / Steiner
+reliability ("ALL of S reached" needs a richer congruence -- a
+boundary-to-internal coverage function, not one bit); DISTINCT-shaped
+aggregations and extra member-relation quals in the detection.
+
+*Other reuse candidates for the canonical-address machinery*: a
+times-canonical analogue serving factored forms if Route 3
+materialises; canonical agg-gate addressing for commutative aggregates
+(pure dedup -- only if duplicate agg gates show up in profiles).  The
+general rule learned: planted gates must live in namespaces ordinary
+creation never touches.
 
 #### Degeneracy pre-probe: implemented, measured, not enabled
 

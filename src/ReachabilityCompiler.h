@@ -291,6 +291,35 @@ static AllHopsResult compileAllHops(const std::vector<EdgeRow> &rows,
                                     bool directed,
                                     unsigned hop_bound,
                                     std::size_t max_states = DEFAULT_MAX_STATES);
+
+/**
+ * @brief Compile "some vertex of @p set is reachable" into one
+ *        certified circuit.
+ *
+ * Same DP, with the state extended by one bit per domain position --
+ * "this position reaches some @p set vertex within the processed
+ * part" -- folded under closure and projection, so the single
+ * acceptance bit (at the source's position, over the root's table) is
+ * read in one bottom-up sweep.  This is the deterministic circuit for
+ * the OR of the per-vertex reachability roots over @p set -- which,
+ * as an OR of *correlated* events (shared edges), could not otherwise
+ * be marked: it serves cross-vertex aggregations ("is some vertex of
+ * this region reachable") the per-vertex roots cannot.
+ *
+ * @param rows        Edge tuples.
+ * @param sources     Source arcs (at least one).
+ * @param set         The target vertex set (need not intersect the
+ *                    graph; an absent vertex contributes nothing).
+ * @param directed    If @c false, every edge contributes both arcs.
+ * @param max_states  Bound on the DP state count per node.
+ * @return            The circuit, its root computing the disjunction,
+ *                    and statistics.
+ */
+static Result compileAnyReach(const std::vector<EdgeRow> &rows,
+                              const std::vector<SourceArc> &sources,
+                              const std::vector<unsigned long> &set,
+                              bool directed,
+                              std::size_t max_states = DEFAULT_MAX_STATES);
 };
 
 #endif /* REACHABILITY_COMPILER_H */

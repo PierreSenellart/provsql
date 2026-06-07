@@ -23,3 +23,7 @@ test: casestudy7
 # fixpoint, tokens tagged 'assumed'/'absorptive'; min-plus and probability
 # proceed, counting and unrestricted tropical refuse
 test: absorptive_recursion
+
+# Cross-vertex reachability aggregations: GROUP BY over a join with a
+# reachability CTE gets certified any-member gates planted per group
+test: btw_anyreach

@@ -1,0 +1,32 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+region|p_independent|p_worlds|certified
+A|0.750000|0.750000|1
+B|0.437500|0.437500|1
+(2 rows)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+region|p_worlds
+A|0.437500
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

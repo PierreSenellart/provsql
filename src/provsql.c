@@ -403,6 +403,22 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
 typedef struct LoweredCte {
   const char *name;
   Query      *subquery;
+#if PG_VERSION_NUM >= 150000
+  /* When the CTE was recognised as the (plain, single-column)
+   * reachability shape, the pieces the post-lowering aggregation
+   * planting needs to rebuild the gathering arguments; see
+   * plant_reach_aggregations(). */
+  bool        reach_routed;
+  Oid         edge_relid;          /* InvalidOid for a subquery edge */
+  const char *src_name;
+  const char *dst_name;
+  const char *source_text;         /* NULL for the multi-source form */
+  Oid         source_relid;
+  const char *source_attname;
+  bool        directed;
+  const char *edge_quals;
+  const char *edge_sql;
+#endif
 } LoweredCte;
 
 static Query *lookup_lowered_cte(List *lowered, const char *name) {
@@ -1117,7 +1133,8 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
  * feasibility prototype: it performs SPI work and temp-table creation during
  * planning, and recognises only the linear/UNION shape.  See poc/recursive/.
  */
-static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
+static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
+                                LoweredCte *entry) {
   Query         *cteq = (Query *) cte->ctequery;
   char          *body_text;
   StringInfoData cols, coldef, call, scan;
@@ -1217,6 +1234,26 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r) {
                        cte->ctename,
                        OidIsValid(shape.relid) ? get_rel_name(shape.relid)
                                                : "a join-defined edge query");
+      /* Stash the pieces the post-lowering aggregation planting needs;
+       * only the plain single-column shape is plantable (a hop-counting
+       * working table has two columns and per-length tokens). */
+      if (entry != NULL && shape.hop_bound < 0) {
+        entry->reach_routed = true;
+        entry->edge_relid = shape.relid;
+        entry->src_name = pstrdup(src_name);
+        entry->dst_name = pstrdup(dst_name);
+        entry->source_text =
+          shape.source_text ? pstrdup(shape.source_text) : NULL;
+        entry->source_relid = shape.source_relid;
+        entry->source_attname =
+          OidIsValid(shape.source_relid)
+            ? get_attname(shape.source_relid, shape.source_attno, false)
+            : NULL;
+        entry->directed = shape.directed;
+        entry->edge_quals =
+          shape.edge_quals ? pstrdup(shape.edge_quals) : NULL;
+        entry->edge_sql = shape.edge_sql ? pstrdup(shape.edge_sql) : NULL;
+      }
       appendStringInfo(&call,
                        "SELECT provsql.eval_reachability(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s",
                        relarg.data,
@@ -1316,16 +1353,17 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
               r->subquery = copyObject(memo);
               r->ctename = NULL;
               r->ctelevelsup = 0;
-            } else if (lower_recursive_cte(cte, r)) {
-              /* Lowering succeeded; remember the scan subquery so any
-               * further reference to this CTE reuses it. */
-              LoweredCte *e = (LoweredCte *)palloc(sizeof(LoweredCte));
-              e->name = pstrdup(cte->ctename);
-              e->subquery = copyObject(r->subquery);
-              *lowered = lappend(*lowered, e);
             } else {
-              /* Unsupported recursion shape (e.g. UNION ALL). */
-              provsql_error("Recursive CTEs not supported (unsupported recursion shape)");
+              LoweredCte *e = (LoweredCte *)palloc0(sizeof(LoweredCte));
+              if (lower_recursive_cte(cte, r, e)) {
+                /* Lowering succeeded; remember the scan subquery so any
+                 * further reference to this CTE reuses it. */
+                e->name = pstrdup(cte->ctename);
+                e->subquery = copyObject(r->subquery);
+                *lowered = lappend(*lowered, e);
+              } else
+                /* Unsupported recursion shape (e.g. UNION ALL). */
+                provsql_error("Recursive CTEs not supported (unsupported recursion shape)");
             }
 #else
             provsql_error("Recursive CTEs not supported");
@@ -1350,14 +1388,256 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
   }
 }
 
+#if PG_VERSION_NUM >= 150000
+/** @brief One detected grouped-reachability aggregation (see below). */
+typedef struct ReachAggCandidate {
+  const char *ctename;        /**< The recursive CTE being aggregated. */
+  const char *node_colname;   /**< Its (single) column name. */
+  Oid member_relid;           /**< The joined member relation T. */
+  const char *member_attname; /**< T's join column. */
+  const char *group_attname;  /**< T's grouping column. */
+} ReachAggCandidate;
+
+/**
+ * @brief Detect, before CTE lowering, the grouped-reachability
+ *        aggregation shape:
+ *
+ *   WITH RECURSIVE reach(v) AS (...)
+ *   SELECT ... FROM reach r JOIN T ON r.v = T.<a> ... GROUP BY T.<g>
+ *
+ * The aggregation collapses each group's per-vertex reach tokens into
+ * one @c provenance_plus -- an OR of *correlated* events (the vertices
+ * share edges) that no per-vertex certificate covers.  When the CTE is
+ * later reachability-routed, @c plant_reach_aggregations() pre-creates,
+ * at the canonical address of each group's token multiset, a certified
+ * any-member-reachable circuit, so the natural aggregation stays on
+ * the linear evaluation route.  Detection is conservative: a single
+ * GROUP BY column from a single joined relation, one join equality
+ * against the CTE's single column, no other quals or range-table
+ * entries; anything else simply skips the planting (the generic path
+ * is always correct).
+ *
+ * @param q  The outer query (CTE references still in place).
+ * @return   List of @c ReachAggCandidate.
+ */
+static List *detect_reach_aggregations(Query *q) {
+  List *out = NIL;
+  ListCell *lc;
+  Index rti = 0, cte_rti = 0, t_rti = 0;
+  RangeTblEntry *cte_rte = NULL, *t_rte = NULL;
+  SortGroupClause *sgc;
+  TargetEntry *gtle = NULL;
+  Var *gvar;
+  List *quals = NIL;
+  bool ok = true;
+  OpExpr *eq;
+  Var *va, *vb, *cte_var, *t_var;
+  CommonTableExpr *cte = NULL;
+  ReachAggCandidate *cand;
+
+  if (q->setOperations != NULL || list_length(q->groupClause) != 1 ||
+      q->groupingSets != NIL || q->cteList == NIL)
+    return NIL;
+
+  foreach(lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    ++rti;
+    switch (r->rtekind) {
+    case RTE_CTE:
+      if (cte_rti != 0 || r->ctelevelsup != 0)
+        return NIL;
+      cte_rti = rti;
+      cte_rte = r;
+      break;
+    case RTE_RELATION:
+      if (t_rti != 0 || r->relkind != RELKIND_RELATION)
+        return NIL;
+      t_rti = rti;
+      t_rte = r;
+      break;
+    case RTE_JOIN:
+#if PG_VERSION_NUM >= 180000
+    case RTE_GROUP:
+      /* PG 18's synthetic grouping RTE; grouping Vars resolved below. */
+#endif
+      break;
+    default:
+      return NIL;
+    }
+  }
+  if (cte_rti == 0 || t_rti == 0)
+    return NIL;
+
+  /* The referenced CTE must be a recursive one of this query, with a
+   * single column (the plain reachability shape; hop-counting working
+   * tables carry per-length tokens and are not plantable). */
+  foreach(lc, q->cteList) {
+    CommonTableExpr *c = (CommonTableExpr *) lfirst(lc);
+    if (strcmp(c->ctename, cte_rte->ctename) == 0) {
+      cte = c;
+      break;
+    }
+  }
+  if (cte == NULL || !cte->cterecursive ||
+      list_length(cte->ctecolnames) != 1)
+    return NIL;
+
+  /* The grouping column: a bare Var of T. */
+  sgc = (SortGroupClause *) linitial(q->groupClause);
+  foreach(lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    if (te->ressortgroupref == sgc->tleSortGroupRef) {
+      gtle = te;
+      break;
+    }
+  }
+  if (gtle == NULL)
+    return NIL;
+  gvar = (Var *) reach_strip((Node *) gtle->expr);
+#if PG_VERSION_NUM >= 180000
+  /* On PG 18 the grouping TLE's Var points at the synthetic RTE_GROUP;
+   * resolve it through the group RTE's groupexprs to the source Var. */
+  if (q->hasGroupRTE && gvar != NULL && IsA(gvar, Var) &&
+      gvar->varlevelsup == 0) {
+    Index gidx = 1;
+    foreach(lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+      if (r->rtekind == RTE_GROUP) {
+        if (gvar->varno == gidx && gvar->varattno >= 1 &&
+            gvar->varattno <= list_length(r->groupexprs))
+          gvar = (Var *) reach_strip(
+            (Node *) list_nth(r->groupexprs, gvar->varattno - 1));
+        break;
+      }
+      ++gidx;
+    }
+  }
+#endif
+  if (gvar == NULL || !IsA(gvar, Var) || gvar->varno != t_rti ||
+      gvar->varlevelsup != 0 || gvar->varattno <= 0)
+    return NIL;
+
+  /* Exactly one qual: the join equality CTE column = T column. */
+  reach_collect_quals((Node *) q->jointree, &quals, &ok);
+  if (!ok || list_length(quals) != 1)
+    return NIL;
+  if (!IsA(linitial(quals), OpExpr))
+    return NIL;
+  eq = (OpExpr *) linitial(quals);
+  if (list_length(eq->args) != 2 ||
+      !op_mergejoinable(eq->opno, exprType((Node *) linitial(eq->args))))
+    return NIL;
+  va = (Var *) reach_strip((Node *) linitial(eq->args));
+  vb = (Var *) reach_strip((Node *) lsecond(eq->args));
+  if (va == NULL || vb == NULL || !IsA(va, Var) || !IsA(vb, Var) ||
+      va->varlevelsup != 0 || vb->varlevelsup != 0)
+    return NIL;
+  if (va->varno == cte_rti && vb->varno == t_rti) {
+    cte_var = va;
+    t_var = vb;
+  } else if (vb->varno == cte_rti && va->varno == t_rti) {
+    cte_var = vb;
+    t_var = va;
+  } else
+    return NIL;
+  if (cte_var->varattno != 1 || t_var->varattno <= 0)
+    return NIL;
+
+  cand = (ReachAggCandidate *) palloc(sizeof(ReachAggCandidate));
+  cand->ctename = pstrdup(cte->ctename);
+  cand->node_colname = pstrdup(strVal(linitial(cte->ctecolnames)));
+  cand->member_relid = t_rte->relid;
+  cand->member_attname = get_attname(t_rte->relid, t_var->varattno, false);
+  cand->group_attname = get_attname(t_rte->relid, gvar->varattno, false);
+  out = lappend(out, cand);
+  return out;
+}
+
+/**
+ * @brief Plant the certified any-member gates for the aggregations
+ *        detected by @c detect_reach_aggregations(), via
+ *        @c provsql.plant_reach_any_groups over SPI -- best-effort and
+ *        after lowering, so the working table exists and the
+ *        reachability shape's gathering arguments are known.
+ */
+static void plant_reach_aggregations(List *candidates, List *lowered) {
+  ListCell *lc;
+  foreach(lc, candidates) {
+    ReachAggCandidate *cand = (ReachAggCandidate *) lfirst(lc);
+    ListCell *ll;
+    LoweredCte *entry = NULL;
+    StringInfoData call;
+    int rc;
+    foreach(ll, lowered) {
+      LoweredCte *e = (LoweredCte *) lfirst(ll);
+      if (strcmp(e->name, cand->ctename) == 0) {
+        entry = e;
+        break;
+      }
+    }
+    if (entry == NULL || !entry->reach_routed)
+      continue;
+
+    initStringInfo(&call);
+    appendStringInfo(&call,
+                     "SELECT provsql.plant_reach_any_groups(%s, %s, %u::pg_catalog.regclass, %s, %s, ",
+                     quote_literal_cstr(cand->ctename),
+                     quote_literal_cstr(cand->node_colname),
+                     cand->member_relid,
+                     quote_literal_cstr(cand->member_attname),
+                     quote_literal_cstr(cand->group_attname));
+    if (OidIsValid(entry->edge_relid))
+      appendStringInfo(&call, "%u::pg_catalog.regclass", entry->edge_relid);
+    else
+      appendStringInfoString(&call, "NULL::pg_catalog.regclass");
+    appendStringInfo(&call, ", %s, %s, %s, %s, %s, ",
+                     quote_literal_cstr(entry->src_name),
+                     quote_literal_cstr(entry->dst_name),
+                     entry->source_text
+                       ? quote_literal_cstr(entry->source_text) : "NULL",
+                     entry->directed ? "true" : "false",
+                     entry->edge_quals
+                       ? quote_literal_cstr(entry->edge_quals) : "NULL");
+    if (OidIsValid(entry->source_relid))
+      appendStringInfo(&call, "%u::pg_catalog.regclass, %s, ",
+                       entry->source_relid,
+                       quote_literal_cstr(entry->source_attname));
+    else
+      appendStringInfoString(&call, "NULL, NULL, ");
+    appendStringInfo(&call, "%s)",
+                     entry->edge_sql
+                       ? quote_literal_cstr(entry->edge_sql) : "NULL");
+
+    if ((rc = SPI_connect()) != SPI_OK_CONNECT)
+      provsql_error("Reachability aggregation planting: SPI_connect failed (%d)", rc);
+    rc = SPI_execute(call.data, false, 0);
+    SPI_finish();
+    if (rc < 0)
+      provsql_error("Reachability aggregation planting failed (%d)", rc);
+  }
+}
+#endif
+
 /**
  * @brief Inline all CTE references in @p q as subqueries.
  */
 static void inline_ctes(Query *q) {
   List *lowered = NIL;
+#if PG_VERSION_NUM >= 150000
+  List *reach_aggs = NIL;
+#endif
   if (q->cteList == NIL)
     return;
+#if PG_VERSION_NUM >= 150000
+  /* Grouped-reachability aggregations are detected before lowering
+   * (the CTE reference is still recognisable) and planted after (the
+   * working table then exists). */
+  reach_aggs = detect_reach_aggregations(q);
+#endif
   inline_ctes_in_rtable(q->rtable, q->cteList, &lowered);
+#if PG_VERSION_NUM >= 150000
+  plant_reach_aggregations(reach_aggs, lowered);
+#endif
   q->cteList = NIL;
 }
 

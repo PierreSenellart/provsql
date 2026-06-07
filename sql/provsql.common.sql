@@ -4531,6 +4531,220 @@ CREATE OR REPLACE FUNCTION reachability_materialize_hops(
 
 
 /**
+ * @brief Per-group "some member reachable" compilation (columnar form,
+ * internal)
+ *
+ * For each distinct group in the parallel @p group_ids /
+ * @p member_vertices arrays, compiles the certified circuit of "some
+ * member vertex is reachable from a present source" along the data
+ * decomposition -- the disjunction over the group's *correlated*
+ * per-vertex reachability events, deterministic by construction
+ * through the set-reachability state bit -- materialises it, and
+ * returns one @c (group_id, token) row per group.  Engine behind the
+ * rewriter's cross-vertex aggregation planting.
+ *
+ * @param sources source vertex of each edge (dense integer IDs)
+ * @param destinations destination vertex of each edge
+ * @param tokens provenance token of each edge tuple
+ * @param probabilities probability of each edge tuple
+ * @param block_keys per-edge BID key variable (nil UUID = independent)
+ * @param block_indices per-edge outcome index within its block
+ * @param source_vertices the source vertices
+ * @param source_tokens per-source provenance token (nil UUID = certain)
+ * @param source_probabilities per-source probability
+ * @param directed if false, each edge can be traversed both ways
+ * @param group_ids group identifier of each member row
+ * @param member_vertices member vertex of each member row
+ */
+CREATE OR REPLACE FUNCTION reachability_materialize_any(
+  IN sources INT[],
+  IN destinations INT[],
+  IN tokens UUID[],
+  IN probabilities DOUBLE PRECISION[],
+  IN block_keys UUID[],
+  IN block_indices INT[],
+  IN source_vertices INT[],
+  IN source_tokens UUID[],
+  IN source_probabilities DOUBLE PRECISION[],
+  IN directed BOOLEAN,
+  IN group_ids INT[],
+  IN member_vertices INT[],
+  OUT group_id INT,
+  OUT token UUID)
+  RETURNS SETOF record AS
+  'provsql','reachability_materialize_any' LANGUAGE C VOLATILE;
+
+/**
+ * @brief Plant certified any-member-reachable gates for a grouped
+ * reachability aggregation (internal)
+ *
+ * Called (at plan time, over SPI) by the recursive-CTE lowering when
+ * the outer query aggregates a reachability working table by a column
+ * of a joined, untracked member relation: @c GROUP @c BY collapses
+ * each group's per-vertex reach tokens with @c provenance_plus, whose
+ * disjuncts are correlated (they share edges) and would otherwise
+ * leave the certified route.  For each multi-member group this
+ * pre-creates, at the canonical address of the group's token multiset,
+ * a certified single-child plus over the group's native
+ * any-member-reachable circuit (@c reachability_materialize_any), so
+ * the natural aggregation stays on the linear evaluation route.
+ * Best-effort: any failure leaves the generic path untouched (notice
+ * under verbosity 10).
+ *
+ * @param work_name the lowered CTE's working table
+ * @param node_attribute its vertex column
+ * @param member_rel the joined member relation (must be untracked)
+ * @param member_attribute the member relation's join column
+ * @param group_attribute the member relation's grouping column
+ * @param edge_rel the tracked edge relation (as for eval_reachability)
+ * @param source_attribute name of the source-vertex column
+ * @param destination_attribute name of the destination-vertex column
+ * @param source_value the base arm's constant, as text
+ * @param directed if false, each edge can be traversed both ways
+ * @param edge_quals optional deterministic filter over edge columns
+ * @param source_rel source relation of a multi-source base arm
+ * @param source_rel_attribute the source relation's vertex column
+ * @param edge_sql deparsed edge subquery (join-defined edges)
+ */
+CREATE OR REPLACE FUNCTION plant_reach_any_groups(
+  work_name text,
+  node_attribute text,
+  member_rel regclass,
+  member_attribute text,
+  group_attribute text,
+  edge_rel regclass,
+  source_attribute text,
+  destination_attribute text,
+  source_value text,
+  directed boolean,
+  edge_quals text DEFAULT NULL,
+  source_rel regclass DEFAULT NULL,
+  source_rel_attribute text DEFAULT NULL,
+  edge_sql text DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  e record;
+  grp record;
+  m record;
+  sv text[];
+  st uuid[];
+  sp double precision[];
+  gids int[] := ARRAY[]::int[];
+  mids int[] := ARRAY[]::int[];
+  vid int;
+  canonical uuid;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  BEGIN
+    -- A tracked member relation would make the aggregated tokens
+    -- per-row products, not the bare reach tokens: nothing to plant.
+    IF EXISTS (SELECT 1 FROM pg_attribute
+               WHERE attrelid = member_rel AND attname = 'provsql'
+                 AND atttypid = 'uuid'::regtype AND NOT attisdropped) THEN
+      RETURN;
+    END IF;
+
+    IF source_rel IS NOT NULL THEN
+      SELECT g.source_values, g.source_tokens, g.source_probabilities
+        INTO sv, st, sp
+        FROM provsql.gather_reachability_sources(source_rel,
+                                                 source_rel_attribute) g;
+      IF sv IS NULL THEN
+        sv := ARRAY[]::text[];
+        st := ARRAY[]::uuid[];
+        sp := ARRAY[]::float8[];
+      END IF;
+    ELSE
+      sv := ARRAY[source_value];
+      st := ARRAY['00000000-0000-0000-0000-000000000000'::uuid];
+      sp := ARRAY[1.0::float8];
+    END IF;
+
+    e := provsql.gather_reachability_edges(edge_rel, source_attribute,
+                                           destination_attribute,
+                                           sv, edge_quals, edge_sql);
+
+    -- The groups, replicating the user's join semantics: per group, the
+    -- member vertices and the multiset of their reach tokens (with the
+    -- multiplicity the join produces).  Single-member groups need no
+    -- planting (provenance_plus passes a single token through).
+    -- Two steps: materialise the joined rows with their per-row tokens
+    -- (tracked CTAS, then strip the automatic provsql column), and only
+    -- then aggregate the now-plain table -- aggregating provenance()
+    -- inside a grouped tracked query would be rewritten as a
+    -- provenance-aware aggregation, which is not what the planting
+    -- needs.
+    DROP TABLE IF EXISTS provsql_reach_any_flat_tmp;
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_reach_any_flat_tmp AS '
+      || 'SELECT w.%1$I::text AS node_val, provsql.provenance() AS tok, '
+      || '       t.%5$I AS grp_key '
+      || 'FROM %2$I w JOIN %3$s t ON w.%1$I = t.%4$I',
+      node_attribute, work_name, member_rel::text, member_attribute,
+      group_attribute);
+    PERFORM provsql.remove_provenance('provsql_reach_any_flat_tmp');
+    DROP TABLE IF EXISTS provsql_reach_any_groups_tmp;
+    CREATE TEMP TABLE provsql_reach_any_groups_tmp AS
+      SELECT (row_number() OVER ())::int AS gid, members, toks FROM (
+        SELECT array_agg(node_val) AS members, array_agg(tok) AS toks
+        FROM provsql_reach_any_flat_tmp
+        GROUP BY grp_key HAVING count(*) >= 2) g;
+    DROP TABLE provsql_reach_any_flat_tmp;
+
+    FOR grp IN SELECT gid, members FROM provsql_reach_any_groups_tmp LOOP
+      FOR m IN SELECT DISTINCT unnest(grp.members) AS val LOOP
+        vid := array_position(e.vertices, m.val);
+        IF vid IS NOT NULL THEN
+          gids := gids || grp.gid;
+          mids := mids || vid;
+        END IF;
+      END LOOP;
+    END LOOP;
+    IF cardinality(gids) = 0 THEN
+      DROP TABLE provsql_reach_any_groups_tmp;
+      RETURN;
+    END IF;
+
+    FOR grp IN
+      SELECT a.group_id, a.token AS any_token, t.toks
+      FROM provsql.reachability_materialize_any(
+             e.sources, e.destinations, e.tokens, e.probabilities,
+             e.block_keys, e.block_indices, e.extra_ids, st, sp,
+             directed, gids, mids) a
+      JOIN provsql_reach_any_groups_tmp t ON t.gid = a.group_id
+    LOOP
+      canonical := public.uuid_generate_v5(
+        provsql.uuid_ns_provsql(),
+        concat('plus-canonical',
+               (SELECT array_agg(tok ORDER BY tok)
+                FROM unnest(grp.toks) tok)));
+      PERFORM provsql.create_gate(canonical, 'plus', ARRAY[grp.any_token]);
+      PERFORM provsql.set_infos(canonical, 1);
+    END LOOP;
+    DROP TABLE provsql_reach_any_groups_tmp;
+    IF verbosity >= 20 THEN
+      -- Lift the function-level client_min_messages = warning for the
+      -- one RAISE; the function-level SET restores the caller's value.
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: certified any-member gates planted for the aggregation of "%" by %.%',
+        work_name, member_rel, group_attribute;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    IF verbosity >= 10 THEN
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: any-member planting for "%" skipped (%)',
+        work_name, SQLERRM;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  END;
+END
+-- No SET search_path: the deparsed edge subquery must resolve against
+-- the caller's path; ProvSQL internals are schema-qualified.
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+/**
  * @brief Input leaves of a conjunction-shaped provenance token (internal)
  *
  * Descends a token's circuit through the conjunctive gate types

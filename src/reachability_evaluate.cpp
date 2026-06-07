@@ -39,12 +39,14 @@ PG_FUNCTION_INFO_V1(reachability_evaluate);
 PG_FUNCTION_INFO_V1(reachability_compile_stats);
 PG_FUNCTION_INFO_V1(reachability_materialize);
 PG_FUNCTION_INFO_V1(reachability_materialize_hops);
+PG_FUNCTION_INFO_V1(reachability_materialize_any);
 }
 
 #include "c_cpp_compatibility.h"
 #include "ReachabilityCompiler.h"
 #include "provsql_utils_cpp.h"
 
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -735,6 +737,98 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
     provsql_error("reachability_materialize_hops: %s", e.what());
   } catch (...) {
     provsql_error("reachability_materialize_hops: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable entry point: per-group "some member
+ *        reachable" compilation and materialisation.
+ *
+ * Arguments 0..9 as @c reachability_materialize, then two parallel
+ * arrays flattening the groups: @c group_ids @c int[] and
+ * @c member_vertices @c int[] (dense vertex IDs).  For each distinct
+ * group, compiles the certified circuit of "some member vertex is
+ * reachable from a present source" (@c compileAnyReach: the
+ * set-reachability bit folded through the decomposition DP, so the
+ * disjunction over the group's *correlated* per-vertex events is
+ * deterministic by construction) and materialises it; returns one
+ * @c (group_id, token) row per group.  The caller plants each token
+ * under the canonical address of the group's per-vertex reach tokens,
+ * keeping cross-vertex aggregations ("is some vertex of this region
+ * reachable") on the linear certified route.
+ */
+Datum reachability_materialize_any(PG_FUNCTION_ARGS)
+{
+  try {
+    if (PG_ARGISNULL(9))
+      provsql_error("reachability: directed must not be NULL");
+
+    auto rows = edgesFromArgs(fcinfo, 4);
+    const bool directed = PG_GETARG_BOOL(9);
+    const auto sources = sourcesFromArgs(fcinfo, 6);
+
+    ArrayType *gids = PG_ARGISNULL(10) ? NULL : PG_GETARG_ARRAYTYPE_P(10);
+    ArrayType *gverts = PG_ARGISNULL(11) ? NULL : PG_GETARG_ARRAYTYPE_P(11);
+    const int ng = checkedArrayLength(gids, "group ids");
+    if (checkedArrayLength(gverts, "group member vertices") != ng)
+      provsql_error("reachability: group arrays must have the same length");
+    if (ng == 0)
+      provsql_error("reachability: at least one group member is required");
+
+    const int32 *gid_data = (const int32 *) ARR_DATA_PTR(gids);
+    const int32 *gv_data = (const int32 *) ARR_DATA_PTR(gverts);
+    std::map<int32, std::vector<unsigned long> > groups;
+    for (int i = 0; i < ng; ++i)
+      groups[gid_data[i]].push_back(static_cast<unsigned long>(gv_data[i]));
+
+    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+    MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+    MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+    TupleDesc tupdesc;
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE) {
+      MemoryContextSwitchTo(oldcontext);
+      provsql_error(
+        "reachability_materialize_any: function must return a row type");
+    }
+    tupdesc = BlessTupleDesc(tupdesc);
+
+    Tuplestorestate *tupstore = tuplestore_begin_heap(
+      rsinfo->allowedModes & SFRM_Materialize_Random, false, work_mem);
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+    rsinfo->setDesc = tupdesc;
+
+    for (const auto &[gid, members] : groups) {
+      ReachabilityCompiler::Result res;
+      try {
+        res = ReachabilityCompiler::compileAnyReach(rows, sources, members,
+                                                    directed);
+      } catch (TreeDecompositionException &) {
+        MemoryContextSwitchTo(oldcontext);
+        provsql_error(
+          "reachability: data treewidth exceeds the supported limit (%d)",
+          TreeDecomposition::MAX_TREEWIDTH);
+      }
+      const auto uuid_of =
+        materializeCertifiedDD(res.dd, {res.dd.getRoot()});
+
+      Datum values[2];
+      bool nulls[2] = {false, false};
+      values[0] = Int32GetDatum(gid);
+      pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
+      *u = uuid_of.at(res.dd.getRoot());
+      values[1] = UUIDPGetDatum(u);
+      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+
+    MemoryContextSwitchTo(oldcontext);
+    return (Datum) 0;
+  } catch (const std::exception &e) {
+    provsql_error("reachability_materialize_any: %s", e.what());
+  } catch (...) {
+    provsql_error("reachability_materialize_any: unknown exception");
   }
   PG_RETURN_NULL();
 }

@@ -116,7 +116,8 @@ INTERNAL_FUNCTIONS = {
     # decomposition-aligned route (bounded-treewidth data), backed by
     # reachability_materialize.
     'eval_recursive', 'eval_reachability', 'reachability_materialize',
-    'reachability_materialize_hops',
+    'reachability_materialize_hops', 'reachability_materialize_any',
+    'plant_reach_any_groups',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',
