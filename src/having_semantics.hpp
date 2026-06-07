@@ -70,6 +70,33 @@ void provsql_having(
   if (cmp_gates.empty())
     return;
 
+  // Whether the world enumeration over these contributor annotations can
+  // be built *certified*: the semiring persists d-DNNF certificates
+  // (circuit-building BoolExpr), every contributor is an independent
+  // literal (base Bernoulli or constant) so world terms are decomposable,
+  // no literal repeats (a repeat would couple two contributors), and the
+  // contributor count is small enough that the complete-worlds
+  // enumeration the certificate requires stays affordable.
+  auto certifiable_contributors =
+    [&](const std::vector<typename SemiringT::value_type> &kv) -> bool {
+      if (!S.certifying())
+        return false;
+      if (kv.size() > 16)
+        return false;
+      for (size_t i = 0; i < kv.size(); ++i) {
+        if (!S.independent_literal(kv[i]))
+          return false;
+        // Distinctness among non-constant literals (constants are
+        // variable-free, so repeats of one() / zero() are harmless).
+        if (kv[i] == S.one() || kv[i] == S.zero())
+          continue;
+        for (size_t j = 0; j < i; ++j)
+          if (kv[j] == kv[i])
+            return false;
+      }
+      return true;
+    };
+
   auto pw_from_cmp_gate = [&](gate_t cmp_gate, typename SemiringT::value_type &pw_out) -> bool {
     const auto &cw = c.getWires(cmp_gate);
     if (cw.size() != 2) return false;
@@ -129,6 +156,28 @@ void provsql_having(
         // first present element matches; summing the annotations of all such
         // worlds telescopes (free suffix sums to one):
         //   pw = ⊕_{i : vᵢ matches} kᵢ ⊗ (⊗_{j<i} (1 ⊖ kⱼ))
+        //
+        // The disjuncts are mutually exclusive by construction (they
+        // differ on the first present index): when the semiring
+        // certifies enumerations, build them as certified world terms
+        // under a certified deterministic OR instead.
+        if (certifiable_contributors(kvals)) {
+          std::vector<typename SemiringT::value_type> disjuncts;
+          std::vector<typename SemiringT::value_type> before;
+          for (size_t i = 0; i < kvals.size(); ++i) {
+            bool match = (effective_op == ComparisonOperator::EQ)
+                           ? (mvals_str[i] == C_str)
+                           : (mvals_str[i] != C_str);
+            if (match)
+              disjuncts.push_back(S.certified_world_term(
+                std::vector<typename SemiringT::value_type>{kvals[i]},
+                before));
+            before.push_back(kvals[i]);
+          }
+          pw_out = disjuncts.empty() ? S.zero()
+                   : S.certified_exclusive_plus(disjuncts);
+          return true;
+        }
         const auto one  = S.one();
         std::vector<typename SemiringT::value_type> disjuncts;
         auto prefix = one;
@@ -200,11 +249,34 @@ void provsql_having(
       for (size_t i = 0; i < m_mant.size(); ++i)
         if (!rescale_to(m_mant[i], m_scale[i], target_scale, mvals[i])) return false;
 
+      // A certified enumeration needs the *complete* valid worlds (every
+      // contributor present or explicitly negated): the upset shortcut
+      // and the monotone MIN/MAX skips below produce overlapping,
+      // non-exclusive disjuncts, sound for absorptive evaluation but
+      // unmarkable.  When certifying, request the full enumeration --
+      // the same one non-absorptive semirings already use.
+      const bool certify = certifiable_contributors(kvals);
+
       bool upset = false;
-      auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind, S.absorptive(), upset, is_scalar);
+      auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind,
+                                           certify ? false : S.absorptive(),
+                                           upset, is_scalar);
 
       if (worlds.empty()) {
         pw_out = S.zero();
+        return true;
+      }
+
+      if (certify) {
+        std::vector<typename SemiringT::value_type> disjuncts;
+        disjuncts.reserve(worlds.size());
+        for (const auto &mask : worlds) {
+          std::vector<typename SemiringT::value_type> present, missing;
+          for (size_t i = 0; i < kvals.size(); ++i)
+            (mask[i] ? present : missing).push_back(kvals[i]);
+          disjuncts.push_back(S.certified_world_term(present, missing));
+        }
+        pw_out = S.certified_exclusive_plus(disjuncts);
         return true;
       }
 
@@ -428,6 +500,10 @@ void provsql_having(
       for (size_t i = 0; i < n; ++i)
         kval[i] = c.evaluate<SemiringT>(kgates[i], mapping, S);
 
+      // The joint enumeration below is over complete worlds already:
+      // certify the disjuncts when the semiring and contributors allow.
+      const bool certify = certifiable_contributors(kval);
+
       std::vector<typename SemiringT::value_type> disjuncts;
       const uint64_t total = uint64_t(1) << n;
       for (uint64_t world = 1; world < total; ++world) {  // skip the empty world
@@ -450,10 +526,14 @@ void provsql_having(
         std::vector<typename SemiringT::value_type> present, missing;
         for (size_t i = 0; i < n; ++i) {
           if (world & (uint64_t(1) << i)) {
-            if (kval[i] != S.one()) present.push_back(kval[i]);
+            if (certify || kval[i] != S.one()) present.push_back(kval[i]);
           } else {
-            if (kval[i] != S.zero()) missing.push_back(kval[i]);
+            if (certify || kval[i] != S.zero()) missing.push_back(kval[i]);
           }
+        }
+        if (certify) {
+          disjuncts.push_back(S.certified_world_term(present, missing));
+          continue;
         }
         auto present_prod = S.times(present);
         if (missing.empty())
@@ -468,7 +548,9 @@ void provsql_having(
         }
       }
 
-      pw_out = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
+      pw_out = disjuncts.empty() ? S.zero()
+               : certify ? S.certified_exclusive_plus(disjuncts)
+               : S.plus(disjuncts);
       return true;
     };
 

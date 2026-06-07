@@ -683,6 +683,27 @@ block, reusing the categorical machinery; pinned by ``test/sql/having_union.sql`
 A base tuple shared *across* a group's contributors is genuinely :math:`\#P`-hard
 and falls back to enumeration.
 
+**The enumeration itself is certified when it can be.**  A comparator that
+reaches ``provsql_having``'s possible-worlds expansion is, when the group's
+contributors are independent base literals, a d-DNNF by construction: the
+complete world terms partition the worlds (a deterministic OR) and each is an
+AND over distinct literals (decomposable).  The Boolean-circuit construction
+(``semiring::BoolExpr``, via the ``Semiring`` certification hooks) builds it
+that way and stamps the persisted d-DNNF certificate -- the same mark the
+bounded-treewidth reachability route emits -- with the missing-side
+``monus(one, plus(...))`` De Morgan-expanded into per-literal negations so the
+whole enumeration forms one certified island whose contributor sharing across
+world terms is licensed.  The certificate-aware ``independent`` method then
+evaluates these tokens linearly in the enumeration size; this is what makes
+``AVG`` *op* constant, arithmetic over several aggregates
+(``sum(a) > 3*count(*)``), and ``choose() = 'text'`` exact without any
+dedicated evaluator -- shapes the closed-form pre-passes above do not cover.
+Certification requires the complete enumeration (the upset shortcut and the
+monotone MIN / MAX skips produce overlapping disjuncts), so the certifying
+path requests it explicitly, capped at 16 contributors; correlated
+contributors are never certified and keep their existing routes.  Pinned by
+``test/sql/having_certified.sql``.
+
 The trichotomy classification above is the standing complexity reference; ProvSQL
 acts on it only through the evaluators (the exact corner) and the sampler (the
 apx-safe corner), not through any read-only verdict surface.

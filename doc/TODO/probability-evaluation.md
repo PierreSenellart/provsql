@@ -140,24 +140,33 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
 ## 4. Method-catalog follow-ups
 
-- **Creator-marked deterministic ORs for HAVING enumerations.** The
-  Boolean circuits that `having_Expr_to_provenance_cmp` builds are ORs
-  over "the group's aggregate takes value v" / "exactly this subset
-  present" outcomes -- mutually exclusive by construction (an aggregate
-  has one value per world), with variable-disjoint ANDs inside: actual
-  d-DNNFs, just unmarked.  Stamping `DNNF_CERT_INFO` on them at
-  creation (the same persisted certificate the bounded-treewidth
-  reachability route uses, consumed by `independent` /
-  `interpret-as-dd`) would give the *circuit-route* evaluation of
-  HAVING tokens exact linear coverage wherever the enumeration is
-  small -- complementary to the marginal-vector engine (which works on
-  the `gate_agg` side) and to item 2's samplers (which remain the
-  answer when the enumeration explodes).  Same dual pattern as the
-  reachability certificates: creator-marked here; a cheap *verified*
-  variant also exists for ORs whose children are `mulinput` literals of
-  one key variable with distinct indices (unions of `repair_key`
-  alternatives), checkable in one pass over the children at evaluation
-  time.
+- **Creator-marked deterministic ORs for HAVING enumerations: done.**
+  The possible-worlds DNF that `provsql_having` builds (at
+  Boolean-circuit construction time, not in the store) is a d-DNNF by
+  construction when the contributors are independent base literals:
+  complete world terms partition the worlds, and an AND over distinct
+  literals is decomposable.  The `BoolExpr` semiring now overrides the
+  new `Semiring` certification hooks (`certifying` /
+  `independent_literal` / `certified_world_term` /
+  `certified_exclusive_plus`) to build the enumeration as certified
+  gates -- the missing-side `monus(one, plus(...))` De Morgan-expanded
+  into per-literal NOTs so the whole enumeration is one certified
+  island and the contributor sharing across world terms is licensed.
+  Certification requires the *complete* enumeration, so the certifying
+  path asks `enumerate_valid_worlds` for it (no upset shortcut, no
+  monotone MIN/MAX skips), capped at 16 contributors; the residual
+  monotone cases over independent contributors were already closed-form
+  (Poisson-binomial / min-max / weighted-sum DP) before reaching the
+  enumeration, so nothing is lost.  Net new exact-linear coverage:
+  `AVG op const`, arithmetic over several aggregates
+  (`sum(a) > 3*count(*)`), `choose() = 'text'` -- pinned by
+  `test/sql/having_certified.sql` against possible-worlds.  Correlated
+  contributors (join products sharing a base tuple) are not certified;
+  `independent` keeps refusing them and the samplers / exhaustive
+  methods remain their route.  Still open from the original note: the
+  cheap *verified* certificate for ORs whose children are `mulinput`
+  literals of one key variable (unions of `repair_key` alternatives),
+  checkable in one pass at evaluation time.
 - **Lazy Boolean build.** RV / HAVING circuits with no Boolean view fall to a
   small top-level estimator outside the catalog (the surviving-aggregate sampler
   routing of item 2 is a partial step). A true lazy Boolean build would fold even

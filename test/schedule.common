@@ -70,6 +70,11 @@ test: having_count_distinct
 test: scalar_empty_having
 test: having_sum_zero
 test: having_bid
+
+# Certified HAVING enumerations: the possible-worlds DNF over independent
+# base contributors carries the d-DNNF certificate, so 'independent'
+# evaluates AVG / multi-aggregate arithmetic / choose() HAVING exactly
+test: having_certified
 test: having_arithmetic
 test: having_agg_fptras
 test: insert_select_sublink

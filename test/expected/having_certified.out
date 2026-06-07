@@ -1,0 +1,44 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+grp|p_independent|p_worlds
+1|0.610000|0.610000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+grp|p_independent
+1|0.610000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+grp|p_independent|p_worlds
+1|0.300000|0.300000
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|p_worlds
+1|0.500000
+(1 row)
+ERROR:  ProvSQL: Not an independent circuit
+remove_provenance
+
+(1 row)

@@ -228,6 +228,66 @@ virtual bool absorptive() const {
 virtual bool compatibleWithBooleanRewrite() const {
   return false;
 }
+
+/**
+ * @brief Whether this semiring builds *certified* exclusive
+ *        enumerations (see the three hooks below).
+ *
+ * The HAVING possible-worlds machinery (@c provsql_having) enumerates,
+ * for a comparison over a group aggregate, the complete valuations of
+ * the group's contributors that satisfy the predicate.  Those
+ * disjuncts partition the worlds -- the OR is *deterministic* and each
+ * world term an AND of literals over distinct contributors,
+ * *decomposable* -- i.e., the enumeration is a d-DNNF by construction.
+ * A circuit-building semiring can persist that knowledge as the d-DNNF
+ * certificate (the same mark the bounded-treewidth reachability route
+ * emits), letting the linear certificate-aware evaluators handle the
+ * result; scalar semirings have nothing to mark.
+ *
+ * @return @c false by default (the hooks below then go unused and the
+ *         historical constructions are kept verbatim).
+ */
+virtual bool certifying() const {
+  return false;
+}
+
+/**
+ * @brief Whether @p v is an independent literal for certification
+ *        purposes: a base Bernoulli variable (or a constant), so that
+ *        distinct literals have disjoint supports and an AND over them
+ *        is decomposable.
+ *
+ * Only consulted when @c certifying() is @c true.
+ *
+ * @return @c false by default.
+ */
+virtual bool independent_literal(const value_type &) const {
+  return false;
+}
+
+/**
+ * @brief Build one complete world term: the conjunction of the
+ *        @p present literals and the *negations* of the @p missing
+ *        literals, certified decomposable.
+ *
+ * Only called when @c certifying() is @c true; the default throws.
+ */
+virtual value_type certified_world_term(
+  const std::vector<value_type> &,
+  const std::vector<value_type> &) const {
+  throw SemiringException("This semiring does not certify enumerations.");
+}
+
+/**
+ * @brief Build the disjunction of pairwise-exclusive @p disjuncts,
+ *        certified deterministic.
+ *
+ * Only called when @c certifying() is @c true; the default throws.
+ */
+virtual value_type certified_exclusive_plus(
+  const std::vector<value_type> &) const {
+  throw SemiringException("This semiring does not certify enumerations.");
+}
 };
 
 

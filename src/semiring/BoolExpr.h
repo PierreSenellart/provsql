@@ -29,6 +29,7 @@
 #ifndef BOOLEXPR_H
 #define BOOLEXPR_H
 
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -133,6 +134,85 @@ virtual bool compatibleWithBooleanRewrite() const override {
   return true;
 }
 
+/**
+ * @brief @c BoolExpr persists the d-DNNF certificate on the HAVING
+ *        possible-worlds enumerations it builds (deterministic ORs over
+ *        decomposable world terms), so the certificate-aware evaluators
+ *        (@c independentEvaluation, @c interpretAsDD) handle the
+ *        resulting circuits linearly.
+ */
+virtual bool certifying() const override {
+  return true;
+}
+
+/**
+ * @brief A gate qualifies as an independent literal when it is a base
+ *        Bernoulli input, or a constant (the empty AND / OR): distinct
+ *        such gates have disjoint supports, so ANDs over them are
+ *        decomposable.  Derived contributors (internal sub-circuits,
+ *        @c mulinput literals whose block siblings are correlated) do
+ *        not qualify.
+ */
+virtual bool independent_literal(const value_type &g) const override {
+  const auto t = c.getGateType(g);
+  if (t == BooleanGate::IN)
+    return true;
+  return (t == BooleanGate::AND || t == BooleanGate::OR) &&
+         c.getWires(g).empty();
+}
+
+/**
+ * @brief One complete world: AND of the @p present literals and of
+ *        NOT-gates over the @p missing ones, marked decomposable
+ *        (pairwise-distinct independent literals have disjoint
+ *        supports).  The negations are De Morgan-expanded per literal
+ *        -- rather than the @c monus(one, plus(missing)) form the
+ *        uncertified construction uses -- so the whole term lies
+ *        inside one certified island and the sharing of contributors
+ *        across the (mutually exclusive) world terms is licensed by
+ *        the certificate.  NOT-gates are cached per literal: the same
+ *        contributor is negated in up to half the worlds.
+ */
+virtual value_type certified_world_term(
+  const std::vector<value_type> &present,
+  const std::vector<value_type> &missing) const override {
+  if (missing.empty() && present.size() == 1)
+    return present[0];
+  auto g = c.setGate(BooleanGate::AND);
+  c.setInfo(g, DNNF_CERT_INFO);
+  for (const auto &h : present)
+    c.addWire(g, h);
+  for (const auto &h : missing) {
+    auto it = not_cache.find(h);
+    if (it == not_cache.end()) {
+      auto n = c.setGate(BooleanGate::NOT);
+      c.addWire(n, h);
+      it = not_cache.emplace(h, n).first;
+    }
+    c.addWire(g, it->second);
+  }
+  return g;
+}
+
+/**
+ * @brief Deterministic OR over pairwise-exclusive world terms, marked
+ *        with the d-DNNF certificate.  No child deduplication: distinct
+ *        complete worlds yield structurally distinct terms.
+ */
+virtual value_type certified_exclusive_plus(
+  const std::vector<value_type> &vec) const override {
+  if (vec.size() == 1)
+    return vec[0];
+  auto g = c.setGate(BooleanGate::OR);
+  c.setInfo(g, DNNF_CERT_INFO);
+  for (const auto &h : vec)
+    c.addWire(g, h);
+  return g;
+}
+
+private:
+/** @brief Per-literal NOT gates of @c certified_world_term (shared across world terms). */
+mutable std::map<gate_t, gate_t> not_cache;
 };
 }
 
