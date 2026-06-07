@@ -69,7 +69,7 @@ SELECT city, formula FROM result_cs1_except WHERE city = 'Nairobi';
 DROP TABLE result_cs1_except;
 
 -- Step 6: where-provenance – trace city column origin in shared-city query
-SET provsql.where_provenance = on;
+SET provsql.provenance = 'where';
 
 CREATE TABLE result_cs1_where AS
 SELECT p1.city,
@@ -83,7 +83,7 @@ SELECT remove_provenance('result_cs1_where');
 SELECT city, source FROM result_cs1_where ORDER BY city;
 DROP TABLE result_cs1_where;
 
-SET provsql.where_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- Steps 7-8: probabilities – assign and evaluate (possible-worlds)
 ALTER TABLE agents ADD COLUMN probability DOUBLE PRECISION;

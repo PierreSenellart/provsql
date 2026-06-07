@@ -215,7 +215,7 @@ output value. Enable it and re-run the shared-city query:
 
 .. code-block:: postgresql
 
-    SET provsql.where_provenance = on;
+    SET provsql.provenance = 'where';
 
     SELECT p1.city,
            where_provenance(provenance()) AS source
@@ -224,7 +224,7 @@ output value. Enable it and re-run the shared-city query:
     GROUP BY p1.city
     ORDER BY p1.city;
 
-    SET provsql.where_provenance = off;
+    SET provsql.provenance = 'semiring';
 
 Each city output value is traced back to the ``city`` column (column 4)
 of the ``personnel`` table for every agent in that city. The notation

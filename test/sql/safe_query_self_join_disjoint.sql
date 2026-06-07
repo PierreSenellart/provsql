@@ -36,7 +36,7 @@ DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM sjd_r; END $$;
 -- so the standard rewrite already produces a read-once circuit (no
 -- shared inputs across @c gate_times); the default evaluator
 -- returns the exact value.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sjd_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -49,7 +49,7 @@ SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sjd_baseline;
 
 -- Disjoint-constant path: 'independent' on the rewritten circuit
 -- must match.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sjd_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -69,7 +69,7 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 --     must satisfy the disjointness check.  The rewrite emits each
 --     RTE as an independent wrap.
 -- ---------------------------------------------------------------------
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sjd_three AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -90,7 +90,7 @@ SELECT x, ROUND(p::numeric, 6) AS prob_three FROM sjd_three;
 --     evaluator (i.e. nothing else broke).
 --
 -- ---------------------------------------------------------------------
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sjd_same_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -99,7 +99,7 @@ CREATE TEMP TABLE sjd_same_baseline AS
              AND r1.x = r2.x) q
    GROUP BY q.x;
 SELECT remove_provenance('sjd_same_baseline');
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sjd_same_rewritten AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -122,7 +122,7 @@ INSERT INTO sjd_r2 VALUES (1, 'A', 10), (2, 'A', 20), (1, 'B', 30);
 SELECT add_provenance('sjd_r2');
 DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM sjd_r2; END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sjd_diffcol_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -132,7 +132,7 @@ CREATE TEMP TABLE sjd_diffcol_baseline AS
    GROUP BY q.x;
 SELECT remove_provenance('sjd_diffcol_baseline');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sjd_diffcol_rewritten AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x

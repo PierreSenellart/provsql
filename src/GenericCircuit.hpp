@@ -57,7 +57,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
 
     /* In-memory Boolean-assumption marker (set by
      * @c foldBooleanIdentities on gates whose wires were rewritten
-     * under a Boolean-only rule).  Mirrors the @c gate_assumed_boolean
+     * under a Boolean-only rule).  Mirrors the @c gate_assumed
      * structural-marker check below but applies to gates that keep
      * their original type (the rule mutated their wires in place ;
      * the persistent mmap was not touched).  Same compatibility
@@ -94,25 +94,54 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       provenance_mapping.emplace(u, semiring.value(getExtra(u)));
       stack.pop_back();
       continue;
-    case gate_assumed_boolean:
-      /* Structural marker: the wrapped sub-circuit was computed under a
-       * Boolean-provenance assumption (e.g. the safe-query rewrite
-       * collapses derivation multiplicities into a single Boolean
-       * witness).  Identity for semirings whose evaluation factors
-       * through a homomorphism from Boolean functions; fatal for the
-       * rest, since otherwise we would silently return a value the
-       * semiring's semantics does not justify. */
-      if(!semiring.compatibleWithBooleanRewrite())
-        throw CircuitException(
-                "The requested semiring does not admit a homomorphism "
-                "from Boolean functions; the wrapped sub-circuit was "
-                "computed under a Boolean-provenance assumption "
-                "(typically by the safe-query rewrite, "
-                "provsql.boolean_provenance = on) and the evaluation is "
-                "unsound under this semiring.  Re-run the query with "
-                "provsql.boolean_provenance = off, or pick a "
-                "Boolean-compatible semiring (boolean, boolexpr, "
-                "formula, ...).");
+    case gate_assumed:
+      /* Structural assumption marker: the wrapped sub-circuit was
+       * computed under the assumption named by the gate's label (the
+       * extra string; gates from stores predating the label default to
+       * the historical 'boolean').  Identity for semirings satisfying
+       * the assumption; fatal for the rest, since otherwise we would
+       * silently return a value the semiring's semantics does not
+       * justify.
+       *
+       * - 'boolean': the sub-circuit only preserves the Boolean
+       *   function of the lineage (e.g. the safe-query rewrite
+       *   collapses derivation multiplicities into a single witness);
+       *   sound for semirings admitting a homomorphism from Boolean
+       *   functions.
+       * - 'absorptive': the sub-circuit was truncated at the
+       *   absorptive value fixpoint (cyclic recursion stopped once
+       *   every minimal -- tuple-repetition-free -- derivation is
+       *   covered); longer derivations are absorbed in any absorptive
+       *   semiring but genuinely missing for the rest (Deutch, Milo,
+       *   Roy & Tannen, ICDT 2014). */
+      {
+        const std::string assumption = getExtra(u);
+        if(assumption.empty() || assumption == "boolean") {
+          if(!semiring.compatibleWithBooleanRewrite())
+            throw CircuitException(
+                    "The requested semiring does not admit a homomorphism "
+                    "from Boolean functions; the wrapped sub-circuit was "
+                    "computed under a Boolean-provenance assumption "
+                    "(typically by the safe-query rewrite, "
+                    "provenance class 'boolean') and the evaluation is "
+                    "unsound under this semiring.  Re-run the query under "
+                    "a more general provenance class, or pick a "
+                    "Boolean-compatible semiring (boolean, boolexpr, "
+                    "formula, ...).");
+        } else if(assumption == "absorptive") {
+          if(!semiring.absorptive())
+            throw CircuitException(
+                    "The requested semiring is not absorptive; the "
+                    "wrapped sub-circuit was truncated at the absorptive "
+                    "value fixpoint (cyclic recursive query), so its "
+                    "value is only defined for absorptive semirings "
+                    "(probability, boolean, formula-with-absorption, "
+                    "tropical, ...).  Counting and why-provenance of "
+                    "cyclic recursion are genuinely infinite.");
+        } else
+          throw CircuitException(
+                  "Unknown assumption marker '" + assumption + "'");
+      }
       break;
     case gate_cmp:
     {
@@ -187,7 +216,7 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     case gate_project:
     case gate_eq:
     case gate_annotation:
-    case gate_assumed_boolean:
+    case gate_assumed:
       // Where-provenance gates, the transparent annotation wrapper and the
       // (compatibility-checked above) Boolean-assumption marker: identity
       // for every admissible semiring.  The annotation's extra string is

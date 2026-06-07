@@ -40,7 +40,7 @@ END $$;
 --     the rewritten provenance must match the baseline produced by
 --     the default evaluator on the unrewritten (shared-input)
 --     circuit.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base1 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_a a, pd_b b
@@ -48,7 +48,7 @@ CREATE TEMP TABLE pd_base1 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base1');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew1 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_a a, pd_b b
@@ -65,7 +65,7 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 --     that folds y for {pd_a, pd_b} before joining the outer C-wrap
 --     on x, so the resulting circuit is read-once and the rewritten
 --     probability must match the baseline.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base2 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_a a, pd_b b, pd_c c
@@ -73,7 +73,7 @@ CREATE TEMP TABLE pd_base2 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base2');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew2 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_a a, pd_b b, pd_c c
@@ -87,7 +87,7 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 
 -- (3) Rewritten root-gate shape for case (1): for each x, the root
 --     must be gate_times of two gate_plus children (one per atom).
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_shape AS
   SELECT a.x,
          get_gate_type(provenance())                  AS root,
@@ -111,7 +111,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.7) FROM pd_g;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base4 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_a a, pd_b b, pd_g g
@@ -119,7 +119,7 @@ CREATE TEMP TABLE pd_base4 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base4');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew4 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_a a, pd_b b, pd_g g
@@ -140,7 +140,7 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 --     detector then sees only x and y, both shared classes touching
 --     all three atoms, and accepts.  The rewritten probability must
 --     match the baseline.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base5 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_a a, pd_b b, pd_g g
@@ -149,7 +149,7 @@ CREATE TEMP TABLE pd_base5 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base5');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew5 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_a a, pd_b b, pd_g g
@@ -171,7 +171,7 @@ SELECT b.x, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 --     rewriter re-enters on the inner sub-Query, the atom-local
 --     pre-pass re-extracts the conjunct into pd_a's wrap inside the
 --     inner.  Rewritten probability must match the baseline.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base7 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_a a, pd_b b, pd_c c
@@ -180,7 +180,7 @@ CREATE TEMP TABLE pd_base7 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base7');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew7 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_a a, pd_b b, pd_c c
@@ -216,7 +216,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.6) FROM pd_r;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base8 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_p a, pd_q b, pd_r c
@@ -225,7 +225,7 @@ CREATE TEMP TABLE pd_base8 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base8');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew8 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_p a, pd_q b, pd_r c
@@ -267,7 +267,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.7) FROM pd_n_d;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base9 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_n_a a, pd_n_b b, pd_n_c c, pd_n_d d
@@ -277,7 +277,7 @@ CREATE TEMP TABLE pd_base9 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base9');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew9 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_n_a a, pd_n_b b, pd_n_c c, pd_n_d d
@@ -315,7 +315,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.7) FROM pd_dj_d;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base10 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_dj_a a, pd_dj_b b, pd_dj_c c, pd_dj_d d
@@ -324,7 +324,7 @@ CREATE TEMP TABLE pd_base10 AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_base10');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew10 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_dj_a a, pd_dj_b b, pd_dj_c c, pd_dj_d d
@@ -359,7 +359,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM pd_bid_p;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_bid_base AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_bid_a a, pd_bid_p p
@@ -367,7 +367,7 @@ CREATE TEMP TABLE pd_bid_base AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_bid_base');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_bid_rew AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_bid_a a, pd_bid_p p
@@ -383,7 +383,7 @@ CREATE TABLE pd_bid_b(x int, y int);
 INSERT INTO pd_bid_b VALUES (1, 100), (1, 200), (2, 300);
 SELECT repair_key('pd_bid_b', 'y');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -408,7 +408,7 @@ CREATE TABLE pd_bid_empty(x int);
 INSERT INTO pd_bid_empty VALUES (1), (2), (3);
 SELECT repair_key('pd_bid_empty', '');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -443,14 +443,14 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM pd_mc_b;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base13 AS
   SELECT a.x, b.y, probability_evaluate(provenance()) AS p
     FROM pd_mc_a a, pd_mc_b b
    GROUP BY a.x, b.y;
 SELECT remove_provenance('pd_base13');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew13 AS
   SELECT a.x, b.y, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_mc_a a, pd_mc_b b
@@ -471,7 +471,7 @@ SELECT b.x, b.y, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 --      one-row inners and the user's DISTINCT keeps the single
 --      output row.  Rewritten probability must match the baseline
 --      (P(non-empty join) = (1 - prod(1 - p_a)) * (1 - prod(1 - p_b))).
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base14 AS
   SELECT DISTINCT 1 AS one FROM pd_mc_a a, pd_mc_b b;
 CREATE TEMP TABLE pd_base14_p AS
@@ -479,7 +479,7 @@ CREATE TEMP TABLE pd_base14_p AS
     FROM pd_base14;
 SELECT remove_provenance('pd_base14_p');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew14 AS
   SELECT DISTINCT 1 AS one FROM pd_mc_a a, pd_mc_b b;
 CREATE TEMP TABLE pd_rew14_p AS
@@ -495,14 +495,14 @@ SELECT b.one, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
 --      row x = x_t:
 --        P(x_t) = P(A has x_t) * P(B is non-empty).
 --      pd_mc_b's inner sub-Query gets a synthetic Const(1) anchor.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base15 AS
   SELECT a.x, probability_evaluate(provenance()) AS p
     FROM pd_mc_a a, pd_mc_b b
    GROUP BY a.x;
 SELECT remove_provenance('pd_base15');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew15 AS
   SELECT a.x, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_mc_a a, pd_mc_b b
@@ -529,7 +529,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM pd_sh_b;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base16 AS
   SELECT a.y, probability_evaluate(provenance()) AS p
     FROM pd_sh_a a, pd_sh_b b
@@ -537,7 +537,7 @@ CREATE TEMP TABLE pd_base16 AS
    GROUP BY a.y;
 SELECT remove_provenance('pd_base16');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew16 AS
   SELECT a.y, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_sh_a a, pd_sh_b b
@@ -571,7 +571,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.6) FROM pd_gh_c;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base17 AS
   SELECT a.w, probability_evaluate(provenance()) AS p
     FROM pd_gh_a a, pd_gh_b b, pd_gh_c c
@@ -579,7 +579,7 @@ CREATE TEMP TABLE pd_base17 AS
    GROUP BY a.w;
 SELECT remove_provenance('pd_base17');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew17 AS
   SELECT a.w, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_gh_a a, pd_gh_b b, pd_gh_c c
@@ -613,7 +613,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.6) FROM pd_nf_c;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base18 AS
   SELECT b.w, probability_evaluate(provenance()) AS p
     FROM pd_nf_a a, pd_nf_b b, pd_nf_c c
@@ -621,7 +621,7 @@ CREATE TEMP TABLE pd_base18 AS
    GROUP BY b.w;
 SELECT remove_provenance('pd_base18');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew18 AS
   SELECT b.w, probability_evaluate(provenance(), 'independent') AS p
     FROM pd_nf_a a, pd_nf_b b, pd_nf_c c
@@ -657,7 +657,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM pd_ua_d;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base19 AS
   SELECT x, probability_evaluate(provenance()) AS p FROM (
     SELECT a.x FROM pd_ua_a a, pd_ua_b b WHERE a.x = b.x GROUP BY a.x
@@ -666,7 +666,7 @@ CREATE TEMP TABLE pd_base19 AS
   ) t;
 SELECT remove_provenance('pd_base19');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew19 AS
   SELECT x, probability_evaluate(provenance(), 'independent') AS p FROM (
     SELECT a.x FROM pd_ua_a a, pd_ua_b b WHERE a.x = b.x GROUP BY a.x
@@ -705,7 +705,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM pd_ud_d;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_base20 AS
   SELECT x, probability_evaluate(provenance()) AS p FROM (
     SELECT a.x FROM pd_ud_a a, pd_ud_b b WHERE a.x = b.x GROUP BY a.x
@@ -714,7 +714,7 @@ CREATE TEMP TABLE pd_base20 AS
   ) t;
 SELECT remove_provenance('pd_base20');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_rew20 AS
   SELECT x, probability_evaluate(provenance(), 'independent') AS p FROM (
     SELECT a.x FROM pd_ud_a a, pd_ud_b b WHERE a.x = b.x GROUP BY a.x
@@ -749,7 +749,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM pd_uo_c;
 END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -805,7 +805,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.4) FROM pd_br_e;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_br_baseline AS
   SELECT a.x AS x, probability_evaluate(provenance()) AS p
     FROM pd_br_a a, pd_br_b b, pd_br_c c, pd_br_d d, pd_br_e e
@@ -814,7 +814,7 @@ CREATE TEMP TABLE pd_br_baseline AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_br_baseline');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_br_rew AS
   SELECT a.x AS x,
          get_gate_type(provenance()) AS root,
@@ -860,7 +860,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.3) FROM pd_tr_c;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_tr_baseline AS
   SELECT a.x AS x, probability_evaluate(provenance()) AS p
     FROM pd_tr_a a, pd_tr_b b, pd_tr_c c
@@ -868,7 +868,7 @@ CREATE TEMP TABLE pd_tr_baseline AS
    GROUP BY a.x;
 SELECT remove_provenance('pd_tr_baseline');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_tr_rew AS
   SELECT a.x AS x,
          get_gate_type(provenance()) AS root,
@@ -914,7 +914,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.3) FROM pd_bail_c;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pd_bail_baseline AS
   SELECT a.x AS x, a.z AS z, probability_evaluate(provenance()) AS p
     FROM pd_bail_a a, pd_bail_b b, pd_bail_c c
@@ -926,7 +926,7 @@ SELECT remove_provenance('pd_bail_baseline');
 -- With GUC on the planner attempts the rewrite, hits the missing
 -- slot for a.z, bails, and falls through to the default pipeline.
 -- The query must succeed (no exception) and produce the same rows.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pd_bail_rew AS
   SELECT a.x AS x, a.z AS z, probability_evaluate(provenance()) AS p
     FROM pd_bail_a a, pd_bail_b b, pd_bail_c c
@@ -940,7 +940,7 @@ SELECT (SELECT count(*) FROM pd_bail_baseline) = (SELECT count(*) FROM pd_bail_r
        AS row_counts_match,
        ROUND(coalesce(SUM(b.p - r.p), 0)::numeric, 9) AS sum_p_diff
   FROM pd_bail_baseline b JOIN pd_bail_rew r ON b.x = r.x AND b.z = r.z;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- (6) Non-hierarchical CQ must bail.  Classes X = {a.x, c.x},
 --     Y = {a.y, b.y}, Z = {b.x, c.x_x} form a cycle (canonical "bad"
@@ -963,7 +963,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.6) FROM pd_f;
 END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -980,7 +980,7 @@ BEGIN
   END IF;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DROP TABLE pd_a, pd_b, pd_c, pd_g, pd_p, pd_q, pd_r,
            pd_n_a, pd_n_b, pd_n_c, pd_n_d,
            pd_dj_a, pd_dj_b, pd_dj_c, pd_dj_d,

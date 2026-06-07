@@ -21,7 +21,7 @@ SET search_path TO provsql_test, provsql;
 -- (cardinality is preserved because the lineage is left intact).
 
 SET provsql.verbose_level = 5;     -- acceptance NOTICE (>=1) + rejection reasons (>=5)
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 
 -- TID base relations.  Column c2 is the "second attribute": it plays y in the
 -- S(x,y),A(x,y) atoms and z in the S(x,z),B(x,z) atoms.
@@ -135,7 +135,7 @@ SELECT round(probability_evaluate(p)::numeric, 8)                   AS block_def
 --     method compiles the structured d-DNNF over those markers; its value
 --     matches the default chain (here independentEvaluation already suffices)
 --     and exact possible worlds (0.5*0.4 = 0.2 at each x).
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TABLE ifr_sjf_a(x int);
 INSERT INTO ifr_sjf_a VALUES (1),(2),(3);
 SELECT add_provenance('ifr_sjf_a');
@@ -257,7 +257,7 @@ SELECT x, round(probability_evaluate(p)::numeric, 6) AS prob_plain,
 --      root value contains a space, exercising the byte-length prefix that keeps
 --      arbitrary text unambiguous.  Probabilities mirror case (4) (0.5 for each
 --      S; A: 0.4/0.6; B: 0.3/0.7), so the block value is the same 0.2203.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TABLE ifr_ts(x text, c2 text);
 INSERT INTO ifr_ts VALUES ('grp one','a'),('grp one','b'),('grp one','c');
 SELECT add_provenance('ifr_ts');
@@ -290,7 +290,7 @@ SELECT round(probability_evaluate(p)::numeric, 8)                   AS tblock_de
 
 -- (7b) uuid root, self-join-free hierarchical q(x) :- A(x), B(x).  The join /
 --      group key is a uuid; its canonical text rendering is the order key.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TABLE ifr_ua(x uuid);
 INSERT INTO ifr_ua VALUES
   ('11111111-1111-1111-1111-111111111111'),
@@ -482,7 +482,7 @@ SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t3_if
 --      inversion-free analysis; each inlined subquery is rewritten with the
 --      parent-supplied markers (the read-once rewrite is skipped for them so the
 --      transparent markers are not bypassed).  Default chain matches pw.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE ifv_t4 AS
   SELECT v1.x AS x, provenance() AS p
     FROM ifv_av v1, ifv_av v2 WHERE v1.x = v2.x GROUP BY v1.x;
@@ -490,7 +490,7 @@ SELECT remove_provenance('ifv_t4');
 SELECT x, round(probability_evaluate(p)::numeric, 6)                    AS t4_default,
           round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t4_pw
   FROM ifv_t4 ORDER BY x;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- (10) Multi-relation SPJ views (a join *inside* the view).  The flattener
 --      expands one subquery slot into all its base atoms, pulling the view's
@@ -590,5 +590,5 @@ SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t3_if
           round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t3_pw
   FROM ifn_t3 ORDER BY x;
 
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;
 RESET provsql.verbose_level;

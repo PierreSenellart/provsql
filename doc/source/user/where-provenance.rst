@@ -13,13 +13,13 @@ Where-provenance is disabled by default. Enable it for a session with:
 
 .. code-block:: postgresql
 
-    SET provsql.where_provenance = on;
+    SET provsql.provenance = 'where';
 
 Or enable it permanently in ``postgresql.conf``:
 
 .. code-block:: ini
 
-    provsql.where_provenance = on
+    provsql.provenance = 'where'
 
 When enabled, each output cell in a provenance-tracked query carries an
 annotation identifying its source.
@@ -37,7 +37,7 @@ value using the :sqlfunc:`where_provenance` function:
 
 .. code-block:: postgresql
 
-    SET provsql.where_provenance = on;
+    SET provsql.provenance = 'where';
 
 .. code-block:: sql
 

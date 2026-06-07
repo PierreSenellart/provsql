@@ -153,7 +153,7 @@ ALTER TABLE coreview  DROP COLUMN conf, DROP COLUMN lbl;
 -- ---------------------------------------------------------------------
 -- Step 1: safe by shape (hierarchical, read-once for any keys).
 -- ---------------------------------------------------------------------
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TABLE cs7_safe AS
   SELECT b.paper, round(probability_evaluate(provenance(),'independent')::numeric,6) AS p_indep
   FROM bid b, expertise e WHERE b.reviewer = e.reviewer GROUP BY b.paper;
@@ -182,7 +182,7 @@ BEGIN
   END IF;
 END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TABLE cs7_cov_p1 AS
   SELECT round(probability_evaluate(provenance(),'independent')::numeric,6)        AS p1_indep,
          round(probability_evaluate(provenance(),'tree-decomposition')::numeric,6) AS p1_exact
@@ -211,7 +211,7 @@ BEGIN
     RAISE EXCEPTION 'expected whole-program coverage to reject independent';
   END IF;
 END $$;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 CREATE TABLE cs7_hard AS
   SELECT round(probability_evaluate(provenance(),'tree-decomposition')::numeric,6) AS hard_exact
@@ -330,7 +330,7 @@ SELECT paper, lineage, prob FROM cs7_anc ORDER BY paper;
 DROP TABLE cs7_anc;
 
 -- Cyclic without boolean_provenance: the fixpoint never stabilises.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -350,7 +350,7 @@ END $$;
 
 -- Cyclic under boolean_provenance: reachability converges; the
 -- probability is connection reliability.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TABLE cs7_conn AS
   WITH RECURSIVE conn(node) AS (
       SELECT 'r1'
@@ -362,7 +362,7 @@ CREATE TABLE cs7_conn AS
 SELECT remove_provenance('cs7_conn');
 SELECT node, reliability FROM cs7_conn ORDER BY node;
 DROP TABLE cs7_conn;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 DROP TABLE bid, expertise, topic_of, extends, coreview, assignment,
            reviewers, papers, topics, extends_label CASCADE;

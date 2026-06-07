@@ -238,13 +238,13 @@ under for the next batch :
 * :guilabel:`Semiring` (default) : standard provenance tracking,
   no special configuration enabled.  The resulting circuit accepts every
   compiled and custom semiring.
-* :guilabel:`Where` : enables ``provsql.where_provenance``, so
+* :guilabel:`Where` : sets ``provsql.provenance = 'where'``, so
   the planner emits ``project`` and ``eq`` gates that record the
   source cell of each output value (see :doc:`where-provenance`).
   Where mode (top nav) locks this position on, because the
   hover-to-trace surface needs the where-provenance gates ; in
   Circuit mode the choice is free.
-* :guilabel:`Boolean` : enables ``provsql.boolean_provenance``, so
+* :guilabel:`Boolean` : sets ``provsql.provenance = 'boolean'``, so
   the planner runs the safe-query rewriter and tags the resulting
   root with a Boolean-rewrite marker (see :doc:`probabilities`).
   Only Boolean-faithful semirings will evaluate the resulting
@@ -311,7 +311,7 @@ Out-of-range values and ProvSQL errors land inline.
 
 A ``gate_assumed_boolean`` wrapper (added by the safe-query
 rewriter or by the load-time Boolean-identity folding when
-``provsql.boolean_provenance`` is on) is rendered as a small
+the provenance class is ``'boolean'``) is rendered as a small
 :sc:`B` badge stamped on top of its child gate rather than as a
 separate node, since structurally it is a marker rather than a
 distinct operation.
@@ -624,7 +624,7 @@ Where mode
 Where mode is the visual counterpart to :sqlfunc:`where_provenance`
 (see :doc:`where-provenance`). Queries are typed into the same
 `Query box`_ as in Circuit mode. Where mode enables
-``provsql.where_provenance`` on the connection and wraps every
+``provsql.provenance = 'where'`` on the connection and wraps every
 ``SELECT`` so the result carries the where-provenance of each output
 value. Hovering a result cell highlights the source cells (in
 the sidebar) that contributed to it. No explicit
@@ -902,7 +902,7 @@ pills:
   and a bare :sc:`prov` in a muted tone for relations whose kind
   is opaque.  This is the same classification the safe-query
   rewriter consults to decide whether a query is in scope for
-  ``provsql.boolean_provenance``.
+  the ``'boolean'`` provenance class.
 * :sc:`mapping` (gold) on a relation shaped
   ``(value <T>, provenance uuid)``, including views from
   :sqlfunc:`create_provenance_mapping_view`. The two pills are
@@ -959,7 +959,7 @@ The Config panel groups its options into four sections:
   role, its field is shown read-only and labelled *(admin-managed)*,
   reflecting the value an administrator pinned (or the server's default
   ``PATH``) rather than letting an edit silently have no effect.
-  ``provsql.where_provenance`` and ``provsql.update_provenance`` live
+  ``provsql.provenance`` and ``provsql.update_provenance`` live
   next to the query box instead (see `Per-query toggles`_), since
   they are typically flipped per query rather than per session.
   Studio also forces ``provsql.aggtoken_text_as_uuid = on`` for the

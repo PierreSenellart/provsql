@@ -3,7 +3,7 @@
 SET search_path TO provsql_test, provsql;
 
 -- Safe-query rewrite (provsql.boolean_provenance = on) wraps every
--- per-row root in a fresh gate_assumed_boolean.  The wrapper is a
+-- per-row root in a fresh gate_assumed.  The wrapper is a
 -- structural marker (single child = original root) that:
 --   * is transparent (identity) for evaluators whose Semiring
 --     subclass returns true from compatibleWithBooleanRewrite();
@@ -32,7 +32,7 @@ SELECT create_provenance_mapping('sqs_a_lbl', 'sqs_a', 'lbl');
 SELECT create_provenance_mapping('sqs_b_lbl', 'sqs_b', 'lbl');
 
 -- A two-atom hierarchical CQ q(x) :- A(x), B(x) under the GUC.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 
 CREATE TEMP TABLE sqs_t AS
   SELECT a.x AS x, provenance() AS p
@@ -41,7 +41,7 @@ CREATE TEMP TABLE sqs_t AS
    GROUP BY a.x;
 SELECT remove_provenance('sqs_t');
 
--- (1) Every root gate is a gate_assumed_boolean (single-child wrapper).
+-- (1) Every root gate is a gate_assumed (single-child wrapper).
 SELECT x, get_gate_type(p) AS root_type,
        array_length(get_children(p), 1) AS nb_children
   FROM sqs_t ORDER BY x;
@@ -119,16 +119,16 @@ DECLARE tok uuid; raised text;
 SELECT 'incompatible semirings rejected' AS step4;
 
 -- (5) Cross-check: the same conceptual circuit evaluated without the
---     rewrite has no gate_assumed_boolean wrapper, so the same
+--     rewrite has no gate_assumed wrapper, so the same
 --     incompatible semirings succeed.  This query is hierarchical and
 --     self-join-free, so the inversion-free analysis certifies it and
 --     wraps the root in a transparent gate_annotation (the read-once
 --     rewrite that would otherwise take precedence is disabled here);
 --     that wrapper is passed through by every semiring, hence the
 --     incompatible ones still succeed.  Its UUID differs from the
---     ON-path's gate_assumed_boolean UUID, so no shared persistent
+--     ON-path's gate_assumed UUID, so no shared persistent
 --     state leaks between the two runs.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 CREATE TEMP TABLE sqs_t_off AS
   SELECT a.x AS x, provenance() AS p

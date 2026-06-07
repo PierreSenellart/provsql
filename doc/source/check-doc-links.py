@@ -67,6 +67,10 @@ INTERNAL_FUNCTIONS = {
     # route (eval_reachability); users never call these directly.
     'gather_reachability_edges', 'gather_reachability_sources',
     'token_conjunctive_leaves',
+    # assumption-marker constructor: called by the rewriters and by
+    # eval_recursive's cyclic truncation, not (normally) by users;
+    # assume_boolean is its documented compatibility wrapper.
+    'provenance_assume',
     # Triggers
     'insert_statement_trigger',
     'update_statement_trigger', 'delete_statement_trigger',

@@ -1,4 +1,4 @@
-"""Tests for Studio's safe-query (provsql.boolean_provenance) integration.
+"""Tests for Studio's safe-query (provenance class 'boolean') integration.
 
 Covers the four points Studio added on top of the C-side rewriter:
 
@@ -6,10 +6,10 @@ Covers the four points Studio added on top of the C-side rewriter:
     the C++ per-semiring ``compatibleWithBooleanRewrite()`` predicate.
   * POST /api/exec with ``prov_scheme = "boolean"`` sets the GUC such that
     the rewriter actually fires (the per-row provenance UUID points at a
-    ``gate_assumed_boolean``).
+    ``gate_assumed``).
   * POST /api/exec with ``prov_scheme = "semiring"`` leaves the GUC off
-    (no ``gate_assumed_boolean`` produced).
-  * GET /api/circuit/<uuid> elides ``gate_assumed_boolean`` wrappers and
+    (no ``gate_assumed`` produced).
+  * GET /api/circuit/<uuid> elides ``gate_assumed`` wrappers and
     stamps the immediate child with ``boolean_assumed = true`` so the
     front-end can render the dashed-ring + "B" badge marker.
 """
@@ -95,7 +95,7 @@ def test_compiled_registry_has_boolean_rewrite_flag():
 
 def test_prov_scheme_boolean_triggers_safe_query_rewrite(client, test_dsn):
     """A hierarchical CQ run with prov_scheme=boolean must produce a
-    per-row provenance whose root is gate_assumed_boolean (the marker
+    per-row provenance whose root is gate_assumed (the marker
     the rewriter wraps every safe-query output in).  Same query under
     prov_scheme=semiring produces a plain plus/times gate."""
     cleanup = _setup_two_tracked_tables(client)
@@ -110,7 +110,7 @@ def test_prov_scheme_boolean_triggers_safe_query_rewrite(client, test_dsn):
         })
         assert resp_b.status_code == 200, resp_b.data
         uuid_b = _provenance_uuid(resp_b.get_json())
-        assert _gate_type(test_dsn, uuid_b) == "assumed_boolean"
+        assert _gate_type(test_dsn, uuid_b) == "assumed"
 
         resp_s = client.post("/api/exec", json={
             "sql": sql,
@@ -122,14 +122,14 @@ def test_prov_scheme_boolean_triggers_safe_query_rewrite(client, test_dsn):
         # Without the rewrite the root is the regular per-row root the
         # default pipeline produces (a plus over GROUP BY witnesses,
         # times over the join, ...) ; the only invariant we pin is
-        # that it must NOT be gate_assumed_boolean.
-        assert _gate_type(test_dsn, uuid_s) != "assumed_boolean"
+        # that it must NOT be gate_assumed.
+        assert _gate_type(test_dsn, uuid_s) != "assumed"
     finally:
         client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
 
 
 def test_prov_scheme_where_keeps_safe_query_off(client, test_dsn):
-    """Selecting the Where flavour must not enable boolean_provenance
+    """Selecting the Where flavour must not enable the boolean class
     (mutually exclusive at the C level)."""
     cleanup = _setup_two_tracked_tables(client)
     try:
@@ -142,7 +142,7 @@ def test_prov_scheme_where_keeps_safe_query_off(client, test_dsn):
         })
         assert resp.status_code == 200, resp.data
         uuid_w = _provenance_uuid(resp.get_json())
-        assert _gate_type(test_dsn, uuid_w) != "assumed_boolean"
+        assert _gate_type(test_dsn, uuid_w) != "assumed"
     finally:
         client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
 
@@ -151,7 +151,7 @@ def test_prov_scheme_where_keeps_safe_query_off(client, test_dsn):
 
 
 def test_circuit_elides_assumed_boolean_wrapper(client, test_dsn):
-    """The circuit endpoint must drop gate_assumed_boolean wrappers
+    """The circuit endpoint must drop gate_assumed wrappers
     from the scene and stamp every wrapper's immediate child with
     `boolean_assumed = True` so the front-end can render the dashed
     ring + B badge.  Scene root must be the (non-wrapper) descendant ;
@@ -168,7 +168,7 @@ def test_circuit_elides_assumed_boolean_wrapper(client, test_dsn):
         })
         assert resp.status_code == 200, resp.data
         wrapper_uuid = _provenance_uuid(resp.get_json())
-        assert _gate_type(test_dsn, wrapper_uuid) == "assumed_boolean"
+        assert _gate_type(test_dsn, wrapper_uuid) == "assumed"
 
         scene = client.get(f"/api/circuit/{wrapper_uuid}").get_json()
         # Wrapper UUID must NOT appear as a node ; the new root is the
@@ -178,7 +178,7 @@ def test_circuit_elides_assumed_boolean_wrapper(client, test_dsn):
         assert scene["root"] != wrapper_uuid
         assert scene["root"] in ids
         types = {n["type"] for n in scene["nodes"]}
-        assert "assumed_boolean" not in types
+        assert "assumed" not in types
         # At least one node must be marked ; the scene root is the
         # most reliable: it is the elided wrapper's direct child.
         assert ids[scene["root"]]["boolean_assumed"] is True

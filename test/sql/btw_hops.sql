@@ -13,7 +13,7 @@ SET search_path TO provsql_test,provsql;
 -- the natural "within k hops" probability stays on the linear certified
 -- route.
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 
 -- Chain 1-2-3-4-5 (p=.5), bound 2: exact-length chain values, nothing
 -- beyond two hops.
@@ -54,7 +54,7 @@ CREATE TABLE btwh_tri_r AS
   FROM reach;
 SELECT remove_provenance('btwh_tri_r');
 SELECT * FROM btwh_tri_r ORDER BY node, hops;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TABLE btwh_tri_r2 AS
   WITH RECURSIVE reach(node, hops) AS (
       SELECT 1, 0
@@ -70,7 +70,7 @@ SELECT remove_provenance('btwh_tri_r2');
 SELECT NOT EXISTS ((TABLE btwh_tri_r EXCEPT TABLE btwh_tri_r2)
                    UNION ALL (TABLE btwh_tri_r2 EXCEPT TABLE btwh_tri_r))
   AS hops_routes_agree;
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DROP TABLE btwh_tri_r2;
 DROP TABLE btwh_tri_r;
 
@@ -178,5 +178,5 @@ SELECT remove_provenance('btwh_nb');
 SELECT count(*) AS unbounded_generic FROM btwh_nb;
 DROP TABLE btwh_nb;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DROP TABLE btwh_edge;

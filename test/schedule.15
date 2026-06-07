@@ -18,3 +18,8 @@ test: btw_hops
 # Case Study 7 (peer-review / knowledge compilation): its recursive
 # reachability section is PG15+, so the whole case study is gated here.
 test: casestudy7
+
+# Absorptive provenance class: cyclic recursion truncated at the value
+# fixpoint, tokens tagged 'assumed'/'absorptive'; min-plus and probability
+# proceed, counting and unrestricted tropical refuse
+test: absorptive_recursion

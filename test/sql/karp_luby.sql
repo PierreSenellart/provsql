@@ -12,7 +12,7 @@
 -- absorbing x1 OR (x1 AND x2) down to x1).
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 SET provsql.monte_carlo_seed = 42;
 
 CREATE TABLE kl_in(id int);
@@ -106,5 +106,5 @@ SELECT probability_evaluate(:shared,'karp-luby','eps=0.1,delta=0.05,max_samples=
 RESET provsql.verbose_level;
 
 DROP TABLE kl_in;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;
 RESET provsql.monte_carlo_seed;

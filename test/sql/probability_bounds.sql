@@ -7,7 +7,7 @@ SET search_path TO provsql_test,provsql;
 -- compiling the circuit (the Olteanu-Huang-Koch d-tree leaf bound, ICDE 2010
 -- Fig. 3).  It is deterministic (no sampling), so the expected values are
 -- exact.  boolean_provenance off so the load-time fold leaves the DNF intact.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 CREATE TABLE pb(id int);
 INSERT INTO pb SELECT generate_series(1,6);
@@ -58,4 +58,4 @@ SELECT lower FROM probability_bounds(current_setting('pb.cnf')::uuid);
 
 SELECT remove_provenance('pb');
 DROP TABLE pb;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;

@@ -172,7 +172,7 @@ SELECT * FROM result_grade ORDER BY exposure, outcome, effect;
 DROP TABLE result_grade;
 
 -- Step 7: Where-provenance on f – only finding columns are tracked
-SET provsql.where_provenance = on;
+SET provsql.provenance = 'where';
 
 CREATE TABLE result_where_f AS
 SELECT study, study_type, exposure, outcome, effect,
@@ -186,10 +186,10 @@ SELECT remove_provenance('result_where_f');
 SELECT study, study_type, exposure, outcome, effect, source FROM result_where_f;
 DROP TABLE result_where_f;
 
-SET provsql.where_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- Step 8: Where-provenance on the base table – all finding columns tracked
-SET provsql.where_provenance = on;
+SET provsql.provenance = 'where';
 
 CREATE TABLE result_where AS
 SELECT finding.study_id, finding.exposure_id, finding.outcome_id, finding.effect,
@@ -205,7 +205,7 @@ SELECT remove_provenance('result_where');
 SELECT study_id, exposure_id, outcome_id, effect, source FROM result_where;
 DROP TABLE result_where;
 
-SET provsql.where_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- Step 9: Assign probabilities from reliability scores
 DO $$ BEGIN

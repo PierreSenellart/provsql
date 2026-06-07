@@ -236,7 +236,7 @@ In addition to the universal
 collapses identities and absorbers shared by every semiring),
 ProvSQL runs an opt-in
 ``GenericCircuit::foldBooleanIdentities`` pass at circuit-load
-time when ``provsql.boolean_provenance`` is on.  It applies three
+time when the provenance class is ``'boolean'``.  It applies three
 Boolean-specific rewrite rules and wraps each rewritten gate in a
 ``gate_assumed_boolean`` marker (same mechanism as the safe-query
 rewriter, so the resulting circuit refuses non-Boolean-compatible
@@ -247,7 +247,7 @@ semirings) :
 - **B3, absorption** : ``plus(u, times(u, v)) -> u`` and
   ``times(u, plus(u, v)) -> u``.
 
-The pass is gated by ``provsql.boolean_provenance`` because the
+The pass is gated by the ``'boolean'`` provenance class because the
 rewrites are sound only when evaluated under a Boolean-faithful
 semiring ; the gate-level marker enforces this at evaluation time.
 

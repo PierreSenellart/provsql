@@ -18,7 +18,7 @@ def _inversion_free_witness(test_dsn: str) -> str:
     dsn = f"{test_dsn} options='-c search_path=public,provsql'"
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute("SET provsql.inversion_free = on")
-        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("SET provsql.provenance = 'semiring'")
         cur.execute("DROP TABLE IF EXISTS ifw_s, ifw_a, ifw_b CASCADE")
         cur.execute("CREATE TABLE ifw_s(x int, c2 int)")
         cur.execute("CREATE TABLE ifw_a(x int, c2 int)")
@@ -48,7 +48,7 @@ def _inversion_free_text_witness(test_dsn: str) -> str:
     dsn = f"{test_dsn} options='-c search_path=public,provsql'"
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute("SET provsql.inversion_free = on")
-        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("SET provsql.provenance = 'semiring'")
         cur.execute("DROP TABLE IF EXISTS ifwt_s, ifwt_a, ifwt_b CASCADE")
         cur.execute("CREATE TABLE ifwt_s(x text, c2 text)")
         cur.execute("CREATE TABLE ifwt_a(x text, c2 text)")

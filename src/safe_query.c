@@ -1,6 +1,6 @@
 /**
  * @file safe_query.c
- * @brief Hierarchical-CQ rewriter for the @c provsql.boolean_provenance GUC.
+ * @brief Hierarchical-CQ rewriter for the @c 'boolean' provenance class (provsql.provenance GUC).
  *
  * Opt-in pre-pass invoked by @c process_query in @c provsql.c.  Rewrites
  * SELECT-FROM-WHERE conjunctive queries with a hierarchical structure
@@ -62,7 +62,7 @@ extern int provsql_verbose;             /* declared in provsql.c */
  * Safe-query optimisation (provsql.boolean_provenance)
  *
  * Slot for the hierarchical-CQ rewriter.  When the GUC
- * provsql.boolean_provenance is on, the planner-hook calls
+ * the provenance class is 'boolean', the planner-hook calls
  * try_safe_query_rewrite() between the AGG-DISTINCT rewrite and
  * get_provenance_attributes; if it returns a non-NULL Query, that
  * Query is fed back into process_query() from the top, exactly the
@@ -4985,7 +4985,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
   /* Self-join-free hierarchical queries are inversion-free too (they coincide
    * with the read-once class) and are certified here as well: the structured
    * d-DNNF path applies whenever the read-once rewrite is not (e.g.
-   * boolean_provenance off), where the raw flat lineage is not low-treewidth.
+   * provenance class below 'boolean'), where the raw flat lineage is not low-treewidth.
    * Under boolean_provenance the read-once rewriter fires independently and
    * takes precedence -- process_query recurses on its rewrite before the
    * inversion-free analysis runs. */

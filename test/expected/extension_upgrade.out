@@ -29,9 +29,9 @@ remove_provenance
 
 (1 row)
 name|root_type
-alice|assumed_boolean
-bob|assumed_boolean
-carol|assumed_boolean
+alice|assumed
+bob|assumed
+carol|assumed
 (3 rows)
 set_table_info
 

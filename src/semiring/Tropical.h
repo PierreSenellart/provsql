@@ -90,6 +90,38 @@ value_type parse_leaf(const char *v) const {
 }
 
 };
+
+/**
+ * @brief Tropical (min-plus) m-semiring restricted to *nonnegative*
+ *        costs.
+ *
+ * Over @f$\mathbb{R}_{\ge 0} \cup \{+\infty\}@f$ the tropical semiring
+ * is absorptive (@f$\min(0, a) = 0@f$ for @f$a \ge 0@f$) -- the
+ * canonically-ordered case the Lean formalisation proves
+ * (@c Tropical.absorptive under @c CanonicallyOrderedAdd).  Declaring
+ * it lets min-plus evaluation accept circuits carrying the
+ * @c 'absorptive' assumption marker -- notably cyclic recursive
+ * queries truncated at the absorptive value fixpoint, whose minimal
+ * derivations determine the min-cost exactly (negative costs would
+ * make cyclic min-cost genuinely unbounded, which is why the
+ * unrestricted @c Tropical declines).  Negative input costs are
+ * rejected at leaf-parsing time.
+ */
+class TropicalNonneg : public Tropical {
+public:
+virtual bool absorptive() const override {
+  return true;
+}
+value_type parse_leaf(const char *v) const {
+  const value_type x = atof(v);
+  if (x < 0)
+    throw SemiringException(
+            "the nonnegative tropical semiring requires nonnegative "
+            "costs (use sr_tropical without nonnegative => true for "
+            "arbitrary costs, on acyclic provenance only)");
+  return x;
+}
+};
 }
 
 #endif /* TROPICAL_H */

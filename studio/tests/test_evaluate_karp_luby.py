@@ -18,7 +18,7 @@ def _dnf_root(test_dsn: str) -> str:
     """
     dsn = f"{test_dsn} options='-c search_path=public,provsql'"
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("SET provsql.provenance = 'semiring'")
         cur.execute("DROP TABLE IF EXISTS kl_dnf CASCADE")
         cur.execute("CREATE TABLE kl_dnf(id int)")
         cur.execute("INSERT INTO kl_dnf SELECT generate_series(1, 4)")

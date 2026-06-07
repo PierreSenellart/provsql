@@ -97,8 +97,36 @@ bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes w
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
-bool provsql_boolean_provenance = false; ///< Opt-in safe-query optimisation: when @c true, rewrites hierarchical conjunctive queries to a read-once form whose probability is computable in linear time. The resulting circuit is tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on it. Controlled by the @c provsql.boolean_provenance GUC.
+bool provsql_boolean_provenance = false; ///< Derived flag: the session's provenance class is 'boolean' -- enables the Boolean-only machinery (safe-query read-once rewrite, bounded-treewidth reachability route, Boolean circuit simplifications), whose outputs are tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on them. Set from the @c provsql.provenance GUC.
+bool provsql_absorptive_provenance = false; ///< Derived flag: the session's provenance class is 'absorptive' or 'boolean' -- licenses constructions sound for absorptive semirings only (cyclic recursive queries stopped at the absorptive value fixpoint, tokens tagged accordingly). Set from the @c provsql.provenance GUC.
 
+/** @brief Values of the @c provsql.provenance enum GUC, from most general to most specialised. */
+typedef enum provsql_provenance_class_t {
+  PROVSQL_PROVENANCE_WHERE,      ///< Universal semiring provenance plus where-provenance gates.
+  PROVSQL_PROVENANCE_SEMIRING,   ///< Universal semiring provenance (default).
+  PROVSQL_PROVENANCE_ABSORPTIVE, ///< Absorptive-semiring constructions licensed (tagged).
+  PROVSQL_PROVENANCE_BOOLEAN     ///< Boolean-only machinery licensed (tagged); implies absorptive.
+} provsql_provenance_class_t;
+
+static int provsql_provenance_class = PROVSQL_PROVENANCE_SEMIRING; ///< Backing variable of the @c provsql.provenance GUC.
+
+/** @brief Option table of the @c provsql.provenance GUC. */
+static const struct config_enum_entry provsql_provenance_options[] = {
+  {"where", PROVSQL_PROVENANCE_WHERE, false},
+  {"semiring", PROVSQL_PROVENANCE_SEMIRING, false},
+  {"absorptive", PROVSQL_PROVENANCE_ABSORPTIVE, false},
+  {"boolean", PROVSQL_PROVENANCE_BOOLEAN, false},
+  {NULL, 0, false}
+};
+
+/** @brief Assign hook of @c provsql.provenance: refresh the derived per-class flags. */
+static void provsql_provenance_assign_hook(int newval, void *extra)
+{
+  provsql_where_provenance = (newval == PROVSQL_PROVENANCE_WHERE);
+  provsql_absorptive_provenance = (newval == PROVSQL_PROVENANCE_ABSORPTIVE ||
+                                   newval == PROVSQL_PROVENANCE_BOOLEAN);
+  provsql_boolean_provenance = (newval == PROVSQL_PROVENANCE_BOOLEAN);
+}
 
 extern void _PG_init(void);
 extern void _PG_fini(void);
@@ -2949,14 +2977,14 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  *                         numbers (see @c build_column_map() for the
  *                         rationale).
  * @param nbcols           Total number of non-provenance output columns.
- * @param wrap_assumed_boolean If true, wrap the result in
- *                         @c provenance_assumed_boolean so downstream
+ * @param wrap_assumed If true, wrap the result in
+ *                         @c assume_boolean so downstream
  *                         probability evaluators may treat it as Boolean.
  * @param inv_cert         If non-NULL, a serialised inversion-free certificate
  *                         to attach to the per-row root via @c provsql.annotate
  *                         (transparent for every evaluator; read back by the
  *                         probability dispatcher).  Mutually compatible with
- *                         @c wrap_assumed_boolean only in principle -- the
+ *                         @c wrap_assumed only in principle -- the
  *                         inversion-free path never sets the latter.
  * @return  The provenance @c Expr to be appended to the target list.
  */
@@ -2964,7 +2992,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
                                         semiring_operation op, int **columns,
-                                        int nbcols, bool wrap_assumed_boolean,
+                                        int nbcols, bool wrap_assumed,
                                         const char *inv_cert) {
   Expr *result;
   ListCell *lc_v;
@@ -3284,7 +3312,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     }
   }
 
-  /* Wrap the finished per-row root in a @c gate_assumed_boolean when
+  /* Wrap the finished per-row root in a @c gate_assumed when
    * our caller (the safe-query rewrite path in @c process_query) asks
    * for it.  Wrapping here -- before @c add_to_select and
    * @c replace_provenance_function_by_expression -- means every
@@ -3292,10 +3320,10 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
    * marker uniformly.  Subqueries that this same Query body opens
    * (per-atom DISTINCT projections inserted by the rewriter) are
    * handled by their own deeper @c process_query / @c make_provenance_expression
-   * calls with @c wrap_assumed_boolean = false, so the marker sits
+   * calls with @c wrap_assumed = false, so the marker sits
    * only at the outermost root that surfaces as the user-visible
    * row provenance. */
-  if (wrap_assumed_boolean &&
+  if (wrap_assumed &&
       OidIsValid(constants->OID_FUNCTION_ASSUME_BOOLEAN))
     result = wrap_in_assume_boolean(constants, result);
 
@@ -9779,7 +9807,7 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
  *
  * Used by @c make_provenance_expression when its caller (the
  * safe-query rewrite path in @c process_query) flagged the result
- * as needing the @c gate_assumed_boolean structural marker.
+ * as needing the @c gate_assumed structural marker.
  * Wrapping at expression-build time rather than at splice time
  * means @c add_to_select and
  * @c replace_provenance_function_by_expression both consume the
@@ -10612,7 +10640,7 @@ static Query *process_query(const constants_t *constants, Query *q,
      *
      * The rewriter is gated on the presence of the assume_boolean()
      * helper (installed by the 1.6.0 upgrade script).  Without it we
-     * cannot wrap the per-row root in a gate_assumed_boolean, which is
+     * cannot wrap the per-row root in a gate_assumed, which is
      * what downstream evaluators inspect to refuse unsound evaluation,
      * so we refuse to rewrite on schemas that still predate the
      * helper. */
@@ -11722,15 +11750,36 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
-  DefineCustomBoolVariable("provsql.where_provenance",
-                           "Should ProvSQL track where-provenance?",
-                           "1 turns where-provenance on, 0 off.",
-                           &provsql_where_provenance,
-                           false,
+  DefineCustomEnumVariable("provsql.provenance",
+                           "Provenance class tracked and assumed by the rewriter.",
+                           "Declares, for the session, the most specific "
+                           "class of provenance semantics the circuits "
+                           "must remain faithful for; constructions are "
+                           "licensed accordingly, from the most general "
+                           "to the most specialised: 'where' adds "
+                           "where-provenance tracking (equality and "
+                           "projection gates) on top of universal "
+                           "semiring provenance; 'semiring' (the "
+                           "default) tracks universal semiring "
+                           "provenance; 'absorptive' additionally lets "
+                           "recursive queries on cyclic data stop at "
+                           "the absorptive value fixpoint, tagging "
+                           "their tokens so non-absorptive semirings "
+                           "refuse them; 'boolean' (which implies "
+                           "'absorptive') additionally enables the "
+                           "Boolean-only machinery -- the safe-query "
+                           "read-once rewrite, the bounded-treewidth "
+                           "reachability route, Boolean circuit "
+                           "simplifications -- whose outputs only "
+                           "preserve the Boolean function of the "
+                           "lineage and are tagged as such.",
+                           &provsql_provenance_class,
+                           PROVSQL_PROVENANCE_SEMIRING,
+                           provsql_provenance_options,
                            PGC_USERSET,
                            0,
                            NULL,
-                           NULL,
+                           provsql_provenance_assign_hook,
                            NULL);
   DefineCustomBoolVariable("provsql.update_provenance",
                            "Should ProvSQL track update provenance?",
@@ -11944,33 +11993,6 @@ void _PG_init(void) {
                            true,
                            PGC_USERSET,
                            GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE,
-                           NULL,
-                           NULL,
-                           NULL);
-  DefineCustomBoolVariable("provsql.boolean_provenance",
-                           "Opt-in safe-query optimisation for hierarchical conjunctive queries.",
-                           "When on, the planner rewrites self-join-free "
-                           "hierarchical conjunctive queries (and independent "
-                           "UCQs) over TID/BID tables to a read-once form "
-                           "whose probability is computable in linear time "
-                           "via the existing BooleanCircuit independent "
-                           "evaluator. The rewrite preserves the Boolean "
-                           "polynomial of the existential lineage, so any "
-                           "evaluation that factors through a homomorphism "
-                           "from Boolean functions remains sound (notably "
-                           "probability and Shapley / Banzhaf). The "
-                           "resulting root gate is tagged; semiring "
-                           "evaluators are individually marked at compile "
-                           "time as compatible or not with this rewrite, "
-                           "and incompatible evaluators refuse to run on a "
-                           "tagged circuit. Off by default because the "
-                           "rewrite changes the multiset of result rows and "
-                           "is therefore unsound for per-row provenance "
-                           "interrogations and aggregation queries.",
-                           &provsql_boolean_provenance,
-                           false,
-                           PGC_USERSET,
-                           0,
                            NULL,
                            NULL,
                            NULL);

@@ -1062,7 +1062,7 @@ linear in the lineage.
 This path is a sibling of the :ref:`safe-query-rewriter`, and the two are
 complementary:
 
-- The safe-query rewriter (``provsql.boolean_provenance`` on) restructures
+- The safe-query rewriter (provenance class ``'boolean'``) restructures
   the *query* so the planner emits a read-once *circuit*, which
   ``independent`` then evaluates almost for free. It applies only to the
   read-once (safe) class and changes the produced circuit.

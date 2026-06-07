@@ -49,7 +49,7 @@ END $$;
 -- circuit (the non-rewritten circuit is still read-once because of
 -- the @c gate_times dedup on identical @c provsql inputs, so the
 -- baseline @c probability_evaluate uses dDNNF / tree decomposition).
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sjp_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -61,7 +61,7 @@ SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sjp_baseline;
 
 -- PK-unification path: 'independent' on the rewritten read-once
 -- circuit must match.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sjp_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -85,7 +85,7 @@ INSERT INTO sjp_r_nnu VALUES (1, 5, 7), (2, 6, 8);
 SELECT add_provenance('sjp_r_nnu');
 DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM sjp_r_nnu; END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sjp_nnu AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -107,7 +107,7 @@ SELECT b.x, ROUND((b.p - n.p)::numeric, 9) AS diff_pk_vs_nnu
 --     case is a regression check that the unified-single-atom path
 --     doesn't break the existing rewrite.
 -- ---------------------------------------------------------------------
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sjp_self_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -116,7 +116,7 @@ CREATE TEMP TABLE sjp_self_baseline AS
    GROUP BY q.x;
 SELECT remove_provenance('sjp_self_baseline');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sjp_self_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x

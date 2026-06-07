@@ -48,7 +48,7 @@ CREATE OR REPLACE FUNCTION sad_probe(lhs regclass, rhs regclass)
 DECLARE
   gt   text;
 BEGIN
-  SET LOCAL provsql.boolean_provenance = on;
+  SET LOCAL provsql.provenance = 'boolean';
   EXECUTE format($f$
     CREATE TEMP TABLE sad_probe_res ON COMMIT DROP AS
       SELECT a.x AS x, provsql.provenance() AS p
@@ -60,7 +60,7 @@ BEGIN
   SELECT provsql.get_gate_type(p)::text INTO gt
     FROM sad_probe_res ORDER BY x LIMIT 1;
   DROP TABLE sad_probe_res;
-  RETURN CASE WHEN gt = 'assumed_boolean' THEN 'fired' ELSE 'refused' END;
+  RETURN CASE WHEN gt = 'assumed' THEN 'fired' ELSE 'refused' END;
 END;
 $$ LANGUAGE plpgsql;
 

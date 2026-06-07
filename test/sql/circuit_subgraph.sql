@@ -86,7 +86,7 @@ ORDER BY depth, gate_type;
 DROP TABLE cs_q;
 
 -- where_provenance=on adds project and eq gates around inputs / joins.
-SET provsql.where_provenance = on;
+SET provsql.provenance = 'where';
 
 CREATE TABLE cs_q AS SELECT provenance() AS p FROM personnel WHERE name='John';
 SELECT remove_provenance('cs_q');
@@ -96,4 +96,4 @@ GROUP BY gate_type, depth
 ORDER BY depth, gate_type;
 DROP TABLE cs_q;
 
-SET provsql.where_provenance = off;
+SET provsql.provenance = 'semiring';

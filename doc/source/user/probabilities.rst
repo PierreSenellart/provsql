@@ -423,14 +423,14 @@ real networks (series-parallel and outerplanar networks, transit and
 utility networks, workflow graphs…).
 
 The interface is an ordinary recursive reachability query.  Under
-``provsql.boolean_provenance = on`` (the construction computes the
+``provsql.provenance = 'boolean'`` (the construction computes the
 Boolean function of the lineage, so it lives in the same regime that
 already governs recursion on cyclic data), the query rewriter
 recognises the shape
 
 .. code-block:: postgresql
 
-    SET provsql.boolean_provenance = on;
+    SET provsql.provenance = 'boolean';
 
     WITH RECURSIVE reach(node) AS (
         SELECT 1                                  -- the source vertex
@@ -616,10 +616,10 @@ Probability evaluation routes through the Boolean-circuit pipeline
 optimisations exploit Boolean-specific structure to make this faster,
 sometimes by orders of magnitude.
 
-Safe-query rewriting (``provsql.boolean_provenance``)
+Safe-query rewriting (provenance class ``'boolean'``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-When the GUC ``provsql.boolean_provenance`` is ``on`` (off by
+When the GUC the provenance class is ``'boolean'`` (``provsql.provenance``) (off by
 default), the planner recognises the *safe* hierarchical
 conjunctive-query subclass of Dalvi-Suciu :cite:`DBLP:journals/jacm/DalviS12`
 and rewrites such queries with per-atom ``DISTINCT`` projections so
@@ -641,7 +641,7 @@ opt-in shortcut, never a different result.
 
 .. code-block:: postgresql
 
-    SET provsql.boolean_provenance = on;
+    SET provsql.provenance = 'boolean';
 
     SELECT person, ROUND(probability_evaluate(provenance())::numeric, 4)
     FROM suspects, witnesses

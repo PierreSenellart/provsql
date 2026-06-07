@@ -355,7 +355,7 @@ def test_where_mode_falls_back_when_no_provenance_relation(client):
 def test_where_provenance_toggle_survives_auto_prepare(client):
     """psycopg3 auto-prepares a query after `prepare_threshold` (default 5)
     executions, freezing whatever planner-hook decisions the FIRST plan
-    made – including the gates produced for `provsql.where_provenance`.
+    made – including the gates produced for the 'where' provenance class.
     The pool's `_configure` disables auto-prepare so SET LOCAL toggles
     keep reaching the planner. This test runs the same SELECT eleven
     times (well past the default threshold), alternating wp on/off, and

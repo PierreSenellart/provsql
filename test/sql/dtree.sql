@@ -10,7 +10,7 @@ SET search_path TO provsql_test,provsql;
 -- negation (EXCEPT / monus, A AND NOT B) take the general circuit recursion
 -- (dtreeBoundsCircuit).  We assert invariants (equals the exact baselines;
 -- within eps of exact) rather than brittle float values.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 CREATE TABLE dt(id int);
 INSERT INTO dt SELECT generate_series(1,8);
@@ -112,4 +112,4 @@ SELECT probability_evaluate(current_setting('dt.ent')::uuid,'d-tree') > 0 AS dtr
 
 SELECT remove_provenance('dt');
 DROP TABLE dt;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;

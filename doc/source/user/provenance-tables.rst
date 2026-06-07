@@ -73,7 +73,7 @@ provenance: it adds the ``provsql`` column itself and registers the
 table as BID with the chosen block-key columns.  Do not call
 :sqlfunc:`add_provenance` first; :sqlfunc:`repair_key` is an
 alternative to it, not a follow-up.  This classification is consulted
-by the safe-query rewriter (the ``provsql.boolean_provenance`` opt-in
+by the safe-query rewriter (the ``'boolean'`` provenance-class opt-in
 optimisation, see :doc:`probabilities`) to verify that any
 projection it introduces preserves the table's block-key alignment.
 
@@ -197,7 +197,7 @@ value, recording metadata for a later stage (a circuit carrying them
 evaluates identically to one without):
 
 - ``assumed_boolean``: added by the safe-query rewriter (and load-time
-  Boolean-identity folding) when ``provsql.boolean_provenance`` is on, to
+  Boolean-identity folding) when the provenance class is ``'boolean'``, to
   record that only Boolean semantics are preserved.
 - ``annotation``: carries the inversion-free certificate on a result root,
   or a per-input order key, for the ``'inversion-free'`` probability

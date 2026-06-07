@@ -36,7 +36,8 @@ The following SQL constructs are supported with full provenance tracking:
   transparently evaluated to a fixpoint and the result carries provenance like
   any other query (e.g. the provenance of s–t reachability is the disjunction
   over the s–t paths).  On **acyclic** data this works for any semiring.  On
-  **cyclic** data it requires ``provsql.boolean_provenance`` (an absorptive
+  **cyclic** data it requires an absorptive provenance class --
+  ``provsql.provenance = 'absorptive'`` or ``'boolean'`` -- (an absorptive
   setting, under which the value converges); the resulting circuit is then
   sound only for absorptive evaluation (probability / Boolean), not for
   multiplicity-counting semirings
@@ -79,7 +80,7 @@ will either raise an error or may cause incorrect provenance tracking:
   …, including via ``IN``/``NOT IN``) -- a plain value body or
   ``count(*)`` in that position is not
 * **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
-  semantics), over cyclic data *without* ``provsql.boolean_provenance``, or on
+  semantics), over cyclic data *without* an absorptive provenance class, or on
   PostgreSQL versions before 15
 * ``INTERSECT``
 * ``DISTINCT ON``

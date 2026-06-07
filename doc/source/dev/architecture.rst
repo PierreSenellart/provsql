@@ -20,7 +20,7 @@ When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
 1. Registers six GUC (Grand Unified Configuration) variables:
 
    - ``provsql.active`` -- enable/disable provenance tracking (default: on).
-   - ``provsql.where_provenance`` -- enable where-provenance (default: off).
+   - ``provsql.provenance`` -- the provenance class: 'where' / 'semiring' (default) / 'absorptive' / 'boolean'.
    - ``provsql.update_provenance`` -- track provenance through DML
      statements (default: off).
    - ``provsql.verbose_level`` -- verbosity for debug messages (0--100,
@@ -74,7 +74,7 @@ and algorithms are in |cpp|.
   and the bulk of the query rewriting logic (~3700 lines).
 - :cfile:`safe_query.c` / :cfile:`safe_query.h` -- safe-query
   rewriter for hierarchical CQs (Dalvi & Suciu 2012), gated on
-  ``provsql.boolean_provenance`` ; includes the FD-aware
+  the ``'boolean'`` provenance class ; includes the FD-aware
   extensions (constant-selection elimination, PK FDs,
   deterministic-relation transparency, PK-unifiable /
   disjoint-constant self-joins) and the propagation

@@ -45,7 +45,7 @@ DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM sd_sales; END $$;
 -- (1) Baseline: probability via the default evaluator on the
 --     unrewritten circuit.
 -- ---------------------------------------------------------------------
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sd_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -62,7 +62,7 @@ SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sd_baseline;
 -- (2) Transparency path: 'independent' on the rewritten read-once
 --     circuit must match the baseline within numerical noise.
 -- ---------------------------------------------------------------------
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sd_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -87,7 +87,7 @@ CREATE TABLE sd_products_dup (product_id int, category text);
 INSERT INTO sd_products_dup VALUES (1, 'Electronics'), (1, 'Electronics'),
                                    (2, 'Books'), (3, 'Electronics');
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sd_dup_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -99,7 +99,7 @@ CREATE TEMP TABLE sd_dup_baseline AS
    GROUP BY q.x;
 SELECT remove_provenance('sd_dup_baseline');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sd_dup_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -133,7 +133,7 @@ SELECT set_table_info('sd_opaque'::regclass::oid, 'opaque');
 INSERT INTO sd_opaque VALUES (1, 'Electronics');
 DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM sd_opaque; END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN

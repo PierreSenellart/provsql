@@ -1,7 +1,7 @@
 """Unit tests for the transparent-marker elision in circuit.py.
 
 Pure functions (no database): the certificate / order-key parsers and the
-``_elide_markers`` rewrite that turns elided gate_assumed_boolean and
+``_elide_markers`` rewrite that turns elided gate_assumed and
 gate_annotation wrappers into per-node badges -- including a node that carries
 both a B and an IF badge.
 """
@@ -41,11 +41,11 @@ def _row(node, parent, pos, gtype, extra=None):
 
 
 def test_elide_markers_stacks_b_and_if_on_one_node():
-    # Scene:  assumed_boolean(wb) -> annotation/C(wc) -> times(t)
+    # Scene:  assumed(wb) -> annotation/C(wc) -> times(t)
     #           t -> annotation/K(wk) -> input(i1)
     #           t -> input(i2)
     rows = [
-        _row("wb", None, None, "assumed_boolean"),
+        _row("wb", None, None, "assumed"),
         _row("wc", "wb", 0, "annotation", "C1 1 0 2 1 0"),
         _row("t", "wc", 0, "times"),
         _row("wk", "t", 0, "annotation", "K-1 1:52:12"),

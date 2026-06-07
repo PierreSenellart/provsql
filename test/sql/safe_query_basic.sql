@@ -39,7 +39,7 @@ END $$;
 -- (1) Without the rewrite: the unrewritten per-id circuit has shared
 --     input gates (each leaf appears in multiple join pairs), so
 --     'independent' rejects on id=3.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -60,7 +60,7 @@ END $$;
 --     'independent' succeeds and returns the analytical value:
 --       id=1: 0.5 * 0.4                            = 0.20
 --       id=3: (1-(1-0.5)^2) * (1-(1-0.4)^2) = 0.75 * 0.64 = 0.48
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sqb_prob AS
   SELECT a.id,
          probability_evaluate(provenance(), 'independent') AS p
@@ -73,7 +73,7 @@ SELECT id, ROUND(p::numeric, 6) AS prob FROM sqb_prob ORDER BY id;
 -- (3) Cross-check: rewritten probabilities must match the default
 --     baseline (which uses dDNNF / tree-decomposition / d4 fallback
 --     on the unrewritten circuit).
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sqb_baseline AS
   SELECT a.id, probability_evaluate(provenance()) AS p
     FROM sqb_left a, sqb_right b
@@ -85,7 +85,7 @@ SELECT b.id, ROUND((b.p - r.p)::numeric, 9) AS diff_baseline_vs_rewritten
  ORDER BY b.id;
 
 -- (4) Rewritten root gate shape: gate_times over two gate_plus children.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sqb_shape AS
   SELECT a.id,
          get_gate_type(provenance())                  AS root,
@@ -103,13 +103,13 @@ SELECT id, root, root_nchildren FROM sqb_shape ORDER BY id;
 --     so the GUC stays observationally transparent.  Cardinality
 --     under the GUC must match the GUC-off baseline: 1 row at id=1
 --     (1x1 self-join) plus 4 rows at id=3 (2x2 self-join) = 5 rows.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sqb_nogb_off AS
   SELECT a.id FROM sqb_left a, sqb_right b WHERE a.id = b.id;
 SELECT remove_provenance('sqb_nogb_off');
 SELECT count(*) AS rows_off FROM sqb_nogb_off;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sqb_nogb_on AS
   SELECT a.id FROM sqb_left a, sqb_right b WHERE a.id = b.id;
 SELECT remove_provenance('sqb_nogb_on');
@@ -131,7 +131,7 @@ SELECT count(*) AS rows_on FROM sqb_nogb_on;
 --       P(matched at id=3) = 0.75 * 0.64                  = 0.48
 --       P(non-empty answer) = 1 - (1-0.20) * (1-0.48)
 --                           = 1 - 0.8 * 0.52              = 0.584
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE sqb_dist1_off AS
   SELECT DISTINCT 1 AS one FROM sqb_left a, sqb_right b WHERE a.id = b.id;
 CREATE TEMP TABLE sqb_dist1_off_p AS
@@ -140,7 +140,7 @@ CREATE TEMP TABLE sqb_dist1_off_p AS
 SELECT remove_provenance('sqb_dist1_off_p');
 SELECT count(*) AS rows_off, p AS p_off FROM sqb_dist1_off_p GROUP BY p;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sqb_dist1_on AS
   SELECT DISTINCT 1 AS one FROM sqb_left a, sqb_right b WHERE a.id = b.id;
 CREATE TEMP TABLE sqb_dist1_on_p AS
@@ -149,6 +149,6 @@ CREATE TEMP TABLE sqb_dist1_on_p AS
 SELECT remove_provenance('sqb_dist1_on_p');
 SELECT count(*) AS rows_on, p AS p_on FROM sqb_dist1_on_p GROUP BY p;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DROP TABLE sqb_left;
 DROP TABLE sqb_right;

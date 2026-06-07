@@ -12,7 +12,7 @@
 -- folding passes leave the shape intact.
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 SET provsql.monte_carlo_seed = 42;
 
 CREATE TABLE sr_in(id int);
@@ -94,5 +94,5 @@ SELECT probability_evaluate(:shared,'stopping-rule','eps=0.001,delta=0.01,max_sa
 RESET provsql.verbose_level;
 
 DROP TABLE sr_in;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;
 RESET provsql.monte_carlo_seed;

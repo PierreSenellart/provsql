@@ -347,7 +347,7 @@ PostgreSQL to evaluate natively on the surviving groups while a
 per-group ``provenance_delta`` wrapper is still emitted, so the
 surviving rows carry the expected provenance shape.
 
-**Where-provenance** (when ``provsql.where_provenance`` is enabled):
+**Where-provenance** (when the provenance class is ``'where'``):
 
 - **Equijoin gates**: :cfunc:`add_eq_from_Quals_to_Expr` scans
   ``JOIN ... ON`` conditions and ``WHERE`` equalities, wrapping
@@ -559,7 +559,7 @@ Safe-Query Rewriter
 
 The safe-query rewriter (``src/safe_query.{c,h}``) is an opt-in
 pre-pass invoked from ``process_query`` in ``provsql.c`` when the
-GUC ``provsql.boolean_provenance`` is on (see
+GUC the provenance class is ``'boolean'`` (see
 :doc:`../user/probabilities`).  It recognises the safe class of
 Dalvi and Suciu :cite:`DBLP:journals/jacm/DalviS12`, namely
 self-join-free hierarchical conjunctive queries, and rewrites them

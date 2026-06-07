@@ -150,7 +150,7 @@ def test_benchmark_includes_inversion_free_only_when_certified(app):
     # (b) a certified self-join-free hierarchical circuit -> row present + sound
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute("SET provsql.inversion_free = on")
-        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("SET provsql.provenance = 'semiring'")
         cur.execute("DROP TABLE IF EXISTS bm_a, bm_b CASCADE")
         cur.execute("CREATE TABLE bm_a(x int)")
         cur.execute("CREATE TABLE bm_b(x int)")
@@ -181,7 +181,7 @@ def test_compile_to_ddnnf_inversion_free(app):
     pool = app.extensions["provsql_pool"]
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute("SET provsql.inversion_free = on")
-        cur.execute("SET provsql.boolean_provenance = off")
+        cur.execute("SET provsql.provenance = 'semiring'")
         cur.execute("DROP TABLE IF EXISTS cd_a, cd_b CASCADE")
         cur.execute("CREATE TABLE cd_a(x int)")
         cur.execute("CREATE TABLE cd_b(x int)")

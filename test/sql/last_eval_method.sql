@@ -48,7 +48,7 @@ SHOW provsql.last_eval_method;
 -- the route actually taken -- exercising the makeDD decomposition, the feature
 -- framework (DnfShape / TreewidthProxy) and the calibrated estimatedCost.
 -- boolean_provenance off so the load-time folding leaves the shapes intact.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 SET provsql.active = off;
 DO $$
 DECLARE v uuid[]; acc uuid; ors uuid[];
@@ -81,7 +81,7 @@ SHOW provsql.last_eval_method;
 SET provsql.last_eval_method = '';
 SELECT probability_evaluate(current_setting('lem.ladder')::uuid) IS NOT NULL AS ran;
 SHOW provsql.last_eval_method;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;
 
 SELECT remove_provenance('lem');
 DROP TABLE lem;

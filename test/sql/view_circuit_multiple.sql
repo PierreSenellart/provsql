@@ -3,7 +3,7 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
-SET provsql.where_provenance = on;
+SET provsql.provenance = 'where';
 
 CREATE TABLE vc_result AS
 SELECT city, view_circuit(provenance(),'d') AS ok

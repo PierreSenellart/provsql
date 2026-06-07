@@ -140,7 +140,7 @@ runtime, fonts are bundled).
      - POST
      - Statement-timeout-bounded multi-statement runner. Splits
        on ``;``, runs each statement in a single transaction,
-       wraps the last ``SELECT`` with ``provsql.where_provenance``
+       wraps the last ``SELECT`` with :sqlfunc:`where_provenance`
        in Where mode, and returns a ``StatementResult`` with
        columns, rows, runtime, and any wrap-fallback notice.
    * - ``/api/cancel/<request_id>``
@@ -273,7 +273,7 @@ GUC the panel and per-query toggles imply:
 - ``provsql.hybrid_evaluation`` (panel, debug-only; gates the
   in-evaluator hybrid path. Same cache-invalidation rule as
   ``simplify_on_load``)
-- ``provsql.where_provenance`` (per-query toggle; locked on in
+- ``provsql.provenance = 'where'`` (per-query toggle; locked on in
   Where mode)
 - ``provsql.update_provenance`` (per-query toggle, free in both
   modes)

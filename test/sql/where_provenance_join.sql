@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
-SET provsql.where_provenance = on;
+SET provsql.provenance = 'where';
 
 /* Where-provenance under a multi-table join.
  *

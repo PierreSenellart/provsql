@@ -14,7 +14,7 @@ SET search_path TO provsql_test,provsql;
 -- artefact surface (interpret-as-dd, Shapley) works on them.  On any
 -- failure the route falls back to the generic eval_recursive fixpoint.
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 
 -- Diamond DAG: same data and values as the recursive test (node 4:
 -- 0.8018), but compiled along the data; the chooser must settle on
@@ -179,7 +179,7 @@ SELECT remove_provenance('btwr_mr');
 SELECT * FROM btwr_mr ORDER BY node;
 SHOW provsql.last_eval_method;
 -- The same query through the generic fixpoint (GUC off) must agree.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TABLE btwr_mr2 AS
   WITH RECURSIVE reach(node) AS (
       SELECT v FROM btwr_msrc
@@ -194,7 +194,7 @@ SELECT remove_provenance('btwr_mr2');
 SELECT NOT EXISTS ((TABLE btwr_mr EXCEPT TABLE btwr_mr2)
                    UNION ALL (TABLE btwr_mr2 EXCEPT TABLE btwr_mr))
   AS routes_agree;
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DROP TABLE btwr_mr2;
 DROP TABLE btwr_mr;
 -- Untracked sources are certain.
@@ -247,7 +247,7 @@ SELECT round(probability_evaluate(pv, 'independent')::numeric, 6)
 FROM btwr_bid_x WHERE node = 4;
 DROP TABLE btwr_bid_x;
 -- The generic fixpoint agrees.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TABLE btwr_bid_r2 AS
   WITH RECURSIVE reach(node) AS (
       SELECT 1
@@ -262,7 +262,7 @@ SELECT remove_provenance('btwr_bid_r2');
 SELECT NOT EXISTS ((TABLE btwr_bid_r EXCEPT TABLE btwr_bid_r2)
                    UNION ALL (TABLE btwr_bid_r2 EXCEPT TABLE btwr_bid_r))
   AS bid_routes_agree;
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DROP TABLE btwr_bid_r2;
 DROP TABLE btwr_bid_r;
 
@@ -409,7 +409,7 @@ SELECT remove_provenance('btwr_d_r');
 SELECT count(*) AS filtered_shape FROM btwr_d_r;
 DROP TABLE btwr_d_r;
 -- ... and the route is gated on boolean_provenance.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TABLE btwr_d_r2 AS
   WITH RECURSIVE reach(node) AS (
       SELECT 1
@@ -420,8 +420,8 @@ CREATE TABLE btwr_d_r2 AS
 SELECT remove_provenance('btwr_d_r2');
 SELECT count(*) AS guc_off FROM btwr_d_r2;
 DROP TABLE btwr_d_r2;
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DROP TABLE btwr_d;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DROP TABLE btwr_edge;

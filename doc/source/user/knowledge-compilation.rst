@@ -27,9 +27,9 @@ The same surfaces drive the knowledge-compilation panels of
    Because this chapter is entirely about knowledge compilation over
    Boolean provenance, you will usually want ProvSQL's Boolean-only
    optimisations switched on for the whole session. They are gated
-   behind the :ref:`provsql.boolean_provenance
+   behind the :ref:`'boolean' provenance class
    <provsql-boolean-provenance>` GUC (off by default): issue ``SET
-   provsql.boolean_provenance = on;``, or pick :guilabel:`Boolean` on
+   provsql.provenance = 'boolean';``, or pick :guilabel:`Boolean` on
    ProvSQL Studio's :guilabel:`Provenance scheme` switch next to the
    query box.
 

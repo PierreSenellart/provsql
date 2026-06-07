@@ -9,7 +9,7 @@
 -- See src/probability_evaluate.cpp (the three-path dispatch).
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 SET provsql.monte_carlo_seed = 42;
 
 CREATE TABLE pp(id int);
@@ -111,5 +111,5 @@ DROP TABLE ppcnf;
 SELECT probability_evaluate(:shared,'nonsense-method');
 
 DROP TABLE pp;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;
 RESET provsql.monte_carlo_seed;

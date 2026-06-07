@@ -7,7 +7,7 @@
 --                      gate_times(a, a, b) -> gate_times(a, b)
 --   B2 (plus-with-one absorber) : gate_plus(..., gate_one, ...) -> gate_one
 --
--- Each rule application wraps the result in gate_assumed_boolean so
+-- Each rule application wraps the result in gate_assumed so
 -- semiring evaluators incompatible with the Boolean assumption refuse.
 
 \pset format unaligned
@@ -52,7 +52,7 @@ END $$;
 -- for the probability carrier irrespective of the GUC.  Non-Boolean
 -- semirings are unaffected (counting still squares the value); the
 -- boolean_assumed discipline below concerns those, not probability.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 SELECT round(probability_evaluate(
                 current_setting('bf.shared_root')::uuid, 'independent')
               ::numeric, 9) AS shared_root_p_ind_nofold;
@@ -60,7 +60,7 @@ SELECT round(probability_evaluate(
 -- With folding, idempotence collapses the duplicate plus(u, v) child,
 -- the in-memory boolean_assumed flag fires on the root, and
 -- independent yields the read-once probability.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 SELECT round(probability_evaluate(
                 current_setting('bf.shared_root')::uuid, 'independent')
               ::numeric, 9) AS shared_root_p_ind;
@@ -88,7 +88,7 @@ BEGIN
     RAISE EXCEPTION 'expected sr_counting to refuse a Boolean-wrapped circuit';
   END IF;
 END $$;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- ----------------------------------------------------------------------
 -- (2) Plus-with-one absorber.  gate_plus(u, gate_one()) collapses to
@@ -106,7 +106,7 @@ BEGIN
   PERFORM set_config('bf.one_root', root::text, false);
 END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 SELECT (simplified_circuit_subgraph(
           current_setting('bf.one_root')::uuid, 2)
          ->0->>'gate_type') AS one_root_simplified_type,
@@ -117,7 +117,7 @@ SELECT (simplified_circuit_subgraph(
 SELECT round(probability_evaluate(
                 current_setting('bf.one_root')::uuid, 'independent')
               ::numeric, 9) AS one_root_p_ind;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- ----------------------------------------------------------------------
 -- (3) foldSemiringIdentities collapses a single-wire plus / times to
@@ -170,14 +170,14 @@ BEGIN
   PERFORM set_config('bf.abs_times_root', root_times::text, false);
 END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 SELECT round(probability_evaluate(
                 current_setting('bf.abs_plus_root')::uuid, 'independent')
               ::numeric, 9) AS plus_abs_p_ind;
 SELECT round(probability_evaluate(
                 current_setting('bf.abs_times_root')::uuid, 'independent')
               ::numeric, 9) AS times_abs_p_ind;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- ----------------------------------------------------------------------
 -- (5) Real-world absorption pattern : the UNION's first branch
@@ -214,7 +214,7 @@ DO $$ BEGIN PERFORM set_prob(provsql, 0.6) FROM bf_personnel; END $$;
 
 -- Without absorption (and the rewriter), 'independent' fails on the
 -- shared p1 / p2 leaves.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DO $$ DECLARE raised boolean := false;
 BEGIN
   BEGIN
@@ -237,7 +237,7 @@ END $$;
 -- yields exact per-city probabilities.  Berlin has 2 people, prob
 -- 0.6 each : P = 1 - (1 - 0.6)^2 = 0.84.  Paris has 3, P = 1 -
 -- 0.4^3 = 0.936.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE bf_abs_demo AS
   SELECT city, probability_evaluate(provenance(), 'independent') AS p
     FROM (
@@ -250,7 +250,7 @@ SELECT remove_provenance('bf_abs_demo');
 SELECT city, round(p::numeric, 6) AS p_independent
   FROM bf_abs_demo ORDER BY city;
 DROP TABLE bf_abs_demo;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DROP TABLE bf_personnel;
 
 -- ----------------------------------------------------------------------
@@ -285,11 +285,11 @@ BEGIN
   PERFORM create_gate(root, 'plus', ARRAY[tab, t1]);
   PERFORM set_config('bf.share_root', root::text, false);
 END $$;
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 SELECT round(probability_evaluate(
                 current_setting('bf.share_root')::uuid, 'possible-worlds')
               ::numeric, 9) AS shared_leaf_collapse_p;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- ----------------------------------------------------------------------
 -- (7) Joint-fixpoint interleave of absorption (B3) and the single-wire
@@ -323,7 +323,7 @@ END $$;
 
 -- Without folding the shared x leaves the circuit non-read-once and
 -- independent refuses.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DO $$ DECLARE raised boolean := false;
 BEGIN
   BEGIN
@@ -339,14 +339,14 @@ END $$;
 
 -- With the interleaved joint fixpoint the circuit collapses to x :
 -- independent yields P(x) = 0.5 and the folded root is the input gate.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 SELECT round(probability_evaluate(
                 current_setting('bf.interleave_root')::uuid, 'independent')
               ::numeric, 9) AS interleave_root_p_ind;
 SELECT (simplified_circuit_subgraph(
           current_setting('bf.interleave_root')::uuid, 1)
          ->0->>'gate_type') AS interleave_root_simplified_type;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 DROP TABLE bf_t_cnt;
 DROP TABLE bf_t;

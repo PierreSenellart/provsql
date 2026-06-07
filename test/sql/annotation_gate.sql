@@ -44,7 +44,7 @@ SELECT round(probability_evaluate(root)::numeric, 6)
 FROM annot_w;
 
 -- (4) Every semiring is transparent (counting, boolean, why) -- in particular
---     the annotation is NOT a Boolean poison pill (contrast gate_assumed_boolean).
+--     the annotation is NOT a Boolean poison pill (contrast gate_assumed).
 SELECT (sr_counting(root,'annot_lbl')       =  sr_counting(ann,'annot_lbl'))       AS counting_transparent,
        (sr_boolean(root,'annot_lbl')::text  =  sr_boolean(ann,'annot_lbl')::text)  AS boolean_transparent,
        (sr_why(root,'annot_lbl')::text      =  sr_why(ann,'annot_lbl')::text)      AS why_transparent

@@ -111,8 +111,8 @@ static string where_provenance_internal
       } else {
         auto id=c.getGate(f);
 
-        if(type == "times" || type == "assumed_boolean" || type == "annotation") {
-          /* assumed_boolean and annotation are single-child wrappers; a
+        if(type == "times" || type == "assumed" || type == "annotation") {
+          /* assumed and annotation are single-child wrappers; a
            * single-wire TIMES is the identity in WhereCircuit semantics (the
            * Locator-set union of one child is just that child's), so funnel
            * all three through the same case. */

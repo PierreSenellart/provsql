@@ -2,7 +2,7 @@
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
 
-SET provsql.where_provenance = on;
+SET provsql.provenance = 'where';
 
 /* Example of where-provenance */
 CREATE TABLE result_where AS

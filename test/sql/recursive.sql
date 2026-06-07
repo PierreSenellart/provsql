@@ -72,7 +72,7 @@ DROP TABLE cedge;
 -- therefore absorbed -- the reachability probabilities do not depend on it.
 -- Expected (hand-computed, independent of c32): reach(2)=0.9, reach(3)=0.72,
 -- reach(4)=0.9*(1-(1-0.6)*(1-0.8*0.7))=0.7416.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TABLE cyc_edge(src int, dst int, p float8);
 INSERT INTO cyc_edge VALUES (1,2,0.9), (2,3,0.8), (3,2,0.5), (2,4,0.6), (3,4,0.7);
 SELECT add_provenance('cyc_edge');
@@ -91,7 +91,7 @@ SELECT remove_provenance('cyc_result');
 SELECT * FROM cyc_result ORDER BY node;
 DROP TABLE cyc_result;
 DROP TABLE cyc_edge;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- A recursive term with a set-returning function in its target list
 -- (e.g. SELECT unnest(...)) is rejected with the usual unsupported-shape

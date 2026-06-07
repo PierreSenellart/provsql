@@ -175,6 +175,27 @@ The mapping should assign ``float8`` cost values to leaf tokens; use
 for shortest-path or least-cost provenance, where ``plus`` selects the
 cheaper alternative and ``times`` accumulates cost along a derivation.
 
+With the optional third argument ``nonnegative => true``, input costs
+are checked nonnegative and the semiring becomes *absorptive*
+(:math:`\min(0, a) = 0` for :math:`a \ge 0`): evaluation then also
+accepts circuits carrying the ``'absorptive'`` assumption marker --
+notably recursive queries over **cyclic** data evaluated under
+``provsql.provenance = 'absorptive'`` (see
+:ref:`provsql-provenance-class`), giving exact min-cost reachability
+on cyclic graphs:
+
+.. code-block:: postgresql
+
+    SET provsql.provenance = 'absorptive';
+    WITH RECURSIVE reach(node) AS (
+        SELECT 1
+      UNION
+        SELECT e.dst FROM edges e JOIN reach r ON e.src = r.node
+    )
+    SELECT node, sr_tropical(provenance(), 'cost_mapping',
+                             nonnegative => true) AS min_cost
+    FROM reach;
+
 Viterbi Semiring (m-semiring)
 ------------------------------
 
@@ -426,7 +447,7 @@ also populate it manually for custom scenarios:
 Compatibility with Boolean-Provenance Rewriting
 ------------------------------------------------
 
-When ``provsql.boolean_provenance`` is ``on`` (see
+When the provenance class is ``'boolean'`` (``provsql.provenance``) (see
 :doc:`probabilities`), the planner rewrites hierarchical CQs to a
 read-once form whose probability is computable in linear time, and
 tags the root of the rewritten circuit so that semirings whose
@@ -438,7 +459,7 @@ value:
 
     ERROR: ProvSQL: semiring 'sr_counting' is not compatible with
            boolean-provenance rewriting; re-run with
-           provsql.boolean_provenance = off
+           provsql.provenance = 'semiring'
 
 The following compiled semirings are Boolean-faithful and run on
 any circuit, including rewritten ones: :sqlfunc:`sr_boolean`,
@@ -451,7 +472,7 @@ rewritten circuits: :sqlfunc:`sr_counting`, :sqlfunc:`sr_how`,
 :sqlfunc:`sr_minmax`, :sqlfunc:`sr_maxmin`.
 
 To run a refused semiring, switch
-``provsql.boolean_provenance`` off (in the current session, or for
+the provenance class below ``'boolean'`` (in the current session, or for
 the role / database) and re-evaluate; the next provenance circuit
 built for the query is unrewritten and accepts any semiring.
 

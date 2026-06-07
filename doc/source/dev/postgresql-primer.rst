@@ -232,7 +232,7 @@ Unified Configuration* (GUC) variables, registered via
 six:
 
 - ``provsql.active`` -- master switch.
-- ``provsql.where_provenance`` -- enable where-provenance tracking
+- ``provsql.provenance = 'where'`` -- enable where-provenance tracking
   (see :doc:`where-provenance`).
 - ``provsql.update_provenance`` -- enable data-modification tracking
   (see :doc:`data-modification`).

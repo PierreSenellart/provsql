@@ -11,7 +11,7 @@ individual value came from.  See :doc:`../user/where-provenance`
 for the user-facing description.
 
 The persistent circuit store does not change when
-``provsql.where_provenance`` is enabled: it is still the same DAG
+the provenance class is ``'where'``: it is still the same DAG
 of gates held in the mmap backend (see :doc:`memory`).  What
 changes is that the rewriter emits two additional gate types
 (``project`` and ``eq``) and -- on the C++ side -- where-provenance
@@ -104,7 +104,7 @@ column, locators inside separated by semicolons.
 Building the Circuit During Query Rewriting
 -------------------------------------------
 
-When ``provsql.where_provenance`` is on,
+When the provenance class is ``'where'``,
 :cfunc:`make_provenance_expression` builds the where-provenance
 fragment in three phases on top of the regular semiring expression
 (see :doc:`query-rewriting` for the surrounding context):
@@ -190,7 +190,7 @@ describes:
      - ``input``, ``plus``, ``times``, ``project``, ``eq``
    * - Extra gates emitted
      - Always (when ProvSQL is active)
-     - Only when ``provsql.where_provenance`` is on
+     - Only when the provenance class is ``'where'``
    * - Read by
      - :sqlfunc:`provenance_evaluate`,
        :sqlfunc:`probability_evaluate`, ``sr_*``...
@@ -200,7 +200,7 @@ Where-provenance does not interact with aggregation, ``HAVING``,
 ``EXCEPT``, or set operations beyond ``UNION ALL`` -- features
 covered by the semiring side -- because cell-level lineage has no
 agreed semantics under those operators.  Enabling
-``provsql.where_provenance`` does not turn off the semiring side;
+the ``'where'`` provenance class does not turn off the semiring side;
 the same persistent circuit then contains both the regular
 semiring gates and the extra ``project`` / ``eq`` gates, and each
 gate type is interpreted by the evaluator that cares about it.

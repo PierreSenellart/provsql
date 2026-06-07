@@ -594,11 +594,11 @@ def _elide_markers(
     rows: list[dict], root: str
 ) -> tuple[list[dict], str, dict[str, dict]]:
     """Drop the transparent single-child marker wrappers
-    (``gate_assumed_boolean`` and ``gate_annotation``) from the displayed
+    (``gate_assumed`` and ``gate_annotation``) from the displayed
     scene, rewiring parents straight to the surviving descendant and recording
     which markers that descendant carries so the front-end can badge it.
 
-    ``gate_assumed_boolean`` records a Boolean-only assumption (B badge), added
+    ``gate_assumed`` records a Boolean-only assumption (B badge), added
     by the safe-query rewriter / Boolean-identity folding.  A
     ``gate_annotation`` carries the inversion-free certificate on a result root
     (``C``-prefixed ``extra``) or a per-input order key on a leaf
@@ -607,14 +607,14 @@ def _elide_markers(
     real gate down and add a letter the user must interpret.
 
     A surviving node may sit under wrappers of *both* kinds, in any order (e.g.
-    an ``assumed_boolean`` over an ``annotation`` over the real root), so it can
+    an ``assumed`` over an ``annotation`` over the real root), so it can
     carry both badges; chains collapse onto the deepest non-wrapper descendant.
 
     Returns the rewritten rows, the new scene root, and a
     ``{node_id: marker dict}`` map, where the marker dict may hold
     ``boolean_assumed``, ``inversion_free``, ``if_cert`` and ``if_key``.
     """
-    WRAP = ("assumed_boolean", "annotation")
+    WRAP = ("assumed", "annotation")
     by_id = {r["node"]: r for r in rows}
     wrapper_kind = {nid: r["gate_type"] for nid, r in by_id.items()
                     if r["gate_type"] in WRAP}
@@ -647,7 +647,7 @@ def _elide_markers(
             continue
         surv = unwind(child)
         m = markers.setdefault(surv, {})
-        if kind == "assumed_boolean":
+        if kind == "assumed":
             m["boolean_assumed"] = True
         else:
             m["inversion_free"] = True
@@ -763,7 +763,7 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             #      (foldBooleanIdentities sets it on gates whose
             #      wires were Boolean-rewritten in place ;
             #      simplified_circuit_subgraph forwards it).
-            #   2. Elision of a persistent gate_assumed_boolean
+            #   2. Elision of a persistent gate_assumed
             #      wrapper above this gate
             #      (see _elide_markers).
             # Either source draws the dashed frame + B badge.

@@ -44,13 +44,16 @@ CREATE TYPE provenance_gate AS
     'rv',      -- Continuous random-variable leaf
     'arith',   -- n-ary arithmetic gate over scalar-valued children
     'mixture', -- Probabilistic mixture of two scalar RV roots with a Bernoulli weight
-    'assumed_boolean', -- Structural marker over a single child: the
-                      -- wrapped sub-circuit was computed under a
-                      -- Boolean-provenance assumption (e.g. the safe-
-                      -- query rewrite).  Transparent for Boolean-
-                      -- compatible evaluators, fatal error for the
-                      -- rest, rendered as an explicit element in
-                      -- PROV-XML export.
+    'assumed', -- Structural assumption marker over a single child: the
+                      -- wrapped sub-circuit was computed under the
+                      -- assumption named by the gate's extra label --
+                      -- 'boolean' (e.g. the safe-query rewrite; the
+                      -- historical default when the label is absent) or
+                      -- 'absorptive' (cyclic recursion truncated at the
+                      -- absorptive value fixpoint).  Transparent for
+                      -- evaluation semirings satisfying the assumption,
+                      -- fatal error for the rest, rendered as an
+                      -- explicit element in PROV-XML export.
     'annotation'      -- Transparent single-child wrapper carrying a
                       -- query-level annotation string in @c extra
                       -- (e.g. the inversion-free tractability
@@ -137,24 +140,31 @@ CREATE OR REPLACE FUNCTION get_infos(
   'provsql','get_infos' LANGUAGE C STABLE PARALLEL SAFE;
 
 /**
- * @brief Wrap @p token in a fresh @c gate_assumed_boolean and return
- *        the wrapper's UUID.
+ * @brief Wrap @p token in a fresh @c gate_assumed carrying @p assumption
+ *        as its label, and return the wrapper's UUID.
  *
- * Public primitive callable from any rewrite that needs to flag a
- * sub-circuit as having been computed under a Boolean-provenance
- * assumption (the safe-query rewriter is the first caller; future
- * Boolean-only simplifications should reuse this).  The wrapper is
- * transparent for Boolean-compatible evaluators (probability, the
- * @c sr_boolean / @c sr_boolexpr / @c sr_formula / @c sr_interval_*
- * family, where-provenance) and raises a @c CircuitException for the
- * rest.  Always kept as an explicit node in PROV-XML export.
+ * Public primitive callable from any rewrite or driver that needs to
+ * flag a sub-circuit as sound only under an evaluation assumption:
+ *
+ * - @c 'boolean' -- the sub-circuit only preserves the Boolean function
+ *   of the lineage (e.g. the safe-query rewrite collapses derivation
+ *   multiplicities); transparent for semirings admitting a homomorphism
+ *   from Boolean functions.
+ * - @c 'absorptive' -- the sub-circuit was truncated at the absorptive
+ *   value fixpoint (cyclic recursive query); transparent for absorptive
+ *   semirings (probability, boolean, min-plus over nonnegative
+ *   costs...), fatal for the rest (counting, why-provenance).
+ *
+ * Incompatible evaluators raise a @c CircuitException.  Always kept as
+ * an explicit node in PROV-XML export.
  *
  * The wrapper UUID is content-derived via @c uuid_generate_v5 on the
- * child, so identical children always wrap to the same outer UUID
- * (and distinct children always wrap to distinct outer UUIDs).
- * No-op (returns NULL) on a NULL input.
+ * assumption and the child, so identical children always wrap to the
+ * same outer UUID per assumption.  No-op (returns NULL) on a NULL
+ * input.
  */
-CREATE OR REPLACE FUNCTION assume_boolean(token UUID) RETURNS UUID AS
+CREATE OR REPLACE FUNCTION provenance_assume(token UUID, assumption TEXT)
+  RETURNS UUID AS
 $$
 DECLARE
   wrapped uuid;
@@ -162,13 +172,26 @@ BEGIN
   IF token IS NULL THEN
     RETURN NULL;
   END IF;
+  IF assumption NOT IN ('boolean', 'absorptive') THEN
+    RAISE EXCEPTION 'provenance_assume: unknown assumption %', assumption;
+  END IF;
   wrapped := public.uuid_generate_v5(uuid_ns_provsql(),
-                                     concat('assumed_boolean', token));
-  PERFORM create_gate(wrapped, 'assumed_boolean', ARRAY[token]);
+                                     concat('assumed', assumption, token));
+  PERFORM create_gate(wrapped, 'assumed', ARRAY[token]);
+  PERFORM set_extra(wrapped, assumption);
   RETURN wrapped;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Wrap @p token in a Boolean-assumption marker (compatibility
+ *        name; see @c provenance_assume).
+ */
+CREATE OR REPLACE FUNCTION assume_boolean(token UUID) RETURNS UUID AS
+$$
+SELECT provsql.provenance_assume(token, 'boolean');
+$$ LANGUAGE sql SECURITY DEFINER PARALLEL SAFE;
 
 /**
  * @brief Wrap @p token in a fresh transparent @c gate_annotation carrying
@@ -1000,10 +1023,16 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
  * Scope: UNION (set) recursion.  On *acyclic* input the structural fixpoint is
  * reached and the resulting circuit is the universal provenance, sound for any
  * semiring.  On *cyclic* input the circuit never stabilises structurally; when
- * @c provsql.boolean_provenance is on (an absorptive setting) we instead stop
- * at the value-fixpoint bound (number of derivable tuples) and return a circuit
- * that is sound only under absorptive evaluation; otherwise cyclic input trips
- * the @p max_iter guard.
+ * the session's provenance class (@c provsql.provenance) is @c 'absorptive' or
+ * @c 'boolean' we instead stop at the value-fixpoint bound (number of
+ * derivable tuples) -- every minimal, tuple-repetition-free derivation is then
+ * covered, and the longer ones are absorbed in any absorptive semiring (after
+ * Deutch, Milo, Roy & Tannen, ICDT 2014) -- and wrap the resulting tokens in
+ * the @c 'absorptive' assumption marker, so that non-absorptive semiring
+ * evaluations (counting, why-provenance: genuinely infinite on cyclic data)
+ * refuse them while probability, Boolean, formula-as-circuit and min-plus
+ * evaluations proceed.  Under the general classes, cyclic input trips the
+ * @p max_iter guard.
  *
  * This function has no @c SET @c search_path on purpose: @p body_sql is the
  * caller's deparsed query and must resolve relation names in the caller's path.
@@ -1028,16 +1057,19 @@ DECLARE
   set_stable boolean;       -- user-column tuple set unchanged this round
   iters     int := 0;
   new_count int;            -- rows in _new this round (INSERT ROW_COUNT)
-  -- Under an absorptive semiring (guaranteed by provsql.boolean_provenance,
-  -- which is strictly stronger) the provenance *value* converges on cyclic data
-  -- even though the circuit keeps growing structurally.  A minimal derivation
-  -- cannot repeat a tuple, so it has depth <= (number of derivable tuples);
-  -- after that many naive rounds the value equals the least fixpoint, and the
-  -- surplus (longer, cyclic) derivations are absorbed at evaluation time.  We
-  -- learn that bound from the tuple-set fixpoint and stop there, returning a
-  -- circuit that is sound for absorptive evaluation only.
-  boolean_mode boolean :=
-    coalesce(current_setting('provsql.boolean_provenance', true)::bool, false);
+  -- Under an absorptive semiring the provenance *value* converges on cyclic
+  -- data even though the circuit keeps growing structurally.  A minimal
+  -- derivation cannot repeat a tuple, so it has depth <= (number of derivable
+  -- tuples); after that many naive rounds the value equals the least fixpoint,
+  -- and the surplus (longer, cyclic) derivations are absorbed at evaluation
+  -- time.  We learn that bound from the tuple-set fixpoint, stop there, and
+  -- mark the resulting tokens with the 'absorptive' assumption so evaluation
+  -- under a non-absorptive semiring refuses rather than silently returning a
+  -- truncated value.
+  absorptive_mode boolean :=
+    coalesce(current_setting('provsql.provenance', true), 'semiring')
+      IN ('absorptive', 'boolean');
+  truncated boolean := false; -- exited at the value fixpoint (cyclic data)
   ntuples   int := NULL;    -- the bound above, set once the tuple set stabilises
 BEGIN
   EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
@@ -1069,9 +1101,10 @@ BEGIN
       'SELECT EXISTS((TABLE _new EXCEPT TABLE %1$I) UNION ALL (TABLE %1$I EXCEPT TABLE _new))',
       work_name) INTO changed;
 
-    -- In Boolean mode, learn the round bound from the tuple-set fixpoint (the
-    -- set always stabilises after finitely many rounds, even on cyclic data).
-    IF boolean_mode AND ntuples IS NULL THEN
+    -- In an absorptive class, learn the round bound from the tuple-set
+    -- fixpoint (the set always stabilises after finitely many rounds, even on
+    -- cyclic data).
+    IF absorptive_mode AND ntuples IS NULL THEN
       EXECUTE format(
         'SELECT NOT EXISTS('
         || '(SELECT %2$s FROM _new EXCEPT SELECT %2$s FROM %1$I) UNION ALL '
@@ -1090,10 +1123,24 @@ BEGIN
     -- semiring.
     EXIT WHEN NOT changed;
 
-    -- Boolean mode on cyclic data: once the value-fixpoint bound is reached we
-    -- stop, even though the circuit is not structurally stable.
-    EXIT WHEN boolean_mode AND ntuples IS NOT NULL AND iters >= ntuples;
+    -- Absorptive class on cyclic data: once the value-fixpoint bound is
+    -- reached (plus one confirming round, so that acyclic circuits whose
+    -- token depth lags the tuple-set saturation still exit through the
+    -- structural test above, untagged) we stop, even though the circuit
+    -- is not structurally stable.
+    IF absorptive_mode AND ntuples IS NOT NULL AND iters >= ntuples + 1 THEN
+      truncated := true;
+      EXIT;
+    END IF;
   END LOOP;
+
+  -- Tokens of a truncated (cyclic) fixpoint are sound only under absorptive
+  -- evaluation: record that in the circuit itself.
+  IF truncated THEN
+    EXECUTE format(
+      'UPDATE %I SET provsql = provsql.provenance_assume(provsql, ''absorptive'')',
+      work_name);
+  END IF;
 END
 $$ LANGUAGE plpgsql SET client_min_messages = warning;
 
@@ -4329,7 +4376,7 @@ CREATE OR REPLACE FUNCTION banzhaf_all_vars(
  * undirected edge in a directed edge relation); they are then treated
  * as a single bidirectional edge.  This is an internal/testing surface:
  * the user-facing route is a plain @c WITH @c RECURSIVE reachability
- * query under @c provsql.boolean_provenance, which the query rewriter
+ * query under the 'boolean' provenance class, which the query rewriter
  * compiles through @c eval_reachability() / @c reachability_materialize().
  *
  * @param sources source vertex of each edge (dense integer IDs)
@@ -4806,7 +4853,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
  * decomposition-aligned compilation with fallback to eval_recursive
  *
  * Called (at plan time, over SPI) by the recursive-CTE lowering when
- * @c provsql.boolean_provenance is on and the CTE matches the linear
+ * the provenance class is 'boolean' (@c provsql.provenance) and the CTE matches the linear
  * reachability shape over a tracked base edge relation.  Attempts the
  * decomposition-aligned route -- gather the edges, compile every
  * reachable vertex's certified provenance circuit along a tree
@@ -5405,15 +5452,22 @@ $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
  * Inputs are read as %float8 cost values; the additive identity
  * is <tt>'Infinity'::%float8</tt> and the multiplicative identity is 0.
  * Returns the cost of the cheapest derivation.
+ *
+ * With @p nonnegative, input costs are checked nonnegative and the
+ * semiring is *absorptive*: evaluation then also accepts circuits
+ * carrying the @c 'absorptive' assumption marker -- notably cyclic
+ * recursive queries truncated at the absorptive value fixpoint, giving
+ * exact min-cost reachability on cyclic data.
  */
-CREATE FUNCTION sr_tropical(token ANYELEMENT, token2value regclass)
+CREATE FUNCTION sr_tropical(token ANYELEMENT, token2value regclass,
+                            nonnegative BOOLEAN = false)
   RETURNS FLOAT AS
 $$
 BEGIN
   RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
-    'tropical',
+    CASE WHEN nonnegative THEN 'tropical_nonneg' ELSE 'tropical' END,
     0::FLOAT
   );
 END

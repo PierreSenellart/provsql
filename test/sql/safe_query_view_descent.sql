@@ -51,14 +51,14 @@ CREATE OR REPLACE FUNCTION vd_probe(qtxt text)
   RETURNS TABLE(x int, rewriter text, p_rew numeric, p_base numeric) AS $$
 DECLARE rec record;
 BEGIN
-  SET LOCAL provsql.boolean_provenance = on;
+  SET LOCAL provsql.provenance = 'boolean';
   EXECUTE format($f$
     CREATE TEMP TABLE vd_rew ON COMMIT DROP AS
       SELECT q.x, provsql.provenance() AS p FROM (%s) q GROUP BY q.x
   $f$, qtxt);
   PERFORM provsql.remove_provenance('vd_rew');
 
-  SET LOCAL provsql.boolean_provenance = off;
+  SET LOCAL provsql.provenance = 'semiring';
   EXECUTE format($f$
     CREATE TEMP TABLE vd_base ON COMMIT DROP AS
       SELECT q.x, provsql.provenance() AS p FROM (%s) q GROUP BY q.x
@@ -67,7 +67,7 @@ BEGIN
 
   FOR rec IN
     SELECT r.x,
-           CASE WHEN provsql.get_gate_type(r.p)::text = 'assumed_boolean'
+           CASE WHEN provsql.get_gate_type(r.p)::text = 'assumed'
                 THEN 'fired' ELSE 'refused' END AS rewriter,
            ROUND(provsql.probability_evaluate(r.p)::numeric, 6) AS p_rew,
            ROUND(provsql.probability_evaluate(b.p)::numeric, 6) AS p_base

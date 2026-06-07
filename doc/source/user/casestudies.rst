@@ -92,7 +92,7 @@ What each case study covers
     opens with one coverage question asked three ways -- safe by shape,
     safe by a key, and genuinely :math:`\#P`-hard -- exposing the
     knowledge-compilation pipeline (Tseytin CNF, d-DNNF compilation,
-    :sqlfunc:`ddnnf_stats`, the ``provsql.boolean_provenance`` rewriter,
+    :sqlfunc:`ddnnf_stats`, the ``'boolean'``-class safe-query rewriter,
     the external-tool registry). It then climbs three further rungs
     that escape the hard case in different ways: a ``HAVING count(*)``
     Poisson-binomial shortcut, an **inversion-free** self-join that is
@@ -217,7 +217,7 @@ Knowledge compilation and safe queries
    :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7"
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``provsql.boolean_provenance`` GUC", "", "", "", "", "", "", "", "✓"
+   "``provsql.provenance = 'boolean'``", "", "", "", "", "", "", "", "✓"
    "``provsql.classify_top_level`` GUC (TID/BID pills)", "", "", "", "", "", "", "", "✓"
    "Safe-query rewriter (hierarchical / read-once)", "", "", "", "", "", "", "", "✓"
    "Tseytin CNF export (DIMACS)", "", "", "", "", "", "", "", "✓"
@@ -330,7 +330,7 @@ Where-provenance
    :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7"
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``provsql.where_provenance`` GUC", "", "✓", "✓", "", "", "", "", ""
+   "``provsql.provenance = 'where'``", "", "✓", "✓", "", "", "", "", ""
    "``where_provenance(col)``", "", "✓", "✓", "", "", "", "", ""
 
 Data-modification tracking

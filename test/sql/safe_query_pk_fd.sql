@@ -47,7 +47,7 @@ END $$;
 
 -- Baseline: probability via the default evaluator on the unrewritten
 -- circuit.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pk_baseline_pk AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -58,7 +58,7 @@ SELECT remove_provenance('pk_baseline_pk');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM pk_baseline_pk;
 
 -- PK-FD path: 'independent' on the rewritten circuit must match.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pk_rewritten_pk AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -84,7 +84,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM pk_s_nnu;
 END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pk_rewritten_nnu AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -108,7 +108,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM pk_s_nullable;
 END $$;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -154,7 +154,7 @@ DO $$ BEGIN
 END $$;
 
 -- Equate only @c a: PK has 2 columns, only @c a anchored.  Must bail.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -205,7 +205,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM pk_t_coll;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE pk_baseline_coll AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -215,7 +215,7 @@ CREATE TEMP TABLE pk_baseline_coll AS
 SELECT remove_provenance('pk_baseline_coll');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline_coll FROM pk_baseline_coll;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE pk_rewritten_coll AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x

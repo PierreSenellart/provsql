@@ -125,7 +125,7 @@ primary key, dotted for a ``repair_key`` grouping key (so
 ``sr_how`` name the leaves.
 
 Most of the probability queries below are run twice, with
-``provsql.boolean_provenance`` off and on. With the GUC **off** (the
+the ``'boolean'`` provenance class off and on. With it **off** (the
 default) ProvSQL builds the provenance circuit literally from the join
 plan. With it **on**, ProvSQL's safe-query rewriter recognises
 hierarchical conjunctive queries -- including those made hierarchical by
@@ -177,7 +177,7 @@ structural pass, with no search. *Tree decomposition* reaches the
 same place from the other side (`treewidth
 <https://en.wikipedia.org/wiki/Treewidth>`__ **1**, a similarly small
 d-DNNF), as does any external compiler. This works the same with
-``boolean_provenance`` off or on.
+the ``'boolean'`` provenance class off or on.
 
 Step 2: Safe by a Key
 ---------------------
@@ -215,12 +215,12 @@ prints ``p1``'s coverage as a disjunction of four
 three of them -- the shared leaf, in plain sight; ``sr_why`` and
 ``sr_how`` read the same mapping.
 
-Run it with ``boolean_provenance`` **off** and ``independent``: it
+Run it with the ``'boolean'`` class **off** and ``independent``: it
 **errors** -- *"Not an independent circuit"*. The literal circuit
 (treewidth 2) reuses the ``topic_of(p1, t1)`` leaf, so it is not
 read-once.
 
-Now turn ``boolean_provenance`` **on** and run ``independent`` again: it
+Now turn the ``'boolean'`` class **on** and run ``independent`` again: it
 succeeds, returning ``≈ 0.4259``, matching *Tree decomposition* exactly.
 The key is what makes the difference. Because ``expertise`` has a primary
 key on ``reviewer`` (``reviewer`` :math:`\to` ``topic``), each reviewer
@@ -239,7 +239,7 @@ emits exactly this factorisation. This is the case study's first lesson:
 together**, not of the query alone.
 
 To watch the key do the work, drop it and re-run the coverage query's
-``independent`` evaluation under ``boolean_provenance`` **on**:
+``independent`` evaluation under the ``'boolean'`` class **on**:
 
 .. code-block:: postgresql
 
@@ -248,7 +248,7 @@ To watch the key do the work, drop it and re-run the coverage query's
 With the functional dependency ``reviewer`` :math:`\to` ``topic`` gone, a
 reviewer may span several areas, the question becomes genuinely
 non-hierarchical, and ``independent`` **errors again** -- even with
-``boolean_provenance`` on, the rewriter can no longer factor the shared
+the ``'boolean'`` class on, the rewriter can no longer factor the shared
 ``topic_of`` leaf out. Add the key back to restore safety:
 
 .. code-block:: postgresql
@@ -278,7 +278,7 @@ both mention it. Now the three variables ``reviewer``, ``paper`` and
 primary key on ``expertise`` does **not** save it: under the FD the topic
 is still shared across papers, so after the FD reduction the query
 remains non-hierarchical (``reviewer`` and ``paper`` overlap on ``bid``
-without nesting). Turn ``boolean_provenance`` on and the provenance
+without nesting). Turn the ``'boolean'`` class on and the provenance
 circuit is unchanged -- the safe-query rewriter finds no safe plan and
 leaves the literal circuit in place -- so ``independent`` errors just as
 it does with the GUC off. (Raising ``provsql.verbose_level`` would log
@@ -547,10 +547,10 @@ just probability.
     FROM conn JOIN reviewers r ON conn.node = r.id
     WHERE conn.node <> 'r1' ORDER BY r.id
 
-Evaluate the probability with ``boolean_provenance`` **off** and the
+Evaluate the probability with the ``'boolean'`` class **off** and the
 fixpoint never stabilises -- ProvSQL stops with *"no fixpoint after N
 rounds (cyclic data?)"*: under a general semiring a cycle keeps
-contributing new derivations forever. Turn ``boolean_provenance`` **on**
+contributing new derivations forever. Turn the ``'boolean'`` class **on**
 and the value converges (Boolean provenance is *absorptive*: a longer,
 cycle-revisiting derivation is absorbed by the shorter one it contains),
 so the connection probability is well defined. It is exactly **network
@@ -564,9 +564,11 @@ compilers can.
 This is the same knowledge-compilation story as Step 3, reached through a
 fixpoint instead of a fixed join pattern: reachability over a
 probabilistic graph is where the provenance circuit, and a real compiler,
-are indispensable. Note that cyclic recursion under
-``boolean_provenance`` is sound for absorptive evaluation (probability,
-Boolean) but not for multiplicity-counting semirings.
+are indispensable. Note that cyclic recursion under an absorptive
+provenance class is sound for absorptive evaluation only (probability,
+Boolean, nonnegative min-plus); its tokens carry the ``'absorptive'``
+assumption marker, and multiplicity-counting or why-provenance
+evaluation refuses them.
 
 .. seealso::
 

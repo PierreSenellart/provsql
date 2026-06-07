@@ -71,7 +71,7 @@ typedef enum gate_type {
   gate_rv,       ///< Continuous random-variable leaf (extra encodes distribution)
   gate_arith,    ///< n-ary arithmetic gate over scalar-valued children (info1 holds operator tag)
   gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
-  gate_assumed_boolean, ///< Structural marker over a single child whose sub-circuit was computed under a Boolean-provenance assumption (e.g. the safe-query rewrite); transparent (identity) for Boolean-compatible evaluators, fatal error for the rest, kept as an explicit node in PROV-XML export
+  gate_assumed, ///< Structural marker over a single child whose sub-circuit was computed under a Boolean-provenance assumption (e.g. the safe-query rewrite); transparent (identity) for Boolean-compatible evaluators, fatal error for the rest, kept as an explicit node in PROV-XML export
   gate_annotation, ///< Transparent single-child wrapper carrying a query-level annotation in @c extra (inversion-free certificate / per-input order key); identity for EVERY evaluator, and -- unlike the children-only convention -- its UUID folds in @c extra so distinct annotations over the same child are distinct gates.
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
@@ -171,7 +171,7 @@ typedef struct constants_t {
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
    *
    *  Installed by the @c 1.5.0--1.6.0 upgrade script.  Wraps its child
-   *  in a fresh @c gate_assumed_boolean and returns the wrapper's UUID.
+   *  in a fresh @c gate_assumed and returns the wrapper's UUID.
    *  When @c InvalidOid the safe-query rewriter (and any other
    *  Boolean-only rewrite that needs the marker) is effectively
    *  disabled even if @c provsql.boolean_provenance is on: the
@@ -396,6 +396,12 @@ extern bool provsql_inversion_free;
  *  evaluations incompatible with this rewrite refuse to run on the
  *  produced circuit. */
 extern bool provsql_boolean_provenance;
+
+/** @brief Derived flag of the @c provsql.provenance GUC: the session's
+ *  provenance class is 'absorptive' or 'boolean', licensing
+ *  constructions sound for absorptive semirings only (cyclic recursion
+ *  stopped at the absorptive value fixpoint, tagged tokens). */
+extern bool provsql_absorptive_provenance;
 
 #include "MMappedTableInfo.h"
 

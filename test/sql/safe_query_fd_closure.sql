@@ -54,7 +54,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM fdc_t;
 END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE fdc_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -64,7 +64,7 @@ CREATE TEMP TABLE fdc_baseline AS
 SELECT remove_provenance('fdc_baseline');
 SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM fdc_baseline;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE fdc_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -96,7 +96,7 @@ INSERT INTO fdc_dim_c VALUES (10, 'EU'), (11, 'US');
 SELECT add_provenance('fdc_fact');
 DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM fdc_fact; END $$;
 
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 CREATE TEMP TABLE fdc_star_baseline AS
   SELECT q.x, probability_evaluate(provenance()) AS p
     FROM (SELECT DISTINCT 1 AS x
@@ -106,7 +106,7 @@ CREATE TEMP TABLE fdc_star_baseline AS
    GROUP BY q.x;
 SELECT remove_provenance('fdc_star_baseline');
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE fdc_star_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (SELECT DISTINCT 1 AS x

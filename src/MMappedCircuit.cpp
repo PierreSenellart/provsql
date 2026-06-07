@@ -738,7 +738,12 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
     }
 
     if(type==gate_project || type==gate_value || type==gate_agg
-       || type==gate_rv || type==gate_mulinput || type==gate_annotation) {
+       || type==gate_rv || type==gate_mulinput || type==gate_annotation
+       || type==gate_assumed) {
+      /* gate_assumed carries its assumption kind ('boolean' /
+       * 'absorptive') in extra; gates from stores predating the label
+       * have none and default to the historical 'boolean' at
+       * evaluation. */
       auto extra = getExtra(uuid);
       result.setExtra(id, extra);
     }

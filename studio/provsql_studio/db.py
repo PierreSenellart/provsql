@@ -610,7 +610,7 @@ def configure_connection(conn: psycopg.Connection) -> None:
     # Disable psycopg3's auto-prepare. The default threshold (5)
     # caches the query plan after the same SQL string has run that
     # many times : but the cached plan locks in whatever
-    # provsql.where_provenance / update_provenance was active at
+    # provsql.provenance / update_provenance was active at
     # prepare time, so subsequent SET LOCAL toggles silently no-op
     # at the planner-hook level (the gates produced reflect the
     # original wp/up choice). Studio runs ad-hoc user queries with
@@ -990,8 +990,8 @@ _INTERVAL_KERNELS = {
 # `boolean_rewrite_compatible`: mirrors the C++
 # `semiring::*::compatibleWithBooleanRewrite()` predicate (see
 # src/semiring/*.h). When the root of the circuit being evaluated is a
-# `gate_assumed_boolean` (produced by the safe-query rewriter under
-# `provsql.boolean_provenance = on`), `GenericCircuit::evaluate` refuses
+# `gate_assumed` marker (produced e.g. by the safe-query rewriter
+# under the 'boolean' provenance class), `GenericCircuit::evaluate` refuses
 # any semiring whose predicate is false. Studio uses this flag to
 # narrow the eval-strip dropdown in that case so users do not pick a
 # semiring that will throw. Drift detection is handled by
@@ -1977,17 +1977,20 @@ def exec_batch_on(
                 "SELECT set_config('search_path', %s, true)",
                 (target_path,),
             )
+            # The provenance class is a single enum GUC (extension >=
+            # 1.10); the Boolean toggle takes precedence over Where when
+            # both are requested (they are mutually exclusive classes).
             cur.execute(
-                "SET LOCAL provsql.where_provenance = "
-                + ("on" if where_provenance else "off")
+                "SET LOCAL provsql.provenance = "
+                + (
+                    "'boolean'"
+                    if boolean_provenance
+                    else "'where'" if where_provenance else "'semiring'"
+                )
             )
             cur.execute(
                 "SET LOCAL provsql.update_provenance = "
                 + ("on" if update_provenance else "off")
-            )
-            cur.execute(
-                "SET LOCAL provsql.boolean_provenance = "
-                + ("on" if boolean_provenance else "off")
             )
             # Studio always wants the classifier NOTICE for the
             # user's outermost SELECT so the result-pane header
@@ -2401,15 +2404,15 @@ def _user_error_result(
 
 
 # GUCs the front-end is allowed to manage. Split into two: those managed
-# per-query through the form toggles (where_provenance, update_provenance)
-# and those managed by the Config panel (active, verbose_level). The split
-# matters because the two groups are applied at different points in
-# exec_batch, and the panel must not expose the toggle GUCs (they would
-# silently override what the user picks per query).
+# per-query through the form toggles (the provenance class,
+# update_provenance) and those managed by the Config panel (active,
+# verbose_level). The split matters because the two groups are applied at
+# different points in exec_batch, and the panel must not expose the
+# toggle GUCs (they would silently override what the user picks per
+# query).
 _TOGGLE_GUCS = {
-    "provsql.where_provenance",
+    "provsql.provenance",
     "provsql.update_provenance",
-    "provsql.boolean_provenance",
 }
 _PANEL_GUCS = {
     "provsql.active",
@@ -2427,7 +2430,7 @@ _PANEL_GUCS = {
 # Boolean-mode selector in the toolbar owns the lifecycle.  Allowed
 # through the same SET LOCAL pipeline as the panel GUCs.
 _SESSION_MODE_GUCS = {
-    "provsql.boolean_provenance",
+    "provsql.provenance",
 }
 # Every key accepted as an `extra_gucs` payload (the union the
 # downstream filter functions check).

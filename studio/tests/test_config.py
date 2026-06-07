@@ -131,10 +131,10 @@ def test_config_fallback_compiler_rejects_unknown(client):
 
 
 def test_config_post_rejects_non_panel_guc(client):
-    # `provsql.where_provenance` is whitelisted overall but is owned by the
+    # `provsql.provenance` is whitelisted overall but is owned by the
     # per-query toggle; the panel must not accept it.
     resp = client.post("/api/config",
-                       json={"key": "provsql.where_provenance", "value": "on"})
+                       json={"key": "provsql.provenance", "value": "where"})
     assert resp.status_code == 400
 
 

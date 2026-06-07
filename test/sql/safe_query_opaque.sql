@@ -7,7 +7,7 @@ SET search_path TO provsql_test, provsql;
 -- rewriter is only sound on TID / BID tables that came through
 -- add_provenance / repair_key; for anything else it must refuse to
 -- fire (per-row root stays an ordinary gate_times / gate_plus, never
--- gate_assumed_boolean).
+-- gate_assumed).
 --
 -- This file pins the contract.  Each scenario carries a DESIRED:
 -- note explaining what the rewriter should do; the expected output
@@ -35,7 +35,7 @@ DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM opq_src; END $$;
 -- ---------------------------------------------------------------
 -- Helper: run the canonical 2-atom hierarchical CQ on (lhs, opq_ref)
 -- under boolean_provenance=on and report, per output x, whether the
--- rewriter fired ('fired' if the per-row root is gate_assumed_boolean,
+-- rewriter fired ('fired' if the per-row root is gate_assumed,
 -- 'refused' otherwise).  The exact non-marker root type
 -- (gate_times / gate_plus / ...) is incidental, so we collapse it.
 -- ---------------------------------------------------------------
@@ -53,7 +53,7 @@ BEGIN
   FOR rec IN SELECT r.x, provsql.get_gate_type(r.p)::text AS gt
                FROM opq_probe_res r ORDER BY r.x LOOP
     x := rec.x;
-    rewriter := CASE WHEN rec.gt = 'assumed_boolean'
+    rewriter := CASE WHEN rec.gt = 'assumed'
                      THEN 'fired' ELSE 'refused' END;
     RETURN NEXT;
   END LOOP;
@@ -61,7 +61,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 
 -- ---------------------------------------------------------------
 -- (S0) Direct INSERT with two rows sharing the same provsql UUID.
@@ -258,7 +258,7 @@ UPDATE opq_s10 SET provsql = public.uuid_generate_v4()
 SELECT 'S10' AS scenario, * FROM opq_probe('opq_s10');
 
 DROP FUNCTION opq_probe(regclass);
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 DROP TABLE opq_ref, opq_src,
            opq_s0, opq_s1, opq_s2, opq_s4, opq_s5,

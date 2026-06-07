@@ -15,52 +15,81 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     silently, as if the extension were not loaded. Useful to temporarily
     disable provenance tracking without unloading the extension.
 
-``provsql.where_provenance`` (default: ``off``)
-    Enable where-provenance tracking (see :doc:`where-provenance`).
-    Adds ``project`` and ``eq`` gates to record the source cell of each
-    output value. Disabled by default due to overhead.
+.. _provsql-provenance-class:
+.. _provsql-boolean-provenance:
+
+``provsql.provenance`` (default: ``'semiring'``)
+    The *provenance class* of the session: the most specific class of
+    provenance semantics circuits must remain faithful for.
+    Constructions are licensed accordingly, and any construction that
+    narrows a circuit's validity records it *in the circuit* (an
+    ``assumed`` marker gate), so evaluation under a semiring outside
+    the recorded class refuses with a clear error rather than
+    returning an unjustified value.  From the most general to the most
+    specialised:
+
+    ``'where'``
+        Universal semiring provenance *plus* where-provenance tracking
+        (see :doc:`where-provenance`): ``project`` and ``eq`` gates
+        record the source cell of each output value.  Not the default
+        due to overhead.
+
+    ``'semiring'``
+        Universal semiring provenance (the default): circuits are
+        faithful for every commutative (m-)semiring.  Recursive queries
+        require the structural fixpoint, so cyclic data is rejected.
+
+    ``'absorptive'``
+        Circuits may additionally be sound only for *absorptive*
+        semirings (those where :math:`1 \oplus a = 1`: probability,
+        Boolean, min-plus over nonnegative costs, Viterbi…).
+        Concretely, a recursive query over **cyclic** data stops at the
+        absorptive value fixpoint -- once every minimal,
+        tuple-repetition-free derivation is covered, the longer
+        (cyclic) ones being absorbed -- instead of failing; the
+        resulting tokens carry the ``'absorptive'`` assumption marker,
+        and non-absorptive evaluations (counting, why-provenance --
+        genuinely infinite on cyclic data) refuse them.  After Deutch,
+        Milo, Roy & Tannen (ICDT 2014).
+
+    ``'boolean'``
+        Implies ``'absorptive'``, and additionally enables every
+        optimisation sound only when provenance is interpreted as a
+        Boolean function:
+
+        * **Planner-level safe-query rewriting.**  Self-join-free
+          hierarchical conjunctive queries (and UCQs of such queries)
+          over TID / BID base tables are rewritten with per-atom
+          ``DISTINCT`` projections so the resulting provenance circuit
+          is read-once and probability-evaluates in linear time.
+          Queries outside the recognised class pass through unchanged.
+
+        * **Recursive reachability on bounded-treewidth data.**  The
+          recursive-CTE reachability shapes compile along a tree
+          decomposition of the data graph into certified d-DNNFs (see
+          :doc:`probabilities`).
+
+        * **Load-time Boolean-only circuit simplification.**  When a
+          circuit is loaded from the mmap store,
+          ``foldBooleanIdentities`` applies rewrites that hold for
+          Boolean functions but not in counting / tropical / Viterbi /
+          …: idempotence, plus-with-one absorption, and absorption.
+          Independent of
+          :ref:`provsql.simplify_on_load <provsql-simplify-on-load>`.
+
+        The rewritten gates are tagged (persistently for the rewriter,
+        in a side-band set for the load-time simplifier) so that
+        semirings whose algebra is not Boolean-faithful refuse to
+        evaluate them; see :doc:`probabilities` and the
+        :ref:`compatibility note <semiring-boolean-compat>` in
+        :doc:`semirings`.  Not the default because the rewrites change
+        the multiset of result rows / the underlying polynomial and are
+        therefore unsound for per-row provenance interrogations and for
+        non-Boolean-faithful semirings.
 
 ``provsql.update_provenance`` (default: ``off``)
     Enable provenance tracking for ``INSERT``, ``UPDATE``, and ``DELETE``
     statements (see :doc:`data-modification`). Requires PostgreSQL ≥ 14.
-
-.. _provsql-boolean-provenance:
-
-``provsql.boolean_provenance`` (default: ``off``)
-    Umbrella switch for every optimisation that is sound only when
-    provenance is interpreted in the Boolean semiring.  When on, two
-    independent layers activate:
-
-    * **Planner-level safe-query rewriting.**  Self-join-free
-      hierarchical conjunctive queries (and UCQs of such queries) over
-      TID / BID base tables are rewritten with per-atom ``DISTINCT``
-      projections so the resulting provenance circuit is read-once.  A
-      read-once circuit is probability-evaluated in linear time by the
-      ``'independent'`` method, replacing the ``'tree-decomposition'``
-      or ``'compilation'`` fallback that would otherwise be needed.
-      Queries outside the recognised class pass through unchanged.
-
-    * **Load-time Boolean-only circuit simplification.**  When a
-      circuit is loaded from the mmap store, ``foldBooleanIdentities``
-      applies rewrites that hold in the Boolean semiring but not in
-      counting / tropical / Viterbi / …: idempotence (drop repeated
-      child wires of ``plus`` / ``times``), plus-with-one absorption
-      (``plus(…, one, …) → one``), and absorption
-      (``plus(x, times(x, y, …), …) → plus(x, …)`` and dually for
-      ``times``).  This is independent of
-      :ref:`provsql.simplify_on_load <provsql-simplify-on-load>`:
-      disabling the universal passes does not disable the
-      Boolean-only ones.
-
-    In both cases the rewritten gates are tagged (persistently for the
-    rewriter, in a side-band set for the load-time simplifier) so that
-    semirings whose algebra is not Boolean-faithful refuse to evaluate
-    them; see :doc:`probabilities` and the
-    :ref:`compatibility note <semiring-boolean-compat>` in
-    :doc:`semirings`.  Off by default because the rewrites change the
-    multiset of result rows / the underlying polynomial and are
-    therefore unsound for per-row provenance interrogations and for
-    non-Boolean-faithful semirings.
 
 .. _provsql-classify-top-level:
 

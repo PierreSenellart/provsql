@@ -54,7 +54,7 @@ END $$;
 --     lineage on this instance, so 'independent' rejects.  The
 --     default evaluator (d4 / tree decomposition) returns the exact
 --     probability.
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 DO $$
 DECLARE raised boolean := false;
 BEGIN
@@ -88,7 +88,7 @@ SELECT x, ROUND(p::numeric, 6) AS prob_baseline FROM sq_const_baseline;
 --     read-once shape, and 'independent' succeeds.  Expected
 --     probability matches the baseline within numerical noise (both
 --     methods are exact on this small instance).
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sq_const_rewritten AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (
@@ -108,7 +108,7 @@ SELECT b.x,
 -- (4) Constant on the other side of the equijoin: propagation runs
 --     in the opposite direction (R.x = 42 pins S.x to 42 transitively
 --     through the equijoin closure).  Result must match (2) exactly.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 CREATE TEMP TABLE sq_const_other_side AS
   SELECT q.x, probability_evaluate(provenance(), 'independent') AS p
     FROM (
@@ -126,7 +126,7 @@ SELECT b.x,
 --     @c Var.attno, so the constant-selection pass must NOT fire.
 --     The H-query is still non-hierarchical; the rewriter falls
 --     through.  'independent' rejects the resulting circuit.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DO $$
 DECLARE raised boolean := false;
 BEGIN

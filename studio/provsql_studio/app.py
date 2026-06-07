@@ -87,7 +87,7 @@ def create_app(
     app.config["RUNTIME_GUCS"] = dict(db.load_persisted_gucs())
     # Session-sticky mode flags. Currently just the Boolean-provenance
     # selector: when the user picks the Boolean flavour in /api/exec,
-    # this dict gets {"provsql.boolean_provenance": "on"} ; subsequent
+    # this dict gets {"provsql.provenance": "boolean"} ; subsequent
     # /api/circuit and /api/evaluate calls merge it into their
     # extra_gucs so the load-time foldBooleanIdentities fires there
     # too.  Picking Semiring / Where in /api/exec drops the entry.
@@ -384,10 +384,10 @@ def create_app(
 
         last = statements[-1]
 
-        # The provenance-flavour selector is a three-way choice :
-        # `boolean` (provsql.boolean_provenance on, safe-query rewriter
-        # enabled), `semiring` (both flavour GUCs off), `where`
-        # (provsql.where_provenance on, eligible queries get wrapped
+        # The provenance-flavour selector is a three-way choice
+        # mirroring the provsql.provenance enum GUC : `boolean`
+        # (safe-query rewriter enabled), `semiring` (the default class),
+        # `where` (eligible queries get wrapped
         # with where_provenance(provenance()) for cell-level highlights).
         # Boolean and where are mutually exclusive at the C level
         # (where-provenance gates do not survive the safe-query rewrite),
@@ -409,12 +409,12 @@ def create_app(
         # Without this the load-time foldBooleanIdentities pass fires
         # only on the original /api/exec batch ; circuit-mode cell
         # clicks would then render the unfolded form.
-        prev_bool = app.config["SESSION_MODES"].get("provsql.boolean_provenance")
+        prev_bool = app.config["SESSION_MODES"].get("provsql.provenance")
         if boolean_prov:
-            app.config["SESSION_MODES"]["provsql.boolean_provenance"] = "on"
+            app.config["SESSION_MODES"]["provsql.provenance"] = "boolean"
         else:
-            app.config["SESSION_MODES"].pop("provsql.boolean_provenance", None)
-        new_bool = app.config["SESSION_MODES"].get("provsql.boolean_provenance")
+            app.config["SESSION_MODES"].pop("provsql.provenance", None)
+        new_bool = app.config["SESSION_MODES"].get("provsql.provenance")
         # The LayoutCache is keyed on (root, depth) only, so a cached
         # scene from a previous mode would shadow the next /api/circuit
         # fetch.  Drop the cache on every mode flip so the next fetch
@@ -1238,7 +1238,7 @@ def create_app(
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
                 boolean_provenance=(
                     app.config["SESSION_MODES"].get(
-                        "provsql.boolean_provenance") == "on"),
+                        "provsql.provenance") == "boolean"),
             )
         except (psycopg.errors.UndefinedFunction,
                 psycopg.errors.UndefinedTable) as e:

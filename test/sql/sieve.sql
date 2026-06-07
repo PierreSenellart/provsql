@@ -9,7 +9,7 @@
 -- provsql.boolean_provenance off so the load-time folding leaves the shape.
 \pset format unaligned
 SET search_path TO provsql_test,provsql;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 CREATE TABLE sv_in(id int);
 INSERT INTO sv_in VALUES (1),(2),(3),(4);
@@ -69,4 +69,4 @@ ORDER BY circuit;
 SELECT probability_evaluate(:nondnf,'sieve');
 
 DROP TABLE sv_in;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;

@@ -322,6 +322,8 @@ static Datum provenance_evaluate_compiled_internal
   }
   if (type == constants.OID_TYPE_FLOAT) {
     if (semiring == "tropical")    return pec(constants, c, g, semiring::Tropical{}, drop_table);
+    if (semiring == "tropical_nonneg")
+      return pec(constants, c, g, semiring::TropicalNonneg{}, drop_table);
     if (semiring == "viterbi")     return pec(constants, c, g, semiring::Viterbi{}, drop_table);
     if (semiring == "lukasiewicz") return pec(constants, c, g, semiring::Lukasiewicz{}, drop_table);
     throw CircuitException("Unknown semiring for type float: " + semiring);

@@ -70,7 +70,7 @@ const char *gate_type_name[] = {
   "rv",
   "arith",
   "mixture",
-  "assumed_boolean",
+  "assumed",
   "annotation",
   "invalid"
 };
@@ -473,9 +473,9 @@ static constants_t initialize_constants(bool failure_if_not_possible)
 
   /* assume_boolean is installed by the 1.6.0 upgrade script.  Treat
    * its absence as a soft signal: on older schemas the safe-query
-   * rewriter (gated behind provsql.boolean_provenance) refuses to
+   * rewriter (gated behind the 'boolean' provenance class) refuses to
    * fire because it cannot mark the per-row root with a
-   * gate_assumed_boolean for downstream semiring-compatibility
+   * gate_assumed for downstream semiring-compatibility
    * enforcement.  Optional lookup matches the pattern used above for
    * rv_aggregate_semimod. */
   constants.OID_FUNCTION_ASSUME_BOOLEAN =
@@ -552,7 +552,15 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID_OPTIONAL(rv);
   GET_GATE_TYPE_OID_OPTIONAL(arith);
   GET_GATE_TYPE_OID_OPTIONAL(mixture);
-  GET_GATE_TYPE_OID_OPTIONAL(assumed_boolean);
+  GET_GATE_TYPE_OID_OPTIONAL(assumed);
+  /* The 'assumed' label was 'assumed_boolean' before 1.10.0; ALTER TYPE
+   * ... RENAME VALUE keeps the enum value's OID, so accepting the
+   * historical label is equivalent -- and necessary when this cache is
+   * built in a session that later runs the upgrade chain across the
+   * rename (the extension-upgrade test does exactly that). */
+  if(constants.GATE_TYPE_TO_OID[gate_assumed] == InvalidOid)
+    constants.GATE_TYPE_TO_OID[gate_assumed] =
+      get_enum_oid(constants.OID_TYPE_GATE_TYPE, "assumed_boolean");
   GET_GATE_TYPE_OID_OPTIONAL(annotation);
 
   constants.ok=true;

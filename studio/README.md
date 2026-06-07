@@ -24,7 +24,7 @@ sidebar):
 * **Where mode** highlights the source cells that contributed to each
   output value. Hover a result cell and the contributing cells of the
   underlying provenance-tracked relations light up in the sidebar. The
-  query is wrapped automatically with `provsql.where_provenance`, so no
+  query is wrapped automatically with `where_provenance()`, so no
   explicit `where_provenance(...)` call is needed.
 
 * **Circuit mode** renders the provenance DAG behind a result's UUID

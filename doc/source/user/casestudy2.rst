@@ -315,7 +315,7 @@ finding:
 
 .. code-block:: postgresql
 
-    SET provsql.where_provenance = on;
+    SET provsql.provenance = 'where';
 
     SELECT study, study_type, exposure, outcome, effect,
         where_provenance(provenance()) AS source
@@ -323,7 +323,7 @@ finding:
     WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
       AND study = 'Smith2018';
 
-    SET provsql.where_provenance = off;
+    SET provsql.provenance = 'semiring';
 
 Each entry in ``source`` takes the form ``[table:token:column]``, where
 ``token`` is the provenance UUID of the source row and ``column`` is its
@@ -347,7 +347,7 @@ provenance-enabled table.
 
 .. code-block:: postgresql
 
-    SET provsql.where_provenance = on;
+    SET provsql.provenance = 'where';
 
     SELECT finding.study_id, finding.exposure_id, finding.outcome_id, finding.effect,
         where_provenance(provenance()) AS source
@@ -357,7 +357,7 @@ provenance-enabled table.
     JOIN outcome  ON finding.outcome_id  = outcome.id  AND outcome.name   = 'Cardiovascular Disease'
     WHERE finding.effect = 'beneficial';
 
-    SET provsql.where_provenance = off;
+    SET provsql.provenance = 'semiring';
 
 .. raw:: html
 
