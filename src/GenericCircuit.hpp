@@ -131,12 +131,16 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
        *   collapses derivation multiplicities into a single witness);
        *   sound for semirings admitting a homomorphism from Boolean
        *   functions.
-       * - 'absorptive': the sub-circuit was truncated at the
-       *   absorptive value fixpoint (cyclic recursion stopped once
-       *   every minimal -- tuple-repetition-free -- derivation is
-       *   covered); longer derivations are absorbed in any absorptive
-       *   semiring but genuinely missing for the rest (Deutch, Milo,
-       *   Roy & Tannen, ICDT 2014). */
+       * - 'absorptive': the sub-circuit only represents the
+       *   absorptive (Sorp) quotient of the recursive provenance --
+       *   either truncated at the absorptive value fixpoint (cyclic
+       *   recursion stopped once every minimal,
+       *   tuple-repetition-free, derivation is covered) or compiled
+       *   by the bounded-treewidth reachability route (whose world
+       *   enumeration surfaces exactly the minimal derivation
+       *   supports); longer derivations are absorbed in any
+       *   absorptive semiring but genuinely missing for the rest
+       *   (Deutch, Milo, Roy & Tannen, ICDT 2014). */
       {
         const std::string assumption = getExtra(u);
         if(assumption.empty() || assumption == "boolean") {
@@ -155,12 +159,16 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
           if(!semiring.absorptive())
             throw CircuitException(
                     "The requested semiring is not absorptive; the "
-                    "wrapped sub-circuit was truncated at the absorptive "
-                    "value fixpoint (cyclic recursive query), so its "
-                    "value is only defined for absorptive semirings "
-                    "(probability, boolean, formula-with-absorption, "
-                    "tropical, ...).  Counting and why-provenance of "
-                    "cyclic recursion are genuinely infinite.");
+                    "wrapped sub-circuit only represents the absorptive "
+                    "quotient of a recursive query's provenance "
+                    "(fixpoint truncation or compiled reachability "
+                    "circuit), so its value is only defined for "
+                    "absorptive semirings (probability, boolean, "
+                    "formula-with-absorption, nonnegative tropical, "
+                    "...).  Counting and why-provenance of cyclic "
+                    "recursion are genuinely infinite; on acyclic "
+                    "data, re-run under the 'semiring' provenance "
+                    "class.");
         } else
           throw CircuitException(
                   "Unknown assumption marker '" + assumption + "'");

@@ -20,10 +20,10 @@ add_provenance
 remove_provenance
 
 (1 row)
-node|gate|certified
-1|plus|1
-2|times|1
-3|times|1
+node|gate|assumption|certified
+1|assumed|absorptive|1
+2|assumed|absorptive|1
+3|assumed|absorptive|1
 (3 rows)
 interpret_as_dd_works
 t

@@ -56,7 +56,11 @@ CREATE TABLE btwr_r AS
   )
   SELECT node, provenance() pv FROM reach;
 SELECT remove_provenance('btwr_r');
-SELECT node, get_gate_type(pv) AS gate, (get_infos(pv)).info1 AS certified
+-- Each root is the certified circuit wrapped in the 'absorptive'
+-- assumption marker (the compiled circuit is only the absorptive
+-- quotient of the infinite recursive semiring provenance).
+SELECT node, get_gate_type(pv) AS gate, get_extra(pv) AS assumption,
+       (get_infos((get_children(pv))[1])).info1 AS certified
 FROM btwr_r ORDER BY node;
 SELECT (ddnnf_stats((SELECT pv FROM btwr_r WHERE node = 3),
                     'interpret-as-dd')::json->>'nodes')::int > 0
@@ -286,9 +290,10 @@ CREATE TABLE btwr_bid_m AS
   )
   SELECT node, provenance() pv FROM reach;
 SELECT remove_provenance('btwr_bid_m');
--- The certificate on every root proves the compiled route ran.
+-- The certificate on every root (behind the assumption wrapper)
+-- proves the compiled route ran.
 SELECT node, round(probability_evaluate(pv)::numeric, 6) AS prob,
-       (get_infos(pv)).info1 AS certified
+       (get_infos((get_children(pv))[1])).info1 AS certified
 FROM btwr_bid_m ORDER BY node;
 DROP TABLE btwr_bid_m;
 -- A BID relation cannot serve as a probabilistic source set (its

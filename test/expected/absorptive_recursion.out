@@ -17,9 +17,9 @@ node|root_type|assumption|prob|min_cost
 remove_provenance
 
 (1 row)
-ERROR:  ProvSQL: provenance_evaluate_compiled: The requested semiring is not absorptive; the wrapped sub-circuit was truncated at the absorptive value fixpoint (cyclic recursive query), so its value is only defined for absorptive semirings (probability, boolean, formula-with-absorption, tropical, ...).  Counting and why-provenance of cyclic recursion are genuinely infinite.
+ERROR:  ProvSQL: provenance_evaluate_compiled: The requested semiring is not absorptive; the wrapped sub-circuit only represents the absorptive quotient of a recursive query's provenance (fixpoint truncation or compiled reachability circuit), so its value is only defined for absorptive semirings (probability, boolean, formula-with-absorption, nonnegative tropical, ...).  Counting and why-provenance of cyclic recursion are genuinely infinite; on acyclic data, re-run under the 'semiring' provenance class.
 CONTEXT:  PL/pgSQL function sr_counting(anyelement,regclass) line 3 at RETURN
-ERROR:  ProvSQL: provenance_evaluate_compiled: The requested semiring is not absorptive; the wrapped sub-circuit was truncated at the absorptive value fixpoint (cyclic recursive query), so its value is only defined for absorptive semirings (probability, boolean, formula-with-absorption, tropical, ...).  Counting and why-provenance of cyclic recursion are genuinely infinite.
+ERROR:  ProvSQL: provenance_evaluate_compiled: The requested semiring is not absorptive; the wrapped sub-circuit only represents the absorptive quotient of a recursive query's provenance (fixpoint truncation or compiled reachability circuit), so its value is only defined for absorptive semirings (probability, boolean, formula-with-absorption, nonnegative tropical, ...).  Counting and why-provenance of cyclic recursion are genuinely infinite; on acyclic data, re-run under the 'semiring' provenance class.
 CONTEXT:  PL/pgSQL function sr_tropical(anyelement,regclass,boolean) line 3 at RETURN
 add_provenance
 
@@ -35,6 +35,16 @@ add_provenance
 create_provenance_mapping
 
 (1 row)
+remove_provenance
+
+(1 row)
+node|root_type|min_cost
+1|assumed|0
+2|assumed|1
+3|assumed|1
+(3 rows)
+ERROR:  ProvSQL: provenance_evaluate_compiled: The requested semiring is not absorptive; the wrapped sub-circuit only represents the absorptive quotient of a recursive query's provenance (fixpoint truncation or compiled reachability circuit), so its value is only defined for absorptive semirings (probability, boolean, formula-with-absorption, nonnegative tropical, ...).  Counting and why-provenance of cyclic recursion are genuinely infinite; on acyclic data, re-run under the 'semiring' provenance class.
+CONTEXT:  PL/pgSQL function sr_counting(anyelement,regclass) line 3 at RETURN
 remove_provenance
 
 (1 row)

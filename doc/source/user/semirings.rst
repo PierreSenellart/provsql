@@ -179,7 +179,7 @@ With the optional third argument ``nonnegative => true``, input costs
 are checked nonnegative and the semiring becomes *absorptive*
 (:math:`\min(0, a) = 0` for :math:`a \ge 0`): evaluation then also
 accepts circuits carrying the ``'absorptive'`` assumption marker --
-notably recursive queries over **cyclic** data evaluated under
+notably recursive queries evaluated under
 ``provsql.provenance = 'absorptive'`` (see
 :ref:`provsql-provenance-class`), giving exact min-cost reachability
 on cyclic graphs:
@@ -195,6 +195,16 @@ on cyclic graphs:
     SELECT node, sr_tropical(provenance(), 'cost_mapping',
                              nonnegative => true) AS min_cost
     FROM reach;
+
+On bounded-treewidth data this is also *fast*: the recursive
+reachability shapes compile along a tree decomposition of the data
+graph into certified circuits of linear total size (see
+:doc:`probabilities`), which min-plus evaluation -- like any
+absorptive-semiring evaluation -- reads off exactly, in time linear
+in the circuit.  Single-source shortest distances over thousands of
+probabilistic edges, hop-bounded variants (the min cost of reaching a
+vertex within :math:`k` hops) and per-region minima (through a
+``GROUP BY`` over a joined member relation) all stay on this route.
 
 Viterbi Semiring (m-semiring)
 ------------------------------

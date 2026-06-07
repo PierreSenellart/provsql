@@ -147,6 +147,21 @@ design (June 2026):
    The integration therefore activates only under
    `provsql.boolean_provenance = on` -- coherently, the only regime where
    `eval_recursive` accepts cyclic data today.
+   *Superseded (June 2026): the gate widened to the `'absorptive'`
+   provenance class.*  The certified d-DNNF evaluates exactly in **any
+   absorptive semiring** -- its deterministic world enumeration surfaces
+   every minimal derivation support (every path) as a world term, and
+   absorption (`1 ⊕ a = 1`) erases the rest, so the value is the image of
+   the Sorp provenance; differentially validated for nonnegative min-plus
+   (including cost-0 edges, whose negation's native `monus(one, x)` kills
+   only worlds dominated by their free-edge supersets at equal cost).  The
+   materialised roots are wrapped in `assume(·, 'absorptive')` (created in
+   the C materialisers, the hops canonicals keyed on the wrapped tokens),
+   so counting / why-provenance refuse loudly while probability and the
+   absorptive semirings pass through; min-cost reachability via
+   `sr_tropical(..., nonnegative => true)` works on plain, hop-bounded
+   (constrained shortest path) and per-region (any-member) tokens.  Test
+   `btw_tropical`.
 2. **Detection in `lower_recursive_cte`, decision fully at plan time.**  The
    method catalog cannot arbitrate between construction routes: the fork
    happens before any artefact exists, and the lineage route's cost is
@@ -586,13 +601,24 @@ concrete case for Route C over more folding, and shows the bound is a property o
   `TreeDecomposition` -> `dDNNFTreeDecompositionBuilder` ->
   `dDNNF::probabilityEvaluation` path (already linear-time on bounded treewidth);
   matches the `provsql.boolean_provenance` regime.
-- **General m-semirings** -- the ABS construction is semiring-agnostic, but
-  ProvSQL's any-semiring evaluation runs over the `GenericCircuit`
-  (`provenance_evaluate_compiled`), which does not exploit treewidth at all. A
-  bounded-treewidth `GenericCircuit` would still need a *width-aware semiring
-  evaluator* (a bag-by-bag dynamic program analogous to the d-DNNF builder, but
-  over the semiring carrier) to cash in the bound. A separate, larger axis; not
-  assumed by the Boolean thread.
+- **Absorptive semirings** -- *landed* (June 2026): the route's certified
+  d-DNNFs evaluate exactly in any absorptive semiring through the plain
+  `GenericCircuit` evaluation (linear in the circuit, hence in the data for
+  bounded treewidth), with no width-aware evaluator needed -- the
+  decomposition already shaped the circuit.  This is the compile-once /
+  evaluate-per-semiring counterpart of the 0-closed algorithms of Ramusat,
+  Maniu & Senellart (EDBT 2021): Sorp(X) is the free 0-closed semiring, and
+  the certificate's evaluation computes its image; min-plus gives Dijkstra's
+  answers (plus hop-bounded and any-of-S variants Dijkstra does not answer
+  directly), on the treewidth axis NodeElimination exploits.
+- **General (non-absorptive) m-semirings** -- the ABS construction is
+  semiring-agnostic, but ProvSQL's any-semiring evaluation runs over the
+  `GenericCircuit` (`provenance_evaluate_compiled`), which does not exploit
+  treewidth at all.  A bounded-treewidth `GenericCircuit` would still need a
+  *width-aware semiring evaluator* (a bag-by-bag dynamic program analogous to
+  the d-DNNF builder, but over the semiring carrier) to cash in the bound --
+  and a finiteness story for recursion (Mumick-Shmueli) first.  A separate,
+  larger axis.
 
 ## Reuse map
 

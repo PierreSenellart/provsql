@@ -475,6 +475,43 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
   return uuid_of;
 }
 
+/**
+ * @brief Wrap a materialised root in the @c 'absorptive' assumption
+ *        marker and return the wrapper's UUID.
+ *
+ * The compiled circuit is the exact Boolean function of the
+ * reachability lineage, but as a *semiring* provenance expression it
+ * only represents the absorptive (Sorp) quotient of the genuinely
+ * infinite recursive provenance: evaluating it is exact in every
+ * absorptive semiring (each minimal model surfaces as a world term and
+ * longer derivations are absorbed) and meaningless for the rest
+ * (counting, why-provenance).  The marker makes non-absorptive
+ * evaluators refuse loudly instead of returning a silent wrong value;
+ * absorptive ones (probability, Boolean, nonnegative min-plus, ...)
+ * pass through it.  Same content address as the SQL
+ * @c provenance_assume(token, 'absorptive'), so wrappers dedup in the
+ * store.
+ *
+ * @param child  UUID of the materialised root to wrap.
+ * @return       UUID of the @c gate_assumed wrapper.
+ */
+pg_uuid_t wrapAssumedAbsorptive(const pg_uuid_t &child)
+{
+  /* Same bounded warm-cache rationale as in materializeCertifiedDD. */
+  static std::unordered_set<std::string> created;
+  constexpr std::size_t kCreatedCap = 1u << 20;
+  if (created.size() > kCreatedCap)
+    created.clear();
+
+  const pg_uuid_t token =
+    uuidV5("assumedabsorptive" + uuid2string(child));
+  if (created.insert(uuid2string(token)).second) {
+    provsql_internal_create_gate(&token, gate_assumed, 1, &child);
+    provsql_internal_set_extra(&token, "absorptive");
+  }
+  return token;
+}
+
 } // namespace
 
 /**
@@ -544,8 +581,10 @@ Datum reachability_compile_stats(PG_FUNCTION_ARGS)
  * source), @c source_probs @c float8[], @c directed @c boolean.
  * Returns: one @c (vertex, token) row per vertex reachable in the
  * all-edges-present world, @c token being the materialised certified
- * provenance circuit of "some present source reaches the vertex".  This
- * is the engine behind the rewriter's recursive-reachability route.
+ * provenance circuit of "some present source reaches the vertex",
+ * wrapped in the @c 'absorptive' assumption marker (see
+ * @c wrapAssumedAbsorptive).  This is the engine behind the rewriter's
+ * recursive-reachability route.
  */
 Datum reachability_materialize(PG_FUNCTION_ARGS)
 {
@@ -598,7 +637,7 @@ Datum reachability_materialize(PG_FUNCTION_ARGS)
       bool nulls[2] = {false, false};
       values[0] = Int32GetDatum(static_cast<int32>(vr.vertex));
       pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
-      *u = uuid_of.at(vr.root);
+      *u = wrapAssumedAbsorptive(uuid_of.at(vr.root));
       values[1] = UUIDPGetDatum(u);
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
@@ -624,7 +663,8 @@ Datum reachability_materialize(PG_FUNCTION_ARGS)
  * pair achievable in the all-edges-present world -- matching the rows
  * the generic fixpoint derives for the hop-counting CTE shape, with
  * @c token the materialised certified circuit of "some present source
- * reaches the vertex by a walk of exactly this many edges".
+ * reaches the vertex by a walk of exactly this many edges", wrapped in
+ * the @c 'absorptive' assumption marker.
  *
  * Additionally pre-creates, for every vertex with at least two length
  * rows, the gate a hop-discarding query's deduplication will mint --
@@ -674,14 +714,19 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
       roots.push_back(vr.root);
     const auto uuid_of = materializeCertifiedDD(all.dd, roots);
 
-    /* Dedup pre-creation: per vertex, the multiset of its length tokens,
-     * sorted as text, addressed in the dedicated "plus-canonical" recipe
-     * namespace that provenance_plus probes (and never creates under, so
-     * a hit there is always a deliberate pre-creation). */
+    /* Dedup pre-creation: per vertex, the multiset of its length tokens
+     * *as the work table carries them* (i.e. wrapped in the 'absorptive'
+     * assumption marker, like every materialised root), sorted as text,
+     * addressed in the dedicated "plus-canonical" recipe namespace that
+     * provenance_plus probes (and never creates under, so a hit there is
+     * always a deliberate pre-creation).  The aliased child is the DP's
+     * native within-bound root, wrapped in the same marker so the
+     * aggregated token refuses non-absorptive evaluation too. */
     {
       std::unordered_map<unsigned long, std::vector<std::string> > by_vertex;
       for (const auto &vr : all.roots)
-        by_vertex[vr.vertex].push_back(uuid2string(uuid_of.at(vr.root)));
+        by_vertex[vr.vertex].push_back(
+          uuid2string(wrapAssumedAbsorptive(uuid_of.at(vr.root))));
       for (const auto &vr : all.within_roots) {
         auto it = by_vertex.find(vr.vertex);
         if (it == by_vertex.end() || it->second.size() < 2)
@@ -696,7 +741,8 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
         }
         name += "}";
         const pg_uuid_t dedup = uuidV5(name);
-        const pg_uuid_t within = uuid_of.at(vr.root);
+        const pg_uuid_t within =
+          wrapAssumedAbsorptive(uuid_of.at(vr.root));
         provsql_internal_create_gate(&dedup, gate_plus, 1, &within);
         provsql_internal_set_infos(&dedup, DNNF_CERT_INFO, 0);
       }
@@ -726,7 +772,7 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
       values[0] = Int32GetDatum(static_cast<int32>(vr.vertex));
       values[1] = Int32GetDatum(hop_seed + static_cast<int32>(vr.hops));
       pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
-      *u = uuid_of.at(vr.root);
+      *u = wrapAssumedAbsorptive(uuid_of.at(vr.root));
       values[2] = UUIDPGetDatum(u);
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }
@@ -753,7 +799,8 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
  * set-reachability bit folded through the decomposition DP, so the
  * disjunction over the group's *correlated* per-vertex events is
  * deterministic by construction) and materialises it; returns one
- * @c (group_id, token) row per group.  The caller plants each token
+ * @c (group_id, token) row per group, each token wrapped in the
+ * @c 'absorptive' assumption marker.  The caller plants each token
  * under the canonical address of the group's per-vertex reach tokens,
  * keeping cross-vertex aggregations ("is some vertex of this region
  * reachable") on the linear certified route.
@@ -818,7 +865,7 @@ Datum reachability_materialize_any(PG_FUNCTION_ARGS)
       bool nulls[2] = {false, false};
       values[0] = Int32GetDatum(gid);
       pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
-      *u = uuid_of.at(res.dd.getRoot());
+      *u = wrapAssumedAbsorptive(uuid_of.at(res.dd.getRoot()));
       values[1] = UUIDPGetDatum(u);
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }

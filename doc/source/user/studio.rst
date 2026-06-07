@@ -315,14 +315,14 @@ rendered as a small :sc:`B` badge stamped on top of its child gate
 rather than as a separate node, since structurally it is a marker
 rather than a distinct operation; the load-time Boolean-only folds
 stamp the same badge on the gates they rewrite.  A wrapper labelled
-``'absorptive'`` (a cyclic recursive query truncated at the
-absorptive value fixpoint), or the load-time absorptive folds, stamp
-an amber :sc:`A` badge instead.  Either badge narrows the evaluation
-strip's semiring menu to the options that are sound on the marked
-gate -- only absorptive semirings for a truncated recursion root
-(including ``Tropical (min-plus, nonnegative)``, which computes
-exact min-cost reachability there), absorptive or Boolean-compatible
-ones for fold-marked gates.
+``'absorptive'`` (a recursive query truncated at the absorptive
+value fixpoint, or compiled by the bounded-treewidth reachability
+route), or the load-time absorptive folds, stamp an amber :sc:`A`
+badge instead.  Either badge narrows the evaluation strip's semiring
+menu to the options that are sound on the marked gate -- only
+absorptive semirings for a recursion root (including ``Tropical
+(min-plus, nonnegative)``, which computes exact min-cost reachability
+there), absorptive or Boolean-compatible ones for fold-marked gates.
 
 A ``plus`` / ``times`` gate carrying the persisted **d-DNNF
 certificate** (deterministic alternatives / decomposable conjunction

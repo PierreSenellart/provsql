@@ -78,7 +78,10 @@ DROP TABLE btwh_tri_r;
 -- rewriter's plus over a vertex's per-length tokens addresses the
 -- pre-created gate over the compilation's within-bound root, so every
 -- root carries the d-DNNF certificate and the probability is the
--- within-4-hops reliability.
+-- within-4-hops reliability.  Vertices achieving a single length keep
+-- that length's root (passed through the aggregation), behind its
+-- 'absorptive' assumption wrapper; the certificate sits one level
+-- down there.
 CREATE TABLE btwh_w AS
   WITH RECURSIVE reach(node, hops) AS (
       SELECT 1, 0
@@ -89,7 +92,9 @@ CREATE TABLE btwh_w AS
   SELECT node FROM reach GROUP BY node;
 CREATE TABLE btwh_w2 AS
   SELECT node, round(probability_evaluate(provenance())::numeric, 6) AS prob,
-         (get_infos(provenance())).info1 AS certified
+         (get_infos(CASE WHEN get_gate_type(provenance()) = 'assumed'
+                         THEN (get_children(provenance()))[1]
+                         ELSE provenance() END)).info1 AS certified
   FROM btwh_w GROUP BY node, provenance();
 SELECT remove_provenance('btwh_w2');
 SELECT * FROM btwh_w2 ORDER BY node;

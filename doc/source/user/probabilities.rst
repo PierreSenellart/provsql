@@ -423,14 +423,16 @@ real networks (series-parallel and outerplanar networks, transit and
 utility networks, workflow graphs…).
 
 The interface is an ordinary recursive reachability query.  Under
-``provsql.provenance = 'boolean'`` (the construction computes the
-Boolean function of the lineage, so it lives in the same regime that
-already governs recursion on cyclic data), the query rewriter
+``provsql.provenance = 'absorptive'`` or ``'boolean'`` (the compiled
+circuit is the exact Boolean function of the lineage but only the
+*absorptive quotient* of the infinite recursive semiring provenance,
+so it lives in the same regime that already governs recursion on
+cyclic data; see :ref:`provsql-provenance-class`), the query rewriter
 recognises the shape
 
 .. code-block:: postgresql
 
-    SET provsql.provenance = 'boolean';
+    SET provsql.provenance = 'absorptive';
 
     WITH RECURSIVE reach(node) AS (
         SELECT 1                                  -- the source vertex
@@ -562,6 +564,32 @@ tuples give a principled *edge criticality* analysis of the network:
 
     SELECT src, dst, shapley(reach_token, provenance()) AS criticality
     FROM link;
+
+The same certified circuits evaluate exactly in every **absorptive
+semiring**, not just under probability: the deterministic world
+enumeration surfaces every minimal derivation support – every path –
+and absorption (:math:`1 \oplus a = 1`) erases the rest, so the value
+is the image of the absorptive provenance of the recursive query
+:cite:`DBLP:conf/icdt/DeutchMRT14`.  In the nonnegative min-plus
+semiring this gives **exact min-cost reachability** – single-source
+shortest distances, on cyclic data too, in time linear in the
+circuit:
+
+.. code-block:: postgresql
+
+    SELECT node, sr_tropical(provenance(), 'cost_mapping',
+                             nonnegative => true) AS min_cost
+    FROM reach;
+
+The bounded-hop variant prices walks under a hop budget (a
+constrained shortest path that plain Dijkstra does not answer
+directly), and the cross-vertex aggregation gives per-region minima.
+To keep the unsound evaluations out, the materialised tokens carry
+the ``'absorptive'`` assumption marker (:sqlfunc:`get_gate_type`
+reports the root as ``assumed``): counting and why-provenance –
+genuinely infinite on cyclic recursion – refuse loudly instead of
+returning a silently wrong value, while probability and the
+absorptive semirings (see :doc:`semirings`) pass through.
 
 When the route cannot apply – the data treewidth exceeds the supported
 limit (the same cap as the ``tree-decomposition`` method, here applied

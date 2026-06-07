@@ -97,8 +97,8 @@ bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes w
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
 bool provsql_inversion_free = true; ///< Insert the inversion-free structured-d-DNNF path into the default probability chain (after independent, when a certificate is present); controlled by the @c provsql.inversion_free GUC
-bool provsql_boolean_provenance = false; ///< Derived flag: the session's provenance class is 'boolean' -- enables the Boolean-only machinery (safe-query read-once rewrite, bounded-treewidth reachability route, Boolean circuit simplifications), whose outputs are tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on them. Set from the @c provsql.provenance GUC.
-bool provsql_absorptive_provenance = false; ///< Derived flag: the session's provenance class is 'absorptive' or 'boolean' -- licenses constructions sound for absorptive semirings only (cyclic recursive queries stopped at the absorptive value fixpoint, tokens tagged accordingly). Set from the @c provsql.provenance GUC.
+bool provsql_boolean_provenance = false; ///< Derived flag: the session's provenance class is 'boolean' -- enables the Boolean-only machinery (safe-query read-once rewrite, Boolean circuit simplifications), whose outputs are tagged so that semiring evaluations admitting no homomorphism from Boolean functions refuse to run on them. Set from the @c provsql.provenance GUC.
+bool provsql_absorptive_provenance = false; ///< Derived flag: the session's provenance class is 'absorptive' or 'boolean' -- licenses constructions sound for absorptive semirings only (cyclic recursive queries stopped at the absorptive value fixpoint, the bounded-treewidth reachability route's certified circuits, absorptive circuit simplifications; tokens tagged accordingly). Set from the @c provsql.provenance GUC.
 
 /** @brief Values of the @c provsql.provenance enum GUC, from most general to most specialised. */
 typedef enum provsql_provenance_class_t {
@@ -1197,18 +1197,23 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
 
   /* Drive the fixpoint now, leaving a tracked temp table `ctename`.
    *
-   * Under provsql.boolean_provenance, a CTE matching the linear
-   * reachability shape over a tracked base edge relation routes to the
-   * decomposition-aligned driver, which compiles one certified provenance
-   * circuit per reachable vertex along a tree decomposition of the data
-   * graph (linear-size for bounded data treewidth, cyclic data included)
-   * and falls back to eval_recursive on any failure. */
+   * Under the 'absorptive' provenance class (or 'boolean', which
+   * implies it), a CTE matching the linear reachability shape over a
+   * tracked base edge relation routes to the decomposition-aligned
+   * driver, which compiles one certified provenance circuit per
+   * reachable vertex along a tree decomposition of the data graph
+   * (linear-size for bounded data treewidth, cyclic data included) and
+   * falls back to eval_recursive on any failure.  The compiled circuit
+   * is the exact Boolean function of the reachability lineage but only
+   * the absorptive quotient of its (infinite) recursive semiring
+   * provenance, hence the class gating; the materialised roots carry
+   * the 'absorptive' assumption marker accordingly. */
   initStringInfo(&call);
   {
     ReachabilityShape shape = {InvalidOid, 0, 0, NULL, InvalidOid, 0, true,
                                NULL, NULL, NIL, -1, 0, 0, 1};
     constants_t constants = get_constants(true);
-    if (provsql_boolean_provenance &&
+    if (provsql_absorptive_provenance &&
         detect_reachability_cte(cte, cteq, &constants, &shape)) {
       char *src_name;
       char *dst_name;

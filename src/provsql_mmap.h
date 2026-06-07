@@ -107,6 +107,16 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
 void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
                                 unsigned info2);
 
+/**
+ * @brief Set a gate's extra string from in-extension C/C++ code.
+ *
+ * Internal entry point behind the SQL-callable @c set_extra().
+ *
+ * @param token  UUID of the gate.
+ * @param str    NUL-terminated extra string to attach.
+ */
+void provsql_internal_set_extra(const pg_uuid_t *token, const char *str);
+
 #ifdef PROVSQL_INPROCESS_STORE
 
 /**

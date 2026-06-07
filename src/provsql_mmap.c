@@ -394,13 +394,9 @@ Datum set_infos(PG_FUNCTION_ARGS)
   PG_RETURN_VOID();
 }
 
-PG_FUNCTION_INFO_V1(set_extra);
-/** @brief PostgreSQL-callable wrapper for set_extra(). */
-Datum set_extra(PG_FUNCTION_ARGS)
+/** @brief Internal entry point behind set_extra(): worker IPC only. */
+void provsql_internal_set_extra(const pg_uuid_t *token, const char *str)
 {
-  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  text *data = PG_GETARG_TEXT_P(1);
-  char *str=text_to_cstring(data);
   unsigned len=strlen(str);
 
   STARTWRITEM();
@@ -415,7 +411,6 @@ Datum set_extra(PG_FUNCTION_ARGS)
   assert(PIPE_BUF-bufferpos>len);
 #endif
   memcpy(buffer+bufferpos, str, len), bufferpos+=len;
-  pfree(str);
 
   provsql_shmem_lock_shared();
   if(!SENDWRITEM()) {
@@ -423,6 +418,18 @@ Datum set_extra(PG_FUNCTION_ARGS)
     provsql_error("Cannot write to pipe (message type E)");
   }
   provsql_shmem_unlock();
+}
+
+PG_FUNCTION_INFO_V1(set_extra);
+/** @brief PostgreSQL-callable wrapper for set_extra(). */
+Datum set_extra(PG_FUNCTION_ARGS)
+{
+  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  text *data = PG_GETARG_TEXT_P(1);
+  char *str=text_to_cstring(data);
+
+  provsql_internal_set_extra(token, str);
+  pfree(str);
 
   PG_RETURN_VOID();
 }

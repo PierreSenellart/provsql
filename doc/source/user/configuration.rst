@@ -53,6 +53,13 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
           marker, and non-absorptive evaluations (counting,
           why-provenance -- genuinely infinite on cyclic data) refuse
           them.  After Deutch, Milo, Roy & Tannen (ICDT 2014).
+        * **recursive reachability on bounded-treewidth data**
+          compiles along a tree decomposition of the data graph into
+          certified d-DNNFs (see :doc:`probabilities`), exact for
+          probability and for every absorptive semiring -- e.g.
+          min-cost reachability through nonnegative min-plus (see
+          :doc:`semirings`); the materialised tokens carry the
+          ``'absorptive'`` marker too.
         * at circuit-load time, the simplification rules sound in every
           absorptive semiring apply -- plus-idempotence
           (:math:`a \oplus a = a`), the plus-with-one absorber
@@ -71,11 +78,6 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
           ``DISTINCT`` projections so the resulting provenance circuit
           is read-once and probability-evaluates in linear time.
           Queries outside the recognised class pass through unchanged.
-
-        * **Recursive reachability on bounded-treewidth data.**  The
-          recursive-CTE reachability shapes compile along a tree
-          decomposition of the data graph into certified d-DNNFs (see
-          :doc:`probabilities`).
 
         * **Load-time Boolean-only circuit simplification.**  On top
           of the ``'absorptive'`` rules above, the rewrites that hold

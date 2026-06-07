@@ -8,7 +8,7 @@ test: recursive
 
 # Bounded-treewidth reachability through the rewriter: the recursive
 # reachability shape compiled along a tree decomposition of the data
-# (provsql.boolean_provenance), with fallback coverage
+# (provenance class 'absorptive' or 'boolean'), with fallback coverage
 test: btw_recursive
 
 # Bounded-hop reachability: the hop-counting CTE shape, walk-length-set
@@ -27,3 +27,8 @@ test: absorptive_recursion
 # Cross-vertex reachability aggregations: GROUP BY over a join with a
 # reachability CTE gets certified any-member gates planted per group
 test: btw_anyreach
+
+# Min-cost reachability: tropical (and any absorptive-semiring)
+# evaluation of the route's certified circuits -- plain, hop-bounded
+# and per-region, cost-0 edges included
+test: btw_tropical

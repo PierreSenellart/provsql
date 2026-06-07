@@ -60,13 +60,33 @@ FROM absr_neg;
 DROP TABLE absr_t;
 DROP TABLE absr_neg;
 
--- Acyclic data reaches the structural fixpoint even under the
--- 'absorptive' class: the circuit is universal, untagged, and counting
--- works (2 derivations of node 3: direct and via the shortcut).
+-- Acyclic data under the 'absorptive' class: the reachability shape
+-- routes through the decomposition-aligned compilation like any
+-- other, so the tokens are tagged -- exact for absorptive evaluations
+-- (min-plus below) and refused for counting.
 CREATE TABLE absr_dag(src int, dst int, n int);
 INSERT INTO absr_dag VALUES (1,2,1),(2,3,1),(1,3,1);
 SELECT add_provenance('absr_dag');
 SELECT create_provenance_mapping('absr_dagmap', 'absr_dag', 'n');
+CREATE TABLE absr_d AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM absr_dag e JOIN reach r ON e.src = r.node
+  )
+  SELECT node, provenance() pv FROM reach;
+SELECT remove_provenance('absr_d');
+SELECT node, get_gate_type(pv) AS root_type,
+       sr_tropical(pv, 'absr_dagmap', nonnegative => true) AS min_cost
+FROM absr_d ORDER BY node;
+SELECT sr_counting(pv, 'absr_dagmap') FROM absr_d WHERE node = 3;
+DROP TABLE absr_d;
+
+-- Under the 'semiring' class the same acyclic recursion reaches the
+-- structural fixpoint: the circuit is universal, untagged, and
+-- counting works (2 derivations of node 3: direct and via the
+-- shortcut).
+SET provsql.provenance = 'semiring';
 CREATE TABLE absr_d AS
   WITH RECURSIVE reach(node) AS (
       SELECT 1
@@ -80,6 +100,7 @@ SELECT remove_provenance('absr_d');
 SELECT * FROM absr_d ORDER BY node;
 DROP TABLE absr_d;
 DROP TABLE absr_dag;
+SET provsql.provenance = 'absorptive';
 DROP TABLE absr_edge;
 
 -- Absorptive folds: under the 'absorptive' class the load-time

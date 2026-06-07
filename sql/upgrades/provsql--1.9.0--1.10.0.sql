@@ -340,8 +340,9 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
  * undirected edge in a directed edge relation); they are then treated
  * as a single bidirectional edge.  This is an internal/testing surface:
  * the user-facing route is a plain @c WITH @c RECURSIVE reachability
- * query under @c provsql.boolean_provenance, which the query rewriter
- * compiles through @c eval_reachability() / @c reachability_materialize().
+ * query under the 'absorptive' (or 'boolean') provenance class, which
+ * the query rewriter compiles through @c eval_reachability() /
+ * @c reachability_materialize().
  *
  * @param sources source vertex of each edge (dense integer IDs)
  * @param destinations destination vertex of each edge
@@ -415,7 +416,12 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
  * tuple's token, the nil UUID marking a certain (always present)
  * source.  This is the engine behind the rewriter's
  * recursive-reachability route; the returned tokens are ordinary
- * provenance tokens usable with the whole evaluation surface.
+ * provenance tokens usable with the whole evaluation surface, wrapped
+ * in the 'absorptive' assumption marker (the compiled circuit is the
+ * exact Boolean lineage but only the absorptive quotient of the
+ * infinite recursive semiring provenance: probability and absorptive
+ * semiring evaluations -- e.g. nonnegative min-plus -- are exact,
+ * counting and why-provenance refuse).
  *
  * @param sources source vertex of each edge (dense integer IDs)
  * @param destinations destination vertex of each edge
@@ -1031,7 +1037,8 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
  * decomposition-aligned compilation with fallback to eval_recursive
  *
  * Called (at plan time, over SPI) by the recursive-CTE lowering when
- * @c provsql.boolean_provenance is on and the CTE matches the linear
+ * the provenance class is 'absorptive' or 'boolean'
+ * (@c provsql.provenance) and the CTE matches the linear
  * reachability shape over a tracked base edge relation.  Attempts the
  * decomposition-aligned route -- gather the edges, compile every
  * reachable vertex's certified provenance circuit along a tree
