@@ -828,6 +828,14 @@ Datum reachability_materialize_any(PG_FUNCTION_ARGS)
     std::map<int32, std::vector<unsigned long> > groups;
     for (int i = 0; i < ng; ++i)
       groups[gid_data[i]].push_back(static_cast<unsigned long>(gv_data[i]));
+    std::vector<int32> group_ids;
+    std::vector<std::vector<unsigned long> > sets;
+    group_ids.reserve(groups.size());
+    sets.reserve(groups.size());
+    for (auto &[gid, members] : groups) {
+      group_ids.push_back(gid);
+      sets.push_back(std::move(members));
+    }
 
     ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
     MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
@@ -847,25 +855,28 @@ Datum reachability_materialize_any(PG_FUNCTION_ARGS)
     rsinfo->setResult = tupstore;
     rsinfo->setDesc = tupdesc;
 
-    for (const auto &[gid, members] : groups) {
-      ReachabilityCompiler::Result res;
-      try {
-        res = ReachabilityCompiler::compileAnyReach(rows, sources, members,
-                                                    directed);
-      } catch (TreeDecompositionException &) {
-        MemoryContextSwitchTo(oldcontext);
-        provsql_error(
-          "reachability: data treewidth exceeds the supported limit (%d)",
-          TreeDecomposition::MAX_TREEWIDTH);
-      }
-      const auto uuid_of =
-        materializeCertifiedDD(res.dd, {res.dd.getRoot()});
+    // One shared compilation for all groups (the prelude and the
+    // seed-independent parts of the circuit are computed and emitted
+    // once), then one materialisation pass over all the roots (shared
+    // gates are walked once).
+    ReachabilityCompiler::AnyReachAllResult all;
+    try {
+      all = ReachabilityCompiler::compileAnyReachAll(rows, sources, sets,
+                                                     directed);
+    } catch (TreeDecompositionException &) {
+      MemoryContextSwitchTo(oldcontext);
+      provsql_error(
+        "reachability: data treewidth exceeds the supported limit (%d)",
+        TreeDecomposition::MAX_TREEWIDTH);
+    }
+    const auto uuid_of = materializeCertifiedDD(all.dd, all.roots);
 
+    for (std::size_t i = 0; i < group_ids.size(); ++i) {
       Datum values[2];
       bool nulls[2] = {false, false};
-      values[0] = Int32GetDatum(gid);
+      values[0] = Int32GetDatum(group_ids[i]);
       pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
-      *u = wrapAssumedAbsorptive(uuid_of.at(res.dd.getRoot()));
+      *u = wrapAssumedAbsorptive(uuid_of.at(all.roots[i]));
       values[1] = UUIDPGetDatum(u);
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }

@@ -543,10 +543,13 @@ certified circuit of "some member vertex is reachable" (the
 set-reachability bit folded through the same decomposition DP) and
 plants it at the gate address the aggregation computes, so the
 per-region reliability evaluates through the linear certified route.
-Planting costs one compilation pass per group at planning time; a
-tracked member relation, or any deviation from the
-join-and-group-by-one-column shape, simply skips it (the generic
-evaluation is always available).
+All the groups share one compilation: the tree decomposition and
+variable analysis are built once, one cheap sweep runs per group, and
+the parts of the per-group circuits the group's members do not
+influence come out as the *same* gates (content-deduplicated
+emission), materialised once.  A tracked member relation, or any
+deviation from the join-and-group-by-one-column shape, simply skips
+the planting (the generic evaluation is always available).
 
 The emitted circuits are *deterministic and decomposable by
 construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a

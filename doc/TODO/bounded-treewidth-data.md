@@ -372,12 +372,29 @@ BID blocks and probabilistic sources -- which exposed a vertex-id
 collision between a caller-supplied set member and the virtual
 super-source, fixed by intersecting the set with the edge/source
 universe); pinned in-database by `btw_anyreach` (region reliability
-exact vs possible-worlds, tracked-member skip).  Cost: one compilation
-pass per group at planning (~1.1 s/group on the 30k-edge ladder with
-100 regions; the warm created-token cache dedupes the shared below
-structure across groups).  *Open*: a shared sweep computing all
-groups' bits at once (the naive product state explodes; per-group
-passes are linear in the group count); k-terminal / Steiner
+exact vs possible-worlds, tracked-member skip).
+
+*Shared multi-group sweep: implemented* (`compileAnyReachAll`).  The
+naive product state (all groups' bits in one state identity) explodes,
+so the sharing is structural instead: the prelude -- variable
+grouping, tree decomposition, bag assignments, literal gates -- is
+built once, one bottom-up sweep runs per group, and the emission is
+*hash-consed* (AND keyed on the packed child pair, OR on the sorted
+children), so the parts of the circuit a group's seeds do not touch
+are literally the same gates across groups, materialised once by a
+single batched store pass.  2.2x end-to-end on the 15k-edge ladder
+with 100 regions (35 s -> 16 s, byte-identical planted canonicals;
+cold = warm, since shared gates ship once).  The residual cost is the
+per-group sweep itself (~60%): the bits must propagate from each
+group's seeds to the root, so the "dirty" region is the seed-to-root
+bag paths -- about half the decomposition on path-like data.  *Next
+leap if needed*: per-group virtual collector chains (member -> chain
+arcs, "some member reachable" = "chain end reachable") turn any-reach
+into per-vertex reads of one two-sweep compileAll pass, in width
++O(batch) for batched groups with chain order aligned to the
+elimination order; needs the width impact validated empirically.
+
+*Open*: k-terminal / Steiner
 reliability ("ALL of S reached" needs a richer congruence -- a
 boundary-to-internal coverage function, not one bit); DISTINCT-shaped
 aggregations and extra member-relation quals in the detection.

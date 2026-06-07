@@ -124,6 +124,7 @@ struct EdgeBlock {
  */
 struct BoolOps {
   static constexpr bool tracks_lengths = false;
+  static constexpr bool has_target_set = false;
   using State = std::bitset<MAXD*MAXD>;
   using Entry = bool;
   /** @brief Hash functor (delegates to @c std::hash of the bitset). */
@@ -190,6 +191,7 @@ struct BoolOps {
  */
 struct HopOps {
   static constexpr bool tracks_lengths = true;
+  static constexpr bool has_target_set = false;
   using Entry = std::uint64_t;
   /** @brief A matrix of length-set bitmasks (unused cells stay zero). */
   struct State {
@@ -316,6 +318,7 @@ struct HopOps {
  */
 struct SetReachOps {
   static constexpr bool tracks_lengths = false;
+  static constexpr bool has_target_set = true;
   using Entry = bool;
   /** @brief Closed relation plus the per-position set-reachability bits. */
   struct State {
@@ -444,12 +447,34 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                           * the whole top-down sweep is skipped. */
                          const std::function<void(const typename Ops::State &,
                                                   gate_t, int)> *root_sink
+                           = nullptr,
+                         /* Multi-set mode (Ops with a target_set member,
+                          * i.e. SetReachOps): the prelude -- variable
+                          * grouping, tree decomposition, bag assignments,
+                          * literal gates -- is built once, then one
+                          * bottom-up sweep runs per target set, with
+                          * content-deduplicated (hash-consed) gate
+                          * emission so the parts of the circuit a set's
+                          * seeds do not touch come out as the *same*
+                          * gates across sets.  The sink receives
+                          * (set index, root state, gate, source position);
+                          * the top-down sweep is skipped. */
+                         const std::vector<std::unordered_set<unsigned long> >
+                           *multi_sets = nullptr,
+                         const std::function<void(std::size_t,
+                                                  const typename Ops::State &,
+                                                  gate_t, int)> *multi_sink
                            = nullptr)
 {
   using State = typename Ops::State;
   using Table = std::unordered_map<State, gate_t, typename Ops::Hash>;
   using Accumulator = std::unordered_map<State, std::vector<gate_t>,
                                          typename Ops::Hash>;
+
+  /* The state algebra the sweeps read through: re-pointed per set in
+   * multi-set mode (each sweep seeds a different target set), constant
+   * otherwise. */
+  const Ops *opsp = &ops;
 
   // Multi-source mode: reachability is from a virtual super-source whose
   // arcs to the given sources are ordinary (or certain) directed edge
@@ -759,15 +784,65 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                     }
                     return block_none[bi];
                   };
+  /* Content dedup (hash-consing) of the emitted AND / OR gates,
+   * enabled when several target sets share the circuit: per-set sweeps
+   * re-derive identical subcircuits everywhere their seeds make no
+   * difference, and consing makes those the *same* gate, so downstream
+   * consumers (notably the store materialisation, which walks every
+   * gate instance) pay for the shared structure once.  Sound
+   * unconditionally: structural identity implies functional identity,
+   * and determinism / decomposability are properties of a gate's
+   * children.  The (dominant) binary ANDs are keyed on the packed
+   * child-id pair; the ORs on the gate type plus the sorted child ids
+   * as raw bytes. */
+  const bool consing = multi_sets != nullptr && multi_sets->size() > 1;
+  struct PairHash {
+    std::size_t operator()(const std::pair<std::uint64_t,
+                                           std::uint64_t> &p) const noexcept {
+      // Mix the halves (splitmix-style) so consecutive ids spread.
+      std::uint64_t x = p.first * 0x9e3779b97f4a7c15ull ^ p.second;
+      x ^= x >> 30; x *= 0xbf58476d1ce4e5b9ull;
+      x ^= x >> 27; x *= 0x94d049bb133111ebull;
+      return static_cast<std::size_t>(x ^ (x >> 31));
+    }
+  };
+  std::unordered_map<std::pair<std::uint64_t, std::uint64_t>, gate_t,
+                     PairHash> cons_and;
+  std::unordered_map<std::string, gate_t> cons_or;
+  auto consKey = [](std::vector<gate_t> children) {
+                   std::sort(children.begin(), children.end());
+                   std::string key;
+                   key.reserve(children.size() * sizeof(gate_t));
+                   for (gate_t c : children)
+                     key.append(reinterpret_cast<const char *>(&c),
+                                sizeof(gate_t));
+                   return key;
+                 };
+
   auto andGate = [&](gate_t a, gate_t b) {
                    if (a == true_gate)
                      return b;
                    if (b == true_gate)
                      return a;
+                   std::pair<std::uint64_t, std::uint64_t> key;
+                   if (consing) {
+                     const auto ai =
+                       static_cast<std::uint64_t>(
+                         static_cast<std::underlying_type<gate_t>::type>(a));
+                     const auto bi =
+                       static_cast<std::uint64_t>(
+                         static_cast<std::underlying_type<gate_t>::type>(b));
+                     key = std::minmax(ai, bi);
+                     auto it = cons_and.find(key);
+                     if (it != cons_and.end())
+                       return it->second;
+                   }
                    gate_t g = dd.setGate(BooleanGate::AND);
                    dd.setInfo(g, DNNF_CERT_INFO);
                    dd.addWire(g, a);
                    dd.addWire(g, b);
+                   if (consing)
+                     cons_and.emplace(key, g);
                    return g;
                  };
 
@@ -784,10 +859,21 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                       else {
                         // Deterministic OR: the contributions partition the
                         // worlds inducing this state.
+                        std::string key;
+                        if (consing) {
+                          key = consKey(entry.second);
+                          auto it = cons_or.find(key);
+                          if (it != cons_or.end()) {
+                            t.emplace(entry.first, it->second);
+                            continue;
+                          }
+                        }
                         gate_t g = dd.setGate(BooleanGate::OR);
                         dd.setInfo(g, DNNF_CERT_INFO);
                         for (gate_t c : entry.second)
                           dd.addWire(g, c);
+                        if (consing)
+                          cons_or.emplace(std::move(key), g);
                         t.emplace(entry.first, g);
                       }
                     }
@@ -824,8 +910,8 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                         domain.begin());
                     };
   auto trivialState = [&](const std::vector<unsigned long> &domain) {
-                        auto s = ops.identity(static_cast<int>(domain.size()));
-                        ops.seed(s, domain);
+                        auto s = opsp->identity(static_cast<int>(domain.size()));
+                        opsp->seed(s, domain);
                         return s;
                       };
   auto trivialTable = [&](const std::vector<unsigned long> &domain) {
@@ -860,8 +946,8 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                   map[i] = (it != to.end() && *it == from[i])
                            ? static_cast<int>(it - to.begin()) : -1;
                 }
-                State id = ops.identity(dt);
-                ops.seed(id, to);
+                State id = opsp->identity(dt);
+                opsp->seed(id, to);
                 Accumulator acc;
                 for (const auto &entry : t) {
                   State r = id;
@@ -871,12 +957,12 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                     for (int j = 0; j < df; ++j) {
                       if (map[j] < 0)
                         continue;
-                      const auto e = ops.get(entry.first, i, j);
+                      const auto e = opsp->get(entry.first, i, j);
                       if (!Ops::emptyEntry(e))
-                        ops.merge(r, map[i], map[j], e);
+                        opsp->merge(r, map[i], map[j], e);
                     }
                   }
-                  ops.liftExtra(entry.first, r, map);
+                  opsp->liftExtra(entry.first, r, map);
                   acc[r].push_back(entry.second);
                 }
                 return finalize(acc);
@@ -899,8 +985,8 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                   for (const auto &right : t2) {
                     CHECK_FOR_INTERRUPTS();
                     State r = left.first;
-                    ops.unite(r, right.first);
-                    ops.close(r, d);
+                    opsp->unite(r, right.first);
+                    opsp->close(r, d);
                     acc[std::move(r)].push_back(andGate(left.second,
                                                         right.second));
                   }
@@ -921,10 +1007,10 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                         for (const auto &entry : table) {
                           State present = entry.first;
                           if (var.arc_uv)
-                            ops.addArc(present, pu, pv, var.weight);
+                            opsp->addArc(present, pu, pv, var.weight);
                           if (var.arc_vu)
-                            ops.addArc(present, pv, pu, var.weight);
-                          ops.close(present, d);
+                            opsp->addArc(present, pv, pu, var.weight);
+                          opsp->close(present, d);
 
                           if (var.certain) {
                             // Always-present arc: every world of this state
@@ -967,10 +1053,10 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                               const int pu = positionIn(domain, alt.u);
                               const int pv = positionIn(domain, alt.v);
                               if (alt.arc_uv)
-                                ops.addArc(present, pu, pv, 1);
+                                opsp->addArc(present, pu, pv, 1);
                               if (alt.arc_vu)
-                                ops.addArc(present, pv, pu, 1);
-                              ops.close(present, d);
+                                opsp->addArc(present, pv, pu, 1);
+                              opsp->close(present, d);
                             }
                             outs[ai] = present;
                             if (!(present == entry.first))
@@ -996,55 +1082,88 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
   //    (children joined, local edges applied), retained for the
   //    top-down sweep and the reads.
   // ------------------------------------------------------------------
-  std::vector<Table> below(nb_bags);
-  {
-    struct Frame {
-      bag_t bag;
-      std::size_t next_child = 0;
-      Table table;
-      bool has_table = false;
-      explicit Frame(bag_t b) : bag(b) {
+  auto runBottomUp = [&]() {
+                       std::vector<Table> below(nb_bags);
+                       struct Frame {
+                         bag_t bag;
+                         std::size_t next_child = 0;
+                         Table table;
+                         bool has_table = false;
+                         explicit Frame(bag_t b) : bag(b) {
+                         }
+                       };
+
+                       std::vector<Frame> stack;
+                       stack.push_back(Frame(td.getRoot()));
+
+                       while (!stack.empty()) {
+                         Frame &frame = stack.back();
+                         const auto &children = td.getChildren(frame.bag);
+
+                         if (frame.next_child < children.size()) {
+                           bag_t c = children[frame.next_child++];
+                           stack.push_back(Frame(c));
+                           continue;
+                         }
+
+                         CHECK_FOR_INTERRUPTS();
+
+                         const std::size_t b = bag_index(frame.bag);
+                         Table table = frame.has_table
+                                       ? std::move(frame.table)
+                                       : trivialTable(domains[b]);
+                         below[b] = applyEdges(std::move(table), b);
+
+                         if (stack.size() == 1) {
+                           stack.pop_back();
+                           break;
+                         }
+
+                         // Merge into the parent's partial join.
+                         Frame &parent = stack[stack.size()-2];
+                         const std::size_t pb = bag_index(parent.bag);
+                         Table lifted = lift(below[b], domains[b],
+                                             domains[pb]);
+                         if (!parent.has_table) {
+                           parent.table = std::move(lifted);
+                           parent.has_table = true;
+                         } else {
+                           parent.table = join(parent.table, lifted,
+                                               domains[pb]);
+                         }
+                         stack.pop_back();
+                       }
+                       return below;
+                     };
+
+  // ------------------------------------------------------------------
+  // 5m. Multi-set mode: one bottom-up sweep per target set over the
+  //     shared prelude, the per-set acceptance read off the root table
+  //     (as in 5b); the consed emission makes the seed-independent
+  //     parts of the per-set circuits literally shared.
+  // ------------------------------------------------------------------
+  if (multi_sets) {
+    if constexpr (Ops::has_target_set) {
+      const std::size_t rb = bag_index(td.getRoot());
+      const int ps = positionIn(domains[rb], source);
+      Ops per_set_ops = ops;
+      opsp = &per_set_ops;
+      for (std::size_t si = 0; si < multi_sets->size(); ++si) {
+        CHECK_FOR_INTERRUPTS();
+        per_set_ops.target_set = &(*multi_sets)[si];
+        const std::vector<Table> below = runBottomUp();
+        for (const auto &[R, g] : below[rb])
+          (*multi_sink)(si, R, g, ps);
       }
-    };
-
-    std::vector<Frame> stack;
-    stack.push_back(Frame(td.getRoot()));
-
-    while (!stack.empty()) {
-      Frame &frame = stack.back();
-      const auto &children = td.getChildren(frame.bag);
-
-      if (frame.next_child < children.size()) {
-        bag_t c = children[frame.next_child++];
-        stack.push_back(Frame(c));
-        continue;
-      }
-
-      CHECK_FOR_INTERRUPTS();
-
-      const std::size_t b = bag_index(frame.bag);
-      Table table = frame.has_table ? std::move(frame.table)
-                    : trivialTable(domains[b]);
-      below[b] = applyEdges(std::move(table), b);
-
-      if (stack.size() == 1) {
-        stack.pop_back();
-        break;
-      }
-
-      // Merge into the parent's partial join.
-      Frame &parent = stack[stack.size()-2];
-      const std::size_t pb = bag_index(parent.bag);
-      Table lifted = lift(below[b], domains[b], domains[pb]);
-      if (!parent.has_table) {
-        parent.table = std::move(lifted);
-        parent.has_table = true;
-      } else {
-        parent.table = join(parent.table, lifted, domains[pb]);
-      }
-      stack.pop_back();
+      stats.nb_gates = dd.getNbGates();
+      return true_gate;
+    } else {
+      throw ReachabilityCompilerException(
+              "multi-set mode requires a set-seeded state algebra");
     }
   }
+
+  const std::vector<Table> below = runBottomUp();
 
   // ------------------------------------------------------------------
   // 5b. Root-only acceptance: when the caller's predicate is a function
@@ -1090,11 +1209,11 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
           for (const auto &[A, h] : above[b]) {
             CHECK_FOR_INTERRUPTS();
             State closed = R;
-            ops.unite(closed, A);
-            ops.close(closed, d);
+            opsp->unite(closed, A);
+            opsp->close(closed, d);
             gate_t pair_gate = invalid_gate;   // lazily created, shared
             for (unsigned long v : reads_at_bag[b]) {
-              const auto e = ops.get(closed, ps, positionIn(domains[b], v));
+              const auto e = opsp->get(closed, ps, positionIn(domains[b], v));
               if (Ops::emptyEntry(e))
                 continue;
               if (pair_gate == invalid_gate)
@@ -1252,21 +1371,28 @@ ReachabilityCompiler::AllResult compileAllBoolInternal(
 }
 
 /**
- * @brief Implementation of @c compileAnyReach(): one bottom-up sweep
- *        with the set-reachability algebra, acceptance read off the
- *        root table.
+ * @brief Implementation of @c compileAnyReachAll() (and, through a
+ *        one-set wrapper, @c compileAnyReach()): the shared prelude --
+ *        variable grouping, tree decomposition, bag assignments,
+ *        literal gates -- built once, then one bottom-up sweep per
+ *        target set with the set-reachability algebra and
+ *        content-deduplicated gate emission, each set's acceptance
+ *        read off the root table.
  */
-ReachabilityCompiler::Result compileAnyReachInternal(
+ReachabilityCompiler::AnyReachAllResult compileAnyReachAllInternal(
   const std::vector<ReachabilityCompiler::EdgeRow> &rows,
   const std::vector<ReachabilityCompiler::SourceArc> &sources,
-  const std::vector<unsigned long> &set,
+  const std::vector<std::vector<unsigned long> > &sets,
   bool directed,
   std::size_t max_states)
 {
-  ReachabilityCompiler::Result result;
+  ReachabilityCompiler::AnyReachAllResult result;
   dDNNF &dd = result.dd;
 
-  /* Restrict the target set to vertices that actually exist (edge
+  if (sets.empty())
+    throw ReachabilityCompilerException("no target sets given");
+
+  /* Restrict each target set to vertices that actually exist (edge
    * endpoints and source vertices): an absent vertex is unreachable
    * and contributes nothing -- and, crucially, the virtual
    * super-source is allocated the first id *above* this universe, so
@@ -1279,21 +1405,23 @@ ReachabilityCompiler::Result compileAnyReachInternal(
   }
   for (const auto &sa : sources)
     universe.insert(sa.vertex);
-  std::unordered_set<unsigned long> target_set;
-  for (unsigned long v : set)
-    if (universe.count(v))
-      target_set.insert(v);
+  std::vector<std::unordered_set<unsigned long> > target_sets(sets.size());
+  for (std::size_t si = 0; si < sets.size(); ++si)
+    for (unsigned long v : sets[si])
+      if (universe.count(v))
+        target_sets[si].insert(v);
   SetReachOps ops;
-  ops.target_set = &target_set;
+  ops.target_set = &target_sets[0];
 
-  // The accepting root states are those whose source position carries
-  // the set-reachability bit; they partition the worlds, so their OR is
-  // deterministic.
-  std::vector<gate_t> accepting;
-  const std::function<void(const SetReachOps::State &, gate_t, int)> sink =
-    [&](const SetReachOps::State &state, gate_t g, int ps) {
+  // Per set, the accepting root states are those whose source position
+  // carries the set-reachability bit; they partition the worlds, so
+  // their OR is deterministic.
+  std::vector<std::vector<gate_t> > accepting(sets.size());
+  const std::function<void(std::size_t, const SetReachOps::State &,
+                           gate_t, int)> sink =
+    [&](std::size_t si, const SetReachOps::State &state, gate_t g, int ps) {
       if (state.dvec[ps])
-        accepting.push_back(g);
+        accepting[si].push_back(g);
     };
 
   runReachabilityDP(
@@ -1301,16 +1429,20 @@ ReachabilityCompiler::Result compileAnyReachInternal(
     result.stats,
     [](unsigned long, SetReachOps::Entry, gate_t) {
   },
-    &sink);
+    nullptr, &target_sets, &sink);
 
-  gate_t root;
-  if (accepting.empty()) {
-    // No world reaches the set: constant false.
-    root = dd.setGate(BooleanGate::OR);
-    dd.setInfo(root, DNNF_CERT_INFO);
-  } else
-    root = finalizeRoot(dd, accepting);
-  dd.setRoot(root);
+  result.roots.reserve(sets.size());
+  for (std::size_t si = 0; si < sets.size(); ++si) {
+    gate_t root;
+    if (accepting[si].empty()) {
+      // No world reaches the set: constant false.
+      root = dd.setGate(BooleanGate::OR);
+      dd.setInfo(root, DNNF_CERT_INFO);
+    } else
+      root = finalizeRoot(dd, accepting[si]);
+    result.roots.push_back(root);
+  }
+  dd.setRoot(result.roots[0]);   // single-set callers read this
   result.stats.nb_gates = dd.getNbGates();
   return result;
 }
@@ -1366,7 +1498,22 @@ ReachabilityCompiler::Result ReachabilityCompiler::compileAnyReach(
   bool directed,
   std::size_t max_states)
 {
-  return compileAnyReachInternal(rows, sources, set, directed, max_states);
+  AnyReachAllResult all =
+    compileAnyReachAllInternal(rows, sources, {set}, directed, max_states);
+  Result result;
+  result.dd = std::move(all.dd);
+  result.stats = all.stats;
+  return result;
+}
+
+ReachabilityCompiler::AnyReachAllResult ReachabilityCompiler::compileAnyReachAll(
+  const std::vector<EdgeRow> &rows,
+  const std::vector<SourceArc> &sources,
+  const std::vector<std::vector<unsigned long> > &sets,
+  bool directed,
+  std::size_t max_states)
+{
+  return compileAnyReachAllInternal(rows, sources, sets, directed, max_states);
 }
 
 ReachabilityCompiler::Result ReachabilityCompiler::compile(

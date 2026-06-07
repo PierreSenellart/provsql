@@ -144,6 +144,13 @@ struct AllHopsResult {
   Stats stats;                           ///< Compilation statistics.
 };
 
+/** @brief A multi-set any-reach compilation: one shared circuit, one root per target set. */
+struct AnyReachAllResult {
+  dDNNF dd;                    ///< Shared circuit (consed: identical subcircuits are the same gate).
+  std::vector<gate_t> roots;   ///< One root per input set, in input order.
+  Stats stats;                 ///< Compilation statistics (max_states maxed over the sweeps).
+};
+
 /**
  * @brief One source of a multi-source compilation.
  *
@@ -320,6 +327,34 @@ static Result compileAnyReach(const std::vector<EdgeRow> &rows,
                               const std::vector<unsigned long> &set,
                               bool directed,
                               std::size_t max_states = DEFAULT_MAX_STATES);
+
+/**
+ * @brief Multi-set variant of @c compileAnyReach(): one shared
+ *        circuit, one root per target set.
+ *
+ * The shared prelude -- variable grouping, tree decomposition of the
+ * data graph, bag assignments, literal gates -- is built once; one
+ * bottom-up sweep then runs per set, with content-deduplicated gate
+ * emission, so the parts of the circuit a set's seeds do not touch
+ * are literally shared across sets (the per-set sweeps re-derive the
+ * same gates).  This is the engine behind cross-vertex aggregation
+ * planting, where one query yields many groups over the same graph.
+ *
+ * @param rows        Edge tuples.
+ * @param sources     Source arcs (at least one).
+ * @param sets        The target vertex sets (at least one; an absent
+ *                    vertex contributes nothing).
+ * @param directed    If @c false, every edge contributes both arcs.
+ * @param max_states  Bound on the DP state count per node.
+ * @return            The shared circuit, one root per set (in input
+ *                    order), and statistics.
+ */
+static AnyReachAllResult compileAnyReachAll(
+  const std::vector<EdgeRow> &rows,
+  const std::vector<SourceArc> &sources,
+  const std::vector<std::vector<unsigned long> > &sets,
+  bool directed,
+  std::size_t max_states = DEFAULT_MAX_STATES);
 };
 
 #endif /* REACHABILITY_COMPILER_H */
