@@ -324,6 +324,15 @@ gate -- only absorptive semirings for a truncated recursion root
 exact min-cost reachability there), absorptive or Boolean-compatible
 ones for fold-marked gates.
 
+A ``plus`` / ``times`` gate carrying the persisted **d-DNNF
+certificate** (deterministic alternatives / decomposable conjunction
+by construction -- emitted by the bounded-treewidth reachability
+route and the certified HAVING enumerations, see
+:doc:`probabilities`) is stamped with a green :sc:`D` badge; its
+inspector states which property is certified.  The certificate is
+what routes :sqlfunc:`probability_evaluate` to the linear exact
+``independent`` method on these subcircuits.
+
 The inversion-free certificate (a ``gate_annotation`` wrapper on a
 certified result root, see :doc:`probabilities`) is likewise elided
 and rendered as a teal :sc:`IF` badge on its child. Its dashed ring
