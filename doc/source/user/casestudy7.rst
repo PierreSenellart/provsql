@@ -531,10 +531,10 @@ is reached as ``ext(p4,p1) ⊗ ext(p6,p4)`` -- and
 read-once per ancestor, and *every* semiring evaluation is available, not
 just probability.
 
-**Cyclic data needs Boolean provenance.** ``coreview`` is symmetric, so
-"who is reviewer ``r1`` connected to?" walks a cyclic graph:
+**Cyclic data needs an absorptive provenance class.** ``coreview`` is
+symmetric, so "who is reviewer ``r1`` connected to?" walks a cyclic graph:
 
-.. nb:scheme: boolean
+.. nb:scheme: absorptive
 
 .. code-block:: postgresql
 
@@ -547,28 +547,44 @@ just probability.
     FROM conn JOIN reviewers r ON conn.node = r.id
     WHERE conn.node <> 'r1' ORDER BY r.id
 
-Evaluate the probability with the ``'boolean'`` class **off** and the
-fixpoint never stabilises -- ProvSQL stops with *"no fixpoint after N
-rounds (cyclic data?)"*: under a general semiring a cycle keeps
-contributing new derivations forever. Turn the ``'boolean'`` class **on**
-and the value converges (Boolean provenance is *absorptive*: a longer,
-cycle-revisiting derivation is absorbed by the shorter one it contains),
-so the connection probability is well defined. It is exactly **network
-reliability** -- the probability that ``r1`` stays connected to the
-target when each collaboration edge is present independently -- which is
-:math:`\#P`-hard in general. Here ``r1`` reaches ``r5`` with reliability
-``0.5496``; the circuit is a genuine reliability circuit, so
-``independent`` cannot evaluate it, while ``tree-decomposition`` and the
-compilers can.
+Evaluate the probability under the default ``'semiring'`` class and the
+fixpoint never stabilises -- ProvSQL stops with *"no fixpoint after 1000
+rounds (cyclic data?)"*: under a general semiring a cycle keeps contributing
+new derivations forever. Switch the provenance class to ``'absorptive'`` (in
+Studio the provenance toggle, in SQL ``SET provsql.provenance =
+'absorptive'``) and the value converges: an absorptive semiring satisfies
+:math:`1 \oplus a = 1`, so a longer, cycle-revisiting derivation is absorbed
+by the shorter one it contains, and the fixpoint is the set of minimal,
+repetition-free paths. (``'boolean'`` works too -- it *implies*
+``'absorptive'`` -- but the recursion needs only absorptivity, so
+``'absorptive'`` is the class to name here; see
+:ref:`the provenance-class GUC <provsql-provenance-class>`.)
 
-This is the same knowledge-compilation story as Step 3, reached through a
-fixpoint instead of a fixed join pattern: reachability over a
-probabilistic graph is where the provenance circuit, and a real compiler,
-are indispensable. Note that cyclic recursion under an absorptive
-provenance class is sound for absorptive evaluation only (probability,
-Boolean, nonnegative min-plus); its tokens carry the ``'absorptive'``
-assumption marker, and multiplicity-counting or why-provenance
-evaluation refuses them.
+The answer is exactly **two-terminal network reliability** -- the probability
+that ``r1`` stays connected when each collaboration edge is present
+independently -- which is :math:`\#P`-hard in general. Yet ProvSQL does not
+reach for a general compiler here. It recognises the recursive-reachability
+shape and, following the provenance refinement of Courcelle's theorem
+:cite:`DBLP:conf/icalp/AmarilliBS15`, **compiles along a tree decomposition
+of the collaboration graph itself** into a certified d-DNNF -- one per
+reachable vertex, of total size linear in the number of edges when the graph
+has bounded treewidth (see :ref:`network-reliability-btw`). The materialised
+tokens carry the ``'absorptive'`` assumption marker.
+
+Because that compiled circuit is already decomposable, :guilabel:`Marginal
+probability` reads the reliability straight off it -- ``r1`` reaches ``r5``
+with reliability ``0.5496`` -- and even the linear ``independent`` method
+evaluates it, where on the bushy :math:`\#P`-hard circuit of Step 3 it had to
+refuse. That contrast is the lesson: Step 3's hardness lived in the *query
+shape* and needed a real compiler to dissolve, whereas here it is tamed by a
+structural property of the *data* -- the bounded treewidth of the graph --
+with no external tool involved at all.
+
+The flip side of absorptivity is that these tokens are sound for absorptive
+evaluation only (probability, Boolean, nonnegative min-plus); the
+``'absorptive'`` marker makes multiplicity-counting or why-provenance
+evaluation -- genuinely infinite on cyclic data -- refuse them rather than
+return an unjustified value.
 
 .. seealso::
 

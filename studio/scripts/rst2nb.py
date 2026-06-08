@@ -43,10 +43,11 @@ docs are unaffected):
                                 cell (notebook-only prose)
   .. nb:scheme: boolean         positional: run the NEXT postgresql
                                 block under that provenance scheme
-                                (semiring / where / boolean) -- the
-                                cell-level counterpart of Studio's
-                                three-way selector, e.g. for cs7's
-                                boolean-provenance narrative
+                                (semiring / where / absorptive / boolean)
+                                -- the cell-level counterpart of Studio's
+                                provenance-class selector, e.g. for cs7's
+                                boolean-provenance and absorptive-recursion
+                                narrative
   .. nb:stop                    positional: ignore the rest of the file
 
 Mapping:
@@ -273,7 +274,7 @@ def parse_rst(path: Path) -> tuple[dict, list[tuple[str, str]]] | None:
                 flush_prose()
                 segments.append(("md", value))
             elif key == "scheme":
-                if value not in ("semiring", "where", "boolean"):
+                if value not in ("semiring", "where", "absorptive", "boolean"):
                     sys.exit(f"{path}:{i + 1}: invalid nb:scheme {value!r}")
                 next_scheme = value
             elif key == "skip":

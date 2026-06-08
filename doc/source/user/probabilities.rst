@@ -411,6 +411,8 @@ exact (default) call remains correct but may not terminate quickly on such a
 query.  (``COUNT`` rarely needs this -- its values are small, so it is almost
 always evaluated exactly.)
 
+.. _network-reliability-btw:
+
 Network Reliability on Bounded-Treewidth Graphs
 ------------------------------------------------
 

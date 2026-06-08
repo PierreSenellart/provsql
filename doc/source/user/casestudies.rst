@@ -230,6 +230,8 @@ Knowledge compilation and safe queries
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
    "``provsql.provenance = 'boolean'``", "", "", "", "", "", "", "", "✓", ""
+   "``provsql.provenance = 'absorptive'`` (cyclic recursion)", "", "", "", "", "", "", "", "✓", ""
+   "Bounded-treewidth network reliability (recursive reachability)", "", "", "", "", "", "", "", "✓", ""
    "``provsql.classify_top_level`` GUC (TID/BID pills)", "", "", "", "", "", "", "", "✓", ""
    "Safe-query rewriter (hierarchical / read-once)", "", "", "", "", "", "", "", "✓", ""
    "Tseytin CNF export (DIMACS)", "", "", "", "", "", "", "", "✓", ""
