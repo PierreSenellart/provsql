@@ -1,0 +1,16 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+e_uncond|e_cond_operator|e_cond_twoarg|var_cond
+15.0000|20.0000|20.0000|100.0000
+(1 row)
+gate|nchildren
+conditioned|2
+(1 row)
+e_idempotent|nchildren_folded
+20.0000|2
+(1 row)
+remove_provenance
+
+(1 row)

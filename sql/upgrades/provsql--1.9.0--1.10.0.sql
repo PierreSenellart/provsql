@@ -1787,3 +1787,305 @@ BEGIN
   RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input);
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+-- ----------------------------------------------------------------------
+-- Conditioning: the SUM(x) | C operator for the agg_token carrier, and the
+-- final moment / support dispatchers carrying both the random_variable and
+-- agg_token conditioned-distribution unpacking.
+-- ----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agg_token_cond(a agg_token, cond uuid)
+  RETURNS agg_token AS
+$$
+DECLARE
+  tok uuid;
+  ev  uuid;
+  result uuid;
+  ch uuid[];
+BEGIN
+  IF cond IS NULL OR cond = gate_one() THEN
+    RETURN a;
+  END IF;
+
+  tok := (a)::uuid;
+  IF get_gate_type(tok) = 'conditioned'
+     AND array_length(get_children(tok), 1) = 2 THEN
+    ch  := get_children(tok);
+    tok := ch[1];
+    ev  := provenance_times(ch[2], cond);
+  ELSE
+    ev := cond;
+  END IF;
+
+  result := public.uuid_generate_v5(uuid_ns_provsql(),
+                                    concat('conditioned', tok, ev));
+  PERFORM create_gate(result, 'conditioned', ARRAY[tok, ev]);
+  RETURN agg_token_make(result, agg_token_value(a));
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OPERATOR | (
+  LEFTARG   = agg_token,
+  RIGHTARG  = uuid,
+  PROCEDURE = agg_token_cond
+);
+
+/**
+ * @brief Unpack the target of a conditioned @c agg_token.
+ *
+ * For a @c "SUM(x) | C" whose provenance token is the two-child
+ * @c gate_conditioned @c [agg_target, condition] returns the agg_token over
+ * @c agg_target (same running value); for any other agg_token returns it
+ * unchanged.  The conditioning event itself is recovered separately via
+ * @c rv_conditioned_prov on the token's uuid.
+ */
+CREATE OR REPLACE FUNCTION agg_conditioned_target(a agg_token)
+  RETURNS agg_token AS
+$$
+  SELECT CASE
+    WHEN provsql.get_gate_type((a)::uuid) = 'conditioned'
+         AND array_length(provsql.get_children((a)::uuid), 1) = 2
+    THEN provsql.agg_token_make(
+           (provsql.get_children((a)::uuid))[1], provsql.agg_token_value(a))
+    ELSE a
+  END;
+$$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION variance(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  m1 float8;
+  m2 float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- Conditioning on prov is handled inside rv_moment: when prov
+    -- resolves to gate_one() (the default, or load-time
+    -- simplification of any always-true sub-circuit) the
+    -- unconditional analytical path runs unchanged; otherwise the
+    -- joint-circuit loader unifies shared gate_rv leaves between
+    -- input and prov, and the conditional path runs either
+    -- truncated-distribution closed form or MC rejection.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), 2, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    m1 := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    m2 := agg_raw_moment(agg_conditioned_target(input::agg_token), 2,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    IF m1 IS NULL OR m2 IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN m2 - m1 * m1;
+  END IF;
+
+  RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), k, false,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    RETURN agg_raw_moment(agg_conditioned_target(input::agg_token), k,
+                          rv_conditioned_prov(input::uuid, prov), method, arguments);
+  END IF;
+
+  RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION support(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL,
+  OUT lo float8,
+  OUT hi float8)
+  AS $$
+DECLARE
+  aggregation_function VARCHAR;
+  child_pairs uuid[];
+  values_arr float8[];
+  total_probability float8;
+BEGIN
+  IF input IS NULL THEN
+    lo := NULL; hi := NULL; RETURN;
+  END IF;
+
+  -- Plain numeric: degenerate point support.  Lets `support(2.5)` /
+  -- `support(42)` / etc.  return (2.5, 2.5) without making the user
+  -- wrap in `as_random`.
+  IF pg_typeof(input) IN (
+       'smallint'::regtype, 'integer'::regtype, 'bigint'::regtype,
+       'numeric'::regtype, 'real'::regtype, 'double precision'::regtype) THEN
+    lo := input::double precision;
+    hi := input::double precision;
+    RETURN;
+  END IF;
+
+  -- random_variable is binary-coercible to uuid (explicit cast
+  -- below), so a single rv_support call covers both shapes.
+  -- rv_support handles
+  -- gate_value (point), gate_rv (distribution), gate_arith
+  -- (propagated), and falls back to the conservative all-real
+  -- interval for any other gate kind.  Conditioning on prov is not
+  -- supported (would require restricting the underlying joint
+  -- distribution by the indicator of prov, which has no closed form
+  -- for the basic distributions we ship).
+  IF pg_typeof(input) IN ('random_variable'::regtype, 'uuid'::regtype) THEN
+    -- Conditional support: rv_support folds the AND-conjunct interval
+    -- constraints from prov into the unconditional support.  When
+    -- prov is gate_one() the unconditional support is returned
+    -- unchanged.
+    SELECT r.lo, r.hi INTO lo, hi
+      FROM provsql.rv_support(
+             rv_conditioned_target(input::uuid),
+             rv_conditioned_prov(input::uuid, prov)) r;
+    RETURN;
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    -- A conditioned aggregate SUM(x)|C: the value-range support is that of
+    -- the target aggregate (conditioning can only tighten it; the
+    -- conservative range stays valid), so unpack to the target gate.
+    DECLARE
+      atok agg_token := agg_conditioned_target(input::agg_token);
+    BEGIN
+    IF get_gate_type(atok) <> 'agg' THEN
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for support computation';
+    END IF;
+    SELECT pp.proname::varchar FROM pg_proc pp
+      WHERE oid=(get_infos(atok)).info1
+      INTO aggregation_function;
+    child_pairs := get_children(atok);
+
+    IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+      -- count(col) is a SUM of per-row 0/1 indicators (empty group = 0), so its
+      -- support is computed like SUM; count(*) arrives as 'sum'.
+      -- Empty agg_token: SUM is identically 0.
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        lo := 0; hi := 0; RETURN;
+      END IF;
+      SELECT sum(LEAST(v, 0::float8)), sum(GREATEST(v, 0::float8))
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM unnest(child_pairs) AS c) sub;
+    ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+      -- MIN/MAX over the empty input world are NULL, not ±Infinity (matching the
+      -- moment surface): the empty world carries no value, so the support is just
+      -- the range of the per-row values [min(v), max(v)].  A structurally empty
+      -- aggregate has no defined value at all -> NULL support.
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        lo := NULL; hi := NULL; RETURN;
+      END IF;
+
+      SELECT min(v), max(v)
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM UNNEST(child_pairs) AS c) sub;
+    ELSE
+      RAISE EXCEPTION USING MESSAGE=
+        'Cannot compute support for aggregation function ' || aggregation_function;
+    END IF;
+    RETURN;
+    END;
+  END IF;
+
+  RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION central_moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  mu float8;
+  total float8;
+  i integer;
+  raw_i float8;
+  binom float8;
+  -- iterative binomial coefficient C(k, i)
+  k_double float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), k, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k < 0 THEN
+      RAISE EXCEPTION 'central_moment(): k must be non-negative (got %)', k;
+    END IF;
+    IF k = 0 THEN RETURN 1; END IF;
+    IF k = 1 THEN RETURN 0; END IF;
+
+    mu := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    IF mu IS NULL THEN RETURN NULL; END IF;
+    -- mu may be ±Infinity for empty MIN / MAX with positive empty
+    -- probability; central_moment is undefined in that case.
+    IF mu = 'Infinity'::float8 OR mu = '-Infinity'::float8 THEN
+      RETURN mu;
+    END IF;
+
+    total := 0;
+    binom := 1;  -- C(k, 0)
+    k_double := k;
+    FOR i IN 0..k LOOP
+      raw_i := agg_raw_moment(agg_conditioned_target(input::agg_token), i,
+                              rv_conditioned_prov(input::uuid, prov), method, arguments);
+      IF raw_i IS NULL THEN RETURN NULL; END IF;
+      total := total + binom * power(-mu, k - i) * raw_i;
+      -- C(k, i+1) = C(k, i) * (k - i) / (i + 1)
+      IF i < k THEN
+        binom := binom * (k_double - i) / (i + 1);
+      END IF;
+    END LOOP;
+    RETURN total;
+  END IF;
+
+  RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;

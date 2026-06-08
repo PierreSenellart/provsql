@@ -2298,6 +2298,77 @@ CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS 
 CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
 
 /**
+ * @brief Condition a discrete aggregate's distribution on an event:
+ *        @c "SUM(x) | C".
+ *
+ * Mirrors @c random_variable_cond for the @c agg_token carrier: returns a
+ * conditioned @c agg_token that flows onward, its provenance token wrapped in
+ * the composable two-child @c gate_conditioned @c [agg_target, condition]
+ * while its running value is preserved.  The moment / support dispatchers
+ * unpack it (@c agg_conditioned_target + @c rv_conditioned_prov) and route
+ * through the existing @c agg_raw_moment with the condition conjoined into the
+ * @c prov argument, so @c expected(SUM(x)|C) / @c variance(SUM(x)|C) report
+ * the conditional aggregate distribution.  Nested conditioning folds.
+ */
+CREATE OR REPLACE FUNCTION agg_token_cond(a agg_token, cond uuid)
+  RETURNS agg_token AS
+$$
+DECLARE
+  tok uuid;
+  ev  uuid;
+  result uuid;
+  ch uuid[];
+BEGIN
+  IF cond IS NULL OR cond = gate_one() THEN
+    RETURN a;
+  END IF;
+
+  tok := (a)::uuid;
+  IF get_gate_type(tok) = 'conditioned'
+     AND array_length(get_children(tok), 1) = 2 THEN
+    ch  := get_children(tok);
+    tok := ch[1];
+    ev  := provenance_times(ch[2], cond);
+  ELSE
+    ev := cond;
+  END IF;
+
+  result := public.uuid_generate_v5(uuid_ns_provsql(),
+                                    concat('conditioned', tok, ev));
+  PERFORM create_gate(result, 'conditioned', ARRAY[tok, ev]);
+  RETURN agg_token_make(result, agg_token_value(a));
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OPERATOR | (
+  LEFTARG   = agg_token,
+  RIGHTARG  = uuid,
+  PROCEDURE = agg_token_cond
+);
+
+/**
+ * @brief Unpack the target of a conditioned @c agg_token.
+ *
+ * For a @c "SUM(x) | C" whose provenance token is the two-child
+ * @c gate_conditioned @c [agg_target, condition] returns the agg_token over
+ * @c agg_target (same running value); for any other agg_token returns it
+ * unchanged.  The conditioning event itself is recovered separately via
+ * @c rv_conditioned_prov on the token's uuid.
+ */
+CREATE OR REPLACE FUNCTION agg_conditioned_target(a agg_token)
+  RETURNS agg_token AS
+$$
+  SELECT CASE
+    WHEN provsql.get_gate_type((a)::uuid) = 'conditioned'
+         AND array_length(provsql.get_children((a)::uuid), 1) = 2
+    THEN provsql.agg_token_make(
+           (provsql.get_children((a)::uuid))[1], provsql.agg_token_value(a))
+    ELSE a
+  END;
+$$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
  * @brief Placeholder comparison of agg_token with numeric
  *
  * This function is never actually called; it exists so the SQL parser
@@ -4273,8 +4344,10 @@ BEGIN
     IF input IS NULL THEN
       RETURN NULL;
     END IF;
-    m1 := agg_raw_moment(input::agg_token, 1, prov, method, arguments);
-    m2 := agg_raw_moment(input::agg_token, 2, prov, method, arguments);
+    m1 := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    m2 := agg_raw_moment(agg_conditioned_target(input::agg_token), 2,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
     IF m1 IS NULL OR m2 IS NULL THEN
       RETURN NULL;
     END IF;
@@ -4314,7 +4387,8 @@ BEGIN
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
-    RETURN agg_raw_moment(input::agg_token, k, prov, method, arguments);
+    RETURN agg_raw_moment(agg_conditioned_target(input::agg_token), k,
+                          rv_conditioned_prov(input::uuid, prov), method, arguments);
   END IF;
 
   RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input);
@@ -4426,13 +4500,19 @@ BEGIN
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
-    IF get_gate_type(input::agg_token) <> 'agg' THEN
+    -- A conditioned aggregate SUM(x)|C: the value-range support is that of
+    -- the target aggregate (conditioning can only tighten it; the
+    -- conservative range stays valid), so unpack to the target gate.
+    DECLARE
+      atok agg_token := agg_conditioned_target(input::agg_token);
+    BEGIN
+    IF get_gate_type(atok) <> 'agg' THEN
       RAISE EXCEPTION USING MESSAGE='Wrong gate type for support computation';
     END IF;
     SELECT pp.proname::varchar FROM pg_proc pp
-      WHERE oid=(get_infos(input::agg_token)).info1
+      WHERE oid=(get_infos(atok)).info1
       INTO aggregation_function;
-    child_pairs := get_children(input::agg_token);
+    child_pairs := get_children(atok);
 
     IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
       -- count(col) is a SUM of per-row 0/1 indicators (empty group = 0), so its
@@ -4463,6 +4543,7 @@ BEGIN
         'Cannot compute support for aggregation function ' || aggregation_function;
     END IF;
     RETURN;
+    END;
   END IF;
 
   RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input);
@@ -4517,7 +4598,8 @@ BEGIN
     IF k = 0 THEN RETURN 1; END IF;
     IF k = 1 THEN RETURN 0; END IF;
 
-    mu := agg_raw_moment(input::agg_token, 1, prov, method, arguments);
+    mu := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
     IF mu IS NULL THEN RETURN NULL; END IF;
     -- mu may be ±Infinity for empty MIN / MAX with positive empty
     -- probability; central_moment is undefined in that case.
@@ -4529,7 +4611,8 @@ BEGIN
     binom := 1;  -- C(k, 0)
     k_double := k;
     FOR i IN 0..k LOOP
-      raw_i := agg_raw_moment(input::agg_token, i, prov, method, arguments);
+      raw_i := agg_raw_moment(agg_conditioned_target(input::agg_token), i,
+                              rv_conditioned_prov(input::uuid, prov), method, arguments);
       IF raw_i IS NULL THEN RETURN NULL; END IF;
       total := total + binom * power(-mu, k - i) * raw_i;
       -- C(k, i+1) = C(k, i) * (k - i) / (i + 1)
