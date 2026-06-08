@@ -31,15 +31,15 @@ The translation dictionary the calculator teaches:
    * - mutually exclusive outcomes
      - :sqlfunc:`repair_key`
    * - :math:`A \wedge B`
-     - join (:sqlfunc:`provenance_times`)
+     - join (``provenance_times``)
    * - :math:`A \vee B`
-     - ``UNION`` (:sqlfunc:`provenance_plus`)
+     - ``UNION`` (``provenance_plus``)
    * - :math:`P(A)`
      - :sqlfunc:`probability_evaluate`
    * - :math:`P(A \mid B)`
      - ``A | B``
    * - a continuous quantity
-     - a :sqlfunc:`random_variable`
+     - a ``random_variable``
    * - :math:`E[X]`, :math:`\mathrm{Var}[X]`
      - :sqlfunc:`expected`, :sqlfunc:`variance`
    * - :math:`E[X \mid C]`
@@ -197,7 +197,7 @@ Problem 4: A Continuous Posterior
 ---------------------------------
 
 The calculator is not limited to discrete events. A lab biomarker is a
-*continuous* quantity, a :sqlfunc:`random_variable`; conditioning on it is
+*continuous* quantity, a ``random_variable``; conditioning on it is
 truncation, and the conditioned distribution flows onward as a value whose
 moments you can take.
 
@@ -231,7 +231,7 @@ is a random quantity. Its expectation, and its expectation *conditioned* on
 an observation, are again one query.
 
 We materialise the per-region totals (each a probabilistic
-:sqlfunc:`agg_token`), then ask for the expected total in the North, and the
+``agg_token``), then ask for the expected total in the North, and the
 expected total *given* that the high-count day actually occurred:
 
 .. code-block:: postgresql
