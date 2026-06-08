@@ -4861,6 +4861,14 @@ CREATE OR REPLACE FUNCTION reachability_evaluate(
  * @param source the vertex reachability starts from
  * @param target the vertex whose reachability is evaluated
  * @param directed if false, each edge can be traversed both ways
+ * @param[out] probability the reachability probability
+ * @param[out] data_treewidth treewidth of the min-fill decomposition of the
+ *        data graph
+ * @param[out] nb_bags number of bags in the decomposition
+ * @param[out] max_states maximum number of dynamic-programming states at any
+ *        decomposition node
+ * @param[out] nb_gates number of gates in the emitted d-DNNF
+ * @param[out] nb_variables number of variables in the emitted d-DNNF
  */
 CREATE OR REPLACE FUNCTION reachability_compile_stats(
   IN sources INT[],
@@ -4914,6 +4922,8 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
  * @param source_tokens per-source provenance token (nil UUID = certain)
  * @param source_probabilities per-source probability
  * @param directed if false, each edge can be traversed both ways
+ * @param[out] vertex a vertex reachable from some source
+ * @param[out] token the materialised reachability provenance token of @c vertex
  */
 CREATE OR REPLACE FUNCTION reachability_materialize(
   IN sources INT[],
@@ -4958,6 +4968,9 @@ CREATE OR REPLACE FUNCTION reachability_materialize(
  * @param directed if false, each edge can be traversed both ways
  * @param hop_bound maximum walk length
  * @param hop_seed hop value of the base arm (added to reported lengths)
+ * @param[out] vertex a reachable vertex
+ * @param[out] hops the walk length at which @c vertex is reached
+ * @param[out] token the materialised provenance token of the @c (vertex, hops) pair
  */
 CREATE OR REPLACE FUNCTION reachability_materialize_hops(
   IN sources INT[],
@@ -5004,6 +5017,9 @@ CREATE OR REPLACE FUNCTION reachability_materialize_hops(
  * @param directed if false, each edge can be traversed both ways
  * @param group_ids group identifier of each member row
  * @param member_vertices member vertex of each member row
+ * @param[out] group_id a group whose every member is reachable
+ * @param[out] token the materialised all-members-reachable provenance token of
+ *        @c group_id
  */
 CREATE OR REPLACE FUNCTION reachability_materialize_any(
   IN sources INT[],
@@ -5098,7 +5114,7 @@ CREATE OR REPLACE FUNCTION reachability_materialize_cover(
  * @param source_rel_attribute the source relation's vertex column
  * @param edge_sql deparsed edge subquery (join-defined edges)
  * @param member_quals optional deterministic filter over the member
- *        relation's columns (table-qualified as @c t.<col>), restricting
+ *        relation's columns (table-qualified as @c t.column), restricting
  *        which members participate in each group
  */
 CREATE OR REPLACE FUNCTION plant_reach_any_groups(
@@ -5178,7 +5194,7 @@ BEGIN
       || '       t.%5$I AS grp_key '
       || 'FROM %2$I w JOIN %3$s t ON w.%1$I = t.%4$I'
       -- The member-relation filter restricts which members participate
-      -- (deparsed table-qualified as t.<col>); the working table side
+      -- (deparsed table-qualified as t.column); the working table side
       -- carries no provenance distinction here.
       || coalesce(' WHERE ' || member_quals, ''),
       node_attribute, work_name, member_rel::text, member_attribute,
@@ -5439,6 +5455,15 @@ $$ LANGUAGE sql STABLE;
  * The @c vertices output maps the dense IDs back to the original
  * vertex values (as text, 1-indexed), for callers that need to label
  * per-vertex results.
+ *
+ * @param[out] sources source vertex (dense ID) of each gathered edge
+ * @param[out] destinations destination vertex (dense ID) of each edge
+ * @param[out] tokens provenance token of each edge tuple
+ * @param[out] probabilities probability of each edge tuple
+ * @param[out] block_keys per-edge BID key variable (nil UUID = independent)
+ * @param[out] block_indices per-edge outcome index within its block
+ * @param[out] extra_ids dense IDs assigned to the @p extra_vertices
+ * @param[out] vertices dense-ID-to-original-value map (text, 1-indexed)
  */
 CREATE OR REPLACE FUNCTION gather_reachability_edges(
   IN rel regclass,
@@ -5634,6 +5659,9 @@ $$ LANGUAGE plpgsql SET client_min_messages = warning;
  *
  * @param rel the source relation
  * @param source_attribute name of the vertex column
+ * @param[out] source_values vertex value of each source tuple (as text)
+ * @param[out] source_tokens per-source base @c input token (nil UUID = certain)
+ * @param[out] source_probabilities per-source probability
  */
 CREATE OR REPLACE FUNCTION gather_reachability_sources(
   IN rel regclass,
