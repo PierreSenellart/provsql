@@ -152,7 +152,7 @@ public:
     } else if (type == gate_plus || type == gate_times || type == gate_monus
             || type == gate_project || type == gate_eq
             || type == gate_cmp || type == gate_update
-            || type == gate_annotation) {
+            || type == gate_annotation || type == gate_conditioned) {
       // Boolean gates: footprint is the union of children's footprints.
       // Lets a compound `p` wire feeding a mixture propagate its atom
       // dependencies to FootprintCache for the disjoint-children
@@ -967,6 +967,59 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k,
   return total;
 }
 
+/**
+ * @brief Lift conditioning out of a scalar arithmetic expression.
+ *
+ * Implements @c "f(X|A, Y|B, …) = f(X, Y, …) | (A ∧ B ∧ …)": walks the scalar
+ * tree rooted at @p root, replaces every nested @c gate_conditioned by a
+ * transparent passthrough to its target (so the tree becomes the plain
+ * arithmetic over the unconditioned distributions), collects the evidence
+ * children, and conjoins them -- together with any pre-existing @p event_opt
+ * -- into a single conditioning event.  The conjunction is built as an
+ * in-memory @c gate_times over the evidence gates, all of which already live
+ * in the (joint) circuit, so a base @c gate_rv shared between a value and its
+ * evidence keeps a single draw under the MC sampler.  No-op (leaves
+ * @p event_opt untouched) when the expression carries no conditioning.
+ */
+static void lift_conditioning(GenericCircuit &gc, gate_t root,
+                              std::optional<gate_t> &event_opt)
+{
+  std::vector<gate_t> evidences;
+  std::set<gate_t> seen;
+  std::vector<gate_t> stack{root};
+  while (!stack.empty()) {
+    gate_t g = stack.back();
+    stack.pop_back();
+    if (!seen.insert(g).second) continue;
+    if (gc.getGateType(g) == gate_conditioned) {
+      const auto &w = gc.getWires(g);
+      if (w.size() < 2)
+        throw CircuitException("malformed conditioned gate in scalar expression");
+      gate_t target = w[0];
+      evidences.push_back(w[1]);
+      gc.liftConditionedToTarget(g, target);  // g becomes arith PLUS [target]
+      stack.push_back(target);
+    } else {
+      for (gate_t c : gc.getWires(g))
+        stack.push_back(c);
+    }
+  }
+  if (evidences.empty())
+    return;
+  if (event_opt.has_value())
+    evidences.push_back(*event_opt);
+  gate_t cond;
+  if (evidences.size() == 1)
+    cond = evidences[0];
+  else {
+    cond = gc.setGate(gate_times);  // AND of all evidence (and prior event)
+    auto &cw = gc.getWires(cond);
+    for (gate_t e : evidences)
+      cw.push_back(e);
+  }
+  event_opt = cond;
+}
+
 }  // namespace provsql
 
 extern "C" {
@@ -1012,6 +1065,15 @@ Datum rv_moment(PG_FUNCTION_ARGS)
     std::optional<gate_t> event_opt;
     if (gc.getGateType(event_gate) != gate_one)
       event_opt = event_gate;
+
+    /* Arithmetic over conditioned distributions: lift any nested
+     * gate_conditioned out of the scalar expression, folding its evidence
+     * into the conditioning event (f(X|A, Y|B) = f(X, Y) | (A ∧ B)).  A
+     * conditioned ROOT was already unpacked by the SQL dispatcher (so the
+     * closed-form truncation path stays available for the bare-rv case); this
+     * pass handles conditioning buried under arithmetic, which the scalar
+     * evaluator otherwise rejects. */
+    provsql::lift_conditioning(gc, root_gate, event_opt);
 
     double result;
     if (central)

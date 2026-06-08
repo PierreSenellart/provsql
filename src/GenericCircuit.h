@@ -282,6 +282,27 @@ void resolveToRv(gate_t g, const std::string &s) {
 }
 
 /**
+ * @brief Replace a @c gate_conditioned @p g by a transparent passthrough to
+ *        its @p target child (a single-child @c gate_arith @c PLUS, i.e. the
+ *        sum of one operand = the operand itself).
+ *
+ * Used by the conditional-moment evaluator to lift conditioning out of a
+ * scalar arithmetic expression: @c "f(X|A, Y|B)" becomes @c "f(X, Y)" with the
+ * evidence @c A, @c B collected separately and conjoined into the root
+ * conditioning event.  The passthrough REFERENCES @p target (it does not copy
+ * it), so a shared @c gate_rv keeps a single sampled draw.  Operates on the
+ * in-memory circuit only.
+ */
+void liftConditionedToTarget(gate_t g, gate_t target) {
+  setGateType(g, gate_arith);
+  auto &w = getWires(g);
+  w.clear();
+  w.push_back(target);
+  setInfos(g, PROVSQL_ARITH_PLUS, 0);
+  extra.erase(g);
+}
+
+/**
  * @brief Drop semiring identity wires and collapse single-wire
  *        @c gate_times / @c gate_plus to their lone non-identity
  *        child; collapse a @c gate_times containing a @c gate_zero

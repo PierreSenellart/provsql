@@ -55,3 +55,36 @@ FROM r;
 -- reports a clear error rather than a probability.
 WITH r AS (SELECT normal(0,1) AS rv)
 SELECT probability_evaluate((r.rv | rv_cmp_gt(r.rv, as_random(3)))::uuid) FROM r;
+
+-- Arithmetic over conditioned distributions: f(X|A, Y|B) = f(X,Y) | (A ∧ B).
+-- The conditioning is lifted to the whole expression on the conjunction of the
+-- evidence; the conditional moment is then evaluated by MC rejection (fixed
+-- seed for reproducibility).
+SET provsql.rv_mc_samples = 200000;
+SET provsql.monte_carlo_seed = 42;
+
+-- Independent factor: (X|X>0) * Y, Y ~ U(0,1) independent.
+--   E = E[X|X>0] * E[Y] = 0.7979 * 0.5 = 0.3989.
+WITH r AS (SELECT normal(0,1) AS x, uniform(0,1) AS y)
+SELECT abs(expected((r.x | (r.x > 0)) * r.y) - 0.3989) < 0.01 AS indep_product_ok
+FROM r;
+
+-- SHARED evidence (the soundness case): (Z|Z>0) * (Z|Z>0) = (Z*Z) | (Z>0).
+--   E[Z^2 | Z>0] = 1.0 (half-normal second moment), NOT the independent
+--   shortcut E[Z|Z>0]^2 = 0.7979^2 = 0.6366.  Pinning both bounds proves the
+--   shared evidence is not mistaken for independence.
+WITH r AS (SELECT normal(0,1) AS z)
+SELECT abs(expected((r.z | (r.z > 0)) * (r.z | (r.z > 0))) - 1.0) < 0.03
+         AS shared_evidence_correct,
+       abs(expected((r.z | (r.z > 0)) * (r.z | (r.z > 0))) - 0.6366) > 0.2
+         AS not_the_independent_shortcut
+FROM r;
+
+-- Different evidence: (X|X>0) + (Y|Y>0.5) = (X+Y) | (X>0 AND Y>0.5).
+--   E = E[X|X>0] + E[Y|Y>0.5] = 0.7979 + 0.75 = 1.5479.
+WITH r AS (SELECT normal(0,1) AS x, uniform(0,1) AS y)
+SELECT abs(expected((r.x | (r.x > 0)) + (r.y | (r.y > 0.5))) - 1.5479) < 0.02
+         AS distinct_evidence_ok
+FROM r;
+RESET provsql.rv_mc_samples;
+RESET provsql.monte_carlo_seed;

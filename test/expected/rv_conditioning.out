@@ -15,3 +15,12 @@ gate|nchildren
 conditioned|2
 (1 row)
 ERROR:  ProvSQL: probability_evaluate: this is a conditioned distribution (a random_variable / agg_token X | C), not a Boolean event; query it with expected / variance / moment / support, which report the conditional distribution
+indep_product_ok
+t
+(1 row)
+shared_evidence_correct|not_the_independent_shortcut
+t|t
+(1 row)
+distinct_evidence_ok
+t
+(1 row)
