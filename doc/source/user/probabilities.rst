@@ -549,10 +549,14 @@ the parts of the per-group circuits the group's members do not
 influence come out as the *same* gates (content-deduplicated
 emission), materialised once.  The ``SELECT DISTINCT`` spelling of the
 same aggregation (``SELECT DISTINCT t.region FROM ... `` with no
-``GROUP BY``) is provenance-identical and recognised too.  A tracked
-member relation, or any deviation from the join-and-group-by-one-column
-shape, simply skips the planting (the generic evaluation is always
-available).
+``GROUP BY``) is provenance-identical and recognised too; a
+deterministic filter on the member relation's own columns
+(``WHERE t.kind = 'hospital'``) is allowed -- it restricts which
+members each group counts, exactly as an edge-column filter restricts
+the edges, and is pushed into the member gathering.  A tracked member
+relation, a filter that touches the recursive side, or any other
+deviation from the join-and-group-by-one-column shape simply skips the
+planting (the generic evaluation is always available).
 
 *K-terminal conjunctions* close the family: a self-join of the CTE
 with one constant node binding per reference --

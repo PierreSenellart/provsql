@@ -578,6 +578,9 @@ CREATE OR REPLACE FUNCTION reachability_materialize_any(
  * @param source_rel source relation of a multi-source base arm
  * @param source_rel_attribute the source relation's vertex column
  * @param edge_sql deparsed edge subquery (join-defined edges)
+ * @param member_quals optional deterministic filter over the member
+ *        relation's columns (table-qualified as @c t.<col>), restricting
+ *        which members participate in each group
  */
 CREATE OR REPLACE FUNCTION plant_reach_any_groups(
   work_name text,
@@ -593,7 +596,8 @@ CREATE OR REPLACE FUNCTION plant_reach_any_groups(
   edge_quals text DEFAULT NULL,
   source_rel regclass DEFAULT NULL,
   source_rel_attribute text DEFAULT NULL,
-  edge_sql text DEFAULT NULL)
+  edge_sql text DEFAULT NULL,
+  member_quals text DEFAULT NULL)
   RETURNS void AS
 $$
 DECLARE
@@ -653,7 +657,11 @@ BEGIN
       'CREATE TEMP TABLE provsql_reach_any_flat_tmp AS '
       || 'SELECT w.%1$I::text AS node_val, provsql.provenance() AS tok, '
       || '       t.%5$I AS grp_key '
-      || 'FROM %2$I w JOIN %3$s t ON w.%1$I = t.%4$I',
+      || 'FROM %2$I w JOIN %3$s t ON w.%1$I = t.%4$I'
+      -- The member-relation filter restricts which members participate
+      -- (deparsed table-qualified as t.<col>); the working table side
+      -- carries no provenance distinction here.
+      || coalesce(' WHERE ' || member_quals, ''),
       node_attribute, work_name, member_rel::text, member_attribute,
       group_attribute);
     PERFORM provsql.remove_provenance('provsql_reach_any_flat_tmp');

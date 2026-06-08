@@ -71,6 +71,41 @@ DROP TABLE btwa_pd;
 SELECT remove_provenance('btwa_rd');
 DROP TABLE btwa_rd;
 
+-- A deterministic filter over the *member* relation's own columns
+-- restricts which members participate in each group (like the edge
+-- filters restrict the edges -- it carries no provenance), and is
+-- pushed into the member gathering: still planted, still certified.
+CREATE TABLE btwa_kinds(node int, region text, kind text);
+INSERT INTO btwa_kinds VALUES
+  (2,'A','hospital'),(3,'A','depot'),(4,'B','hospital'),(5,'B','hospital');
+CREATE TABLE btwa_rf AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwa_edge e JOIN reach r ON e.src = r.node
+  )
+  SELECT t.region FROM reach r JOIN btwa_kinds t ON r.node = t.node
+  WHERE t.kind = 'hospital'
+  GROUP BY t.region;
+CREATE TABLE btwa_pf AS
+  SELECT region,
+         round(probability_evaluate(provenance(), 'independent')::numeric, 6)
+           AS p_independent,
+         round(probability_evaluate(provenance(), 'possible-worlds')::numeric, 6)
+           AS p_worlds,
+         (get_infos(provenance())).info1 AS certified
+  FROM btwa_rf GROUP BY region, provenance();
+SELECT remove_provenance('btwa_pf');
+-- Region A loses the depot (node 3): just {2}, P = .5 (a single-member
+-- group passes its per-vertex token through, behind the assumption
+-- wrapper, so info1 = 0 there); region B keeps {4,5}, P = .4375,
+-- planted and certified.
+SELECT * FROM btwa_pf ORDER BY region;
+DROP TABLE btwa_pf;
+SELECT remove_provenance('btwa_rf');
+DROP TABLE btwa_rf;
+DROP TABLE btwa_kinds;
+
 -- A *tracked* member relation makes the aggregated tokens per-row
 -- products: nothing is planted, the generic path stays correct.
 CREATE TABLE btwa_tracked(node int, region text);

@@ -421,18 +421,30 @@ dropped: proving the constant equals the group size is data-dependent
 and the HAVING cmp construction has no probe point; the self-join
 form covers the need.)
 
-*DISTINCT-shaped aggregations: implemented* (detection-only, no new
-compiler work).  `SELECT DISTINCT region` is provenance-identical to
-`GROUP BY region`; the existing `transform_distinct_into_group_by`
-already normalises it, but it ran *after* `inline_ctes` (hence after
-the reachability detection inside it).  Hoisting a guarded
-`normalize_distinct_into_group_by` to before `inline_ctes` (idempotent
-with the historical late site) makes both the any-reach and the
-k-terminal detectors see the `GROUP BY` form with zero
-DISTINCT-specific arms.  Folded into `btw_anyreach` (the DISTINCT twin
-gives a byte-identical result).
+*DISTINCT-shaped aggregations and member-relation filters: implemented*
+(detection-only, no new compiler work).  `SELECT DISTINCT region` is
+provenance-identical to `GROUP BY region`; the existing
+`transform_distinct_into_group_by` already normalises it, but it ran
+*after* `inline_ctes` (hence after the reachability detection inside
+it).  Hoisting a guarded `normalize_distinct_into_group_by` to before
+`inline_ctes` (idempotent with the historical late site) makes both
+the any-reach and the k-terminal detectors see the `GROUP BY` form
+with zero DISTINCT-specific arms.  A deterministic, provenance-free
+filter on the member relation's own columns (`WHERE t.kind =
+'hospital'`) is the data-side twin of the already-supported
+edge-column filters: `detect_reach_aggregations` now partitions the
+collected quals into the one join equality and member-local residue
+(an expression walker rejects CTE/outer Vars, sublinks, params;
+`contain_volatile_functions` rejects the rest), deparses the residue
+table-qualified (`deparse_context_for("t", relid)`, forceprefix) and
+threads it through `plant_reach_any_groups` as a `WHERE` on the
+member-gathering CTAS.  A CTE-correlated filter still forces fallback.
+Tests fold into `btw_anyreach` (DISTINCT twin = byte-identical result;
+hospital filter shrinks region A to one member).
 
-*Open*: extra member-relation quals in the detection.
+*Open*: none in this thread (DISTINCT and member filters close it; the
+k-terminal detector could gain the same member-filter treatment if a
+workload wants conjunctions with side filters, but none does yet).
 
 *Other reuse candidates for the canonical-address machinery*: the
 times-canonical namespace now exists (serving the k-terminal

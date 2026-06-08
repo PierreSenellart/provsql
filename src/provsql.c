@@ -1394,6 +1394,45 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
 }
 
 #if PG_VERSION_NUM >= 150000
+/** @brief Context for @c reach_member_local_walker. */
+typedef struct {
+  Index t_rti;   /**< The member relation's RT index. */
+  bool ok;       /**< Cleared on any non-member-local node. */
+} ReachMemberQualCtx;
+
+/**
+ * @brief Expression walker: clear @c ok on any node that makes a qual
+ *        not a deterministic filter over the member relation alone --
+ *        a Var of another RTE (or an outer reference), a sublink, or a
+ *        placeholder parameter.
+ */
+static bool reach_member_local_walker(Node *node, ReachMemberQualCtx *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *) node;
+    if (v->varlevelsup != 0 || v->varno != ctx->t_rti)
+      ctx->ok = false;
+    return false;
+  }
+  if (IsA(node, SubLink) || IsA(node, Param)) {
+    ctx->ok = false;
+    return false;
+  }
+  return expression_tree_walker(node, reach_member_local_walker, ctx);
+}
+
+/**
+ * @brief Whether @p qual is a deterministic filter over the member
+ *        relation @p t_rti alone (no CTE / join / outer references, no
+ *        sublinks or parameters).  Volatility is checked separately.
+ */
+static bool reach_member_local_qual(Node *qual, Index t_rti) {
+  ReachMemberQualCtx ctx = { t_rti, true };
+  reach_member_local_walker(qual, &ctx);
+  return ctx.ok;
+}
+
 /** @brief One detected grouped-reachability aggregation (see below). */
 typedef struct ReachAggCandidate {
   const char *ctename;        /**< The recursive CTE being aggregated. */
@@ -1401,6 +1440,7 @@ typedef struct ReachAggCandidate {
   Oid member_relid;           /**< The joined member relation T. */
   const char *member_attname; /**< T's join column. */
   const char *group_attname;  /**< T's grouping column. */
+  const char *member_quals;   /**< Deparsed member-relation-local filter (against T's columns), or NULL. */
 } ReachAggCandidate;
 
 /**
@@ -1434,9 +1474,10 @@ static List *detect_reach_aggregations(Query *q) {
   TargetEntry *gtle = NULL;
   Var *gvar;
   List *quals = NIL;
+  List *member_quals = NIL;
   bool ok = true;
   OpExpr *eq;
-  Var *va, *vb, *cte_var, *t_var;
+  Var *cte_var, *t_var;
   CommonTableExpr *cte = NULL;
   ReachAggCandidate *cand;
 
@@ -1522,28 +1563,48 @@ static List *detect_reach_aggregations(Query *q) {
       gvar->varlevelsup != 0 || gvar->varattno <= 0)
     return NIL;
 
-  /* Exactly one qual: the join equality CTE column = T column. */
+  /* The quals: exactly one join equality (CTE column = T column), the
+   * rest member-relation-local deterministic filters (which restrict
+   * the members of each group, like the edge-column filters restrict
+   * the edges -- they carry no provenance).  Anything else (a qual
+   * touching the CTE side, a sublink, a volatile function) forces
+   * fallback. */
+  cte_var = t_var = NULL;
   reach_collect_quals((Node *) q->jointree, &quals, &ok);
-  if (!ok || list_length(quals) != 1)
+  if (!ok || quals == NIL)
     return NIL;
-  if (!IsA(linitial(quals), OpExpr))
-    return NIL;
-  eq = (OpExpr *) linitial(quals);
-  if (list_length(eq->args) != 2 ||
-      !op_mergejoinable(eq->opno, exprType((Node *) linitial(eq->args))))
-    return NIL;
-  va = (Var *) reach_strip((Node *) linitial(eq->args));
-  vb = (Var *) reach_strip((Node *) lsecond(eq->args));
-  if (va == NULL || vb == NULL || !IsA(va, Var) || !IsA(vb, Var) ||
-      va->varlevelsup != 0 || vb->varlevelsup != 0)
-    return NIL;
-  if (va->varno == cte_rti && vb->varno == t_rti) {
-    cte_var = va;
-    t_var = vb;
-  } else if (vb->varno == cte_rti && va->varno == t_rti) {
-    cte_var = vb;
-    t_var = va;
-  } else
+  foreach(lc, quals) {
+    Node *qual = (Node *) lfirst(lc);
+    /* Is this the join equality?  An OpExpr with one CTE Var and one
+     * T Var. */
+    if (cte_var == NULL && IsA(qual, OpExpr)) {
+      eq = (OpExpr *) qual;
+      if (list_length(eq->args) == 2 &&
+          op_mergejoinable(eq->opno, exprType((Node *) linitial(eq->args)))) {
+        Var *ja = (Var *) reach_strip((Node *) linitial(eq->args));
+        Var *jb = (Var *) reach_strip((Node *) lsecond(eq->args));
+        if (ja != NULL && jb != NULL && IsA(ja, Var) && IsA(jb, Var) &&
+            ja->varlevelsup == 0 && jb->varlevelsup == 0) {
+          if (ja->varno == cte_rti && jb->varno == t_rti) {
+            cte_var = ja;
+            t_var = jb;
+            continue;
+          } else if (jb->varno == cte_rti && ja->varno == t_rti) {
+            cte_var = jb;
+            t_var = ja;
+            continue;
+          }
+        }
+      }
+    }
+    /* Otherwise it must be a member-relation-local deterministic
+     * filter. */
+    if (!reach_member_local_qual(qual, t_rti) ||
+        contain_volatile_functions(qual))
+      return NIL;
+    member_quals = lappend(member_quals, qual);
+  }
+  if (cte_var == NULL)
     return NIL;
   if (cte_var->varattno != 1 || t_var->varattno <= 0)
     return NIL;
@@ -1554,6 +1615,20 @@ static List *detect_reach_aggregations(Query *q) {
   cand->member_relid = t_rte->relid;
   cand->member_attname = get_attname(t_rte->relid, t_var->varattno, false);
   cand->group_attname = get_attname(t_rte->relid, gvar->varattno, false);
+  cand->member_quals = NULL;
+  if (member_quals != NIL) {
+    /* Deparse with the member relation aliased "t" and column
+     * references forced table-qualified: the planting applies the
+     * filter as a WHERE on its member-gathering query, which joins the
+     * working table with the member relation aliased "t" -- so
+     * "t.<col>" resolves unambiguously there. */
+    Node *conj = (Node *) make_ands_explicit(member_quals);
+    List *dpcontext;
+    conj = copyObject(conj);
+    ChangeVarNodes(conj, t_rti, 1, 0);
+    dpcontext = deparse_context_for("t", t_rte->relid);
+    cand->member_quals = deparse_expression(conj, dpcontext, true, false);
+  }
   out = lappend(out, cand);
   return out;
 }
@@ -1609,9 +1684,11 @@ static void plant_reach_aggregations(List *candidates, List *lowered) {
                        quote_literal_cstr(entry->source_attname));
     else
       appendStringInfoString(&call, "NULL, NULL, ");
-    appendStringInfo(&call, "%s)",
+    appendStringInfo(&call, "%s, %s)",
                      entry->edge_sql
-                       ? quote_literal_cstr(entry->edge_sql) : "NULL");
+                       ? quote_literal_cstr(entry->edge_sql) : "NULL",
+                     cand->member_quals
+                       ? quote_literal_cstr(cand->member_quals) : "NULL");
 
     if ((rc = SPI_connect()) != SPI_OK_CONNECT)
       provsql_error("Reachability aggregation planting: SPI_connect failed (%d)", rc);
