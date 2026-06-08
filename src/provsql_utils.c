@@ -500,6 +500,26 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_COND  = get_provsql_func_oid("cond");
   constants.OID_FUNCTION_GIVEN = get_provsql_func_oid("given");
 
+  /* random_variable_cond(random_variable,uuid) and its Boolean-predicate
+   * placeholder random_variable_cond_predicate(random_variable,boolean): the
+   * planner rewrites "X | (predicate)" into the former over the gate built
+   * from the latter's Boolean operand.  Optional (older schemas). */
+  constants.OID_FUNCTION_RV_COND =
+    get_provsql_func_oid("random_variable_cond");
+  constants.OID_FUNCTION_AGG_COND =
+    get_provsql_func_oid("agg_token_cond");
+  /* The "X | (predicate)" placeholders, one per carrier (and the prefix
+   * whole-tuple form).  The planner rewrites each into the matching
+   * conditioning constructor over the gate built from the Boolean operand. */
+  constants.OID_FUNCTION_COND_PREDICATE =
+    get_provsql_func_oid("cond_predicate");
+  constants.OID_FUNCTION_RV_COND_PREDICATE =
+    get_provsql_func_oid("random_variable_cond_predicate");
+  constants.OID_FUNCTION_AGG_COND_PREDICATE =
+    get_provsql_func_oid("agg_token_cond_predicate");
+  constants.OID_FUNCTION_GIVEN_PREDICATE =
+    get_provsql_func_oid("given_predicate");
+
   /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
    * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,
    * LT=3, GE=4, GT=5). */

@@ -308,6 +308,26 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
 CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=UUID, PROCEDURE=cond);
 
 /**
+ * @brief Placeholder for @c "X | (predicate)" on a uuid event.
+ *
+ * Lets the conditioning event be written as a natural Boolean combination of
+ * random_variable / aggregate comparisons (e.g. @c "event | (sensor > 3)")
+ * instead of a hand-built gate.  Never executes: the ProvSQL planner hook
+ * converts the Boolean operand into a condition gate and emits @c cond.
+ */
+CREATE OR REPLACE FUNCTION cond_predicate(target UUID, predicate boolean)
+  RETURNS UUID AS
+$$
+BEGIN
+  RAISE EXCEPTION 'uuid | (predicate) must be rewritten by the ProvSQL '
+    'planner hook: the right operand must be a Boolean combination of '
+    'random_variable / aggregate comparisons (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=boolean, PROCEDURE=cond_predicate);
+
+/**
  * @brief Whole-tuple output conditioning directive: @c "given(evidence)".
  *
  * Written as a term in the select list, @c given(c) conditions the OUTPUT
@@ -343,6 +363,26 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
  * removed in PG14), so @c "| c" is safe across the CI matrix.
  */
 CREATE OPERATOR | (RIGHTARG=UUID, PROCEDURE=given);
+
+/**
+ * @brief Placeholder for the prefix @c "| (predicate)" whole-tuple form.
+ *
+ * Lets the whole-tuple conditioning event be a natural Boolean predicate
+ * (e.g. @c "SELECT a, | (sensor > 3) FROM readings") instead of a hand-built
+ * gate.  Never executes: the planner converts the Boolean operand into a
+ * condition gate and emits @c given, which the rewriter then strips and folds
+ * into each output row's provenance.
+ */
+CREATE OR REPLACE FUNCTION given_predicate(predicate boolean) RETURNS UUID AS
+$$
+BEGIN
+  RAISE EXCEPTION 'prefix | (predicate) must be rewritten by the ProvSQL '
+    'planner hook: the operand must be a Boolean combination of '
+    'random_variable / aggregate comparisons (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR | (RIGHTARG=boolean, PROCEDURE=given_predicate);
 
 /**
  * @brief Build a per-input order-key string for the inversion-free path.
@@ -2348,6 +2388,30 @@ CREATE OPERATOR | (
 );
 
 /**
+ * @brief Placeholder for @c "SUM(x) | (predicate)" on an agg_token.
+ *
+ * Lets the conditioning event be a natural Boolean predicate (e.g.
+ * @c "SUM(x) | (SUM(x) > 5)") instead of a hand-built gate.  Never executes:
+ * the planner converts the Boolean operand into a condition gate and emits
+ * @c agg_token_cond.
+ */
+CREATE OR REPLACE FUNCTION agg_token_cond_predicate(
+  a agg_token, predicate boolean) RETURNS agg_token AS
+$$
+BEGIN
+  RAISE EXCEPTION 'agg_token | (predicate) must be rewritten by the ProvSQL '
+    'planner hook: the right operand must be a Boolean combination of '
+    'aggregate / random_variable comparisons (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR | (
+  LEFTARG   = agg_token,
+  RIGHTARG  = boolean,
+  PROCEDURE = agg_token_cond_predicate
+);
+
+/**
  * @brief Unpack the target of a conditioned @c agg_token.
  *
  * For a @c "SUM(x) | C" whose provenance token is the two-child
@@ -3547,6 +3611,33 @@ CREATE OPERATOR | (
   LEFTARG   = random_variable,
   RIGHTARG  = uuid,
   PROCEDURE = random_variable_cond
+);
+
+/**
+ * @brief Placeholder for @c "X | (predicate)" -- conditioning a random
+ *        variable on a Boolean comparison written naturally.
+ *
+ * Lets one write @c "X | (X > 3)" instead of
+ * @c "X | rv_cmp_gt(X, as_random(3))".  Never executes: the ProvSQL planner
+ * hook rewrites the Boolean operand (a combination of random_variable
+ * comparisons) into the corresponding condition gate and emits
+ * @c random_variable_cond.  Reaching it at runtime means the rewriter was
+ * inactive or the predicate was not a random_variable comparison.
+ */
+CREATE OR REPLACE FUNCTION random_variable_cond_predicate(
+  rv random_variable, predicate boolean) RETURNS random_variable AS
+$$
+BEGIN
+  RAISE EXCEPTION 'random_variable | (predicate) must be rewritten by the '
+    'ProvSQL planner hook: the right operand must be a Boolean combination '
+    'of random_variable comparisons (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR | (
+  LEFTARG   = random_variable,
+  RIGHTARG  = boolean,
+  PROCEDURE = random_variable_cond_predicate
 );
 
 /**

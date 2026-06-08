@@ -1,0 +1,22 @@
+\set ECHO none
+rv_predicate_matches|rv_compound_mean
+t|5.000000
+(1 row)
+add_provenance
+
+(1 row)
+agg_predicate|agg_uncond
+30.0000|15.0000
+(1 row)
+add_provenance
+
+(1 row)
+id|gate|p_cond
+1|conditioned|0.8000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

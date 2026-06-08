@@ -215,6 +215,25 @@ typedef struct constants_t {
    *  row's provenance on the marker's argument.  @c InvalidOid on a schema
    *  predating the feature. */
   Oid OID_FUNCTION_GIVEN;
+  /** @brief OID of @c provsql.random_variable_cond(random_variable,uuid).
+   *  The real conditioning constructor the planner emits when rewriting the
+   *  @c "X | (predicate)" placeholder. @c InvalidOid disables the rewrite. */
+  Oid OID_FUNCTION_RV_COND;
+  /** @brief OID of @c provsql.agg_token_cond(agg_token,uuid): the conditioning
+   *  constructor for the @c agg_token carrier the planner emits when rewriting
+   *  the @c "SUM(x) | (predicate)" placeholder. */
+  Oid OID_FUNCTION_AGG_COND;
+  /** @name @c "X | (predicate)" placeholder OIDs (carrier-parametric).
+   *  Each is a no-op placeholder operator whose right operand is a Boolean
+   *  combination of random_variable / agg_token comparisons; the planner
+   *  converts that predicate into a condition gate and emits the matching
+   *  conditioning constructor.  @c InvalidOid disables the rewrite. */
+  /**@{*/
+  Oid OID_FUNCTION_COND_PREDICATE;      ///< cond_predicate(uuid,boolean)
+  Oid OID_FUNCTION_RV_COND_PREDICATE;   ///< random_variable_cond_predicate(random_variable,boolean)
+  Oid OID_FUNCTION_AGG_COND_PREDICATE;  ///< agg_token_cond_predicate(agg_token,boolean)
+  Oid OID_FUNCTION_GIVEN_PREDICATE;     ///< given_predicate(boolean) -- prefix whole-tuple
+  /**@}*/
   bool ok; ///< true if constants were loaded
 } constants_t;
 

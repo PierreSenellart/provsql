@@ -3519,6 +3519,168 @@ rv_Expr_to_provenance(Expr *expr, const constants_t *constants, bool negated)
 }
 
 /**
+ * @brief Convert a Boolean predicate into a provenance condition gate.
+ *
+ * Carrier-independent counterpart of @c rv_Expr_to_provenance, used by the
+ * @c "X | (predicate)" rewrite: the predicate is a Boolean combination
+ * (AND / OR / NOT) of probabilistic comparisons -- a random_variable
+ * comparison (@c "X > 3", lowered by @c rv_OpExpr_to_provenance_cmp) or an
+ * agg_token comparison (@c "SUM(x) > 5", lowered by
+ * @c having_OpExpr_to_provenance_cmp).  Returns the @c uuid gate that
+ * represents the event "the predicate holds".  AND maps to
+ * @c provenance_times, OR to @c provenance_plus, NOT flips @c negated (De
+ * Morgan), mirroring @c rv_BoolExpr_to_provenance.
+ */
+static FuncExpr *predicate_to_condition_gate(Expr *expr,
+                                             const constants_t *constants,
+                                             bool negated) {
+  if (IsA(expr, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)expr;
+    ArrayExpr *array;
+    FuncExpr *result;
+    List *l = NIL;
+    ListCell *lc;
+
+    if (be->boolop == NOT_EXPR)
+      return predicate_to_condition_gate((Expr *)linitial(be->args),
+                                         constants, !negated);
+
+    array = makeNode(ArrayExpr);
+    array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+    array->element_typeid = constants->OID_TYPE_UUID;
+    array->location = -1;
+
+    result = makeNode(FuncExpr);
+    result->funcresulttype = constants->OID_TYPE_UUID;
+    result->funcvariadic = true;
+    result->location = be->location;
+    result->args = list_make1(array);
+    if ((be->boolop == AND_EXPR && !negated) ||
+        (be->boolop == OR_EXPR && negated))
+      result->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+    else
+      result->funcid = constants->OID_FUNCTION_PROVENANCE_PLUS;
+
+    foreach (lc, be->args)
+      l = lappend(l, predicate_to_condition_gate((Expr *)lfirst(lc),
+                                                 constants, negated));
+    array->elements = l;
+    return result;
+  }
+
+  if (IsA(expr, OpExpr)) {
+    OpExpr *op = (OpExpr *)expr;
+    if (rv_cmp_index(constants, op->opfuncid) >= 0)
+      return rv_OpExpr_to_provenance_cmp(op, constants, negated);
+    if (expr_contains_agg((Node *)op, constants))
+      return having_OpExpr_to_provenance_cmp(op, constants, negated);
+  }
+
+  provsql_error("The right operand of the conditioning operator | must be a "
+                "Boolean combination of random_variable or aggregate "
+                "comparisons (e.g. \"X | (X > 3)\")");
+  return NULL; /* unreachable */
+}
+
+/**
+ * @brief Carrier-routing for an @c "X | (predicate)" placeholder OpExpr.
+ *
+ * Maps the placeholder's @c opfuncid to the conditioning constructor to emit
+ * and its result type; the prefix whole-tuple form (@c given_predicate) maps
+ * to @c given, whose single argument is the gate (no left operand).  Returns
+ * @c false if @p opfuncid is not a conditioning placeholder.
+ */
+static bool cond_predicate_target(const constants_t *constants, Oid opfuncid,
+                                  Oid *cond_fn, Oid *result_type,
+                                  bool *is_prefix) {
+  *is_prefix = false;
+  if (opfuncid == constants->OID_FUNCTION_COND_PREDICATE) {
+    *cond_fn = constants->OID_FUNCTION_COND;
+    *result_type = constants->OID_TYPE_UUID;
+  } else if (opfuncid == constants->OID_FUNCTION_RV_COND_PREDICATE) {
+    *cond_fn = constants->OID_FUNCTION_RV_COND;
+    *result_type = constants->OID_TYPE_RANDOM_VARIABLE;
+  } else if (opfuncid == constants->OID_FUNCTION_AGG_COND_PREDICATE) {
+    *cond_fn = constants->OID_FUNCTION_AGG_COND;
+    *result_type = constants->OID_TYPE_AGG_TOKEN;
+  } else if (opfuncid == constants->OID_FUNCTION_GIVEN_PREDICATE) {
+    *cond_fn = constants->OID_FUNCTION_GIVEN;
+    *result_type = constants->OID_TYPE_UUID;
+    *is_prefix = true;
+  } else
+    return false;
+  return OidIsValid(*cond_fn);
+}
+
+/**
+ * @brief Mutator: rewrite @c "X | (predicate)" into the carrier's @c cond.
+ *
+ * The @c "|" on @c "(carrier, boolean)" -- and the prefix @c "| (boolean)" --
+ * parses to an @c OpExpr over a conditioning placeholder, whose Boolean
+ * operand is a combination of probabilistic comparisons.  This mutator builds
+ * the condition gate from that operand (@c predicate_to_condition_gate) and
+ * replaces the node with @c "cond(X, gate)" for the carrier (or @c given(gate)
+ * for the prefix whole-tuple form), so the natural @c "X | (X > 3)" /
+ * @c "SUM(x) | (SUM(x) > 5)" / prefix @c "| (sensor > k)" syntax resolves to
+ * the existing conditioning surface.  The left operand is recursively mutated
+ * so nested forms (@c "(X | p1) | p2") compose.
+ */
+static Node *rewrite_cond_predicate_mutator(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, OpExpr)) {
+    OpExpr *op = (OpExpr *)node;
+    Oid cond_fn, result_type;
+    bool is_prefix;
+    if (cond_predicate_target(constants, op->opfuncid, &cond_fn, &result_type,
+                              &is_prefix)) {
+      FuncExpr *gate, *cond;
+      Expr *pred = (Expr *)llast(op->args); /* the Boolean predicate operand */
+      gate = predicate_to_condition_gate(pred, constants, false);
+      cond = makeNode(FuncExpr);
+      cond->funcid = cond_fn;
+      cond->funcresulttype = result_type;
+      cond->funcretset = false;
+      cond->funcvariadic = false;
+      cond->funcformat = COERCE_EXPLICIT_CALL;
+      cond->funccollid = InvalidOid;
+      cond->inputcollid = InvalidOid;
+      if (is_prefix)
+        cond->args = list_make1(gate); /* given(gate): no left operand */
+      else {
+        Expr *target = (Expr *)expression_tree_mutator(
+          (Node *)linitial(op->args), rewrite_cond_predicate_mutator, data);
+        cond->args = list_make2(target, gate);
+      }
+      cond->location = op->location;
+      return (Node *) cond;
+    }
+  }
+  return expression_tree_mutator(node, rewrite_cond_predicate_mutator, data);
+}
+
+/**
+ * @brief Rewrite every @c "X | (predicate)" in @p q's own clauses.
+ *
+ * Runs early in @c process_query (before the FROM-less early return, the
+ * given()-marker strip and the probabilistic-qual migration), over the target
+ * list, WHERE and HAVING.  No-op on a schema predating the placeholders.
+ */
+static void rewrite_cond_predicates(const constants_t *constants, Query *q) {
+  if (!OidIsValid(constants->OID_FUNCTION_RV_COND_PREDICATE))
+    return;
+  q->targetList = (List *)expression_tree_mutator(
+    (Node *)q->targetList, rewrite_cond_predicate_mutator, (void *)constants);
+  if (q->jointree && q->jointree->quals)
+    q->jointree->quals = expression_tree_mutator(
+      q->jointree->quals, rewrite_cond_predicate_mutator, (void *)constants);
+  if (q->havingQual)
+    q->havingQual = expression_tree_mutator(
+      q->havingQual, rewrite_cond_predicate_mutator, (void *)constants);
+}
+
+/**
  * @brief Test whether an Expr (sub-)tree contains any RV comparison.
  *
  * Used by the WHERE-clause extractor to decide whether a top-level
@@ -11385,6 +11547,17 @@ static Query *process_query(const constants_t *constants, Query *q,
    * otherwise couple it into the outer lineage. */
   if (provsql_active)
     process_inert_fetches(constants, q);
+
+  /* Natural Boolean-predicate conditioning: rewrite "X | (predicate)" into
+   * the carrier's conditioning constructor over the converted condition gate
+   * (cond / random_variable_cond / agg_token_cond, and given(...) for the
+   * prefix whole-tuple form).  Runs before the FROM-less early return (an
+   * rv-conditioning query commonly has no FROM), before the given()-marker
+   * strip (which then sees the emitted given() call), and before
+   * migrate_probabilistic_quals (so a comparison inside the predicate is
+   * consumed here, not lifted as a WHERE qual). */
+  if (provsql_active)
+    rewrite_cond_predicates(constants, q);
 
   if (q->rtable == NULL) {
     /* FROM-less SELECT: the rest of the rewriter indexes into
