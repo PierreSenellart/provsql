@@ -1616,7 +1616,11 @@ static void run_stopping_rule(GenericCircuit &gc, gate_t gc_root,
  * @param token   UUID of the root provenance gate.
  * @param method  Evaluation method name (e.g. "independent", "monte-carlo").
  * @param args    Additional arguments for the chosen method.
- * @return        Float8 Datum containing the computed probability.
+ * @param isnull  Out-param set to @c true when the result is SQL NULL (a
+ *                conditioned token whose evidence has probability zero); may
+ *                be @c NULL when the caller does not need null-propagation.
+ * @return        Float8 Datum containing the computed probability (undefined
+ *                when @p isnull is set to @c true).
  */
 static Datum probability_evaluate_internal
   (pg_uuid_t token, const string &method, const string &args, bool *isnull)
