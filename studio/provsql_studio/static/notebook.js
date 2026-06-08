@@ -396,11 +396,27 @@
     });
   }
 
+  function loadStyle(href) {
+    return new Promise((resolve, reject) => {
+      const l = document.createElement('link');
+      l.rel = 'stylesheet';
+      l.href = href;
+      l.onload = resolve;
+      l.onerror = () => reject(new Error('failed to load ' + href));
+      document.head.appendChild(l);
+    });
+  }
+
   function ensureMdLibs() {
     if (!mdLibs) {
       mdLibs = Promise.all([
         loadScript('/static/vendor/marked.min.js'),
         loadScript('/static/vendor/purify.min.js'),
+        // KaTeX for $…$ / $$…$$ math in Markdown cells; auto-render needs
+        // the katex global, so it is chained after katex.min.js.
+        loadStyle('/static/vendor/katex.min.css'),
+        loadScript('/static/vendor/katex.min.js')
+          .then(() => loadScript('/static/vendor/auto-render.min.js')),
       ]);
     }
     return mdLibs;
@@ -420,6 +436,19 @@
             'pre code.language-sql, pre code.language-postgresql')) {
           code.innerHTML = hl(code.textContent);
         }
+      }
+      // Render LaTeX math (the rst :math: roles become $…$ / $$…$$). Runs
+      // on the live DOM after sanitize, so KaTeX's spans are not stripped;
+      // its default ignoredTags skip <pre>/<code>, so SQL fences (and any
+      // ``DO $$ … $$`` dollar-quoting in them) are left untouched.
+      if (window.renderMathInElement) {
+        window.renderMathInElement(el, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$',  right: '$',  display: false },
+          ],
+          throwOnError: false,
+        });
       }
     } catch (e) {
       // Renderer unavailable (vendored file missing): degrade to
