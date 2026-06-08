@@ -144,6 +144,10 @@ INTERNAL_FUNCTIONS = {
     'union_tstzintervals_monus',
     # Temporal internals
     'update_provenance',
+    # Columns of the documented update_provenance history table, surfaced by
+    # the plpgsql filter as members of the `provsql` namespace.  Not callable
+    # functions; users read the table (or the time_validity_view), not these.
+    'provsql', 'query', 'query_type', 'ts', 'username', 'valid_time',
     # GUC variables (not functions)
     'aggtoken_text_as_uuid', 'tool_search_path', 'boolean_provenance',
     # random_variable type internals (I/O, internal builder,
@@ -231,7 +235,12 @@ INTERNAL_FUNCTIONS = {
 if DOXYGEN_SQL_HTML.exists():
     doxygen_funcs = set()
     for html_file in DOXYGEN_SQL_HTML.glob("group__*.html"):
-        for match in re.finditer(r'provsql\.([a-z0-9_]+)', html_file.read_text()):
+        # Match both the C-mode dot separator (provsql.name, emitted when
+        # OPTIMIZE_OUTPUT_FOR_C takes effect) and the C++ scope separator
+        # (provsql::name): some Doxygen builds render the filter-emitted
+        # `namespace provsql` members with `::` rather than `.`, which would
+        # otherwise let undocumented symbols slip through on those builds.
+        for match in re.finditer(r'provsql(?:\.|::)([a-z0-9_]+)', html_file.read_text()):
             fname = match.group(1)
             if fname not in INTERNAL_FUNCTIONS:
                 doxygen_funcs.add(fname)
