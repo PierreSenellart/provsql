@@ -262,6 +262,47 @@ disjunction circuit accounted for the shared obesity on its own. You never
 had to write the inclusion--exclusion correction :math:`\Pr(A) + \Pr(B) -
 \Pr(A \wedge B)`.
 
+The same shared gate also lets us turn the question around and *condition* on
+it. Problem 1 conditioned one event on another with the **binary** ``A | B``;
+the **unary** ``| B`` (the prefix form of :sqlfunc:`given`) conditions a
+*whole query's rows at once* -- a directive in the ``SELECT`` list that is
+stripped from the output, leaving each row's provenance conditioned on ``B``.
+Condition every factor on obesity being present:
+
+.. code-block:: postgresql
+
+    SELECT factor,
+           round(probability_evaluate(provenance())::numeric, 4) AS p_given_obesity
+    FROM (
+      SELECT factor, | (SELECT provenance() FROM risk WHERE factor = 'obesity')
+      FROM risk
+    ) s
+    ORDER BY factor;
+
+``obesity`` comes back at **1.0** -- an event given itself is certain -- while
+``insulin_resistance`` (0.6) and ``high_salt`` (0.7) are **unchanged** from
+their priors: they share no gate with obesity, so conditioning on it tells us
+nothing about them. The same content-addressed circuit that made the
+disjunction correct makes the conditional correct.
+
+See what conditioning built. Select one conditioned tuple on its own and
+**click its** ``provsql`` **token**:
+
+.. code-block:: postgresql
+
+    SELECT factor, | (SELECT provenance() FROM risk WHERE factor = 'obesity')
+    FROM risk WHERE factor = 'insulin_resistance';
+
+You stay in Notebook mode; Studio adds a circuit cell below showing a ``∣``
+(*conditioned*) gate with three labelled children -- the **target** event
+(``insulin_resistance``), the **evidence** (``obesity``), and their **joint**
+``target ⊗ evidence``. Its probability is read straight off that gate as
+:math:`\Pr(\text{target} \wedge \text{evidence}) / \Pr(\text{evidence})` --
+Bayes' rule over the shared circuit, the same ratio Problem 1 used. The ``|``
+operator, in both its binary and unary forms (with the function spellings
+:sqlfunc:`cond` and :sqlfunc:`given`), is documented in
+:doc:`the conditioning chapter <conditioning>`.
+
 Problem 3: The Right Method, Chosen for You
 -------------------------------------------
 

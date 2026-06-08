@@ -369,7 +369,11 @@ on the group existing (i.e., its provenance being true):
     GROUP BY dept;
 
 Without the second argument, the expectation is unconditional.  With
-it, the result is normalized by the probability of the condition.
+it, the result is normalized by the probability of the condition. This
+:sqlfunc:`expected` ``(aggregate, condition)`` form is the aggregate-specific
+spelling of the conditioning operator ``|``; see :doc:`conditioning` for the
+uniform ``A | B`` ("``A`` given ``B``") operator across discrete events,
+random variables, and aggregates.
 
 HAVING with Probabilities
 --------------------------

@@ -9,7 +9,10 @@ arithmetic and comparison work natively; the planner rewrites
 ``WHERE``, ``JOIN`` and ``UNION`` on random-variable columns
 transparently; and ``expected``, ``variance``, ``moment``,
 ``support``, ``rv_sample`` and ``rv_histogram`` query the resulting
-distributions, conditioning on filter predicates when asked.
+distributions, conditioning on filter predicates when asked. Conditioning a
+random variable -- ``x | (x > k)``, which truncates and renormalises its
+distribution -- uses the same ``|`` operator that conditions discrete events
+and aggregates; see :doc:`conditioning`.
 
 .. note::
 

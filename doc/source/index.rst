@@ -56,6 +56,7 @@ This documentation is organized into four parts:
    user/probabilities
    user/knowledge-compilation
    user/continuous-distributions
+   user/conditioning
    user/shapley
    user/where-provenance
    user/data-modification
