@@ -2744,6 +2744,12 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants);
  * "push arithmetic to data values" half of the agg_token arithmetic story.
  * -------------------------------------------------------------------- */
 
+/* Forward declaration: the regular-leaf handling in the HAVING / RV
+ * converters needs to recognise an rv-free sub-expression, but
+ * expr_contains_rv_cmp is defined further down with the rest of the RV
+ * helpers. */
+static bool expr_contains_rv_cmp(Node *node, const constants_t *constants);
+
 /** @brief Context for @c contains_agg_walker. */
 typedef struct contains_agg_ctx {
   const constants_t *constants;
@@ -3258,6 +3264,36 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
 }
 
 /**
+ * @brief Build the deterministic indicator gate for an ordinary (regular)
+ *        comparison: @c regular_indicator(cond) (@c gate_one when @p cond
+ *        holds, @c gate_zero otherwise).
+ *
+ * Used for the regular leaves of a MIXED predicate (one that also carries a
+ * probabilistic comparison), in both the conditioning rewrite and the
+ * WHERE / HAVING Boolean analysis -- the @c χ case of the HAVING-provenance
+ * semantics.  Under negation, @c χ(¬ψ) = 𝟙 ⊖ χ(ψ): wrap @p expr in @c NOT.
+ */
+static FuncExpr *make_regular_indicator(const constants_t *constants,
+                                        Expr *expr, bool negated) {
+  FuncExpr *ind = makeNode(FuncExpr);
+  if (!OidIsValid(constants->OID_FUNCTION_REGULAR_INDICATOR))
+    provsql_error("a regular comparison in a probabilistic predicate requires "
+                  "provsql.regular_indicator (schema too old)");
+  ind->funcid = constants->OID_FUNCTION_REGULAR_INDICATOR;
+  ind->funcresulttype = constants->OID_TYPE_UUID;
+  ind->funcretset = false;
+  ind->funcvariadic = false;
+  ind->funcformat = COERCE_EXPLICIT_CALL;
+  ind->funccollid = InvalidOid;
+  ind->inputcollid = InvalidOid;
+  ind->args = list_make1(negated
+                ? (Expr *) makeBoolExpr(NOT_EXPR, list_make1(expr), -1)
+                : expr);
+  ind->location = -1;
+  return ind;
+}
+
+/**
  * @brief Convert a Boolean combination of HAVING comparisons into a
  *        @c provenance_times / @c provenance_plus gate expression.
  *
@@ -3322,6 +3358,12 @@ static FuncExpr *having_BoolExpr_to_provenance(BoolExpr *be, const constants_t *
  */
 static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *constants, bool negated)
 {
+  /* A sub-expression with no aggregate is an ordinary (regular) condition --
+   * a grouping-column comparison mixed into the HAVING predicate.  Its
+   * predicate-provenance is the deterministic indicator (the χ case), so a
+   * mixed HAVING such as "SUM(x) > 5 OR region = 'north'" is supported. */
+  if (!expr_contains_agg((Node *)expr, constants))
+    return make_regular_indicator(constants, expr, negated);
   if (IsA(expr, BoolExpr))
     return having_BoolExpr_to_provenance((BoolExpr *)expr, constants, negated);
   else if (IsA(expr, OpExpr))
@@ -3506,6 +3548,12 @@ rv_BoolExpr_to_provenance(BoolExpr *be, const constants_t *constants,
 static FuncExpr *
 rv_Expr_to_provenance(Expr *expr, const constants_t *constants, bool negated)
 {
+  /* A sub-expression with no RV comparison is an ordinary (regular)
+   * per-tuple condition mixed into the predicate.  Its predicate-provenance
+   * is the deterministic indicator (the χ case), so a mixed WHERE such as
+   * "X > 3 OR region = 'north'" is supported. */
+  if (!expr_contains_rv_cmp((Node *)expr, constants))
+    return make_regular_indicator(constants, expr, negated);
   if (IsA(expr, BoolExpr))
     return rv_BoolExpr_to_provenance((BoolExpr *)expr, constants, negated);
   if (IsA(expr, OpExpr)) {
@@ -3514,7 +3562,8 @@ rv_Expr_to_provenance(Expr *expr, const constants_t *constants, bool negated)
       return rv_OpExpr_to_provenance_cmp(opExpr, constants, negated);
   }
   provsql_error("Unsupported sub-expression in random_variable WHERE clause "
-                "(only Boolean combinations of RV comparisons are accepted)");
+                "(only Boolean combinations of RV comparisons, optionally "
+                "mixed with ordinary comparisons, are accepted)");
   return NULL; /* unreachable, silences -Wreturn-type */
 }
 
@@ -3788,6 +3837,11 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
 {
   if (expr == NULL)
     return false;
+  /* An rv-free sub-expression is an ordinary comparison: supported as a
+   * deterministic indicator (the χ case), so a mix of RV and ordinary
+   * comparisons is accepted. */
+  if (!expr_contains_rv_cmp((Node *)expr, constants))
+    return true;
   if (IsA(expr, OpExpr))
     return rv_cmp_index(constants, ((OpExpr *)expr)->opfuncid) >= 0;
   if (IsA(expr, BoolExpr)) {
@@ -9781,6 +9835,12 @@ static bool check_boolexpr_on_aggregate(BoolExpr *be, const constants_t *constan
 
   foreach (lc, be->args) {
     Node *n=lfirst(lc);
+    /* An agg-free child is an ordinary (regular) condition mixed into the
+     * HAVING predicate -- supported as a deterministic indicator (the χ
+     * case).  Only children that actually involve an aggregate must match a
+     * supported aggregate-comparison shape. */
+    if(!expr_contains_agg(n, constants))
+      continue;
     if(IsA(n, OpExpr)) {
       if(!check_selection_on_aggregate((OpExpr*) n, constants))
         return false;
@@ -9949,12 +10009,18 @@ static void error_for_mixed_qual(qual_class c)
 {
   switch (c) {
     case QUAL_MIXED_AGG_DET:
-      provsql_error("Complex selection on aggregation results not supported");
+      /* An ordinary comparison mixed with an aggregate one is now supported
+       * (the regular leaf becomes a deterministic indicator); this fires only
+       * when an aggregate comparison itself has an unsupported shape. */
+      provsql_error("Unsupported aggregate comparison shape in the selection "
+                    "predicate");
       break;
     case QUAL_MIXED_RV_DET:
-      provsql_error("WHERE clause mixes random_variable comparisons with "
-                    "other predicates inside the same Boolean expression; "
-                    "split the non-RV part into its own AND conjunct");
+      /* Likewise: a random_variable comparison mixed with ordinary ones is
+       * supported; this fires only on an unsupported random_variable
+       * comparison shape. */
+      provsql_error("Unsupported random_variable comparison shape in the "
+                    "WHERE clause");
       break;
     case QUAL_MIXED_AGG_RV:
       provsql_error("WHERE clause mixes agg_token (HAVING-style) and "

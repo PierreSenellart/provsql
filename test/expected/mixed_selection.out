@@ -1,0 +1,38 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+or_region_true|or_region_false
+1.0000|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+and_region_true|and_region_false
+0.2500|0.0000
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|pr
+a|1.0000
+b|0.5000
+(2 rows)
+remove_provenance
+
+(1 row)

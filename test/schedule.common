@@ -84,6 +84,7 @@ test: given_conditioning
 test: rv_conditioning
 test: agg_conditioning
 test: predicate_conditioning
+test: mixed_selection
 test: last_eval_method
 
 # Probability computation using external software

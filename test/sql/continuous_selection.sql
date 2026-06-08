@@ -203,20 +203,23 @@ DROP TABLE result_h;
 DROP TABLE readings;
 
 -- ====================================================================
--- I: mixed RV / non-RV inside a single Boolean expression is
--- explicitly rejected with a clear error -- the planner cannot lift
--- the RV part without lifting the deterministic part too, and the
--- latter would require synthesising a Boolean RV gate (CASE WHEN ...
--- THEN gate_one() ELSE gate_zero() END), which is deferred work.
--- This mirrors agg_token's check_expr_on_aggregate behaviour for
--- mixed WHERE clauses.
--- ====================================================================
+-- I: mixed RV / non-RV inside a single Boolean expression is supported:
+-- the ordinary (non-RV) leaf becomes a deterministic indicator
+-- (regular_indicator: gate_one when it holds, gate_zero otherwise) combined
+-- with the RV comparison gate, per the predicate-provenance semantics (the
+-- χ case).  "reading > 0 OR id = 'm1'" is therefore certainly true on the m1
+-- row (the regular leaf holds -> OR with 𝟙 is 𝟙, probability 1) and reduces
+-- to P(reading > 0) = 0.5 on a row where the regular leaf fails.
 CREATE TABLE mix(id text, reading provsql.random_variable);
-INSERT INTO mix VALUES ('m1', provsql.normal(0, 1));
+INSERT INTO mix VALUES ('m1', provsql.normal(0, 1)), ('m2', provsql.normal(0, 1));
 SELECT add_provenance('mix');
-\set VERBOSITY terse
-SELECT id FROM mix WHERE reading > 0 OR id = 'm1';
-\set VERBOSITY default
+DO $$ BEGIN PERFORM set_prob(provenance(), 1) FROM mix; END $$;
+CREATE TABLE result_i AS
+  SELECT id, probability_evaluate(provenance()) AS pr
+    FROM mix WHERE reading > 0 OR id = 'm1';
+SELECT remove_provenance('result_i');
+SELECT id, round(pr::numeric, 4) AS pr FROM result_i ORDER BY id;
+DROP TABLE result_i;
 DROP TABLE mix;
 
 -- ====================================================================

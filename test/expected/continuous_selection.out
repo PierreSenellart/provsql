@@ -66,7 +66,13 @@ warm|t
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: WHERE clause mixes random_variable comparisons with other predicates inside the same Boolean expression; split the non-RV part into its own AND conjunct
+remove_provenance
+
+(1 row)
+id|pr
+m1|1.0000
+m2|0.5000
+(2 rows)
 rows_returned|root_is_cmp
 1|t
 (1 row)
