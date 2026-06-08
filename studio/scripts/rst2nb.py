@@ -66,6 +66,7 @@ from any other version).
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -73,6 +74,30 @@ import sys
 from pathlib import Path
 
 SENTINEL = "NBCELLxSPLITx"  # survives pandoc as a plain paragraph
+
+# :sqlfunc:`name` roles link to the Doxygen SQL API reference. The docs
+# resolve them relative to the site root; a shared notebook has no such
+# root, so it gets the same paths made absolute under the public site.
+_SQLFUNC_BASE = "https://provsql.org"
+_SF_SENTINEL = "@@SQLFUNC@@"  # marks a sqlfunc literal across pandoc
+_FA_SENTINEL = "@@FA@@"       # marks a Font Awesome icon literal across pandoc
+
+
+def _load_sqlfunc_map() -> dict:
+    """Read _SQL_FUNC_MAP (name -> Doxygen URL path) straight from the
+    Sphinx conf.py, so the notebook links stay in lockstep with the docs
+    and there is a single source of truth for the anchors."""
+    conf = (Path(__file__).resolve().parents[2]
+            / "doc" / "source" / "conf.py").read_text()
+    for node in ast.parse(conf).body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "_SQL_FUNC_MAP"
+                for t in node.targets):
+            return ast.literal_eval(node.value)
+    return {}
+
+
+_SQLFUNC_MAP = _load_sqlfunc_map()
 
 NB_DIRECTIVE_RE = re.compile(r"^\.\. nb:([a-z-]+)(?::\s*(.*))?\s*$")
 CODE_BLOCK_RE = re.compile(r"^(\s*)\.\. code-block::\s*(\S+)\s*$")
@@ -108,6 +133,30 @@ def _dedent(body: list[str]) -> list[str]:
     indents = [_indent_of(line) for line in body if line.strip()]
     cut = min(indents) if indents else 0
     return [line[cut:] if line.strip() else "" for line in body]
+
+
+def _escape_table_code_pipes(md: str) -> str:
+    """Escape ``|`` inside inline-code spans on GFM table rows.
+
+    pandoc -t gfm leaves a literal ``|`` inside a code span untouched
+    (e.g. ``| `A | B` |``), but GFM reads every unescaped pipe on a
+    table row as a cell delimiter -- splitting the code span and
+    truncating it in the notebook renderer. A pipe inside a table cell
+    must be ``\\|`` even within code. Only table rows (lines fenced by
+    leading/trailing ``|``) need this; in prose a code-span pipe renders
+    literally."""
+    def fix(line: str) -> str:
+        if not re.match(r"^\s*\|.*\|\s*$", line):
+            return line
+        out, in_code = [], False
+        for ch in line:
+            if ch == "`":
+                in_code = not in_code
+            elif ch == "|" and in_code:
+                out.append("\\")
+            out.append(ch)
+        return "".join(out)
+    return "\n".join(fix(line) for line in md.split("\n"))
 
 
 def split_setup_sql(text: str) -> list[str]:
@@ -199,11 +248,19 @@ def parse_rst(path: Path) -> tuple[dict, list[tuple[str, str]]] | None:
                         # + "run psql -f setup.sql" instructions)
                         # duplicate the notebook title and the psql
                         # loading story, so those are dropped; interior
-                        # comment headers convert to markdown.
+                        # comment headers convert to markdown. ASCII rule
+                        # lines (a banner boxed in ``=``/``-``) are pure
+                        # decoration -- drop them so the title-banner
+                        # match still fires and a trailing rule does not
+                        # turn the last sentence into a setext heading.
                         md = "\n".join(
                             re.sub(r"^\s*--\s?", "", ln)
                             for ln in chunk_lines)
-                        if re.match(r"\s*(Case Study \d|Tutorial)", md):
+                        md = "\n".join(
+                            ln for ln in md.split("\n")
+                            if not re.fullmatch(r"\s*[=-]{3,}\s*", ln)
+                        ).strip()
+                        if not md or re.match(r"\s*(Case Study \d|Tutorial)", md):
                             pass
                         else:
                             segments.append(("md", md))
@@ -300,6 +357,17 @@ def rst_prose_to_markdown_cells(prose_segments: list[str]) -> list[str]:
     seeing every underline style in order), separated by sentinel
     paragraphs, then split the gfm output back into per-run cells."""
     joined = ("\n\n" + SENTINEL + "\n\n").join(prose_segments)
+    # Carry :sqlfunc:`name` roles through pandoc as inline literals tagged
+    # with a sentinel, so they survive verbatim (code spans are not
+    # smart-substituted) and can be turned into absolute doc links below.
+    joined = re.sub(r":sqlfunc:`([^`]+)`",
+                    lambda m: "``" + m.group(1) + _SF_SENTINEL + "``", joined)
+    # Same trick for :fa:`icon` roles (inline Font Awesome icons mirroring
+    # the buttons Studio shows): carry them through pandoc verbatim, emit the
+    # <i> below. The notebook loads the same FA stylesheet as the app.
+    joined = re.sub(r":fa:`([^`]+)`",
+                    lambda m: "``" + _FA_SENTINEL + m.group(1) + _FA_SENTINEL + "``",
+                    joined)
     # rst+smart applies typographic substitutions the docs get from Sphinx's
     # smart_quotes: ``--`` becomes an en-dash, straight quotes curl, ``...``
     # becomes an ellipsis -- and it is code-aware, so an inline literal such
@@ -331,6 +399,26 @@ def rst_prose_to_markdown_cells(prose_segments: list[str]) -> list[str]:
     # :cite: keys come out as bare DBLP:... tokens; drop them (the
     # surrounding prose is phrased to carry the reference on its own).
     parts = [re.sub(r"\s*\bDBLP:[\w/-]+", "", p) for p in parts]
+    # Tagged sqlfunc literals -> absolute links to the function's doc, with
+    # the name kept in monospace. An unmapped name (should not happen: the
+    # docs' link check enforces the map) degrades to plain code.
+    def _sqlfunc_link(m):
+        name = m.group(1)
+        url = _SQLFUNC_MAP.get(name.rstrip("()"))
+        return f"[`{name}`]({_SQLFUNC_BASE}{url})" if url else f"`{name}`"
+    sf_re = re.compile(r"`([^`]+?)" + re.escape(_SF_SENTINEL) + r"`")
+    parts = [sf_re.sub(_sqlfunc_link, p) for p in parts]
+    # Tagged :fa: literals -> an inline Font Awesome <i> (raw HTML the
+    # markdown renderer passes through). `:fa:\`bolt\`` is solid by default;
+    # an explicit style word selects another, e.g. `:fa:\`fab markdown\``.
+    def _fa_icon(m):
+        bits = m.group(1).split()
+        style, icon = (bits[0], bits[1]) if len(bits) == 2 else ("fas", bits[0])
+        return f'<i class="{style} fa-{icon}" aria-hidden="true"></i>'
+    fa_re = re.compile(r"`" + re.escape(_FA_SENTINEL) + r"([^`]+?)"
+                       + re.escape(_FA_SENTINEL) + r"`")
+    parts = [fa_re.sub(_fa_icon, p) for p in parts]
+    parts = [_escape_table_code_pipes(p) for p in parts]
     return parts
 
 

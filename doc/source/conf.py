@@ -125,6 +125,8 @@ _SQL_FUNC_MAP = {
     'inversion_free_key':       '/doxygen-sql/html/group__gate__manipulation.html#gacc16e47ab21d01de696c6323453d3515',
     'provenance_guard':         '/doxygen-sql/html/group__table__management.html#ga978755a7d3a0b8af0abc128b1fc776e2',
     'provenance_aggregate':     '/doxygen-sql/html/group__aggregate__provenance.html#gaaa4ca20eebffb9f086eae1bfd2bcc8b9',
+    'provenance_times':         '/doxygen-sql/html/group__semiring__operations.html#ga2ac3939267cec756cc2d5f05314e26ff',
+    'provenance_plus':          '/doxygen-sql/html/group__semiring__operations.html#gaac5b2a2265ee8f8c9629c07d2d5ada84',
     'get_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#ga859702367ce6d65ff3a020ed3122157d',
     'probability_evaluate':     '/doxygen-sql/html/group__probability.html#gad377e94cb1fff57141b1950cc4169c5e',
     'probability_bounds':       '/doxygen-sql/html/group__probability.html#ga80dd344ea08b2743e2f69c7f854af7f2',
