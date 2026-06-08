@@ -5514,6 +5514,16 @@ static bool is_inert_subselect(Query *q) {
   return q != NULL && list_member_ptr(provsql_inert_subselects, q);
 }
 
+/** @brief Does @p sl wrap a recorded inert provenance()-fetch subselect?
+ *  Such a SubLink is an untracked scalar value: the decorrelation /
+ *  move-to-FROM passes must leave it alone (moving or aggregating it would
+ *  couple its relation into the outer lineage and wrap the token in an
+ *  aggregate gate). */
+static bool sublink_is_inert(SubLink *sl) {
+  return sl != NULL && sl->subselect && IsA(sl->subselect, Query) &&
+         is_inert_subselect((Query *)sl->subselect);
+}
+
 /**
  * @brief Whether @p sub's sole non-junk output is a bare provenance() call.
  *
@@ -5532,10 +5542,6 @@ static bool subselect_is_pure_provenance_fetch(const constants_t *constants,
   ListCell *lc;
   if (sub == NULL || !IsA(sub, Query))
     return false;
-  if (sub->hasAggs || sub->groupClause || sub->groupingSets ||
-      sub->havingQual || sub->setOperations || sub->distinctClause ||
-      sub->hasWindowFuncs)
-    return false;
   foreach (lc, sub->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     if (te->resjunk)
@@ -5546,6 +5552,41 @@ static bool subselect_is_pure_provenance_fetch(const constants_t *constants,
   }
   return only != NULL && IsA(only->expr, FuncExpr) &&
          ((FuncExpr *)only->expr)->funcid == constants->OID_FUNCTION_PROVENANCE;
+}
+
+/** @brief Walker: set found if an inert provenance()-fetch SubLink is present
+ *  in this query's *own* clauses (not descending into other scopes). */
+static bool inert_fetch_sublink_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subLinkType == EXPR_SUBLINK && sl->subselect &&
+        IsA(sl->subselect, Query) &&
+        subselect_is_pure_provenance_fetch((const constants_t *)data,
+                                           (Query *)sl->subselect))
+      return true;
+    return expression_tree_walker((Node *)sl->testexpr,
+                                  inert_fetch_sublink_walker, data);
+  }
+  if (IsA(node, Query))
+    return false; /* a nested scope handles its own */
+  return expression_tree_walker(node, inert_fetch_sublink_walker, data);
+}
+
+/** @brief Does @p q's own target list / jointree / HAVING contain an inert
+ *  provenance()-fetch SubLink?  Such a query must be rewritten so the early
+ *  inert pass resolves the fetch, even with an otherwise-untracked outer. */
+static bool query_has_inert_fetch(const constants_t *constants, Query *q) {
+  if (inert_fetch_sublink_walker((Node *)q->targetList, (void *)constants))
+    return true;
+  if (q->jointree &&
+      inert_fetch_sublink_walker((Node *)q->jointree, (void *)constants))
+    return true;
+  if (q->havingQual &&
+      inert_fetch_sublink_walker(q->havingQual, (void *)constants))
+    return true;
+  return false;
 }
 
 static bool decorr_value_sublink_walker(Node *node, void *data) {
@@ -5633,6 +5674,14 @@ static bool has_provenance_walker(Node *node, void *data) {
         decorr_value_sublink_walker((Node *)q->jointree->quals, data))
       return true;
 
+    /* An (unresolved) inert provenance()-fetch sublink also engages the
+     * gate, at every level -- including a FROM subquery whose only
+     * provenance is the fetch -- so the early inert pass resolves it.
+     * (After resolution the subselect no longer reads as a pure fetch,
+     * so this does not re-fire.) */
+    if (query_has_inert_fetch(constants, q))
+      return true;
+
     foreach (rc, q->rtable) {
       RangeTblEntry *r = (RangeTblEntry *)lfirst(rc);
       if (r->rtekind == RTE_RELATION) {
@@ -5699,7 +5748,9 @@ static bool has_provenance_walker(Node *node, void *data) {
  */
 static bool has_provenance(const constants_t *constants, Query *q) {
   /* An already-processed inert provenance() fetch is an untracked value
-   * subquery: it contributes no lineage to whatever references it. */
+   * subquery: it contributes no lineage to whatever references it.
+   * (Detection of an *unresolved* inert fetch -- which must engage the
+   * gate -- lives in has_provenance_walker, so it fires at every level.) */
   if (is_inert_subselect(q))
     return false;
   return has_provenance_walker((Node *)q, (void *)constants);
@@ -7122,7 +7173,7 @@ static bool oj_sublink_scan_walker(Node *node, void *cx) {
   oj_sublink_scan *s = (oj_sublink_scan *)cx;
   if (node == NULL)
     return false;
-  if (IsA(node, SubLink)) {
+  if (IsA(node, SubLink) && !sublink_is_inert((SubLink *)node)) {
     s->n_sublinks++;
     if (s->found_sublink == NULL)
       s->found_sublink = (SubLink *)node;
@@ -8559,6 +8610,8 @@ static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
     sl = (SubLink *)te->expr;
     if (sl->subLinkType != EXPR_SUBLINK || !IsA(sl->subselect, Query))
       continue;
+    if (sublink_is_inert(sl))
+      continue; /* an inert fetch stays an untracked scalar subquery */
     D = oj_build_uncorrelated_from_subquery(constants, (Query *)sl->subselect);
     if (D == NULL)
       continue;
@@ -11109,6 +11162,46 @@ static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
  */
 typedef struct { const constants_t *constants; } inert_walk_ctx;
 
+/**
+ * @brief Make a processed inert subselect return exactly its provenance
+ *        token as a single column.
+ *
+ * After @c process_query (with @c wrap_root false, so the token is the
+ * plain provenance expression, not @c assume_boolean-wrapped) the subselect
+ * carries the resolved provenance() value, an auto-appended @c provsql
+ * column, and possibly resjunk grouping / ordering keys.  An inert scalar
+ * fetch must return exactly one non-junk column: keep the resolved
+ * provenance() value (the first non-junk entry that is not the appended
+ * @c provsql), drop the @c provsql duplicate, and retain the resjunk
+ * entries that GROUP BY / ORDER BY still reference.
+ */
+static void keep_only_provenance_output(Query *sub) {
+  ListCell *lc;
+  TargetEntry *value = NULL;
+  List *kept;
+  int n = 0;
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (te->resname && !strcmp(te->resname, PROVSQL_COLUMN_NAME))
+      continue; /* the appended duplicate */
+    value = te; /* the resolved provenance() value */
+    break;
+  }
+  if (value == NULL)
+    return; /* defensive */
+  kept = list_make1(value);
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te != value && te->resjunk)
+      kept = lappend(kept, te); /* grouping / ordering keys */
+  }
+  foreach (lc, kept)
+    ((TargetEntry *)lfirst(lc))->resno = ++n;
+  sub->targetList = kept;
+}
+
 static bool process_inert_fetches_walker(Node *node, void *cx) {
   inert_walk_ctx *ctx = (inert_walk_ctx *)cx;
   if (node == NULL)
@@ -11122,6 +11215,7 @@ static bool process_inert_fetches_walker(Node *node, void *cx) {
       bool *removed = NULL;
       Query *processed = process_query(ctx->constants, (Query *)sl->subselect,
                                        &removed, false, false, NULL);
+      keep_only_provenance_output(processed);
       sl->subselect = (Node *)processed;
       provsql_inert_subselects = lappend(provsql_inert_subselects, processed);
       return false; /* handled; do not descend into it */
@@ -11195,6 +11289,15 @@ static Query *process_query(const constants_t *constants, Query *q,
   const InvFreeMarkerCtx *local_inv_ctx = NULL; /* this query's marker context */
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
+
+  /* Inert provenance() fetches: resolve a scalar `(SELECT provenance()
+   * FROM R ...)` to that subquery's token in place and record it as
+   * untracked.  Runs *before* the FROM-less early return below (a
+   * `SELECT (SELECT provenance() ...)` has no outer rtable but still
+   * carries the fetch) and before the decorrelation passes that would
+   * otherwise couple it into the outer lineage. */
+  if (provsql_active)
+    process_inert_fetches(constants, q);
 
   if (q->rtable == NULL) {
     /* FROM-less SELECT: the rest of the rewriter indexes into
@@ -11302,13 +11405,6 @@ static Query *process_query(const constants_t *constants, Query *q,
    * runs SPI and creates temp tables at plan time. */
   if (provsql_active)
     inline_ctes(q);
-
-  /* Inert provenance() fetches: resolve a scalar `(SELECT provenance()
-   * FROM R …)` to R's token in place and record it as untracked, BEFORE
-   * the decorrelation passes below would otherwise couple it into the
-   * outer lineage.  The evidence token is then read inertly. */
-  if (provsql_active)
-    process_inert_fetches(constants, q);
 
   /* Decorrelate a top-level scalar subquery into a LEFT JOIN + choose() +
    * GROUP BY + count<=1 HAVING.  Runs before lower_outer_joins so the LEFT JOIN

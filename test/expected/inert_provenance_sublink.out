@@ -22,7 +22,18 @@ remove_provenance
 p_row
 0.500
 (1 row)
-ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
+remove_provenance
+
+(1 row)
+p_row|p_ev
+0.500|0.250
+(1 row)
+remove_provenance
+
+(1 row)
+p_ev
+0.500
+(1 row)
 ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
 remove_provenance
 
