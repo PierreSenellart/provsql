@@ -4275,7 +4275,17 @@ BEGIN
     RAISE EXCEPTION 'agg_raw_moment(): k must be non-negative (got %)', k;
   END IF;
   IF get_gate_type(token) <> 'agg' THEN
-    RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
+    IF get_gate_type(token) IN ('arith', 'conditioned') THEN
+      RAISE EXCEPTION 'expected / variance / moment over an arithmetic '
+        'combination of aggregates (e.g. SUM(x) + SUM(y) or SUM(x) + 5), or a '
+        'conditioning of one, is not yet supported: a moment can be taken only '
+        'over a single aggregate (SUM / COUNT / MIN / MAX), optionally '
+        'conditioned (SUM(x) | C)'
+        USING HINT = 'Take the moment of each aggregate separately, or condition '
+          'the bare aggregate.';
+    ELSE
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
+    END IF;
   END IF;
   IF k = 0 THEN
     RETURN 1;
