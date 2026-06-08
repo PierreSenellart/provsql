@@ -18,15 +18,17 @@ SELECT jsonb_array_length(j) AS nbins,
        (j->0->>'count')::int = 10000 AS count_ok
   FROM h;
 
--- gate_rv: total count = sample budget, every bin in support.
+-- gate_rv: closed-form shapes get an EXACT analytical histogram (bin masses
+-- = cdf(hi) - cdf(lo)), so `count` is a probability mass; the masses sum to
+-- 1 and every bin lies in the support.
 WITH h AS (
   SELECT provsql.rv_histogram(
            (provsql.uniform(0, 1))::uuid,
            20) AS j
 )
 SELECT jsonb_array_length(j) AS nbins,
-       (SELECT sum((b->>'count')::int) FROM jsonb_array_elements(j) b)
-         = 10000 AS total_ok,
+       abs((SELECT sum((b->>'count')::float8) FROM jsonb_array_elements(j) b)
+           - 1) < 0.01 AS mass_sums_to_one,
        (SELECT min((b->>'bin_lo')::float8) FROM jsonb_array_elements(j) b)
          >= 0 AS lo_in_support,
        (SELECT max((b->>'bin_hi')::float8) FROM jsonb_array_elements(j) b)
@@ -115,19 +117,20 @@ BEGIN
 END
 $$;
 
--- rv_mc_samples = 0 errors for gate_rv (no MC fallback available).
+-- rv_mc_samples = 0 does NOT disable a closed-form histogram: a bare normal
+-- has exact per-bin masses (cdf differences), so the full histogram is
+-- produced without any sampling.
 SET provsql.rv_mc_samples = 0;
 DO $$
+DECLARE
+  n int;
 BEGIN
-  BEGIN
-    PERFORM provsql.rv_histogram(
-      (provsql.normal(0, 1))::uuid, 10);
-    RAISE EXCEPTION 'expected rv_histogram to reject rv_mc_samples = 0';
-  EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM NOT LIKE '%rv_mc_samples%' THEN
-      RAISE EXCEPTION 'unexpected error: %', SQLERRM;
-    END IF;
-  END;
+  SELECT jsonb_array_length(
+           provsql.rv_histogram((provsql.normal(0, 1))::uuid, 10))
+    INTO n;
+  IF n <> 10 THEN
+    RAISE EXCEPTION 'expected 10 analytical bins at rv_mc_samples = 0, got %', n;
+  END IF;
 END
 $$;
 RESET provsql.rv_mc_samples;

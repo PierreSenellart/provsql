@@ -978,13 +978,34 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k,
  * -- into a single conditioning event.  The conjunction is built as an
  * in-memory @c gate_times over the evidence gates, all of which already live
  * in the (joint) circuit, so a base @c gate_rv shared between a value and its
- * evidence keeps a single draw under the MC sampler.  No-op (leaves
- * @p event_opt untouched) when the expression carries no conditioning.
+ * evidence keeps a single draw under the MC sampler.  A conditioned ROOT is
+ * peeled to its bare target (returned), so a stored "X | C" reaching any
+ * low-level RV entry point keeps the closed-form scalar path; the (possibly
+ * new) root is returned.  Leaves @p event_opt untouched and returns @p root
+ * unchanged when the expression carries no conditioning.
  */
-static void lift_conditioning(GenericCircuit &gc, gate_t root,
-                              std::optional<gate_t> &event_opt)
+gate_t lift_conditioning(GenericCircuit &gc, gate_t root,
+                         std::optional<gate_t> &event_opt)
 {
   std::vector<gate_t> evidences;
+
+  // 1. Peel a conditioned ROOT to its bare target.  A root has no parent
+  //    wires, so it is replaced by its target directly rather than the
+  //    single-child gate_arith passthrough the buried case below needs;
+  //    keeping a bare gate_rv root preserves the closed-form truncation
+  //    path for "X | (X > c)".  Handles the 2-child rv/agg carrier
+  //    [target, condition] and (defensively) the 3-child uuid carrier
+  //    [target, evidence, joint]; iterates in case of nested conditioning.
+  while (gc.getGateType(root) == gate_conditioned) {
+    const auto &w = gc.getWires(root);
+    if (w.size() < 2)
+      throw CircuitException("malformed conditioned gate in scalar expression");
+    evidences.push_back(w[1]);
+    root = w[0];
+  }
+
+  // 2. Replace every BURIED gate_conditioned by an arith passthrough to its
+  //    target, collecting evidence as well.
   std::set<gate_t> seen;
   std::vector<gate_t> stack{root};
   while (!stack.empty()) {
@@ -1005,7 +1026,7 @@ static void lift_conditioning(GenericCircuit &gc, gate_t root,
     }
   }
   if (evidences.empty())
-    return;
+    return root;
   if (event_opt.has_value())
     evidences.push_back(*event_opt);
   gate_t cond;
@@ -1018,6 +1039,7 @@ static void lift_conditioning(GenericCircuit &gc, gate_t root,
       cw.push_back(e);
   }
   event_opt = cond;
+  return root;
 }
 
 }  // namespace provsql
@@ -1066,14 +1088,14 @@ Datum rv_moment(PG_FUNCTION_ARGS)
     if (gc.getGateType(event_gate) != gate_one)
       event_opt = event_gate;
 
-    /* Arithmetic over conditioned distributions: lift any nested
-     * gate_conditioned out of the scalar expression, folding its evidence
-     * into the conditioning event (f(X|A, Y|B) = f(X, Y) | (A ∧ B)).  A
-     * conditioned ROOT was already unpacked by the SQL dispatcher (so the
-     * closed-form truncation path stays available for the bare-rv case); this
-     * pass handles conditioning buried under arithmetic, which the scalar
-     * evaluator otherwise rejects. */
-    provsql::lift_conditioning(gc, root_gate, event_opt);
+    /* Arithmetic over conditioned distributions: peel a conditioned ROOT to
+     * its bare target (keeping the closed-form truncation path for the
+     * bare-rv case) and lift any nested gate_conditioned out of the scalar
+     * expression, folding its evidence into the conditioning event
+     * (f(X|A, Y|B) = f(X, Y) | (A ∧ B)).  Works whether the token arrives
+     * already unpacked by the SQL dispatcher or as a raw conditioned root
+     * (Studio's distribution panel calls this low-level binding directly). */
+    root_gate = provsql::lift_conditioning(gc, root_gate, event_opt);
 
     double result;
     if (central)

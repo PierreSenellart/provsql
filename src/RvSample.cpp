@@ -32,11 +32,13 @@ PG_FUNCTION_INFO_V1(rv_sample);
 }
 
 #include "CircuitFromMMap.h"
+#include "Expectation.h"
 #include "GenericCircuit.h"
 #include "MonteCarloSampler.h"
 #include "provsql_utils_cpp.h"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 extern "C" Datum
@@ -66,10 +68,17 @@ rv_sample(PG_FUNCTION_ARGS)
     gate_t root_gate, event_gate;
     auto gc = getJointCircuit(*token, *prov, root_gate, event_gate);
 
-    const bool conditional = gc.getGateType(event_gate) != gate_one;
+    /* A stored "X | C" arrives as a conditioned root: peel it to the bare
+     * scalar target and fold the condition into the event so the rest of the
+     * function samples the conditional (truncated) distribution. */
+    std::optional<gate_t> event_opt;
+    if (gc.getGateType(event_gate) != gate_one) event_opt = event_gate;
+    root_gate = provsql::lift_conditioning(gc, root_gate, event_opt);
+    const bool conditional = event_opt.has_value();
 
     std::vector<double> samples;
     if (conditional) {
+      const gate_t event = *event_opt;
       /* Closed-form truncation fast path: when the root is a bare
        * gate_rv of a supported family (Uniform / Normal / Exponential)
        * and the event reduces to a single interval on it, we draw
@@ -79,7 +88,7 @@ rv_sample(PG_FUNCTION_ARGS)
        * through to the MC rejection path for un-extractable shapes
        * (Erlang, gate_arith composites, gate_mixture roots…). */
       auto direct = provsql::try_truncated_closed_form_sample(
-                      gc, root_gate, event_gate, n);
+                      gc, root_gate, event, n);
       if (direct) {
         samples = std::move(*direct);
       } else {
@@ -92,7 +101,7 @@ rv_sample(PG_FUNCTION_ARGS)
           provsql_rv_mc_samples > 0
             ? static_cast<unsigned>(provsql_rv_mc_samples) : 1000u * n);
         auto cs = provsql::monteCarloConditionalScalarSamples(
-                    gc, root_gate, event_gate, budget);
+                    gc, root_gate, event, budget);
         if (cs.accepted.size() > n) cs.accepted.resize(n);
         if (cs.accepted.size() < n) {
           ereport(NOTICE,

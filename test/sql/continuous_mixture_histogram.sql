@@ -45,7 +45,7 @@ SELECT (
   ), m AS (
     SELECT
       ( (b->>'bin_lo')::float8 + (b->>'bin_hi')::float8 ) / 2.0 AS mid,
-      (b->>'count')::int AS cnt
+      (b->>'count')::float8 AS cnt
     FROM bins
   )
   SELECT COALESCE(SUM(cnt) FILTER (WHERE mid BETWEEN -2 AND 2), 0)::float8
@@ -60,7 +60,7 @@ SELECT (
   ), m AS (
     SELECT
       ( (b->>'bin_lo')::float8 + (b->>'bin_hi')::float8 ) / 2.0 AS mid,
-      (b->>'count')::int AS cnt
+      (b->>'count')::float8 AS cnt
     FROM bins
   )
   SELECT abs(
@@ -71,7 +71,8 @@ SELECT (
 ) < 0.05 AS halves_roughly_equal;
 
 -- Structural invariants: bins are contiguous (bin_hi[i] = bin_lo[i+1])
--- and the per-bin counts sum to rv_mc_samples.
+-- and the per-bin masses sum to 1 (a closed-form mixture gets an exact
+-- analytical histogram, so `count` carries a probability mass).
 SELECT (
   WITH ordered AS (
     SELECT ordinality, b FROM bimix_hist,
@@ -88,11 +89,11 @@ SELECT (
 
 SELECT (
   WITH bins AS (
-    SELECT (b->>'count')::int AS cnt
+    SELECT (b->>'count')::float8 AS cnt
       FROM bimix_hist, jsonb_array_elements(h) AS b
   )
-  SELECT SUM(cnt) FROM bins
-) = 20000 AS total_counts_match;
+  SELECT abs(SUM(cnt) - 1) < 0.01 FROM bins
+) AS total_mass_one;
 
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;

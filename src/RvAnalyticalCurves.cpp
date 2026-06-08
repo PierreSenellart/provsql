@@ -49,6 +49,7 @@ PG_FUNCTION_INFO_V1(rv_analytical_curves);
 
 #include "AnalyticEvaluator.h"  // pdfAt, cdfAt
 #include "CircuitFromMMap.h"    // getJointCircuit
+#include "Expectation.h"        // lift_conditioning
 #include "GenericCircuit.h"
 #include "HybridEvaluator.h"    // runHybridSimplifier
 #include "RandomVariable.h"     // DistKind
@@ -61,6 +62,7 @@ PG_FUNCTION_INFO_V1(rv_analytical_curves);
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -276,6 +278,38 @@ std::pair<double, double> shape_x_range(const provsql::ClosedFormShape &s)
 
 }  // namespace
 
+namespace provsql {
+
+// Exact histogram of a closed-form shape: `bins` equal-width bins over the
+// shape's natural plotting range, each carrying the analytical probability
+// mass cdf(hi) - cdf(lo).  Lets rv_histogram answer for a closed-form
+// distribution (e.g. a truncated Gaussian) without sampling -- in
+// particular under provsql.rv_mc_samples = 0.  Returns nullopt when the
+// range is degenerate or the CDF is unavailable (non-integer Erlang, an
+// unmatched arm), so the caller can fall back to Monte Carlo.
+std::optional<std::vector<std::tuple<double, double, double>>>
+analyticalHistogram(const ClosedFormShape &shape, int bins)
+{
+  if (bins <= 0) return std::nullopt;
+  const auto [xlo, xhi] = shape_x_range(shape);
+  if (!(xlo < xhi) || !std::isfinite(xlo) || !std::isfinite(xhi))
+    return std::nullopt;
+  const double w = (xhi - xlo) / bins;
+  std::vector<std::tuple<double, double, double>> out;
+  out.reserve(bins);
+  for (int i = 0; i < bins; ++i) {
+    const double lo = xlo + i * w;
+    const double hi = (i == bins - 1) ? xhi : lo + w;
+    const double cl = shape_cdf(shape, lo);
+    const double ch = shape_cdf(shape, hi);
+    if (std::isnan(cl) || std::isnan(ch)) return std::nullopt;
+    out.emplace_back(lo, hi, std::max(0.0, ch - cl));
+  }
+  return out;
+}
+
+}  // namespace provsql
+
 extern "C" Datum
 rv_analytical_curves(PG_FUNCTION_ARGS)
 {
@@ -297,6 +331,15 @@ rv_analytical_curves(PG_FUNCTION_ARGS)
       PG_RETURN_NULL();
     }
 
+    /* A stored "X | C" arrives as a conditioned root: peel it to the bare
+     * scalar target and fold the condition into the event, so the closed-form
+     * match below sees the bare distribution truncated by the event rather
+     * than a gate_conditioned it cannot match (which would drop to
+     * histogram-only). */
+    std::optional<gate_t> event_opt;
+    if (gc.getGateType(event_gate) != gate_one) event_opt = event_gate;
+    root_gate = provsql::lift_conditioning(gc, root_gate, event_opt);
+
     /* Run the hybrid-evaluator simplifier so the analytical curves
      * see the same folded tree Studio's circuit view shows via
      * simplified_circuit_subgraph: c·Exp(λ) → Exp(λ/c), N(μ,σ)+N(...)
@@ -315,7 +358,7 @@ rv_analytical_curves(PG_FUNCTION_ARGS)
      * NULL so the front-end renders histogram-only without a
      * structural pre-check. */
     auto shape = provsql::matchClosedFormDistribution(
-                   gc, root_gate, std::optional<gate_t>{event_gate});
+                   gc, root_gate, event_opt);
     if (!shape) PG_RETURN_NULL();
 
     std::vector<std::pair<double, double>> stems;

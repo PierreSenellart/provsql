@@ -100,6 +100,21 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k,
  */
 double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot);
 
+/**
+ * @brief Normalise conditioning in a scalar sub-circuit before evaluation.
+ *
+ * Peels a conditioned ROOT to its bare target and rewrites every buried
+ * @c gate_conditioned into a transparent passthrough, folding all collected
+ * evidence (and any pre-existing @p event_opt) into a single conditioning
+ * event left in @p event_opt.  Returns the (possibly new) root so a stored
+ * "X | C" reaching a low-level RV entry point evaluates as the bare scalar
+ * conditioned on the folded event -- keeping the closed-form path available.
+ * No-op (returns @p root, leaves @p event_opt untouched) when there is no
+ * conditioning.
+ */
+gate_t lift_conditioning(GenericCircuit &gc, gate_t root,
+                         std::optional<gate_t> &event_opt);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_EXPECTATION_H

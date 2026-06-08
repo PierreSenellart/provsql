@@ -53,6 +53,7 @@ PG_FUNCTION_INFO_V1(rv_histogram);
 }
 
 #include "CircuitFromMMap.h"
+#include "Expectation.h"
 #include "GenericCircuit.h"
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
@@ -65,13 +66,14 @@ PG_FUNCTION_INFO_V1(rv_histogram);
 #include <optional>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace {
 
 void emit_bin(std::ostringstream &out, bool &first,
-              double lo, double hi, unsigned count)
+              double lo, double hi, double count)
 {
   if (!first) out << ',';
   first = false;
@@ -119,9 +121,13 @@ rv_histogram(PG_FUNCTION_ARGS)
     }
 
     /* gate_one event = unconditional. */
-    const bool conditional = gc.getGateType(event_gate) != gate_one;
     std::optional<gate_t> event_opt;
-    if (conditional) event_opt = event_gate;
+    if (gc.getGateType(event_gate) != gate_one) event_opt = event_gate;
+    /* A stored "X | C" arrives as a conditioned root: peel it to the bare
+     * scalar target and fold the condition into the event, so the histogram
+     * is of the conditional (truncated) distribution. */
+    root_gate = provsql::lift_conditioning(gc, root_gate, event_opt);
+    const bool conditional = event_opt.has_value();
 
     const gate_type t = gc.getGateType(root_gate);
 
@@ -136,13 +142,33 @@ rv_histogram(PG_FUNCTION_ARGS)
       emit_bin(out, first, v, v, n);
     } else if (t == gate_rv || t == gate_arith || t == gate_mixture
                || t == gate_agg || t == gate_semimod) {
-      if (provsql_rv_mc_samples <= 0)
-        provsql_error(
-          "rv_histogram: provsql.rv_mc_samples = 0 disables sampling; "
-          "raise it above 0 to compute a histogram");
+      std::vector<double> samples;
+      /* Exact analytical histogram: when the (peeled) root matches a
+       * closed-form distribution -- a (truncated) Gaussian, a sum of
+       * Normals, a mixture of bare RVs -- the per-bin probability mass is
+       * cdf(hi) - cdf(lo), exact and sampling-free.  This is the right
+       * answer whatever provsql.rv_mc_samples is (in particular 0):
+       * truncating a Gaussian has an exact distribution.  Composites with
+       * no closed form (general gate_arith, gate_agg) fall through to
+       * Monte Carlo below. */
+      auto shape = provsql::matchClosedFormDistribution(gc, root_gate, event_opt);
+      std::optional<std::vector<std::tuple<double, double, double>>> ahist;
+      if (shape) ahist = provsql::analyticalHistogram(*shape, bins);
+
+      if (ahist) {
+        for (const auto &[bl, bh, mass] : *ahist)
+          emit_bin(out, first, bl, bh, mass);
+      } else if (provsql_rv_mc_samples <= 0) {
+        /* No closed form and sampling disabled: empty histogram rather
+         * than an error, so a distribution-profile composed with the
+         * closed-form support / moments still succeeds. */
+        ereport(NOTICE,
+                (errmsg("rv_histogram: no closed-form shape and "
+                        "provsql.rv_mc_samples = 0; returning an empty "
+                        "histogram")));
+      } else {
       const unsigned N = static_cast<unsigned>(provsql_rv_mc_samples);
 
-      std::vector<double> samples;
       if (conditional) {
         /* Closed-form truncation fast path: when the root is a bare
          * gate_rv of a supported family and the event reduces to an
@@ -151,12 +177,12 @@ rv_histogram(PG_FUNCTION_ARGS)
          * error below no longer fires on tight events that previously
          * starved the MC rejection path. */
         auto direct = provsql::try_truncated_closed_form_sample(
-                        gc, root_gate, event_gate, N);
+                        gc, root_gate, *event_opt, N);
         if (direct) {
           samples = std::move(*direct);
         } else {
           auto cs = provsql::monteCarloConditionalScalarSamples(
-                      gc, root_gate, event_gate, N);
+                      gc, root_gate, *event_opt, N);
           if (cs.accepted.empty())
             provsql_error(
               "rv_histogram: conditional MC accepted 0 of %u samples; "
@@ -168,6 +194,7 @@ rv_histogram(PG_FUNCTION_ARGS)
       } else {
         samples = provsql::monteCarloScalarSamples(gc, root_gate, N);
       }
+      }  /* end: rv_mc_samples > 0 */
 
       if (!samples.empty()) {
         /* Pick the bin range per side: when @c compute_support proves

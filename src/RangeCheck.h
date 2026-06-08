@@ -24,6 +24,7 @@
 
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -236,6 +237,19 @@ struct BernoulliMixtureShape {
 std::optional<ClosedFormShape>
 matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
                             std::optional<gate_t> event_root);
+
+/**
+ * @brief Exact histogram (bin_lo, bin_hi, probability mass) of a closed-form
+ *        @p shape, in @p bins equal-width bins over its natural range.
+ *
+ * Defined in @c RvAnalyticalCurves.cpp (where the shape CDF / range helpers
+ * live).  Lets @c rv_histogram answer for a closed-form distribution without
+ * sampling -- e.g. a truncated Gaussian under @c provsql.rv_mc_samples = 0.
+ * Returns @c std::nullopt when the range is degenerate or the CDF is
+ * unavailable, so the caller can fall back to Monte Carlo.
+ */
+std::optional<std::vector<std::tuple<double, double, double>>>
+analyticalHistogram(const ClosedFormShape &shape, int bins);
 
 /**
  * @brief Run the support-based pruning pass over @p gc.

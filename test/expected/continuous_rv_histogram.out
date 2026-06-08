@@ -2,7 +2,7 @@
 nbins|lo_ok|hi_ok|count_ok
 1|t|t|t
 (1 row)
-nbins|total_ok|lo_in_support|hi_in_support
+nbins|mass_sums_to_one|lo_in_support|hi_in_support
 20|t|t|t
 (1 row)
 deterministic

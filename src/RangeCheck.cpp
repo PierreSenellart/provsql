@@ -16,6 +16,7 @@
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
 #include "AnalyticEvaluator.h"  // cdfAt for shape_mass under truncation
 #include "CircuitFromMMap.h"    // getGenericCircuit
+#include "Expectation.h"        // lift_conditioning
 #include "RandomVariable.h"     // parse_distribution_spec, DistKind
 #include "provsql_utils_cpp.h"  // uuid2string
 
@@ -1698,6 +1699,11 @@ Datum rv_support(PG_FUNCTION_ARGS)
     std::optional<gate_t> event_opt;
     if (gc.getGateType(event_gate) != gate_one)
       event_opt = event_gate;
+
+    /* A stored "X | C" arrives here as a conditioned root: peel it to the
+     * bare target and fold the condition into the event, so the support is
+     * the conditional (truncated) one rather than the unconditional. */
+    root_gate = provsql::lift_conditioning(gc, root_gate, event_opt);
 
     auto iv = provsql::compute_support(gc, root_gate, event_opt);
 
