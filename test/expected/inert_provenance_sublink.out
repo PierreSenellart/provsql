@@ -1,0 +1,29 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p_row|p_ev|distinct_tokens
+0.500|0.500|t
+(1 row)
+remove_provenance
+
+(1 row)
+id|p_row|p_ev
+1|0.500|0.500
+2|0.500|0.500
+3|0.500|
+(3 rows)
+remove_provenance
+
+(1 row)
+p_row
+0.500
+(1 row)
+ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
+ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
+remove_provenance
+
+(1 row)

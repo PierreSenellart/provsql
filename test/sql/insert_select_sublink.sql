@@ -3,11 +3,12 @@
 SET search_path TO provsql_test,provsql;
 
 -- Two fixes exercised together:
---  (1) provenance() inside a SubLink (scalar / IN / EXISTS) is unsupported --
---      a SubLink subselect is planned standalone, so the call is never
---      rewritten.  ProvSQL now raises a clear error instead of silently
---      returning NULL / a misleading "table without provenance".  A plain read
---      of the provsql column inside a SubLink stays legal.
+--  (1) provenance() inside a SubLink that is NOT a simple inert fetch
+--      (here: an aggregated scalar subselect, and an EXISTS) is
+--      unsupported -- ProvSQL raises a clear error.  A plain read of the
+--      provsql column inside a SubLink stays legal.  (The simple
+--      `SELECT provenance() FROM R WHERE ...` scalar fetch is now an inert
+--      token read -- see inert_provenance_sublink.)
 --  (2) INSERT ... SELECT whose source SELECT uses provenance() / HAVING is now
 --      rewritten (HAVING lifted into provenance) even when the target table is
 --      not provenance-tracked, so the SELECT returns the right rows (it used to
