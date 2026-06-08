@@ -19,10 +19,11 @@ security-classification scenario.
    <https://provsql.org/playground/?nb=cs1>`_ -- every query below is a cell,
    and the opening cells set up the database for you -- or open the bare `cs1
    database <https://provsql.org/playground/?db=cs1>`_ and run the queries as
-   you read. The Playground bundles no external tools, so a step that
-   explicitly calls an external knowledge compiler (``d4``, ``c2d``…) or the
-   ``graph-easy`` ASCII renderer (:sqlfunc:`view_circuit`) will not run
-   there; the default probability methods still work (they use the built-in
+   you read. The Playground bundles no external tools, so the steps that call
+   an external knowledge compiler (``d4``, ``c2d``…) or the ``graph-easy``
+   ASCII renderer (:sqlfunc:`view_circuit`) detect its absence and report it
+   instead of returning a result -- the cells still run cleanly; the default
+   probability methods work throughout (they use the built-in
    tree-decomposition compiler), as does everything else. See the
    :ref:`Playground note <playground-note>`.
 
@@ -308,11 +309,14 @@ Step 10: Probability – Knowledge Compiler
 
 .. note::
 
-   This step requires an external knowledge compiler such as ``d4`` or
-   ``dsharp`` to be installed and on your ``PATH`` (or in a directory
+   This step uses an external knowledge compiler such as ``d4`` or
+   ``dsharp``, which must be on your ``PATH`` (or in a directory
    listed in the ``provsql.tool_search_path`` GUC, see
-   :doc:`the configuration chapter <configuration>`). Skip it if
-   neither is available.
+   :doc:`the configuration chapter <configuration>`). The query below
+   guards the call with :sqlfunc:`tool_available`, so where no such
+   compiler is installed -- in particular in the
+   :ref:`Playground <playground-note>`, which bundles none -- it reports
+   that instead of failing, and you can read on.
 
 A knowledge compiler converts the provenance circuit to a *d-DNNF*
 representation, which enables efficient exact probability evaluation
@@ -321,8 +325,11 @@ on large circuits of specific forms:
 .. code-block:: postgresql
 
     SELECT city,
-           ROUND(probability_evaluate(
-               provenance(), 'compilation', 'd4')::numeric, 4) AS prob
+           CASE WHEN tool_available('d4')
+                THEN ROUND(probability_evaluate(
+                         provenance(), 'compilation', 'd4')::numeric, 4)::text
+                ELSE '(needs external compiler d4; unavailable here)'
+           END AS prob
     FROM (
         SELECT DISTINCT city FROM personnel
       EXCEPT
@@ -347,11 +354,19 @@ Step 11: Visualise a Provenance Circuit
 :sqlfunc:`view_circuit` renders the provenance circuit as an ASCII
 box-art diagram using
 `graph-easy <https://metacpan.org/dist/Graph-Easy>`_
-(must be installed and on your ``PATH``):
+(which must be on your ``PATH``). The query guards the call with
+:sqlfunc:`tool_available`, so without ``graph-easy`` -- in particular in
+the :ref:`Playground <playground-note>`, where Studio's interactive
+:doc:`circuit mode <studio>` is the better view anyway -- it says so
+rather than failing:
 
 .. code-block:: postgresql
 
-    SELECT city, view_circuit(provenance(), 'personnel_name') AS circuit
+    SELECT city,
+           CASE WHEN tool_available('graph-easy')
+                THEN view_circuit(provenance(), 'personnel_name')
+                ELSE '(needs the graph-easy renderer; use Studio circuit mode)'
+           END AS circuit
     FROM (
         SELECT DISTINCT city FROM personnel
       EXCEPT
@@ -456,9 +471,14 @@ Now run the same path query with each method in turn, timing each
 
 .. code-block:: postgresql
 
-    -- Knowledge compilation via external tool d4
+    -- Knowledge compilation via external tool d4 (guarded with
+    -- tool_available, so it reports rather than fails where d4 is
+    -- absent, e.g. in the Playground)
     SELECT m1.x, m2.y,
-           probability_evaluate(provenance(), 'compilation', 'd4') AS prob
+           CASE WHEN tool_available('d4')
+                THEN probability_evaluate(provenance(), 'compilation', 'd4')::text
+                ELSE '(d4 unavailable here)'
+           END AS prob
     FROM matrix m1, matrix m2
     WHERE m2.x = m1.y AND m1.x > 90 AND m2.x > 90 AND m2.y > 90
     GROUP BY m1.x, m2.y
