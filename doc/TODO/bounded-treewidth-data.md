@@ -421,8 +421,18 @@ dropped: proving the constant equals the group size is data-dependent
 and the HAVING cmp construction has no probe point; the self-join
 form covers the need.)
 
-*Open*: DISTINCT-shaped
-aggregations and extra member-relation quals in the detection.
+*DISTINCT-shaped aggregations: implemented* (detection-only, no new
+compiler work).  `SELECT DISTINCT region` is provenance-identical to
+`GROUP BY region`; the existing `transform_distinct_into_group_by`
+already normalises it, but it ran *after* `inline_ctes` (hence after
+the reachability detection inside it).  Hoisting a guarded
+`normalize_distinct_into_group_by` to before `inline_ctes` (idempotent
+with the historical late site) makes both the any-reach and the
+k-terminal detectors see the `GROUP BY` form with zero
+DISTINCT-specific arms.  Folded into `btw_anyreach` (the DISTINCT twin
+gives a byte-identical result).
+
+*Open*: extra member-relation quals in the detection.
 
 *Other reuse candidates for the canonical-address machinery*: the
 times-canonical namespace now exists (serving the k-terminal

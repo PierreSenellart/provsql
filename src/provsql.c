@@ -5093,6 +5093,39 @@ static void transform_distinct_into_group_by(Query *q) {
 }
 
 /**
+ * @brief Normalise a supported @c SELECT @c DISTINCT into a @c GROUP @c BY.
+ *
+ * Wraps @c transform_distinct_into_group_by() with the validity guards
+ * (DISTINCT ON and DISTINCT-on-aggregate-results stay rejected; a
+ * DISTINCT not covering the whole target list is inconsistent).
+ *
+ * Called twice on the main rewrite path: once *before* @c inline_ctes()
+ * so the recursive-reachability detectors see the @c GROUP @c BY form
+ * (a @c SELECT @c DISTINCT region aggregation is provenance-identical
+ * to its @c GROUP @c BY twin), and once at the historical late site --
+ * idempotent, since the first call clears @c distinctClause, so the
+ * second is a no-op for any query the first already normalised.  The
+ * target list carries only the user's columns at both call sites (the
+ * provsql output column is spliced later), so the length guard reads
+ * the same either way.
+ *
+ * @param q  Query to normalise in place.
+ */
+static void normalize_distinct_into_group_by(Query *q) {
+  if (!q->distinctClause)
+    return;
+  if (q->hasDistinctOn)
+    provsql_error("DISTINCT ON not supported");
+  else if (q->hasAggs)
+    provsql_error("DISTINCT on aggregate results not supported");
+  else if (list_length(q->distinctClause) < list_length(q->targetList))
+    provsql_error("Inconsistent DISTINCT and GROUP BY clauses not "
+                  "supported");
+  else
+    transform_distinct_into_group_by(q);
+}
+
+/**
  * @brief Remove sort/group references that belonged to removed provenance columns.
  *
  * After @c remove_provenance_attributes_select strips provenance entries from
@@ -11048,6 +11081,16 @@ static Query *process_query(const constants_t *constants, Query *q,
     return q;
   }
 
+  /* Normalise SELECT DISTINCT into the equivalent GROUP BY *before*
+   * inlining: the recursive-reachability aggregation detectors
+   * (detect_reach_aggregations / detect_reach_conjunctions, run inside
+   * inline_ctes) key on groupClause, and a DISTINCT aggregation is
+   * provenance-identical to its GROUP BY twin -- normalising here lets
+   * them recognise it with no DISTINCT-specific arm.  Idempotent with
+   * the historical late site below. */
+  if (provsql_active)
+    normalize_distinct_into_group_by(q);
+
   /* Inline non-recursive CTE references as subqueries so we can track
    * provenance through them. Must happen before set operation handling
    * since UNION/EXCEPT branches may reference CTEs.  Gated on
@@ -11254,20 +11297,11 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
     }
 
-    if (supported && q->distinctClause) {
-      if (q->hasDistinctOn) {
-        provsql_error("DISTINCT ON not supported");
-        supported = false;
-      } else if (q->hasAggs) {
-        provsql_error("DISTINCT on aggregate results not supported");
-      } else if (list_length(q->distinctClause) < list_length(q->targetList)) {
-        provsql_error("Inconsistent DISTINCT and GROUP BY clauses not "
-                      "supported");
-        supported = false;
-      } else {
-        transform_distinct_into_group_by(q);
-      }
-    }
+    /* Normally already normalised before inline_ctes; this late call
+     * catches any DISTINCT introduced by the intervening rewrites (set
+     * operations, sublink decorrelation) and is a no-op otherwise. */
+    if (supported && q->distinctClause)
+      normalize_distinct_into_group_by(q);
 
     if (supported && q->setOperations) {
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;

@@ -46,6 +46,31 @@ DROP TABLE btwa_p;
 SELECT remove_provenance('btwa_r');
 DROP TABLE btwa_r;
 
+-- SELECT DISTINCT is provenance-identical to GROUP BY: normalised
+-- before CTE lowering, so the same certified any-member gate is
+-- planted and the same per-region reliability evaluates through the
+-- linear route (certified, matching the GROUP BY case exactly).
+CREATE TABLE btwa_rd AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT 1
+    UNION
+      SELECT e.dst FROM btwa_edge e JOIN reach r ON e.src = r.node
+  )
+  SELECT DISTINCT t.region FROM reach r JOIN btwa_regions t ON r.node = t.node;
+CREATE TABLE btwa_pd AS
+  SELECT region,
+         round(probability_evaluate(provenance(), 'independent')::numeric, 6)
+           AS p_independent,
+         round(probability_evaluate(provenance(), 'possible-worlds')::numeric, 6)
+           AS p_worlds,
+         (get_infos(provenance())).info1 AS certified
+  FROM btwa_rd GROUP BY region, provenance();
+SELECT remove_provenance('btwa_pd');
+SELECT * FROM btwa_pd ORDER BY region;
+DROP TABLE btwa_pd;
+SELECT remove_provenance('btwa_rd');
+DROP TABLE btwa_rd;
+
 -- A *tracked* member relation makes the aggregated tokens per-row
 -- products: nothing is planted, the generic path stays correct.
 CREATE TABLE btwa_tracked(node int, region text);

@@ -547,9 +547,12 @@ All the groups share one compilation: the tree decomposition and
 variable analysis are built once, one cheap sweep runs per group, and
 the parts of the per-group circuits the group's members do not
 influence come out as the *same* gates (content-deduplicated
-emission), materialised once.  A tracked member relation, or any
-deviation from the join-and-group-by-one-column shape, simply skips
-the planting (the generic evaluation is always available).
+emission), materialised once.  The ``SELECT DISTINCT`` spelling of the
+same aggregation (``SELECT DISTINCT t.region FROM ... `` with no
+``GROUP BY``) is provenance-identical and recognised too.  A tracked
+member relation, or any deviation from the join-and-group-by-one-column
+shape, simply skips the planting (the generic evaluation is always
+available).
 
 *K-terminal conjunctions* close the family: a self-join of the CTE
 with one constant node binding per reference --
