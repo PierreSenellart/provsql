@@ -600,6 +600,12 @@
       ta.value = cell.source;
       ta.addEventListener('focus', () => { lastFocused = cell; selectCell(cell, { scroll: false }); });
       ta.addEventListener('input', refresh);
+      // Clean pasted / dropped SQL of invisible Unicode (NBSP, zero-width
+      // characters…) exactly like the shared query box; the sanitizer
+      // re-fires `input`, so refresh() repaints with the cleaned text.
+      if (window.ProvsqlStudio.wirePasteSanitizer) {
+        window.ProvsqlStudio.wirePasteSanitizer(ta);
+      }
       ta.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
           e.preventDefault();
@@ -2011,6 +2017,23 @@
       const file = input.files && input.files[0];
       input.value = '';
       if (!file) return;
+      // A .sql file (a dump, a fixture script) lands in the CURRENT
+      // notebook as one appended SQL cell, ready to run -- the cell
+      // splitter handles multi-statement content, COPY blocks included.
+      // Cleaned like a paste (invisible Unicode, CRLF); see app.js.
+      if (/\.sql$/i.test(file.name)) {
+        try {
+          const text = await file.text();
+          const clean = window.ProvsqlStudio.sanitizeSqlText
+            ? window.ProvsqlStudio.sanitizeSqlText(text.replace(/\r\n/g, '\n'))
+            : text.replace(/\r\n/g, '\n');
+          focusCell(appendCell('sql', clean));
+          scheduleAutosave();
+        } catch (e) {
+          window.alert(`Could not load ${file.name}: ${e.message}`);
+        }
+        return;
+      }
       try {
         const doc = JSON.parse(await file.text());
         // Validate before opening a tab for it.

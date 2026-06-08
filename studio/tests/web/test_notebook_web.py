@@ -13,7 +13,7 @@ import re
 
 from playwright.sync_api import Page, expect
 
-from test_browser import ui
+from test_browser import _api, ui
 
 RUN_ALL_TIMEOUT = 300_000  # ms; a whole seeded notebook on WASM Postgres
 
@@ -104,3 +104,15 @@ def test_seeded_tutorial_notebook_runs_end_to_end(open_studio) -> None:
     expect(cells.last.locator(".nb-cell__count"))\
         .to_have_text(re.compile(r"\[\d+\]"), timeout=RUN_ALL_TIMEOUT)
     assert fr.locator(".nb-out .wp-error").count() == 0
+
+    # The setup cells' dump-style `COPY ... FROM stdin` units actually loaded
+    # their data (the shim maps them onto COPY FROM '/dev/blob'): an error-free
+    # run over EMPTY tables would pass the checks above while every result is
+    # vacuous (DROP+CREATE succeed, data loads fail -> all tables empty).
+    out = _api(page, "POST", "/api/exec",
+               {"sql": "SELECT count(*) = 20 AS all_persons_loaded FROM person",
+                "mode": "circuit", "prov_scheme": "semiring"})
+    assert out["status"] == 200
+    blob = str(out.get("json") or out.get("text"))
+    assert "all_persons_loaded" in blob and "true" in blob.lower(), \
+        f"person table looks empty: {blob[:300]}"

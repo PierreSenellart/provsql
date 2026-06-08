@@ -9,9 +9,12 @@
 # transaction; rollback/commit.  cursor.execute synchronously awaits the
 # async PGlite via run_sync (requires a callPromising entry / JSPI).
 #
-# Requires a JS global `pgQuery(sql, params)` -> Promise of
+# Requires a JS global `pgQuery(sql, params, copyData)` -> Promise of
 #   {ok, rows, fields:[{name,dataTypeID}], affected, message,
-#    notices:[{severity,message_primary,message_detail,message_hint}]}.
+#    notices:[{severity,message_primary,message_detail,message_hint}]};
+# a non-null copyData string becomes PGlite's per-query `blob` option, the
+# backing store of a `COPY ... FROM '/dev/blob'` (how cursor.copy() below
+# implements db.py's COPY-FROM-stdin route).
 import re as _re
 import sys
 import types
@@ -38,8 +41,8 @@ class _Diag:
         self.message_hint = d.message_hint
 
 
-def _run(sql_str, params):
-    res = run_sync(pgQuery(sql_str, to_js(params) if params else None))
+def _run(sql_str, params, copy_data=None):
+    res = run_sync(pgQuery(sql_str, to_js(params) if params else None, copy_data))
     notices = [_Diag(n) for n in res.notices] if res.notices else []
     if not res.ok:
         e = psycopg.Error(res.message)
@@ -88,6 +91,45 @@ class _Col(tuple):
 
 
 _TXCTRL = _re.compile(r"^\s*(BEGIN|START|COMMIT|ROLLBACK|END)\b", _re.I)
+_FROM_STDIN = _re.compile(r"\bFROM\s+stdin\b", _re.I)
+
+
+class _Copy:
+    """psycopg's `with cur.copy('COPY t ... FROM STDIN') as c: c.write(...)`,
+    for the COPY-FROM-stdin units db.py's _execute_statement carves out of
+    dump-style batches (notebook setup cells, pasted pg_dump output). PGlite
+    speaks no COPY sub-protocol over query(), but reads a per-query Blob as
+    the virtual file '/dev/blob': collect the written rows and run the
+    statement once, rewritten to `FROM '/dev/blob'`, with the data as that
+    blob. COPY TO is not implemented (db.py refuses it upstream)."""
+
+    def __init__(self, cur, stmt):
+        self._cur = cur
+        self._buf = []
+        self._stmt = stmt
+
+    def __enter__(self):
+        return self
+
+    def write(self, data):
+        self._buf.append(data if isinstance(data, str) else bytes(data).decode())
+
+    def __exit__(self, exc_t, exc_v, tb):
+        if exc_t is not None:
+            return False
+        cur = self._cur
+        sql = _FROM_STDIN.sub("FROM '/dev/blob'", self._stmt, count=1)
+        cur._c._ensure_tx()
+        try:
+            _f, _rows, aff, notices = _run(sql, None, "".join(self._buf))
+        except psycopg.Error as e:
+            cur._c._dispatch(getattr(e, "_notices", []))
+            raise
+        cur.description = None
+        cur._rows, cur._i = [], 0
+        cur.rowcount = aff
+        cur._c._dispatch(notices)
+        return False
 
 
 class _Cursor:
@@ -120,6 +162,10 @@ class _Cursor:
         self._rows, self._i = rows, 0
         self.rowcount = len(rows) if f else aff
         self._c._dispatch(notices)
+
+    def copy(self, statement):
+        s = statement if isinstance(statement, str) else statement.as_string(None)
+        return _Copy(self, s)
 
     def fetchall(self):
         r = self._rows[self._i:]

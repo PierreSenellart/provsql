@@ -342,6 +342,10 @@
   });
   setupHistoryDropdown();
 
+  // Pasted / dropped SQL is cleaned of invisible Unicode on arrival (see
+  // sanitizeSqlText below; the module-scope declaration is hoisted).
+  wirePasteSanitizer(document.getElementById('request'));
+
   // Clear-query button in the editor gutter : wipes the textarea so the
   // user can start over without selecting + deleting the previous text.
   // The current text is pushed to history first (pushHistory dedupes
@@ -383,7 +387,9 @@
       return;
     }
     pushHistory(ta.value);
-    ta.value = text.replace(/\r\n/g, '\n');
+    // Same cleanup as a paste: a file saved from a rich-text source can
+    // carry a BOM or NBSPs that PostgreSQL's lexer rejects.
+    ta.value = sanitizeSqlText(text.replace(/\r\n/g, '\n'));
     ta.setSelectionRange(0, 0);
     ta.focus();
     ta.dispatchEvent(new Event('input', { bubbles: true }));
@@ -423,6 +429,11 @@
     isRightAlignedType, matchesProvType, pushHistory,
   };
   window.ProvsqlStudio.highlightSql = highlightSql;
+  // The notebook front-end (static/notebook.js, loaded on demand) attaches
+  // the same paste cleanup to its per-cell SQL textareas, and runs loaded
+  // .sql files through the same text cleanup.
+  window.ProvsqlStudio.wirePasteSanitizer = wirePasteSanitizer;
+  window.ProvsqlStudio.sanitizeSqlText = sanitizeSqlText;
 
   if (mode === 'where')         setupWhereMode();
   else if (mode === 'notebook') setupNotebookMode();
@@ -2653,6 +2664,43 @@ const CLASSIFIER_EXPLAINERS = {
         + 'not certified by the classifier.',
 };
 
+/* Normalize SQL text that arrived via the clipboard, a drag-and-drop or a
+   file: rich-text copy (docs pages, PDFs, mail clients) routinely smuggles
+   in invisible Unicode that PostgreSQL's lexer rejects with a baffling
+   `syntax error at or near "￼"`. Zero-width and bidi format characters
+   are dropped, the non-breaking-space family becomes a plain space, and
+   Unicode line / paragraph separators become newlines. Applied to the whole
+   text, string literals included: a pasted literal that genuinely needs an
+   NBSP is far rarer than a doc copy that chokes on one. */
+function sanitizeSqlText(text) {
+  return String(text)
+    // zero-width spaces / joiners, bidi marks and embeddings, word joiner,
+    // BOM/ZWNBSP, object replacement character, soft hyphen
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF\uFFFC\u00AD]/g, '')
+    // NBSP, ogham space mark, the en/em/figure/punctuation/thin/hair space
+    // family, narrow NBSP, math space, ideographic space
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
+    // Unicode line / paragraph separators
+    .replace(/[\u2028\u2029]/g, '\n');
+}
+
+/* Attach the sanitizer to a SQL-editing textarea: after a paste or drop,
+   rewrite the value in place (cursor preserved relative to the cleaned
+   prefix) and re-fire `input` so highlight / autosize listeners repaint.
+   The synthetic event carries no inputType, so it cannot re-trigger. */
+function wirePasteSanitizer(ta) {
+  ta.addEventListener('input', (e) => {
+    if (e.inputType !== 'insertFromPaste' && e.inputType !== 'insertFromDrop') return;
+    const dirty = ta.value;
+    const clean = sanitizeSqlText(dirty);
+    if (clean === dirty) return;
+    const pos = sanitizeSqlText(dirty.slice(0, ta.selectionStart)).length;
+    ta.value = clean;
+    ta.setSelectionRange(pos, pos);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 /* Global runQuery: invoked by the form's inline onsubmit. POSTs to /api/exec
    and renders the response into the result section. */
 /* Block renderer factory: turns an /api/exec-shaped payload (blocks /
@@ -3077,7 +3125,18 @@ async function runQuery(ev) {
   ev.preventDefault();
 
   const env = window.__provsqlStudio || { mode: 'where', escapeHtml: s => s, escapeAttr: s => s, formatCell: v => v };
-  const sqlText = document.getElementById('request').value;
+  // Last-line cleanup for invisible Unicode, covering entry paths the paste
+  // hook does not see (?q= deep links, programmatic fills): fix the textarea
+  // in place so what runs is what the user sees highlighted.
+  const reqTa = document.getElementById('request');
+  {
+    const clean = sanitizeSqlText(reqTa.value);
+    if (clean !== reqTa.value) {
+      reqTa.value = clean;
+      reqTa.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+  const sqlText = reqTa.value;
   const head    = document.getElementById('result-head');
   const body    = document.getElementById('result-body');
   const count   = document.getElementById('result-count');

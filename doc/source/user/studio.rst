@@ -33,12 +33,13 @@ under the `MIT License
    PostgreSQL and ProvSQL compiled to WebAssembly, runs entirely
    client-side as the **ProvSQL Playground** at
    `provsql.org/playground/ <https://provsql.org/playground/>`_, on the
-   tutorial and case-study databases. It needs a recent browser with
+   tutorial and case-study databases; a first visit opens the
+   interactive tutorial notebook. It needs a recent browser with
    WebAssembly JSPI; the landing page lists current browser support.
    Because the browser cannot launch external programs, the external
    knowledge compilers and model counters, as well as graph-easy for
-   :sqlfunc:`view_circuit`, are not available there: probability uses
-   the built-in tree-decomposition compiler, and everything else works.
+   :sqlfunc:`view_circuit`, are not available there: probability is
+   computed with ProvSQL's built-in methods, and everything else works.
 
 Studio combines well with ``psql``: bulk fixture loads
 (``psql -d mydb -f setup.sql``) can go through ``psql`` before Studio
@@ -859,7 +860,9 @@ SVG circuit snapshots, plain-text evaluation results), so GitHub and
 nbviewer render a saved notebook as a readable static document;
 Studio itself re-renders from richer payloads stored alongside under
 ``application/vnd.provsql.*`` keys. :fa:`folder-open` :guilabel:`Load` opens an
-``.ipynb`` in a new tab. Between saves, every tab autosaves to the
+``.ipynb`` in a new tab; it also accepts a ``.sql`` file (a fixture
+script, a ``pg_dump`` dump…), appended to the current notebook as one
+ready-to-run SQL cell. Between saves, every tab autosaves to the
 browser's local storage, surviving reloads and mode switches.
 
 .. _studio-example-notebooks:

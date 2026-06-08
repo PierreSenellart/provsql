@@ -72,9 +72,25 @@
               it will likely hang.)
             </div>
 
-            <p><a class="btn btn--primary btn--large" id="launch" href="app.html">Launch the Playground</a></p>
+            <p>
+              <a class="btn btn--primary btn--large" id="launch" href="app.html">Launch the Playground</a>
+              <a class="btn btn--info btn--large" id="launch-tutorial" href="app.html?nb=tutorial">Follow the interactive tutorial</a>
+            </p>
             <p><small>First load fetches a few megabytes (PostgreSQL and Python,
             as WebAssembly) and takes a few seconds; it is then cached.</small></p>
+
+            <p>New to ProvSQL? The tutorial is a notebook of runnable cells
+            that adds provenance to a small database and walks through
+            semiring evaluation and probability computation; on your first
+            visit, the Playground opens on it. The
+            <a href="https://provsql.org/docs/">documentation</a>'s case
+            studies are bundled as notebooks too: open them from the Notebook
+            mode's <em>Open example</em> menu, or jump straight to one
+            (<a href="app.html?nb=cs1">intelligence agency</a>,
+            <a href="app.html?nb=cs2">open science database</a>,
+            <a href="app.html?nb=cs5">wildlife photo archive</a>,
+            <a href="app.html?nb=cs6">air-quality sensor network</a>,
+            <a href="app.html?nb=cs7">peer-review assignment</a>).</p>
 
             <div class="notice--info">
               <strong>Everything runs in-process; external tools are not
@@ -82,7 +98,7 @@
               the external knowledge compilers (d4, c2d, miniC2D, dsharp,
               weightmc) and graph-easy are absent, and options that rely on them
               do not appear. Probability is computed with ProvSQL's built-in
-              tree-decomposition compiler. Everything else works: semiring
+              methods. Everything else works: semiring
               evaluation, where-provenance, Shapley and Banzhaf values,
               continuous random variables, and circuit / tree-decomposition
               rendering (via a WebAssembly Graphviz).

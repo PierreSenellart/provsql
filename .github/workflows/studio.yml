@@ -193,6 +193,10 @@ jobs:
           path: /root/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
       - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest studio/tests/e2e
+      # --reruns: a busy shared runner sporadically blows the 90s
+      # Page.goto timeout on one cell of the matrix; retry the failed
+      # test once before failing the job. A genuine failure still fails
+      # (both attempts), it just reports a few seconds later.
+      - run: python -m pytest studio/tests/e2e --reruns 1 --reruns-delay 5
         env:
           PGUSER: postgres

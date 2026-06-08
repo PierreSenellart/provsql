@@ -291,6 +291,25 @@ def test_load_ipynb_rerenders_saved_outputs(page: Page, studio_url: str, tmp_pat
     expect(page.locator("#nb-kernel-label")).to_have_text("no kernel")
 
 
+def test_load_sql_file_appends_sql_cell(page: Page, studio_url: str,
+                                        tmp_path) -> None:
+    """The Load button also accepts a .sql file: its content lands in the
+    current notebook as one appended SQL cell (cleaned of CRLF and invisible
+    Unicode like a paste), ready to run."""
+    sql_file = tmp_path / "fixture.sql"
+    sql_file.write_text("SELECT\u00a01 AS a;\r\nSELECT 2 AS b;\u200b\n")
+
+    _goto_notebook(page, studio_url)
+    page.locator("#nb-load-input").set_input_files(str(sql_file))
+    ta = _sql_cell_ta(page, 1)   # appended after the pristine empty cell
+    expect(ta).to_have_value("SELECT 1 AS a;\nSELECT 2 AS b;\n", timeout=8000)
+    ta.focus()
+    _run_focused(page)
+    cell = page.locator(".nb-cell--sql").nth(1)
+    expect(cell.locator(".nb-out tbody td").first).to_have_text("2", timeout=8000)
+    assert cell.locator(".nb-out .wp-error").count() == 0
+
+
 def test_uuid_click_inserts_circuit_cell(page: Page, studio_url: str) -> None:
     """Clicking a provenance UUID in a result inserts a circuit cell
     right below the SQL cell, with the DAG painted as SVG; clicking a
