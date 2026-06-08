@@ -55,6 +55,360 @@ Conditioning is exactly such an operation: it couples everything in the
 footprint of `C`. The discrete and continuous cases are then the same
 construction reading off two different carriers.
 
+## 1bis. Agreed surface and model (June 2026)
+
+This section is the decided plan; §2–§6 are the supporting rationale.
+
+### The operator(s)
+
+Conditioning is surfaced as a single overloaded operator `|`
+("given"/"conditioned on"), all forms living in the `provsql` schema
+(bare when `provsql` is on the search_path, like every other ProvSQL
+operator). The right operand is always a Boolean event supplied as a
+provenance token (`uuid`); evidence in `[0,1]` only. **Weighted / soft
+(MarkoViews-style) conditioning (§2, §5) is explicitly not a priority** –
+hard conditioning only; §2 stays as background, not a build target.
+
+**Binary `|` – value-level conditioning** (function alias `cond`,
+i.e. `cond(x, c) ≡ x | c`), carrier-parametric in its left operand,
+result type following the left operand:
+
+- `uuid | uuid` – condition a provenance token (a Boolean event) on
+  another. A terminal `gate_conditioned` (see below); usually consumed
+  by `probability_evaluate` to a scalar `P(x∧c)/P(c)`.
+- `agg_token | uuid` – condition a discrete aggregate's distribution.
+- `rv | uuid` – condition a random variable's distribution.
+
+**Prefix unary `|` – whole-tuple output conditioning** (function alias
+`given`, i.e. `| c ≡ given(c)`). Written as a *consumed* term in the
+select list, it conditions the **output provenance** of the current
+query's rows on `c`:
+
+```sql
+SELECT a, b, given((SELECT provenance() FROM tests
+                    WHERE patient_id = s.id AND result = 'positive'))
+FROM source s;
+-- visible columns: a, b   (the given(...) term is stripped)
+-- per-row output provenance: provenance() | <that row's evidence>
+```
+
+This is the *derive*-not-*mutate* answer to "condition an entire tuple
+output": there is **no `set_provenance`** – the rewriter derives a new
+relation's provenance, exactly as every query already derives output
+provenance, just with one more operator. The literal `(a,b,c) | evidence`
+form is *not* used (ProvSQL is a post-parse rewriter and cannot add
+syntax; a record-typed `|` would collapse the columns and still not
+reach the tuple's hidden `provsql`). The prefix term is the realizable
+shape, and it is a directive (`given c`), never a naming of the `provsql`
+column.
+
+Mechanics and conventions:
+
+- **Prefix, not postfix.** PostgreSQL removed postfix operators in PG14
+  but keeps prefix operators on every supported version, so `| c` is
+  safe across the CI matrix; `c |` would not be.
+- **Coexistence.** Operators key on `(name, leftarg, rightarg)`, so the
+  binary `|`(uuid,uuid)/(rv,uuid)/(agg_token,uuid) and the prefix
+  `|`(none,uuid) all coexist, and none collide with core PG's binary `|`
+  (integer bitwise-OR, different arg types). Prefix vs binary is
+  disambiguated by the presence of a left operand (`a, | c` parses `| c`
+  as prefix).
+- **Per-row evidence is free.** Because `given(c)` is a select-list term,
+  `c` is evaluated per output row and may correlate with the row's
+  columns – each tuple is conditioned on its *own* evidence.
+- **No-provenance → 1.** A row whose provenance defaults to `gate_one()`
+  conditioned by `given(c)` is `1 | c = gate_conditioned(one, c)`,
+  well-defined (a certain row, given `c`), so `SELECT given(c)` with no
+  payload columns is harmless.
+- **Rewriter novelty.** Both `| c` and `given(c)` resolve to one backing
+  function the rewriter recognizes; the only new pattern is that the
+  prefix term is *stripped* from the visible projection (a consumed
+  marker) rather than *substituted* like `provenance()`.
+
+### Why this stays consistent with semiring annotations
+
+The default `provsql` column is a *semiring* annotation, not a
+probability or a Boolean event. Conditioning is **not a semiring
+operation**: `P(·|C) = P(·∧C)/P(C)` needs a normalizing division, which
+no general semiring has (m-semirings have monus, not a multiplicative
+inverse). So `|` does not act on the annotation *qua* semiring element;
+it is meaningful only in the *measure* interpretation (probability, and
+the RV / `agg_token` distribution evaluators).
+
+Concretely, `|` builds a **`gate_conditioned`** marker that is
+
+- transparent to the measure-flavoured evaluators (`probability_evaluate`
+  → `P(·∧C)/P(C)`; the RV / `agg_token` moment / sample / histogram
+  dispatchers → the restricted distribution), and
+- **refused by every general `sr_*` semiring** (counting, why, formula,
+  tropical, …),
+
+reusing the `gate_assumed` "transparent-or-refuse" marker pattern (the
+`'boolean'` / `'absorptive'` assumption markers). The semiring-safe
+*shadow* of conditioning already exists: restriction without
+normalization is plain `times(token, C)`. Conditioning = restriction +
+a measure-only normalization; only the normalization leaves the semiring
+world, and the marker is what fences it off so a conditioned token
+cannot be silently fed to `sr_counting` et al.
+
+### Prerequisite (A): `provenance()` is scope-local and inert, in every case
+
+`provenance()` must resolve to the current (innermost) subquery scope in
+**all** contexts, and the token it yields must be **inert**: obtaining it
+– as a target-list column, a sublink result, or conditioning evidence –
+reads the tuple's *identifier* without coupling that relation into the
+surrounding row's lineage. Lineage coupling comes only from actual data
+flow (joins, and the decorrelation of *non*-provenance values) and from
+explicit conditioning. This separates **identity** (the token, inert)
+from **existence** (the probabilistic lineage); naming a token never
+asserts the tuple's existence into your row.
+
+Today FROM-subqueries already resolve `provenance()` scope-locally and
+expose it as a plain value, but a `provenance()` inside an
+expression-context SubLink (scalar / `IN` / `EXISTS`) is *rejected* by a
+defensive guard (`provsql.c` ~11757 / ~11777), because `has_provenance()`
+and the provenance mutator do not descend into SubLinks, so the call
+would otherwise reach the executor unprocessed. The fix:
+
+- drop the guard;
+- make `has_provenance()` and the provenance mutator descend into
+  SubLinks, resolving `provenance()` to the SubLink's own scope;
+- treat a `provenance()`-returning SubLink as an **inert scalar token
+  fetch** – evaluate it to the uuid, *not* through value-subquery
+  decorrelation (which would couple the relation into the outer lineage).
+
+This is an independently-sensible model fix (it removes a current
+limitation and makes `provenance()` uniform across FROM and expression
+contexts), and it is the piece the canonical use case hinges on:
+
+```sql
+-- bare row token  |  inert evidence token
+SELECT probability_evaluate(
+         provenance() | (SELECT provenance() FROM tests
+                         WHERE patient_id = p.id AND result = 'positive'))
+FROM patients p;
+```
+
+The correlation between the two tokens is handled automatically by
+content-addressing: a base tuple shared by `X` and `C` is the *same*
+input gate in both circuits, so `P(X∧C)` over `times(X, C)` is the true
+joint, not an independent product – no special joint-load path is needed.
+
+### Carrier asymmetry, and the terminal discrete gate
+
+Normalization by `P(C)` is **global** (a ratio of two whole-circuit
+evaluations), so it does not distribute through `×` / `+`. The two
+carriers answer this differently, and the discrete one is settled by an
+explicit design choice:
+
+- `rv | C` and `agg_token | C` yield a self-contained conditioned
+  *distribution* that composes onward cleanly – `gate_conditioned` as a
+  stored, composable gate is sound here (this is the §3 continuous gate).
+- `uuid | C` builds a **terminal** `gate_conditioned(target, evidence)`
+  gate. It is **not composable with the semiring gates**: it may not be
+  a child of `plus` / `times` / `monus` / `semimod` / `agg` / `project`
+  / etc., and the constructors refuse to build such a parent (so
+  joining or unioning a conditioned tuple raises, rather than silently
+  burying a posterior under further algebra where the global
+  normalization would be meaningless). This makes the
+  "discrete conditioning is root/answer-level" property *structural*
+  rather than a convention.
+
+The single operation a conditioned `uuid` token admits is **more
+conditioning**: `cond(cond(X, A), B)` is allowed and **folds** to
+`cond(X, A ∧ B)` – the evidence accumulates via `times` into the gate's
+*evidence* child, so the gate never actually nests; it stays the binary
+`gate_conditioned(target, evidence)` flattened to one level. This is
+sequential Bayesian update (the §3 simplifier rule), and it is sound for
+hard conditioning because `P((X|A)|B) = P(X | A∧B)`. Evaluation:
+`probability_evaluate(gate_conditioned(X, E)) = P(X∧E)/P(E)`; every
+general `sr_*` semiring refuses it.
+
+This shapes **materialization** (creating a tuple whose `provsql` is a
+conditioned token):
+
+- `rv` / `agg_token`: trivial – ordinary column values that flow onward.
+- `uuid`: **also fine now** – store the `gate_conditioned` token; it can
+  be re-conditioned and evaluated as above with no special machinery,
+  precisely because it is terminal. The **only** thing it cannot do is
+  re-enter relational algebra (join / union). Making a conditioned tuple
+  *re-composable* would need a **re-based posterior** (MayBMS-style: fold
+  the evidence in and treat the result as a fresh independent
+  representation); that is the one piece left **deferred**, and it is
+  needed only when a stored posterior must be joined onward, not for the
+  store / re-condition / evaluate cycle.
+
+### Delivery target: a "ProvSQL as a probability calculator" case study
+
+A dedicated case study (a sibling of the existing `doc/.../casestudy*`
+narratives) that uses ProvSQL as an **exact, correlation-aware
+probability calculator queried in SQL**, across **both carriers** –
+discrete events *and* continuous random variables. It is a demonstrator
+and an acceptance target for the whole conditioning surface, discrete and
+continuous together; the implementation targets both, and any blocker on
+the continuous side (e.g. the §F.1 per-distribution refactor in
+`continuous_distributions.md`) is fixed as it is hit, not treated as a
+gate.
+
+The pitch: classic probability problems, expressed as queries over a
+probabilistic database, with ProvSQL doing the (conditional) probability
+arithmetic – *exactly* (not by sampling) and *correlation-aware* (the
+provenance circuit tracks shared events, so joint and conditional
+probabilities are right without independence assumptions or hand-rolled
+inclusion–exclusion). That correlation-awareness is the differentiator a
+spreadsheet or an independence-assuming tool cannot match, and it is
+what makes "calculator in SQL" non-trivial.
+
+**The database substrate is the other half of the pitch**, and the case
+study should make it tangible rather than incidental – this is a
+probability calculator that inherits everything a DBMS already provides:
+
+- **The query language *is* the event algebra.** Events, evidence and
+  hypotheses are arbitrary SQL – joins, `GROUP BY`, set operations,
+  `WITH RECURSIVE`, window functions, subqueries – so a complex event is
+  *specified*, declaratively and compactly, never enumerated by hand. A
+  standalone calculator works over a small, explicitly listed sample
+  space; here the sample space is whatever the tables hold, and the
+  event is a predicate over it. (Recursion is the sharpest example:
+  gambler's ruin / a Markov chain is a `WITH RECURSIVE`, not a
+  hand-unrolled tree.)
+- **Real data, at scale, with indexing and the planner.** The
+  probabilistic model is an ordinary (large) dataset, not a toy: the
+  evidence `(SELECT … WHERE patient_id = p.id AND result = 'positive')`
+  is found by an index, the joins are planned and executed by Postgres,
+  and only the *relevant* lineage reaches the circuit. The calculator
+  scales with the database, not with a hand-built model.
+- **Integration into ordinary analytics.** Conditional probabilities and
+  posterior moments are columns in normal queries – they join with
+  deterministic tables, feed views / CTAS / BI tools, and compose with
+  the rest of a SQL pipeline. The probability lives *next to* the data it
+  is about.
+- **The model and its posteriors persist.** `add_provenance` + `set_prob`
+  + `repair_key` define a stored, declarative probabilistic model that is
+  queried (and updated) across sessions; materialised conditional tables
+  persist posteriors for re-query. There is no per-session model rebuild.
+
+So the case study argues two things at once: ProvSQL is *correct* where
+naive tools are wrong (correlation-aware, exact), and it is *practical*
+where standalone calculators are not (a real query language over real,
+indexed, persistent data).
+
+The translation dictionary it teaches (both carriers):
+
+| probability | ProvSQL / SQL |
+|---|---|
+| event | tuple(s) with `set_prob` |
+| `A ∧ B` | join (`provenance_times`) |
+| `A ∨ B` | `UNION` (`provenance_plus`) |
+| `¬A` | `EXCEPT` (`monus`) |
+| mutually exclusive outcomes | `repair_key` |
+| `P(A)` | `probability_evaluate(A)` |
+| `P(A \| B)` | `probability_evaluate(A \| B)` |
+| a continuous quantity | a `random_variable` (`normal`, `uniform`, …) |
+| `E[X]`, `Var[X]` | `expected(X)`, `variance(X)` |
+| `X \| C` (a posterior distribution) | `X \| C` (an `rv`, flows onward) |
+| `E[X \| C]`, `Var[X \| C]` | `expected(X \| C)`, `variance(X \| C)` |
+| sequential Bayesian update | `cond(cond(X,A),B)` / `given(...)` materialisation |
+
+Candidate worked problems (a spread across both carriers):
+
+Discrete:
+
+- **Base-rate / medical test (Bayes).** Prevalence + sensitivity +
+  specificity ⇒ `P(disease | positive)`; the canonical conditioning
+  demo, showing `P(D|+) ≠ sensitivity`.
+- **Correlation that matters.** `P(A ∪ B)` where `A`, `B` share a
+  sub-event: ProvSQL does inclusion–exclusion automatically where a
+  naive independent computation is wrong – the showcase example.
+- **Monty Hall / two-child.** Conditioning on an observation; the
+  textbook "surprising" answers fall out of `|`.
+- **Mutual exclusion + conditioning.** A die via `repair_key`;
+  `P(even | > 3)`.
+- **Independence as a computed fact.** Check `P(A∧B) = P(A)·P(B)`; show
+  conditioning breaks it when events are correlated.
+
+Continuous (the same calculator, distribution-valued):
+
+- **Bayesian inference on a quantity.** A `normal` prior, updated by
+  observations into a posterior `random_variable`; `expected` /
+  `variance` of the posterior. The continuous twin of the medical-test
+  Bayes example, and the motivating sequential-update story (the
+  posterior must be a *value that flows onward*, not just a moment).
+- **Truncation as conditioning.** `X | (X > k)` – a truncated /
+  conditional-Value-at-Risk distribution; `expected(X | X > k)`. Shows
+  the RangeCheck truncation path as a *special case* of the general
+  `|`.
+- **Conditional moments of an aggregate.** `E[SUM(x) | event]` over a
+  probabilistic `GROUP BY` (the `agg_token` carrier).
+- **Mixed discrete/continuous.** A continuous posterior conditioned on a
+  discrete event (e.g. a measurement distribution given that a
+  correlated sensor fired).
+
+Cross-cutting / tie-in:
+
+- **Recursive / random walk.** Gambler's ruin or a conditional
+  reachability probability as a `WITH RECURSIVE`, linking to the
+  bounded-treewidth recursive route – the substrate argument's sharpest
+  case (the event *is* a recursive query, not a hand-unrolled tree).
+- **Grounded at scale (the substrate argument made concrete).** One
+  problem over a real, indexed table rather than a toy sample space –
+  entity resolution / record linkage (`P(records 42, 88 match |
+  17, 42 confirmed)` over correlated `matches`), or per-component network
+  reliability – where the event and the evidence are non-trivial queries
+  resolved through indexes and the planner, and the *same* `|` machinery
+  that cracks the textbook puzzles runs over thousands of correlated
+  tuples. This is the example that proves the calculator is not a toy.
+
+How it shapes the implementation:
+
+- The CS is the acceptance target for the **whole operator across both
+  carriers** – discrete `cond` / `probability_evaluate(A | B)` *and*
+  continuous `rv | C` / `agg_token | C` with `expected` / `variance` of
+  the conditioned object. The continuous carrier is in scope from the
+  start, not deferred; if the §F.1 per-distribution refactor (or any
+  other continuous-side blocker) gets in the way, it is fixed as part of
+  this work rather than gating it.
+- It forces the `P(C)=0` (impossible evidence) decision early (lean:
+  NULL), and on the continuous side the rare-evidence behaviour (prefer
+  the analytic / closed-form path; the rejection-sampling fallback must
+  warn as `P(C) → 0`).
+- It pins the **`FootprintCache` soundness risk** as a first-class test:
+  the `cond(X,A) * cond(Y,A)` shared-evidence case must defeat the
+  `gate_arith TIMES` structural-independence shortcut – ship the
+  regression test with the feature.
+- It exercises the interplay with `repair_key` mutual exclusion and the
+  existing `probability_evaluate` method portfolio (all exact methods
+  correct on `[0,1]` evidence; no exact-only guard needed, weighted /
+  MarkoViews inputs being out of scope).
+- It may motivate a thin `conditional_probability(A, B)` convenience, or
+  confirm `probability_evaluate(A | B)` is enough.
+
+### Build order
+
+1. **(A)** `provenance()` scope-local + inert in SubLinks (drop the
+   guard, descend, inert fetch). Standalone prerequisite, testable in
+   isolation: the currently-rejected scalar-subquery cases now return
+   inert tokens.
+2. **(B)** the whole `|` conditioning surface, **both carriers**, on top
+   of (A) – built as one deliverable, not staged discrete-then-continuous:
+   - binary `|` / `cond` value operator for `uuid` / `rv` / `agg_token`;
+   - prefix `|` / `given` whole-tuple output directive;
+   - the `gate_conditioned` gate – terminal for `uuid`, composable
+     distribution for `rv` / `agg_token` – transparent to the measure
+     evaluators, refused by general semirings;
+   - `probability_evaluate(A | B)` → scalar; `expected` / `variance` of a
+     conditioned `rv` / `agg_token`.
+   The continuous carrier is in scope from the start; the §F.1
+   per-distribution refactor in `continuous_distributions.md` (or any
+   other continuous-side blocker) is **fixed inline as part of this
+   work**, not a gate. Ship the `cond(X,A) * cond(Y,A)` `FootprintCache`
+   regression test with it.
+3. **(C)** the "ProvSQL as a probability calculator" case study
+   (discrete + continuous) – the acceptance target for (B).
+4. Materialised *re-based* discrete posterior (MayBMS-style, for
+   re-composition into join / union) – deferred.
+5. Soft / weighted conditioning – not a priority.
+
 ## 2. MarkoViews: the discrete precedent
 
 An MVDB is `(Tup, w, V)`: possible tuples with weights, plus
@@ -371,35 +725,47 @@ SELECT provsql.condition(prior, evidence_token, weight => 0.9);
 
 ## Priorities
 
-1. **Hard conditioning on the continuous carrier (§3).** The most
-   leverage per architectural unit: it collapses the existing RangeCheck
-   truncation codepath into one general mechanism, promotes the existing
-   `prov` moment-conditioning argument (§6.A.1) from "moment only" to "a
-   distribution that flows onward", and unblocks §6.B.2. Lands after the
-   §F.1 per-distribution refactor in `continuous_distributions.md`,
-   alongside the first architectural batch. The single soundness risk is
-   the `FootprintCache` back-off; ship it with the `cond(X,A)*cond(Y,A)`
-   regression test.
-2. **Discrete event-conditioning as a thin SQL surface (§2, lesson 1).**
-   A `probability_evaluate(token, prov => …)` overload lowering to
-   `P(Q ∧ C) / P(C)` on the existing dispatcher, with the exact-only
-   guard for out-of-range inputs. No new gate. Delivers §6.B.1 and §6.B.3
-   (the latter once a no-violation-event helper exists).
-3. **Materialised conditional tables (§3).** The MayBMS-style assertion:
-   store and re-query a conditioned object. Needed once §6.B.2's running
-   posteriors want persistence.
-4. **Soft / weighted conditioning (§5).** Parameter on the same gate;
-   bridges to importance weighting and soft evidence (§6.B.5). Lower
-   priority, no new mechanism.
+Superseding the original ordering below: the agreed plan (§1bis) leads
+with the model prerequisite, then the unified operator.
+
+0. **(A) `provenance()` scope-local + inert in SubLinks (§1bis).** The
+   enabling model fix, independently sensible and testable in isolation;
+   the `|` operator's ergonomics hinge on it. Drop the sublink guard,
+   descend into SubLinks, inert token fetch.
+1. **(B) the whole `|` conditioning surface, both carriers (§1bis).**
+   Binary `|` / `cond` for `uuid` / `rv` / `agg_token`, prefix `|` /
+   `given` whole-tuple directive, the `gate_conditioned` gate (terminal
+   for `uuid`, composable distribution for `rv` / `agg_token`, refusing
+   non-measure semirings), `probability_evaluate(A|B)` and
+   `expected`/`variance` of conditioned distributions. **One deliverable,
+   discrete and continuous together** – the §F.1 continuous refactor (or
+   any continuous blocker) is fixed inline, not a gate. Ships with the
+   `cond(X,A)*cond(Y,A)` `FootprintCache` regression test.
+2. **(C) Delivery target: the "ProvSQL as a probability calculator" case
+   study (§1bis).** Demonstrator and acceptance target for (1), spanning
+   both carriers.
+3. **Materialised *re-based* discrete posterior (MayBMS-style, §3 /
+   §1bis).** Store a conditioned `uuid` as a fresh independent
+   representation so it can re-enter relational algebra (join/union).
+   Deferred until a persisted posterior must be composed onward.
+4. **Soft / weighted conditioning (§5).** *Not a priority* (explicit
+   decision): hard conditioning only. Kept as background; later a
+   parameter on the same gate, no new mechanism.
 5. **Shapley over evidence (§6.B.4).** Research track; connecting code
    over (1) plus existing Shapley infrastructure.
 
 ## Implementation observations
 
-- The MarkoViews reduction shows the discrete carrier wants *no new
-  gate*: `P(Q | C) = P(Q ∧ C) / P(C)` is two existing evaluations and a
-  division. Resist adding a discrete conditioning gate; reserve the gate
-  for distribution-valued and materialised results.
+- The MarkoViews reduction shows the discrete *evaluation* needs no new
+  machinery: `P(Q | C) = P(Q ∧ C) / P(C)` is two existing evaluations and
+  a division, and that is exactly what `probability_evaluate` does for a
+  `gate_conditioned(Q, C)` internally. The gate itself is still added for
+  the `uuid` carrier (§1bis) – not to evaluate a one-shot `P(Q|C)`, but
+  so the operator's result is a storable, re-conditionable token. It is
+  the **terminal** kind (§1bis "terminal discrete gate"): non-composable
+  with the semiring gates, foldable only under further conditioning. The
+  thing to resist is a *composable* discrete conditioning gate that would
+  bury the global `P(C)` normalization under `plus` / `times`.
 - Conditioning is the canonical example of a circuit operation that
   *defeats* independence shortcuts. Any optimisation keyed on
   `FootprintCache` disjointness must treat `cond` as widening the
