@@ -300,11 +300,22 @@ def rst_prose_to_markdown_cells(prose_segments: list[str]) -> list[str]:
     seeing every underline style in order), separated by sentinel
     paragraphs, then split the gfm output back into per-run cells."""
     joined = ("\n\n" + SENTINEL + "\n\n").join(prose_segments)
+    # rst+smart applies typographic substitutions the docs get from Sphinx's
+    # smart_quotes: ``--`` becomes an en-dash, straight quotes curl, ``...``
+    # becomes an ellipsis -- and it is code-aware, so an inline literal such
+    # as ``--wrap=none`` is left untouched.
     out = subprocess.run(
-        ["pandoc", "-f", "rst", "-t", "gfm", "--wrap=none"],
+        ["pandoc", "-f", "rst+smart", "-t", "gfm", "--wrap=none"],
         input=joined.encode(), capture_output=True, check=True,
     ).stdout.decode()
     parts = [p.strip() for p in re.split(rf"^{SENTINEL}$", out, flags=re.M)]
+    # pandoc -t gfm emits GitHub-flavoured math -- inline ``$`...`$`` and
+    # display fenced ```` ```math ... ``` ```` -- but the Jupyter / Studio
+    # notebook renderer is MathJax, which wants ``$...$`` / ``$$...$$``;
+    # convert so the LaTeX renders instead of appearing as verbatim source.
+    parts = [re.sub(r"```+\s*math\s*\n(.*?)\n```+", r"$$\n\1\n$$", p, flags=re.S)
+             for p in parts]
+    parts = [re.sub(r"\$`([^`]+?)`\$", r"$\1$", p) for p in parts]
     # pandoc litter that adds nothing in a notebook context
     parts = [re.sub(r"^<!-- end list -->$", "", p, flags=re.M) for p in parts]
     # Sphinx roles pandoc cannot resolve. Explicit-target references

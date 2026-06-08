@@ -5,9 +5,9 @@
 -- correlation-aware probability calculator.  Three small probabilistic
 -- models, each backing one classic problem:
 --
---   screening  -- the (disease, test) joint sample space (discrete Bayes)
---   risk       -- risk factors that share a common cause (correlation)
---   cases      -- per-day case contributions (aggregation)
+--   screening  – the (disease, test) joint sample space (discrete Bayes)
+--   risk       – risk factors that share a common cause (correlation)
+--   cases      – per-day case contributions (aggregation)
 --
 -- The continuous thread builds its biomarker inline with normal(), so it
 -- needs no table.
