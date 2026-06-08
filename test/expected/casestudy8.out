@@ -1,0 +1,37 @@
+\set ECHO none
+repair_key
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+p_disease|p_positive|p_disease_given_pos|p_pos_given_disease
+0.0100|0.0585|0.1538|0.9000
+(1 row)
+p_a|p_b|p_or_exact|p_or_naive
+0.3000|0.3500|0.4400|0.5450
+(1 row)
+p_default|p_independent|mc_ok
+0.8800|0.8800|t
+(1 row)
+e_x|e_given_referral|var_given_referral|support_lower
+20.000|27.626|4.977|25
+(1 row)
+region|e_total|e_total_given_highday
+North|3.50|5.50
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

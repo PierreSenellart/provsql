@@ -181,6 +181,7 @@ test: continuous_analytical_curves
 
 # Case Study 6: City Air-Quality Sensor Network (continuous RVs)
 test: casestudy6
+test: casestudy8
 
 # PROV export
 test: to_provxml
