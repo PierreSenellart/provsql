@@ -3519,21 +3519,69 @@ rv_Expr_to_provenance(Expr *expr, const constants_t *constants, bool negated)
 }
 
 /**
+ * @brief Walker: does @p node contain a probabilistic (random_variable or
+ *        aggregate) comparison?
+ *
+ * Distinguishes a conditioning predicate (which has at least one such
+ * comparison) from a purely-regular one (an ordinary filter, which is NOT a
+ * conditioning event and is rejected by the @c "X | (predicate)" rewrite).
+ */
+static bool expr_has_probabilistic_cmp(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return false;
+  if (IsA(node, OpExpr)) {
+    OpExpr *op = (OpExpr *)node;
+    if (rv_cmp_index(constants, op->opfuncid) >= 0 ||
+        expr_contains_agg((Node *)op, constants))
+      return true;
+  }
+  return expression_tree_walker(node, expr_has_probabilistic_cmp, data);
+}
+
+/**
  * @brief Convert a Boolean predicate into a provenance condition gate.
  *
  * Carrier-independent counterpart of @c rv_Expr_to_provenance, used by the
  * @c "X | (predicate)" rewrite: the predicate is a Boolean combination
- * (AND / OR / NOT) of probabilistic comparisons -- a random_variable
- * comparison (@c "X > 3", lowered by @c rv_OpExpr_to_provenance_cmp) or an
- * agg_token comparison (@c "SUM(x) > 5", lowered by
- * @c having_OpExpr_to_provenance_cmp).  Returns the @c uuid gate that
- * represents the event "the predicate holds".  AND maps to
- * @c provenance_times, OR to @c provenance_plus, NOT flips @c negated (De
- * Morgan), mirroring @c rv_BoolExpr_to_provenance.
+ * (AND / OR / NOT) of comparisons.  A probabilistic comparison -- a
+ * random_variable comparison (@c "X > 3", lowered by
+ * @c rv_OpExpr_to_provenance_cmp) or an agg_token comparison (@c "SUM(x) > 5",
+ * lowered by @c having_OpExpr_to_provenance_cmp) -- becomes its gate.  A
+ * purely-regular SUB-expression (no probabilistic comparison, e.g.
+ * @c "region = 'north'") becomes the deterministic indicator
+ * @c regular_indicator(cond) (@c χ: @c gate_one when it holds, @c gate_zero
+ * otherwise), so a MIXED predicate is supported per the HAVING-provenance
+ * semantics.  Returns the @c uuid gate representing "the predicate holds":
+ * AND maps to @c provenance_times, OR to @c provenance_plus, NOT flips
+ * @c negated (De Morgan), mirroring @c rv_BoolExpr_to_provenance.
  */
 static FuncExpr *predicate_to_condition_gate(Expr *expr,
                                              const constants_t *constants,
                                              bool negated) {
+  /* A purely-regular sub-expression: a single deterministic indicator (not
+   * decomposed -- a regular OR must not become a sum of indicators).  Under
+   * negation, χ(¬ψ) = 𝟙 ⊖ χ(ψ), i.e. the indicator of the negated comparison,
+   * so wrap the operand in NOT. */
+  if (!expr_has_probabilistic_cmp((Node *)expr, (void *)constants)) {
+    FuncExpr *ind = makeNode(FuncExpr);
+    if (!OidIsValid(constants->OID_FUNCTION_REGULAR_INDICATOR))
+      provsql_error("conditioning on an ordinary (regular) comparison requires "
+                    "provsql.regular_indicator (schema too old)");
+    ind->funcid = constants->OID_FUNCTION_REGULAR_INDICATOR;
+    ind->funcresulttype = constants->OID_TYPE_UUID;
+    ind->funcretset = false;
+    ind->funcvariadic = false;
+    ind->funcformat = COERCE_EXPLICIT_CALL;
+    ind->funccollid = InvalidOid;
+    ind->inputcollid = InvalidOid;
+    ind->args = list_make1(negated
+                  ? (Expr *) makeBoolExpr(NOT_EXPR, list_make1(expr), -1)
+                  : expr);
+    ind->location = -1;
+    return ind;
+  }
+
   if (IsA(expr, BoolExpr)) {
     BoolExpr *be = (BoolExpr *)expr;
     ArrayExpr *array;
@@ -3637,6 +3685,16 @@ static Node *rewrite_cond_predicate_mutator(Node *node, void *data) {
                               &is_prefix)) {
       FuncExpr *gate, *cond;
       Expr *pred = (Expr *)llast(op->args); /* the Boolean predicate operand */
+      /* A conditioning predicate must carry at least one probabilistic
+       * (random_variable / aggregate) comparison.  A purely-regular predicate
+       * is an ordinary deterministic filter, not a conditioning event: reject
+       * it (the regular-indicator leaf only fires for regular comparisons
+       * MIXED with probabilistic ones). */
+      if (!expr_has_probabilistic_cmp((Node *)pred, (void *)constants))
+        provsql_error("the conditioning operator | needs a predicate with at "
+                      "least one random_variable / aggregate comparison; a "
+                      "purely regular condition is an ordinary filter -- use a "
+                      "WHERE clause instead");
       gate = predicate_to_condition_gate(pred, constants, false);
       cond = makeNode(FuncExpr);
       cond->funcid = cond_fn;

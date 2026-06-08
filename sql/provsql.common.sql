@@ -328,6 +328,23 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=boolean, PROCEDURE=cond_predicate);
 
 /**
+ * @brief Deterministic indicator gate for an ordinary (regular) comparison.
+ *
+ * The predicate-provenance of an ordinary comparison (both sides of regular
+ * type, e.g. @c "region = 'north'") is the deterministic indicator
+ * @c "χ(cond)": @c gate_one() when the comparison holds on the row,
+ * @c gate_zero() otherwise (Definition in the HAVING-provenance semantics).
+ * The planner emits this for a regular comparison appearing inside a MIXED
+ * conditioning predicate (one that also has a random_variable / aggregate
+ * comparison); @c cond is evaluated per row, so the indicator is the row's
+ * own truth value, combined by @c ⊗ / @c ⊕ with the probabilistic gates.
+ */
+CREATE OR REPLACE FUNCTION regular_indicator(cond boolean) RETURNS UUID AS
+$$
+  SELECT CASE WHEN cond THEN provsql.gate_one() ELSE provsql.gate_zero() END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
  * @brief Whole-tuple output conditioning directive: @c "given(evidence)".
  *
  * Written as a term in the select list, @c given(c) conditions the OUTPUT

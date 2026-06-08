@@ -2150,3 +2150,12 @@ CREATE OPERATOR | (
   RIGHTARG  = boolean,
   PROCEDURE = random_variable_cond_predicate
 );
+
+-- Deterministic indicator gate for an ordinary (regular) comparison inside a
+-- MIXED conditioning predicate (HAVING-provenance semantics): gate_one when
+-- the comparison holds on the row, gate_zero otherwise.  The planner emits it
+-- for the regular leaves of "X | (SUM(x) > 5 AND region = 'north')".
+CREATE OR REPLACE FUNCTION regular_indicator(cond boolean) RETURNS UUID AS
+$$
+  SELECT CASE WHEN cond THEN provsql.gate_one() ELSE provsql.gate_zero() END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;

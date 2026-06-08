@@ -57,3 +57,30 @@ DROP TABLE agg;
 DROP TABLE s;
 DROP TABLE pc;
 DROP TABLE readings;
+
+-- Mixed predicate: an ordinary (regular-column) comparison combined with a
+-- probabilistic one.  The regular comparison becomes a deterministic
+-- indicator (gate_one / gate_zero) per the HAVING-provenance semantics, so
+-- "SUM(x) | (SUM(x) > 25 AND region = 'north')" conditions on SUM>25 when the
+-- group is in the north (indicator 1 -> E = 30) and on the impossible event
+-- otherwise.  A PURELY regular predicate is rejected (it is an ordinary
+-- filter, not a conditioning event).
+CREATE TABLE sr(g int, region text, x int, p float);
+INSERT INTO sr VALUES (1,'north',10,0.5),(1,'north',20,0.5);
+SELECT add_provenance('sr');
+DO $$ BEGIN PERFORM set_prob(provenance(), p) FROM sr; END $$;
+CREATE TABLE aggr AS SELECT g, region, sum(x) AS sx FROM sr GROUP BY g, region;
+CREATE TABLE mixed_res AS
+  SELECT expected(aggr.sx | (aggr.sx > 25 AND aggr.region = 'north')) AS e_north
+  FROM aggr;
+SET provsql.active = off;
+SELECT round(e_north::numeric,4) AS e_mixed_north FROM mixed_res;
+RESET provsql.active;
+
+-- Purely regular predicate: rejected with a clear message.
+SELECT expected(aggr.sx | (aggr.region = 'north')) FROM aggr;
+
+SELECT remove_provenance('sr');
+DROP TABLE mixed_res;
+DROP TABLE aggr;
+DROP TABLE sr;

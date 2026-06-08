@@ -234,6 +234,11 @@ typedef struct constants_t {
   Oid OID_FUNCTION_AGG_COND_PREDICATE;  ///< agg_token_cond_predicate(agg_token,boolean)
   Oid OID_FUNCTION_GIVEN_PREDICATE;     ///< given_predicate(boolean) -- prefix whole-tuple
   /**@}*/
+  /** @brief OID of @c provsql.regular_indicator(boolean): the deterministic
+   *  @c gate_one/@c gate_zero indicator the planner emits for an ordinary
+   *  (regular-type) comparison appearing inside a mixed conditioning
+   *  predicate. */
+  Oid OID_FUNCTION_REGULAR_INDICATOR;
   bool ok; ///< true if constants were loaded
 } constants_t;
 

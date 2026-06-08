@@ -20,3 +20,13 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+e_mixed_north
+30.0000
+(1 row)
+ERROR:  ProvSQL: the conditioning operator | needs a predicate with at least one random_variable / aggregate comparison; a purely regular condition is an ordinary filter -- use a WHERE clause instead
+remove_provenance
+
+(1 row)
