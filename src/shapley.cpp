@@ -33,7 +33,9 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 
 #include "c_cpp_compatibility.h"
 #include "BooleanCircuit.h"
+#include "GenericCircuit.h"
 #include "Circuit.hpp"
+#include <unordered_map>
 #include "provsql_utils_cpp.h"
 #include "dDNNFTreeDecompositionBuilder.h"
 #include "CircuitFromMMap.h"
@@ -54,8 +56,22 @@ using namespace std;
 static double shapley_internal
   (pg_uuid_t token, pg_uuid_t variable, const std::string &method, const std::string &args, bool banzhaf)
 {
+  /* A conditioned token (X | C) is refused: Shapley / Banzhaf are linear in
+   * their value function, whereas P(X|C) = P(X∧C)/P(C) is a non-linear ratio,
+   * so the conditional indices are not a combination of the unconditioned
+   * ones and have no implementation here.  Detect the conditioned root and
+   * raise a Shapley-specific message rather than the generic semiring-refusal
+   * thrown deeper in the Boolean-circuit build. */
+  GenericCircuit gc = getGenericCircuit(token);
+  if(gc.getGateType(gc.getGate(uuid2string(token))) == gate_conditioned)
+    provsql_error("shapley/banzhaf: conditional Shapley / Banzhaf values are "
+                  "not supported -- a conditioned token (X | C) cannot be "
+                  "passed to shapley() / banzhaf().  Compute the index on the "
+                  "unconditioned token, or use probability_evaluate for the "
+                  "conditional probability P(X|C)");
   gate_t root;
-  BooleanCircuit c = getBooleanCircuit(token, root);
+  std::unordered_map<gate_t, gate_t> gc_to_bc;
+  BooleanCircuit c = getBooleanCircuit(gc, token, root, gc_to_bc);
 
   if(c.hasMultivaluedGates())
     provsql_error("Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates");
@@ -154,8 +170,16 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
     }
 
 
+    GenericCircuit gc = getGenericCircuit(token);
+    if(gc.getGateType(gc.getGate(uuid2string(token))) == gate_conditioned)
+      provsql_error("shapley/banzhaf: conditional Shapley / Banzhaf values are "
+                    "not supported -- a conditioned token (X | C) cannot be "
+                    "passed to shapley() / banzhaf().  Compute the index on the "
+                    "unconditioned token, or use probability_evaluate for the "
+                    "conditional probability P(X|C)");
     gate_t root;
-    BooleanCircuit c = getBooleanCircuit(token, root);
+    std::unordered_map<gate_t, gate_t> gc_to_bc;
+    BooleanCircuit c = getBooleanCircuit(gc, token, root, gc_to_bc);
 
     if(c.hasMultivaluedGates())
       provsql_error("Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates");
