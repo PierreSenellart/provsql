@@ -73,6 +73,7 @@ typedef enum gate_type {
   gate_mixture,  ///< Probabilistic mixture: three wires [p_token (gate_input Bernoulli), x_token, y_token]; samples x when p is true, y otherwise
   gate_assumed, ///< Structural marker over a single child whose sub-circuit was computed under a Boolean-provenance assumption (e.g. the safe-query rewrite); transparent (identity) for Boolean-compatible evaluators, fatal error for the rest, kept as an explicit node in PROV-XML export
   gate_annotation, ///< Transparent single-child wrapper carrying a query-level annotation in @c extra (inversion-free certificate / per-input order key); identity for EVERY evaluator, and -- unlike the children-only convention -- its UUID folds in @c extra so distinct annotations over the same child are distinct gates.
+  gate_conditioned, ///< Conditioning marker with two children [target, evidence]: measure-only, @c probability_evaluate returns P(target ∧ evidence)/P(evidence) and the RV / agg_token evaluators the restricted distribution; for the uuid carrier a TERMINAL gate (never a semiring child), nested conditioning folding into a conjunction of evidence; refused by every general @c sr_* semiring (normalization is not a semiring operation).
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;

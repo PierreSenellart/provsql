@@ -54,13 +54,23 @@ CREATE TYPE provenance_gate AS
                       -- evaluation semirings satisfying the assumption,
                       -- fatal error for the rest, rendered as an
                       -- explicit element in PROV-XML export.
-    'annotation'      -- Transparent single-child wrapper carrying a
+    'annotation',     -- Transparent single-child wrapper carrying a
                       -- query-level annotation string in @c extra
                       -- (e.g. the inversion-free tractability
                       -- certificate / per-input order key).  Identity
                       -- for EVERY evaluator; its UUID folds in @c extra
                       -- so distinct annotations over the same child are
                       -- distinct gates.
+    'conditioned'     -- Conditioning marker: two children
+                      -- [target, evidence].  Evaluated only in the
+                      -- measure interpretation: probability_evaluate
+                      -- returns P(target ∧ evidence) / P(evidence); the
+                      -- RV / agg_token evaluators return the restricted
+                      -- distribution.  For the uuid carrier it is a
+                      -- TERMINAL gate (never a child of a semiring gate);
+                      -- nested conditioning folds into a conjunction of
+                      -- evidence.  Refused by every general sr_* semiring
+                      -- (normalization is not a semiring operation).
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -222,6 +232,80 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Condition a provenance token (a Boolean event) on another.
+ *
+ * Builds the terminal @c gate_conditioned that the measure evaluators read
+ * as @c "P(target ∧ evidence) / P(evidence)".  This is the backing function
+ * of the binary @c | operator (@c "target | evidence", value-level
+ * conditioning of the uuid carrier).
+ *
+ * The gate stores three children @c [target, evidence, joint] with
+ * @c joint @c = @c times(target, @c evidence); evaluation is then the plain
+ * ratio @c P(joint)/P(evidence), and content-addressing makes a base tuple
+ * shared by @p target and @p evidence the same input gate in both circuits,
+ * so the conditional is exact and correlation-aware.
+ *
+ * Conventions:
+ *  - Conditioning on a certain or absent event is a no-op: @c evidence NULL
+ *    or @c gate_one() returns @p target unchanged (@c "P(X|true)=P(X)").
+ *  - A @p target with no provenance defaults to the certain event 1, so
+ *    @c "1 | c" is the well-defined certain-row posterior.
+ *  - Nested conditioning folds (sequential Bayesian update):
+ *    @c "(X | A) | B = X | (A ∧ B)" -- the gate never nests, it stays one
+ *    level deep with the evidence accumulated by @c times.
+ *
+ * The result is TERMINAL: a conditioned token may not become a child of a
+ * @c plus / @c times / @c monus / @c agg gate (those constructors refuse
+ * it); the only operation it admits is more conditioning.
+ */
+CREATE OR REPLACE FUNCTION cond(target UUID, evidence UUID) RETURNS UUID AS
+$$
+DECLARE
+  tgt uuid;
+  ev  uuid;
+  jnt uuid;
+  result uuid;
+  ch uuid[];
+BEGIN
+  -- P(X | true) = P(X): conditioning on a certain / absent event is inert.
+  IF evidence IS NULL OR evidence = gate_one() THEN
+    RETURN target;
+  END IF;
+
+  -- A row with no provenance defaults to the certain event 1.
+  tgt := coalesce(target, gate_one());
+
+  IF get_gate_type(tgt) = 'conditioned' THEN
+    -- Sequential update (X | A) | B = X | (A ∧ B): fold B into both the
+    -- evidence and the joint of the inner gate so the result stays a single
+    -- gate_conditioned over the ORIGINAL target.
+    ch  := get_children(tgt);
+    tgt := ch[1];                              -- original target X
+    ev  := provenance_times(ch[2], evidence);  -- A ∧ B
+    jnt := provenance_times(ch[3], evidence);  -- (X ∧ A) ∧ B
+  ELSE
+    ev  := evidence;
+    jnt := provenance_times(tgt, evidence);    -- X ∧ C
+  END IF;
+
+  result := public.uuid_generate_v5(uuid_ns_provsql(),
+                                    concat('conditioned', tgt, ev, jnt));
+  PERFORM create_gate(result, 'conditioned', ARRAY[tgt, ev, jnt]);
+  RETURN result;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Binary @c | : value-level conditioning, @c "target | evidence".
+ *
+ * Carrier-parametric in its left operand; the uuid form builds the terminal
+ * @c gate_conditioned via @c cond.  Does not collide with core PostgreSQL's
+ * integer bitwise @c | (different argument types).
+ */
+CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=UUID, PROCEDURE=cond);
 
 /**
  * @brief Build a per-input order-key string for the inversion-free path.

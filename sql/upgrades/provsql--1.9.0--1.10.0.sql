@@ -31,6 +31,13 @@ SET search_path TO provsql;
 -- historical 'boolean'.
 ALTER TYPE provenance_gate RENAME VALUE 'assumed_boolean' TO 'assumed';
 
+-- Conditioning marker for the | / cond operator (see the conditioning
+-- block at the end of this script): a three-child gate evaluated only in
+-- the measure interpretation.  ADD VALUE is not used in this transaction
+-- (the cond function below only references it as a literal / in
+-- create_gate, never materialising the value), so it is upgrade-safe.
+ALTER TYPE provenance_gate ADD VALUE IF NOT EXISTS 'conditioned';
+
 /**
  * @brief Wrap @p token in a fresh @c gate_assumed carrying @p assumption
  *        as its label, and return the wrapper's UUID.
@@ -1411,3 +1418,51 @@ END
 -- No SET search_path: the deparsed edge subquery must resolve against
 -- the caller's path; ProvSQL internals are schema-qualified.
 $$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+-- ----------------------------------------------------------------------
+-- Conditioning: the | / cond operator (uuid carrier).
+--
+-- cond(target, evidence) builds the terminal gate_conditioned that the
+-- measure evaluators read as P(target ∧ evidence) / P(evidence).  The gate
+-- stores [target, evidence, joint] with joint = times(target, evidence), so
+-- probability_evaluate is the plain ratio P(joint)/P(evidence); content-
+-- addressing makes shared base tuples the same input gate in both circuits,
+-- so the conditional is exact and correlation-aware.  Nested conditioning
+-- folds (sequential Bayesian update (X|A)|B = X|(A∧B)); the token is
+-- terminal (refused as a child of any semiring gate, and by every general
+-- sr_* semiring at evaluation).
+-- ----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION cond(target UUID, evidence UUID) RETURNS UUID AS
+$$
+DECLARE
+  tgt uuid;
+  ev  uuid;
+  jnt uuid;
+  result uuid;
+  ch uuid[];
+BEGIN
+  IF evidence IS NULL OR evidence = gate_one() THEN
+    RETURN target;
+  END IF;
+
+  tgt := coalesce(target, gate_one());
+
+  IF get_gate_type(tgt) = 'conditioned' THEN
+    ch  := get_children(tgt);
+    tgt := ch[1];
+    ev  := provenance_times(ch[2], evidence);
+    jnt := provenance_times(ch[3], evidence);
+  ELSE
+    ev  := evidence;
+    jnt := provenance_times(tgt, evidence);
+  END IF;
+
+  result := public.uuid_generate_v5(uuid_ns_provsql(),
+                                    concat('conditioned', tgt, ev, jnt));
+  PERFORM create_gate(result, 'conditioned', ARRAY[tgt, ev, jnt]);
+  RETURN result;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=UUID, PROCEDURE=cond);

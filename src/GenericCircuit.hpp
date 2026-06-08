@@ -280,6 +280,21 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       break;
     }
 
+    case gate_conditioned:
+      /* Conditioning marker: P(·|C) requires a normalising division that
+       * no general semiring provides (m-semirings have monus, not a
+       * multiplicative inverse).  A conditioned token is evaluable only
+       * in the measure interpretation (probability_evaluate, special-
+       * cased at the root, or the random-variable / agg_token
+       * distribution evaluators), never under a generic sr_* semiring. */
+      throw CircuitException(
+              "The requested semiring does not support conditioning: "
+              "P(·|C) = P(·∧C)/P(C) needs a normalising division "
+              "no general semiring provides.  A conditioned token is "
+              "evaluable only in the measure interpretation "
+              "(probability_evaluate, or the random-variable / agg_token "
+              "distribution evaluators).");
+
     default:
       throw CircuitException("Invalid gate type for semiring evaluation");
     }

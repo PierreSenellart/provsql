@@ -1619,8 +1619,10 @@ static void run_stopping_rule(GenericCircuit &gc, gate_t gc_root,
  * @return        Float8 Datum containing the computed probability.
  */
 static Datum probability_evaluate_internal
-  (pg_uuid_t token, const string &method, const string &args)
+  (pg_uuid_t token, const string &method, const string &args, bool *isnull)
 {
+  if(isnull != nullptr)
+    *isnull = false;
   // Load the GenericCircuit once: we need it for the RV-detection
   // dispatch below, and getBooleanCircuit() reuses it internally so we
   // pay no extra cost compared to the previous flow.  Universal
@@ -1630,6 +1632,46 @@ static Datum probability_evaluate_internal
   // peephole-pruned for any "always true / always false" comparator.
   GenericCircuit gc = getGenericCircuit(token);
   gate_t gc_root = gc.getGate(uuid2string(token));
+
+  // Conditioning gate (the | / cond operator, uuid carrier): a terminal
+  // gate_conditioned with children [target, evidence, joint], joint =
+  // times(target, evidence).  Its probability is the conditional
+  // P(target ∧ evidence) / P(evidence) = P(joint) / P(evidence).  Both
+  // sub-tokens are ordinary semiring gates already in the store (the joint
+  // is materialised at construction), so each is evaluated by an ordinary
+  // recursive call -- correlation between target and evidence is exact
+  // because content-addressing makes a shared base tuple the same input
+  // gate in both circuits.  Impossible evidence (P(evidence) = 0) yields
+  // SQL NULL.  The gate is terminal: a conditioned token can never be a
+  // child of a semiring gate (the constructors refuse it), so we only ever
+  // meet it at the root here.
+  if(gc.getGateType(gc_root) == gate_conditioned) {
+    const auto &w = gc.getWires(gc_root);
+    if(w.size() != 3)
+      provsql_error("probability_evaluate: malformed conditioned gate "
+                    "(expected 3 children [target, evidence, joint], got %zu)",
+                    w.size());
+    pg_uuid_t evidence = string2uuid(gc.getUUID(w[1]));
+    pg_uuid_t joint    = string2uuid(gc.getUUID(w[2]));
+    bool ev_null = false, jt_null = false;
+    double pe = DatumGetFloat8(
+                  probability_evaluate_internal(evidence, method, args, &ev_null));
+    if(ev_null || pe == 0.) {
+      if(isnull != nullptr)
+        *isnull = true;
+      return (Datum) 0;          // impossible (or undefined) evidence -> NULL
+    }
+    double pj = DatumGetFloat8(
+                  probability_evaluate_internal(joint, method, args, &jt_null));
+    if(jt_null) {
+      if(isnull != nullptr)
+        *isnull = true;
+      return (Datum) 0;
+    }
+    double r = pj / pe;
+    if(r > 1.) r = 1.; else if(r < 0.) r = 0.;
+    PG_RETURN_FLOAT8(r);
+  }
 
   // Inversion-free tractability certificate: the planner wraps the per-row
   // provenance root in a transparent annotation gate carrying the serialised
@@ -2031,7 +2073,12 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
       args = string(VARDATA(t),VARSIZE(t)-VARHDRSZ);
     }
 
-    return probability_evaluate_internal(*DatumGetUUIDP(token), method, args);
+    bool isnull = false;
+    Datum result =
+      probability_evaluate_internal(*DatumGetUUIDP(token), method, args, &isnull);
+    if(isnull)
+      PG_RETURN_NULL();
+    return result;
   } catch(const std::exception &e) {
     provsql_error("probability_evaluate: %s", e.what());
   } catch(...) {

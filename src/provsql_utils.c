@@ -72,6 +72,7 @@ const char *gate_type_name[] = {
   "mixture",
   "assumed",
   "annotation",
+  "conditioned",
   "invalid"
 };
 
@@ -562,6 +563,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     constants.GATE_TYPE_TO_OID[gate_assumed] =
       get_enum_oid(constants.OID_TYPE_GATE_TYPE, "assumed_boolean");
   GET_GATE_TYPE_OID_OPTIONAL(annotation);
+  GET_GATE_TYPE_OID_OPTIONAL(conditioned);
 
   constants.ok=true;
 
