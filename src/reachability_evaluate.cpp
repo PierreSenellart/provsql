@@ -26,6 +26,7 @@ extern "C" {
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "access/htup_details.h"
 #include "catalog/pg_type.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
