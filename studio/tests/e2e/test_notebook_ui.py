@@ -865,8 +865,8 @@ def test_empty_db_button_confirms_and_wipes(
 
 def test_per_cell_scheme_cycles_and_persists(page: Page, studio_url: str) -> None:
     """The cell-actions scheme button cycles default -> semiring ->
-    where -> boolean; the chip reflects it and the override round-trips
-    through the .ipynb metadata."""
+    absorptive -> where -> boolean; the chip reflects it and the override
+    round-trips through the .ipynb metadata."""
     _goto_notebook(page, studio_url)
     cell = page.locator(".nb-cell--sql").first
     _sql_cell_ta(page).fill("SELECT 1;")
@@ -875,6 +875,8 @@ def test_per_cell_scheme_cycles_and_persists(page: Page, studio_url: str) -> Non
     expect(cell.locator(".nb-cell__scheme")).to_have_count(0)
     btn.click()
     expect(cell.locator(".nb-cell__scheme")).to_have_text("semiring")
+    btn.click()
+    expect(cell.locator(".nb-cell__scheme")).to_have_text("absorptive")
     btn.click()
     expect(cell.locator(".nb-cell__scheme")).to_have_text("where")
     btn.click()
