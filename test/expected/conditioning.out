@@ -1,0 +1,29 @@
+\set ECHO none
+repair_key
+
+(1 row)
+p_disease|p_positive|p_disease_given_pos|p_pos_given_disease
+0.010000|0.058500|0.153846|0.900000
+(1 row)
+repair_key
+
+(1 row)
+p_a|p_a_given_b
+0.300|0.300
+(1 row)
+null_evidence_identity|one_evidence_identity
+t|t
+(1 row)
+folded_type|folded_children|d_given_pos_pos|d_given_pos_d
+conditioned|3|0.153846|1.000000
+(1 row)
+impossible_evidence_is_null
+t
+(1 row)
+ERROR:  ProvSQL: The requested semiring does not support conditioning: P(·|C) = P(·∧C)/P(C) needs a normalising division no general semiring provides.  A conditioned token is evaluable only in the measure interpretation (probability_evaluate, or the random-variable / agg_token distribution evaluators).
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
