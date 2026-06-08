@@ -1647,6 +1647,11 @@ static Datum probability_evaluate_internal
   // meet it at the root here.
   if(gc.getGateType(gc_root) == gate_conditioned) {
     const auto &w = gc.getWires(gc_root);
+    if(w.size() == 2)
+      provsql_error("probability_evaluate: this is a conditioned distribution "
+                    "(a random_variable / agg_token X | C), not a Boolean "
+                    "event; query it with expected / variance / moment / "
+                    "support, which report the conditional distribution");
     if(w.size() != 3)
       provsql_error("probability_evaluate: malformed conditioned gate "
                     "(expected 3 children [target, evidence, joint], got %zu)",

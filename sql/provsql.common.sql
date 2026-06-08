@@ -3423,6 +3423,98 @@ CREATE OPERATOR > (
   NEGATOR    = <=
 );
 
+/**
+ * @brief Condition a random variable on an event: @c "X | C".
+ *
+ * Returns a conditioned distribution that flows onward like any other
+ * @c random_variable: it can be stored, re-conditioned, and queried with
+ * @c expected / @c variance / @c moment / @c support, which then report the
+ * conditional distribution.  @p cond is a Boolean-event provenance token,
+ * typically a comparison over the variable itself (@c "X | rv_cmp_gt(X,
+ * as_random(3))" -- a truncation) or any external event.
+ *
+ * Unlike the uuid carrier's terminal @c cond, the random-variable form is a
+ * composable two-child @c gate_conditioned @c [target, condition]: the moment
+ * / support dispatchers unpack it and route through the existing conditional
+ * evaluator (@c rv_moment over the joint of the target and the condition).
+ * Nested conditioning folds: @c "(X|A)|B = X|(A∧B)".
+ */
+CREATE OR REPLACE FUNCTION random_variable_cond(rv random_variable, cond uuid)
+  RETURNS random_variable AS
+$$
+DECLARE
+  tgt uuid;
+  ev  uuid;
+  result uuid;
+  ch uuid[];
+BEGIN
+  IF cond IS NULL OR cond = gate_one() THEN
+    RETURN rv;
+  END IF;
+
+  tgt := (rv)::uuid;
+  IF get_gate_type(tgt) = 'conditioned'
+     AND array_length(get_children(tgt), 1) = 2 THEN
+    -- Fold (X|A)|B = X|(A∧B): the rv-carrier conditioned gate is the
+    -- two-child [target, condition] shape; accumulate the new event.
+    ch  := get_children(tgt);
+    tgt := ch[1];
+    ev  := provenance_times(ch[2], cond);
+  ELSE
+    ev := cond;
+  END IF;
+
+  result := public.uuid_generate_v5(uuid_ns_provsql(),
+                                    concat('conditioned', tgt, ev));
+  PERFORM create_gate(result, 'conditioned', ARRAY[tgt, ev]);
+  RETURN (result)::random_variable;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OPERATOR | (
+  LEFTARG   = random_variable,
+  RIGHTARG  = uuid,
+  PROCEDURE = random_variable_cond
+);
+
+/**
+ * @brief Unpack the target of a random-variable conditioning gate.
+ *
+ * For a two-child @c gate_conditioned @c [target, condition] (the @c "X | C"
+ * shape) returns @p target; for any other token returns it unchanged.  Used
+ * by the moment / support dispatchers to route a conditioned distribution
+ * through the existing conditional evaluator.
+ */
+CREATE OR REPLACE FUNCTION rv_conditioned_target(token uuid) RETURNS uuid AS
+$$
+  SELECT CASE
+    WHEN provsql.get_gate_type(token) = 'conditioned'
+         AND array_length(provsql.get_children(token), 1) = 2
+    THEN (provsql.get_children(token))[1]
+    ELSE token
+  END;
+$$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief Combine a conditioning gate's event with an explicit @p prov.
+ *
+ * For a two-child @c gate_conditioned @c [target, condition] returns
+ * @c "condition ∧ prov"; otherwise returns @p prov unchanged.  Lets a stored
+ * @c "X | C" be queried as @c expected(X|C) (prov defaulting to one) or have
+ * an extra condition conjoined as @c expected(X|C, extra_prov).
+ */
+CREATE OR REPLACE FUNCTION rv_conditioned_prov(token uuid, prov uuid)
+  RETURNS uuid AS
+$$
+  SELECT CASE
+    WHEN provsql.get_gate_type(token) = 'conditioned'
+         AND array_length(provsql.get_children(token), 1) = 2
+    THEN provsql.provenance_times((provsql.get_children(token))[2], prov)
+    ELSE prov
+  END;
+$$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
 /** @} */
 
 /**
@@ -4173,7 +4265,8 @@ BEGIN
     -- input and prov, and the conditional path runs either
     -- truncated-distribution closed form or MC rejection.
     RETURN provsql.rv_moment(
-      (input::random_variable)::uuid, 2, true, prov);
+      rv_conditioned_target((input::random_variable)::uuid), 2, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
@@ -4216,7 +4309,8 @@ BEGIN
     -- See variance() above: rv_moment handles the conditional/unconditional
     -- dispatch internally based on the resolved prov gate type.
     RETURN provsql.rv_moment(
-      (input::random_variable)::uuid, k, false, prov);
+      rv_conditioned_target((input::random_variable)::uuid), k, false,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN
@@ -4325,7 +4419,9 @@ BEGIN
     -- prov is gate_one() the unconditional support is returned
     -- unchanged.
     SELECT r.lo, r.hi INTO lo, hi
-      FROM provsql.rv_support(input::uuid, prov) r;
+      FROM provsql.rv_support(
+             rv_conditioned_target(input::uuid),
+             rv_conditioned_prov(input::uuid, prov)) r;
     RETURN;
   END IF;
 
@@ -4407,7 +4503,8 @@ BEGIN
     -- See variance() above: rv_moment handles the conditional/unconditional
     -- dispatch internally based on the resolved prov gate type.
     RETURN provsql.rv_moment(
-      (input::random_variable)::uuid, k, true, prov);
+      rv_conditioned_target((input::random_variable)::uuid), k, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
   END IF;
 
   IF pg_typeof(input) = 'agg_token'::regtype THEN

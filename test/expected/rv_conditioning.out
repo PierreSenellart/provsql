@@ -1,0 +1,17 @@
+\set ECHO none
+expected_matches|variance_matches
+t|t
+(1 row)
+support_lo|support_hi
+3|Infinity
+(1 row)
+mean_folded|var_folded
+5.000000|1.333333
+(1 row)
+e_stored|support_lo|support_hi
+7.5000|5|10
+(1 row)
+gate|nchildren
+conditioned|2
+(1 row)
+ERROR:  ProvSQL: probability_evaluate: this is a conditioned distribution (a random_variable / agg_token X | C), not a Boolean event; query it with expected / variance / moment / support, which report the conditional distribution
