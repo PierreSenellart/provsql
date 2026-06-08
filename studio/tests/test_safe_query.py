@@ -156,6 +156,34 @@ def test_prov_scheme_boolean_triggers_safe_query_rewrite(client, test_dsn):
         client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
 
 
+def test_prov_scheme_absorptive_is_session_sticky(client, test_dsn):
+    """prov_scheme=absorptive must be accepted end-to-end and made
+    session-sticky (so /api/circuit and /api/evaluate run under the same
+    class); switching back to semiring must clear the sticky flag."""
+    cleanup = _setup_two_tracked_tables(client)
+    modes = client.application.config["SESSION_MODES"]
+    try:
+        sql = ("SELECT a.x, provenance() FROM sq_t_a a, sq_t_b b "
+               "WHERE a.x = b.x GROUP BY a.x")
+        resp = client.post("/api/exec", json={
+            "sql": sql,
+            "mode": "circuit",
+            "prov_scheme": "absorptive",
+        })
+        assert resp.status_code == 200, resp.data
+        assert modes.get("provsql.provenance") == "absorptive"
+
+        resp = client.post("/api/exec", json={
+            "sql": sql,
+            "mode": "circuit",
+            "prov_scheme": "semiring",
+        })
+        assert resp.status_code == 200, resp.data
+        assert "provsql.provenance" not in modes
+    finally:
+        client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})
+
+
 def test_prov_scheme_where_keeps_safe_query_off(client, test_dsn):
     """Selecting the Where flavour must not enable the boolean class
     (mutually exclusive at the C level)."""

@@ -1820,6 +1820,7 @@ def exec_batch(
     where_provenance: bool,
     update_provenance: bool = False,
     boolean_provenance: bool = False,
+    absorptive_provenance: bool = False,
     wrap_last: bool,
     extra_gucs: dict[str, str] | None = None,
     on_pid=None,
@@ -1844,6 +1845,7 @@ def exec_batch(
                 where_provenance=where_provenance,
                 update_provenance=update_provenance,
                 boolean_provenance=boolean_provenance,
+                absorptive_provenance=absorptive_provenance,
                 wrap_last=wrap_last,
                 extra_gucs=extra_gucs,
                 on_pid=on_pid,
@@ -1879,6 +1881,7 @@ def exec_batch_on(
     where_provenance: bool,
     update_provenance: bool = False,
     boolean_provenance: bool = False,
+    absorptive_provenance: bool = False,
     wrap_last: bool,
     extra_gucs: dict[str, str] | None = None,
     on_pid=None,
@@ -2004,14 +2007,18 @@ def exec_batch_on(
                 (target_path,),
             )
             # The provenance class is a single enum GUC (extension >=
-            # 1.10); the Boolean toggle takes precedence over Where when
-            # both are requested (they are mutually exclusive classes).
+            # 1.10); the classes are mutually exclusive, so at most one
+            # flag is set. Order from most to least specialised:
+            # 'boolean' implies 'absorptive', which implies 'semiring';
+            # 'where' is the semiring class plus cell-level tracking.
             cur.execute(
                 "SET LOCAL provsql.provenance = "
                 + (
                     "'boolean'"
                     if boolean_provenance
-                    else "'where'" if where_provenance else "'semiring'"
+                    else "'where'" if where_provenance
+                    else "'absorptive'" if absorptive_provenance
+                    else "'semiring'"
                 )
             )
             cur.execute(
@@ -2213,6 +2220,7 @@ def exec_kernel_cell(
     where_provenance: bool,
     update_provenance: bool = False,
     boolean_provenance: bool = False,
+    absorptive_provenance: bool = False,
     wrap_last: bool,
     extra_gucs: dict[str, str] | None = None,
     search_path: str = "",
@@ -2245,6 +2253,7 @@ def exec_kernel_cell(
                 where_provenance=where_provenance,
                 update_provenance=update_provenance,
                 boolean_provenance=boolean_provenance,
+                absorptive_provenance=absorptive_provenance,
                 wrap_last=wrap_last,
                 extra_gucs=extra_gucs,
                 search_path=search_path,

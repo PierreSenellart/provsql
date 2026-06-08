@@ -384,12 +384,13 @@ def create_app(
 
         last = statements[-1]
 
-        # The provenance-flavour selector is a three-way choice
+        # The provenance-flavour selector is a four-way choice
         # mirroring the provsql.provenance enum GUC : `boolean`
-        # (safe-query rewriter enabled), `semiring` (the default class),
-        # `where` (eligible queries get wrapped
-        # with where_provenance(provenance()) for cell-level highlights).
-        # Boolean and where are mutually exclusive at the C level
+        # (safe-query rewriter enabled), `absorptive` (constructions sound
+        # for absorptive semirings licensed), `semiring` (the default
+        # class), `where` (eligible queries get wrapped with
+        # where_provenance(provenance()) for cell-level highlights).
+        # The classes are mutually exclusive at the C level
         # (where-provenance gates do not survive the safe-query rewrite),
         # so the front-end's segmented control enforces a single pick.
         # In Where UI mode the cell-highlight wrap requires where, so
@@ -398,20 +399,23 @@ def create_app(
         prov_scheme = (payload.get("prov_scheme") or "semiring").lower()
         if mode == "where":
             prov_scheme = "where"
-        if prov_scheme not in ("boolean", "semiring", "where"):
+        if prov_scheme not in ("boolean", "absorptive", "semiring", "where"):
             prov_scheme = "semiring"
         where_prov = prov_scheme == "where"
         boolean_prov = prov_scheme == "boolean"
+        absorptive_prov = prov_scheme == "absorptive"
         # Session-sticky : update the app-level mode flag so subsequent
         # /api/circuit and /api/evaluate calls (which carry their own
-        # backend connection from the pool) also run under
-        # boolean_provenance=on when the user is in Boolean mode.
-        # Without this the load-time foldBooleanIdentities pass fires
+        # backend connection from the pool) also run under the same
+        # provenance class the user picked. Without this the load-time
+        # simplifier passes (foldBooleanIdentities, absorptive fold) fire
         # only on the original /api/exec batch ; circuit-mode cell
         # clicks would then render the unfolded form.
         prev_bool = app.config["SESSION_MODES"].get("provsql.provenance")
         if boolean_prov:
             app.config["SESSION_MODES"]["provsql.provenance"] = "boolean"
+        elif absorptive_prov:
+            app.config["SESSION_MODES"]["provsql.provenance"] = "absorptive"
         else:
             app.config["SESSION_MODES"].pop("provsql.provenance", None)
         new_bool = app.config["SESSION_MODES"].get("provsql.provenance")
@@ -447,6 +451,7 @@ def create_app(
                 where_provenance=where_prov,
                 update_provenance=update_prov,
                 boolean_provenance=boolean_prov,
+                absorptive_provenance=absorptive_prov,
                 wrap_last=wrap_last,
                 extra_gucs=_backend_gucs(),
                 on_pid=register_pid,
@@ -680,14 +685,15 @@ def create_app(
                             "kernel_dead": False})
         last = statements[-1]
 
-        # Same three-way provenance-scheme dispatch as /api/exec; the
-        # notebook sends it per cell (notebook-level default applied
+        # Same provenance-scheme dispatch as /api/exec; the notebook
+        # sends it per cell (notebook-level default applied
         # client-side).
         prov_scheme = (payload.get("prov_scheme") or "semiring").lower()
-        if prov_scheme not in ("boolean", "semiring", "where"):
+        if prov_scheme not in ("boolean", "absorptive", "semiring", "where"):
             prov_scheme = "semiring"
         where_prov = prov_scheme == "where"
         boolean_prov = prov_scheme == "boolean"
+        absorptive_prov = prov_scheme == "absorptive"
         wrap_last = where_prov and bool(_WRAPPABLE_RE.match(last))
         update_prov = bool(payload.get("update_provenance", False))
 
@@ -710,6 +716,7 @@ def create_app(
                     where_provenance=where_prov,
                     update_provenance=update_prov,
                     boolean_provenance=boolean_prov,
+                    absorptive_provenance=absorptive_prov,
                     wrap_last=wrap_last,
                     extra_gucs=_backend_gucs(),
                     search_path=app.config.get("SEARCH_PATH", ""),

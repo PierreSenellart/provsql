@@ -379,6 +379,12 @@
             <i class="fas fa-lock wp-prov-scheme__lock" aria-hidden="true"></i>
             <span>Boolean</span>
           </label>
+          <label class="wp-prov-scheme__opt" data-scheme="absorptive"
+                 title="Assume an absorptive semiring (idempotent product-of-the-same): licenses constructions sound only for absorptive semirings, such as stopping cyclic recursive queries at the absorptive-value fixpoint and absorptive circuit simplifications. Only absorptive (and Boolean-rewrite-compatible) semirings may then be evaluated.">
+            <input type="radio" name="prov-scheme" value="absorptive">
+            <i class="fas fa-lock wp-prov-scheme__lock" aria-hidden="true"></i>
+            <span>Absorptive</span>
+          </label>
           <label class="wp-prov-scheme__opt" data-scheme="semiring"
                  title="Default ProvSQL behaviour: full m-semiring provenance, every semiring available.">
             <input type="radio" name="prov-scheme" value="semiring" checked>
@@ -453,6 +459,7 @@
         <select class="nb__scheme" id="nb-scheme"
                 title="Provenance scheme applied to every cell (notebook-level default)">
           <option value="semiring">Semiring</option>
+          <option value="absorptive">Absorptive</option>
           <option value="where">Where</option>
           <option value="boolean">Boolean</option>
         </select>

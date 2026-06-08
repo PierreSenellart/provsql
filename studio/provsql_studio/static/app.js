@@ -2094,7 +2094,7 @@
     // last *circuit-mode* pick; Where UI mode locks the selector to
     // `where` but does not overwrite the stored value, so a
     // circuit→where→circuit round-trip preserves the user's pick.
-    // `boolean`/`semiring`/`where`; default `semiring`.
+    // `boolean`/`absorptive`/`semiring`/`where`; default `semiring`.
     const savedMode = sessionStorage.getItem('ps.opt.provScheme') || 'semiring';
     const savedUpdate = sessionStorage.getItem('ps.opt.updateProv') === '1';
 
@@ -2109,7 +2109,7 @@
                + 'Switch to Circuit mode to pick Boolean or Semiring.';
       radios.forEach((r) => { r.disabled = true; });
     } else {
-      setMode(savedMode === 'where' || savedMode === 'boolean' ? savedMode : 'semiring');
+      setMode(['where', 'boolean', 'absorptive'].includes(savedMode) ? savedMode : 'semiring');
     }
     up.checked = savedUpdate;
 

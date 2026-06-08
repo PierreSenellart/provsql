@@ -577,7 +577,7 @@
           ? `<button type="button" data-act="to-circuit" title="Open this query in Circuit mode"><i class="fas fa-project-diagram"></i></button>`
           : ''}
         ${cell.type === 'sql'
-          ? `<button type="button" data-act="scheme" title="Provenance scheme for this cell: ${cell.scheme || 'notebook default'} – click to cycle (default → semiring → where → boolean)"><i class="fas fa-sliders-h"></i></button>`
+          ? `<button type="button" data-act="scheme" title="Provenance scheme for this cell: ${cell.scheme || 'notebook default'} – click to cycle (default → semiring → absorptive → where → boolean)"><i class="fas fa-sliders-h"></i></button>`
           : ''}
         <button type="button" data-act="add-sql" title="Insert SQL cell below (command mode: b below, a above)"><i class="fas fa-plus"></i></button>
         <button type="button" data-act="add-md" title="Insert Markdown cell below (command mode: m converts)"><i class="fab fa-markdown"></i></button>
@@ -678,7 +678,7 @@
       div.querySelector('.nb-cell__run').addEventListener('click',
         () => refreshCircuitCell(cell));
       div.querySelector('.nb-circ__eval').addEventListener('click', () => {
-        insertEvalAfter(cell, cell.token);
+        insertEvalAfter(cell, cell.token, sceneRootFlags(cell.scene));
       });
       div.querySelector('.nb-circ__jump').addEventListener('click', () => {
         // Same carry mechanism as the where-mode jump button: Circuit
@@ -713,6 +713,11 @@
       const meth = div.querySelector('.nb-eval__method');
       const args = div.querySelector('.nb-eval__args');
       const map = div.querySelector('.nb-eval__mapping');
+      // Hide semirings the evaluator would refuse on a Boolean/absorptive
+      // root before the user can pick them (parity with Circuit mode); if
+      // the persisted selection just got hidden, snap to the first sound
+      // option and refresh the dependent controls.
+      if (filterEvalSemirings(cell, sem)) sem.value = cell.semiring;
       sem.addEventListener('change', () => {
         cell.semiring = sem.value;
         syncEvalControls(cell, div);
@@ -788,9 +793,10 @@
     });
   }
 
-  // Per-cell scheme cycling (default -> semiring -> where -> boolean).
+  // Per-cell scheme cycling
+  // (default -> semiring -> absorptive -> where -> boolean).
   // `undefined` means "follow the toolbar's notebook-level default".
-  const SCHEME_CYCLE = [undefined, 'semiring', 'where', 'boolean'];
+  const SCHEME_CYCLE = [undefined, 'semiring', 'absorptive', 'where', 'boolean'];
 
   function cycleScheme(cell, div) {
     const idx = SCHEME_CYCLE.indexOf(cell.scheme);
@@ -813,7 +819,7 @@
     if (btn) {
       btn.title = `Provenance scheme for this cell: `
         + `${cell.scheme || 'notebook default'} – click to cycle `
-        + '(default → semiring → where → boolean)';
+        + '(default → semiring → absorptive → where → boolean)';
     }
     scheduleAutosave();
   }
@@ -896,6 +902,82 @@
     return el;
   }
 
+  // Assumed-class / certificate badges, ported from circuit.js's node
+  // renderer (the B / A / D / IF rings and badges). Hardcoded hex (not
+  // CSS vars) so the htmlSnapshot SVG embedded in the .ipynb renders
+  // standalone in external viewers; the resolved values match
+  // colors_and_type.css (purple-700/900) and circuit.js's amber/green/
+  // teal fallbacks. The badge geometry (radii, offsets) mirrors
+  // circuit.js's node renderer so the inline canvas matches Circuit
+  // mode.
+  function paintNodeBadges(g, n) {
+    const addBadge = (cx, cy, r, fill, stroke, text, fontSize, title) => {
+      const grp = svgEl('g', {});
+      const tip = svgEl('title');
+      tip.textContent = title;
+      grp.appendChild(tip);
+      grp.appendChild(svgEl('circle', {
+        cx, cy, r, fill, stroke, 'stroke-width': 1,
+      }));
+      const t = svgEl('text', {
+        x: cx, y: cy,
+        'text-anchor': 'middle',
+        'dominant-baseline': 'central',
+        'font-size': fontSize,
+        'font-weight': 700,
+        fill: '#F4F0FA',
+      });
+      t.textContent = text;
+      grp.appendChild(t);
+      g.appendChild(grp);
+    };
+    const absorptive = n.absorptive_assumed || n.absorptive_folded;
+    // Boolean-rewrite root: dashed purple ring + "B".
+    if (n.boolean_assumed) {
+      g.appendChild(svgEl('circle', {
+        r: 28, fill: 'none', stroke: '#5A3E8C',
+        'stroke-width': 1.4, 'stroke-dasharray': '3 2',
+      }));
+      addBadge(-16, -18, 7, '#5A3E8C', '#2A1850', 'B', 9,
+        'Boolean-rewrite root: interpreted as a Boolean function; '
+        + 'only Boolean-compatible semirings are sound here.');
+    }
+    // Absorptive root / fold: dashed amber ring + "A".
+    if (absorptive) {
+      g.appendChild(svgEl('circle', {
+        r: n.boolean_assumed ? 31 : 28, fill: 'none', stroke: '#b45309',
+        'stroke-width': 1.4, 'stroke-dasharray': '3 2',
+      }));
+      addBadge(16, -18, 7, '#b45309', '#78350f', 'A', 9,
+        n.absorptive_assumed
+          ? ('Absorptive-truncation root: cyclic recursive query stopped '
+             + 'at the absorptive value fixpoint; only absorptive '
+             + 'semirings are sound here.')
+          : ('Absorptive fold: wires simplified under rules sound in every '
+             + 'absorptive semiring; absorptive and Boolean-compatible '
+             + 'semirings are sound here.'));
+    }
+    // d-DNNF certificate: green "D".
+    if (n.dnnf_certified) {
+      addBadge(16, 18, 7, '#15803d', '#14532d', 'D', 9,
+        (n.type === 'plus')
+          ? 'Certified deterministic ⊕: children mutually exclusive.'
+          : 'Certified decomposable ⊗: children over disjoint variables.');
+    }
+    // Inversion-free certificate root: dashed teal ring + "IF".
+    if (n.if_cert) {
+      g.appendChild(svgEl('circle', {
+        r: (n.boolean_assumed && absorptive) ? 34
+           : (n.boolean_assumed || absorptive) ? 31 : 28,
+        fill: 'none', stroke: '#2E7D8A',
+        'stroke-width': 1.4, 'stroke-dasharray': '2 2',
+      }));
+      addBadge(-16, 18, 8, '#2E7D8A', '#1F5660', 'IF', 7,
+        'Inversion-free certificate root: compiles to a structured '
+        + 'd-DNNF in time linear in the lineage.');
+    }
+  }
+
   function paintSceneInto(container, scene) {
     container.innerHTML = '';
     if (!scene || !scene.nodes || !scene.nodes.length) {
@@ -969,13 +1051,20 @@
     }
     for (const n of scene.nodes) {
       const g = svgEl('g', {
-        class: `node-group node--${n.type}` + (n.frontier ? ' is-frontier' : ''),
+        class: `node-group node--${n.type}`
+          + (n.frontier ? ' is-frontier' : '')
+          + (n.boolean_assumed ? ' is-boolean-assumed' : '')
+          + (n.absorptive_assumed || n.absorptive_folded
+             ? ' is-absorptive-assumed' : '')
+          + (n.dnnf_certified ? ' is-dnnf-certified' : '')
+          + (n.if_cert ? ' is-inversion-free' : ''),
         transform: `translate(${n.x},${n.y})`,
       });
       g.appendChild(svgEl('circle', {
         class: 'node-shape', r: 22,
         fill: '#fff', stroke: '#6B4FA0', 'stroke-width': 2,
       }));
+      paintNodeBadges(g, n);
       const label = String(n.label == null ? '' : n.label);
       const t = svgEl('text', {
         class: 'node-label',
@@ -1090,6 +1179,72 @@
     ['counting', 'Counting'],
   ];
 
+  // Per-semiring soundness flags for the eval-cell dropdown, mirroring
+  // circuit.js's _COMPILED_REGISTRY (booleanCompatible / absorptive) and
+  // the C++ semiring predicates. 'probability' is intentionally absent:
+  // like Circuit mode, it always stays available (it factors through the
+  // Boolean function, sound under every assumed class). Kept in sync
+  // with circuit.js / test/sql/{safe_query_semiring,absorptive_recursion}.sql.
+  const EVAL_SEMIRING_FLAGS = {
+    formula:  { booleanCompatible: true,  absorptive: false },
+    boolexpr: { booleanCompatible: true,  absorptive: true  },
+    why:      { booleanCompatible: false, absorptive: false },
+    which:    { booleanCompatible: false, absorptive: false },
+    how:      { booleanCompatible: false, absorptive: false },
+    counting: { booleanCompatible: false, absorptive: false },
+  };
+
+  // The assumed class of a token, read off its circuit scene's root node
+  // (the post-elision root carries boolean_assumed / absorptive_assumed /
+  // absorptive_folded). Returns null when unknown, in which case the
+  // dropdown stays unfiltered -- matching Circuit mode's "scene not
+  // loaded -> show everything" fallback.
+  function sceneRootFlags(scene) {
+    if (!scene || !Array.isArray(scene.nodes)) return null;
+    const root = scene.nodes.find((n) => n.id === scene.root);
+    if (!root) return null;
+    return {
+      boolean_assumed: !!root.boolean_assumed,
+      absorptive_assumed: !!root.absorptive_assumed,
+      absorptive_folded: !!root.absorptive_folded,
+    };
+  }
+
+  // Hide the eval-strip semirings the C++ evaluator would refuse on a
+  // token whose root is assumed Boolean / absorptive, mirroring Circuit
+  // mode's syncDropdownVisibility: strictly (absorptive only) for a
+  // truncated cyclic-recursion root, leniently (absorptive OR Boolean-
+  // compatible) for a fold-marked one, and Boolean-compatible only for a
+  // Boolean root. Options absent from the flag table (probability) always
+  // stay. Bumps a now-hidden selection to the first visible option.
+  function filterEvalSemirings(cell, sel) {
+    const a = cell.assumed || {};
+    const booleanOnly = !!a.boolean_assumed;
+    const absorptiveOnly = !!a.absorptive_assumed;
+    const absorptiveFold = !!a.absorptive_folded;
+    let firstVisible = null;
+    for (const opt of sel.querySelectorAll('option')) {
+      const spec = EVAL_SEMIRING_FLAGS[opt.value];
+      let hide = false;
+      if (spec) {
+        if (booleanOnly && spec.booleanCompatible === false) hide = true;
+        if (absorptiveOnly && spec.absorptive === false) hide = true;
+        if (absorptiveFold && spec.absorptive === false
+            && spec.booleanCompatible === false) hide = true;
+      }
+      opt.hidden = hide;
+      opt.disabled = hide;
+      if (!hide && !firstVisible) firstVisible = opt.value;
+    }
+    const cur = sel.querySelector(`option[value="${CSS.escape(sel.value)}"]`);
+    if (firstVisible && (!cur || cur.hidden)) {
+      sel.value = firstVisible;
+      cell.semiring = firstVisible;
+      return true;
+    }
+    return false;
+  }
+
   let mappingsCache = null;   // /api/provenance_mappings payload
 
   async function ensureMappings() {
@@ -1115,6 +1270,27 @@
     'monte-carlo', 'karp-luby', 'stopping-rule',
   ];
 
+  // Notice variant of the result renderer, ported from circuit.js's
+  // renderEvalNotice: the eval strip floors provsql.verbose_level at 5
+  // server-side (see db.evaluate_circuit), so probability / semiring
+  // calls surface informational ProvSQL notices (e.g. the gate_cmp
+  // probability-side shortcut, approximation guarantees). Circuit mode
+  // shows them; the notebook eval cell now does too. Goldenrod
+  // cv-kc-notice background + warning icon, with the source badge
+  // stripped off the "ProvSQL: " prefix.
+  function renderEvalNotice(messages) {
+    const esc = env.escapeHtml;
+    const list = Array.isArray(messages) ? messages : [messages];
+    const formatted = list.map((raw) => {
+      const m = (raw || '').match(/^ProvSQL:\s*(.*)$/s);
+      const badge = m ? '<span class="wp-srcbadge">ProvSQL</span> ' : '';
+      const text = m ? m[1] : (raw || '');
+      return `${badge}${esc(text)}`;
+    }).join('<br>');
+    return `<div class="cv-kc-notice">`
+      + `<i class="fas fa-exclamation-triangle"></i> ${formatted}</div>`;
+  }
+
   function renderEvalResult(cell) {
     const el = cellEl(cell);
     const box = el && el.querySelector('.nb-eval__out');
@@ -1132,12 +1308,15 @@
         + `${esc(r.error)}${r.detail ? ' – ' + esc(r.detail) : ''}</div>`;
       return;
     }
+    const notices = Array.isArray(r.notices) ? r.notices : [];
+    const noticeHtml = notices.length ? renderEvalNotice(notices) : '';
     const value = (r.result == null) ? '(null)'
       : (typeof r.result === 'object' ? JSON.stringify(r.result, null, 1)
                                       : String(r.result));
     const multiline = value.includes('\n') || value.length > 100;
     box.innerHTML =
-      (multiline
+      noticeHtml
+      + (multiline
         ? `<pre class="nb-eval__value">${esc(value)}</pre>`
         : `<span class="nb-eval__value">${esc(value)}</span>`)
       + (r.resolved_method
@@ -1186,7 +1365,7 @@
 
   // Insert an evaluation cell for `token` after `afterCell` (a circuit
   // cell's "Evaluate" button).
-  function insertEvalAfter(afterCell, token) {
+  function insertEvalAfter(afterCell, token, assumed) {
     const idx = cells.indexOf(afterCell);
     const cell = newCell('eval');
     cell.token = token;
@@ -1194,6 +1373,7 @@
     cell.method = 'exact';
     cell.args = '';
     cell.mapping = '';
+    cell.assumed = assumed || null;
     const pos = idx >= 0 ? idx + 1 : cells.length;
     cells.splice(pos, 0, cell);
     const anchorEl = idx >= 0 ? cellEl(afterCell) : null;
@@ -1696,6 +1876,9 @@
               semiring: c.semiring || 'probability',
               method: c.method || undefined, arguments: c.args || undefined,
               mapping: c.mapping || undefined,
+              // The token's assumed class, so a reloaded notebook keeps
+              // disabling the semirings the evaluator would refuse.
+              assumed: c.assumed || undefined,
             } },
             source: toLines(
               `-- evaluate ${c.semiring || 'probability'}`
@@ -1758,6 +1941,8 @@
         cell.method = String(p.method || '');
         cell.args = String(p.arguments || '');
         cell.mapping = String(p.mapping || '');
+        cell.assumed = (p.assumed && typeof p.assumed === 'object')
+          ? p.assumed : null;
         cell.count = (typeof c.execution_count === 'number') ? c.execution_count : null;
         for (const o of (c.outputs || [])) {
           const r = o && o.data && o.data['application/vnd.provsql.eval+json'];
@@ -1781,7 +1966,7 @@
       } else if (c.cell_type === 'code') {
         const cell = newCell('sql', joinSource(c.source));
         const pmeta = (c.metadata && c.metadata.provsql) || {};
-        if (['semiring', 'where', 'boolean'].includes(pmeta.scheme)) {
+        if (['semiring', 'absorptive', 'where', 'boolean'].includes(pmeta.scheme)) {
           cell.scheme = pmeta.scheme;
         }
         cell.count = (typeof c.execution_count === 'number') ? c.execution_count : null;
@@ -1813,7 +1998,7 @@
   // scheme. (Per-notebook metadata still wins when a tab/doc carries
   // one; the channel reflects whatever is currently active.)
   function setScheme(value) {
-    if (!['semiring', 'where', 'boolean'].includes(value)) return;
+    if (!['semiring', 'absorptive', 'where', 'boolean'].includes(value)) return;
     byId('nb-scheme').value = value;
     try { sessionStorage.setItem('ps.opt.provScheme', value); } catch (e) {}
   }
