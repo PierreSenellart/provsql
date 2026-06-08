@@ -355,6 +355,51 @@ static AnyReachAllResult compileAnyReachAll(
   const std::vector<std::vector<unsigned long> > &sets,
   bool directed,
   std::size_t max_states = DEFAULT_MAX_STATES);
+
+/**
+ * @brief Compile "every vertex of @p set is reachable" (k-terminal /
+ *        coverage reachability) into one certified circuit.
+ *
+ * Same DP, with the state extended by the *pending rescuer-set
+ * antichain*: a forgotten target vertex not yet reached by the source
+ * pends on the boundary positions that reach it (its rescuers), the
+ * sets staying closed under the relation, shrinking losslessly at
+ * forgets, discharged when the source reaches them and absorbed by
+ * the empty (reject) set; acceptance, after a final collapse onto the
+ * source domain, is the empty antichain.  Worlds map to one state
+ * each, so the circuit is a certified d-DNNF like the rest of the
+ * family: probability evaluation gives k-terminal reliability, and
+ * absorptive-semiring evaluation is exact too -- nonnegative min-plus
+ * gives the cost of the cheapest covering subgraph (directed Steiner
+ * cost).
+ *
+ * @param rows        Edge tuples.
+ * @param sources     Source arcs (at least one).
+ * @param set         The target vertex set; a vertex absent from the
+ *                    graph is unreachable, so the result is constant
+ *                    false.
+ * @param directed    If @c false, every edge contributes both arcs.
+ * @param max_states  Bound on the DP state count per node.
+ * @return            The circuit, its root computing the conjunction,
+ *                    and statistics.
+ */
+static Result compileCoverReach(const std::vector<EdgeRow> &rows,
+                                const std::vector<SourceArc> &sources,
+                                const std::vector<unsigned long> &set,
+                                bool directed,
+                                std::size_t max_states = DEFAULT_MAX_STATES);
+
+/**
+ * @brief Multi-set variant of @c compileCoverReach(): one shared
+ *        (content-deduplicated) circuit, one root per set, as
+ *        @c compileAnyReachAll().
+ */
+static AnyReachAllResult compileCoverReachAll(
+  const std::vector<EdgeRow> &rows,
+  const std::vector<SourceArc> &sources,
+  const std::vector<std::vector<unsigned long> > &sets,
+  bool directed,
+  std::size_t max_states = DEFAULT_MAX_STATES);
 };
 
 #endif /* REACHABILITY_COMPILER_H */

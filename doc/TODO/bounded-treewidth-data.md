@@ -394,13 +394,39 @@ into per-vertex reads of one two-sweep compileAll pass, in width
 +O(batch) for batched groups with chain order aligned to the
 elimination order; needs the width impact validated empirically.
 
-*Open*: k-terminal / Steiner
-reliability ("ALL of S reached" needs a richer congruence -- a
-boundary-to-internal coverage function, not one bit); DISTINCT-shaped
+*K-terminal / Steiner: implemented* (`compileCoverReach[All]`,
+`CoverOps`).  The richer congruence is the *pending rescuer-set
+antichain*: a forgotten terminal not yet reached by the source pends
+on the boundary positions that reach it; the sets stay closed under
+the relation (one backward pass per closure), shrink by plain
+intersection at forgets (lossless by transitivity), discharge on
+acquiring the source position, and the empty set is the absorbing
+reject; acceptance, after a final re-expression onto the singleton
+source domain, is the empty antichain.  Worlds still map to one state
+each, so the certificate carries over -- probability gives k-terminal
+reliability, nonnegative min-plus the exact directed Steiner cost
+(cheapest covering subgraph, shared edges paid once).  `max_states`
+stays a function of the treewidth alone (28 on tw-2 ladders,
+independent of N and of the terminal count; the Sperner bound
+C(d, d/2) is the worst case).  Surface: self-join conjunctions
+(`FROM reach r1, reach r2 WHERE r1.v = c1 AND r2.v = c2`) detected at
+lowering and planted at the *times-canonical* address probed by
+`provenance_times` -- the exact twin of the plus-canonical machinery,
+so any phrasing computing the same token multiset lands on the
+planted gate.  Per-terminal pitfall caught differentially: a vertex
+appearing only in self-loops never enters the DP and must count as
+absent (constant false), not silently covered.  Test `btw_cover`.
+(The grouped HAVING `count(*) = |group|` surface was considered and
+dropped: proving the constant equals the group size is data-dependent
+and the HAVING cmp construction has no probe point; the self-join
+form covers the need.)
+
+*Open*: DISTINCT-shaped
 aggregations and extra member-relation quals in the detection.
 
-*Other reuse candidates for the canonical-address machinery*: a
-times-canonical analogue serving factored forms if Route 3
+*Other reuse candidates for the canonical-address machinery*: the
+times-canonical namespace now exists (serving the k-terminal
+conjunctions above) and could equally serve factored forms if Route 3
 materialises; canonical agg-gate addressing for commutative aggregates
 (pure dedup -- only if duplicate agg gates show up in profiles).  The
 general rule learned: planted gates must live in namespaces ordinary

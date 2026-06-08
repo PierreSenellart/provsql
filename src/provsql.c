@@ -1621,6 +1621,225 @@ static void plant_reach_aggregations(List *candidates, List *lowered) {
       provsql_error("Reachability aggregation planting failed (%d)", rc);
   }
 }
+
+/** @brief One detected reachability self-join conjunction (see below). */
+typedef struct ReachConjCandidate {
+  const char *ctename;        /**< The self-joined recursive CTE. */
+  const char *node_colname;   /**< Its (single) column name. */
+  List *const_texts;          /**< The constant node bindings, as text
+                               *   (multiset, one per reference). */
+} ReachConjCandidate;
+
+/**
+ * @brief Detect, before CTE lowering, the reachability self-join
+ *        conjunction shape:
+ *
+ *   WITH RECURSIVE reach(v) AS (...)
+ *   SELECT ... FROM reach r1, ..., reach rk
+ *   WHERE r1.v = c1 AND ... AND rk.v = ck
+ *
+ * The row's provenance is the @c provenance_times() of the per-vertex
+ * reach tokens -- a conjunction of *correlated* events (the vertices
+ * share edges) that entangles the per-vertex certificates.  When the
+ * CTE is later reachability-routed, @c plant_reach_conjunctions()
+ * pre-creates, at the times-canonical address of that token multiset,
+ * a certified all-members-reachable circuit, so the natural "are
+ * these k vertices all reachable" query stays on the linear
+ * evaluation route (and min-plus evaluation prices the cheapest
+ * *joint* covering subgraph).  Detection is conservative: every
+ * range-table entry references the same single-column recursive CTE,
+ * each constrained by exactly one equality against a constant, no
+ * other quals, grouping, aggregation or DISTINCT; anything else
+ * simply skips the planting (the generic path is always correct).
+ *
+ * @param q  The outer query (CTE references still in place).
+ * @return   List of @c ReachConjCandidate.
+ */
+static List *detect_reach_conjunctions(Query *q) {
+  ListCell *lc;
+  Index rti = 0;
+  int nb_refs = 0;
+  RangeTblEntry *cte_rte = NULL;
+  CommonTableExpr *cte = NULL;
+  List *quals = NIL;
+  bool ok = true;
+  Node **bound;          /* per-RTE constant binding (1-based rti) */
+  List *const_texts = NIL;
+  ReachConjCandidate *cand;
+
+  if (q->setOperations != NULL || q->groupClause != NIL ||
+      q->groupingSets != NIL || q->distinctClause != NIL ||
+      q->havingQual != NULL || q->hasAggs || q->hasWindowFuncs ||
+      q->hasSubLinks || q->cteList == NIL)
+    return NIL;
+
+  foreach(lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    ++rti;
+    switch (r->rtekind) {
+    case RTE_CTE:
+      if (r->ctelevelsup != 0)
+        return NIL;
+      if (cte_rte == NULL)
+        cte_rte = r;
+      else if (strcmp(cte_rte->ctename, r->ctename) != 0)
+        return NIL;
+      ++nb_refs;
+      break;
+    case RTE_JOIN:
+      break;
+    default:
+      return NIL;
+    }
+  }
+  if (nb_refs < 2)
+    return NIL;
+
+  /* The referenced CTE must be a recursive one of this query, with a
+   * single column (the plain reachability shape). */
+  foreach(lc, q->cteList) {
+    CommonTableExpr *c = (CommonTableExpr *) lfirst(lc);
+    if (strcmp(c->ctename, cte_rte->ctename) == 0) {
+      cte = c;
+      break;
+    }
+  }
+  if (cte == NULL || !cte->cterecursive ||
+      list_length(cte->ctecolnames) != 1)
+    return NIL;
+
+  /* The quals: exactly one constant equality per CTE reference,
+   * nothing else. */
+  reach_collect_quals((Node *) q->jointree, &quals, &ok);
+  if (!ok || list_length(quals) != nb_refs)
+    return NIL;
+  bound = (Node **) palloc0(sizeof(Node *) * (list_length(q->rtable) + 1));
+  foreach(lc, quals) {
+    OpExpr *eq;
+    Node *na, *nb;
+    Var *v;
+    Const *c;
+    if (!IsA(lfirst(lc), OpExpr))
+      return NIL;
+    eq = (OpExpr *) lfirst(lc);
+    if (list_length(eq->args) != 2 ||
+        !op_mergejoinable(eq->opno, exprType((Node *) linitial(eq->args))))
+      return NIL;
+    na = reach_strip((Node *) linitial(eq->args));
+    nb = reach_strip((Node *) lsecond(eq->args));
+    if (na != NULL && IsA(na, Var) && nb != NULL && IsA(nb, Const)) {
+      v = (Var *) na;
+      c = (Const *) nb;
+    } else if (nb != NULL && IsA(nb, Var) && na != NULL && IsA(na, Const)) {
+      v = (Var *) nb;
+      c = (Const *) na;
+    } else
+      return NIL;
+    if (v->varlevelsup != 0 || v->varattno != 1 ||
+        v->varno < 1 || v->varno > (Index) list_length(q->rtable) ||
+        list_nth_node(RangeTblEntry, q->rtable, v->varno - 1)->rtekind
+        != RTE_CTE)
+      return NIL;
+    if (c->constisnull || bound[v->varno] != NULL)
+      return NIL;
+    bound[v->varno] = (Node *) c;
+  }
+
+  /* Every reference bound: collect the constants as text, in
+   * range-table order (the canonical recipe sorts anyway). */
+  rti = 0;
+  foreach(lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    ++rti;
+    if (r->rtekind != RTE_CTE)
+      continue;
+    if (bound[rti] == NULL)
+      return NIL;
+    {
+      Const *c = (Const *) bound[rti];
+      Oid out_func;
+      bool is_varlena;
+      getTypeOutputInfo(c->consttype, &out_func, &is_varlena);
+      const_texts = lappend(const_texts,
+                            OidOutputFunctionCall(out_func, c->constvalue));
+    }
+  }
+
+  cand = (ReachConjCandidate *) palloc(sizeof(ReachConjCandidate));
+  cand->ctename = pstrdup(cte->ctename);
+  cand->node_colname = pstrdup(strVal(linitial(cte->ctecolnames)));
+  cand->const_texts = const_texts;
+  return list_make1(cand);
+}
+
+/**
+ * @brief Plant the certified all-members gates for the conjunctions
+ *        detected by @c detect_reach_conjunctions(), via
+ *        @c provsql.plant_reach_cover over SPI -- best-effort and
+ *        after lowering, so the working table exists and the
+ *        reachability shape's gathering arguments are known.
+ */
+static void plant_reach_conjunctions(List *candidates, List *lowered) {
+  ListCell *lc;
+  foreach(lc, candidates) {
+    ReachConjCandidate *cand = (ReachConjCandidate *) lfirst(lc);
+    ListCell *ll;
+    LoweredCte *entry = NULL;
+    StringInfoData call;
+    bool first = true;
+    int rc;
+    foreach(ll, lowered) {
+      LoweredCte *e = (LoweredCte *) lfirst(ll);
+      if (strcmp(e->name, cand->ctename) == 0) {
+        entry = e;
+        break;
+      }
+    }
+    if (entry == NULL || !entry->reach_routed)
+      continue;
+
+    initStringInfo(&call);
+    appendStringInfo(&call,
+                     "SELECT provsql.plant_reach_cover(%s, %s, ",
+                     quote_literal_cstr(cand->ctename),
+                     quote_literal_cstr(cand->node_colname));
+    if (OidIsValid(entry->edge_relid))
+      appendStringInfo(&call, "%u::pg_catalog.regclass", entry->edge_relid);
+    else
+      appendStringInfoString(&call, "NULL::pg_catalog.regclass");
+    appendStringInfo(&call, ", %s, %s, %s, %s, ",
+                     quote_literal_cstr(entry->src_name),
+                     quote_literal_cstr(entry->dst_name),
+                     entry->source_text
+                       ? quote_literal_cstr(entry->source_text) : "NULL",
+                     entry->directed ? "true" : "false");
+    appendStringInfoString(&call, "ARRAY[");
+    foreach(ll, cand->const_texts) {
+      appendStringInfo(&call, "%s%s", first ? "" : ", ",
+                       quote_literal_cstr((const char *) lfirst(ll)));
+      first = false;
+    }
+    appendStringInfo(&call, "]::text[], %s, ",
+                     entry->edge_quals
+                       ? quote_literal_cstr(entry->edge_quals) : "NULL");
+    if (OidIsValid(entry->source_relid))
+      appendStringInfo(&call, "%u::pg_catalog.regclass, %s, ",
+                       entry->source_relid,
+                       quote_literal_cstr(entry->source_attname));
+    else
+      appendStringInfoString(&call, "NULL, NULL, ");
+    appendStringInfo(&call, "%s)",
+                     entry->edge_sql
+                       ? quote_literal_cstr(entry->edge_sql) : "NULL");
+
+    if ((rc = SPI_connect()) != SPI_OK_CONNECT)
+      provsql_error("Reachability conjunction planting: SPI_connect failed (%d)", rc);
+    rc = SPI_execute(call.data, false, 0);
+    SPI_finish();
+    if (rc < 0)
+      provsql_error("Reachability conjunction planting failed (%d)", rc);
+  }
+}
 #endif
 
 /**
@@ -1630,18 +1849,22 @@ static void inline_ctes(Query *q) {
   List *lowered = NIL;
 #if PG_VERSION_NUM >= 150000
   List *reach_aggs = NIL;
+  List *reach_conjs = NIL;
 #endif
   if (q->cteList == NIL)
     return;
 #if PG_VERSION_NUM >= 150000
-  /* Grouped-reachability aggregations are detected before lowering
-   * (the CTE reference is still recognisable) and planted after (the
-   * working table then exists). */
+  /* Grouped-reachability aggregations and self-join conjunctions are
+   * detected before lowering (the CTE reference is still
+   * recognisable) and planted after (the working table then
+   * exists). */
   reach_aggs = detect_reach_aggregations(q);
+  reach_conjs = detect_reach_conjunctions(q);
 #endif
   inline_ctes_in_rtable(q->rtable, q->cteList, &lowered);
 #if PG_VERSION_NUM >= 150000
   plant_reach_aggregations(reach_aggs, lowered);
+  plant_reach_conjunctions(reach_conjs, lowered);
 #endif
   q->cteList = NIL;
 }

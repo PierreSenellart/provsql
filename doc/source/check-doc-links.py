@@ -117,7 +117,8 @@ INTERNAL_FUNCTIONS = {
     # reachability_materialize.
     'eval_recursive', 'eval_reachability', 'reachability_materialize',
     'reachability_materialize_hops', 'reachability_materialize_any',
-    'plant_reach_any_groups',
+    'reachability_materialize_cover',
+    'plant_reach_any_groups', 'plant_reach_cover',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',

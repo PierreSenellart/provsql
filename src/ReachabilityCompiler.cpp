@@ -31,7 +31,7 @@
  * roots.
  *
  * The DP scaffold is generic over the *state algebra* (the @c Ops
- * template parameter below).  Two instantiations:
+ * template parameter below).  Four instantiations:
  *
  * - @c BoolOps -- plain reachability: the state is the transitively
  *   closed reachability relation over the domain (a bitset), composed
@@ -39,10 +39,16 @@
  * - @c HopOps -- bounded-hop reachability: each relation entry is the
  *   *set of achievable walk lengths* up to the hop bound (a bitmask),
  *   composed in the capped min-plus-set semiring by the algebraic-path
- *   (Floyd-Warshall-Kleene) algorithm with diagonal star.  Worlds still
- *   map to exactly one state, so states partition worlds and every
- *   emitted OR remains deterministic; each edge variable is still
- *   introduced at one node, so ANDs remain decomposable.
+ *   (Floyd-Warshall-Kleene) algorithm with diagonal star.
+ * - @c SetReachOps -- any-of-S reachability: the relation plus one bit
+ *   per position, "reaches an S-vertex within the processed part".
+ * - @c CoverOps -- all-of-S (k-terminal) reachability: the relation
+ *   plus the pending rescuer-set antichain (see its doc comment).
+ *
+ * In every case worlds map to exactly one state, so states partition
+ * worlds and every emitted OR remains deterministic; each edge
+ * variable is still introduced at one node, so ANDs remain
+ * decomposable.
  */
 #include "ReachabilityCompiler.h"
 
@@ -115,6 +121,18 @@ struct EdgeBlock {
 // ---------------------------------------------------------------------
 
 /**
+ * @brief Context handed to @c Ops::liftExtra() by the domain
+ *        re-expression: the outgoing domain's vertices and the source's
+ *        position in it, for algebras whose extra state depends on
+ *        *which* vertices are forgotten (the coverage algebra records a
+ *        rescuer set when a forgotten vertex is a target-set member).
+ */
+struct LiftContext {
+  const std::vector<unsigned long> &from_domain;   ///< Vertices of the outgoing domain, position-indexed.
+  int from_ps;                                     ///< Source position in the outgoing domain.
+};
+
+/**
  * @brief Plain-reachability state algebra.
  *
  * The state is a reachability relation over the first @c d domain
@@ -125,6 +143,7 @@ struct EdgeBlock {
 struct BoolOps {
   static constexpr bool tracks_lengths = false;
   static constexpr bool has_target_set = false;
+  static constexpr bool final_collapse = false;
   using State = std::bitset<MAXD*MAXD>;
   using Entry = bool;
   /** @brief Hash functor (delegates to @c std::hash of the bitset). */
@@ -174,7 +193,11 @@ struct BoolOps {
   void seed(State &, const std::vector<unsigned long> &) const {
   }
   /** @brief Per-position extra state transfer under re-expression (no-op). */
-  void liftExtra(const State &, State &, const std::vector<int> &) const {
+  void liftExtra(const State &, State &, const std::vector<int> &,
+                 const LiftContext &) const {
+  }
+  /** @brief Post-closure canonicalisation hook (a coverage concept). */
+  void normalize(State &, int, int) const {
   }
 };
 
@@ -192,6 +215,7 @@ struct BoolOps {
 struct HopOps {
   static constexpr bool tracks_lengths = true;
   static constexpr bool has_target_set = false;
+  static constexpr bool final_collapse = false;
   using Entry = std::uint64_t;
   /** @brief A matrix of length-set bitmasks (unused cells stay zero). */
   struct State {
@@ -299,7 +323,11 @@ struct HopOps {
   void seed(State &, const std::vector<unsigned long> &) const {
   }
   /** @brief Per-position extra state transfer under re-expression (no-op). */
-  void liftExtra(const State &, State &, const std::vector<int> &) const {
+  void liftExtra(const State &, State &, const std::vector<int> &,
+                 const LiftContext &) const {
+  }
+  /** @brief Post-closure canonicalisation hook (a coverage concept). */
+  void normalize(State &, int, int) const {
   }
 };
 
@@ -319,6 +347,7 @@ struct HopOps {
 struct SetReachOps {
   static constexpr bool tracks_lengths = false;
   static constexpr bool has_target_set = true;
+  static constexpr bool final_collapse = false;
   using Entry = bool;
   /** @brief Closed relation plus the per-position set-reachability bits. */
   struct State {
@@ -394,10 +423,187 @@ struct SetReachOps {
   }
   /** @brief Carry surviving positions' bits through a re-expression. */
   void liftExtra(const State &from, State &to,
-                 const std::vector<int> &map) const {
+                 const std::vector<int> &map, const LiftContext &) const {
     for (std::size_t i = 0; i < map.size(); ++i)
       if (map[i] >= 0 && from.dvec[static_cast<int>(i)])
         to.dvec.set(map[i]);
+  }
+  /** @brief Post-closure canonicalisation hook (a coverage concept). */
+  void normalize(State &, int, int) const {
+  }
+};
+
+/**
+ * @brief Coverage (k-terminal) state algebra: plain reachability plus
+ *        the *pending rescuer-set antichain* -- the Courcelle
+ *        congruence for @f$\forall y\, S(y) \rightarrow
+ *        \mathrm{reach}(x, y)@f$.
+ *
+ * When a target-set vertex @c v is forgotten, either the source
+ * already reaches it (nothing recorded) or its fate now depends only
+ * on the boundary: @c v ends up reachable iff the source eventually
+ * reaches one of its *rescuers*, the domain positions that reach
+ * @c v within the processed part.  The state therefore carries, next
+ * to the closed relation, the family of pending rescuer sets:
+ *
+ * - kept *closed* under the relation (anything reaching a rescuer is
+ *   one; the relation being transitively closed, one backward pass
+ *   per closure suffices), which makes the forget step a plain
+ *   intersection with the surviving positions -- lossless by
+ *   transitivity;
+ * - *discharged* (dropped) as soon as a set acquires the source's
+ *   position: the vertex is reached, in every world of this state;
+ * - the *empty* set is the absorbing reject -- a vertex none of whose
+ *   rescuers survived can never be reached -- and absorbs the whole
+ *   antichain (it is a subset of every set);
+ * - reduced to the *antichain of minimal sets*: hitting a subset
+ *   implies hitting its supersets, so only minimal sets constrain.
+ *
+ * Acceptance, after a final re-expression onto the singleton
+ * @c {source} domain (which forgets -- and thereby resolves -- every
+ * remaining target vertex): no pending set.  Worlds still map to
+ * exactly one state, so the emitted ORs stay deterministic and the
+ * d-DNNF certificate carries over; the antichain is bounded by the
+ * domain size alone (at most @f$\binom{d}{\lfloor d/2\rfloor}@f$
+ * sets), so the state space stays a function of the treewidth, with
+ * the usual @c max_states guard.
+ */
+struct CoverOps {
+  static constexpr bool tracks_lengths = false;
+  static constexpr bool has_target_set = true;
+  static constexpr bool final_collapse = true;
+  using Entry = bool;
+  using Mask = std::uint32_t;
+  static_assert(MAXD <= 32, "rescuer sets are 32-bit masks");
+  /** @brief Closed relation plus the sorted antichain of pending rescuer sets. */
+  struct State {
+    std::bitset<MAXD*MAXD> rel;   ///< Reachability relation (as @c BoolOps).
+    std::vector<Mask> pending;    ///< Minimal rescuer sets, sorted (canonical).
+    bool operator==(const State &o) const {
+      return rel == o.rel && pending == o.pending;
+    }
+  };
+  /** @brief Hash over both components. */
+  struct Hash {
+    std::size_t operator()(const State &s) const noexcept {
+      std::size_t h = std::hash<std::bitset<MAXD*MAXD> >()(s.rel);
+      for (Mask m : s.pending)
+        h = h * 1099511628211ull ^ m;
+      return h;
+    }
+  };
+
+  const std::unordered_set<unsigned long> *target_set;   ///< The vertex set S.
+
+  /** @brief Identity relation, nothing pending. */
+  State identity(int d) const {
+    State s;
+    for (int i = 0; i < d; ++i)
+      s.rel.set(i*MAXD + i);
+    return s;
+  }
+  /** @brief Warshall closure (the pending sets are updated by @c normalize()). */
+  void close(State &s, int d) const {
+    for (int k = 0; k < d; ++k)
+      for (int i = 0; i < d; ++i)
+        if (s.rel[i*MAXD + k])
+          for (int j = 0; j < d; ++j)
+            if (s.rel[k*MAXD + j])
+              s.rel.set(i*MAXD + j);
+  }
+  /** @brief Entrywise union; pending sets concatenate (normalised next). */
+  void unite(State &a, const State &b) const {
+    a.rel |= b.rel;
+    a.pending.insert(a.pending.end(), b.pending.begin(), b.pending.end());
+  }
+  /** @brief Record the arc @p pu -> @p pv. */
+  void addArc(State &s, int pu, int pv, unsigned /*weight*/) const {
+    s.rel.set(pu*MAXD + pv);
+  }
+  /** @brief Read relation entry (@p i, @p j). */
+  Entry get(const State &s, int i, int j) const {
+    return s.rel[i*MAXD + j];
+  }
+  /** @brief Whether an entry carries no information. */
+  static bool emptyEntry(Entry e) {
+    return !e;
+  }
+  /** @brief Merge a relation entry (domain re-expression). */
+  void merge(State &s, int i, int j, Entry /*e*/) const {
+    s.rel.set(i*MAXD + j);
+  }
+  /** @brief No seeding: target vertices are resolved when forgotten. */
+  void seed(State &, const std::vector<unsigned long> &) const {
+  }
+  /** @brief Re-express the pending sets; resolve forgotten target vertices. */
+  void liftExtra(const State &from, State &to,
+                 const std::vector<int> &map, const LiftContext &ctx) const {
+    // Surviving rescuers keep their sets alive (an emptied set is the
+    // absorbing reject; normalize() collapses around it).
+    for (Mask m : from.pending) {
+      Mask r = 0;
+      for (std::size_t i = 0; i < map.size(); ++i)
+        if (map[i] >= 0 && (m & (Mask{1} << i)))
+          r |= Mask{1} << map[i];
+      to.pending.push_back(r);
+    }
+    // A forgotten target vertex is either already reached by the
+    // source, or pends on the surviving positions that reach it.
+    for (std::size_t i = 0; i < map.size(); ++i) {
+      if (map[i] >= 0 || !target_set->count(ctx.from_domain[i]))
+        continue;
+      if (from.rel[static_cast<std::size_t>(ctx.from_ps)*MAXD + i])
+        continue;   // discharged
+      Mask r = 0;
+      for (std::size_t u = 0; u < map.size(); ++u)
+        if (map[u] >= 0 && from.rel[u*MAXD + i])
+          r |= Mask{1} << map[u];
+      to.pending.push_back(r);
+    }
+  }
+  /**
+   * @brief Canonicalise after a closure: re-close the pending sets
+   *        under the relation, discharge the source-reached ones, and
+   *        reduce to the sorted minimal antichain.
+   */
+  void normalize(State &s, int d, int ps) const {
+    if (s.pending.empty())
+      return;
+    for (Mask &m : s.pending) {
+      // One backward pass (rel is transitively closed).
+      Mask grown = m;
+      for (int u = 0; u < d; ++u) {
+        if (grown & (Mask{1} << u))
+          continue;
+        for (int w = 0; w < d; ++w)
+          if ((m & (Mask{1} << w)) && s.rel[static_cast<std::size_t>(u)*MAXD + w]) {
+            grown |= Mask{1} << u;
+            break;
+          }
+      }
+      m = grown;
+    }
+    // Discharge, then keep the sorted minimal antichain (the empty set,
+    // the absorbing reject, is minimal and absorbs everything).
+    const Mask ps_bit = Mask{1} << ps;
+    std::vector<Mask> keep;
+    keep.reserve(s.pending.size());
+    for (Mask m : s.pending)
+      if (!(m & ps_bit))
+        keep.push_back(m);
+    std::sort(keep.begin(), keep.end());
+    keep.erase(std::unique(keep.begin(), keep.end()), keep.end());
+    s.pending.clear();
+    for (Mask m : keep) {
+      bool dominated = false;
+      for (Mask k : s.pending)
+        if ((k & m) == k) {   // an already-kept subset constrains more
+          dominated = true;
+          break;
+        }
+      if (!dominated)
+        s.pending.push_back(m);
+    }
   }
 };
 
@@ -948,6 +1154,8 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                 }
                 State id = opsp->identity(dt);
                 opsp->seed(id, to);
+                const LiftContext ctx{from, positionIn(from, source)};
+                const int to_ps = positionIn(to, source);
                 Accumulator acc;
                 for (const auto &entry : t) {
                   State r = id;
@@ -962,7 +1170,8 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                         opsp->merge(r, map[i], map[j], e);
                     }
                   }
-                  opsp->liftExtra(entry.first, r, map);
+                  opsp->liftExtra(entry.first, r, map, ctx);
+                  opsp->normalize(r, dt, to_ps);
                   acc[r].push_back(entry.second);
                 }
                 return finalize(acc);
@@ -980,6 +1189,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                   return t2;
                 if (isTrivial(t2, domain))
                   return t1;
+                const int ps = positionIn(domain, source);
                 Accumulator acc;
                 for (const auto &left : t1)
                   for (const auto &right : t2) {
@@ -987,6 +1197,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                     State r = left.first;
                     opsp->unite(r, right.first);
                     opsp->close(r, d);
+                    opsp->normalize(r, d, ps);
                     acc[std::move(r)].push_back(andGate(left.second,
                                                         right.second));
                   }
@@ -998,6 +1209,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
   auto applyEdges = [&](Table table, std::size_t b) {
                       const auto &domain = domains[b];
                       const int d = static_cast<int>(domain.size());
+                      const int ps = positionIn(domain, source);
                       for (std::size_t vi : variables_at_bag[b]) {
                         const EdgeVariable &var = variables[vi];
                         const int pu = positionIn(domain, var.u);
@@ -1011,6 +1223,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                           if (var.arc_vu)
                             opsp->addArc(present, pv, pu, var.weight);
                           opsp->close(present, d);
+                          opsp->normalize(present, d, ps);
 
                           if (var.certain) {
                             // Always-present arc: every world of this state
@@ -1057,6 +1270,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
                               if (alt.arc_vu)
                                 opsp->addArc(present, pv, pu, 1);
                               opsp->close(present, d);
+                              opsp->normalize(present, d, ps);
                             }
                             outs[ai] = present;
                             if (!(present == entry.first))
@@ -1146,14 +1360,26 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
     if constexpr (Ops::has_target_set) {
       const std::size_t rb = bag_index(td.getRoot());
       const int ps = positionIn(domains[rb], source);
+      const std::vector<unsigned long> source_domain{source};
       Ops per_set_ops = ops;
       opsp = &per_set_ops;
       for (std::size_t si = 0; si < multi_sets->size(); ++si) {
         CHECK_FOR_INTERRUPTS();
         per_set_ops.target_set = &(*multi_sets)[si];
         const std::vector<Table> below = runBottomUp();
-        for (const auto &[R, g] : below[rb])
-          (*multi_sink)(si, R, g, ps);
+        if constexpr (Ops::final_collapse) {
+          // Re-express the root table onto the singleton source domain:
+          // forgetting every remaining vertex resolves the in-domain
+          // target vertices, so acceptance is a predicate of the
+          // collapsed state alone.
+          const Table collapsed =
+            lift(below[rb], domains[rb], source_domain);
+          for (const auto &[R, g] : collapsed)
+            (*multi_sink)(si, R, g, 0);
+        } else {
+          for (const auto &[R, g] : below[rb])
+            (*multi_sink)(si, R, g, ps);
+        }
       }
       stats.nb_gates = dd.getNbGates();
       return true_gate;
@@ -1447,6 +1673,87 @@ ReachabilityCompiler::AnyReachAllResult compileAnyReachAllInternal(
   return result;
 }
 
+/**
+ * @brief Implementation of @c compileCoverReachAll() (and, through a
+ *        one-set wrapper, @c compileCoverReach()): the coverage
+ *        algebra over the shared prelude, one bottom-up sweep per
+ *        target set, acceptance -- no pending rescuer set after the
+ *        final collapse onto the source domain -- read per set.
+ */
+ReachabilityCompiler::AnyReachAllResult compileCoverReachAllInternal(
+  const std::vector<ReachabilityCompiler::EdgeRow> &rows,
+  const std::vector<ReachabilityCompiler::SourceArc> &sources,
+  const std::vector<std::vector<unsigned long> > &sets,
+  bool directed,
+  std::size_t max_states)
+{
+  ReachabilityCompiler::AnyReachAllResult result;
+  dDNNF &dd = result.dd;
+
+  if (sets.empty())
+    throw ReachabilityCompilerException("no target sets given");
+
+  /* The universe filter serves the super-source collision as in the
+   * any-reach case -- but here an absent vertex is *unreachable*, so a
+   * set containing one compiles to constant false rather than being
+   * silently shrunk.  The universe is the *decomposed graph's* vertex
+   * set: a vertex appearing only in self-loops never enters the DP
+   * (self-loops are irrelevant to plain reachability), is unreachable
+   * from anywhere else, and must count as absent. */
+  std::unordered_set<unsigned long> universe;
+  for (const auto &row : rows)
+    if (row.src != row.dst) {
+      universe.insert(row.src);
+      universe.insert(row.dst);
+    }
+  for (const auto &sa : sources)
+    universe.insert(sa.vertex);
+  std::vector<std::unordered_set<unsigned long> > target_sets(sets.size());
+  std::vector<bool> absent(sets.size(), false);
+  for (std::size_t si = 0; si < sets.size(); ++si)
+    for (unsigned long v : sets[si]) {
+      if (universe.count(v))
+        target_sets[si].insert(v);
+      else
+        absent[si] = true;
+    }
+  CoverOps ops;
+  ops.target_set = &target_sets[0];
+
+  // Per set, the accepting collapsed states are those with no pending
+  // rescuer set; they partition the worlds, so their OR is
+  // deterministic.
+  std::vector<std::vector<gate_t> > accepting(sets.size());
+  const std::function<void(std::size_t, const CoverOps::State &,
+                           gate_t, int)> sink =
+    [&](std::size_t si, const CoverOps::State &state, gate_t g, int) {
+      if (state.pending.empty())
+        accepting[si].push_back(g);
+    };
+
+  runReachabilityDP(
+    rows, 0, directed, max_states, nullptr, &sources, ops, dd,
+    result.stats,
+    [](unsigned long, CoverOps::Entry, gate_t) {
+  },
+    nullptr, &target_sets, &sink);
+
+  result.roots.reserve(sets.size());
+  for (std::size_t si = 0; si < sets.size(); ++si) {
+    gate_t root;
+    if (absent[si] || accepting[si].empty()) {
+      // An absent target vertex, or no covering world: constant false.
+      root = dd.setGate(BooleanGate::OR);
+      dd.setInfo(root, DNNF_CERT_INFO);
+    } else
+      root = finalizeRoot(dd, accepting[si]);
+    result.roots.push_back(root);
+  }
+  dd.setRoot(result.roots[0]);   // single-set callers read this
+  result.stats.nb_gates = dd.getNbGates();
+  return result;
+}
+
 } // namespace
 
 ReachabilityCompiler::AllResult ReachabilityCompiler::compileAll(
@@ -1514,6 +1821,32 @@ ReachabilityCompiler::AnyReachAllResult ReachabilityCompiler::compileAnyReachAll
   std::size_t max_states)
 {
   return compileAnyReachAllInternal(rows, sources, sets, directed, max_states);
+}
+
+ReachabilityCompiler::Result ReachabilityCompiler::compileCoverReach(
+  const std::vector<EdgeRow> &rows,
+  const std::vector<SourceArc> &sources,
+  const std::vector<unsigned long> &set,
+  bool directed,
+  std::size_t max_states)
+{
+  AnyReachAllResult all =
+    compileCoverReachAllInternal(rows, sources, {set}, directed, max_states);
+  Result result;
+  result.dd = std::move(all.dd);
+  result.stats = all.stats;
+  return result;
+}
+
+ReachabilityCompiler::AnyReachAllResult ReachabilityCompiler::compileCoverReachAll(
+  const std::vector<EdgeRow> &rows,
+  const std::vector<SourceArc> &sources,
+  const std::vector<std::vector<unsigned long> > &sets,
+  bool directed,
+  std::size_t max_states)
+{
+  return compileCoverReachAllInternal(rows, sources, sets, directed,
+                                      max_states);
 }
 
 ReachabilityCompiler::Result ReachabilityCompiler::compile(

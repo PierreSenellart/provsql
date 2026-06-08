@@ -551,6 +551,27 @@ emission), materialised once.  A tracked member relation, or any
 deviation from the join-and-group-by-one-column shape, simply skips
 the planting (the generic evaluation is always available).
 
+*K-terminal conjunctions* close the family: a self-join of the CTE
+with one constant node binding per reference --
+
+.. code-block:: postgresql
+
+    ... SELECT 'all supplied'
+        FROM reach r1, reach r2, reach r3
+        WHERE r1.node = 5 AND r2.node = 6 AND r3.node = 9;
+
+-- asks "are these vertices *all* reachable", and its row provenance
+is the product of the correlated per-vertex tokens.  The route
+compiles the certified all-members-reachable circuit (a richer
+congruence: each forgotten terminal pends on the boundary vertices
+that reach it, the pending sets folding through the same DP) and
+plants it at the address the conjunction computes, so the query
+evaluates to the **k-terminal reliability** through the linear
+certified route -- with joint-worlds semantics: under nonnegative
+min-plus (see :doc:`semirings`) the same token prices the cheapest
+covering subgraph, the **directed Steiner cost**, shared edges paid
+once where the raw product would pay them once per terminal.
+
 The emitted circuits are *deterministic and decomposable by
 construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
 persisted **certificate** of that property (readable with

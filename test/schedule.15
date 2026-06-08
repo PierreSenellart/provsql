@@ -32,3 +32,8 @@ test: btw_anyreach
 # evaluation of the route's certified circuits -- plain, hop-bounded
 # and per-region, cost-0 edges included
 test: btw_tropical
+
+# K-terminal coverage: reachability self-join conjunctions get a
+# certified all-members circuit planted at the times-canonical address
+# (k-terminal reliability, Steiner cost via min-plus)
+test: btw_cover

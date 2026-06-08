@@ -203,8 +203,11 @@ graph into certified circuits of linear total size (see
 absorptive-semiring evaluation -- reads off exactly, in time linear
 in the circuit.  Single-source shortest distances over thousands of
 probabilistic edges, hop-bounded variants (the min cost of reaching a
-vertex within :math:`k` hops) and per-region minima (through a
-``GROUP BY`` over a joined member relation) all stay on this route.
+vertex within :math:`k` hops), per-region minima (through a
+``GROUP BY`` over a joined member relation) and **exact directed
+Steiner costs** -- the cheapest subgraph covering :math:`k` terminals
+at once, through a self-join of the reachability CTE -- all stay on
+this route.
 The same holds for every absorptive semiring on this page:
 :sqlfunc:`sr_viterbi` gives the most reliable path,
 :sqlfunc:`sr_maxmin` the widest path, :sqlfunc:`sr_lukasiewicz` the

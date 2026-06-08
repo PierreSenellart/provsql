@@ -40,6 +40,7 @@ PG_FUNCTION_INFO_V1(reachability_compile_stats);
 PG_FUNCTION_INFO_V1(reachability_materialize);
 PG_FUNCTION_INFO_V1(reachability_materialize_hops);
 PG_FUNCTION_INFO_V1(reachability_materialize_any);
+PG_FUNCTION_INFO_V1(reachability_materialize_cover);
 }
 
 #include "c_cpp_compatibility.h"
@@ -887,6 +888,68 @@ Datum reachability_materialize_any(PG_FUNCTION_ARGS)
     provsql_error("reachability_materialize_any: %s", e.what());
   } catch (...) {
     provsql_error("reachability_materialize_any: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable entry point: "every member vertex
+ *        reachable" (k-terminal / coverage) compilation and
+ *        materialisation.
+ *
+ * Arguments 0..9 as @c reachability_materialize, then
+ * @c member_vertices @c int[] (dense vertex IDs).  Compiles the
+ * certified circuit of "every member vertex is reachable from a
+ * present source" (@c compileCoverReach: the pending rescuer-set
+ * antichain folded through the decomposition DP, so the conjunction
+ * over the members' *correlated* per-vertex events is deterministic
+ * by construction), materialises it, and returns its token, wrapped
+ * in the @c 'absorptive' assumption marker.  The caller plants the
+ * token under the times-canonical address of the members' per-vertex
+ * reach tokens, keeping reachability self-join conjunctions ("are
+ * these k vertices all reachable") on the linear certified route --
+ * with the joint-worlds semantics: under nonnegative min-plus the
+ * token evaluates to the cost of the cheapest covering subgraph
+ * (directed Steiner cost), shared edges paid once.
+ */
+Datum reachability_materialize_cover(PG_FUNCTION_ARGS)
+{
+  try {
+    if (PG_ARGISNULL(9))
+      provsql_error("reachability: directed must not be NULL");
+
+    auto rows = edgesFromArgs(fcinfo, 4);
+    const bool directed = PG_GETARG_BOOL(9);
+    const auto sources = sourcesFromArgs(fcinfo, 6);
+
+    ArrayType *mverts = PG_ARGISNULL(10) ? NULL : PG_GETARG_ARRAYTYPE_P(10);
+    const int nm = checkedArrayLength(mverts, "member vertices");
+    if (nm == 0)
+      provsql_error("reachability: at least one member vertex is required");
+    const int32 *mv_data = (const int32 *) ARR_DATA_PTR(mverts);
+    std::vector<unsigned long> set;
+    set.reserve(nm);
+    for (int i = 0; i < nm; ++i)
+      set.push_back(static_cast<unsigned long>(mv_data[i]));
+
+    ReachabilityCompiler::AnyReachAllResult all;
+    try {
+      all = ReachabilityCompiler::compileCoverReachAll(rows, sources, {set},
+                                                       directed);
+    } catch (TreeDecompositionException &) {
+      provsql_error(
+        "reachability: data treewidth exceeds the supported limit (%d)",
+        TreeDecomposition::MAX_TREEWIDTH);
+    }
+    const auto uuid_of = materializeCertifiedDD(all.dd, all.roots);
+
+    pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
+    *u = wrapAssumedAbsorptive(uuid_of.at(all.roots[0]));
+    PG_RETURN_UUID_P(u);
+  } catch (const std::exception &e) {
+    provsql_error("reachability_materialize_cover: %s", e.what());
+  } catch (...) {
+    provsql_error("reachability_materialize_cover: unknown exception");
   }
   PG_RETURN_NULL();
 }

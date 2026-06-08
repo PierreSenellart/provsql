@@ -12,7 +12,10 @@
 --     reachability_evaluate / reachability_compile_stats columnar
 --     internals, and the gather_reachability_edges helper.
 --   * a canonical-address probe in provenance_plus, serving the
---     pre-created within-bound gates of the bounded-hop route.
+--     pre-created within-bound gates of the bounded-hop route, and its
+--     provenance_times twin, serving the pre-created
+--     all-members-reachable gates of self-join conjunctions
+--     (plant_reach_cover / reachability_materialize_cover).
 --   * the labelled assumption marker: gate type 'assumed_boolean' is
 --     renamed 'assumed' with the assumption kind in the gate's extra
 --     label; provenance_assume(token, assumption) is the constructor,
@@ -1163,5 +1166,240 @@ BEGIN
 END
 $$ LANGUAGE plpgsql;
 
+/**
+ * @brief Create a times (product) gate from multiple provenance tokens
+ *
+ * Filters out NULL and one-gates; returns gate_one() if all tokens
+ * are trivial, or a single token if only one remains.
+ *
+ * Before creating an ordinary gate, the *times-canonical* address of
+ * the surviving multiset -- @c uuid5('times-canonical{sorted tokens}')
+ * -- is probed: the reachability rewriter pre-creates there, for
+ * self-join conjunctions of reachability tokens, a certified
+ * equivalent (the all-members-reachable circuit; see
+ * @c plant_reach_cover).  Ordinary creation never writes under that
+ * recipe, so a hit is always a deliberate plant; the historical
+ * order-dependent recipe is used unchanged otherwise, so ordinary
+ * times gates (and their formula rendering) are untouched.
+ */
+CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
+  RETURNS UUID AS
+$$
+DECLARE
+  times_token uuid;
+  filtered_tokens uuid[];
+  canonical uuid;
+BEGIN
+  SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
 
+  -- Dispatch on the FILTERED count: a single survivor short-circuits
+  -- to that token directly (no useless single-child times gate); zero
+  -- survivors collapse to the identity. Using array_length(tokens, 1)
+  -- here would miss the [one, cmp] → [cmp] case, leaving the cmp wrapped
+  -- in a one-child times when its only sibling was gate_one().
+  CASE coalesce(array_length(filtered_tokens, 1), 0)
+    WHEN 0 THEN
+      times_token:=gate_one();
+    WHEN 1 THEN
+      times_token:=filtered_tokens[1];
+    ELSE
+      -- Computed separately from the filtering aggregate above: an
+      -- ORDER BY aggregate there would make the planner feed *both*
+      -- aggregates sorted input, scrambling the stored children order.
+      SELECT uuid_generate_v5(uuid_ns_provsql(),
+                              concat('times-canonical', array_agg(t ORDER BY t)))
+      FROM unnest(filtered_tokens) t
+      INTO canonical;
+      IF get_gate_type(canonical) = 'times' THEN
+        -- A deliberate pre-creation at the canonical address: same
+        -- children, same product.
+        times_token := canonical;
+      ELSE
+        times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',filtered_tokens));
 
+        PERFORM create_gate(times_token, 'times', ARRAY_AGG(t)) FROM UNNEST(filtered_tokens) AS t WHERE t IS NOT NULL;
+      END IF;
+  END CASE;
+
+  RETURN times_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Compile and materialise the "every member vertex reachable"
+ * (k-terminal / coverage) circuit (columnar form, internal)
+ *
+ * Arguments as @c reachability_materialize_any() with a single member
+ * set: compiles the certified circuit of "every member vertex is
+ * reachable from a present source" -- the conjunction over the
+ * members' *correlated* per-vertex events, deterministic by
+ * construction through the pending rescuer-set congruence --
+ * materialises it, and returns its token, wrapped in the
+ * @c 'absorptive' assumption marker.  Probability evaluation gives the
+ * k-terminal reliability; nonnegative min-plus the cost of the
+ * cheapest covering subgraph (directed Steiner cost), shared edges
+ * paid once.  A member vertex absent from the graph is unreachable:
+ * the circuit is then constant false.
+ *
+ * @param sources source vertex of each edge (dense integer IDs)
+ * @param destinations destination vertex of each edge
+ * @param tokens provenance token of each edge tuple
+ * @param probabilities probability of each edge tuple
+ * @param block_keys per-edge BID key variable (nil UUID = independent)
+ * @param block_indices per-edge outcome index within its block
+ * @param source_vertices the source vertices
+ * @param source_tokens per-source provenance token (nil UUID = certain)
+ * @param source_probabilities per-source probability
+ * @param directed if false, each edge can be traversed both ways
+ * @param member_vertices the member vertices (dense IDs)
+ */
+CREATE OR REPLACE FUNCTION reachability_materialize_cover(
+  sources INT[],
+  destinations INT[],
+  tokens UUID[],
+  probabilities DOUBLE PRECISION[],
+  block_keys UUID[],
+  block_indices INT[],
+  source_vertices INT[],
+  source_tokens UUID[],
+  source_probabilities DOUBLE PRECISION[],
+  directed BOOLEAN,
+  member_vertices INT[])
+  RETURNS UUID AS
+  'provsql','reachability_materialize_cover' LANGUAGE C VOLATILE;
+
+/**
+ * @brief Plant the certified all-members-reachable gate for a
+ * reachability self-join conjunction (internal)
+ *
+ * Called (at plan time, over SPI) by the recursive-CTE lowering when
+ * the outer query self-joins a reachability working table with one
+ * constant node binding per reference -- "are these k vertices all
+ * reachable" -- whose row provenance @c provenance_times() computes as
+ * the product of *correlated* per-vertex reach tokens (they share
+ * edges).  This pre-creates, at the times-canonical address of that
+ * token multiset, a certified single-child times over the native
+ * all-members-reachable circuit (@c reachability_materialize_cover),
+ * so the natural conjunction stays on the linear certified route --
+ * with the joint-worlds semantics: probability evaluation gives the
+ * k-terminal reliability, and nonnegative min-plus the cost of the
+ * cheapest covering subgraph (directed Steiner cost), shared edges
+ * paid once where the raw product would pay them once per factor.
+ * Best-effort: any failure leaves the generic path untouched (notice
+ * under verbosity 10).
+ *
+ * @param work_name the lowered CTE's working table
+ * @param node_attribute its vertex column
+ * @param edge_rel the tracked edge relation (as for eval_reachability)
+ * @param source_attribute name of the source-vertex column
+ * @param destination_attribute name of the destination-vertex column
+ * @param source_value the base arm's constant, as text
+ * @param directed if false, each edge can be traversed both ways
+ * @param node_values the constant node bindings, as text (multiset:
+ *        one per self-join reference)
+ * @param edge_quals optional deterministic filter over edge columns
+ * @param source_rel source relation of a multi-source base arm
+ * @param source_rel_attribute the source relation's vertex column
+ * @param edge_sql deparsed edge subquery (join-defined edges)
+ */
+CREATE OR REPLACE FUNCTION plant_reach_cover(
+  work_name text,
+  node_attribute text,
+  edge_rel regclass,
+  source_attribute text,
+  destination_attribute text,
+  source_value text,
+  directed boolean,
+  node_values text[],
+  edge_quals text DEFAULT NULL,
+  source_rel regclass DEFAULT NULL,
+  source_rel_attribute text DEFAULT NULL,
+  edge_sql text DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  e record;
+  sv text[];
+  st uuid[];
+  sp double precision[];
+  val text;
+  vid int;
+  vids int[] := ARRAY[]::int[];
+  tok uuid;
+  toks uuid[] := ARRAY[]::uuid[];
+  cover_token uuid;
+  canonical uuid;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  BEGIN
+    IF source_rel IS NOT NULL THEN
+      SELECT g.source_values, g.source_tokens, g.source_probabilities
+        INTO sv, st, sp
+        FROM provsql.gather_reachability_sources(source_rel,
+                                                 source_rel_attribute) g;
+      IF sv IS NULL THEN
+        sv := ARRAY[]::text[];
+        st := ARRAY[]::uuid[];
+        sp := ARRAY[]::float8[];
+      END IF;
+    ELSE
+      sv := ARRAY[source_value];
+      st := ARRAY['00000000-0000-0000-0000-000000000000'::uuid];
+      sp := ARRAY[1.0::float8];
+    END IF;
+
+    e := provsql.gather_reachability_edges(edge_rel, source_attribute,
+                                           destination_attribute,
+                                           sv, edge_quals, edge_sql);
+
+    -- The bound vertices and their per-row reach tokens, with the
+    -- multiplicity the self-join produces.  A vertex absent from the
+    -- graph, or from the working table, means the join is empty: no
+    -- row will exist, nothing to plant.
+    FOREACH val IN ARRAY node_values LOOP
+      vid := array_position(e.vertices, val);
+      IF vid IS NULL THEN
+        RETURN;
+      END IF;
+      vids := vids || vid;
+      EXECUTE format('SELECT provsql FROM %I WHERE %I::text = $1',
+                     work_name, node_attribute)
+        INTO tok USING val;
+      IF tok IS NULL THEN
+        RETURN;
+      END IF;
+      toks := toks || tok;
+    END LOOP;
+
+    cover_token := provsql.reachability_materialize_cover(
+      e.sources, e.destinations, e.tokens, e.probabilities,
+      e.block_keys, e.block_indices, e.extra_ids, st, sp,
+      directed, vids);
+
+    SELECT public.uuid_generate_v5(
+             provsql.uuid_ns_provsql(),
+             concat('times-canonical', array_agg(t ORDER BY t)))
+    FROM unnest(toks) t
+    INTO canonical;
+    PERFORM provsql.create_gate(canonical, 'times', ARRAY[cover_token]);
+    PERFORM provsql.set_infos(canonical, 1);
+    IF verbosity >= 20 THEN
+      -- Lift the function-level client_min_messages = warning for the
+      -- one RAISE; the function-level SET restores the caller's value.
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: certified all-members gate planted for the self-join of "%"',
+        work_name;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    IF verbosity >= 10 THEN
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: all-members planting for "%" skipped (%)',
+        work_name, SQLERRM;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  END;
+END
+-- No SET search_path: the deparsed edge subquery must resolve against
+-- the caller's path; ProvSQL internals are schema-qualified.
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
