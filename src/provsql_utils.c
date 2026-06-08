@@ -494,6 +494,12 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_INVERSION_FREE_KEY =
     get_provsql_func_oid("inversion_free_key");
 
+  /* cond(uuid,uuid) / given(uuid) -- the conditioning operator and its
+   * whole-tuple output marker.  Optional: InvalidOid on a schema predating
+   * the conditioning feature disables the given() rewrite. */
+  constants.OID_FUNCTION_COND  = get_provsql_func_oid("cond");
+  constants.OID_FUNCTION_GIVEN = get_provsql_func_oid("given");
+
   /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
    * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,
    * LT=3, GE=4, GT=5). */

@@ -1,0 +1,25 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+visible_columns
+k,provsql
+(1 row)
+k|gate|p_cond
+1|conditioned|0.4000
+2|conditioned|0.6000
+(2 rows)
+k|p_self
+1|1.0000
+2|1.0000
+(2 rows)
+ERROR:  ProvSQL: provsql.given (whole-tuple output conditioning) is supported only in a plain per-row SELECT, not in an aggregated / grouped / DISTINCT / set-operation query; condition the individual tokens with the binary | operator instead
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

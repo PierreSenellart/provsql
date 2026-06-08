@@ -200,6 +200,21 @@ typedef struct constants_t {
    * order in @c src/Aggregation.h).  Used by the planner hook to detect
    * RV-comparison @c OpExpr nodes in WHERE clauses. */
   Oid OID_FUNCTION_RV_CMP[6];
+  /** @brief OID of @c provsql.cond(uuid,uuid)->uuid.
+   *
+   *  Builds the terminal @c gate_conditioned (value-level conditioning, the
+   *  binary @c | operator).  The rewriter wraps a row's output provenance in
+   *  it when a @c given(...) marker is present.  @c InvalidOid on a schema
+   *  predating the conditioning feature (the @c given rewrite is then
+   *  disabled). */
+  Oid OID_FUNCTION_COND;
+  /** @brief OID of @c provsql.given(uuid)->uuid.
+   *
+   *  The whole-tuple output-conditioning marker: a consumed select-list term
+   *  the rewriter strips from the visible projection, conditioning each output
+   *  row's provenance on the marker's argument.  @c InvalidOid on a schema
+   *  predating the feature. */
+  Oid OID_FUNCTION_GIVEN;
   bool ok; ///< true if constants were loaded
 } constants_t;
 

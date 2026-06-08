@@ -80,6 +80,7 @@ test: having_agg_fptras
 test: insert_select_sublink
 test: inert_provenance_sublink
 test: conditioning
+test: given_conditioning
 test: last_eval_method
 
 # Probability computation using external software

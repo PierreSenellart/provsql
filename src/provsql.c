@@ -2221,6 +2221,67 @@ remove_provenance_attributes_select(const constants_t *constants, Query *q,
 }
 
 /**
+ * @brief Strip @c given(evidence) whole-tuple conditioning markers from the
+ *        visible projection, returning the captured evidence expressions.
+ *
+ * Walks @p q's target list for visible (non-resjunk) entries whose expression
+ * is a @c provsql.given(uuid) @c FuncExpr -- the consumed marker emitted by the
+ * prefix @c | operator / @c given() call.  Each match is removed from the
+ * projection (its @c resno renumbered like @c remove_provenance_attributes_
+ * select), and its single argument (the per-row evidence token) is collected
+ * into the returned list, in target-list order.  The caller wraps the query's
+ * output provenance in @c cond(row_provenance, evidence) for each captured
+ * expression, so multiple markers accumulate as a conjunction of evidence
+ * (cond folds @c "(X|A)|B = X|(A∧B)").
+ *
+ * Returns @c NIL when the query carries no marker (the common case, no cost
+ * beyond the walk).  @p q's target list is modified in place.
+ */
+static List *strip_given_markers(const constants_t *constants, Query *q) {
+  List *evidence = NIL;
+  int nbRemoved = 0;
+  ListCell *cell, *prev;
+
+  if (!OidIsValid(constants->OID_FUNCTION_GIVEN) || q->targetList == NIL)
+    return NIL;
+
+  for (cell = list_head(q->targetList), prev = NULL; cell != NULL;) {
+    TargetEntry *rt = (TargetEntry *)lfirst(cell);
+    bool is_given = false;
+    List *args = NIL;
+
+    /* The marker reaches the rewriter as either a given(...) FuncExpr (the
+     * function-call spelling) or a prefix `| c` OpExpr (the operator
+     * spelling, whose opfuncid is given's OID). */
+    if (!rt->resjunk && IsA(rt->expr, FuncExpr) &&
+        ((FuncExpr *)rt->expr)->funcid == constants->OID_FUNCTION_GIVEN)
+      args = ((FuncExpr *)rt->expr)->args;
+    else if (!rt->resjunk && IsA(rt->expr, OpExpr) &&
+             ((OpExpr *)rt->expr)->opfuncid == constants->OID_FUNCTION_GIVEN)
+      args = ((OpExpr *)rt->expr)->args;
+
+    if (args != NIL) {
+      if (list_length(args) != 1)
+        provsql_error("provsql.given expects exactly one argument");
+      is_given = true;
+      evidence = lappend(evidence, linitial(args));
+      q->targetList = my_list_delete_cell(q->targetList, cell, prev);
+      ++nbRemoved;
+    }
+
+    if (is_given) {
+      cell = prev ? my_lnext(q->targetList, prev) : list_head(q->targetList);
+    } else {
+      rt->resno -= nbRemoved;
+      prev = cell;
+      cell = my_lnext(q->targetList, cell);
+    }
+  }
+
+  return evidence;
+}
+
+/**
  * @brief Semiring operation used to combine provenance tokens.
  *
  * @c SR_TIMES corresponds to the multiplicative operation (joins, Cartesian
@@ -10608,6 +10669,31 @@ static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
   return (Expr *) wrap;
 }
 
+/**
+ * @brief Wrap @p target in a @c provsql.cond(uuid, uuid) FuncExpr conditioning
+ *        it on @p evidence.
+ *
+ * Used by @c process_query when the query carries a @c given(...) marker: the
+ * per-row output provenance @p target is conditioned on the marker's evidence
+ * expression, so each output row's provenance becomes
+ * @c "cond(row_provenance, evidence)".  @p evidence is the (per-row, possibly
+ * correlated) argument captured from the stripped @c given() term.
+ */
+static Expr *wrap_in_cond(const constants_t *constants, Expr *target,
+                          Expr *evidence) {
+  FuncExpr *wrap = makeNode(FuncExpr);
+  wrap->funcid = constants->OID_FUNCTION_COND;
+  wrap->funcresulttype = constants->OID_TYPE_UUID;
+  wrap->funcretset = false;
+  wrap->funcvariadic = false;
+  wrap->funcformat = COERCE_EXPLICIT_CALL;
+  wrap->funccollid = InvalidOid;
+  wrap->inputcollid = InvalidOid;
+  wrap->args = list_make2(target, evidence);
+  wrap->location = -1;
+  return (Expr *) wrap;
+}
+
 /** @brief Mark column @p attno of RTE @p r as selected (read permission). */
 static void mark_col_selected(Query *q, RangeTblEntry *r, AttrNumber attno) {
 #if PG_VERSION_NUM >= 160000
@@ -11287,6 +11373,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   unsigned i = 0;
   char *inv_cert = NULL;            /* serialised inversion-free certificate (root) */
   const InvFreeMarkerCtx *local_inv_ctx = NULL; /* this query's marker context */
+  List *given_evidence = NIL;       /* captured given(...) whole-tuple evidence */
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
 
@@ -11440,6 +11527,26 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (q->setOperations)
         remove_provenance_attribute_setoperations(q, *removed);
     }
+  }
+
+  /* Whole-tuple output conditioning: strip any given(...) marker now (before
+   * the aggregation / set-operation restructuring below, which would
+   * renumber the Vars in the captured per-row evidence), and condition this
+   * query's output provenance on each captured evidence at splice time.  The
+   * marker is meaningful only for a per-row projection: an aggregated /
+   * grouped / set-operation / DISTINCT query has no single output row to
+   * condition, so reject it with a clear message rather than silently
+   * conditioning an aggregate. */
+  if (provsql_active && q->targetList) {
+    given_evidence = strip_given_markers(constants, q);
+    if (given_evidence != NIL &&
+        (q->hasAggs || q->groupClause || q->groupingSets || q->havingQual ||
+         q->distinctClause || q->setOperations || q->hasWindowFuncs))
+      provsql_error(
+        "provsql.given (whole-tuple output conditioning) is supported only in "
+        "a plain per-row SELECT, not in an aggregated / grouped / DISTINCT / "
+        "set-operation query; condition the individual tokens with the binary "
+        "| operator instead");
   }
 
   if(provsql_active) {
@@ -11744,6 +11851,19 @@ static Query *process_query(const constants_t *constants, Query *q,
         array->location = -1;
         times->args = list_make1(array);
         provenance = (Expr *)times;
+      }
+
+      /* Whole-tuple output conditioning: wrap the per-row provenance in
+       * cond(row_provenance, evidence) for each captured given(...) marker.
+       * Done before add_to_select / replace_provenance_function_by_expression
+       * so the auto-added provsql column AND any user-side provenance() call
+       * uniformly carry the conditioning (mirrors the assume_boolean wrap).
+       * Multiple markers accumulate as a conjunction of evidence (cond folds
+       * (X|A)|B = X|(A∧B)). */
+      if (given_evidence != NIL && OidIsValid(constants->OID_FUNCTION_COND)) {
+        ListCell *lc_ev;
+        foreach (lc_ev, given_evidence)
+          provenance = wrap_in_cond(constants, provenance, (Expr *)lfirst(lc_ev));
       }
 
       add_to_select(q, provenance);

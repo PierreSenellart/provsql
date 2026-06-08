@@ -1466,3 +1466,13 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
 
 CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=UUID, PROCEDURE=cond);
+
+-- Whole-tuple output conditioning marker: given(c) / prefix | c.  A consumed
+-- select-list term the rewriter strips, conditioning each output row's
+-- provenance on c.  Identity at runtime when the rewriter is inactive.
+CREATE OR REPLACE FUNCTION given(evidence UUID) RETURNS UUID AS
+$$
+  SELECT evidence;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE OPERATOR | (RIGHTARG=UUID, PROCEDURE=given);

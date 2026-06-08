@@ -308,6 +308,43 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
 CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=UUID, PROCEDURE=cond);
 
 /**
+ * @brief Whole-tuple output conditioning directive: @c "given(evidence)".
+ *
+ * Written as a term in the select list, @c given(c) conditions the OUTPUT
+ * provenance of the current query's rows on @p c:
+ *
+ * @code
+ *   SELECT a, b, given((SELECT provenance() FROM tests
+ *                       WHERE patient_id = s.id AND result = 'positive'))
+ *   FROM source s;
+ *   -- visible columns: a, b   (the given(...) term is stripped)
+ *   -- per-row output provenance: provenance() | <that row's evidence>
+ * @endcode
+ *
+ * The query rewriter recognises the marker, STRIPS it from the visible
+ * projection, and wraps each output row's provenance expression in
+ * @c cond(row_provenance, c) -- deriving a new conditioned relation, never
+ * mutating any stored provenance.  @p c is evaluated per output row and may
+ * correlate with the row's columns, so each tuple is conditioned on its own
+ * evidence.  When the rewriter is inactive the call is a harmless identity
+ * (it returns @p evidence as an ordinary column).
+ */
+CREATE OR REPLACE FUNCTION given(evidence UUID) RETURNS UUID AS
+$$
+  SELECT evidence;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Prefix unary @c | : alias for @c given, @c "| evidence".
+ *
+ * Disambiguated from the binary @c | by the absence of a left operand
+ * (@c "a, | c" parses @c "| c" as the prefix form).  PostgreSQL keeps
+ * prefix operators on every supported version (postfix operators were
+ * removed in PG14), so @c "| c" is safe across the CI matrix.
+ */
+CREATE OPERATOR | (RIGHTARG=UUID, PROCEDURE=given);
+
+/**
  * @brief Build a per-input order-key string for the inversion-free path.
  *
  * Emitted by the planner per certified atom: @c K-prefixed, length-prefixed
