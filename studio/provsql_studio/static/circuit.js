@@ -32,6 +32,10 @@
             + 'under the named evaluation assumption (boolean / absorptive)',
     annotation: 'Annotation wrapper: query-level metadata (inversion-free '
             + 'certificate / input order key)',
+    conditioned: 'Conditioned gate (∣): "A given B". Children are the '
+            + 'target A and the evidence B (plus, for discrete events, '
+            + 'their joint A∧B); P(A|B) = P(A∧B)/P(B). A terminal token: '
+            + 'evaluate it for a probability or a moment, not a semiring.',
     'kc-and':   'AND gate',
     'kc-or':    'OR gate',
     'kc-not':   'NOT gate',
@@ -101,7 +105,8 @@
   // labels would be redundant.  mixture's three wires (p / x / y) are
   // positional and get the semantic labels defined in EDGE_POS_LABEL
   // below.
-  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture']);
+  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
+                                 'conditioned']);
   // Per-(parent type, 1-based child_pos) edge-label overrides for
   // gates whose wires have well-known names.  Falls back to the bare
   // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
@@ -144,8 +149,16 @@
     // Classic 3-wire mixture: [p, x, y].
     return ({ 1: 'p', 2: 'x', 3: 'y' })[child_pos] ?? String(child_pos);
   }
+  // gate_conditioned wires: the target A and the evidence B, plus -- for
+  // discrete (uuid|uuid) conditioning -- their joint A∧B (so the circuit
+  // shows P(A|B) = P(A∧B)/P(B)). The rv|uuid / agg|uuid forms have just the
+  // two; the function tolerates either by labelling positionally.
+  function _conditionedEdgeLabel(parent, child_pos) {
+    return ({ 1: 'A', 2: 'B', 3: 'A∧B' })[child_pos] ?? null;
+  }
   const EDGE_POS_LABEL = {
     mixture: _mixtureEdgeLabel,
+    conditioned: _conditionedEdgeLabel,
   };
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   // = and <> are commutative; lhs/rhs digits add noise for those cmp
@@ -1819,6 +1832,24 @@
     if (!targetId) return null;
     return state.scene.nodes.find(n => n.id === targetId) || null;
   }
+  // A gate_conditioned (A | B) is a terminal token: a semiring refuses it.
+  // What it *does* support depends on the carrier of its subject child A
+  // (child_pos 1): a continuous / aggregate A yields the standard value
+  // evaluations of the conditional distribution; a discrete (uuid) A yields
+  // only a conditional probability. Returns 'moment' | 'discrete', or null
+  // when the current target is not a conditioned gate.
+  function _conditionedTargetKind() {
+    const node = _currentTargetNode();
+    if (!node || node.type !== 'conditioned' || !state.scene) return null;
+    const edges = (state.scene.edges || [])
+      .filter(e => e.from === node.id)
+      .sort((a, b) => (a.child_pos ?? 0) - (b.child_pos ?? 0));
+    const child = edges.length
+      ? (state.scene.nodes || []).find(n => n.id === edges[0].to) : null;
+    const t = child && child.type;
+    return (_SCALAR_GATE_TYPES.has(t) || _AGG_SCALAR_GATE_TYPES.has(t))
+      ? 'moment' : 'discrete';
+  }
 
   // PG type names psycopg surfaces as either JS numbers (smallints, ints,
   // floats) or strings (numeric / Decimal). Either way we render with 4
@@ -2086,6 +2117,11 @@
       // moment / sample _do_ work, going through
       // MonteCarloSampler::evalScalar's gate_agg / gate_semimod arms.
       const aggTarget = _AGG_SCALAR_GATE_TYPES.has(gateType);
+      // gate_conditioned: a terminal token no semiring accepts. Offer only
+      // what works -- a conditional probability (uuid|uuid) or the standard
+      // value evaluations of the conditional distribution (rv|uuid /
+      // agg|uuid) -- keyed on the subject child's carrier.
+      const condKind = gateType === 'conditioned' ? _conditionedTargetKind() : null;
       let firstVisible = null;
       for (const opt of sel.querySelectorAll('option')) {
         let hide;
@@ -2093,6 +2129,10 @@
           // Indeterminate: hide nothing target-specific; respect the
           // existing PG-version gate on compiled options.
           hide = false;
+        } else if (condKind === 'discrete') {
+          hide = !(opt.value === 'probability' || opt.value === 'prov-xml');
+        } else if (condKind === 'moment') {
+          hide = !_SCALAR_TARGET_OPTIONS.has(opt.value);
         } else if (isScalar) {
           hide = !_SCALAR_TARGET_OPTIONS.has(opt.value);
         } else if (aggTarget) {
@@ -3035,7 +3075,19 @@
       const node = pinned ? state.scene.nodes.find(n => n.id === pinned) : null;
       const isScalarPinned =
         node != null && _SCALAR_GATE_TYPES.has(node.type) && pinned !== root;
-      if (isScalarPinned) target = root;
+      if (isScalarPinned) {
+        target = root;
+        // When the root is itself a conditioned gate (X | C), conditioning
+        // on the root is nonsensical (it is already conditioned).  Offer its
+        // evidence child instead -- the second wire (child_pos 2), C.
+        const rootNode = state.scene.nodes.find(n => n.id === root);
+        if (rootNode && rootNode.type === 'conditioned') {
+          const wires = (state.scene.edges || [])
+            .filter(e => e.from === root)
+            .sort((a, b) => (a.child_pos ?? 0) - (b.child_pos ?? 0));
+          if (wires.length >= 2) target = wires[1].to;
+        }
+      }
     }
     if (!target) {
       // No row context and no scalar pin: drop any prior auto value.
@@ -3371,7 +3423,7 @@
       //     the notice banner with the ProvSQL badge + warning icon.
       const notice = document.getElementById('eval-notice');
       if (!isKc && semiring === 'probability') {
-        const guar = parseGuaranteeNotice(data.notices);
+        const guar = window.ProvsqlStudio.parseGuaranteeNotice(data.notices);
         // Show the method the chooser actually used when it is informative:
         // for the tolerance paths / default the request names no algorithm, and
         // any time the resolved method differs from the one requested (e.g. a
@@ -3385,7 +3437,7 @@
              || resolved !== requested);
           const via = showVia ? `via ${resolved}` : '';
           const est = typeof data.result === 'number' ? data.result : NaN;
-          const g = guar ? renderGuarantee(guar, est) : '';
+          const g = guar ? window.ProvsqlStudio.renderGuarantee(guar, est, resolved) : '';
           bound.textContent = via && g ? `${via} · ${g}`
                             : via       ? via
                             : g;
@@ -4311,59 +4363,6 @@
   // [clauses=] [tool=]"), emitted for every approximate method at
   // verbose_level >= 5 (which Studio sets for evaluation). Returns the parsed
   // key/value object, or null if no such notice is present.
-  function parseGuaranteeNotice(messages) {
-    for (const raw of (Array.isArray(messages) ? messages : [])) {
-      const m = (raw || '').match(/approximation-guarantee:\s*(.*)$/);
-      if (!m) continue;
-      const kv = {};
-      m[1].trim().split(/\s+/).forEach(tok => {
-        const i = tok.indexOf('=');
-        if (i > 0) kv[tok.slice(0, i)] = tok.slice(i + 1);
-      });
-      return kv;
-    }
-    return null;
-  }
-
-  // Render a parsed guarantee UNIFORMLY as the value interval [lo, hi] the true
-  // probability is guaranteed to lie in, given the point estimate -- whether the
-  // guarantee is additive, relative, or the d-tree's deterministic bound.  This
-  // is more intuitive than "± ε" / "relative error ≤ ε%": the user reads the
-  // actual range of possible values directly.
-  //   additive: |est − p| ≤ ε        => p ∈ [est − ε, est + ε]
-  //   relative: |est − p| ≤ ε·p       => p ∈ [est/(1+ε), est/(1−ε)]
-  // δ (when present) gives the confidence 1−δ; δ = 0 is deterministic (certain).
-  // The optional sample count / tool name are appended for context.
-  function renderGuarantee(kv, estimate) {
-    if (!kv) return '';
-    const eps = parseFloat(kv.eps);
-    if (!Number.isFinite(eps) || !(typeof estimate === 'number')
-        || !Number.isFinite(estimate)) return '';
-    let lo, hi;
-    if (kv.kind === 'additive') { lo = estimate - eps; hi = estimate + eps; }
-    else if (kv.kind === 'relative') {
-      lo = estimate / (1 + eps);
-      hi = eps < 1 ? estimate / (1 - eps) : 1;
-    } else return '';
-    lo = Math.max(0, lo);
-    hi = Math.min(1, hi);
-    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
-      ? window.ProvsqlStudio.getProbDecimals() : 4;
-    const delta = kv.delta != null ? parseFloat(kv.delta) : NaN;
-    // delta == 0 is a DETERMINISTIC guarantee (the d-tree's certified interval):
-    // the bound holds with certainty, so say so rather than "prob ≥ 100%".
-    const conf = !Number.isFinite(delta) ? ''
-      : delta <= 0 ? ', certain'
-      : `, prob ≥ ${(100 * (1 - delta)).toFixed(delta < 0.01 ? 1 : 0)}%`;
-    // Report the actual sample count when the method is sample-based (the
-    // adaptive (eps, delta) path derives it, so it is informative); weighted
-    // counters carry no sample count.
-    const n = kv.samples != null ? parseInt(kv.samples, 10) : NaN;
-    const smp = Number.isFinite(n) && n > 0 ? `, ${n.toLocaleString()} samples` : '';
-    const tool = kv.tool ? ` [${kv.tool}]` : '';
-    return `(Pr ∈ [${lo.toFixed(dec)}, ${hi.toFixed(dec)}]${conf}${smp})${tool}`;
-  }
-
   function shortUuid(u) {
     if (!u) return '–';
     // Match the result-table abbreviation in app.js's formatCell so the

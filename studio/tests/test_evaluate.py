@@ -838,8 +838,9 @@ def _rv_uuid(client, sql_expr: str) -> str:
 
 
 def test_evaluate_distribution_profile_uniform(client):
-    """U(0, 1) leaf: support = [0, 1], expectation ≈ 0.5, variance ≈ 1/12,
-    histogram counts sum to provsql.rv_mc_samples."""
+    """U(0, 1) leaf: support = [0, 1], expectation = 0.5, variance = 1/12.
+    A closed-form shape gets an exact analytical histogram, so `count` is a
+    probability mass and the masses sum to 1."""
     tok = _rv_uuid(client, "provsql.uniform(0::float8, 1::float8)")
     resp = client.post("/api/evaluate", json={
         "token": tok, "semiring": "distribution-profile",
@@ -849,13 +850,12 @@ def test_evaluate_distribution_profile_uniform(client):
     assert body["kind"] == "distribution-profile"
     r = body["result"]
     assert r["support"] == [0.0, 1.0]
-    # MC-driven moments: tolerate the default 10k-sample noise.
+    # Exact closed-form moments.
     assert abs(r["expected"] - 0.5) < 0.02, r["expected"]
     assert abs(r["variance"] - 1.0 / 12.0) < 0.01, r["variance"]
     assert isinstance(r["histogram"], list) and len(r["histogram"]) == 30
-    total = sum(int(b["count"]) for b in r["histogram"])
-    # Should equal rv_mc_samples; the default panel value is 10000.
-    assert total > 0
+    total = sum(float(b["count"]) for b in r["histogram"])
+    assert abs(total - 1.0) < 0.02, total
 
 
 def test_evaluate_distribution_profile_bins_argument(client):
@@ -971,6 +971,77 @@ def test_evaluate_moment_categorical(client):
         "token": tok, "semiring": "moment", "arguments": "3;central",
     })
     assert abs(float(resp.get_json()["result"]) - 0.276) < 1e-9
+
+
+def test_evaluate_moment_aggregate_exact(client):
+    """An aggregate (agg_token) gate has an *exact* moment, computed by
+    the agg_token dispatcher (moment / central_moment -> agg_raw_moment,
+    which enumerates the rows' contributions and weights each by its
+    exact probability), not by rv_moment's Monte-Carlo arm.  The moment
+    evaluator must route aggregate roots to that exact path, so the
+    answer is correct even with provsql.rv_mc_samples = 0 -- the budget
+    that disables the MC fallback a bare rv_moment(agg) would otherwise
+    need.
+
+    Model: two rows, counts 3 and 4, each present independently with
+    probability 0.5, summed.  total = 3·b1 + 4·b2 with b1,b2 ~ Bern(0.5):
+      E[total]   = 0.5·3 + 0.5·4                 = 3.5
+      Var(total) = 9·Var(b1) + 16·Var(b2)
+                 = 9·0.25 + 16·0.25              = 6.25
+    """
+    # sum(n) is a plain bigint at parse time; the agg_token only
+    # materialises as a result *column*, so build it into a table (as the
+    # notebook does with casesum) and read its UUID off the agg_token
+    # column via the binary-coercible agg_token -> uuid cast.
+    setup = (
+        "DROP TABLE IF EXISTS _ev_agg CASCADE;"
+        " DROP TABLE IF EXISTS _ev_sum CASCADE;"
+        " CREATE TABLE _ev_agg(n int, p float);"
+        " INSERT INTO _ev_agg VALUES (3, 0.5), (4, 0.5);"
+        " SELECT add_provenance('_ev_agg');"
+        " SELECT set_prob(provenance(), p) FROM _ev_agg;"
+        " CREATE TABLE _ev_sum AS SELECT sum(n) AS total FROM _ev_agg;"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    try:
+        resp = client.post("/api/exec", json={
+            "sql": "SELECT total::uuid AS u FROM _ev_sum",
+            "mode": "circuit",
+        })
+        assert resp.status_code == 200, resp.data
+        rows_block = next(
+            b for b in resp.get_json()["blocks"] if "columns" in b
+        )
+        cols = [c["name"] for c in rows_block["columns"]]
+        tok = rows_block["rows"][0][cols.index("u")]
+
+        # Disable the MC fallback: only the exact agg path can answer.
+        r = client.post("/api/config",
+                        json={"key": "provsql.rv_mc_samples", "value": "0"})
+        assert r.status_code == 200, r.data
+        try:
+            # E[total] = 3.5, exact at any budget.
+            resp = client.post("/api/evaluate", json={
+                "token": tok, "semiring": "moment", "arguments": "1;raw",
+            })
+            assert resp.status_code == 200, resp.data
+            assert abs(float(resp.get_json()["result"]) - 3.5) < 1e-9
+            # Var(total) = 6.25, exact at any budget.
+            resp = client.post("/api/evaluate", json={
+                "token": tok, "semiring": "moment", "arguments": "2;central",
+            })
+            assert resp.status_code == 200, resp.data
+            assert abs(float(resp.get_json()["result"]) - 6.25) < 1e-9
+        finally:
+            client.post("/api/config",
+                        json={"key": "provsql.rv_mc_samples", "value": "10000"})
+    finally:
+        client.post("/api/exec", json={
+            "sql": "DROP TABLE IF EXISTS _ev_sum CASCADE;"
+                   " DROP TABLE IF EXISTS _ev_agg CASCADE;",
+            "mode": "circuit",
+        })
 
 
 def test_evaluate_moment_rejects_bad_arguments(client):
@@ -1092,16 +1163,18 @@ def test_evaluate_distribution_profile_mixture_root(client):
     assert isinstance(r["histogram"], list) and len(r["histogram"]) == 20
     # Bimodal sanity: leftmost and rightmost bins both populated, the
     # middle bins (around 0) are empty.
+    # A closed-form mixture gets an exact analytical histogram, so `count`
+    # is a probability mass: each peak carries ~0.5, the middle ~0.
     bins = r["histogram"]
-    left_count  = sum(int(b["count"]) for b in bins
-                      if (b["bin_lo"] + b["bin_hi"]) / 2 < -1)
-    right_count = sum(int(b["count"]) for b in bins
-                      if (b["bin_lo"] + b["bin_hi"]) / 2 > 1)
-    mid_count   = sum(int(b["count"]) for b in bins
-                      if -1 <= (b["bin_lo"] + b["bin_hi"]) / 2 <= 1)
-    assert left_count  > 5000, left_count
-    assert right_count > 5000, right_count
-    assert mid_count   < 200,  mid_count
+    left_mass  = sum(float(b["count"]) for b in bins
+                     if (b["bin_lo"] + b["bin_hi"]) / 2 < -1)
+    right_mass = sum(float(b["count"]) for b in bins
+                     if (b["bin_lo"] + b["bin_hi"]) / 2 > 1)
+    mid_mass   = sum(float(b["count"]) for b in bins
+                     if -1 <= (b["bin_lo"] + b["bin_hi"]) / 2 <= 1)
+    assert left_mass  > 0.4,  left_mass
+    assert right_mass > 0.4,  right_mass
+    assert mid_mass   < 0.01, mid_mass
 
     # And the circuit subgraph for this mixture has gate_type == 'mixture'
     # with three child edges, the first being a gate_input.

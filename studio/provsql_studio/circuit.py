@@ -40,6 +40,7 @@ _GATE_LABEL = {
     "rv":       "ξ",
     "arith":    "α",
     "mixture":  "Mix",
+    "conditioned": "∣",   # A given B (the conditioning bar)
     # An assumption wrapper normally elides into a badge on its child
     # (_elide_markers); it renders as its own node only when its child
     # lies beyond the scene frontier.

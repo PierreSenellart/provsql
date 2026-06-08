@@ -124,6 +124,17 @@ def test_markdown_cell_edit_and_render(page: Page, studio_url: str) -> None:
     expect(md.locator(".nb-cell__mdta")).to_be_visible()
 
 
+def test_markdown_links_open_in_new_tab(page: Page, studio_url: str) -> None:
+    # A same-tab navigation fires pagehide, which closes the kernel; doc /
+    # external links must therefore open in a new tab so returning does not
+    # land on an expired session.
+    _goto_notebook(page, studio_url)
+    _add_markdown_cell(page, "See [the docs](https://provsql.org/).")
+    link = page.locator(".nb-cell--markdown .nb-cell__md a").first
+    expect(link).to_have_attribute("target", "_blank", timeout=8000)
+    expect(link).to_have_attribute("rel", "noopener noreferrer")
+
+
 def test_markdown_render_is_sanitized(page: Page, studio_url: str) -> None:
     _goto_notebook(page, studio_url)
     _add_markdown_cell(page,
@@ -148,11 +159,12 @@ def test_sidebar_is_compact_outline_plus_relations(page: Page, studio_url: str) 
     outline = page.locator(".nb-side__outline .nb-side__h")
     expect(outline.first).to_have_text("My analysis", timeout=8000)
 
-    # The personnel relation is listed with its prov pill and a compact
-    # column line.
+    # The personnel relation is listed with the same provenance pill the
+    # schema panel shows -- PROV-TID here, since it was add_provenance'd --
+    # and a compact column line.
     rel = page.locator(".nb-side__rel", has_text="personnel").first
     expect(rel).to_be_visible(timeout=8000)
-    expect(rel.locator(".wp-result__col-prov")).to_have_text("prov")
+    expect(rel.locator(".wp-schema__rel-prov")).to_have_text("prov-tid")
     expect(rel.locator(".nb-side__cols")).to_contain_text("name")
 
     # Click-to-insert into the focused SQL cell.
@@ -337,6 +349,33 @@ def test_uuid_click_inserts_circuit_cell(page: Page, studio_url: str) -> None:
     # Re-click the same UUID: still exactly one circuit cell.
     uuid_cell.click()
     expect(circ).to_have_count(1)
+
+
+def test_eval_strip_renders_guarantee_interval(page: Page, studio_url: str) -> None:
+    """An approximate probability shows the guarantee as a value interval
+    (Pr ∈ [lo, hi]), like Circuit mode -- not the raw structured NOTICE."""
+    _goto_notebook(page, studio_url)
+    ta = _sql_cell_ta(page)
+    ta.fill("SELECT name, provsql.provenance() FROM personnel LIMIT 1;")
+    ta.focus()
+    _run_focused(page)
+    sql_cell = page.locator(".nb-cell--sql").first
+    sql_cell.locator(".nb-out [data-circuit-uuid]").first.click(timeout=8000)
+    circ = page.locator(".nb-cell--circuit")
+    expect(circ).to_have_count(1, timeout=8000)
+
+    circ.locator(".nb-circ__eval").click()
+    ev = page.locator(".nb-cell--eval")
+    expect(ev).to_have_count(1, timeout=8000)
+    ev.locator(".nb-eval__semiring").select_option("probability")
+    ev.locator(".nb-eval__method").select_option("karp-luby")
+    ev.locator(".nb-eval__args").fill("eps=0.1,delta=0.05")
+    ev.locator(".nb-cell__run").click()
+
+    out = ev.locator(".nb-eval__out")
+    expect(out).to_contain_text("Pr ∈", timeout=15000)
+    # The structured notice is folded into the interval, never shown verbatim.
+    assert "approximation-guarantee" not in out.inner_text()
 
 
 def test_circuit_cell_roundtrips_through_ipynb(page: Page, studio_url: str) -> None:
@@ -585,6 +624,23 @@ def test_tabs_create_switch_and_persist(page: Page, studio_url: str) -> None:
     page.wait_for_timeout(700)  # autosave tick re-renders the bar
     expect(page.locator(".nb__tab--active")).to_contain_text(
         "Renamed via heading")
+
+
+def test_close_all_tabs(page: Page, studio_url: str) -> None:
+    """The discreet "close all" appears only with more than one tab, and
+    resets the strip to a single fresh tab."""
+    _goto_notebook(page, studio_url)
+    expect(page.locator("#nb-tab-closeall")).to_have_count(0)
+
+    page.locator("#nb-tab-add").click()
+    expect(page.locator(".nb__tab")).to_have_count(2)
+    expect(page.locator("#nb-tab-closeall")).to_be_visible()
+
+    # Accept the confirm if any tab happens to hold content.
+    page.on("dialog", lambda d: d.accept())
+    page.locator("#nb-tab-closeall").click()
+    expect(page.locator(".nb__tab")).to_have_count(1, timeout=8000)
+    expect(page.locator("#nb-tab-closeall")).to_have_count(0)
 
 
 def test_loaded_notebook_opens_new_tab_with_binding_banner(

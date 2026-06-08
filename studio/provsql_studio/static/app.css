@@ -2941,6 +2941,10 @@ table thead th[data-sort="desc"]::after {
   gap: 0.5rem;
   margin-bottom: 0.7rem;
   align-items: flex-start;
+  /* Clear the sticky stack (top nav ~4.2rem + the sticky toolbar ~2.3rem)
+     when an Outline entry scrolls a cell to the top, so the heading lands
+     just below the toolbar instead of behind it -- at any depth. */
+  scroll-margin-top: 6.8rem;
 }
 .nb-cell__gutter {
   flex: 0 0 3.2rem;
@@ -2980,6 +2984,9 @@ table thead th[data-sort="desc"]::after {
 }
 .nb-cell--markdown:hover .nb-cell__md { border-left-color: var(--border-soft); }
 .nb-cell__md > :first-child { margin-top: 0; }
+/* Outline clicks scroll to a heading; clear the sticky stack (top nav +
+   toolbar) so it lands just below the toolbar rather than behind it. */
+.nb-cell__md :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: 6.8rem; }
 .nb-cell__md > :last-child { margin-bottom: 0; }
 .nb-cell__md code {
   background: var(--bg-code);
@@ -2987,6 +2994,9 @@ table thead th[data-sort="desc"]::after {
   border-radius: 3px;
   font-size: 0.85em;
 }
+/* KaTeX ships a 1.21em default that dwarfs the surrounding prose; bring
+   inline (and display) math back in line with the body text. */
+.nb-cell__md .katex { font-size: 1.05em; }
 .nb-cell__md pre code { display: block; padding: 0.5em 0.7em; overflow-x: auto; }
 .nb-cell__md blockquote {
   border-left: 3px solid var(--border-soft);
@@ -3217,6 +3227,20 @@ table thead th[data-sort="desc"]::after {
   padding: 0.2rem 0.55rem;
 }
 .nb__tab-add:hover { color: var(--terracotta-500); }
+/* "close all" sits quietly at the far right of the tab strip: no border,
+   muted and slightly faded so it never competes with the tabs themselves. */
+.nb__tab-closeall {
+  margin-left: auto;
+  align-self: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.4rem;
+  opacity: 0.65;
+}
+.nb__tab-closeall:hover { color: var(--terracotta-500); opacity: 1; }
 
 /* Database-binding banner under the tab bar. */
 .nb__banner {

@@ -435,6 +435,102 @@
   window.ProvsqlStudio.wirePasteSanitizer = wirePasteSanitizer;
   window.ProvsqlStudio.sanitizeSqlText = sanitizeSqlText;
 
+  // The provenance / mapping pills for a schema relation record `r`, shared
+  // by the schema panel and the notebook sidebar so both classify a relation
+  // identically: PROV-TID / PROV-BID / PROV-OPAQUE (from r.prov_kind, 1.6.0+;
+  // a bare PROV when the kind is unknown), or "mapping", or nothing. `escA`
+  // is an attribute-escaper. Returns an HTML string (possibly empty).
+  function relProvBadges(r, escA) {
+    const showProv = r.has_provenance && !r.is_mapping;
+    let provLabel = 'prov';
+    let provTip = 'Provenance-tracked (provsql uuid column)';
+    let provKindCls = '';
+    if (r.prov_kind === 'tid') {
+      provLabel = 'prov-tid';
+      provTip   = 'Provenance-tracked, independent leaves (TID): '
+                + 'one independent random variable per row, '
+                + 'standard probabilistic semantics.';
+      provKindCls = ' wp-schema__rel-prov--tid';
+    } else if (r.prov_kind === 'bid') {
+      provLabel = 'prov-bid';
+      provTip   = 'Provenance-tracked, block-correlated (BID): '
+                + 'rows sharing the same block key are mutually '
+                + 'exclusive (set via repair_key).';
+      provKindCls = ' wp-schema__rel-prov--bid';
+    } else if (r.prov_kind === 'opaque') {
+      provTip   = 'Provenance-tracked, opaque kind: the relation '
+                + 'either carries user-supplied or shared provsql '
+                + 'tokens, or its body has structure the classifier '
+                + 'cannot certify TID / BID (multi-source join, '
+                + 'sublink). The safe-query rewriter refuses to '
+                + 'fire on it.';
+      provKindCls = ' wp-schema__rel-prov--opaque';
+    }
+    const provBadge = showProv
+      ? `<span class="wp-schema__rel-prov${provKindCls}" `
+        + `title="${escA(provTip)}">${provLabel}</span>`
+      : '';
+    const mapBadge = r.is_mapping
+      ? `<span class="wp-schema__rel-map" title="Provenance mapping (value + provenance uuid columns)">mapping</span>`
+      : '';
+    return provBadge + mapBadge;
+  }
+  window.ProvsqlStudio.relProvBadges = relProvBadges;
+
+  // Approximation-guarantee helpers, shared by Circuit mode and the notebook
+  // eval strip so an approximate probability is shown the same way in both:
+  // the structured "approximation-guarantee" NOTICE the extension emits is
+  // parsed and rendered as the value interval the true probability lies in.
+  function parseGuaranteeNotice(messages) {
+    for (const raw of (Array.isArray(messages) ? messages : [])) {
+      const m = (raw || '').match(/approximation-guarantee:\s*(.*)$/);
+      if (!m) continue;
+      const kv = {};
+      m[1].trim().split(/\s+/).forEach((tok) => {
+        const i = tok.indexOf('=');
+        if (i > 0) kv[tok.slice(0, i)] = tok.slice(i + 1);
+      });
+      return kv;
+    }
+    return null;
+  }
+  // Render a parsed guarantee UNIFORMLY as the value interval [lo, hi] the
+  // true probability is guaranteed to lie in, given the point estimate --
+  // whether the guarantee is additive, relative, or the d-tree's bound.
+  //   additive: |est − p| ≤ ε   => p ∈ [est − ε, est + ε]
+  //   relative: |est − p| ≤ ε·p => p ∈ [est/(1+ε), est/(1−ε)]
+  // δ (when present) gives the confidence 1−δ; δ = 0 is deterministic.
+  function renderGuarantee(kv, estimate, resolvedMethod) {
+    if (!kv) return '';
+    const eps = parseFloat(kv.eps);
+    if (!Number.isFinite(eps) || !(typeof estimate === 'number')
+        || !Number.isFinite(estimate)) return '';
+    let lo, hi;
+    if (kv.kind === 'additive') { lo = estimate - eps; hi = estimate + eps; }
+    else if (kv.kind === 'relative') {
+      lo = estimate / (1 + eps);
+      hi = eps < 1 ? estimate / (1 - eps) : 1;
+    } else return '';
+    lo = Math.max(0, lo);
+    hi = Math.min(1, hi);
+    const dec = window.ProvsqlStudio.getProbDecimals
+      ? window.ProvsqlStudio.getProbDecimals() : 4;
+    const delta = kv.delta != null ? parseFloat(kv.delta) : NaN;
+    const conf = !Number.isFinite(delta) ? ''
+      : delta <= 0 ? ', certain'
+      : `, prob ≥ ${(100 * (1 - delta)).toFixed(delta < 0.01 ? 1 : 0)}%`;
+    const n = kv.samples != null ? parseInt(kv.samples, 10) : NaN;
+    const smp = Number.isFinite(n) && n > 0 ? `, ${n.toLocaleString()} samples` : '';
+    // The mechanism/tool name, but only when it adds information: when it is
+    // the method already shown ("via stopping-rule"), repeating it as
+    // "[stopping-rule]" is noise. It stays for the distinct case (e.g. the
+    // external "weightmc" tool behind the "wmc" method).
+    const tool = (kv.tool && kv.tool !== resolvedMethod) ? ` [${kv.tool}]` : '';
+    return `(Pr ∈ [${lo.toFixed(dec)}, ${hi.toFixed(dec)}]${conf}${smp})${tool}`;
+  }
+  window.ProvsqlStudio.parseGuaranteeNotice = parseGuaranteeNotice;
+  window.ProvsqlStudio.renderGuarantee = renderGuarantee;
+
   if (mode === 'where')         setupWhereMode();
   else if (mode === 'notebook') setupNotebookMode();
   else                          setupCircuitMode();
@@ -1834,54 +1930,10 @@
           // table), but tagging it as both is noisy. Show only "mapping".
           const showProv = r.has_provenance && !r.is_mapping;
           const provCls   = showProv ? ' wp-schema__rel--prov' : '';
-          // The PROV badge is split into PROV-TID / PROV-BID / PROV-OPAQUE
-          // when the per-relation metadata is known (1.6.0+). Older
-          // schemas leave `prov_kind` null and we fall back to a bare
-          // "prov". The qualified form is discreet on purpose : it
-          // matters most for probabilistic query evaluation (TID =
-          // independent leaves, BID = block-correlated) but is
-          // meaningful in other settings too. OPAQUE warns the user
-          // that the safe-query rewriter will refuse on the table.
-          let provLabel = 'prov';
-          let provTip = 'Provenance-tracked (provsql uuid column)';
-          let provKindCls = '';
-          if (r.prov_kind === 'tid') {
-            provLabel = 'prov-tid';
-            provTip   = 'Provenance-tracked, independent leaves (TID): '
-                      + 'one independent random variable per row, '
-                      + 'standard probabilistic semantics.';
-            provKindCls = ' wp-schema__rel-prov--tid';
-          } else if (r.prov_kind === 'bid') {
-            provLabel = 'prov-bid';
-            provTip   = 'Provenance-tracked, block-correlated (BID): '
-                      + 'rows sharing the same block key are mutually '
-                      + 'exclusive (set via repair_key).';
-            provKindCls = ' wp-schema__rel-prov--bid';
-          } else if (r.prov_kind === 'opaque') {
-            // OPAQUE keeps the bare "prov" label : the muted-tone
-            // pill is enough to flag "kind not certified" and
-            // "prov-opaque" reads as redundant against the tooltip.
-            // Mirrors the convention used by the result-table pill.
-            // Wording covers both flavours of opaque : tables marked
-            // opaque via user-supplied provsql values (set_table_info
-            // or the provenance_guard trigger), and views whose body
-            // the planner-hook classifier cannot certify TID / BID
-            // (e.g. multi-source join, sublink).
-            provTip   = 'Provenance-tracked, opaque kind: the relation '
-                      + 'either carries user-supplied or shared provsql '
-                      + 'tokens, or its body has structure the classifier '
-                      + 'cannot certify TID / BID (multi-source join, '
-                      + 'sublink). The safe-query rewriter refuses to '
-                      + 'fire on it.';
-            provKindCls = ' wp-schema__rel-prov--opaque';
-          }
-          const provBadge = showProv
-            ? `<span class="wp-schema__rel-prov${provKindCls}" `
-              + `title="${escapeAttr(provTip)}">${provLabel}</span>`
-            : '';
-          const mapBadge = r.is_mapping
-            ? `<span class="wp-schema__rel-map" title="Provenance mapping (value + provenance uuid columns)">mapping</span>`
-            : '';
+          // The PROV / mapping pills (split into PROV-TID / PROV-BID /
+          // PROV-OPAQUE when r.prov_kind is known) are built by the shared
+          // helper so the notebook sidebar renders them identically.
+          const relBadges = relProvBadges(r, escapeAttr);
           const titleSuffix =
               (showProv ? ' · provenance-tracked' : '')
             + (r.is_mapping ? ' · provenance mapping' : '');
@@ -1922,8 +1974,7 @@
             + ` title="${escapeAttr(qname)}: ${visibleCount} column${visibleCount === 1 ? '' : 's'}${titleSuffix}">`
             + `<span class="wp-schema__rel-name">${escapeHtml(r.table)}</span>`
             + `<span class="wp-schema__rel-kind">${escapeHtml(r.kind)}</span>`
-            + provBadge
-            + mapBadge
+            + relBadges
             + (actions ? `<span class="wp-schema__rel-actions">${actions}</span>` : '');
           if (cols) {
             // `cols` is already escaped per-column inside the map above
@@ -3009,6 +3060,7 @@ function makeBlockRenderer(env, targets) {
           // tooltip carries the UUID so users can confirm which
           // circuit the cell points at without inspecting the DOM.
           let displayValue = value;
+          let renderType = col.type_name;
           if (typeName === 'agg_token' && value) {
             if (clickableUuid) {
               extraCls  = (extraCls + ' is-clickable').trim();
@@ -3018,10 +3070,17 @@ function makeBlockRenderer(env, targets) {
             }
             extraAttr += ` title="${env.escapeAttr(String(value))}"`;
             const friendly = aggDisplay[value];
-            if (friendly) displayValue = friendly;
+            if (friendly) {
+              displayValue = friendly;
+            } else {
+              // No scalar to show (e.g. a conditioned agg_token): render the
+              // bare UUID through the uuid path so it abbreviates to the
+              // short/full pair instead of dumping the full string.
+              renderType = 'uuid';
+            }
           }
           if (env.isRightAlignedType(typeName)) extraCls += ' is-right';
-          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(displayValue, col.type_name)}</td>`;
+          return `<td class="wp-result__cell${extraCls}"${sourcesAttr}${extraAttr}>${env.formatCell(displayValue, renderType)}</td>`;
         }).join('');
         const jumpBtn = (isWhere && wrapped && provIdx >= 0 && r[provIdx])
           ? `<td class="wp-result__cell--actions"><button class="wp-btn wp-btn--mini" type="button" `

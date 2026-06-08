@@ -16,6 +16,7 @@
   let execCounter = 0;
   let running = null;      // {cellId, requestId} | null
   let mdLibs = null;       // promise for marked + DOMPurify
+  let mdRenders = [];      // in-flight markdown renders of the current paint
   let lastFocused = null;  // last cell whose editor had focus
   let schemaCache = null;  // /api/schema payload for the sidebar
   let tabs = [];           // [{id, name, db, doc, kernel, resume}]
@@ -95,8 +96,13 @@
       }
       const y = tab.resume.scrollY;
       if (Number.isFinite(y) && y > 0) {
-        requestAnimationFrame(() => requestAnimationFrame(
-          () => window.scrollTo(0, y)));
+        // Markdown / KaTeX cells render asynchronously and grow the page
+        // after the first paint; wait for this paint's renders to settle
+        // before restoring the saved offset, so returning (e.g. from
+        // Circuit mode) lands on the same content rather than near the top.
+        Promise.allSettled(mdRenders.slice()).then(() =>
+          requestAnimationFrame(() => requestAnimationFrame(
+            () => window.scrollTo(0, y))));
       }
     } else {
       if (cells.length) selectCell(cells[0], { scroll: false });
@@ -145,15 +151,21 @@
     return tab;
   }
 
+  // Does a tab hold anything worth a confirm-before-close? The active tab's
+  // live cells, or an inactive tab's stored doc.
+  function tabHasContent(tab) {
+    return tab.doc
+      ? (tab.doc.cells || []).some((c) => String(
+          Array.isArray(c.source) ? c.source.join('') : c.source || '').trim())
+      : (tab.id === activeTabId && cells.some((c) => (c.source || '').trim()));
+  }
+
   function closeTab(id) {
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     const tab = tabs[idx];
-    const nonTrivial = tab.doc
-      ? (tab.doc.cells || []).some((c) => String(
-          Array.isArray(c.source) ? c.source.join('') : c.source || '').trim())
-      : (id === activeTabId && cells.some((c) => (c.source || '').trim()));
-    if (nonTrivial && !window.confirm(`Close tab “${tabDisplayName(tab)}”?`)) return;
+    if (tabHasContent(tab)
+        && !window.confirm(`Close tab “${tabDisplayName(tab)}”?`)) return;
     if (tab.kernel) {
       fetch(`/api/nb/session/${encodeURIComponent(tab.kernel.sessionId)}`,
             { method: 'DELETE' }).catch(() => {});
@@ -168,6 +180,24 @@
       renderTabBar();
       persistTabs();
     }
+  }
+
+  // Drop every tab and reopen a single fresh one. One confirm covers the
+  // lot when any tab holds content; each tab's kernel is released.
+  function closeAllTabs() {
+    if (!tabs.length) return;
+    if (tabs.some(tabHasContent)
+        && !window.confirm('Close all tabs and start fresh?')) return;
+    for (const t of tabs) {
+      if (t.kernel) {
+        fetch(`/api/nb/session/${encodeURIComponent(t.kernel.sessionId)}`,
+              { method: 'DELETE' }).catch(() => {});
+      }
+    }
+    tabs = [];
+    activeTabId = null;
+    kernel = null;
+    newTab();   // one fresh Untitled tab; renders + persists
   }
 
   // A tab's display name is the first level-1 Markdown heading in its
@@ -214,7 +244,12 @@
         + `</span>`;
     }).join('')
     + `<button type="button" class="nb__tab-add" id="nb-tab-add"`
-    + ` title="New notebook tab (bound to the current database)">+</button>`;
+    + ` title="New notebook tab (bound to the current database)">+</button>`
+    // Discreet "close all" at the far end, only once a second tab exists.
+    + (tabs.length > 1
+        ? `<button type="button" class="nb__tab-closeall" id="nb-tab-closeall"`
+          + ` title="Close all tabs and start fresh">close all</button>`
+        : '');
   }
 
   function wireTabBar() {
@@ -228,6 +263,10 @@
       }
       if (e.target.closest('#nb-tab-add')) {
         newTab();
+        return;
+      }
+      if (e.target.closest('#nb-tab-closeall')) {
+        closeAllTabs();
         return;
       }
       const tabEl = e.target.closest('[data-tab]');
@@ -427,6 +466,16 @@
       await ensureMdLibs();
       const html = window.marked.parse(source, { gfm: true, breaks: false });
       el.innerHTML = window.DOMPurify.sanitize(html);
+      // Links (doc references, external URLs) must open in a new tab: a
+      // same-tab navigation fires `pagehide`, which beacons the kernel
+      // session closed -- coming back then reports "unknown or expired
+      // notebook session". Fragment-only links stay in-page.
+      for (const a of el.querySelectorAll('a[href]')) {
+        if (!(a.getAttribute('href') || '').startsWith('#')) {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }
+      }
       // ```sql fences get the same tokenizer as the cell editors (marked
       // tags them code.language-sql). highlightSql escapes its input, so
       // feeding it the decoded textContent cannot reintroduce markup.
@@ -689,7 +738,8 @@
           selectCell(cell);
         }
       });
-      renderMarkdownInto(view, cell.source || '*(empty cell: double-click to edit)*');
+      mdRenders.push(
+        renderMarkdownInto(view, cell.source || '*(empty cell: double-click to edit)*'));
       // Fresh empty markdown cells drop straight into edit mode (the
       // "+ Markdown" flow); cells *converted* to markdown (the `m` key)
       // stay in command mode, like Jupyter, so the keymap keeps working.
@@ -900,7 +950,8 @@
 
   // Child-position labelling rules, mirrored from circuit.js: only
   // gates whose argument order matters get the digits.
-  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture']);
+  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
+                                 'conditioned']);
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   const COMMUTATIVE_CMP = new Set(['=', '<>', '!=']);
   const NON_COMMUTATIVE_ARITH = new Set([2, 3]);   // MINUS, DIV
@@ -921,6 +972,10 @@
   function edgePosLabel(parent, pos) {
     if (parent.type === 'mixture') {
       return ({ 1: 'p', 2: 'x', 3: 'y' })[pos] || String(pos);
+    }
+    if (parent.type === 'conditioned') {
+      // A | B, with the joint A∧B for the discrete (uuid|uuid) carrier.
+      return ({ 1: 'A', 2: 'B', 3: 'A∧B' })[pos] || String(pos);
     }
     return String(pos);
   }
@@ -1293,8 +1348,10 @@
     el.querySelector('.nb-eval__args').hidden = !isProb;
   }
 
+  // '' is the default: the chooser picks the cheapest exact method, so a
+  // separate 'exact' entry would be redundant and is left out.
   const EVAL_METHODS = [
-    '', 'exact', 'relative', 'additive', 'independent', 'possible-worlds',
+    '', 'relative', 'additive', 'independent', 'possible-worlds',
     'sieve', 'd-tree', 'tree-decomposition', 'compilation', 'wmc',
     'monte-carlo', 'karp-luby', 'stopping-rule',
   ];
@@ -1337,7 +1394,20 @@
         + `${esc(r.error)}${r.detail ? ' – ' + esc(r.detail) : ''}</div>`;
       return;
     }
-    const notices = Array.isArray(r.notices) ? r.notices : [];
+    let notices = Array.isArray(r.notices) ? r.notices : [];
+    // An approximate probability carries a structured guarantee NOTICE;
+    // pull it out of the banner and render it as the value interval the
+    // true probability lies in -- exactly as Circuit mode does.
+    let boundHtml = '';
+    if ((cell.semiring || 'probability') === 'probability') {
+      const guar = window.ProvsqlStudio.parseGuaranteeNotice(notices);
+      if (guar) {
+        const est = typeof r.result === 'number' ? r.result : NaN;
+        const g = window.ProvsqlStudio.renderGuarantee(guar, est, r.resolved_method || '');
+        if (g) boundHtml = ` <span class="nb-eval__meta" title="Approximation guarantee">${esc(g)}</span>`;
+        notices = notices.filter((m) => !/approximation-guarantee:/.test(m || ''));
+      }
+    }
     const noticeHtml = notices.length ? renderEvalNotice(notices) : '';
     const value = (r.result == null) ? '(null)'
       : (typeof r.result === 'object' ? JSON.stringify(r.result, null, 1)
@@ -1351,6 +1421,7 @@
       + (r.resolved_method
           ? ` <span class="nb-eval__meta" title="Method the chooser actually used">via ${esc(r.resolved_method)}</span>`
           : '')
+      + boundHtml
       + (cell.elapsed != null
           ? ` <span class="nb-eval__meta">· ${esc(String(cell.elapsed))} ms</span>`
           : '');
@@ -1446,7 +1517,9 @@
     const outlineHtml = entries.length
       ? `<ul class="nb-side__outline">` + entries.map((e) =>
           `<li class="nb-side__h nb-side__h--${e.level}"`
-          + ` data-outline-cell="${escA(e.cellId)}">${esc(e.text)}</li>`
+          + ` data-outline-cell="${escA(e.cellId)}"`
+          + ` data-outline-level="${e.level}"`
+          + ` title="${escA(e.text)}">${esc(e.text)}</li>`
         ).join('') + `</ul>`
       : `<p class="nb-side__empty">Headings in Markdown cells appear here.</p>`;
 
@@ -1459,9 +1532,10 @@
             const cols = (r.columns || []).map((c) => c.name).join(', ');
             const colsTitle = (r.columns || [])
               .map((c) => `${c.name} ${c.type}`).join('\n');
-            const pill = r.has_provenance
-              ? `<span class="wp-result__col-prov" title="provenance-tracked">prov</span>`
-              : '';
+            // Same PROV-TID / PROV-BID / PROV-OPAQUE / mapping pills the
+            // schema panel renders (shared helper), so a relation is
+            // classified identically in both places.
+            const pill = window.ProvsqlStudio.relProvBadges(r, escA);
             return `<li class="nb-side__rel">`
               + `<button type="button" class="nb-side__relname"`
               + ` data-rel="${escA(qname)}"`
@@ -1547,7 +1621,27 @@
         const el = cellsEl().querySelector(
           `[data-cell-id="${CSS.escape(h.dataset.outlineCell)}"]`);
         if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          // Scroll to the specific heading, not the cell top: a markdown
+          // cell often holds the previous section's closing prose above
+          // this heading, so block:'start' on the cell would leave the
+          // heading partway down.  Match the rendered <hN> by level+text;
+          // the heading (and the cell) carry a scroll-margin-top that
+          // clears the sticky toolbar.
+          const md = el.querySelector('.nb-cell__md');
+          const wantTag = 'H' + (h.dataset.outlineLevel || '');
+          const wantTxt = h.textContent.trim();
+          let target = null;
+          if (md) {
+            const hs = md.querySelectorAll('h1,h2,h3,h4,h5,h6');
+            for (const hh of hs)
+              if (hh.tagName === wantTag && hh.textContent.trim() === wantTxt) {
+                target = hh; break;
+              }
+            if (!target)
+              for (const hh of hs)
+                if (hh.textContent.trim() === wantTxt) { target = hh; break; }
+          }
+          (target || el).scrollIntoView({ behavior: 'smooth', block: 'start' });
           el.classList.add('nb-cell--flash');
           setTimeout(() => el.classList.remove('nb-cell--flash'), 1200);
         }
@@ -2017,6 +2111,7 @@
   function renderAll() {
     const root = cellsEl();
     root.innerHTML = '';
+    mdRenders = [];  // collect this paint's async markdown renders (for scroll restore)
     for (const c of cells) root.appendChild(buildCellDom(c));
     for (const c of cells) { updateGutter(c); renderOutputs(c); }
   }

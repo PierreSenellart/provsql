@@ -1432,18 +1432,42 @@ def evaluate_circuit(
             raise ValueError(
                 f"moment: central must be 'raw' or 'central' (got {central_str!r})"
             )
-        # Splice the conditioning event when set; otherwise rv_moment's
-        # `prov` default of gate_one() makes the call unconditional.
+        # Splice the conditioning event when set; otherwise the `prov`
+        # default of gate_one() makes the call unconditional.
         cond_expr = (
             sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
             if condition_uuid
             else sql.SQL("provsql.gate_one()")
         )
+        # Aggregate roots (and conditioned aggregates) have an *exact*
+        # moment, computed by the agg_token dispatcher (moment /
+        # central_moment -> agg_raw_moment, which enumerates the
+        # aggregate's per-row contributions and calls the exact
+        # probability_evaluate).  rv_moment, by contrast, has no
+        # analytical arm for an `agg` gate and falls back to Monte Carlo
+        # (so it depends on provsql.rv_mc_samples and errors when that is
+        # 0).  Route aggregate roots to the exact path so Circuit-mode
+        # moments match the notebook's expected()/variance() and stay
+        # correct at any sample budget; everything else stays on
+        # rv_moment (continuous RVs: analytical when closed-form, else MC).
+        agg_fn = (
+            sql.SQL("provsql.central_moment") if central
+            else sql.SQL("provsql.moment")
+        )
         sql_stmt = sql.SQL(
-            "SELECT provsql.rv_moment({}::uuid, {}, {}, {})"
+            "SELECT CASE"
+            "  WHEN provsql.get_gate_type(t) = 'agg'"
+            "       OR (provsql.get_gate_type(t) = 'conditioned'"
+            "           AND provsql.get_gate_type((provsql.get_children(t))[1])"
+            "               IN ('agg', 'semimod'))"
+            "  THEN {agg_fn}(provsql.agg_token_make(t, 0), {k}, {cond})"
+            "  ELSE provsql.rv_moment(t, {k}, {central}, {cond})"
+            " END"
+            " FROM (SELECT {tok}::uuid AS t) q"
         ).format(
-            sql.Literal(token), sql.Literal(k_value), sql.Literal(central),
-            cond_expr,
+            agg_fn=agg_fn, k=sql.Literal(k_value),
+            central=sql.Literal(central), cond=cond_expr,
+            tok=sql.Literal(token),
         )
         params = ()
     elif semiring == "sample":
