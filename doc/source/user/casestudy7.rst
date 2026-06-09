@@ -365,7 +365,8 @@ installed. The **Tools** panel (the wrench icon in the top nav) lists the
 external-tool registry -- every ``compile`` and ``wmc`` tool ProvSQL
 knows, each flagged whether it is *available* on your backend (its binary
 resolves on the server's ``PATH``) and *enabled* -- read live from
-``provsql.tools`` (see :doc:`/user/tool-registry`). The compiler dropdown
+``provsql.tools`` (see :doc:`the external-tool registry </user/tool-registry>`).
+The compiler dropdown
 and the benchmark offer only the available, enabled ones, so the rows you
 see reflect your machine.
 
@@ -557,8 +558,7 @@ Studio the provenance toggle, in SQL ``SET provsql.provenance =
 by the shorter one it contains, and the fixpoint is the set of minimal,
 repetition-free paths. (``'boolean'`` works too -- it *implies*
 ``'absorptive'`` -- but the recursion needs only absorptivity, so
-``'absorptive'`` is the class to name here; see
-:ref:`the provenance-class GUC <provsql-provenance-class>`.)
+``'absorptive'`` is the class to name here.)
 
 The answer is exactly **two-terminal network reliability** -- the probability
 that ``r1`` stays connected when each collaboration edge is present

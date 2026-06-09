@@ -69,6 +69,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import posixpath
 import re
 import subprocess
 import sys
@@ -80,6 +81,11 @@ SENTINEL = "NBCELLxSPLITx"  # survives pandoc as a plain paragraph
 # resolve them relative to the site root; a shared notebook has no such
 # root, so it gets the same paths made absolute under the public site.
 _SQLFUNC_BASE = "https://provsql.org"
+
+# :doc:`text <target>` chapter cross-references. The docs render them as
+# internal links; a standalone notebook has no doc tree, so resolve each to
+# an absolute link to the published HTML under the public site.
+_DOCS_BASE = "https://provsql.org/docs/"
 _SF_SENTINEL = "@@SQLFUNC@@"  # marks a sqlfunc literal across pandoc
 _FA_SENTINEL = "@@FA@@"       # marks a Font Awesome icon literal across pandoc
 
@@ -353,11 +359,46 @@ def parse_rst(path: Path) -> tuple[dict, list[tuple[str, str]]] | None:
     return opts, segments
 
 
-def rst_prose_to_markdown_cells(prose_segments: list[str]) -> list[str]:
+def _doc_url(target: str, src_dir: str) -> str:
+    """Resolve a :doc: target to an absolute published-docs URL. An
+    absolute target (``/user/tool-registry``) is relative to the source
+    root; a bare one (``conditioning``) is relative to the referencing
+    file's directory under doc/source (e.g. ``user``)."""
+    rel = (target.lstrip("/") if target.startswith("/")
+           else posixpath.normpath(posixpath.join(src_dir, target)))
+    return _DOCS_BASE + rel + ".html"
+
+
+def _md_safe_math(s: str) -> str:
+    """Protect LaTeX backslash commands inside ``$…$`` / ``$$…$$`` from the
+    notebook's markdown pass. Studio renders a markdown cell with marked
+    (GFM) and *then* runs KaTeX on the result, so marked first strips a
+    backslash before ASCII punctuation -- turning ``\\#`` into ``#`` (a bare
+    TeX parameter char KaTeX then renders as a red error), ``\\{`` into
+    ``{``, ``\\\\`` into ``\\`` … Doubling the backslash before any
+    punctuation char makes GFM hand KaTeX the original command. Backslash +
+    letter (``\\Pr``, ``\\text``) is not GFM-escaped, so it is left alone."""
+    # GFM un-escapes a backslash before any ASCII punctuation char; that set
+    # includes ``_``, which a ``\\w``-based class would wrongly exempt.
+    return re.sub(r"\\([!-/:-@\[-`{-~])", r"\\\\\1", s)
+
+
+def rst_prose_to_markdown_cells(prose_segments: list[str],
+                                src_dir: str = "user") -> list[str]:
     """pandoc the prose runs as ONE document (heading levels depend on
     seeing every underline style in order), separated by sentinel
     paragraphs, then split the gfm output back into per-run cells."""
     joined = ("\n\n" + SENTINEL + "\n\n").join(prose_segments)
+    # :doc:`text <target>` chapter references: the docs link to the rendered
+    # chapter, but a standalone notebook has no doc tree, so rewrite each to
+    # an rst external link to the absolute published URL (pandoc turns the
+    # ``\`text <url>\`_`` form into a proper [text](url) markdown link). Only
+    # the explicit-title form reaches a notebook (bare :doc: live in omitted
+    # psql-setup preambles); leaving those untouched keeps the change tight.
+    joined = re.sub(
+        r":doc:`([^`<>]+?)\s*<([^`<>]+)>`",
+        lambda m: f"`{' '.join(m.group(1).split())} <{_doc_url(m.group(2).strip(), src_dir)}>`_",
+        joined)
     # Carry :sqlfunc:`name` roles through pandoc as inline literals tagged
     # with a sentinel, so they survive verbatim (code spans are not
     # smart-substituted) and can be turned into absolute doc links below.
@@ -382,9 +423,19 @@ def rst_prose_to_markdown_cells(prose_segments: list[str]) -> list[str]:
     # display fenced ```` ```math ... ``` ```` -- but the Jupyter / Studio
     # notebook renderer is MathJax, which wants ``$...$`` / ``$$...$$``;
     # convert so the LaTeX renders instead of appearing as verbatim source.
-    parts = [re.sub(r"```+\s*math\s*\n(.*?)\n```+", r"$$\n\1\n$$", p, flags=re.S)
+    parts = [re.sub(r"```+\s*math\s*\n(.*?)\n```+",
+                    lambda m: "$$\n" + _md_safe_math(m.group(1)) + "\n$$",
+                    p, flags=re.S)
              for p in parts]
-    parts = [re.sub(r"\$`([^`]+?)`\$", r"$\1$", p) for p in parts]
+    # Inline math: a :math: role split across source lines keeps the newline
+    # inside the ``$`...`$`` span; the notebook's KaTeX does not allow a
+    # newline inside inline ``$...$`` (the delimiters mispair and render the
+    # surrounding prose as a red error), so flatten internal whitespace --
+    # LaTeX is whitespace-insensitive, so the rendered formula is unchanged --
+    # and protect backslash-punctuation commands from the markdown pass.
+    parts = [re.sub(r"\$`([^`]+?)`\$",
+                    lambda m: "$" + _md_safe_math(" ".join(m.group(1).split())) + "$", p)
+             for p in parts]
     # pandoc litter that adds nothing in a notebook context
     parts = [re.sub(r"^<!-- end list -->$", "", p, flags=re.M) for p in parts]
     # Sphinx roles pandoc cannot resolve. Explicit-target references
@@ -425,7 +476,12 @@ def rst_prose_to_markdown_cells(prose_segments: list[str]) -> list[str]:
 
 def build_notebook(opts: dict, segments: list[tuple[str, str]]) -> dict:
     prose_runs = [seg[1] for seg in segments if seg[0] == "rst"]
-    md_cells = rst_prose_to_markdown_cells(prose_runs) if prose_runs else []
+    # Directory of the source file under doc/source (e.g. "user"), so
+    # relative :doc: targets resolve to the right published-docs path.
+    src_dir = posixpath.dirname(
+        opts.get("source", "doc/source/user/x").split("doc/source/", 1)[-1]) or "user"
+    md_cells = (rst_prose_to_markdown_cells(prose_runs, src_dir)
+                if prose_runs else [])
     md_iter = iter(md_cells)
 
     def to_lines(text: str) -> list[str]:
