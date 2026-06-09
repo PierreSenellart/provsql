@@ -11,7 +11,7 @@
  *   bounded treewidth;
  * - @c reachability_compile_stats(): same compilation, returning the
  *   probability together with structural statistics (data treewidth,
- *   number of bags, maximum DP state count, d-DNNF size) that
+ *   number of bags, maximum DP state count, d-D size) that
  *   substantiate the linear-size claim in tests and benchmarks.
  *
  * Both take the edge relation in columnar form (parallel arrays of
@@ -200,7 +200,7 @@ std::vector<ReachabilityCompiler::SourceArc> sourcesFromArgs(
  * @c directed @c boolean.
  *
  * @param fcinfo  PostgreSQL function-call info.
- * @return        The compiled d-DNNF and statistics.
+ * @return        The compiled d-D and statistics.
  */
 ReachabilityCompiler::Result compileFromArgs(FunctionCallInfo fcinfo)
 {
@@ -224,7 +224,7 @@ ReachabilityCompiler::Result compileFromArgs(FunctionCallInfo fcinfo)
 }
 
 // ---------------------------------------------------------------------
-// Content-addressed materialisation of a certified d-DNNF into the mmap
+// Content-addressed materialisation of a certified d-D into the mmap
 // store.
 // ---------------------------------------------------------------------
 
@@ -325,7 +325,7 @@ pg_uuid_t uuidV5(const std::string &name)
 }
 
 /**
- * @brief Materialise (the reachable part of) a certified d-DNNF into the
+ * @brief Materialise (the reachable part of) a certified d-D into the
  *        mmap store.
  *
  * Bottom-up over the gates reachable from @p roots: input gates keep
@@ -336,7 +336,7 @@ pg_uuid_t uuidV5(const std::string &name)
  * the commutative gates), so identical sub-circuits dedup in the store
  * and re-materialising the same circuit is a no-op
  * (@c MMappedCircuit::createGate is idempotent).  Gates carrying the
- * d-DNNF certificate get it persisted via @c set_infos.
+ * d-D certificate get it persisted via @c set_infos.
  *
  * @param dd     The certified circuit.
  * @param roots  Gates whose closure to materialise.

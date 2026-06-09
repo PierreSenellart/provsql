@@ -27,7 +27,7 @@
  * states partition the worlds by their disjoint edge sets, so the
  * acceptance test over the combination of the two states is a
  * deterministic OR over decomposable AND pairs -- one linear-size
- * certified d-DNNF whose gates are shared across all the per-vertex
+ * certified d-D whose gates are shared across all the per-vertex
  * roots.
  *
  * The DP scaffold is generic over the *state algebra* (the @c Ops
@@ -463,7 +463,7 @@ struct SetReachOps {
  * @c {source} domain (which forgets -- and thereby resolves -- every
  * remaining target vertex): no pending set.  Worlds still map to
  * exactly one state, so the emitted ORs stay deterministic and the
- * d-DNNF certificate carries over; the antichain is bounded by the
+ * d-D certificate carries over; the antichain is bounded by the
  * domain size alone (at most @f$\binom{d}{\lfloor d/2\rfloor}@f$
  * sets), so the state space stays a function of the treewidth, with
  * the usual @c max_states guard.
@@ -932,7 +932,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
   // 3. Gate-emission helpers.
   //
   // Every emitted OR is deterministic and every emitted AND decomposable
-  // *by construction*; mark them with the d-DNNF certificate so the
+  // *by construction*; mark them with the d-D certificate so the
   // certificate-aware consumers (independentEvaluation, interpretAsDD)
   // can evaluate the circuit linearly.
   // ------------------------------------------------------------------
@@ -1487,7 +1487,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
 
 /**
  * @brief Build a deterministic OR over @p gates (or pass a single gate
- *        through), with the d-DNNF certificate.
+ *        through), with the d-D certificate.
  */
 gate_t finalizeRoot(dDNNF &dd, const std::vector<gate_t> &gates)
 {
@@ -1564,7 +1564,7 @@ ReachabilityCompiler::AllHopsResult compileAllHopsInternal(
  *                       (an isolated target is legal) and emit a root for
  *                       it alone, skipping the other vertices' reads.
  * @param multi_sources  When set: virtual super-source mode.
- * @return               The shared d-DNNF, per-vertex roots, statistics.
+ * @return               The shared d-D, per-vertex roots, statistics.
  */
 ReachabilityCompiler::AllResult compileAllBoolInternal(
   const std::vector<ReachabilityCompiler::EdgeRow> &rows,

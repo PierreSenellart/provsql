@@ -1,7 +1,7 @@
 /**
  * @file ReachabilityCompiler.h
  * @brief Decomposition-aligned compilation of two-terminal reachability
- *        over bounded-treewidth data into a d-DNNF.
+ *        over bounded-treewidth data into a d-D.
  *
  * Implements the data-side counterpart of ProvSQL's circuit-side
  * treewidth exploitation: instead of building a provenance circuit
@@ -16,7 +16,7 @@
  * decomposition node is the transitively-closed reachability relation
  * over the bag's vertices augmented with the two terminals @c s and
  * @c t (equivalently, the standard DP over the decomposition obtained
- * by adding @c s and @c t to every bag).  Each transition emits d-DNNF
+ * by adding @c s and @c t to every bag).  Each transition emits d-D
  * gates directly:
  *
  * - states at a node are **mutually exclusive and exhaustive** over the
@@ -28,7 +28,7 @@
  *
  * No knowledge-compilation step is therefore needed: the result is fed
  * straight to @c dDNNF::probabilityEvaluation().  For data of treewidth
- * @f$k@f$ the d-DNNF has size linear in the number of edges (times a
+ * @f$k@f$ the d-D has size linear in the number of edges (times a
  * function of @f$k@f$ only), which yields linear-time exact computation
  * of two-terminal network reliability -- a @c \#P-hard problem in
  * general -- on bounded-treewidth probabilistic graphs, including
@@ -69,7 +69,7 @@ explicit ReachabilityCompilerException(const std::string &what)
 
 /**
  * @brief Compiles s-t reachability over a probabilistic edge relation
- *        into a d-DNNF, along a tree decomposition of the data graph.
+ *        into a d-D, along a tree decomposition of the data graph.
  */
 class ReachabilityCompiler {
 public:
@@ -95,23 +95,23 @@ struct Stats {
   unsigned data_treewidth = 0;   ///< Treewidth of the min-fill decomposition of the *data* graph.
   std::size_t nb_bags = 0;       ///< Number of bags of the decomposition.
   std::size_t max_states = 0;    ///< Maximum number of DP states at any node.
-  std::size_t nb_gates = 0;      ///< Number of gates of the emitted d-DNNF.
+  std::size_t nb_gates = 0;      ///< Number of gates of the emitted d-D.
   std::size_t nb_variables = 0;  ///< Number of edge variables (provenance tokens).
 };
 
-/** @brief A compiled reachability query: the d-DNNF and its statistics. */
+/** @brief A compiled reachability query: the d-D and its statistics. */
 struct Result {
-  dDNNF dd;      ///< d-DNNF whose root computes "t is reachable from s"; input gates carry the edge tokens (UUID) and probabilities.
+  dDNNF dd;      ///< d-D whose root computes "t is reachable from s"; input gates carry the edge tokens (UUID) and probabilities.
   Stats stats;   ///< Compilation statistics.
 };
 
 /** @brief One vertex's reachability circuit in an all-targets compilation. */
 struct VertexRoot {
   unsigned long vertex;   ///< Vertex ID.
-  gate_t root;            ///< Root of "vertex is reachable from the source" in the shared d-DNNF.
+  gate_t root;            ///< Root of "vertex is reachable from the source" in the shared d-D.
 };
 
-/** @brief An all-targets compilation: one shared d-DNNF, one root per reachable vertex. */
+/** @brief An all-targets compilation: one shared d-D, one root per reachable vertex. */
 struct AllResult {
   dDNNF dd;                        ///< Shared circuit (gates are reused across vertices).
   std::vector<VertexRoot> roots;   ///< One entry per vertex reachable in the all-edges-present world (including the source itself, with a constant-true root).
@@ -187,7 +187,7 @@ static constexpr std::size_t DEFAULT_MAX_STATES = 100000;
 static constexpr unsigned MAX_HOP_BOUND = 62;
 
 /**
- * @brief Compile s-t reachability over @p rows into a d-DNNF.
+ * @brief Compile s-t reachability over @p rows into a d-D.
  *
  * @param rows        Edge tuples (vertex IDs, provenance token, probability).
  * @param source      Source vertex @c s.
@@ -195,7 +195,7 @@ static constexpr unsigned MAX_HOP_BOUND = 62;
  * @param directed    If @c false, every edge contributes both arcs
  *                    (undirected connectivity).
  * @param max_states  Bound on the DP state count per node.
- * @return            The compiled d-DNNF and statistics.
+ * @return            The compiled d-D and statistics.
  * @throws TreeDecompositionException        if the data treewidth exceeds
  *                                           @c TreeDecomposition::MAX_TREEWIDTH.
  * @throws ReachabilityCompilerException     on unsupported input shapes or
@@ -224,7 +224,7 @@ static Result compile(const std::vector<EdgeRow> &rows,
  * @param source      Source vertex @c s.
  * @param directed    If @c false, every edge contributes both arcs.
  * @param max_states  Bound on the DP state count per node.
- * @return            The shared d-DNNF, per-vertex roots, statistics.
+ * @return            The shared d-D, per-vertex roots, statistics.
  * @throws TreeDecompositionException / ReachabilityCompilerException as
  *         for @c compile().
  */
@@ -247,7 +247,7 @@ static AllResult compileAll(const std::vector<EdgeRow> &rows,
  * @param sources     Source arcs (at least one).
  * @param directed    If @c false, every edge contributes both arcs.
  * @param max_states  Bound on the DP state count per node.
- * @return            The shared d-DNNF, per-vertex roots, statistics.
+ * @return            The shared d-D, per-vertex roots, statistics.
  */
 static AllResult compileAll(const std::vector<EdgeRow> &rows,
                             const std::vector<SourceArc> &sources,
@@ -271,7 +271,7 @@ static AllResult compileAll(const std::vector<EdgeRow> &rows,
  * @param directed    If @c false, every edge contributes both arcs.
  * @param hop_bound   Maximum walk length (at most @c MAX_HOP_BOUND).
  * @param max_states  Bound on the DP state count per node.
- * @return            The shared d-DNNF, per-(vertex, length) and
+ * @return            The shared d-D, per-(vertex, length) and
  *                    per-vertex within-bound roots, statistics.
  */
 static AllHopsResult compileAllHops(const std::vector<EdgeRow> &rows,
@@ -367,7 +367,7 @@ static AnyReachAllResult compileAnyReachAll(
  * forgets, discharged when the source reaches them and absorbed by
  * the empty (reject) set; acceptance, after a final collapse onto the
  * source domain, is the empty antichain.  Worlds map to one state
- * each, so the circuit is a certified d-DNNF like the rest of the
+ * each, so the circuit is a certified d-D like the rest of the
  * family: probability evaluation gives k-terminal reliability, and
  * absorptive-semiring evaluation is exact too -- nonnegative min-plus
  * gives the cost of the cheapest covering subgraph (directed Steiner
