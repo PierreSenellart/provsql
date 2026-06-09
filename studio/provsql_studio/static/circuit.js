@@ -585,12 +585,16 @@
         aGroup.appendChild(tip);
         const aa = svgEl('circle', {
           class: 'absorptive-assumed-badge',
-          cx: 16, cy: -18, r: 7,
+          // Top-left, sharing the Boolean badge's corner: a node is never
+          // both assumed-absorptive and assumed-Boolean, so they never
+          // collide, and this leaves the top-right corner to the frontier
+          // "+" expansion tag.
+          cx: -16, cy: -18, r: 7,
           fill: 'var(--amber-700, #b45309)',
           stroke: 'var(--amber-900, #78350f)',
         });
         const at = svgEl('text', {
-          x: 16, y: -18,
+          x: -16, y: -18,
           'text-anchor': 'middle',
           'dominant-baseline': 'central',
           'font-size': 9,
