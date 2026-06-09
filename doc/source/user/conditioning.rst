@@ -136,6 +136,44 @@ evidence written as a Boolean combination of ``random_variable`` /
    or set-operation (``UNION`` / ``EXCEPT`` …) query, where the individual
    tokens should be conditioned with the binary ``|`` instead.
 
+Negating an event -- ``! event``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The prefix ``!`` operator (function spelling :sqlfunc:`provenance_not`
+``(event)``) is the **complement** of a Boolean provenance event: ``!x`` holds
+in exactly
+the worlds where ``x`` does not, so ``probability_evaluate(!x)`` is
+:math:`1 - \Pr(x)`. Unlike the conditioned gate, ``!`` is an ordinary
+m-semiring expression -- Boolean negation, :math:`\mathbb{1} \ominus x`
+underneath -- so it composes freely under ``times`` / ``plus``; the one thing
+it refuses is a conditioned (terminal) token.
+
+Its natural use with conditioning is a **denial constraint**: restricting a
+query to the worlds where some forbidden pattern *does not* occur. The
+violation event ``W`` is just an ordinary query -- no hand-built gates --
+aggregated to a single token with ``provenance() ... GROUP BY ()``, and the
+query is conditioned on its negation, ``Q | !W``:
+
+.. code-block:: postgresql
+
+    -- P(booking 1 is present | no two overlapping bookings of the same room)
+    WITH w AS (
+      SELECT provenance() AS violation        -- W = "some overlapping pair exists"
+      FROM bookings a JOIN bookings b
+        ON a.id < b.id AND a.room = b.room
+           AND a.lo < b.hi AND b.lo < a.hi
+      GROUP BY ())
+    SELECT probability_evaluate(
+             (SELECT provenance() FROM bookings WHERE id = 1) | !w.violation)
+    FROM w;
+
+The constraint can be any query: a forbidden pattern expressed as a query
+becomes a denial constraint by conditioning on the negation of "the pattern
+occurs", so ``!W`` is the event "no violation" and ``Q | !W`` restricts ``Q``
+to exactly the worlds the constraint admits. ``!`` is also useful on its own, wherever the
+complement of an event is wanted (``probability_evaluate(!a)``,
+``a AND NOT b`` as ``times(a, !b)``).
+
 The three carriers
 ------------------
 

@@ -402,6 +402,51 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 CREATE OPERATOR | (RIGHTARG=boolean, PROCEDURE=given_predicate);
 
 /**
+ * @brief Event negation: @c "! event" / @c "provenance_not(event)".
+ *
+ * The complement of a Boolean provenance event: @c "!x" holds in exactly the
+ * worlds where @p x does not.  It is sugar for @c "monus(one, x)" -- an
+ * ordinary m-semiring expression (Boolean @c NOT, probability @c "1 - P(x)"),
+ * NOT a measure-only marker -- so it composes like any @c monus, and a
+ * conditioned / terminal token is refused as its child (so @c "!(x | c)"
+ * errors, as conditioning cannot be buried under further algebra).
+ *
+ * The motivating use is conditioning on the NON-occurrence of an arbitrary
+ * violation query @p W (a denial constraint), where @p W itself is built with
+ * ordinary idioms and needs no hand-rolled gates:
+ *
+ * @code
+ *   -- W = "some pair of overlapping same-room bookings is present"
+ *   WITH w AS (SELECT provenance() AS tok
+ *              FROM bookings a JOIN bookings b
+ *                ON a.id < b.id AND a.room = b.room
+ *                   AND a.lo < b.hi AND b.lo < a.hi
+ *              GROUP BY ())
+ *   SELECT probability_evaluate((SELECT provenance() FROM bookings WHERE id=1)
+ *                               | !w.tok)             -- P(booking 1 | no overlap)
+ *   FROM w;
+ * @endcode
+ *
+ * Named @c provenance_not, after the @c "provenance_times / _plus / _monus"
+ * family; the prefix @c ! operator is the ergonomic form (SQL's reserved
+ * @c NOT keyword cannot serve as a function name).
+ */
+CREATE OR REPLACE FUNCTION provenance_not(event UUID) RETURNS UUID AS
+$$
+  SELECT provsql.provenance_monus(provsql.gate_one(), event);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+   SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief Prefix unary @c ! : alias for @c provenance_not, @c "! event".
+ *
+ * Prefix operators are kept on every supported PostgreSQL version (postfix
+ * operators were removed in PG14), and core PG defines no prefix @c !  on
+ * @c uuid, so @c "! event" is safe across the CI matrix.
+ */
+CREATE OPERATOR ! (RIGHTARG=UUID, PROCEDURE=provenance_not);
+
+/**
  * @brief Build a per-input order-key string for the inversion-free path.
  *
  * Emitted by the planner per certified atom: @c K-prefixed, length-prefixed

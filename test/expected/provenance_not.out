@@ -1,0 +1,26 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+not_op_ok|op_eq_fn
+t|t
+(1 row)
+double_neg_ok
+t
+(1 row)
+compose_ok
+t
+(1 row)
+add_provenance
+
+(1 row)
+denial_ok
+t
+(1 row)
+ERROR:  ProvSQL: The requested semiring does not support conditioning: P(·|C) = P(·∧C)/P(C) needs a normalising division no general semiring provides.  A conditioned token is evaluable only in the measure interpretation (probability_evaluate, or the random-variable / agg_token distribution evaluators).
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

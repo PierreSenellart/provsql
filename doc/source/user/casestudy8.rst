@@ -6,8 +6,9 @@ Case Study: ProvSQL as a Probability Calculator
 
 This case study uses ProvSQL as an **exact, correlation-aware probability
 calculator that you drive in SQL**. Classic probability problems -- base
-rates, correlated events, conditional expectation, truncated distributions
--- become ordinary queries, and the answers are computed *exactly* (not by
+rates, correlated events, conditional expectation, truncated distributions,
+denial constraints -- become ordinary queries, and the answers are computed
+*exactly* (not by
 sampling, unless you ask) and *correlation-aware* (the provenance circuit
 tracks shared events, so joint and conditional probabilities come out right
 without independence assumptions or hand-rolled `inclusion--exclusion <https://en.wikipedia.org/wiki/Inclusion%E2%80%93exclusion_principle>`_).
@@ -496,19 +497,104 @@ sampling and is unaffected by the ``provsql.rv_mc_samples = 0`` you set in
 Problem 4 (its full distribution and individual samples, by contrast, are
 estimated by Monte Carlo, and would need sampling switched back on).
 
+Problem 6: Ruling Worlds Out
+----------------------------
+
+:sqlfunc:`repair_key` in Problem 1 imposed one kind of constraint -- *at most
+one* row of a key group is real. Many real rules are not keys but relations
+between *pairs* of rows: "no two reported doses of one vaccine fall within 21
+days", "no two outbreak cases at one site are reported within the incubation
+window". No key declaration captures these. They are **denial constraints** --
+a query describing a forbidden pattern -- and ProvSQL conditions on their
+*non-occurrence* with the event-negation operator ``!``
+(:sqlfunc:`provenance_not`).
+
+An immunization registry merges dose reports from several sources, so each
+reported dose is only *probably* a real administration. A data-quality rule
+says two doses of the same vaccine must be at least 21 days apart. Here are
+four uncertain dose reports for one patient -- the date each was administered
+and the probability it is genuine. The Mar 14 report sits close to two others:
+it is within 21 days of both Mar 4 (10 days earlier) and Mar 28 (14 days
+later).
+
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS doses CASCADE;
+    CREATE TABLE doses(id int, administered date, p float);
+    INSERT INTO doses VALUES
+      (1, '2024-03-04', 0.5),
+      (2, '2024-03-14', 0.5),
+      (3, '2024-03-28', 0.5),
+      (4, '2024-04-30', 0.8);
+    SELECT add_provenance('doses');
+    SELECT id, administered, p, set_prob(provenance(), p) FROM doses;
+
+The forbidden pattern -- "some two doses are fewer than 21 days apart" -- is an
+ordinary self-join. Materialise it, collapsing all the witnessing pairs into a
+single ``DISTINCT`` row: that one row's *provenance* is the violation event
+``W``, "the record has a too-close pair". Two pairs qualify -- (Mar 4, Mar 14)
+and (Mar 14, Mar 28) -- and they *share* the Mar 14 dose, so ``W`` is not a
+simple product of independent pairs; ProvSQL tracks the shared gate and gets
+the overlap right (the same correlation-awareness as Problem 2). So
+``provenance()`` over the ``violation`` table is ``W``, and ``!provenance()`` is
+the complementary "valid record" event:
+
+.. code-block:: postgresql
+
+    DROP TABLE IF EXISTS violation;
+    CREATE TEMP TABLE violation AS
+      SELECT DISTINCT 1
+      FROM doses a JOIN doses b
+        ON a.id < b.id AND abs(a.administered - b.administered) < 21;
+
+    SELECT probability_evaluate(provenance())  AS p_violation,
+           probability_evaluate(!provenance()) AS p_valid
+    FROM violation;
+
+The clash has probability 0.375, so a valid record (``!provenance()``) has
+probability 0.625.
+
+Now condition each dose on the record being valid -- one row per dose. Prior and
+posterior are the *same* row token, ``provenance()``, evaluated two ways:
+unconditioned, and conditioned on ``!W``. Each row's own provenance stays the
+dose itself; the violation event is pulled in by an inert
+``(SELECT provenance() FROM violation)`` -- naming ``W`` once, without coupling
+it into the row's lineage:
+
+.. code-block:: postgresql
+
+    SELECT d.id,
+           probability_evaluate(provenance()) AS prior,
+           probability_evaluate(provenance() | !(SELECT provenance() FROM violation)) AS posterior
+    FROM doses d
+    ORDER BY d.id;
+
+Same prior, different posterior. A valid record is evidence against exactly the
+doses the constraint could have caught, in proportion to how implicated each is:
+the Mar 14 dose (dose 2), which would clash with *either* neighbour, drops the
+furthest -- from 0.5 to **0.2** -- while doses 1 and 3, each in only one of the
+two possible violations, drop to **0.4**; dose 4, far from the rest and in no
+possible clash, is untouched at **0.8**. The constraint here was an arbitrary
+query: ``!`` turns any forbidden pattern into evidence, the way
+:sqlfunc:`repair_key` turns a key into mutual exclusion, but without being
+limited to keys.
+
 Recap
 -----
 
-The five problems used one operator, ``|``, with a single meaning
+The six problems used one operator, ``|``, with a single meaning
 throughout -- conditional probability, :math:`\Pr(A \mid B) = \Pr(A \wedge
-B) / \Pr(B)` -- over three kinds of value: discrete events (Problems 1-3), a
-continuous ``random_variable`` (Problem 4), and a probabilistic aggregate
+B) / \Pr(B)` -- over three kinds of value: discrete events (Problems 1-3
+and 6), a continuous ``random_variable`` (Problem 4), and a probabilistic
+aggregate
 ``agg_token`` (Problem 5). A few mechanics recurred:
 
 * Each model was built and stored in the database. :sqlfunc:`add_provenance`
   registers a table for tuple-independent tracking and :sqlfunc:`set_prob`
   attaches a probability to each row; :sqlfunc:`repair_key` is the alternative
-  registration, making the rows of a key group mutually exclusive outcomes.
+  registration, making the rows of a key group mutually exclusive outcomes,
+  and the negation operator ``!`` conditions on the non-occurrence of an
+  arbitrary forbidden pattern (Problem 6) -- a denial constraint beyond keys.
   The model is ordinary SQL data: it persists, and is queried and updated,
   across sessions.
 * Provenance is recorded per result row as a circuit of gates, and equal
