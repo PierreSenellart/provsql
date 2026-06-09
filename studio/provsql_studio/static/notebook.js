@@ -448,15 +448,21 @@
 
   function ensureMdLibs() {
     if (!mdLibs) {
+      // marked + DOMPurify are the core renderer: prose must render even if the
+      // optional KaTeX assets are missing, so they alone gate the promise.
       mdLibs = Promise.all([
         loadScript('/static/vendor/marked.min.js'),
         loadScript('/static/vendor/purify.min.js'),
-        // KaTeX for $…$ / $$…$$ math in Markdown cells; auto-render needs
-        // the katex global, so it is chained after katex.min.js.
-        loadStyle('/static/vendor/katex.min.css'),
-        loadScript('/static/vendor/katex.min.js')
-          .then(() => loadScript('/static/vendor/auto-render.min.js')),
       ]);
+      // KaTeX for $…$ / $$…$$ math in Markdown cells; auto-render needs the
+      // katex global, so it is chained after katex.min.js. Loaded best-effort
+      // and off the critical path: a load failure leaves math un-rendered (the
+      // $…$ source shows through) rather than degrading the whole cell to raw
+      // text.
+      loadStyle('/static/vendor/katex.min.css').catch(() => {});
+      loadScript('/static/vendor/katex.min.js')
+        .then(() => loadScript('/static/vendor/auto-render.min.js'))
+        .catch(() => {});
     }
     return mdLibs;
   }

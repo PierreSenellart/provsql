@@ -39,6 +39,14 @@ STUDIES = [
     ("cs7",      "casestudy7", "CS7: Peer-Review Assignment"),
 ]
 
+# Notebooks that build their own tables inline (no doc/<dir>/setup.sql): they
+# only need an empty, provsql-enabled database to exist in the cluster so the
+# ?nb=<name> deep link binds to an existing database rather than offering a
+# "create" banner. The notebook's own setup cells seed the data. (name, title)
+SELF_SEEDING = [
+    ("cs8", "CS8: ProvSQL as a Probability Calculator"),
+]
+
 _COPY_RE = re.compile(r"^\s*COPY\s+(\S+)\s*\(([^)]*)\)\s+FROM\s+stdin\s*;", re.I)
 _PSQL_COPY_RE = re.compile(
     r"^\s*\\copy\s+(\S+)\s+FROM\s+'([^']+)'\s+WITH\s+CSV\s+HEADER\s*;?", re.I)
@@ -207,6 +215,11 @@ def main():
             json.dump(stmts, f)
         manifest.append({"name": name, "file": name + ".json", "title": title})
         print("  %-10s <- doc/%s/setup.sql (%d statements)" % (name, src_dir, len(stmts)))
+    for name, title in SELF_SEEDING:
+        with open(os.path.join(OUT, name + ".json"), "w", encoding="utf-8") as f:
+            json.dump([], f)
+        manifest.append({"name": name, "file": name + ".json", "title": title})
+        print("  %-10s <- (empty; notebook self-seeds its tables)" % name)
     with open(os.path.join(OUT, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     print("build-casestudies.py: wrote %d databases + manifest.json to %s"

@@ -376,13 +376,27 @@ class _Conn:
 
 
 def _connect(*a, **k):
-    return _Conn()
+    c = _Conn()
+    # Honour psycopg's autocommit kwarg: db.create_database opens
+    # `psycopg.connect(dsn, autocommit=True)` to run CREATE DATABASE, which
+    # PostgreSQL (and PGlite) reject inside a transaction. Without this the
+    # connection defaulted to autocommit=False, _ensure_tx wrapped the statement
+    # in BEGIN, and the create failed.
+    if k.get("autocommit"):
+        c.autocommit = True
+    return c
 
 
 psycopg.connect = _connect
 
 _errors = types.ModuleType("psycopg.errors")
-for _n in ("UndefinedFunction", "UndefinedObject", "InsufficientPrivilege", "SyntaxError"):
+# DuplicateDatabase: app.api_create_database catches it to turn a re-create into
+# a clean 409. It must exist even when no such error is in flight -- evaluating
+# the `except psycopg.errors.DuplicateDatabase` clause dereferences the
+# attribute, so a missing name raised AttributeError and surfaced as an opaque
+# HTTP 500 instead.
+for _n in ("UndefinedFunction", "UndefinedObject", "InsufficientPrivilege",
+           "SyntaxError", "DuplicateDatabase", "DuplicateObject"):
     setattr(_errors, _n, type(_n, (psycopg.Error,), {}))
 psycopg.errors = _errors
 

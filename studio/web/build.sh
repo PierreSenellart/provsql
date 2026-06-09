@@ -101,6 +101,13 @@ p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
 subs = [("loadScript('/static/vendor/marked.min.js')", "loadScript('static/vendor/marked.min.js')"),
         ("loadScript('/static/vendor/purify.min.js')", "loadScript('static/vendor/purify.min.js')"),
+        # KaTeX (math in Markdown cells) loads from the same vendor dir; its
+        # three assets share the Promise.all in ensureMdLibs, so a root-absolute
+        # path that 404s under a sub-path (e.g. /playground/) rejects the whole
+        # render and the cell degrades to raw, unrendered text.
+        ("loadStyle('/static/vendor/katex.min.css')", "loadStyle('static/vendor/katex.min.css')"),
+        ("loadScript('/static/vendor/katex.min.js')", "loadScript('static/vendor/katex.min.js')"),
+        ("loadScript('/static/vendor/auto-render.min.js')", "loadScript('static/vendor/auto-render.min.js')"),
         ("window.location.href = '/circuit'", "window.location.href = '?mode=circuit'")]
 for old, new in subs:
     if old not in s:
