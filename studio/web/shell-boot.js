@@ -165,11 +165,25 @@ async function switchDb(name) {
   // same database rather than snapping back to the default.
   localStorage.setItem('ps.activeDb', name)
 }
-// A ?db= in the link wins, then the last-used database, then the default.
+// A ?nb= deep link should open against the notebook's own bound database, so a
+// shared link lands ready-to-run instead of on the last-used database behind a
+// "switch" banner. The binding is read from the notebook's metadata
+// (provsql.database) rather than assumed equal to the link name. An explicit
+// ?db= still wins.
+let _linkedDb = null
+if (linkedNotebook != null && !params.has('db')) {
+  try {
+    const nb = await (await fetch(asset(`./pkg/notebooks/${linkedNotebook}.ipynb`))).json()
+    _linkedDb = (nb && nb.metadata && nb.metadata.provsql && nb.metadata.provsql.database) || null
+  } catch (_e) { /* unreadable notebook: fall through to saved / default */ }
+}
+// A ?db= in the link wins, then the ?nb= notebook's bound database, then the
+// last-used database, then the default.
 const _urlDb = params.get('db')
 const _saved = localStorage.getItem('ps.activeDb')
 await switchDb(
   manifest.some((m) => m.name === _urlDb) ? _urlDb
+  : manifest.some((m) => m.name === _linkedDb) ? _linkedDb
   : manifest.some((m) => m.name === _saved) ? _saved
   : DEFAULT_DB)
 
