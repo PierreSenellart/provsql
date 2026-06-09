@@ -79,7 +79,8 @@ p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
 subs = [("s.src = '/static/circuit.js'", "s.src = 'static/circuit.js'"),
         ("s.src = '/static/notebook.js'", "s.src = 'static/notebook.js'"),
-        ("window.location.href = '/circuit'", "window.location.href = '?mode=circuit'")]
+        ("window.location.href = '/circuit'", "window.location.href = '?mode=circuit'"),
+        ("window.location.href = '/contributions'", "window.location.href = '?mode=contributions'")]
 for old, new in subs:
     if old not in s:
         sys.exit("build.sh: app.js no longer contains %r (path-portability rewrite)" % old)
@@ -136,6 +137,7 @@ html = html.replace('<body class="mode-where">', '<body class="mode-circuit">')
 # /where); make them relative ?mode= queries so they resolve under any base
 # path and need no server redirect.
 html = html.replace('href="/circuit"', 'href="?mode=circuit"')
+html = html.replace('href="/contributions"', 'href="?mode=contributions"')
 html = html.replace('href="/where"', 'href="?mode=where"')
 html = html.replace('href="/notebook"', 'href="?mode=notebook"')
 # The in-browser build is branded "ProvSQL Playground" (vs the installable
