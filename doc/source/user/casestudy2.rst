@@ -674,6 +674,30 @@ there are many input variables. Replace ``shapley_all_vars`` with
    keyed by its UUID token. The ``study_mapping`` join maps these tokens
    back to study titles for display.
 
+Seeing it in Studio: Contributions mode
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The same bulk computation is one click away in :ref:`ProvSQL Studio's
+Contributions mode <studio-contributions-mode>`. Run the replication
+query for the finding, set :guilabel:`Labels` to ``study_mapping``, and
+click the result row's ``provsql`` cell: Studio computes
+``shapley_all_vars`` for that tuple and draws one ranked bar per study,
+the interactive twin of Steps 13–15.
+
+.. code-block:: postgresql
+
+    SELECT exposure, outcome, effect FROM f_replicated
+     WHERE exposure = 'Exercise' AND outcome = 'Cardiovascular Disease'
+       AND effect = 'beneficial';
+
+.. figure:: /_static/studio/contributions-mode.png
+   :alt: Studio Contributions mode showing per-study Shapley bars for the
+         Exercise to Cardiovascular Disease beneficial finding.
+
+   Contributions mode: Johnson2020, Smith2018, and Williams2021 ranked
+   by Shapley value -- the same numbers as Step 13, read off a heat-map.
+   The :guilabel:`Measure` toggle switches to Banzhaf (Step 14).
+
 Step 16: Arithmetic on Aggregate Results
 ------------------------------------------
 

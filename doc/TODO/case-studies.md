@@ -44,6 +44,18 @@ case-study real estate:
 - `aggregation_evaluate`: extend the evidence-grade semiring (Step 6) to
   a `GROUP BY outcome` query with a custom semimodule that aggregates
   per-finding grades into a per-outcome grade.
+- **Studio Contributions mode** (depends on the mode shipping, see
+  `studio.md`): a closing "Seeing it in Studio" section that re-runs the
+  replication query, pins the Exercise→CVD→beneficial row, and reads the
+  per-study Shapley / Banzhaf bars off the Contributions sidebar with
+  `study_mapping` as the label source. This is the visual counterpart of
+  Steps 13–15 (already the canonical contribution narrative: same
+  finding, same mapping), so CS2 is the natural home rather than a new
+  case study. Mirrors how CS6/CS7 add a Studio-driven section atop a
+  SQL narrative; needs a screenshot via `nb_doc_shots.py` and a
+  Contributions-mode row in the `casestudies.rst` feature-coverage
+  matrix (alongside the existing "ProvSQL Studio (Circuit + Where)"
+  row). Ship together with, or right after, the mode itself.
 
 ### CS3: Île-de-France Public Transit
 

@@ -879,14 +879,40 @@ def _parse_pos(pos: str) -> tuple[float, float]:
 
 def resolve_input(pool: ConnectionPool, uuid: str) -> list[dict]:
     """Wrap `provsql.resolve_input`. Returns a list of {relation, row} dicts;
-    empty when the UUID is not the provenance token of any tracked row."""
+    empty when the UUID is not the provenance token of any tracked row.
+
+    `resolve_input` builds row_data with `to_jsonb(t)`, and PostgreSQL
+    `jsonb` does not preserve key order (keys are stored sorted by length
+    then bytes). We reorder each row to the relation's real column order
+    (pg_attribute.attnum) so the inspector and Contributions labels read
+    like the table, not the scrambled jsonb order."""
     out: list[dict] = []
+    order_cache: dict[str, list[str]] = {}
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT relation::text, row_data FROM provsql.resolve_input(%s::uuid)",
             (uuid,),
         )
-        for relation, row_data in cur.fetchall():
+        rows = cur.fetchall()
+        for relation, row_data in rows:
+            if isinstance(row_data, dict) and row_data:
+                order = order_cache.get(relation)
+                if order is None:
+                    cur.execute(
+                        "SELECT a.attname FROM pg_attribute a"
+                        " WHERE a.attrelid = %s::regclass AND a.attnum > 0"
+                        "   AND NOT a.attisdropped"
+                        " ORDER BY a.attnum",
+                        (relation,),
+                    )
+                    order = [r[0] for r in cur.fetchall()]
+                    order_cache[relation] = order
+                ordered = {k: row_data[k] for k in order if k in row_data}
+                # Keep any key not found in pg_attribute (defensive) at the end.
+                for k, v in row_data.items():
+                    if k not in ordered:
+                        ordered[k] = v
+                row_data = ordered
             out.append({"relation": relation, "row": row_data})
     return out
 

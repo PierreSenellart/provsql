@@ -390,3 +390,4 @@ Export and visualisation
    "``view_circuit`` (graph-easy)", "", "✓", "", "", "", "", "", "", ""
    "``provsql.verbose_level``", "", "", "", "", "", "", "", "(✓)", ""
    "ProvSQL Studio (Circuit mode + Where mode)", "", "", "", "", "", "", "✓", "✓", ""
+   "ProvSQL Studio (Contributions mode)", "", "", "✓", "", "", "", "", "", ""

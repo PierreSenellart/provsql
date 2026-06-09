@@ -1701,6 +1701,126 @@ def evaluate_circuit(
     return out
 
 
+def contributions(
+    pool: ConnectionPool,
+    *,
+    token: str,
+    measure: str,
+    method: str | None = None,
+    arguments: str | None = None,
+    mapping: str | None = None,
+    statement_timeout: str,
+    search_path: str = "",
+    tool_search_path: str = "",
+    extra_gucs: dict[str, str] | None = None,
+) -> dict:
+    """Per-input Shapley / Banzhaf contributions toward `token`.
+
+    Backs Contributions mode. Runs `provsql.shapley_all_vars(token, method,
+    arguments, banzhaf)` once -- one C function serves both measures via its
+    `banzhaf` flag (`banzhaf_all_vars` is just `shapley_all_vars(.., 't')`)
+    -- and returns one entry per input variable, sorted by value descending:
+    `{variable, value, label}`. `value` is the contribution; `label` is the
+    mapping's `value` column when a provenance `mapping` is given (the CS2
+    §15 `JOIN ON provenance = variable` idiom), else None so the front-end
+    lazily resolves the source row via /api/leaf, exactly like the
+    circuit-mode leaf chips.
+
+    Returns `{result, kind, measure, method, mapping}` ready to JSON-encode.
+    Raises ValueError on bad input; propagates psycopg.Error to the caller
+    (the route shapes it into HTTP, as for /api/evaluate)."""
+    measure = (measure or "").strip().lower()
+    if measure not in ("shapley", "banzhaf"):
+        raise ValueError(f"unknown contribution measure: {measure!r}")
+    m = (method or "").strip() or None
+    a = (arguments or "").strip() or None
+
+    # When a mapping is requested, validate it against the same discovery
+    # rule the picker uses so a crafted payload can't read an arbitrary
+    # relation, then resolve its (schema, name) for a safe Identifier.
+    map_ident: sql.Identifier | None = None
+    if mapping:
+        match = next(
+            (x for x in list_provenance_mappings(pool) if x["qname"] == mapping),
+            None,
+        )
+        if match is None:
+            raise ValueError(f"unknown provenance mapping: {mapping!r}")
+        map_ident = sql.Identifier(match["schema"], match["name"])
+
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("SET LOCAL statement_timeout = {}").format(
+                sql.Literal(statement_timeout)
+            )
+        )
+        if (search_path or "").strip():
+            target_path = compose_search_path(search_path, "")
+        else:
+            cur.execute("SHOW search_path")
+            target_path = compose_search_path("", cur.fetchone()[0])
+        cur.execute("SELECT set_config('search_path', %s, true)", (target_path,))
+        apply_tool_search_path(cur, tool_search_path)
+        for guc_name, guc_val in (extra_gucs or {}).items():
+            if guc_name not in _EXTRA_GUC_WHITELIST:
+                continue
+            cur.execute(
+                sql.SQL("SET LOCAL {} = {}").format(
+                    sql.Identifier(*guc_name.split(".")),
+                    sql.Literal(guc_val),
+                )
+            )
+
+        cur.execute(
+            sql.SQL(
+                "SELECT variable::text, value "
+                "FROM provsql.shapley_all_vars({tok}::uuid, {method}, {args}, {bz})"
+            ).format(
+                tok=sql.Literal(token),
+                method=sql.Literal(m),
+                args=sql.Literal(a),
+                bz=sql.Literal(measure == "banzhaf"),
+            )
+        )
+        rows = cur.fetchall()
+
+        labels: dict[str, object] = {}
+        if map_ident is not None:
+            # Cast the mapping's value column to text for display; a single
+            # variable can in principle appear more than once, last wins.
+            cur.execute(
+                sql.SQL(
+                    "SELECT provenance::text, value::text FROM {}"
+                ).format(map_ident)
+            )
+            labels = {prov: val for prov, val in cur.fetchall()}
+
+    result = [
+        {
+            "variable": variable,
+            "value": _to_jsonable(value),
+            "label": labels.get(variable),
+        }
+        for variable, value in rows
+    ]
+    # Sort by contribution descending. `_to_jsonable` may stringify a
+    # non-finite float ("NaN" / "Infinity"); treat any non-numeric (and
+    # NULL) value as missing so it sinks to the end without a TypeError.
+    def _sortkey(r):
+        v = r["value"]
+        numeric = isinstance(v, (int, float)) and not isinstance(v, bool)
+        return (not numeric, -(v if numeric else 0.0))
+
+    result.sort(key=_sortkey)
+    return {
+        "result": result,
+        "kind": "contributions",
+        "measure": measure,
+        "method": m,
+        "mapping": mapping,
+    }
+
+
 def _result_kind(semiring: str) -> str:
     if semiring in ("probability", "moment", "tropical", "viterbi", "lukasiewicz"):
         return "float"

@@ -4,12 +4,15 @@ ProvSQL Studio
 ProvSQL Studio is a Python-backed web UI for the ProvSQL extension. It
 runs as a separate package, connects to any PostgreSQL database with
 ProvSQL installed, and lets you inspect provenance interactively
-through three complementary modes:
+through four complementary modes:
 
 * **Circuit mode** renders the provenance directed acyclic graph
   (DAG) behind a result's UUID or aggregate token, with frontier
   expansion, a node inspector, and on-the-fly :doc:`semiring
   evaluation <semirings>`.
+* **Contributions mode** ranks the input tuples by their
+  :doc:`Shapley value or Banzhaf power index <shapley>` toward a chosen
+  result tuple, as a heat-map of signed contribution bars.
 * **Where mode** highlights the source cells that contributed to each
   output value, against the live content of the provenance-tracked
   relations.
@@ -634,6 +637,65 @@ trivially when shifted out of the support) collapse to Bernoulli
 graph matches what the semiring evaluators and Monte-Carlo
 sampler actually consume.
 
+.. _studio-contributions-mode:
+
+Contributions mode
+------------------
+
+Contributions mode answers a different question from Circuit mode: not
+*how* a result tuple was derived, but *how much each input tuple
+mattered* to it. It is the visual counterpart of the :sqlfunc:`shapley`
+/ :sqlfunc:`banzhaf` family (see :doc:`shapley`), turning the bulk
+:sqlfunc:`shapley_all_vars` / :sqlfunc:`banzhaf_all_vars` enumeration
+into an interactive, ranked heat-map.
+
+Queries are typed into the same `Query box`_ as in Circuit mode, under
+the same :guilabel:`Provenance scheme` (the default :guilabel:`Semiring`
+is the right choice; the contribution is computed over the Boolean
+circuit underneath). Run a query, then **click a result row's**
+``provsql`` **cell** to pin it as the *target tuple*: the contribution
+of every input tuple toward that target is computed and drawn in the
+sidebar.
+
+.. figure:: /_static/studio/contributions-mode.png
+   :alt: Studio Contributions mode showing per-study Shapley bars for a
+         pinned result tuple.
+
+   Contributions mode: the pinned target token at the top, then one
+   signed contribution bar per input, ranked by magnitude.
+
+Each bar diverges from a central baseline (positive contributions grow
+right, negative ones -- possible under ``monus``-based or
+conditioned circuits -- grow left), scaled to the largest magnitude in
+the set, with the numeric value alongside. Three controls above the
+chart drive the computation:
+
+* :guilabel:`Measure` : :guilabel:`Shapley` (averaged over input
+  orderings) or :guilabel:`Banzhaf` (averaged over coalitions). Both
+  are computed in the *expected* probabilistic sense, so the Shapley
+  values of all inputs sum to the target's marginal probability.
+* :guilabel:`Method` : how the decision-diagram behind each value is
+  built. :guilabel:`auto` cost-selects the cheapest route
+  (``interpret-as-dd`` / ``tree-decomposition`` / ``compilation``),
+  reusing the probability chooser's cost model; the named routes force
+  one; :guilabel:`ladder` is the old fixed
+  interpret-as-dd → tree-decomposition → compiler chain.
+* :guilabel:`Labels` : the :ref:`provenance mapping
+  <studio-circuit-eval-strip>` whose ``value`` column names the inputs
+  (the ``ON provenance = variable`` join). With :guilabel:`source row`
+  selected instead, each input is resolved to its full tracked row (in
+  table-column order) via :sqlfunc:`resolve_input`; the bar shows the
+  values and its tooltip names every column.
+
+Changing any control re-computes for the pinned target. A wide input
+relation can mint thousands of variables; the chart shows the top 200
+by magnitude and reports the total when it truncates.
+
+Conditioned tokens (``X | C``) are refused here, because the
+conditional indices are not a linear combination of the unconditioned
+ones; compute the index on the unconditioned token instead, or use
+:sqlfunc:`probability_evaluate` for the conditional probability.
+
 .. _studio-where-mode:
 
 Where mode
@@ -665,7 +727,9 @@ gate, so derived materialisations do not crowd the panel.
 
 Each result row gets a :fa:`project-diagram` :guilabel:`Circuit` button that
 switches to Circuit mode and pre-loads the provenance DAG of that
-row's token; see `Mode-switching`_.
+row's token, and a :fa:`chart-bar` :guilabel:`Contributions` button that
+switches to `Contributions mode`_ and pins the same token; see
+`Mode-switching`_.
 
 .. _studio-where-example:
 

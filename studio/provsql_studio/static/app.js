@@ -7,6 +7,7 @@
 
 (function () {
   const mode = document.body.classList.contains('mode-circuit') ? 'circuit'
+             : document.body.classList.contains('mode-contributions') ? 'contributions'
              : document.body.classList.contains('mode-notebook') ? 'notebook'
              : 'where';
 
@@ -281,6 +282,10 @@
   // in-mode click (set by the notebook's circuit-cell jump).
   const preloadCircuitRowProv = sessionStorage.getItem('ps.preloadCircuitRowProv');
   sessionStorage.removeItem('ps.preloadCircuitRowProv');
+  // Same mechanism for the where-mode "→ Contributions" jump: the token to
+  // pin once Contributions mode's result table has rendered.
+  const preloadContribUuid = sessionStorage.getItem('ps.preloadContrib');
+  sessionStorage.removeItem('ps.preloadContrib');
 
   // GUC toggles. In where mode, where_provenance is forced on (the wrap
   // calls where_provenance(...) and would otherwise return all-empty); the
@@ -531,9 +536,10 @@
   window.ProvsqlStudio.parseGuaranteeNotice = parseGuaranteeNotice;
   window.ProvsqlStudio.renderGuarantee = renderGuarantee;
 
-  if (mode === 'where')         setupWhereMode();
-  else if (mode === 'notebook') setupNotebookMode();
-  else                          setupCircuitMode();
+  if (mode === 'where')              setupWhereMode();
+  else if (mode === 'notebook')      setupNotebookMode();
+  else if (mode === 'contributions') setupContributionsMode();
+  else                               setupCircuitMode();
 
   // The setup call has to come AFTER the SQL_KEYWORDS const declaration
   // below: function declarations are hoisted but `const` is not, so calling
@@ -669,12 +675,19 @@
     body.addEventListener('mouseover', (e) => onResultHover(e, true));
     body.addEventListener('mouseout',  (e) => onResultHover(e, false));
     body.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-jump-circuit]');
-      if (!btn) return;
       // Same carry rule as the mode-switch tab : only auto-replay in the
       // new mode if the textarea still matches the last-run SQL. The
-      // preloadCircuit UUID is always carried so the DAG renders
+      // preloaded UUID is always carried so the target renders
       // regardless of whether we re-run the query.
+      const cBtn = e.target.closest('[data-jump-contributions]');
+      if (cBtn) {
+        window.ProvsqlStudio.carryQueryForSwitch();
+        sessionStorage.setItem('ps.preloadContrib', cBtn.dataset.jumpContributions);
+        window.location.href = '/contributions';
+        return;
+      }
+      const btn = e.target.closest('[data-jump-circuit]');
+      if (!btn) return;
       window.ProvsqlStudio.carryQueryForSwitch();
       sessionStorage.setItem('ps.preloadCircuit', btn.dataset.jumpCircuit);
       window.location.href = '/circuit';
@@ -2251,6 +2264,231 @@
     }
   }
 
+  /* ──────── Contributions mode ──────── */
+
+  function contributionsSidebarHtml() {
+    return `
+      <div class="cv-contrib">
+        <div class="cv-contrib__controls" role="toolbar" aria-label="Contribution controls">
+          <label class="cv-contrib__ctl">
+            <span>Measure</span>
+            <select id="contrib-measure" title="Shapley value (averaged over orderings) or Banzhaf power index (averaged over coalitions).">
+              <option value="shapley">Shapley</option>
+              <option value="banzhaf">Banzhaf</option>
+            </select>
+          </label>
+          <label class="cv-contrib__ctl">
+            <span>Method</span>
+            <select id="contrib-method" title="How the d-D circuit behind the contribution is built. 'auto' cost-selects the cheapest route (interpret-as-dd / tree-decomposition / compilation) like the probability chooser; the named routes force one; 'ladder' is the old fixed interpret → tree-decomposition → compiler chain.">
+              <option value="">auto (cost-based)</option>
+              <option value="tree-decomposition">tree-decomposition</option>
+              <option value="interpret-as-dd">interpret as d-D</option>
+              <option value="ladder">ladder (fixed chain)</option>
+            </select>
+          </label>
+          <label class="cv-contrib__ctl">
+            <span>Labels</span>
+            <select id="contrib-mapping" title="Provenance mapping used to label inputs; 'source row' resolves each input to its tracked row via resolve_input.">
+              <option value="">source row</option>
+            </select>
+          </label>
+        </div>
+        <div class="cv-contrib__targetline">
+          <span class="cv-contrib__targetlbl">Target</span>
+          <span class="cv-contrib__target" id="contrib-target" title="">none pinned</span>
+        </div>
+        <div class="cv-contrib__status" id="contrib-status" hidden></div>
+        <div class="cv-contrib__chart" id="contrib-chart"></div>
+      </div>`;
+  }
+
+  function setupContributionsMode() {
+    document.getElementById('sidebar-title').textContent = 'Contributions';
+    document.getElementById('sidebar-body').innerHTML = contributionsSidebarHtml();
+    document.getElementById('result-legend').innerHTML =
+      '<span class="wp-legend-swatch" style="background:var(--terracotta-500)"></span> '
+      + 'Click a UUID cell in the result to compute its per-input Shapley / Banzhaf contributions.';
+
+    const state = { token: null };
+    const chart     = document.getElementById('contrib-chart');
+    const statusEl  = document.getElementById('contrib-status');
+    const measureSel = document.getElementById('contrib-measure');
+    const methodSel  = document.getElementById('contrib-method');
+    const mapSel     = document.getElementById('contrib-mapping');
+    const targetEl   = document.getElementById('contrib-target');
+
+    const shortToken = (s) =>
+      (s && String(s).length > 8) ? String(s).slice(0, 8) + '…' : String(s || '');
+
+    populateContribMappings();
+
+    // Re-fetch when a control changes, but only once a token is pinned.
+    [measureSel, methodSel, mapSel].forEach((el) => {
+      el.addEventListener('change', () => { if (state.token) fetchContributions(); });
+    });
+
+    // Cell click pins the token (same is-clickable / data-circuit-uuid
+    // affordance circuit mode uses; contributions joins clickableUuid).
+    document.getElementById('result-body').addEventListener('click', (e) => {
+      const cell = e.target.closest('.wp-result__cell.is-clickable');
+      if (!cell || !cell.dataset.circuitUuid) return;
+      state.token = cell.dataset.circuitUuid;
+      fetchContributions();
+    });
+
+    // Carry from a where-mode "→ Contributions" jump, mirroring the
+    // circuit-mode preload: replay the query when it is still the last-run
+    // SQL, then pin the carried token.
+    const carry = preloadContribUuid;
+    const shouldReplay =
+      (carriedRan || carry) && document.getElementById('request').value.trim();
+    if (shouldReplay) {
+      runQuery({ preventDefault() {} }).then(() => {
+        if (carry) { state.token = carry; fetchContributions(); }
+      });
+    } else if (carry) {
+      state.token = carry;
+      queueMicrotask(fetchContributions);
+    }
+
+    async function populateContribMappings() {
+      let rows = [];
+      try {
+        const resp = await fetch('/api/provenance_mappings');
+        if (resp.ok) rows = await resp.json();
+      } catch { /* leave the default "source row" option only */ }
+      for (const m of rows) {
+        const opt = document.createElement('option');
+        opt.value = m.qname;
+        opt.textContent = m.display_name || m.qname;
+        mapSel.appendChild(opt);
+      }
+    }
+
+    async function fetchContributions() {
+      const measure = measureSel.value;
+      const method  = methodSel.value || null;
+      const mapping = mapSel.value || null;
+      targetEl.textContent = state.token ? shortToken(state.token) : 'none pinned';
+      targetEl.title = state.token || '';
+      statusEl.hidden = false;
+      statusEl.textContent = 'Computing…';
+      chart.innerHTML = '';
+      let resp;
+      try {
+        resp = await fetch('/api/contributions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: state.token, measure, method, mapping }),
+        });
+      } catch (e) {
+        statusEl.textContent = 'Network error: ' + e.message;
+        return;
+      }
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        statusEl.textContent = data.detail || data.error || ('HTTP ' + resp.status);
+        return;
+      }
+      renderContributions(data, mapping);
+    }
+
+    function renderContributions(data, mapping) {
+      const items = data.result || [];
+      const measureName = data.measure === 'banzhaf' ? 'Banzhaf' : 'Shapley';
+      if (!items.length) {
+        statusEl.hidden = false;
+        statusEl.textContent = 'No input variables contribute to this token.';
+        chart.innerHTML = '';
+        return;
+      }
+      const CAP = 200;
+      const shown = items.slice(0, CAP);
+      const nums = shown
+        .map((r) => (typeof r.value === 'number' ? Math.abs(r.value) : 0));
+      const maxAbs = Math.max(1e-12, ...nums);
+      if (items.length > CAP) {
+        statusEl.hidden = false;
+        statusEl.textContent =
+          `Showing top ${CAP} of ${items.length} inputs by |${measureName}|.`;
+      } else {
+        statusEl.hidden = true;
+      }
+      chart.innerHTML = shown.map((r) => {
+        const v = (typeof r.value === 'number') ? r.value : null;
+        const frac = v == null ? 0 : Math.abs(v) / maxAbs;
+        const half = (frac * 50).toFixed(2);
+        const pos = (v == null) || v >= 0;
+        const style = pos
+          ? `left:50%;width:${half}%`
+          : `left:${(50 - half).toFixed(2)}%;width:${half}%`;
+        const valTxt = v == null ? '—' : v.toFixed(4);
+        const hasLabel = r.label != null && String(r.label) !== '';
+        const labelHtml = hasLabel
+          ? escapeHtml(String(r.label))
+          : `<span class="cv-contrib__lazy" data-var="${escapeAttr(r.variable)}">`
+            + `${escapeHtml(shortToken(r.variable))}</span>`;
+        const titleAttr = escapeAttr(hasLabel ? String(r.label) : r.variable);
+        return `<div class="cv-contrib__bar">
+          <div class="cv-contrib__barhead">
+            <span class="cv-contrib__label" title="${titleAttr}">${labelHtml}</span>
+            <span class="cv-contrib__val${pos ? '' : ' is-neg'}">${valTxt}</span>
+          </div>
+          <div class="cv-contrib__track">
+            <div class="cv-contrib__fill ${pos ? 'is-pos' : 'is-neg'}" style="${style}"></div>
+          </div>
+        </div>`;
+      }).join('');
+      // Lazily resolve source-row labels when no mapping is selected.
+      // Capped so a wide input relation doesn't fan out hundreds of
+      // /api/leaf requests; users who want every label pick a mapping.
+      if (!mapping) resolveContribLabels(chart, 60);
+    }
+
+    async function resolveContribLabels(root, limit) {
+      const chips = Array.from(root.querySelectorAll('.cv-contrib__lazy'))
+        .slice(0, limit);
+      for (const chip of chips) {
+        const uuid = chip.dataset.var;
+        if (!uuid) continue;
+        let data;
+        try {
+          const resp = await fetch(`/api/leaf/${encodeURIComponent(uuid)}`);
+          if (!resp.ok) continue;
+          data = await resp.json();
+        } catch { continue; }
+        const label = labelFromLeaf(data);
+        if (!label) continue;
+        chip.textContent = label.text;
+        chip.classList.remove('cv-contrib__lazy');
+        const cell = chip.closest('.cv-contrib__label');
+        // The visible label is values-only (compact, clipped to one line);
+        // the tooltip names every column so the row is readable on hover.
+        if (cell) cell.title = label.title;
+      }
+    }
+
+    function labelFromLeaf(data) {
+      const m = (data && data.matches && data.matches[0]) || null;
+      if (!m) return null;
+      const rel = m.relation || '';
+      // `resolve_input` already strips the bookkeeping `provsql` token and
+      // the row is reordered to table-column order, so iterate it directly.
+      let entries = [];
+      try {
+        entries = Object.entries(m.row || {}).filter(([, val]) => val != null);
+      } catch { /* relation-only fallback */ }
+      const values = entries.map(([, val]) => String(val)).join(', ');
+      // Visible: "relation: v1, v2, …" (clipped by CSS). Tooltip: the
+      // relation then one "column: value" per line.
+      const text = rel && values ? `${rel}: ${values}` : (rel || values || '');
+      if (!text) return null;
+      const named = entries.map(([k, val]) => `${k}: ${val}`).join('\n');
+      const title = rel && named ? `${rel}\n${named}` : (named || rel || text);
+      return { text, title };
+    }
+  }
+
   async function loadCircuit(uuid, opts) {
     await ensureCircuitLib();
     window.ProvsqlCircuit.showLoading();
@@ -2925,7 +3163,7 @@ function makeBlockRenderer(env, targets) {
       // Notebook cells make UUID-ish values clickable too (the click
       // inserts a circuit cell below, wired in notebook.js); only the
       // single-UUID auto-render below stays circuit-mode-only.
-      const clickableUuid = isCircuit || env.mode === 'notebook';
+      const clickableUuid = isCircuit || env.mode === 'contributions' || env.mode === 'notebook';
       // The studio session has provsql.aggtoken_text_as_uuid = on, so
       // agg_token cells arrive as bare UUIDs. The server pre-resolves
       // each unique UUID's "value (*)" via agg_token_value_text and
@@ -3084,7 +3322,9 @@ function makeBlockRenderer(env, targets) {
         }).join('');
         const jumpBtn = (isWhere && wrapped && provIdx >= 0 && r[provIdx])
           ? `<td class="wp-result__cell--actions"><button class="wp-btn wp-btn--mini" type="button" `
-            + `data-jump-circuit="${env.escapeAttr(String(r[provIdx]))}" title="Open circuit DAG"><i class="fas fa-project-diagram"></i> Circuit</button></td>`
+            + `data-jump-circuit="${env.escapeAttr(String(r[provIdx]))}" title="Open circuit DAG"><i class="fas fa-project-diagram"></i> Circuit</button>`
+            + `<button class="wp-btn wp-btn--mini" type="button" `
+            + `data-jump-contributions="${env.escapeAttr(String(r[provIdx]))}" title="Open Shapley / Banzhaf contributions"><i class="fas fa-chart-bar"></i> Contributions</button></td>`
           : '';
         return `<tr>${cells}${jumpBtn}</tr>`;
       }).join('');

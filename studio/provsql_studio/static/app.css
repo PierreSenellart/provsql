@@ -182,6 +182,7 @@ em { font-style: italic; }
    flash on /circuit. */
 body.mode-where    .ps-modeswitch__btn[data-mode="where"],
 body.mode-circuit  .ps-modeswitch__btn[data-mode="circuit"],
+body.mode-contributions .ps-modeswitch__btn[data-mode="contributions"],
 body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
   background: var(--gold-500);
   color: var(--purple-900);
@@ -3328,3 +3329,100 @@ table thead th[data-sort="desc"]::after {
   padding: 0.05rem 0.35rem;
   margin-bottom: 0.2rem;
 }
+
+/* ──────── Contributions mode ──────── */
+.cv-contrib {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.4rem 0.2rem;
+}
+.cv-contrib__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.cv-contrib__ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--fg-2);
+}
+.cv-contrib__ctl select {
+  font-size: 0.78rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--fg-1);
+}
+.cv-contrib__targetline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+.cv-contrib__targetlbl { color: var(--fg-muted); }
+.cv-contrib__target {
+  font-family: var(--mono, monospace);
+  color: var(--purple-500);
+}
+.cv-contrib__status {
+  font-size: 0.76rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.cv-contrib__chart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.cv-contrib__bar { display: flex; flex-direction: column; gap: 0.1rem; }
+.cv-contrib__barhead {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+.cv-contrib__label {
+  color: var(--fg-1);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-contrib__lazy { font-family: var(--mono, monospace); color: var(--fg-muted); }
+.cv-contrib__val {
+  font-variant-numeric: tabular-nums;
+  color: var(--terracotta-500);
+  flex: none;
+}
+.cv-contrib__val.is-neg { color: var(--purple-500); }
+/* Diverging track with a centre baseline; positive bars grow right,
+   negative bars grow left of centre. */
+.cv-contrib__track {
+  position: relative;
+  height: 10px;
+  background: var(--bg-2, #f3eefb);
+  border-radius: 3px;
+}
+.cv-contrib__track::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-soft);
+}
+.cv-contrib__fill {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  border-radius: 2px;
+  min-width: 1px;
+}
+.cv-contrib__fill.is-pos { background: var(--terracotta-500); }
+.cv-contrib__fill.is-neg { background: var(--purple-500); }

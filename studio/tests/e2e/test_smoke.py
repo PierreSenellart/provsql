@@ -6,6 +6,8 @@ the JS bootstraps without raising, and the request → result → render path
 works for each mode."""
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import Page, expect
 
 
@@ -42,6 +44,48 @@ def test_circuit_mode_renders_a_dag(page: Page, studio_url: str) -> None:
     page.locator("#result-body tr").first.locator("td").last.click()
     # circuit.js renders the DAG into the sidebar as an SVG.
     expect(page.locator("#sidebar-body svg").first).to_be_visible(timeout=8000)
+
+
+def test_contributions_mode_renders_bars(
+    page: Page, studio_url: str, test_dsn: str
+) -> None:
+    """Contributions mode: navigate to /contributions, give the inputs
+    probabilities, run a DISTINCT query whose single row is a ⊕ over the
+    three Paris inputs, click its provsql cell, and see three contribution
+    bars in the sidebar. Then flip the measure to Banzhaf and confirm the
+    chart re-renders."""
+    page.goto(studio_url + "/contributions")
+    expect(page.locator("body")).to_have_class("mode-contributions", timeout=5000)
+    try:
+        _run_query_and_wait(
+            page,
+            "DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM personnel; END $$;"
+            " SELECT DISTINCT city FROM personnel WHERE city = 'Paris';",
+            1,
+        )
+        # The provsql UUID is the last <td>; clicking it pins the target.
+        page.locator("#result-body tr").first.locator("td").last.click()
+        bars = page.locator("#contrib-chart .cv-contrib__bar")
+        expect(bars).to_have_count(3, timeout=8000)
+        # With the default "source row" labels, each bar resolves (lazily, via
+        # /api/leaf) to the full personnel row, not a truncated subset: the
+        # label carries the relation and every column value.
+        first_label = page.locator("#contrib-chart .cv-contrib__label").first
+        expect(first_label).to_contain_text("personnel", timeout=8000)
+        expect(first_label).to_contain_text("Paris")
+        # The tooltip names every column so the row is readable on hover.
+        expect(first_label).to_have_attribute("title", re.compile(r"city: Paris"))
+        # Switching the measure re-fetches; the chart still has three bars.
+        page.locator("#contrib-measure").select_option("banzhaf")
+        expect(bars).to_have_count(3, timeout=8000)
+    finally:
+        # The set_prob above mutates the session-shared DB; restore the
+        # implicit default (1.0) so later tests see untouched probabilities.
+        import psycopg
+        with psycopg.connect(
+            f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+        ) as conn, conn.cursor() as cur:
+            cur.execute("DO $$ BEGIN PERFORM set_prob(provsql, 1.0) FROM personnel; END $$;")
 
 
 def test_query_history_records_runs(page: Page, studio_url: str) -> None:

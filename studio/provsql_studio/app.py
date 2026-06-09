@@ -61,6 +61,10 @@ def create_app(
     db_is_auto: bool = False,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)  # we serve /static/ ourselves
+    # Preserve dict insertion order in jsonify output: Flask sorts JSON keys
+    # by default, which would re-scramble meaningfully-ordered payloads such
+    # as resolve_input rows (reordered to table-column order in circuit.py).
+    app.json.sort_keys = False
     app.config.update(
         STATEMENT_TIMEOUT=statement_timeout,
         MAX_CIRCUIT_DEPTH=max_circuit_depth,
@@ -176,6 +180,10 @@ def create_app(
     @app.get("/notebook")
     def notebook_shell():
         return _serve_shell("notebook")
+
+    @app.get("/contributions")
+    def contributions_shell():
+        return _serve_shell("contributions")
 
     @app.get("/static/<path:filename>")
     def static_file(filename: str):
@@ -953,6 +961,58 @@ def create_app(
             diag = getattr(e, "diag", None)
             return jsonify({
                 "error": "evaluation failed",
+                "sqlstate": diag.sqlstate if diag else None,
+                "detail": str(e).strip(),
+            }), 500
+        return jsonify(data)
+
+    @app.post("/api/contributions")
+    def api_contributions():
+        # Contributions mode : per-input Shapley / Banzhaf contributions
+        # toward one pinned result token.  Mirrors /api/evaluate's GUC
+        # composition and error shaping; backed by db.contributions over
+        # provsql.shapley_all_vars.
+        import psycopg
+        payload = request.get_json(silent=True) or {}
+        try:
+            token = _coerce_to_uuid(payload.get("token", ""))
+        except ValueError:
+            return jsonify({"error": "token is not a valid UUID"}), 400
+        measure   = (payload.get("measure") or "shapley").strip().lower()
+        method    = payload.get("method") or None
+        arguments = payload.get("arguments") or None
+        mapping   = payload.get("mapping") or None
+        merged_gucs = _backend_gucs(
+            {str(k): str(v) for k, v in (payload.get("extra_gucs") or {}).items()}
+            if isinstance(payload.get("extra_gucs"), dict)
+            else None
+        )
+        try:
+            data = db.contributions(
+                get_pool(),
+                token=token,
+                measure=measure,
+                method=method,
+                arguments=arguments,
+                mapping=mapping,
+                statement_timeout=app.config["STATEMENT_TIMEOUT"],
+                search_path=app.config.get("SEARCH_PATH", ""),
+                tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
+                extra_gucs=merged_gucs,
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except psycopg.errors.UndefinedFunction as e:
+            # Older provsql without shapley_all_vars : surface which
+            # function is missing, same shape as /api/evaluate.
+            return jsonify({
+                "error": "contribution function unavailable on this database",
+                "detail": str(e).splitlines()[0],
+            }), 501
+        except psycopg.Error as e:
+            diag = getattr(e, "diag", None)
+            return jsonify({
+                "error": "contribution computation failed",
                 "sqlstate": diag.sqlstate if diag else None,
                 "detail": str(e).strip(),
             }), 500
