@@ -192,7 +192,8 @@ def test_mode_switch_carries_query_forward(
     page.locator("#request").fill("SELECT 42 AS carry_me;")
     # The mode-switcher anchor: clicking it triggers a normal navigation
     # plus the JS-side stash. Use a click rather than a goto so the JS path
-    # is exercised end-to-end.
+    # is exercised end-to-end. Modes live in a dropdown now, so open it first.
+    page.locator("#modeswitch-btn").click()
     page.locator("#modeswitch [data-mode='circuit']").click()
     expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
     expect(page.locator("#request")).to_have_value(

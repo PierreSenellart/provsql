@@ -304,7 +304,9 @@ def test_mode_switch_keeps_backend_warm(open_studio) -> None:
     f = ui(page)
     expect(f.locator("body")).to_have_class("mode-circuit", timeout=5000)
 
-    # The Where tab is a ?mode=where anchor; clicking it reloads the iframe.
+    # The Where tab is a ?mode=where anchor in the mode dropdown; open the
+    # dropdown, then clicking the item reloads the iframe.
+    f.locator("#modeswitch-btn").click()
     with page.expect_event("framenavigated", lambda fr: fr.name == "studio-ui", timeout=60000):
         f.locator("#modeswitch [data-mode='where']").click()
     expect(ui(page).locator("body")).to_have_class("mode-where", timeout=10000)

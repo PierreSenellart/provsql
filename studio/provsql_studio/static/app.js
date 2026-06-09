@@ -191,6 +191,36 @@
     });
   });
 
+  // Mode switcher is a dropdown (four modes, soon five, would overflow the
+  // header as buttons): the trigger shows the current mode, the menu lists
+  // all modes. The current mode's icon + label are copied from its menu item
+  // so there is a single source of truth for both.
+  (function setupModeSwitcher() {
+    const trigger = document.getElementById('modeswitch-btn');
+    const menu    = document.getElementById('modeswitch-menu');
+    if (!trigger || !menu) return;
+    const current = menu.querySelector(`.ps-modeswitch__btn[data-mode="${mode}"]`);
+    if (current) {
+      const ico = document.getElementById('modeswitch-icon');
+      const lbl = document.getElementById('modeswitch-label');
+      const srcIcon = current.querySelector('i');
+      if (ico && srcIcon) ico.className = srcIcon.className + ' ps-modeswitch__curicon';
+      if (lbl) lbl.textContent = current.textContent.trim();
+    }
+    const close = () => { menu.hidden = true; trigger.setAttribute('aria-expanded', 'false'); };
+    const open  = () => { menu.hidden = false; trigger.setAttribute('aria-expanded', 'true'); };
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (menu.hidden) open(); else close();
+    });
+    document.addEventListener('click', (e) => {
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== trigger) close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !menu.hidden) close();
+    });
+  })();
+
   // Site-wide click-to-sort on any <thead> column header. Numeric
   // columns (marked with class="num") sort numerically; everything else
   // sorts by localeCompare on the cell's textContent. Click cycles

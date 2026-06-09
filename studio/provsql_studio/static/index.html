@@ -17,11 +17,19 @@
     <span class="wp-nav__title"><em>ProvSQL</em> Studio</span>
   </div>
   <div class="wp-nav__meta">
-    <div class="ps-modeswitch" id="modeswitch" role="tablist">
-      <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="tab"><i class="fas fa-project-diagram"></i> Circuit</a>
-      <a class="ps-modeswitch__btn" href="/contributions" data-mode="contributions" role="tab"><i class="fas fa-chart-bar"></i> Contributions</a>
-      <a class="ps-modeswitch__btn" href="/where" data-mode="where" role="tab"><i class="fas fa-search-location"></i> Where</a>
-      <a class="ps-modeswitch__btn" href="/notebook" data-mode="notebook" role="tab"><i class="fas fa-book-open"></i> Notebook</a>
+    <div class="ps-modeswitch" id="modeswitch">
+      <button type="button" class="ps-modeswitch__current" id="modeswitch-btn"
+              aria-haspopup="menu" aria-expanded="false" aria-label="Switch mode">
+        <i class="fas fa-project-diagram ps-modeswitch__curicon" id="modeswitch-icon" aria-hidden="true"></i>
+        <span class="ps-modeswitch__curlabel" id="modeswitch-label">Circuit</span>
+        <i class="fas fa-caret-down ps-modeswitch__caret" aria-hidden="true"></i>
+      </button>
+      <div class="ps-modeswitch__menu" id="modeswitch-menu" role="menu" hidden>
+        <a class="ps-modeswitch__btn" href="/circuit" data-mode="circuit" role="menuitem"><i class="fas fa-project-diagram"></i> Circuit</a>
+        <a class="ps-modeswitch__btn" href="/contributions" data-mode="contributions" role="menuitem"><i class="fas fa-chart-bar"></i> Contributions</a>
+        <a class="ps-modeswitch__btn" href="/where" data-mode="where" role="menuitem"><i class="fas fa-search-location"></i> Where</a>
+        <a class="ps-modeswitch__btn" href="/notebook" data-mode="notebook" role="menuitem"><i class="fas fa-book-open"></i> Notebook</a>
+      </div>
     </div>
     <span class="wp-nav__conn">
       <button type="button" class="wp-nav__connbtn" id="conn-dot"

@@ -574,9 +574,11 @@ def test_mode_roundtrip_returns_to_same_place(page: Page, studio_url: str) -> No
     scroll_before = page.evaluate("window.scrollY")
     assert scroll_before > 0
 
-    # Round-trip through Circuit mode via the mode tabs.
+    # Round-trip through Circuit mode via the mode dropdown.
+    page.locator("#modeswitch-btn").click()
     page.locator(".ps-modeswitch__btn[data-mode='circuit']").click()
     expect(page.locator("body")).to_have_class("mode-circuit", timeout=8000)
+    page.locator("#modeswitch-btn").click()
     page.locator(".ps-modeswitch__btn[data-mode='notebook']").click()
     expect(page.locator("body")).to_have_class("mode-notebook", timeout=8000)
 
@@ -737,12 +739,14 @@ def test_scheme_carries_to_circuit_mode(page: Page, studio_url: str) -> None:
     a Circuit-mode pick seeds fresh notebooks on the way back."""
     _goto_notebook(page, studio_url)
     page.locator("#nb-scheme").select_option("boolean")
+    page.locator("#modeswitch-btn").click()
     page.locator(".ps-modeswitch__btn[data-mode='circuit']").click()
     expect(page.locator("body")).to_have_class("mode-circuit", timeout=8000)
     expect(page.locator(
         "input[name='prov-scheme'][value='boolean']")).to_be_checked()
 
     # And back: the notebook inherits the session's scheme.
+    page.locator("#modeswitch-btn").click()
     page.locator(".ps-modeswitch__btn[data-mode='notebook']").click()
     expect(page.locator("body")).to_have_class("mode-notebook", timeout=8000)
     expect(page.locator("#nb-scheme")).to_have_value("boolean")

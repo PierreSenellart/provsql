@@ -157,29 +157,56 @@ em { font-style: italic; }
 
 /* ───────── mode switcher (in top nav, both modes) ───────── */
 .ps-modeswitch {
+  position: relative;
   display: inline-flex;
-  border: 1px solid rgba(255,255,255,0.25);
-  border-radius: 4px;
-  overflow: hidden;
   font-family: var(--font-ui);
   font-size: 0.82rem;
 }
-.ps-modeswitch__btn {
+/* The dropdown trigger: shows the current mode (icon + label + caret). */
+.ps-modeswitch__current {
   background: transparent;
-  color: rgba(255,255,255,0.8);
-  border: none;
-  padding: 0.35rem 0.85rem;
+  color: rgba(255,255,255,0.9);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 4px;
+  padding: 0.35rem 0.7rem;
   cursor: pointer;
-  text-decoration: none;
-  display: inline-flex; align-items: center; gap: 0.4rem;
+  display: inline-flex; align-items: center; gap: 0.45rem;
   transition: background 0.15s, color 0.15s;
 }
-.ps-modeswitch__btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
-/* Drive the active highlight from <body class="mode-X"> so it lands on
-   the right tab from the very first paint. The body class is set
-   server-side in _serve_shell, while a JS toggle would only fire once
-   app.js parses : that delay is what produced the brief "Where"
-   flash on /circuit. */
+.ps-modeswitch__current:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.ps-modeswitch__caret { font-size: 0.72rem; opacity: 0.8; margin-left: 0.1rem; }
+/* The dropdown menu: anchored under the trigger, light surface like the
+   other header menus (History, Connection). */
+.ps-modeswitch__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem 0;
+  background: #fff;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(42, 24, 80, 0.25);
+  z-index: 20;
+}
+.ps-modeswitch__menu[hidden] { display: none; }
+.ps-modeswitch__btn {
+  background: transparent;
+  color: var(--purple-900);
+  border: none;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  transition: background 0.15s, color 0.15s;
+}
+.ps-modeswitch__btn:hover { background: var(--bg-code); }
+/* Highlight the current mode in the menu, driven from <body class="mode-X">
+   so it is correct from the first paint (the body class is set server-side
+   in _serve_shell; a JS toggle would only land once app.js parses). */
 body.mode-where    .ps-modeswitch__btn[data-mode="where"],
 body.mode-circuit  .ps-modeswitch__btn[data-mode="circuit"],
 body.mode-contributions .ps-modeswitch__btn[data-mode="contributions"],
