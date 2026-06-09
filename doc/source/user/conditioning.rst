@@ -197,9 +197,11 @@ In ProvSQL Studio
 
 Studio's :ref:`evaluation strip <studio-circuit-eval-strip>` exposes
 conditioning interactively: the :guilabel:`Condition on` input takes an
-evidence provenance UUID (auto-presetting to a clicked row's own provenance),
-and the :guilabel:`Conditioned by` badge shows when an evaluation is
-conditional. Distribution profiles, moments, and probabilities all honour it,
+evidence provenance UUID, auto-presetting to a clicked row's own provenance,
+with an adjacent :guilabel:`Conditioned by` badge that lights up while the
+result is being conditioned on it -- click the badge to toggle the
+conditioning off (an unconditional result) and back on. Distribution
+profiles, moments, and probabilities all honour it,
 so the truncated histogram of a conditioned ``random_variable`` and the
 conditional mean of an ``agg_token`` are visible in the canvas. See
 :doc:`studio` for the panel and :doc:`case study 6 <casestudy6>` for it in

@@ -554,7 +554,7 @@ variable analysis are built once, one cheap sweep runs per group, and
 the parts of the per-group circuits the group's members do not
 influence come out as the *same* gates (content-deduplicated
 emission), materialised once.  The ``SELECT DISTINCT`` spelling of the
-same aggregation (``SELECT DISTINCT t.region FROM ... `` with no
+same aggregation (``SELECT DISTINCT t.region FROM ...`` with no
 ``GROUP BY``) is provenance-identical and recognised too; a
 deterministic filter on the member relation's own columns
 (``WHERE t.kind = 'hospital'``) is allowed -- it restricts which
@@ -565,7 +565,7 @@ deviation from the join-and-group-by-one-column shape simply skips the
 planting (the generic evaluation is always available).
 
 *K-terminal conjunctions* close the family: a self-join of the CTE
-with one constant node binding per reference --
+with one constant node binding per reference
 
 .. code-block:: postgresql
 
@@ -573,7 +573,7 @@ with one constant node binding per reference --
         FROM reach r1, reach r2, reach r3
         WHERE r1.node = 5 AND r2.node = 6 AND r3.node = 9;
 
--- asks "are these vertices *all* reachable", and its row provenance
+asks "are these vertices *all* reachable", and its row provenance
 is the product of the correlated per-vertex tokens.  The route
 compiles the certified all-members-reachable circuit (a richer
 congruence: each forgotten terminal pends on the boundary vertices
@@ -586,13 +586,15 @@ covering subgraph, the **directed Steiner cost**, shared edges paid
 once where the raw product would pay them once per terminal.
 
 The emitted circuits are *deterministic and decomposable by
-construction* (d-DNNFs), and each ``plus`` / ``times`` gate carries a
+construction* (**d-Ds** -- deterministic and decomposable, but not in
+negation normal form, so not d-DNNFs), and each ``plus`` / ``times``
+gate carries a
 persisted **certificate** of that property (readable with
 :sqlfunc:`get_infos`).  Downstream, the certificate is what makes the
 tokens cheap: :sqlfunc:`probability_evaluate`'s cost-based chooser
 settles on the linear exact ``independent`` method (which trusts
 certified gates the way it trusts read-once structure), and the
-d-DNNF artefact surface – ``interpret-as-dd`` compilation,
+d-D artefact surface – ``interpret-as-dd`` compilation,
 :sqlfunc:`ddnnf_stats`, :sqlfunc:`shapley` and :sqlfunc:`banzhaf` –
 works on them without external compilers.  Shapley values of the edge
 tuples give a principled *edge criticality* analysis of the network:
@@ -642,14 +644,6 @@ CTE deviates from the recognised shape – the query silently falls back
 to the generic recursive-fixpoint evaluation, preserving its behaviour
 exactly; set ``provsql.verbose_level`` to at least 10 to get a notice
 when the fallback fires, or 20 to confirm the compiled route.
-
-For workloads that already have the graph in columnar form, the
-internal entry points :sqlfunc:`reachability_evaluate` (the
-probability of one target) and :sqlfunc:`reachability_compile_stats`
-(the probability plus the structural statistics substantiating the
-linear-size guarantee: data treewidth, decomposition size, maximal
-state count, d-DNNF size) take parallel arrays of sources,
-destinations, provenance tokens and probabilities directly.
 
 On a 2×n ladder network (treewidth 2), the integrated route answers
 exactly over 1,500 probabilistic edges in under 200 ms end to end,

@@ -144,7 +144,12 @@
     circuits rather than as (potentially exponential) polynomials or sets. Establishes
     circuit-based provenance as a practical representation for recursive queries, with
     efficient evaluation algorithms. ProvSQL's circuit-based provenance representation
-    for all gate types is directly inspired by this work.},
+    for all gate types is directly inspired by this work, and it is the basis of
+    ProvSQL's <strong>absorptive provenance scheme</strong>: under
+    <code>provsql.provenance = 'absorptive'</code> a recursive query over cyclic
+    data stops at the absorptive value fixpoint of this circuit semantics, where
+    longer (cycle-revisiting) derivations are absorbed, instead of failing to
+    converge.},
 }
 
 @inproceedings{DBLP:conf/sigmod/BourhisDM20,
@@ -625,21 +630,46 @@
   publisher    = {Springer},
   year         = {2015},
   doi          = {10.1007/978-3-662-47666-6_5},
-  keyword      = {provsql-foundation},
+  keyword      = {provsql-paper},
   annote       = {The provenance refinement of Courcelle's theorem: for a fixed
     MSO query over an instance of bounded treewidth, a provenance circuit of
     treewidth independent of the instance size can be built in linear time
-    along a tree decomposition of the data. ProvSQL's
-    <code>reachability_probability</code> implements this construction for
-    two-terminal network reliability: the s-t reachability query is compiled
-    along a tree decomposition of the edge relation's graph into a d-DNNF of
-    linear size, giving exact linear-time evaluation of a \#P-hard problem on
-    bounded-treewidth probabilistic graphs.},
+    along a tree decomposition of the data. ProvSQL's recursive-reachability
+    route implements this construction for two-terminal network reliability:
+    the s-t reachability query is compiled along a tree decomposition of the
+    edge relation's graph into a d-D (a deterministic, decomposable circuit,
+    not in negation normal form) of linear size, giving exact linear-time
+    evaluation of a \#P-hard problem on bounded-treewidth probabilistic
+    graphs.},
 }
 
 % ---------------------------------------------------------------------------
 % Papers about ProvSQL
 % ---------------------------------------------------------------------------
+
+@inproceedings{DBLP:conf/icdt/ManiuSJ19,
+  author       = {Silviu Maniu and
+                  Pierre Senellart and
+                  Suraj Jog},
+  title        = {An Experimental Study of the Treewidth of Real-World Graph Data},
+  booktitle    = {22nd International Conference on Database Theory, {ICDT} 2019,
+                  March 26-28, 2019, Lisbon, Portugal},
+  series       = {LIPIcs},
+  volume       = {127},
+  pages        = {12:1--12:18},
+  publisher    = {Schloss Dagstuhl - Leibniz-Zentrum f{\"{u}}r Informatik},
+  year         = {2019},
+  doi          = {10.4230/LIPIcs.ICDT.2019.12},
+  url          = {https://pierre.senellart.com/publications/maniu2019experimental.pdf},
+  keyword      = {provsql-paper},
+  annote       = {An experimental study of treewidth lower and upper bounds on
+    real-world graph data. ProvSQL follows its findings in choosing the
+    treewidth heuristics of its bounded-treewidth machinery: the degeneracy
+    lower bound (cheap, to abort a hopeless decomposition early) and the
+    min-fill upper bound (the elimination ordering that builds the tree
+    decomposition the knowledge compiler and the recursive-reachability route
+    run along).},
+}
 
 @article{DBLP:journals/sigmod/Senellart17,
   author       = {Pierre Senellart},

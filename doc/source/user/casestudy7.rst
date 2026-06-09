@@ -566,9 +566,10 @@ independently -- which is :math:`\#P`-hard in general. Yet ProvSQL does not
 reach for a general compiler here. It recognises the recursive-reachability
 shape and, following the provenance refinement of Courcelle's theorem
 :cite:`DBLP:conf/icalp/AmarilliBS15`, **compiles along a tree decomposition
-of the collaboration graph itself** into a certified d-DNNF -- one per
-reachable vertex, of total size linear in the number of edges when the graph
-has bounded treewidth (see :ref:`network-reliability-btw`). The materialised
+of the collaboration graph itself** into a certified **d-D** (a
+deterministic, decomposable circuit -- not in negation normal form, so not a
+d-DNNF) -- one per reachable vertex, of total size linear in the number of
+edges when the graph has bounded treewidth (see :ref:`network-reliability-btw`). The materialised
 tokens carry the ``'absorptive'`` assumption marker.
 
 Because that compiled circuit is already decomposable, :guilabel:`Marginal

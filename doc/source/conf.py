@@ -135,8 +135,6 @@ _SQL_FUNC_MAP = {
     # Two-terminal network reliability on bounded-treewidth data
     # (columnar internals; the user-facing route is WITH RECURSIVE under
     # provsql.boolean_provenance).
-    'reachability_compile_stats': '/doxygen-sql/html/group__probability.html#gae03be64454ee78941a767be76da38953',
-    'reachability_evaluate':    '/doxygen-sql/html/group__probability.html#gab5aea34f7e00343ebe89cbeb06f37424',
     'provenance_evaluate':      '/doxygen-sql/html/group__semiring__evaluation.html#ga0a30e01db8afbc4c645e2a2b4924d676',
     'aggregation_evaluate':     '/doxygen-sql/html/group__semiring__evaluation.html#ga4d09bcd8d51cce333777694da8e593ba',
     'choose':                   '/doxygen-sql/html/group__choose__aggregate.html#ga020d50a4e5ed39e5d037dd5e313f8266',

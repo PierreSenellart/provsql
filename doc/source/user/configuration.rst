@@ -52,10 +52,11 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
           resulting tokens carry the ``'absorptive'`` assumption
           marker, and non-absorptive evaluations (counting,
           why-provenance -- genuinely infinite on cyclic data) refuse
-          them.  After Deutch, Milo, Roy & Tannen (ICDT 2014).
+          them, following :cite:`DBLP:conf/icdt/DeutchMRT14`.
         * **recursive reachability on bounded-treewidth data**
           compiles along a tree decomposition of the data graph into
-          certified d-DNNFs (see :doc:`probabilities`), exact for
+          certified d-Ds (deterministic and decomposable, but not in
+          negation normal form; see :doc:`probabilities`), exact for
           probability and for every absorptive semiring -- e.g.
           min-cost reachability through nonnegative min-plus (see
           :doc:`semirings`); the materialised tokens carry the

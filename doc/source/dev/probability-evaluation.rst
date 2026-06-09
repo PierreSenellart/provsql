@@ -241,7 +241,12 @@ worst-case cost is :math:`O(2^{w+1} \cdot |\mathit{circuit}|)`,
 which is why ProvSQL caps the treewidth at
 :cfunc:`TreeDecomposition::MAX_TREEWIDTH` (currently 10) and
 falls back to ``compilation`` with ``d4`` when that bound is
-exceeded.
+exceeded.  The two treewidth heuristics ProvSQL relies on -- the
+cheap *degeneracy* lower bound (used for the cost estimate that
+drives the chooser, see below) and the *min-fill* upper bound (the
+elimination ordering that builds the decomposition here) -- are
+chosen following the experimental study of real-world graph
+treewidth of :cite:`DBLP:conf/icdt/ManiuSJ19`.
 
 Both the min-fill elimination loop in the
 :cfunc:`TreeDecomposition` constructor and the bottom-up d-DNNF
