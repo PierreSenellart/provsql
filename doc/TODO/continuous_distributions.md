@@ -928,9 +928,12 @@ architectural risk:
 4. **Empirical track.** Samples gate (§C.2) and CDF gate (§C.3), then
    snapshot (§C.4). Each lands as a `Distribution` subclass under the
    §F.1 hierarchy, reusing the moment dispatchers already in place.
-5. **First architectural step: conditioning as a gate (§D.1).** The
-   most leverage per architectural unit; collapses the existing
-   truncation codepath into a general mechanism; unlocks §E.1.
+5. **First architectural step: conditioning as a gate (§D.1).**
+   *Shipped* (ahead of 1–4, on the existing four families): the
+   continuous carrier `rv | C` / `agg_token | C` landed with the rest
+   of the conditioning surface – see [`conditioning.md`](conditioning.md).
+   It collapses the truncation codepath into a general mechanism; §E.1
+   (Shapley over RV payoffs) is now unlocked but still open.
 6. **Second architectural step: correlation (§D.2 + §A.5).** The MVN
    constructor lands as a Gaussian-copula special case; copulas land
    simultaneously. Largest expressivity gain in the entire roadmap.

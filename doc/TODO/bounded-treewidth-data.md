@@ -73,7 +73,12 @@ manual. The items below are what remains.
 The BID route marks a block's `plus(mulins)` *deterministic* and the
 certified-island evaluator trusts the mark (sums the alternatives, registers the
 block key once, reads the none branch as `monus(one, plus(mulins))` = `1 - Σp`).
-That trust is unproven. The to-do is a Lean statement backing it (a spec the C++
+That trust is unproven. (The read-once `independent` evaluator, by contrast,
+*verifies* a block directly -- its OR case groups `MULIN` children by block key
+and sums within a block -- so the obligation is specifically about
+`evaluateCertifiedIsland`, which plain-sums marked ORs *without* that check, and
+about the constructor's internal *state* ORs whose determinism is global, not
+locally checkable.) The to-do is a Lean statement backing it (a spec the C++
 must meet, not a verification of the C++ itself), in the **probability / WMC**
 semantics only -- the absorptive-semiring BID path is a separate question.
 

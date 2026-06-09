@@ -14,25 +14,25 @@ additive** – not algorithm picks; the chooser returns the cheapest *admissible
 method.  Every method declares `guaranteeKind` / `isDeterministic` / `applicable`
 / `estimatedCost`, so new work below must fit that frame.
 
-## 1. d-tree: remaining pieces
+## 1. d-tree: closed
 
 The anytime engine handles arbitrary Boolean circuits (exact + certified bounds)
-under a per-method subproblem budget.  Still open:
+under a per-method subproblem budget.  The BID / multivalued gap is fixed (the
+`ProbabilityMethod::handlesMultivalued()` central rewrite).  The two remaining
+polish ideas were evaluated and **dropped** -- recorded here so they are not
+re-attempted:
 
-- **Multivalued / BID circuits.** The general recursion throws on a
-  `gate_mulinput` (the chooser then falls back), so BID circuits are not covered;
-  extend `dtreeBoundsCircuit` to multivalued blocks.
-- **Non-DNF exact auto-selection.** A surviving non-DNF circuit's *exact* d-tree
-  cost is currently `∞` in the chooser, so the general recursion is reached only
-  by name or on the approximate / `δ=0` paths; tree-decomposition / d4 /
-  possible-worlds stay preferred for non-DNF exact.  Now that the subproblem
-  budget guards a blow-up, the general recursion could join the exact auto-chain
-  with a budgeted optimistic cost.
-- **Memoise the approximate path.** Only the *exact* recursion writes the memo
-  (an early-stopped interval is width-dependent), so on a high-sharing circuit
-  (a long cycle) approximate evaluation is *slower* than exact and the budget
-  bails it (e.g. `dtree_bench`'s `big_rare`).  Memoising the exact sub-results
-  encountered during an approximate recursion would remove the blow-up.
+- **Non-DNF exact auto-selection.**  To join the exact auto-chain the general
+  recursion needs a cost estimate, but the d-tree's cost has no usable proxy
+  (the code's own comment: "the treewidth proxy is NOT used -- it mispredicts
+  this engine").  Leaving it by-name-only for exact is the honest choice.
+- **Memoise the approximate path** (cache exact sub-results during an
+  approximate recursion).  *Tried.*  It speeds d-tree itself ~20-30%, but on
+  `big_rare` it makes the auto `relative` path **11x slower** (681 ms -> 7.9 s):
+  by letting d-tree converge within its step budget it suppresses the beneficial
+  escalation to `compilation:d4`, and keeping that escalation only where d4
+  actually wins requires the same (unsolvable) cost prediction as the item
+  above.  Net regression; reverted.
 
 ## 2. The SUM-safe rounding FPTRAS (`AggFptrasMethod`)
 
@@ -113,21 +113,6 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   a pivot identity that avoids explicit factorisation). Remaining: genuinely
   coupled values that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor;
   may be `#P`-hard, self-gates back to enumeration today).
-- **BID disjoint-block `⊥`** – the circuit-visible case is now exact for *every*
-  aggregate: a `repair_key` block surfaces as `gate_mulinput` contributors
-  sharing a block-key child, so `runAggMarginalEvaluator` handles each block as
-  a *categorical* (mutually exclusive, null arm Σp<1) independent of the TID
-  part – `COUNT` / `SUM` / `AVG` convolve its count / weighted-sum distribution,
-  `MIN` / `MAX` fold a per-block `1-Σ_{pred}p` factor into each `pAllAbsent`
-  (`src/AggMarginalEvaluator.cpp`, pinned by `test/sql/having_bid.sql`). The one
-  residual is the genuinely **certificate-only** case – a *declared key on a
-  plain TID table*, where mutual exclusion lives in `block_key` metadata only
-  (no `mulinput` in the circuit). That needs a `CERT_SAFE_AGG_PLAN` blob baked
-  onto the `gate_agg` at the HAVING-lift site (`having_Expr_to_provenance_cmp`
-  in `src/provsql.c`, via `src/safe_query_cert.{c,h}`), carried through
-  `CircuitFromMMap` – consuming, at probability time, the
-  `find_hierarchical_root_atoms` block structure that the rewriter already
-  computes but the HAVING-lift currently discards.
 - **UNION/EXCEPT over a join that re-uses a base tuple** – `(R⋈S) UNION (R⋈T)` →
   `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. The *independent* case (each
   contributor's footprint private – the usual one) is now exact:
@@ -140,33 +125,6 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
 ## 4. Method-catalog follow-ups
 
-- **Creator-marked deterministic ORs for HAVING enumerations: done.**
-  The possible-worlds DNF that `provsql_having` builds (at
-  Boolean-circuit construction time, not in the store) is a d-DNNF by
-  construction when the contributors are independent base literals:
-  complete world terms partition the worlds, and an AND over distinct
-  literals is decomposable.  The `BoolExpr` semiring now overrides the
-  new `Semiring` certification hooks (`certifying` /
-  `independent_literal` / `certified_world_term` /
-  `certified_exclusive_plus`) to build the enumeration as certified
-  gates -- the missing-side `monus(one, plus(...))` De Morgan-expanded
-  into per-literal NOTs so the whole enumeration is one certified
-  island and the contributor sharing across world terms is licensed.
-  Certification requires the *complete* enumeration, so the certifying
-  path asks `enumerate_valid_worlds` for it (no upset shortcut, no
-  monotone MIN/MAX skips), capped at 16 contributors; the residual
-  monotone cases over independent contributors were already closed-form
-  (Poisson-binomial / min-max / weighted-sum DP) before reaching the
-  enumeration, so nothing is lost.  Net new exact-linear coverage:
-  `AVG op const`, arithmetic over several aggregates
-  (`sum(a) > 3*count(*)`), `choose() = 'text'` -- pinned by
-  `test/sql/having_certified.sql` against possible-worlds.  Correlated
-  contributors (join products sharing a base tuple) are not certified;
-  `independent` keeps refusing them and the samplers / exhaustive
-  methods remain their route.  Still open from the original note: the
-  cheap *verified* certificate for ORs whose children are `mulinput`
-  literals of one key variable (unions of `repair_key` alternatives),
-  checkable in one pass at evaluation time.
 - **Lazy Boolean build.** RV / HAVING circuits with no Boolean view fall to a
   small top-level estimator outside the catalog (the surviving-aggregate sampler
   routing of item 2 is a partial step). A true lazy Boolean build would fold even

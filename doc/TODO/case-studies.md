@@ -3,11 +3,12 @@
 The feature-coverage matrix in the rendered user guide
 (`doc/source/user/casestudies.rst`, section *Feature coverage matrix*)
 lists user-guide features that are not exercised by the tutorial or any
-of the seven existing case studies. This file plans how to close that
+of the eight existing case studies. This file plans how to close that
 gap, by extending CS1-CS5 where the existing scenario fits. CS6 (City
 Air-Quality Sensor Network) already covers the continuous-distribution
-surface end-to-end, and CS7 (Peer-Review Assignment and Knowledge
-Compilation) the knowledge-compilation and safe-query surface.
+surface end-to-end, CS7 (Peer-Review Assignment and Knowledge
+Compilation) the knowledge-compilation and safe-query surface, and CS8
+(ProvSQL as a Probability Calculator) the conditioning surface.
 
 ## Out of scope
 
@@ -74,9 +75,8 @@ case-study real estate:
 
 ### Future case study (UDFs / aggregate joins / `choose`)
 
-A new case study to be written. (The CS7 slot is now taken by
-*Peer-Review Assignment and Knowledge Compilation*, so this would be
-CS8.) Targets:
+A new case study to be written. (The CS8 slot is now taken by *ProvSQL
+as a Probability Calculator*, so this would be CS9.) Targets:
 
 - **UDFs**: provenance propagation through user-defined functions
   (blocked: not yet supported).

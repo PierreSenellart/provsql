@@ -16,6 +16,11 @@ Each plan document follows a consistent layout:
 
 ## Contents
 
+- [`priorization.md`](priorization.md) : a cross-file prioritisation of
+  every open point, each with a concrete example, its **current
+  behaviour tested on the installed build** (verbatim output), and an
+  after-implementation sketch. Start here for the ship-order across all
+  the plans below; the per-plan files keep the full design rationale.
 - [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
   feasibility study for exploiting bounded treewidth of the input data
   (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017).
@@ -31,12 +36,16 @@ Each plan document follows a consistent layout:
   data-decomposition + tree-automaton pipeline (now cheaper: emitted
   gates only need the d-DNNF certificate), and a treewidth-aware
   general m-semiring evaluator.
-- [`conditioning.md`](conditioning.md) : plan for a conditioning
-  primitive, unifying discrete tuple-correlation (MarkoViews, Jha &
-  Suciu PVLDB 2012) and continuous random variables as one operation at
-  two carriers -- the `gate_conditioned` design, conditional `P(Q|C)`, a
-  conditioned distribution that flows onward, arbitrary denial
-  constraints, Shapley over evidence, and soft/weighted conditioning.
+- [`conditioning.md`](conditioning.md) : the conditioning primitive,
+  unifying discrete tuple-correlation (MarkoViews, Jha & Suciu PVLDB
+  2012) and continuous random variables as one operation at two carriers.
+  Landed end to end: inert scope-local `provenance()`, the `|` / `cond` /
+  `given` surface and `gate_conditioned` gate (terminal for `uuid`,
+  composable for `rv` / `agg_token`), `probability_evaluate(A|B)`, and
+  the "probability calculator" case study 8. Open: arbitrary denial
+  constraints (general `¬W`), a re-based materialised discrete posterior
+  for re-composition, Shapley over evidence, and soft/weighted
+  conditioning (explicitly not a priority).
 - [`case-studies.md`](case-studies.md) : plan for closing the
   feature-coverage gaps in the user tutorial and the existing case
   studies by extending CS1-CS5, plus a future UDF / aggregate-join
@@ -60,10 +69,9 @@ Each plan document follows a consistent layout:
   bordering the `provsql.boolean_provenance` work -- further Boolean-only
   optimisations (independent-subtree detection, Möbius / Monet…), the
   inversion-free `UCQ(OBDD)` extensions (UNION in a view, FD-aware orders),
-  the planner-side `CERT_SAFE_AGG_PLAN` certificate for BID-disjoint
-  HAVING, discrete `random_variable` extensions, and the
-  hierarchical-detector follow-ups (FD-induced nested rewrite, soft keys,
-  view-descent FD chases, data-safe plans).
+  discrete `random_variable` extensions, and the hierarchical-detector
+  follow-ups (FD-induced nested rewrite, soft keys, view-descent FD
+  chases, data-safe plans).
 - [`scalar-subqueries.md`](scalar-subqueries.md) : the remaining
   unsupported scalar-/correlated-subquery forms -- scalar sublinks nested
   in arithmetic (today a passthrough-with-warning; the decorrelation

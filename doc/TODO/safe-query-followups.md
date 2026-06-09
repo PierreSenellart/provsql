@@ -8,8 +8,7 @@ already landed is described in the *Safe-Query Rewriter* section of
 This file is organised by **priority**: Tier 2 (reusable prerequisites
 and certificates) and Tier 3 (workload-gated). The HAVING-clause
 optimisation layers (Tier 1) and the base FD-aware rewriter extensions
-have all landed; what remains there is a single planner-side certificate,
-folded into Tier 2 below.
+have all landed.
 
 ## Tier 2 – reusable prerequisites and certificates
 
@@ -21,10 +20,20 @@ folded into Tier 2 below.
   UCQ(OBDD) Path* section of
   :cfile:`doc/source/dev/probability-evaluation.rst`.  Three extensions to
   that class remain open, in increasing difficulty:
-  - **UNION inside a view** (the inlined subquery is a `setOperations`
-    UCQ): flatten per branch with the order markers fanned across branches.
-    The class is defined for UCQs, so this is a flattening extension, not a
-    core change; it declines gracefully today.  *Sensible next slice.*
+  - **UNION nested in an inlined subquery / view** (the inlined body is a
+    `setOperations` UCQ): flatten per branch with the order markers fanned
+    across branches.  This is not really a *view* quirk -- a **top-level**
+    `UNION` is already handled, because the planner's recursive
+    `process_query` splits it branch-by-branch and each branch reaches the
+    safe-query gate (`is_safe_query_candidate`, which bails on
+    `setOperations`) on its own and is certified independently.  The gap is
+    only the *nested* case: a `UNION` inlined from a view / derived table
+    lands as a `setOperations` node *inside one* safe-query candidate's
+    scope, with no re-entry to split it, so the single global Prop. 4.5
+    order cannot span the branches.  The fix gives the nested case the
+    per-branch treatment the top-level case gets for free; the class is
+    defined for UCQs, so this is a flattening extension, not a core change,
+    and it declines gracefully today.  *Sensible next slice.*
   - **Functional dependencies do not fit this builder.**  The canonical
     FD-tractable queries (the H-query `R(x),S(x,y),T(y)` under a PK on `S`,
     the two-PK triangle) have no single root class, which the detector and
@@ -39,19 +48,6 @@ folded into Tier 2 below.
     with different orders on different branches.  Choosing the decision
     variable per branch would capture strictly more, and subsume the FD
     case above.  *Research extension, not a surface one.*
-
-- **Planner-side safe-aggregate-plan certificate (`CERT_SAFE_AGG_PLAN`).**
-  The probability-side HAVING engine certifies the independence of
-  `gate_agg` children *circuit-only*: `runAggMarginalEvaluator`
-  (`src/AggMarginalEvaluator.{h,cpp}`) recurses through any hierarchical
-  (laminar) join self-gating on whether each multi-member block has a leaf
-  common to all its members.  What remains is the planner
-  certificate for shapes the circuit *cannot* self-certify -- notably BID
-  disjoint-block (`⊥`) structure, where the mutual exclusivity is not
-  visible from leaf sharing alone.  The certificate would be stamped on the
-  per-row provenance root (the same carrier as `CERT_INVERSION_FREE` in
-  `src/safe_query_cert.{c,h}`) and read back by the evaluator; the enum in
-  `safe_query_cert.h` has no `CERT_SAFE_AGG_PLAN` value yet.
 
 ## Tier 3 – workload-gated
 
