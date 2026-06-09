@@ -349,6 +349,7 @@
   year         = {2011},
   doi          = {10.1145/1938551.1938574},
   pdf          = {https://openproceedings.org/2011/conf/icdt/JhaS11.pdf},
+  keyword      = {provsql-foundation},
   annote       = {Maps the lineage of a UCQ to four compilation targets of strictly
     increasing power -- read-once, OBDD, FBDD, d-DNNF -- and shows that over UCQ
     (unlike self-join-free CQ, where Olteanu-Huang collapse them all to read-once)
@@ -359,6 +360,30 @@
     Relevant to ProvSQL because it explains why a knowledge compiler working on the
     materialized circuit alone cannot in general recover the tractability a
     query-level analysis exposes.},
+}
+
+@article{DBLP:journals/pvldb/JhaS12,
+  author       = {Abhay Kumar Jha and
+                  Dan Suciu},
+  title        = {Probabilistic Databases with MarkoViews},
+  journal      = {Proc. {VLDB} Endow.},
+  volume       = {5},
+  number       = {11},
+  pages        = {1160--1171},
+  year         = {2012},
+  doi          = {10.14778/2350229.2350236},
+  pdf          = {https://vldb.org/pvldb/vol5/p1160_abhayjha_vldb2012.pdf},
+  keyword      = {provsql-foundation},
+  annote       = {Represents tuple correlations as MarkoViews -- UCQ views that
+    attach a weight to each output tuple (a weight above 1 makes the contributing
+    tuples positively correlated, below 1 negatively, 1 independent, and 0 a hard
+    constraint) -- and reduces query evaluation on such a database to ordinary
+    tuple-independent evaluation plus a single conditioning step (their Theorem 1):
+    the answer probability is the original
+    query conditioned on the event that no constraint is violated. This is the
+    discrete precedent for ProvSQL's <a href="/docs/user/conditioning.html">conditioning
+    operator</a>: a denial constraint becomes a violation query W, and conditioning a
+    query on its non-occurrence (Q | !W) is exactly the MarkoViews reduction.},
 }
 
 @article{DBLP:journals/jal/KarpLM89,
@@ -372,16 +397,6 @@
   pages        = {429--448},
   year         = {1989},
   doi          = {10.1016/0196-6774(89)90038-2},
-  annote       = {The fully-polynomial randomised approximation scheme (FPRAS) for
-    {\#}DNF -- estimating the probability that a positive DNF formula holds under
-    independent inputs -- with the tight O(m/ε² log 1/δ) sample-complexity
-    analysis (m clauses). Each round draws a clause with probability proportional to
-    its own probability, samples a satisfying assignment, and accepts only if the
-    clause is the first the assignment covers; the acceptance probability is
-    Pr[F]/S in [1/m, 1], so the sample count is independent of Pr[F]. ProvSQL's
-    <a href="/docs/user/probabilities.html#computation-methods">'karp-luby' probability method</a> applies it to DNF-shaped provenance circuits (the
-    lineage of a union of conjunctive queries over a tuple-independent database),
-    where it stays accurate on rare-event outputs that defeat naive Monte Carlo.},
 }
 
 @inproceedings{DBLP:conf/ecai/Darwiche04,

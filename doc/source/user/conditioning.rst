@@ -170,9 +170,11 @@ query is conditioned on its negation, ``Q | !W``:
 The constraint can be any query: a forbidden pattern expressed as a query
 becomes a denial constraint by conditioning on the negation of "the pattern
 occurs", so ``!W`` is the event "no violation" and ``Q | !W`` restricts ``Q``
-to exactly the worlds the constraint admits. ``!`` is also useful on its own, wherever the
-complement of an event is wanted (``probability_evaluate(!a)``,
-``a AND NOT b`` as ``times(a, !b)``).
+to exactly the worlds the constraint admits. This is the MarkoViews
+construction :cite:`DBLP:journals/pvldb/JhaS12` -- conditioning a probabilistic
+database on the event that no constraint is violated. ``!`` is also useful on
+its own, wherever the complement of an event is wanted
+(``probability_evaluate(!a)``, ``a AND NOT b`` as ``times(a, !b)``).
 
 The three carriers
 ------------------
