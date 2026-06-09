@@ -825,6 +825,9 @@ public:
   std::string name() const override { return "independent"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
+  // Interprets a mulinput (BID) block natively -- summing the mutually-exclusive
+  // alternatives -- so it must see the raw circuit, not the Boolean rewrite.
+  bool handlesMultivalued() const override { return true; }
   // O(S): one memoised linear pass over the circuit.
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
     return kCostIndependent * static_cast<double>(ctx.circuit_size);
@@ -897,7 +900,6 @@ public:
   std::string name() const override { return "interpret-as-dd"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    ctx.ensureMultivaluedRewritten();
     dDNNF dd = ctx.c.interpretAsDD(ctx.gate);
     double r = dd.probabilityEvaluation();
     ctx.actual_method = "interpret-as-dd";
@@ -941,7 +943,6 @@ public:
            * pow2_clamped(ctx.tw_proxy_);
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    ctx.ensureMultivaluedRewritten();
     try {
       TreeDecomposition td(ctx.c);
       // Speculative execution: the (poly) min-fill build has now discovered the
@@ -993,7 +994,6 @@ public:
                     kCostCompilation * static_cast<double>(ctx.circuit_size));
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    ctx.ensureMultivaluedRewritten();
     // On a chooser path (exact / relative / additive) ctx.args carries the
     // path's TOLERANCE string (epsilon=...,delta=...), not a compiler name, so
     // auto-select the compiler.  Only a by-name 'compilation' call passes an
@@ -1030,7 +1030,6 @@ public:
     return ctx.n_inputs > 0 && ctx.n_inputs <= kPossibleWorldsSanityMax;
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
-    ctx.ensureMultivaluedRewritten();
     // Only flag ignored args for an EXPLICIT `possible-worlds` request; when the
     // chooser auto-picks it on a relative/additive path, the args carry the path's
     // (eps,delta) tolerance, which an exact method legitimately ignores.
@@ -1062,7 +1061,6 @@ public:
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     unsigned long samples = monte_carlo_samples(parse_method_args(ctx.args));
-    ctx.ensureMultivaluedRewritten();
     double r = ctx.c.monteCarlo(ctx.gate, static_cast<unsigned>(samples));
     ctx.actual_method = "monte-carlo";
     return r;
@@ -1221,8 +1219,10 @@ public:
     return {Feature::DnfShape};
   }
   bool applicable(const EvalContext &, const Tolerance &) const override {
-    // Applies to any Boolean circuit; a multivalued (BID) circuit makes the
-    // general recursion throw and the chooser drops to the next method.
+    // Applies to any Boolean circuit.  A multivalued (BID) circuit is handled
+    // too: handlesMultivalued() is false, so the dispatcher rewrites the blocks
+    // to independent Booleans before evaluate() and the general recursion never
+    // meets a mulinput (the throw in footprintOf is now only a defensive net).
     return true;
   }
   double estimatedCost(const EvalContext &ctx, const Tolerance &tol) const override {
@@ -1343,7 +1343,6 @@ public:
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     std::string opt = wmc_opt_from_args(parse_method_args(ctx.args), "weightmc");
     emit_guarantee("relative", eps_from_wmc_opt(opt), -1., 0, -1, "weightmc");
-    ctx.ensureMultivaluedRewritten();
     double r = ctx.c.wmcCount(ctx.gate, "weightmc", opt);
     ctx.actual_method = "weightmc";
     return r;
@@ -1379,7 +1378,6 @@ public:
     if(is_approx_wmc_tool(tool))
       emit_guarantee("relative", eps_from_wmc_opt(tool_args), -1., 0, -1,
                      tool.c_str());
-    ctx.ensureMultivaluedRewritten();
     double r = ctx.c.wmcCount(ctx.gate, tool, tool_args);
     // Report WHICH counter ran (e.g. "wmc:ganak"), mirroring "compilation:d4".
     ctx.actual_method = tool.empty() ? "wmc" : "wmc:" + tool;
@@ -1478,7 +1476,12 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
 
     if(best != nullptr && (!have_pending || best_cost <= cheapest_fc)) {
       // Run the cheapest method: nothing cheaper could be revealed by acquiring
-      // a feature first.
+      // a feature first.  A Boolean-only method (handlesMultivalued() == false)
+      // gets multivalued / BID blocks rewritten to independent Booleans first;
+      // this is the single, declarative enforcement point (idempotent, and a
+      // no-op on a circuit with no mulinput gates).
+      if(!best->handlesMultivalued())
+        ctx.ensureMultivaluedRewritten();
       try {
         // Calibration (provsql.verbose_level >= 50): emit the raw cost parameters
         // and elapsed ms so each kCost can be fit so that cost ~ ms.
@@ -2020,6 +2023,10 @@ static Datum probability_evaluate_internal
         if(m == nullptr)
           provsql_error("Wrong method '%s' for probability evaluation",
                         method.c_str());
+        // Same declarative rewrite point as chooseAndRun: a Boolean-only method
+        // named explicitly gets multivalued / BID blocks rewritten first.
+        if(!m->handlesMultivalued())
+          ctx.ensureMultivaluedRewritten();
         result = m->evaluate(ctx, provsql::Tolerance{});
       }
       actual_method = ctx.actual_method;

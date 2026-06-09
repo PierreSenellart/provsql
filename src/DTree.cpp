@@ -308,8 +308,11 @@ inline unsigned long gid(gate_t g)
 }
 
 /// Variable-input cone of @p g (inputs with probability in (0,1)).  Constant
-/// inputs (probability 0 / 1) carry no variable and are dropped.  Throws on a
-/// multivalued / undetermined gate so the caller falls back to another method.
+/// inputs (probability 0 / 1) carry no variable and are dropped.  A multivalued
+/// (BID) block is rewritten to independent Booleans by the dispatcher before
+/// this method runs (d-tree's handlesMultivalued() is false), so a MULIN gate
+/// should never reach here; the throw is a defensive net rather than the
+/// applicability signal it once was.
 /// unordered_map references survive rehash, so holding a child's reference while
 /// inserting the parent is safe.
 const std::set<gate_t> &footprintOf(GenContext &ctx, gate_t g)

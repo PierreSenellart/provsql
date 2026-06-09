@@ -127,6 +127,20 @@ public:
   virtual bool applicable(const EvalContext &, const Tolerance &) const
   { return true; }
 
+  /// True iff the method evaluates the *raw* circuit, including multivalued
+  /// (BID / @c gate_mulinput) gates, and must therefore NOT have them rewritten
+  /// to independent Booleans first.  The dispatcher rewrites multivalued gates
+  /// (@c EvalContext::ensureMultivaluedRewritten) before every method that
+  /// returns @c false, so a Boolean-only method needs no per-@c evaluate rewrite
+  /// of its own and a new one is BID-correct by default.  Only @c "independent"
+  /// overrides this: it interprets a @c mulinput block natively (summing the
+  /// mutually-exclusive alternatives) to keep the exact disjoint-OR structure
+  /// the rewrite would dissolve.  (Methods gated to TID-only circuits -- the
+  /// DNF samplers via @c Feature::DnfShape, @c inversion-free via its
+  /// certificate -- never see a @c mulinput, so the central rewrite is a no-op
+  /// for them and they keep the default.)
+  virtual bool handlesMultivalued() const { return false; }
+
   /// Run the method, returning the probability.  May mutate @p ctx (build the
   /// Boolean view lazily, trigger the multivalued rewrite, set the reported
   /// method name).

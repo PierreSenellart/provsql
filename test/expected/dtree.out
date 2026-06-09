@@ -28,3 +28,12 @@ t
 remove_provenance
 
 (1 row)
+repair_key
+
+(1 row)
+bid_single_eq_pw|bid_conj_eq_pw|bid_disj_eq_pw
+t|t|t
+(1 row)
+remove_provenance
+
+(1 row)

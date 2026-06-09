@@ -113,3 +113,44 @@ SELECT probability_evaluate(current_setting('dt.ent')::uuid,'d-tree') > 0 AS dtr
 SELECT remove_provenance('dt');
 DROP TABLE dt;
 RESET provsql.provenance;
+
+-- BID / multivalued (gate_mulinput) circuits.  repair_key builds mutually
+-- exclusive blocks; the general d-tree recursion once THREW on a mulinput gate.
+-- The dispatcher now rewrites multivalued blocks to independent Booleans before
+-- any method whose handlesMultivalued() is false (every method except
+-- 'independent'), so 'd-tree' evaluates BID circuits and agrees with the exact
+-- baseline instead of bailing.
+CREATE TABLE dtb(k int, v int);
+INSERT INTO dtb VALUES (1,10),(1,11),(2,20),(2,21),(2,22);
+SELECT repair_key('dtb','k');
+DO $$ BEGIN PERFORM set_prob(provenance(),
+  (CASE v WHEN 10 THEN 0.2 WHEN 11 THEN 0.3 WHEN 20 THEN 0.1
+          WHEN 21 THEN 0.4 ELSE 0.25 END)::double precision) FROM dtb; END $$;
+
+SET provsql.active = off;
+DO $$
+BEGIN
+  -- a bare mulinput alternative, a cross-block conjunction, and an intra-block
+  -- (mutually exclusive) disjunction
+  PERFORM set_config('dtb.single', (SELECT provsql FROM dtb WHERE v=11)::text, false);
+  PERFORM set_config('dtb.conj', provenance_times(
+     (SELECT provsql FROM dtb WHERE v=10),
+     (SELECT provsql FROM dtb WHERE v=21))::text, false);
+  PERFORM set_config('dtb.disj', provenance_plus(ARRAY[
+     (SELECT provsql FROM dtb WHERE v=20),
+     (SELECT provsql FROM dtb WHERE v=21)])::text, false);
+END $$;
+RESET provsql.active;
+
+SELECT abs(probability_evaluate(current_setting('dtb.single')::uuid,'d-tree')
+         - probability_evaluate(current_setting('dtb.single')::uuid,'possible-worlds'))
+         < 1e-9 AS bid_single_eq_pw,
+       abs(probability_evaluate(current_setting('dtb.conj')::uuid,'d-tree')
+         - probability_evaluate(current_setting('dtb.conj')::uuid,'possible-worlds'))
+         < 1e-9 AS bid_conj_eq_pw,
+       abs(probability_evaluate(current_setting('dtb.disj')::uuid,'d-tree')
+         - probability_evaluate(current_setting('dtb.disj')::uuid,'possible-worlds'))
+         < 1e-9 AS bid_disj_eq_pw;
+
+SELECT remove_provenance('dtb');
+DROP TABLE dtb;
