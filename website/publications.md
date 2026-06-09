@@ -17,11 +17,9 @@ and the semiring provenance theory that motivates its design.
 
 ## Foundational Works
 
-These papers establish the theoretical framework on which ProvSQL is built:
-why- and where-provenance, provenance semirings, aggregate provenance, m-semirings
-for non-monotone queries, the connection between provenance and probabilistic
-databases, circuit-based provenance representations, and algebraic provenance
-for update queries.
+These papers establish the theoretical framework on which ProvSQL is built,
+from provenance semirings and their extensions to the knowledge-compilation
+and probabilistic-database results its evaluation engine relies on.
 
 {% bibliography --query @*[keyword ~= provsql-foundation] %}
 

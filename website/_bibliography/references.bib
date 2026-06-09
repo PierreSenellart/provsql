@@ -23,7 +23,7 @@
   annote       = {The paper that introduced the concepts of why-provenance and where-provenance.
     Why-provenance tracks which source tuples contribute to a result; where-provenance
     tracks which specific attribute values (locations in the source) a result value
-    was copied from. ProvSQL implements where-provenance via project and eq gates that
+    was copied from. ProvSQL implements <a href="/docs/user/where-provenance.html">where-provenance</a> via project and eq gates that
     record the column-level origin of each output value.},
 }
 
@@ -43,7 +43,7 @@
     relations over commutative semirings and shows that the standard relational algebra
     operators correspond to semiring operations, unifying many existing provenance
     formalisms (why-provenance, lineage, trio, bag semantics) as instances of a single
-    algebraic framework. ProvSQL's core data model is a direct implementation of this
+    algebraic framework. ProvSQL’s <a href="/docs/user/semirings.html">core data model</a> is a direct implementation of this
     theory.},
 }
 
@@ -63,7 +63,7 @@
   annote       = {Extends semiring provenance to SQL aggregate queries (COUNT, SUM, AVG, etc.),
     which fall outside the positive relational algebra covered by Green et al. Introduces
     a semimodule structure over semirings to handle aggregation provenance. ProvSQL's
-    support for provenance of GROUP BY queries and aggregation gates is grounded in
+    support for <a href="/docs/user/aggregation.html">provenance of GROUP BY queries and aggregation gates</a> is grounded in
     this work.},
 }
 
@@ -81,7 +81,7 @@
   annote       = {Introduces m-semirings (semirings equipped with a monus operator ⊖) to extend
     the provenance semiring framework to the full relational algebra including set
     difference and negation. Defines the corresponding notion of K-relations for
-    m-semirings. ProvSQL's handling of EXCEPT queries and its monus gate type are
+    m-semirings. ProvSQL's handling of <a href="/docs/user/semirings.html">EXCEPT queries and its monus gate type</a> are
     direct implementations of this framework.},
 }
 
@@ -121,7 +121,7 @@
     tuple-independent databases: every union of conjunctive queries is either in PTIME
     (computable by a “safe plan” using extensional probability propagation) or
     #P-hard. The safe class includes hierarchical CQs, which admit a read-once
-    rewriting. ProvSQL's safe-query rewriter (the
+    rewriting. ProvSQL's <a href="/docs/user/probabilities.html#safe-query-rewriting-provenance-class-boolean">safe-query rewriter</a> (the
     provsql.boolean_provenance optimisation) implements the read-once rewriting for
     self-join-free hierarchical CQs and UCQs derived from this theory; circuits it
     emits are evaluated in linear time by the independent-probability method.},
@@ -145,7 +145,7 @@
     circuit-based provenance as a practical representation for recursive queries, with
     efficient evaluation algorithms. ProvSQL's circuit-based provenance representation
     for all gate types is directly inspired by this work, and it is the basis of
-    ProvSQL's <strong>absorptive provenance scheme</strong>: under
+    ProvSQL's <a href="/docs/user/configuration.html#provsql-provenance-class"><strong>absorptive provenance scheme</strong></a>: under
     <code>provsql.provenance = 'absorptive'</code> a recursive query over cyclic
     data stops at the absorptive value fixpoint of this circuit semantics, where
     longer (cycle-revisiting) derivations are absorbed, instead of failing to
@@ -168,7 +168,7 @@
   annote       = {Introduces an algebraic provenance framework for hyperplane update queries
     (INSERT, DELETE, UPDATE via linear constraints), defining a semiring that tracks
     provenance through data-modification operations in an equivalence-invariant manner.
-    This work provides the theoretical foundation for ProvSQL's update provenance
+    This work provides the theoretical foundation for ProvSQL's <a href="/docs/user/data-modification.html">update provenance</a>
     support.},
 }
 
@@ -255,6 +255,7 @@
   publisher    = {{IEEE} Computer Society},
   year         = {2013},
   doi          = {10.1109/ICDE.2013.6544869},
+  pdf          = {https://pierre.senellart.com/publications/souihli2013optimizing.pdf},
   keyword      = {provsql-foundation},
   annote       = {The ProApproX query processor: rather than committing to a single
     confidence-computation algorithm, it maintains a portfolio of exact and
@@ -262,7 +263,7 @@
     and a cost model that picks, per lineage formula and per requested
     (ε, δ) tolerance, the cheapest method expected to meet the bound. This
     portfolio + cost-model principle is the design behind ProvSQL's
-    probability-method catalog and its cost-based chooser: tolerance grants
+    <a href="/docs/user/probabilities.html#choosing-a-guarantee-not-a-method">probability-method catalog and its cost-based chooser</a>: tolerance grants
     (exact / relative / additive) nest, and the chooser returns the cheapest
     admissible member.},
 }
@@ -303,7 +304,7 @@
   annote       = {Textbook treatment of probabilistic databases. Chapter 4 covers the safe-plan
     framework and the FD-aware extensions (constant-selection FDs, primary-key FDs,
     deterministic-relation transparency, the FD-closure on the union-find) that ProvSQL's
-    safe-query rewriter implements. The textbook is the most accessible reference for
+    <a href="/docs/user/probabilities.html#safe-query-rewriting-provenance-class-boolean">safe-query rewriter</a> implements. The textbook is the most accessible reference for
     the framework's correctness arguments.},
 }
 
@@ -352,7 +353,7 @@
     increasing power -- read-once, OBDD, FBDD, d-DNNF -- and shows that over UCQ
     (unlike self-join-free CQ, where Olteanu-Huang collapse them all to read-once)
     they form a strict hierarchy. Gives exact syntactic characterisations of the
-    first two: UCQ(OBDD) is precisely the inversion-free queries (with a linear-size
+    first two: UCQ(OBDD) is precisely the <a href="/docs/user/probabilities.html#computation-methods">inversion-free queries</a> (with a linear-size
     OBDD construction using a query-derived variable order), and UCQ(RO) the
     inversion-free queries in which every relation symbol occurs at most once.
     Relevant to ProvSQL because it explains why a knowledge compiler working on the
@@ -630,12 +631,14 @@
   publisher    = {Springer},
   year         = {2015},
   doi          = {10.1007/978-3-662-47666-6_5},
+  pdf          = {https://pierre.senellart.com/publications/amarilli2015provenance.pdf},
+  slides       = {https://pierre.senellart.com/publications/amarilli2015provenance_slides.pdf},
   keyword      = {provsql-paper},
   annote       = {The provenance refinement of Courcelle's theorem: for a fixed
     MSO query over an instance of bounded treewidth, a provenance circuit of
     treewidth independent of the instance size can be built in linear time
-    along a tree decomposition of the data. ProvSQL's recursive-reachability
-    route implements this construction for two-terminal network reliability:
+    along a tree decomposition of the data. ProvSQL's <a href="/docs/user/probabilities.html#network-reliability-btw">recursive-reachability
+    route</a> implements this construction for two-terminal network reliability:
     the s-t reachability query is compiled along a tree decomposition of the
     edge relation's graph into a d-D (a deterministic, decomposable circuit,
     not in negation normal form) of linear size, giving exact linear-time
@@ -660,11 +663,11 @@
   publisher    = {Schloss Dagstuhl - Leibniz-Zentrum f{\"{u}}r Informatik},
   year         = {2019},
   doi          = {10.4230/LIPIcs.ICDT.2019.12},
-  url          = {https://pierre.senellart.com/publications/maniu2019experimental.pdf},
+  pdf          = {https://pierre.senellart.com/publications/maniu2019experimental.pdf},
   keyword      = {provsql-paper},
   annote       = {An experimental study of treewidth lower and upper bounds on
     real-world graph data. ProvSQL follows its findings in choosing the
-    treewidth heuristics of its bounded-treewidth machinery: the degeneracy
+    treewidth heuristics of its <a href="/docs/user/probabilities.html#network-reliability-btw">bounded-treewidth machinery</a>: the degeneracy
     lower bound (cheap, to abort a hopeless decomposition early) and the
     min-fill upper bound (the elimination ordering that builds the tree
     decomposition the knowledge compiler and the recursive-reachability route
@@ -729,7 +732,7 @@
   annote       = {The original demonstration paper introducing ProvSQL. Describes the core design:
     transparent query rewriting via a PostgreSQL planner hook, the provenance term
     algebra circuit as a uniform representation for semiring provenance,
-    where-provenance, and m-semiring provenance, and knowledge compilation to d-DNNF
+    <a href="/docs/user/where-provenance.html">where-provenance</a>, and m-semiring provenance, and <a href="/docs/user/knowledge-compilation.html">knowledge compilation to d-DNNF</a>
     for probabilistic query evaluation.},
 }
 
@@ -749,10 +752,10 @@
   pdf          = {https://pierre.senellart.com/publications/widiaatmaja2025demonstration.pdf},
   poster       = {https://pierre.senellart.com/publications/widiaatmaja2025demonstration_poster.pdf},
   keyword      = {provsql-paper},
-  annote       = {Extends ProvSQL to track provenance for data modification operations (INSERT,
+  annote       = {Extends ProvSQL to track provenance for <a href="/docs/user/data-modification.html">data modification operations</a> (INSERT,
     UPDATE, DELETE) by introducing monus gates for deleted tuples and times gates for
     inserted ones. Demonstrates the utility of update provenance by implementing
-    temporal database features -- time travel, history tracking, and undo -- using the
+    <a href="/docs/user/temporal.html">temporal database features</a> -- time travel, history tracking, and undo -- using the
     union-of-intervals m-semiring.},
 }
 
@@ -796,7 +799,7 @@
   annote       = {Establishes formal connections between knowledge compilation classes (OBDDs,
     d-DNNFs, SDDs…) and graph width parameters (treewidth, pathwidth, cliquewidth).
     Section 5.1 of this paper provides the algorithm directly implemented in ProvSQL's
-    internal tree-decomposition-based knowledge compiler (tdkc), which converts
+    internal <a href="/docs/user/knowledge-compilation.html#the-in-process-routes">tree-decomposition-based knowledge compiler</a> (tdkc), which converts
     a provenance circuit into a d-DNNF for tractable probability evaluation.},
 }
 
@@ -840,7 +843,7 @@
   annote       = {Demonstrates ProvSQL as the probabilistic database backend for an image
     retrieval application. Images are indexed by uncertain feature vectors; queries
     return ranked results with tuple-independent probabilities computed via ProvSQL's
-    knowledge compilation pipeline. Shows that ProvSQL's provenance-based probability
+    <a href="/docs/user/knowledge-compilation.html">knowledge compilation pipeline</a>. Shows that ProvSQL's provenance-based probability
     management integrates naturally with a real-world multimedia retrieval use case.},
 }
 
@@ -862,7 +865,7 @@
   poster       = {https://pierre.senellart.com/publications/karmakar2024expected_poster.pdf},
   slides       = {https://pierre.senellart.com/publications/karmakar2024expected_slides.pdf},
   keyword      = {provsql-paper},
-  annote       = {Studies the complexity of expected Shapley and Banzhaf values for Boolean
+  annote       = {Studies the complexity of <a href="/docs/user/shapley.html">expected Shapley and Banzhaf values</a> for Boolean
     functions in probabilistic database settings, showing that their computation is
     interreducible in polynomial time with probabilistic query evaluation. Designs a
     polynomial-time algorithm for Boolean functions represented as d-DNNF circuits.
