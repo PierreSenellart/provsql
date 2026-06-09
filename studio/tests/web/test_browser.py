@@ -189,7 +189,7 @@ def test_kernel_ddl_lands_in_public_schema(cs7_page: Page) -> None:
 def test_database_list_is_the_case_studies(cs7_page: Page) -> None:
     out = _api(cs7_page, "GET", "/api/databases")
     assert out["status"] == 200
-    assert out["json"] == ["tutorial", "cs1", "cs2", "cs4", "cs5", "cs6", "cs7"]
+    assert out["json"] == ["tutorial", "cs1", "cs2", "cs4", "cs5", "cs6", "cs7", "cs8"]
 
 
 def test_where_provenance_traces_cells(cs7_page: Page) -> None:
