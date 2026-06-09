@@ -60,7 +60,7 @@ feature_row:
     btn_class: "btn--primary"
   - title: "Probabilistic Databases"
     image_path: /assets/images/probabilities.png
-    alt: "ProvSQL Studio screenshot: a small provenance circuit with the evaluation strip's Probability-method dropdown open, listing the exact (independent, possible-worlds, tree-decomposition, compilation) and approximate (monte-carlo, weightmc) backends."
+    alt: "ProvSQL Studio probability-benchmark panel: every probability method timed on one circuit – the exact methods agree on 0.8818, the approximate ones land in their band, and unsuitable methods report a refusal or a statement timeout."
     excerpt: >
       Attach probabilities to input tuples and get the probability of every
       query answer. Ask for a *guarantee* – exact, or additive / relative
@@ -73,6 +73,32 @@ feature_row:
     url: "/docs/user/probabilities.html"
     btn_label: "Probability docs"
     btn_class: "btn--primary"
+  - title: "Knowledge Compilation"
+    image_path: /assets/images/knowledge-compilation.png
+    alt: "ProvSQL Studio Tseytin-CNF panel: the DIMACS CNF of a provenance circuit, each variable annotated with the source tuple it stands for, ready for an external compiler or model counter."
+    excerpt: >
+      Compile a Boolean provenance circuit to a **CNF** and on to a
+      **d-DNNF / d-D** for exact probability: Tseytin encoding with a
+      variable-to-source-tuple mapping, an in-process tree-decomposition
+      compiler, and a registry of external compilers and weighted model
+      counters (`d4`, `c2d`, `dsharp`, `miniC2D`, `ganak`…), with
+      `ddnnf_stats` to measure the result.
+    url: "/docs/user/knowledge-compilation.html"
+    btn_label: "Knowledge-compilation docs"
+    btn_class: "btn--primary"
+  - title: "Network Reliability &amp; Reachability"
+    image_path: /assets/images/reachability.png
+    alt: "A small probabilistic graph with a source s and target t and per-edge probabilities, annotated with the exact two-terminal reachability probability 0.76."
+    excerpt: >
+      Recursive `WITH RECURSIVE` reachability becomes **exact network
+      reliability**: ProvSQL compiles the query along a tree decomposition
+      of the *data graph* (after Amarilli–Bourhis–Senellart), evaluating a
+      `#P`-hard problem in time **linear in the number of edges** on
+      bounded-treewidth graphs – two-terminal and k-terminal reliability,
+      bounded-hop and min-cost paths, on cyclic data too.
+    url: "/docs/user/probabilities.html#network-reliability-btw"
+    btn_label: "Reachability docs"
+    btn_class: "btn--primary"
   - title: "Continuous Distributions"
     image_path: /assets/images/continuous.png
     alt: "ProvSQL Studio screenshot: a Normal random_variable gate N(40, 4) above its Distribution-profile panel, conditioned on the threshold event x &ge; 35 (truncated PDF with the analytical curve overlaid)."
@@ -84,6 +110,18 @@ feature_row:
       predicates inline.
     url: "/docs/user/continuous-distributions.html"
     btn_label: "Continuous-distribution docs"
+    btn_class: "btn--primary"
+  - title: "Conditioning"
+    image_path: /assets/images/conditioning.png
+    alt: "ProvSQL Studio circuit: a conditioned gate (the | operator) over a times-gate joint and two input gates, the edges labelled with the conditioning event."
+    excerpt: >
+      Ask *conditional* questions with one operator: `A | B` ("`A` given
+      `B`") gives `P(A | B)`, conditional expectations and variances, and
+      truncated distributions – computed exactly and correlation-aware
+      over the shared provenance circuit, uniformly across discrete
+      events, continuous random variables, and probabilistic aggregates.
+    url: "/docs/user/conditioning.html"
+    btn_label: "Conditioning docs"
     btn_class: "btn--primary"
   - title: "Shapley &amp; Banzhaf Values"
     image_path: /assets/images/shapley.png
@@ -108,7 +146,7 @@ feature_row:
     btn_class: "btn--primary"
   - title: "Temporal &amp; Update Provenance"
     image_path: /assets/images/temporal.png
-    alt: "ProvSQL temporal query: per-tuple validity intervals computed through the interval-union semiring."
+    alt: "ProvSQL Studio query result: French prime ministers with the validity time interval (a tstzmultirange) during which each held office, every row provenance-tracked (PROV-TID)."
     excerpt: >
       Provenance of data modifications: `INSERT` / `UPDATE` / `DELETE` are
       tracked as update gates, enabling audit and undo. Combined with the
@@ -120,7 +158,7 @@ feature_row:
     btn_class: "btn--primary"
   - title: "Lean Formalization"
     image_path: /assets/images/lean.png
-    alt: "Rendered Lean 4 documentation of the provenance formalization, showing a machine-checked correctness theorem."
+    alt: "Rendered Lean 4 documentation of the theorem rewriting_valid_full – the machine-checked correctness of ProvSQL's query rewriting – with its full type signature, docstring, and proof outline."
     excerpt: >
       The algebraic core – m-semirings, annotated databases,
       relational-algebra and aggregation semantics, query rewriting,
@@ -131,7 +169,7 @@ feature_row:
     btn_class: "btn--primary"
   - title: "ProvSQL Studio"
     image_path: /assets/images/studio/circuit-mode.png
-    alt: "ProvSQL Studio Circuit-mode screenshot showing a provenance DAG with a pinned input gate."
+    alt: "ProvSQL Studio Circuit mode: the provenance DAG behind a query result – a plus gate over four times gates over labelled input gates, with an inversion-free certificate badge on the root."
     excerpt: >
       A web UI for provenance inspection, in three modes: render the
       circuit DAG behind any result token and evaluate any compiled
@@ -144,7 +182,7 @@ feature_row:
     btn_class: "btn--primary"
   - title: "Notebooks"
     image_path: /assets/images/studio/notebook-mode.png
-    alt: "ProvSQL Studio Notebook-mode screenshot: the executed tutorial notebook with SQL and Markdown cells and the kernel chip in the toolbar."
+    alt: "ProvSQL Studio Notebook mode: the tutorial notebook with Markdown prose, a SQL cell, a rendered result table with a provenance column, and the outline and schema sidebars."
     excerpt: >
       Jupyter-style notebooks over a ProvSQL database: SQL, Markdown,
       circuit, and evaluation cells, per-cell provenance schemes, saved
@@ -155,7 +193,7 @@ feature_row:
     btn_class: "btn--primary"
   - title: "ProvSQL Playground"
     image_path: /assets/images/playground.png
-    alt: "ProvSQL Playground screenshot: Studio's notebook mode running entirely in the browser over PostgreSQL compiled to WebAssembly."
+    alt: "ProvSQL Playground landing page: ProvSQL Studio with PostgreSQL and the ProvSQL extension compiled to WebAssembly, running entirely in the browser with no install, no server, and no account."
     excerpt: >
       The whole system in your browser: PostgreSQL with ProvSQL compiled
       to WebAssembly, Studio running on top – no install, no server,
