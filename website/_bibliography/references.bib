@@ -238,8 +238,8 @@
     sub-formula, and a cheap per-leaf bound (the “independent” heuristic of
     Fig. 3) is tightened by recursing into the widest interval until the additive
     or relative target is met. Bounds are valid at every node (Prop. 5.1/5.4), so
-    the recursion can stop early with a certified interval. ProvSQL's “d-tree”
-    probability method implements this over
+    the recursion can stop early with a certified interval. ProvSQL's <a href="/docs/user/probabilities.html#computation-methods">“d-tree”
+    probability method</a> implements this over
     the materialised circuit's monotone-DNF lineage, memoised over the shared DAG
     so bounded-treewidth lineage stays polynomial; it serves the high-treewidth
     exact corner and the deterministic / low-δ approximate paths.},
@@ -379,7 +379,7 @@
     its own probability, samples a satisfying assignment, and accepts only if the
     clause is the first the assignment covers; the acceptance probability is
     Pr[F]/S in [1/m, 1], so the sample count is independent of Pr[F]. ProvSQL's
-    'karp-luby' probability method applies it to DNF-shaped provenance circuits (the
+    <a href="/docs/user/probabilities.html#computation-methods">'karp-luby' probability method</a> applies it to DNF-shaped provenance circuits (the
     lineage of a union of conjunctive queries over a tuple-independent database),
     where it stays accurate on rare-event outputs that defeat naive Monte Carlo.},
 }
