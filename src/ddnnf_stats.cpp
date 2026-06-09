@@ -72,6 +72,9 @@ Datum ddnnf_stats(PG_FUNCTION_ARGS)
     // treewidth probe below still runs on c, which is the point -- it shows the
     // structured d-DNNF stays small even where the treewidth is large.
     auto t0 = std::chrono::steady_clock::now();
+    // Keeps the external-compilation default (this surface reports d-DNNF
+    // compiler stats); the makeDD cost optimizer ('auto') is for shapley /
+    // banzhaf, not the KC-compiler inspection surfaces.
     dDNNF d = (compiler == "inversion-free")
       ? buildInversionFreeDDNNF(*token)
       : c.makeDDByName(root, compiler);

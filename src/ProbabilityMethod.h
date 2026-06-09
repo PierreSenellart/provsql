@@ -26,6 +26,15 @@
 #include <string>
 #include <vector>
 
+// d-DNNF artifact (defined in dDNNF.h). The d-D-producing methods can return it
+// via buildDD(), and the catalog's chooseAndBuildDD / makeDDAuto cost-select a
+// construction route and return the artifact for makeDD's callers (shapley,
+// compile_to_ddnnf, ddnnf_stats) -- the same selection the probability chooser
+// already makes among interpret-as-dd / tree-decomposition / compilation.
+class dDNNF;
+class BooleanCircuit;
+enum class gate_t : size_t;
+
 namespace provsql {
 
 /**
@@ -145,6 +154,18 @@ public:
   /// Boolean view lazily, trigger the multivalued rewrite, set the reported
   /// method name).
   virtual double evaluate(EvalContext &ctx, const Tolerance &tol) const = 0;
+
+  /// True iff this method constructs a d-DNNF artifact (and so can serve the
+  /// makeDD route-chooser via @c buildDD).  The three d-D constructors --
+  /// interpret-as-dd, tree-decomposition, compilation -- override this; the
+  /// scalar methods (independent, possible-worlds, the samplers, the d-tree)
+  /// do not.  This is the @c producesDD() portfolio @c chooseAndBuildDD ranks.
+  virtual bool producesDD() const { return false; }
+
+  /// Build the d-DNNF this method constructs (only when @c producesDD()).
+  /// @c evaluate() of a d-D method is exactly @c buildDD(ctx).probabilityEvaluation(),
+  /// so the cost/route logic stays single-sourced.  Sets @c ctx.actual_method.
+  virtual dDNNF buildDD(EvalContext &ctx) const;
 };
 
 /**
@@ -169,9 +190,26 @@ public:
   /// portfolio is exhausted).
   double chooseAndRun(EvalContext &ctx, const Tolerance &tol) const;
 
+  /// The d-DNNF analogue of @c chooseAndRun: cost-select among the
+  /// @c producesDD() portfolio (interpret-as-dd / tree-decomposition /
+  /// compilation) with the same uniform-cost search and speculative budget, and
+  /// return the chosen d-DNNF artifact (rather than a probability).  This is the
+  /// makeDD route optimizer -- the same selection the probability chooser makes
+  /// among these routes, surfaced for the d-D-artifact callers.
+  dDNNF chooseAndBuildDD(EvalContext &ctx, const Tolerance &tol) const;
+
 private:
   std::vector<std::unique_ptr<ProbabilityMethod>> methods_;
 };
+
+/// Cost-select a d-DNNF construction route for gate @p g of Boolean circuit
+/// @p c and build it -- the default makeDD route.  A thin entry point over
+/// @c MethodCatalog::chooseAndBuildDD that builds the @c EvalContext from the
+/// Boolean view alone (the d-D portfolio needs no generic-circuit state); the
+/// callers that have a method/compiler request route the empty / "default" /
+/// "auto" case here and keep @c BooleanCircuit::makeDD for the named routes and
+/// the "ladder" (old fixed interpret -> tree-decomposition -> compiler) escape.
+dDNNF makeDDAuto(BooleanCircuit &c, gate_t g);
 
 }  // namespace provsql
 

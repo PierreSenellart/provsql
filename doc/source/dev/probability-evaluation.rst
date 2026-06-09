@@ -385,6 +385,36 @@ single linear-time pass
 (:cfunc:`dDNNF::probabilityEvaluation`), because the d-DNNF
 structure guarantees decomposability and determinism.
 
+Cost-selecting the d-DNNF construction route (makeDD ``auto``)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Callers that need the d-DNNF *artifact* rather than a probability --
+``shapley`` / ``banzhaf`` / ``shapley_all_vars`` (and ProvSQL Studio's
+Contributions mode) -- historically asked :cfunc:`BooleanCircuit::makeDD`
+for a fixed interpret-as-dd → tree-decomposition → compiler ladder.  Those
+three routes are *already* first-class, cost-modelled members of the
+probability method catalog (``InterpretAsDdMethod`` /
+``TreeDecompositionMethod`` / ``CompilationMethod``), so rather than carry a
+second optimizer they share the catalog's chooser: each d-D method overrides
+``producesDD()`` and factors its build into ``buildDD()`` (with
+``evaluate()`` reduced to ``buildDD(ctx).probabilityEvaluation()``), and
+``MethodCatalog::chooseAndBuildDD`` runs the same uniform-cost search as
+``chooseAndRun`` over the ``producesDD()`` portfolio, returning the artifact.
+``provsql::makeDDAuto`` is the thin entry point (it builds an ``EvalContext``
+from the Boolean view alone, since these routes need no generic-circuit
+state).  ``interpret-as-dd`` -- the artifact twin of ``independent``, same
+O(*S*) computation -- carries the same O(*S*) cost so it is ranked first and
+falls through (by throwing, dropped by the chooser) on a non-read-once
+circuit, exactly as the ladder did.
+
+This is the **default** route for the d-D-artifact callers (the empty method,
+``default`` and ``auto`` all map to it); the old fixed ladder stays reachable
+as ``ladder``.  It is **not** wired into the KC-inspection surfaces
+(``compile_to_ddnnf`` / ``ddnnf_stats`` / ``compile_to_ddnnf_dot``): those
+serialise via ``toNNF`` / report compiler stats and require a compiler-style
+d-DNNF in negation normal form, which ``interpret-as-dd``'s internal NOTs
+violate, so they keep the external-compilation default.
+
 Approximation-guarantee NOTICE
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

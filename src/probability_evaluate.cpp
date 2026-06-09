@@ -726,12 +726,16 @@ static double pow2_clamped(size_t k)
 /// the multivalued rewrite trigger it (idempotently) through this context, so
 /// the rewrite fires exactly when the historical post-rewrite branch did.
 struct EvalContext {
-  GenericCircuit &gc;
+  // Generic-circuit state is needed only by the methods that consult the
+  // original circuit (inversion-free, stopping-rule); the d-D-construction
+  // portfolio (chooseAndBuildDD / makeDDAuto) works off the Boolean view alone,
+  // so these are pointers a Boolean-only caller can leave null.
+  GenericCircuit *gc;
   gate_t gc_root;
   pg_uuid_t token;
   BooleanCircuit &c;
   gate_t gate;
-  std::unordered_map<gate_t, gate_t> &gc_to_bc;
+  std::unordered_map<gate_t, gate_t> *gc_to_bc;
   bool inv_free_cert;
   const std::string &args;
   bool explicitly_named;            ///< invoked via byName (vs the default chain)
@@ -862,7 +866,7 @@ public:
       provsql_error("method 'inversion-free' requires an inversion-free "
                     "certificate on the provenance root");
     std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
-    if(!collect_inversion_free_keys(ctx.gc, ctx.gc_root, ctx.gc_to_bc, ctx.c,
+    if(!collect_inversion_free_keys(*ctx.gc, ctx.gc_root, *ctx.gc_to_bc, ctx.c,
                                     ctx.gate, keys)) {
       if(ctx.explicitly_named)
         provsql_error("method 'inversion-free': the provenance root carries a "
@@ -899,11 +903,23 @@ class InterpretAsDdMethod : public ProbabilityMethod {
 public:
   std::string name() const override { return "interpret-as-dd"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
-  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+  bool producesDD() const override { return true; }
+  // O(S), the same cost as 'independent' -- for a probability *number* this IS
+  // independentEvaluation (interpretAsDD treats OR as independent-OR, AND as a
+  // product, throws on a shared input), which is why it stays out of the
+  // probability default chain.  In the d-D portfolio it is the cheapest route
+  // and the artifact-producing twin of 'independent' (which yields no d-DNNF),
+  // so it must carry this cost to be ranked first by chooseAndBuildDD.
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return kCostIndependent * static_cast<double>(ctx.circuit_size);
+  }
+  dDNNF buildDD(EvalContext &ctx) const override {
     dDNNF dd = ctx.c.interpretAsDD(ctx.gate);
-    double r = dd.probabilityEvaluation();
     ctx.actual_method = "interpret-as-dd";
-    return r;
+    return dd;
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    return buildDD(ctx).probabilityEvaluation();
   }
 };
 
@@ -916,6 +932,7 @@ public:
   std::string name() const override { return "tree-decomposition"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
+  bool producesDD() const override { return true; }
   // Cost/applicability are gated by a cheap degeneracy lower bound on the
   // treewidth: if it already exceeds the build's MAX_TREEWIDTH, the bounded
   // min-fill build would certainly fail, so the method is ruled out (skipped
@@ -942,7 +959,7 @@ public:
     return kCostTreeDecomp * static_cast<double>(ctx.circuit_size)
            * pow2_clamped(ctx.tw_proxy_);
   }
-  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+  dDNNF buildDD(EvalContext &ctx) const override {
     try {
       TreeDecomposition td(ctx.c);
       // Speculative execution: the (poly) min-fill build has now discovered the
@@ -961,9 +978,8 @@ public:
             "tree-decomposition: discovered treewidth exceeds the budget");
       }
       dDNNF dd = dDNNFTreeDecompositionBuilder{ctx.c, ctx.gate, td}.build();
-      double r = dd.probabilityEvaluation();
       ctx.actual_method = "tree-decomposition";
-      return r;
+      return dd;
     } catch(TreeDecompositionException &) {
       if(ctx.explicitly_named)
         provsql_error("Treewidth greater than %u",
@@ -971,6 +987,9 @@ public:
       // Default chain: fall through to the compilation terminal.
       throw CircuitException("tree-decomposition: treewidth above the bound");
     }
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    return buildDD(ctx).probabilityEvaluation();
   }
 };
 
@@ -984,6 +1003,7 @@ public:
   std::string name() const override { return "compilation"; }
   ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
   bool inDefaultChain() const override { return true; }
+  bool producesDD() const override { return true; }
   // Subprocess: the compilers exploit structure, so the typical cost is the
   // d-DNNF compile (~linear in the serialized circuit) plus a fixed startup, not
   // the 2^N worst case.  Modelled as max(startup_floor, slope * S) ms.  (It is
@@ -993,7 +1013,7 @@ public:
     return std::max(kCostCompilationFloor,
                     kCostCompilation * static_cast<double>(ctx.circuit_size));
   }
-  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+  dDNNF buildDD(EvalContext &ctx) const override {
     // On a chooser path (exact / relative / additive) ctx.args carries the
     // path's TOLERANCE string (epsilon=...,delta=...), not a compiler name, so
     // auto-select the compiler.  Only a by-name 'compilation' call passes an
@@ -1005,11 +1025,13 @@ public:
       ctx.explicitly_named ? ctx.args : std::string();
     std::string used;
     dDNNF dd = ctx.c.compilation(ctx.gate, compiler, &used);
-    double r = dd.probabilityEvaluation();
     // Report WHICH compiler ran (e.g. "compilation:d4"), not just "compilation":
     // on a chooser path the tool is auto-selected, so the bare label hid it.
     ctx.actual_method = used.empty() ? "compilation" : "compilation:" + used;
-    return r;
+    return dd;
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    return buildDD(ctx).probabilityEvaluation();
   }
 };
 
@@ -1135,7 +1157,7 @@ public:
   }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     double r = 0.;
-    run_stopping_rule(ctx.gc, ctx.gc_root, parse_method_args(ctx.args), r,
+    run_stopping_rule(*ctx.gc, ctx.gc_root, parse_method_args(ctx.args), r,
                       ctx.actual_method);
     return r;
   }
@@ -1392,6 +1414,27 @@ void MethodCatalog::registerMethod(std::unique_ptr<ProbabilityMethod> m)
   methods_.push_back(std::move(m));
 }
 
+// Base implementation: only the producesDD() methods override this.
+dDNNF ProbabilityMethod::buildDD(EvalContext &) const
+{
+  throw CircuitException("method '" + name()
+                         + "' does not construct a d-DNNF");
+}
+
+dDNNF makeDDAuto(BooleanCircuit &c, gate_t g)
+{
+  // The d-D portfolio reads only the Boolean view, so the generic-circuit
+  // pointers are null (never dereferenced by interpret-as-dd /
+  // tree-decomposition / compilation) and the request is the exact path.
+  std::string no_args;
+  EvalContext ctx{/*gc=*/nullptr, /*gc_root=*/gate_t{}, /*token=*/pg_uuid_t{},
+                  c, g, /*gc_to_bc=*/nullptr, /*inv_free_cert=*/false, no_args,
+                  /*explicitly_named=*/false,
+                  /*n_inputs=*/c.getInputs().size(),
+                  /*circuit_size=*/c.getNbGates()};
+  return MethodCatalog::instance().chooseAndBuildDD(ctx, Tolerance{});
+}
+
 const ProbabilityMethod *MethodCatalog::byName(const std::string &n) const
 {
   for(const auto &m : methods_)
@@ -1417,9 +1460,18 @@ static bool toleranceAdmits(ToleranceKind request, ToleranceKind method)
   return false;
 }
 
-double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
+namespace {
+
+/// Uniform-cost search shared by chooseAndRun (returns a probability) and
+/// chooseAndBuildDD (returns a d-DNNF artifact).  @p run performs the chosen
+/// method's work and returns the result of type @c R (calling @c evaluate or
+/// @c buildDD respectively); everything else -- lazy feature acquisition, the
+/// cheapest-first ranking, the speculative budget, and dropping a method that
+/// throws -- is identical for both, so it lives here once.
+template<class R, class Run>
+R runPortfolio(EvalContext &ctx, const Tolerance &tol,
+               std::vector<const ProbabilityMethod *> portfolio, Run run)
 {
-  // Uniform-cost search interleaving feature acquisition and method execution.
   // Each step either RUNS the cheapest ready method or ACQUIRES the cheapest
   // pending feature -- and we acquire a feature only when no ready method is
   // already cheaper than acquiring it (a feature-gated method then costs at
@@ -1428,16 +1480,6 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
   // changed the decision.  A method that throws when attempted is dropped (its
   // implicit feature -- e.g. 'independent' learning the circuit is not
   // independent); the last such error propagates if the portfolio is exhausted.
-  std::vector<const ProbabilityMethod *> portfolio;
-  for(const auto &m : methods_)
-    if(m->inDefaultChain() && toleranceAdmits(tol.kind, m->guaranteeKind())
-       // A delta == 0 ("deterministic") request admits only deterministic
-       // methods: the (eps,delta) samplers cannot honour delta = 0 (their cost
-       // model even masks this by falling back to a finite delta), so they must
-       // be excluded by admissibility, not left to lose on cost.
-       && (tol.delta > 0. || m->isDeterministic()))
-      portfolio.push_back(m.get());
-
   std::set<Feature> acquired;
   std::string last_error;
   bool have_last_error = false;
@@ -1487,7 +1529,7 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
         // and elapsed ms so each kCost can be fit so that cost ~ ms.
         if(provsql_verbose >= 50) {
           auto t0 = std::chrono::steady_clock::now();
-          double r = best->evaluate(ctx, tol);
+          R r = run(best);
           double ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - t0).count();
           provsql_notice("calibrate kind=method which=%s S=%zu N=%zu m=%zu w=%u "
@@ -1496,7 +1538,7 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
                          ctx.tw_proxy_, ctx.tw_max_degree_, best_cost, ms);
           return r;
         }
-        return best->evaluate(ctx, tol);
+        return run(best);
       } catch(CircuitException &e) {
         if(provsql_interrupted)
           throw;  // a cancel / timeout -- do not silently try another method
@@ -1526,6 +1568,38 @@ double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
       throw CircuitException("no applicable probability method in the portfolio");
     }
   }
+}
+
+}  // anonymous namespace
+
+double MethodCatalog::chooseAndRun(EvalContext &ctx, const Tolerance &tol) const
+{
+  std::vector<const ProbabilityMethod *> portfolio;
+  for(const auto &m : methods_)
+    if(m->inDefaultChain() && toleranceAdmits(tol.kind, m->guaranteeKind())
+       // A delta == 0 ("deterministic") request admits only deterministic
+       // methods: the (eps,delta) samplers cannot honour delta = 0 (their cost
+       // model even masks this by falling back to a finite delta), so they must
+       // be excluded by admissibility, not left to lose on cost.
+       && (tol.delta > 0. || m->isDeterministic()))
+      portfolio.push_back(m.get());
+  return runPortfolio<double>(ctx, tol, std::move(portfolio),
+    [&](const ProbabilityMethod *m){ return m->evaluate(ctx, tol); });
+}
+
+dDNNF MethodCatalog::chooseAndBuildDD(EvalContext &ctx, const Tolerance &tol) const
+{
+  // The d-D portfolio is the producesDD() methods (interpret-as-dd /
+  // tree-decomposition / compilation): all exact, so no tolerance filtering.
+  // interpret-as-dd is by-name-only for the probability chain (independent
+  // subsumes it there) but IS the cheapest artifact route here, so it is
+  // included via producesDD(), not inDefaultChain().
+  std::vector<const ProbabilityMethod *> portfolio;
+  for(const auto &m : methods_)
+    if(m->producesDD())
+      portfolio.push_back(m.get());
+  return runPortfolio<dDNNF>(ctx, tol, std::move(portfolio),
+    [&](const ProbabilityMethod *m){ return m->buildDD(ctx); });
 }
 
 const MethodCatalog &MethodCatalog::instance()
@@ -1964,7 +2038,7 @@ static Datum probability_evaluate_internal
       }
 
       if(boolean_built) {
-        provsql::EvalContext ctx{gc, gc_root, token, c, gate, gc_to_bc,
+        provsql::EvalContext ctx{&gc, gc_root, token, c, gate, &gc_to_bc,
                                  inv_free_cert, args,
                                  /*explicitly_named=*/false,
                                  /*n_inputs=*/c.getInputs().size(),
@@ -2010,7 +2084,7 @@ static Datum probability_evaluate_internal
 
       const bool is_path = method.empty() || method == "default"
                            || method == "exact";
-      provsql::EvalContext ctx{gc, gc_root, token, c, gate, gc_to_bc,
+      provsql::EvalContext ctx{&gc, gc_root, token, c, gate, &gc_to_bc,
                                inv_free_cert, args,
                                /*explicitly_named=*/!is_path,
                                /*n_inputs=*/c.getInputs().size(),

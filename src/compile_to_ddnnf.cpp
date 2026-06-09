@@ -76,6 +76,11 @@ Datum compile_to_ddnnf(PG_FUNCTION_ARGS)
     // "inversion-free" builds the structured d-DNNF over the order keys on the
     // generic circuit (see buildInversionFreeDDNNF); its input leaves carry the
     // same UUIDs as c, so var_of_uuid still aligns the NNF with the CNF.
+    // NB: this surface serialises to NNF (toNNF), which requires negation only
+    // on inputs, so it keeps the external-compilation default rather than the
+    // makeDD cost optimizer -- interpret-as-dd's d-DNNF carries internal NOTs
+    // that toNNF rejects.  The cost optimizer ('auto') is for the shapley /
+    // banzhaf surfaces (and Studio), whose consumers accept that form.
     dDNNF d = (compiler == "inversion-free")
       ? buildInversionFreeDDNNF(*token)
       : c.makeDDByName(root, compiler);

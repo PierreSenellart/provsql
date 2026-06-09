@@ -111,6 +111,9 @@ test: shapley
 test: banzhaf
 test: shapley_mulinput
 
+# makeDD route is cost-selected by default ('auto'); 'ladder' = old fixed chain
+test: makedd_auto
+
 # Viewing circuit
 test: view_circuit_multiple
 

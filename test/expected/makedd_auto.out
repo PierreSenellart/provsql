@@ -1,0 +1,10 @@
+\set ECHO none
+remove_provenance
+
+(1 row)
+measure|mismatches
+shapley|0
+(1 row)
+measure|mismatches
+banzhaf|0
+(1 row)

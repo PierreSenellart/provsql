@@ -33,6 +33,7 @@ PG_FUNCTION_INFO_V1(shapley_all_vars);
 
 #include "c_cpp_compatibility.h"
 #include "BooleanCircuit.h"
+#include "ProbabilityMethod.h"
 #include "GenericCircuit.h"
 #include "Circuit.hpp"
 #include <unordered_map>
@@ -79,7 +80,13 @@ static double shapley_internal
   if(c.getGateType(c.getGate(uuid2string(variable))) != BooleanGate::IN)
     return 0.;
 
-  dDNNF dd = c.makeDD(root, method, args);
+  // Default / "auto": cost-select the d-D construction (interpret-as-dd /
+  // tree-decomposition / compilation) via the probability catalog's chooser;
+  // "ladder" forces the old fixed chain; any other method is taken by name.
+  dDNNF dd = (method.empty() || method == "default" || method == "auto")
+               ? provsql::makeDDAuto(c, root)
+               : method == "ladder" ? c.makeDD(root, "", args)
+               : c.makeDD(root, method, args);
 
   dd.makeSmooth();
   if(!banzhaf)
@@ -184,7 +191,10 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
     if(c.hasMultivaluedGates())
       provsql_error("Computing Shapley/Banzhaf values is ill-defined for circuits with multivalued (mulinput) gates");
 
-    dDNNF dd = c.makeDD(root, method, args);
+    dDNNF dd = (method.empty() || method == "default" || method == "auto")
+                 ? provsql::makeDDAuto(c, root)
+                 : method == "ladder" ? c.makeDD(root, "", args)
+                 : c.makeDD(root, method, args);
     dd.makeSmooth();
     if(!banzhaf)
       dd.makeGatesBinary(BooleanGate::AND);
