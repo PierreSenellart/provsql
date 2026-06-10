@@ -395,12 +395,57 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
     facts.push_back(std::move(f));
   }
 
-  const JointEncoding enc =
-    JointEncoding::fromCorrelated(std::move(facts), std::move(sb.slice),
-                                  n_elements);
   const unsigned max_tw = static_cast<unsigned>(provsql_joint_max_treewidth);
   const std::size_t max_states =
     static_cast<std::size_t>(provsql_joint_max_states);
+
+  // Dispatch by input class: when the slice has no internal gates (every
+  // fact gated by a bare gate_input leaf -- the non-correlated / TID
+  // regime), use the data-graph fast path, which decomposes only the
+  // data (no gate vertices); the joint screen there is the data
+  // treewidth.  Internal gates (correlated inputs) need the full joint
+  // data+circuit decomposition.  Both give the same probability; the
+  // fast path is just cheaper.  A shared leaf across *different* element
+  // tuples is a real correlation that fromFacts rejects -- fall back to
+  // the joint path then.
+  bool has_internal = false;
+  for (const auto &sg : sb.slice)
+    if (sg.type != SliceGateType::INPUT) {
+      has_internal = true;
+      break;
+    }
+  if (!has_internal) {
+    std::vector<FactRow> rows;
+    rows.reserve(facts.size());
+    for (const auto &f : facts) {
+      FactRow row;
+      row.relation_id = f.relation_id;
+      row.elements = f.elements;
+      if (f.kind == FactGateKind::GATE) {
+        row.token = sb.slice[f.gate].token;
+        row.prob = sb.slice[f.gate].prob;
+      }   // CERTAIN: empty token, prob 1
+      rows.push_back(std::move(row));
+    }
+    try {
+      const JointEncoding enc = JointEncoding::fromFacts(rows);
+      try {
+        return UCQJointCompiler::compile(enc, ucq, max_tw, max_states);
+      } catch (TreeDecompositionException &) {
+        provsql_error(
+          "ucq_joint: data treewidth exceeds the configured maximum (%d); "
+          "fall back to the standard probability ladder",
+          provsql_joint_max_treewidth);
+      }
+    } catch (const JointCompilerException &) {
+      // A gate_input shared across different element tuples: genuinely
+      // correlated; fall through to the joint path below.
+    }
+  }
+
+  const JointEncoding enc =
+    JointEncoding::fromCorrelated(std::move(facts), std::move(sb.slice),
+                                  n_elements);
   try {
     return UCQJointCompiler::compile(enc, ucq, max_tw, max_states);
   } catch (TreeDecompositionException &) {

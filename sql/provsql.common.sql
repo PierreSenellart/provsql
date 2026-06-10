@@ -5322,6 +5322,103 @@ BEGIN
 END;
 $ucq$ LANGUAGE plpgsql VOLATILE;
 
+/**
+ * @brief Compile a UCQ over named relations into a materialised certified
+ * d-D, gathering the facts from the store -- the descriptor-driven engine
+ *
+ * The query-surface bridge for the joint-width compiler: instead of
+ * hand-built columnar arrays, a JSON @p descriptor names the relations
+ * and how their columns map to query variables, and this function
+ * gathers the facts itself (the provenance rewriting is disabled around
+ * the gather), builds the value-based element dictionary shared across
+ * the relations (so equal join values get the same dense id), compiles
+ * and materialises the certified d-D, and returns its provenance token.
+ * The answer is then any standard evaluation on that token --
+ * @c probability_evaluate(ucq_joint_provenance(...)),
+ * @c shapley(...), expectation.  This is also the engine the planner-time
+ * query recogniser drives once it builds the descriptor from a query's
+ * abstract syntax.
+ *
+ * Descriptor shape:
+ * @verbatim
+ * { "disjuncts": [ { "n_vars": k,
+ *                    "atoms": [ {"rel": <relidx>, "vars": [..]}, ... ] }, ... ],
+ *   "relations": [ "schema.r", "schema.s", ... ],   -- relidx -> relation
+ *   "elem_cols": [ ["x"], ["x","y"], ... ] }         -- per relation: the
+ *                                                       element columns, in
+ *                                                       the atom's var order
+ * @endverbatim
+ *
+ * @param descriptor the UCQ + the relations and their element columns
+ * @return the materialised joint-width provenance token (NULL UUID-free
+ *         exact Boolean provenance of the UCQ)
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_provenance(
+  descriptor JSONB, fallback UUID DEFAULT NULL)
+RETURNS UUID AS $ucq$
+DECLARE
+  legs text; sql text; saved text;
+  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
+  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}';
+  avars int[]:='{}'; aarity int[]:='{}';
+  d jsonb; a jsonb; v text; didx int:=0;
+BEGIN
+  -- Parse the UCQ structure into the columnar query arrays.
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  -- One UNION ALL leg per relation: (relation index, text element array,
+  -- provenance token).  No temp tables: a single gather query, with the
+  -- value-based dense element dictionary built inline.
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s',
+             rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val)
+  $q$, legs);
+
+  -- Read the raw rows with provenance rewriting disabled (we only read
+  -- the existing provsql column; this internal gather is not tracked).
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  PERFORM set_config('provsql.active', saved, true);
+
+  RETURN ucq_joint_materialize_tracked(dnv,adisj,arel,avars,aarity,
+    fact_rel,fact_elems,fact_arity,fact_tokens);
+EXCEPTION WHEN OTHERS THEN
+  -- The joint-width compiler declined (unsupported gate type, joint
+  -- width too large, ...): fall back to the normal provenance so the
+  -- query never fails.  Both give the same probability.
+  RETURN fallback;
+END;
+$ucq$ LANGUAGE plpgsql VOLATILE;
+
 
 /**
  * @brief Compile and materialise the reachability provenance of every

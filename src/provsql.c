@@ -31,6 +31,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
+#include "utils/jsonb.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/print.h"
 #include "executor/executor.h"
@@ -63,6 +64,7 @@
 #include <time.h>
 
 #include "classify_query.h"
+#include "joint_width_query.h"
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
@@ -95,6 +97,7 @@ int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-eval
 int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subproblems before it bails (0 = off; the chooser auto-budgets at the next-best method's cost regardless); @c provsql.dtree_max_subproblems GUC
 int provsql_joint_max_treewidth = 10; ///< Maximum joint treewidth the joint-width UCQ compiler attempts before declining (caller falls back to the ladder); @c provsql.joint_max_treewidth GUC
 int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joint-width UCQ compiler (the true safety net); @c provsql.joint_max_states GUC
+bool provsql_joint_width = true; ///< Recognise unsafe UCQs at planner time and route their existence provenance through the joint-width compiler (on by default); the @c provsql.joint_width GUC is a debug-only switch to disable it
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
@@ -3910,6 +3913,50 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  *                         inversion-free path never sets the latter.
  * @return  The provenance @c Expr to be appended to the target list.
  */
+/**
+ * @brief Build the @c ucq_joint_provenance(descriptor) call substituted for
+ *        a recognised unsafe UCQ's existence provenance.
+ *
+ * The descriptor (built by @c provsql_joint_width_descriptor from the
+ * query's syntax) is wrapped as a @c jsonb @c Const; the resulting
+ * provenance token is the joint-width compiler's certified d-D, so the
+ * standard probability / Shapley evaluators answer the @c \#P-hard UCQ
+ * through the one pipeline.  Returns @c NULL if the function cannot be
+ * resolved (e.g. an older schema without it), leaving the normal path.
+ */
+static Expr *build_joint_width_provenance_expr(const constants_t *constants,
+                                               const char *desc, Expr *fallback)
+{
+  FuncCandidateList fcl = FuncnameGetCandidates(
+    list_make2(makeString("provsql"), makeString("ucq_joint_provenance")),
+    2, NIL, false, false,
+#if PG_VERSION_NUM >= 140000
+    false,
+#endif
+    false);
+  FuncExpr *fe;
+  Const *c;
+  Datum jb;
+
+  if (fcl == NULL)
+    return NULL;
+
+  jb = DirectFunctionCall1(jsonb_in, CStringGetDatum(desc));
+  c = makeConst(JSONBOID, -1, InvalidOid, -1, jb, false, false);
+
+  fe = makeNode(FuncExpr);
+  fe->funcid = fcl->oid;
+  fe->funcresulttype = constants->OID_TYPE_UUID;
+  fe->funcretset = false;
+  fe->funcvariadic = false;
+  /* (descriptor, fallback token): the joint-width compiler is tried at
+   * execution; on any failure the fallback (the normal provenance) is
+   * returned, so the query never fails. */
+  fe->args = list_make2(c, fallback);
+  fe->location = -1;
+  return (Expr *) fe;
+}
+
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
@@ -3918,6 +3965,13 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         const char *inv_cert) {
   Expr *result;
   ListCell *lc_v;
+  /* Recognise the joint-width substitution BEFORE the aggregation branch
+   * mutates q (it sets q->hasAggs); the descriptor is applied at the end. */
+  char *jw_desc = NULL;
+  bool  jw_all_exist = false;
+  if (provsql_joint_width && provsql_boolean_provenance &&
+      op != SR_PLUS && (aggregation || group_by_rewrite))
+    jw_desc = provsql_joint_width_descriptor(constants, q, &jw_all_exist);
 
   if (op == SR_PLUS) {
     result = linitial(prov_atts);
@@ -4255,6 +4309,23 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
   if (inv_cert != NULL &&
       OidIsValid(constants->OID_FUNCTION_ANNOTATE))
     result = wrap_in_annotate(constants, result, inv_cert);
+
+  /* Joint-width substitution (debug GUC provsql.joint_width, on by
+   * default).  When the Boolean-provenance query forms the *existence*
+   * of a recognised unsafe UCQ -- a DISTINCT / GROUP-BY that ORs the
+   * witnesses, the #P-hard case the Dalvi-Suciu dichotomy rules out from
+   * lifted inference -- wrap the just-built normal provenance so that, at
+   * execution, the joint-width compiler's certified d-D is used instead
+   * whenever it applies, and the normal provenance is the fallback on any
+   * failure (unsupported gate type, width too large, ...).  Both give the
+   * exact same probability; joint-width only makes the #P-hard ones
+   * tractable.  The normal provenance is still built (it is the
+   * fallback), so this never makes a query fail. */
+  if (jw_desc != NULL && jw_all_exist) {
+    Expr *jw = build_joint_width_provenance_expr(constants, jw_desc, result);
+    if (jw != NULL)
+      result = jw;
+  }
 
   return result;
 }
@@ -11918,6 +11989,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (rewritten)
         return process_query(constants, rewritten, removed, true, top_level,
                              inv_ctx);
+
     }
 
     /* Inversion-free analysis is *not* an operation-mode change: it leaves the
@@ -13390,6 +13462,28 @@ void _PG_init(void) {
                           NULL,
                           NULL,
                           NULL);
+
+  DefineCustomBoolVariable("provsql.joint_width",
+                           "Recognise unsafe UCQs at planner time and route "
+                           "their existence provenance through the "
+                           "joint-width compiler (debug-only switch).",
+                           "On by default. When provsql.provenance = "
+                           "'boolean', a conjunctive query the safe-query "
+                           "rewriter declined -- an unsafe / #P-hard UCQ -- "
+                           "whose existence is being formed (DISTINCT / GROUP "
+                           "BY) is recognised and its provenance replaced by "
+                           "the joint-width compiler's certified d-D (exact "
+                           "and tractable when the joint treewidth of the data "
+                           "and its correlation structure is bounded). Turn "
+                           "off only to compare against the general lineage "
+                           "for debugging.",
+                           &provsql_joint_width,
+                           true,
+                           PGC_USERSET,
+                           GUC_NO_SHOW_ALL,
+                           NULL,
+                           NULL,
+                           NULL);
 
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");
