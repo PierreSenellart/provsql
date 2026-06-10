@@ -146,6 +146,47 @@ static bool exist_walker(Node *node, void *vctx)
   return expression_tree_walker(node, exist_walker, vctx);
 }
 
+/**
+ * @brief Recursively collect tracked base-relation atoms and the ON quals
+ *        of a jointree item (a @c RangeTblRef or an inner @c JoinExpr).
+ *
+ * Flattens @c a @c JOIN @c b @c ON ... (and nested inner joins) to the
+ * same atom set + equality quals as the comma/@c WHERE form.  Declines
+ * (returns @c false) on an outer join, a non-relation RTE, an untracked
+ * relation, or any other item shape.
+ */
+static bool collect_jointree(Node *n, Query *q, Index *atom_rti,
+                             Oid *atom_relid, int *natoms, List **qual_list)
+{
+  if (n == NULL)
+    return true;
+  if (IsA(n, RangeTblRef)) {
+    Index rti = ((RangeTblRef *) n)->rtindex;
+    RangeTblEntry *rte = rt_fetch(rti, q->rtable);
+    if (rte->rtekind != RTE_RELATION)
+      return false;
+    if (get_attnum(rte->relid, PROVSQL_COLUMN_NAME) == InvalidAttrNumber)
+      return false;
+    atom_rti[*natoms] = rti;
+    atom_relid[*natoms] = rte->relid;
+    (*natoms)++;
+    return true;
+  }
+  if (IsA(n, JoinExpr)) {
+    JoinExpr *je = (JoinExpr *) n;
+    if (je->jointype != JOIN_INNER)
+      return false;   /* outer joins change the semantics: decline */
+    if (!collect_jointree(je->larg, q, atom_rti, atom_relid, natoms, qual_list))
+      return false;
+    if (!collect_jointree(je->rarg, q, atom_rti, atom_relid, natoms, qual_list))
+      return false;
+    if (je->quals != NULL)
+      *qual_list = lappend(*qual_list, je->quals);   /* the ON condition */
+    return true;
+  }
+  return false;   /* FromExpr / subquery / other: outside scope */
+}
+
 char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
                                      bool *all_existential,
                                      List **head_var_idx, List **head_exprs)
@@ -162,6 +203,7 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   int       *pairs;
   int        npairs = 0;
   int        maxcols;
+  List      *qual_list = NIL;
   StringInfoData buf;
   int        i, a;
 
@@ -185,25 +227,15 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   atom_relid = palloc(list_length(q->rtable) * sizeof(Oid));
   atom_relidx = palloc(list_length(q->rtable) * sizeof(int));
   rel_oids   = palloc(list_length(q->rtable) * sizeof(Oid));
-  foreach (lc, q->jointree->fromlist) {
-    Node *n = (Node *) lfirst(lc);
-    RangeTblEntry *rte;
-    Index rti;
-    if (!IsA(n, RangeTblRef))
+  foreach (lc, q->jointree->fromlist)
+    if (!collect_jointree((Node *) lfirst(lc), q, atom_rti, atom_relid,
+                          &natoms, &qual_list))
       return NULL;
-    rti = ((RangeTblRef *) n)->rtindex;
-    rte = rt_fetch(rti, q->rtable);
-    if (rte->rtekind != RTE_RELATION)
-      return NULL;
-    /* Tracked iff it has a uuid provsql column. */
-    if (get_attnum(rte->relid, PROVSQL_COLUMN_NAME) == InvalidAttrNumber)
-      return NULL;
-    atom_rti[natoms] = rti;
-    atom_relid[natoms] = rte->relid;
-    natoms++;
-  }
   if (natoms == 0)
     return NULL;
+  /* The top-level WHERE conjoins with every collected ON condition. */
+  if (q->jointree->quals != NULL)
+    qual_list = lappend(qual_list, q->jointree->quals);
 
   /* Map distinct relation OIDs to relation indices. */
   for (a = 0; a < natoms; a++) {
@@ -238,9 +270,11 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
     }
   }
 
-  /* Equalities -> union-find; decline on any other qual shape. */
-  if (!collect_equalities(q->jointree->quals, cols, &ncols, &pairs, &npairs))
-    return NULL;
+  /* Equalities (WHERE + every collected ON) -> union-find; decline on any
+   * other qual shape. */
+  foreach (lc, qual_list)
+    if (!collect_equalities((Node *) lfirst(lc), cols, &ncols, &pairs, &npairs))
+      return NULL;
   for (i = 0; i < npairs; i += 2)
     uf_union(cols, pairs[i], pairs[i + 1]);
 

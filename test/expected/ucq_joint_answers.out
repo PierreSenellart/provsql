@@ -78,3 +78,10 @@ x|z|joint_width_fired|diff
 3|2|t|0.000000000
 3|3|t|0.000000000
 (9 rows)
+== JOIN..ON recognised: fired (token != comma standard), value equal ==
+x|joint_width_fired|diff
+1|t|0.000000000
+2|t|0.000000000
+3|t|0.000000000
+4|t|0.000000000
+(4 rows)

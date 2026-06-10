@@ -219,4 +219,26 @@ SELECT o.x, o.z, (o.tok <> f.tok) AS joint_width_fired,
        ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
   FROM star_on o JOIN star_off f ON o.x = f.x AND o.z = f.z ORDER BY o.x, o.z;
 
+-- ---------------------------------------------------------------------
+-- (6) JOIN ... ON spelling: the recogniser flattens inner JoinExprs and
+--     collects their ON conditions, so the JOIN-ON form of H0 is
+--     recognised exactly like the comma/WHERE form -- joint-width fires
+--     (token differs from the comma-form standard) and the value agrees.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = on;
+CREATE TEMP TABLE h0_join_on AS
+  SELECT jr.x AS x, provenance() AS tok
+    FROM jr JOIN js ON jr.x = js.x JOIN jt ON js.y = jt.y GROUP BY jr.x;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE h0_comma_off AS
+  SELECT jr.x AS x, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY jr.x;
+SET provsql.active = off;
+\echo '== JOIN..ON recognised: fired (token != comma standard), value equal =='
+SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
+  FROM h0_join_on o JOIN h0_comma_off f ON o.x = f.x ORDER BY o.x;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_ CASCADE;
