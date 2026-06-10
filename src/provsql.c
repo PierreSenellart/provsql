@@ -93,6 +93,8 @@ char *provsql_kcmcp_server = NULL; ///< Launch command for the managed KCMCP ser
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
 int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subproblems before it bails (0 = off; the chooser auto-budgets at the next-best method's cost regardless); @c provsql.dtree_max_subproblems GUC
+int provsql_joint_max_treewidth = 10; ///< Maximum joint treewidth the joint-width UCQ compiler attempts before declining (caller falls back to the ladder); @c provsql.joint_max_treewidth GUC
+int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joint-width UCQ compiler (the true safety net); @c provsql.joint_max_states GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
@@ -13341,6 +13343,50 @@ void _PG_init(void) {
                           INT_MAX,
                           PGC_USERSET,
                           GUC_NO_SHOW_ALL,
+                          NULL,
+                          NULL,
+                          NULL);
+
+  DefineCustomIntVariable("provsql.joint_max_treewidth",
+                          "Maximum joint treewidth the joint-width UCQ "
+                          "compiler attempts.",
+                          "The joint-width UCQ compiler "
+                          "(ucq_joint_evaluate) evaluates an arbitrary UCQ -- "
+                          "including queries that are #P-hard under the "
+                          "Dalvi-Suciu dichotomy -- exactly, tractably when "
+                          "the joint treewidth of the data and its "
+                          "correlation structure is bounded. Above this "
+                          "bound the path declines (the degeneracy screen or "
+                          "the min-fill build raises), and the caller falls "
+                          "back to the standard probability ladder. Default "
+                          "10 (the tree-decomposition compiler's own cap).",
+                          &provsql_joint_max_treewidth,
+                          10,
+                          0,
+                          10,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+  DefineCustomIntVariable("provsql.joint_max_states",
+                          "Per-bag DP state-count cap of the joint-width UCQ "
+                          "compiler.",
+                          "The joint-width UCQ compiler caps the number of "
+                          "dynamic-programming states at any decomposition "
+                          "node; exceeding it raises and the caller falls "
+                          "back to the ladder. This cap, not the static "
+                          "enumerating-variable count, is the true safety "
+                          "net: the realised state count is governed by data "
+                          "sparsity and the absorbing satisfied-state "
+                          "collapse, typically far below the a-priori bound. "
+                          "Default 65536.",
+                          &provsql_joint_max_states,
+                          65536,
+                          1,
+                          INT_MAX,
+                          PGC_USERSET,
+                          0,
                           NULL,
                           NULL,
                           NULL);
