@@ -192,7 +192,9 @@ em { font-style: italic; }
   z-index: 20;
 }
 .ps-modeswitch__menu[hidden] { display: none; }
-.ps-modeswitch__btn {
+/* :visited included so navigated-to menu items don't fall to the global
+   a:visited (or the nav's white-visited) rule and vanish on the white menu. */
+.ps-modeswitch__btn, .ps-modeswitch__btn:visited {
   background: transparent;
   color: var(--purple-900);
   border: none;
@@ -406,7 +408,7 @@ body.mode-notebook .ps-modeswitch__btn[data-mode="notebook"] {
 }
 .wp-nav__link:hover { color: var(--gold-500); }
 /* Override the global a:visited rule so visited nav links don't go purple-on-purple */
-.wp-nav__link:visited, .cv-nav__link:visited, .ps-modeswitch__btn:visited {
+.wp-nav__link:visited, .cv-nav__link:visited {
   color: rgba(255,255,255,0.88);
 }
 
