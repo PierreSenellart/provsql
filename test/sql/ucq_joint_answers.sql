@@ -500,4 +500,37 @@ SELECT (o.tok <> f.tok) AS joint_width_fired,
          AS diff_vs_ladder
   FROM he_on o, he_off f;
 
-DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;
+-- ---------------------------------------------------------------------
+-- (16) The width screen (the cheap tw prepass): the joint compiler runs a
+--      degeneracy lower bound on the joint graph before the expensive
+--      decomposition + DP, and throws (-> the SQL layer falls back to the
+--      ladder) when it exceeds provsql.joint_max_treewidth.  A 6-cycle has
+--      joint treewidth 2: at the default bound it fires; with the bound set
+--      to 1 the screen declines and the query is answered by the ladder --
+--      same probability either way (the screen is a sound dispatch gate,
+--      not an approximation).  [The provsql.joint_max_states cap is the
+--      second net, during the DP; not toggled here.]
+-- ---------------------------------------------------------------------
+CREATE TABLE jcyc(x int, y int);
+INSERT INTO jcyc VALUES (1,2),(2,3),(3,4),(4,5),(5,6),(6,1);
+SELECT add_provenance('jcyc');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM jcyc; END $$;
+SET provsql.active = on;
+SET provsql.joint_width = on;
+SET provsql.joint_max_treewidth = 10;
+CREATE TEMP TABLE sc_hi AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
+SET provsql.joint_max_treewidth = 1;     -- below the joint treewidth (2): screen declines
+CREATE TEMP TABLE sc_lo AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
+SET provsql.joint_max_treewidth = 10;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE sc_off AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
+SET provsql.active = off;
+\echo '== width screen: fires under the bound, declines (falls back) below it, same value =='
+SELECT (hi.tok <> off.tok) AS fired_at_tw10,
+       (lo.tok =  off.tok) AS declined_to_ladder_at_tw1,
+       ROUND(probability_evaluate(hi.tok)::numeric, 6) AS p_joint,
+       ROUND((probability_evaluate(lo.tok) - probability_evaluate(off.tok))::numeric, 9)
+         AS diff_fallback_vs_ladder
+  FROM sc_hi hi, sc_lo lo, sc_off off;
+
+DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_, jcyc CASCADE;

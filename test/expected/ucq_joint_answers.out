@@ -172,3 +172,10 @@ OR jr.x=1 OR jr.x=4|t|0.000000000
 joint_width_fired|diff_vs_ladder
 t|0.000000000
 (1 row)
+add_provenance
+
+(1 row)
+== width screen: fires under the bound, declines (falls back) below it, same value ==
+fired_at_tw10|declined_to_ladder_at_tw1|p_joint|diff_fallback_vs_ladder
+t|t|0.984375|0.000000000
+(1 row)
