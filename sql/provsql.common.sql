@@ -5114,6 +5114,85 @@ END;
 $ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
 /**
+ * @brief Per-answer (non-Boolean) UCQ probabilities, by per-binding pinning
+ *
+ * The joint-width compiler is Boolean; a non-Boolean UCQ -- one with head
+ * (free) variables -- is evaluated answer by answer, reusing the Boolean
+ * @c ucq_joint_evaluate().  Each candidate head tuple is pinned by
+ * appending a unary constraint atom @c Sel(h) per head variable @c h plus a
+ * matching CERTAIN fact (the all-zero token, which @c JointEncoding treats
+ * as always present) for the bound value; the Boolean probability of the
+ * residual existential query is then the answer's marginal.  Candidates
+ * with no possible witness (probability 0) are dropped, so the result is
+ * the possible answers with their marginals -- the set-projection (DISTINCT
+ * / GROUP BY on the head) semantics.
+ *
+ * @param query JSON UCQ (see @c ucq_joint_evaluate(query JSONB, ...))
+ * @param head_vars query-variable indices forming the head (shared across
+ *        disjuncts by position)
+ * @param head_tuples candidate head tuples, row-major flattened
+ *        (length = #answers * @c array_length(head_vars,1)); the GROUP BY
+ *        of the non-Boolean query supplies them
+ * @returns one @c (head, probability) row per non-empty answer
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_answers(
+  query JSONB,
+  head_vars INT[],
+  head_tuples INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  fact_probs DOUBLE PRECISION[])
+  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
+DECLARE
+  nh INT := array_length(head_vars, 1);
+  na INT := array_length(head_tuples, 1) / GREATEST(array_length(head_vars, 1), 1);
+  maxrel INT; sel_atoms JSONB; aug_query JSONB;
+  sel_rel INT[]; sel_ar INT[]; sel_tok UUID[]; sel_pr DOUBLE PRECISION[];
+  sel_el INT[]; i INT; pr DOUBLE PRECISION;
+BEGIN
+  IF nh IS NULL OR nh = 0 THEN
+    RAISE EXCEPTION 'ucq_joint_answers: head_vars must be non-empty '
+                    '(use ucq_joint_evaluate for a Boolean query)';
+  END IF;
+  IF head_tuples IS NULL OR array_length(head_tuples, 1) % nh <> 0 THEN
+    RAISE EXCEPTION 'ucq_joint_answers: head_tuples length must be a '
+                    'multiple of array_length(head_vars, 1)';
+  END IF;
+  -- Fresh relation ids for the per-head Sel constraint atoms.
+  SELECT max((a->>'rel')::int) INTO maxrel
+    FROM jsonb_array_elements(query->'disjuncts') d,
+         jsonb_array_elements(d->'atoms') a;
+  SELECT jsonb_agg(jsonb_build_object('rel', maxrel + k,
+                                      'vars', jsonb_build_array(head_vars[k]))
+                   ORDER BY k)
+    INTO sel_atoms FROM generate_subscripts(head_vars, 1) k;
+  SELECT jsonb_build_object('disjuncts',
+           jsonb_agg(jsonb_set(d.val, '{atoms}', (d.val->'atoms') || sel_atoms)
+                     ORDER BY d.ord))
+    INTO aug_query
+    FROM jsonb_array_elements(query->'disjuncts') WITH ORDINALITY d(val, ord);
+  SELECT array_agg(maxrel + k ORDER BY k), array_agg(1 ORDER BY k),
+         array_agg('00000000-0000-0000-0000-000000000000'::uuid ORDER BY k),
+         array_agg(1.0::float8 ORDER BY k)
+    INTO sel_rel, sel_ar, sel_tok, sel_pr
+    FROM generate_subscripts(head_vars, 1) k;
+  FOR i IN 0 .. na - 1 LOOP
+    sel_el := head_tuples[i * nh + 1 : i * nh + nh];
+    pr := ucq_joint_evaluate(aug_query,
+            fact_rel || sel_rel, fact_elems || sel_el, fact_arity || sel_ar,
+            fact_tokens || sel_tok, fact_probs || sel_pr);
+    IF pr > 0 THEN
+      head := sel_el;
+      probability := pr;
+      RETURN NEXT;
+    END IF;
+  END LOOP;
+END;
+$ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+/**
  * @brief Exact Boolean UCQ probability over CORRELATED inputs
  * (columnar form, internal)
  *

@@ -229,3 +229,4 @@ test: nested_agg_refuse
 # arbitrary UCQ -- including #P-hard ones -- over bounded joint treewidth
 test: ucq_joint
 test: ucq_joint_correlated
+test: ucq_joint_answers
