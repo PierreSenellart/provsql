@@ -12,10 +12,10 @@
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
-#include "utils/typcache.h"
 
 #include "joint_width_query.h"
 #include "provsql_utils.h"
+#include "qual_classify.h"
 
 /** @brief A column reference (range-table index, attribute number). */
 typedef struct ColRef {
@@ -55,79 +55,45 @@ static void uf_union(ColRef *cols, int a, int b)
 }
 
 /**
- * @brief Collect the equality structure of a WHERE / ON qual tree.
+ * @brief Collect the equality structure of a WHERE / ON qual tree, over
+ *        the shared @c qual_classify recognisers.
  *
- * A conjunction of equalities (the qual must be @c AND-only).  @c Var=Var
- * is a join: its two columns are unioned (recorded in @p pairs).
- * @c Var=Const is a selection: when @p const_cols is non-NULL the column
- * and the constant are recorded (in @p const_cols / @p const_vals) so the
- * caller can pin the column's variable to the value; when @p const_cols is
- * @c NULL such a selection makes the recogniser decline (callers that
- * cannot apply a pin -- the UNION arms -- pass @c NULL).  Any other qual
- * shape declines.  The equality must be the column type's default @c =.
+ * Every conjunct of the (AND-only) qual must be either a @c Var=Var join
+ * (its two columns unioned, recorded in @p pairs) or a @c Var=Const
+ * selection.  A selection is recorded in @p const_cols / @p const_vals
+ * when @p const_cols is non-NULL (the caller pins the column's variable to
+ * the value); when @c NULL it makes the recogniser decline (the UNION arms,
+ * which cannot pin per disjunct, pass @c NULL).  The constant must share
+ * the column's exact type: the pin is applied through the gather's text
+ * element dictionary, so a cross-type literal could mis-match its column's
+ * text form.  Any other qual shape declines.
  */
 static bool collect_equalities(Node *qual, ColRef *cols, int *ncols,
                                int **pairs, int *npairs,
                                int *const_cols, Const **const_vals, int *nconst)
 {
-  if (qual == NULL)
-    return true;
-  if (IsA(qual, BoolExpr)) {
-    BoolExpr *b = (BoolExpr *) qual;
-    ListCell *lc;
-    if (b->boolop != AND_EXPR)
-      return false;
-    foreach (lc, b->args)
-      if (!collect_equalities((Node *) lfirst(lc), cols, ncols, pairs, npairs,
-                              const_cols, const_vals, nconst))
-        return false;
-    return true;
-  }
-  if (IsA(qual, OpExpr)) {
-    OpExpr *op = (OpExpr *) qual;
-    Node *ln, *rn;
-    Var  *v;
-    Const *c;
-    Oid   eq;
-    if (list_length(op->args) != 2)
-      return false;
-    ln = (Node *) linitial(op->args);
-    rn = (Node *) lsecond(op->args);
-    while (IsA(ln, RelabelType))
-      ln = (Node *) ((RelabelType *) ln)->arg;
-    while (IsA(rn, RelabelType))
-      rn = (Node *) ((RelabelType *) rn)->arg;
-    /* Var = Var: a join. */
-    if (IsA(ln, Var) && IsA(rn, Var)) {
-      Var *lv = (Var *) ln, *rv = (Var *) rn;
-      if (lv->varlevelsup != 0 || rv->varlevelsup != 0)
-        return false;
-      eq = lookup_type_cache(lv->vartype, TYPECACHE_EQ_OPR)->eq_opr;
-      if (eq == InvalidOid || op->opno != eq)
-        return false;
+  List     *conjuncts = NIL;
+  ListCell *lc;
+
+  qc_flatten_and(qual, &conjuncts);
+  foreach (lc, conjuncts) {
+    Expr  *c = (Expr *) lfirst(lc);
+    Var   *lv, *rv;
+    Const *k;
+    if (qc_is_var_eq(c, &lv, &rv)) {
       (*pairs)[(*npairs)++] = colref_get(cols, ncols, lv->varno, lv->varattno);
       (*pairs)[(*npairs)++] = colref_get(cols, ncols, rv->varno, rv->varattno);
-      return true;
-    }
-    /* Var = Const (either order): a selection pinning the column. */
-    if ((IsA(ln, Var) && IsA(rn, Const)) || (IsA(rn, Var) && IsA(ln, Const))) {
-      if (const_cols == NULL)
-        return false;   /* this caller cannot apply a constant pin */
-      if (IsA(ln, Var)) { v = (Var *) ln; c = (Const *) rn; }
-      else              { v = (Var *) rn; c = (Const *) ln; }
-      if (v->varlevelsup != 0 || c->constisnull || c->consttype != v->vartype)
-        return false;   /* NULL or cross-type: not a plain value pin */
-      eq = lookup_type_cache(v->vartype, TYPECACHE_EQ_OPR)->eq_opr;
-      if (eq == InvalidOid || op->opno != eq)
-        return false;
-      const_cols[*nconst] = colref_get(cols, ncols, v->varno, v->varattno);
-      const_vals[*nconst] = c;
+    } else if (qc_is_var_const_eq(c, &lv, &k)) {
+      if (const_cols == NULL || k->consttype != lv->vartype)
+        return false;   /* caller cannot pin, or a cross-type literal */
+      const_cols[*nconst] = colref_get(cols, ncols, lv->varno, lv->varattno);
+      const_vals[*nconst] = k;
       (*nconst)++;
-      return true;
+    } else {
+      return false;   /* not an equijoin or a value selection: decline */
     }
-    return false;
   }
-  return false;   /* any other qual shape: decline */
+  return true;
 }
 
 /** @brief Append @p s as a JSON string literal (escaping @c " and @c \\). */

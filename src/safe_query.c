@@ -53,6 +53,7 @@
 #include "compatibility.h"
 #include "provsql_mmap.h"
 #include "provsql_utils.h"
+#include "qual_classify.h"
 #include "safe_query.h"
 #include "safe_query_cert.h"
 
@@ -329,313 +330,6 @@ typedef struct safe_inner_group {
   Index       outer_rtindex;       ///< Assigned by the rewriter: position of the inner sub-Query RTE in the outer rtable
 } safe_inner_group;
 
-/** @brief Walker context for @c safe_collect_vars_walker. */
-typedef struct safe_collect_vars_ctx {
-  List *vars;  ///< Deduplicated list of distinct base-level Var nodes
-} safe_collect_vars_ctx;
-
-/**
- * @brief Tree walker that collects every distinct base-level Var node.
- *
- * "Base level" means @c varlevelsup == 0; outer references are ignored.
- * Vars are deduplicated by @c (varno, varattno).
- */
-static bool safe_collect_vars_walker(Node *node, safe_collect_vars_ctx *ctx) {
-  ListCell *lc;
-  if (node == NULL)
-    return false;
-  if (IsA(node, Var)) {
-    Var *v = (Var *) node;
-    if (v->varlevelsup != 0)
-      return false;
-    foreach (lc, ctx->vars) {
-      Var *existing = (Var *) lfirst(lc);
-      if (existing->varno == v->varno && existing->varattno == v->varattno)
-        return false;
-    }
-    ctx->vars = lappend(ctx->vars, v);
-    return false;
-  }
-  return expression_tree_walker(node, safe_collect_vars_walker, ctx);
-}
-
-/**
- * @brief Find the position of a Var inside the @c vars list (matched on
- *        @c (varno, varattno)).  Returns -1 if not present.
- */
-static int safe_var_index(List *vars, Index varno, AttrNumber varattno) {
-  ListCell *lc;
-  int i = 0;
-  foreach (lc, vars) {
-    Var *v = (Var *) lfirst(lc);
-    if (v->varno == varno && v->varattno == varattno)
-      return i;
-    i++;
-  }
-  return -1;
-}
-
-/**
- * @brief Recognise a top-level WHERE conjunct that equates two base Vars.
- *
- * Matches @c OpExpr nodes whose operator is the canonical equality for
- * the two operand types and whose operands strip down to base-level
- * @c Var nodes (possibly through @c RelabelType wrappers, which carry
- * binary-coercion casts).  Returns @c true and fills @p *l, @p *r when
- * matched.
- */
-static bool safe_is_var_equality(Expr *qual, Var **l, Var **r) {
-  OpExpr *op;
-  Node   *ln, *rn;
-  Var    *lv, *rv;
-  Oid     expected;
-
-  if (!IsA(qual, OpExpr))
-    return false;
-  op = (OpExpr *) qual;
-  if (list_length(op->args) != 2)
-    return false;
-  ln = (Node *) linitial(op->args);
-  rn = (Node *) lsecond(op->args);
-  while (IsA(ln, RelabelType))
-    ln = (Node *) ((RelabelType *) ln)->arg;
-  while (IsA(rn, RelabelType))
-    rn = (Node *) ((RelabelType *) rn)->arg;
-  if (!IsA(ln, Var) || !IsA(rn, Var))
-    return false;
-  lv = (Var *) ln;
-  rv = (Var *) rn;
-  if (lv->varlevelsup != 0 || rv->varlevelsup != 0)
-    return false;
-  expected = find_equality_operator(lv->vartype, rv->vartype);
-  if (expected == InvalidOid || op->opno != expected)
-    return false;
-  *l = lv;
-  *r = rv;
-  return true;
-}
-
-/**
- * @brief Recognise @c OpExpr nodes of shape @c Var @c = @c Const.
- *
- * Mirrors @c safe_is_var_equality but matches an equality between a
- * base-level @c Var and a planner-time @c Const literal (in either argument
- * order), again stripping @c RelabelType wrappers to see through binary-
- * coercion casts.  This is the recogniser used by the constant-selection
- * elimination pass (Dalvi & Suciu 2007 §5.1, induced FD @c ∅ @c → @c R.a)
- * to flag union-find roots as pinned to a literal.  Volatile predicates
- * never reach this point: @c safe_split_quals routes them to the residual,
- * and the constant-selection scan walks both @c per_atom and the residual
- * but stops at any @c OpExpr that is not a plain @c Var/@c Const equality.
- *
- * On match, @p *var receives the base-level @c Var and @p *konst the
- * literal; on no match, returns @c false without touching them.  NULL
- * constants (@c constisnull) do not yield an FD -- equality to NULL is
- * never satisfied in standard SQL semantics, so the planner would have
- * already short-circuited the row at executor time, but a @c Var @c = @c
- * NULL conjunct is still SQL-legal and we conservatively reject it as
- * non-FD-inducing.
- */
-static bool safe_is_var_const_equality(Expr *qual, Var **var, Const **konst) {
-  OpExpr *op;
-  Node   *ln, *rn;
-  Var    *v;
-  Const  *k;
-  Oid     expected;
-
-  if (!IsA(qual, OpExpr))
-    return false;
-  op = (OpExpr *) qual;
-  if (list_length(op->args) != 2)
-    return false;
-  ln = (Node *) linitial(op->args);
-  rn = (Node *) lsecond(op->args);
-  while (IsA(ln, RelabelType))
-    ln = (Node *) ((RelabelType *) ln)->arg;
-  while (IsA(rn, RelabelType))
-    rn = (Node *) ((RelabelType *) rn)->arg;
-  if (IsA(ln, Var) && IsA(rn, Const)) {
-    v = (Var *) ln;
-    k = (Const *) rn;
-  } else if (IsA(ln, Const) && IsA(rn, Var)) {
-    k = (Const *) ln;
-    v = (Var *) rn;
-  } else {
-    return false;
-  }
-  if (v->varlevelsup != 0)
-    return false;
-  if (k->constisnull)
-    return false;
-  expected = find_equality_operator(v->vartype, k->consttype);
-  if (expected == InvalidOid || op->opno != expected)
-    return false;
-  *var   = v;
-  *konst = k;
-  return true;
-}
-
-/**
- * @brief Walk @p quals as a tree of @c AND, collecting equality conjuncts.
- *
- * Returns the matched @c (Var *, Var *) pairs as a flat list, with each
- * pair contributed as two consecutive list entries (left, right).
- * Non-equality conjuncts are silently ignored (they do not contribute
- * to the variable equivalence relation but do not prevent the rewrite
- * either; the detector will fall back to bail if no root variable is
- * found).  OR / NOT are not traversed -- they are not equijoins, and
- * accepting them here would be unsound.
- */
-static void safe_collect_equalities(Node *quals, List **out) {
-  if (quals == NULL)
-    return;
-  if (IsA(quals, List)) {
-    ListCell *lc;
-    foreach (lc, (List *) quals)
-      safe_collect_equalities((Node *) lfirst(lc), out);
-    return;
-  }
-  if (IsA(quals, BoolExpr)) {
-    BoolExpr *be = (BoolExpr *) quals;
-    if (be->boolop == AND_EXPR) {
-      ListCell *lc;
-      foreach (lc, be->args)
-        safe_collect_equalities((Node *) lfirst(lc), out);
-    }
-    return;
-  }
-  {
-    Var *l, *r;
-    if (safe_is_var_equality((Expr *) quals, &l, &r)) {
-      *out = lappend(*out, l);
-      *out = lappend(*out, r);
-    }
-  }
-}
-
-/** @brief Walker context for @c safe_collect_varnos_walker. */
-typedef struct safe_collect_varnos_ctx {
-  Bitmapset *varnos;  ///< Set of @c varno values seen in base-level Vars
-} safe_collect_varnos_ctx;
-
-/**
- * @brief Collect the distinct base-level @c varno values referenced by an
- *        expression sub-tree.
- *
- * Used by @c safe_split_quals to decide whether a WHERE conjunct is
- * "atom-local" (single varno ⇒ pushable) or "cross-atom" (≥ 2 varnos
- * ⇒ stays in the residual).  Outer Vars (@c varlevelsup > 0) are
- * ignored; the safe-query candidate gate has already rejected
- * sublinks, so they cannot legitimately appear here.
- */
-static bool safe_collect_varnos_walker(Node *node,
-                                       safe_collect_varnos_ctx *ctx) {
-  if (node == NULL)
-    return false;
-  if (IsA(node, Var)) {
-    Var *v = (Var *) node;
-    if (v->varlevelsup == 0 && (int) v->varno >= 1)
-      ctx->varnos = bms_add_member(ctx->varnos, (int) v->varno);
-    return false;
-  }
-  return expression_tree_walker(node, safe_collect_varnos_walker, ctx);
-}
-
-/**
- * @brief Flatten the top-level @c AND tree of a WHERE clause into a flat
- *        list of conjunct @c Node *.
- *
- * Mirrors @c safe_collect_equalities' AND-tree recursion: a top-level
- * @c List is treated as an implicit AND (as @c FromExpr->quals can be),
- * a @c BoolExpr with @c AND_EXPR has its @c args recursed into, and any
- * other node is treated as a single leaf conjunct (including OR /
- * NOT / NULL-tests / equalities / arbitrary @c OpExpr).  The resulting
- * list shares pointers with the original tree; callers must
- * @c copyObject before mutating.
- */
-static void safe_flatten_and(Node *n, List **out) {
-  if (n == NULL)
-    return;
-  if (IsA(n, List)) {
-    ListCell *lc;
-    foreach (lc, (List *) n)
-      safe_flatten_and((Node *) lfirst(lc), out);
-    return;
-  }
-  if (IsA(n, BoolExpr) && ((BoolExpr *) n)->boolop == AND_EXPR) {
-    ListCell *lc;
-    foreach (lc, ((BoolExpr *) n)->args)
-      safe_flatten_and((Node *) lfirst(lc), out);
-    return;
-  }
-  *out = lappend(*out, n);
-}
-
-/**
- * @brief Partition top-level WHERE conjuncts into atom-local quals
- *        (pushed into the matching atom's inner wrap) and the residual
- *        cross-atom quals (which stay in the outer query).
- *
- * @p per_atom_out is an array of length @p natoms (caller-allocated,
- * zero-initialised) of @c List *.  @p out_residual receives the
- * residual conjunction, rebuilt as a single @c Node *: @c NULL when no
- * residual conjuncts remain, the bare conjunct when exactly one, or a
- * fresh @c BoolExpr(@c AND_EXPR) otherwise.
- *
- * A conjunct is pushed when its base-level Vars all reference the same
- * @c varno and the conjunct contains no volatile function calls.
- * Volatile predicates are kept in the outer scope because the inner
- * @c SELECT @c DISTINCT can collapse the evaluation count -- we
- * deliberately avoid changing the number of times such functions run.
- *
- * The pushed conjuncts are still shared with the original
- * @c q->jointree->quals tree; @c safe_build_inner_wrap @c copyObject's
- * them before performing the @c varno remap.
- */
-static void safe_split_quals(Node *quals, int natoms,
-                             List **per_atom_out, Node **out_residual) {
-  List     *conjuncts = NIL;
-  List     *residual  = NIL;
-  ListCell *lc;
-  int       i;
-
-  for (i = 0; i < natoms; i++)
-    per_atom_out[i] = NIL;
-
-  safe_flatten_and(quals, &conjuncts);
-
-  foreach (lc, conjuncts) {
-    Node *qual = (Node *) lfirst(lc);
-    safe_collect_varnos_ctx vctx = { NULL };
-    int nmembers;
-
-    if (contain_volatile_functions(qual)) {
-      residual = lappend(residual, qual);
-      continue;
-    }
-
-    safe_collect_varnos_walker(qual, &vctx);
-    nmembers = bms_num_members(vctx.varnos);
-    if (nmembers == 1) {
-      int v = bms_singleton_member(vctx.varnos);
-      if (v >= 1 && v <= natoms) {
-        per_atom_out[v - 1] = lappend(per_atom_out[v - 1], qual);
-        bms_free(vctx.varnos);
-        continue;
-      }
-    }
-    bms_free(vctx.varnos);
-    residual = lappend(residual, qual);
-  }
-
-  if (residual == NIL)
-    *out_residual = NULL;
-  else if (list_length(residual) == 1)
-    *out_residual = (Node *) linitial(residual);
-  else
-    *out_residual = (Node *) makeBoolExpr(AND_EXPR, residual, -1);
-}
-
 /**
  * @brief Partition the cross-atom residual into per-group conjuncts and a
  *        new outer residual.
@@ -664,11 +358,11 @@ static void safe_partition_residual(Node *residual, List *atoms, List *groups,
     return;
   }
 
-  safe_flatten_and(residual, &conjuncts);
+  qc_flatten_and(residual, &conjuncts);
 
   foreach (lc, conjuncts) {
     Node *qual = (Node *) lfirst(lc);
-    safe_collect_varnos_ctx vctx = { NULL };
+    qc_varnos_ctx vctx = { NULL };
     int v;
     int target_group = -1;
     bool stays_outer = false;
@@ -678,7 +372,7 @@ static void safe_partition_residual(Node *residual, List *atoms, List *groups,
       continue;
     }
 
-    safe_collect_varnos_walker(qual, &vctx);
+    qc_collect_varnos_walker(qual, &vctx);
     v = -1;
     while ((v = bms_next_member(vctx.varnos, v)) >= 0) {
       int g;
@@ -818,7 +512,7 @@ static Node *safe_pushed_remap_mutator(Node *node,
 static List *find_hierarchical_root_atoms(const constants_t *constants,
                                           Query *q, Node *quals,
                                           List **groups_out) {
-  safe_collect_vars_ctx vctx = { NIL };
+  qc_vars_ctx vctx = { NIL };
   List   *eq_pairs = NIL;
   ListCell *lc;
   Var   **vars_arr;
@@ -868,12 +562,12 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
 
   /* Collect every distinct base-level Var occurring anywhere in the
    * residual query (target list and the residual WHERE quals,
-   * i.e. cross-atom conjuncts that survive @c safe_split_quals).
+   * i.e. cross-atom conjuncts that survive @c qc_split_quals).
    * Each becomes a node in the union-find. */
   expression_tree_walker((Node *) q->targetList,
-                         safe_collect_vars_walker, &vctx);
+                         qc_collect_vars_walker, &vctx);
   if (quals)
-    expression_tree_walker(quals, safe_collect_vars_walker, &vctx);
+    expression_tree_walker(quals, qc_collect_vars_walker, &vctx);
 
   nvars = list_length(vctx.vars);
   if (nvars == 0)
@@ -894,7 +588,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
    * are never traversed because they would weaken, not strengthen,
    * the equivalence relation. */
   if (quals)
-    safe_collect_equalities(quals, &eq_pairs);
+    qc_collect_equalities(quals, &eq_pairs);
 
   for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
     Var *lv, *rv;
@@ -902,8 +596,8 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
     lv = (Var *) lfirst(lc);
     lc = my_lnext(eq_pairs, lc);
     rv = (Var *) lfirst(lc);
-    li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
-    ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    li = qc_var_index(vctx.vars, lv->varno, lv->varattno);
+    ri = qc_var_index(vctx.vars, rv->varno, rv->varattno);
     if (li < 0 || ri < 0)
       continue;
     ci = cls[li];
@@ -990,7 +684,7 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
        * a partial match (some PK columns equated, others not) does
        * not give the FD. */
       for (kc = 0; kc < key->col_n; kc++) {
-        int idx = safe_var_index(vctx.vars,
+        int idx = qc_var_index(vctx.vars,
                                  (Index) (j + 1),
                                  key->cols[kc]);
         if (idx < 0) {
@@ -1137,13 +831,13 @@ static List *find_hierarchical_root_atoms(const constants_t *constants,
    * wrap. */
   in_targetlist = palloc0(nvars * sizeof(bool));
   {
-    safe_collect_vars_ctx tlist_ctx = { NIL };
+    qc_vars_ctx tlist_ctx = { NIL };
     ListCell *tlc;
     expression_tree_walker((Node *) q->targetList,
-                           safe_collect_vars_walker, &tlist_ctx);
+                           qc_collect_vars_walker, &tlist_ctx);
     foreach (tlc, tlist_ctx.vars) {
       Var *v = (Var *) lfirst(tlc);
-      int idx = safe_var_index(vctx.vars, v->varno, v->varattno);
+      int idx = qc_var_index(vctx.vars, v->varno, v->varattno);
       if (idx >= 0)
         in_targetlist[idx] = true;
     }
@@ -2446,7 +2140,7 @@ static Query *safe_build_group_subquery(Query *outer_src,
    * routed here, plus each member atom's pushed atom-local quals
    * (the atom-local pre-pass will re-extract them when the rewriter
    * re-enters on the inner sub-Query, but the conjuncts must travel
-   * along with their atoms so the re-entry's @c safe_split_quals sees
+   * along with their atoms so the re-entry's @c qc_split_quals sees
    * them). */
   {
     List *all_quals = NIL;
@@ -2800,7 +2494,7 @@ static Query *rewrite_hierarchical_cq(const constants_t *constants,
  * equality conjuncts in @p quals that connects one of their Vars to
  * one of the other's Vars.  Uses a quick atom-level union-find driven
  * by the equality pairs already extracted by
- * @c safe_collect_equalities, then compacts representatives into
+ * @c qc_collect_equalities, then compacts representatives into
  * 0-based component ids written into @p atom_to_comp.
  *
  * @return Number of distinct components.
@@ -2817,7 +2511,7 @@ static int compute_atom_components(Query *q, Node *quals, int *atom_to_comp) {
   for (j = 0; j < natoms; j++)
     dsu[j] = j;
 
-  safe_collect_equalities(quals, &eq_pairs);
+  qc_collect_equalities(quals, &eq_pairs);
   for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
     Var *lv, *rv;
     int  la, ra;
@@ -2981,10 +2675,10 @@ static Query *rewrite_multi_component(const constants_t *constants,
    * that. */
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *) lfirst(lc);
-    safe_collect_varnos_ctx vctx = { NULL };
+    qc_varnos_ctx vctx = { NULL };
     int v;
     int chosen = -1;
-    safe_collect_varnos_walker((Node *) te->expr, &vctx);
+    qc_collect_varnos_walker((Node *) te->expr, &vctx);
     if (bms_is_empty(vctx.varnos)) {
       /* No atom Vars: a constant-only or @c provenance()-only TE
        * (the latter is rewritten downstream).  It stays at the outer
@@ -3037,14 +2731,14 @@ static Query *rewrite_multi_component(const constants_t *constants,
    * conjunct whose Vars span more than one component stays at the
    * outer level (shouldn't happen for a truly disconnected CQ but be
    * defensive). */
-  safe_flatten_and(residual, &conjuncts);
+  qc_flatten_and(residual, &conjuncts);
   foreach (lc, conjuncts) {
     Node *qual = (Node *) lfirst(lc);
-    safe_collect_varnos_ctx vctx = { NULL };
+    qc_varnos_ctx vctx = { NULL };
     int v;
     int chosen = -1;
     bool keep_outer = false;
-    safe_collect_varnos_walker(qual, &vctx);
+    qc_collect_varnos_walker(qual, &vctx);
     v = -1;
     while ((v = bms_next_member(vctx.varnos, v)) >= 0) {
       int c;
@@ -3180,9 +2874,9 @@ static Query *rewrite_multi_component(const constants_t *constants,
          * a given (varno, varattno) ends up at one inner column) this
          * gives the right mapping. */
         {
-          safe_collect_varnos_ctx vctx = { NULL };
+          qc_varnos_ctx vctx = { NULL };
           int v;
-          safe_collect_varnos_walker((Node *) src_te->expr, &vctx);
+          qc_collect_varnos_walker((Node *) src_te->expr, &vctx);
           v = -1;
           while ((v = bms_next_member(vctx.varnos, v)) >= 0) {
             if (v >= 1 && v <= natoms && atom_to_comp[v - 1] == k)
@@ -3341,7 +3035,7 @@ static Query *rewrite_multi_component(const constants_t *constants,
 static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
                                              Node **residual_in_out) {
   int     natoms = list_length(q->rtable);
-  safe_collect_vars_ctx vctx = { NIL };
+  qc_vars_ctx vctx = { NIL };
   List   *eq_pairs = NIL;
   Var   **vars_arr;
   int    *cls;
@@ -3359,17 +3053,17 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
    * and every per-atom-quals list.  All of these may carry the
    * Vars whose classes the equijoin closure will merge. */
   expression_tree_walker((Node *) q->targetList,
-                         safe_collect_vars_walker, &vctx);
+                         qc_collect_vars_walker, &vctx);
   if (*residual_in_out)
     expression_tree_walker(*residual_in_out,
-                           safe_collect_vars_walker, &vctx);
+                           qc_collect_vars_walker, &vctx);
   if (per_atom_quals != NULL) {
     int j;
     for (j = 0; j < natoms; j++) {
       ListCell *qlc;
       foreach (qlc, per_atom_quals[j])
         expression_tree_walker((Node *) lfirst(qlc),
-                               safe_collect_vars_walker, &vctx);
+                               qc_collect_vars_walker, &vctx);
     }
   }
   nvars = list_length(vctx.vars);
@@ -3387,15 +3081,15 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
 
   /* Union-find on residual equijoin conjuncts. */
   if (*residual_in_out)
-    safe_collect_equalities(*residual_in_out, &eq_pairs);
+    qc_collect_equalities(*residual_in_out, &eq_pairs);
   for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
     Var *lv, *rv;
     int  li, ri, ci, cj, k;
     lv = (Var *) lfirst(lc);
     lc = my_lnext(eq_pairs, lc);
     rv = (Var *) lfirst(lc);
-    li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
-    ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    li = qc_var_index(vctx.vars, lv->varno, lv->varattno);
+    ri = qc_var_index(vctx.vars, rv->varno, rv->varattno);
     if (li < 0 || ri < 0)
       continue;
     ci = cls[li];
@@ -3420,7 +3114,7 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
     }
   }
   if (*residual_in_out)
-    safe_flatten_and(*residual_in_out, &all_const_conjuncts);
+    qc_flatten_and(*residual_in_out, &all_const_conjuncts);
 
   {
     ListCell *qlc;
@@ -3429,9 +3123,9 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
       Var   *v;
       Const *k;
       int    idx, root;
-      if (!safe_is_var_const_equality(e, &v, &k))
+      if (!qc_is_var_const_eq(e, &v, &k))
         continue;
-      idx = safe_var_index(vctx.vars, v->varno, v->varattno);
+      idx = qc_var_index(vctx.vars, v->varno, v->varattno);
       if (idx < 0)
         continue;
       root = cls[idx];
@@ -3463,7 +3157,7 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
         continue;
       atom_idx = (int) vp->varno - 1;
       foreach (qlc, per_atom_quals[atom_idx]) {
-        if (safe_is_var_const_equality((Expr *) lfirst(qlc),
+        if (qc_is_var_const_eq((Expr *) lfirst(qlc),
                                        &v_existing, &k_existing)
             && v_existing->varno == vp->varno
             && v_existing->varattno == vp->varattno) {
@@ -3508,17 +3202,17 @@ static void apply_constant_selection_fd_pass(Query *q, List **per_atom_quals,
     List     *conjuncts = NIL;
     List     *kept = NIL;
     ListCell *qlc;
-    safe_flatten_and(*residual_in_out, &conjuncts);
+    qc_flatten_and(*residual_in_out, &conjuncts);
     foreach (qlc, conjuncts) {
       Node *cj = (Node *) lfirst(qlc);
-      safe_collect_vars_ctx cv = { NIL };
+      qc_vars_ctx cv = { NIL };
       ListCell *vlc;
       bool all_constant = true;
       bool any_var = false;
-      expression_tree_walker(cj, safe_collect_vars_walker, &cv);
+      expression_tree_walker(cj, qc_collect_vars_walker, &cv);
       foreach (vlc, cv.vars) {
         Var *v = (Var *) lfirst(vlc);
-        int idx = safe_var_index(vctx.vars, v->varno, v->varattno);
+        int idx = qc_var_index(vctx.vars, v->varno, v->varattno);
         any_var = true;
         if (idx < 0 || !is_constant_class[cls[idx]]) {
           all_constant = false;
@@ -3649,7 +3343,7 @@ static Query *try_pk_self_join_unification(Query *q) {
   bool      found_dup;
   List     *seen_relids;
   ListCell *lc;
-  safe_collect_vars_ctx vctx = { NIL };
+  qc_vars_ctx vctx = { NIL };
   List     *eq_pairs = NIL;
   Var     **vars_arr;
   int      *cls;
@@ -3697,10 +3391,10 @@ static Query *try_pk_self_join_unification(Query *q) {
    * atom-local and pins a single Var, but unification requires Vars
    * on two distinct RTEs to share a class. */
   expression_tree_walker((Node *) q->targetList,
-                         safe_collect_vars_walker, &vctx);
+                         qc_collect_vars_walker, &vctx);
   if (q->jointree && q->jointree->quals)
     expression_tree_walker(q->jointree->quals,
-                           safe_collect_vars_walker, &vctx);
+                           qc_collect_vars_walker, &vctx);
   nvars = list_length(vctx.vars);
   if (nvars == 0)
     return NULL;
@@ -3714,15 +3408,15 @@ static Query *try_pk_self_join_unification(Query *q) {
     i++;
   }
   if (q->jointree && q->jointree->quals)
-    safe_collect_equalities(q->jointree->quals, &eq_pairs);
+    qc_collect_equalities(q->jointree->quals, &eq_pairs);
   for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
     Var *lv, *rv;
     int  li, ri, ci, cj, k;
     lv = (Var *) lfirst(lc);
     lc = my_lnext(eq_pairs, lc);
     rv = (Var *) lfirst(lc);
-    li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
-    ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+    li = qc_var_index(vctx.vars, lv->varno, lv->varattno);
+    ri = qc_var_index(vctx.vars, rv->varno, rv->varattno);
     if (li < 0 || ri < 0)
       continue;
     ci = cls[li];
@@ -3794,9 +3488,9 @@ static Query *try_pk_self_join_unification(Query *q) {
           for (kc = 0; kc < key->col_n; kc++) {
             AttrNumber attno = key->cols[kc];
             int idx_a =
-              safe_var_index(vctx.vars, (Index) (aa + 1), attno);
+              qc_var_index(vctx.vars, (Index) (aa + 1), attno);
             int idx_b =
-              safe_var_index(vctx.vars, (Index) (bb + 1), attno);
+              qc_var_index(vctx.vars, (Index) (bb + 1), attno);
             if (idx_a < 0 || idx_b < 0 || cls[idx_a] != cls[idx_b]) {
               all_pk_equated = false;
               break;
@@ -3975,7 +3669,7 @@ static Query *try_pk_self_join_unification(Query *q) {
  *    both predicates can match.
  *  - Equality-to-literal only: inequalities (@c r.kind @c <> @c
  *    'A') do not pin a column to a single value and do not
- *    contribute to provable disjointness.  @c safe_is_var_const_equality
+ *    contribute to provable disjointness.  @c qc_is_var_const_eq
  *    enforces this through the operator-OID check.
  *  - Transitive disjointness via FDs (e.g. @c kind @c → @c
  *    category, with @c r1.category @c = @c 'X' / @c r2.category
@@ -4030,12 +3724,12 @@ try_disjoint_constant_self_join_split(Query *q) {
   if (q->jointree && q->jointree->quals) {
     List     *conjuncts = NIL;
     ListCell *lc;
-    safe_flatten_and(q->jointree->quals, &conjuncts);
+    qc_flatten_and(q->jointree->quals, &conjuncts);
     foreach (lc, conjuncts) {
       Expr  *e = (Expr *) lfirst(lc);
       Var   *v;
       Const *k;
-      if (!safe_is_var_const_equality(e, &v, &k))
+      if (!qc_is_var_const_eq(e, &v, &k))
         continue;
       if (v->varno < 1 || (int) v->varno > natoms)
         continue;
@@ -4096,13 +3790,13 @@ try_disjoint_constant_self_join_split(Query *q) {
           Var   *v_a;
           Const *k_a;
           ListCell *lc_qb;
-          if (!safe_is_var_const_equality(e_a, &v_a, &k_a))
+          if (!qc_is_var_const_eq(e_a, &v_a, &k_a))
             continue;
           foreach (lc_qb, rte_const_quals[bb]) {
             Expr  *e_b = (Expr *) lfirst(lc_qb);
             Var   *v_b;
             Const *k_b;
-            if (!safe_is_var_const_equality(e_b, &v_b, &k_b))
+            if (!qc_is_var_const_eq(e_b, &v_b, &k_b))
               continue;
             if (v_a->varattno != v_b->varattno)
               continue;
@@ -4880,7 +4574,7 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
   int  nranks = 0;
   int  n_tracked = 0;             /* number of non-deterministic (TID) atoms */
   bool has_self_join = false;
-  safe_collect_vars_ctx vctx = { NIL };
+  qc_vars_ctx vctx = { NIL };
   List *eq_pairs = NIL;
   Var **vars_arr;
   int  *cls;
@@ -4992,9 +4686,9 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
   (void) has_self_join;
 
   /* --- 2. union-find over (varno, varattno) Vars via the WHERE equalities --- */
-  expression_tree_walker((Node *) q->targetList, safe_collect_vars_walker, &vctx);
+  expression_tree_walker((Node *) q->targetList, qc_collect_vars_walker, &vctx);
   if (q->jointree && q->jointree->quals)
-    expression_tree_walker(q->jointree->quals, safe_collect_vars_walker, &vctx);
+    expression_tree_walker(q->jointree->quals, qc_collect_vars_walker, &vctx);
   nvars = list_length(vctx.vars);
   if (nvars == 0) { pfree(atom_relid); pfree(atom_rank); pfree(atom_det); return NULL; }
 
@@ -5004,14 +4698,14 @@ static SafeCert *detect_inversion_free(const constants_t *constants, Query *q) {
   foreach (lc, vctx.vars) { vars_arr[i] = (Var *) lfirst(lc); cls[i] = i; i++; }
 
   if (q->jointree && q->jointree->quals)
-    safe_collect_equalities(q->jointree->quals, &eq_pairs);
+    qc_collect_equalities(q->jointree->quals, &eq_pairs);
   for (lc = list_head(eq_pairs); lc != NULL; lc = my_lnext(eq_pairs, lc)) {
     Var *lv = (Var *) lfirst(lc); int li, ri, ci, cj, k;
     lc = my_lnext(eq_pairs, lc);
     {
       Var *rv = (Var *) lfirst(lc);
-      li = safe_var_index(vctx.vars, lv->varno, lv->varattno);
-      ri = safe_var_index(vctx.vars, rv->varno, rv->varattno);
+      li = qc_var_index(vctx.vars, lv->varno, lv->varattno);
+      ri = qc_var_index(vctx.vars, rv->varno, rv->varattno);
     }
     if (li < 0 || ri < 0) continue;
     ci = cls[li]; cj = cls[ri];
@@ -5370,7 +5064,7 @@ Query *try_safe_query_rewrite(const constants_t *constants, Query *q) {
    * "every Var in a class touching every atom" check. */
   natoms = list_length(q->rtable);
   per_atom = palloc0(natoms * sizeof(List *));
-  safe_split_quals(q->jointree ? q->jointree->quals : NULL,
+  qc_split_quals(q->jointree ? q->jointree->quals : NULL,
                    natoms, per_atom, &residual);
 
   /* Constant-selection elimination pre-pass.  Identifies union-find
