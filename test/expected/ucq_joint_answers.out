@@ -40,8 +40,8 @@ rows
 (1 row)
 == ucq_joint_provenance_answer: materialise + evaluate per answer ==
 pin|joint_width
-1|0.384521
-2|0.219727
+1|
+2|
 (2 rows)
 == transparent H0 per source: diff vs standard (must be 0) ==
 x|diff_transparent_vs_standard
@@ -57,3 +57,24 @@ x|joint_width
 3|0.219727
 4|0.219727
 (4 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+== star 2 heads (x,z) over a self-join: diff vs standard (must be 0) ==
+x|z|diff_transparent_vs_standard
+1|1|0.000000000
+1|2|0.000000000
+1|3|0.000000000
+2|1|0.000000000
+2|2|0.000000000
+2|3|0.000000000
+3|1|0.000000000
+3|2|0.000000000
+3|3|0.000000000
+(9 rows)

@@ -5504,11 +5504,13 @@ $ucq$ LANGUAGE plpgsql VOLATILE;
  *
  * The per-answer counterpart of @c ucq_joint_provenance(): for a UCQ with
  * head (free) variables @p head_vars bound to @p head_vals (the GROUP BY
- * value of the answer), it gathers the facts of @p descriptor but filters
- * every relation that mentions a head variable to the bound value -- so
- * the head is forced and only that answer's existential witnesses remain
- * -- then materialises the certified d-D of the residual Boolean query.
- * The transparent per-answer rewrite substitutes one such call per group;
+ * value of the answer), it gathers the facts of @p descriptor and adds, per
+ * head, a unary @c Sel(head) constraint atom plus a single CERTAIN fact
+ * (@c gate_one()) for the bound value -- forcing the head VARIABLE wherever
+ * it occurs (correct under self-joins, unlike filtering a relation, which
+ * would over-constrain a relation used in two atoms) -- then materialises
+ * the certified d-D of the residual Boolean query.  The transparent
+ * per-answer rewrite substitutes one such call per group;
  * @c probability_evaluate() on the returned token is the answer's
  * marginal.  On any decline the @p fallback token (the standard
  * per-answer provenance) is returned, so the query never fails.
@@ -5523,14 +5525,27 @@ CREATE OR REPLACE FUNCTION ucq_joint_provenance_answer(
   descriptor JSONB, head_vars INT[], head_vals INT[], fallback UUID DEFAULT NULL)
 RETURNS UUID AS $ucq$
 DECLARE
-  legs text; sql text; saved text;
+  legs text; sql text; saved text; aug jsonb; nrel int; one uuid;
   fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
   dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}'; avars int[]:='{}'; aarity int[]:='{}';
-  d jsonb; a jsonb; v text; didx int:=0;
-  ri int; whereclause text; k int; pos int; colname text;
+  d jsonb; a jsonb; v text; didx int:=0; k int;
 BEGIN
-  -- Parse the UCQ structure into the columnar query arrays.
-  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+  nrel := jsonb_array_length(descriptor->'relations');
+  one := gate_one();   -- a CERTAIN-true token to gate the Sel facts
+
+  -- Augment every disjunct with one unary Sel(head_k) atom per head, over a
+  -- fresh relation index nrel+k-1; this constrains the head VARIABLE (so it
+  -- is forced to the bound value at every occurrence, self-join safe).
+  SELECT jsonb_build_object('disjuncts', jsonb_agg(
+           jsonb_set(t.val,'{atoms}', (t.val->'atoms') ||
+             (SELECT jsonb_agg(jsonb_build_object('rel', nrel+k-1,
+                       'vars', jsonb_build_array(head_vars[k])) ORDER BY k)
+                FROM generate_subscripts(head_vars,1) k)) ORDER BY t.ord))
+    INTO aug
+    FROM jsonb_array_elements(descriptor->'disjuncts') WITH ORDINALITY t(val,ord);
+
+  -- Parse the augmented UCQ structure into the columnar query arrays.
+  FOR d IN SELECT * FROM jsonb_array_elements(aug->'disjuncts') LOOP
     dnv := dnv || (d->>'n_vars')::int;
     FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
       adisj := adisj || didx; arel := arel || (a->>'rel')::int;
@@ -5542,30 +5557,19 @@ BEGIN
     didx := didx + 1;
   END LOOP;
 
-  -- One UNION ALL leg per relation; a relation that mentions a head
-  -- variable is filtered to the bound value (forcing the head).
-  legs := '';
-  FOR ri IN 0 .. jsonb_array_length(descriptor->'relations') - 1 LOOP
-    whereclause := '';
-    FOR a IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts'->0->'atoms')
-             WHERE (value->>'rel')::int = ri LOOP
-      FOR k IN 1 .. array_length(head_vars, 1) LOOP
-        FOR pos IN 0 .. jsonb_array_length(a->'vars') - 1 LOOP
-          IF (a->'vars'->>pos)::int = head_vars[k] THEN
-            colname := descriptor->'elem_cols'->ri->>pos;
-            whereclause := whereclause
-              || CASE WHEN whereclause = '' THEN ' WHERE ' ELSE ' AND ' END
-              || format('(%I)::text = %L', colname, head_vals[k]::text);
-          END IF;
-        END LOOP;
-      END LOOP;
-    END LOOP;
-    legs := legs || CASE WHEN legs = '' THEN '' ELSE ' UNION ALL ' END
-      || format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
-           ri,
-           (SELECT string_agg(format('(%I)::text', c), ',')
-              FROM jsonb_array_elements_text(descriptor->'elem_cols'->ri) c),
-           descriptor->'relations'->>ri, whereclause);
+  -- One UNFILTERED leg per real relation, then one synthetic CERTAIN Sel
+  -- leg per head (relation index nrel+k-1, the bound value, gate_one()).
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s', rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+  FOR k IN 1 .. array_length(head_vars, 1) LOOP
+    legs := legs || format(' UNION ALL SELECT %s, ARRAY[%L]::text[], %L::uuid',
+                           nrel + k - 1, head_vals[k]::text, one);
   END LOOP;
 
   sql := format($q$

@@ -172,4 +172,40 @@ SELECT t.x, ROUND((t.p - s.p)::numeric, 9) AS diff_transparent_vs_standard
 \echo '== transparent almost-safe per source: joint-width per answer =='
 SELECT x, ROUND(p::numeric, 6) AS joint_width FROM as_tr ORDER BY x;
 
-DROP TABLE jr, js, jt, jp, jq, jw_, jtt CASCADE;
+-- ---------------------------------------------------------------------
+-- (5) Multiple heads over a SELF-JOIN: the star 2-path q(x,z) :- A(x),
+--     E(x,y), E(y,z), B(z) (E twice), GROUP BY x, z.  The head must be
+--     forced by a Sel constraint on the variable, not by filtering the
+--     E relation (which both atoms share); transparent must match the
+--     standard per-(x,z) evaluation (diff 0 for every pair).
+-- ---------------------------------------------------------------------
+SET provsql.active = on;   -- re-enable tracking (section 4 left it off)
+CREATE TABLE na_(x int); INSERT INTO na_ SELECT g FROM generate_series(1,3) g;
+CREATE TABLE ne_(x int, y int);
+INSERT INTO ne_ SELECT g, 0 FROM generate_series(1,3) g
+  UNION ALL SELECT 0, g FROM generate_series(1,3) g;
+CREATE TABLE nb_(z int); INSERT INTO nb_ SELECT g FROM generate_series(1,3) g;
+SELECT add_provenance('na_'); SELECT add_provenance('ne_'); SELECT add_provenance('nb_');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM na_;
+  PERFORM set_prob(provsql, 0.5) FROM ne_;
+  PERFORM set_prob(provsql, 0.5) FROM nb_;
+END $$;
+
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = on;
+CREATE TEMP TABLE star_tr AS
+  SELECT na_.x AS x, nb_.z AS z, probability_evaluate(provenance()) AS p
+    FROM na_, ne_ e1, ne_ e2, nb_
+   WHERE na_.x = e1.x AND e1.y = e2.x AND e2.y = nb_.z GROUP BY na_.x, nb_.z;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE star_std AS
+  SELECT na_.x AS x, nb_.z AS z, probability_evaluate(provenance()) AS p
+    FROM na_, ne_ e1, ne_ e2, nb_
+   WHERE na_.x = e1.x AND e1.y = e2.x AND e2.y = nb_.z GROUP BY na_.x, nb_.z;
+SET provsql.active = off;
+\echo '== star 2 heads (x,z) over a self-join: diff vs standard (must be 0) =='
+SELECT t.x, t.z, ROUND((t.p - s.p)::numeric, 9) AS diff_transparent_vs_standard
+  FROM star_tr t JOIN star_std s ON t.x = s.x AND t.z = s.z ORDER BY t.x, t.z;
+
+DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_ CASCADE;
