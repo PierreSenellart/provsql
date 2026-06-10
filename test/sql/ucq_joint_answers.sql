@@ -343,4 +343,28 @@ SELECT o.y, (o.tok <> f.tok) AS joint_width_fired,
 SELECT o.x, o.y, (o.tok = f.tok) AS same_as_standard
   FROM jbag_on o JOIN jbag_off f ON o.x = f.x AND o.y = f.y ORDER BY o.x, o.y;
 
+-- ---------------------------------------------------------------------
+-- (10) Boolean UNION of conjunctive queries: a genuine multi-disjunct UCQ
+--      Q :- R(x).  Q :- S(x,y), T(y).  written as a SQL UNION inside an
+--      aggregated subquery.  The planner recogniser builds a two-disjunct
+--      descriptor (relations merged across the arms) and the transparent
+--      substitution evaluates the union with the joint-width compiler --
+--      the "U" in UCQ exercised end to end.  Cross-checked against the
+--      standard ladder on the same instance (diff 0), token differs from
+--      the joint_width=off run (proves it fired).
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.joint_width = on;
+CREATE TEMP TABLE ju_on AS SELECT provenance() AS tok
+  FROM (SELECT 1 d FROM jr UNION SELECT 1 FROM js, jt WHERE js.y = jt.y) q;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE ju_off AS SELECT provenance() AS tok
+  FROM (SELECT 1 d FROM jr UNION SELECT 1 FROM js, jt WHERE js.y = jt.y) q;
+SET provsql.active = off;
+\echo '== Boolean UNION (two disjuncts): joint-width fired, value = ladder =='
+SELECT (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9)
+         AS diff_vs_ladder
+  FROM ju_on o, ju_off f;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;

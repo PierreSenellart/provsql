@@ -28,10 +28,15 @@
  * Recognises a pure-join conjunctive query over provenance-tracked base
  * relations: a flat @c FROM list of @c RTE_RELATION entries (each
  * tracked), a @c WHERE that is a conjunction of @c Var @c = @c Var
- * equalities, no aggregates / @c GROUP @c BY / @c HAVING / set
- * operations / sublinks.  The variable structure is the column
- * equivalence relation induced by the equalities; every base column is a
- * query variable (existential or output).
+ * equalities, no aggregates / @c GROUP @c BY / @c HAVING / sublinks.  The
+ * variable structure is the column equivalence relation induced by the
+ * equalities; every base column is a query variable (existential or
+ * output).
+ *
+ * A @c UNION [@c ALL] of such conjunctive queries (the body of an
+ * aggregated subquery) is recognised as a genuine multi-disjunct UCQ: one
+ * disjunct per arm, relations merged across the arms, Boolean existence
+ * only (per-answer UNION heads decline).
  *
  * @param constants        Cached extension OIDs.
  * @param q                The parsed query (read-only).

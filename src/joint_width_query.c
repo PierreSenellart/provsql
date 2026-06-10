@@ -187,6 +187,280 @@ static bool collect_jointree(Node *n, Query *q, Index *atom_rti,
   return false;   /* FromExpr / subquery / other: outside scope */
 }
 
+/**
+ * @brief A merge of relations across the disjuncts of a UCQ: distinct
+ *        relation OIDs (first-seen order) with their element column-name
+ *        lists.  The atoms of every disjunct reference relations by their
+ *        index here, so a relation shared between disjuncts (a self-join
+ *        across a UNION) is gathered once.
+ */
+typedef struct {
+  Oid   *oids;
+  List **colnames;   /* element column names (raw), per relation */
+  int    n;
+  int    cap;
+} RelMerge;
+
+/** @brief Find-or-add a relation; returns its global index. */
+static int relmerge_get(RelMerge *m, Oid oid, List *colnames)
+{
+  int i;
+  for (i = 0; i < m->n; i++)
+    if (m->oids[i] == oid)
+      return i;
+  m->oids[m->n] = oid;
+  m->colnames[m->n] = colnames;
+  return m->n++;
+}
+
+/**
+ * @brief Does @p cq expose no tracked-atom variable in its target list
+ *        (i.e. it computes the Boolean existence of its CQ)?
+ *
+ * @p atom_rti / @p natoms describe the tracked range-table entries of
+ * @p cq (as collected by @c collect_jointree).
+ */
+static bool cq_is_existential(Query *cq, Index *atom_rti, int natoms)
+{
+  ListCell *lc;
+  ExistCtx  ec;
+  ec.rtis = atom_rti;
+  ec.natoms = natoms;
+  ec.found = false;
+  foreach (lc, cq->targetList) {
+    TargetEntry *te = (TargetEntry *) lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (te->resname != NULL && strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0)
+      continue;   /* the auto-added provenance column of a processed arm */
+    exist_walker((Node *) te->expr, &ec);
+  }
+  return !ec.found;
+}
+
+/**
+ * @brief Extract one conjunctive query (a flat join over tracked base
+ *        relations) as a UCQ disjunct, appending its
+ *        @c {"n_vars":N,"atoms":[...]} object to @p dbuf and registering
+ *        its relations in @p m (so atom @c "rel" indices are global).
+ *
+ * The per-disjunct variable space is local (variables 0..N-1 of this
+ * disjunct); the element dictionary that binds them to data values is
+ * shared across the whole UCQ by the gather.  Requires the disjunct be
+ * Boolean-existential (no tracked head exposed) -- per-answer UNION heads
+ * are not yet supported.  Returns @c false to decline.
+ */
+static bool emit_cq_disjunct(const constants_t *constants, Query *cq,
+                             RelMerge *m, StringInfo dbuf)
+{
+  ListCell *lc;
+  int       natoms = 0;
+  Index    *atom_rti;
+  Oid      *atom_relid;
+  ColRef   *cols;
+  int       ncols = 0;
+  int      *pairs;
+  int       npairs = 0;
+  int       maxcols;
+  List     *qual_list = NIL;
+  int      *root_var;
+  int       nvars = 0;
+  int       a, i;
+
+  (void) constants;
+
+  /* Same shape gate as the top-level single-CQ path, per arm. */
+  if (cq->commandType != CMD_SELECT || cq->setOperations != NULL ||
+      cq->jointree == NULL || cq->hasAggs || cq->havingQual != NULL ||
+      cq->hasWindowFuncs || cq->hasSubLinks || cq->cteList != NIL ||
+      cq->jointree->fromlist == NIL)
+    return false;
+
+  atom_rti   = palloc(list_length(cq->rtable) * sizeof(Index));
+  atom_relid = palloc(list_length(cq->rtable) * sizeof(Oid));
+  foreach (lc, cq->jointree->fromlist)
+    if (!collect_jointree((Node *) lfirst(lc), cq, atom_rti, atom_relid,
+                          &natoms, &qual_list))
+      return false;
+  if (natoms == 0)
+    return false;
+  if (cq->jointree->quals != NULL)
+    qual_list = lappend(qual_list, cq->jointree->quals);
+
+  /* Boolean arms only (MVP): a per-answer UNION head is out of scope. */
+  if (!cq_is_existential(cq, atom_rti, natoms))
+    return false;
+
+  maxcols = 0;
+  for (a = 0; a < natoms; a++) {
+    RangeTblEntry *rte = rt_fetch(atom_rti[a], cq->rtable);
+    maxcols += list_length(rte->eref->colnames);
+  }
+  cols = palloc(maxcols * sizeof(ColRef));
+  pairs = palloc(2 * (list_length(cq->rtable) * 8 + 64) * sizeof(int));
+
+  for (a = 0; a < natoms; a++) {
+    RangeTblEntry *rte = rt_fetch(atom_rti[a], cq->rtable);
+    AttrNumber attno = 0;
+    ListCell *c;
+    foreach (c, rte->eref->colnames) {
+      char *name = strVal(lfirst(c));
+      attno++;
+      if (name[0] == '\0' || strcmp(name, PROVSQL_COLUMN_NAME) == 0)
+        continue;
+      (void) colref_get(cols, &ncols, atom_rti[a], attno);
+    }
+  }
+
+  foreach (lc, qual_list)
+    if (!collect_equalities((Node *) lfirst(lc), cols, &ncols, &pairs, &npairs))
+      return false;
+  for (i = 0; i < npairs; i += 2)
+    uf_union(cols, pairs[i], pairs[i + 1]);
+
+  root_var = palloc(ncols * sizeof(int));
+  for (i = 0; i < ncols; i++)
+    root_var[i] = -1;
+  for (i = 0; i < ncols; i++) {
+    int r = uf_find(cols, i);
+    if (root_var[r] < 0)
+      root_var[r] = nvars++;
+  }
+
+  appendStringInfo(dbuf, "{\"n_vars\":%d,\"atoms\":[", nvars);
+  for (a = 0; a < natoms; a++) {
+    RangeTblEntry *rte = rt_fetch(atom_rti[a], cq->rtable);
+    AttrNumber attno = 0;
+    ListCell *c;
+    bool firstv = true;
+    List *elem_colnames = NIL;
+    int   gidx;
+    /* Element column names of this atom's relation (raw, in order). */
+    foreach (c, rte->eref->colnames) {
+      char *name = strVal(lfirst(c));
+      if (name[0] == '\0' || strcmp(name, PROVSQL_COLUMN_NAME) == 0)
+        continue;
+      elem_colnames = lappend(elem_colnames, makeString(name));
+    }
+    gidx = relmerge_get(m, atom_relid[a], elem_colnames);
+    if (a) appendStringInfoChar(dbuf, ',');
+    appendStringInfo(dbuf, "{\"rel\":%d,\"vars\":[", gidx);
+    attno = 0;
+    foreach (c, rte->eref->colnames) {
+      char *name = strVal(lfirst(c));
+      attno++;
+      if (name[0] == '\0' || strcmp(name, PROVSQL_COLUMN_NAME) == 0)
+        continue;
+      {
+        int node = colref_get(cols, &ncols, atom_rti[a], attno);
+        int var = root_var[uf_find(cols, node)];
+        if (!firstv) appendStringInfoChar(dbuf, ',');
+        appendStringInfo(dbuf, "%d", var);
+        firstv = false;
+      }
+    }
+    appendStringInfoString(dbuf, "]}");
+  }
+  appendStringInfoString(dbuf, "]}");
+  return true;
+}
+
+/**
+ * @brief Collect the leaf arm subqueries of a UNION set-operation tree.
+ *
+ * Walks @p node (a @c SetOperationStmt tree); every internal node must be
+ * a @c SETOP_UNION (UNION or UNION ALL -- both compute the same Boolean
+ * existence), and every leaf a @c RangeTblRef to an @c RTE_SUBQUERY arm.
+ * Appends each arm @c Query* to @p arms.  Returns @c false to decline
+ * (INTERSECT / EXCEPT, or an unexpected leaf).
+ */
+static bool collect_union_arms(Node *node, Query *parent, List **arms)
+{
+  if (node == NULL)
+    return false;
+  if (IsA(node, SetOperationStmt)) {
+    SetOperationStmt *so = (SetOperationStmt *) node;
+    if (so->op != SETOP_UNION)
+      return false;
+    return collect_union_arms(so->larg, parent, arms) &&
+           collect_union_arms(so->rarg, parent, arms);
+  }
+  if (IsA(node, RangeTblRef)) {
+    Index rti = ((RangeTblRef *) node)->rtindex;
+    RangeTblEntry *rte = rt_fetch(rti, parent->rtable);
+    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+      return false;
+    *arms = lappend(*arms, rte->subquery);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Build the descriptor for a UNION of conjunctive queries (a UCQ
+ *        with more than one disjunct): one disjunct per arm, relations
+ *        merged across arms.  Boolean existence only (MVP).  Returns
+ *        @c NULL to decline.
+ */
+static char *build_union_descriptor(const constants_t *constants, Query *unionq)
+{
+  List          *arms = NIL;
+  ListCell      *lc;
+  RelMerge       m;
+  StringInfoData dbuf;
+  StringInfoData buf;
+  int            i;
+  bool           first = true;
+
+  if (!collect_union_arms(unionq->setOperations, unionq, &arms))
+    return NULL;
+  if (list_length(arms) < 2)
+    return NULL;
+
+  m.cap = 0;
+  foreach (lc, arms)
+    m.cap += list_length(((Query *) lfirst(lc))->rtable);
+  m.oids     = palloc(m.cap * sizeof(Oid));
+  m.colnames = palloc(m.cap * sizeof(List *));
+  m.n = 0;
+
+  initStringInfo(&dbuf);
+  foreach (lc, arms) {
+    if (!first) appendStringInfoChar(&dbuf, ',');
+    if (!emit_cq_disjunct(constants, (Query *) lfirst(lc), &m, &dbuf))
+      return NULL;
+    first = false;
+  }
+
+  initStringInfo(&buf);
+  appendStringInfo(&buf, "{\"disjuncts\":[%s],\"relations\":[", dbuf.data);
+  for (i = 0; i < m.n; i++) {
+    char *nsp = get_namespace_name(get_rel_namespace(m.oids[i]));
+    char *rel = get_rel_name(m.oids[i]);
+    StringInfoData qn;
+    initStringInfo(&qn);
+    appendStringInfo(&qn, "%s.%s", quote_identifier(nsp), quote_identifier(rel));
+    if (i) appendStringInfoChar(&buf, ',');
+    append_json_string(&buf, qn.data);
+    pfree(qn.data);
+  }
+  appendStringInfoString(&buf, "],\"elem_cols\":[");
+  for (i = 0; i < m.n; i++) {
+    ListCell *c;
+    bool firstc = true;
+    if (i) appendStringInfoChar(&buf, ',');
+    appendStringInfoChar(&buf, '[');
+    foreach (c, m.colnames[i]) {
+      if (!firstc) appendStringInfoChar(&buf, ',');
+      append_json_string(&buf, strVal(lfirst(c)));
+      firstc = false;
+    }
+    appendStringInfoChar(&buf, ']');
+  }
+  appendStringInfoString(&buf, "]}");
+  return buf.data;
+}
+
 char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
                                      bool *all_existential,
                                      List **head_var_idx, List **head_exprs)
@@ -209,11 +483,27 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
 
   if (all_existential)
     *all_existential = false;
+  if (head_var_idx)
+    *head_var_idx = NIL;
+  if (head_exprs)
+    *head_exprs = NIL;
 
-  /* Shape gate: a plain SELECT, single CQ (no set ops, no aggregates),
-   * with a jointree.  DISTINCT / GROUP BY are allowed (they are how the
-   * existence / per-answer questions are written). */
-  if (q->commandType != CMD_SELECT || q->setOperations != NULL ||
+  /* UNION of conjunctive queries: a genuine multi-disjunct UCQ.  Reached
+   * when this is the body of an aggregated subquery (the recursion from the
+   * subquery branch below); a top-level UNION is combined at SR_PLUS, where
+   * the recogniser is not invoked.  Boolean existence only (per-answer
+   * UNION heads decline inside emit_cq_disjunct). */
+  if (q->setOperations != NULL) {
+    char *desc = build_union_descriptor(constants, q);
+    if (desc != NULL && all_existential)
+      *all_existential = true;
+    return desc;
+  }
+
+  /* Shape gate: a plain SELECT, single CQ (no aggregates), with a jointree.
+   * DISTINCT / GROUP BY are allowed (they are how the existence / per-answer
+   * questions are written). */
+  if (q->commandType != CMD_SELECT ||
       q->jointree == NULL || q->hasAggs ||
       q->havingQual != NULL ||
       q->hasWindowFuncs || q->hasSubLinks || q->cteList != NIL)
@@ -236,7 +526,21 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
         char *desc = provsql_joint_width_descriptor(constants, subrte->subquery,
                                                     &sub_all, &sub_idx,
                                                     &sub_exprs);
-        if (desc == NULL || sub_idx == NIL)
+        if (desc == NULL)
+          return NULL;
+        /* Boolean UNION subquery: the recursion has confirmed every arm is
+         * existential (sub_all, no per-answer head -- a per-answer arm makes
+         * emit_cq_disjunct decline, so desc would be NULL above).  The outer
+         * query can therefore only be projecting the union's constant /
+         * non-tracked columns and aggregating its provenance: propagate the
+         * Boolean existence. */
+        if (subrte->subquery->setOperations != NULL && sub_all &&
+            sub_idx == NIL) {
+          if (all_existential)
+            *all_existential = true;
+          return desc;
+        }
+        if (sub_idx == NIL)
           return NULL;
         if (head_var_idx != NULL) {
           bool clean = true;

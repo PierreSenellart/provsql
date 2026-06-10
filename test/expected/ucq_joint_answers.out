@@ -136,3 +136,7 @@ x|y|same_as_standard
 4|41|t
 4|42|t
 (8 rows)
+== Boolean UNION (two disjuncts): joint-width fired, value = ladder ==
+joint_width_fired|diff_vs_ladder
+t|0.000000000
+(1 row)
