@@ -2,6 +2,11 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
+-- Probes the safe-query read-once ('independent') rewrite in isolation;
+-- pin the joint-width debug GUC off so its per-answer d-D does not replace
+-- the read-once provenance the 'independent' method checks.
+SET provsql.joint_width = off;
+
 -- End-to-end exercise of provsql.boolean_provenance for a two-atom
 -- self-join-free hierarchical conjunctive query of the form
 -- q(x) :- A(x), B(x).  The rewrite is only sound for global /

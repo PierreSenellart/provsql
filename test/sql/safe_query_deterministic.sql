@@ -2,6 +2,11 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
+-- Probes the safe-query read-once ('independent') rewrite in isolation;
+-- pin the joint-width debug GUC off so its per-answer d-D does not replace
+-- the read-once provenance the 'independent' method checks.
+SET provsql.joint_width = off;
+
 -- Deterministic-relation transparency (Gatterbauer & Suciu 2015,
 -- dissociation framework).  A relation that is not provenance-tracked
 -- (no @c provsql column and no metadata entry) carries

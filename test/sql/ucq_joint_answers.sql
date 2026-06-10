@@ -159,9 +159,17 @@ SET provsql.joint_width = on;
 CREATE TEMP TABLE h0_tr AS
   SELECT jr.x AS x, probability_evaluate(provenance()) AS p
     FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY jr.x;
-CREATE TEMP TABLE as_tr AS
-  SELECT jp.x AS x, probability_evaluate(provenance()) AS p
-    FROM jp, jq, jw_, jtt
+-- Capture the joint-width token (on) and the standard token (off) per
+-- answer; the joint-width d-D is a different gate, so on <> off proves the
+-- per-answer substitution fired (a regression that silently fell back to
+-- the standard provenance would make them equal -- and pass a value-only
+-- check, since the values agree on a small instance).
+CREATE TEMP TABLE as_on AS
+  SELECT jp.x AS x, provenance() AS tok FROM jp, jq, jw_, jtt
+   WHERE jp.x = jq.x AND jp.x = jw_.x AND jp.y = jtt.y GROUP BY jp.x;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE as_off AS
+  SELECT jp.x AS x, provenance() AS tok FROM jp, jq, jw_, jtt
    WHERE jp.x = jq.x AND jp.x = jw_.x AND jp.y = jtt.y GROUP BY jp.x;
 SET provsql.active = off;
 
@@ -169,8 +177,10 @@ SET provsql.active = off;
 SELECT t.x, ROUND((t.p - s.p)::numeric, 9) AS diff_transparent_vs_standard
   FROM h0_tr t JOIN h0_std s ON t.x = s.x ORDER BY t.x;
 
-\echo '== transparent almost-safe per source: joint-width per answer =='
-SELECT x, ROUND(p::numeric, 6) AS joint_width FROM as_tr ORDER BY x;
+\echo '== almost-safe: joint-width fired (token differs) and value = closed form =='
+SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND(probability_evaluate(o.tok)::numeric, 6) AS joint_width
+  FROM as_on o JOIN as_off f ON o.x = f.x ORDER BY o.x;
 
 -- ---------------------------------------------------------------------
 -- (5) Multiple heads over a SELF-JOIN: the star 2-path q(x,z) :- A(x),
@@ -194,18 +204,19 @@ END $$;
 
 SET provsql.provenance = 'boolean';
 SET provsql.joint_width = on;
-CREATE TEMP TABLE star_tr AS
-  SELECT na_.x AS x, nb_.z AS z, probability_evaluate(provenance()) AS p
+CREATE TEMP TABLE star_on AS
+  SELECT na_.x AS x, nb_.z AS z, provenance() AS tok
     FROM na_, ne_ e1, ne_ e2, nb_
    WHERE na_.x = e1.x AND e1.y = e2.x AND e2.y = nb_.z GROUP BY na_.x, nb_.z;
 SET provsql.joint_width = off;
-CREATE TEMP TABLE star_std AS
-  SELECT na_.x AS x, nb_.z AS z, probability_evaluate(provenance()) AS p
+CREATE TEMP TABLE star_off AS
+  SELECT na_.x AS x, nb_.z AS z, provenance() AS tok
     FROM na_, ne_ e1, ne_ e2, nb_
    WHERE na_.x = e1.x AND e1.y = e2.x AND e2.y = nb_.z GROUP BY na_.x, nb_.z;
 SET provsql.active = off;
-\echo '== star 2 heads (x,z) over a self-join: diff vs standard (must be 0) =='
-SELECT t.x, t.z, ROUND((t.p - s.p)::numeric, 9) AS diff_transparent_vs_standard
-  FROM star_tr t JOIN star_std s ON t.x = s.x AND t.z = s.z ORDER BY t.x, t.z;
+\echo '== star 2 heads over a self-join: joint-width fired, diff vs standard 0 =='
+SELECT o.x, o.z, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
+  FROM star_on o JOIN star_off f ON o.x = f.x AND o.z = f.z ORDER BY o.x, o.z;
 
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_ CASCADE;

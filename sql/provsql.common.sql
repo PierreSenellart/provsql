@@ -5538,9 +5538,9 @@ BEGIN
   -- is forced to the bound value at every occurrence, self-join safe).
   SELECT jsonb_build_object('disjuncts', jsonb_agg(
            jsonb_set(t.val,'{atoms}', (t.val->'atoms') ||
-             (SELECT jsonb_agg(jsonb_build_object('rel', nrel+k-1,
-                       'vars', jsonb_build_array(head_vars[k])) ORDER BY k)
-                FROM generate_subscripts(head_vars,1) k)) ORDER BY t.ord))
+             (SELECT jsonb_agg(jsonb_build_object('rel', nrel+kk-1,
+                       'vars', jsonb_build_array(head_vars[kk])) ORDER BY kk)
+                FROM generate_subscripts(head_vars,1) kk)) ORDER BY t.ord))
     INTO aug
     FROM jsonb_array_elements(descriptor->'disjuncts') WITH ORDINALITY t(val,ord);
 
