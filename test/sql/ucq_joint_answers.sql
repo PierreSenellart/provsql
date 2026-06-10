@@ -367,4 +367,31 @@ SELECT (o.tok <> f.tok) AS joint_width_fired,
          AS diff_vs_ladder
   FROM ju_on o, ju_off f;
 
+-- ---------------------------------------------------------------------
+-- (11) Per-answer UNION (free-variable head): Q(x) :- R(x).  Q(x) :-
+--      S(x,y), T(y).  written as SELECT x, ... FROM (... UNION ...)
+--      GROUP BY x.  Each arm exposes the head x; emit_cq_disjunct numbers
+--      the head canonically (head -> variable 0 in every disjunct) so the
+--      Sel-pin forces it across both disjuncts, and the substitution
+--      evaluates the head-pinned UCQ per answer.  Cross-checked per x
+--      against the standard ladder (diff 0), token differs (fired).
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.joint_width = on;
+CREATE TEMP TABLE jpu_on AS
+  SELECT x, provenance() AS tok
+    FROM (SELECT jr.x FROM jr UNION SELECT js.x FROM js, jt WHERE js.y = jt.y) q
+   GROUP BY x;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE jpu_off AS
+  SELECT x, provenance() AS tok
+    FROM (SELECT jr.x FROM jr UNION SELECT js.x FROM js, jt WHERE js.y = jt.y) q
+   GROUP BY x;
+SET provsql.active = off;
+\echo '== per-answer UNION q(x): joint-width fired per answer, diff vs ladder 0 =='
+SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9)
+         AS diff_vs_ladder
+  FROM jpu_on o JOIN jpu_off f ON o.x = f.x ORDER BY o.x;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;

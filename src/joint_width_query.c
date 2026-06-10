@@ -246,12 +246,20 @@ static bool cq_is_existential(Query *cq, Index *atom_rti, int natoms)
  *
  * The per-disjunct variable space is local (variables 0..N-1 of this
  * disjunct); the element dictionary that binds them to data values is
- * shared across the whole UCQ by the gather.  Requires the disjunct be
- * Boolean-existential (no tracked head exposed) -- per-answer UNION heads
- * are not yet supported.  Returns @c false to decline.
+ * shared across the whole UCQ by the gather.
+ *
+ * @p head_resno (length @p n_heads) gives the arm output-column positions
+ * (1-based @c resno, aligned across the UNION's arms) of the per-answer
+ * head variables, in head order.  Each is numbered CANONICALLY -- head
+ * @e h becomes query variable @e h in every arm -- so a single
+ * @c head_vars = [0,1,…] pins the head in every disjunct (the SQL
+ * @c ucq_joint_provenance_answer uses one head-variable index across all
+ * disjuncts).  With @p n_heads == 0 the arm must be Boolean-existential.
+ * Returns @c false to decline.
  */
 static bool emit_cq_disjunct(const constants_t *constants, Query *cq,
-                             RelMerge *m, StringInfo dbuf)
+                             RelMerge *m, StringInfo dbuf,
+                             const int *head_resno, int n_heads)
 {
   ListCell *lc;
   int       natoms = 0;
@@ -265,7 +273,7 @@ static bool emit_cq_disjunct(const constants_t *constants, Query *cq,
   List     *qual_list = NIL;
   int      *root_var;
   int       nvars = 0;
-  int       a, i;
+  int       a, i, h;
 
   (void) constants;
 
@@ -287,8 +295,9 @@ static bool emit_cq_disjunct(const constants_t *constants, Query *cq,
   if (cq->jointree->quals != NULL)
     qual_list = lappend(qual_list, cq->jointree->quals);
 
-  /* Boolean arms only (MVP): a per-answer UNION head is out of scope. */
-  if (!cq_is_existential(cq, atom_rti, natoms))
+  /* A Boolean disjunct must expose no tracked head; a per-answer disjunct
+   * exposes exactly the head columns (resolved below). */
+  if (n_heads == 0 && !cq_is_existential(cq, atom_rti, natoms))
     return false;
 
   maxcols = 0;
@@ -321,6 +330,39 @@ static bool emit_cq_disjunct(const constants_t *constants, Query *cq,
   root_var = palloc(ncols * sizeof(int));
   for (i = 0; i < ncols; i++)
     root_var[i] = -1;
+
+  /* Canonical head numbering: head h -> variable h.  Resolve each head
+   * output column to its base Var, then its equivalence class. */
+  for (h = 0; h < n_heads; h++) {
+    TargetEntry *te = NULL;
+    ListCell    *tc;
+    Node        *e;
+    Var         *hv;
+    bool         tracked = false;
+    int          node, root;
+    foreach (tc, cq->targetList) {
+      TargetEntry *t = (TargetEntry *) lfirst(tc);
+      if (t->resno == head_resno[h]) { te = t; break; }
+    }
+    if (te == NULL || te->resjunk)
+      return false;
+    e = (Node *) te->expr;
+    while (IsA(e, RelabelType))
+      e = (Node *) ((RelabelType *) e)->arg;
+    if (!IsA(e, Var) || ((Var *) e)->varlevelsup != 0)
+      return false;   /* a head must be a bare base column to be pinnable */
+    hv = (Var *) e;
+    for (a = 0; a < natoms; a++)
+      if (atom_rti[a] == hv->varno) { tracked = true; break; }
+    if (!tracked)
+      return false;
+    node = colref_get(cols, &ncols, hv->varno, hv->varattno);
+    root = uf_find(cols, node);
+    if (root_var[root] >= 0 && root_var[root] != h)
+      return false;   /* two heads collapse to one variable: decline */
+    root_var[root] = h;
+  }
+  nvars = n_heads;
   for (i = 0; i < ncols; i++) {
     int r = uf_find(cols, i);
     if (root_var[r] < 0)
@@ -397,12 +439,63 @@ static bool collect_union_arms(Node *node, Query *parent, List **arms)
 }
 
 /**
+ * @brief Classify a UNION output column (1-based @p resno): is it a
+ *        per-answer head or a constant projection?
+ *
+ * @return @c 1 if every arm exposes a bare @c Var over a tracked base
+ *         relation there (a real head, pinnable), @c 0 if every arm
+ *         exposes a constant / non-tracked expression there (a Boolean
+ *         projection like @c SELECT @c 1, to be ignored), @c -1 on a mixed
+ *         or malformed column (the recogniser then declines).
+ */
+static int union_position_kind(Query *unionq, int resno)
+{
+  List     *arms = NIL;
+  ListCell *lc;
+  int       kind = -2;   /* unset */
+
+  if (!collect_union_arms(unionq->setOperations, unionq, &arms))
+    return -1;
+  foreach (lc, arms) {
+    Query       *arm = (Query *) lfirst(lc);
+    TargetEntry *te = NULL;
+    ListCell    *tc;
+    Node        *e;
+    int          k;
+    foreach (tc, arm->targetList) {
+      TargetEntry *t = (TargetEntry *) lfirst(tc);
+      if (t->resno == resno) { te = t; break; }
+    }
+    if (te == NULL)
+      return -1;
+    e = (Node *) te->expr;
+    while (IsA(e, RelabelType))
+      e = (Node *) ((RelabelType *) e)->arg;
+    k = 0;
+    if (IsA(e, Var) && ((Var *) e)->varlevelsup == 0) {
+      RangeTblEntry *rte = rt_fetch(((Var *) e)->varno, arm->rtable);
+      if (rte->rtekind == RTE_RELATION &&
+          get_attnum(rte->relid, PROVSQL_COLUMN_NAME) != InvalidAttrNumber)
+        k = 1;
+    }
+    if (kind == -2)
+      kind = k;
+    else if (kind != k)
+      return -1;   /* tracked in one arm, constant in another: decline */
+  }
+  return kind < 0 ? 0 : kind;
+}
+
+/**
  * @brief Build the descriptor for a UNION of conjunctive queries (a UCQ
  *        with more than one disjunct): one disjunct per arm, relations
- *        merged across arms.  Boolean existence only (MVP).  Returns
+ *        merged across arms.  @p head_resno (length @p n_heads) gives the
+ *        per-answer head output positions (canonically numbered in every
+ *        arm); @p n_heads == 0 is the Boolean existence case.  Returns
  *        @c NULL to decline.
  */
-static char *build_union_descriptor(const constants_t *constants, Query *unionq)
+static char *build_union_descriptor(const constants_t *constants, Query *unionq,
+                                    const int *head_resno, int n_heads)
 {
   List          *arms = NIL;
   ListCell      *lc;
@@ -427,7 +520,8 @@ static char *build_union_descriptor(const constants_t *constants, Query *unionq)
   initStringInfo(&dbuf);
   foreach (lc, arms) {
     if (!first) appendStringInfoChar(&dbuf, ',');
-    if (!emit_cq_disjunct(constants, (Query *) lfirst(lc), &m, &dbuf))
+    if (!emit_cq_disjunct(constants, (Query *) lfirst(lc), &m, &dbuf,
+                          head_resno, n_heads))
       return NULL;
     first = false;
   }
@@ -494,7 +588,7 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
    * the recogniser is not invoked.  Boolean existence only (per-answer
    * UNION heads decline inside emit_cq_disjunct). */
   if (q->setOperations != NULL) {
-    char *desc = build_union_descriptor(constants, q);
+    char *desc = build_union_descriptor(constants, q, NULL, 0);
     if (desc != NULL && all_existential)
       *all_existential = true;
     return desc;
@@ -520,27 +614,74 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
     if (IsA(only, RangeTblRef)) {
       Index subrti = ((RangeTblRef *) only)->rtindex;
       RangeTblEntry *subrte = rt_fetch(subrti, q->rtable);
+      if (subrte->rtekind == RTE_SUBQUERY &&
+          subrte->subquery->setOperations != NULL) {
+        /* UNION subquery: a multi-disjunct UCQ.  The outer query's bare Vars
+         * over the subquery are the per-answer head columns (a GROUP BY over
+         * them); the provenance() aggregate references the subquery's provsql
+         * column and is not a head.  With no heads it is the Boolean
+         * existence; with heads, a per-answer UCQ pinned per group. */
+        int  *head_resno = palloc(list_length(q->targetList) * sizeof(int));
+        List *hexprs = NIL;
+        int   n_heads = 0;
+        char *udesc;
+        foreach (lc, q->targetList) {
+          TargetEntry *te = (TargetEntry *) lfirst(lc);
+          Node *e;
+          Var  *v;
+          TargetEntry *ste = NULL;
+          ListCell *sc;
+          if (te->resjunk)
+            continue;
+          e = (Node *) te->expr;
+          while (IsA(e, RelabelType))
+            e = (Node *) ((RelabelType *) e)->arg;
+          if (!(IsA(e, Var) && ((Var *) e)->varno == subrti &&
+                ((Var *) e)->varlevelsup == 0))
+            continue;   /* the provenance() aggregate or a constant */
+          v = (Var *) e;
+          foreach (sc, subrte->subquery->targetList) {
+            TargetEntry *t = (TargetEntry *) lfirst(sc);
+            if (t->resno == v->varattno) { ste = t; break; }
+          }
+          if (ste != NULL && ste->resname != NULL &&
+              strcmp(ste->resname, PROVSQL_COLUMN_NAME) == 0)
+            continue;   /* the subquery's provenance column, not a head */
+          {
+            int kind = union_position_kind(subrte->subquery, v->varattno);
+            if (kind == -1)
+              return NULL;       /* malformed / mixed head column */
+            if (kind == 0)
+              continue;          /* a constant projection (SELECT 1 d): ignore */
+          }
+          head_resno[n_heads] = v->varattno;
+          hexprs = lappend(hexprs, e);
+          n_heads++;
+        }
+        udesc = build_union_descriptor(constants, subrte->subquery,
+                                       head_resno, n_heads);
+        if (udesc == NULL)
+          return NULL;
+        if (n_heads == 0) {
+          if (all_existential)
+            *all_existential = true;
+        } else if (head_var_idx != NULL) {
+          int h;
+          *head_var_idx = NIL;
+          for (h = 0; h < n_heads; h++)
+            *head_var_idx = lappend_int(*head_var_idx, h);   /* canonical */
+          if (head_exprs != NULL)
+            *head_exprs = hexprs;
+        }
+        return udesc;
+      }
       if (subrte->rtekind == RTE_SUBQUERY) {
         List *sub_idx = NIL, *sub_exprs = NIL;
         bool  sub_all = false;
         char *desc = provsql_joint_width_descriptor(constants, subrte->subquery,
                                                     &sub_all, &sub_idx,
                                                     &sub_exprs);
-        if (desc == NULL)
-          return NULL;
-        /* Boolean UNION subquery: the recursion has confirmed every arm is
-         * existential (sub_all, no per-answer head -- a per-answer arm makes
-         * emit_cq_disjunct decline, so desc would be NULL above).  The outer
-         * query can therefore only be projecting the union's constant /
-         * non-tracked columns and aggregating its provenance: propagate the
-         * Boolean existence. */
-        if (subrte->subquery->setOperations != NULL && sub_all &&
-            sub_idx == NIL) {
-          if (all_existential)
-            *all_existential = true;
-          return desc;
-        }
-        if (sub_idx == NIL)
+        if (desc == NULL || sub_idx == NIL)
           return NULL;
         if (head_var_idx != NULL) {
           bool clean = true;

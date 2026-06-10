@@ -35,8 +35,10 @@
  *
  * A @c UNION [@c ALL] of such conjunctive queries (the body of an
  * aggregated subquery) is recognised as a genuine multi-disjunct UCQ: one
- * disjunct per arm, relations merged across the arms, Boolean existence
- * only (per-answer UNION heads decline).
+ * disjunct per arm, relations merged across the arms.  Both the Boolean
+ * existence and the per-answer form (a free-variable head exposed by every
+ * arm and grouped by the outer query) are handled; the head is numbered
+ * canonically so a single Sel-pin forces it across all disjuncts.
  *
  * @param constants        Cached extension OIDs.
  * @param q                The parsed query (read-only).

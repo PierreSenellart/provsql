@@ -140,3 +140,10 @@ x|y|same_as_standard
 joint_width_fired|diff_vs_ladder
 t|0.000000000
 (1 row)
+== per-answer UNION q(x): joint-width fired per answer, diff vs ladder 0 ==
+x|joint_width_fired|diff_vs_ladder
+1|t|0.000000000
+2|t|0.000000000
+3|t|0.000000000
+4|t|0.000000000
+(4 rows)
