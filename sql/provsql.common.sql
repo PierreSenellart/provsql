@@ -4934,6 +4934,396 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
 
 
 /**
+ * @brief Exact probability of a Boolean UCQ over a joint encoding
+ * (columnar form, internal)
+ *
+ * The joint-width UCQ compiler evaluates an arbitrary union of
+ * conjunctive queries -- including the queries that are #P-hard under
+ * the Dalvi-Suciu dichotomy (H0 = R(x),S(x,y),T(y) and the Hk family) --
+ * exactly, in time tractable whenever the joint treewidth of the data
+ * and its correlation structure is bounded (Amarilli, PhD thesis
+ * tel-01345836, §4.2; Amarilli, Bourhis & Senellart, arXiv:1511.08723
+ * App. D).  A UCQ-specialised homomorphism-type dynamic program runs
+ * directly over a tree decomposition of the joint graph, emitting a
+ * deterministic, decomposable circuit by construction -- no separate
+ * knowledge-compilation step.
+ *
+ * This is the columnar internal surface; the ergonomic route is the
+ * @c ucq_joint_evaluate(query jsonb, ...) wrapper below, which flattens
+ * a JSON UCQ specification.  The query is given as five parallel arrays
+ * (the UCQ structure) and the facts as five more (the relation rows);
+ * element ids are dense integers assigned with a dictionary shared
+ * across relations (so join-compatible values match).  A fact whose
+ * token is the nil UUID is certain (an untracked relation).
+ *
+ * @param disjunct_nvars per disjunct: number of query variables
+ * @param atom_disjunct per atom: owning disjunct index (0-based)
+ * @param atom_rel per atom: relation id
+ * @param atom_vars flattened atom variable lists (in atom order)
+ * @param atom_arity per atom: number of variables
+ * @param fact_rel per fact: relation id
+ * @param fact_elems flattened fact element lists (in fact order)
+ * @param fact_arity per fact: arity
+ * @param fact_tokens per fact: provenance token (nil UUID = certain)
+ * @param fact_probs per fact: probability
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_evaluate(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  fact_probs DOUBLE PRECISION[])
+  RETURNS DOUBLE PRECISION AS
+  'provsql','ucq_joint_evaluate' LANGUAGE C IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Boolean UCQ probability plus compilation statistics
+ * (columnar form, internal)
+ *
+ * Same compilation as @c ucq_joint_evaluate(), returning the probability
+ * together with the three width columns that substantiate thesis
+ * Prop. 4.2.11 empirically -- the adversarial family has small data and
+ * circuit widths but large joint width -- and the structural statistics.
+ *
+ * @param[out] probability the exact UCQ probability
+ * @param[out] joint_treewidth width of the min-fill decomposition found
+ * @param[out] data_treewidth_lb degeneracy lower bound of the data-only graph
+ * @param[out] circuit_treewidth_lb degeneracy lower bound of the slice-only graph
+ * @param[out] n_bags number of bags in the decomposition
+ * @param[out] max_states peak number of DP states at any node
+ * @param[out] dd_size number of gates in the emitted d-D
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
+  IN disjunct_nvars INT[],
+  IN atom_disjunct INT[],
+  IN atom_rel INT[],
+  IN atom_vars INT[],
+  IN atom_arity INT[],
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  IN fact_probs DOUBLE PRECISION[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT)
+  AS 'provsql','ucq_joint_compile_stats'
+  LANGUAGE C IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Exact Boolean UCQ probability from a JSON specification
+ *
+ * Ergonomic wrapper over the columnar @c ucq_joint_evaluate(): the UCQ
+ * is a JSON object @c {"disjuncts":[{"n_vars":k,"atoms":[{"rel":r,
+ * "vars":[..]},...]},...]} and the facts are the same five parallel
+ * arrays as the columnar form.  Variables are 0-based indices into a
+ * disjunct's variable list; relation ids and element ids are dense
+ * integers (the element dictionary shared across relations).
+ *
+ * @param query the UCQ as a JSON object
+ * @param fact_rel per fact: relation id
+ * @param fact_elems flattened fact element lists
+ * @param fact_arity per fact: arity
+ * @param fact_tokens per fact: provenance token (nil UUID = certain)
+ * @param fact_probs per fact: probability
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_evaluate(
+  query JSONB,
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  fact_probs DOUBLE PRECISION[])
+  RETURNS DOUBLE PRECISION AS $ucq$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  RETURN ucq_joint_evaluate(dnv, adisj, arel, avars, aarity,
+    fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs);
+END;
+$ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Boolean UCQ probability plus statistics from a JSON specification
+ *
+ * JSON-spec wrapper over the columnar @c ucq_joint_compile_stats()
+ * (see @c ucq_joint_evaluate(query jsonb, ...) for the JSON format).
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
+  IN query JSONB,
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  IN fact_probs DOUBLE PRECISION[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT)
+  AS $ucq$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  SELECT s.probability, s.joint_treewidth, s.data_treewidth_lb,
+         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size
+    INTO probability, joint_treewidth, data_treewidth_lb,
+         circuit_treewidth_lb, n_bags, max_states, dd_size
+    FROM ucq_joint_compile_stats(dnv, adisj, arel, avars, aarity,
+      fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs) s;
+END;
+$ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Exact Boolean UCQ probability over CORRELATED inputs
+ * (columnar form, internal)
+ *
+ * Like @c ucq_joint_evaluate(), but the facts carry real provenance
+ * tokens (no explicit probabilities): the circuit slice is walked from
+ * the provenance store, so a token that is an internal gate over shared
+ * events -- a materialised tracked view, a @c repair_key block, a user
+ * constraint circuit -- is handled natively.  This is the capability no
+ * other exact ProvSQL method offers with a width guarantee: query-side
+ * safety (the Dalvi-Suciu dichotomy) presumes tuple-independent inputs,
+ * so a query over correlated inputs is not tractable by lifted
+ * inference, while the joint-width compiler stays exact and linear when
+ * the joint treewidth is bounded.
+ *
+ * @param disjunct_nvars per disjunct: number of query variables
+ * @param atom_disjunct per atom: owning disjunct index (0-based)
+ * @param atom_rel per atom: relation id
+ * @param atom_vars flattened atom variable lists
+ * @param atom_arity per atom: number of variables
+ * @param fact_rel per fact: relation id
+ * @param fact_elems flattened fact element lists
+ * @param fact_arity per fact: arity
+ * @param fact_tokens per fact: provenance token (walked in the store)
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_evaluate_tracked(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[])
+  RETURNS DOUBLE PRECISION AS
+  'provsql','ucq_joint_evaluate_tracked' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Correlated Boolean UCQ probability plus compilation statistics
+ * (columnar form, internal)
+ *
+ * Same compilation as @c ucq_joint_evaluate_tracked(); the three width
+ * columns substantiate thesis Prop. 4.2.11 on real correlated data (the
+ * data-only and circuit-only degeneracy bounds can be small while the
+ * joint width is large).
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
+  IN disjunct_nvars INT[],
+  IN atom_disjunct INT[],
+  IN atom_rel INT[],
+  IN atom_vars INT[],
+  IN atom_arity INT[],
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT)
+  AS 'provsql','ucq_joint_compile_stats_tracked'
+  LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Exact correlated Boolean UCQ probability from a JSON spec
+ *
+ * JSON-spec wrapper over @c ucq_joint_evaluate_tracked() (see
+ * @c ucq_joint_evaluate(query jsonb, ...) for the JSON UCQ format).  The
+ * facts carry real provenance tokens (no probabilities).
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_evaluate_tracked(
+  query JSONB,
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[])
+  RETURNS DOUBLE PRECISION AS $ucq$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  RETURN ucq_joint_evaluate_tracked(dnv, adisj, arel, avars, aarity,
+    fact_rel, fact_elems, fact_arity, fact_tokens);
+END;
+$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
+
+/**
+ * @brief Correlated Boolean UCQ probability plus statistics from a JSON spec
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
+  IN query JSONB,
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT)
+  AS $ucq$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  SELECT s.probability, s.joint_treewidth, s.data_treewidth_lb,
+         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size
+    INTO probability, joint_treewidth, data_treewidth_lb,
+         circuit_treewidth_lb, n_bags, max_states, dd_size
+    FROM ucq_joint_compile_stats_tracked(dnv, adisj, arel, avars, aarity,
+      fact_rel, fact_elems, fact_arity, fact_tokens) s;
+END;
+$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
+
+/**
+ * @brief Compile a correlated UCQ and materialise its certified d-D,
+ * returning the root provenance token (columnar form, internal)
+ *
+ * The architecturally-primary route: the compiler builds the
+ * deterministic, decomposable circuit and materialises it as ordinary
+ * @c plus / @c times / @c monus provenance gates (carrying the d-DNNF
+ * certificate); the answer is then obtained through the standard entry
+ * points on the returned token -- @c probability_evaluate(token),
+ * @c shapley(token, ...), expectation -- so the joint-width path shares
+ * the one evaluation pipeline.  The token is the exact Boolean
+ * provenance of the UCQ (no @c 'absorptive' marker).
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_materialize_tracked(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[])
+  RETURNS UUID AS
+  'provsql','ucq_joint_materialize_tracked' LANGUAGE C VOLATILE;
+
+/**
+ * @brief Compile a correlated UCQ and materialise its certified d-D
+ * from a JSON spec, returning the root provenance token
+ *
+ * JSON-spec wrapper over @c ucq_joint_materialize_tracked().  Evaluate
+ * the answer with the standard surface, e.g.
+ * @c probability_evaluate(ucq_joint_materialize_tracked(query, ...)).
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_materialize_tracked(
+  query JSONB,
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[])
+  RETURNS UUID AS $ucq$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  RETURN ucq_joint_materialize_tracked(dnv, adisj, arel, avars, aarity,
+    fact_rel, fact_elems, fact_arity, fact_tokens);
+END;
+$ucq$ LANGUAGE plpgsql VOLATILE;
+
+
+/**
  * @brief Compile and materialise the reachability provenance of every
  * vertex (columnar form, internal)
  *
