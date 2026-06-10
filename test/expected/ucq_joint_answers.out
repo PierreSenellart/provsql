@@ -100,3 +100,17 @@ a|t|0.000000000
 b|t|0.000000000
 c|t|0.000000000
 (3 rows)
+== subquery (plain) fired and value equals comma form ==
+x|joint_width_fired|diff
+1|t|0.000000000
+2|t|0.000000000
+3|t|0.000000000
+4|t|0.000000000
+(4 rows)
+== subquery (DISTINCT inside) fired and value equals comma form ==
+x|joint_width_fired|diff
+1|t|0.000000000
+2|t|0.000000000
+3|t|0.000000000
+4|t|0.000000000
+(4 rows)

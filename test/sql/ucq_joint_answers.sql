@@ -276,4 +276,36 @@ SELECT o.nm, (o.tok <> f.tok) AS joint_width_fired,
        ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
   FROM txt_on o JOIN txt_off f ON o.nm = f.nm ORDER BY o.nm;
 
+-- ---------------------------------------------------------------------
+-- (8) Subquery form: the UCQ is wrapped in a FROM-subquery and the
+--     per-answer aggregation is on the outer.  The recogniser recurses
+--     into the subquery and maps the outer GROUP BY column through the
+--     subquery target list, so the plain and the DISTINCT-in-subquery
+--     spellings of H0 both fire and agree with the comma/WHERE form.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = on;
+CREATE TEMP TABLE sub_on AS
+  SELECT x, provenance() AS tok
+    FROM (SELECT jr.x FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) s
+   GROUP BY x;
+CREATE TEMP TABLE subd_on AS
+  SELECT x, provenance() AS tok
+    FROM (SELECT DISTINCT jr.x FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) s
+   GROUP BY x;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE sub_off AS
+  SELECT jr.x AS x, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY jr.x;
+SET provsql.active = off;
+\echo '== subquery (plain) fired and value equals comma form =='
+SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
+  FROM sub_on o JOIN sub_off f ON o.x = f.x ORDER BY o.x;
+\echo '== subquery (DISTINCT inside) fired and value equals comma form =='
+SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
+  FROM subd_on o JOIN sub_off f ON o.x = f.x ORDER BY o.x;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;

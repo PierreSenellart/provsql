@@ -219,6 +219,84 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       q->hasWindowFuncs || q->hasSubLinks || q->cteList != NIL)
     return NULL;
 
+  /* Subquery form: the sole FROM item is a subquery whose body is the UCQ
+   * (SELECT head, probability_evaluate(provenance())
+   *    FROM (SELECT base.head FROM ... WHERE ...) s GROUP BY head, and the
+   * DISTINCT variant).  Recurse into the subquery for the descriptor and
+   * its output heads, then map the outer output columns through the
+   * subquery target list (the outer Var becomes the per-group head value). */
+  if (list_length(q->jointree->fromlist) == 1 && q->jointree->quals == NULL) {
+    Node *only = (Node *) linitial(q->jointree->fromlist);
+    if (IsA(only, RangeTblRef)) {
+      Index subrti = ((RangeTblRef *) only)->rtindex;
+      RangeTblEntry *subrte = rt_fetch(subrti, q->rtable);
+      if (subrte->rtekind == RTE_SUBQUERY) {
+        List *sub_idx = NIL, *sub_exprs = NIL;
+        bool  sub_all = false;
+        char *desc = provsql_joint_width_descriptor(constants, subrte->subquery,
+                                                    &sub_all, &sub_idx,
+                                                    &sub_exprs);
+        if (desc == NULL || sub_idx == NIL)
+          return NULL;
+        if (head_var_idx != NULL) {
+          bool clean = true;
+          *head_var_idx = NIL;
+          if (head_exprs != NULL)
+            *head_exprs = NIL;
+          foreach (lc, q->targetList) {
+            TargetEntry *te = (TargetEntry *) lfirst(lc);
+            Node *e;
+            AttrNumber outcol;
+            TargetEntry *ste = NULL;
+            ListCell *sc, *li, *lx;
+            Node *se;
+            int hv = -1;
+            if (te->resjunk)
+              continue;
+            e = (Node *) te->expr;
+            while (IsA(e, RelabelType))
+              e = (Node *) ((RelabelType *) e)->arg;
+            if (!(IsA(e, Var) && ((Var *) e)->varno == subrti &&
+                  ((Var *) e)->varlevelsup == 0))
+              continue;   /* the aggregate / a constant: not a head */
+            outcol = ((Var *) e)->varattno;
+            foreach (sc, subrte->subquery->targetList) {
+              TargetEntry *t = (TargetEntry *) lfirst(sc);
+              if (t->resno == outcol) { ste = t; break; }
+            }
+            if (ste == NULL || ste->resjunk) { clean = false; break; }
+            se = (Node *) ste->expr;
+            while (IsA(se, RelabelType))
+              se = (Node *) ((RelabelType *) se)->arg;
+            if (!IsA(se, Var)) { clean = false; break; }
+            forboth (li, sub_idx, lx, sub_exprs) {
+              Var *sv = (Var *) lfirst(lx);
+              if (sv->varno == ((Var *) se)->varno &&
+                  sv->varattno == ((Var *) se)->varattno) {
+                hv = lfirst_int(li);
+                break;
+              }
+            }
+            if (hv < 0) { clean = false; break; }
+            if (!list_member_int(*head_var_idx, hv)) {
+              *head_var_idx = lappend_int(*head_var_idx, hv);
+              if (head_exprs != NULL)
+                *head_exprs = lappend(*head_exprs, e);
+            }
+          }
+          if (!clean) {
+            *head_var_idx = NIL;
+            if (head_exprs != NULL)
+              *head_exprs = NIL;
+          }
+        }
+        if (all_existential)
+          *all_existential = false;
+        return desc;
+      }
+    }
+  }
+
   /* The FROM list must be a flat list of RangeTblRefs to tracked base
    * relations. */
   if (q->jointree->fromlist == NIL)
@@ -371,6 +449,9 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
         ExistCtx ec;
         if (te->resjunk)
           continue;
+        if (te->resname != NULL &&
+            strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0)
+          continue;   /* auto-added provenance column of a processed subquery */
         e = (Node *) te->expr;
         while (IsA(e, RelabelType))
           e = (Node *) ((RelabelType *) e)->arg;
