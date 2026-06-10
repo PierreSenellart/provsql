@@ -114,3 +114,25 @@ x|joint_width_fired|diff
 3|t|0.000000000
 4|t|0.000000000
 (4 rows)
+== free JOIN-variable head q(y): fired, diff vs standard 0 ==
+y|joint_width_fired|diff
+11|t|0.000000000
+12|t|0.000000000
+21|t|0.000000000
+22|t|0.000000000
+31|t|0.000000000
+32|t|0.000000000
+41|t|0.000000000
+42|t|0.000000000
+(8 rows)
+== bag projection (no dup-elim): joint-width does NOT fire (token = standard) ==
+x|y|same_as_standard
+1|11|t
+1|12|t
+2|21|t
+2|22|t
+3|31|t
+3|32|t
+4|41|t
+4|42|t
+(8 rows)

@@ -308,4 +308,39 @@ SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
        ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
   FROM subd_on o JOIN sub_off f ON o.x = f.x ORDER BY o.x;
 
+-- ---------------------------------------------------------------------
+-- (9) Free JOIN-variable as head, and bag projection.  q(y) :- R(x),
+--     S(x,y), T(y) GROUP BY y exposes the join variable y as the head
+--     (joint-width fires and agrees with standard).  A bag projection
+--     SELECT x, y (no DISTINCT / GROUP BY) keeps one row per witness, each
+--     a single monomial -- joint-width must NOT fire (no aggregation), so
+--     the per-row token equals the standard provenance.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = on;
+CREATE TEMP TABLE jy_on AS
+  SELECT js.y AS y, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY js.y;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE jy_off AS
+  SELECT js.y AS y, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY js.y;
+SET provsql.joint_width = on;
+CREATE TEMP TABLE jbag_on AS
+  SELECT jr.x AS x, js.y AS y, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE jbag_off AS
+  SELECT jr.x AS x, js.y AS y, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y;
+SET provsql.active = off;
+\echo '== free JOIN-variable head q(y): fired, diff vs standard 0 =='
+SELECT o.y, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
+  FROM jy_on o JOIN jy_off f ON o.y = f.y ORDER BY o.y;
+\echo '== bag projection (no dup-elim): joint-width does NOT fire (token = standard) =='
+SELECT o.x, o.y, (o.tok = f.tok) AS same_as_standard
+  FROM jbag_on o JOIN jbag_off f ON o.x = f.x AND o.y = f.y ORDER BY o.x, o.y;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;
