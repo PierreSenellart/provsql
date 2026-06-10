@@ -51,6 +51,9 @@ PG_FUNCTION_INFO_V1(ucq_joint_materialize_tracked);
 #include "GenericCircuit.h"
 #include "provsql_utils_cpp.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -253,6 +256,20 @@ struct SliceBuilder {
   std::vector<SliceGate> slice;
   std::map<std::string, int> uuid2node;   ///< UUID -> node code (cached).
 
+  /// A @c gate_mulinput leaf deferred until @c expandMulBlocks() can see
+  /// the whole categorical block it belongs to.  @c block is the UUID of
+  /// the shared key gate (all values of one repair_key block share it);
+  /// @c value_index orders the values; @c prob is the value's mass.
+  struct MulRef { std::string block; unsigned value_index; double prob; };
+  std::vector<MulRef> mulrefs;            ///< Deferred mulinput leaves.
+  std::vector<int> mul_resolved;          ///< MulRef index -> slice node.
+  unsigned mulsb_counter = 0;             ///< Fresh stick-breaking event ids.
+
+  /// Node codes below this are deferred mulinput references; the actual
+  /// MulRef index is @c MULREF_BASE - code (so distinct from the -1/-2
+  /// constants and from any non-negative slice index).
+  static constexpr int MULREF_BASE = -1000000;
+
   int binarize(SliceGateType t, std::vector<int> &children) {
     if (children.empty())
       return t == SliceGateType::AND ? -2 : -1;   // empty AND=true, OR=false
@@ -337,14 +354,136 @@ struct SliceBuilder {
       }
       break;
     }
+    case gate_mulinput: {
+      // A BID / repair_key categorical value.  We cannot stick-break it
+      // here -- that needs the cumulative mass of every value in its block,
+      // which is scattered across the facts.  Defer it: record the value
+      // and return a placeholder code; expandMulBlocks() resolves the whole
+      // block at once (after every fact has been walked) into shared
+      // independent IN/NOT/AND slice nodes that enforce the mutual
+      // exclusivity (the block's values share stick-breaking events -- the
+      // correlation the joint screen must see).
+      const auto &w = gc.getWires(g);
+      if (w.empty())
+        throw JointCompilerException("malformed mulinput gate (no key wire)");
+      const std::string key = gc.getUUID(w[0]);
+      if (key.empty())
+        throw JointCompilerException(
+                "mulinput key gate has no UUID (cannot group the block)");
+      MulRef m;
+      m.block = key;
+      m.value_index = gc.getInfos(g).first;
+      m.prob = gc.getProb(g);
+      mulrefs.push_back(std::move(m));
+      res = MULREF_BASE - static_cast<int>(mulrefs.size() - 1);
+      break;
+    }
     default:
       throw JointCompilerException(
               "unsupported gate type in circuit slice (joint-width "
-              "compilation handles input/and/or/not only)");
+              "compilation handles input/and/or/not and mulinput only)");
     }
     if (!u.empty())
       uuid2node[u] = res;
     return res;
+  }
+
+  /// Append a fresh independent IN (INPUT) slice node of mass @p p.  Its
+  /// token is synthetic and unique so JointEncoding treats it as a brand
+  /// new event (a stick-breaking coin), never colliding with a real input.
+  int emitInput(double p) {
+    SliceGate s;
+    s.type = SliceGateType::INPUT;
+    s.prob = p;
+    s.token = "\x01mulsb:" + std::to_string(mulsb_counter++);
+    slice.push_back(std::move(s));
+    return static_cast<int>(slice.size()) - 1;
+  }
+
+  /// Append a NOT slice node over the existing node @p child (>= 0).
+  int emitNot(int child) {
+    SliceGate s;
+    s.type = SliceGateType::NOT;
+    s.children = {static_cast<unsigned>(child)};
+    slice.push_back(std::move(s));
+    return static_cast<int>(slice.size()) - 1;
+  }
+
+  /// Stick-break the value range [@p start, @p end] of one block (balanced
+  /// bisection, mirroring BooleanCircuit::rewriteMultivaluedGatesRec): the
+  /// IN coin at each split is SHARED by both halves (so the values are
+  /// mutually exclusive), and each value's slice node is the AND of the
+  /// path of coins (positive on the left, negated on the right) that
+  /// selects it.  @p prefix carries that path of already-chosen coins.
+  void expandRec(const std::vector<int> &idxs, const std::vector<double> &cum,
+                 unsigned start, unsigned end, std::vector<int> &prefix) {
+    if (start == end) {
+      mul_resolved[idxs[start]] =
+        prefix.empty() ? emitInput(1.0)               // sole value, mass 1
+                       : binarize(SliceGateType::AND, prefix);
+      return;
+    }
+    const unsigned mid = (start + end) / 2;
+    const double prev_start = (start == 0) ? 0. : cum[start - 1];
+    const int g = emitInput((cum[mid] - prev_start) / (cum[end] - prev_start));
+    const int ng = emitNot(g);
+    prefix.push_back(g);
+    expandRec(idxs, cum, start, mid, prefix);
+    prefix.pop_back();
+    prefix.push_back(ng);
+    expandRec(idxs, cum, mid + 1, end, prefix);
+    prefix.pop_back();
+  }
+
+  /// Resolve every deferred mulinput leaf.  Group the MulRefs by block,
+  /// order each block's values, stick-break it into shared IN/NOT/AND slice
+  /// nodes, then rewrite every deferred reference (in slice children) to the
+  /// resolved node.  Call once, after every fact token has been walked.
+  void expandMulBlocks() {
+    if (mulrefs.empty())
+      return;
+    mul_resolved.assign(mulrefs.size(), -1);
+    std::map<std::string, std::vector<int>> by_block;
+    for (int i = 0; i < static_cast<int>(mulrefs.size()); ++i)
+      by_block[mulrefs[i].block].push_back(i);
+
+    for (auto &kv : by_block) {
+      std::vector<int> &idxs = kv.second;
+      std::sort(idxs.begin(), idxs.end(), [&](int a, int b) {
+        return mulrefs[a].value_index < mulrefs[b].value_index;
+      });
+      const unsigned n = static_cast<unsigned>(idxs.size());
+      std::vector<double> cum(n);
+      double c = 0.;
+      for (unsigned i = 0; i < n; ++i) {
+        c += mulrefs[idxs[i]].prob;
+        cum[i] = c;
+      }
+      std::vector<int> prefix;
+      // When the present values do not exhaust the block (their masses sum
+      // to less than 1, the rest being "key absent"), gate the whole block
+      // behind one block-active coin of that total mass.
+      constexpr double eps = std::numeric_limits<double>::epsilon() * 10;
+      if (cum[n - 1] < 1. - eps)
+        prefix.push_back(emitInput(cum[n - 1]));
+      expandRec(idxs, cum, 0, n - 1, prefix);
+    }
+
+    // Rewrite deferred references buried as children of AND/OR/NOT nodes.
+    for (SliceGate &sg : slice)
+      for (unsigned &ch : sg.children) {
+        const int ci = static_cast<int>(ch);
+        if (ci <= MULREF_BASE)
+          ch = static_cast<unsigned>(mul_resolved[MULREF_BASE - ci]);
+      }
+  }
+
+  /// Map a raw @c walk() code to a final slice node (resolving any deferred
+  /// mulinput reference).  Returns -2 (true), -1 (false), or a slice index.
+  int resolveCode(int code) const {
+    if (code <= MULREF_BASE)
+      return mul_resolved[MULREF_BASE - code];
+    return code;
   }
 };
 
@@ -366,7 +505,12 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
     (toks && n_ft) ? (const pg_uuid_t *) ARR_DATA_PTR(toks) : NULL;
 
   SliceBuilder sb;
-  std::vector<Fact> facts;
+  // Walk every fact's token first, keeping its raw slice code; mulinput
+  // (BID) leaves resolve only after the whole batch is seen (a value's
+  // block-mates live in other facts), so we finalise the facts in a second
+  // pass once expandMulBlocks() has stick-broken the blocks.
+  std::vector<std::pair<Fact, int>> pending;
+  pending.reserve(n_fr);
   unsigned long n_elements = 0;
   int eoff = 0;
   for (int i = 0; i < n_fr; ++i) {
@@ -384,8 +528,18 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
     // Walk the token's slice.
     GenericCircuit gc = getGenericCircuit(tok_data[i]);
     const int node = sb.walk(gc, gc.getGate(uuid2string(tok_data[i])));
+    pending.emplace_back(std::move(f), node);
+  }
+
+  sb.expandMulBlocks();
+
+  std::vector<Fact> facts;
+  facts.reserve(pending.size());
+  for (auto &pf : pending) {
+    const int node = sb.resolveCode(pf.second);
     if (node == -1)
       continue;   // constant-false token: the fact is never present
+    Fact &f = pf.first;
     if (node == -2)
       f.kind = FactGateKind::CERTAIN;
     else {

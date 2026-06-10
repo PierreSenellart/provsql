@@ -8,8 +8,9 @@
 -- Here the facts are NOT independent: a fact's provenance is an internal
 -- gate over shared events -- a materialised tracked view.  This is the
 -- regime the "joint" in joint-width is named for.  (Native BID blocks from
--- repair_key are a gate_mulinput correlation the slice walk does not yet
--- handle -- input/and/or/not only -- so they are out of scope here.)
+-- repair_key, a gate_mulinput correlation, are also handled: the slice
+-- walk stick-breaks each block into shared independent coins -- see the
+-- repair_key section of test/sql/ucq_joint_correlated.sql.)
 --
 -- Three things this regime buys, none of which the data-graph case shows:
 --

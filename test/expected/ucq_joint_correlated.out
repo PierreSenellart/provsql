@@ -17,3 +17,12 @@ shared_event_exists
 joint_treewidth|data_treewidth_lb|circuit_treewidth_lb
 2|1|2
 (1 row)
+repair_key
+
+(1 row)
+bid_h0
+0.728000
+(1 row)
+bid_ladder_oracle
+0.728000
+(1 row)
