@@ -5498,6 +5498,101 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $ucq$ LANGUAGE plpgsql VOLATILE;
 
+/**
+ * @brief Per-answer joint-width provenance: the head-pinned d-D for one
+ *        answer of a non-Boolean UCQ
+ *
+ * The per-answer counterpart of @c ucq_joint_provenance(): for a UCQ with
+ * head (free) variables @p head_vars bound to @p head_vals (the GROUP BY
+ * value of the answer), it gathers the facts of @p descriptor but filters
+ * every relation that mentions a head variable to the bound value -- so
+ * the head is forced and only that answer's existential witnesses remain
+ * -- then materialises the certified d-D of the residual Boolean query.
+ * The transparent per-answer rewrite substitutes one such call per group;
+ * @c probability_evaluate() on the returned token is the answer's
+ * marginal.  On any decline the @p fallback token (the standard
+ * per-answer provenance) is returned, so the query never fails.
+ *
+ * @param descriptor the UCQ plus @c relations / @c elem_cols (as for
+ *        @c ucq_joint_provenance())
+ * @param head_vars query-variable indices of the head
+ * @param head_vals the bound head values for this answer (same length)
+ * @param fallback token returned if the joint-width compiler declines
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_provenance_answer(
+  descriptor JSONB, head_vars INT[], head_vals INT[], fallback UUID DEFAULT NULL)
+RETURNS UUID AS $ucq$
+DECLARE
+  legs text; sql text; saved text;
+  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
+  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}'; avars int[]:='{}'; aarity int[]:='{}';
+  d jsonb; a jsonb; v text; didx int:=0;
+  ri int; whereclause text; k int; pos int; colname text;
+BEGIN
+  -- Parse the UCQ structure into the columnar query arrays.
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  -- One UNION ALL leg per relation; a relation that mentions a head
+  -- variable is filtered to the bound value (forcing the head).
+  legs := '';
+  FOR ri IN 0 .. jsonb_array_length(descriptor->'relations') - 1 LOOP
+    whereclause := '';
+    FOR a IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts'->0->'atoms')
+             WHERE (value->>'rel')::int = ri LOOP
+      FOR k IN 1 .. array_length(head_vars, 1) LOOP
+        FOR pos IN 0 .. jsonb_array_length(a->'vars') - 1 LOOP
+          IF (a->'vars'->>pos)::int = head_vars[k] THEN
+            colname := descriptor->'elem_cols'->ri->>pos;
+            whereclause := whereclause
+              || CASE WHEN whereclause = '' THEN ' WHERE ' ELSE ' AND ' END
+              || format('(%I)::text = %L', colname, head_vals[k]::text);
+          END IF;
+        END LOOP;
+      END LOOP;
+    END LOOP;
+    legs := legs || CASE WHEN legs = '' THEN '' ELSE ' UNION ALL ' END
+      || format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
+           ri,
+           (SELECT string_agg(format('(%I)::text', c), ',')
+              FROM jsonb_array_elements_text(descriptor->'elem_cols'->ri) c),
+           descriptor->'relations'->>ri, whereclause);
+  END LOOP;
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val)
+  $q$, legs);
+
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  PERFORM set_config('provsql.active', saved, true);
+
+  RETURN ucq_joint_materialize_tracked(dnv,adisj,arel,avars,aarity,
+    fact_rel,fact_elems,fact_arity,fact_tokens);
+EXCEPTION WHEN OTHERS THEN
+  RETURN fallback;
+END;
+$ucq$ LANGUAGE plpgsql VOLATILE;
+
 
 /**
  * @brief Compile and materialise the reachability provenance of every

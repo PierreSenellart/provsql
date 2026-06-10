@@ -127,4 +127,21 @@ SELECT count(*) AS rows FROM ucq_joint_answers(
   (SELECT array_agg(t ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z),
   (SELECT array_agg(0.5::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z));
 
+-- ---------------------------------------------------------------------
+-- (3) Per-answer transparent primitive ucq_joint_provenance_answer():
+--     gather the real relations filtered to the bound head value, then
+--     materialise the head-pinned d-D; probability_evaluate of the token
+--     is the answer's marginal.  Must match the closed form above
+--     (violation x=1 -> 0.384521, normal x=2 -> 0.219727).
+-- ---------------------------------------------------------------------
+SET provsql.provenance = 'boolean';
+\echo '== ucq_joint_provenance_answer: materialise + evaluate per answer =='
+SELECT pin, ROUND(probability_evaluate(ucq_joint_provenance_answer(
+  '{"disjuncts":[{"n_vars":4,"atoms":[{"rel":0,"vars":[0,1]},
+     {"rel":1,"vars":[0,2]},{"rel":2,"vars":[0,3]},{"rel":3,"vars":[1]}]}],
+    "relations":["provsql_test.jp","provsql_test.jq","provsql_test.jw_","provsql_test.jtt"],
+    "elem_cols":[["x","y"],["x","z"],["x","u"],["y"]]}'::jsonb,
+  ARRAY[0], ARRAY[pin]))::numeric, 6) AS joint_width
+FROM (VALUES (1), (2)) AS v(pin) ORDER BY pin;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt CASCADE;

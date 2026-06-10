@@ -38,3 +38,8 @@ x|joint_width
 rows
 0
 (1 row)
+== ucq_joint_provenance_answer: materialise + evaluate per answer ==
+pin|joint_width
+1|0.384521
+2|0.219727
+(2 rows)
