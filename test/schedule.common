@@ -224,3 +224,8 @@ test: boolean_fold
 
 # Refusal of outer SQL aggregate over ProvSQL-aggregated subquery
 test: nested_agg_refuse
+
+# Joint-width UCQ compiler (data-graph regime): exact probability of an
+# arbitrary UCQ -- including #P-hard ones -- over bounded joint treewidth
+test: ucq_joint
+test: ucq_joint_correlated

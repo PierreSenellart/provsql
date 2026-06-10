@@ -1,0 +1,19 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+h0_correlated
+0.125000
+(1 row)
+ladder_oracle
+0.125000
+(1 row)
+materialize_then_probeval
+0.125000
+(1 row)
+shared_event_exists
+0.500000
+(1 row)
+joint_treewidth|data_treewidth_lb|circuit_treewidth_lb
+2|1|2
+(1 row)

@@ -1,0 +1,24 @@
+\set ECHO none
+h0_two_chains
+0.234375
+(1 row)
+h0_shared_y
+0.391680
+(1 row)
+prop_4_2_11_a
+0.384000
+(1 row)
+prop_4_2_11_c_cycle
+0.984375
+(1 row)
+self_join_r_s_r
+0.218750
+(1 row)
+ucq_two_disjuncts
+0.750000
+(1 row)
+joint_treewidth|data_treewidth_lb|circuit_treewidth_lb
+1|1|0
+(1 row)
+ERROR:  ProvSQL: ucq_joint: joint treewidth exceeds the configured maximum (1); fall back to the standard probability ladder
+CONTEXT:  PL/pgSQL function ucq_joint_evaluate(jsonb,integer[],integer[],integer[],uuid[],double precision[]) line 19 at RETURN
