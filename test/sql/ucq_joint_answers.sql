@@ -443,4 +443,40 @@ SELECT e.x, e.k, (e.tok <> o.tok) AS joint_width_fired,
   FROM jhx_expr e JOIN jhx_bare b ON e.x = b.x JOIN jhx_off o ON e.x = o.x
  ORDER BY e.x;
 
+-- ---------------------------------------------------------------------
+-- (14) Single-relation selections as PRE-FILTERS: any predicate over one
+--      relation (not just a Var=Const) is lifted by qc_split_quals,
+--      deparsed, and pushed into that relation's gather scan -- the
+--      relation/join/group structure is all the joint-width engine sees.
+--      Inequality, IN, and a single-relation OR over the per-answer H0
+--      (grouped by jr.x) all fire and agree with the ladder per answer.
+--      (A self-join with disjoint constant filters yields two filtered
+--      scans of the same relation; covered in the prefilter bench sweep.)
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+CREATE OR REPLACE FUNCTION jw_prefilter_chk(label text, where_extra text)
+  RETURNS TABLE(test text, all_fired bool, max_abs_diff numeric) AS $f$
+DECLARE q text;
+BEGIN
+  q := 'SELECT jr.x AS x, provenance() AS t FROM jr, js, jt '
+    || 'WHERE jr.x = js.x AND js.y = jt.y AND ' || where_extra || ' GROUP BY jr.x';
+  SET provsql.active = on;
+  SET provsql.joint_width = on;  EXECUTE 'CREATE TEMP TABLE pf_on AS '||q;
+  SET provsql.joint_width = off; EXECUTE 'CREATE TEMP TABLE pf_off AS '||q;
+  SET provsql.active = off;      -- the comparison below only reads tokens
+  test := label;
+  SELECT bool_and(o.t <> f.t),
+         max(abs(round((probability_evaluate(o.t)-probability_evaluate(f.t))::numeric,9)))
+    INTO all_fired, max_abs_diff
+    FROM pf_on o JOIN pf_off f USING (x);
+  DROP TABLE pf_on; DROP TABLE pf_off;
+  RETURN NEXT;
+END $f$ LANGUAGE plpgsql;
+\echo '== single-relation pre-filters (inequality / IN / OR): every answer fired, diff 0 =='
+SELECT * FROM jw_prefilter_chk('inequality jr.x > 2', 'jr.x > 2');
+SELECT * FROM jw_prefilter_chk('IN jr.x IN (1,3)',    'jr.x IN (1,3)');
+SELECT * FROM jw_prefilter_chk('OR jr.x=1 OR jr.x=4', '(jr.x = 1 OR jr.x = 4)');
+DROP FUNCTION jw_prefilter_chk(text, text);
+SET provsql.active = off;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;

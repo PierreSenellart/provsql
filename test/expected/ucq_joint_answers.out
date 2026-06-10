@@ -158,3 +158,13 @@ x|k|joint_width_fired|same_token_as_bare_head|diff_vs_ladder
 3|31|t|t|0.000000000
 4|41|t|t|0.000000000
 (4 rows)
+== single-relation pre-filters (inequality / IN / OR): every answer fired, diff 0 ==
+test|all_fired|max_abs_diff
+inequality jr.x > 2|t|0.000000000
+(1 row)
+test|all_fired|max_abs_diff
+IN jr.x IN (1,3)|t|0.000000000
+(1 row)
+test|all_fired|max_abs_diff
+OR jr.x=1 OR jr.x=4|t|0.000000000
+(1 row)

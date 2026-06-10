@@ -5459,11 +5459,16 @@ BEGIN
   -- provenance token).  No temp tables: a single gather query, with the
   -- value-based dense element dictionary built inline.
   SELECT string_agg(
-           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s',
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
              rn - 1,
              (SELECT string_agg(format('(%I)::text', c), ',')
                 FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
-             rel),
+             rel,
+             -- the lifted single-relation selection (a pre-filter), already
+             -- deparsed to SQL by the recogniser; '' / absent = unfiltered.
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
            ' UNION ALL ')
     INTO legs
     FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
@@ -5557,13 +5562,17 @@ BEGIN
     didx := didx + 1;
   END LOOP;
 
-  -- One UNFILTERED leg per real relation, then one synthetic CERTAIN Sel
-  -- leg per head (relation index nrel+k-1, the bound value, gate_one()).
+  -- One leg per real relation scan (with its lifted single-relation
+  -- pre-filter, if any), then one synthetic CERTAIN Sel leg per head
+  -- (relation index nrel+k-1, the bound value, gate_one()).
   SELECT string_agg(
-           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s', rn - 1,
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s', rn - 1,
              (SELECT string_agg(format('(%I)::text', c), ',')
                 FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
-             rel),
+             rel,
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
            ' UNION ALL ')
     INTO legs
     FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);

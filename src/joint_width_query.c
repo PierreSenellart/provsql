@@ -6,12 +6,16 @@
 #include "postgres.h"
 #include "nodes/parsenodes.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/makefuncs.h"
 #include "nodes/pg_list.h"
 #include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
+#include "optimizer/optimizer.h"
 #include "parser/parsetree.h"
+#include "rewrite/rewriteManip.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/ruleutils.h"
 
 #include "joint_width_query.h"
 #include "provsql_utils.h"
@@ -556,16 +560,17 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   int        natoms = 0;
   Index     *atom_rti;        /* per atom: range-table index */
   Oid       *atom_relid;      /* per atom: relation OID */
-  int       *atom_relidx;     /* per atom: index into the distinct relations */
-  Oid       *rel_oids;        /* distinct relation OIDs */
-  int        nrel = 0;
+  char     **atom_filter;     /* per atom: deparsed single-relation selection, or NULL */
+  int       *atom_scanidx;    /* per atom: index into the distinct scans */
+  Oid       *scan_relid;      /* per scan: base relation OID */
+  char     **scan_filter;     /* per scan: filter text (NULL = unfiltered scan) */
+  int        nscan = 0;
   ColRef    *cols;
   int        ncols = 0;
   int       *pairs;
   int        npairs = 0;
-  int       *const_cols;       /* per const pin: colref index */
-  Const    **const_vals;       /* per const pin: the literal */
-  int        nconst = 0;
+  List     **per_atom;        /* qc_split_quals output, indexed by rtindex-1 */
+  Node      *residual = NULL;
   int        maxcols;
   List      *qual_list = NIL;
   StringInfoData buf;
@@ -778,10 +783,16 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
    * relations. */
   if (q->jointree->fromlist == NIL)
     return NULL;
-  atom_rti   = palloc(list_length(q->rtable) * sizeof(Index));
-  atom_relid = palloc(list_length(q->rtable) * sizeof(Oid));
-  atom_relidx = palloc(list_length(q->rtable) * sizeof(int));
-  rel_oids   = palloc(list_length(q->rtable) * sizeof(Oid));
+  {
+    int nrte = list_length(q->rtable);
+    atom_rti     = palloc(nrte * sizeof(Index));
+    atom_relid   = palloc(nrte * sizeof(Oid));
+    atom_filter  = palloc(nrte * sizeof(char *));
+    atom_scanidx = palloc(nrte * sizeof(int));
+    scan_relid   = palloc(nrte * sizeof(Oid));
+    scan_filter  = palloc(nrte * sizeof(char *));
+    per_atom     = palloc0(nrte * sizeof(List *));
+  }
   foreach (lc, q->jointree->fromlist)
     if (!collect_jointree((Node *) lfirst(lc), q, atom_rti, atom_relid,
                           &natoms, &qual_list))
@@ -792,13 +803,41 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   if (q->jointree->quals != NULL)
     qual_list = lappend(qual_list, q->jointree->quals);
 
-  /* Map distinct relation OIDs to relation indices. */
+  /* Split the conjunction into single-relation selections (a pre-filter,
+   * pushed into that atom's relation scan) and the cross-relation residual
+   * (which must be join equalities).  This is the shared qc_split_quals the
+   * safe-query rewrite uses; here the lifted selections are deparsed back
+   * to SQL and the gather scans FROM <relation> WHERE <selection>. */
+  qc_split_quals((Node *) qual_list, list_length(q->rtable), per_atom,
+                 &residual);
+
+  /* Deparse each atom's pushed selections, then key the scans by
+   * (relation, filter): atoms over the same relation with the same filter
+   * (notably the unfiltered self-join) share one scan; a self-join with
+   * disjoint constant filters gets two filtered scans. */
   for (a = 0; a < natoms; a++) {
-    int found = -1;
-    for (i = 0; i < nrel; i++)
-      if (rel_oids[i] == atom_relid[a]) { found = i; break; }
-    if (found < 0) { rel_oids[nrel] = atom_relid[a]; found = nrel++; }
-    atom_relidx[a] = found;
+    List *sel = per_atom[atom_rti[a] - 1];
+    int   found = -1;
+    atom_filter[a] = NULL;
+    if (sel != NIL) {
+      Node *conj = (Node *) make_ands_explicit(sel);
+      List *dpctx;
+      conj = copyObject(conj);
+      ChangeVarNodes(conj, atom_rti[a], 1, 0);   /* the scan sees the rel as varno 1 */
+      dpctx = deparse_context_for(get_rel_name(atom_relid[a]), atom_relid[a]);
+      atom_filter[a] = deparse_expression(conj, dpctx, false, false);
+    }
+    for (i = 0; i < nscan; i++)
+      if (scan_relid[i] == atom_relid[a] &&
+          ((scan_filter[i] == NULL && atom_filter[a] == NULL) ||
+           (scan_filter[i] != NULL && atom_filter[a] != NULL &&
+            strcmp(scan_filter[i], atom_filter[a]) == 0))) { found = i; break; }
+    if (found < 0) {
+      scan_relid[nscan]  = atom_relid[a];
+      scan_filter[nscan] = atom_filter[a];
+      found = nscan++;
+    }
+    atom_scanidx[a] = found;
   }
 
   /* Upper bound on column nodes: every atom's every column. */
@@ -809,8 +848,6 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   }
   cols = palloc(maxcols * sizeof(ColRef));
   pairs = palloc(2 * (list_length(q->rtable) * 8 + 64) * sizeof(int));
-  const_cols = palloc((list_length(q->rtable) * 8 + 64) * sizeof(int));
-  const_vals = palloc((list_length(q->rtable) * 8 + 64) * sizeof(Const *));
 
   /* Seed a column node for every element column of every atom (so even
    * un-joined columns become singleton variables). */
@@ -827,12 +864,22 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
     }
   }
 
-  /* Equalities (WHERE + every collected ON) -> union-find; decline on any
-   * other qual shape. */
-  foreach (lc, qual_list)
-    if (!collect_equalities((Node *) lfirst(lc), cols, &ncols, &pairs, &npairs,
-                            const_cols, const_vals, &nconst))
-      return NULL;
+  /* The cross-relation residual must be pure join equalities: each conjunct
+   * a Var=Var equijoin (-> union-find).  Anything else (a non-equijoin join
+   * predicate, an OR / inequality spanning two relations, a volatile
+   * selection) is outside the fragment -- decline. */
+  {
+    List     *rconj = NIL;
+    ListCell *rc;
+    qc_flatten_and(residual, &rconj);
+    foreach (rc, rconj) {
+      Var *lv, *rv;
+      if (!qc_is_var_eq((Expr *) lfirst(rc), &lv, &rv))
+        return NULL;
+      pairs[npairs++] = colref_get(cols, &ncols, lv->varno, lv->varattno);
+      pairs[npairs++] = colref_get(cols, &ncols, rv->varno, rv->varattno);
+    }
+  }
   for (i = 0; i < npairs; i += 2)
     uf_union(cols, pairs[i], pairs[i + 1]);
 
@@ -858,7 +905,7 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       ListCell *c;
       bool firstv = true;
       if (a) appendStringInfoChar(&buf, ',');
-      appendStringInfo(&buf, "{\"rel\":%d,\"vars\":[", atom_relidx[a]);
+      appendStringInfo(&buf, "{\"rel\":%d,\"vars\":[", atom_scanidx[a]);
       foreach (c, rte->eref->colnames) {
         char *name = strVal(lfirst(c));
         attno++;
@@ -874,10 +921,12 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       }
       appendStringInfoString(&buf, "]}");
     }
+    /* One entry per SCAN: the qualified relation name, its pushed selection
+     * (rel_where; "" when unfiltered), and its element columns. */
     appendStringInfoString(&buf, "]}],\"relations\":[");
-    for (i = 0; i < nrel; i++) {
-      char *nsp = get_namespace_name(get_rel_namespace(rel_oids[i]));
-      char *rel = get_rel_name(rel_oids[i]);
+    for (i = 0; i < nscan; i++) {
+      char *nsp = get_namespace_name(get_rel_namespace(scan_relid[i]));
+      char *rel = get_rel_name(scan_relid[i]);
       StringInfoData qn;
       initStringInfo(&qn);
       appendStringInfo(&qn, "%s.%s", quote_identifier(nsp),
@@ -886,16 +935,21 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       append_json_string(&buf, qn.data);   /* gather uses it raw (FROM %s) */
       pfree(qn.data);
     }
+    appendStringInfoString(&buf, "],\"rel_where\":[");
+    for (i = 0; i < nscan; i++) {
+      if (i) appendStringInfoChar(&buf, ',');
+      append_json_string(&buf, scan_filter[i] ? scan_filter[i] : "");
+    }
     appendStringInfoString(&buf, "],\"elem_cols\":[");
-    for (i = 0; i < nrel; i++) {
-      /* Element columns of relation i: take them from the first atom over
-       * it (all atoms over the same relation share its columns). */
+    for (i = 0; i < nscan; i++) {
+      /* Element columns of scan i: from the first atom on it (all atoms
+       * over the same relation share its columns). */
       RangeTblEntry *rte = NULL;
       AttrNumber attno = 0;
       ListCell *c;
       bool firstc = true;
       for (a = 0; a < natoms; a++)
-        if (atom_relidx[a] == i) { rte = rt_fetch(atom_rti[a], q->rtable); break; }
+        if (atom_scanidx[a] == i) { rte = rt_fetch(atom_rti[a], q->rtable); break; }
       if (i) appendStringInfoChar(&buf, ',');
       appendStringInfoChar(&buf, '[');
       foreach (c, rte->eref->colnames) {
@@ -911,19 +965,17 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
     }
     appendStringInfoString(&buf, "]}");
 
-    /* Heads = the variables the query pins per answer: the GROUP BY keys
-     * (each a bare Var over a tracked atom -- the SELECT list itself is
-     * arbitrary, a function of the keys, so what is displayed does not
-     * constrain recognition) plus the constant selections from WHERE (a
-     * column pinned to a literal).  Both bind a variable to a value via the
-     * same Sel mechanism; the value is the GROUP BY column per answer, or
-     * the literal.  A query with no such pins is the Boolean existence; an
-     * un-pinnable group key (an expression) declines.  Without a GROUP BY,
-     * the exposed bare tracked Vars are the heads (the historical form). */
+    /* Heads = the variables the query pins per answer: the GROUP BY keys,
+     * each a bare Var over a tracked atom.  The SELECT list is arbitrary (a
+     * function of the keys), so what is displayed does not constrain
+     * recognition; constant selections are not heads (they are pre-filters
+     * lifted into the relation scans above).  No pin at all is the Boolean
+     * existence; an un-pinnable group key (an expression) declines.  Without
+     * a GROUP BY, the exposed bare tracked Vars are the heads (the
+     * historical form). */
     {
     bool   clean = true;
     List  *hv = NIL, *hx = NIL;
-    int    k;
     if (q->groupClause != NIL) {
       ListCell *gl;
       foreach (gl, q->groupClause) {
@@ -988,17 +1040,6 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
         break;
       }
     }
-    /* Constant pins (skip a variable already pinned as a head -- a grouped
-     * column that is also constant-selected agrees by construction). */
-    if (clean)
-      for (k = 0; k < nconst; k++) {
-        int var = root_var[uf_find(cols, const_cols[k])];
-        if (!list_member_int(hv, var)) {
-          hv = lappend_int(hv, var);
-          hx = lappend(hx, (Expr *) const_vals[k]);
-        }
-      }
-
     if (head_var_idx != NULL) {
       *head_var_idx = clean ? hv : NIL;
       if (head_exprs != NULL)
