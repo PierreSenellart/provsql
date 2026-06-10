@@ -187,3 +187,7 @@ n_events|max_abs_diff
 cond_joint_minus_std|conditioning_is_nontrivial
 0.000000000|t
 (1 row)
+== single-pass swept == per-binding: per-answer max |swept - per_binding| ==
+n_answers|max_abs_diff
+4|0.000000000
+(1 row)

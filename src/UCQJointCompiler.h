@@ -44,6 +44,9 @@
 #define UCQ_JOINT_COMPILER_H
 
 #include <cstddef>
+#include <map>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "JointEncoding.h"
@@ -131,6 +134,45 @@ static Result compile(const JointEncoding &enc,
                       const UCQ &ucq,
                       unsigned max_treewidth = TreeDecomposition::MAX_TREEWIDTH,
                       std::size_t max_states = DEFAULT_MAX_STATES);
+
+/**
+ * @brief One answer of a per-answer (non-Boolean) evaluation: the bound
+ *        head-variable element values and the answer's marginal.
+ */
+struct Answer {
+  std::vector<unsigned long> head;  ///< Bound element value per head variable.
+  double probability = 0.0;         ///< Marginal of that answer.
+  std::size_t max_states = 0;       ///< Peak DP states for this answer's sweep.
+};
+
+/**
+ * @brief Per-answer evaluation in a SINGLE PASS over the shared structure
+ *        (data-graph / TID-BID regime only).
+ *
+ * The joint encoding and its tree decomposition are built **once**; each
+ * candidate head tuple is then evaluated by one bottom-up sweep with the
+ * head variables pinned **inside the DP** (no @c Sel atom, so the encoding
+ * and decomposition are identical across answers).  Equivalent to running
+ * @c compile() once per head with the head pinned, but sharing the
+ * gather/encode/decompose stages.  Non-answer head tuples (probability 0)
+ * are dropped.
+ *
+ * @param enc        The joint encoding (must be the data-graph regime;
+ *                   throws @c JointCompilerException if correlated).
+ * @param ucq        The UCQ (head variables identified by @p head_vars).
+ * @param head_vars  Query-variable indices of the head, canonical across
+ *                   disjuncts.
+ * @param candidates Candidate head tuples (row-major, length
+ *                   @c |head_vars| each) -- typically the distinct values
+ *                   the head columns take in the data.
+ */
+static std::vector<Answer> compileAnswers(
+  const JointEncoding &enc,
+  const UCQ &ucq,
+  const std::vector<unsigned> &head_vars,
+  const std::vector<std::vector<unsigned long> > &candidates,
+  unsigned max_treewidth = TreeDecomposition::MAX_TREEWIDTH,
+  std::size_t max_states = DEFAULT_MAX_STATES);
 };
 
 #endif /* UCQ_JOINT_COMPILER_H */

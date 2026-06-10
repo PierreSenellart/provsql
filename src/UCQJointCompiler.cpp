@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -196,7 +197,8 @@ State satState()
 bool closeDisjunct(const DisjunctInfo &di,
                    std::vector<DCode> &codes,
                    const Fact &fact,
-                   const std::vector<unsigned long> &domain)
+                   const std::vector<unsigned long> &domain,
+                   const std::map<unsigned, unsigned long> *head_pin = nullptr)
 {
   // Atoms of this disjunct a present @p fact could witness.
   std::vector<std::size_t> cand;
@@ -227,6 +229,16 @@ bool closeDisjunct(const DisjunctInfo &di,
       for (std::size_t i = 0; i < a.vars.size(); ++i) {
         const unsigned v = a.vars[i];
         const std::int8_t p = static_cast<std::int8_t>(pos[i]);
+        // Per-answer head pin: a head variable may bind only to its answer's
+        // value (the same restriction the Sel-pin enforces, but without
+        // touching the encoding -- so the decomposition is shared).
+        if (head_pin) {
+          auto pit = head_pin->find(v);
+          if (pit != head_pin->end() && fact.elements[i] != pit->second) {
+            ok = false;
+            break;
+          }
+        }
         if (c2.st[v] == UNASSIGNED)
           c2.st[v] = p;
         else if (c2.st[v] != p) {   // already pinned to a different element
@@ -252,13 +264,14 @@ bool closeDisjunct(const DisjunctInfo &di,
 
 /** @brief Apply a present fact to a whole state (closure over all disjuncts). */
 State closeWithFact(const QueryCtx &q, const State &s, const Fact &fact,
-                    const std::vector<unsigned long> &domain)
+                    const std::vector<unsigned long> &domain,
+                    const std::map<unsigned, unsigned long> *head_pin = nullptr)
 {
   if (s.sat)
     return s;
   State out = s;
   for (std::size_t d = 0; d < q.disjuncts.size(); ++d)
-    if (closeDisjunct(q.disjuncts[d], out.homs[d], fact, domain))
+    if (closeDisjunct(q.disjuncts[d], out.homs[d], fact, domain, head_pin))
       return satState();
   return out;
 }
@@ -900,12 +913,26 @@ UCQJointCompiler::Result mergedCompile(const JointEncoding &enc,
 
 } // namespace
 
-UCQJointCompiler::Result UCQJointCompiler::compile(
+/**
+ * @brief Data-graph (TID/BID) compile, with optional decomposition reuse
+ *        and an optional in-DP head pin.
+ *
+ * With @p shared_td == nullptr and @p head_pin == nullptr this is the
+ * Boolean data-graph compiler verbatim (the path the 223-test suite
+ * exercises).  @c compileAnswers supplies a shared decomposition and a
+ * per-answer head pin so the gather/encode/decompose stages are paid once.
+ */
+static UCQJointCompiler::Result compileImpl(
   const JointEncoding &enc,
   const UCQ &ucq,
   unsigned max_treewidth,
-  std::size_t max_states)
+  std::size_t max_states,
+  const TreeDecomposition *shared_td,
+  const std::unordered_map<unsigned long, bag_t> *shared_elim,
+  const std::map<unsigned, unsigned long> *head_pin)
 {
+  using Result = UCQJointCompiler::Result;
+  using Stats  = UCQJointCompiler::Stats;
   Result result;
   dDNNF &dd = result.dd;
   Stats &stats = result.stats;
@@ -920,29 +947,37 @@ UCQJointCompiler::Result UCQJointCompiler::compile(
   buildQueryCtx(ucq, enc, q, stats);
 
   // Correlated regime (facts gated by internal circuit gates): the
-  // merged valuation + homomorphism DP.
+  // merged valuation + homomorphism DP.  (The single-sweep per-answer path
+  // -- shared_td / head_pin -- is data-graph only and never gets here.)
   if (enc.correlated)
     return mergedCompile(enc, q, stats, max_treewidth, max_states);
 
   // ------------------------------------------------------------------
-  // 1. Width screen + tree decomposition of the joint graph.  The
-  //    degeneracy lower bound proves an unconstructible width without
-  //    paying for min-fill (thesis Prop. 4.2.11: the screen must be on
-  //    the joint graph; for the data-graph regime that is the data
-  //    treewidth, the sound screen there).
+  // 1. Width screen + tree decomposition of the joint graph (or reuse a
+  //    shared one).  The degeneracy lower bound proves an unconstructible
+  //    width without paying for min-fill (thesis Prop. 4.2.11: the screen
+  //    must be on the joint graph; for the data-graph regime that is the
+  //    data treewidth, the sound screen there).
   // ------------------------------------------------------------------
-  Graph graph = enc.buildGraph();
-  unsigned max_degree = 0;
-  if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) >
-      max_treewidth)
-    throw TreeDecompositionException();
-
-  std::unordered_map<unsigned long, bag_t> elimination_bag;
-  const TreeDecomposition td(std::move(graph), &elimination_bag);
+  std::unordered_map<unsigned long, bag_t> elim_local;
+  std::unique_ptr<TreeDecomposition> built_td;
+  const TreeDecomposition *tdp = shared_td;
+  if (tdp == nullptr) {
+    Graph graph = enc.buildGraph();
+    unsigned max_degree = 0;
+    if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) >
+        max_treewidth)
+      throw TreeDecompositionException();
+    built_td.reset(new TreeDecomposition(std::move(graph), &elim_local));
+    if (built_td->getTreewidth() > max_treewidth)
+      throw TreeDecompositionException();
+    tdp = built_td.get();
+  }
+  const TreeDecomposition &td = *tdp;
+  const std::unordered_map<unsigned long, bag_t> &elimination_bag =
+    shared_elim ? *shared_elim : elim_local;
   stats.joint_treewidth = td.getTreewidth();
   stats.nb_bags = td.getNbBags();
-  if (td.getTreewidth() > max_treewidth)
-    throw TreeDecompositionException();
   const std::size_t nb_bags = td.getNbBags();
 
   // Each fact is introduced at exactly one bag: the bag created when the
@@ -1083,7 +1118,7 @@ UCQJointCompiler::Result UCQJointCompiler::compile(
                         for (const auto &entry : table) {
                           CHECK_FOR_INTERRUPTS();
                           State present = closeWithFact(q, entry.first, fact,
-                                                        domain);
+                                                        domain, head_pin);
                           if (fact.kind == FactGateKind::CERTAIN) {
                             acc[std::move(present)].push_back(entry.second);
                           } else if (present == entry.first) {
@@ -1179,4 +1214,59 @@ UCQJointCompiler::Result UCQJointCompiler::compile(
   dd.setRoot(root);
   stats.dd_size = dd.getNbGates();
   return result;
+}
+
+UCQJointCompiler::Result UCQJointCompiler::compile(
+  const JointEncoding &enc,
+  const UCQ &ucq,
+  unsigned max_treewidth,
+  std::size_t max_states)
+{
+  return compileImpl(enc, ucq, max_treewidth, max_states,
+                     nullptr, nullptr, nullptr);
+}
+
+std::vector<UCQJointCompiler::Answer> UCQJointCompiler::compileAnswers(
+  const JointEncoding &enc,
+  const UCQ &ucq,
+  const std::vector<unsigned> &head_vars,
+  const std::vector<std::vector<unsigned long> > &candidates,
+  unsigned max_treewidth,
+  std::size_t max_states)
+{
+  if (ucq.disjuncts.empty())
+    throw JointCompilerException("empty UCQ");
+  if (enc.correlated)
+    throw JointCompilerException(
+      "compileAnswers: single-sweep is data-graph (TID/BID) only");
+
+  // Build the joint graph + tree decomposition ONCE; the head pin keeps the
+  // encoding and decomposition identical across answers.
+  Graph graph = enc.buildGraph();
+  unsigned max_degree = 0;
+  if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)
+    throw TreeDecompositionException();
+  std::unordered_map<unsigned long, bag_t> elim;
+  TreeDecomposition td(std::move(graph), &elim);
+  if (td.getTreewidth() > max_treewidth)
+    throw TreeDecompositionException();
+
+  std::vector<Answer> answers;
+  for (const std::vector<unsigned long> &tuple : candidates) {
+    if (tuple.size() != head_vars.size())
+      throw JointCompilerException("compileAnswers: head tuple arity mismatch");
+    std::map<unsigned, unsigned long> pin;
+    for (std::size_t i = 0; i < head_vars.size(); ++i)
+      pin[head_vars[i]] = tuple[i];
+    Result r = compileImpl(enc, ucq, max_treewidth, max_states, &td, &elim, &pin);
+    const double p = r.dd.probabilityEvaluation();
+    if (p > 0.0) {
+      Answer a;
+      a.head = tuple;
+      a.probability = p;
+      a.max_states = r.stats.max_states;
+      answers.push_back(std::move(a));
+    }
+  }
+  return answers;
 }

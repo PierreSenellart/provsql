@@ -564,4 +564,42 @@ SET provsql.active = off;
 SELECT ROUND((:'ej'::float8 - :'es'::float8)::numeric, 9) AS cond_joint_minus_std,
        (ROUND(:'ej'::numeric,6) <> ROUND(:'eu'::numeric,6)) AS conditioning_is_nontrivial;
 
+-- ---------------------------------------------------------------------
+-- (18) Single-pass per-answer (ucq_joint_answers_swept): the encoding and
+--      the tree decomposition are built ONCE and each answer is a
+--      head-pinned bottom-up sweep, instead of the per-binding Sel-pinned
+--      recompile of ucq_joint_answers.  Both must return the same answer
+--      set with the same marginals (H0 per source over jr,js,jt).
+-- ---------------------------------------------------------------------
+SET provsql.active = off;
+CREATE TEMP TABLE swf AS
+  SELECT 0 rel, ARRAY[x] el, 1 ar, provsql tk FROM jr
+  UNION ALL SELECT 1, ARRAY[x,y], 2, provsql FROM js
+  UNION ALL SELECT 2, ARRAY[y], 1, provsql FROM jt;
+\echo '== single-pass swept == per-binding: per-answer max |swept - per_binding| =='
+SELECT count(*) AS n_answers,
+       MAX(ABS(ROUND((sw.probability - pb.probability)::numeric, 9))) AS max_abs_diff
+  FROM ucq_joint_answers_swept(
+         '{"disjuncts":[{"n_vars":2,"atoms":[
+            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+         ARRAY[0], (SELECT array_agg(DISTINCT x ORDER BY x) FROM jr),
+         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
+            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
+         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) sw
+  JOIN ucq_joint_answers(
+         '{"disjuncts":[{"n_vars":2,"atoms":[
+            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+         ARRAY[0], (SELECT array_agg(DISTINCT x ORDER BY x) FROM jr),
+         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
+            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
+         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) pb
+    ON sw.head = pb.head;
+SET provsql.active = on;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_, jcyc CASCADE;

@@ -41,6 +41,7 @@ PG_FUNCTION_INFO_V1(ucq_joint_compile_stats);
 PG_FUNCTION_INFO_V1(ucq_joint_evaluate_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_compile_stats_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_materialize_tracked);
+PG_FUNCTION_INFO_V1(ucq_joint_answers_swept);
 }
 
 #include "c_cpp_compatibility.h"
@@ -754,5 +755,98 @@ Datum ucq_joint_compile_stats_tracked(PG_FUNCTION_ARGS)
   } catch (...) {
     provsql_error("ucq_joint_compile_stats: unknown exception");
   }
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable SRF: per-answer probabilities in a SINGLE
+ *        PASS over the shared encoding + tree decomposition.
+ *
+ * Argument layout: the columnar query + facts (args 0-9, as
+ * @c ucq_joint_evaluate / @c decodeArgs), then
+ *
+ *   10 head_vars       int[]  : query-variable indices of the head
+ *   11 candidate_heads int[]  : candidate head tuples, row-major,
+ *                               |head_vars| element ids each
+ *
+ * Returns @c SETOF (head int[], probability float8): one row per answer
+ * with non-zero probability.  The encoding and the joint tree
+ * decomposition are built once; each candidate is evaluated by a
+ * head-pinned bottom-up sweep (see @c UCQJointCompiler::compileAnswers).
+ */
+Datum ucq_joint_answers_swept(PG_FUNCTION_ARGS)
+{
+  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
+  TupleDesc tupdesc = rsinfo->expectedDesc;
+  Tuplestorestate *tupstore =
+    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
+                          false, work_mem);
+  rsinfo->returnMode = SFRM_Materialize;
+  rsinfo->setResult = tupstore;
+
+  try {
+    UCQ ucq;
+    std::vector<FactRow> rows;
+    decodeArgs(fcinfo, ucq, rows);
+
+    int n_hv, n_cand;
+    const int32 *hv  = intArray(fcinfo, 10, "head_vars", n_hv);
+    const int32 *cnd = intArray(fcinfo, 11, "candidate_heads", n_cand);
+    if (n_hv <= 0)
+      provsql_error("ucq_joint_answers_swept: empty head_vars");
+    if (n_cand % n_hv != 0)
+      provsql_error("ucq_joint_answers_swept: candidate_heads length is not "
+                    "a multiple of the head arity");
+
+    std::vector<unsigned> head_vars(n_hv);
+    for (int i = 0; i < n_hv; ++i)
+      head_vars[i] = static_cast<unsigned>(hv[i]);
+    std::vector<std::vector<unsigned long> > candidates;
+    candidates.reserve(static_cast<std::size_t>(n_cand / n_hv));
+    for (int i = 0; i + n_hv <= n_cand; i += n_hv) {
+      std::vector<unsigned long> t(n_hv);
+      for (int k = 0; k < n_hv; ++k)
+        t[k] = static_cast<unsigned long>(cnd[i + k]);
+      candidates.push_back(std::move(t));
+    }
+
+    const JointEncoding enc = JointEncoding::fromFacts(rows);
+    const unsigned max_tw =
+      static_cast<unsigned>(provsql_joint_max_treewidth);
+    const std::size_t max_states =
+      static_cast<std::size_t>(provsql_joint_max_states);
+
+    std::vector<UCQJointCompiler::Answer> answers;
+    try {
+      answers = UCQJointCompiler::compileAnswers(enc, ucq, head_vars,
+                                                 candidates, max_tw, max_states);
+    } catch (TreeDecompositionException &) {
+      provsql_error(
+        "ucq_joint_answers_swept: joint treewidth exceeds the configured "
+        "maximum (%d)", provsql_joint_max_treewidth);
+    }
+
+    for (const auto &a : answers) {
+      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
+      for (std::size_t i = 0; i < a.head.size(); ++i)
+        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
+      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
+                                       INT4OID, sizeof(int32), true,
+                                       TYPALIGN_INT);
+      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
+      bool nulls[2] = { false, false };
+      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+  } catch (const std::exception &e) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_swept: %s", e.what());
+  } catch (...) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_swept: unknown exception");
+  }
+
+  MemoryContextSwitchTo(oldcontext);
   PG_RETURN_NULL();
 }

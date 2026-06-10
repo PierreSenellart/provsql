@@ -5193,6 +5193,71 @@ END;
 $ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
 /**
+ * @brief Per-answer probabilities in a SINGLE PASS (columnar form, C).
+ *
+ * The per-answer counterpart of @c ucq_joint_answers() that shares the work:
+ * the joint encoding and its tree decomposition are built once, and each
+ * candidate head tuple is evaluated by a head-pinned bottom-up sweep instead
+ * of a fresh @c Sel-pinned compile -- so the gather/encode/decompose stages
+ * are paid once rather than per answer (TID/BID inputs only).  Returns one
+ * row per candidate with non-zero probability.
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_answers_swept(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  fact_probs DOUBLE PRECISION[],
+  head_vars INT[],
+  candidate_heads INT[])
+  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS
+  'provsql','ucq_joint_answers_swept' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Per-answer probabilities in a single pass (JSON UCQ wrapper).
+ *
+ * Same surface as @c ucq_joint_answers(query, head_vars, head_tuples, …) but
+ * routed through the single-pass C SRF.
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_answers_swept(
+  query JSONB,
+  head_vars INT[],
+  head_tuples INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  fact_probs DOUBLE PRECISION[])
+  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
+DECLARE
+  dnv INT[]:='{}'; adisj INT[]:='{}'; arel INT[]:='{}';
+  avars INT[]:='{}'; aarity INT[]:='{}';
+  d JSONB; a JSONB; v TEXT; didx INT:=0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  RETURN QUERY SELECT * FROM ucq_joint_answers_swept(
+    dnv, adisj, arel, avars, aarity,
+    fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs,
+    head_vars, head_tuples);
+END;
+$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
+
+/**
  * @brief Exact Boolean UCQ probability over CORRELATED inputs
  * (columnar form, internal)
  *
