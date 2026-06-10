@@ -43,3 +43,17 @@ pin|joint_width
 1|0.384521
 2|0.219727
 (2 rows)
+== transparent H0 per source: diff vs standard (must be 0) ==
+x|diff_transparent_vs_standard
+1|0.000000000
+2|0.000000000
+3|0.000000000
+4|0.000000000
+(4 rows)
+== transparent almost-safe per source: joint-width per answer ==
+x|joint_width
+1|0.384521
+2|0.219727
+3|0.219727
+4|0.219727
+(4 rows)

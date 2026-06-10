@@ -147,7 +147,8 @@ static bool exist_walker(Node *node, void *vctx)
 }
 
 char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
-                                     bool *all_existential)
+                                     bool *all_existential,
+                                     List **head_var_idx, List **head_exprs)
 {
   ListCell  *lc;
   int        natoms = 0;
@@ -317,6 +318,51 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       appendStringInfoChar(&buf, ']');
     }
     appendStringInfoString(&buf, "]}");
+
+    /* Per-answer heads: every exposed (non-resjunk) target column must be
+     * a bare int4 Var over a tracked atom; collect their query-variable
+     * indices and the exposing Vars (the per-group head values).  Any
+     * other exposed tracked column makes the head set unextractable, so
+     * the per-answer substitution declines (head list left empty). */
+    if (head_var_idx != NULL) {
+      bool clean = true;
+      *head_var_idx = NIL;
+      if (head_exprs != NULL)
+        *head_exprs = NIL;
+      foreach (lc, q->targetList) {
+        TargetEntry *te = (TargetEntry *) lfirst(lc);
+        Node *e;
+        ExistCtx ec;
+        if (te->resjunk)
+          continue;
+        e = (Node *) te->expr;
+        while (IsA(e, RelabelType))
+          e = (Node *) ((RelabelType *) e)->arg;
+        ec.rtis = atom_rti; ec.natoms = natoms; ec.found = false;
+        exist_walker(e, &ec);
+        if (!ec.found)
+          continue;   /* a constant / untracked column: not a head */
+        if (IsA(e, Var) && ((Var *) e)->varlevelsup == 0 &&
+            ((Var *) e)->vartype == INT4OID) {
+          Var *vv = (Var *) e;
+          int node = colref_get(cols, &ncols, vv->varno, vv->varattno);
+          int hv = root_var[uf_find(cols, node)];
+          if (!list_member_int(*head_var_idx, hv)) {
+            *head_var_idx = lappend_int(*head_var_idx, hv);
+            if (head_exprs != NULL)
+              *head_exprs = lappend(*head_exprs, e);
+          }
+          continue;
+        }
+        clean = false;   /* an exposed tracked column we cannot pin */
+        break;
+      }
+      if (!clean) {
+        *head_var_idx = NIL;
+        if (head_exprs != NULL)
+          *head_exprs = NIL;
+      }
+    }
   }
 
   /* The query computes the Boolean existence of the UCQ iff no tracked

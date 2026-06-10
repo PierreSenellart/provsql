@@ -3957,6 +3957,71 @@ static Expr *build_joint_width_provenance_expr(const constants_t *constants,
   return (Expr *) fe;
 }
 
+/**
+ * @brief Build the per-answer @c ucq_joint_provenance_answer(...) call for a
+ *        recognised non-Boolean UCQ (head variables exposed in the output).
+ *
+ * Per output group the head variables are bound to their values; the
+ * substituted call materialises the head-pinned certified d-D for that
+ * answer (@c head_vals is @c ARRAY[head Vars], evaluated per group at
+ * execution).  @c fallback (the normal per-answer provenance) is returned
+ * on any decline.  Heads are int4 Vars (the recogniser's restriction), so
+ * the value array is a plain @c int4[].  Returns @c NULL if the function
+ * cannot be resolved or there are no heads.
+ */
+static Expr *build_joint_width_answer_expr(const constants_t *constants,
+                                           const char *desc, List *head_var_idx,
+                                           List *head_exprs, Expr *fallback)
+{
+  FuncCandidateList fcl = FuncnameGetCandidates(
+    list_make2(makeString("provsql"), makeString("ucq_joint_provenance_answer")),
+    4, NIL, false, false,
+#if PG_VERSION_NUM >= 140000
+    false,
+#endif
+    false);
+  FuncExpr *fe;
+  Const *desc_c, *hv_c;
+  ArrayExpr *vals;
+  Datum jb;
+  Datum *hd;
+  int n = list_length(head_var_idx), i;
+  ListCell *lc;
+  ArrayType *arr;
+
+  if (fcl == NULL || head_var_idx == NIL)
+    return NULL;
+
+  jb = DirectFunctionCall1(jsonb_in, CStringGetDatum(desc));
+  desc_c = makeConst(JSONBOID, -1, InvalidOid, -1, jb, false, false);
+
+  /* The head variables' query-variable indices as an int4[] Const. */
+  hd = palloc(n * sizeof(Datum));
+  i = 0;
+  foreach (lc, head_var_idx)
+    hd[i++] = Int32GetDatum(lfirst_int(lc));
+  arr = construct_array(hd, n, INT4OID, sizeof(int32), true, TYPALIGN_INT);
+  hv_c = makeConst(INT4ARRAYOID, -1, InvalidOid, -1,
+                   PointerGetDatum(arr), false, false);
+
+  /* The head values: ARRAY[head Vars] (int4[]), bound per group at run time. */
+  vals = makeNode(ArrayExpr);
+  vals->array_typeid = INT4ARRAYOID;
+  vals->element_typeid = INT4OID;
+  vals->multidims = false;
+  vals->elements = list_copy(head_exprs);
+  vals->location = -1;
+
+  fe = makeNode(FuncExpr);
+  fe->funcid = fcl->oid;
+  fe->funcresulttype = constants->OID_TYPE_UUID;
+  fe->funcretset = false;
+  fe->funcvariadic = false;
+  fe->args = list_make4(desc_c, hv_c, (Expr *) vals, fallback);
+  fe->location = -1;
+  return (Expr *) fe;
+}
+
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,
@@ -3969,9 +4034,12 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
    * mutates q (it sets q->hasAggs); the descriptor is applied at the end. */
   char *jw_desc = NULL;
   bool  jw_all_exist = false;
+  List *jw_head_idx = NIL;
+  List *jw_head_exprs = NIL;
   if (provsql_joint_width && provsql_boolean_provenance &&
       op != SR_PLUS && (aggregation || group_by_rewrite))
-    jw_desc = provsql_joint_width_descriptor(constants, q, &jw_all_exist);
+    jw_desc = provsql_joint_width_descriptor(constants, q, &jw_all_exist,
+                                             &jw_head_idx, &jw_head_exprs);
 
   if (op == SR_PLUS) {
     result = linitial(prov_atts);
@@ -4323,6 +4391,17 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
    * fallback), so this never makes a query fail. */
   if (jw_desc != NULL && jw_all_exist) {
     Expr *jw = build_joint_width_provenance_expr(constants, jw_desc, result);
+    if (jw != NULL)
+      result = jw;
+  } else if (jw_desc != NULL && jw_head_idx != NIL && inv_cert == NULL) {
+    /* Per-answer (non-Boolean) UCQ, and the inversion-free certifier has
+     * declined (an inv_cert would be carried on the normal provenance and
+     * is consumed by the 'inversion-free' method, which the joint-width
+     * d-D does not provide): substitute the head-pinned joint-width
+     * provenance per output group, falling back to the just-built normal
+     * per-answer provenance on any decline. */
+    Expr *jw = build_joint_width_answer_expr(constants, jw_desc,
+                                             jw_head_idx, jw_head_exprs, result);
     if (jw != NULL)
       result = jw;
   }

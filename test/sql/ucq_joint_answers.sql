@@ -144,4 +144,32 @@ SELECT pin, ROUND(probability_evaluate(ucq_joint_provenance_answer(
   ARRAY[0], ARRAY[pin]))::numeric, 6) AS joint_width
 FROM (VALUES (1), (2)) AS v(pin) ORDER BY pin;
 
+-- ---------------------------------------------------------------------
+-- (4) Transparent per-answer rewrite: the NATURAL flat query
+--     "SELECT head, probability_evaluate(provenance()) ... GROUP BY head"
+--     over tracked base relations, under provsql.joint_width = on, must
+--     substitute the head-pinned joint-width provenance per group.  On H0
+--     it must agree with the standard per-answer evaluation (diff 0); on
+--     the almost-safe shape it must reproduce the closed form (the values
+--     of case (2)) -- there the per-answer lineage is the QxW biclique no
+--     other method tree-decomposes.
+-- ---------------------------------------------------------------------
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = on;
+CREATE TEMP TABLE h0_tr AS
+  SELECT jr.x AS x, probability_evaluate(provenance()) AS p
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY jr.x;
+CREATE TEMP TABLE as_tr AS
+  SELECT jp.x AS x, probability_evaluate(provenance()) AS p
+    FROM jp, jq, jw_, jtt
+   WHERE jp.x = jq.x AND jp.x = jw_.x AND jp.y = jtt.y GROUP BY jp.x;
+SET provsql.active = off;
+
+\echo '== transparent H0 per source: diff vs standard (must be 0) =='
+SELECT t.x, ROUND((t.p - s.p)::numeric, 9) AS diff_transparent_vs_standard
+  FROM h0_tr t JOIN h0_std s ON t.x = s.x ORDER BY t.x;
+
+\echo '== transparent almost-safe per source: joint-width per answer =='
+SELECT x, ROUND(p::numeric, 6) AS joint_width FROM as_tr ORDER BY x;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt CASCADE;

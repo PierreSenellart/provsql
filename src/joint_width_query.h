@@ -40,13 +40,25 @@
  *                         computes the Boolean *existence* of the UCQ --
  *                         the @c \#P-hard case the substitution targets);
  *                         @c false when output/grouped variables remain
- *                         (a per-answer query, left to the normal path
- *                         for now).
+ *                         (a per-answer query).
+ * @param head_var_idx     Output (may be @c NULL): when the query is
+ *                         per-answer and every exposed target column is a
+ *                         bare integer @c Var over a tracked atom, the
+ *                         @c List of the head variables' query-variable
+ *                         indices (@c Integer nodes), in output order,
+ *                         deduplicated; @c NIL if the heads cannot be
+ *                         cleanly extracted (the per-answer substitution
+ *                         then declines).
+ * @param head_exprs       Output (may be @c NULL): parallel @c List of the
+ *                         target @c Var @c Expr exposing each head variable
+ *                         (the per-group head value at execution).
  * @return A palloc'd JSON descriptor string (the shape
  *         @c ucq_joint_provenance expects), or @c NULL when @p q is
  *         outside the recogniser's scope.
  */
 extern char *provsql_joint_width_descriptor(const constants_t *constants,
-                                            Query *q, bool *all_existential);
+                                            Query *q, bool *all_existential,
+                                            List **head_var_idx,
+                                            List **head_exprs);
 
 #endif /* JOINT_WIDTH_QUERY_H */
