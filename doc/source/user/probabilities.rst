@@ -160,6 +160,79 @@ where each shines; most users can skip it.
      - A universal relative estimator for any circuit -- including
        random-variable and HAVING-aggregate lineage.
 
+.. _tractable-cases:
+
+When exact evaluation is tractable
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Computing the exact probability is :math:`\#P`-hard in general
+:cite:`DBLP:journals/vldb/DalviS07`, but several structural restrictions make
+it tractable -- and ProvSQL recognises each and routes to a dedicated
+mechanism rather than a general-purpose counter. Each row below is a
+*sufficient* condition for tractability, classified by the shape of the
+**data**, of its probabilistic **annotation** (``TID`` = tuple-independent,
+``BID`` = block-independent-disjoint, *correlated* = arbitrary, e.g.
+view-derived), and of the **query**. The planner-time rewrites and the
+cost-based chooser apply whichever fits; the last row is the boundary, where
+no exact polynomial guarantee exists and ProvSQL falls back to knowledge
+compilation or to an approximation.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 13 25 18 11 21
+
+   * - Data
+     - Annotation
+     - Query
+     - Complexity
+     - Source
+     - ProvSQL mechanism
+   * - any
+     - ``TID`` / ``BID``
+     - hierarchical, **self-join-free** CQ
+     - PTIME (read-once, linear)
+     - :cite:`DBLP:journals/jacm/DalviS12`
+     - safe-query rewrite, then ``independent``
+   * - any
+     - ``TID``
+     - inversion-free UCQ (self-joins allowed)
+     - PTIME (linear-size d-DNNF)
+     - :cite:`DBLP:conf/icdt/JhaS11`
+     - inversion-free certificate, then ``inversion-free``
+   * - any
+     - ``TID`` / ``BID``
+     - any query whose **lineage** has bounded treewidth
+     - FPT in the lineage treewidth
+     - :cite:`DBLP:journals/mst/AmarilliCMS20`
+     - ``tree-decomposition`` / ``d-tree``
+   * - bounded treewidth (treelike)
+     - ``TID`` / ``BID``
+     - recursive reachability (and fixed MSO)
+     - linear in the data
+     - :cite:`DBLP:conf/icalp/AmarilliBS15`
+     - compile along a tree decomposition of the data (Courcelle), giving a
+       certified d-D (:ref:`network-reliability-btw`)
+   * - any
+     - ``TID`` / ``BID`` / **correlated**
+     - UCQ of bounded **joint** width (incl. the :math:`\#P`-hard
+       :math:`H_0`, :math:`H_k`)
+     - linear in the data for bounded joint width
+     - :cite:`Amarilli2016thesis` (§4.2)
+     - joint-width UCQ compiler (``provsql.joint_width``)
+   * - any
+     - any
+     - anything else (a :math:`\#P`-hard lineage)
+     - no exact polynomial guarantee
+     - :cite:`DBLP:journals/vldb/DalviS07`
+     - knowledge compilation (``compilation`` / ``wmc``), or an FPRAS
+       (``monte-carlo`` / ``karp-luby``)
+
+The first two rows are *query-side* dichotomy results that presume
+tuple-independent inputs; the joint-width row subsumes them on the hard
+queries and, crucially, stays exact over **correlated** inputs, where
+query-side safety is inapplicable -- the bound is then on the *joint* graph of
+the data and its correlations, not on either alone :cite:`Amarilli2016thesis`.
+
 Computation Methods
 ^^^^^^^^^^^^^^^^^^^^
 
