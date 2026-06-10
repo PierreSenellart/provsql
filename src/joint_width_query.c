@@ -984,7 +984,7 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
         ListCell        *tc;
         Node            *e;
         Var             *vv;
-        bool             tracked = false;
+        ExistCtx         ec;
         int              node, var;
         foreach (tc, q->targetList) {
           TargetEntry *t = (TargetEntry *) lfirst(tc);
@@ -994,14 +994,19 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
         e = (Node *) gte->expr;
         while (IsA(e, RelabelType))
           e = (Node *) ((RelabelType *) e)->arg;
+        /* A group key independent of the tracked data (a constant -- e.g. the
+         * GROUP BY 1 that DISTINCT lowers to -- or an untracked column) is
+         * one group, not a per-answer head: ignore it.  The Boolean
+         * existence keeps no head at all. */
+        ec.rtis = atom_rti; ec.natoms = natoms; ec.found = false;
+        exist_walker(e, &ec);
+        if (!ec.found)
+          continue;
+        /* It partitions the tracked data: it must be a bare column to pin. */
         if (!(IsA(e, Var) && ((Var *) e)->varlevelsup == 0)) {
-          clean = false; break;   /* an expression group key: cannot pin */
+          clean = false; break;   /* an expression over tracked cols: cannot pin */
         }
         vv = (Var *) e;
-        for (a = 0; a < natoms; a++)
-          if (atom_rti[a] == vv->varno) { tracked = true; break; }
-        if (!tracked)
-          continue;   /* grouping on an untracked column: not a head */
         node = colref_get(cols, &ncols, vv->varno, vv->varattno);
         var = root_var[uf_find(cols, node)];
         if (!list_member_int(hv, var)) {

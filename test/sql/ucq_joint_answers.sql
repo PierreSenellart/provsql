@@ -479,4 +479,25 @@ SELECT * FROM jw_prefilter_chk('OR jr.x=1 OR jr.x=4', '(jr.x = 1 OR jr.x = 4)');
 DROP FUNCTION jw_prefilter_chk(text, text);
 SET provsql.active = off;
 
+-- ---------------------------------------------------------------------
+-- (15) Boolean EXISTENCE of a multi-atom UCQ via DISTINCT: the #P-hard H0
+--      = R(x), S(x,y), T(y) asked as "does any witness exist?".  DISTINCT
+--      lowers to GROUP BY <const>, which is one group (the existence), not
+--      a per-answer head -- the recogniser must read it as Boolean and
+--      fire build_joint_width_provenance_expr.  Cross-check vs the ladder.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.joint_width = on;
+CREATE TEMP TABLE he_on AS SELECT provenance() AS tok
+  FROM (SELECT DISTINCT 1 FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) q;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE he_off AS SELECT provenance() AS tok
+  FROM (SELECT DISTINCT 1 FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) q;
+SET provsql.active = off;
+\echo '== Boolean existence of H0 (3-atom, DISTINCT): fired, diff vs ladder 0 =='
+SELECT (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9)
+         AS diff_vs_ladder
+  FROM he_on o, he_off f;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;
