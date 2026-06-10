@@ -25,13 +25,17 @@
 /**
  * @brief Build the joint-width descriptor for a recognised UCQ.
  *
- * Recognises a pure-join conjunctive query over provenance-tracked base
- * relations: a flat @c FROM list of @c RTE_RELATION entries (each
- * tracked), a @c WHERE that is a conjunction of @c Var @c = @c Var
- * equalities, no aggregates / @c GROUP @c BY / @c HAVING / sublinks.  The
- * variable structure is the column equivalence relation induced by the
- * equalities; every base column is a query variable (existential or
- * output).
+ * Recognises a conjunctive query over provenance-tracked base relations:
+ * a flat @c FROM list (or inner @c JOIN @c ... @c ON tree) of tracked
+ * @c RTE_RELATION entries, a @c WHERE that is a conjunction of equalities,
+ * no @c HAVING / window functions / sublinks / aggregates other than the
+ * provenance aggregation.  The variable structure is the column
+ * equivalence relation induced by the @c Var @c = @c Var join equalities;
+ * a @c Var @c = @c Const selection pins that variable to the literal (the
+ * same Sel mechanism as a head).  The per-answer heads are the @c GROUP
+ * @c BY keys (bare tracked columns); the @c SELECT list itself is
+ * arbitrary (a function of the keys), so what is displayed does not
+ * constrain recognition.
  *
  * A @c UNION [@c ALL] of such conjunctive queries (the body of an
  * aggregated subquery) is recognised as a genuine multi-disjunct UCQ: one

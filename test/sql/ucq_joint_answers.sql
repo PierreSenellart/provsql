@@ -394,4 +394,53 @@ SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
          AS diff_vs_ladder
   FROM jpu_on o JOIN jpu_off f ON o.x = f.x ORDER BY o.x;
 
+-- ---------------------------------------------------------------------
+-- (12) Constant selection: a Var = Const conjunct pins the column's
+--      variable to the literal (the same Sel mechanism as a head, value
+--      known at plan time), so the recogniser no longer declines on it.
+--      H0 with the existential y pinned (js.y = 11): cross-check vs ladder.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.joint_width = on;
+CREATE TEMP TABLE jc_on AS SELECT provenance() AS tok
+  FROM (SELECT DISTINCT 1 FROM jr, js, jt
+         WHERE jr.x = js.x AND js.y = jt.y AND js.y = 11) q;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE jc_off AS SELECT provenance() AS tok
+  FROM (SELECT DISTINCT 1 FROM jr, js, jt
+         WHERE jr.x = js.x AND js.y = jt.y AND js.y = 11) q;
+SET provsql.active = off;
+\echo '== constant selection (js.y = 11): joint-width fired, diff vs ladder 0 =='
+SELECT (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9)
+         AS diff_vs_ladder
+  FROM jc_on o, jc_off f;
+
+-- ---------------------------------------------------------------------
+-- (13) Arbitrary head expression: the per-answer partition is the GROUP BY
+--      key, so what the SELECT list displays does not constrain
+--      recognition.  Grouping by jr.x but outputting jr.x * 10 + 1 must
+--      fire and give the SAME per-answer provenance as outputting jr.x.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.joint_width = on;
+CREATE TEMP TABLE jhx_expr AS
+  SELECT jr.x * 10 + 1 AS k, jr.x AS x, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY jr.x;
+CREATE TEMP TABLE jhx_bare AS
+  SELECT jr.x AS x, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY jr.x;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE jhx_off AS
+  SELECT jr.x AS x, provenance() AS tok
+    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y GROUP BY jr.x;
+SET provsql.active = off;
+\echo '== head expression r.x*10+1: fired, token == the bare-x head, diff vs ladder 0 =='
+SELECT e.x, e.k, (e.tok <> o.tok) AS joint_width_fired,
+       (e.tok = b.tok) AS same_token_as_bare_head,
+       ROUND((probability_evaluate(e.tok) - probability_evaluate(o.tok))::numeric, 9)
+         AS diff_vs_ladder
+  FROM jhx_expr e JOIN jhx_bare b ON e.x = b.x JOIN jhx_off o ON e.x = o.x
+ ORDER BY e.x;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;

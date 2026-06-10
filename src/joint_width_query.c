@@ -54,10 +54,21 @@ static void uf_union(ColRef *cols, int a, int b)
     cols[ra].parent = rb;
 }
 
-/** @brief Collect Var=Var equalities from a WHERE qual tree; false on any
- *         qual that is not such an equality (so the recogniser declines). */
+/**
+ * @brief Collect the equality structure of a WHERE / ON qual tree.
+ *
+ * A conjunction of equalities (the qual must be @c AND-only).  @c Var=Var
+ * is a join: its two columns are unioned (recorded in @p pairs).
+ * @c Var=Const is a selection: when @p const_cols is non-NULL the column
+ * and the constant are recorded (in @p const_cols / @p const_vals) so the
+ * caller can pin the column's variable to the value; when @p const_cols is
+ * @c NULL such a selection makes the recogniser decline (callers that
+ * cannot apply a pin -- the UNION arms -- pass @c NULL).  Any other qual
+ * shape declines.  The equality must be the column type's default @c =.
+ */
 static bool collect_equalities(Node *qual, ColRef *cols, int *ncols,
-                               int **pairs, int *npairs)
+                               int **pairs, int *npairs,
+                               int *const_cols, Const **const_vals, int *nconst)
 {
   if (qual == NULL)
     return true;
@@ -67,15 +78,17 @@ static bool collect_equalities(Node *qual, ColRef *cols, int *ncols,
     if (b->boolop != AND_EXPR)
       return false;
     foreach (lc, b->args)
-      if (!collect_equalities((Node *) lfirst(lc), cols, ncols, pairs, npairs))
+      if (!collect_equalities((Node *) lfirst(lc), cols, ncols, pairs, npairs,
+                              const_cols, const_vals, nconst))
         return false;
     return true;
   }
   if (IsA(qual, OpExpr)) {
     OpExpr *op = (OpExpr *) qual;
     Node *ln, *rn;
-    Var *lv, *rv;
-    Oid eq;
+    Var  *v;
+    Const *c;
+    Oid   eq;
     if (list_length(op->args) != 2)
       return false;
     ln = (Node *) linitial(op->args);
@@ -84,22 +97,35 @@ static bool collect_equalities(Node *qual, ColRef *cols, int *ncols,
       ln = (Node *) ((RelabelType *) ln)->arg;
     while (IsA(rn, RelabelType))
       rn = (Node *) ((RelabelType *) rn)->arg;
-    if (!IsA(ln, Var) || !IsA(rn, Var))
-      return false;
-    lv = (Var *) ln;
-    rv = (Var *) rn;
-    if (lv->varlevelsup != 0 || rv->varlevelsup != 0)
-      return false;
-    eq = lookup_type_cache(lv->vartype, TYPECACHE_EQ_OPR)->eq_opr;
-    if (eq == InvalidOid || op->opno != eq)
-      return false;
-    {
-      int a = colref_get(cols, ncols, lv->varno, lv->varattno);
-      int b = colref_get(cols, ncols, rv->varno, rv->varattno);
-      (*pairs)[(*npairs)++] = a;
-      (*pairs)[(*npairs)++] = b;
+    /* Var = Var: a join. */
+    if (IsA(ln, Var) && IsA(rn, Var)) {
+      Var *lv = (Var *) ln, *rv = (Var *) rn;
+      if (lv->varlevelsup != 0 || rv->varlevelsup != 0)
+        return false;
+      eq = lookup_type_cache(lv->vartype, TYPECACHE_EQ_OPR)->eq_opr;
+      if (eq == InvalidOid || op->opno != eq)
+        return false;
+      (*pairs)[(*npairs)++] = colref_get(cols, ncols, lv->varno, lv->varattno);
+      (*pairs)[(*npairs)++] = colref_get(cols, ncols, rv->varno, rv->varattno);
+      return true;
     }
-    return true;
+    /* Var = Const (either order): a selection pinning the column. */
+    if ((IsA(ln, Var) && IsA(rn, Const)) || (IsA(rn, Var) && IsA(ln, Const))) {
+      if (const_cols == NULL)
+        return false;   /* this caller cannot apply a constant pin */
+      if (IsA(ln, Var)) { v = (Var *) ln; c = (Const *) rn; }
+      else              { v = (Var *) rn; c = (Const *) ln; }
+      if (v->varlevelsup != 0 || c->constisnull || c->consttype != v->vartype)
+        return false;   /* NULL or cross-type: not a plain value pin */
+      eq = lookup_type_cache(v->vartype, TYPECACHE_EQ_OPR)->eq_opr;
+      if (eq == InvalidOid || op->opno != eq)
+        return false;
+      const_cols[*nconst] = colref_get(cols, ncols, v->varno, v->varattno);
+      const_vals[*nconst] = c;
+      (*nconst)++;
+      return true;
+    }
+    return false;
   }
   return false;   /* any other qual shape: decline */
 }
@@ -322,7 +348,8 @@ static bool emit_cq_disjunct(const constants_t *constants, Query *cq,
   }
 
   foreach (lc, qual_list)
-    if (!collect_equalities((Node *) lfirst(lc), cols, &ncols, &pairs, &npairs))
+    if (!collect_equalities((Node *) lfirst(lc), cols, &ncols, &pairs, &npairs,
+                            NULL, NULL, NULL))   /* a UNION arm cannot pin a const */
       return false;
   for (i = 0; i < npairs; i += 2)
     uf_union(cols, pairs[i], pairs[i + 1]);
@@ -570,6 +597,9 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   int        ncols = 0;
   int       *pairs;
   int        npairs = 0;
+  int       *const_cols;       /* per const pin: colref index */
+  Const    **const_vals;       /* per const pin: the literal */
+  int        nconst = 0;
   int        maxcols;
   List      *qual_list = NIL;
   StringInfoData buf;
@@ -616,29 +646,50 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
       RangeTblEntry *subrte = rt_fetch(subrti, q->rtable);
       if (subrte->rtekind == RTE_SUBQUERY &&
           subrte->subquery->setOperations != NULL) {
-        /* UNION subquery: a multi-disjunct UCQ.  The outer query's bare Vars
-         * over the subquery are the per-answer head columns (a GROUP BY over
-         * them); the provenance() aggregate references the subquery's provsql
-         * column and is not a head.  With no heads it is the Boolean
-         * existence; with heads, a per-answer UCQ pinned per group. */
-        int  *head_resno = palloc(list_length(q->targetList) * sizeof(int));
-        List *hexprs = NIL;
-        int   n_heads = 0;
-        char *udesc;
-        foreach (lc, q->targetList) {
+        /* UNION subquery: a multi-disjunct UCQ.  The per-answer heads are the
+         * GROUP BY keys (Vars over the subquery); the SELECT list is
+         * arbitrary, and the provenance() aggregate is not a head.  With no
+         * GROUP BY it is the Boolean existence.  A constant union column
+         * (SELECT 1) is ignored. */
+        int      *head_resno = palloc((list_length(q->targetList) +
+                                       list_length(q->groupClause)) * sizeof(int));
+        List     *hexprs = NIL;
+        int       n_heads = 0;
+        char     *udesc;
+        List     *cand = NIL;   /* candidate head target-entries */
+        if (q->groupClause != NIL) {
+          ListCell *gl, *tc;
+          foreach (gl, q->groupClause) {
+            SortGroupClause *sgc = (SortGroupClause *) lfirst(gl);
+            foreach (tc, q->targetList) {
+              TargetEntry *t = (TargetEntry *) lfirst(tc);
+              if (t->ressortgroupref == sgc->tleSortGroupRef) {
+                cand = lappend(cand, t); break;
+              }
+            }
+          }
+        } else {
+          foreach (lc, q->targetList) {
+            TargetEntry *t = (TargetEntry *) lfirst(lc);
+            if (!t->resjunk)
+              cand = lappend(cand, t);
+          }
+        }
+        foreach (lc, cand) {
           TargetEntry *te = (TargetEntry *) lfirst(lc);
           Node *e;
           Var  *v;
           TargetEntry *ste = NULL;
           ListCell *sc;
-          if (te->resjunk)
-            continue;
           e = (Node *) te->expr;
           while (IsA(e, RelabelType))
             e = (Node *) ((RelabelType *) e)->arg;
           if (!(IsA(e, Var) && ((Var *) e)->varno == subrti &&
-                ((Var *) e)->varlevelsup == 0))
-            continue;   /* the provenance() aggregate or a constant */
+                ((Var *) e)->varlevelsup == 0)) {
+            if (q->groupClause != NIL)
+              return NULL;   /* an un-pinnable group key: decline */
+            continue;        /* the provenance() aggregate or a constant */
+          }
           v = (Var *) e;
           foreach (sc, subrte->subquery->targetList) {
             TargetEntry *t = (TargetEntry *) lfirst(sc);
@@ -653,6 +704,12 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
               return NULL;       /* malformed / mixed head column */
             if (kind == 0)
               continue;          /* a constant projection (SELECT 1 d): ignore */
+          }
+          {
+            bool dup = false; int z;
+            for (z = 0; z < n_heads; z++)
+              if (head_resno[z] == v->varattno) { dup = true; break; }
+            if (dup) continue;
           }
           head_resno[n_heads] = v->varattno;
           hexprs = lappend(hexprs, e);
@@ -683,6 +740,15 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
                                                     &sub_exprs);
         if (desc == NULL || sub_idx == NIL)
           return NULL;
+        /* If the inner CQ carries a constant pin (a Const, not a Var, in its
+         * head list), it cannot be remapped through the outer target list:
+         * decline (the flat form handles constants directly). */
+        {
+          ListCell *xc;
+          foreach (xc, sub_exprs)
+            if (!IsA((Node *) lfirst(xc), Var))
+              return NULL;
+        }
         if (head_var_idx != NULL) {
           bool clean = true;
           *head_var_idx = NIL;
@@ -777,6 +843,8 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   }
   cols = palloc(maxcols * sizeof(ColRef));
   pairs = palloc(2 * (list_length(q->rtable) * 8 + 64) * sizeof(int));
+  const_cols = palloc((list_length(q->rtable) * 8 + 64) * sizeof(int));
+  const_vals = palloc((list_length(q->rtable) * 8 + 64) * sizeof(Const *));
 
   /* Seed a column node for every element column of every atom (so even
    * un-joined columns become singleton variables). */
@@ -796,7 +864,8 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
   /* Equalities (WHERE + every collected ON) -> union-find; decline on any
    * other qual shape. */
   foreach (lc, qual_list)
-    if (!collect_equalities((Node *) lfirst(lc), cols, &ncols, &pairs, &npairs))
+    if (!collect_equalities((Node *) lfirst(lc), cols, &ncols, &pairs, &npairs,
+                            const_cols, const_vals, &nconst))
       return NULL;
   for (i = 0; i < npairs; i += 2)
     uf_union(cols, pairs[i], pairs[i + 1]);
@@ -876,18 +945,53 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
     }
     appendStringInfoString(&buf, "]}");
 
-    /* Per-answer heads: every exposed (non-resjunk) target column must be
-     * a bare Var over a tracked atom (any type -- the head value is bound
-     * per group by casting it to text, matching the text element
-     * dictionary the gather builds); collect their query-variable indices
-     * and the exposing Vars.  Any other exposed tracked column makes the
-     * head set unextractable, so the per-answer substitution declines
-     * (head list left empty). */
-    if (head_var_idx != NULL) {
-      bool clean = true;
-      *head_var_idx = NIL;
-      if (head_exprs != NULL)
-        *head_exprs = NIL;
+    /* Heads = the variables the query pins per answer: the GROUP BY keys
+     * (each a bare Var over a tracked atom -- the SELECT list itself is
+     * arbitrary, a function of the keys, so what is displayed does not
+     * constrain recognition) plus the constant selections from WHERE (a
+     * column pinned to a literal).  Both bind a variable to a value via the
+     * same Sel mechanism; the value is the GROUP BY column per answer, or
+     * the literal.  A query with no such pins is the Boolean existence; an
+     * un-pinnable group key (an expression) declines.  Without a GROUP BY,
+     * the exposed bare tracked Vars are the heads (the historical form). */
+    {
+    bool   clean = true;
+    List  *hv = NIL, *hx = NIL;
+    int    k;
+    if (q->groupClause != NIL) {
+      ListCell *gl;
+      foreach (gl, q->groupClause) {
+        SortGroupClause *sgc = (SortGroupClause *) lfirst(gl);
+        TargetEntry     *gte = NULL;
+        ListCell        *tc;
+        Node            *e;
+        Var             *vv;
+        bool             tracked = false;
+        int              node, var;
+        foreach (tc, q->targetList) {
+          TargetEntry *t = (TargetEntry *) lfirst(tc);
+          if (t->ressortgroupref == sgc->tleSortGroupRef) { gte = t; break; }
+        }
+        if (gte == NULL) { clean = false; break; }
+        e = (Node *) gte->expr;
+        while (IsA(e, RelabelType))
+          e = (Node *) ((RelabelType *) e)->arg;
+        if (!(IsA(e, Var) && ((Var *) e)->varlevelsup == 0)) {
+          clean = false; break;   /* an expression group key: cannot pin */
+        }
+        vv = (Var *) e;
+        for (a = 0; a < natoms; a++)
+          if (atom_rti[a] == vv->varno) { tracked = true; break; }
+        if (!tracked)
+          continue;   /* grouping on an untracked column: not a head */
+        node = colref_get(cols, &ncols, vv->varno, vv->varattno);
+        var = root_var[uf_find(cols, node)];
+        if (!list_member_int(hv, var)) {
+          hv = lappend_int(hv, var);
+          hx = lappend(hx, e);
+        }
+      }
+    } else {
       foreach (lc, q->targetList) {
         TargetEntry *te = (TargetEntry *) lfirst(lc);
         Node *e;
@@ -907,39 +1011,38 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
         if (IsA(e, Var) && ((Var *) e)->varlevelsup == 0) {
           Var *vv = (Var *) e;
           int node = colref_get(cols, &ncols, vv->varno, vv->varattno);
-          int hv = root_var[uf_find(cols, node)];
-          if (!list_member_int(*head_var_idx, hv)) {
-            *head_var_idx = lappend_int(*head_var_idx, hv);
-            if (head_exprs != NULL)
-              *head_exprs = lappend(*head_exprs, e);
+          int var = root_var[uf_find(cols, node)];
+          if (!list_member_int(hv, var)) {
+            hv = lappend_int(hv, var);
+            hx = lappend(hx, e);
           }
           continue;
         }
         clean = false;   /* an exposed tracked column we cannot pin */
         break;
       }
-      if (!clean) {
-        *head_var_idx = NIL;
-        if (head_exprs != NULL)
-          *head_exprs = NIL;
+    }
+    /* Constant pins (skip a variable already pinned as a head -- a grouped
+     * column that is also constant-selected agrees by construction). */
+    if (clean)
+      for (k = 0; k < nconst; k++) {
+        int var = root_var[uf_find(cols, const_cols[k])];
+        if (!list_member_int(hv, var)) {
+          hv = lappend_int(hv, var);
+          hx = lappend(hx, (Expr *) const_vals[k]);
+        }
       }
-    }
-  }
 
-  /* The query computes the Boolean existence of the UCQ iff no tracked
-   * variable is exposed in the (non-resjunk) target list. */
-  if (all_existential) {
-    ExistCtx ec;
-    ec.rtis = atom_rti;
-    ec.natoms = natoms;
-    ec.found = false;
-    foreach (lc, q->targetList) {
-      TargetEntry *te = (TargetEntry *) lfirst(lc);
-      if (te->resjunk)
-        continue;
-      exist_walker((Node *) te->expr, &ec);
+    if (head_var_idx != NULL) {
+      *head_var_idx = clean ? hv : NIL;
+      if (head_exprs != NULL)
+        *head_exprs = clean ? hx : NIL;
     }
-    *all_existential = !ec.found;
+    /* Boolean existence iff there is no pin at all (and recognition is
+     * clean); otherwise the per-answer / constant-pinned substitution. */
+    if (all_existential)
+      *all_existential = clean && (hv == NIL);
+    }
   }
 
   (void) constants;
