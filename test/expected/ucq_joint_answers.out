@@ -179,3 +179,11 @@ add_provenance
 fired_at_tw10|declined_to_ladder_at_tw1|p_joint|diff_fallback_vs_ladder
 t|t|0.984375|0.000000000
 (1 row)
+== Shapley pass-through: events match, max |shapley(d-D) - shapley(standard)| = 0 ==
+n_events|max_abs_diff
+20|0.000000000
+(1 row)
+== expectation pass-through: E[SUM|H0] on d-D == on standard, and != unconditional ==
+cond_joint_minus_std|conditioning_is_nontrivial
+0.000000000|t
+(1 row)

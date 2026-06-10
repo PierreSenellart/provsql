@@ -533,4 +533,35 @@ SELECT (hi.tok <> off.tok) AS fired_at_tw10,
          AS diff_fallback_vs_ladder
   FROM sc_hi hi, sc_lo lo, sc_off off;
 
+-- ---------------------------------------------------------------------
+-- (17) Shapley and expectation pass-through.  The joint-width compiler
+--      MATERIALISES its certified d-D as an ordinary provenance token, so
+--      the standard shapley() and expected() machinery work on it
+--      unchanged, attributing/conditioning on the input EVENTS.  Both must
+--      agree with the same computation over the standard (joint_width=off)
+--      provenance of the same Boolean H0 -- they are the same Boolean
+--      function over the same events.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.joint_width = on;
+SELECT provenance() AS tok_j
+  FROM (SELECT DISTINCT 1 FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) q \gset
+SET provsql.joint_width = off;
+SELECT provenance() AS tok_s
+  FROM (SELECT DISTINCT 1 FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) q \gset
+SET provsql.joint_width = on;
+\echo '== Shapley pass-through: events match, max |shapley(d-D) - shapley(standard)| = 0 =='
+SELECT count(*) AS n_events,
+       MAX(ABS(ROUND((j.value - s.value)::numeric, 9))) AS max_abs_diff
+  FROM shapley_all_vars(:'tok_j'::uuid) j
+  JOIN shapley_all_vars(:'tok_s'::uuid) s USING (variable);
+-- conditional expectation of an aggregate that shares events with H0
+SELECT expected(SUM(jr.x), :'tok_j'::uuid) AS ej,
+       expected(SUM(jr.x), :'tok_s'::uuid) AS es,
+       expected(SUM(jr.x))                 AS eu FROM jr \gset
+SET provsql.active = off;
+\echo '== expectation pass-through: E[SUM|H0] on d-D == on standard, and != unconditional =='
+SELECT ROUND((:'ej'::float8 - :'es'::float8)::numeric, 9) AS cond_joint_minus_std,
+       (ROUND(:'ej'::numeric,6) <> ROUND(:'eu'::numeric,6)) AS conditioning_is_nontrivial;
+
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_, jcyc CASCADE;
