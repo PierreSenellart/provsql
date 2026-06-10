@@ -85,3 +85,18 @@ x|joint_width_fired|diff
 3|t|0.000000000
 4|t|0.000000000
 (4 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+== text head column: joint-width fired (token differs), value agrees ==
+nm|joint_width_fired|diff
+a|t|0.000000000
+b|t|0.000000000
+c|t|0.000000000
+(3 rows)

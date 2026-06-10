@@ -141,7 +141,7 @@ SELECT pin, ROUND(probability_evaluate(ucq_joint_provenance_answer(
      {"rel":1,"vars":[0,2]},{"rel":2,"vars":[0,3]},{"rel":3,"vars":[1]}]}],
     "relations":["provsql_test.jp","provsql_test.jq","provsql_test.jw_","provsql_test.jtt"],
     "elem_cols":[["x","y"],["x","z"],["x","u"],["y"]]}'::jsonb,
-  ARRAY[0], ARRAY[pin]))::numeric, 6) AS joint_width
+  ARRAY[0], ARRAY[pin::text]))::numeric, 6) AS joint_width
 FROM (VALUES (1), (2)) AS v(pin) ORDER BY pin;
 
 -- ---------------------------------------------------------------------
@@ -241,4 +241,39 @@ SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
        ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
   FROM h0_join_on o JOIN h0_comma_off f ON o.x = f.x ORDER BY o.x;
 
-DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_ CASCADE;
+-- ---------------------------------------------------------------------
+-- (7) Non-integer head column: a TEXT key.  The head value is bound by
+--     casting the GROUP BY column to text (matching the gather's
+--     (col)::text), so a text head works -- joint-width fires and agrees
+--     with the standard per-answer evaluation.
+-- ---------------------------------------------------------------------
+SET provsql.active = on;
+SET provsql.provenance = 'boolean';
+CREATE TABLE tr_(nm text); INSERT INTO tr_ VALUES ('a'), ('b'), ('c');
+CREATE TABLE ts_(nm text, y int);
+INSERT INTO ts_ SELECT nm, ascii(nm)*10 + k
+  FROM (VALUES ('a'), ('b'), ('c')) g(nm), generate_series(1,2) k;
+CREATE TABLE tt2_(y int);
+INSERT INTO tt2_ SELECT ascii(nm)*10 + k
+  FROM (VALUES ('a'), ('b'), ('c')) g(nm), generate_series(1,2) k;
+SELECT add_provenance('tr_'); SELECT add_provenance('ts_'); SELECT add_provenance('tt2_');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM tr_;
+  PERFORM set_prob(provsql, 0.5) FROM ts_;
+  PERFORM set_prob(provsql, 0.5) FROM tt2_;
+END $$;
+SET provsql.joint_width = on;
+CREATE TEMP TABLE txt_on AS
+  SELECT tr_.nm AS nm, provenance() AS tok FROM tr_, ts_, tt2_
+   WHERE tr_.nm = ts_.nm AND ts_.y = tt2_.y GROUP BY tr_.nm;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE txt_off AS
+  SELECT tr_.nm AS nm, provenance() AS tok FROM tr_, ts_, tt2_
+   WHERE tr_.nm = ts_.nm AND ts_.y = tt2_.y GROUP BY tr_.nm;
+SET provsql.active = off;
+\echo '== text head column: joint-width fired (token differs), value agrees =='
+SELECT o.nm, (o.tok <> f.tok) AS joint_width_fired,
+       ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9) AS diff
+  FROM txt_on o JOIN txt_off f ON o.nm = f.nm ORDER BY o.nm;
+
+DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_ CASCADE;

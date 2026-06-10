@@ -5522,7 +5522,7 @@ $ucq$ LANGUAGE plpgsql VOLATILE;
  * @param fallback token returned if the joint-width compiler declines
  */
 CREATE OR REPLACE FUNCTION ucq_joint_provenance_answer(
-  descriptor JSONB, head_vars INT[], head_vals INT[], fallback UUID DEFAULT NULL)
+  descriptor JSONB, head_vars INT[], head_vals TEXT[], fallback UUID DEFAULT NULL)
 RETURNS UUID AS $ucq$
 DECLARE
   legs text; sql text; saved text; aug jsonb; nrel int; one uuid;
@@ -5569,7 +5569,7 @@ BEGIN
     FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
   FOR k IN 1 .. array_length(head_vars, 1) LOOP
     legs := legs || format(' UNION ALL SELECT %s, ARRAY[%L]::text[], %L::uuid',
-                           nrel + k - 1, head_vals[k]::text, one);
+                           nrel + k - 1, head_vals[k], one);
   END LOOP;
 
   sql := format($q$

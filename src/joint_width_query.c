@@ -354,10 +354,12 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
     appendStringInfoString(&buf, "]}");
 
     /* Per-answer heads: every exposed (non-resjunk) target column must be
-     * a bare int4 Var over a tracked atom; collect their query-variable
-     * indices and the exposing Vars (the per-group head values).  Any
-     * other exposed tracked column makes the head set unextractable, so
-     * the per-answer substitution declines (head list left empty). */
+     * a bare Var over a tracked atom (any type -- the head value is bound
+     * per group by casting it to text, matching the text element
+     * dictionary the gather builds); collect their query-variable indices
+     * and the exposing Vars.  Any other exposed tracked column makes the
+     * head set unextractable, so the per-answer substitution declines
+     * (head list left empty). */
     if (head_var_idx != NULL) {
       bool clean = true;
       *head_var_idx = NIL;
@@ -376,8 +378,7 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
         exist_walker(e, &ec);
         if (!ec.found)
           continue;   /* a constant / untracked column: not a head */
-        if (IsA(e, Var) && ((Var *) e)->varlevelsup == 0 &&
-            ((Var *) e)->vartype == INT4OID) {
+        if (IsA(e, Var) && ((Var *) e)->varlevelsup == 0) {
           Var *vv = (Var *) e;
           int node = colref_get(cols, &ncols, vv->varno, vv->varattno);
           int hv = root_var[uf_find(cols, node)];

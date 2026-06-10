@@ -4004,12 +4004,24 @@ static Expr *build_joint_width_answer_expr(const constants_t *constants,
   hv_c = makeConst(INT4ARRAYOID, -1, InvalidOid, -1,
                    PointerGetDatum(arr), false, false);
 
-  /* The head values: ARRAY[head Vars] (int4[]), bound per group at run time. */
+  /* The head values: ARRAY[head Vars cast to text] (text[]), bound per
+   * group at run time.  The cast is the type's output function (CoerceViaIO),
+   * matching the (col)::text the gather uses for the element dictionary, so
+   * a head of any type pins correctly. */
   vals = makeNode(ArrayExpr);
-  vals->array_typeid = INT4ARRAYOID;
-  vals->element_typeid = INT4OID;
+  vals->array_typeid = TEXTARRAYOID;
+  vals->element_typeid = TEXTOID;
   vals->multidims = false;
-  vals->elements = list_copy(head_exprs);
+  vals->elements = NIL;
+  foreach (lc, head_exprs) {
+    CoerceViaIO *cio = makeNode(CoerceViaIO);
+    cio->arg = (Expr *) lfirst(lc);
+    cio->resulttype = TEXTOID;
+    cio->resultcollid = DEFAULT_COLLATION_OID;
+    cio->coerceformat = COERCE_IMPLICIT_CAST;
+    cio->location = -1;
+    vals->elements = lappend(vals->elements, (Node *) cio);
+  }
   vals->location = -1;
 
   fe = makeNode(FuncExpr);
