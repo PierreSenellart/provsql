@@ -88,6 +88,7 @@ html_css_files = [
 html_js_files = [
     ('jquery.js', {'priority': 100}),  # sphinx-rtd-theme requires jQuery
     'back-to-site.js',
+    'sidebar-toggle.js',  # floating button to collapse the navigation sidebar
     # Shim runs before copybutton.js (default priority 500) and back-fills
     # DOCUMENTATION_OPTIONS.URL_ROOT for sphinx-copybutton 0.4.0 on Sphinx >= 5.
     ('copybutton-shim.js', {'priority': 450}),

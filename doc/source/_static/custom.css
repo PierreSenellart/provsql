@@ -266,3 +266,42 @@ footer {
 .guilabel {
   font-family: var(--font-sans, system-ui, sans-serif);
 }
+
+/* ---- Collapsible navigation sidebar (custom toggle, see
+   sidebar-toggle.js) ---- */
+#ps-sidebar-toggle {
+  position: fixed;
+  bottom: 1em;
+  left: 1em;
+  z-index: 300;
+  width: 2.4em;
+  height: 2.4em;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #6B4FA0;
+  color: #fff;
+  font-size: 1rem;
+  line-height: 2.4em;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+#ps-sidebar-toggle:hover {
+  background: #58408a;
+}
+body.ps-sidebar-collapsed .wy-nav-side {
+  display: none;
+}
+body.ps-sidebar-collapsed .wy-nav-content-wrap {
+  margin-left: 0;
+}
+body.ps-sidebar-collapsed .wy-nav-content {
+  max-width: none;
+}
+/* On narrow viewports the theme already has its own off-canvas menu. */
+@media screen and (max-width: 768px) {
+  #ps-sidebar-toggle {
+    display: none;
+  }
+}
