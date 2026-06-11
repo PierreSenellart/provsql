@@ -129,6 +129,9 @@ SELECT n_enumerating AS e_fd_broken FROM ucq_joint_compile_stats(
 -- lowered to 1, a triangle over S (Gaifman treewidth 2) is rejected by
 -- the degeneracy screen.
 SET provsql.joint_max_treewidth = 1;
+-- terse: the error's CONTEXT echoes the wrapper's SELECT ... INTO ... FROM,
+-- whose blanked-INTO whitespace is platform-dependent; keep only the message.
+\set VERBOSITY terse
 SELECT (SELECT probability FROM ucq_joint_compile_stats(
   '{"disjuncts":[{"n_vars":2,"atoms":[{"rel":0,"vars":[0,1]}]}]}'::jsonb,
   ARRAY[0,0,0],
@@ -136,6 +139,7 @@ SELECT (SELECT probability FROM ucq_joint_compile_stats(
   ARRAY[2,2,2],
   ARRAY[u('e01'),u('e12'),u('e02')]::uuid[],
   ARRAY[0.5,0.5,0.5])) AS should_error;
+\set VERBOSITY default
 RESET provsql.joint_max_treewidth;
 
 DROP FUNCTION u(text);

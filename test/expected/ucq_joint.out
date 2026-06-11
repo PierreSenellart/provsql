@@ -27,9 +27,3 @@ e_fd_broken
 2
 (1 row)
 ERROR:  ProvSQL: ucq_joint: joint treewidth exceeds the configured maximum (1); fall back to the standard probability ladder
-CONTEXT:  SQL statement "SELECT s.probability, s.joint_treewidth, s.data_treewidth_lb,
-         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size,
-         s.n_enumerating
-                                                                                                                                        FROM ucq_joint_compile_stats(dnv, adisj, arel, avars, aarity,
-      fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs) s"
-PL/pgSQL function ucq_joint_compile_stats(jsonb,integer[],integer[],integer[],uuid[],double precision[]) line 19 at SQL statement
