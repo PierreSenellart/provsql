@@ -698,6 +698,17 @@ Each method in detail:
 
         SELECT probability_evaluate(provenance(), 'possible-worlds') FROM suspects;
 
+``'sieve'``
+    Exact computation by inclusion-exclusion over the clauses of a monotone-DNF
+    lineage, in time ``O(S × 2^m)`` for ``m`` clauses.  The chooser prefers it
+    over ``'possible-worlds'`` when there are fewer clauses than input tuples,
+    and over the compilers when ``m`` is small.  It applies only to a
+    DNF-shaped circuit and errors when the clause count exceeds 24:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'sieve') FROM suspects;
+
 ``'monte-carlo'``
     Approximate computation by random sampling. The third argument is either a
     fixed sample count (a bare integer or ``samples=N``) or an **additive**
@@ -767,6 +778,22 @@ Each method in detail:
     ``samples`` is mutually exclusive with ``epsilon``/``delta``. Pin
     ``provsql.monte_carlo_seed`` for a reproducible estimate.
 
+``'stopping-rule'``
+    A universal **relative** ``(ε, δ)`` estimator that runs on the generic
+    circuit, so unlike ``'karp-luby'`` it applies to **any** lineage -- plain
+    Boolean, random-variable, or HAVING-aggregate alike.  It samples under an
+    optimal stopping rule, halting as soon as the estimate is provably within
+    the relative target, in ``O(S / (p ε²) · ln(1/δ))`` for an output of
+    probability ``p``.  The third argument is the ``(ε, δ)`` target (with an
+    optional ``max_samples`` cap; if the cap is reached first the guarantee
+    degrades from relative to the additive accuracy actually achieved).  Pin
+    ``provsql.monte_carlo_seed`` for a reproducible estimate:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'stopping-rule', 'eps=0.05,delta=0.01')
+        FROM suspects;
+
 ``'tree-decomposition'``
     Exact computation via a tree decomposition of the Boolean circuit
     :cite:`DBLP:journals/mst/AmarilliCMS20`. Built-in; no external tool
@@ -776,6 +803,25 @@ Each method in detail:
 
         SELECT probability_evaluate(provenance(), 'tree-decomposition')
         FROM suspects;
+
+``'d-tree'``
+    Anytime **certified-interval** computation
+    :cite:`DBLP:conf/icde/OlteanuHK10`: starting from cheap leaf bounds, it
+    refines the interval by independent-or decomposition (the connected
+    components of the clause graph) and Shannon expansion on the most frequent
+    variable until the interval is narrow enough, or exact (width 0).  It fills
+    two corners the other exact methods do not: it returns an exact value where
+    the lineage treewidth **exceeds** ``'tree-decomposition'``'s cap, and --
+    being *deterministic*, at a cost independent of ``δ`` -- it is the method
+    that honours a ``δ = 0`` (no-failure) approximate request, returning a
+    certified interval rather than a point estimate.  It works on any Boolean
+    circuit (a monotone-DNF lineage takes an optimised path).  Called by name
+    with no third argument it refines to the exact value; given an accuracy
+    target it stops at a certified interval of that width:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'd-tree') FROM suspects;
 
 ``'inversion-free'``
     Exact computation for the *inversion-free* ``UCQ(OBDD)`` class
