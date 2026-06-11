@@ -32,21 +32,15 @@ add_provenance
 remove_provenance
 
 (1 row)
-== correlated single-sweep per-answer probabilities ==
-x|p
-0|0.125000
-5|0.500000
-(2 rows)
-== correlated single-sweep == ladder per group: n_answers, max |diff| ==
-n_answers|max_abs_diff
-2|0
+remove_provenance
+
 (1 row)
-== correlated top-down single DP per-answer probabilities ==
+== correlated transparent per-answer probabilities ==
 x|p
 0|0.125000
 5|0.500000
 (2 rows)
-== correlated single DP == ladder per group: n_answers, max |diff| ==
+== correlated transparent == ladder per group: n_answers, max |diff| ==
 n_answers|max_abs_diff
 2|0
 (1 row)

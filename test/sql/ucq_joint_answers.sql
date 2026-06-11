@@ -2,16 +2,34 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql, public;
 
--- Per-answer (non-Boolean) joint-width evaluation: ucq_joint_answers()
--- pins each candidate head tuple with a Sel(h) constraint atom + a CERTAIN
--- fact and reuses the Boolean ucq_joint_evaluate(), one row per answer.
--- Cross-checked against ProvSQL's standard per-answer evaluation
--- (probability_evaluate over GROUP BY) where that terminates, and against
--- the closed form on the almost-safe shape whose per-answer lineage is the
--- QxW biclique the standard ladder cannot tree-decompose.
+-- Whether the joint-width substitution is in the plan of @p q (a robust
+-- firing test: the materialised d-D of a trivial single-witness query can
+-- coincide with the standard provenance token, so token-inequality alone is
+-- not a reliable firing signal).
+CREATE FUNCTION jw_fires(q text) RETURNS boolean AS $$
+DECLARE line text; sa text; sj text; found boolean := false;
+BEGIN
+  sa := current_setting('provsql.active', true);
+  sj := current_setting('provsql.joint_width', true);
+  PERFORM set_config('provsql.active', 'on', true);
+  PERFORM set_config('provsql.joint_width', 'on', true);
+  FOR line IN EXECUTE 'EXPLAIN (VERBOSE, COSTS OFF) ' || q LOOP
+    IF line LIKE '%ucq_joint_provenance%' THEN found := true; END IF;
+  END LOOP;
+  PERFORM set_config('provsql.active', sa, true);
+  PERFORM set_config('provsql.joint_width', sj, true);
+  RETURN found;
+END $$ LANGUAGE plpgsql;
 
--- A helper: flatten a fact relation (rel id, element columns, token) of a
--- query into the columnar arrays, appended to running arrays.
+-- Per-answer (non-Boolean) joint-width evaluation through the TRANSPARENT
+-- route: the flat "SELECT head, probability_evaluate(provenance()) ...
+-- GROUP BY head" query under provsql.joint_width = on substitutes the
+-- head-pinned joint-width provenance (ucq_joint_provenance_answer), which
+-- gathers once and materialises every answer's certified d-D in one
+-- single-DP sweep.  Cross-checked against ProvSQL's standard per-answer
+-- evaluation (joint_width off) where that terminates, and against the
+-- closed form on the almost-safe shape whose per-answer lineage is the
+-- QxW biclique the standard ladder cannot tree-decompose.
 
 -- ---------------------------------------------------------------------
 -- (1) H0 per source: q(x) :- R(x), S(x,y), T(y).  Cross-check against the
@@ -37,31 +55,8 @@ CREATE TEMP TABLE h0_std AS
     FROM (SELECT jr.x FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y) q
    GROUP BY x;
 
-SET provsql.active = off;
-CREATE TEMP TABLE h0_facts AS
-  SELECT 0 rel, ARRAY[x] el, 1 ar, provsql t FROM jr
-  UNION ALL SELECT 1, ARRAY[x,y], 2, provsql FROM js
-  UNION ALL SELECT 2, ARRAY[y], 1, provsql FROM jt;
-SET provsql.active = on;
-
-CREATE TEMP TABLE h0_jw AS
-SELECT a.head[1] AS x, a.probability AS p FROM ucq_joint_answers(
-  '{"disjuncts":[{"n_vars":2,"atoms":[
-     {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
-  ARRAY[0],
-  (SELECT array_agg(DISTINCT x ORDER BY x) FROM jr),
-  (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM h0_facts) z),
-  (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
-     FROM h0_facts f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
-  (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM h0_facts) z),
-  (SELECT array_agg(t ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM h0_facts) z),
-  (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM h0_facts) z)) a;
-
-SET provsql.active = off;   -- report rows must not carry a provsql column
-\echo '== H0 per source: x, joint-width probability, diff vs standard =='
-SELECT j.x, ROUND(j.p::numeric, 6) AS joint_width,
-       ROUND((s.p - j.p)::numeric, 9) AS diff_vs_standard
-  FROM h0_jw j JOIN h0_std s ON s.x = j.x ORDER BY j.x;
+-- h0_std (the standard per-x ladder) is the oracle the transparent route
+-- (section 4) cross-checks against.
 
 -- ---------------------------------------------------------------------
 -- (2) Almost-safe per source: q(x) :- P(x,y), Q(x,z), W(x,u), T(y), with
@@ -91,41 +86,8 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM jtt;
 END $$;
 
-SET provsql.active = off;
-CREATE TEMP TABLE as_facts AS
-  SELECT 0 rel, ARRAY[x,y] el, 2 ar, provsql t FROM jp
-  UNION ALL SELECT 1, ARRAY[x,z], 2, provsql FROM jq
-  UNION ALL SELECT 2, ARRAY[x,u], 2, provsql FROM jw_
-  UNION ALL SELECT 3, ARRAY[y], 1, provsql FROM jtt;
-SET provsql.active = on;
-
-\echo '== almost-safe per source: x, joint-width probability =='
-SELECT a.head[1] AS x, ROUND(a.probability::numeric, 6) AS joint_width
-FROM ucq_joint_answers(
-  '{"disjuncts":[{"n_vars":4,"atoms":[{"rel":0,"vars":[0,1]},
-     {"rel":1,"vars":[0,2]},{"rel":2,"vars":[0,3]},{"rel":3,"vars":[1]}]}]}'::jsonb,
-  ARRAY[0],
-  (SELECT array_agg(DISTINCT x ORDER BY x) FROM jp),
-  (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z),
-  (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
-     FROM as_facts f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
-  (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z),
-  (SELECT array_agg(t ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z),
-  (SELECT array_agg(0.5::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z)) a
-ORDER BY x;
-
--- A non-answer head value (no witness) is dropped: pin x=99, expect no row.
-\echo '== non-answer (x=99) is dropped: count must be 0 =='
-SELECT count(*) AS rows FROM ucq_joint_answers(
-  '{"disjuncts":[{"n_vars":4,"atoms":[{"rel":0,"vars":[0,1]},
-     {"rel":1,"vars":[0,2]},{"rel":2,"vars":[0,3]},{"rel":3,"vars":[1]}]}]}'::jsonb,
-  ARRAY[0], ARRAY[99],
-  (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z),
-  (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
-     FROM as_facts f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
-  (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z),
-  (SELECT array_agg(t ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z),
-  (SELECT array_agg(0.5::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM as_facts) z));
+-- The almost-safe shape's closed form is checked through the transparent
+-- route in section 4 (its per-answer lineage is the QxW biclique).
 
 -- ---------------------------------------------------------------------
 -- (3) Per-answer transparent primitive ucq_joint_provenance_answer():
@@ -411,7 +373,9 @@ CREATE TEMP TABLE jc_off AS SELECT provenance() AS tok
          WHERE jr.x = js.x AND js.y = jt.y AND js.y = 11) q;
 SET provsql.active = off;
 \echo '== constant selection (js.y = 11): joint-width fired, diff vs ladder 0 =='
-SELECT (o.tok <> f.tok) AS joint_width_fired,
+SELECT jw_fires('SELECT provsql.provenance() FROM (SELECT DISTINCT 1
+                   FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y
+                    AND js.y = 11) q') AS joint_width_fired,
        ROUND((probability_evaluate(o.tok) - probability_evaluate(f.tok))::numeric, 9)
          AS diff_vs_ladder
   FROM jc_on o, jc_off f;
@@ -564,74 +528,6 @@ SET provsql.active = off;
 SELECT ROUND((:'ej'::float8 - :'es'::float8)::numeric, 9) AS cond_joint_minus_std,
        (ROUND(:'ej'::numeric,6) <> ROUND(:'eu'::numeric,6)) AS conditioning_is_nontrivial;
 
--- ---------------------------------------------------------------------
--- (18) Single-pass per-answer (ucq_joint_answers_swept): the encoding and
---      the tree decomposition are built ONCE and each answer is a
---      head-pinned bottom-up sweep, instead of the per-binding Sel-pinned
---      recompile of ucq_joint_answers.  Both must return the same answer
---      set with the same marginals (H0 per source over jr,js,jt).
--- ---------------------------------------------------------------------
-SET provsql.active = off;
-CREATE TEMP TABLE swf AS
-  SELECT 0 rel, ARRAY[x] el, 1 ar, provsql tk FROM jr
-  UNION ALL SELECT 1, ARRAY[x,y], 2, provsql FROM js
-  UNION ALL SELECT 2, ARRAY[y], 1, provsql FROM jt;
-\echo '== single-pass swept == per-binding: per-answer max |swept - per_binding| =='
-SELECT count(*) AS n_answers,
-       MAX(ABS(ROUND((sw.probability - pb.probability)::numeric, 9))) AS max_abs_diff
-  FROM ucq_joint_answers_swept(
-         '{"disjuncts":[{"n_vars":2,"atoms":[
-            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
-         ARRAY[0], (SELECT array_agg(DISTINCT x ORDER BY x) FROM jr),
-         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
-            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
-         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) sw
-  JOIN ucq_joint_answers(
-         '{"disjuncts":[{"n_vars":2,"atoms":[
-            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
-         ARRAY[0], (SELECT array_agg(DISTINCT x ORDER BY x) FROM jr),
-         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
-            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
-         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) pb
-    ON sw.head = pb.head;
-
--- ---------------------------------------------------------------------
--- (19) Full top-down single DP (ucq_joint_answers_onedp): ONE bottom-up
---      sweep emits one circuit root per answer (the head is a state-level
---      key; an answer is emitted when no partial witness can still bind it).
---      The answers are discovered (no candidate list).  Must match the
---      per-binding ucq_joint_answers on the answer set and every marginal.
--- ---------------------------------------------------------------------
-\echo '== single top-down DP == per-binding: n_answers, max |onedp - per_binding| =='
-SELECT count(*) AS n_answers,
-       MAX(ABS(ROUND((od.probability - pb.probability)::numeric, 9))) AS max_abs_diff
-  FROM ucq_joint_answers_onedp(
-         '{"disjuncts":[{"n_vars":2,"atoms":[
-            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
-         ARRAY[0],
-         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
-            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
-         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) od
-  JOIN ucq_joint_answers(
-         '{"disjuncts":[{"n_vars":2,"atoms":[
-            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
-         ARRAY[0], (SELECT array_agg(DISTINCT x ORDER BY x) FROM jr),
-         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
-            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
-         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
-         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) pb
-    ON od.head = pb.head;
 SET provsql.active = on;
 
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_, jcyc CASCADE;

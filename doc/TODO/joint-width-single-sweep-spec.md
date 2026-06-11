@@ -1,7 +1,19 @@
 # Joint-width UCQ compiler — single-sweep (shared-work) per-answer evaluation
 
-Design + implementation notes for the M4 "single sweep" optimisation, and a
-benchmark of it against the current **per-binding** (multiple-pass) approach.
+Design + implementation notes for the "single sweep" per-answer optimisation.
+
+> **Final state.** The top-down single DP (§3) is the materialisation engine
+> behind the **transparent** per-answer route: the planner substitutes the C
+> `ucq_joint_provenance_answer`, which on a query's first output group gathers
+> the facts once (`ucq_joint_gather`), runs the single DP, and materialises
+> every answer's certified d-D into the store, caching `head -> token` in
+> `fn_extra`; each group is then an O(1) lookup. Probability / Shapley /
+> expectation are the standard evaluation on the returned token. The
+> standalone probability/answers SRFs and the wall-clock benchmarks named in
+> the sections below were development scaffolding and have been removed; the
+> sections remain as the design narrative (the shared-decomposition and
+> top-down constructions, their correctness arguments, and the measured
+> speed-ups). The width-stats helpers (`ucq_joint_compile_stats`) are kept.
 
 ## 0. Where we are
 
@@ -33,7 +45,7 @@ The work an answer does decomposes into four stages, in increasing share-ability
 | gather (SQL reads the relations) | no | **yes** — gather once |
 | encode (`JointEncoding`, slice walk) | no (without the `Sel` pin) | **yes** |
 | decompose (joint graph + min-fill tree decomposition) | no | **yes** |
-| DP (bag sweep, gate emission) | **yes** | partially (see §3) |
+| DP (bag sweep, gate emission) | **yes** | **yes** via the single top-down DP (§3) |
 
 The current `Sel`-pin makes *encode* and *decompose* depend on the head (the
 pin adds a fact + atom whose element is the head value), which is why
@@ -177,7 +189,7 @@ regimes use to bind a query variable from a fact).
 - **Correlated regime (internal-gate tokens).** `mergedCompile` gained the
   same optional `shared_td` / `shared_elim` / `head_pin` parameters and threads
   the pin through its `closeFact` → `closeDisjunct`; `compileImpl` forwards them
-  and `compileAnswers` no longer rejects the correlated encoding. The joint
+  and `compileAnswers` accepts the correlated encoding. The joint
   graph spans **data and circuit slice**, but neither depends on the head, so
   it is built once and only the pinned merged DP (the per-world gate valuation +
   hom DP) is rerun per answer. New C SRF `ucq_joint_answers_swept_tracked(query,
@@ -216,7 +228,7 @@ with *k* as more identical encode+decompose passes are amortised onto one. Both
 remain ~quadratic in *k* here (the dense encoding still carries all *k·w* facts,
 and the pinned DP still sweeps them once per answer — the shared-decomposition
 pass removes the *repeated* encode+decompose constant, not the per-answer DP;
-killing the latter is the deferred top-down single-DP of §3). Per-binding is in
+killing the latter is the top-down single-DP of §3, measured above). Per-binding is in
 turn 10–40× faster than the re-gather-per-group transparent path, whose constant
 is dominated by *k* planner substitutions and *k* full relation gathers. The
 transparent path is skipped past k=128 (it is O(k) gathers of O(k·w) data, i.e.

@@ -2,26 +2,27 @@
  * @file ucq_joint_evaluate.cpp
  * @brief SQL entry points for the joint-width UCQ compiler.
  *
- * Exposes @c UCQJointCompiler (see @c UCQJointCompiler.h) to SQL:
+ * Exposes @c UCQJointCompiler (see @c UCQJointCompiler.h) to SQL.  The
+ * compiler's job ends at the certified d-D circuit; probability / Shapley /
+ * expectation are the standard evaluation on the materialised token, so the
+ * SQL surface is materialisation, not probability:
  *
- * - @c ucq_joint_evaluate(): exact probability of a Boolean UCQ -- even
- *   one that is @c \#P-hard under the Dalvi-Suciu dichotomy -- evaluated
- *   in time tractable whenever the joint treewidth of the data and its
- *   correlation structure is bounded;
- * - @c ucq_joint_compile_stats(): the same compilation, returning the
- *   probability together with the three width columns (joint width,
- *   data-only and circuit-only degeneracy lower bounds) that
- *   substantiate thesis Prop. 4.2.11 empirically -- the adversarial
- *   family has small data/circuit widths but large joint width -- and
- *   the structural statistics (number of bags, peak DP state count, d-D
- *   size).
+ * - @c ucq_joint_provenance_answer(): the planner-substituted per-answer
+ *   entry point.  On the first call of a query it gathers the facts once
+ *   (@c ucq_joint_gather), runs the single top-down DP, and materialises every
+ *   answer's d-D into the store, caching head -> token in @c fn_extra; each
+ *   output group is then an O(1) lookup -- one gather + one decomposition +
+ *   one sweep for the whole GROUP BY.
+ * - @c ucq_joint_materialize_tracked(): materialise the Boolean (existence)
+ *   d-D of a UCQ over real provenance tokens, returning its root token.
+ * - @c ucq_joint_compile_stats(): the same compilation returning the
+ *   probability together with the three width columns (joint width, data-only
+ *   and circuit-only degeneracy lower bounds) that substantiate thesis
+ *   Prop. 4.2.11 empirically, and the structural statistics; the columnar
+ *   form takes the query and facts as flat parallel arrays.
  *
- * Both take the query and the facts in flat columnar form (the UCQ
- * structure and the relation rows as parallel arrays); the user-facing
- * @c ucq_joint_evaluate(query jsonb, ...) plpgsql wrapper in
- * @c provsql.common.sql flattens a JSON UCQ specification and gathers
- * the rows.  Element ids are dense integers assigned by the wrapper with
- * a dictionary shared across relations (so join-compatible values match).
+ * Element ids are dense integers assigned by the gather with a dictionary
+ * shared across relations (so join-compatible values match).
  */
 extern "C" {
 #include "postgres.h"
@@ -29,22 +30,20 @@ extern "C" {
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "access/htup_details.h"
+#include "access/xact.h"
 #include "catalog/pg_type.h"
+#include "executor/spi.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/resowner.h"
 #include "utils/uuid.h"
 
 #include "provsql_utils.h"
 
-PG_FUNCTION_INFO_V1(ucq_joint_evaluate);
 PG_FUNCTION_INFO_V1(ucq_joint_compile_stats);
-PG_FUNCTION_INFO_V1(ucq_joint_evaluate_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_compile_stats_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_materialize_tracked);
-PG_FUNCTION_INFO_V1(ucq_joint_answers_swept);
-PG_FUNCTION_INFO_V1(ucq_joint_answers_swept_tracked);
-PG_FUNCTION_INFO_V1(ucq_joint_answers_onedp);
-PG_FUNCTION_INFO_V1(ucq_joint_answers_onedp_tracked);
+PG_FUNCTION_INFO_V1(ucq_joint_provenance_answer);
 }
 
 #include "c_cpp_compatibility.h"
@@ -503,21 +502,16 @@ struct SliceBuilder {
  * @p has_internal is true iff the slice has a non-INPUT gate (correlated).
  * Shared by the Boolean tracked compile and the per-answer tracked sweep.
  */
-void buildTrackedFacts(FunctionCallInfo fcinfo, int base,
-                       std::vector<Fact> &facts, std::vector<SliceGate> &slice,
-                       unsigned long &n_elements, bool &has_internal)
+void buildTrackedFactsArrays(const int32 *f_rel, int n_fr,
+                             const int32 *f_elems, int n_fe,
+                             const int32 *f_arity, int n_fa,
+                             const pg_uuid_t *tok_data, int n_ft,
+                             std::vector<Fact> &facts,
+                             std::vector<SliceGate> &slice,
+                             unsigned long &n_elements, bool &has_internal)
 {
-  int n_fr, n_fe, n_fa, n_ft;
-  const int32 *f_rel   = intArray(fcinfo, base,     "fact_rel", n_fr);
-  const int32 *f_elems = intArray(fcinfo, base + 1, "fact_elems", n_fe);
-  const int32 *f_arity = intArray(fcinfo, base + 2, "fact_arity", n_fa);
-  ArrayType *toks =
-    PG_ARGISNULL(base + 3) ? NULL : PG_GETARG_ARRAYTYPE_P(base + 3);
-  n_ft = checkedArrayLength(toks, "fact_tokens");
   if (n_fr != n_fa || n_fr != n_ft)
     provsql_error("ucq_joint: fact arrays must have the same length");
-  const pg_uuid_t *tok_data =
-    (toks && n_ft) ? (const pg_uuid_t *) ARR_DATA_PTR(toks) : NULL;
 
   SliceBuilder sb;
   // Walk every fact's token first, keeping its raw slice code; mulinput
@@ -571,6 +565,67 @@ void buildTrackedFacts(FunctionCallInfo fcinfo, int base,
       break;
     }
   slice = std::move(sb.slice);
+}
+
+/** @brief @c buildTrackedFactsArrays over the fact arrays at @p base..base+3. */
+void buildTrackedFacts(FunctionCallInfo fcinfo, int base,
+                       std::vector<Fact> &facts, std::vector<SliceGate> &slice,
+                       unsigned long &n_elements, bool &has_internal)
+{
+  int n_fr, n_fe, n_fa, n_ft;
+  const int32 *f_rel   = intArray(fcinfo, base,     "fact_rel", n_fr);
+  const int32 *f_elems = intArray(fcinfo, base + 1, "fact_elems", n_fe);
+  const int32 *f_arity = intArray(fcinfo, base + 2, "fact_arity", n_fa);
+  ArrayType *toks =
+    PG_ARGISNULL(base + 3) ? NULL : PG_GETARG_ARRAYTYPE_P(base + 3);
+  n_ft = checkedArrayLength(toks, "fact_tokens");
+  const pg_uuid_t *tok_data =
+    (toks && n_ft) ? (const pg_uuid_t *) ARR_DATA_PTR(toks) : NULL;
+  buildTrackedFactsArrays(f_rel, n_fr, f_elems, n_fe, f_arity, n_fa,
+                          tok_data, n_ft, facts, slice, n_elements, has_internal);
+}
+
+/**
+ * @brief Single top-down DP materialisation: from the columnar fact arrays,
+ *        walk the tokens once, run the single DP, and materialise every
+ *        answer's certified d-D into the store.
+ *
+ * Returns a map from each answer's head (element-id tuple) to its root token.
+ * Throws @c TreeDecompositionException when the joint width is too large (the
+ * caller falls back).  This is the engine behind the transparent per-answer
+ * route: one walk + one decomposition + one sweep for ALL answers.
+ */
+std::map<std::vector<unsigned long>, pg_uuid_t> materializeAnswersSingleDP(
+  const UCQ &ucq, const std::vector<unsigned> &head_vars,
+  const int32 *f_rel, int n_fr, const int32 *f_elems, int n_fe,
+  const int32 *f_arity, int n_fa, const pg_uuid_t *tok_data, int n_ft)
+{
+  std::vector<Fact> facts;
+  std::vector<SliceGate> slice;
+  unsigned long n_elements;
+  bool has_internal;
+  buildTrackedFactsArrays(f_rel, n_fr, f_elems, n_fe, f_arity, n_fa,
+                          tok_data, n_ft, facts, slice, n_elements, has_internal);
+
+  const JointEncoding enc =
+    JointEncoding::fromCorrelated(std::move(facts), std::move(slice), n_elements);
+  const unsigned max_tw = static_cast<unsigned>(provsql_joint_max_treewidth);
+  const std::size_t max_states =
+    static_cast<std::size_t>(provsql_joint_max_states);
+
+  UCQJointCompiler::AnswerCircuit circ =
+    UCQJointCompiler::compileAnswersOneDP(enc, ucq, head_vars, max_tw, max_states);
+
+  std::vector<gate_t> roots;
+  roots.reserve(circ.answers.size());
+  for (const auto &a : circ.answers)
+    roots.push_back(a.root);
+  const auto uuid_of = materializeCertifiedDD(circ.dd, roots);
+
+  std::map<std::vector<unsigned long>, pg_uuid_t> out;
+  for (const auto &a : circ.answers)
+    out[a.head] = uuid_of.at(a.root);
+  return out;
 }
 
 /** @brief Run the correlated (tracked) compilation from the arguments. */
@@ -643,23 +698,6 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
 
 } // namespace
 
-/**
- * @brief PostgreSQL-callable entry point: exact Boolean UCQ probability.
- *
- * See @c decodeArgs() for the argument layout.
- */
-Datum ucq_joint_evaluate(PG_FUNCTION_ARGS)
-{
-  try {
-    auto result = runFromArgs(fcinfo);
-    PG_RETURN_FLOAT8(result.dd.probabilityEvaluation());
-  } catch (const std::exception &e) {
-    provsql_error("ucq_joint: %s", e.what());
-  } catch (...) {
-    provsql_error("ucq_joint: unknown exception");
-  }
-  PG_RETURN_NULL();
-}
 
 /**
  * @brief PostgreSQL-callable entry point: UCQ probability plus
@@ -726,31 +764,6 @@ Datum ucq_joint_materialize_tracked(PG_FUNCTION_ARGS)
   PG_RETURN_NULL();
 }
 
-/**
- * @brief PostgreSQL-callable entry point: exact Boolean UCQ probability
- *        with **correlated** inputs (tokens are real provenance gates).
- *
- * Like @c ucq_joint_evaluate, but the facts carry real provenance tokens
- * (no explicit probabilities): the circuit slice is walked from the
- * mmap store, so tokens that are internal gates over shared events --
- * tracked views, user constraint circuits -- are handled natively, the
- * capability that no other exact ProvSQL method offers with a width
- * guarantee.  Argument layout: the five query arrays (0..4), then
- * @c fact_rel (5), @c fact_elems (6), @c fact_arity (7), @c fact_tokens
- * (8).
- */
-Datum ucq_joint_evaluate_tracked(PG_FUNCTION_ARGS)
-{
-  try {
-    auto result = runTrackedFromArgs(fcinfo);
-    PG_RETURN_FLOAT8(result.dd.probabilityEvaluation());
-  } catch (const std::exception &e) {
-    provsql_error("ucq_joint: %s", e.what());
-  } catch (...) {
-    provsql_error("ucq_joint: unknown exception");
-  }
-  PG_RETURN_NULL();
-}
 
 /**
  * @brief PostgreSQL-callable entry point: correlated UCQ probability plus
@@ -787,380 +800,230 @@ Datum ucq_joint_compile_stats_tracked(PG_FUNCTION_ARGS)
   PG_RETURN_NULL();
 }
 
-/**
- * @brief PostgreSQL-callable SRF: per-answer probabilities in a SINGLE
- *        PASS over the shared encoding + tree decomposition.
- *
- * Argument layout: the columnar query + facts (args 0-9, as
- * @c ucq_joint_evaluate / @c decodeArgs), then
- *
- *   10 head_vars       int[]  : query-variable indices of the head
- *   11 candidate_heads int[]  : candidate head tuples, row-major,
- *                               |head_vars| element ids each
- *
- * Returns @c SETOF (head int[], probability float8): one row per answer
- * with non-zero probability.  The encoding and the joint tree
- * decomposition are built once; each candidate is evaluated by a
- * head-pinned bottom-up sweep (see @c UCQJointCompiler::compileAnswers).
- */
-Datum ucq_joint_answers_swept(PG_FUNCTION_ARGS)
+
+
+
+
+// ---------------------------------------------------------------------
+// Transparent per-answer route (planner-substituted).  One call per output
+// group; on the FIRST call we gather the facts once, run the single top-down
+// DP, materialise EVERY answer's certified d-D, and cache head -> token in
+// fn_extra.  Each subsequent group is an O(1) lookup, so the whole GROUP BY
+// costs one gather + one decomposition + one sweep.
+// ---------------------------------------------------------------------
+
+namespace {
+
+/** @brief A query's cached answers: serialised head-text key -> token. */
+struct JwAnswerCache {
+  bool declined = false;
+  std::vector<std::string> keys;
+  std::vector<pg_uuid_t> tokens;
+};
+
+/** @brief Delete the cache when its memory context is reset (query end). */
+void jwAnswerCacheDelete(void *arg)
 {
-  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
-  TupleDesc tupdesc = rsinfo->expectedDesc;
-  Tuplestorestate *tupstore =
-    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
-                          false, work_mem);
-  rsinfo->returnMode = SFRM_Materialize;
-  rsinfo->setResult = tupstore;
+  delete reinterpret_cast<JwAnswerCache *>(arg);
+}
 
-  try {
-    UCQ ucq;
-    std::vector<FactRow> rows;
-    decodeArgs(fcinfo, ucq, rows);
+/** @brief Serialise a head tuple (text values) to one lookup key. */
+std::string jwHeadKey(const std::vector<std::string> &vals)
+{
+  std::string k;
+  for (const auto &v : vals) { k += v; k.push_back('\x1f'); }
+  return k;
+}
 
-    int n_hv, n_cand;
-    const int32 *hv  = intArray(fcinfo, 10, "head_vars", n_hv);
-    const int32 *cnd = intArray(fcinfo, 11, "candidate_heads", n_cand);
-    if (n_hv <= 0)
-      provsql_error("ucq_joint_answers_swept: empty head_vars");
-    if (n_cand % n_hv != 0)
-      provsql_error("ucq_joint_answers_swept: candidate_heads length is not "
-                    "a multiple of the head arity");
+}  // namespace
 
-    std::vector<unsigned> head_vars(n_hv);
-    for (int i = 0; i < n_hv; ++i)
-      head_vars[i] = static_cast<unsigned>(hv[i]);
-    std::vector<std::vector<unsigned long> > candidates;
-    candidates.reserve(static_cast<std::size_t>(n_cand / n_hv));
-    for (int i = 0; i + n_hv <= n_cand; i += n_hv) {
-      std::vector<unsigned long> t(n_hv);
-      for (int k = 0; k < n_hv; ++k)
-        t[k] = static_cast<unsigned long>(cnd[i + k]);
-      candidates.push_back(std::move(t));
-    }
-
-    const JointEncoding enc = JointEncoding::fromFacts(rows);
-    const unsigned max_tw =
-      static_cast<unsigned>(provsql_joint_max_treewidth);
-    const std::size_t max_states =
-      static_cast<std::size_t>(provsql_joint_max_states);
-
-    std::vector<UCQJointCompiler::Answer> answers;
-    try {
-      answers = UCQJointCompiler::compileAnswers(enc, ucq, head_vars,
-                                                 candidates, max_tw, max_states);
-    } catch (TreeDecompositionException &) {
-      provsql_error(
-        "ucq_joint_answers_swept: joint treewidth exceeds the configured "
-        "maximum (%d)", provsql_joint_max_treewidth);
-    }
-
-    for (const auto &a : answers) {
-      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
-      for (std::size_t i = 0; i < a.head.size(); ++i)
-        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
-      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
-                                       INT4OID, sizeof(int32), true,
-                                       TYPALIGN_INT);
-      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
-      bool nulls[2] = { false, false };
-      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
-    }
-  } catch (const std::exception &e) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_swept: %s", e.what());
-  } catch (...) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_swept: unknown exception");
+/**
+ * @brief Gather + single-DP materialise all answers into @p cache.
+ *
+ * Runs inside a subtransaction (the caller wraps it): a SQL error from the
+ * gather (e.g. an unsupported token type for which the joint route declines)
+ * propagates as an @c ereport and is caught by the caller's @c PG_CATCH; a
+ * compiler decline (joint width too large) is a C++ exception caught here and
+ * signalled by returning @c false.  Returns @c true and fills @p cache on
+ * success.
+ */
+static bool jwComputeCache(Datum descriptor,
+                           const std::vector<unsigned> &head_vars,
+                           JwAnswerCache *cache)
+{
+  SPI_connect();
+  Oid argt[1] = { JSONBOID };
+  Datum argv[1] = { descriptor };
+  char argn[1] = { ' ' };
+  const int rc = SPI_execute_with_args(
+    "SELECT * FROM provsql.ucq_joint_gather($1)", 1, argt, argv, argn, true, 1);
+  if (rc != SPI_OK_SELECT || SPI_processed != 1) {
+    SPI_finish();
+    return false;
   }
 
-  MemoryContextSwitchTo(oldcontext);
-  PG_RETURN_NULL();
+  std::vector<std::string> keys;
+  std::vector<pg_uuid_t> tokens;
+  bool ok = true;
+  try {
+    TupleDesc td = SPI_tuptable->tupdesc;
+    HeapTuple row = SPI_tuptable->vals[0];
+    bool isnull;
+    auto intArr = [&](int col, int &n) -> const int32 * {
+      Datum dd = SPI_getbinval(row, td, col, &isnull);
+      if (isnull) { n = 0; return nullptr; }
+      ArrayType *a = DatumGetArrayTypeP(dd);
+      n = ArrayGetNItems(ARR_NDIM(a), ARR_DIMS(a));
+      return (const int32 *) ARR_DATA_PTR(a);
+    };
+    int n_dnv, n_adisj, n_arel, n_avars, n_aarity, n_frel, n_felems, n_farity;
+    const int32 *dnv    = intArr(1, n_dnv);
+    const int32 *adisj  = intArr(2, n_adisj);
+    const int32 *arel   = intArr(3, n_arel);
+    const int32 *avars  = intArr(4, n_avars);
+    const int32 *aarity = intArr(5, n_aarity);
+    const int32 *frel   = intArr(6, n_frel);
+    const int32 *felems = intArr(7, n_felems);
+    const int32 *farity = intArr(8, n_farity);
+    Datum dtok = SPI_getbinval(row, td, 9, &isnull);
+    ArrayType *atok = isnull ? nullptr : DatumGetArrayTypeP(dtok);
+    const int n_ftok = atok ? ArrayGetNItems(ARR_NDIM(atok), ARR_DIMS(atok)) : 0;
+    const pg_uuid_t *ftok =
+      atok ? (const pg_uuid_t *) ARR_DATA_PTR(atok) : nullptr;
+
+    std::vector<std::string> val_by_id;
+    Datum dval = SPI_getbinval(row, td, 10, &isnull);
+    if (!isnull) {
+      ArrayType *aval = DatumGetArrayTypeP(dval);
+      Datum *elems; bool *nulls; int nval;
+      deconstruct_array(aval, TEXTOID, -1, false, TYPALIGN_INT,
+                        &elems, &nulls, &nval);
+      val_by_id.resize(nval);
+      for (int i = 0; i < nval; ++i)
+        val_by_id[i] = nulls[i] ? std::string() : TextDatumGetCString(elems[i]);
+    }
+
+    UCQ ucq;
+    ucq.disjuncts.resize(n_dnv);
+    for (int d = 0; d < n_dnv; ++d)
+      ucq.disjuncts[d].n_vars = static_cast<unsigned>(dnv[d]);
+    int voff = 0;
+    for (int i = 0; i < n_adisj; ++i) {
+      const int dd = adisj[i];
+      const int ar = aarity[i];
+      Atom atom;
+      atom.relation_id = static_cast<unsigned>(arel[i]);
+      for (int k = 0; k < ar; ++k)
+        atom.vars.push_back(static_cast<unsigned>(avars[voff + k]));
+      voff += ar;
+      ucq.disjuncts[dd].atoms.push_back(std::move(atom));
+    }
+
+    const auto answers = materializeAnswersSingleDP(
+      ucq, head_vars, frel, n_frel, felems, n_felems, farity, n_farity,
+      ftok, n_ftok);
+    keys.reserve(answers.size());
+    tokens.reserve(answers.size());
+    for (const auto &kv : answers) {
+      std::vector<std::string> txt;
+      txt.reserve(kv.first.size());
+      for (unsigned long id : kv.first)
+        txt.push_back(id < val_by_id.size() ? val_by_id[id] : std::string());
+      keys.push_back(jwHeadKey(txt));
+      tokens.push_back(kv.second);
+    }
+  } catch (...) {
+    ok = false;     // compiler decline (joint width too large, ...)
+  }
+  SPI_finish();
+  if (ok) {
+    cache->keys = std::move(keys);
+    cache->tokens = std::move(tokens);
+  }
+  return ok;
 }
 
 /**
- * @brief PostgreSQL-callable SRF: per-answer probabilities for the
- *        CORRELATED regime in a SINGLE PASS over the shared encoding.
- *
- * The per-answer counterpart of @c ucq_joint_evaluate_tracked: the fact
- * tokens are walked through the circuit ONCE, the correlated joint encoding
- * (data + circuit slice) and its tree decomposition are built ONCE, and each
- * candidate head tuple is evaluated by a head-pinned merged DP sweep.  This
- * shares the gather/walk/encode/decompose stages across all answers; only the
- * pinned DP is rerun per answer.
- *
- * Argument layout:
- *
- *    0-4 query             (as @c decodeQuery)
- *    5   head_vars       int[]  : query-variable indices of the head
- *    6   candidate_heads int[]  : candidate head tuples, row-major
- *    7   fact_rel        int[]
- *    8   fact_elems      int[]
- *    9   fact_arity      int[]
- *   10   fact_tokens     uuid[] : real provenance tokens (walked, not probs)
- *
- * Returns @c SETOF (head int[], probability float8): one row per answer with
- * non-zero probability.
+ * @brief Per-answer joint-width provenance via the single top-down DP.
+ *        See @c ucq_joint_provenance_answer in provsql.common.sql.
  */
-Datum ucq_joint_answers_swept_tracked(PG_FUNCTION_ARGS)
+Datum ucq_joint_provenance_answer(PG_FUNCTION_ARGS)
 {
-  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
-  TupleDesc tupdesc = rsinfo->expectedDesc;
-  Tuplestorestate *tupstore =
-    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
-                          false, work_mem);
-  rsinfo->returnMode = SFRM_Materialize;
-  rsinfo->setResult = tupstore;
+  JwAnswerCache *cache =
+    reinterpret_cast<JwAnswerCache *>(fcinfo->flinfo->fn_extra);
 
-  try {
-    UCQ ucq;
-    decodeQuery(fcinfo, ucq);
+  if (cache == nullptr) {
+    // First call: build and cache all answers in the (per-query) fn context.
+    MemoryContext fnctx = fcinfo->flinfo->fn_mcxt;
+    cache = new JwAnswerCache();
+    MemoryContextCallback *cb = (MemoryContextCallback *)
+      MemoryContextAllocZero(fnctx, sizeof(MemoryContextCallback));
+    cb->func = jwAnswerCacheDelete;
+    cb->arg = cache;
+    MemoryContextRegisterResetCallback(fnctx, cb);
+    fcinfo->flinfo->fn_extra = cache;
 
-    int n_hv, n_cand;
-    const int32 *hv  = intArray(fcinfo, 5, "head_vars", n_hv);
-    const int32 *cnd = intArray(fcinfo, 6, "candidate_heads", n_cand);
-    if (n_hv <= 0)
-      provsql_error("ucq_joint_answers_swept_tracked: empty head_vars");
-    if (n_cand % n_hv != 0)
-      provsql_error("ucq_joint_answers_swept_tracked: candidate_heads length "
-                    "is not a multiple of the head arity");
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1)) {
+      cache->declined = true;
+    } else {
+      std::vector<unsigned> head_vars;
+      {
+        ArrayType *a = PG_GETARG_ARRAYTYPE_P(1);
+        const int32 *d = (const int32 *) ARR_DATA_PTR(a);
+        const int n = ArrayGetNItems(ARR_NDIM(a), ARR_DIMS(a));
+        for (int i = 0; i < n; ++i)
+          head_vars.push_back(static_cast<unsigned>(d[i]));
+      }
+      const Datum desc = PG_GETARG_DATUM(0);
 
-    std::vector<unsigned> head_vars(n_hv);
-    for (int i = 0; i < n_hv; ++i)
-      head_vars[i] = static_cast<unsigned>(hv[i]);
-    std::vector<std::vector<unsigned long> > candidates;
-    candidates.reserve(static_cast<std::size_t>(n_cand / n_hv));
-    for (int i = 0; i + n_hv <= n_cand; i += n_hv) {
-      std::vector<unsigned long> t(n_hv);
-      for (int k = 0; k < n_hv; ++k)
-        t[k] = static_cast<unsigned long>(cnd[i + k]);
-      candidates.push_back(std::move(t));
+      // Catch any error from the gather / compiler (an unsupported token, a
+      // width too large, ...) and decline gracefully to the @p fallback, so a
+      // recognised query never fails.
+      MemoryContext oldcxt = CurrentMemoryContext;
+      ResourceOwner oldowner = CurrentResourceOwner;
+      BeginInternalSubTransaction(NULL);
+      PG_TRY();
+      {
+        if (!jwComputeCache(desc, head_vars, cache))
+          cache->declined = true;
+        ReleaseCurrentSubTransaction();
+        MemoryContextSwitchTo(oldcxt);
+        CurrentResourceOwner = oldowner;
+      }
+      PG_CATCH();
+      {
+        MemoryContextSwitchTo(oldcxt);
+        RollbackAndReleaseCurrentSubTransaction();
+        MemoryContextSwitchTo(oldcxt);
+        CurrentResourceOwner = oldowner;
+        FlushErrorState();
+        cache->declined = true;
+        cache->keys.clear();
+        cache->tokens.clear();
+      }
+      PG_END_TRY();
     }
-
-    std::vector<Fact> facts;
-    std::vector<SliceGate> slice;
-    unsigned long n_elements;
-    bool has_internal;
-    buildTrackedFacts(fcinfo, 7, facts, slice, n_elements, has_internal);
-
-    const unsigned max_tw =
-      static_cast<unsigned>(provsql_joint_max_treewidth);
-    const std::size_t max_states =
-      static_cast<std::size_t>(provsql_joint_max_states);
-
-    // The correlated joint encoding (data + circuit slice).  An all-INPUT
-    // slice (the TID/BID regime reached through a tracked token) is handled
-    // here too, just without the data-graph fast path -- the columnar
-    // ucq_joint_answers_swept is the fast path for that case.
-    const JointEncoding enc =
-      JointEncoding::fromCorrelated(std::move(facts), std::move(slice),
-                                    n_elements);
-
-    std::vector<UCQJointCompiler::Answer> answers;
-    try {
-      answers = UCQJointCompiler::compileAnswers(enc, ucq, head_vars,
-                                                 candidates, max_tw, max_states);
-    } catch (TreeDecompositionException &) {
-      provsql_error(
-        "ucq_joint_answers_swept_tracked: joint treewidth exceeds the "
-        "configured maximum (%d)", provsql_joint_max_treewidth);
-    }
-
-    for (const auto &a : answers) {
-      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
-      for (std::size_t i = 0; i < a.head.size(); ++i)
-        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
-      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
-                                       INT4OID, sizeof(int32), true,
-                                       TYPALIGN_INT);
-      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
-      bool nulls[2] = { false, false };
-      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
-    }
-  } catch (const std::exception &e) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_swept_tracked: %s", e.what());
-  } catch (...) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_swept_tracked: unknown exception");
   }
 
-  MemoryContextSwitchTo(oldcontext);
-  PG_RETURN_NULL();
-}
-
-/**
- * @brief PostgreSQL-callable SRF: per-answer probabilities via the full
- *        TOP-DOWN single DP (data-graph regime).
- *
- * Unlike @c ucq_joint_answers_swept (k head-pinned sweeps sharing only the
- * decomposition), this runs ONE bottom-up sweep that emits one circuit root
- * per answer -- the head variables are a state-level key and each answer is
- * emitted when its head elements leave the tree decomposition.  The answers
- * are DISCOVERED by the sweep, so no candidate list is taken.
- *
- * Argument layout: the columnar query + facts (args 0-9, as
- * @c ucq_joint_evaluate / @c decodeArgs), then
- *
- *   10 head_vars int[] : query-variable indices of the head.
- *
- * Returns @c SETOF (head int[], probability float8).
- */
-Datum ucq_joint_answers_onedp(PG_FUNCTION_ARGS)
-{
-  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
-  TupleDesc tupdesc = rsinfo->expectedDesc;
-  Tuplestorestate *tupstore =
-    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
-                          false, work_mem);
-  rsinfo->returnMode = SFRM_Materialize;
-  rsinfo->setResult = tupstore;
-
-  try {
-    UCQ ucq;
-    std::vector<FactRow> rows;
-    decodeArgs(fcinfo, ucq, rows);
-
-    int n_hv;
-    const int32 *hv = intArray(fcinfo, 10, "head_vars", n_hv);
-    if (n_hv <= 0)
-      provsql_error("ucq_joint_answers_onedp: empty head_vars");
-    std::vector<unsigned> head_vars(n_hv);
-    for (int i = 0; i < n_hv; ++i)
-      head_vars[i] = static_cast<unsigned>(hv[i]);
-
-    const JointEncoding enc = JointEncoding::fromFacts(rows);
-    const unsigned max_tw =
-      static_cast<unsigned>(provsql_joint_max_treewidth);
-    const std::size_t max_states =
-      static_cast<std::size_t>(provsql_joint_max_states);
-
-    std::vector<UCQJointCompiler::Answer> answers;
-    try {
-      answers = UCQJointCompiler::compileAnswersOneDP(enc, ucq, head_vars,
-                                                      max_tw, max_states);
-    } catch (TreeDecompositionException &) {
-      provsql_error(
-        "ucq_joint_answers_onedp: joint treewidth exceeds the configured "
-        "maximum (%d)", provsql_joint_max_treewidth);
-    }
-
-    for (const auto &a : answers) {
-      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
-      for (std::size_t i = 0; i < a.head.size(); ++i)
-        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
-      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
-                                       INT4OID, sizeof(int32), true,
-                                       TYPALIGN_INT);
-      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
-      bool nulls[2] = { false, false };
-      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
-    }
-  } catch (const std::exception &e) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_onedp: %s", e.what());
-  } catch (...) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_onedp: unknown exception");
+  // Every call: look the group's head up in the cache.
+  if (!cache->declined && !PG_ARGISNULL(2)) {
+    std::vector<std::string> hv;
+    ArrayType *a = PG_GETARG_ARRAYTYPE_P(2);
+    Datum *elems; bool *nulls; int n;
+    deconstruct_array(a, TEXTOID, -1, false, TYPALIGN_INT, &elems, &nulls, &n);
+    for (int i = 0; i < n; ++i)
+      hv.push_back(nulls[i] ? std::string() : TextDatumGetCString(elems[i]));
+    const std::string key = jwHeadKey(hv);
+    for (std::size_t i = 0; i < cache->keys.size(); ++i)
+      if (cache->keys[i] == key) {
+        pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
+        *u = cache->tokens[i];
+        PG_RETURN_UUID_P(u);
+      }
   }
 
-  MemoryContextSwitchTo(oldcontext);
-  PG_RETURN_NULL();
-}
-
-/**
- * @brief PostgreSQL-callable SRF: per-answer probabilities via the full
- *        TOP-DOWN single DP over CORRELATED inputs.
- *
- * The correlated counterpart of @c ucq_joint_answers_onedp: the fact tokens
- * are real provenance gates, walked through the circuit ONCE, the correlated
- * joint encoding (data + circuit slice) and its decomposition are built ONCE,
- * and a single bottom-up sweep emits one d-DNNF root per answer.  Answers are
- * discovered (no candidate list).
- *
- * Argument layout: 0-4 query (as @c decodeQuery), then
- *   5 head_vars  int[]  : query-variable indices of the head
- *   6 fact_rel   int[]
- *   7 fact_elems int[]
- *   8 fact_arity int[]
- *   9 fact_tokens uuid[] : real provenance tokens (walked, not probs)
- *
- * Returns @c SETOF (head int[], probability float8).
- */
-Datum ucq_joint_answers_onedp_tracked(PG_FUNCTION_ARGS)
-{
-  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
-  TupleDesc tupdesc = rsinfo->expectedDesc;
-  Tuplestorestate *tupstore =
-    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
-                          false, work_mem);
-  rsinfo->returnMode = SFRM_Materialize;
-  rsinfo->setResult = tupstore;
-
-  try {
-    UCQ ucq;
-    decodeQuery(fcinfo, ucq);
-
-    int n_hv;
-    const int32 *hv = intArray(fcinfo, 5, "head_vars", n_hv);
-    if (n_hv <= 0)
-      provsql_error("ucq_joint_answers_onedp_tracked: empty head_vars");
-    std::vector<unsigned> head_vars(n_hv);
-    for (int i = 0; i < n_hv; ++i)
-      head_vars[i] = static_cast<unsigned>(hv[i]);
-
-    std::vector<Fact> facts;
-    std::vector<SliceGate> slice;
-    unsigned long n_elements;
-    bool has_internal;
-    buildTrackedFacts(fcinfo, 6, facts, slice, n_elements, has_internal);
-
-    const unsigned max_tw =
-      static_cast<unsigned>(provsql_joint_max_treewidth);
-    const std::size_t max_states =
-      static_cast<std::size_t>(provsql_joint_max_states);
-
-    const JointEncoding enc =
-      JointEncoding::fromCorrelated(std::move(facts), std::move(slice),
-                                    n_elements);
-
-    std::vector<UCQJointCompiler::Answer> answers;
-    try {
-      answers = UCQJointCompiler::compileAnswersOneDP(enc, ucq, head_vars,
-                                                      max_tw, max_states);
-    } catch (TreeDecompositionException &) {
-      provsql_error(
-        "ucq_joint_answers_onedp_tracked: joint treewidth exceeds the "
-        "configured maximum (%d)", provsql_joint_max_treewidth);
-    }
-
-    for (const auto &a : answers) {
-      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
-      for (std::size_t i = 0; i < a.head.size(); ++i)
-        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
-      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
-                                       INT4OID, sizeof(int32), true,
-                                       TYPALIGN_INT);
-      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
-      bool nulls[2] = { false, false };
-      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
-    }
-  } catch (const std::exception &e) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_onedp_tracked: %s", e.what());
-  } catch (...) {
-    MemoryContextSwitchTo(oldcontext);
-    provsql_error("ucq_joint_answers_onedp_tracked: unknown exception");
-  }
-
-  MemoryContextSwitchTo(oldcontext);
-  PG_RETURN_NULL();
+  // Declined, or the group is not an answer of the joint compiler: fall back.
+  if (PG_ARGISNULL(3))
+    PG_RETURN_NULL();
+  PG_RETURN_DATUM(PG_GETARG_DATUM(3));
 }

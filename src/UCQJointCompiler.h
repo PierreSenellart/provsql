@@ -189,11 +189,24 @@ static std::vector<Answer> compileAnswers(
  * candidate list is needed.  Equivalent answers and probabilities to
  * @c compileAnswers, in one pass instead of @c k.
  *
- * @param enc        The joint encoding (data-graph / TID-BID regime).
+ * The compiler's job ends at the **circuit**: it returns the shared d-D and
+ * one root gate per answer (the materialisation / probability / Shapley is the
+ * caller's, on the returned roots), keeping a single evaluation pipeline.
+ *
+ * @param enc        The joint encoding (data-graph / TID-BID or correlated).
  * @param ucq        The UCQ; the head variables must occur in every disjunct.
  * @param head_vars  Query-variable indices of the head.
  */
-static std::vector<Answer> compileAnswersOneDP(
+struct AnswerRoot {
+  std::vector<unsigned long> head;  ///< Bound element value per head variable.
+  gate_t root;                      ///< This answer's d-D root in @c dd.
+};
+struct AnswerCircuit {
+  dDNNF dd;                         ///< The shared certified d-D.
+  std::vector<AnswerRoot> answers;  ///< One root per discovered answer.
+  std::size_t max_states = 0;       ///< Peak DP state count.
+};
+static AnswerCircuit compileAnswersOneDP(
   const JointEncoding &enc,
   const UCQ &ucq,
   const std::vector<unsigned> &head_vars,

@@ -1351,13 +1351,13 @@ struct CStateHash {
  * subtree's input literals -- when its head elements leave and no surviving
  * code can still witness it).
  */
-std::vector<UCQJointCompiler::Answer> compileAnswersOneDPCorrelated(
+UCQJointCompiler::AnswerCircuit compileAnswersOneDPCorrelated(
   const JointEncoding &enc, const UCQ &ucq, const QueryCtx &q,
   const HeadInfo &hi, UCQJointCompiler::Stats stats,
   unsigned max_treewidth, std::size_t max_states)
 {
-  using Answer = UCQJointCompiler::Answer;
-  dDNNF dd;
+  UCQJointCompiler::AnswerCircuit result;
+  dDNNF &dd = result.dd;
 
   const unsigned long E = enc.n_elements;
   const std::vector<SliceGate> &slice = enc.slice;
@@ -1724,29 +1724,20 @@ std::vector<UCQJointCompiler::Answer> compileAnswersOneDPCorrelated(
   // every remaining answer.
   lift(root_table, dom[root_bag], {});
 
-  std::vector<Answer> answers;
-  answers.reserve(answer_acc.size());
-  for (auto &entry : answer_acc) {
-    gate_t gg = orGates(entry.second);
-    dd.setRoot(gg);
-    const double p = dd.probabilityEvaluation();
-    if (p > 0.0) {
-      Answer a;
-      a.head = entry.first;
-      a.probability = p;
-      a.max_states = stats.max_states;
-      answers.push_back(std::move(a));
-    }
-  }
-  return answers;
+  // One root per discovered answer; the caller materialises / evaluates them.
+  result.answers.reserve(answer_acc.size());
+  for (auto &entry : answer_acc)
+    result.answers.push_back(
+      UCQJointCompiler::AnswerRoot{entry.first, orGates(entry.second)});
+  result.max_states = stats.max_states;
+  return result;
 }
 
-std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
+UCQJointCompiler::AnswerCircuit compileAnswersOneDPImpl(
   const JointEncoding &enc, const UCQ &ucq,
   const std::vector<unsigned> &head_vars,
   unsigned max_treewidth, std::size_t max_states)
 {
-  using Answer = UCQJointCompiler::Answer;
   using Stats  = UCQJointCompiler::Stats;
   if (ucq.disjuncts.empty())
     throw JointCompilerException("empty UCQ");
@@ -1795,7 +1786,8 @@ std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
 
   // Gate emission (identical discipline to compileImpl: deterministic OR,
   // decomposable AND, certified).
-  dDNNF dd;
+  UCQJointCompiler::AnswerCircuit result;
+  dDNNF &dd = result.dd;
   using Table = std::unordered_map<AState, gate_t, AStateHash>;
   using Accumulator = std::unordered_map<AState, std::vector<gate_t>, AStateHash>;
   const gate_t invalid_gate{static_cast<std::underlying_type<gate_t>::type>(-1)};
@@ -1984,23 +1976,14 @@ std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
   // Forget the root domain: emits every remaining answer.
   lift(root_table, domains[root_bag], {});
 
-  // Evaluate each answer root from the shared circuit; the gate cache makes
-  // the k evaluations share work (each touches only its own new gates).
-  std::vector<Answer> answers;
-  answers.reserve(answer_acc.size());
-  for (auto &entry : answer_acc) {
-    gate_t g = orGates(entry.second);
-    dd.setRoot(g);
-    const double p = dd.probabilityEvaluation();
-    if (p > 0.0) {
-      Answer a;
-      a.head = entry.first;
-      a.probability = p;
-      a.max_states = stats.max_states;
-      answers.push_back(std::move(a));
-    }
-  }
-  return answers;
+  // One root per discovered answer in the shared circuit; the caller
+  // materialises / evaluates them (the gate cache then shares work).
+  result.answers.reserve(answer_acc.size());
+  for (auto &entry : answer_acc)
+    result.answers.push_back(
+      UCQJointCompiler::AnswerRoot{entry.first, orGates(entry.second)});
+  result.max_states = stats.max_states;
+  return result;
 }
 
 } // namespace
@@ -2365,7 +2348,7 @@ std::vector<UCQJointCompiler::Answer> UCQJointCompiler::compileAnswers(
   return answers;
 }
 
-std::vector<UCQJointCompiler::Answer> UCQJointCompiler::compileAnswersOneDP(
+UCQJointCompiler::AnswerCircuit UCQJointCompiler::compileAnswersOneDP(
   const JointEncoding &enc,
   const UCQ &ucq,
   const std::vector<unsigned> &head_vars,

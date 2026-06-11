@@ -4933,53 +4933,6 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
   LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
 
-/**
- * @brief Exact probability of a Boolean UCQ over a joint encoding
- * (columnar form, internal)
- *
- * The joint-width UCQ compiler evaluates an arbitrary union of
- * conjunctive queries -- including the queries that are #P-hard under
- * the Dalvi-Suciu dichotomy (H0 = R(x),S(x,y),T(y) and the Hk family) --
- * exactly, in time tractable whenever the joint treewidth of the data
- * and its correlation structure is bounded (Amarilli, PhD thesis
- * tel-01345836, §4.2; Amarilli, Bourhis & Senellart, arXiv:1511.08723
- * App. D).  A UCQ-specialised homomorphism-type dynamic program runs
- * directly over a tree decomposition of the joint graph, emitting a
- * deterministic, decomposable circuit by construction -- no separate
- * knowledge-compilation step.
- *
- * This is the columnar internal surface; the ergonomic route is the
- * @c ucq_joint_evaluate(query jsonb, ...) wrapper below, which flattens
- * a JSON UCQ specification.  The query is given as five parallel arrays
- * (the UCQ structure) and the facts as five more (the relation rows);
- * element ids are dense integers assigned with a dictionary shared
- * across relations (so join-compatible values match).  A fact whose
- * token is the nil UUID is certain (an untracked relation).
- *
- * @param disjunct_nvars per disjunct: number of query variables
- * @param atom_disjunct per atom: owning disjunct index (0-based)
- * @param atom_rel per atom: relation id
- * @param atom_vars flattened atom variable lists (in atom order)
- * @param atom_arity per atom: number of variables
- * @param fact_rel per fact: relation id
- * @param fact_elems flattened fact element lists (in fact order)
- * @param fact_arity per fact: arity
- * @param fact_tokens per fact: provenance token (nil UUID = certain)
- * @param fact_probs per fact: probability
- */
-CREATE OR REPLACE FUNCTION ucq_joint_evaluate(
-  disjunct_nvars INT[],
-  atom_disjunct INT[],
-  atom_rel INT[],
-  atom_vars INT[],
-  atom_arity INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[],
-  fact_probs DOUBLE PRECISION[])
-  RETURNS DOUBLE PRECISION AS
-  'provsql','ucq_joint_evaluate' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
 /**
  * @brief Boolean UCQ probability plus compilation statistics
@@ -5019,52 +4972,6 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
   AS 'provsql','ucq_joint_compile_stats'
   LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
-/**
- * @brief Exact Boolean UCQ probability from a JSON specification
- *
- * Ergonomic wrapper over the columnar @c ucq_joint_evaluate(): the UCQ
- * is a JSON object @c {"disjuncts":[{"n_vars":k,"atoms":[{"rel":r,
- * "vars":[..]},...]},...]} and the facts are the same five parallel
- * arrays as the columnar form.  Variables are 0-based indices into a
- * disjunct's variable list; relation ids and element ids are dense
- * integers (the element dictionary shared across relations).
- *
- * @param query the UCQ as a JSON object
- * @param fact_rel per fact: relation id
- * @param fact_elems flattened fact element lists
- * @param fact_arity per fact: arity
- * @param fact_tokens per fact: provenance token (nil UUID = certain)
- * @param fact_probs per fact: probability
- */
-CREATE OR REPLACE FUNCTION ucq_joint_evaluate(
-  query JSONB,
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[],
-  fact_probs DOUBLE PRECISION[])
-  RETURNS DOUBLE PRECISION AS $ucq$
-DECLARE
-  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
-  avars INT[] := '{}'; aarity INT[] := '{}';
-  d JSONB; a JSONB; v TEXT; didx INT := 0;
-BEGIN
-  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
-    dnv := dnv || (d->>'n_vars')::int;
-    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
-      adisj := adisj || didx;
-      arel := arel || (a->>'rel')::int;
-      aarity := aarity || jsonb_array_length(a->'vars');
-      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
-        avars := avars || v::int;
-      END LOOP;
-    END LOOP;
-    didx := didx + 1;
-  END LOOP;
-  RETURN ucq_joint_evaluate(dnv, adisj, arel, avars, aarity,
-    fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs);
-END;
-$ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
 /**
  * @brief Boolean UCQ probability plus statistics from a JSON specification
@@ -5113,373 +5020,15 @@ BEGIN
 END;
 $ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer (non-Boolean) UCQ probabilities, by per-binding pinning
- *
- * The joint-width compiler is Boolean; a non-Boolean UCQ -- one with head
- * (free) variables -- is evaluated answer by answer, reusing the Boolean
- * @c ucq_joint_evaluate().  Each candidate head tuple is pinned by
- * appending a unary constraint atom @c Sel(h) per head variable @c h plus a
- * matching CERTAIN fact (the all-zero token, which @c JointEncoding treats
- * as always present) for the bound value; the Boolean probability of the
- * residual existential query is then the answer's marginal.  Candidates
- * with no possible witness (probability 0) are dropped, so the result is
- * the possible answers with their marginals -- the set-projection (DISTINCT
- * / GROUP BY on the head) semantics.
- *
- * @param query JSON UCQ (see @c ucq_joint_evaluate(query JSONB, ...))
- * @param head_vars query-variable indices forming the head (shared across
- *        disjuncts by position)
- * @param head_tuples candidate head tuples, row-major flattened
- *        (length = #answers * @c array_length(head_vars,1)); the GROUP BY
- *        of the non-Boolean query supplies them
- * @returns one @c (head, probability) row per non-empty answer
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers(
-  query JSONB,
-  head_vars INT[],
-  head_tuples INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[],
-  fact_probs DOUBLE PRECISION[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
-DECLARE
-  nh INT := array_length(head_vars, 1);
-  na INT := array_length(head_tuples, 1) / GREATEST(array_length(head_vars, 1), 1);
-  maxrel INT; sel_atoms JSONB; aug_query JSONB;
-  sel_rel INT[]; sel_ar INT[]; sel_tok UUID[]; sel_pr DOUBLE PRECISION[];
-  sel_el INT[]; i INT; pr DOUBLE PRECISION;
-BEGIN
-  IF nh IS NULL OR nh = 0 THEN
-    RAISE EXCEPTION 'ucq_joint_answers: head_vars must be non-empty '
-                    '(use ucq_joint_evaluate for a Boolean query)';
-  END IF;
-  IF head_tuples IS NULL OR array_length(head_tuples, 1) % nh <> 0 THEN
-    RAISE EXCEPTION 'ucq_joint_answers: head_tuples length must be a '
-                    'multiple of array_length(head_vars, 1)';
-  END IF;
-  -- Fresh relation ids for the per-head Sel constraint atoms.
-  SELECT max((a->>'rel')::int) INTO maxrel
-    FROM jsonb_array_elements(query->'disjuncts') d,
-         jsonb_array_elements(d->'atoms') a;
-  SELECT jsonb_agg(jsonb_build_object('rel', maxrel + k,
-                                      'vars', jsonb_build_array(head_vars[k]))
-                   ORDER BY k)
-    INTO sel_atoms FROM generate_subscripts(head_vars, 1) k;
-  SELECT jsonb_build_object('disjuncts',
-           jsonb_agg(jsonb_set(d.val, '{atoms}', (d.val->'atoms') || sel_atoms)
-                     ORDER BY d.ord))
-    INTO aug_query
-    FROM jsonb_array_elements(query->'disjuncts') WITH ORDINALITY d(val, ord);
-  SELECT array_agg(maxrel + k ORDER BY k), array_agg(1 ORDER BY k),
-         array_agg('00000000-0000-0000-0000-000000000000'::uuid ORDER BY k),
-         array_agg(1.0::float8 ORDER BY k)
-    INTO sel_rel, sel_ar, sel_tok, sel_pr
-    FROM generate_subscripts(head_vars, 1) k;
-  FOR i IN 0 .. na - 1 LOOP
-    sel_el := head_tuples[i * nh + 1 : i * nh + nh];
-    pr := ucq_joint_evaluate(aug_query,
-            fact_rel || sel_rel, fact_elems || sel_el, fact_arity || sel_ar,
-            fact_tokens || sel_tok, fact_probs || sel_pr);
-    IF pr > 0 THEN
-      head := sel_el;
-      probability := pr;
-      RETURN NEXT;
-    END IF;
-  END LOOP;
-END;
-$ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer probabilities in a SINGLE PASS (columnar form, C).
- *
- * The per-answer counterpart of @c ucq_joint_answers() that shares the work:
- * the joint encoding and its tree decomposition are built once, and each
- * candidate head tuple is evaluated by a head-pinned bottom-up sweep instead
- * of a fresh @c Sel-pinned compile -- so the gather/encode/decompose stages
- * are paid once rather than per answer (TID/BID inputs only).  Returns one
- * row per candidate with non-zero probability.
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_swept(
-  disjunct_nvars INT[],
-  atom_disjunct INT[],
-  atom_rel INT[],
-  atom_vars INT[],
-  atom_arity INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[],
-  fact_probs DOUBLE PRECISION[],
-  head_vars INT[],
-  candidate_heads INT[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS
-  'provsql','ucq_joint_answers_swept' LANGUAGE C STABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer probabilities in a single pass (JSON UCQ wrapper).
- *
- * Same surface as @c ucq_joint_answers(query, head_vars, head_tuples, …) but
- * routed through the single-pass C SRF.
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_swept(
-  query JSONB,
-  head_vars INT[],
-  head_tuples INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[],
-  fact_probs DOUBLE PRECISION[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
-DECLARE
-  dnv INT[]:='{}'; adisj INT[]:='{}'; arel INT[]:='{}';
-  avars INT[]:='{}'; aarity INT[]:='{}';
-  d JSONB; a JSONB; v TEXT; didx INT:=0;
-BEGIN
-  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
-    dnv := dnv || (d->>'n_vars')::int;
-    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
-      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
-      aarity := aarity || jsonb_array_length(a->'vars');
-      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
-        avars := avars || v::int;
-      END LOOP;
-    END LOOP;
-    didx := didx + 1;
-  END LOOP;
-  RETURN QUERY SELECT * FROM ucq_joint_answers_swept(
-    dnv, adisj, arel, avars, aarity,
-    fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs,
-    head_vars, head_tuples);
-END;
-$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer probabilities via the full TOP-DOWN single DP
- *        (columnar form, C).
- *
- * Unlike @c ucq_joint_answers_swept (which shares the decomposition but reruns
- * a head-pinned DP per answer), this runs ONE bottom-up sweep that emits one
- * d-DNNF root per answer -- the head variables are a state-level key and an
- * answer is emitted when its head elements leave the tree decomposition.  The
- * answers are DISCOVERED by the sweep, so no candidate list is passed.  Same
- * answers and probabilities as @c ucq_joint_answers, in a single pass.
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_onedp(
-  disjunct_nvars INT[],
-  atom_disjunct INT[],
-  atom_rel INT[],
-  atom_vars INT[],
-  atom_arity INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[],
-  fact_probs DOUBLE PRECISION[],
-  head_vars INT[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS
-  'provsql','ucq_joint_answers_onedp' LANGUAGE C STABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer probabilities via the top-down single DP (JSON wrapper).
- *
- * Same surface as @c ucq_joint_answers(query, head_vars, …) minus the
- * @c head_tuples candidate list (answers are discovered), routed through the
- * single-pass top-down C SRF.
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_onedp(
-  query JSONB,
-  head_vars INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[],
-  fact_probs DOUBLE PRECISION[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
-DECLARE
-  dnv INT[]:='{}'; adisj INT[]:='{}'; arel INT[]:='{}';
-  avars INT[]:='{}'; aarity INT[]:='{}';
-  d JSONB; a JSONB; v TEXT; didx INT:=0;
-BEGIN
-  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
-    dnv := dnv || (d->>'n_vars')::int;
-    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
-      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
-      aarity := aarity || jsonb_array_length(a->'vars');
-      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
-        avars := avars || v::int;
-      END LOOP;
-    END LOOP;
-    didx := didx + 1;
-  END LOOP;
-  RETURN QUERY SELECT * FROM ucq_joint_answers_onedp(
-    dnv, adisj, arel, avars, aarity,
-    fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs, head_vars);
-END;
-$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer probabilities via the full TOP-DOWN single DP over
- *        CORRELATED inputs (columnar form, C).
- *
- * The correlated counterpart of @c ucq_joint_answers_onedp and the single-DP
- * counterpart of @c ucq_joint_answers_swept_tracked: the fact tokens are real
- * provenance gates (walked once), and a single bottom-up sweep over the joint
- * data+circuit decomposition emits one root per answer.  Answers discovered.
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_onedp_tracked(
-  disjunct_nvars INT[],
-  atom_disjunct INT[],
-  atom_rel INT[],
-  atom_vars INT[],
-  atom_arity INT[],
-  head_vars INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS
-  'provsql','ucq_joint_answers_onedp_tracked' LANGUAGE C STABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer correlated single-DP probabilities (JSON wrapper).
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_onedp_tracked(
-  query JSONB,
-  head_vars INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
-DECLARE
-  dnv INT[]:='{}'; adisj INT[]:='{}'; arel INT[]:='{}';
-  avars INT[]:='{}'; aarity INT[]:='{}';
-  d JSONB; a JSONB; v TEXT; didx INT:=0;
-BEGIN
-  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
-    dnv := dnv || (d->>'n_vars')::int;
-    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
-      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
-      aarity := aarity || jsonb_array_length(a->'vars');
-      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
-        avars := avars || v::int;
-      END LOOP;
-    END LOOP;
-    didx := didx + 1;
-  END LOOP;
-  RETURN QUERY SELECT * FROM ucq_joint_answers_onedp_tracked(
-    dnv, adisj, arel, avars, aarity, head_vars,
-    fact_rel, fact_elems, fact_arity, fact_tokens);
-END;
-$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer probabilities in a SINGLE PASS over CORRELATED inputs
- *        (columnar form, C).
- *
- * The per-answer counterpart of @c ucq_joint_evaluate_tracked() and the
- * correlated counterpart of @c ucq_joint_answers_swept(): the fact tokens are
- * walked through the provenance store ONCE, the correlated joint encoding
- * (data + circuit slice) and its tree decomposition are built ONCE, and each
- * candidate head tuple is evaluated by a head-pinned merged DP sweep.  Returns
- * one row per candidate with non-zero probability.
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_swept_tracked(
-  disjunct_nvars INT[],
-  atom_disjunct INT[],
-  atom_rel INT[],
-  atom_vars INT[],
-  atom_arity INT[],
-  head_vars INT[],
-  candidate_heads INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS
-  'provsql','ucq_joint_answers_swept_tracked' LANGUAGE C STABLE PARALLEL SAFE;
 
-/**
- * @brief Per-answer correlated probabilities in a single pass (JSON wrapper).
- *
- * Same surface as @c ucq_joint_answers(query, head_vars, head_tuples, …) but
- * the facts carry real provenance tokens (walked, no explicit probabilities)
- * and the work is shared across answers through the single-pass correlated
- * SRF.
- */
-CREATE OR REPLACE FUNCTION ucq_joint_answers_swept_tracked(
-  query JSONB,
-  head_vars INT[],
-  head_tuples INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[])
-  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
-DECLARE
-  dnv INT[]:='{}'; adisj INT[]:='{}'; arel INT[]:='{}';
-  avars INT[]:='{}'; aarity INT[]:='{}';
-  d JSONB; a JSONB; v TEXT; didx INT:=0;
-BEGIN
-  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
-    dnv := dnv || (d->>'n_vars')::int;
-    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
-      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
-      aarity := aarity || jsonb_array_length(a->'vars');
-      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
-        avars := avars || v::int;
-      END LOOP;
-    END LOOP;
-    didx := didx + 1;
-  END LOOP;
-  RETURN QUERY SELECT * FROM ucq_joint_answers_swept_tracked(
-    dnv, adisj, arel, avars, aarity,
-    head_vars, head_tuples,
-    fact_rel, fact_elems, fact_arity, fact_tokens);
-END;
-$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
-/**
- * @brief Exact Boolean UCQ probability over CORRELATED inputs
- * (columnar form, internal)
- *
- * Like @c ucq_joint_evaluate(), but the facts carry real provenance
- * tokens (no explicit probabilities): the circuit slice is walked from
- * the provenance store, so a token that is an internal gate over shared
- * events -- a materialised tracked view, a @c repair_key block, a user
- * constraint circuit -- is handled natively.  This is the capability no
- * other exact ProvSQL method offers with a width guarantee: query-side
- * safety (the Dalvi-Suciu dichotomy) presumes tuple-independent inputs,
- * so a query over correlated inputs is not tractable by lifted
- * inference, while the joint-width compiler stays exact and linear when
- * the joint treewidth is bounded.
- *
- * @param disjunct_nvars per disjunct: number of query variables
- * @param atom_disjunct per atom: owning disjunct index (0-based)
- * @param atom_rel per atom: relation id
- * @param atom_vars flattened atom variable lists
- * @param atom_arity per atom: number of variables
- * @param fact_rel per fact: relation id
- * @param fact_elems flattened fact element lists
- * @param fact_arity per fact: arity
- * @param fact_tokens per fact: provenance token (walked in the store)
- */
-CREATE OR REPLACE FUNCTION ucq_joint_evaluate_tracked(
-  disjunct_nvars INT[],
-  atom_disjunct INT[],
-  atom_rel INT[],
-  atom_vars INT[],
-  atom_arity INT[],
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[])
-  RETURNS DOUBLE PRECISION AS
-  'provsql','ucq_joint_evaluate_tracked' LANGUAGE C STABLE PARALLEL SAFE;
 
 /**
  * @brief Correlated Boolean UCQ probability plus compilation statistics
@@ -5510,41 +5059,6 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
   AS 'provsql','ucq_joint_compile_stats_tracked'
   LANGUAGE C STABLE PARALLEL SAFE;
 
-/**
- * @brief Exact correlated Boolean UCQ probability from a JSON spec
- *
- * JSON-spec wrapper over @c ucq_joint_evaluate_tracked() (see
- * @c ucq_joint_evaluate(query jsonb, ...) for the JSON UCQ format).  The
- * facts carry real provenance tokens (no probabilities).
- */
-CREATE OR REPLACE FUNCTION ucq_joint_evaluate_tracked(
-  query JSONB,
-  fact_rel INT[],
-  fact_elems INT[],
-  fact_arity INT[],
-  fact_tokens UUID[])
-  RETURNS DOUBLE PRECISION AS $ucq$
-DECLARE
-  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
-  avars INT[] := '{}'; aarity INT[] := '{}';
-  d JSONB; a JSONB; v TEXT; didx INT := 0;
-BEGIN
-  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
-    dnv := dnv || (d->>'n_vars')::int;
-    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
-      adisj := adisj || didx;
-      arel := arel || (a->>'rel')::int;
-      aarity := aarity || jsonb_array_length(a->'vars');
-      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
-        avars := avars || v::int;
-      END LOOP;
-    END LOOP;
-    didx := didx + 1;
-  END LOOP;
-  RETURN ucq_joint_evaluate_tracked(dnv, adisj, arel, avars, aarity,
-    fact_rel, fact_elems, fact_arity, fact_tokens);
-END;
-$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
 /**
  * @brief Correlated Boolean UCQ probability plus statistics from a JSON spec
@@ -5777,45 +5291,42 @@ $ucq$ LANGUAGE plpgsql VOLATILE;
  * @param head_vals the bound head values for this answer (same length)
  * @param fallback token returned if the joint-width compiler declines
  */
-CREATE OR REPLACE FUNCTION ucq_joint_provenance_answer(
-  descriptor JSONB, head_vars INT[], head_vals TEXT[], fallback UUID DEFAULT NULL)
-RETURNS UUID AS $ucq$
+/**
+ * @brief Internal gather for the per-answer joint route: parse @p descriptor
+ *        into the columnar UCQ arrays and gather every fact (relation index,
+ *        dense element ids, provenance token) with the value dictionary.
+ *
+ * Used only by the planner-substituted @c ucq_joint_provenance_answer (the C
+ * single-DP entry point), which calls it ONCE per query and then computes all
+ * answers in one sweep.  No head pinning: the single DP discovers the answers.
+ * @c val_by_id maps a dense element id back to its text value (so an answer's
+ * head ids can be matched to the @c GROUP @c BY head text).
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_gather(
+  descriptor JSONB,
+  OUT disjunct_nvars INT[], OUT atom_disjunct INT[], OUT atom_rel INT[],
+  OUT atom_vars INT[], OUT atom_arity INT[],
+  OUT fact_rel INT[], OUT fact_elems INT[], OUT fact_arity INT[],
+  OUT fact_tokens UUID[], OUT val_by_id TEXT[])
+AS $ucq$
 DECLARE
-  legs text; sql text; saved text; aug jsonb; nrel int; one uuid;
-  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
-  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}'; avars int[]:='{}'; aarity int[]:='{}';
-  d jsonb; a jsonb; v text; didx int:=0; k int;
+  legs text; sql text; saved text; d jsonb; a jsonb; v text; didx int := 0;
 BEGIN
-  nrel := jsonb_array_length(descriptor->'relations');
-  one := gate_one();   -- a CERTAIN-true token to gate the Sel facts
-
-  -- Augment every disjunct with one unary Sel(head_k) atom per head, over a
-  -- fresh relation index nrel+k-1; this constrains the head VARIABLE (so it
-  -- is forced to the bound value at every occurrence, self-join safe).
-  SELECT jsonb_build_object('disjuncts', jsonb_agg(
-           jsonb_set(t.val,'{atoms}', (t.val->'atoms') ||
-             (SELECT jsonb_agg(jsonb_build_object('rel', nrel+kk-1,
-                       'vars', jsonb_build_array(head_vars[kk])) ORDER BY kk)
-                FROM generate_subscripts(head_vars,1) kk)) ORDER BY t.ord))
-    INTO aug
-    FROM jsonb_array_elements(descriptor->'disjuncts') WITH ORDINALITY t(val,ord);
-
-  -- Parse the augmented UCQ structure into the columnar query arrays.
-  FOR d IN SELECT * FROM jsonb_array_elements(aug->'disjuncts') LOOP
-    dnv := dnv || (d->>'n_vars')::int;
+  disjunct_nvars:='{}'; atom_disjunct:='{}'; atom_rel:='{}';
+  atom_vars:='{}'; atom_arity:='{}';
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    disjunct_nvars := disjunct_nvars || (d->>'n_vars')::int;
     FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
-      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
-      aarity := aarity || jsonb_array_length(a->'vars');
+      atom_disjunct := atom_disjunct || didx;
+      atom_rel := atom_rel || (a->>'rel')::int;
+      atom_arity := atom_arity || jsonb_array_length(a->'vars');
       FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
-        avars := avars || v::int;
+        atom_vars := atom_vars || v::int;
       END LOOP;
     END LOOP;
     didx := didx + 1;
   END LOOP;
 
-  -- One leg per real relation scan (with its lifted single-relation
-  -- pre-filter, if any), then one synthetic CERTAIN Sel leg per head
-  -- (relation index nrel+k-1, the bound value, gate_one()).
   SELECT string_agg(
            format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s', rn - 1,
              (SELECT string_agg(format('(%I)::text', c), ',')
@@ -5827,10 +5338,6 @@ BEGIN
            ' UNION ALL ')
     INTO legs
     FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
-  FOR k IN 1 .. array_length(head_vars, 1) LOOP
-    legs := legs || format(' UNION ALL SELECT %s, ARRAY[%L]::text[], %L::uuid',
-                           nrel + k - 1, head_vals[k], one);
-  END LOOP;
 
   sql := format($q$
     WITH facts(rel,elems,tok) AS (%s),
@@ -5842,20 +5349,36 @@ BEGIN
            (SELECT array_agg(tok ORDER BY ord) FROM ord),
            (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
               FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
-              JOIN dict dd ON dd.val = e.val)
+              JOIN dict dd ON dd.val = e.val),
+           (SELECT array_agg(val ORDER BY id) FROM dict)
   $q$, legs);
 
   saved := current_setting('provsql.active', true);
   PERFORM set_config('provsql.active','off', true);
-  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems, val_by_id;
   PERFORM set_config('provsql.active', saved, true);
-
-  RETURN ucq_joint_materialize_tracked(dnv,adisj,arel,avars,aarity,
-    fact_rel,fact_elems,fact_arity,fact_tokens);
-EXCEPTION WHEN OTHERS THEN
-  RETURN fallback;
 END;
 $ucq$ LANGUAGE plpgsql VOLATILE;
+
+/**
+ * @brief Per-answer joint-width provenance via the TOP-DOWN single DP
+ *        (planner-substituted, C).
+ *
+ * The transparent per-answer rewrite substitutes one call per output group.
+ * On the FIRST call of a query the function gathers the facts once
+ * (@c ucq_joint_gather), runs the single DP, and materialises EVERY answer's
+ * certified d-D into the store, caching @c head_vals -> token in @c fn_extra;
+ * each subsequent group call is an O(1) lookup -- so the whole GROUP BY costs
+ * one gather + one decomposition + one sweep, not @p k of each.  On any
+ * decline (joint width too large) the @p fallback token (the normal
+ * per-answer provenance) is returned, so the query never fails.  The answer's
+ * marginal / Shapley / expectation is then the standard evaluation on the
+ * returned token -- one pipeline for the whole system.
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_provenance_answer(
+  descriptor JSONB, head_vars INT[], head_vals TEXT[], fallback UUID DEFAULT NULL)
+RETURNS UUID AS 'provsql','ucq_joint_provenance_answer'
+LANGUAGE C STABLE;
 
 
 /**

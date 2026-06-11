@@ -8,13 +8,6 @@ add_provenance
 add_provenance
 
 (1 row)
-== H0 per source: x, joint-width probability, diff vs standard ==
-x|joint_width|diff_vs_standard
-1|0.117760|0.000000000
-2|0.117760|0.000000000
-3|0.117760|0.000000000
-4|0.117760|0.000000000
-(4 rows)
 add_provenance
 
 (1 row)
@@ -26,17 +19,6 @@ add_provenance
 (1 row)
 add_provenance
 
-(1 row)
-== almost-safe per source: x, joint-width probability ==
-x|joint_width
-1|0.384521
-2|0.219727
-3|0.219727
-4|0.219727
-(4 rows)
-== non-answer (x=99) is dropped: count must be 0 ==
-rows
-0
 (1 row)
 == ucq_joint_provenance_answer: materialise + evaluate per answer ==
 pin|joint_width
@@ -186,12 +168,4 @@ n_events|max_abs_diff
 == expectation pass-through: E[SUM|H0] on d-D == on standard, and != unconditional ==
 cond_joint_minus_std|conditioning_is_nontrivial
 0.000000000|t
-(1 row)
-== single-pass swept == per-binding: per-answer max |swept - per_binding| ==
-n_answers|max_abs_diff
-4|0.000000000
-(1 row)
-== single top-down DP == per-binding: n_answers, max |onedp - per_binding| ==
-n_answers|max_abs_diff
-4|0.000000000
 (1 row)

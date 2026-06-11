@@ -3,14 +3,15 @@
 SET search_path TO provsql_test,provsql,public;
 SET provsql.provenance = 'boolean';
 
--- The correlated regime of the joint-width UCQ compiler
--- (ucq_joint_evaluate_tracked): facts whose provenance tokens are
--- internal gates over shared events -- materialised tracked views, joins
--- -- are handled natively, the capability no other exact ProvSQL method
--- offers with a width guarantee.  The tracked entry point walks the
--- circuit slice from the real provenance tokens; results are
--- cross-checked against ProvSQL's own ladder (probability_evaluate) on
--- the same instance (the thesis §7.3 correlated oracle).
+-- The correlated regime of the joint-width UCQ compiler: facts whose
+-- provenance tokens are internal gates over shared events -- materialised
+-- tracked views, joins -- are handled natively, the capability no other
+-- exact ProvSQL method offers with a width guarantee.  The compiler walks
+-- the circuit slice from the real provenance tokens; the width columns come
+-- from ucq_joint_compile_stats_tracked and the materialised d-D from
+-- ucq_joint_materialize_tracked, each cross-checked against ProvSQL's own
+-- ladder (probability_evaluate) on the same instance (the thesis §7.3
+-- correlated oracle).
 
 CREATE TABLE base(k int);
 SELECT add_provenance('base');
@@ -27,12 +28,12 @@ CREATE TABLE r AS SELECT 0 AS x FROM base a JOIN base b ON true
 CREATE TABLE s AS SELECT 0 AS x, 2 AS y FROM base WHERE k=0;
 CREATE TABLE t AS SELECT 2 AS y FROM base WHERE k=2;
 
-SELECT round(ucq_joint_evaluate_tracked(
+SELECT round((SELECT probability FROM ucq_joint_compile_stats_tracked(
   '{"disjuncts":[{"n_vars":2,"atoms":[
      {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
   ARRAY[0,1,2], ARRAY[0, 0,2, 2], ARRAY[1,2,1],
   ARRAY[(SELECT provsql FROM r),(SELECT provsql FROM s),
-        (SELECT provsql FROM t)])::numeric, 6) AS h0_correlated;
+        (SELECT provsql FROM t)]))::numeric, 6) AS h0_correlated;
 
 -- Ladder oracle: the real provenance of the H0 join, evaluated by
 -- probability_evaluate.  Must agree.
@@ -57,11 +58,11 @@ SELECT round(probability_evaluate(ucq_joint_materialize_tracked(
 CREATE TABLE r2 AS
   SELECT 10 AS x FROM base WHERE k=0
   UNION ALL SELECT 20 FROM base WHERE k=0;
-SELECT round(ucq_joint_evaluate_tracked(
+SELECT round((SELECT probability FROM ucq_joint_compile_stats_tracked(
   '{"disjuncts":[{"n_vars":1,"atoms":[{"rel":0,"vars":[0]}]}]}'::jsonb,
   ARRAY[0,0], ARRAY[10,20], ARRAY[1,1],
   ARRAY[(SELECT provsql FROM r2 WHERE x=10),
-        (SELECT provsql FROM r2 WHERE x=20)])::numeric, 6)
+        (SELECT provsql FROM r2 WHERE x=20)]))::numeric, 6)
   AS shared_event_exists;
 
 -- Width columns: the joint screen sees the correlation (data and circuit
@@ -96,14 +97,14 @@ DO $$ BEGIN PERFORM set_prob(provenance(), confidence) FROM detection_n2; END $$
 -- bbox 2's two values makes the answer
 -- P((deer1 OR deer2) AND (fox2 OR fox3)) = 0.728, NOT the independent
 -- 0.8.. reading.
-SELECT round(ucq_joint_evaluate_tracked(
+SELECT round((SELECT probability FROM ucq_joint_compile_stats_tracked(
   '{"disjuncts":[{"n_vars":2,"atoms":[{"rel":0,"vars":[0]},{"rel":1,"vars":[1]}]}]}'::jsonb,
   ARRAY[0,0,1,1], ARRAY[1,2,2,3], ARRAY[1,1,1,1],
   ARRAY[(SELECT provsql FROM detection_n2 WHERE bbox_key='1' AND species_id=1),
         (SELECT provsql FROM detection_n2 WHERE bbox_key='2' AND species_id=1),
         (SELECT provsql FROM detection_n2 WHERE bbox_key='2' AND species_id=3),
         (SELECT provsql FROM detection_n2 WHERE bbox_key='3' AND species_id=3)]
-  )::numeric, 6) AS bid_h0;
+  ))::numeric, 6) AS bid_h0;
 
 -- Ladder oracle on the native BID circuit (joint_width off): the
 -- hand-computed 0.728 -- the joint-width answer must agree.
@@ -116,11 +117,10 @@ SELECT round((SELECT probability_evaluate(tok) FROM bid_h0)::numeric, 6)
 SET provsql.joint_width = on;
 
 -- ----------------------------------------------------------------------
--- Per-answer SINGLE SWEEP over correlated inputs
--- (ucq_joint_answers_swept_tracked).  The H0 query q(x) :- R(x),S(x,y),T(y)
--- has one answer per x; the tokens are walked once, the correlated joint
--- encoding + tree decomposition are built once, and each answer is a
--- head-pinned merged DP sweep.  Two answers, one of them correlated:
+-- Per-answer over correlated inputs.  The H0 query q(x) :- R(x),S(x,y),T(y)
+-- has one answer per x; the transparent route gathers the tokens once and
+-- materialises every answer's d-D in a single merged DP sweep.  Two answers,
+-- both correlated:
 --   x=0 : R(0)=e0&e1, S(0,2)=e0 (e0 SHARED with R(0)), T(2)=e2
 --         -> P = P(e0&e1&e2) = 0.5^3 = 0.125
 --   x=5 : R(5)=e3, S(5,7)=e3, T(7)=e3 (all THREE share e3)
@@ -142,53 +142,28 @@ CREATE TABLE t3 AS
   SELECT 2 AS y FROM base2 WHERE k=2
   UNION ALL SELECT 7 AS y FROM base2 WHERE k=3;
 
--- Ladder oracle: per-group probability of the H0 join, standard evaluation.
--- Strip the provenance column the CTAS adds so the cross-check below joins
--- two plain relations (a tracked relation joined with a multi-output SRF is
--- not rewritable by the ProvSQL hook).
-SET provsql.joint_width = off;
-CREATE TABLE h0_groups AS
+-- Per-answer over CORRELATED inputs through the TRANSPARENT route: the flat
+-- GROUP BY query under provsql.joint_width = on substitutes the head-pinned
+-- joint-width provenance (one gather + one single-DP sweep materialising all
+-- answers); off is the exact ladder.  Two answers, both correlated:
+--   x=0 : R(0)=e0&e1, S(0,2)=e0 (e0 SHARED with R(0)), T(2)=e2 -> 0.5^3 = 0.125
+--   x=5 : R(5)=e3, S(5,7)=e3, T(7)=e3 (all THREE share e3) -> P(e3) = 0.5
+-- The shared events make neither answer an independent product.
+SET provsql.joint_width = on;
+CREATE TABLE jc_on AS
   SELECT r3.x AS x, probability_evaluate(provenance()) AS p
     FROM r3, s3, t3 WHERE r3.x = s3.x AND s3.y = t3.y GROUP BY r3.x;
-SELECT remove_provenance('h0_groups');
+SELECT remove_provenance('jc_on');
+SET provsql.joint_width = off;
+CREATE TABLE jc_off AS
+  SELECT r3.x AS x, probability_evaluate(provenance()) AS p
+    FROM r3, s3, t3 WHERE r3.x = s3.x AND s3.y = t3.y GROUP BY r3.x;
+SELECT remove_provenance('jc_off');
 SET provsql.joint_width = on;
 
-\echo '== correlated single-sweep per-answer probabilities =='
-CREATE TABLE swept_corr AS
-  SELECT head[1] AS x, probability AS p
-  FROM ucq_joint_answers_swept_tracked(
-    '{"disjuncts":[{"n_vars":2,"atoms":[
-       {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
-    ARRAY[0], ARRAY[0, 5],
-    ARRAY[0,0,1,1,2,2], ARRAY[0, 5, 0,2, 5,7, 2, 7], ARRAY[1,1,2,2,1,1],
-    ARRAY[(SELECT provsql FROM r3 WHERE x=0),(SELECT provsql FROM r3 WHERE x=5),
-          (SELECT provsql FROM s3 WHERE x=0),(SELECT provsql FROM s3 WHERE x=5),
-          (SELECT provsql FROM t3 WHERE y=2),(SELECT provsql FROM t3 WHERE y=7)]);
-SELECT x, round(p::numeric, 6) AS p FROM swept_corr ORDER BY x;
+\echo '== correlated transparent per-answer probabilities =='
+SELECT x, round(p::numeric, 6) AS p FROM jc_on ORDER BY x;
 
-\echo '== correlated single-sweep == ladder per group: n_answers, max |diff| =='
-SELECT count(*) AS n_answers, max(abs(sw.p - og.p)) AS max_abs_diff
-FROM swept_corr sw JOIN h0_groups og USING (x);
-
--- Full top-down single DP over correlated inputs
--- (ucq_joint_answers_onedp_tracked): ONE bottom-up sweep over the joint
--- data+circuit decomposition emits one root per answer; an answer is held
--- open until its whole connected component (elements and gate vertices) has
--- left the bag, so every witness gate has folded into its provenance.
--- Discovers the answers; must match the per-binding sweep and the ladder.
-\echo '== correlated top-down single DP per-answer probabilities =='
-CREATE TABLE onedp_corr AS
-  SELECT head[1] AS x, probability AS p
-  FROM ucq_joint_answers_onedp_tracked(
-    '{"disjuncts":[{"n_vars":2,"atoms":[
-       {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
-    ARRAY[0],
-    ARRAY[0,0,1,1,2,2], ARRAY[0, 5, 0,2, 5,7, 2, 7], ARRAY[1,1,2,2,1,1],
-    ARRAY[(SELECT provsql FROM r3 WHERE x=0),(SELECT provsql FROM r3 WHERE x=5),
-          (SELECT provsql FROM s3 WHERE x=0),(SELECT provsql FROM s3 WHERE x=5),
-          (SELECT provsql FROM t3 WHERE y=2),(SELECT provsql FROM t3 WHERE y=7)]);
-SELECT x, round(p::numeric, 6) AS p FROM onedp_corr ORDER BY x;
-
-\echo '== correlated single DP == ladder per group: n_answers, max |diff| =='
-SELECT count(*) AS n_answers, max(abs(od.p - og.p)) AS max_abs_diff
-FROM onedp_corr od JOIN h0_groups og USING (x);
+\echo '== correlated transparent == ladder per group: n_answers, max |diff| =='
+SELECT count(*) AS n_answers, max(abs(a.p - b.p)) AS max_abs_diff
+FROM jc_on a JOIN jc_off b USING (x);
