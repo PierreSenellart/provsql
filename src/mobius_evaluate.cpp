@@ -240,7 +240,13 @@ struct FactIndex {
 
 class MobiusCompiler {
 public:
-  MobiusCompiler(const FactIndex &fi, MobiusStats &st) : fi(fi), st(st) {}
+  MobiusCompiler(const FactIndex &fi, MobiusStats &st) : fi(fi), st(st) {
+    const constants_t c = get_constants(true);
+    times_oid = c.OID_FUNCTION_PROVENANCE_TIMES;
+    plus_oid  = c.OID_FUNCTION_PROVENANCE_PLUS;
+    if(!OidIsValid(times_oid) || !OidIsValid(plus_oid))
+      provsql_error("ucq_mobius: provenance_times / provenance_plus unavailable");
+  }
 
   /// Compile the top sentence, returning the root token.  @p lineage is the
   /// token of the literal Boolean provenance of the query (the normal lineage
@@ -264,6 +270,8 @@ public:
 private:
   const FactIndex &fi;
   MobiusStats &st;
+  Oid times_oid = InvalidOid;        // provsql.provenance_times
+  Oid plus_oid  = InvalidOid;        // provsql.provenance_plus
   std::unordered_map<std::string, std::string> memo;  // key -> uuid string
   std::unordered_set<std::string> created;
   std::string pending_lineage;   // lineage to inline into the top Möbius step
@@ -271,41 +279,43 @@ private:
 
   // -- materialisation -----------------------------------------------------
 
-  pg_uuid_t mkConst(bool one) {
-    pg_uuid_t u = provsqlUuidV5(one ? "one" : "zero");
-    if(created.insert(uuid2string(u)).second) {
-      provsql_internal_create_gate(&u, one?gate_one:gate_zero, 0, NULL);
-      ++st.dd_size;
-    }
-    return u;
+  /// Delegate plus / times construction to the system's provenance_times /
+  /// provenance_plus (the single source of truth: they filter the semiring
+  /// identities, short-circuit 0 / 1 surviving children, and content-address
+  /// the gate in the store).  The Möbius path must NOT mint its own plus / times
+  /// gates -- using these functions keeps one gate-construction code path and
+  /// lets the Möbius islands share sub-gates with the rest of the system.
+  pg_uuid_t callProvenance(bool isAnd, const std::vector<pg_uuid_t> &ch) {
+    std::vector<Datum> datums;
+    datums.reserve(ch.size());
+    for(const auto &u : ch)
+      datums.push_back(UUIDPGetDatum(const_cast<pg_uuid_t *>(&u)));
+    ArrayType *arr = construct_array(datums.empty()?nullptr:datums.data(),
+                                     static_cast<int>(datums.size()),
+                                     UUIDOID, 16, false, TYPALIGN_CHAR);
+    Datum res = OidFunctionCall1(isAnd ? times_oid : plus_oid,
+                                 PointerGetDatum(arr));
+    ++st.dd_size;
+    return *DatumGetUUIDP(res);
   }
 
-  /// Independent OR / AND over child tokens (deduped).  An empty AND is one,
-  /// an empty OR is zero; a single child is returned as-is.
+  /// gate_one (empty times) / gate_zero (empty plus).
+  pg_uuid_t mkConst(bool one) { return callProvenance(one, {}); }
+
+  /// Independent OR / AND over child tokens.  Children are deduplicated first:
+  /// the certified-independent evaluation is read-once, so a child must not be
+  /// double-counted (provenance_plus / provenance_times keep duplicates).  The
+  /// 0 / 1-child and identity cases are handled by the provenance functions.
   pg_uuid_t mkBool(bool isAnd, std::vector<pg_uuid_t> ch) {
     std::vector<std::string> texts;
     texts.reserve(ch.size());
     for(const auto &c : ch) texts.push_back(uuid2string(c));
     std::sort(texts.begin(), texts.end());
     texts.erase(std::unique(texts.begin(), texts.end()), texts.end());
-    if(texts.empty())
-      return mkConst(isAnd);
-    if(texts.size()==1)
-      return string2uuid(texts[0]);
-    std::string name = (isAnd ? "times{" : "plus{");
-    for(std::size_t i=0;i<texts.size();++i){ if(i) name+=","; name+=texts[i]; }
-    name += "}";
-    pg_uuid_t u = provsqlUuidV5(name);
-    if(created.insert(uuid2string(u)).second) {
-      std::vector<pg_uuid_t> children;
-      children.reserve(texts.size());
-      for(const auto &t : texts) children.push_back(string2uuid(t));
-      provsql_internal_create_gate(&u, isAnd?gate_times:gate_plus,
-                                   static_cast<unsigned>(children.size()),
-                                   children.data());
-      ++st.dd_size;
-    }
-    return u;
+    std::vector<pg_uuid_t> uniq;
+    uniq.reserve(texts.size());
+    for(const auto &t : texts) uniq.push_back(string2uuid(t));
+    return callProvenance(isAnd, uniq);
   }
 
   /// Signed Möbius combination gate over @p children with integer @p coeffs.
