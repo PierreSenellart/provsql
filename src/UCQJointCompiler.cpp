@@ -1268,23 +1268,9 @@ AState trivialAState(const QueryCtx &q, const HeadInfo &hi)
  * @brief The data-graph single top-down DP: build one d-DNNF root per answer
  *        and evaluate them all from the shared circuit.
  */
-std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
-  const JointEncoding &enc, const UCQ &ucq,
-  const std::vector<unsigned> &head_vars,
-  unsigned max_treewidth, std::size_t max_states)
+/** @brief Head bookkeeping built from a UCQ + head-variable list. */
+HeadInfo buildHeadInfo(const QueryCtx &q, const std::vector<unsigned> &head_vars)
 {
-  using Answer = UCQJointCompiler::Answer;
-  using Stats  = UCQJointCompiler::Stats;
-  if (ucq.disjuncts.empty())
-    throw JointCompilerException("empty UCQ");
-  if (enc.correlated)
-    throw JointCompilerException(
-      "compileAnswersOneDP: single top-down DP is data-graph (TID/BID) only");
-
-  QueryCtx q;
-  Stats stats;
-  buildQueryCtx(ucq, enc, q, stats);
-
   HeadInfo hi;
   hi.head_vars = head_vars;
   unsigned maxv = 0;
@@ -1296,12 +1282,485 @@ std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
       throw JointCompilerException("compileAnswersOneDP: head var out of range");
     hi.slot_of_var[head_vars[i]] = static_cast<int>(i);
   }
-  // The head must occur in every disjunct (else its value is undetermined).
   for (const auto &di : q.disjuncts)
     for (unsigned hv : head_vars)
       if (hv >= di.n_vars || di.atoms_of_var[hv] == 0)
         throw JointCompilerException(
           "compileAnswersOneDP: a head variable does not occur in a disjunct");
+  return hi;
+}
+
+/** @brief The value a code binds to head slot @p i over @p dom (NO_VAL if
+ *         unbound: at a position -> dom[pos]; DONE -> hval; else unbound). */
+inline unsigned long headValOf(const ADCode &c, const HeadInfo &hi, std::size_t i,
+                               const std::vector<unsigned long> &dom)
+{
+  const std::int8_t s = c.st[hi.head_vars[i]];
+  if (s == UNASSIGNED) return NO_VAL;
+  if (s == DONE) return c.hval[i];
+  return dom[static_cast<std::size_t>(s)];
+}
+
+/** @brief Does a (partial) code still bind every head slot to tuple @p t? */
+inline bool bindsTuple(const ADCode &c, const HeadInfo &hi,
+                       const std::vector<unsigned long> &t,
+                       const std::vector<unsigned long> &dom)
+{
+  for (std::size_t i = 0; i < hi.n_head(); ++i)
+    if (headValOf(c, hi, i, dom) != t[i])
+      return false;
+  return true;
+}
+
+/**
+ * @brief Augmented merged state for the CORRELATED single top-down DP: the
+ *        answer core (per-disjunct hom codes + completed head tuples) carried
+ *        alongside the slice-gate valuation and suspicious set.
+ */
+struct CState {
+  AState core;                              ///< homs (with hval) + done tuples.
+  std::map<unsigned long, bool> gate_val;   ///< In-bag gate vertex -> value.
+  std::vector<unsigned long> susp;          ///< Suspicious gate vertices (sorted).
+
+  bool operator==(const CState &o) const {
+    return gate_val == o.gate_val && susp == o.susp && core == o.core;
+  }
+};
+
+struct CStateHash {
+  std::size_t operator()(const CState &s) const noexcept {
+    std::uint64_t h = static_cast<std::uint64_t>(AStateHash{}(s.core));
+    auto mix = [&](std::uint64_t x) { h ^= x; h *= 1099511628211ull; };
+    for (const auto &[g, v] : s.gate_val)
+      mix((g << 1) | (v ? 1u : 0u));
+    for (unsigned long g : s.susp)
+      mix(g * 0x9e3779b97f4a7c15ull);
+    return static_cast<std::size_t>(h);
+  }
+};
+
+/**
+ * @brief The CORRELATED single top-down DP: one bottom-up sweep over the
+ *        joint data+circuit decomposition emits one d-DNNF root per answer.
+ *
+ * Combines the merged valuation/suspicious gate DP of @c mergedCompile (the
+ * world variables are the slice INPUT leaves; a fact is present iff its slice
+ * gate is true) with the answer machinery of @c compileAnswersOneDPImpl (the
+ * head is a state-level key carried in @c hval, completions are per-tuple in
+ * @c done, and an answer is emitted -- at the gate already accumulating its
+ * subtree's input literals -- when its head elements leave and no surviving
+ * code can still witness it).
+ */
+std::vector<UCQJointCompiler::Answer> compileAnswersOneDPCorrelated(
+  const JointEncoding &enc, const UCQ &ucq, const QueryCtx &q,
+  const HeadInfo &hi, UCQJointCompiler::Stats stats,
+  unsigned max_treewidth, std::size_t max_states)
+{
+  using Answer = UCQJointCompiler::Answer;
+  dDNNF dd;
+
+  const unsigned long E = enc.n_elements;
+  const std::vector<SliceGate> &slice = enc.slice;
+  const std::size_t D = q.disjuncts.size();
+  auto isElem = [&](unsigned long v) { return v < E; };
+  auto gidx = [&](unsigned long v) { return static_cast<std::size_t>(v - E); };
+
+  // Width screen + decomposition of the joint graph (data + circuit slice).
+  Graph graph = enc.buildGraph();
+  unsigned max_degree = 0;
+  if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)
+    throw TreeDecompositionException();
+  std::unordered_map<unsigned long, bag_t> elim;
+  const TreeDecomposition td(std::move(graph), &elim);
+  if (td.getTreewidth() > max_treewidth)
+    throw TreeDecompositionException();
+  const std::size_t nb_bags = td.getNbBags();
+  stats.joint_treewidth = td.getTreewidth();
+  stats.nb_bags = nb_bags;
+  auto bagIdx = [](bag_t b) {
+                  return static_cast<std::underlying_type<bag_t>::type>(b);
+                };
+
+  std::vector<std::vector<unsigned long> > dom(nb_bags), edom(nb_bags);
+  for (std::size_t b = 0; b < nb_bags; ++b) {
+    for (gate_t g : td.getBag(bag_t{b}))
+      dom[b].push_back(static_cast<std::underlying_type<gate_t>::type>(g));
+    std::sort(dom[b].begin(), dom[b].end());
+    dom[b].erase(std::unique(dom[b].begin(), dom[b].end()), dom[b].end());
+    for (unsigned long v : dom[b])
+      if (isElem(v))
+        edom[b].push_back(v);
+  }
+  std::vector<std::vector<std::size_t> > facts_at_bag(nb_bags);
+  for (std::size_t fi = 0; fi < enc.facts.size(); ++fi) {
+    const Fact &f = enc.facts[fi];
+    std::vector<unsigned long> cl = f.elements;
+    if (f.kind == FactGateKind::GATE)
+      cl.push_back(E + f.gate);
+    bag_t best = elim.at(cl[0]);
+    for (unsigned long v : cl)
+      if (bagIdx(elim.at(v)) < bagIdx(best))
+        best = elim.at(v);
+    facts_at_bag[bagIdx(best)].push_back(fi);
+  }
+
+  // Connected components of the joint graph (elements + gate vertices, joined
+  // by each fact's clique).  An answer is settled -- safe to emit -- only when
+  // its whole component has left the bag: a witness fact's gate vertex can
+  // outlive the head element, and the input literal it folds in then is part
+  // of the answer's provenance.  So we keep an answer open until no vertex of
+  // its component remains, by when every component gate has folded into the
+  // state gate.  Independent answers fall in separate components (no
+  // co-carrying); correlated answers share one (and must be carried together).
+  const unsigned long NV = E + slice.size();
+  std::vector<unsigned long> uf(NV);
+  for (unsigned long v = 0; v < NV; ++v) uf[v] = v;
+  std::function<unsigned long(unsigned long)> ufind =
+    [&](unsigned long x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+  auto uunion = [&](unsigned long a, unsigned long b) { uf[ufind(a)] = ufind(b); };
+  for (const Fact &f : enc.facts) {
+    std::vector<unsigned long> cl = f.elements;
+    if (f.kind == FactGateKind::GATE)
+      cl.push_back(E + f.gate);
+    for (std::size_t i = 1; i < cl.size(); ++i)
+      uunion(cl[0], cl[i]);
+  }
+
+  // Gate emission (certified deterministic OR / decomposable AND).
+  using Table = std::unordered_map<CState, gate_t, CStateHash>;
+  using Accumulator = std::unordered_map<CState, std::vector<gate_t>, CStateHash>;
+  const gate_t invalid{static_cast<std::underlying_type<gate_t>::type>(-1)};
+  const gate_t true_gate = dd.setGate(BooleanGate::AND);
+  dd.setInfo(true_gate, DNNF_CERT_INFO);
+  std::vector<gate_t> ev_in(slice.size(), invalid), ev_not(slice.size(), invalid);
+  auto inGate = [&](std::size_t i) {
+                  if (ev_in[i] == invalid)
+                    ev_in[i] = dd.setGate(slice[i].token, BooleanGate::IN,
+                                          slice[i].prob);
+                  return ev_in[i];
+                };
+  auto notGate = [&](std::size_t i) {
+                   if (ev_not[i] == invalid) {
+                     ev_not[i] = dd.setGate(BooleanGate::NOT);
+                     dd.addWire(ev_not[i], inGate(i));
+                   }
+                   return ev_not[i];
+                 };
+  auto andGate = [&](gate_t a, gate_t b) {
+                   if (a == true_gate) return b;
+                   if (b == true_gate) return a;
+                   gate_t g = dd.setGate(BooleanGate::AND);
+                   dd.setInfo(g, DNNF_CERT_INFO);
+                   dd.addWire(g, a);
+                   dd.addWire(g, b);
+                   return g;
+                 };
+  auto orGates = [&](const std::vector<gate_t> &gs) {
+                   if (gs.size() == 1) return gs[0];
+                   gate_t o = dd.setGate(BooleanGate::OR);
+                   dd.setInfo(o, DNNF_CERT_INFO);
+                   for (gate_t c : gs) dd.addWire(o, c);
+                   return o;
+                 };
+  auto finalize = [&](Accumulator &acc) {
+                    Table t;
+                    t.reserve(acc.size());
+                    for (auto &e : acc)
+                      t.emplace(e.first, orGates(e.second));
+                    acc.clear();
+                    stats.max_states = std::max(stats.max_states, t.size());
+                    if (t.size() > max_states)
+                      throw JointCompilerException(
+                        "joint DP state space exceeds the per-node bound (" +
+                        std::to_string(max_states) + ")");
+                    return t;
+                  };
+
+  // Gate-valuation local consistency / strong-gate justification.
+  auto almost = [&](const std::map<unsigned long, bool> &gv) {
+                  for (const auto &[g, gval] : gv) {
+                    const SliceGate &G = slice[gidx(g)];
+                    for (unsigned c : G.children) {
+                      auto it = gv.find(E + c);
+                      if (it == gv.end()) continue;
+                      const bool cval = it->second;
+                      if (G.type == SliceGateType::AND) {
+                        if (gval && !cval) return false;
+                      } else if (G.type == SliceGateType::OR) {
+                        if (!gval && cval) return false;
+                      } else if (G.type == SliceGateType::NOT) {
+                        if (gval == cval) return false;
+                      }
+                    }
+                  }
+                  return true;
+                };
+  auto justify = [&](std::map<unsigned long, bool> &gv,
+                     std::vector<unsigned long> &susp) {
+                   std::vector<unsigned long> keep;
+                   for (unsigned long g : susp) {
+                     const SliceGate &G = slice[gidx(g)];
+                     const bool gval = gv.at(g);
+                     bool just = false;
+                     for (unsigned c : G.children) {
+                       auto it = gv.find(E + c);
+                       if (it == gv.end()) continue;
+                       const bool cval = it->second;
+                       if (G.type == SliceGateType::OR && gval && cval) just = true;
+                       if (G.type == SliceGateType::AND && !gval && !cval) just = true;
+                       if (G.type == SliceGateType::NOT && cval != gval) just = true;
+                     }
+                     if (!just) keep.push_back(g);
+                   }
+                   susp = std::move(keep);
+                 };
+  auto addSusp = [](std::vector<unsigned long> &susp, unsigned long g) {
+                   auto it = std::lower_bound(susp.begin(), susp.end(), g);
+                   if (it == susp.end() || *it != g) susp.insert(it, g);
+                 };
+
+  std::map<std::vector<unsigned long>, std::vector<gate_t> > answer_acc;
+
+  // Apply a bag's facts: a fact is present iff its slice gate is true in the
+  // valuation; a present fact closes the disjuncts (completions -> done).
+  auto applyFacts = [&](Table table, std::size_t b) {
+                      for (std::size_t fi : facts_at_bag[b]) {
+                        const Fact &f = enc.facts[fi];
+                        Accumulator acc;
+                        for (const auto &[St, g] : table) {
+                          CHECK_FOR_INTERRUPTS();
+                          const bool present =
+                            f.kind == FactGateKind::CERTAIN ||
+                            (St.gate_val.count(E + f.gate) &&
+                             St.gate_val.at(E + f.gate));
+                          CState ns = St;
+                          if (present) {
+                            std::vector<std::vector<unsigned long> > comp;
+                            for (std::size_t d = 0; d < D; ++d)
+                              closeDisjunctA(q.disjuncts[d], hi, ns.core.homs[d],
+                                             f, edom[b], comp);
+                            for (const auto &t : comp)
+                              addDone(ns.core.done, t);
+                          }
+                          acc[std::move(ns)].push_back(g);
+                        }
+                        table = finalize(acc);
+                      }
+                      return table;
+                    };
+
+  // Lift to the parent: forget leaving gates (fold INPUT literals, kill an
+  // unjustified strong gate), forget/remap elements on the core, EMIT settled
+  // answers, then introduce the parent's fresh gates (enumerate values).
+  std::function<Table(const Table &, const std::vector<unsigned long> &,
+                      const std::vector<unsigned long> &)> lift =
+    [&](const Table &tab, const std::vector<unsigned long> &from,
+        const std::vector<unsigned long> &to) -> Table {
+      if (from == to)
+        return tab;
+      std::vector<unsigned long> ef, et;
+      for (unsigned long v : from) if (isElem(v)) ef.push_back(v);
+      for (unsigned long v : to)   if (isElem(v)) et.push_back(v);
+      std::vector<unsigned long> gforget, gintro;
+      for (unsigned long v : from)
+        if (!isElem(v) && !std::binary_search(to.begin(), to.end(), v))
+          gforget.push_back(v);
+      for (unsigned long v : to)
+        if (!isElem(v) && !std::binary_search(from.begin(), from.end(), v))
+          gintro.push_back(v);
+      Accumulator acc;
+      for (const auto &[St, g] : tab) {
+        CHECK_FOR_INTERRUPTS();
+        std::map<unsigned long, bool> cur_gv = St.gate_val;
+        std::vector<unsigned long> cur_susp = St.susp;
+        gate_t cg = g;
+        bool dead = false;
+        for (unsigned long v : gforget) {
+          if (slice[gidx(v)].type == SliceGateType::INPUT)
+            cg = andGate(cg, St.gate_val.at(v) ? inGate(gidx(v)) : notGate(gidx(v)));
+          else if (std::binary_search(St.susp.begin(), St.susp.end(), v)) {
+            dead = true;
+            break;
+          }
+          cur_gv.erase(v);
+          auto it = std::lower_bound(cur_susp.begin(), cur_susp.end(), v);
+          if (it != cur_susp.end() && *it == v)
+            cur_susp.erase(it);
+        }
+        if (dead)
+          continue;
+
+        AState core = forgetLiftA(q, hi, St.core, ef, et);
+        // Emit answers whose whole component has left @p to: then every
+        // witness gate has folded into @c cg and no future fact can touch the
+        // answer.  (The component of the head element subsumes both the
+        // head-element-departure and the no-pending-witness tests.)
+        std::vector<std::vector<unsigned long> > keep;
+        for (const auto &tup : core.done) {
+          const unsigned long cv = ufind(tup[0]);
+          bool present = false;
+          for (unsigned long u : to)
+            if (ufind(u) == cv) { present = true; break; }
+          if (!present)
+            answer_acc[tup].push_back(cg);
+          else
+            keep.push_back(tup);
+        }
+        core.done = std::move(keep);
+
+        std::vector<CState> sts;
+        std::vector<gate_t> gs;
+        sts.push_back(CState{std::move(core), std::move(cur_gv),
+                             std::move(cur_susp)});
+        gs.push_back(cg);
+        for (unsigned long v : gintro) {
+          std::vector<CState> ns;
+          std::vector<gate_t> n2;
+          for (std::size_t i = 0; i < sts.size(); ++i)
+            for (int bv = 0; bv < 2; ++bv) {
+              CState nv = sts[i];
+              nv.gate_val[v] = static_cast<bool>(bv);
+              if (slice[gidx(v)].type != SliceGateType::INPUT &&
+                  isStrong(slice[gidx(v)].type, static_cast<bool>(bv)))
+                addSusp(nv.susp, v);
+              ns.push_back(std::move(nv));
+              n2.push_back(gs[i]);
+            }
+          sts = std::move(ns);
+          gs = std::move(n2);
+        }
+        for (std::size_t i = 0; i < sts.size(); ++i) {
+          justify(sts[i].gate_val, sts[i].susp);
+          if (!almost(sts[i].gate_val))
+            continue;
+          acc[std::move(sts[i])].push_back(gs[i]);
+        }
+      }
+      return finalize(acc);
+    };
+
+  auto join = [&](const Table &t1, const Table &t2,
+                  const std::vector<unsigned long> &edomain) {
+                Accumulator acc;
+                for (const auto &[A, ga] : t1)
+                  for (const auto &[B, gb] : t2) {
+                    CHECK_FOR_INTERRUPTS();
+                    bool ok = true;
+                    for (const auto &[k, v] : A.gate_val) {
+                      auto it = B.gate_val.find(k);
+                      if (it != B.gate_val.end() && it->second != v) {
+                        ok = false;
+                        break;
+                      }
+                    }
+                    if (!ok)
+                      continue;
+                    CState nv;
+                    nv.gate_val = A.gate_val;
+                    for (const auto &[k, v] : B.gate_val)
+                      nv.gate_val[k] = v;
+                    for (unsigned long x : A.susp)
+                      if (std::binary_search(B.susp.begin(), B.susp.end(), x))
+                        nv.susp.push_back(x);
+                    justify(nv.gate_val, nv.susp);
+                    if (!almost(nv.gate_val))
+                      continue;
+                    nv.core = joinA(q, hi, edomain, A.core, B.core);
+                    acc[std::move(nv)].push_back(andGate(ga, gb));
+                  }
+                return finalize(acc);
+              };
+
+  auto trivialTable = [&](const std::vector<unsigned long> &d) {
+                        CState z;
+                        z.core = trivialAState(q, hi);
+                        Table e;
+                        e.emplace(std::move(z), true_gate);
+                        return lift(e, {}, d);
+                      };
+
+  // Bottom-up sweep.
+  struct Frame {
+    bag_t bag;
+    std::size_t next_child = 0;
+    Table table;
+    bool has_table = false;
+    explicit Frame(bag_t b) : bag(b) {}
+  };
+  Table root_table;
+  std::size_t root_bag = bagIdx(td.getRoot());
+  {
+    std::vector<Frame> stack;
+    stack.push_back(Frame(td.getRoot()));
+    while (!stack.empty()) {
+      Frame &frame = stack.back();
+      const auto &children = td.getChildren(frame.bag);
+      if (frame.next_child < children.size()) {
+        stack.push_back(Frame(children[frame.next_child++]));
+        continue;
+      }
+      CHECK_FOR_INTERRUPTS();
+      const std::size_t b = bagIdx(frame.bag);
+      Table table = frame.has_table ? std::move(frame.table) : trivialTable(dom[b]);
+      table = applyFacts(std::move(table), b);
+      if (stack.size() == 1) {
+        root_table = std::move(table);
+        stack.pop_back();
+        break;
+      }
+      Frame &parent = stack[stack.size() - 2];
+      const std::size_t pb = bagIdx(parent.bag);
+      Table lifted = lift(table, dom[b], dom[pb]);
+      if (!parent.has_table) {
+        parent.table = std::move(lifted);
+        parent.has_table = true;
+      } else {
+        parent.table = join(parent.table, lifted, edom[pb]);
+      }
+      stack.pop_back();
+    }
+  }
+  // Forget the root domain: folds the remaining input literals and emits
+  // every remaining answer.
+  lift(root_table, dom[root_bag], {});
+
+  std::vector<Answer> answers;
+  answers.reserve(answer_acc.size());
+  for (auto &entry : answer_acc) {
+    gate_t gg = orGates(entry.second);
+    dd.setRoot(gg);
+    const double p = dd.probabilityEvaluation();
+    if (p > 0.0) {
+      Answer a;
+      a.head = entry.first;
+      a.probability = p;
+      a.max_states = stats.max_states;
+      answers.push_back(std::move(a));
+    }
+  }
+  return answers;
+}
+
+std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
+  const JointEncoding &enc, const UCQ &ucq,
+  const std::vector<unsigned> &head_vars,
+  unsigned max_treewidth, std::size_t max_states)
+{
+  using Answer = UCQJointCompiler::Answer;
+  using Stats  = UCQJointCompiler::Stats;
+  if (ucq.disjuncts.empty())
+    throw JointCompilerException("empty UCQ");
+
+  QueryCtx q;
+  Stats stats;
+  buildQueryCtx(ucq, enc, q, stats);
+  HeadInfo hi = buildHeadInfo(q, head_vars);
+
+  // Correlated regime (facts gated by internal circuit gates): the merged
+  // valuation + answer DP over the joint data+circuit decomposition.
+  if (enc.correlated)
+    return compileAnswersOneDPCorrelated(enc, ucq, q, hi, std::move(stats),
+                                         max_treewidth, max_states);
 
   // Width screen + decomposition of the data graph.
   Graph graph = enc.buildGraph();
@@ -1424,23 +1883,6 @@ std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
                       return table;
                     };
 
-  // The value a code binds to head slot @p i over @p dom (NO_VAL if unbound).
-  auto headValOf = [&](const ADCode &c, std::size_t i,
-                       const std::vector<unsigned long> &dom) -> unsigned long {
-                     const std::int8_t s = c.st[hi.head_vars[i]];
-                     if (s == UNASSIGNED) return NO_VAL;
-                     if (s == DONE) return c.hval[i];
-                     return dom[static_cast<std::size_t>(s)];
-                   };
-  // Does a (partial) code still bind every head slot to the tuple @p t?
-  auto bindsTuple = [&](const ADCode &c, const std::vector<unsigned long> &t,
-                        const std::vector<unsigned long> &dom) {
-                      for (std::size_t i = 0; i < hi.n_head(); ++i)
-                        if (headValOf(c, i, dom) != t[i])
-                          return false;
-                      return true;
-                    };
-
   // Lift a child table to the parent domain.  An answer is EMITTED (its
   // provenance is then final) when all its head elements have left AND no
   // surviving partial code still witnesses it -- a code committed to the
@@ -1470,7 +1912,7 @@ std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
                     if (gone && !to.empty())
                       for (const auto &codes : ls.homs) {
                         for (const ADCode &c : codes)
-                          if (bindsTuple(c, tup, to)) { pending = true; break; }
+                          if (bindsTuple(c, hi, tup, to)) { pending = true; break; }
                         if (pending) break;
                       }
                     if (gone && !pending)

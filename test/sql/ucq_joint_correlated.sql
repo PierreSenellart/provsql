@@ -169,3 +169,26 @@ SELECT x, round(p::numeric, 6) AS p FROM swept_corr ORDER BY x;
 \echo '== correlated single-sweep == ladder per group: n_answers, max |diff| =='
 SELECT count(*) AS n_answers, max(abs(sw.p - og.p)) AS max_abs_diff
 FROM swept_corr sw JOIN h0_groups og USING (x);
+
+-- Full top-down single DP over correlated inputs
+-- (ucq_joint_answers_onedp_tracked): ONE bottom-up sweep over the joint
+-- data+circuit decomposition emits one root per answer; an answer is held
+-- open until its whole connected component (elements and gate vertices) has
+-- left the bag, so every witness gate has folded into its provenance.
+-- Discovers the answers; must match the per-binding sweep and the ladder.
+\echo '== correlated top-down single DP per-answer probabilities =='
+CREATE TABLE onedp_corr AS
+  SELECT head[1] AS x, probability AS p
+  FROM ucq_joint_answers_onedp_tracked(
+    '{"disjuncts":[{"n_vars":2,"atoms":[
+       {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+    ARRAY[0],
+    ARRAY[0,0,1,1,2,2], ARRAY[0, 5, 0,2, 5,7, 2, 7], ARRAY[1,1,2,2,1,1],
+    ARRAY[(SELECT provsql FROM r3 WHERE x=0),(SELECT provsql FROM r3 WHERE x=5),
+          (SELECT provsql FROM s3 WHERE x=0),(SELECT provsql FROM s3 WHERE x=5),
+          (SELECT provsql FROM t3 WHERE y=2),(SELECT provsql FROM t3 WHERE y=7)]);
+SELECT x, round(p::numeric, 6) AS p FROM onedp_corr ORDER BY x;
+
+\echo '== correlated single DP == ladder per group: n_answers, max |diff| =='
+SELECT count(*) AS n_answers, max(abs(od.p - og.p)) AS max_abs_diff
+FROM onedp_corr od JOIN h0_groups og USING (x);

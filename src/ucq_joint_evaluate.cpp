@@ -44,6 +44,7 @@ PG_FUNCTION_INFO_V1(ucq_joint_materialize_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_answers_swept);
 PG_FUNCTION_INFO_V1(ucq_joint_answers_swept_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_answers_onedp);
+PG_FUNCTION_INFO_V1(ucq_joint_answers_onedp_tracked);
 }
 
 #include "c_cpp_compatibility.h"
@@ -1067,6 +1068,97 @@ Datum ucq_joint_answers_onedp(PG_FUNCTION_ARGS)
   } catch (...) {
     MemoryContextSwitchTo(oldcontext);
     provsql_error("ucq_joint_answers_onedp: unknown exception");
+  }
+
+  MemoryContextSwitchTo(oldcontext);
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable SRF: per-answer probabilities via the full
+ *        TOP-DOWN single DP over CORRELATED inputs.
+ *
+ * The correlated counterpart of @c ucq_joint_answers_onedp: the fact tokens
+ * are real provenance gates, walked through the circuit ONCE, the correlated
+ * joint encoding (data + circuit slice) and its decomposition are built ONCE,
+ * and a single bottom-up sweep emits one d-DNNF root per answer.  Answers are
+ * discovered (no candidate list).
+ *
+ * Argument layout: 0-4 query (as @c decodeQuery), then
+ *   5 head_vars  int[]  : query-variable indices of the head
+ *   6 fact_rel   int[]
+ *   7 fact_elems int[]
+ *   8 fact_arity int[]
+ *   9 fact_tokens uuid[] : real provenance tokens (walked, not probs)
+ *
+ * Returns @c SETOF (head int[], probability float8).
+ */
+Datum ucq_joint_answers_onedp_tracked(PG_FUNCTION_ARGS)
+{
+  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
+  TupleDesc tupdesc = rsinfo->expectedDesc;
+  Tuplestorestate *tupstore =
+    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
+                          false, work_mem);
+  rsinfo->returnMode = SFRM_Materialize;
+  rsinfo->setResult = tupstore;
+
+  try {
+    UCQ ucq;
+    decodeQuery(fcinfo, ucq);
+
+    int n_hv;
+    const int32 *hv = intArray(fcinfo, 5, "head_vars", n_hv);
+    if (n_hv <= 0)
+      provsql_error("ucq_joint_answers_onedp_tracked: empty head_vars");
+    std::vector<unsigned> head_vars(n_hv);
+    for (int i = 0; i < n_hv; ++i)
+      head_vars[i] = static_cast<unsigned>(hv[i]);
+
+    std::vector<Fact> facts;
+    std::vector<SliceGate> slice;
+    unsigned long n_elements;
+    bool has_internal;
+    buildTrackedFacts(fcinfo, 6, facts, slice, n_elements, has_internal);
+
+    const unsigned max_tw =
+      static_cast<unsigned>(provsql_joint_max_treewidth);
+    const std::size_t max_states =
+      static_cast<std::size_t>(provsql_joint_max_states);
+
+    const JointEncoding enc =
+      JointEncoding::fromCorrelated(std::move(facts), std::move(slice),
+                                    n_elements);
+
+    std::vector<UCQJointCompiler::Answer> answers;
+    try {
+      answers = UCQJointCompiler::compileAnswersOneDP(enc, ucq, head_vars,
+                                                      max_tw, max_states);
+    } catch (TreeDecompositionException &) {
+      provsql_error(
+        "ucq_joint_answers_onedp_tracked: joint treewidth exceeds the "
+        "configured maximum (%d)", provsql_joint_max_treewidth);
+    }
+
+    for (const auto &a : answers) {
+      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
+      for (std::size_t i = 0; i < a.head.size(); ++i)
+        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
+      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
+                                       INT4OID, sizeof(int32), true,
+                                       TYPALIGN_INT);
+      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
+      bool nulls[2] = { false, false };
+      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+  } catch (const std::exception &e) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_onedp_tracked: %s", e.what());
+  } catch (...) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_onedp_tracked: unknown exception");
   }
 
   MemoryContextSwitchTo(oldcontext);

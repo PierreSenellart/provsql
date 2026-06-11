@@ -104,10 +104,32 @@ not by *k*. So the whole evaluation is **one pass, linear in the data** rather
 than *k* passes.
 
 C surface: `UCQJointCompiler::compileAnswersOneDP` + SRF
-`ucq_joint_answers_onedp(query, head_vars, facts…)`. Data-graph regime; the
-correlated regime keeps the shared-decomposition path (§2) -- the head-pin
-merged DP -- the same `done`/`hval` machinery would carry over but is not yet
-wired through `mergedCompile`.
+`ucq_joint_answers_onedp(query, head_vars, facts…)`.
+
+### Correlated regime (`compileAnswersOneDPCorrelated`)
+
+The same single-DP carries to the correlated regime, merging the answer
+machinery (head-as-state-key `hval`, per-tuple `done`) with the
+valuation/suspicious gate DP of `mergedCompile` (the world variables are the
+slice INPUT leaves; a fact is present iff its slice gate is true). One extra
+subtlety makes it correct: **a witness gate vertex can outlive the head
+element**. A fact's gate is a separate vertex in the joint graph, and the
+input literal it folds into the running provenance is added only when that gate
+vertex leaves the bag -- which can be *above* the bag where the head element
+left. Emitting at head-element departure (as the data-graph path does) would
+freeze the answer's gate before its witness gates fold in, over-counting (a
+single fact `R(0)=e0` came out 1.0 instead of 0.5). The fix is a **component
+barrier**: an answer is emitted only when its whole connected component
+(elements *and* gate vertices, union-found over each fact's clique) has left
+the bag, by when every component gate has folded into the state gate. This
+keeps independent answers in separate components (no co-carrying) while
+correlated answers share a component and are carried together -- exactly the
+correlation structure. The dispatch is in `compileAnswersOneDPImpl` (-> 
+`compileAnswersOneDPCorrelated`); SRF `ucq_joint_answers_onedp_tracked` walks
+the real tokens once (shared `buildTrackedFacts`) and runs the single merged
+sweep. Cross-checked exact against the per-binding sweep and the ladder over
+five correlated shapes (H0, self-join, RSTU chain, union, two-column head, all
+joint treewidth 2) in `ucq_joint_correlated.sql`.
 
 ### Measured (same H0 family, w=2, p=0.5)
 
@@ -125,6 +147,21 @@ single DP is 853× faster than the shared-decomposition sweep and ~3200× faster
 than per-binding, and the gap widens without bound. All three agree on every
 answer. Cross-checked against per-binding in `ucq_joint_answers` section 19 and,
 on a treewidth-2 instance with correlated answers, against the standard ladder.
+
+### Measured, correlated regime (R(x) an internal times of shared events)
+
+`test/bench/ucq_joint_onedp_correlated_bench.sql` -- the merged single sweep
+vs the *k* pinned merged sweeps of `ucq_joint_answers_swept_tracked`:
+
+| k | swept ms | onedp ms | onedp vs swept |
+|---|---|---|---|
+| 16  | 13.6     | 2.9   | 4.7× |
+| 64  | 179.9    | 8.0   | 22×  |
+| 256 | 2640.6   | 30.5  | 87×  |
+| 512 | 10841.5  | 61.3  | 177× |
+
+Same linear-vs-quadratic separation as the data-graph regime (177× at k=512),
+both exact.
 
 ## 4. Scope of the implementation
 
