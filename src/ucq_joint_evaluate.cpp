@@ -42,6 +42,7 @@ PG_FUNCTION_INFO_V1(ucq_joint_evaluate_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_compile_stats_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_materialize_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_answers_swept);
+PG_FUNCTION_INFO_V1(ucq_joint_answers_swept_tracked);
 }
 
 #include "c_cpp_compatibility.h"
@@ -488,17 +489,28 @@ struct SliceBuilder {
   }
 };
 
-/** @brief Run the correlated (tracked) compilation from the arguments. */
-UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
+/**
+ * @brief Walk the fact tokens at arguments @p base..base+3 into a fact list
+ *        and its circuit slice.
+ *
+ * @p base+0 fact_rel, @p base+1 fact_elems, @p base+2 fact_arity,
+ * @p base+3 fact_tokens (uuid[]).  Each token is walked through the mmap
+ * circuit (shared slice nodes for shared gates -- the correlation the joint
+ * screen must see).  On return @p facts holds the present facts (their gate
+ * indices into @p slice), @p n_elements is the element-id bound, and
+ * @p has_internal is true iff the slice has a non-INPUT gate (correlated).
+ * Shared by the Boolean tracked compile and the per-answer tracked sweep.
+ */
+void buildTrackedFacts(FunctionCallInfo fcinfo, int base,
+                       std::vector<Fact> &facts, std::vector<SliceGate> &slice,
+                       unsigned long &n_elements, bool &has_internal)
 {
-  UCQ ucq;
-  decodeQuery(fcinfo, ucq);
-
   int n_fr, n_fe, n_fa, n_ft;
-  const int32 *f_rel   = intArray(fcinfo, 5, "fact_rel", n_fr);
-  const int32 *f_elems = intArray(fcinfo, 6, "fact_elems", n_fe);
-  const int32 *f_arity = intArray(fcinfo, 7, "fact_arity", n_fa);
-  ArrayType *toks = PG_ARGISNULL(8) ? NULL : PG_GETARG_ARRAYTYPE_P(8);
+  const int32 *f_rel   = intArray(fcinfo, base,     "fact_rel", n_fr);
+  const int32 *f_elems = intArray(fcinfo, base + 1, "fact_elems", n_fe);
+  const int32 *f_arity = intArray(fcinfo, base + 2, "fact_arity", n_fa);
+  ArrayType *toks =
+    PG_ARGISNULL(base + 3) ? NULL : PG_GETARG_ARRAYTYPE_P(base + 3);
   n_ft = checkedArrayLength(toks, "fact_tokens");
   if (n_fr != n_fa || n_fr != n_ft)
     provsql_error("ucq_joint: fact arrays must have the same length");
@@ -512,7 +524,7 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
   // pass once expandMulBlocks() has stick-broken the blocks.
   std::vector<std::pair<Fact, int>> pending;
   pending.reserve(n_fr);
-  unsigned long n_elements = 0;
+  n_elements = 0;
   int eoff = 0;
   for (int i = 0; i < n_fr; ++i) {
     const int ar = f_arity[i];
@@ -534,7 +546,7 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
 
   sb.expandMulBlocks();
 
-  std::vector<Fact> facts;
+  facts.clear();
   facts.reserve(pending.size());
   for (auto &pf : pending) {
     const int node = sb.resolveCode(pf.second);
@@ -550,6 +562,27 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
     facts.push_back(std::move(f));
   }
 
+  has_internal = false;
+  for (const auto &sg : sb.slice)
+    if (sg.type != SliceGateType::INPUT) {
+      has_internal = true;
+      break;
+    }
+  slice = std::move(sb.slice);
+}
+
+/** @brief Run the correlated (tracked) compilation from the arguments. */
+UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
+{
+  UCQ ucq;
+  decodeQuery(fcinfo, ucq);
+
+  std::vector<Fact> facts;
+  std::vector<SliceGate> slice;
+  unsigned long n_elements;
+  bool has_internal;
+  buildTrackedFacts(fcinfo, 5, facts, slice, n_elements, has_internal);
+
   const unsigned max_tw = static_cast<unsigned>(provsql_joint_max_treewidth);
   const std::size_t max_states =
     static_cast<std::size_t>(provsql_joint_max_states);
@@ -563,12 +596,6 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
   // fast path is just cheaper.  A shared leaf across *different* element
   // tuples is a real correlation that fromFacts rejects -- fall back to
   // the joint path then.
-  bool has_internal = false;
-  for (const auto &sg : sb.slice)
-    if (sg.type != SliceGateType::INPUT) {
-      has_internal = true;
-      break;
-    }
   if (!has_internal) {
     std::vector<FactRow> rows;
     rows.reserve(facts.size());
@@ -577,8 +604,8 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
       row.relation_id = f.relation_id;
       row.elements = f.elements;
       if (f.kind == FactGateKind::GATE) {
-        row.token = sb.slice[f.gate].token;
-        row.prob = sb.slice[f.gate].prob;
+        row.token = slice[f.gate].token;
+        row.prob = slice[f.gate].prob;
       }   // CERTAIN: empty token, prob 1
       rows.push_back(std::move(row));
     }
@@ -599,7 +626,7 @@ UCQJointCompiler::Result runTrackedFromArgs(FunctionCallInfo fcinfo)
   }
 
   const JointEncoding enc =
-    JointEncoding::fromCorrelated(std::move(facts), std::move(sb.slice),
+    JointEncoding::fromCorrelated(std::move(facts), std::move(slice),
                                   n_elements);
   try {
     return UCQJointCompiler::compile(enc, ucq, max_tw, max_states);
@@ -845,6 +872,119 @@ Datum ucq_joint_answers_swept(PG_FUNCTION_ARGS)
   } catch (...) {
     MemoryContextSwitchTo(oldcontext);
     provsql_error("ucq_joint_answers_swept: unknown exception");
+  }
+
+  MemoryContextSwitchTo(oldcontext);
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable SRF: per-answer probabilities for the
+ *        CORRELATED regime in a SINGLE PASS over the shared encoding.
+ *
+ * The per-answer counterpart of @c ucq_joint_evaluate_tracked: the fact
+ * tokens are walked through the circuit ONCE, the correlated joint encoding
+ * (data + circuit slice) and its tree decomposition are built ONCE, and each
+ * candidate head tuple is evaluated by a head-pinned merged DP sweep.  This
+ * shares the gather/walk/encode/decompose stages across all answers; only the
+ * pinned DP is rerun per answer.
+ *
+ * Argument layout:
+ *
+ *    0-4 query             (as @c decodeQuery)
+ *    5   head_vars       int[]  : query-variable indices of the head
+ *    6   candidate_heads int[]  : candidate head tuples, row-major
+ *    7   fact_rel        int[]
+ *    8   fact_elems      int[]
+ *    9   fact_arity      int[]
+ *   10   fact_tokens     uuid[] : real provenance tokens (walked, not probs)
+ *
+ * Returns @c SETOF (head int[], probability float8): one row per answer with
+ * non-zero probability.
+ */
+Datum ucq_joint_answers_swept_tracked(PG_FUNCTION_ARGS)
+{
+  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
+  TupleDesc tupdesc = rsinfo->expectedDesc;
+  Tuplestorestate *tupstore =
+    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
+                          false, work_mem);
+  rsinfo->returnMode = SFRM_Materialize;
+  rsinfo->setResult = tupstore;
+
+  try {
+    UCQ ucq;
+    decodeQuery(fcinfo, ucq);
+
+    int n_hv, n_cand;
+    const int32 *hv  = intArray(fcinfo, 5, "head_vars", n_hv);
+    const int32 *cnd = intArray(fcinfo, 6, "candidate_heads", n_cand);
+    if (n_hv <= 0)
+      provsql_error("ucq_joint_answers_swept_tracked: empty head_vars");
+    if (n_cand % n_hv != 0)
+      provsql_error("ucq_joint_answers_swept_tracked: candidate_heads length "
+                    "is not a multiple of the head arity");
+
+    std::vector<unsigned> head_vars(n_hv);
+    for (int i = 0; i < n_hv; ++i)
+      head_vars[i] = static_cast<unsigned>(hv[i]);
+    std::vector<std::vector<unsigned long> > candidates;
+    candidates.reserve(static_cast<std::size_t>(n_cand / n_hv));
+    for (int i = 0; i + n_hv <= n_cand; i += n_hv) {
+      std::vector<unsigned long> t(n_hv);
+      for (int k = 0; k < n_hv; ++k)
+        t[k] = static_cast<unsigned long>(cnd[i + k]);
+      candidates.push_back(std::move(t));
+    }
+
+    std::vector<Fact> facts;
+    std::vector<SliceGate> slice;
+    unsigned long n_elements;
+    bool has_internal;
+    buildTrackedFacts(fcinfo, 7, facts, slice, n_elements, has_internal);
+
+    const unsigned max_tw =
+      static_cast<unsigned>(provsql_joint_max_treewidth);
+    const std::size_t max_states =
+      static_cast<std::size_t>(provsql_joint_max_states);
+
+    // The correlated joint encoding (data + circuit slice).  An all-INPUT
+    // slice (the TID/BID regime reached through a tracked token) is handled
+    // here too, just without the data-graph fast path -- the columnar
+    // ucq_joint_answers_swept is the fast path for that case.
+    const JointEncoding enc =
+      JointEncoding::fromCorrelated(std::move(facts), std::move(slice),
+                                    n_elements);
+
+    std::vector<UCQJointCompiler::Answer> answers;
+    try {
+      answers = UCQJointCompiler::compileAnswers(enc, ucq, head_vars,
+                                                 candidates, max_tw, max_states);
+    } catch (TreeDecompositionException &) {
+      provsql_error(
+        "ucq_joint_answers_swept_tracked: joint treewidth exceeds the "
+        "configured maximum (%d)", provsql_joint_max_treewidth);
+    }
+
+    for (const auto &a : answers) {
+      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
+      for (std::size_t i = 0; i < a.head.size(); ++i)
+        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
+      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
+                                       INT4OID, sizeof(int32), true,
+                                       TYPALIGN_INT);
+      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
+      bool nulls[2] = { false, false };
+      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+  } catch (const std::exception &e) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_swept_tracked: %s", e.what());
+  } catch (...) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_swept_tracked: unknown exception");
   }
 
   MemoryContextSwitchTo(oldcontext);

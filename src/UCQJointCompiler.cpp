@@ -461,7 +461,12 @@ UCQJointCompiler::Result mergedCompile(const JointEncoding &enc,
                                        const QueryCtx &q,
                                        UCQJointCompiler::Stats stats,
                                        unsigned max_treewidth,
-                                       std::size_t max_states)
+                                       std::size_t max_states,
+                                       const TreeDecomposition *shared_td,
+                                       const std::unordered_map<unsigned long,
+                                                                bag_t> *shared_elim,
+                                       const std::map<unsigned,
+                                                      unsigned long> *head_pin)
 {
   UCQJointCompiler::Result result;
   dDNNF &dd = result.dd;
@@ -472,17 +477,28 @@ UCQJointCompiler::Result mergedCompile(const JointEncoding &enc,
   auto isElem = [&](unsigned long v) { return v < E; };
   auto gidx = [&](unsigned long v) { return static_cast<std::size_t>(v - E); };
 
-  // 1. Width screen + decomposition of the joint graph.
-  Graph graph = enc.buildGraph();
-  unsigned max_degree = 0;
-  if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)
-    throw TreeDecompositionException();
-  std::unordered_map<unsigned long, bag_t> elim;
-  const TreeDecomposition td(std::move(graph), &elim);
+  // 1. Width screen + decomposition of the joint graph (or reuse a shared
+  //    one: the single-sweep per-answer path builds it once and pins the
+  //    head in the DP, so the joint graph -- data plus circuit -- is
+  //    identical across answers).
+  std::unordered_map<unsigned long, bag_t> elim_local;
+  std::unique_ptr<TreeDecomposition> built_td;
+  const TreeDecomposition *tdp = shared_td;
+  if (tdp == nullptr) {
+    Graph graph = enc.buildGraph();
+    unsigned max_degree = 0;
+    if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)
+      throw TreeDecompositionException();
+    built_td.reset(new TreeDecomposition(std::move(graph), &elim_local));
+    if (built_td->getTreewidth() > max_treewidth)
+      throw TreeDecompositionException();
+    tdp = built_td.get();
+  }
+  const TreeDecomposition &td = *tdp;
+  const std::unordered_map<unsigned long, bag_t> &elim =
+    shared_elim ? *shared_elim : elim_local;
   stats.joint_treewidth = td.getTreewidth();
   stats.nb_bags = td.getNbBags();
-  if (td.getTreewidth() > max_treewidth)
-    throw TreeDecompositionException();
   const std::size_t nb_bags = td.getNbBags();
 
   auto bagIndex = [](bag_t b) {
@@ -615,12 +631,16 @@ UCQJointCompiler::Result mergedCompile(const JointEncoding &enc,
                  };
 
   // Close a state's homs under a present fact (reuse the hom machinery).
+  // The head pin (single-sweep per-answer) is threaded through here: a fact
+  // binding a head variable to an element other than the answer's value is
+  // rejected, so a pinned sweep computes P(exists witness with head = v).
   auto closeFact = [&](State s, const Fact &f,
                        const std::vector<unsigned long> &ed) {
                      if (s.sat)
                        return s;
                      for (std::size_t d = 0; d < D; ++d)
-                       if (closeDisjunct(q.disjuncts[d], s.homs[d], f, ed)) {
+                       if (closeDisjunct(q.disjuncts[d], s.homs[d], f, ed,
+                                         head_pin)) {
                          s.sat = true;
                          s.homs.clear();
                          return s;
@@ -947,10 +967,13 @@ static UCQJointCompiler::Result compileImpl(
   buildQueryCtx(ucq, enc, q, stats);
 
   // Correlated regime (facts gated by internal circuit gates): the
-  // merged valuation + homomorphism DP.  (The single-sweep per-answer path
-  // -- shared_td / head_pin -- is data-graph only and never gets here.)
+  // merged valuation + homomorphism DP.  The single-sweep per-answer path
+  // (shared_td / shared_elim / head_pin) is supported here too: the joint
+  // graph spans data and circuit, is built once, and the head is pinned in
+  // the DP rather than by a Sel atom (which would change the encoding).
   if (enc.correlated)
-    return mergedCompile(enc, q, stats, max_treewidth, max_states);
+    return mergedCompile(enc, q, stats, max_treewidth, max_states,
+                         shared_td, shared_elim, head_pin);
 
   // ------------------------------------------------------------------
   // 1. Width screen + tree decomposition of the joint graph (or reuse a
@@ -1236,12 +1259,11 @@ std::vector<UCQJointCompiler::Answer> UCQJointCompiler::compileAnswers(
 {
   if (ucq.disjuncts.empty())
     throw JointCompilerException("empty UCQ");
-  if (enc.correlated)
-    throw JointCompilerException(
-      "compileAnswers: single-sweep is data-graph (TID/BID) only");
 
   // Build the joint graph + tree decomposition ONCE; the head pin keeps the
-  // encoding and decomposition identical across answers.
+  // encoding and decomposition identical across answers.  This holds in both
+  // regimes: the data-graph joint graph is the data graph, the correlated
+  // joint graph spans data and circuit slice -- neither depends on the head.
   Graph graph = enc.buildGraph();
   unsigned max_degree = 0;
   if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)

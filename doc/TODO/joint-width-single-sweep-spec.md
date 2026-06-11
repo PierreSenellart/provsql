@@ -89,15 +89,28 @@ cheaper shared-decomposition pass already buys.
 
 ## 4. Scope of the implementation
 
-- Data-graph (TID/BID) regime only — the common per-answer regime. The
-  correlated regime (internal-gate tokens) keeps the per-binding path (the
-  shared-decomposition refactor of `mergedCompile` is mechanical but larger;
-  deferred with the same head-pin primitive).
-- New C SRF `ucq_joint_answers_swept(query, head_vars, facts…)` → `SETOF
-  (head int[], probability float8)`: gather/encode/decompose once, loop the
-  pinned DP over the distinct head tuples in the data.
-- Cross-checked against `ucq_joint_answers` (per-binding): identical answers
-  and probabilities.
+Both regimes share the decomposition the same way; the in-DP head pin is the
+single primitive that makes it sound (it lives in `closeDisjunct`, which both
+regimes use to bind a query variable from a fact).
+
+- **Data-graph (TID/BID) regime.** New C SRF `ucq_joint_answers_swept(query,
+  head_vars, facts…)` → `SETOF (head int[], probability float8)`:
+  gather/encode/decompose once, loop the pinned DP over the distinct head
+  tuples in the data. Cross-checked against `ucq_joint_answers` (per-binding):
+  identical answers and probabilities.
+- **Correlated regime (internal-gate tokens).** `mergedCompile` gained the
+  same optional `shared_td` / `shared_elim` / `head_pin` parameters and threads
+  the pin through its `closeFact` → `closeDisjunct`; `compileImpl` forwards them
+  and `compileAnswers` no longer rejects the correlated encoding. The joint
+  graph spans **data and circuit slice**, but neither depends on the head, so
+  it is built once and only the pinned merged DP (the per-world gate valuation +
+  hom DP) is rerun per answer. New C SRF `ucq_joint_answers_swept_tracked(query,
+  head_vars, head_tuples, fact_rel, fact_elems, fact_arity, fact_tokens)`: the
+  fact tokens are real provenance gates, walked through the circuit **once**
+  (shared `buildTrackedFacts` helper), the correlated encoding + decomposition
+  built once, each answer a pinned sweep. Cross-checked against the standard
+  ladder per group (`test/sql/ucq_joint_correlated.sql`): exact, e.g. two
+  answers q(0)=0.125 (shared e0) and q(5)=0.5 (three facts sharing e3).
 
 ## 5. Benchmark (single sweep vs multiple passes)
 
@@ -132,3 +145,23 @@ turn 10–40× faster than the re-gather-per-group transparent path, whose const
 is dominated by *k* planner substitutions and *k* full relation gathers. The
 transparent path is skipped past k=128 (it is O(k) gathers of O(k·w) data, i.e.
 the row already takes 5 s at k=128 and would dominate the run).
+
+### Correlated regime (R(x) gated by an internal times of shared base events)
+
+`test/bench/ucq_joint_single_sweep_correlated_bench.sql` times the same SRF
+called once-per-answer (k walks + k decompositions + k DPs) against one call
+with all candidates (1 walk + 1 decomposition + k pinned merged DPs) — the two
+differ only by the shared walk+encode+decompose over the joint data+circuit
+graph:
+
+| k (answers) | per-binding ms | swept ms | per-binding / swept |
+|---|---|---|---|
+| 16  | 27.9   | 12.3   | 2.3× |
+| 64  | 452.4  | 171.0  | 2.6× |
+| 128 | 1588.8 | 664.7  | 2.4× |
+| 256 | 6466.1 | 2593.4 | 2.5× |
+
+A steady **~2.3–2.6×**, lower than the data-graph ~3.9× because the pinned
+merged DP (per-world gate valuation + hom DP) is a larger share of each answer's
+cost than the plain hom DP, so amortising the shared stages saves a smaller
+fraction of the whole. Both methods agree on every answer.

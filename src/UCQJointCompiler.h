@@ -147,7 +147,7 @@ struct Answer {
 
 /**
  * @brief Per-answer evaluation in a SINGLE PASS over the shared structure
- *        (data-graph / TID-BID regime only).
+ *        (data-graph / TID-BID **and** correlated regimes).
  *
  * The joint encoding and its tree decomposition are built **once**; each
  * candidate head tuple is then evaluated by one bottom-up sweep with the
@@ -155,10 +155,10 @@ struct Answer {
  * and decomposition are identical across answers).  Equivalent to running
  * @c compile() once per head with the head pinned, but sharing the
  * gather/encode/decompose stages.  Non-answer head tuples (probability 0)
- * are dropped.
+ * are dropped.  The correlated regime shares the joint data+circuit
+ * decomposition the same way; only the pinned merged DP is rerun per answer.
  *
- * @param enc        The joint encoding (must be the data-graph regime;
- *                   throws @c JointCompilerException if correlated).
+ * @param enc        The joint encoding (data-graph or correlated).
  * @param ucq        The UCQ (head variables identified by @p head_vars).
  * @param head_vars  Query-variable indices of the head, canonical across
  *                   disjuncts.

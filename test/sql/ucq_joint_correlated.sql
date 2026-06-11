@@ -114,3 +114,58 @@ CREATE TABLE bid_h0 AS SELECT provenance() tok
 SELECT round((SELECT probability_evaluate(tok) FROM bid_h0)::numeric, 6)
   AS bid_ladder_oracle;
 SET provsql.joint_width = on;
+
+-- ----------------------------------------------------------------------
+-- Per-answer SINGLE SWEEP over correlated inputs
+-- (ucq_joint_answers_swept_tracked).  The H0 query q(x) :- R(x),S(x,y),T(y)
+-- has one answer per x; the tokens are walked once, the correlated joint
+-- encoding + tree decomposition are built once, and each answer is a
+-- head-pinned merged DP sweep.  Two answers, one of them correlated:
+--   x=0 : R(0)=e0&e1, S(0,2)=e0 (e0 SHARED with R(0)), T(2)=e2
+--         -> P = P(e0&e1&e2) = 0.5^3 = 0.125
+--   x=5 : R(5)=e3, S(5,7)=e3, T(7)=e3 (all THREE share e3)
+--         -> P = P(e3) = 0.5
+-- The shared events make neither answer an independent product; the answer
+-- set is cross-checked against the standard ladder evaluated per group.
+CREATE TABLE base2(k int);
+SELECT add_provenance('base2');
+INSERT INTO base2 VALUES (0),(1),(2),(3);
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM base2; END $$;
+
+CREATE TABLE r3 AS
+  SELECT 0 AS x FROM base2 a JOIN base2 b ON true WHERE a.k=0 AND b.k=1
+  UNION ALL SELECT 5 AS x FROM base2 WHERE k=3;
+CREATE TABLE s3 AS
+  SELECT 0 AS x, 2 AS y FROM base2 WHERE k=0
+  UNION ALL SELECT 5 AS x, 7 AS y FROM base2 WHERE k=3;
+CREATE TABLE t3 AS
+  SELECT 2 AS y FROM base2 WHERE k=2
+  UNION ALL SELECT 7 AS y FROM base2 WHERE k=3;
+
+-- Ladder oracle: per-group probability of the H0 join, standard evaluation.
+-- Strip the provenance column the CTAS adds so the cross-check below joins
+-- two plain relations (a tracked relation joined with a multi-output SRF is
+-- not rewritable by the ProvSQL hook).
+SET provsql.joint_width = off;
+CREATE TABLE h0_groups AS
+  SELECT r3.x AS x, probability_evaluate(provenance()) AS p
+    FROM r3, s3, t3 WHERE r3.x = s3.x AND s3.y = t3.y GROUP BY r3.x;
+SELECT remove_provenance('h0_groups');
+SET provsql.joint_width = on;
+
+\echo '== correlated single-sweep per-answer probabilities =='
+CREATE TABLE swept_corr AS
+  SELECT head[1] AS x, probability AS p
+  FROM ucq_joint_answers_swept_tracked(
+    '{"disjuncts":[{"n_vars":2,"atoms":[
+       {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+    ARRAY[0], ARRAY[0, 5],
+    ARRAY[0,0,1,1,2,2], ARRAY[0, 5, 0,2, 5,7, 2, 7], ARRAY[1,1,2,2,1,1],
+    ARRAY[(SELECT provsql FROM r3 WHERE x=0),(SELECT provsql FROM r3 WHERE x=5),
+          (SELECT provsql FROM s3 WHERE x=0),(SELECT provsql FROM s3 WHERE x=5),
+          (SELECT provsql FROM t3 WHERE y=2),(SELECT provsql FROM t3 WHERE y=7)]);
+SELECT x, round(p::numeric, 6) AS p FROM swept_corr ORDER BY x;
+
+\echo '== correlated single-sweep == ladder per group: n_answers, max |diff| =='
+SELECT count(*) AS n_answers, max(abs(sw.p - og.p)) AS max_abs_diff
+FROM swept_corr sw JOIN h0_groups og USING (x);

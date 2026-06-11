@@ -26,3 +26,18 @@ bid_h0
 bid_ladder_oracle
 0.728000
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+== correlated single-sweep per-answer probabilities ==
+x|p
+0|0.125000
+5|0.500000
+(2 rows)
+== correlated single-sweep == ladder per group: n_answers, max |diff| ==
+n_answers|max_abs_diff
+2|0
+(1 row)
