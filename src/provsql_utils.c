@@ -73,6 +73,7 @@ const char *gate_type_name[] = {
   "assumed",
   "annotation",
   "conditioned",
+  "mobius",
   "invalid"
 };
 
@@ -592,6 +593,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
       get_enum_oid(constants.OID_TYPE_GATE_TYPE, "assumed_boolean");
   GET_GATE_TYPE_OID_OPTIONAL(annotation);
   GET_GATE_TYPE_OID_OPTIONAL(conditioned);
+  GET_GATE_TYPE_OID_OPTIONAL(mobius);
 
   constants.ok=true;
 

@@ -77,10 +77,129 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "provsql_utils_cpp.h"
 #include "tool_registry_sync.h"
 #include "semiring/BoolExpr.h"
+#include "mobius_evaluate.h"
 
 using namespace std;
 
 namespace {
+
+// ---------------------------------------------------------------------------
+// Möbius-route probability sweep (safe-UCQ Möbius-inversion route).
+//
+// The Möbius compiler (mobius_evaluate.cpp) materialises a circuit rooted at a
+// gate_mobius signed combination over certified-independent Boolean islands.
+// Its probability is a single linear sweep: the Boolean islands evaluate
+// read-once (independent OR / AND), and at each gate_mobius the children's
+// probabilities are summed with the stored integer coefficients.  gate_mobius
+// nodes nest (an inner MobiusStep is a child of an outer separator's
+// independent-OR), so one unified recursion walks the whole mixed circuit.
+// ---------------------------------------------------------------------------
+double mobiusEvalRec(GenericCircuit &gc, gate_t g, std::map<gate_t,double> &memo)
+{
+  auto it = memo.find(g);
+  if(it != memo.end()) return it->second;
+  CHECK_FOR_INTERRUPTS();
+  double r;
+  switch(gc.getGateType(g)) {
+  case gate_input:    r = gc.getProb(g); break;
+  case gate_one:      r = 1.0; break;
+  case gate_zero:     r = 0.0; break;
+  case gate_times: {
+    r = 1.0;
+    for(gate_t c : gc.getWires(g)) r *= mobiusEvalRec(gc, c, memo);
+    break;
+  }
+  case gate_plus: {          // independent OR (read-once by construction)
+    double pn = 1.0;
+    for(gate_t c : gc.getWires(g)) pn *= (1.0 - mobiusEvalRec(gc, c, memo));
+    r = 1.0 - pn;
+    break;
+  }
+  case gate_monus: {         // monus(one, x) = NOT x
+    const auto &w = gc.getWires(g);
+    if(w.size()!=2)
+      throw CircuitException("mobius: malformed monus gate");
+    r = mobiusEvalRec(gc, w[0], memo) - mobiusEvalRec(gc, w[1], memo);
+    if(r < 0.) r = 0.;
+    break;
+  }
+  case gate_mobius: {        // signed Möbius combination
+    const auto &w = gc.getWires(g);
+    const std::string extra = gc.getExtra(g);
+    // extra is a space-separated list of "uuid:coeff": coefficients keyed by
+    // child UUID, so wire order / dedup does not matter.
+    std::map<std::string,long> co;
+    {
+      std::size_t i = 0;
+      while(i < extra.size()) {
+        while(i < extra.size() && (extra[i]==' '||extra[i]=='\t')) ++i;
+        if(i >= extra.size()) break;
+        std::size_t j = i;
+        while(j < extra.size() && extra[j]!=' ' && extra[j]!='\t') ++j;
+        const std::string tok = extra.substr(i, j-i);
+        const std::size_t colon = tok.rfind(':');
+        if(colon != std::string::npos)
+          co[tok.substr(0,colon)] =
+            std::strtol(tok.substr(colon+1).c_str(), nullptr, 10);
+        i = j;
+      }
+    }
+    double v = 0.;
+    for(std::size_t i=0;i<w.size();++i) {
+      const std::string u = uuid2string(string2uuid(gc.getUUID(w[i])));
+      auto cit = co.find(u);
+      if(cit == co.end())
+        throw CircuitException("mobius: a gate_mobius child has no coefficient");
+      v += static_cast<double>(cit->second) * mobiusEvalRec(gc, w[i], memo);
+    }
+    // The true value is a probability; a small fp excursion is folded away,
+    // a larger one means a compiler bug -- warn (a free sanity check).
+    constexpr double tol = 1e-9;
+    if(v < -tol || v > 1.0 + tol)
+      provsql_warning("mobius: signed combination left [0,1] before clamping "
+                      "(value %g) -- possible compiler bug", v);
+    if(v < 0.) v = 0.; else if(v > 1.) v = 1.;
+    r = v;
+    break;
+  }
+  default:
+    throw CircuitException("mobius: unsupported gate type in the Möbius-route "
+                           "circuit");
+  }
+  memo[g] = r;
+  return r;
+}
+
+double mobiusProbabilityImpl(pg_uuid_t token)
+{
+  // Load the circuit RAW: the load-time simplifier (foldSemiringIdentities /
+  // foldBooleanIdentities) rewrites the gate_mobius children's gates, which
+  // would break the coefficient<->child association.  The Möbius sweep needs
+  // the circuit exactly as the compiler built it.
+  const bool s1 = provsql_simplify_on_load;
+  const bool s2 = provsql_boolean_provenance;
+  const bool s3 = provsql_absorptive_provenance;
+  provsql_simplify_on_load = false;
+  provsql_boolean_provenance = false;
+  provsql_absorptive_provenance = false;
+  double r;
+  try {
+    GenericCircuit gc = getGenericCircuit(token);
+    gate_t root = gc.getGate(uuid2string(token));
+    std::map<gate_t,double> memo;
+    r = mobiusEvalRec(gc, root, memo);
+  } catch(...) {
+    provsql_simplify_on_load = s1;
+    provsql_boolean_provenance = s2;
+    provsql_absorptive_provenance = s3;
+    throw;
+  }
+  provsql_simplify_on_load = s1;
+  provsql_boolean_provenance = s2;
+  provsql_absorptive_provenance = s3;
+  return r;
+}
+
 
 /// Trim leading/trailing ASCII spaces and tabs.
 string trim_arg(const string &s)
@@ -464,6 +583,13 @@ double evaluate_karp_luby(const BooleanCircuit &c,
 }
 
 } // anonymous namespace
+
+/// External entry point for the Möbius-route probability sweep (declared in
+/// mobius_evaluate.h, used by the stats SRF in mobius_evaluate.cpp).
+double mobius_probability_of(pg_uuid_t token)
+{
+  return mobiusProbabilityImpl(token);
+}
 
 /**
  * @brief SIGINT handler that sets the global interrupted flag.
@@ -1758,6 +1884,15 @@ static Datum probability_evaluate_internal
     if(r > 1.) r = 1.; else if(r < 0.) r = 0.;
     PG_RETURN_FLOAT8(r);
   }
+
+  // Möbius-inversion route (safe-UCQ Möbius cancellation): a gate_mobius root
+  // is a signed combination Σ_i coeff_i · P(child_i) over certified-independent
+  // islands.  The measure is the dedicated linear sweep (mobiusProbabilityImpl),
+  // not a semiring / BooleanCircuit evaluation -- the BooleanCircuit has no
+  // gate_mobius and the signed combination is exact, so the method / args are
+  // not consulted (as with gate_conditioned, this is a terminal measure gate).
+  if(gc.getGateType(gc_root) == gate_mobius)
+    PG_RETURN_FLOAT8(mobiusProbabilityImpl(token));
 
   // Inversion-free tractability certificate: the planner wraps the per-row
   // provenance root in a transparent annotation gate carrying the serialised

@@ -484,12 +484,19 @@ SELECT add_provenance('jcyc');
 DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM jcyc; END $$;
 SET provsql.active = on;
 SET provsql.joint_width = on;
+-- Isolate the joint width screen's ladder fallback: with the safe-UCQ Möbius
+-- route on (the default) the tw=1 decline would instead be caught by Möbius (a
+-- gate_mobius token, same probability), so turn it off here to test the
+-- joint->ladder fallback proper (the Möbius interaction is covered in
+-- mobius_safe).
+SET provsql.mobius = off;
 SET provsql.joint_max_treewidth = 10;
 CREATE TEMP TABLE sc_hi AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
 SET provsql.joint_max_treewidth = 1;     -- below the joint treewidth (2): screen declines
 CREATE TEMP TABLE sc_lo AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
 SET provsql.joint_max_treewidth = 10;
 SET provsql.joint_width = off;
+SET provsql.mobius = on;
 CREATE TEMP TABLE sc_off AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
 SET provsql.active = off;
 \echo '== width screen: fires under the bound, declines (falls back) below it, same value =='

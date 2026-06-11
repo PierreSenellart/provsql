@@ -61,7 +61,7 @@ CREATE TYPE provenance_gate AS
                       -- for EVERY evaluator; its UUID folds in @c extra
                       -- so distinct annotations over the same child are
                       -- distinct gates.
-    'conditioned'     -- Conditioning marker: two children
+    'conditioned',    -- Conditioning marker: two children
                       -- [target, evidence].  Evaluated only in the
                       -- measure interpretation: probability_evaluate
                       -- returns P(target ∧ evidence) / P(evidence); the
@@ -71,6 +71,14 @@ CREATE TYPE provenance_gate AS
                       -- nested conditioning folds into a conjunction of
                       -- evidence.  Refused by every general sr_* semiring
                       -- (normalization is not a semiring operation).
+    'mobius'          -- Signed Möbius combination over child islands: one
+                      -- integer coefficient per child in @c extra (the
+                      -- gate_arith precedent), probability_evaluate returns
+                      -- Σ_i coeff_i · P(child_i).  The one new primitive of
+                      -- the safe-UCQ Möbius-inversion route, evaluated only
+                      -- in the measure interpretation; refused by every
+                      -- general sr_* semiring (a signed combination is not a
+                      -- semiring operation).
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -5287,6 +5295,207 @@ EXCEPTION WHEN OTHERS THEN
   -- width too large, ...): fall back to the normal provenance so the
   -- query never fails.  Both give the same probability.
   RETURN fallback;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+-- ===========================================================================
+-- Safe-UCQ Möbius-inversion route (mobius_evaluate.cpp).
+--
+-- The last missing exact route of the Dalvi-Suciu dichotomy: UCQs that are
+-- safe only because the #P-hard terms of their inclusion-exclusion expansion
+-- carry a zero Möbius value on the CNF lattice and cancel (canonical witness:
+-- QW / q9).  Same TID gather as ucq_joint, then the lattice-walking compiler
+-- materialises a gate_mobius-rooted circuit (a signed combination over
+-- certified-independent islands), answered in PTIME data complexity by the
+-- standard probability path.
+-- ===========================================================================
+
+/**
+ * @brief Materialise the safe-UCQ Möbius circuit and return its root token.
+ *        Columnar (TID) interface; see ucq_mobius_provenance for the gather.
+ */
+CREATE OR REPLACE FUNCTION ucq_mobius_materialize_tracked(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[])
+  RETURNS UUID AS
+  'provsql','ucq_mobius_materialize_tracked' LANGUAGE C VOLATILE;
+
+/**
+ * @brief Compile the Möbius circuit and return the lattice statistics plus the
+ *        probability (the demonstrability surface).  @c cancelled_hard is the
+ *        single number that makes the mechanism legible: for q9 the 1 cancelled
+ *        element is #P-hard, so the query is easy only because its hard part
+ *        cancels.
+ */
+CREATE OR REPLACE FUNCTION ucq_mobius_compile_stats(
+  IN disjunct_nvars INT[],
+  IN atom_disjunct INT[],
+  IN atom_rel INT[],
+  IN atom_vars INT[],
+  IN atom_arity INT[],
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  OUT probability DOUBLE PRECISION,
+  OUT n_components INT,
+  OUT n_cnf_conjuncts INT,
+  OUT lattice_size INT,
+  OUT n_nonzero INT,
+  OUT n_cancelled INT,
+  OUT cancelled_hard BOOLEAN,
+  OUT dd_size BIGINT,
+  OUT memo_hits BIGINT)
+  AS 'provsql','ucq_mobius_compile_stats'
+  LANGUAGE C VOLATILE;
+
+/**
+ * @brief Möbius-route provenance from a descriptor (the planner-substituted
+ *        entry point, and the manual one).  Same descriptor and TID gather as
+ *        @c ucq_joint_provenance; on any decline (unsafe shape, cap, not TID)
+ *        returns @p fallback, so a recognised query never fails.
+ */
+CREATE OR REPLACE FUNCTION ucq_mobius_provenance(
+  descriptor JSONB, fallback UUID DEFAULT NULL)
+RETURNS UUID AS $$
+DECLARE
+  legs text; sql text; saved text;
+  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
+  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}';
+  avars int[]:='{}'; aarity int[]:='{}';
+  d jsonb; a jsonb; v text; didx int:=0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
+             rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel,
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val)
+  $q$, legs);
+
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  PERFORM set_config('provsql.active', saved, true);
+
+  RETURN ucq_mobius_materialize_tracked(dnv,adisj,arel,avars,aarity,
+    fact_rel,fact_elems,fact_arity,fact_tokens);
+EXCEPTION WHEN OTHERS THEN
+  RETURN fallback;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+/**
+ * @brief Möbius lattice statistics + probability from a descriptor: the
+ *        demonstrability SRF (mirrors mobius_compile_stats in doc/TODO).  Gathers
+ *        the same TID facts as @c ucq_mobius_provenance, then runs the columnar
+ *        @c ucq_mobius_compile_stats.
+ */
+CREATE OR REPLACE FUNCTION mobius_compile_stats(
+  IN descriptor JSONB,
+  OUT probability DOUBLE PRECISION,
+  OUT n_components INT,
+  OUT n_cnf_conjuncts INT,
+  OUT lattice_size INT,
+  OUT n_nonzero INT,
+  OUT n_cancelled INT,
+  OUT cancelled_hard BOOLEAN,
+  OUT dd_size BIGINT,
+  OUT memo_hits BIGINT)
+RETURNS RECORD AS $$
+DECLARE
+  legs text; sql text; saved text;
+  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
+  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}';
+  avars int[]:='{}'; aarity int[]:='{}';
+  d jsonb; a jsonb; v text; didx int:=0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
+             rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel,
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val)
+  $q$, legs);
+
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  PERFORM set_config('provsql.active', saved, true);
+
+  SELECT s.probability, s.n_components, s.n_cnf_conjuncts, s.lattice_size,
+         s.n_nonzero, s.n_cancelled, s.cancelled_hard, s.dd_size, s.memo_hits
+    INTO probability, n_components, n_cnf_conjuncts, lattice_size,
+         n_nonzero, n_cancelled, cancelled_hard, dd_size, memo_hits
+    FROM ucq_mobius_compile_stats(dnv,adisj,arel,avars,aarity,
+      fact_rel,fact_elems,fact_arity,fact_tokens) s;
 END;
 $$ LANGUAGE plpgsql VOLATILE;
 

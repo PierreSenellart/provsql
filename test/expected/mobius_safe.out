@@ -1,0 +1,40 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+q|probability|n_components|n_cnf_conjuncts|lattice_size|n_nonzero|n_cancelled|cancelled_hard
+phi1|0.855190|4|2|3|3|0|f
+(1 row)
+q|probability
+phi1_token|0.855190
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+q|probability|n_components|n_cancelled|cancelled_hard
+q9|0.574136|4|1|t
+(1 row)
+q|probability
+q9_token|0.574136
+(1 row)
+q|declined
+h0_declines|t
+(1 row)

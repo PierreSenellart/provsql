@@ -230,3 +230,8 @@ test: nested_agg_refuse
 test: ucq_joint
 test: ucq_joint_correlated
 test: ucq_joint_answers
+
+# Safe-UCQ Möbius-inversion route: the last missing exact route of the
+# Dalvi-Suciu dichotomy (UCQs safe only because the #P-hard terms cancel on
+# the CNF lattice; canonical witness q9 / QW)
+test: mobius_safe

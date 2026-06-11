@@ -98,6 +98,7 @@ int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subp
 int provsql_joint_max_treewidth = 10; ///< Maximum joint treewidth the joint-width UCQ compiler attempts before declining (caller falls back to the ladder); @c provsql.joint_max_treewidth GUC
 int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joint-width UCQ compiler (the true safety net); @c provsql.joint_max_states GUC
 bool provsql_joint_width = true; ///< Recognise unsafe UCQs at planner time and route their existence provenance through the joint-width compiler (on by default); the @c provsql.joint_width GUC is a debug-only switch to disable it
+bool provsql_mobius = true; ///< Wire the safe-UCQ Möbius-inversion route as the joint-width compiler's runtime fallback (on by default); the @c provsql.mobius GUC is a debug-only switch to disable it
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
@@ -3919,6 +3920,49 @@ static Expr *build_joint_width_provenance_expr(const constants_t *constants,
 }
 
 /**
+ * @brief Build the @c ucq_mobius_provenance(descriptor, fallback) call.
+ *
+ * The Möbius-inversion route (safe-UCQ Möbius cancellation, the last missing
+ * exact route of the Dalvi-Suciu dichotomy) shares the joint-width descriptor.
+ * It is wired as the runtime fallback of the joint-width call (see
+ * @c make_provenance_expression): the joint-width compiler is tried first
+ * (strict priority -- it is more general on its inputs), and only on its
+ * decline (e.g. the joint treewidth exceeds the cap, as for q9 on adversarial
+ * data) does the Möbius compiler run; on its own decline the @p fallback (the
+ * normal provenance) is returned, so the query never fails.  Returns @c NULL
+ * if the function cannot be resolved (older schema), leaving @p fallback.
+ */
+static Expr *build_mobius_provenance_expr(const constants_t *constants,
+                                          const char *desc, Expr *fallback)
+{
+  FuncCandidateList fcl = FuncnameGetCandidates(
+    list_make2(makeString("provsql"), makeString("ucq_mobius_provenance")),
+    2, NIL, false, false,
+#if PG_VERSION_NUM >= 140000
+    false,
+#endif
+    false);
+  FuncExpr *fe;
+  Const *c;
+  Datum jb;
+
+  if (fcl == NULL)
+    return fallback;
+
+  jb = DirectFunctionCall1(jsonb_in, CStringGetDatum(desc));
+  c = makeConst(JSONBOID, -1, InvalidOid, -1, jb, false, false);
+
+  fe = makeNode(FuncExpr);
+  fe->funcid = fcl->oid;
+  fe->funcresulttype = constants->OID_TYPE_UUID;
+  fe->funcretset = false;
+  fe->funcvariadic = false;
+  fe->args = list_make2(c, fallback);
+  fe->location = -1;
+  return (Expr *) fe;
+}
+
+/**
  * @brief Build the per-answer @c ucq_joint_provenance_answer(...) call for a
  *        recognised non-Boolean UCQ (head variables exposed in the output).
  *
@@ -4419,7 +4463,16 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
    * tractable.  The normal provenance is still built (it is the
    * fallback), so this never makes a query fail. */
   if (jw_desc != NULL && jw_all_exist) {
-    Expr *jw = build_joint_width_provenance_expr(constants, jw_desc, result);
+    /* The Möbius-inversion route shares this descriptor and is wired as the
+     * joint-width compiler's runtime fallback: joint-width keeps strict
+     * priority (more general on its inputs), and only on its decline (e.g.
+     * the joint treewidth exceeds the cap, as q9 does on adversarial data)
+     * does the safe-UCQ Möbius cancellation run, before the normal-provenance
+     * fallback. */
+    Expr *fb = provsql_mobius
+      ? build_mobius_provenance_expr(constants, jw_desc, result)
+      : result;
+    Expr *jw = build_joint_width_provenance_expr(constants, jw_desc, fb);
     if (jw != NULL)
       result = jw;
   } else if (jw_desc != NULL && jw_head_idx != NIL && inv_cert == NULL) {
@@ -13599,6 +13652,29 @@ void _PG_init(void) {
                            "off only to compare against the general lineage "
                            "for debugging.",
                            &provsql_joint_width,
+                           true,
+                           PGC_USERSET,
+                           GUC_NO_SHOW_ALL,
+                           NULL,
+                           NULL,
+                           NULL);
+
+  DefineCustomBoolVariable("provsql.mobius",
+                           "Wire the safe-UCQ Möbius-inversion route as the "
+                           "joint-width compiler's runtime fallback "
+                           "(debug-only switch).",
+                           "On by default. The last missing exact route of the "
+                           "Dalvi-Suciu dichotomy: a UCQ safe only because the "
+                           "#P-hard terms of its inclusion-exclusion expansion "
+                           "carry a zero Möbius value on the CNF lattice and "
+                           "cancel (canonical witness QW / q9).  Shares the "
+                           "joint-width descriptor and is tried only when the "
+                           "joint-width compiler declines (e.g. the joint "
+                           "treewidth exceeds the cap); on its own decline the "
+                           "normal provenance is the fallback, so the query "
+                           "never fails.  Turn off only to compare against the "
+                           "general lineage for debugging.",
+                           &provsql_mobius,
                            true,
                            PGC_USERSET,
                            GUC_NO_SHOW_ALL,
