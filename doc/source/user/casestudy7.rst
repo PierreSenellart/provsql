@@ -291,23 +291,38 @@ both mention it. Now the three variables ``reviewer``, ``paper`` and
 primary key on ``expertise`` does **not** save it: under the FD the topic
 is still shared across papers, so after the FD reduction the query
 remains non-hierarchical (``reviewer`` and ``paper`` overlap on ``bid``
-without nesting). Turn the ``'boolean'`` class on and the provenance
-circuit is unchanged -- the safe-query rewriter finds no safe plan and
-leaves the literal circuit in place -- so ``independent`` errors just as
-it does with the GUC off. (Raising ``provsql.verbose_level`` would log
-the rewriter falling through, but by default you simply observe that the
-circuit, and the error, are the same.)
+without nesting), and the safe-query rewriter finds no safe plan.
 
+Yet under the ``'boolean'`` class ``independent`` still **succeeds**,
+returning ``≈ 0.8818``. The query is #P-hard in its *shape*, but on *this*
+data the **joint** treewidth -- of the data together with its
+correlations -- is bounded, so the joint-width UCQ compiler (on by
+default) recognises the shape at planning time and compiles the
+provenance along a tree decomposition of the data into a certified
+**d-D** that ``independent`` evaluates in linear time. Step 9 returns to
+this hard-and-correlated regime in depth; see also
+:ref:`bounded-joint-width`.
+
+To watch the hardness *without* that optimisation -- the literal lineage
+a generic engine would face -- click the :guilabel:`Semiring` position of
+the provenance toggle, rebuilding the provenance in the **semiring**
+class. Now neither the read-once rewrite nor the joint-width substitution
+fires:
+the provenance is the bushy literal circuit of the cyclic join, and
+``independent`` **errors** -- *"Not an independent circuit"* -- because
+the shared ``topic_of`` leaves make it neither read-once nor certified.
 The result is a single row, so Studio displays its circuit automatically:
-it is visibly bushy.
-Run :guilabel:`Marginal probability` with ``tree-decomposition`` (or any
-external compiler): it succeeds, returning ``≈ 0.8818``. The treewidth is
-**4** (a property of the circuit, not the compiler), against **1** for
-the safe query; compiling it (the *Compiled d-D circuit* option with,
-say, ``d4``) yields a d-DNNF of order a thousand nodes -- against the
-safe query's few dozen -- though the precise representation, and its
-size, depend on the compiler. The hardness is in the shape, and a real
-compiler is what turns it into a number.
+it is visibly bushy. Run :guilabel:`Marginal probability` with
+``tree-decomposition`` (or any external compiler): it succeeds, returning
+the same ``≈ 0.8818``. The treewidth is **4** (a property of the circuit,
+not the compiler), against **1** for the safe query; compiling it (the
+*Compiled d-D circuit* option with, say, ``d4``) yields a d-DNNF of order
+a thousand nodes -- against the safe query's few dozen -- though the
+precise representation, and its size, depend on the compiler. The
+hardness is in the shape, and a real compiler is what turns it into a
+number. The joint-width route took a shortcut past all of this by reading
+the structure off the *data*; the rest of this case study works with the
+literal circuit, the general object every method below operates on.
 
 Step 4: From Circuit to CNF, and Back
 -------------------------------------
@@ -508,15 +523,18 @@ tractable without a compiler.
 Step 9: Hard *and* Correlated -- Bounded Joint Width
 ----------------------------------------------------
 
-Step 3's whole-program coverage was :math:`\#P`-hard in its *shape* and needed
-a compiler; Step 8's ``repair_key`` correlation stayed tractable because the
-query *shape* was safe. What about a query that is **both** -- the hard cyclic
-shape **and** correlated inputs? Lifted inference presumes
-tuple-independence, so the Dalvi-Suciu safe-query rewrite (Steps 1-2) and the
-inversion-free certificate (Step 7) do not apply, and ``independent`` rejects
-the circuit outright.
+Step 3's whole-program coverage was :math:`\#P`-hard in its *shape*, yet
+``independent`` still returned the exact answer: its inputs were
+tuple-independent and the *joint* treewidth of the data was bounded, so the
+joint-width route evaluated it at planning time without ever materialising the
+hard circuit. Step 8's ``repair_key`` correlation stayed tractable for the
+opposite reason: the query *shape* was safe. What about a query that is
+**both** -- the hard cyclic shape **and** correlated inputs? Lifted inference
+presumes tuple-independence, so the Dalvi-Suciu safe-query rewrite (Steps 1-2)
+and the inversion-free certificate (Step 7) do not apply, and ``independent``
+rejects the circuit outright.
 
-ProvSQL has a fourth planner-time escape for exactly this: the **joint-width
+This is where the route already met in Step 3 earns its keep: the **joint-width
 UCQ compiler**. It is the non-recursive sibling of the reachability compiler
 of Step 10: when a :math:`\#P`-hard union of conjunctive queries has bounded
 **joint treewidth** -- the treewidth of the data *together with* its
@@ -526,25 +544,21 @@ compiles its provenance along a tree decomposition of the data into a certified
 every other tractable route, it stays exact over correlated inputs.
 
 Like the safe-query rewrite of Steps 1-2, this is part of the Boolean
-machinery, so it needs the ``'boolean'`` provenance class. Within that class it
+machinery, so it needs the ``'boolean'`` provenance class -- the
+:guilabel:`Boolean` position of the provenance toggle. Within that class it
 is on automatically (the ``provsql.joint_width`` GUC, on by default, is only a
 debug switch to turn it off). Ask the Step-3 cyclic coverage question **per
 paper** -- "for each paper, how competently is it covered?":
 
 .. code-block:: postgresql
 
-    SET provsql.provenance = 'boolean';
-
-    SELECT t.paper, probability_evaluate(provenance())
+    SELECT t.paper, provenance()
     FROM bid b, expertise e, topic_of t
     WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
     GROUP BY t.paper ORDER BY t.paper
 
-The planner substitutes the head-pinned joint-width provenance per group, but
-computes them all in **one pass**: the facts are gathered once, the joint
-graph decomposed once, and a single bottom-up sweep emits one d-D per paper
-(``ucq_joint_provenance_answer`` caches them and hands each group its token).
-The per-paper values match a circuit compiler to full precision -- ``p1``
+In the eval strip, pick :guilabel:`Marginal probability` to read each group's
+value. The per-paper values match a circuit compiler to full precision -- ``p1``
 ``0.425869``, ``p4`` ``0.300776`` -- so the marginal you read back is the
 exact one, produced from the *data* treewidth without an external tool.
 
@@ -557,18 +571,20 @@ Step 8 -- "is any paper covered by its *assigned* expert reviewer?":
     FROM assignment a, expertise e, topic_of t
     WHERE a.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = a.paper
 
-``independent`` rejects this (*"Not an independent circuit"*: a reviewer's
-candidate papers are mutually exclusive, so the lineage is neither
-tuple-independent nor read-once), and the safe and inversion-free routes do
-not apply to the cyclic shape. Yet ProvSQL returns the exact ``0.735868`` from
-the joint-width route, because the joint treewidth -- the data graph
-*together with* the ``repair_key`` exclusion blocks -- is bounded. This is the
-one cell of the method comparison that nothing else fills: a query that is at
-once :math:`\#P`-hard *and* over correlated inputs, evaluated exactly and in
-linear data time. (Setting ``provsql.joint_width = off`` reverts ``provenance()``
-to the literal circuit of Steps 3-5, leaving an external compiler to handle the
-correlated circuit and ``independent`` to reject it, so you can see the two
-routes side by side; see :doc:`the tractable-cases table <probabilities>`.)
+On the literal circuit ``independent`` rejects this (*"Not an independent
+circuit"*: a reviewer's candidate papers are mutually exclusive, so the lineage
+is neither tuple-independent nor read-once), and the safe and inversion-free
+routes do not apply to the cyclic shape. The joint-width route compiles it
+anyway: the joint treewidth -- the data graph *together with* the ``repair_key``
+exclusion blocks -- is bounded, so ProvSQL builds a certified **d-D** (each
+exclusion block stick-broken into shared independent events) that
+``independent`` evaluates to the exact ``0.735868``. This is the one cell of the
+method comparison that nothing else fills: a query that is at once
+:math:`\#P`-hard *and* over correlated inputs, evaluated exactly and in linear
+data time. (Set ``provsql.joint_width = off`` and ``provenance()`` reverts to the
+literal circuit of Steps 3-5, where ``independent`` rejects it and a heavier
+method must take over, so you can see the two routes side by side; see
+:doc:`the tractable-cases table <probabilities>`.)
 
 Step 10: Recursive Lineage -- Reachability and Reliability
 ----------------------------------------------------------
