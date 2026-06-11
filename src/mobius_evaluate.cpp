@@ -242,9 +242,23 @@ class MobiusCompiler {
 public:
   MobiusCompiler(const FactIndex &fi, MobiusStats &st) : fi(fi), st(st) {}
 
-  /// Compile the top sentence, returning the root token.
-  pg_uuid_t compileTop(const Sentence &s) {
-    return compile(s, /*top=*/true);
+  /// Compile the top sentence, returning the root token.  @p lineage is the
+  /// token of the literal Boolean provenance of the query (the normal lineage
+  /// the route falls back to); it is carried on the root gate_mobius as a
+  /// designated transparent child so every non-probability evaluator (semiring,
+  /// Shapley, Banzhaf, PROV export) sees the literal lineage and works, while
+  /// probability uses the signed Möbius combination.  Empty = no lineage
+  /// (measure-only; the manual descriptor entry points without a fallback).
+  pg_uuid_t compileTop(const Sentence &s, const std::string &lineage = "") {
+    pending_lineage = lineage;
+    lineage_consumed = false;
+    pg_uuid_t root = compile(s, /*top=*/true);
+    if(!lineage.empty() && !lineage_consumed)
+      // The top did not go through a Möbius step (e.g. a safe query that
+      // reached this route): wrap it in a thin gate_mobius selector carrying
+      // the lineage and the value with coefficient 1.
+      root = mkMobius({root}, {1}, lineage);
+    return root;
   }
 
 private:
@@ -252,6 +266,8 @@ private:
   MobiusStats &st;
   std::unordered_map<std::string, std::string> memo;  // key -> uuid string
   std::unordered_set<std::string> created;
+  std::string pending_lineage;   // lineage to inline into the top Möbius step
+  bool lineage_consumed = false;
 
   // -- materialisation -----------------------------------------------------
 
@@ -297,8 +313,11 @@ private:
   /// @c extra), so evaluation is robust to any child reordering / dedup the
   /// store may apply; duplicate children are merged (coefficients summed) and
   /// zero-coefficient children dropped.
+  /// @p lineage (optional): the literal-lineage token, carried as a
+  /// designated transparent child marked @c "L:<uuid>" in @c extra (child 0).
   pg_uuid_t mkMobius(const std::vector<pg_uuid_t> &children,
-                     const std::vector<long> &coeffs) {
+                     const std::vector<long> &coeffs,
+                     const std::string &lineage = "") {
     std::map<std::string,long> bycoeff;
     std::vector<std::string> order;
     for(std::size_t i=0;i<children.size();++i) {
@@ -308,6 +327,11 @@ private:
     }
     std::vector<pg_uuid_t> ch;
     std::string extra, name = "mobius[";
+    if(!lineage.empty()) {
+      ch.push_back(string2uuid(lineage));     // the literal lineage, child 0
+      extra += "L:" + lineage + " ";
+      name  += "L:" + lineage + ",";
+    }
     for(const std::string &u : order) {
       if(bycoeff[u]==0) continue;
       ch.push_back(string2uuid(u));
@@ -315,8 +339,8 @@ private:
       name  += u + ":" + std::to_string(bycoeff[u]) + ",";
     }
     name += "]";
-    if(ch.empty())
-      return mkConst(false);
+    if(ch.empty() || (!lineage.empty() && ch.size()==1))
+      return mkConst(false);   // no surviving combination -> probability 0
     pg_uuid_t u = provsqlUuidV5(name);
     if(created.insert(uuid2string(u)).second) {
       provsql_internal_create_gate(&u, gate_mobius,
@@ -604,6 +628,13 @@ pg_uuid_t MobiusCompiler::mobiusStep(const Sentence &s, bool top)
 
   if(children.empty())
     return mkConst(false);
+  // The top-level Möbius step inlines the literal lineage onto its own gate so
+  // the root gate_mobius carries it directly (single level); nested steps do
+  // not (their values are discarded by the transparent-to-lineage passthrough).
+  if(top && !pending_lineage.empty()) {
+    lineage_consumed = true;
+    return mkMobius(children, coeffs, pending_lineage);
+  }
   return mkMobius(children, coeffs);
 }
 
@@ -987,20 +1018,28 @@ bool mobGather(Datum descriptor, MobAnswerCache *c)
  * Columnar arguments (mirrors @c ucq_joint_materialize_tracked, TID inputs):
  *   0..4 disjunct_nvars, atom_disjunct, atom_rel, atom_vars, atom_arity
  *   5..8 fact_rel, fact_elems, fact_arity, fact_tokens
+ *   9    lineage (uuid, optional): the literal Boolean provenance of the query,
+ *        carried on the root gate_mobius so the token still answers Shapley /
+ *        semiring / PROV on the normal lineage (the Möbius combination is a
+ *        probability-only shortcut layered over it).
  *
- * The root is a @c gate_mobius whose children are certified-independent
- * Boolean islands; @c probability_evaluate later answers the #P-hard UCQ in
- * PTIME data complexity through the standard token entry point.  Declines
- * (unsafe shape, cap, ...) raise an error so the SQL wrapper falls back.
+ * The root is a @c gate_mobius carrying the certified-independent Boolean
+ * islands (the signed combination) and the lineage child; @c probability_evaluate
+ * answers the #P-hard UCQ in PTIME through the fast Möbius route, and every other
+ * evaluator passes through to the lineage.  Declines raise an error so the SQL
+ * wrapper falls back.
  */
 Datum ucq_mobius_materialize_tracked(PG_FUNCTION_ARGS)
 {
   try {
     Sentence s = decodeQuery(fcinfo);
     FactIndex fi = decodeFacts(fcinfo);
+    std::string lineage;
+    if(!PG_ARGISNULL(9))
+      lineage = uuid2string(*PG_GETARG_UUID_P(9));
     MobiusStats st;
     MobiusCompiler mc(fi, st);
-    pg_uuid_t root = mc.compileTop(s);
+    pg_uuid_t root = mc.compileTop(s, lineage);
     pg_uuid_t *u = (pg_uuid_t*) palloc(sizeof(pg_uuid_t));
     *u = root;
     PG_RETURN_UUID_P(u);
@@ -1149,9 +1188,15 @@ Datum ucq_mobius_provenance_answer(PG_FUNCTION_ARGS)
           }
         }
         if(resolved) {
+          // The per-group literal lineage (the normal per-answer provenance,
+          // argument 3) is carried on the gate_mobius so this answer's token
+          // still answers Shapley / semiring on its normal lineage.
+          std::string lineage;
+          if(!PG_ARGISNULL(3))
+            lineage = uuid2string(*PG_GETARG_UUID_P(3));
           MobiusStats st;
           MobiusCompiler mc(cache->fi, st);
-          pg_uuid_t root = mc.compileTop(s);
+          pg_uuid_t root = mc.compileTop(s, lineage);
           cache->tokcache[key] = uuid2string(root);
           pg_uuid_t *u = (pg_uuid_t*) palloc(sizeof(pg_uuid_t));
           *u = root;

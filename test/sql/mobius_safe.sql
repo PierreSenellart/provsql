@@ -150,12 +150,49 @@ CREATE TEMP TABLE q9auto AS
     SELECT 1 FROM mob_r d, mob_s1 d1, mob_s1 d1b, mob_s2 d2, mob_s2 d2b, mob_s3 d3
       WHERE d.x=d1.x AND d1b.x=d2.x AND d1b.y=d2.y AND d2b.x=d3.x AND d2b.y=d3.y
   ) qq;
+-- The literal lineage of the same query (the normal provenance), to cross-check
+-- that the Möbius token preserves every non-probability evaluation.
+SET provsql.mobius = off;
+SET provsql.joint_width = off;
+CREATE TEMP TABLE q9lit AS
+  SELECT provenance() AS tok FROM (
+    SELECT 1 FROM mob_r, mob_s1 a1, mob_s3 a3, mob_t t3
+      WHERE mob_r.x=a1.x AND a3.y=t3.y
+    UNION
+    SELECT 1 FROM mob_s1 b1, mob_s2 b2, mob_s3 b3, mob_t tb
+      WHERE b1.x=b2.x AND b1.y=b2.y AND b3.y=tb.y
+    UNION
+    SELECT 1 FROM mob_s2 c2, mob_s3 c3, mob_s3 c3b, mob_t tc
+      WHERE c2.x=c3.x AND c2.y=c3.y AND c3b.y=tc.y
+    UNION
+    SELECT 1 FROM mob_r d, mob_s1 d1, mob_s1 d1b, mob_s2 d2, mob_s2 d2b, mob_s3 d3
+      WHERE d.x=d1.x AND d1b.x=d2.x AND d1b.y=d2.y AND d2b.x=d3.x AND d2b.y=d3.y
+  ) qq;
 SET provsql.active = off;
 SET provsql.joint_max_treewidth = 10;
+SET provsql.mobius = on;
+SET provsql.joint_width = on;
 SELECT 'q9_planner' AS q,
        provsql.get_gate_type(tok) AS root_gate,
        round(provsql.probability_evaluate(tok)::numeric,6) AS probability
   FROM q9auto;
+
+-- The Möbius token is the inversion-free model, not a measure-only gate: it
+-- carries the literal lineage, so the default route uses the fast Möbius
+-- combination while every OTHER evaluation (a named probability method,
+-- Shapley, ...) passes through to the normal provenance and matches evaluating
+-- that lineage directly.
+SELECT 'mobius_keeps_evaluations' AS q,
+       round(provsql.probability_evaluate(m.tok)::numeric,6)
+         = round(provsql.probability_evaluate(m.tok,'possible-worlds')::numeric,6)
+         AS pw_matches_default,
+       round(provsql.probability_evaluate(m.tok,'possible-worlds')::numeric,6)
+         = round(provsql.probability_evaluate(l.tok,'possible-worlds')::numeric,6)
+         AS pw_matches_lineage,
+       round(provsql.shapley(m.tok,(SELECT provsql FROM mob_r WHERE x=1))::numeric,6)
+         = round(provsql.shapley(l.tok,(SELECT provsql FROM mob_r WHERE x=1))::numeric,6)
+         AS shapley_matches_lineage
+  FROM q9auto m, q9lit l;
 
 -- ===========================================================================
 -- Per-answer (free head variable): grouped Φ₁ over R(g,x), S(g,x,y), T(g,y),

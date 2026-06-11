@@ -295,6 +295,35 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
               "(probability_evaluate, or the random-variable / agg_token "
               "distribution evaluators).");
 
+    case gate_mobius: {
+      /* The signed Möbius combination is a probability-only shortcut layered
+       * over the normal provenance: the gate carries the literal lineage as a
+       * designated child marked "L:<uuid>" in extra.  Every non-probability
+       * evaluator (this semiring path, hence Shapley / Banzhaf / PROV export)
+       * is TRANSPARENT to that lineage, so the token behaves like the ordinary
+       * provenance of the query.  A nested gate_mobius (an inner
+       * inclusion-exclusion step) carries no lineage: its value is never used
+       * (the root passes through to the top lineage), but it must not throw, so
+       * it falls back to its first child. */
+      const std::string ex = getExtra(u);
+      gate_t lineage = u;   // sentinel: not found
+      const std::string key = "L:";
+      std::size_t p = ex.find(key);
+      if(p != std::string::npos) {
+        std::size_t e = ex.find(' ', p);
+        const std::string luid =
+          ex.substr(p + key.size(),
+                    e == std::string::npos ? std::string::npos : e - p - key.size());
+        for(const auto &c : getWires(u))
+          if(getUUID(c) == luid) { lineage = c; break; }
+      }
+      if(lineage != u)
+        provenance_mapping.emplace(u, provenance_mapping.at(lineage));
+      else
+        provenance_mapping.emplace(u, childValue(0));
+      break;
+    }
+
     default:
       throw CircuitException("Invalid gate type for semiring evaluation");
     }

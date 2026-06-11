@@ -5323,7 +5323,8 @@ CREATE OR REPLACE FUNCTION ucq_mobius_materialize_tracked(
   fact_rel INT[],
   fact_elems INT[],
   fact_arity INT[],
-  fact_tokens UUID[])
+  fact_tokens UUID[],
+  lineage UUID DEFAULT NULL)
   RETURNS UUID AS
   'provsql','ucq_mobius_materialize_tracked' LANGUAGE C VOLATILE;
 
@@ -5415,8 +5416,11 @@ BEGIN
   EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
   PERFORM set_config('provsql.active', saved, true);
 
+  -- Pass the normal-provenance fallback as the lineage: it is carried on the
+  -- gate_mobius so the token still answers Shapley / semiring / PROV on the
+  -- literal lineage (the Möbius combination is a probability-only shortcut).
   RETURN ucq_mobius_materialize_tracked(dnv,adisj,arel,avars,aarity,
-    fact_rel,fact_elems,fact_arity,fact_tokens);
+    fact_rel,fact_elems,fact_arity,fact_tokens, fallback);
 EXCEPTION WHEN OTHERS THEN
   RETURN fallback;
 END;

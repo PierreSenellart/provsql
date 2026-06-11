@@ -681,13 +681,20 @@ DISTINCT`` / ``GROUP BY`` over a ``UNION``), and answers
           AND c.x = s3.x AND c.y = s3.y
     ) q;
 
-The per-row token is rooted at a single new measure gate -- a *signed
-Möbius combination* over its certified-independent children -- which the
-probability sweep evaluates in one linear pass (the islands read-once, the
-root a signed sum of their probabilities).  Because that root is not a
-Boolean gate, the token answers probability but not the Boolean-provenance
-surfaces (Shapley, possible-worlds export); this is inherent, since the
-class has no polynomial Boolean circuit.
+The per-row token is rooted at a single new gate -- a *signed Möbius
+combination* over its certified-independent children -- which the default
+probability route evaluates in one linear pass (the islands read-once, the
+root a signed sum of their probabilities).  Crucially, this is a
+**probability shortcut layered over the normal provenance**, not a
+replacement for it (the model is the ``inversion-free`` certificate, not a
+measure-only gate): the gate carries the query's **literal lineage** as a
+transparent child, so every
+*other* evaluation -- ``shapley``, ``banzhaf``, a named probability method
+such as ``possible-worlds``, PROV export -- passes straight through to that
+lineage and answers exactly as it would for the ordinary provenance of the
+query (necessarily slower, since the class has no polynomial Boolean
+circuit, but available).  Only the default / ``mobius`` probability takes
+the fast cancelling route.
 
 The route keeps **strict priority** behind everything cheaper: the
 safe-query rewrite, the inversion-free certificate, and the joint-width
@@ -953,11 +960,14 @@ Each method in detail:
     :math:`Q_W` class).  It applies to a token whose root is the signed
     ``gate_mobius`` combination the planner substitutes for such a query; it
     is a linear sweep that sums the certified-independent islands'
-    probabilities with the stored integer coefficients, and it errors on any
-    other token (the combination is not a Boolean circuit, so no other method
-    can evaluate it).  The default strategy already takes this path
-    automatically for a ``gate_mobius``-rooted token, so naming it explicitly
-    is mainly useful for testing:
+    probabilities with the stored integer coefficients (it errors on a token
+    that is not ``gate_mobius``-rooted).  This is the *fast* route only: the
+    gate carries the query's literal lineage, so naming **another** method on
+    the same token (``'possible-worlds'``, ``'monte-carlo'``, ...), or asking
+    for ``shapley`` / ``banzhaf``, evaluates that lineage instead and returns
+    the same exact answer (slower).  The default strategy already takes the
+    fast Möbius path automatically for a ``gate_mobius``-rooted token, so
+    naming it explicitly is mainly useful for testing:
 
     .. code-block:: postgresql
 

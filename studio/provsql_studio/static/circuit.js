@@ -169,9 +169,14 @@
   // coefficient (+1, −1, …) on the edge -- the value is Σ_i c_i·P(child_i).
   function _mobiusEdgeLabel(parent, child_pos) {
     if (!parent.extra) return null;
+    // extra: "uuid:coeff ..." plus an optional "L:<uuid>" naming the literal
+    // lineage child (carried so the token still answers Shapley / semiring on
+    // the normal provenance; the Möbius combination is a probability shortcut).
     const coeffs = {};
+    let lineage = null;
     for (const tok of parent.extra.split(/\s+/)) {
       if (!tok) continue;
+      if (tok.startsWith('L:')) { lineage = tok.slice(2); continue; }
       const i = tok.lastIndexOf(':');
       if (i > 0) coeffs[tok.slice(0, i)] = tok.slice(i + 1);
     }
@@ -179,6 +184,7 @@
     const edge = state.scene.edges.find(
       e => e.from === parent.id && e.child_pos === child_pos);
     if (!edge) return null;
+    if (lineage && edge.to === lineage) return 'lineage';
     const c = coeffs[edge.to];
     if (c == null) return null;
     const n = Number(c);

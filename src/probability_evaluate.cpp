@@ -126,9 +126,12 @@ double mobiusEvalRec(GenericCircuit &gc, gate_t g, std::map<gate_t,double> &memo
   case gate_mobius: {        // signed Möbius combination
     const auto &w = gc.getWires(g);
     const std::string extra = gc.getExtra(g);
-    // extra is a space-separated list of "uuid:coeff": coefficients keyed by
-    // child UUID, so wire order / dedup does not matter.
+    // extra is a space-separated list of "uuid:coeff" (coefficients keyed by
+    // child UUID, so wire order / dedup do not matter), plus an optional
+    // "L:<uuid>" naming the literal-lineage child, which the probability
+    // shortcut ignores (it is there only for the non-probability evaluators).
     std::map<std::string,long> co;
+    std::string lineage;
     {
       std::size_t i = 0;
       while(i < extra.size()) {
@@ -137,16 +140,22 @@ double mobiusEvalRec(GenericCircuit &gc, gate_t g, std::map<gate_t,double> &memo
         std::size_t j = i;
         while(j < extra.size() && extra[j]!=' ' && extra[j]!='\t') ++j;
         const std::string tok = extra.substr(i, j-i);
-        const std::size_t colon = tok.rfind(':');
-        if(colon != std::string::npos)
-          co[tok.substr(0,colon)] =
-            std::strtol(tok.substr(colon+1).c_str(), nullptr, 10);
+        if(tok.size()>2 && tok[0]=='L' && tok[1]==':')
+          lineage = tok.substr(2);
+        else {
+          const std::size_t colon = tok.rfind(':');
+          if(colon != std::string::npos)
+            co[tok.substr(0,colon)] =
+              std::strtol(tok.substr(colon+1).c_str(), nullptr, 10);
+        }
         i = j;
       }
     }
     double v = 0.;
     for(std::size_t i=0;i<w.size();++i) {
       const std::string u = uuid2string(string2uuid(gc.getUUID(w[i])));
+      if(u == lineage)
+        continue;                            // the literal lineage: not summed
       auto cit = co.find(u);
       if(cit == co.end())
         throw CircuitException("mobius: a gate_mobius child has no coefficient");
@@ -168,6 +177,35 @@ double mobiusEvalRec(GenericCircuit &gc, gate_t g, std::map<gate_t,double> &memo
   }
   memo[g] = r;
   return r;
+}
+
+/// The literal-lineage child UUID of a gate_mobius-rooted @p token (the "L:"
+/// entry in extra), read from the RAW circuit -- the load-time simplifier may
+/// strip the gate_mobius extra, so a simplified read is unreliable.  Empty if
+/// the token carries no lineage (a measure-only build).
+std::string mobiusLineageOf(pg_uuid_t token)
+{
+  const bool s1 = provsql_simplify_on_load;
+  const bool s2 = provsql_boolean_provenance;
+  const bool s3 = provsql_absorptive_provenance;
+  provsql_simplify_on_load = false;
+  provsql_boolean_provenance = false;
+  provsql_absorptive_provenance = false;
+  std::string lineage;
+  try {
+    GenericCircuit gc = getGenericCircuit(token);
+    const std::string ex = gc.getExtra(gc.getGate(uuid2string(token)));
+    const std::size_t p = ex.find("L:");
+    if(p != std::string::npos) {
+      const std::size_t e = ex.find(' ', p);
+      lineage = ex.substr(p + 2,
+                          e == std::string::npos ? std::string::npos : e - p - 2);
+    }
+  } catch(...) { /* leave empty */ }
+  provsql_simplify_on_load = s1;
+  provsql_boolean_provenance = s2;
+  provsql_absorptive_provenance = s3;
+  return lineage;
 }
 
 double mobiusProbabilityImpl(pg_uuid_t token)
@@ -1921,28 +1959,35 @@ static Datum probability_evaluate_internal
 
   // Möbius-inversion route (safe-UCQ Möbius cancellation): a gate_mobius root
   // is a signed combination Σ_i coeff_i · P(child_i) over certified-independent
-  // islands.  It is a non-Boolean measure gate, so it cannot become a
-  // BooleanCircuit and is routed straight to the dedicated 'mobius' method --
-  // modelled on 'inversion-free' (a first-class, by-name-invocable catalog
-  // method), not the gate_conditioned terminal special-case.  The default /
-  // exact / empty request and an explicit 'mobius' both run it; any other
-  // explicit method is an error (the token is not a Boolean circuit).
+  // islands -- a probability-only shortcut layered over the normal provenance,
+  // which it carries as a designated "L:<uuid>" lineage child (modelled on
+  // 'inversion-free').  The default / exact / empty request and an explicit
+  // 'mobius' run the fast Möbius route; any OTHER named method is evaluated on
+  // the literal lineage (the same exact probability via, e.g., possible-worlds
+  // or monte-carlo -- slower, but the user keeps every method).
   if(gc.getGateType(gc_root) == gate_mobius) {
     const bool is_path =
       method.empty() || method == "default" || method == "exact";
-    if(!is_path && method != "mobius")
-      provsql_error("method '%s' cannot evaluate a Möbius-route token: it is a "
-                    "signed combination over certified-independent islands; use "
-                    "'mobius' (the default for such tokens)", method.c_str());
-    BooleanCircuit dummy;
-    gate_t dummygate{};
-    std::unordered_map<gate_t, gate_t> dummymap;
-    provsql::EvalContext ctx{&gc, gc_root, token, dummy, dummygate, &dummymap,
-                             /*inv_free_cert=*/false, args,
-                             /*explicitly_named=*/!is_path, 0, 0};
-    PG_RETURN_FLOAT8(
-      provsql::MethodCatalog::instance().byName("mobius")->evaluate(
-        ctx, provsql::Tolerance{}));
+    if(is_path || method == "mobius") {
+      BooleanCircuit dummy;
+      gate_t dummygate{};
+      std::unordered_map<gate_t, gate_t> dummymap;
+      provsql::EvalContext ctx{&gc, gc_root, token, dummy, dummygate, &dummymap,
+                               /*inv_free_cert=*/false, args,
+                               /*explicitly_named=*/!is_path, 0, 0};
+      PG_RETURN_FLOAT8(
+        provsql::MethodCatalog::instance().byName("mobius")->evaluate(
+          ctx, provsql::Tolerance{}));
+    }
+    // Another named method: fall through to the literal lineage (the "L:"
+    // child, read from the raw circuit) and recurse with the requested method.
+    const std::string lineage = mobiusLineageOf(token);
+    if(lineage.empty())
+      provsql_error("method '%s': this Möbius-route token carries no literal "
+                    "lineage (it was built measure-only); only the default / "
+                    "'mobius' method applies", method.c_str());
+    return probability_evaluate_internal(string2uuid(lineage), method, args,
+                                         isnull);
   }
 
   // Inversion-free tractability certificate: the planner wraps the per-row
