@@ -283,6 +283,10 @@ treewidth relevant to each row (lineage, data, or joint treewidth), and
    | the data and its         |                        |                         |                                         | ``independent``                                          |
    | annotation               |                        |                         |                                         |                                                          |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
+   | any         | TID        | safe UCQ needing       |                         | :cite:`DBLP:journals/jacm/DalviS12`     | :ref:`Möbius compiler <safe-ucq-mobius>`, then           |
+   |             |            | Möbius inversion       | :math:`O(|D|^k)`        |                                         | the signed Möbius sweep over ``independent``             |
+   |             |            | (self-join-free)       |                         |                                         | islands                                                  |
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
 
 For the exact guarantee, the :ref:`cost-based chooser <probability-guarantees>`
 always tries ``independent`` and ``inversion-free`` when their certificate
@@ -608,6 +612,92 @@ chooser; set ``provsql.verbose_level`` to confirm which route ran.
 
 :doc:`Case Study 7 <casestudy7>`, Step 9, walks a worked example over
 both independent and :sqlfunc:`repair_key`-correlated reviewing data.
+
+.. _safe-ucq-mobius:
+
+Safe UCQs that need Möbius inversion
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The query-side routes above stop short of one corner of the
+Dalvi-Suciu dichotomy: unions of conjunctive queries that are
+**safe** -- PTIME data complexity -- yet are neither hierarchical nor
+inversion-free, so they are tractable *only because* the :math:`\#P`-hard
+terms of their inclusion-exclusion expansion cancel.  The canonical
+witness, due to Dalvi & Suciu and named :math:`q_9` / :math:`Q_W`, is
+built from the four hard-boundary patterns
+:math:`h_0=R(x),S_1(x,y)`, :math:`h_1=S_1(x,y),S_2(x,y)`,
+:math:`h_2=S_2(x,y),S_3(x,y)`, :math:`h_3=S_3(x,y),T(y)` as
+
+.. math::
+
+   q_9 = (h_2\vee h_3)\wedge(h_0\vee h_3)\wedge(h_1\vee h_3)
+         \wedge(h_0\vee h_1\vee h_2).
+
+Writing :math:`P(q_9)` by inclusion-exclusion on the CNF lattice and
+grouping the terms up to logical equivalence, the conjunction of all
+four patterns -- the one :math:`\#P`-hard element, with no separator --
+acquires a **zero Möbius coefficient** and never has to be evaluated;
+every surviving term is a safe disjunctive sentence.  ProvSQL computes
+this exactly: it builds the CNF lattice over the disjuncts' connected
+components, collapses elements up to logical equivalence (homomorphism),
+reads off the integer coefficients, and recurses by the standard
+lifted-inference steps (independent union of disjoint vocabularies, an
+independent project at a *separator* variable, an inner Möbius step) down
+to read-once islands over the data :cite:`DBLP:journals/jacm/DalviS12`.
+(The lattice / Möbius computation follows Dalvi, Schnaitter & Suciu,
+*Computing query probability with incidence algebras*, PODS 2010; Monet &
+Olteanu, AMW 2018, compute these lattices at scale.)  The route is the
+first integration of this complete safe-UCQ step in a query planner;
+:math:`q_9` provably has no polynomial OBDD / FBDD / d-DNNF
+:cite:`DBLP:journals/mst/AmarilliCMS20`, so a polynomial circuit *must*
+use subtraction somewhere -- here, at the root.
+
+Like the joint-width route, it is part of the Boolean machinery, fires
+**automatically** when a UCQ-existence shape the safe-query rewriter and
+the inversion-free certifier both declined is formed (a ``SELECT
+DISTINCT`` / ``GROUP BY`` over a ``UNION``), and answers
+``probability_evaluate(provenance())`` exactly with no method named:
+
+.. code-block:: postgresql
+
+    SET provsql.provenance = 'boolean';
+
+    -- q9 / QW: #P-hard, exact only because its hard part cancels.
+    -- Each UNION arm is one disjunct (a conjunction of the h_i); the
+    -- existence is formed by the UNION dedup.
+    SELECT probability_evaluate(provenance())
+    FROM (
+      SELECT 1 FROM r, s1, s3 a, t        -- h0, h3
+        WHERE r.x = s1.x AND a.y = t.y
+      UNION
+      SELECT 1 FROM s1, s2, s3 a, t       -- h1, h3
+        WHERE s1.x = s2.x AND s1.y = s2.y AND a.y = t.y
+      UNION
+      SELECT 1 FROM s2, s3, s3 b, t       -- h2, h3
+        WHERE s2.x = s3.x AND s2.y = s3.y AND b.y = t.y
+      UNION
+      SELECT 1 FROM r, s1, s1 b, s2, s2 c, s3   -- h0, h1, h2
+        WHERE r.x = s1.x AND b.x = s2.x AND b.y = s2.y
+          AND c.x = s3.x AND c.y = s3.y
+    ) q;
+
+The per-row token is rooted at a single new measure gate -- a *signed
+Möbius combination* over its certified-independent children -- which the
+probability sweep evaluates in one linear pass (the islands read-once, the
+root a signed sum of their probabilities).  Because that root is not a
+Boolean gate, the token answers probability but not the Boolean-provenance
+surfaces (Shapley, possible-worlds export); this is inherent, since the
+class has no polynomial Boolean circuit.
+
+The route keeps **strict priority** behind everything cheaper: the
+safe-query rewrite, the inversion-free certificate, and the joint-width
+compiler all run first, and it fires only when the joint-width screen
+declines.  Inputs must be tuple-independent (lifted inference is sound
+only under independence); v1 supports *reduced-form* UCQs (no relation
+repeated within a single conjunct's homomorphic core, no constants).
+Anything outside that simply does not fire and the query falls back to
+the literal circuit and the general chooser.  The ``provsql.mobius`` GUC,
+on by default, is a debug switch to turn the recognition off.
 
 .. _forcing-a-method:
 
