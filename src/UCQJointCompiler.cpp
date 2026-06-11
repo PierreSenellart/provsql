@@ -37,6 +37,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -393,6 +394,118 @@ State join(const QueryCtx &q, const State &s1, const State &s2)
 // ToCS 2020), run over the joint graph (element + gate vertices).
 // ---------------------------------------------------------------------
 
+/**
+ * @brief Number of *essential* (enumerating) variables of a disjunct.
+ *
+ * The exponential parameter of the DP is not every join variable but only
+ * those that must be enumerated: a variable functionally determined by others
+ * does not multiply the partial-homomorphism state.  This returns the size of
+ * a minimum set @c S of join variables whose FD closure covers all of them
+ * (the @c e of the @f$2^{O(k^e)}@f$ bound).
+ *
+ * The FDs are **mined from the gathered tuples** (@p enc.facts, already
+ * post-selection): a column set determines a column when no two tuples of the
+ * relation agree on the former and differ on the latter.  This captures any
+ * declared key (which necessarily holds on the data) along with FDs incidental
+ * to this instance, and needs no catalog lookup.  The closure is sound for the
+ * instance being compiled: if the FD holds on these tuples the variable is
+ * genuinely fixed in every world of this computation.
+ *
+ * The minimum-cover search is @f$2^{|V|}@f$ in the join-variable count @c |V|;
+ * above @c MAX_FD_VARS it is skipped and the full count returned (a sound upper
+ * bound), the design target being a handful of enumerating variables.
+ */
+unsigned essentialVarCount(const CQ &cq, const std::vector<bool> &appears,
+                           const JointEncoding &enc)
+{
+  std::vector<unsigned> V;          // the join variables
+  for (unsigned v = 0; v < cq.n_vars; ++v)
+    if (appears[v])
+      V.push_back(v);
+  const unsigned nV = static_cast<unsigned>(V.size());
+  static constexpr unsigned MAX_FD_VARS = 12;
+  if (nV <= 1 || nV > MAX_FD_VARS)
+    return nV;
+
+  // Tuples per (relation, arity), as pointers into enc.facts.
+  std::map<std::pair<unsigned, std::size_t>,
+           std::vector<const std::vector<unsigned long> *> > byrel;
+  for (const Fact &f : enc.facts)
+    byrel[{f.relation_id, f.elements.size()}].push_back(&f.elements);
+
+  // Memoised data FD: do the columns in bitmask @c known determine column @c c
+  // in the tuples of (@c rel, @c arity)?
+  std::map<std::tuple<unsigned, std::size_t, std::uint64_t, unsigned>, bool> memo;
+  auto dataFD = [&](unsigned rel, std::size_t arity,
+                    std::uint64_t known, unsigned c) -> bool {
+    auto key = std::make_tuple(rel, arity, known, c);
+    auto it = memo.find(key);
+    if (it != memo.end())
+      return it->second;
+    bool holds = true;
+    auto rit = byrel.find({rel, arity});
+    if (rit != byrel.end()) {
+      std::map<std::vector<unsigned long>, unsigned long> grp;
+      for (const std::vector<unsigned long> *t : rit->second) {
+        std::vector<unsigned long> kv;
+        for (std::size_t p = 0; p < arity; ++p)
+          if (known & (std::uint64_t{1} << p))
+            kv.push_back((*t)[p]);
+        auto git = grp.find(kv);
+        if (git == grp.end())
+          grp.emplace(std::move(kv), (*t)[c]);
+        else if (git->second != (*t)[c]) {
+          holds = false;
+          break;
+        }
+      }
+    }
+    memo[key] = holds;
+    return holds;
+  };
+
+  std::unordered_map<unsigned, unsigned> bitOf;
+  for (unsigned i = 0; i < nV; ++i)
+    bitOf[V[i]] = i;
+  const std::uint32_t fullMask = (std::uint32_t{1} << nV) - 1;
+
+  // FD closure of a determined set (bitmask over @c V).
+  auto closure = [&](std::uint32_t det) -> std::uint32_t {
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (const Atom &a : cq.atoms) {
+        const std::size_t arity = a.vars.size();
+        std::uint64_t knownPos = 0;
+        for (std::size_t p = 0; p < arity; ++p)
+          if (det & (std::uint32_t{1} << bitOf[a.vars[p]]))
+            knownPos |= (std::uint64_t{1} << p);
+        for (std::size_t p = 0; p < arity; ++p) {
+          if (knownPos & (std::uint64_t{1} << p))
+            continue;                       // this column already determined
+          const unsigned bit = bitOf[a.vars[p]];
+          if (dataFD(a.relation_id, arity, knownPos, static_cast<unsigned>(p))) {
+            det |= (std::uint32_t{1} << bit);
+            knownPos |= (std::uint64_t{1} << p);
+            changed = true;
+          }
+        }
+      }
+    }
+    return det;
+  };
+
+  unsigned best = nV;
+  for (std::uint32_t s = 0; s <= fullMask; ++s) {
+    const unsigned pc = static_cast<unsigned>(__builtin_popcount(s));
+    if (pc >= best)
+      continue;                             // cannot beat the current minimum
+    if (closure(s) == fullMask)
+      best = pc;
+  }
+  return best;
+}
+
 /** @brief Build the per-disjunct query context and the query stats. */
 void buildQueryCtx(const UCQ &ucq, const JointEncoding &enc,
                    QueryCtx &q, UCQJointCompiler::Stats &stats)
@@ -420,14 +533,10 @@ void buildQueryCtx(const UCQ &ucq, const JointEncoding &enc,
         di.atoms_of_var[v] |= (std::uint64_t{1} << ai);
         appears[v] = true;
       }
-    // The exponential parameter is the number of variables that occur in
-    // an atom (the join variables); a variable in no atom never enters a
-    // code.  Key/FD determination (a later milestone) shrinks this.
-    unsigned ne = 0;
-    for (unsigned v = 0; v < di.n_vars; ++v)
-      if (appears[v])
-        ++ne;
-    stats.n_enumerating[d] = ne;
+    // The exponential parameter is the number of *essential* join variables:
+    // those that must be enumerated once the ones functionally determined by
+    // others (via FDs mined from the gathered data) are removed.
+    stats.n_enumerating[d] = essentialVarCount(cq, appears, enc);
   }
   stats.data_treewidth_lb = enc.data_treewidth_lb;
   stats.circuit_treewidth_lb = enc.circuit_treewidth_lb;

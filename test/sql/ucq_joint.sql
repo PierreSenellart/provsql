@@ -102,6 +102,28 @@ FROM ucq_joint_compile_stats(
   ARRAY[u('r0'),u('r1'),u('s02'),u('s13'),u('t2'),u('t3')]::uuid[],
   ARRAY[0.5,0.5,0.5,0.5,0.5,0.5]);
 
+-- FD-aware essential-variable count (n_enumerating): a join variable
+-- functionally determined by others -- via an FD *mined from the gathered
+-- tuples* -- is not counted in the exponential parameter e.  H0 =
+-- R(x),S(x,y),T(y): when S carries x -> y in the data, y is determined by x
+-- so e = 1; add a second y for some x and the FD breaks, so e = 2.
+SELECT n_enumerating AS e_fd_holds FROM ucq_joint_compile_stats(
+  '{"disjuncts":[{"n_vars":2,"atoms":[
+      {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+  ARRAY[0,0, 1,1, 2,2],
+  ARRAY[0, 1, 0,2, 1,3, 2, 3],
+  ARRAY[1,1, 2,2, 1,1],
+  ARRAY[u('r0'),u('r1'),u('s02'),u('s13'),u('t2'),u('t3')]::uuid[],
+  ARRAY[0.5,0.5,0.5,0.5,0.5,0.5]);
+SELECT n_enumerating AS e_fd_broken FROM ucq_joint_compile_stats(
+  '{"disjuncts":[{"n_vars":2,"atoms":[
+      {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+  ARRAY[0,0, 1,1,1, 2,2],
+  ARRAY[0, 1, 0,2, 1,3, 0,3, 2, 3],
+  ARRAY[1,1, 2,2,2, 1,1],
+  ARRAY[u('r0'),u('r1'),u('s02'),u('s13'),u('s03'),u('t2'),u('t3')]::uuid[],
+  ARRAY[0.5,0.5,0.5,0.5,0.5,0.5,0.5]);
+
 -- Prop 4.2.11(b): a high-joint-width instance must be rejected (the
 -- caller then falls back to the ladder).  With the joint-width cap
 -- lowered to 1, a triangle over S (Gaifman treewidth 2) is rejected by

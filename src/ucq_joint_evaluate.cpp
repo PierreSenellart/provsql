@@ -714,8 +714,8 @@ Datum ucq_joint_compile_stats(PG_FUNCTION_ARGS)
       provsql_error("ucq_joint_compile_stats: expected composite return type");
     tupdesc = BlessTupleDesc(tupdesc);
 
-    Datum values[7];
-    bool nulls[7] = {false, false, false, false, false, false, false};
+    Datum values[8];
+    bool nulls[8] = {false, false, false, false, false, false, false, false};
     values[0] = Float8GetDatum(result.dd.probabilityEvaluation());
     values[1] = Int32GetDatum(static_cast<int32>(result.stats.joint_treewidth));
     values[2] = Int32GetDatum(static_cast<int32>(result.stats.data_treewidth_lb));
@@ -723,6 +723,11 @@ Datum ucq_joint_compile_stats(PG_FUNCTION_ARGS)
     values[4] = Int64GetDatum(static_cast<int64>(result.stats.nb_bags));
     values[5] = Int64GetDatum(static_cast<int64>(result.stats.max_states));
     values[6] = Int64GetDatum(static_cast<int64>(result.stats.dd_size));
+    unsigned maxenum = 0;
+    for (unsigned ev : result.stats.n_enumerating)
+      if (ev > maxenum)
+        maxenum = ev;
+    values[7] = Int32GetDatum(static_cast<int32>(maxenum));
 
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
   } catch (const std::exception &e) {
@@ -781,8 +786,8 @@ Datum ucq_joint_compile_stats_tracked(PG_FUNCTION_ARGS)
       provsql_error("ucq_joint_compile_stats: expected composite return type");
     tupdesc = BlessTupleDesc(tupdesc);
 
-    Datum values[7];
-    bool nulls[7] = {false, false, false, false, false, false, false};
+    Datum values[8];
+    bool nulls[8] = {false, false, false, false, false, false, false, false};
     values[0] = Float8GetDatum(result.dd.probabilityEvaluation());
     values[1] = Int32GetDatum(static_cast<int32>(result.stats.joint_treewidth));
     values[2] = Int32GetDatum(static_cast<int32>(result.stats.data_treewidth_lb));
@@ -790,6 +795,11 @@ Datum ucq_joint_compile_stats_tracked(PG_FUNCTION_ARGS)
     values[4] = Int64GetDatum(static_cast<int64>(result.stats.nb_bags));
     values[5] = Int64GetDatum(static_cast<int64>(result.stats.max_states));
     values[6] = Int64GetDatum(static_cast<int64>(result.stats.dd_size));
+    unsigned maxenum = 0;
+    for (unsigned ev : result.stats.n_enumerating)
+      if (ev > maxenum)
+        maxenum = ev;
+    values[7] = Int32GetDatum(static_cast<int32>(maxenum));
 
     PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
   } catch (const std::exception &e) {

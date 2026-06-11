@@ -4961,6 +4961,10 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
  * @param[out] n_bags number of bags in the decomposition
  * @param[out] max_states peak number of DP states at any node
  * @param[out] dd_size number of gates in the emitted d-D
+ * @param[out] n_enumerating maximum number of essential (enumerating) query
+ *        variables over the disjuncts -- the @c e of the @f$2^{O(k^e)}@f$
+ *        bound, with variables functionally determined by others (via FDs
+ *        mined from the data) removed
  */
 CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
   IN disjunct_nvars INT[],
@@ -4979,7 +4983,8 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
   OUT circuit_treewidth_lb INT,
   OUT n_bags BIGINT,
   OUT max_states BIGINT,
-  OUT dd_size BIGINT)
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
   AS 'provsql','ucq_joint_compile_stats'
   LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
@@ -5003,7 +5008,8 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
   OUT circuit_treewidth_lb INT,
   OUT n_bags BIGINT,
   OUT max_states BIGINT,
-  OUT dd_size BIGINT)
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
   AS $$
 DECLARE
   dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
@@ -5023,9 +5029,10 @@ BEGIN
     didx := didx + 1;
   END LOOP;
   SELECT s.probability, s.joint_treewidth, s.data_treewidth_lb,
-         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size
+         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size,
+         s.n_enumerating
     INTO probability, joint_treewidth, data_treewidth_lb,
-         circuit_treewidth_lb, n_bags, max_states, dd_size
+         circuit_treewidth_lb, n_bags, max_states, dd_size, n_enumerating
     FROM ucq_joint_compile_stats(dnv, adisj, arel, avars, aarity,
       fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs) s;
 END;
@@ -5066,7 +5073,8 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
   OUT circuit_treewidth_lb INT,
   OUT n_bags BIGINT,
   OUT max_states BIGINT,
-  OUT dd_size BIGINT)
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
   AS 'provsql','ucq_joint_compile_stats_tracked'
   LANGUAGE C STABLE PARALLEL SAFE;
 
@@ -5086,7 +5094,8 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
   OUT circuit_treewidth_lb INT,
   OUT n_bags BIGINT,
   OUT max_states BIGINT,
-  OUT dd_size BIGINT)
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
   AS $$
 DECLARE
   dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
@@ -5106,9 +5115,10 @@ BEGIN
     didx := didx + 1;
   END LOOP;
   SELECT s.probability, s.joint_treewidth, s.data_treewidth_lb,
-         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size
+         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size,
+         s.n_enumerating
     INTO probability, joint_treewidth, data_treewidth_lb,
-         circuit_treewidth_lb, n_bags, max_states, dd_size
+         circuit_treewidth_lb, n_bags, max_states, dd_size, n_enumerating
     FROM ucq_joint_compile_stats_tracked(dnv, adisj, arel, avars, aarity,
       fact_rel, fact_elems, fact_arity, fact_tokens) s;
 END;
