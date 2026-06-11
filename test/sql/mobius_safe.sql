@@ -117,6 +117,14 @@ SELECT 'q9_token' AS q,
                provsql.ucq_mobius_provenance(:'q9_desc'::jsonb))::numeric,6)
          AS probability;
 
+-- The 'mobius' method is a first-class, by-name-invocable catalog method
+-- (modelled on 'inversion-free', not a terminal special-case): naming it
+-- explicitly gives the same exact answer as the default chain.
+SELECT 'q9_named' AS q,
+       round(provsql.probability_evaluate(
+               provsql.ucq_mobius_provenance(:'q9_desc'::jsonb), 'mobius')::numeric,6)
+         AS probability;
+
 -- Planner auto-routing ("just works"): q9 written as a plain SQL UNION (the
 -- existence formed by the UNION dedup), with the joint-width width screen
 -- forced to decline (joint_max_treewidth = 0) so the runtime hands off to the

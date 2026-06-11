@@ -1008,6 +1008,39 @@ public:
   }
 };
 
+/// The safe-UCQ Möbius-inversion route's evaluation method.  Modelled on
+/// 'inversion-free' -- a first-class, by-name-invocable catalog method in the
+/// default chain, gated by a feature of the provenance root -- rather than a
+/// terminal special-case.  A @c gate_mobius root is a signed combination
+/// @f$\sum_i c_i\,P(\text{child}_i)@f$ over certified-independent islands,
+/// evaluated by a single linear sweep (@c mobiusProbabilityImpl).  Because that
+/// root is not a Boolean gate the circuit never becomes a @c BooleanCircuit, so
+/// the dispatcher routes a @c gate_mobius-rooted token straight here (see
+/// @c probability_evaluate_internal); @c applicable() also keeps it out of the
+/// ordinary chain for Boolean circuits.
+class MobiusMethod : public ProbabilityMethod {
+public:
+  std::string name() const override { return "mobius"; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  // Linear sweep over the certified-independent islands (the per-element
+  // probabilities are read-once); same order as 'independent'.
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return kCostIndependent * static_cast<double>(ctx.circuit_size);
+  }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    return ctx.gc != nullptr
+           && ctx.gc->getGateType(ctx.gc_root) == gate_mobius;
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    if(ctx.gc == nullptr || ctx.gc->getGateType(ctx.gc_root) != gate_mobius)
+      provsql_error("method 'mobius' requires a Möbius-route token (a "
+                    "gate_mobius signed-combination root)");
+    ctx.actual_method = "mobius";
+    return mobiusProbabilityImpl(ctx.token);
+  }
+};
+
 // makeDD's internal interpret-as-dd -> tree-decomposition -> compiler ladder is
 // lifted here into three first-class catalog members, so the chooser can see
 // and rank the three most cost-divergent exact compilers (linear / treewidth-
@@ -1738,6 +1771,7 @@ const MethodCatalog &MethodCatalog::instance()
     // -- it is redundant with independent (see InterpretAsDd).
     c.registerMethod(std::make_unique<IndependentMethod>());
     c.registerMethod(std::make_unique<InversionFreeMethod>());
+    c.registerMethod(std::make_unique<MobiusMethod>());
     c.registerMethod(std::make_unique<TreeDecompositionMethod>());
     c.registerMethod(std::make_unique<CompilationMethod>());
     c.registerMethod(std::make_unique<PossibleWorldsMethod>());
@@ -1887,12 +1921,29 @@ static Datum probability_evaluate_internal
 
   // Möbius-inversion route (safe-UCQ Möbius cancellation): a gate_mobius root
   // is a signed combination Σ_i coeff_i · P(child_i) over certified-independent
-  // islands.  The measure is the dedicated linear sweep (mobiusProbabilityImpl),
-  // not a semiring / BooleanCircuit evaluation -- the BooleanCircuit has no
-  // gate_mobius and the signed combination is exact, so the method / args are
-  // not consulted (as with gate_conditioned, this is a terminal measure gate).
-  if(gc.getGateType(gc_root) == gate_mobius)
-    PG_RETURN_FLOAT8(mobiusProbabilityImpl(token));
+  // islands.  It is a non-Boolean measure gate, so it cannot become a
+  // BooleanCircuit and is routed straight to the dedicated 'mobius' method --
+  // modelled on 'inversion-free' (a first-class, by-name-invocable catalog
+  // method), not the gate_conditioned terminal special-case.  The default /
+  // exact / empty request and an explicit 'mobius' both run it; any other
+  // explicit method is an error (the token is not a Boolean circuit).
+  if(gc.getGateType(gc_root) == gate_mobius) {
+    const bool is_path =
+      method.empty() || method == "default" || method == "exact";
+    if(!is_path && method != "mobius")
+      provsql_error("method '%s' cannot evaluate a Möbius-route token: it is a "
+                    "signed combination over certified-independent islands; use "
+                    "'mobius' (the default for such tokens)", method.c_str());
+    BooleanCircuit dummy;
+    gate_t dummygate{};
+    std::unordered_map<gate_t, gate_t> dummymap;
+    provsql::EvalContext ctx{&gc, gc_root, token, dummy, dummygate, &dummymap,
+                             /*inv_free_cert=*/false, args,
+                             /*explicitly_named=*/!is_path, 0, 0};
+    PG_RETURN_FLOAT8(
+      provsql::MethodCatalog::instance().byName("mobius")->evaluate(
+        ctx, provsql::Tolerance{}));
+  }
 
   // Inversion-free tractability certificate: the planner wraps the per-row
   // provenance root in a transparent annotation gate carrying the serialised
