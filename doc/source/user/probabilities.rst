@@ -727,6 +727,13 @@ table summarises where each shines:
      - exact
      - Safe (inversion-free) UCQs the planner certifies -- linear-time via a
        structured d-DNNF even with self-joins.
+   * - ``mobius``
+     - exact
+     - Safe UCQs that are tractable *only* because the :math:`\#P`-hard terms of
+       their inclusion-exclusion expansion cancel (:ref:`Möbius inversion
+       <safe-ucq-mobius>`, the :math:`q_9` / :math:`Q_W` class).  Applies to a
+       ``gate_mobius``-rooted token; a linear signed sweep over
+       certified-independent islands.
    * - ``possible-worlds``
      - exact
      - Very few input tuples (a couple of dozen at most): brute force over all
@@ -938,6 +945,23 @@ Each method in detail:
 
         SELECT probability_evaluate(provenance(), 'inversion-free')
         FROM suspects;
+
+``'mobius'``
+    Exact computation for the safe UCQs that need :ref:`Möbius inversion
+    <safe-ucq-mobius>` -- those tractable only because the :math:`\#P`-hard
+    terms of their inclusion-exclusion expansion cancel (the :math:`q_9` /
+    :math:`Q_W` class).  It applies to a token whose root is the signed
+    ``gate_mobius`` combination the planner substitutes for such a query; it
+    is a linear sweep that sums the certified-independent islands'
+    probabilities with the stored integer coefficients, and it errors on any
+    other token (the combination is not a Boolean circuit, so no other method
+    can evaluate it).  The default strategy already takes this path
+    automatically for a ``gate_mobius``-rooted token, so naming it explicitly
+    is mainly useful for testing:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'mobius') FROM safe_ucq;
 
 ``'compilation'``
     Exact computation by first compiling the circuit to a d-DNNF using an
