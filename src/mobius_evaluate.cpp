@@ -42,16 +42,24 @@ extern "C" {
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "access/xact.h"
 #include "catalog/pg_type.h"
+#include "executor/spi.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/resowner.h"
 #include "utils/uuid.h"
 
 #include "provsql_utils.h"
 #include "provsql_mmap.h"
 
+/* Store-backed gate-type lookup (defined in provsql_mmap.c); used to enforce
+ * the TID restriction (G3) -- every fact token must be a bare gate_input. */
+extern Datum get_gate_type(PG_FUNCTION_ARGS);
+
 PG_FUNCTION_INFO_V1(ucq_mobius_materialize_tracked);
 PG_FUNCTION_INFO_V1(ucq_mobius_compile_stats);
+PG_FUNCTION_INFO_V1(ucq_mobius_provenance_answer);
 }
 
 #include "c_cpp_compatibility.h"
@@ -770,22 +778,18 @@ const int32 *intArr(FunctionCallInfo fcinfo, int n, const char *what, int &len){
   return (a==NULL||len==0)?NULL:(const int32*)ARR_DATA_PTR(a);
 }
 
-/// Decode the query arrays (0..4) into the top sentence.  Disjunct-local
-/// variables are globalised by a per-disjunct offset so unification across
-/// disjuncts is by (rel,pos), not by raw id.
-Sentence decodeQuery(FunctionCallInfo fcinfo)
+/// Build the top sentence from the raw query arrays.  Disjunct-local variables
+/// are globalised by a per-disjunct offset (returned via @p base) so
+/// unification across disjuncts is by (rel,pos), not by raw id, and so head
+/// variables can be pinned per disjunct.
+Sentence buildSentenceArrays(const int32 *d_nvars, int n_disj,
+                             const int32 *a_disj, const int32 *a_rel,
+                             const int32 *a_vars, int n_av,
+                             const int32 *a_arity, int n_ad,
+                             std::vector<long> &base)
 {
-  int n_disj,n_ad,n_ar,n_av,n_aa;
-  const int32 *d_nvars = intArr(fcinfo,0,"disjunct_nvars",n_disj);
-  const int32 *a_disj  = intArr(fcinfo,1,"atom_disjunct",n_ad);
-  const int32 *a_rel   = intArr(fcinfo,2,"atom_rel",n_ar);
-  const int32 *a_vars  = intArr(fcinfo,3,"atom_vars",n_av);
-  const int32 *a_arity = intArr(fcinfo,4,"atom_arity",n_aa);
   if(n_disj==0) provsql_error("ucq_mobius: the UCQ has no disjuncts");
-  if(n_ad!=n_ar || n_ad!=n_aa)
-    provsql_error("ucq_mobius: atom arrays must have the same length");
-
-  std::vector<long> base(n_disj, 0);
+  base.assign(n_disj, 0);
   long acc = 1;   // start at 1 so id 0 is unused (avoids any sentinel clash)
   for(int d=0; d<n_disj; ++d){ base[d]=acc; acc += d_nvars[d] + 1; }
 
@@ -808,18 +812,20 @@ Sentence decodeQuery(FunctionCallInfo fcinfo)
   return s;
 }
 
-/// Decode the fact arrays (5..8) into a FactIndex.
-FactIndex decodeFacts(FunctionCallInfo fcinfo)
+/// Build a FactIndex (and, optionally, the text->dense-id map) from the raw
+/// fact arrays.
+FactIndex buildFactIndexArrays(const int32 *f_rel, int n_fr,
+                               const int32 *f_elems, int n_fe,
+                               const int32 *f_arity,
+                               const pg_uuid_t *tok)
 {
-  int n_fr,n_fe,n_fa,n_ft;
-  const int32 *f_rel   = intArr(fcinfo,5,"fact_rel",n_fr);
-  const int32 *f_elems = intArr(fcinfo,6,"fact_elems",n_fe);
-  const int32 *f_arity = intArr(fcinfo,7,"fact_arity",n_fa);
-  ArrayType *toks = PG_ARGISNULL(8)?NULL:PG_GETARG_ARRAYTYPE_P(8);
-  n_ft = checkedLen(toks,"fact_tokens");
-  if(n_fr!=n_fa || n_fr!=n_ft)
-    provsql_error("ucq_mobius: fact arrays must have the same length");
-  const pg_uuid_t *tok = (toks&&n_ft)?(const pg_uuid_t*)ARR_DATA_PTR(toks):NULL;
+  // G3 (tuple independence): every present fact must be gated by a bare
+  // gate_input.  A fact whose token is an internal gate (a view-derived /
+  // reachability / repair_key lineage) is correlated -- out of scope for the
+  // lifted-inference recursion, which assumes independence -- so decline and
+  // let the caller fall back (the more general joint-width route already had
+  // its chance).  The input-gate enum OID, fetched once.
+  const Oid input_oid = get_constants(true).GATE_TYPE_TO_OID[gate_input];
 
   FactIndex fi;
   int eoff=0;
@@ -838,9 +844,139 @@ FactIndex decodeFacts(FunctionCallInfo fcinfo)
     fi.present.insert({rel, el});
     bool nil=true;
     for(int b=0;b<16;++b) if(tok[i].data[b]!=0) nil=false;
+    if(!nil) {
+      pg_uuid_t tk = tok[i];
+      const Datum gt = DirectFunctionCall1(get_gate_type, UUIDPGetDatum(&tk));
+      if(static_cast<Oid>(DatumGetInt32(gt)) != input_oid)
+        throw MobiusDecline("non-TID input: a fact token is not a bare "
+                            "gate_input (correlated / derived lineage)");
+    }
     fi.tok[{rel, el}] = nil ? std::string() : uuid2string(tok[i]);
   }
   return fi;
+}
+
+/// Decode the query arrays (0..4) into the top sentence (Boolean path).
+Sentence decodeQuery(FunctionCallInfo fcinfo)
+{
+  int n_disj,n_ad,n_ar,n_av,n_aa;
+  const int32 *d_nvars = intArr(fcinfo,0,"disjunct_nvars",n_disj);
+  const int32 *a_disj  = intArr(fcinfo,1,"atom_disjunct",n_ad);
+  const int32 *a_rel   = intArr(fcinfo,2,"atom_rel",n_ar);
+  const int32 *a_vars  = intArr(fcinfo,3,"atom_vars",n_av);
+  const int32 *a_arity = intArr(fcinfo,4,"atom_arity",n_aa);
+  if(n_ad!=n_ar || n_ad!=n_aa)
+    provsql_error("ucq_mobius: atom arrays must have the same length");
+  std::vector<long> base;
+  return buildSentenceArrays(d_nvars,n_disj,a_disj,a_rel,a_vars,n_av,
+                             a_arity,n_ad,base);
+}
+
+/// Decode the fact arrays (5..8) into a FactIndex (Boolean path).
+FactIndex decodeFacts(FunctionCallInfo fcinfo)
+{
+  int n_fr,n_fe,n_fa,n_ft;
+  const int32 *f_rel   = intArr(fcinfo,5,"fact_rel",n_fr);
+  const int32 *f_elems = intArr(fcinfo,6,"fact_elems",n_fe);
+  const int32 *f_arity = intArr(fcinfo,7,"fact_arity",n_fa);
+  ArrayType *toks = PG_ARGISNULL(8)?NULL:PG_GETARG_ARRAYTYPE_P(8);
+  n_ft = checkedLen(toks,"fact_tokens");
+  if(n_fr!=n_fa || n_fr!=n_ft)
+    provsql_error("ucq_mobius: fact arrays must have the same length");
+  const pg_uuid_t *tok = (toks&&n_ft)?(const pg_uuid_t*)ARR_DATA_PTR(toks):NULL;
+  return buildFactIndexArrays(f_rel,n_fr,f_elems,n_fe,f_arity,tok);
+}
+
+// ===========================================================================
+// Per-answer (free head variables): head-pin then compile, one circuit per
+// output group.  On the first call of a query the facts are gathered once
+// (ucq_joint_gather) and the value dictionary cached; each group binds its
+// head variables to their values, the head positions are substituted to
+// constants across every disjunct, and the Möbius circuit is compiled and
+// cached.  Mirrors ucq_joint_provenance_answer (the per-group caching), but
+// each answer is a separate compile rather than a single sweep.
+// ===========================================================================
+
+struct MobAnswerCache {
+  bool ready = false;                 ///< gather succeeded
+  Sentence sentence;                  ///< the UCQ template (global vars)
+  std::vector<long> base;             ///< per-disjunct variable offset
+  std::vector<int>  d_nvars;          ///< per-disjunct n_vars
+  FactIndex fi;                       ///< the gathered facts
+  std::map<std::string,long> val_to_id;   ///< text value -> dense id
+  std::map<std::string,std::string> tokcache;  ///< head-key -> token uuid
+};
+
+void mobAnswerCacheDelete(void *arg) { delete reinterpret_cast<MobAnswerCache*>(arg); }
+
+std::string mobHeadKey(const std::vector<std::string> &vals)
+{
+  std::string k;
+  for(const auto &v : vals){ k += v; k.push_back('\x1f'); }
+  return k;
+}
+
+/// Gather the facts + value dictionary once (via ucq_joint_gather) into @p c.
+/// Returns false on any failure (the caller then declines to the fallback).
+bool mobGather(Datum descriptor, MobAnswerCache *c)
+{
+  SPI_connect();
+  Oid argt[1] = { JSONBOID };
+  Datum argv[1] = { descriptor };
+  char argn[1] = { ' ' };
+  const int rc = SPI_execute_with_args(
+    "SELECT * FROM provsql.ucq_joint_gather($1)", 1, argt, argv, argn, true, 1);
+  if(rc != SPI_OK_SELECT || SPI_processed != 1) { SPI_finish(); return false; }
+
+  bool ok = true;
+  try {
+    TupleDesc td = SPI_tuptable->tupdesc;
+    HeapTuple row = SPI_tuptable->vals[0];
+    bool isnull;
+    auto ia = [&](int col, int &n)->const int32*{
+      Datum d = SPI_getbinval(row, td, col, &isnull);
+      if(isnull){ n=0; return nullptr; }
+      ArrayType *a = DatumGetArrayTypeP(d);
+      n = ArrayGetNItems(ARR_NDIM(a), ARR_DIMS(a));
+      return (const int32*) ARR_DATA_PTR(a);
+    };
+    int n_dnv,n_adisj,n_arel,n_avars,n_aarity,n_frel,n_felems,n_farity;
+    const int32 *dnv    = ia(1,n_dnv);
+    const int32 *adisj  = ia(2,n_adisj);
+    const int32 *arel   = ia(3,n_arel);
+    const int32 *avars  = ia(4,n_avars);
+    const int32 *aarity = ia(5,n_aarity);
+    const int32 *frel   = ia(6,n_frel);
+    const int32 *felems = ia(7,n_felems);
+    const int32 *farity = ia(8,n_farity);
+    Datum dtok = SPI_getbinval(row, td, 9, &isnull);
+    ArrayType *atok = isnull ? nullptr : DatumGetArrayTypeP(dtok);
+    const int n_ftok = atok ? ArrayGetNItems(ARR_NDIM(atok), ARR_DIMS(atok)) : 0;
+    const pg_uuid_t *ftok = atok ? (const pg_uuid_t*) ARR_DATA_PTR(atok) : nullptr;
+    if(n_frel != n_farity || n_frel != n_ftok)
+      throw MobiusDecline("ucq_mobius: fact arrays length mismatch");
+
+    c->sentence = buildSentenceArrays(dnv,n_dnv,adisj,arel,avars,n_avars,
+                                      aarity,n_adisj,c->base);
+    c->d_nvars.assign(dnv, dnv+n_dnv);
+    c->fi = buildFactIndexArrays(frel,n_frel,felems,n_felems,farity,ftok);
+
+    // The value dictionary: dense id -> text, inverted to text -> id.
+    Datum dval = SPI_getbinval(row, td, 10, &isnull);
+    if(!isnull) {
+      ArrayType *aval = DatumGetArrayTypeP(dval);
+      Datum *elems; bool *nulls; int nval;
+      deconstruct_array(aval, TEXTOID, -1, false, TYPALIGN_INT,
+                        &elems, &nulls, &nval);
+      for(int i=0;i<nval;++i)
+        if(!nulls[i])
+          c->val_to_id[TextDatumGetCString(elems[i])] = i;
+    }
+  } catch(...) {
+    ok = false;
+  }
+  SPI_finish();
+  return ok;
 }
 
 }  // namespace
@@ -915,4 +1051,119 @@ Datum ucq_mobius_compile_stats(PG_FUNCTION_ARGS)
     provsql_error("ucq_mobius_compile_stats: unknown exception");
   }
   PG_RETURN_NULL();
+}
+
+/**
+ * @brief Per-answer Möbius provenance (the planner-substituted entry point for
+ *        a non-Boolean UCQ with free head variables).
+ *
+ * Arguments: (descriptor jsonb, head_vars int[], head_vals text[],
+ * fallback uuid).  Called once per output group; on the first call the facts
+ * are gathered once and the value dictionary cached, then each group pins its
+ * head variables (the canonical head indices @p head_vars, in every disjunct)
+ * to their values (@p head_vals, matched through the gather's text dictionary)
+ * and compiles the head-pinned Möbius circuit, caching head-key -> token.  On
+ * any decline (unsafe shape, head value absent, ...) returns @p fallback.
+ */
+Datum ucq_mobius_provenance_answer(PG_FUNCTION_ARGS)
+{
+  MobAnswerCache *cache =
+    reinterpret_cast<MobAnswerCache*>(fcinfo->flinfo->fn_extra);
+
+  if(cache == nullptr) {
+    MemoryContext fnctx = fcinfo->flinfo->fn_mcxt;
+    cache = new MobAnswerCache();
+    MemoryContextCallback *cb = (MemoryContextCallback*)
+      MemoryContextAllocZero(fnctx, sizeof(MemoryContextCallback));
+    cb->func = mobAnswerCacheDelete;
+    cb->arg = cache;
+    MemoryContextRegisterResetCallback(fnctx, cb);
+    fcinfo->flinfo->fn_extra = cache;
+
+    if(!PG_ARGISNULL(0)) {
+      // Gather inside a subtransaction so a SQL error declines gracefully.
+      MemoryContext oldcxt = CurrentMemoryContext;
+      ResourceOwner oldowner = CurrentResourceOwner;
+      BeginInternalSubTransaction(NULL);
+      PG_TRY();
+      {
+        cache->ready = mobGather(PG_GETARG_DATUM(0), cache);
+        ReleaseCurrentSubTransaction();
+        MemoryContextSwitchTo(oldcxt);
+        CurrentResourceOwner = oldowner;
+      }
+      PG_CATCH();
+      {
+        MemoryContextSwitchTo(oldcxt);
+        RollbackAndReleaseCurrentSubTransaction();
+        MemoryContextSwitchTo(oldcxt);
+        CurrentResourceOwner = oldowner;
+        FlushErrorState();
+        cache->ready = false;
+      }
+      PG_END_TRY();
+    }
+  }
+
+  // The group's head values (text), and the head variable indices.
+  if(cache->ready && !PG_ARGISNULL(1) && !PG_ARGISNULL(2)) {
+    std::vector<int> head_vars;
+    {
+      ArrayType *a = PG_GETARG_ARRAYTYPE_P(1);
+      const int32 *d = (const int32*) ARR_DATA_PTR(a);
+      const int n = ArrayGetNItems(ARR_NDIM(a), ARR_DIMS(a));
+      for(int i=0;i<n;++i) head_vars.push_back(d[i]);
+    }
+    std::vector<std::string> head_vals;
+    {
+      ArrayType *a = PG_GETARG_ARRAYTYPE_P(2);
+      Datum *elems; bool *nulls; int n;
+      deconstruct_array(a, TEXTOID, -1, false, TYPALIGN_INT, &elems, &nulls, &n);
+      for(int i=0;i<n;++i)
+        head_vals.push_back(nulls[i] ? std::string() : TextDatumGetCString(elems[i]));
+    }
+
+    if(head_vars.size() == head_vals.size()) {
+      const std::string key = mobHeadKey(head_vals);
+      auto it = cache->tokcache.find(key);
+      if(it != cache->tokcache.end()) {
+        pg_uuid_t *u = (pg_uuid_t*) palloc(sizeof(pg_uuid_t));
+        *u = string2uuid(it->second);
+        PG_RETURN_UUID_P(u);
+      }
+      try {
+        // Map each head value to its dense id; pin the head variable (canonical
+        // index hv, hence global base[d]+hv in every disjunct) to that constant.
+        Sentence s = cache->sentence;
+        bool resolved = true;
+        for(std::size_t h=0; h<head_vars.size() && resolved; ++h) {
+          auto vit = cache->val_to_id.find(head_vals[h]);
+          if(vit == cache->val_to_id.end()) { resolved = false; break; }
+          const long val = vit->second;
+          const int hv = head_vars[h];
+          for(std::size_t d=0; d<s.size(); ++d) {
+            const long gid = cache->base[d] + hv;
+            for(MAtom &at : s[d])
+              for(Term &t : at.args)
+                if(t.isVar && t.v == gid) { t.isVar=false; t.v=val; }
+          }
+        }
+        if(resolved) {
+          MobiusStats st;
+          MobiusCompiler mc(cache->fi, st);
+          pg_uuid_t root = mc.compileTop(s);
+          cache->tokcache[key] = uuid2string(root);
+          pg_uuid_t *u = (pg_uuid_t*) palloc(sizeof(pg_uuid_t));
+          *u = root;
+          PG_RETURN_UUID_P(u);
+        }
+      } catch(...) {
+        // decline this group -> fallback
+      }
+    }
+  }
+
+  if(PG_ARGISNULL(3))
+    PG_RETURN_NULL();
+  PG_RETURN_DATUM(PG_GETARG_DATUM(3));
 }

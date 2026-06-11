@@ -38,6 +38,19 @@ q9_token|0.574136
 q|root_gate|probability
 q9_planner|mobius|0.574136
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+q|head_g|probability
+per_answer|1|0.855190
+per_answer|2|0.858256
+(2 rows)
 q|declined
 h0_declines|t
 (1 row)

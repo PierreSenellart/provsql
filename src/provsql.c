@@ -4040,6 +4040,74 @@ static Expr *build_joint_width_answer_expr(const constants_t *constants,
 }
 
 /**
+ * @brief Build the per-answer @c ucq_mobius_provenance_answer(...) call,
+ *        identical in shape to @c build_joint_width_answer_expr but for the
+ *        Möbius route.  Wired as the runtime fallback of the joint-width
+ *        per-answer call, so the joint-width single-DP keeps priority and the
+ *        Möbius head-pinned compile runs only on its decline.  Returns
+ *        @p fallback if the function cannot be resolved.
+ */
+static Expr *build_mobius_answer_expr(const constants_t *constants,
+                                      const char *desc, List *head_var_idx,
+                                      List *head_exprs, Expr *fallback)
+{
+  FuncCandidateList fcl = FuncnameGetCandidates(
+    list_make2(makeString("provsql"), makeString("ucq_mobius_provenance_answer")),
+    4, NIL, false, false,
+#if PG_VERSION_NUM >= 140000
+    false,
+#endif
+    false);
+  FuncExpr *fe;
+  Const *desc_c, *hv_c;
+  ArrayExpr *vals;
+  Datum jb;
+  Datum *hd;
+  int n = list_length(head_var_idx), i;
+  ListCell *lc;
+  ArrayType *arr;
+
+  if (fcl == NULL || head_var_idx == NIL)
+    return fallback;
+
+  jb = DirectFunctionCall1(jsonb_in, CStringGetDatum(desc));
+  desc_c = makeConst(JSONBOID, -1, InvalidOid, -1, jb, false, false);
+
+  hd = palloc(n * sizeof(Datum));
+  i = 0;
+  foreach (lc, head_var_idx)
+    hd[i++] = Int32GetDatum(lfirst_int(lc));
+  arr = construct_array(hd, n, INT4OID, sizeof(int32), true, TYPALIGN_INT);
+  hv_c = makeConst(INT4ARRAYOID, -1, InvalidOid, -1,
+                   PointerGetDatum(arr), false, false);
+
+  vals = makeNode(ArrayExpr);
+  vals->array_typeid = TEXTARRAYOID;
+  vals->element_typeid = TEXTOID;
+  vals->multidims = false;
+  vals->elements = NIL;
+  foreach (lc, head_exprs) {
+    CoerceViaIO *cio = makeNode(CoerceViaIO);
+    cio->arg = (Expr *) lfirst(lc);
+    cio->resulttype = TEXTOID;
+    cio->resultcollid = DEFAULT_COLLATION_OID;
+    cio->coerceformat = COERCE_IMPLICIT_CAST;
+    cio->location = -1;
+    vals->elements = lappend(vals->elements, (Node *) cio);
+  }
+  vals->location = -1;
+
+  fe = makeNode(FuncExpr);
+  fe->funcid = fcl->oid;
+  fe->funcresulttype = constants->OID_TYPE_UUID;
+  fe->funcretset = false;
+  fe->funcvariadic = false;
+  fe->args = list_make4(desc_c, hv_c, (Expr *) vals, fallback);
+  fe->location = -1;
+  return (Expr *) fe;
+}
+
+/**
  * @brief Build the combined provenance expression to be added to the SELECT list.
  *
  * Combines the tokens in @p prov_atts according to @p op:
@@ -4482,8 +4550,12 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
      * d-D does not provide): substitute the head-pinned joint-width
      * provenance per output group, falling back to the just-built normal
      * per-answer provenance on any decline. */
+    Expr *fb = provsql_mobius
+      ? build_mobius_answer_expr(constants, jw_desc, jw_head_idx,
+                                 jw_head_exprs, result)
+      : result;
     Expr *jw = build_joint_width_answer_expr(constants, jw_desc,
-                                             jw_head_idx, jw_head_exprs, result);
+                                             jw_head_idx, jw_head_exprs, fb);
     if (jw != NULL)
       result = jw;
   }

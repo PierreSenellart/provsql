@@ -5588,6 +5588,19 @@ CREATE OR REPLACE FUNCTION ucq_joint_provenance_answer(
 RETURNS UUID AS 'provsql','ucq_joint_provenance_answer'
 LANGUAGE C STABLE;
 
+/**
+ * @brief Per-answer safe-UCQ Möbius provenance (planner-substituted): one
+ *        head-pinned Möbius circuit per output group.  On the first call the
+ *        facts are gathered once (ucq_joint_gather) and cached; each group pins
+ *        @p head_vars to @p head_vals and compiles, caching head -> token.  On
+ *        any decline returns @p fallback.  STABLE: it caches per fn-call
+ *        context, so it is not re-evaluated within one scan.
+ */
+CREATE OR REPLACE FUNCTION ucq_mobius_provenance_answer(
+  descriptor JSONB, head_vars INT[], head_vals TEXT[], fallback UUID DEFAULT NULL)
+RETURNS UUID AS 'provsql','ucq_mobius_provenance_answer'
+LANGUAGE C STABLE;
+
 
 /**
  * @brief Compile and materialise the reachability provenance of every

@@ -150,6 +150,47 @@ SELECT 'q9_planner' AS q,
   FROM q9auto;
 
 -- ===========================================================================
+-- Per-answer (free head variable): grouped Φ₁ over R(g,x), S(g,x,y), T(g,y),
+-- the head g pinned per output group.  ucq_mobius_provenance_answer gathers the
+-- facts once, then for each group binds the head variable (canonical index 0)
+-- to the group's value and compiles a head-pinned Möbius circuit.  Two groups
+-- with different data; brute force gives 0.855190 and 0.858256.
+-- ===========================================================================
+CREATE TABLE mob_gr(g int, x int);
+INSERT INTO mob_gr VALUES (1,1),(1,2),(2,1),(2,2);
+SELECT add_provenance('mob_gr');
+CREATE TABLE mob_gs(g int, x int, y int);
+INSERT INTO mob_gs VALUES (1,1,1),(1,1,2),(1,2,2),(2,1,1),(2,2,1);
+SELECT add_provenance('mob_gs');
+CREATE TABLE mob_gt(g int, y int);
+INSERT INTO mob_gt VALUES (1,1),(1,2),(2,1),(2,2);
+SELECT add_provenance('mob_gt');
+DO $$ BEGIN
+  PERFORM set_prob(provsql,0.6) FROM mob_gr WHERE g=1 AND x=1;
+  PERFORM set_prob(provsql,0.4) FROM mob_gr WHERE g=1 AND x=2;
+  PERFORM set_prob(provsql,0.3) FROM mob_gr WHERE g=2 AND x=1;
+  PERFORM set_prob(provsql,0.8) FROM mob_gr WHERE g=2 AND x=2;
+  PERFORM set_prob(provsql,0.5) FROM mob_gs WHERE g=1 AND x=1 AND y=1;
+  PERFORM set_prob(provsql,0.7) FROM mob_gs WHERE g=1 AND x=1 AND y=2;
+  PERFORM set_prob(provsql,0.3) FROM mob_gs WHERE g=1 AND x=2 AND y=2;
+  PERFORM set_prob(provsql,0.4) FROM mob_gs WHERE g=2 AND x=1 AND y=1;
+  PERFORM set_prob(provsql,0.6) FROM mob_gs WHERE g=2 AND x=2 AND y=1;
+  PERFORM set_prob(provsql,0.5) FROM mob_gt WHERE g=1 AND y=1;
+  PERFORM set_prob(provsql,0.55) FROM mob_gt WHERE g=1 AND y=2;
+  PERFORM set_prob(provsql,0.7) FROM mob_gt WHERE g=2 AND y=1;
+  PERFORM set_prob(provsql,0.2) FROM mob_gt WHERE g=2 AND y=2;
+END $$;
+
+\set ga_desc '{"disjuncts":[{"n_vars":3,"atoms":[{"rel":0,"vars":[0,1]},{"rel":1,"vars":[0,1,2]}]},{"n_vars":3,"atoms":[{"rel":1,"vars":[0,1,2]},{"rel":2,"vars":[0,2]}]},{"n_vars":3,"atoms":[{"rel":0,"vars":[0,1]},{"rel":2,"vars":[0,2]}]}],"relations":["provsql_test.mob_gr","provsql_test.mob_gs","provsql_test.mob_gt"],"elem_cols":[["g","x"],["g","x","y"],["g","y"]]}'
+
+SELECT 'per_answer' AS q, v.g AS head_g,
+       round(provsql.probability_evaluate(
+         provsql.ucq_mobius_provenance_answer(
+           :'ga_desc'::jsonb, ARRAY[0], ARRAY[v.g]))::numeric,6) AS probability
+  FROM (VALUES ('1'),('2')) v(g)
+  ORDER BY v.g;
+
+-- ===========================================================================
 -- Negative: a non-hierarchical single CQ H0 = R(x),S(x,y),T(y) has no
 -- separator and no inclusion-exclusion structure -- it is genuinely #P-hard,
 -- not safe.  The Möbius route declines (it is not in the supported class), so
