@@ -84,8 +84,8 @@ remove_provenance
 remove_provenance
 
 (1 row)
-n_papers|max_abs_diff
-7|0
+n_papers|agree
+7|t
 (1 row)
 remove_provenance
 

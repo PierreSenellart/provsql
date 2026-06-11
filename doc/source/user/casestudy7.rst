@@ -504,19 +504,23 @@ inversion-free certificate (Step 7) do not apply, and ``independent`` rejects
 the circuit outright.
 
 ProvSQL has a fourth planner-time escape for exactly this: the **joint-width
-UCQ compiler** (the ``provsql.joint_width`` route, on by default). It is the
-non-recursive sibling of the reachability compiler of Step 10: when a
-:math:`\#P`-hard union of conjunctive queries has bounded **joint
-treewidth** -- the treewidth of the data *together with* its correlation
-structure -- ProvSQL recognises the shape at planning time and compiles its
-provenance along a tree decomposition of the data into a certified **d-D**,
-exactly, in time linear in the data :cite:`Amarilli2016thesis`. Unlike every
-other tractable route, it stays exact over correlated inputs.
+UCQ compiler**. It is the non-recursive sibling of the reachability compiler
+of Step 10: when a :math:`\#P`-hard union of conjunctive queries has bounded
+**joint treewidth** -- the treewidth of the data *together with* its
+correlation structure -- ProvSQL recognises the shape at planning time and
+compiles its provenance along a tree decomposition of the data into a certified
+**d-D**, exactly, in time linear in the data :cite:`Amarilli2016thesis`. Unlike
+every other tractable route, it stays exact over correlated inputs.
 
-Ask the Step-3 cyclic coverage question **per paper** -- "for each paper, how
-competently is it covered?":
+Like the safe-query rewrite of Steps 1-2, this is part of the Boolean
+machinery, so it needs the ``'boolean'`` provenance class. Within that class it
+is on automatically (the ``provsql.joint_width`` GUC, on by default, is only a
+debug switch to turn it off). Ask the Step-3 cyclic coverage question **per
+paper** -- "for each paper, how competently is it covered?":
 
 .. code-block:: postgresql
+
+    SET provsql.provenance = 'boolean';
 
     SELECT t.paper, probability_evaluate(provenance())
     FROM bid b, expertise e, topic_of t

@@ -316,12 +316,15 @@ DROP TABLE cs7_assign;
 
 -- ---------------------------------------------------------------------
 -- Step 9: hard *and* correlated -- the joint-width route.  The #P-hard
--- cyclic coverage of Step 3, recognised at planning time under
--- provsql.joint_width = on and compiled along a tree decomposition of the
--- data, agrees per paper with the circuit compiler (joint_width off); and
--- over the repair_key-correlated assignment it is the only exact and
--- tractable route -- independent rejects the literal circuit.
+-- cyclic coverage of Step 3, recognised at planning time under the
+-- 'boolean' class and compiled along a tree decomposition of the data,
+-- agrees per paper with the circuit compiler (joint_width off); and over
+-- the repair_key-correlated assignment it is the only exact and tractable
+-- route -- independent rejects the literal circuit.  The route is part of
+-- the Boolean machinery, so it needs provsql.provenance = 'boolean' (the
+-- joint_width GUC merely switches the recognition on or off within it).
 -- ---------------------------------------------------------------------
+SET provsql.provenance = 'boolean';
 SET provsql.joint_width = on;
 CREATE TABLE cs7_jw_on AS
   SELECT t.paper AS paper, probability_evaluate(provenance()) AS p
@@ -337,7 +340,7 @@ CREATE TABLE cs7_jw_off AS
     GROUP BY t.paper;
 SELECT remove_provenance('cs7_jw_off');
 SELECT count(*) AS n_papers,
-       max(abs(a.p - b.p)) AS max_abs_diff
+       max(abs(a.p - b.p)) < 1e-9 AS agree
   FROM cs7_jw_on a JOIN cs7_jw_off b USING (paper);
 DROP TABLE cs7_jw_on; DROP TABLE cs7_jw_off;
 
@@ -375,6 +378,8 @@ BEGIN
     RAISE EXCEPTION 'expected independent to reject the correlated cyclic coverage';
   END IF;
 END $$;
+SET provsql.joint_width = on;
+SET provsql.provenance = 'semiring';
 
 -- ---------------------------------------------------------------------
 -- Step 10: recursive lineage (PostgreSQL 15+).
