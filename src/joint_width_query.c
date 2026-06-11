@@ -10,7 +10,11 @@
 #include "nodes/pg_list.h"
 #include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
+#if PG_VERSION_NUM >= 120000
 #include "optimizer/optimizer.h"
+#else
+#include "optimizer/clauses.h"          /* make_ands_explicit (PG <12) */
+#endif
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/builtins.h"
