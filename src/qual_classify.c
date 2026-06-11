@@ -9,7 +9,11 @@
 #include "nodes/bitmapset.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#if PG_VERSION_NUM >= 120000
 #include "optimizer/optimizer.h"
+#else
+#include "optimizer/clauses.h"          /* contain_volatile_functions (PG <12) */
+#endif
 
 #include "qual_classify.h"
 #include "provsql_utils.h"
