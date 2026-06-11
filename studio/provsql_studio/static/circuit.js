@@ -36,6 +36,12 @@
             + 'target A and the evidence B (plus, for discrete events, '
             + 'their joint A∧B); P(A|B) = P(A∧B)/P(B). A terminal token: '
             + 'evaluate it for a probability or a moment, not a semiring.',
+    mobius:   'Möbius gate (μ): signed Möbius combination Σ_i c_i·P(child_i) '
+            + 'over certified-independent islands — the safe-UCQ '
+            + 'inclusion-exclusion route, where the #P-hard term cancels '
+            + '(coefficient 0). Each child edge is labelled with its integer '
+            + 'coefficient. A measure-only token: evaluate it for a '
+            + 'probability, not a semiring.',
     'kc-and':   'AND gate',
     'kc-or':    'OR gate',
     'kc-not':   'NOT gate',
@@ -106,7 +112,7 @@
   // positional and get the semantic labels defined in EDGE_POS_LABEL
   // below.
   const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned']);
+                                 'conditioned', 'mobius']);
   // Per-(parent type, 1-based child_pos) edge-label overrides for
   // gates whose wires have well-known names.  Falls back to the bare
   // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
@@ -156,9 +162,34 @@
   function _conditionedEdgeLabel(parent, child_pos) {
     return ({ 1: 'A', 2: 'B', 3: 'A∧B' })[child_pos] ?? null;
   }
+  // gate_mobius wires: each child is one element of the inclusion-exclusion
+  // expansion, carrying an integer coefficient.  The coefficients live in the
+  // gate's extra, keyed by child UUID ("uuid:coeff uuid:coeff ..."), so we
+  // resolve the child at this position to its UUID and render its signed
+  // coefficient (+1, −1, …) on the edge -- the value is Σ_i c_i·P(child_i).
+  function _mobiusEdgeLabel(parent, child_pos) {
+    if (!parent.extra) return null;
+    const coeffs = {};
+    for (const tok of parent.extra.split(/\s+/)) {
+      if (!tok) continue;
+      const i = tok.lastIndexOf(':');
+      if (i > 0) coeffs[tok.slice(0, i)] = tok.slice(i + 1);
+    }
+    if (!(state.scene && state.scene.edges)) return null;
+    const edge = state.scene.edges.find(
+      e => e.from === parent.id && e.child_pos === child_pos);
+    if (!edge) return null;
+    const c = coeffs[edge.to];
+    if (c == null) return null;
+    const n = Number(c);
+    if (Number.isFinite(n))
+      return (n < 0 ? '−' : '+') + Math.abs(n);   // U+2212 minus sign
+    return String(c);
+  }
   const EDGE_POS_LABEL = {
     mixture: _mixtureEdgeLabel,
     conditioned: _conditionedEdgeLabel,
+    mobius: _mobiusEdgeLabel,
   };
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   // = and <> are commutative; lhs/rhs digits add noise for those cmp

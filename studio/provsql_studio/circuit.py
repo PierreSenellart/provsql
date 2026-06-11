@@ -41,6 +41,8 @@ _GATE_LABEL = {
     "arith":    "α",
     "mixture":  "Mix",
     "conditioned": "∣",   # A given B (the conditioning bar)
+    "mobius":   "μ",      # signed Möbius combination (the Möbius function μ);
+                          # each child edge is labelled with its coefficient
     # An assumption wrapper normally elides into a badge on its child
     # (_elide_markers); it renders as its own node only when its child
     # lies beyond the scene frontier.

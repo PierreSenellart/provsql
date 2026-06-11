@@ -566,3 +566,91 @@ def test_circuit_dirac_mixture_keeps_classic_shape(client, test_dsn):
     types = [nodes_by_id[e["to"]]["type"] for e in children]
     # Classic shape: Bernoulli input + two Dirac value leaves.
     assert types == ["input", "value", "value"], types
+
+# ──────── Möbius-inversion gate (signed combination) ────────
+
+
+def _mobius_q9_root(test_dsn: str) -> str:
+    """Build the q9 / QW safe-UCQ Möbius circuit over a tiny TID instance and
+    return the gate_mobius root UUID."""
+    desc = (
+        '{"disjuncts":['
+        '{"n_vars":4,"atoms":[{"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},'
+        '{"rel":3,"vars":[2,3]},{"rel":4,"vars":[3]}]},'
+        '{"n_vars":4,"atoms":[{"rel":1,"vars":[0,1]},{"rel":2,"vars":[0,1]},'
+        '{"rel":3,"vars":[2,3]},{"rel":4,"vars":[3]}]},'
+        '{"n_vars":4,"atoms":[{"rel":2,"vars":[0,1]},{"rel":3,"vars":[0,1]},'
+        '{"rel":3,"vars":[2,3]},{"rel":4,"vars":[3]}]},'
+        '{"n_vars":6,"atoms":[{"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},'
+        '{"rel":1,"vars":[2,3]},{"rel":2,"vars":[2,3]},{"rel":2,"vars":[4,5]},'
+        '{"rel":3,"vars":[4,5]}]}],'
+        '"relations":["public.mvr","public.mvs1","public.mvs2","public.mvs3",'
+        '"public.mvt"],'
+        '"elem_cols":[["x"],["x","y"],["x","y"],["x","y"],["y"]]}'
+    )
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=public,provsql'", autocommit=True
+    ) as conn, conn.cursor() as cur:
+        cur.execute("CREATE TABLE mvr(x int); INSERT INTO mvr VALUES (1),(2);")
+        cur.execute("CREATE TABLE mvs1(x int,y int);"
+                    " INSERT INTO mvs1 VALUES (1,1),(1,2),(2,1);")
+        cur.execute("CREATE TABLE mvs2(x int,y int);"
+                    " INSERT INTO mvs2 VALUES (1,1),(2,2),(1,2);")
+        cur.execute("CREATE TABLE mvs3(x int,y int);"
+                    " INSERT INTO mvs3 VALUES (1,1),(2,2),(1,2);")
+        cur.execute("CREATE TABLE mvt(y int); INSERT INTO mvt VALUES (1),(2);")
+        for tbl in ("mvr", "mvs1", "mvs2", "mvs3", "mvt"):
+            cur.execute("SELECT provsql.add_provenance(%s)", (tbl,))
+        cur.execute(
+            "DO $$ BEGIN"
+            "  PERFORM provsql.set_prob(provsql, 0.5) FROM mvr;"
+            "  PERFORM provsql.set_prob(provsql, 0.5) FROM mvs1;"
+            "  PERFORM provsql.set_prob(provsql, 0.5) FROM mvs2;"
+            "  PERFORM provsql.set_prob(provsql, 0.5) FROM mvs3;"
+            "  PERFORM provsql.set_prob(provsql, 0.5) FROM mvt;"
+            "END $$;"
+        )
+        cur.execute("SET provsql.provenance = 'boolean'")
+        cur.execute(
+            "SELECT provsql.ucq_mobius_provenance(%s::jsonb)::text", (desc,)
+        )
+        row = cur.fetchone()
+    assert row and row[0], "ucq_mobius_provenance returned NULL (declined)"
+    return row[0]
+
+
+def test_circuit_mobius_root_renders_as_mobius_with_coefficients(client, test_dsn):
+    """The safe-UCQ Möbius route's per-row token is rooted at a gate_mobius: a
+    signed combination over its certified-independent children, each carrying an
+    integer coefficient.  Studio must render it as its own node (the μ glyph)
+    and carry the per-child coefficients in `extra`, keyed by child UUID, so the
+    front-end can label each edge with its signed coefficient.  For q9 the
+    lattice has exactly one #P-hard element with coefficient 0 (it cancels), so
+    7 children survive."""
+    root = _mobius_q9_root(test_dsn)
+    # depth 2: one element's circuit is a shared sub-DAG of another's, so its
+    # root edge sits at BFS depth 2; depth >= 2 renders every coefficient edge.
+    resp = client.get(f"/api/circuit/{root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    nodes_by_id = {n["id"]: n for n in data["nodes"]}
+    assert root in nodes_by_id
+    rootn = nodes_by_id[root]
+    assert rootn["type"] == "mobius", rootn["type"]
+    assert rootn["label"] == "μ", rootn["label"]
+    assert rootn["extra"], "the gate_mobius must carry its coefficients in extra"
+
+    # extra is "uuid:coeff uuid:coeff ..." -- one signed integer per child,
+    # keyed by the child UUID (so edge labels are order-independent).
+    coeffs = {}
+    for tok in rootn["extra"].split():
+        uuid_str, _, c = tok.rpartition(":")
+        coeffs[uuid_str] = int(c)
+    edges_from_root = [e for e in data["edges"] if e["from"] == root]
+    assert len(edges_from_root) == 7, len(edges_from_root)   # q9: 8 nonzero - top
+    # Every child edge resolves to a stored coefficient (what the front-end
+    # _mobiusEdgeLabel renders on the wire), and the q9 signs are ±1.
+    for e in edges_from_root:
+        assert e["to"] in coeffs, (e["to"], coeffs)
+        assert coeffs[e["to"]] in (-1, 1), coeffs[e["to"]]
+    assert sorted(coeffs.values()) == [-1, -1, -1, 1, 1, 1, 1]
