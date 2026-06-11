@@ -113,6 +113,12 @@ explicitly deferred until a real workload motivates it.
   constructing-then-evaluating Monet's circuit.  Revisit only if
   a benchmark surfaces where d4 visibly chokes on a safe
   non-hierarchical UCQ and Monet's construction plausibly helps.*
+  Superseded as the route to safe non-hierarchical UCQs by
+  [`mobius.md`](mobius.md), which plans the **extensional**
+  lattice-walking algorithm (Möbius certificate at plan time,
+  compile-at-execution circuit with a signed top combination);
+  the intensional construction above stays deferred on the same
+  grounds.
 
 ### Hierarchical-detector follow-ups (rewriter coverage)
 

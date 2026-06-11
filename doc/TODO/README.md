@@ -65,6 +65,17 @@ Each plan document follows a consistent layout:
   follow-ups (lazy Boolean build, guarantee propagation, independence-cert
   cache), RV-probability transparency, and d-tree research polish. Borders
   [`safe-query-followups.md`](safe-query-followups.md).
+- [`mobius.md`](mobius.md) : plan for the Möbius-inversion route, the
+  last missing exact route of the Dalvi-Suciu dichotomy -- UCQs that
+  are safe only because the hard terms of their inclusion-exclusion
+  expansion carry a zero Möbius value on the CNF lattice and cancel
+  (canonical witness: QW / q9).  Planner-time lattice analysis +
+  certificate, execution-time compiler emitting certified-independent
+  islands under a signed `gate_mobius` combination, linear evaluation;
+  fires only when the safe-query rewriter, the inversion-free
+  certificate and the joint-width route all pass.  Supersedes the
+  *Möbius / Monet* entry of
+  [`safe-query-followups.md`](safe-query-followups.md).
 - [`safe-query-followups.md`](safe-query-followups.md) : deferred ideas
   bordering the `provsql.boolean_provenance` work -- further Boolean-only
   optimisations (independent-subtree detection, Möbius / Monet…), the
