@@ -81,6 +81,24 @@ p5|0.500000|0.500000
 remove_provenance
 
 (1 row)
+remove_provenance
+
+(1 row)
+n_papers|max_abs_diff
+7|0
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+jw_correlated|circuit_compiler
+0.735868|0.735868
+(1 row)
+remove_provenance
+
+(1 row)
 paper|lineage|prob
 p1|ext(p4,p1) ⊗ ext(p6,p4)|0.720000
 p2|ext(p5,p2) ⊗ ext(p6,p5)|0.490000

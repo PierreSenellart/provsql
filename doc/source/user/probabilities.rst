@@ -232,6 +232,14 @@ tuple-independent inputs; the joint-width row subsumes them on the hard
 queries and, crucially, stays exact over **correlated** inputs, where
 query-side safety is inapplicable -- the bound is then on the *joint* graph of
 the data and its correlations, not on either alone :cite:`Amarilli2016thesis`.
+The joint-width route is applied **transparently**: a ``GROUP BY`` or existence
+query over a recognised shape, under the default ``'boolean'`` class, has its
+provenance compiled by the joint-width route at planning time (the
+``provsql.joint_width`` GUC, on by default; a per-answer query materialises
+every answer's d-D in a single bottom-up sweep), so the value returned by
+``probability_evaluate(provenance())`` is already the exact one -- no method
+needs to be named. :doc:`Case Study 7 <casestudy7>`, Step 9, walks a worked
+example over both independent and ``repair_key``-correlated reviewing data.
 
 Computation Methods
 ^^^^^^^^^^^^^^^^^^^^

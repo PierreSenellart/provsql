@@ -3869,51 +3869,6 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  * @c qual_class for the routing matrix. */
 
 /**
- * @brief Build the combined provenance expression to be added to the SELECT list.
- *
- * Combines the tokens in @p prov_atts according to @p op:
- * - @c SR_PLUS  → use the first token directly (union branch; the outer
- *                  @c array_agg / @c provenance_plus is added later if needed).
- * - @c SR_TIMES → wrap all tokens in @c provenance_times(...).
- * - @c SR_MONUS → wrap all tokens in @c provenance_monus(...).
- *
- * When @p aggregation or @p group_by_rewrite is true, wraps the result in
- * @c array_agg + @c provenance_plus to collapse groups.  A @c provenance_delta
- * gate is added for plain aggregations without a HAVING clause.
- *
- * If a HAVING clause is present it is removed from @p q->havingQual and
- * converted into a provenance expression via @c having_Expr_to_provenance_cmp.
- *
- * If @c provsql_where_provenance is enabled, equality gates (@c provenance_eq)
- * are prepended for join conditions and WHERE equalities, and a projection gate
- * is appended if the output columns form a proper subset of the input columns.
- *
- * @param constants        Extension OID cache.
- * @param q                Query being rewritten (HAVING is cleared if present).
- * @param prov_atts        List of provenance @c Var nodes.
- * @param aggregation      True if the query contains aggregate functions.
- * @param group_by_rewrite True if a GROUP BY requires the plus-aggregate wrapper.
- * @param op               Semiring operation to use for combining tokens.
- * @param columns          Per-RTE column-numbering array (for where-provenance).
- *                         For provenance-tracked @c RTE_RELATION entries, the
- *                         -1 sentinel is used to identify them; the PROJECT
- *                         gate positions for their columns use @c varattno
- *                         rather than the query-order-dependent sequential
- *                         numbers (see @c build_column_map() for the
- *                         rationale).
- * @param nbcols           Total number of non-provenance output columns.
- * @param wrap_assumed If true, wrap the result in
- *                         @c assume_boolean so downstream
- *                         probability evaluators may treat it as Boolean.
- * @param inv_cert         If non-NULL, a serialised inversion-free certificate
- *                         to attach to the per-row root via @c provsql.annotate
- *                         (transparent for every evaluator; read back by the
- *                         probability dispatcher).  Mutually compatible with
- *                         @c wrap_assumed only in principle -- the
- *                         inversion-free path never sets the latter.
- * @return  The provenance @c Expr to be appended to the target list.
- */
-/**
  * @brief Build the @c ucq_joint_provenance(descriptor) call substituted for
  *        a recognised unsafe UCQ's existence provenance.
  *
@@ -4034,6 +3989,51 @@ static Expr *build_joint_width_answer_expr(const constants_t *constants,
   return (Expr *) fe;
 }
 
+/**
+ * @brief Build the combined provenance expression to be added to the SELECT list.
+ *
+ * Combines the tokens in @p prov_atts according to @p op:
+ * - @c SR_PLUS  → use the first token directly (union branch; the outer
+ *                  @c array_agg / @c provenance_plus is added later if needed).
+ * - @c SR_TIMES → wrap all tokens in @c provenance_times(...).
+ * - @c SR_MONUS → wrap all tokens in @c provenance_monus(...).
+ *
+ * When @p aggregation or @p group_by_rewrite is true, wraps the result in
+ * @c array_agg + @c provenance_plus to collapse groups.  A @c provenance_delta
+ * gate is added for plain aggregations without a HAVING clause.
+ *
+ * If a HAVING clause is present it is removed from @p q->havingQual and
+ * converted into a provenance expression via @c having_Expr_to_provenance_cmp.
+ *
+ * If @c provsql_where_provenance is enabled, equality gates (@c provenance_eq)
+ * are prepended for join conditions and WHERE equalities, and a projection gate
+ * is appended if the output columns form a proper subset of the input columns.
+ *
+ * @param constants        Extension OID cache.
+ * @param q                Query being rewritten (HAVING is cleared if present).
+ * @param prov_atts        List of provenance @c Var nodes.
+ * @param aggregation      True if the query contains aggregate functions.
+ * @param group_by_rewrite True if a GROUP BY requires the plus-aggregate wrapper.
+ * @param op               Semiring operation to use for combining tokens.
+ * @param columns          Per-RTE column-numbering array (for where-provenance).
+ *                         For provenance-tracked @c RTE_RELATION entries, the
+ *                         -1 sentinel is used to identify them; the PROJECT
+ *                         gate positions for their columns use @c varattno
+ *                         rather than the query-order-dependent sequential
+ *                         numbers (see @c build_column_map() for the
+ *                         rationale).
+ * @param nbcols           Total number of non-provenance output columns.
+ * @param wrap_assumed If true, wrap the result in
+ *                         @c assume_boolean so downstream
+ *                         probability evaluators may treat it as Boolean.
+ * @param inv_cert         If non-NULL, a serialised inversion-free certificate
+ *                         to attach to the per-row root via @c provsql.annotate
+ *                         (transparent for every evaluator; read back by the
+ *                         probability dispatcher).  Mutually compatible with
+ *                         @c wrap_assumed only in principle -- the
+ *                         inversion-free path never sets the latter.
+ * @return  The provenance @c Expr to be appended to the target list.
+ */
 static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         List *prov_atts, bool aggregation,
                                         bool group_by_rewrite,

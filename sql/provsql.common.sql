@@ -4938,11 +4938,22 @@ CREATE OR REPLACE FUNCTION reachability_compile_stats(
  * @brief Boolean UCQ probability plus compilation statistics
  * (columnar form, internal)
  *
- * Same compilation as @c ucq_joint_evaluate(), returning the probability
- * together with the three width columns that substantiate thesis
- * Prop. 4.2.11 empirically -- the adversarial family has small data and
- * circuit widths but large joint width -- and the structural statistics.
+ * Same compilation as @c ucq_joint_compile_stats(query jsonb, ...),
+ * returning the probability together with the three width columns that
+ * substantiate thesis Prop. 4.2.11 empirically -- the adversarial family
+ * has small data and circuit widths but large joint width -- and the
+ * structural statistics.
  *
+ * @param disjunct_nvars number of query variables of each disjunct
+ * @param atom_disjunct disjunct index of each atom (parallel to @p atom_rel)
+ * @param atom_rel relation id of each atom
+ * @param atom_vars query-variable indices of all atom columns, concatenated
+ * @param atom_arity number of columns of each atom (slices @p atom_vars)
+ * @param fact_rel relation id of each fact
+ * @param fact_elems element ids of all fact columns, concatenated
+ * @param fact_arity number of columns of each fact (slices @p fact_elems)
+ * @param fact_tokens provenance token of each fact
+ * @param fact_probs probability of each fact
  * @param[out] probability the exact UCQ probability
  * @param[out] joint_treewidth width of the min-fill decomposition found
  * @param[out] data_treewidth_lb degeneracy lower bound of the data-only graph
@@ -4993,7 +5004,7 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
   OUT n_bags BIGINT,
   OUT max_states BIGINT,
   OUT dd_size BIGINT)
-  AS $ucq$
+  AS $$
 DECLARE
   dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
   avars INT[] := '{}'; aarity INT[] := '{}';
@@ -5018,7 +5029,7 @@ BEGIN
     FROM ucq_joint_compile_stats(dnv, adisj, arel, avars, aarity,
       fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs) s;
 END;
-$ucq$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
 
 
@@ -5076,7 +5087,7 @@ CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
   OUT n_bags BIGINT,
   OUT max_states BIGINT,
   OUT dd_size BIGINT)
-  AS $ucq$
+  AS $$
 DECLARE
   dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
   avars INT[] := '{}'; aarity INT[] := '{}';
@@ -5101,7 +5112,7 @@ BEGIN
     FROM ucq_joint_compile_stats_tracked(dnv, adisj, arel, avars, aarity,
       fact_rel, fact_elems, fact_arity, fact_tokens) s;
 END;
-$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
 /**
  * @brief Compile a correlated UCQ and materialise its certified d-D,
@@ -5143,7 +5154,7 @@ CREATE OR REPLACE FUNCTION ucq_joint_materialize_tracked(
   fact_elems INT[],
   fact_arity INT[],
   fact_tokens UUID[])
-  RETURNS UUID AS $ucq$
+  RETURNS UUID AS $$
 DECLARE
   dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
   avars INT[] := '{}'; aarity INT[] := '{}';
@@ -5164,7 +5175,7 @@ BEGIN
   RETURN ucq_joint_materialize_tracked(dnv, adisj, arel, avars, aarity,
     fact_rel, fact_elems, fact_arity, fact_tokens);
 END;
-$ucq$ LANGUAGE plpgsql VOLATILE;
+$$ LANGUAGE plpgsql VOLATILE;
 
 /**
  * @brief Compile a UCQ over named relations into a materialised certified
@@ -5194,12 +5205,13 @@ $ucq$ LANGUAGE plpgsql VOLATILE;
  * @endverbatim
  *
  * @param descriptor the UCQ + the relations and their element columns
+ * @param fallback token returned if the joint-width compiler declines
  * @return the materialised joint-width provenance token (NULL UUID-free
  *         exact Boolean provenance of the UCQ)
  */
 CREATE OR REPLACE FUNCTION ucq_joint_provenance(
   descriptor JSONB, fallback UUID DEFAULT NULL)
-RETURNS UUID AS $ucq$
+RETURNS UUID AS $$
 DECLARE
   legs text; sql text; saved text;
   fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
@@ -5266,31 +5278,8 @@ EXCEPTION WHEN OTHERS THEN
   -- query never fails.  Both give the same probability.
   RETURN fallback;
 END;
-$ucq$ LANGUAGE plpgsql VOLATILE;
+$$ LANGUAGE plpgsql VOLATILE;
 
-/**
- * @brief Per-answer joint-width provenance: the head-pinned d-D for one
- *        answer of a non-Boolean UCQ
- *
- * The per-answer counterpart of @c ucq_joint_provenance(): for a UCQ with
- * head (free) variables @p head_vars bound to @p head_vals (the GROUP BY
- * value of the answer), it gathers the facts of @p descriptor and adds, per
- * head, a unary @c Sel(head) constraint atom plus a single CERTAIN fact
- * (@c gate_one()) for the bound value -- forcing the head VARIABLE wherever
- * it occurs (correct under self-joins, unlike filtering a relation, which
- * would over-constrain a relation used in two atoms) -- then materialises
- * the certified d-D of the residual Boolean query.  The transparent
- * per-answer rewrite substitutes one such call per group;
- * @c probability_evaluate() on the returned token is the answer's
- * marginal.  On any decline the @p fallback token (the standard
- * per-answer provenance) is returned, so the query never fails.
- *
- * @param descriptor the UCQ plus @c relations / @c elem_cols (as for
- *        @c ucq_joint_provenance())
- * @param head_vars query-variable indices of the head
- * @param head_vals the bound head values for this answer (same length)
- * @param fallback token returned if the joint-width compiler declines
- */
 /**
  * @brief Internal gather for the per-answer joint route: parse @p descriptor
  *        into the columnar UCQ arrays and gather every fact (relation index,
@@ -5308,7 +5297,7 @@ CREATE OR REPLACE FUNCTION ucq_joint_gather(
   OUT atom_vars INT[], OUT atom_arity INT[],
   OUT fact_rel INT[], OUT fact_elems INT[], OUT fact_arity INT[],
   OUT fact_tokens UUID[], OUT val_by_id TEXT[])
-AS $ucq$
+AS $$
 DECLARE
   legs text; sql text; saved text; d jsonb; a jsonb; v text; didx int := 0;
 BEGIN
@@ -5358,7 +5347,7 @@ BEGIN
   EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems, val_by_id;
   PERFORM set_config('provsql.active', saved, true);
 END;
-$ucq$ LANGUAGE plpgsql VOLATILE;
+$$ LANGUAGE plpgsql VOLATILE;
 
 /**
  * @brief Per-answer joint-width provenance via the TOP-DOWN single DP

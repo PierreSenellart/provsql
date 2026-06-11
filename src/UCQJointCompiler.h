@@ -165,6 +165,8 @@ struct Answer {
  * @param candidates Candidate head tuples (row-major, length
  *                   @c |head_vars| each) -- typically the distinct values
  *                   the head columns take in the data.
+ * @param max_treewidth Reject (throw) when the joint width exceeds this.
+ * @param max_states    Bound on the DP state count per node.
  */
 static std::vector<Answer> compileAnswers(
   const JointEncoding &enc,

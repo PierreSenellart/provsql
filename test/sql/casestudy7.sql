@@ -315,7 +315,69 @@ SELECT paper, p_indep, p_exact FROM cs7_assign ORDER BY paper;
 DROP TABLE cs7_assign;
 
 -- ---------------------------------------------------------------------
--- Step 8: recursive lineage (PostgreSQL 15+).
+-- Step 9: hard *and* correlated -- the joint-width route.  The #P-hard
+-- cyclic coverage of Step 3, recognised at planning time under
+-- provsql.joint_width = on and compiled along a tree decomposition of the
+-- data, agrees per paper with the circuit compiler (joint_width off); and
+-- over the repair_key-correlated assignment it is the only exact and
+-- tractable route -- independent rejects the literal circuit.
+-- ---------------------------------------------------------------------
+SET provsql.joint_width = on;
+CREATE TABLE cs7_jw_on AS
+  SELECT t.paper AS paper, probability_evaluate(provenance()) AS p
+    FROM bid b, expertise e, topic_of t
+    WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
+    GROUP BY t.paper;
+SELECT remove_provenance('cs7_jw_on');
+SET provsql.joint_width = off;
+CREATE TABLE cs7_jw_off AS
+  SELECT t.paper AS paper, probability_evaluate(provenance()) AS p
+    FROM bid b, expertise e, topic_of t
+    WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
+    GROUP BY t.paper;
+SELECT remove_provenance('cs7_jw_off');
+SELECT count(*) AS n_papers,
+       max(abs(a.p - b.p)) AS max_abs_diff
+  FROM cs7_jw_on a JOIN cs7_jw_off b USING (paper);
+DROP TABLE cs7_jw_on; DROP TABLE cs7_jw_off;
+
+-- Hard + correlated: cyclic coverage over the repair_key assignment.  The
+-- joint-width value (on) matches the circuit compiler (off) exactly.
+SET provsql.joint_width = on;
+CREATE TABLE cs7_jw_corr_on AS
+  SELECT round(probability_evaluate(provenance())::numeric, 6) AS jw_correlated
+  FROM (SELECT DISTINCT 1 FROM assignment a, expertise e, topic_of t
+        WHERE a.reviewer = e.reviewer AND e.topic = t.topic
+          AND t.paper = a.paper) q;
+SELECT remove_provenance('cs7_jw_corr_on');
+SET provsql.joint_width = off;
+CREATE TABLE cs7_jw_corr_off AS
+  SELECT round(probability_evaluate(provenance())::numeric, 6) AS circuit_compiler
+  FROM (SELECT DISTINCT 1 FROM assignment a, expertise e, topic_of t
+        WHERE a.reviewer = e.reviewer AND e.topic = t.topic
+          AND t.paper = a.paper) q;
+SELECT remove_provenance('cs7_jw_corr_off');
+SELECT a.jw_correlated, b.circuit_compiler
+  FROM cs7_jw_corr_on a, cs7_jw_corr_off b;
+DROP TABLE cs7_jw_corr_on, cs7_jw_corr_off;
+-- With the literal circuit (joint_width off) independent rejects it.
+DO $$
+DECLARE raised boolean := false;
+BEGIN
+  BEGIN
+    PERFORM probability_evaluate(provenance(), 'independent')
+      FROM (SELECT DISTINCT 1 FROM assignment a, expertise e, topic_of t
+            WHERE a.reviewer = e.reviewer AND e.topic = t.topic
+              AND t.paper = a.paper) q;
+  EXCEPTION WHEN OTHERS THEN raised := true;
+  END;
+  IF NOT raised THEN
+    RAISE EXCEPTION 'expected independent to reject the correlated cyclic coverage';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- Step 10: recursive lineage (PostgreSQL 15+).
 -- ---------------------------------------------------------------------
 -- Acyclic: what does p6 transitively build on?  Read-once per ancestor,
 -- any semiring (Boolean formula + possible-worlds probability).

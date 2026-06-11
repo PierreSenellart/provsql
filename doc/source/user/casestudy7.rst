@@ -57,8 +57,8 @@ uncertainty -- seven tuple-independent, plus the block-correlated
 ``reviewers`` / ``papers`` / ``topics``. Three tuple-independent
 relations make up the core instance and drive the coverage queries; the
 rest are introduced where they are first used -- two graphs queried
-recursively in Step 9, ``recommend`` / ``champion`` in Step 7, and
-``assignment`` in Step 8:
+recursively in Step 10, ``recommend`` / ``champion`` in Step 7, and
+``assignment`` in Steps 8-9:
 
 * ``bid(reviewer, paper)`` -- a reviewer offered to review a paper; the
   confidence is how firm the bid is (availability, willingness).
@@ -492,8 +492,69 @@ within a block rather than multiplying), so this kind of block
 correlation, unlike the non-hierarchical cycle of Step 3, stays
 tractable without a compiler.
 
-Step 9: Recursive Lineage -- Reachability and Reliability
----------------------------------------------------------
+Step 9: Hard *and* Correlated -- Bounded Joint Width
+----------------------------------------------------
+
+Step 3's whole-program coverage was :math:`\#P`-hard in its *shape* and needed
+a compiler; Step 8's ``repair_key`` correlation stayed tractable because the
+query *shape* was safe. What about a query that is **both** -- the hard cyclic
+shape **and** correlated inputs? Lifted inference presumes
+tuple-independence, so the Dalvi-Suciu safe-query rewrite (Steps 1-2) and the
+inversion-free certificate (Step 7) do not apply, and ``independent`` rejects
+the circuit outright.
+
+ProvSQL has a fourth planner-time escape for exactly this: the **joint-width
+UCQ compiler** (the ``provsql.joint_width`` route, on by default). It is the
+non-recursive sibling of the reachability compiler of Step 10: when a
+:math:`\#P`-hard union of conjunctive queries has bounded **joint
+treewidth** -- the treewidth of the data *together with* its correlation
+structure -- ProvSQL recognises the shape at planning time and compiles its
+provenance along a tree decomposition of the data into a certified **d-D**,
+exactly, in time linear in the data :cite:`Amarilli2016thesis`. Unlike every
+other tractable route, it stays exact over correlated inputs.
+
+Ask the Step-3 cyclic coverage question **per paper** -- "for each paper, how
+competently is it covered?":
+
+.. code-block:: postgresql
+
+    SELECT t.paper, probability_evaluate(provenance())
+    FROM bid b, expertise e, topic_of t
+    WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
+    GROUP BY t.paper ORDER BY t.paper
+
+The planner substitutes the head-pinned joint-width provenance per group, but
+computes them all in **one pass**: the facts are gathered once, the joint
+graph decomposed once, and a single bottom-up sweep emits one d-D per paper
+(``ucq_joint_provenance_answer`` caches them and hands each group its token).
+The per-paper values match a circuit compiler to full precision -- ``p1``
+``0.425869``, ``p4`` ``0.300776`` -- so the marginal you read back is the
+exact one, produced from the *data* treewidth without an external tool.
+
+Now the same cyclic shape over the **correlated** ``assignment`` table of
+Step 8 -- "is any paper covered by its *assigned* expert reviewer?":
+
+.. code-block:: postgresql
+
+    SELECT DISTINCT 1
+    FROM assignment a, expertise e, topic_of t
+    WHERE a.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = a.paper
+
+``independent`` rejects this (*"Not an independent circuit"*: a reviewer's
+candidate papers are mutually exclusive, so the lineage is neither
+tuple-independent nor read-once), and the safe and inversion-free routes do
+not apply to the cyclic shape. Yet ProvSQL returns the exact ``0.735868`` from
+the joint-width route, because the joint treewidth -- the data graph
+*together with* the ``repair_key`` exclusion blocks -- is bounded. This is the
+one cell of the method comparison that nothing else fills: a query that is at
+once :math:`\#P`-hard *and* over correlated inputs, evaluated exactly and in
+linear data time. (Setting ``provsql.joint_width = off`` reverts ``provenance()``
+to the literal circuit of Steps 3-5, leaving an external compiler to handle the
+correlated circuit and ``independent`` to reject it, so you can see the two
+routes side by side; see :doc:`the tractable-cases table <probabilities>`.)
+
+Step 10: Recursive Lineage -- Reachability and Reliability
+----------------------------------------------------------
 
 .. note::
 
