@@ -26,6 +26,17 @@ bid_h0
 bid_ladder_oracle
 0.728000
 (1 row)
+remove_provenance
+
+(1 row)
+== BID H0 transparent: joint-width fired (token differs from off) ==
+joint_width_fired
+t
+(1 row)
+== BID H0 transparent: independent on the materialised d-D = oracle ==
+jw_independent
+0.728000
+(1 row)
 add_provenance
 
 (1 row)

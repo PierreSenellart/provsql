@@ -162,8 +162,26 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
     const auto t = dd.getGateType(g);
 
     if (t == BooleanGate::IN || t == BooleanGate::MULIN) {
-      // Existing tokens (the leaf provenance): never re-created.
-      uuid_of[g] = string2uuid(dd.getUUID(g));
+      const std::string tok = dd.getUUID(g);
+      if (!tok.empty() && tok[0] == '\x01') {
+        // A synthetic stick-breaking coin: the joint-width compiler
+        // introduces these (token "\x01mulsb:N") when it expands a
+        // repair_key / BID exclusion block into shared independent
+        // events; they carry a probability but no store UUID.  Materialise
+        // each as a fresh independent gate_input with that probability.
+        // The UUID is content-addressed on the synthetic token, so coins
+        // shared across a block's values (the same "\x01mulsb:N") collapse
+        // to one store gate, preserving the mutual exclusion.
+        const pg_uuid_t token = provsqlUuidV5(tok);
+        if (created.insert(uuid2string(token)).second) {
+          provsql_internal_create_gate(&token, gate_input, 0, NULL);
+          provsql_internal_set_prob(&token, dd.getProb(g));
+        }
+        uuid_of[g] = token;
+      } else {
+        // Existing tokens (the leaf provenance): never re-created.
+        uuid_of[g] = string2uuid(tok);
+      }
       stack.pop_back();
       continue;
     }

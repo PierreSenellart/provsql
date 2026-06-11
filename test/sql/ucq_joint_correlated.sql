@@ -116,6 +116,25 @@ SELECT round((SELECT probability_evaluate(tok) FROM bid_h0)::numeric, 6)
   AS bid_ladder_oracle;
 SET provsql.joint_width = on;
 
+-- The same BID H0 through the TRANSPARENT route (provenance() under
+-- joint_width on), so the stick-broken exclusion blocks travel the
+-- *materialisation* path, not just probabilityEvaluation: each synthetic
+-- stick-breaking coin must be materialised as a fresh independent input
+-- gate carrying its probability.  Regression guard: the materialiser used
+-- to choke on the synthetic leaf token and silently fall back to the
+-- literal circuit (so the value still matched but joint-width never fired);
+-- here we assert the token *differs* from the joint_width-off circuit and
+-- that 'independent' accepts the certified d-D and returns the 0.728 oracle.
+CREATE TABLE bid_h0_on AS SELECT provenance() tok
+  FROM (SELECT DISTINCT 1 FROM detection_n2 d1 JOIN detection_n2 d2 USING (photo_id)
+        WHERE d1.species_id=1 AND d2.species_id=3) q;
+SELECT remove_provenance('bid_h0_on');
+\echo '== BID H0 transparent: joint-width fired (token differs from off) =='
+SELECT ((SELECT tok FROM bid_h0_on) <> (SELECT tok FROM bid_h0)) AS joint_width_fired;
+\echo '== BID H0 transparent: independent on the materialised d-D = oracle =='
+SELECT round(probability_evaluate((SELECT tok FROM bid_h0_on), 'independent')::numeric, 6)
+  AS jw_independent;
+
 -- ----------------------------------------------------------------------
 -- Per-answer over correlated inputs.  The H0 query q(x) :- R(x),S(x,y),T(y)
 -- has one answer per x; the transparent route gathers the tokens once and

@@ -282,6 +282,28 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
 #endif
 }
 
+/** @brief Internal entry point behind set_prob(): worker IPC only.  Returns
+ *  whether the worker accepted the probability (false on a non-input gate). */
+bool provsql_internal_set_prob(const pg_uuid_t *token, double prob)
+{
+  char result;
+
+  STARTWRITEM();
+  ADDWRITEM("P", char);
+  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEM(token, pg_uuid_t);
+  ADDWRITEM(&prob, double);
+
+  provsql_shmem_lock_shared();
+  if(!SENDWRITEM() || !READB(result, char)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe");
+  }
+  provsql_shmem_unlock();
+
+  return result;
+}
+
 /** @brief Internal entry point behind set_infos(): worker IPC only. */
 void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
                                 unsigned info2)
@@ -351,25 +373,11 @@ Datum set_prob(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   double prob = PG_GETARG_FLOAT8(1);
-  char result;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     provsql_error("Invalid NULL value passed to set_prob");
 
-  STARTWRITEM();
-  ADDWRITEM("P", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(token, pg_uuid_t);
-  ADDWRITEM(&prob, double);
-
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM() || !READB(result, char)) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe");
-  }
-  provsql_shmem_unlock();
-
-  if(!result)
+  if(!provsql_internal_set_prob(token, prob))
     provsql_error("set_prob called on non-input gate");
 
   PG_RETURN_VOID();

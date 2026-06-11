@@ -104,6 +104,18 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
  * @param info1  First (gate-type-specific) info value.
  * @param info2  Second info value.
  */
+/**
+ * @brief Set an input gate's probability from in-extension C/C++ code.
+ *
+ * Internal entry point behind the SQL-callable @c set_prob().
+ *
+ * @param token  UUID of the input gate.
+ * @param prob   Probability value in [0,1].
+ * @return       False if the worker rejected it (the token is not an input
+ *               gate); true on success.
+ */
+bool provsql_internal_set_prob(const pg_uuid_t *token, double prob);
+
 void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
                                 unsigned info2);
 
