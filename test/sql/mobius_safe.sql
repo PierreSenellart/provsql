@@ -117,6 +117,38 @@ SELECT 'q9_token' AS q,
                provsql.ucq_mobius_provenance(:'q9_desc'::jsonb))::numeric,6)
          AS probability;
 
+-- Planner auto-routing ("just works"): q9 written as a plain SQL UNION (the
+-- existence formed by the UNION dedup), with the joint-width width screen
+-- forced to decline (joint_max_treewidth = 0) so the runtime hands off to the
+-- Möbius route -- exactly the adversarial-data situation where the joint
+-- treewidth is unbounded and Möbius is the only exact route.  The planner hook
+-- recognises the UCQ, the Möbius compiler fires, and the per-row token is a
+-- gate_mobius answered in PTIME -- no manual intervention.
+SET provsql.active = on;
+SET provsql.joint_width = on;
+SET provsql.mobius = on;
+SET provsql.joint_max_treewidth = 0;     -- force the joint screen to decline -> Möbius
+CREATE TEMP TABLE q9auto AS
+  SELECT provenance() AS tok FROM (
+    SELECT 1 FROM mob_r, mob_s1 a1, mob_s3 a3, mob_t t3
+      WHERE mob_r.x=a1.x AND a3.y=t3.y
+    UNION
+    SELECT 1 FROM mob_s1 b1, mob_s2 b2, mob_s3 b3, mob_t tb
+      WHERE b1.x=b2.x AND b1.y=b2.y AND b3.y=tb.y
+    UNION
+    SELECT 1 FROM mob_s2 c2, mob_s3 c3, mob_s3 c3b, mob_t tc
+      WHERE c2.x=c3.x AND c2.y=c3.y AND c3b.y=tc.y
+    UNION
+    SELECT 1 FROM mob_r d, mob_s1 d1, mob_s1 d1b, mob_s2 d2, mob_s2 d2b, mob_s3 d3
+      WHERE d.x=d1.x AND d1b.x=d2.x AND d1b.y=d2.y AND d2b.x=d3.x AND d2b.y=d3.y
+  ) qq;
+SET provsql.active = off;
+SET provsql.joint_max_treewidth = 10;
+SELECT 'q9_planner' AS q,
+       provsql.get_gate_type(tok) AS root_gate,
+       round(provsql.probability_evaluate(tok)::numeric,6) AS probability
+  FROM q9auto;
+
 -- ===========================================================================
 -- Negative: a non-hierarchical single CQ H0 = R(x),S(x,y),T(y) has no
 -- separator and no inclusion-exclusion structure -- it is genuinely #P-hard,
