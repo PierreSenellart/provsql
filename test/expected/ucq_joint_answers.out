@@ -129,9 +129,9 @@ x|joint_width_fired|diff_vs_ladder
 3|t|0.000000000
 4|t|0.000000000
 (4 rows)
-== constant selection (js.y = 11): joint-width fired, diff vs ladder 0 ==
+== constant selection (js.y = 11) collapses to hierarchical: jw defers, diff vs ladder 0 ==
 joint_width_fired|diff_vs_ladder
-t|0.000000000
+f|0.000000000
 (1 row)
 == head expression r.x*10+1: fired, token == the bare-x head, diff vs ladder 0 ==
 x|k|joint_width_fired|same_token_as_bare_head|diff_vs_ladder

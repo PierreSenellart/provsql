@@ -246,10 +246,23 @@ To watch the key do the work, drop it and re-run the coverage query's
     ALTER TABLE expertise DROP CONSTRAINT expertise_pkey;
 
 With the functional dependency ``reviewer`` :math:`\to` ``topic`` gone, a
-reviewer may span several areas, the question becomes genuinely
-non-hierarchical, and ``independent`` **errors again** -- even with
-the ``'boolean'`` class on, the rewriter can no longer factor the shared
-``topic_of`` leaf out. Add the key back to restore safety:
+reviewer may span several areas and the question becomes genuinely
+non-hierarchical, so the safe-query rewriter can no longer factor the
+shared ``topic_of`` leaf out: the lineage is **no longer read-once**.
+
+The answer stays tractable nonetheless -- ``independent`` keeps returning
+``≈ 0.4259``. What changes is the *circuit*. The query is now a
+:math:`\#P`-hard union of conjunctive queries, and under the ``'boolean'``
+class the **joint-width UCQ compiler** (on by default) recognises it and
+compiles its provenance along a tree decomposition of the data into a
+certified **d-D**, which ``independent`` then evaluates in linear time.
+That decomposition is more complex than the read-once factorisation above:
+the key, when present, is what buys the cheaper read-once form, and without
+it the joint-width route takes over. Step 9 returns to this hard-and-
+correlated regime in depth; see also the :doc:`tractable-cases table
+<probabilities>` and :ref:`bounded-joint-width`.
+
+Add the key back to recover the cheaper read-once form:
 
 .. code-block:: postgresql
 

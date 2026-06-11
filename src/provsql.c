@@ -140,6 +140,7 @@ static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chaine
 
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
+                            bool in_boolean_rewrite,
                             const InvFreeMarkerCtx *inv_ctx);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
@@ -1969,6 +1970,9 @@ static void inline_ctes(Query *q) {
  * @param constants  Extension OID cache.
  * @param q          Query whose range table is scanned (subquery RTEs are
  *                   modified in place by the recursive call).
+ * @param in_boolean_rewrite  True when @p q lies under a safe-query (boolean)
+ *                   rewrite; threaded into the subquery recursion so the
+ *                   joint-width recogniser defers throughout the subtree.
  * @param inv_ctx    Inversion-free marker context for @p q, or @c NULL; its
  *                   per-subquery child context is threaded into each recursive
  *                   @c process_query call so a flattened view's base inputs
@@ -1977,6 +1981,7 @@ static void inline_ctes(Query *q) {
  *          query has no provenance-bearing relation.
  */
 static List *get_provenance_attributes(const constants_t *constants, Query *q,
+                                       bool in_boolean_rewrite,
                                        const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts = NIL;
 
@@ -2015,6 +2020,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
         r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
         process_query(constants, r->subquery, &inner_removed, false, false,
+                      in_boolean_rewrite,
                       (inv_ctx && rteid - 1 < (Index) inv_ctx->natoms)
                         ? inv_ctx->sub[rteid - 1] : NULL);
       if (new_subquery != NULL) {
@@ -4026,6 +4032,9 @@ static Expr *build_joint_width_answer_expr(const constants_t *constants,
  * @param wrap_assumed If true, wrap the result in
  *                         @c assume_boolean so downstream
  *                         probability evaluators may treat it as Boolean.
+ * @param in_boolean_rewrite  True when this query lies under a safe-query
+ *                         (boolean) rewrite; the joint-width substitution
+ *                         declines so it never pre-empts the read-once form.
  * @param inv_cert         If non-NULL, a serialised inversion-free certificate
  *                         to attach to the per-row root via @c provsql.annotate
  *                         (transparent for every evaluator; read back by the
@@ -4039,6 +4048,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                                         bool group_by_rewrite,
                                         semiring_operation op, int **columns,
                                         int nbcols, bool wrap_assumed,
+                                        bool in_boolean_rewrite,
                                         const char *inv_cert) {
   Expr *result;
   ListCell *lc_v;
@@ -4048,8 +4058,15 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
   bool  jw_all_exist = false;
   List *jw_head_idx = NIL;
   List *jw_head_exprs = NIL;
+  /* Joint-width is the fallback for the genuinely #P-hard UCQs.  It must NOT
+   * pre-empt a query another route already certifies: @c in_boolean_rewrite is
+   * set throughout a safe-query rewrite's subtree (so jw defers to it even one
+   * level down a subquery, where @c wrap_assumed alone is lost), and @c inv_cert
+   * marks an inversion-free certificate.  In both cases the lineage is already
+   * tractable, so decline. */
   if (provsql_joint_width && provsql_boolean_provenance &&
-      op != SR_PLUS && (aggregation || group_by_rewrite))
+      op != SR_PLUS && (aggregation || group_by_rewrite) &&
+      !in_boolean_rewrite && inv_cert == NULL)
     jw_desc = provsql_joint_width_descriptor(constants, q, &jw_all_exist,
                                              &jw_head_idx, &jw_head_exprs);
 
@@ -11750,7 +11767,7 @@ static bool process_inert_fetches_walker(Node *node, void *cx) {
                                            (Query *)sl->subselect)) {
       bool *removed = NULL;
       Query *processed = process_query(ctx->constants, (Query *)sl->subselect,
-                                       &removed, false, false, NULL);
+                                       &removed, false, false, false, NULL);
       keep_only_provenance_output(processed);
       sl->subselect = (Node *)processed;
       provsql_inert_subselects = lappend(provsql_inert_subselects, processed);
@@ -11802,6 +11819,11 @@ static void process_inert_fetches(const constants_t *constants, Query *q) {
  *                   @c provsql.assume_boolean before splicing.
  * @param top_level  True for the outermost query the user evaluates; gates the
  *                   inversion-free analysis (run only at the top).
+ * @param in_boolean_rewrite  True once a safe-query (boolean) rewrite has fired
+ *                   above; propagated through every recursion (including into
+ *                   subqueries, where @c wrap_root is otherwise lost) so the
+ *                   joint-width recogniser defers to the safe rewrite everywhere
+ *                   in its subtree.
  * @param inv_ctx    Inversion-free marker context supplied by a parent that
  *                   flattened this query as a subquery, or @c NULL; when set,
  *                   this query applies the supplied per-input markers instead of
@@ -11811,6 +11833,7 @@ static void process_inert_fetches(const constants_t *constants, Query *q) {
  */
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
+                            bool in_boolean_rewrite,
                             const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts;
   bool has_union = false;
@@ -12029,7 +12052,8 @@ static Query *process_query(const constants_t *constants, Query *q,
                           "aggregate results not supported");
         }
         q = rewrite_non_all_into_external_group_by(q);
-        return process_query(constants, q, removed, wrap_root, top_level, inv_ctx);
+        return process_query(constants, q, removed, wrap_root, top_level,
+                             in_boolean_rewrite, inv_ctx);
       }
     }
 
@@ -12037,7 +12061,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       Query *rewritten = rewrite_agg_distinct(q, constants);
       if (rewritten)
         return process_query(constants, rewritten, removed, wrap_root, top_level,
-                             inv_ctx);
+                             in_boolean_rewrite, inv_ctx);
     }
 
     /* Rewrite any JOIN on an agg_token column before provenance
@@ -12053,7 +12077,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         Query *rewritten = rewrite_join_agg_token(q, constants, rteid, join_attno);
         if (rewritten)
           return process_query(constants, rewritten, removed, wrap_root,
-                               top_level, inv_ctx);
+                               top_level, in_boolean_rewrite, inv_ctx);
       }
     }
 
@@ -12078,8 +12102,11 @@ static Query *process_query(const constants_t *constants, Query *q,
        * circuit-changing read-once rewrite that would bypass them. */
       Query *rewritten = try_safe_query_rewrite(constants, q);
       if (rewritten)
+        /* The whole rewritten subtree is a boolean safe-query rewrite: flag it
+         * so the joint-width recogniser defers to it everywhere below (the
+         * signal would otherwise be lost at the subquery boundary). */
         return process_query(constants, rewritten, removed, true, top_level,
-                             inv_ctx);
+                             true, inv_ctx);
 
     }
 
@@ -12117,7 +12144,8 @@ static Query *process_query(const constants_t *constants, Query *q,
 
     // get_provenance_attributes will also recursively process subqueries
     // by calling process_query (threading each subquery's marker sub-context)
-    prov_atts = get_provenance_attributes(constants, q, local_inv_ctx);
+    prov_atts = get_provenance_attributes(constants, q, in_boolean_rewrite,
+                                          local_inv_ctx);
 
     /* Inversion-free path: wrap each certified atom's provenance token in its
      * per-input order marker.  prov_atts are base-relation Vars (the certified
@@ -12295,7 +12323,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       provenance = make_provenance_expression(
         constants, q, prov_atts, q->hasAggs, group_by_rewrite,
         has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES), columns,
-        nbcols, wrap_root, inv_cert);
+        nbcols, wrap_root, in_boolean_rewrite, inv_cert);
 
       /* Fallback for the rare set-op outer WHERE case: conjoin via
        * provenance_times after the aggregation wrappers.  Correct only
@@ -12396,7 +12424,8 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   {
     bool *removed = NULL;
     Query *new_subquery =
-      process_query(constants, src_rte->subquery, &removed, false, false, NULL);
+      process_query(constants, src_rte->subquery, &removed, false, false, false,
+                    NULL);
     if (new_subquery == NULL)
       return;
     src_rte->subquery = new_subquery;
@@ -12636,7 +12665,8 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         begin = clock();
 
-      new_query = process_query(&constants, q, &removed, false, true, NULL);
+      new_query = process_query(&constants, q, &removed, false, true, false,
+                                NULL);
 
       if (provsql_verbose >= 40)
         provsql_notice("planner time spent=%f",

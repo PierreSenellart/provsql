@@ -357,10 +357,13 @@ SELECT o.x, (o.tok <> f.tok) AS joint_width_fired,
   FROM jpu_on o JOIN jpu_off f ON o.x = f.x ORDER BY o.x;
 
 -- ---------------------------------------------------------------------
--- (12) Constant selection: a Var = Const conjunct pins the column's
---      variable to the literal (the same Sel mechanism as a head, value
---      known at plan time), so the recogniser no longer declines on it.
---      H0 with the existential y pinned (js.y = 11): cross-check vs ladder.
+-- (12) Constant selection pinning the existential y (js.y = 11).  On this
+--      join-only schema the pin collapses H0 to a query hierarchical in x,
+--      which the safe-query route claims under the 'boolean' class, so
+--      joint-width correctly DEFERS to it; the value still cross-checks against
+--      the ladder.  (A constant on a non-join column -- e.g. cs7's
+--      b.paper='p1' -- keeps H0 #P-hard and lets joint-width fire with its
+--      rel_where pushdown.)
 -- ---------------------------------------------------------------------
 SET provsql.active = on;
 SET provsql.joint_width = on;
@@ -372,7 +375,7 @@ CREATE TEMP TABLE jc_off AS SELECT provenance() AS tok
   FROM (SELECT DISTINCT 1 FROM jr, js, jt
          WHERE jr.x = js.x AND js.y = jt.y AND js.y = 11) q;
 SET provsql.active = off;
-\echo '== constant selection (js.y = 11): joint-width fired, diff vs ladder 0 =='
+\echo '== constant selection (js.y = 11) collapses to hierarchical: jw defers, diff vs ladder 0 =='
 SELECT jw_fires('SELECT provsql.provenance() FROM (SELECT DISTINCT 1
                    FROM jr, js, jt WHERE jr.x = js.x AND js.y = jt.y
                     AND js.y = 11) q') AS joint_width_fired,
