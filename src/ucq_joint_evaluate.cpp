@@ -43,6 +43,7 @@ PG_FUNCTION_INFO_V1(ucq_joint_compile_stats_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_materialize_tracked);
 PG_FUNCTION_INFO_V1(ucq_joint_answers_swept);
 PG_FUNCTION_INFO_V1(ucq_joint_answers_swept_tracked);
+PG_FUNCTION_INFO_V1(ucq_joint_answers_onedp);
 }
 
 #include "c_cpp_compatibility.h"
@@ -985,6 +986,87 @@ Datum ucq_joint_answers_swept_tracked(PG_FUNCTION_ARGS)
   } catch (...) {
     MemoryContextSwitchTo(oldcontext);
     provsql_error("ucq_joint_answers_swept_tracked: unknown exception");
+  }
+
+  MemoryContextSwitchTo(oldcontext);
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief PostgreSQL-callable SRF: per-answer probabilities via the full
+ *        TOP-DOWN single DP (data-graph regime).
+ *
+ * Unlike @c ucq_joint_answers_swept (k head-pinned sweeps sharing only the
+ * decomposition), this runs ONE bottom-up sweep that emits one circuit root
+ * per answer -- the head variables are a state-level key and each answer is
+ * emitted when its head elements leave the tree decomposition.  The answers
+ * are DISCOVERED by the sweep, so no candidate list is taken.
+ *
+ * Argument layout: the columnar query + facts (args 0-9, as
+ * @c ucq_joint_evaluate / @c decodeArgs), then
+ *
+ *   10 head_vars int[] : query-variable indices of the head.
+ *
+ * Returns @c SETOF (head int[], probability float8).
+ */
+Datum ucq_joint_answers_onedp(PG_FUNCTION_ARGS)
+{
+  ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+  MemoryContext per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+  MemoryContext oldcontext = MemoryContextSwitchTo(per_query_ctx);
+  TupleDesc tupdesc = rsinfo->expectedDesc;
+  Tuplestorestate *tupstore =
+    tuplestore_begin_heap(rsinfo->allowedModes & SFRM_Materialize_Random,
+                          false, work_mem);
+  rsinfo->returnMode = SFRM_Materialize;
+  rsinfo->setResult = tupstore;
+
+  try {
+    UCQ ucq;
+    std::vector<FactRow> rows;
+    decodeArgs(fcinfo, ucq, rows);
+
+    int n_hv;
+    const int32 *hv = intArray(fcinfo, 10, "head_vars", n_hv);
+    if (n_hv <= 0)
+      provsql_error("ucq_joint_answers_onedp: empty head_vars");
+    std::vector<unsigned> head_vars(n_hv);
+    for (int i = 0; i < n_hv; ++i)
+      head_vars[i] = static_cast<unsigned>(hv[i]);
+
+    const JointEncoding enc = JointEncoding::fromFacts(rows);
+    const unsigned max_tw =
+      static_cast<unsigned>(provsql_joint_max_treewidth);
+    const std::size_t max_states =
+      static_cast<std::size_t>(provsql_joint_max_states);
+
+    std::vector<UCQJointCompiler::Answer> answers;
+    try {
+      answers = UCQJointCompiler::compileAnswersOneDP(enc, ucq, head_vars,
+                                                      max_tw, max_states);
+    } catch (TreeDecompositionException &) {
+      provsql_error(
+        "ucq_joint_answers_onedp: joint treewidth exceeds the configured "
+        "maximum (%d)", provsql_joint_max_treewidth);
+    }
+
+    for (const auto &a : answers) {
+      Datum *elems = (Datum *) palloc(a.head.size() * sizeof(Datum));
+      for (std::size_t i = 0; i < a.head.size(); ++i)
+        elems[i] = Int32GetDatum(static_cast<int32>(a.head[i]));
+      ArrayType *arr = construct_array(elems, static_cast<int>(a.head.size()),
+                                       INT4OID, sizeof(int32), true,
+                                       TYPALIGN_INT);
+      Datum values[2] = { PointerGetDatum(arr), Float8GetDatum(a.probability) };
+      bool nulls[2] = { false, false };
+      tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+  } catch (const std::exception &e) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_onedp: %s", e.what());
+  } catch (...) {
+    MemoryContextSwitchTo(oldcontext);
+    provsql_error("ucq_joint_answers_onedp: unknown exception");
   }
 
   MemoryContextSwitchTo(oldcontext);

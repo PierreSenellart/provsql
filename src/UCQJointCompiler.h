@@ -173,6 +173,32 @@ static std::vector<Answer> compileAnswers(
   const std::vector<std::vector<unsigned long> > &candidates,
   unsigned max_treewidth = TreeDecomposition::MAX_TREEWIDTH,
   std::size_t max_states = DEFAULT_MAX_STATES);
+
+/**
+ * @brief Per-answer evaluation by a single top-down DP (data-graph regime).
+ *
+ * The full multi-output construction (Amarilli, tel-01345836, §4.2.9): ONE
+ * bottom-up sweep emits one circuit root per answer, rather than @c k
+ * head-pinned sweeps (@c compileAnswers).  The head variables become a
+ * **state-level key** -- they are never existentially projected (a forgotten
+ * head element is recorded as a fixed value), completed answers are tracked
+ * per head-tuple in the state, and an answer is emitted as its own d-DNNF
+ * root when its head elements leave the tree decomposition.  All answer roots
+ * share one circuit, so a single probability pass (with the gate cache) values
+ * them all.  The candidate answers are **discovered** by the sweep -- no
+ * candidate list is needed.  Equivalent answers and probabilities to
+ * @c compileAnswers, in one pass instead of @c k.
+ *
+ * @param enc        The joint encoding (data-graph / TID-BID regime).
+ * @param ucq        The UCQ; the head variables must occur in every disjunct.
+ * @param head_vars  Query-variable indices of the head.
+ */
+static std::vector<Answer> compileAnswersOneDP(
+  const JointEncoding &enc,
+  const UCQ &ucq,
+  const std::vector<unsigned> &head_vars,
+  unsigned max_treewidth = TreeDecomposition::MAX_TREEWIDTH,
+  std::size_t max_states = DEFAULT_MAX_STATES);
 };
 
 #endif /* UCQ_JOINT_COMPILER_H */

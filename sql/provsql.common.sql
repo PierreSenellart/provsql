@@ -5258,6 +5258,70 @@ END;
 $ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 
 /**
+ * @brief Per-answer probabilities via the full TOP-DOWN single DP
+ *        (columnar form, C).
+ *
+ * Unlike @c ucq_joint_answers_swept (which shares the decomposition but reruns
+ * a head-pinned DP per answer), this runs ONE bottom-up sweep that emits one
+ * d-DNNF root per answer -- the head variables are a state-level key and an
+ * answer is emitted when its head elements leave the tree decomposition.  The
+ * answers are DISCOVERED by the sweep, so no candidate list is passed.  Same
+ * answers and probabilities as @c ucq_joint_answers, in a single pass.
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_answers_onedp(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  fact_probs DOUBLE PRECISION[],
+  head_vars INT[])
+  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS
+  'provsql','ucq_joint_answers_onedp' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Per-answer probabilities via the top-down single DP (JSON wrapper).
+ *
+ * Same surface as @c ucq_joint_answers(query, head_vars, …) minus the
+ * @c head_tuples candidate list (answers are discovered), routed through the
+ * single-pass top-down C SRF.
+ */
+CREATE OR REPLACE FUNCTION ucq_joint_answers_onedp(
+  query JSONB,
+  head_vars INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  fact_probs DOUBLE PRECISION[])
+  RETURNS TABLE(head INT[], probability DOUBLE PRECISION) AS $ucq$
+DECLARE
+  dnv INT[]:='{}'; adisj INT[]:='{}'; arel INT[]:='{}';
+  avars INT[]:='{}'; aarity INT[]:='{}';
+  d JSONB; a JSONB; v TEXT; didx INT:=0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  RETURN QUERY SELECT * FROM ucq_joint_answers_onedp(
+    dnv, adisj, arel, avars, aarity,
+    fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs, head_vars);
+END;
+$ucq$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
+
+/**
  * @brief Per-answer probabilities in a SINGLE PASS over CORRELATED inputs
  *        (columnar form, C).
  *

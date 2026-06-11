@@ -931,6 +931,636 @@ UCQJointCompiler::Result mergedCompile(const JointEncoding &enc,
   return result;
 }
 
+// =====================================================================
+// Full top-down single-DP for per-answer evaluation (data-graph regime).
+//
+// One bottom-up sweep emits one d-DNNF root per answer, replacing the k
+// head-pinned sweeps of compileAnswers.  The head variables become a
+// STATE-LEVEL key: a head variable is never existentially projected (when
+// its element leaves the bag it is recorded as a fixed value, not collapsed
+// to DONE-and-forgotten), so different head bindings live in different
+// states.  Completed answers are tracked per head-tuple in the state's
+// @c done set, and an answer is EMITTED as its own circuit root at the lift
+// where the last of its head elements leaves the decomposition (no future
+// fact can touch it, so its provenance is final).  The answer roots share
+// one circuit; the gate cache values them all in (amortised) one pass.
+// =====================================================================
+
+/** @brief Head bookkeeping: which query variables are the head, and the slot
+ *         of each.  @c slot_of_var[v] is the head position of variable @p v,
+ *         or -1 if @p v is not a head variable. */
+struct HeadInfo {
+  std::vector<unsigned> head_vars;     ///< Query-variable indices of the head.
+  std::vector<int> slot_of_var;        ///< var -> head slot, or -1.
+  std::size_t n_head() const { return head_vars.size(); }
+};
+
+/** @brief No-value sentinel for an unbound / in-bag head slot. */
+constexpr unsigned long NO_VAL = static_cast<unsigned long>(-1);
+
+/** @brief Augmented hom code: head variables additionally carry the fixed
+ *         element value once forgotten (@c st[v]==DONE for a head var). */
+struct ADCode {
+  std::vector<std::int8_t> st;         ///< Per variable: UNASSIGNED/DONE/pos.
+  std::uint64_t w = 0;                 ///< Witnessed-atom mask.
+  std::vector<unsigned long> hval;     ///< Per head slot: fixed value or NO_VAL.
+
+  bool operator==(const ADCode &o) const {
+    return w == o.w && st == o.st && hval == o.hval;
+  }
+  bool operator<(const ADCode &o) const {
+    if (w != o.w) return w < o.w;
+    if (st != o.st) return st < o.st;
+    return hval < o.hval;
+  }
+};
+
+/** @brief Augmented DP state: per-disjunct hom-set plus the set of head
+ *         tuples already satisfied (sorted, unique). */
+struct AState {
+  std::vector<std::vector<ADCode> > homs;
+  std::vector<std::vector<unsigned long> > done;   ///< Completed head tuples.
+
+  bool operator==(const AState &o) const {
+    return done == o.done && homs == o.homs;
+  }
+};
+
+struct AStateHash {
+  std::size_t operator()(const AState &s) const noexcept {
+    std::uint64_t h = 1469598103934665603ull;
+    auto mix = [&](std::uint64_t x) { h ^= x; h *= 1099511628211ull; };
+    for (const auto &t : s.done) {
+      mix(0xD0E + t.size());
+      for (unsigned long e : t) mix(e * 0x9e3779b97f4a7c15ull);
+    }
+    for (const auto &codes : s.homs) {
+      mix(codes.size());
+      for (const auto &c : codes) {
+        mix(c.w);
+        for (std::int8_t v : c.st)
+          mix(static_cast<std::uint64_t>(static_cast<std::uint8_t>(v)));
+        for (unsigned long e : c.hval) mix(e + 0x9e37);
+      }
+    }
+    return static_cast<std::size_t>(h);
+  }
+};
+
+inline void canonicalizeA(std::vector<ADCode> &codes)
+{
+  std::sort(codes.begin(), codes.end());
+  codes.erase(std::unique(codes.begin(), codes.end()), codes.end());
+}
+
+/** @brief Insert a head tuple into the sorted-unique @c done set. */
+inline void addDone(std::vector<std::vector<unsigned long> > &done,
+                    const std::vector<unsigned long> &t)
+{
+  auto it = std::lower_bound(done.begin(), done.end(), t);
+  if (it == done.end() || *it != t)
+    done.insert(it, t);
+}
+
+/** @brief The head-tuple value of a full code (every head var bound). */
+inline std::vector<unsigned long> readHeadTuple(
+  const ADCode &c, const HeadInfo &hi,
+  const std::vector<unsigned long> &domain)
+{
+  std::vector<unsigned long> t(hi.n_head());
+  for (std::size_t i = 0; i < hi.n_head(); ++i) {
+    const unsigned v = hi.head_vars[i];
+    const std::int8_t s = c.st[v];
+    if (s >= 0)
+      t[i] = domain[static_cast<std::size_t>(s)];
+    else if (s == DONE)
+      t[i] = c.hval[i];
+    else
+      throw JointCompilerException(
+        "compileAnswersOneDP: head variable unbound at completion "
+        "(head must occur in every disjunct)");
+  }
+  return t;
+}
+
+/**
+ * @brief Close a disjunct's augmented code set under a present fact.
+ *
+ * Like @c closeDisjunct but (a) the head variables are bound like any other
+ * (no pin), and (b) a code that reaches the full witnessed mask is a
+ * COMPLETION: its head tuple is appended to @p completions and the code is
+ * discharged (dropped) rather than turned into a sat collapse.
+ */
+void closeDisjunctA(const DisjunctInfo &di, const HeadInfo &hi,
+                    std::vector<ADCode> &codes, const Fact &fact,
+                    const std::vector<unsigned long> &domain,
+                    std::vector<std::vector<unsigned long> > &completions)
+{
+  std::vector<std::size_t> cand;
+  for (std::size_t ai = 0; ai < di.atoms.size(); ++ai)
+    if (di.atoms[ai].relation_id == fact.relation_id &&
+        di.atoms[ai].vars.size() == fact.elements.size())
+      cand.push_back(ai);
+  if (cand.empty())
+    return;
+
+  std::vector<int> pos(fact.elements.size());
+  for (std::size_t i = 0; i < fact.elements.size(); ++i)
+    pos[i] = positionIn(domain, fact.elements[i]);
+
+  std::set<ADCode> seen(codes.begin(), codes.end());
+  std::vector<ADCode> work(codes.begin(), codes.end());
+
+  while (!work.empty()) {
+    ADCode c = std::move(work.back());
+    work.pop_back();
+    for (std::size_t ai : cand) {
+      if ((c.w >> ai) & 1u)
+        continue;
+      const Atom &a = di.atoms[ai];
+      ADCode c2 = c;
+      bool ok = true;
+      for (std::size_t i = 0; i < a.vars.size(); ++i) {
+        const unsigned v = a.vars[i];
+        const std::int8_t p = static_cast<std::int8_t>(pos[i]);
+        if (c2.st[v] == UNASSIGNED)
+          c2.st[v] = p;
+        else if (c2.st[v] != p) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok)
+        continue;
+      c2.w |= (std::uint64_t{1} << ai);
+      if (seen.insert(c2).second) {
+        if (c2.w == di.full)
+          completions.push_back(readHeadTuple(c2, hi, domain));
+        else
+          work.push_back(c2);
+      }
+    }
+  }
+
+  codes.clear();
+  for (const ADCode &c : seen)
+    if (c.w != di.full)
+      codes.push_back(c);
+  canonicalizeA(codes);
+}
+
+/** @brief Apply a present fact to an augmented state (all disjuncts). */
+AState closeWithFactA(const QueryCtx &q, const HeadInfo &hi, const AState &s,
+                      const Fact &fact, const std::vector<unsigned long> &domain)
+{
+  AState out = s;
+  std::vector<std::vector<unsigned long> > comp;
+  for (std::size_t d = 0; d < q.disjuncts.size(); ++d)
+    closeDisjunctA(q.disjuncts[d], hi, out.homs[d], fact, domain, comp);
+  for (const auto &t : comp)
+    addDone(out.done, t);
+  return out;
+}
+
+/**
+ * @brief Re-express an augmented state over @p to_domain.
+ *
+ * Non-head variables forget exactly as @c forgetLift (DONE if discharged,
+ * else the code dies).  A head variable pinned to a leaving element is, if
+ * discharged, set DONE with its element VALUE recorded in @c hval (so the
+ * answer survives); else the code dies.  The @c done set is carried verbatim
+ * (its tuples are element values, immune to position remapping).
+ */
+AState forgetLiftA(const QueryCtx &q, const HeadInfo &hi, const AState &s,
+                   const std::vector<unsigned long> &from_domain,
+                   const std::vector<unsigned long> &to_domain)
+{
+  if (from_domain == to_domain)
+    return s;
+  std::vector<int> map(from_domain.size());
+  for (std::size_t i = 0; i < from_domain.size(); ++i) {
+    auto it = std::lower_bound(to_domain.begin(), to_domain.end(),
+                               from_domain[i]);
+    map[i] = (it != to_domain.end() && *it == from_domain[i])
+             ? static_cast<int>(it - to_domain.begin()) : -1;
+  }
+
+  AState out;
+  out.done = s.done;
+  out.homs.resize(q.disjuncts.size());
+  for (std::size_t d = 0; d < q.disjuncts.size(); ++d) {
+    const DisjunctInfo &di = q.disjuncts[d];
+    std::vector<ADCode> &dst = out.homs[d];
+    for (const ADCode &c : s.homs[d]) {
+      ADCode c2;
+      c2.w = c.w;
+      c2.st.resize(di.n_vars);
+      c2.hval = c.hval;
+      bool dead = false;
+      for (unsigned v = 0; v < di.n_vars; ++v) {
+        const std::int8_t st = c.st[v];
+        if (st == UNASSIGNED || st == DONE) {
+          c2.st[v] = st;
+        } else {
+          const int np = map[static_cast<std::size_t>(st)];
+          if (np >= 0) {
+            c2.st[v] = static_cast<std::int8_t>(np);
+          } else if ((c.w & di.atoms_of_var[v]) == di.atoms_of_var[v]) {
+            c2.st[v] = DONE;
+            const int slot = hi.slot_of_var[v];
+            if (slot >= 0)
+              c2.hval[static_cast<std::size_t>(slot)] =
+                from_domain[static_cast<std::size_t>(st)];
+          } else {
+            dead = true;
+            break;
+          }
+        }
+      }
+      if (!dead)
+        dst.push_back(std::move(c2));
+    }
+    canonicalizeA(dst);
+  }
+  return out;
+}
+
+/** @brief Join two augmented states over the same domain (disjoint facts). */
+AState joinA(const QueryCtx &q, const HeadInfo &hi,
+             const std::vector<unsigned long> &domain,
+             const AState &s1, const AState &s2)
+{
+  AState out;
+  out.done = s1.done;
+  for (const auto &t : s2.done)
+    addDone(out.done, t);
+  out.homs.resize(q.disjuncts.size());
+  for (std::size_t d = 0; d < q.disjuncts.size(); ++d) {
+    const DisjunctInfo &di = q.disjuncts[d];
+    std::vector<ADCode> &dst = out.homs[d];
+    for (const ADCode &c1 : s1.homs[d])
+      for (const ADCode &c2 : s2.homs[d]) {
+        ADCode c;
+        c.w = c1.w | c2.w;
+        c.st.resize(di.n_vars);
+        c.hval.assign(hi.n_head(), NO_VAL);
+        bool ok = true;
+        for (unsigned v = 0; v < di.n_vars; ++v) {
+          const std::int8_t a = c1.st[v];
+          const std::int8_t b = c2.st[v];
+          std::int8_t r;
+          if (a == UNASSIGNED)
+            r = b;
+          else if (b == UNASSIGNED)
+            r = a;
+          else if (a == DONE && b == DONE)
+            r = DONE;
+          else if (a == DONE || b == DONE) {
+            ok = false;
+            break;
+          } else if (a == b)
+            r = a;
+          else {
+            ok = false;
+            break;
+          }
+          c.st[v] = r;
+          // Reconcile the head value when a head variable is (now) forgotten.
+          const int slot = hi.slot_of_var[v];
+          if (r == DONE && slot >= 0) {
+            const unsigned long v1 = (a == DONE)
+              ? c1.hval[static_cast<std::size_t>(slot)] : NO_VAL;
+            const unsigned long v2 = (b == DONE)
+              ? c2.hval[static_cast<std::size_t>(slot)] : NO_VAL;
+            if (v1 != NO_VAL && v2 != NO_VAL && v1 != v2) {
+              ok = false;
+              break;
+            }
+            c.hval[static_cast<std::size_t>(slot)] =
+              (v1 != NO_VAL) ? v1 : v2;
+          }
+        }
+        if (!ok)
+          continue;
+        if (c.w == di.full)
+          addDone(out.done, readHeadTuple(c, hi, domain));
+        else
+          dst.push_back(std::move(c));
+      }
+    canonicalizeA(dst);
+  }
+  return out;
+}
+
+/** @brief The trivial augmented state (every @c hval slot unbound). */
+AState trivialAState(const QueryCtx &q, const HeadInfo &hi)
+{
+  AState s;
+  s.homs.resize(q.disjuncts.size());
+  for (std::size_t d = 0; d < q.disjuncts.size(); ++d)
+    s.homs[d].push_back(
+      ADCode{std::vector<std::int8_t>(q.disjuncts[d].n_vars, UNASSIGNED), 0,
+             std::vector<unsigned long>(hi.n_head(), NO_VAL)});
+  return s;
+}
+
+/**
+ * @brief The data-graph single top-down DP: build one d-DNNF root per answer
+ *        and evaluate them all from the shared circuit.
+ */
+std::vector<UCQJointCompiler::Answer> compileAnswersOneDPImpl(
+  const JointEncoding &enc, const UCQ &ucq,
+  const std::vector<unsigned> &head_vars,
+  unsigned max_treewidth, std::size_t max_states)
+{
+  using Answer = UCQJointCompiler::Answer;
+  using Stats  = UCQJointCompiler::Stats;
+  if (ucq.disjuncts.empty())
+    throw JointCompilerException("empty UCQ");
+  if (enc.correlated)
+    throw JointCompilerException(
+      "compileAnswersOneDP: single top-down DP is data-graph (TID/BID) only");
+
+  QueryCtx q;
+  Stats stats;
+  buildQueryCtx(ucq, enc, q, stats);
+
+  HeadInfo hi;
+  hi.head_vars = head_vars;
+  unsigned maxv = 0;
+  for (const auto &di : q.disjuncts)
+    maxv = std::max(maxv, di.n_vars);
+  hi.slot_of_var.assign(maxv, -1);
+  for (std::size_t i = 0; i < head_vars.size(); ++i) {
+    if (head_vars[i] >= maxv)
+      throw JointCompilerException("compileAnswersOneDP: head var out of range");
+    hi.slot_of_var[head_vars[i]] = static_cast<int>(i);
+  }
+  // The head must occur in every disjunct (else its value is undetermined).
+  for (const auto &di : q.disjuncts)
+    for (unsigned hv : head_vars)
+      if (hv >= di.n_vars || di.atoms_of_var[hv] == 0)
+        throw JointCompilerException(
+          "compileAnswersOneDP: a head variable does not occur in a disjunct");
+
+  // Width screen + decomposition of the data graph.
+  Graph graph = enc.buildGraph();
+  unsigned max_degree = 0;
+  if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)
+    throw TreeDecompositionException();
+  std::unordered_map<unsigned long, bag_t> elim;
+  const TreeDecomposition td(std::move(graph), &elim);
+  if (td.getTreewidth() > max_treewidth)
+    throw TreeDecompositionException();
+  const std::size_t nb_bags = td.getNbBags();
+  stats.joint_treewidth = td.getTreewidth();
+  stats.nb_bags = nb_bags;
+
+  std::vector<std::vector<std::size_t> > facts_at_bag(nb_bags);
+  for (std::size_t i = 0; i < enc.facts.size(); ++i) {
+    const Fact &f = enc.facts[i];
+    bag_t best = elim.at(f.elements[0]);
+    for (unsigned long e : f.elements)
+      if (bag_index(elim.at(e)) < bag_index(best))
+        best = elim.at(e);
+    facts_at_bag[bag_index(best)].push_back(i);
+  }
+  std::vector<std::vector<unsigned long> > domains(nb_bags);
+  for (std::size_t b = 0; b < nb_bags; ++b) {
+    auto &dom = domains[b];
+    for (gate_t g : td.getBag(bag_t{b}))
+      dom.push_back(static_cast<std::underlying_type<gate_t>::type>(g));
+    std::sort(dom.begin(), dom.end());
+    dom.erase(std::unique(dom.begin(), dom.end()), dom.end());
+  }
+
+  // Gate emission (identical discipline to compileImpl: deterministic OR,
+  // decomposable AND, certified).
+  dDNNF dd;
+  using Table = std::unordered_map<AState, gate_t, AStateHash>;
+  using Accumulator = std::unordered_map<AState, std::vector<gate_t>, AStateHash>;
+  const gate_t invalid_gate{static_cast<std::underlying_type<gate_t>::type>(-1)};
+  const gate_t true_gate = dd.setGate(BooleanGate::AND);
+  dd.setInfo(true_gate, DNNF_CERT_INFO);
+  std::vector<gate_t> ev_in(enc.events.size(), invalid_gate);
+  std::vector<gate_t> ev_not(enc.events.size(), invalid_gate);
+  auto inGate = [&](std::size_t e) {
+                  if (ev_in[e] == invalid_gate)
+                    ev_in[e] = dd.setGate(enc.events[e].token, BooleanGate::IN,
+                                          enc.events[e].prob);
+                  return ev_in[e];
+                };
+  auto notGate = [&](std::size_t e) {
+                   if (ev_not[e] == invalid_gate) {
+                     ev_not[e] = dd.setGate(BooleanGate::NOT);
+                     dd.addWire(ev_not[e], inGate(e));
+                   }
+                   return ev_not[e];
+                 };
+  auto andGate = [&](gate_t a, gate_t b) {
+                   if (a == true_gate) return b;
+                   if (b == true_gate) return a;
+                   gate_t g = dd.setGate(BooleanGate::AND);
+                   dd.setInfo(g, DNNF_CERT_INFO);
+                   dd.addWire(g, a);
+                   dd.addWire(g, b);
+                   return g;
+                 };
+  auto orGates = [&](const std::vector<gate_t> &gs) {
+                   if (gs.size() == 1)
+                     return gs[0];
+                   gate_t o = dd.setGate(BooleanGate::OR);
+                   dd.setInfo(o, DNNF_CERT_INFO);
+                   for (gate_t c : gs)
+                     dd.addWire(o, c);
+                   return o;
+                 };
+  auto finalize = [&](Accumulator &acc) {
+                    Table t;
+                    t.reserve(acc.size());
+                    for (auto &entry : acc)
+                      t.emplace(entry.first, orGates(entry.second));
+                    acc.clear();
+                    stats.max_states = std::max(stats.max_states, t.size());
+                    if (t.size() > max_states)
+                      throw JointCompilerException(
+                        "joint DP state space exceeds the per-node bound (" +
+                        std::to_string(max_states) + ")");
+                    return t;
+                  };
+
+  // Per-answer accumulated roots, filled when a head tuple leaves the tree.
+  std::map<std::vector<unsigned long>, std::vector<gate_t> > answer_acc;
+
+  const AState kTrivial = trivialAState(q, hi);
+  auto trivialTable = [&]() { return Table{{kTrivial, true_gate}}; };
+  auto isTrivial = [&](const Table &t) {
+                     return t.size() == 1 && t.begin()->second == true_gate &&
+                            t.begin()->first == kTrivial;
+                   };
+
+  auto applyFacts = [&](Table table, std::size_t b) {
+                      const auto &domain = domains[b];
+                      for (std::size_t fi : facts_at_bag[b]) {
+                        const Fact &fact = enc.facts[fi];
+                        Accumulator acc;
+                        for (const auto &entry : table) {
+                          CHECK_FOR_INTERRUPTS();
+                          AState present =
+                            closeWithFactA(q, hi, entry.first, fact, domain);
+                          if (fact.kind == FactGateKind::CERTAIN) {
+                            acc[std::move(present)].push_back(entry.second);
+                          } else if (present == entry.first) {
+                            acc[entry.first].push_back(entry.second);
+                          } else {
+                            acc[std::move(present)].push_back(
+                              andGate(entry.second, inGate(fact.event)));
+                            acc[entry.first].push_back(
+                              andGate(entry.second, notGate(fact.event)));
+                          }
+                        }
+                        table = finalize(acc);
+                      }
+                      return table;
+                    };
+
+  // The value a code binds to head slot @p i over @p dom (NO_VAL if unbound).
+  auto headValOf = [&](const ADCode &c, std::size_t i,
+                       const std::vector<unsigned long> &dom) -> unsigned long {
+                     const std::int8_t s = c.st[hi.head_vars[i]];
+                     if (s == UNASSIGNED) return NO_VAL;
+                     if (s == DONE) return c.hval[i];
+                     return dom[static_cast<std::size_t>(s)];
+                   };
+  // Does a (partial) code still bind every head slot to the tuple @p t?
+  auto bindsTuple = [&](const ADCode &c, const std::vector<unsigned long> &t,
+                        const std::vector<unsigned long> &dom) {
+                      for (std::size_t i = 0; i < hi.n_head(); ++i)
+                        if (headValOf(c, i, dom) != t[i])
+                          return false;
+                      return true;
+                    };
+
+  // Lift a child table to the parent domain.  An answer is EMITTED (its
+  // provenance is then final) when all its head elements have left AND no
+  // surviving partial code still witnesses it -- a code committed to the
+  // answer's head value (via a forgotten-element @c hval) can complete the
+  // answer in a higher bag, so we must keep it open until no such code
+  // remains.  Emitting on element-departure alone would split one answer's
+  // provenance across the lifts of its several witnesses (over-counting).
+  auto lift = [&](const Table &t, const std::vector<unsigned long> &from,
+                  const std::vector<unsigned long> &to) {
+                if (from == to)
+                  return t;
+                Accumulator acc;
+                for (const auto &entry : t) {
+                  AState ls = forgetLiftA(q, hi, entry.first, from, to);
+                  std::vector<std::vector<unsigned long> > keep;
+                  for (const auto &tup : ls.done) {
+                    bool gone = true;
+                    for (unsigned long e : tup)
+                      if (std::binary_search(to.begin(), to.end(), e)) {
+                        gone = false;
+                        break;
+                      }
+                    // At the root (empty parent) no future fact can witness
+                    // anything, so a code still binding the tuple is a dead
+                    // end, not a pending witness: emit unconditionally.
+                    bool pending = false;
+                    if (gone && !to.empty())
+                      for (const auto &codes : ls.homs) {
+                        for (const ADCode &c : codes)
+                          if (bindsTuple(c, tup, to)) { pending = true; break; }
+                        if (pending) break;
+                      }
+                    if (gone && !pending)
+                      answer_acc[tup].push_back(entry.second);
+                    else
+                      keep.push_back(tup);
+                  }
+                  ls.done = std::move(keep);
+                  acc[std::move(ls)].push_back(entry.second);
+                }
+                return finalize(acc);
+              };
+
+  auto joinTables = [&](const Table &t1, const Table &t2,
+                        const std::vector<unsigned long> &domain) {
+                      if (isTrivial(t1)) return t2;
+                      if (isTrivial(t2)) return t1;
+                      Accumulator acc;
+                      for (const auto &l : t1)
+                        for (const auto &r : t2) {
+                          CHECK_FOR_INTERRUPTS();
+                          acc[joinA(q, hi, domain, l.first, r.first)].push_back(
+                            andGate(l.second, r.second));
+                        }
+                      return finalize(acc);
+                    };
+
+  // Bottom-up sweep.
+  struct Frame {
+    bag_t bag;
+    std::size_t next_child = 0;
+    Table table;
+    bool has_table = false;
+    explicit Frame(bag_t b) : bag(b) {}
+  };
+  Table root_table;
+  std::size_t root_bag = bag_index(td.getRoot());
+  {
+    std::vector<Frame> stack;
+    stack.push_back(Frame(td.getRoot()));
+    while (!stack.empty()) {
+      Frame &frame = stack.back();
+      const auto &children = td.getChildren(frame.bag);
+      if (frame.next_child < children.size()) {
+        stack.push_back(Frame(children[frame.next_child++]));
+        continue;
+      }
+      CHECK_FOR_INTERRUPTS();
+      const std::size_t b = bag_index(frame.bag);
+      Table table = frame.has_table ? std::move(frame.table) : trivialTable();
+      table = applyFacts(std::move(table), b);
+      if (stack.size() == 1) {
+        root_table = std::move(table);
+        stack.pop_back();
+        break;
+      }
+      Frame &parent = stack[stack.size() - 2];
+      const std::size_t pb = bag_index(parent.bag);
+      Table lifted = lift(table, domains[b], domains[pb]);
+      if (!parent.has_table) {
+        parent.table = std::move(lifted);
+        parent.has_table = true;
+      } else {
+        parent.table = joinTables(parent.table, lifted, domains[pb]);
+      }
+      stack.pop_back();
+    }
+  }
+  // Forget the root domain: emits every remaining answer.
+  lift(root_table, domains[root_bag], {});
+
+  // Evaluate each answer root from the shared circuit; the gate cache makes
+  // the k evaluations share work (each touches only its own new gates).
+  std::vector<Answer> answers;
+  answers.reserve(answer_acc.size());
+  for (auto &entry : answer_acc) {
+    gate_t g = orGates(entry.second);
+    dd.setRoot(g);
+    const double p = dd.probabilityEvaluation();
+    if (p > 0.0) {
+      Answer a;
+      a.head = entry.first;
+      a.probability = p;
+      a.max_states = stats.max_states;
+      answers.push_back(std::move(a));
+    }
+  }
+  return answers;
+}
+
 } // namespace
 
 /**
@@ -1291,4 +1921,15 @@ std::vector<UCQJointCompiler::Answer> UCQJointCompiler::compileAnswers(
     }
   }
   return answers;
+}
+
+std::vector<UCQJointCompiler::Answer> UCQJointCompiler::compileAnswersOneDP(
+  const JointEncoding &enc,
+  const UCQ &ucq,
+  const std::vector<unsigned> &head_vars,
+  unsigned max_treewidth,
+  std::size_t max_states)
+{
+  return compileAnswersOneDPImpl(enc, ucq, head_vars, max_treewidth,
+                                 max_states);
 }

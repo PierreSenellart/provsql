@@ -66,26 +66,65 @@ A head with several variables (a multi-column `GROUP BY`) pins each component.
 Non-answer head values (probability 0) fall out as the empty/false root and
 are dropped, exactly as `ucq_joint_answers` drops them.
 
-## 3. The full top-down single-DP (not implemented here; future work)
+## 3. The full top-down single-DP (implemented: `compileAnswersOneDP`)
 
 The shared-decomposition path still pays *k* bottom-up DP sweeps. The thesis's
-multi-output construction (Amarilli, tel-01345836, §4.2.9 / the spec §4.5
-top-down sweep) shares the DP **itself**, emitting one root per answer from a
-single sweep. The obstacle is that the bottom-up state's hom-set **mixes head
-bindings**: a single `State` carries many partial maps (`DCode`s) that may bind
-the head variable to *different* elements. To produce one root per answer the
-head must become a **state-level key** — i.e. states are split by head binding,
-the head variable is never existentially projected (a forgotten head element is
-recorded as a fixed value rather than collapsed to `DONE`), and the `sat`
-collapse keeps the head binding. This is a genuine DP restructuring (the
-two-pass above/below sweep of `ReachabilityCompiler`), with state count growing
-by the number of *distinct* answers; it shares sub-DP work that is independent
-of the head but replicates the head-dependent part. It is the right next step
-once the shared-decomposition win is measured and found insufficient, but it is
-**not** a free pass — it trades the *k* decompositions for one, and the *k*
-independent DPs for one larger split DP whose size is data- and answer-count
-dependent. Deferred; this document and the benchmark below quantify what the
-cheaper shared-decomposition pass already buys.
+multi-output construction (Amarilli, tel-01345836, §4.2.9) shares the DP
+**itself**, emitting one circuit root per answer from a single sweep. The
+obstacle was that the bottom-up state's hom-set **mixes head bindings**: a
+single state carries many partial maps that may bind the head variable to
+*different* elements. The implementation makes the head a **state-level key**:
+
+- **The head is never existentially projected.** A head variable is bound like
+  any other while in the bag, but when its element leaves the decomposition it
+  is set `DONE` with its element **value recorded** in the code's `hval`
+  (rather than collapsed to a value-less `DONE`). So different head bindings
+  live in different states and never merge.
+- **Completed answers are tracked per head-tuple.** Instead of the global `sat`
+  collapse, a code that reaches the full witnessed mask is a *completion*: its
+  head tuple is added to the state's `done` set and the code is discharged.
+  `done` is part of the state key, so worlds are partitioned by which answers
+  they satisfy.
+- **An answer is emitted as its own root** when its head elements have all left
+  the tree **and** no surviving partial code can still witness it. The second
+  condition is the subtle one: a witness can complete *after* the head element
+  is forgotten (the head value lives on in `hval`, and the rest of the witness
+  may sit in a higher bag). Emitting on element-departure alone splits one
+  answer's provenance across the lifts of its several witnesses, double-counting
+  the overlap. At the root (empty parent) nothing can complete, so every
+  remaining answer is emitted there.
+- **All answer roots share one circuit.** A single probability pass values them
+  all: `dDNNF::probabilityEvaluation` caches per-gate values, so evaluating the
+  *k* roots in sequence touches each shared gate once.
+
+The candidate answers are **discovered** by the sweep (no candidate list). The
+state count grows with the number of *concurrently live* answers (those with a
+pending witness crossing the current bag), which is bounded by the treewidth,
+not by *k*. So the whole evaluation is **one pass, linear in the data** rather
+than *k* passes.
+
+C surface: `UCQJointCompiler::compileAnswersOneDP` + SRF
+`ucq_joint_answers_onedp(query, head_vars, facts…)`. Data-graph regime; the
+correlated regime keeps the shared-decomposition path (§2) -- the head-pin
+merged DP -- the same `done`/`hval` machinery would carry over but is not yet
+wired through `mergedCompile`.
+
+### Measured (same H0 family, w=2, p=0.5)
+
+| k | per-binding ms | swept ms | onedp ms | onedp vs swept |
+|---|---|---|---|---|
+| 16   | 9.1      | 2.7     | 1.1   | 2.5× |
+| 64   | 109.2    | 29.5    | 2.7   | 11×  |
+| 256  | 1596.0   | 446.7   | 8.5   | 53×  |
+| 1024 | 27047.7  | 7297.7  | 34.1  | 214× |
+| 4096 | 490685.0 | 129590.0| 152.0 | 853× |
+
+`onedp` is **linear** in *k* (≈4× per 4× answers) while per-binding and swept
+are **quadratic** (each of the *k* passes sweeps all *k·w* facts). At k=4096 the
+single DP is 853× faster than the shared-decomposition sweep and ~3200× faster
+than per-binding, and the gap widens without bound. All three agree on every
+answer. Cross-checked against per-binding in `ucq_joint_answers` section 19 and,
+on a treewidth-2 instance with correlated answers, against the standard ladder.
 
 ## 4. Scope of the implementation
 

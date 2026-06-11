@@ -600,6 +600,38 @@ SELECT count(*) AS n_answers,
          (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
          (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) pb
     ON sw.head = pb.head;
+
+-- ---------------------------------------------------------------------
+-- (19) Full top-down single DP (ucq_joint_answers_onedp): ONE bottom-up
+--      sweep emits one circuit root per answer (the head is a state-level
+--      key; an answer is emitted when no partial witness can still bind it).
+--      The answers are discovered (no candidate list).  Must match the
+--      per-binding ucq_joint_answers on the answer set and every marginal.
+-- ---------------------------------------------------------------------
+\echo '== single top-down DP == per-binding: n_answers, max |onedp - per_binding| =='
+SELECT count(*) AS n_answers,
+       MAX(ABS(ROUND((od.probability - pb.probability)::numeric, 9))) AS max_abs_diff
+  FROM ucq_joint_answers_onedp(
+         '{"disjuncts":[{"n_vars":2,"atoms":[
+            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+         ARRAY[0],
+         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
+            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
+         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) od
+  JOIN ucq_joint_answers(
+         '{"disjuncts":[{"n_vars":2,"atoms":[
+            {"rel":0,"vars":[0]},{"rel":1,"vars":[0,1]},{"rel":2,"vars":[1]}]}]}'::jsonb,
+         ARRAY[0], (SELECT array_agg(DISTINCT x ORDER BY x) FROM jr),
+         (SELECT array_agg(rel ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(e ORDER BY rn, idx) FROM (SELECT row_number() OVER () rn, u.e, u.idx
+            FROM swf f, LATERAL unnest(f.el) WITH ORDINALITY u(e,idx)) s),
+         (SELECT array_agg(ar ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(tk ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z),
+         (SELECT array_agg(0.4::float8 ORDER BY rn) FROM (SELECT *, row_number() OVER () rn FROM swf) z)) pb
+    ON od.head = pb.head;
 SET provsql.active = on;
 
 DROP TABLE jr, js, jt, jp, jq, jw_, jtt, na_, ne_, nb_, tr_, ts_, tt2_, jcyc CASCADE;
