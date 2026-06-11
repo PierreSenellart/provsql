@@ -14,7 +14,9 @@ extensions = ['sphinx.ext.todo', 'sphinx.ext.graphviz', 'sphinxcontrib.bibtex', 
 # img refs are still zero outgoing requests.
 imgmath_image_format = 'svg'
 imgmath_use_preview = True
-imgmath_font_size = 14
+# Match the surrounding prose; the imgmath default (12) and 14 both render
+# noticeably smaller than the RTD body text.
+imgmath_font_size = 16
 
 # |cpp| / |cpp17| substitutions: render "C++" and "C++17" as non-breaking
 # spans so the browser never wraps between "C+" and the final "+".

@@ -78,11 +78,6 @@ example below; it adds the ``provsql`` column itself and is used
            ROUND(probability_evaluate(provenance())::numeric, 3) AS prob
     FROM (SELECT ground FROM weather GROUP BY ground) t;
 
-Independent and block-independent inputs are handled by every evaluation
-method.  A query that is at once :math:`\#P`-hard *and* over correlated
-inputs needs the dedicated joint-width route; see
-:ref:`bounded-joint-width`.
-
 Computing query probabilities
 -----------------------------
 
@@ -138,7 +133,7 @@ request, per query.  Three things make this safe to rely on:
   chooser runs each optimistic pick under a **budget and escalates automatically**
   if it turns out slow -- a pathological circuit never hangs on the wrong method.
 - A ``δ = 0`` (no-failure) approximate request is honoured by a *deterministic*
-  method (the certified-bounds d-tree), not a sampler.
+  method, not a sampler.
 
 Naming a method explicitly is therefore an **escape hatch** -- for forcing a
 specific algorithm, for ``EXPLAIN``-style understanding, or for the rare case
@@ -199,7 +194,7 @@ random variables, and aggregates.
 HAVING with probabilities
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``HAVING`` clauses are partially supported in the probabilistic setting.
+``HAVING`` clauses are supported in the probabilistic setting.
 The following aggregate functions in ``HAVING`` are handled:
 ``COUNT``, ``SUM``, ``AVG``, ``MIN``, ``MAX``:
 
@@ -217,22 +212,17 @@ and their semantics.  For the common ``COUNT`` / ``MIN`` / ``MAX`` /
 ``SUM`` thresholds a closed-form shortcut keeps the exact call fast; see
 :ref:`having-shortcuts`.
 
-An aggregate (``SUM``, ``AVG``, ``MIN`` or ``MAX``) whose possible values
+A ``SUM`` (or the ``AVG`` that reduces to one) whose possible values
 span a very large range cannot be evaluated exactly in reasonable time (the
 problem is *pseudo*-polynomial: exact cost grows with the magnitude of the
-values).  In that case ask for an approximate answer instead -- a
-``relative`` or ``additive`` guarantee -- and ProvSQL estimates the
-probability by sampling, which is independent of the value magnitude:
+values; ``MIN`` and ``MAX`` have a magnitude-independent closed form and are
+not affected).  In that case ask for an approximate answer instead -- a
+``relative`` or ``additive`` guarantee:
 
 .. code-block:: postgresql
 
     SELECT probability_evaluate(provenance(), 'relative', 'epsilon=0.05,delta=0.01')
     FROM orders GROUP BY region HAVING sum(amount_cents) > 100000000;
-
-This is the *approximable* corner of the Ré–Suciu HAVING trichotomy; the
-exact (default) call remains correct but may not terminate quickly on such a
-query.  (``COUNT`` rarely needs this -- its values are small, so it is almost
-always evaluated exactly.)
 
 Continuous random variables
 ---------------------------
@@ -245,7 +235,7 @@ columns are rewritten into conditioning events on the row's
 provenance. Evaluation routes through Monte Carlo by default, with
 a hybrid evaluator falling back to analytical closed forms where
 applicable (RangeCheck for support-decidable comparators, exact
-CDFs for single-distribution :math:`\mathrm{gate\_cmp}`,
+CDFs for single-distribution ``gate_cmp``,
 family-closure simplification for linear combinations of
 normals…). See :doc:`continuous-distributions` for the full
 surface.
@@ -260,71 +250,51 @@ Computing the exact probability is :math:`\#P`-hard in general
 it tractable -- and ProvSQL recognises each and routes to a dedicated
 mechanism rather than a general-purpose counter. Each row below is a
 *sufficient* condition for tractability, classified by the shape of the
-**data**, of its probabilistic **annotation** (``TID`` = tuple-independent,
-``BID`` = block-independent-disjoint, *correlated* = arbitrary, e.g.
+**data**, of its probabilistic **annotation** (TID = tuple-independent,
+BID = block-independent-disjoint, *correlated* = arbitrary, e.g.
 view-derived), and of the **query**. The planner-time rewrites and the
-cost-based chooser apply whichever fits; the last row is the boundary, where
-no exact polynomial guarantee exists and ProvSQL falls back to knowledge
-compilation or to an approximation.
+cost-based chooser apply whichever fits.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 12 13 25 18 11 21
+The query conditions are stated over classes of the relational calculus --
+`conjunctive queries
+<https://en.wikipedia.org/wiki/Conjunctive_query>`__ (CQ) and unions of them
+(UCQ) -- which ProvSQL recognises from the structure of ordinary SQL queries.
+All complexities are **data complexity**: the query is fixed, so its size is
+not counted.  :math:`|D|` is the input size (number of tuples), :math:`k` the
+treewidth relevant to each row (lineage, data, or joint treewidth), and
+:math:`e` the number of essential query variables.
 
-   * - Data
-     - Annotation
-     - Query
-     - Complexity
-     - Source
-     - ProvSQL mechanism
-   * - any
-     - ``TID`` / ``BID``
-     - hierarchical, **self-join-free** CQ
-     - PTIME (read-once, linear)
-     - :cite:`DBLP:journals/jacm/DalviS12`
-     - safe-query rewrite, then ``independent``
-   * - any
-     - ``TID``
-     - inversion-free UCQ (self-joins allowed)
-     - PTIME (linear-size d-DNNF)
-     - :cite:`DBLP:conf/icdt/JhaS11`
-     - inversion-free certificate, then ``inversion-free``
-   * - any
-     - ``TID`` / ``BID``
-     - any query whose **lineage** has bounded treewidth
-     - FPT in the lineage treewidth
-     - :cite:`DBLP:journals/mst/AmarilliCMS20`
-     - ``tree-decomposition`` / ``d-tree``
-   * - bounded treewidth (treelike)
-     - ``TID`` / ``BID``
-     - recursive reachability (and fixed MSO)
-     - linear in the data
-     - :cite:`DBLP:conf/icalp/AmarilliBS15`
-     - compile along a tree decomposition of the data (Courcelle), giving a
-       certified d-D (:ref:`network-reliability-btw`)
-   * - any
-     - ``TID`` / ``BID`` / **correlated**
-     - UCQ of bounded **joint** width (incl. the :math:`\#P`-hard
-       :math:`H_0`, :math:`H_k`)
-     - linear in the data for bounded joint width
-     - :cite:`Amarilli2016thesis` (§4.2)
-     - joint-width UCQ compiler (:ref:`bounded-joint-width`)
-   * - any
-     - any
-     - anything else (a :math:`\#P`-hard lineage)
-     - no exact polynomial guarantee
-     - :cite:`DBLP:journals/vldb/DalviS07`
-     - knowledge compilation (``compilation`` / ``wmc``), or an FPRAS
-       (``monte-carlo`` / ``karp-luby``)
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
+   | Data        | Annotation | Query                  | Complexity              | Source                                  | ProvSQL mechanism                                        |
+   +=============+============+========================+=========================+=========================================+==========================================================+
+   | any         | TID / BID  | hierarchical,          | :math:`\Theta(|D|)`     | :cite:`DBLP:journals/vldb/DalviS07`     | :ref:`safe-query rewrite <safe-query-rewriting>`, then   |
+   |             |            | **self-join-free** CQ  |                         | :cite:`DBLP:journals/jacm/DalviS12`     | ``independent``                                          |
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
+   | any         | TID        | inversion-free UCQ     | :math:`O(|D|)`          | :cite:`DBLP:conf/icdt/JhaS11`           | inversion-free certificate, then ``inversion-free``      |
+   |             |            | (self-joins allowed)   |                         |                                         |                                                          |
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
+   | any query whose **lineage** over this data and    | :math:`2^{O(k)}\,|D|`   | :cite:`DBLP:journals/mst/AmarilliCMS20` | ``tree-decomposition``                                   |
+   | annotations has treewidth ≤ k                     |                         |                                         |                                                          |
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
+   | treewidth ≤ | TID / BID  | recursive reachability | :math:`2^{O(k^2)}\,|D|` | :cite:`DBLP:conf/icalp/AmarilliBS15`    | :ref:`reachability compiler <network-reliability-btw>`,  |
+   | k (treelike)|            |                        |                         |                                         | then ``independent``                                     |
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
+   | joint treewidth ≤ k of   | any UCQ                | :math:`2^{O(k^e)}\,|D|` | :cite:`Amarilli2016thesis` (§4.2)       | :ref:`joint-width compiler <bounded-joint-width>`, then  |
+   | the data and its         |                        |                         |                                         | ``independent``                                          |
+   | annotation               |                        |                         |                                         |                                                          |
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
 
-The first two rows are *query-side* dichotomy results that presume
-tuple-independent inputs; the joint-width row subsumes them on the hard
-queries and, crucially, stays exact over **correlated** inputs, where
-query-side safety is inapplicable -- the bound is then on the *joint* graph of
-the data and its correlations, not on either alone :cite:`Amarilli2016thesis`.
-The two data-side routes -- bounded-treewidth reachability and bounded joint
-width -- have dedicated sections next; the explicit methods follow under
-:ref:`forcing-a-method`.
+For the exact guarantee, the :ref:`cost-based chooser <probability-guarantees>`
+always tries ``independent`` and ``inversion-free`` when their certificate
+applies (they are cheap and read-once-friendly), and tries
+``tree-decomposition`` when it estimates the lineage treewidth low enough to
+stand a chance.
+
+Outside these sufficient conditions, when the lineage is genuinely
+:math:`\#P`-hard with no structure to exploit, no exact polynomial guarantee
+remains, and ProvSQL falls back to knowledge compilation (``compilation`` /
+``wmc``) for an exact answer or to an FPRAS (``monte-carlo`` / ``karp-luby``)
+for an approximate one (see :ref:`forcing-a-method`).
 
 Specialized routes for hard queries
 -----------------------------------
@@ -419,7 +389,7 @@ query falls back to the generic evaluation.
 
 *Bounded-hop reachability* is recognised as well: a hop-counting CTE
 whose counter column is seeded by an integer constant, incremented in
-the recursive arm, and bounded by a (mandatory) ``WHERE`` qual –
+the recursive arm, and bounded by a (mandatory) ``WHERE`` qual:
 
 .. code-block:: postgresql
 
@@ -440,8 +410,8 @@ reachability relations to sets of achievable walk lengths) accounts
 for that exactly, on cyclic data too.  Both ``<`` and ``<=`` bounds,
 either column order, any integer seed, and the undirected, filtered,
 multi-source and ``repair_key`` variants compose with the counter.
-The natural follow-up – "which nodes are *within* k hops", obtained
-by deduplicating the hop column away –
+The natural follow-up, "which nodes are *within* k hops", obtained
+by deduplicating the hop column away:
 
 .. code-block:: postgresql
 
@@ -456,7 +426,7 @@ method.
 
 *Cross-vertex aggregations* of a reachability CTE are recognised as
 well: grouping the reachable vertices by a column of a joined
-(untracked) member relation --
+(untracked) member relation:
 
 .. code-block:: postgresql
 
@@ -464,7 +434,7 @@ well: grouping the reachable vertices by a column of a joined
         FROM reach r JOIN regions t ON r.node = t.node
         GROUP BY t.region;
 
--- collapses each group's per-vertex tokens into an OR of *correlated*
+collapses each group's per-vertex tokens into an OR of *correlated*
 events (the vertices share edges).  The route compiles, per group, the
 certified circuit of "some member vertex is reachable" (the
 set-reachability bit folded through the same decomposition DP) and
@@ -600,8 +570,8 @@ the correlations – emitting a certified **d-D** by construction, with no
 external compiler and no knowledge-compilation step.
 
 The route is part of the Boolean machinery, so it takes the same opt-in
-as safe-query rewriting: the ``'boolean'`` provenance class, off by
-default.  Within that class it fires **automatically** – when a
+as :ref:`safe-query rewriting <safe-query-rewriting>`: the ``'boolean'``
+provenance class, off by default.  Within that class it fires **automatically** – when a
 conjunctive query the safe-query rewriter declined (an unsafe / #P-hard
 UCQ) has its *existence* formed (a ``SELECT DISTINCT`` or a
 ``GROUP BY``), the planner recognises the shape and replaces its
@@ -660,8 +630,9 @@ table summarises where each shines:
      - Best when (query / provenance circuit)
    * - ``independent``
      - exact
-     - Read-once lineage: self-join-free / hierarchical conjunctive queries, where
-       each input tuple is used at most once.  Linear time.
+     - Read-once lineage (self-join-free / hierarchical CQs, each input tuple used
+       at most once) and certified d-D circuits (from the safe-query, reachability
+       and joint-width compilers).  Linear time.
    * - ``inversion-free``
      - exact
      - Safe (inversion-free) UCQs the planner certifies -- linear-time via a
@@ -706,8 +677,13 @@ table summarises where each shines:
 Each method in detail:
 
 ``'independent'``
-    Exact computation assuming all input tokens are mutually independent.
-    Fails with an error if the circuit is not independent:
+    Exact computation by a single linear pass that treats each gate as
+    independent.  It is correct on **read-once** lineage (each input tuple
+    used at most once) and on **certified d-D circuits** -- the
+    deterministic-and-decomposable circuits the safe-query, reachability and
+    joint-width compilers emit, whose ``plus`` / ``times`` gates carry a
+    certificate of that property which the method trusts the same way it
+    trusts read-once structure.  It errors on a circuit that is neither:
 
     .. code-block:: postgresql
 
@@ -887,6 +863,8 @@ Probability evaluation runs through the Boolean-circuit pipeline
 families of optimisation exploit Boolean-specific structure to make this
 faster, sometimes by orders of magnitude; both are transparent to the
 result.
+
+.. _safe-query-rewriting:
 
 Safe-query rewriting (provenance class ``'boolean'``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
