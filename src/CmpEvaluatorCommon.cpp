@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-#include "having_semantics.hpp" // extract_constant_C, semimod_extract_M_and_K, map_cmp_op, flip_op
+#include "having_semantics.hpp" // extract_constant_string, semimod_extract_string_and_K, map_cmp_op, flip_op
 extern "C" {
 #include "provsql_utils.h"      // gate_type enum
 }

@@ -162,38 +162,6 @@ bool rescale_to(long mantissa, int scale, int target_scale, long &out) {
   return true;
 }
 
-namespace {
-// Parse int from string
-int parse_int_strict(const std::string &s, bool &ok) {
-  ok = false;
-  if (s.empty()) return 0;
-  size_t idx = 0;
-  try {
-    int v = std::stoi(s, &idx);
-    if (idx != s.size()) return 0;
-    ok = true;
-    return v;
-  } catch (...) {
-    return 0;
-  }
-}
-
-// Parse double from string
-double parse_double_strict(const std::string &s, bool &ok) {
-  ok = false;
-  if (s.empty()) return 0.0;
-  size_t idx = 0;
-  try {
-    double v = std::stod(s, &idx);
-    if (idx != s.size()) return 0.0;
-    ok = true;
-    return v;
-  } catch (...) {
-    return 0.0;
-  }
-}
-} // namespace
-
 // Map a cmp gate's Postgres operator to subset.cpp's ComparisonOperator
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok) {
   return cmpOpFromOid(c.getInfos(cmp_gate).first, ok);
@@ -212,29 +180,8 @@ ComparisonOperator flip_op(ComparisonOperator op) {
   return op;
 }
 
-bool semimod_extract_M_and_K(
-  GenericCircuit &c,
-  gate_t semimod_gate,
-  int &m_out,
-  gate_t &k_gate_out)
-{
-  if (c.getGateType(semimod_gate) != gate_semimod) return false;
-
-  const auto &w = c.getWires(semimod_gate);
-  if (w.size() != 2) return false;
-
-  if (c.getGateType(w[1]) != gate_value) return false;
-  bool ok = false;
-  m_out = parse_int_strict(c.getExtra(w[1]), ok);
-  if (!ok) return false;
-
-  k_gate_out = w[0];
-  return true;
-}
-
-// String sibling of semimod_extract_M_and_K: extracts the gate_value's
-// extra as a raw string instead of parsing it as an int.  Used by the
-// agg_token-to-text comparison path.
+// Extract a gate_semimod's gate_value extra as a raw string, along with its
+// K-gate operand.  Used by the value-as-text HAVING comparison path.
 bool semimod_extract_string_and_K(
   GenericCircuit &c,
   gate_t semimod_gate,
@@ -253,52 +200,9 @@ bool semimod_extract_string_and_K(
   return true;
 }
 
-// Extract constant C from possible encodings:
-// - gate_value("C")
-// - gate_semimod(C, gate_one)
-// - gate_semimod(gate_one, C)
-bool extract_constant_C(GenericCircuit &c, gate_t x, int &C_out) {
-  if (c.getGateType(x) != gate_semimod)
-    return false;
-
-  const auto &w = c.getWires(x);
-  if (w.size() != 2)
-    return false;
-
-  if (c.getGateType(w[0]) != gate_one)
-    return false;
-
-  if (c.getGateType(w[1]) != gate_value)
-    return false;
-
-  bool ok = false;
-  int v = parse_int_strict(c.getExtra(w[1]), ok);
-  if (!ok)
-    return false;
-
-  C_out = v;
-  return true;
-}
-
-// Float8 sibling of extract_constant_C: parses a gate_value's extra as
-// double precision instead of int.  Used by the continuous-distributions
-// path where the right-hand side of a gate_cmp is a float literal.
-bool extract_constant_double(GenericCircuit &c, gate_t x, double &C_out) {
-  if (c.getGateType(x) != gate_value)
-    return false;
-
-  bool ok = false;
-  double v = parse_double_strict(c.getExtra(x), ok);
-  if (!ok)
-    return false;
-
-  C_out = v;
-  return true;
-}
-
-// String sibling of extract_constant_C: returns the gate_value's extra as a
-// raw string instead of parsing it as an int.  Used by the agg_token-to-text
-// comparison path.
+// Extract a constant C encoded as gate_semimod(gate_one, gate_value("C")),
+// returning the gate_value's extra as a raw string.  Used by the
+// value-as-text HAVING comparison path.
 bool extract_constant_string(GenericCircuit &c, gate_t x, std::string &C_out) {
   if (c.getGateType(x) != gate_semimod)
     return false;
