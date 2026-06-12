@@ -136,52 +136,11 @@ static Result compile(const JointEncoding &enc,
                       std::size_t max_states = DEFAULT_MAX_STATES);
 
 /**
- * @brief One answer of a per-answer (non-Boolean) evaluation: the bound
- *        head-variable element values and the answer's marginal.
- */
-struct Answer {
-  std::vector<unsigned long> head;  ///< Bound element value per head variable.
-  double probability = 0.0;         ///< Marginal of that answer.
-  std::size_t max_states = 0;       ///< Peak DP states for this answer's sweep.
-};
-
-/**
- * @brief Per-answer evaluation in a SINGLE PASS over the shared structure
- *        (data-graph / TID-BID **and** correlated regimes).
- *
- * The joint encoding and its tree decomposition are built **once**; each
- * candidate head tuple is then evaluated by one bottom-up sweep with the
- * head variables pinned **inside the DP** (no @c Sel atom, so the encoding
- * and decomposition are identical across answers).  Equivalent to running
- * @c compile() once per head with the head pinned, but sharing the
- * gather/encode/decompose stages.  Non-answer head tuples (probability 0)
- * are dropped.  The correlated regime shares the joint data+circuit
- * decomposition the same way; only the pinned merged DP is rerun per answer.
- *
- * @param enc        The joint encoding (data-graph or correlated).
- * @param ucq        The UCQ (head variables identified by @p head_vars).
- * @param head_vars  Query-variable indices of the head, canonical across
- *                   disjuncts.
- * @param candidates Candidate head tuples (row-major, length
- *                   @c |head_vars| each) -- typically the distinct values
- *                   the head columns take in the data.
- * @param max_treewidth Reject (throw) when the joint width exceeds this.
- * @param max_states    Bound on the DP state count per node.
- */
-static std::vector<Answer> compileAnswers(
-  const JointEncoding &enc,
-  const UCQ &ucq,
-  const std::vector<unsigned> &head_vars,
-  const std::vector<std::vector<unsigned long> > &candidates,
-  unsigned max_treewidth = TreeDecomposition::MAX_TREEWIDTH,
-  std::size_t max_states = DEFAULT_MAX_STATES);
-
-/**
  * @brief Per-answer evaluation by a single top-down DP (data-graph regime).
  *
  * The full multi-output construction (Amarilli, tel-01345836, §4.2.9): ONE
  * bottom-up sweep emits one circuit root per answer, rather than @c k
- * head-pinned sweeps (@c compileAnswers).  The head variables become a
+ * head-pinned @c compile() sweeps.  The head variables become a
  * **state-level key** -- they are never existentially projected (a forgotten
  * head element is recorded as a fixed value), completed answers are tracked
  * per head-tuple in the state, and an answer is emitted as its own d-DNNF
@@ -189,7 +148,7 @@ static std::vector<Answer> compileAnswers(
  * share one circuit, so a single probability pass (with the gate cache) values
  * them all.  The candidate answers are **discovered** by the sweep -- no
  * candidate list is needed.  Equivalent answers and probabilities to
- * @c compileAnswers, in one pass instead of @c k.
+ * @c k head-pinned @c compile() calls, in one pass instead of @c k.
  *
  * The compiler's job ends at the **circuit**: it returns the shared d-D and
  * one root gate per answer (the materialisation / probability / Shapley is the

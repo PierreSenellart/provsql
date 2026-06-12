@@ -1043,8 +1043,8 @@ UCQJointCompiler::Result mergedCompile(const JointEncoding &enc,
 // =====================================================================
 // Full top-down single-DP for per-answer evaluation (data-graph regime).
 //
-// One bottom-up sweep emits one d-DNNF root per answer, replacing the k
-// head-pinned sweeps of compileAnswers.  The head variables become a
+// One bottom-up sweep emits one d-DNNF root per answer, replacing k
+// head-pinned @c compile() sweeps.  The head variables become a
 // STATE-LEVEL key: a head variable is never existentially projected (when
 // its element leaves the bag it is recorded as a fixed value, not collapsed
 // to DONE-and-forgotten), so different head bindings live in different
@@ -1218,19 +1218,6 @@ void closeDisjunctA(const DisjunctInfo &di, const HeadInfo &hi,
   canonicalizeA(codes);
 }
 
-/** @brief Apply a present fact to an augmented state (all disjuncts). */
-AState closeWithFactA(const QueryCtx &q, const HeadInfo &hi, const AState &s,
-                      const Fact &fact, const std::vector<unsigned long> &domain)
-{
-  AState out = s;
-  std::vector<std::vector<unsigned long> > comp;
-  for (std::size_t d = 0; d < q.disjuncts.size(); ++d)
-    closeDisjunctA(q.disjuncts[d], hi, out.homs[d], fact, domain, comp);
-  for (const auto &t : comp)
-    addDone(out.done, t);
-  return out;
-}
-
 /**
  * @brief Re-express an augmented state over @p to_domain.
  *
@@ -1397,28 +1384,6 @@ HeadInfo buildHeadInfo(const QueryCtx &q, const std::vector<unsigned> &head_vars
         throw JointCompilerException(
           "compileAnswersOneDP: a head variable does not occur in a disjunct");
   return hi;
-}
-
-/** @brief The value a code binds to head slot @p i over @p dom (NO_VAL if
- *         unbound: at a position -> dom[pos]; DONE -> hval; else unbound). */
-inline unsigned long headValOf(const ADCode &c, const HeadInfo &hi, std::size_t i,
-                               const std::vector<unsigned long> &dom)
-{
-  const std::int8_t s = c.st[hi.head_vars[i]];
-  if (s == UNASSIGNED) return NO_VAL;
-  if (s == DONE) return c.hval[i];
-  return dom[static_cast<std::size_t>(s)];
-}
-
-/** @brief Does a (partial) code still bind every head slot to tuple @p t? */
-inline bool bindsTuple(const ADCode &c, const HeadInfo &hi,
-                       const std::vector<unsigned long> &t,
-                       const std::vector<unsigned long> &dom)
-{
-  for (std::size_t i = 0; i < hi.n_head(); ++i)
-    if (headValOf(c, hi, i, dom) != t[i])
-      return false;
-  return true;
 }
 
 /**
@@ -1856,243 +1821,13 @@ UCQJointCompiler::AnswerCircuit compileAnswersOneDPImpl(
   buildQueryCtx(ucq, enc, q, stats);
   HeadInfo hi = buildHeadInfo(q, head_vars);
 
-  // Correlated regime (facts gated by internal circuit gates): the merged
-  // valuation + answer DP over the joint data+circuit decomposition.
-  if (enc.correlated)
-    return compileAnswersOneDPCorrelated(enc, ucq, q, hi, std::move(stats),
-                                         max_treewidth, max_states);
-
-  // Width screen + decomposition of the data graph.
-  Graph graph = enc.buildGraph();
-  unsigned max_degree = 0;
-  if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)
-    throw TreeDecompositionException();
-  std::unordered_map<unsigned long, bag_t> elim;
-  const TreeDecomposition td(std::move(graph), &elim);
-  if (td.getTreewidth() > max_treewidth)
-    throw TreeDecompositionException();
-  const std::size_t nb_bags = td.getNbBags();
-  stats.joint_treewidth = td.getTreewidth();
-  stats.nb_bags = nb_bags;
-
-  std::vector<std::vector<std::size_t> > facts_at_bag(nb_bags);
-  for (std::size_t i = 0; i < enc.facts.size(); ++i) {
-    const Fact &f = enc.facts[i];
-    bag_t best = elim.at(f.elements[0]);
-    for (unsigned long e : f.elements)
-      if (bag_index(elim.at(e)) < bag_index(best))
-        best = elim.at(e);
-    facts_at_bag[bag_index(best)].push_back(i);
-  }
-  std::vector<std::vector<unsigned long> > domains(nb_bags);
-  for (std::size_t b = 0; b < nb_bags; ++b) {
-    auto &dom = domains[b];
-    for (gate_t g : td.getBag(bag_t{b}))
-      dom.push_back(static_cast<std::underlying_type<gate_t>::type>(g));
-    std::sort(dom.begin(), dom.end());
-    dom.erase(std::unique(dom.begin(), dom.end()), dom.end());
-  }
-
-  // Gate emission (identical discipline to compileImpl: deterministic OR,
-  // decomposable AND, certified).
-  UCQJointCompiler::AnswerCircuit result;
-  dDNNF &dd = result.dd;
-  using Table = std::unordered_map<AState, gate_t, AStateHash>;
-  using Accumulator = std::unordered_map<AState, std::vector<gate_t>, AStateHash>;
-  const gate_t invalid_gate{static_cast<std::underlying_type<gate_t>::type>(-1)};
-  const gate_t true_gate = dd.setGate(BooleanGate::AND);
-  dd.setInfo(true_gate, DNNF_CERT_INFO);
-  std::vector<gate_t> ev_in(enc.events.size(), invalid_gate);
-  std::vector<gate_t> ev_not(enc.events.size(), invalid_gate);
-  auto inGate = [&](std::size_t e) {
-                  if (ev_in[e] == invalid_gate)
-                    ev_in[e] = dd.setGate(enc.events[e].token, BooleanGate::IN,
-                                          enc.events[e].prob);
-                  return ev_in[e];
-                };
-  auto notGate = [&](std::size_t e) {
-                   if (ev_not[e] == invalid_gate) {
-                     ev_not[e] = dd.setGate(BooleanGate::NOT);
-                     dd.addWire(ev_not[e], inGate(e));
-                   }
-                   return ev_not[e];
-                 };
-  auto andGate = [&](gate_t a, gate_t b) {
-                   if (a == true_gate) return b;
-                   if (b == true_gate) return a;
-                   gate_t g = dd.setGate(BooleanGate::AND);
-                   dd.setInfo(g, DNNF_CERT_INFO);
-                   dd.addWire(g, a);
-                   dd.addWire(g, b);
-                   return g;
-                 };
-  auto orGates = [&](const std::vector<gate_t> &gs) {
-                   if (gs.size() == 1)
-                     return gs[0];
-                   gate_t o = dd.setGate(BooleanGate::OR);
-                   dd.setInfo(o, DNNF_CERT_INFO);
-                   for (gate_t c : gs)
-                     dd.addWire(o, c);
-                   return o;
-                 };
-  auto finalize = [&](Accumulator &acc) {
-                    Table t;
-                    t.reserve(acc.size());
-                    for (auto &entry : acc)
-                      t.emplace(entry.first, orGates(entry.second));
-                    acc.clear();
-                    stats.max_states = std::max(stats.max_states, t.size());
-                    if (t.size() > max_states)
-                      throw JointCompilerException(
-                        "joint DP state space exceeds the per-node bound (" +
-                        std::to_string(max_states) + ")");
-                    return t;
-                  };
-
-  // Per-answer accumulated roots, filled when a head tuple leaves the tree.
-  std::map<std::vector<unsigned long>, std::vector<gate_t> > answer_acc;
-
-  const AState kTrivial = trivialAState(q, hi);
-  auto trivialTable = [&]() { return Table{{kTrivial, true_gate}}; };
-  auto isTrivial = [&](const Table &t) {
-                     return t.size() == 1 && t.begin()->second == true_gate &&
-                            t.begin()->first == kTrivial;
-                   };
-
-  auto applyFacts = [&](Table table, std::size_t b) {
-                      const auto &domain = domains[b];
-                      for (std::size_t fi : facts_at_bag[b]) {
-                        const Fact &fact = enc.facts[fi];
-                        Accumulator acc;
-                        for (const auto &entry : table) {
-                          CHECK_FOR_INTERRUPTS();
-                          AState present =
-                            closeWithFactA(q, hi, entry.first, fact, domain);
-                          if (fact.kind == FactGateKind::CERTAIN) {
-                            acc[std::move(present)].push_back(entry.second);
-                          } else if (present == entry.first) {
-                            acc[entry.first].push_back(entry.second);
-                          } else {
-                            acc[std::move(present)].push_back(
-                              andGate(entry.second, inGate(fact.event)));
-                            acc[entry.first].push_back(
-                              andGate(entry.second, notGate(fact.event)));
-                          }
-                        }
-                        table = finalize(acc);
-                      }
-                      return table;
-                    };
-
-  // Lift a child table to the parent domain.  An answer is EMITTED (its
-  // provenance is then final) when all its head elements have left AND no
-  // surviving partial code still witnesses it -- a code committed to the
-  // answer's head value (via a forgotten-element @c hval) can complete the
-  // answer in a higher bag, so we must keep it open until no such code
-  // remains.  Emitting on element-departure alone would split one answer's
-  // provenance across the lifts of its several witnesses (over-counting).
-  auto lift = [&](const Table &t, const std::vector<unsigned long> &from,
-                  const std::vector<unsigned long> &to) {
-                if (from == to)
-                  return t;
-                Accumulator acc;
-                for (const auto &entry : t) {
-                  AState ls = forgetLiftA(q, hi, entry.first, from, to);
-                  std::vector<std::vector<unsigned long> > keep;
-                  for (const auto &tup : ls.done) {
-                    bool gone = true;
-                    for (unsigned long e : tup)
-                      if (std::binary_search(to.begin(), to.end(), e)) {
-                        gone = false;
-                        break;
-                      }
-                    // At the root (empty parent) no future fact can witness
-                    // anything, so a code still binding the tuple is a dead
-                    // end, not a pending witness: emit unconditionally.
-                    bool pending = false;
-                    if (gone && !to.empty())
-                      for (const auto &codes : ls.homs) {
-                        for (const ADCode &c : codes)
-                          if (bindsTuple(c, hi, tup, to)) { pending = true; break; }
-                        if (pending) break;
-                      }
-                    if (gone && !pending)
-                      answer_acc[tup].push_back(entry.second);
-                    else
-                      keep.push_back(tup);
-                  }
-                  ls.done = std::move(keep);
-                  acc[std::move(ls)].push_back(entry.second);
-                }
-                return finalize(acc);
-              };
-
-  auto joinTables = [&](const Table &t1, const Table &t2,
-                        const std::vector<unsigned long> &domain) {
-                      if (isTrivial(t1)) return t2;
-                      if (isTrivial(t2)) return t1;
-                      Accumulator acc;
-                      for (const auto &l : t1)
-                        for (const auto &r : t2) {
-                          CHECK_FOR_INTERRUPTS();
-                          acc[joinA(q, hi, domain, l.first, r.first)].push_back(
-                            andGate(l.second, r.second));
-                        }
-                      return finalize(acc);
-                    };
-
-  // Bottom-up sweep.
-  struct Frame {
-    bag_t bag;
-    std::size_t next_child = 0;
-    Table table;
-    bool has_table = false;
-    explicit Frame(bag_t b) : bag(b) {}
-  };
-  Table root_table;
-  std::size_t root_bag = bag_index(td.getRoot());
-  {
-    std::vector<Frame> stack;
-    stack.push_back(Frame(td.getRoot()));
-    while (!stack.empty()) {
-      Frame &frame = stack.back();
-      const auto &children = td.getChildren(frame.bag);
-      if (frame.next_child < children.size()) {
-        stack.push_back(Frame(children[frame.next_child++]));
-        continue;
-      }
-      CHECK_FOR_INTERRUPTS();
-      const std::size_t b = bag_index(frame.bag);
-      Table table = frame.has_table ? std::move(frame.table) : trivialTable();
-      table = applyFacts(std::move(table), b);
-      if (stack.size() == 1) {
-        root_table = std::move(table);
-        stack.pop_back();
-        break;
-      }
-      Frame &parent = stack[stack.size() - 2];
-      const std::size_t pb = bag_index(parent.bag);
-      Table lifted = lift(table, domains[b], domains[pb]);
-      if (!parent.has_table) {
-        parent.table = std::move(lifted);
-        parent.has_table = true;
-      } else {
-        parent.table = joinTables(parent.table, lifted, domains[pb]);
-      }
-      stack.pop_back();
-    }
-  }
-  // Forget the root domain: emits every remaining answer.
-  lift(root_table, domains[root_bag], {});
-
-  // One root per discovered answer in the shared circuit; the caller
-  // materialises / evaluates them (the gate cache then shares work).
-  result.answers.reserve(answer_acc.size());
-  for (auto &entry : answer_acc)
-    result.answers.push_back(
-      UCQJointCompiler::AnswerRoot{entry.first, orGates(entry.second)});
-  result.max_states = stats.max_states;
-  return result;
+  // The per-answer route always materialises over the real provenance tokens,
+  // so the encoding is always correlated (JointEncoding::fromCorrelated): one
+  // merged valuation + answer DP over the joint data+circuit decomposition.
+  // The data-graph-only single-sweep answer DP was retired with its SRFs
+  // (commit 928afb5).
+  return compileAnswersOneDPCorrelated(enc, ucq, q, hi, std::move(stats),
+                                       max_treewidth, max_states);
 }
 
 } // namespace
@@ -2102,9 +1837,10 @@ UCQJointCompiler::AnswerCircuit compileAnswersOneDPImpl(
  *        and an optional in-DP head pin.
  *
  * With @p shared_td == nullptr and @p head_pin == nullptr this is the
- * Boolean data-graph compiler verbatim (the path the 223-test suite
- * exercises).  @c compileAnswers supplies a shared decomposition and a
- * per-answer head pin so the gather/encode/decompose stages are paid once.
+ * Boolean data-graph compiler verbatim (the path the test suite exercises),
+ * which is how @c compile() always calls it.  The shared-decomposition /
+ * per-answer head-pin parameters remain for a head-pinned per-answer sweep
+ * (no current caller; the live per-answer path is @c compileAnswersOneDP).
  */
 static UCQJointCompiler::Result compileImpl(
   const JointEncoding &enc,
@@ -2411,50 +2147,6 @@ UCQJointCompiler::Result UCQJointCompiler::compile(
 {
   return compileImpl(enc, ucq, max_treewidth, max_states,
                      nullptr, nullptr, nullptr);
-}
-
-std::vector<UCQJointCompiler::Answer> UCQJointCompiler::compileAnswers(
-  const JointEncoding &enc,
-  const UCQ &ucq,
-  const std::vector<unsigned> &head_vars,
-  const std::vector<std::vector<unsigned long> > &candidates,
-  unsigned max_treewidth,
-  std::size_t max_states)
-{
-  if (ucq.disjuncts.empty())
-    throw JointCompilerException("empty UCQ");
-
-  // Build the joint graph + tree decomposition ONCE; the head pin keeps the
-  // encoding and decomposition identical across answers.  This holds in both
-  // regimes: the data-graph joint graph is the data graph, the correlated
-  // joint graph spans data and circuit slice -- neither depends on the head.
-  Graph graph = enc.buildGraph();
-  unsigned max_degree = 0;
-  if (TreeDecomposition::degeneracyLowerBound(graph, max_degree) > max_treewidth)
-    throw TreeDecompositionException();
-  std::unordered_map<unsigned long, bag_t> elim;
-  TreeDecomposition td(std::move(graph), &elim);
-  if (td.getTreewidth() > max_treewidth)
-    throw TreeDecompositionException();
-
-  std::vector<Answer> answers;
-  for (const std::vector<unsigned long> &tuple : candidates) {
-    if (tuple.size() != head_vars.size())
-      throw JointCompilerException("compileAnswers: head tuple arity mismatch");
-    std::map<unsigned, unsigned long> pin;
-    for (std::size_t i = 0; i < head_vars.size(); ++i)
-      pin[head_vars[i]] = tuple[i];
-    Result r = compileImpl(enc, ucq, max_treewidth, max_states, &td, &elim, &pin);
-    const double p = r.dd.probabilityEvaluation();
-    if (p > 0.0) {
-      Answer a;
-      a.head = tuple;
-      a.probability = p;
-      a.max_states = r.stats.max_states;
-      answers.push_back(std::move(a));
-    }
-  }
-  return answers;
 }
 
 UCQJointCompiler::AnswerCircuit UCQJointCompiler::compileAnswersOneDP(
