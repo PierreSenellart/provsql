@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 
+import psycopg
+import pytest
 from playwright.sync_api import Page, expect
 
 
@@ -197,7 +199,14 @@ def test_part_c_data_structured(page: Page, cs7_studio_url: str) -> None:
     assert _approx(_marg(page, "independent"), 0.735868, 2e-3)
 
 
-def test_part_c_recursion(page: Page, cs7_studio_url: str) -> None:
+def test_part_c_recursion(page: Page, cs7_studio_url: str, cs7_dsn: str) -> None:
+    # The C4 reachability steps use WITH RECURSIVE, which ProvSQL tracks only
+    # on PostgreSQL >= 15 (the regression suite puts them in schedule.15).
+    with psycopg.connect(cs7_dsn) as conn:
+        version = conn.execute("SHOW server_version_num").fetchone()[0]
+    if int(version) < 150000:
+        pytest.skip("recursive-query provenance requires PostgreSQL >= 15")
+
     page.goto(cs7_studio_url + "/circuit")
     expect(page.locator("body")).to_have_class(re.compile(r"\bmode-circuit\b"),
                                                timeout=8000)
