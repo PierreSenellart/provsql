@@ -273,6 +273,10 @@ treewidth relevant to each row (lineage, data, or joint treewidth), and
    | any         | TID        | inversion-free UCQ     | :math:`O(|D|)`          | :cite:`DBLP:conf/icdt/JhaS11`           | inversion-free certificate, then ``inversion-free``      |
    |             |            | (self-joins allowed)   |                         |                                         |                                                          |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
+   | any         | TID        | safe UCQ needing       |                         | :cite:`DBLP:journals/jacm/DalviS12`     | :ref:`Möbius compiler <safe-ucq-mobius>`, then           |
+   |             |            | Möbius inversion       | :math:`O(|D|^e)`        |                                         | the signed Möbius sweep over ``independent``             |
+   |             |            | (self-join-free)       |                         |                                         | islands                                                  |
+   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
    | any query whose **lineage** over this data and    | :math:`2^{O(k)}\,|D|`   | :cite:`DBLP:journals/mst/AmarilliCMS20` | ``tree-decomposition``                                   |
    | annotations has treewidth ≤ k                     |                         |                                         |                                                          |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
@@ -282,10 +286,6 @@ treewidth relevant to each row (lineage, data, or joint treewidth), and
    | joint treewidth ≤ k of   | any UCQ                | :math:`2^{O(k^e)}\,|D|` | :cite:`Amarilli2016thesis` (§4.2)       | :ref:`joint-width compiler <bounded-joint-width>`, then  |
    | the data and its         |                        |                         |                                         | ``independent``                                          |
    | annotation               |                        |                         |                                         |                                                          |
-   +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
-   | any         | TID        | safe UCQ needing       |                         | :cite:`DBLP:journals/jacm/DalviS12`     | :ref:`Möbius compiler <safe-ucq-mobius>`, then           |
-   |             |            | Möbius inversion       | :math:`O(|D|^k)`        |                                         | the signed Möbius sweep over ``independent``             |
-   |             |            | (self-join-free)       |                         |                                         | islands                                                  |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
 
 For the exact guarantee, the :ref:`cost-based chooser <probability-guarantees>`
@@ -648,9 +648,14 @@ to read-once islands over the data :cite:`DBLP:journals/jacm/DalviS12`.
 *Computing query probability with incidence algebras*, PODS 2010; Monet &
 Olteanu, AMW 2018, compute these lattices at scale.)  The route is the
 first integration of this complete safe-UCQ step in a query planner;
-:math:`q_9` provably has no polynomial OBDD / FBDD / d-DNNF
-:cite:`DBLP:journals/mst/AmarilliCMS20`, so a polynomial circuit *must*
-use subtraction somewhere -- here, at the root.
+:math:`q_9` provably has no polynomial OBDD / FBDD / **decision**-DNNF
+:cite:`DBLP:journals/mst/AmarilliCMS20` -- the monotone, decision-based
+representations ProvSQL's compilers target -- so any polynomial method over
+them *must* use subtraction somewhere, here at the root.  (Whether a
+polynomial *general* d-DNNF exists for :math:`q_9` is open: the lower
+bounds are for the decision classes, and surprising polynomial
+constructions are known for some other inversion queries, so the absence of
+*any* tractable circuit is conjectured, not proved.)
 
 Like the joint-width route, it is part of the Boolean machinery, fires
 **automatically** when a UCQ-existence shape the safe-query rewriter and
@@ -692,19 +697,38 @@ transparent child, so every
 *other* evaluation -- ``shapley``, ``banzhaf``, a named probability method
 such as ``possible-worlds``, PROV export -- passes straight through to that
 lineage and answers exactly as it would for the ordinary provenance of the
-query (necessarily slower, since the class has no polynomial Boolean
-circuit, but available).  Only the default / ``mobius`` probability takes
-the fast cancelling route.
+query (necessarily slower -- the literal lineage is the very
+:math:`\#P`-hard circuit the cancellation sidesteps -- but available).  Only
+the default / ``mobius`` probability takes the fast cancelling route.
 
-The route keeps **strict priority** behind everything cheaper: the
-safe-query rewrite, the inversion-free certificate, and the joint-width
-compiler all run first, and it fires only when the joint-width screen
-declines.  Inputs must be tuple-independent (lifted inference is sound
-only under independence); v1 supports *reduced-form* UCQs (no relation
-repeated within a single conjunct's homomorphic core, no constants).
-Anything outside that simply does not fire and the query falls back to
-the literal circuit and the general chooser.  The ``provsql.mobius`` GUC,
-on by default, is a debug switch to turn the recognition off.
+**Cost and priority.**  The route is **supra-linear**: its lifted recursion
+fans out over a variable's active domain at each independent project, so it
+runs in :math:`O(|D|^e)`, the degree the query's essential-variable count --
+more expensive, by a polynomial factor, than the *linear* hierarchical and
+inversion-free routes.  So among the **query-side** routes those two run
+first, and Möbius only when they decline.  Among the routes for a recognised
+*hard* UCQ, however, **Möbius takes precedence over the joint-width
+compiler**: where it applies it is a *guaranteed*-PTIME exact route, whereas
+the joint-width compiler's success on exactly these queries is unproven --
+their joint treewidth need not be bounded -- and it can grind to its state
+cap before declining, so trying Möbius first short-circuits past that.  (An
+engineering preference, not a theorem: no polynomial d-D is *known* for
+:math:`q_9`, but none is *proved* impossible.)  A data-cost cap
+(``provsql.mobius_max_gates``) makes the route decline gracefully -- to the
+joint-width compiler, then the general chooser -- on a high-level query
+whose :math:`|D|^e` would out-cost them.
+
+Inputs must be tuple-independent (lifted inference is sound only under
+independence); v1 supports *reduced-form* UCQs: no relation repeated within
+a single conjunct's homomorphic core, no constants, and -- the soundness
+guards -- no bag multiplicity and no overlapping self-join slots (two facts
+sharing an element tuple, or one tuple feeding two slots, carry a
+correlation the element-keyed islands cannot represent).  Anything outside
+that does not fire and the query falls back to the joint-width compiler, or
+the literal circuit and the general chooser.  ``provsql.mobius`` (the
+precedence route) and ``provsql.joint_width`` are independent debug
+switches, both on by default; turning both off compares against the literal
+lineage.
 
 .. _forcing-a-method:
 
