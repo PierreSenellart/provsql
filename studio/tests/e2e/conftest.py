@@ -105,6 +105,12 @@ def cs7_studio_url(cs7_dsn: str) -> str:
 
 
 @pytest.fixture(scope="session")
+def cs2_studio_url(cs2_dsn: str) -> str:
+    """Studio against the Case Study 2 fixture (`public` schema)."""
+    yield from _serve_studio(cs2_dsn, "public")
+
+
+@pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
     # Pin a deterministic viewport so layout-sensitive selectors stay stable
     # across hosts; matches the desktop breakpoint the UI is designed for.

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import subprocess
 from pathlib import Path
 
 import psycopg
@@ -29,6 +30,32 @@ SETUP_SQL_FILES = [
 # The Case Study 7 fixture (peer-review data + the external-review pool that
 # drives the Möbius step), loaded into its own database for the e2e walkthrough.
 CASESTUDY7_SETUP = REPO_ROOT / "doc" / "casestudy7" / "setup.sql"
+
+# The Case Study 2 fixture (Open Science evidence corpus) and the extra SQL its
+# Contributions-mode walkthrough needs on top of setup.sql: the `f` view, its
+# study_mapping, per-finding probabilities, and the f_replicated view (Steps
+# 2-12 of doc/source/user/casestudy2.rst, mirrored in test/sql/casestudy2.sql).
+CASESTUDY2_SETUP = REPO_ROOT / "doc" / "casestudy2" / "setup.sql"
+CS2_CONTRIB_PREP = """
+SET search_path TO public, provsql;
+SELECT add_provenance('finding');
+CREATE VIEW f AS
+  SELECT study.title    AS study,
+         study.study_type,
+         study.reliability,
+         exposure.name   AS exposure,
+         outcome.name    AS outcome,
+         finding.effect
+  FROM finding
+    JOIN study    ON finding.study_id    = study.id
+    JOIN exposure ON finding.exposure_id = exposure.id
+    JOIN outcome  ON finding.outcome_id  = outcome.id;
+SELECT create_provenance_mapping('study_mapping', 'f', 'study');
+DO $$ BEGIN PERFORM set_prob(provenance(), reliability) FROM f; END $$;
+CREATE VIEW f_replicated AS
+  SELECT exposure, outcome, effect FROM f
+  GROUP BY exposure, outcome, effect HAVING COUNT(*) >= 2;
+"""
 
 
 def _read_setup_sql(path: Path) -> str:
@@ -109,6 +136,42 @@ def cs7_dsn() -> str:
         with psycopg.connect(target_dsn, autocommit=True) as conn:
             conn.execute(_read_setup_sql(CASESTUDY7_SETUP))
         yield target_dsn
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            admin.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+
+
+@pytest.fixture(scope="session")
+def cs2_dsn() -> str:
+    """A fresh database with the Case Study 2 fixture prepared for
+    Contributions mode.  Its `setup.sql` loads the base tables with
+    `COPY ... FROM stdin` (a psql client feature, not runnable through
+    psycopg), so it is fed to `psql`; the `f` view / study_mapping /
+    probabilities / f_replicated are then layered on with psycopg.
+    Overridable with `PROVSQL_STUDIO_CS2_DSN`."""
+    override = os.environ.get("PROVSQL_STUDIO_CS2_DSN")
+    if override:
+        yield override
+        return
+
+    suffix = secrets.token_hex(4)
+    db_name = f"provsql_studio_cs2_{suffix}"
+    admin_dsn = "dbname=postgres"
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{db_name}"')
+    try:
+        subprocess.run(
+            ["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", db_name,
+             "-f", str(CASESTUDY2_SETUP)],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        with psycopg.connect(f"dbname={db_name}", autocommit=True) as conn:
+            conn.execute(CS2_CONTRIB_PREP)
+        yield f"dbname={db_name}"
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as admin:
             admin.execute(
