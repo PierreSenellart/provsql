@@ -5358,6 +5358,24 @@ CREATE OR REPLACE FUNCTION ucq_mobius_compile_stats(
   LANGUAGE C VOLATILE;
 
 /**
+ * @brief Pass a token through iff it is a @c gate_mobius, else return NULL.
+ *
+ * The Möbius-precedence dispatch (see @c make_provenance_expression) wraps the
+ * Möbius call in this and then @c COALESCE\ s it before the joint-width call:
+ * a Möbius *success* always roots a @c gate_mobius (the compiler wraps even a
+ * thin selector around the lineage), so it short-circuits and the joint-width
+ * compiler never runs; a Möbius *decline* returns the literal lineage (never a
+ * @c gate_mobius), so this yields NULL and @c COALESCE falls through to
+ * joint-width.  The lineage token is a plain plus/times/input, so the test is
+ * unambiguous.
+ */
+CREATE OR REPLACE FUNCTION mobius_or_null(tok UUID)
+RETURNS UUID AS $$
+  SELECT CASE WHEN tok IS NOT NULL AND provsql.get_gate_type(tok) = 'mobius'
+              THEN tok END
+$$ LANGUAGE sql STABLE;
+
+/**
  * @brief Möbius-route provenance from a descriptor (the planner-substituted
  *        entry point, and the manual one).  Same descriptor and TID gather as
  *        @c ucq_joint_provenance; on any decline (unsafe shape, cap, not TID)

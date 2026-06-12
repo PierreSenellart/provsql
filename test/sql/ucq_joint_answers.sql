@@ -2,6 +2,15 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql, public;
 
+-- This file exercises the joint-width ANSWER (per-group) path in isolation.
+-- The safe-UCQ Möbius route now shares the same recognition and takes
+-- precedence over the joint-width compiler where it applies (several of the
+-- safe-ish answer queries below), which would route them to a gate_mobius
+-- instead -- the same exact values, but not the joint-width token this test
+-- asserts on.  Disable it so the joint-width path is what fires here; the
+-- Möbius route has its own coverage in mobius_safe.
+SET provsql.mobius = off;
+
 -- Whether the joint-width substitution is in the plan of @p q (a robust
 -- firing test: the materialised d-D of a trivial single-witness query can
 -- coincide with the standard provenance token, so token-inequality alone is
@@ -484,19 +493,17 @@ SELECT add_provenance('jcyc');
 DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM jcyc; END $$;
 SET provsql.active = on;
 SET provsql.joint_width = on;
--- Isolate the joint width screen's ladder fallback: with the safe-UCQ Möbius
--- route on (the default) the tw=1 decline would instead be caught by Möbius (a
--- gate_mobius token, same probability), so turn it off here to test the
--- joint->ladder fallback proper (the Möbius interaction is covered in
--- mobius_safe).
-SET provsql.mobius = off;
+-- Isolate the joint width screen's ladder fallback.  Möbius is off for the
+-- whole file (it would otherwise catch the tw=1 decline AND the joint_width=off
+-- token below with a gate_mobius of the same probability -- the two routes are
+-- independent, so disabling joint-width alone no longer disables Möbius); the
+-- Möbius interaction is covered in mobius_safe.
 SET provsql.joint_max_treewidth = 10;
 CREATE TEMP TABLE sc_hi AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
 SET provsql.joint_max_treewidth = 1;     -- below the joint treewidth (2): screen declines
 CREATE TEMP TABLE sc_lo AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
 SET provsql.joint_max_treewidth = 10;
 SET provsql.joint_width = off;
-SET provsql.mobius = on;
 CREATE TEMP TABLE sc_off AS SELECT provenance() AS tok FROM (SELECT DISTINCT 1 FROM jcyc) q;
 SET provsql.active = off;
 \echo '== width screen: fires under the bound, declines (falls back) below it, same value =='

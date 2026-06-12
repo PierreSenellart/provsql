@@ -98,7 +98,8 @@ int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subp
 int provsql_joint_max_treewidth = 10; ///< Maximum joint treewidth the joint-width UCQ compiler attempts before declining (caller falls back to the ladder); @c provsql.joint_max_treewidth GUC
 int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joint-width UCQ compiler (the true safety net); @c provsql.joint_max_states GUC
 bool provsql_joint_width = true; ///< Recognise unsafe UCQs at planner time and route their existence provenance through the joint-width compiler (on by default); the @c provsql.joint_width GUC is a debug-only switch to disable it
-bool provsql_mobius = true; ///< Wire the safe-UCQ Möbius-inversion route as the joint-width compiler's runtime fallback (on by default); the @c provsql.mobius GUC is a debug-only switch to disable it
+bool provsql_mobius = true; ///< Try the safe-UCQ Möbius-inversion route (a guaranteed-PTIME exact route for its class) BEFORE the joint-width compiler, which it short-circuits on success (on by default); the @c provsql.mobius GUC is a debug-only switch to disable it
+int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route: it declines (falling through to joint-width / the ladder) once its compile has built more than this many gates, bounding the \f$O(|D|^k)\f$ blow-up of a high-level safe query on large data; @c provsql.mobius_max_gates GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
@@ -4108,6 +4109,77 @@ static Expr *build_mobius_answer_expr(const constants_t *constants,
 }
 
 /**
+ * @brief Wrap a Möbius call in @c mobius_or_null(...): the token if it roots a
+ *        @c gate_mobius (a Möbius success), else NULL (a Möbius decline returns
+ *        the lineage, never a @c gate_mobius).  Returns @p mobius_call
+ *        unwrapped if the helper cannot be resolved (older schema).
+ */
+static Expr *wrap_mobius_or_null(const constants_t *constants, Expr *mobius_call)
+{
+  FuncCandidateList fcl = FuncnameGetCandidates(
+    list_make2(makeString("provsql"), makeString("mobius_or_null")),
+    1, NIL, false, false,
+#if PG_VERSION_NUM >= 140000
+    false,
+#endif
+    false);
+  FuncExpr *fe;
+
+  if (fcl == NULL)
+    return mobius_call;
+
+  fe = makeNode(FuncExpr);
+  fe->funcid = fcl->oid;
+  fe->funcresulttype = constants->OID_TYPE_UUID;
+  fe->funcretset = false;
+  fe->funcvariadic = false;
+  fe->args = list_make1(mobius_call);
+  fe->location = -1;
+  return (Expr *) fe;
+}
+
+/**
+ * @brief Combine the Möbius and joint-width routes under Möbius precedence.
+ *
+ * Builds @c COALESCE(mobius_or_null(mobius), joint) -- a SHORT-CIRCUITING
+ * choice: the safe-UCQ Möbius cancellation route (a *guaranteed* PTIME
+ * \f$O(|D|^k)\f$ exact route for its class -- TID, self-join-free, safe) is
+ * tried first; on success it roots a @c gate_mobius and @c COALESCE returns it
+ * without ever evaluating -- hence ever running -- the joint-width compiler.
+ * Only when Möbius declines (correlated inputs, self-joins, or an unsafe shape:
+ * @c mobius_or_null then yields NULL) does the joint-width compiler run, with
+ * the literal @p lineage as its own fallback.  Möbius is preferred not because
+ * joint-width is provably worse -- whether the Möbius class has bounded joint
+ * treewidth is open (no polynomial d-D is *known* for q9, but none is proved
+ * impossible for the general d-D class either) -- but because Möbius is a
+ * guaranteed-terminating route for its class whereas the joint-width compiler
+ * may grind to its state cap before declining.  @p mobius_call / @p joint_call
+ * are pre-built route expressions (either may be NULL when its debug GUC is
+ * off); @p lineage is the normal provenance, the final fallback.
+ */
+static Expr *combine_safe_routes(const constants_t *constants,
+                                 Expr *mobius_call, Expr *joint_call,
+                                 Expr *lineage)
+{
+  Expr *first;
+  CoalesceExpr *ce;
+
+  if (mobius_call == NULL)
+    return (joint_call != NULL) ? joint_call : lineage;
+
+  first = wrap_mobius_or_null(constants, mobius_call);
+
+  ce = makeNode(CoalesceExpr);
+  ce->coalescetype = constants->OID_TYPE_UUID;
+  ce->coalescecollid = InvalidOid;
+  /* On a Möbius decline fall through to joint-width if enabled, else straight
+   * to the literal lineage. */
+  ce->args = list_make2(first, (joint_call != NULL) ? joint_call : lineage);
+  ce->location = -1;
+  return (Expr *) ce;
+}
+
+/**
  * @brief Build the combined provenance expression to be added to the SELECT list.
  *
  * Combines the tokens in @p prov_atts according to @p op:
@@ -4176,7 +4248,12 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
    * level down a subquery, where @c wrap_assumed alone is lost), and @c inv_cert
    * marks an inversion-free certificate.  In both cases the lineage is already
    * tractable, so decline. */
-  if (provsql_joint_width && provsql_boolean_provenance &&
+  /* The Möbius and joint-width routes share this UCQ-existence recognition and
+   * its descriptor, but are INDEPENDENT: neither GUC gates the other.  Build
+   * the descriptor when EITHER route is enabled; combine_safe_routes then
+   * wires whichever are on (Möbius first, with precedence).  Turning both off
+   * compares against the literal lineage. */
+  if ((provsql_joint_width || provsql_mobius) && provsql_boolean_provenance &&
       op != SR_PLUS && (aggregation || group_by_rewrite) &&
       !in_boolean_rewrite && inv_cert == NULL)
     jw_desc = provsql_joint_width_descriptor(constants, q, &jw_all_exist,
@@ -4531,33 +4608,37 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
    * tractable.  The normal provenance is still built (it is the
    * fallback), so this never makes a query fail. */
   if (jw_desc != NULL && jw_all_exist) {
-    /* The Möbius-inversion route shares this descriptor and is wired as the
-     * joint-width compiler's runtime fallback: joint-width keeps strict
-     * priority (more general on its inputs), and only on its decline (e.g.
-     * the joint treewidth exceeds the cap, as q9 does on adversarial data)
-     * does the safe-UCQ Möbius cancellation run, before the normal-provenance
-     * fallback. */
-    Expr *fb = provsql_mobius
+    /* Möbius precedence (see combine_safe_routes): the safe-UCQ Möbius
+     * cancellation route -- a guaranteed PTIME exact route for its class -- is
+     * tried first and, on success, short-circuits past the joint-width
+     * compiler (which may otherwise grind to its state cap before declining on
+     * exactly these queries).  The joint-width compiler runs only on a Möbius
+     * decline (correlated inputs, self-joins, unsafe shape), with the normal
+     * provenance the final fallback, so a recognised query never fails.  Both
+     * give the same probability. */
+    Expr *mob = provsql_mobius
       ? build_mobius_provenance_expr(constants, jw_desc, result)
-      : result;
-    Expr *jw = build_joint_width_provenance_expr(constants, jw_desc, fb);
-    if (jw != NULL)
-      result = jw;
+      : NULL;
+    Expr *jw = provsql_joint_width
+      ? build_joint_width_provenance_expr(constants, jw_desc, result)
+      : NULL;
+    result = combine_safe_routes(constants, mob, jw, result);
   } else if (jw_desc != NULL && jw_head_idx != NIL && inv_cert == NULL) {
     /* Per-answer (non-Boolean) UCQ, and the inversion-free certifier has
-     * declined (an inv_cert would be carried on the normal provenance and
-     * is consumed by the 'inversion-free' method, which the joint-width
-     * d-D does not provide): substitute the head-pinned joint-width
-     * provenance per output group, falling back to the just-built normal
-     * per-answer provenance on any decline. */
-    Expr *fb = provsql_mobius
+     * declined (an inv_cert would be carried on the normal provenance and is
+     * consumed by the 'inversion-free' method, which the joint-width d-D does
+     * not provide): same Möbius-precedence dispatch per output group, head
+     * variables pinned per group, the normal per-answer provenance the final
+     * fallback. */
+    Expr *mob = provsql_mobius
       ? build_mobius_answer_expr(constants, jw_desc, jw_head_idx,
                                  jw_head_exprs, result)
-      : result;
-    Expr *jw = build_joint_width_answer_expr(constants, jw_desc,
-                                             jw_head_idx, jw_head_exprs, fb);
-    if (jw != NULL)
-      result = jw;
+      : NULL;
+    Expr *jw = provsql_joint_width
+      ? build_joint_width_answer_expr(constants, jw_desc, jw_head_idx,
+                                      jw_head_exprs, result)
+      : NULL;
+    result = combine_safe_routes(constants, mob, jw, result);
   }
 
   return result;
@@ -13732,20 +13813,23 @@ void _PG_init(void) {
                            NULL);
 
   DefineCustomBoolVariable("provsql.mobius",
-                           "Wire the safe-UCQ Möbius-inversion route as the "
-                           "joint-width compiler's runtime fallback "
-                           "(debug-only switch).",
+                           "Try the safe-UCQ Möbius-inversion route before the "
+                           "joint-width compiler (debug-only switch).",
                            "On by default. The last missing exact route of the "
                            "Dalvi-Suciu dichotomy: a UCQ safe only because the "
                            "#P-hard terms of its inclusion-exclusion expansion "
                            "carry a zero Möbius value on the CNF lattice and "
                            "cancel (canonical witness QW / q9).  Shares the "
-                           "joint-width descriptor and is tried only when the "
-                           "joint-width compiler declines (e.g. the joint "
-                           "treewidth exceeds the cap); on its own decline the "
-                           "normal provenance is the fallback, so the query "
-                           "never fails.  Turn off only to compare against the "
-                           "general lineage for debugging.",
+                           "joint-width descriptor but has PRECEDENCE over it: a "
+                           "guaranteed-PTIME exact route for its class (TID, "
+                           "self-join-free, safe), it is tried first and "
+                           "short-circuits past the joint-width compiler on "
+                           "success.  The joint-width compiler runs only on a "
+                           "Möbius decline (correlated inputs, self-joins, "
+                           "unsafe shape); on its decline too the normal "
+                           "provenance is the fallback, so the query never "
+                           "fails.  Turn off only to compare against the "
+                           "joint-width / general lineage for debugging.",
                            &provsql_mobius,
                            true,
                            PGC_USERSET,
@@ -13753,6 +13837,30 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
+
+  DefineCustomIntVariable("provsql.mobius_max_gates",
+                          "Data-cost cap of the safe-UCQ Möbius-inversion "
+                          "route.",
+                          "The Möbius route is PTIME in its class but its "
+                          "lifted-inference recursion is O(|D|^k) in the data, "
+                          "k the safe query's level (number of nested "
+                          "independent-projections) -- supra-linear, and the "
+                          "degree grows with the query.  To keep it safe to "
+                          "leave on by default with precedence, it declines "
+                          "(falling through to the joint-width compiler / the "
+                          "ladder) once its compile has built more than this "
+                          "many gates, so a high-level safe query on large data "
+                          "never out-costs the general pipeline. Default "
+                          "4000000.",
+                          &provsql_mobius_max_gates,
+                          4000000,
+                          0,
+                          INT_MAX,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
 
   // Emit warnings for undeclared provsql.* configuration parameters
   EmitWarningsOnPlaceholders("provsql");

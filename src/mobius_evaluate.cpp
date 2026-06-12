@@ -57,6 +57,11 @@ extern "C" {
  * the TID restriction (G3) -- every fact token must be a bare gate_input. */
 extern Datum get_gate_type(PG_FUNCTION_ARGS);
 
+/* Data-cost cap (provsql.mobius_max_gates GUC, defined in provsql.c): the
+ * Möbius recursion is O(|D|^k), so a high-level safe query on large data is
+ * bounded by declining once it has built this many gates. */
+extern int provsql_mobius_max_gates;
+
 PG_FUNCTION_INFO_V1(ucq_mobius_materialize_tracked);
 PG_FUNCTION_INFO_V1(ucq_mobius_compile_stats);
 PG_FUNCTION_INFO_V1(ucq_mobius_provenance_answer);
@@ -295,7 +300,15 @@ private:
                                      UUIDOID, 16, false, TYPALIGN_CHAR);
     Datum res = OidFunctionCall1(isAnd ? times_oid : plus_oid,
                                  PointerGetDatum(arr));
+    /* Data-cost cap: the lifted-inference recursion is O(|D|^k), so bound the
+     * total work and decline (-> joint-width / the ladder) past the cap rather
+     * than let a high-level safe query on large data out-cost the general
+     * pipeline.  0 disables the cap. */
     ++st.dd_size;
+    if(provsql_mobius_max_gates > 0 &&
+       static_cast<long>(st.dd_size) > static_cast<long>(provsql_mobius_max_gates))
+      throw MobiusDecline("Möbius: data-cost cap (provsql.mobius_max_gates) "
+                          "exceeded -- the |D|^k recursion is too large");
     return *DatumGetUUIDP(res);
   }
 
@@ -869,6 +882,11 @@ FactIndex buildFactIndexArrays(const int32 *f_rel, int n_fr,
   const Oid input_oid = get_constants(true).GATE_TYPE_TO_OID[gate_input];
 
   FactIndex fi;
+  // Self-join overlap guard: which (rel, element) key first carried each token.
+  // The same base tuple feeding two DISTINCT fact slots (a self-join whose
+  // constant prefilters are not disjoint, so the slots share rows) is a
+  // correlation the independence-assuming recursion cannot represent.
+  std::map<std::string, std::pair<unsigned, std::vector<long>>> token_owner;
   int eoff=0;
   for(int i=0;i<n_fr;++i){
     const int ar=f_arity[i];
@@ -892,7 +910,34 @@ FactIndex buildFactIndexArrays(const int32 *f_rel, int n_fr,
         throw MobiusDecline("non-TID input: a fact token is not a bare "
                             "gate_input (correlated / derived lineage)");
     }
-    fi.tok[{rel, el}] = nil ? std::string() : uuid2string(tok[i]);
+    // Bag multiplicity guard: the fact index is keyed by (rel, element tuple),
+    // one token per key (the SJF-TID reduced form).  Two DISTINCT probabilistic
+    // tuples that project to the same element tuple -- e.g. a relation column
+    // not bound by the query, or a duplicate-bearing input -- would silently
+    // collapse to one event (lose the OR), under-counting the probability.  The
+    // lifted-inference recursion has no place to represent that disjunction, so
+    // decline and let the joint-width route (which sees full multiplicity) take
+    // it.  (A repeated key with the SAME token is the same tuple gathered twice
+    // -- harmless, kept.)
+    const std::string newtok = nil ? std::string() : uuid2string(tok[i]);
+    auto existing = fi.tok.find({rel, el});
+    if(existing != fi.tok.end() && existing->second != newtok)
+      throw MobiusDecline("bag multiplicity: two distinct tuples share an "
+                          "element tuple (non-reduced data) -- defer to "
+                          "joint-width, which keeps the multiplicity");
+    // The same token under a DIFFERENT (rel, element) key means one base tuple
+    // feeds two fact slots -- an overlapping (non-disjoint) self-join, a
+    // correlation the lifted recursion would wrongly treat as independent.
+    // Decline (joint-width tracks the shared token correctly).  A disjoint
+    // self-join shares no token, so it passes.
+    if(!newtok.empty()) {
+      auto own = token_owner.find(newtok);
+      if(own != token_owner.end() && own->second != std::make_pair(rel, el))
+        throw MobiusDecline("self-join overlap: one tuple feeds two fact slots "
+                            "(non-disjoint self-join) -- defer to joint-width");
+      token_owner[newtok] = {rel, el};
+    }
+    fi.tok[{rel, el}] = newtok;
   }
   return fi;
 }
