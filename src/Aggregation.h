@@ -152,14 +152,11 @@ struct Aggregator {
   virtual AggValue finalize() const = 0;
 
   /**
-   * @brief Return the aggregation operator this accumulator implements.
-   * @return The @c AggregationOperator enum value for this accumulator.
-   */
-  virtual AggregationOperator op() const = 0;
-
-  /**
    * @brief Return the type of the input values accepted by @c add().
    * @return The @c ValueType of values passed to @c add().
+   *
+   * Used (via the @c resultType() default) to report the aggregate's
+   * result type; see @c makeAggregator() for the operators actually built.
    */
   virtual ValueType inputType() const = 0;
 

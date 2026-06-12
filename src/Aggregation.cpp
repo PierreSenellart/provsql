@@ -9,10 +9,15 @@
  * - @c makeAggregator(): constructs a concrete @c Aggregator subclass
  *   for the given operator/type combination.
  *
- * Each aggregation function × value-type combination has its own
- * @c Aggregator subclass defined locally in this file (e.g.
- * @c SumAggregator<long>, @c MinAggregator<double>, @c ArrayAggregator<std::string>,
- * etc.).
+ * Each built aggregation function × value-type combination has its own
+ * @c Aggregator subclass defined locally in this file (e.g. @c SumAgg<long>,
+ * @c MinAgg<double>, @c ChooseAgg<long>).  Only the aggregates the Monte-Carlo
+ * sampler and the subset enumerator evaluate directly are built: the numeric
+ * ones (SUM / COUNT / MIN / MAX / AVG) and CHOOSE (the categorical analog,
+ * decided by the exhaustive subset enumerator).  The boolean (bool_or /
+ * bool_and) and array_agg aggregates are resolved to a Boolean subcircuit by
+ * the m-semiring HAVING rewrite (@c having_semantics) and so never reach
+ * @c makeAggregator.
  */
 #include "Aggregation.h"
 
@@ -85,21 +90,6 @@ ComparisonOperator cmpOpFromOid(Oid op_oid, bool &ok)
   return ComparisonOperator::EQ;
 }
 
-/** @brief Aggregator that ignores all inputs and always returns NULL. */
-struct NoneAgg : Aggregator {
-  void add(const AggValue& x) override {
-  }
-  AggValue finalize() const override {
-    return AggValue{};
-  }
-  AggregationOperator op() const override {
-    return AggregationOperator::NONE;
-  }
-  ValueType inputType() const override {
-    return ValueType::NONE;
-  }
-};
-
 template <class ...>
 struct False : std::bool_constant<false> { };
 
@@ -146,9 +136,6 @@ struct SumAgg : StandardAgg<T> {
     value += v;
     has = true;
   }
-  AggregationOperator op() const override {
-    return AggregationOperator::SUM;
-  }
 };
 
 /** @brief Aggregator implementing MIN for integer or float types. */
@@ -166,9 +153,6 @@ struct MinAgg : StandardAgg<T> {
       value = v;
       has = true;
     }
-  }
-  AggregationOperator op() const override {
-    return AggregationOperator::MIN;
   }
 };
 
@@ -188,43 +172,6 @@ struct MaxAgg : StandardAgg<T> {
       has = true;
     }
   }
-  AggregationOperator op() const override {
-    return AggregationOperator::MAX;
-  }
-};
-
-/** @brief Aggregator implementing boolean AND (returns false if any input is false). */
-struct AndAgg : StandardAgg<bool> {
-  AndAgg() {
-    value=true;
-  }
-
-  void add(const AggValue& x) override {
-    if (x.getType() == ValueType::NONE) return;
-    auto b = std::get<bool>(x.v);
-    value = value && b;
-    has = true;
-  }
-  AggregationOperator op() const override {
-    return AggregationOperator::AND;
-  }
-};
-
-/** @brief Aggregator implementing boolean OR (returns true if any input is true). */
-struct OrAgg : StandardAgg<bool> {
-  OrAgg() {
-    value=false;
-  }
-
-  void add(const AggValue& x) override {
-    if (x.getType() == ValueType::NONE) return;
-    auto b = std::get<bool>(x.v);
-    value = value || b;
-    has = true;
-  }
-  AggregationOperator op() const override {
-    return AggregationOperator::OR;
-  }
 };
 
 /** @brief Aggregator implementing CHOOSE (returns the first non-NULL input). */
@@ -238,9 +185,6 @@ struct ChooseAgg : StandardAgg<T> {
     if(!has)
       value = std::get<T>(x.v);
     has = true;
-  }
-  AggregationOperator op() const override {
-    return AggregationOperator::CHOOSE;
   }
 };
 
@@ -260,9 +204,6 @@ public:
     ++count;
     has = true;
   }
-  AggregationOperator op() const override {
-    return AggregationOperator::AVG;
-  }
   AggValue finalize() const override {
     if (has) return AggValue {sum/count}; else return AggValue{};
   }
@@ -279,43 +220,14 @@ public:
   }
 };
 
-/** @brief Aggregator implementing ARRAY_AGG; collects all non-NULL inputs into an array. */
-template<class T>
-struct ArrayAgg : StandardAgg<T> {
-protected:
-  std::vector<T> values; ///< Accumulated elements
-  using StandardAgg<T>::has;
-
-public:
-  void add(const AggValue& x) override {
-    if (x.getType() == ValueType::NONE) return;
-    const T& v = std::get<T>(x.v);
-    values.push_back(v);
-    has = true;
-  }
-  AggValue finalize() const override {
-    if (has) return AggValue {values}; else return AggValue{};
-  }
-  AggregationOperator op() const override {
-    return AggregationOperator::ARRAY_AGG;
-  }
-  ValueType resultType() const override {
-    if constexpr (std::is_same_v<T,long>)
-      return ValueType::ARRAY_INT;
-    else if constexpr (std::is_same_v<T,double>)
-      return ValueType::ARRAY_FLOAT;
-    else if constexpr (std::is_same_v<T,bool>)
-      return ValueType::ARRAY_BOOLEAN;
-    else if constexpr (std::is_same_v<T,std::string>)
-      return ValueType::ARRAY_STRING;
-    else
-      static_assert(False<T>{});
-  }
-};
-
+// Constructs the deterministic accumulator the Monte-Carlo sampler and the
+// exhaustive subset enumerator push per-world values into.  The numeric
+// aggregates (SUM / COUNT / MIN / MAX / AVG) and CHOOSE are built; the boolean
+// (bool_or / bool_and) and array_agg aggregates never reach this factory: the
+// m-semiring HAVING rewrite in having_semantics resolves them to a Boolean
+// subcircuit before probability evaluation, so no such gate_agg survives to the
+// sampler.  They are rejected explicitly rather than handled.
 std::unique_ptr<Aggregator> makeAggregator(AggregationOperator op, ValueType t) {
-  if(t==ValueType::NONE) return std::make_unique<NoneAgg>();
-
   switch (op) {
   case AggregationOperator::COUNT:
     if (t == ValueType::INT) return std::make_unique<SumAgg<long> >();
@@ -344,12 +256,6 @@ std::unique_ptr<Aggregator> makeAggregator(AggregationOperator op, ValueType t) 
     case ValueType::FLOAT: return std::make_unique<AvgAgg<double> >();
     default: throw std::runtime_error("AVG not supported for this type");
     }
-  case AggregationOperator::AND:
-    if (t == ValueType::BOOLEAN) return std::make_unique<AndAgg>();
-    throw std::runtime_error("AND requires BOOLEAN");
-  case AggregationOperator::OR:
-    if (t == ValueType::BOOLEAN) return std::make_unique<OrAgg>();
-    throw std::runtime_error("OR requires BOOLEAN");
   case AggregationOperator::CHOOSE:
     switch(t) {
     case ValueType::BOOLEAN: return std::make_unique<ChooseAgg<bool> >();
@@ -358,16 +264,14 @@ std::unique_ptr<Aggregator> makeAggregator(AggregationOperator op, ValueType t) 
     case ValueType::STRING: return std::make_unique<ChooseAgg<std::string> >();
     default: throw std::runtime_error("CHOOSE not supported for this type");
     }
+  case AggregationOperator::AND:
+  case AggregationOperator::OR:
   case AggregationOperator::ARRAY_AGG:
-    switch(t) {
-    case ValueType::BOOLEAN: return std::make_unique<ArrayAgg<bool> >();
-    case ValueType::INT: return std::make_unique<ArrayAgg<long> >();
-    case ValueType::FLOAT: return std::make_unique<ArrayAgg<double> >();
-    case ValueType::STRING: return std::make_unique<ArrayAgg<std::string> >();
-    default: throw std::runtime_error("ARRAY_AGG not supported for this type");
-    }
   case AggregationOperator::NONE:
-    return std::make_unique<NoneAgg>();
+    // Resolved to a Boolean subcircuit by the HAVING rewrite; never sampled.
+    throw std::runtime_error(
+            "makeAggregator: boolean/array_agg aggregates are handled by the "
+            "m-semiring HAVING rewrite, not the deterministic sampler");
   }
 
   throw std::logic_error("Unhandled AggregationOperator");
