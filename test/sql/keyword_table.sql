@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE "order" (x INT, y INT);
 INSERT INTO "order" VALUES (1,1),(1,2),(2,2),(3,3);

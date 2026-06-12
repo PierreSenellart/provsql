@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- A 3-way times circuit (AND of three personnel inputs).
 CREATE TABLE tree_decomposition_dot_q AS

@@ -11,7 +11,6 @@
 -- passes do not rewrite the DNF shape out from under the detector (e.g.
 -- absorbing x1 OR (x1 AND x2) down to x1).
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 SET provsql.provenance = 'semiring';
 SET provsql.monte_carlo_seed = 42;
 

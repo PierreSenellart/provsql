@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- foldSemiringIdentities (gated by provsql.simplify_on_load) drops
 -- identity wires from gate_plus / gate_times and collapses the

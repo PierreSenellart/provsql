@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Case Study 5: The Wildlife Photo Archive
 -- Tests VALUES, repair_key with synthetic key, mulinput probability,

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- The makeDD route is now cost-selected by default ('auto', the empty/NULL
 -- method, and 'default' all map to it); the old fixed interpret-as-dd ->

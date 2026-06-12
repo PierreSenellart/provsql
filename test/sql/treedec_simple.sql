@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE treedec_simple_result AS
 SELECT *, probability_evaluate(provenance(),'tree-decomposition') AS prob FROM personnel

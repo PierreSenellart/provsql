@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 SET client_min_messages TO WARNING;
 
 -- Regression for the segfault described in the

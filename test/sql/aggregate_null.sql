@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- NULL inputs never participate in an aggregate (SQL semantics): sum / min /
 -- max / avg / count(expr) ignore NULL-valued rows, while count(*) counts every

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Provenance for recursive queries (WITH RECURSIVE), PG15+.
 --

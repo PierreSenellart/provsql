@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 SELECT create_provenance_mapping('personnel_prob', 'personnel', '(0.5^id)::float');
 CREATE TABLE result_viterbi AS SELECT

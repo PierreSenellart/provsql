@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TEMP TABLE p(t uuid);
 INSERT INTO p VALUES (public.uuid_generate_v4());

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Cross-vertex reachability aggregations: GROUP BY over a join of a
 -- reachability CTE with an untracked member relation collapses each

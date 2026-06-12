@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE result_having_other_operator AS SELECT
   city,

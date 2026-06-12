@@ -11,7 +11,6 @@
 -- token combinators, with provsql.boolean_provenance off so the load-time
 -- folding passes leave the shape intact.
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 SET provsql.provenance = 'semiring';
 SET provsql.monte_carlo_seed = 42;
 

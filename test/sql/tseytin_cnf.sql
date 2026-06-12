@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- A 3-way times circuit (AND of three personnel inputs with probabilities
 -- 0.5, 0.6, 0.7). Stable CNF shape under the Tseytin transformation.

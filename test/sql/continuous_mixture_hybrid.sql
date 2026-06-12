@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- The HybridSimplifier's try_mixture_lift rule pushes PLUS / TIMES
 -- inside a single mixture child, then recursively folds the two new

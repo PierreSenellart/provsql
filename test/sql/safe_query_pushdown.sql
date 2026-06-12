@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 -- Probes the safe-query / 'independent' rejection layer in isolation; pin
 -- the joint-width debug GUC off so the higher joint-width fallback (which
 -- makes these unsafe UCQs tractable) does not mask the rejection.

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- INSERT ... SELECT propagates provenance
 CREATE TABLE insert_prov_result (name varchar, city varchar);

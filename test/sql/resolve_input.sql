@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Known input: round-trip via the row's provsql column.
 CREATE TABLE ri_q AS

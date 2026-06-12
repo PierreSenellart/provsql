@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Correlated scalar subqueries.  (SELECT Q.x FROM Q WHERE corr) used as a
 -- top-level target-list entry, over a single tracked base relation R, is

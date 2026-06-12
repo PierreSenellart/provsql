@@ -7,7 +7,6 @@
 -- NOTICEs -- a fallback to MC emits a NOTICE so an estimate is never mistaken
 -- for a closed-form moment.  See src/Expectation.cpp mc_samples_or_throw.
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 SET provsql.monte_carlo_seed = 42;
 
 -- expected(rv * rv) over a SHARED base RV has overlapping footprints and no

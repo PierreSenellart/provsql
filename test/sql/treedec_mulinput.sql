@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Regression test for tree-decomposition probability evaluation on
 -- circuits containing mulinput gates (produced by repair_key).

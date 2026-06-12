@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Columnar internals of the bounded-treewidth reachability route:
 -- reachability_evaluate / reachability_compile_stats compile s-t

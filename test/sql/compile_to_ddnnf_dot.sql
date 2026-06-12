@@ -1,7 +1,6 @@
 \set ECHO none
 \if `which d4 > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- A 3-way times circuit; the compiled d-DNNF should contain at least
 -- the three IN leaves (recognisable by their @c "p=0.<n>" label).

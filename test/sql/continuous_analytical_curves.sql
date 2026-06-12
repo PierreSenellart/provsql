@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- provsql.rv_analytical_curves(token, samples, prov) returns a jsonb
 -- {pdf: [{x, p}, ...], cdf: [{x, p}, ...]} payload with closed-form

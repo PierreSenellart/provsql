@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- 3-way times circuit (personnel 5/6/7), same as tseytin_cnf.sql. The
 -- tree-decomposition route needs no external tool, so the NNF is

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Case Study 8: ProvSQL as a Probability Calculator.
 -- Backs the five worked problems of doc/source/user/casestudy8.rst: discrete

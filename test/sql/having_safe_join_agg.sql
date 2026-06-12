@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- ----------------------------------------------------------------------
 -- Pin the safe-join SUM / MIN / MAX arms of the marginal-vector pre-pass

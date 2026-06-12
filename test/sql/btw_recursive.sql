@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- The user-facing bounded-treewidth reachability route: under
 -- provsql.boolean_provenance, the recursive-CTE lowering recognises the

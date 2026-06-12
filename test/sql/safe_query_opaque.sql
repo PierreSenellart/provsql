@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Audit: every documented and undocumented way to obtain a table with
 -- a provsql column whose values are NOT independent.  The safe-query

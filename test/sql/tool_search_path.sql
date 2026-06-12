@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- 1. The GUC is registered and defaults to the empty string.
 SHOW provsql.tool_search_path;

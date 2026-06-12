@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- ----------------------------------------------------------------------
 -- Pin the Poisson-binomial pre-pass (provsql.cmp_probability_evaluation)

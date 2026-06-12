@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Mirrors the sr_why test: cross-join of personnel with id1 < id2,
 -- grouped by city. Each city's polynomial is a sum of length-2

@@ -1,7 +1,6 @@
 \set ECHO none
 \set SHOW_CONTEXT never
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE expected_result AS
 SELECT city, expected(COUNT(*)) AS c1, expected(COUNT(id)) AS c2, expected(SUM(id)) AS s, expected(MIN(id)) AS min, expected(MAX(id)) as max

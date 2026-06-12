@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE wrong_get AS SELECT get_prob(provenance()) FROM (SELECT DISTINCT city FROM personnel) t;
 SELECT remove_provenance('wrong_get');

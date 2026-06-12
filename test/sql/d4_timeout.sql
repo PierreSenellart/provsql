@@ -1,7 +1,6 @@
 \set ECHO none
 \if `which d4 > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- 100x100 random-probability matrix (matches the casestudy1 documentation).
 -- The self-join below produces a circuit whose per-group d4 compilations

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- provsql.last_eval_method records, after each probability_evaluate call, the
 -- evaluation method that produced the result (comma-separated and deduplicated

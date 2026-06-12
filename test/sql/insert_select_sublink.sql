@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Two fixes exercised together:
 --  (1) provenance() inside an EXISTS SubLink (a boolean predicate, not a

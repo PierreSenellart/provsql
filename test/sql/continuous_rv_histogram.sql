@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- All MC bins below are deterministic via a fixed seed and sample count.
 SET provsql.monte_carlo_seed = 42;

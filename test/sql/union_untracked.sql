@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Regression: a UNION mixing a branch with NO provenance source (constant
 -- rows, or an untracked relation) with a provenance-tracked branch.  Before the

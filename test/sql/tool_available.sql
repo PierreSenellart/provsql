@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Non-existent tool: deterministic FALSE regardless of host setup.
 SELECT tool_available('definitely-not-a-real-tool-xyz123');

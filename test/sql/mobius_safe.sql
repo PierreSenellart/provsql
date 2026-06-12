@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql,public;
 
 -- Safe-UCQ Möbius-inversion route (mobius_evaluate.cpp): the last missing
 -- exact route of the Dalvi-Suciu dichotomy.  Some unions of conjunctive

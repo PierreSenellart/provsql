@@ -1,7 +1,6 @@
 \set ECHO none
 \if `which weightmc > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE weightmc_result AS
 SELECT city, probability_evaluate(provenance(),'weightmc','0.2;0.8') AS prob

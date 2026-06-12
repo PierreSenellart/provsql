@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Probes the safe-query read-once ('independent') rewrite in isolation;
 -- pin the joint-width debug GUC off so its per-answer d-D does not replace

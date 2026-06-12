@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Exercises the per-table provenance metadata store added for the
 -- safe-query optimisation: add_provenance / repair_key /

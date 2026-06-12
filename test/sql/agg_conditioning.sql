@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- SUM(x) | C conditions a discrete aggregate's distribution on an event,
 -- returning a conditioned agg_token that flows onward: expected / variance /

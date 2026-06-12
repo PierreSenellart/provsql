@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Arithmetic on aggregate results (issue #63)
 -- These queries require casts from agg_token to the original aggregate type

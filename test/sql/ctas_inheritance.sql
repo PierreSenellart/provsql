@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Exercises the ProcessUtility CTAS lineage hook: when a
 -- CREATE TABLE AS / CREATE MATERIALIZED VIEW / SELECT INTO inner

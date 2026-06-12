@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- probability_bounds(token) returns a cheap CERTIFIED interval [lower,upper]
 -- with lower <= probability_evaluate(token) <= upper, computed without

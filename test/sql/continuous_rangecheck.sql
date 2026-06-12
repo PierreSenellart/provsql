@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- RangeCheck: support-based interval arithmetic decides gate_cmps
 -- whose two sides have provably ordered or disjoint supports.  When

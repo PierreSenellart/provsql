@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Stash a plus-gate UUID into a regular table so a fresh-backend test
 -- (gate_cache_consistency) can call get_gate_type / get_children

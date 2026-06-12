@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Pin the MC seed: any test below that falls back to MC rejection
 -- must be reproducible across runs.

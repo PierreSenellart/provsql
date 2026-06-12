@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Min-cost reachability through the decomposition-aligned compilation:
 -- under the 'absorptive' provenance class the reachability route's

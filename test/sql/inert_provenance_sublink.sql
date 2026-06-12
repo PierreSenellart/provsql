@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- provenance() inside a scalar SubLink is a scope-local, INERT token
 -- fetch: it resolves to that subquery's own provenance token and returns

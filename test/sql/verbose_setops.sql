@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Regression for a backend segfault when provsql.verbose_level >= 20
 -- triggered pg_get_querydef() on a rewritten EXCEPT / non-ALL UNION

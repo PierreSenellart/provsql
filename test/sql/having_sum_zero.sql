@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Regression for HAVING sum(val) over a mutually-exclusive (repair_key / BID)
 -- block that contains a value-0 outcome.  Value 0 is SUM's additive identity,

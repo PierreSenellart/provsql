@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Case Study 1: The Intelligence Agency
 -- Uses an 'agents' table to avoid conflict with the existing provsql_test.personnel table.

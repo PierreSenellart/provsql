@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- From https://github.com/PierreSenellart/provsql/issues/60
 

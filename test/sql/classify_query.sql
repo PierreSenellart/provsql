@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Exercises the query-time TID / BID / OPAQUE classifier surfaced
 -- through the provsql.classify_top_level GUC.  When on, every

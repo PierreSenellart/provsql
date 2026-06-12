@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql, public;
 
 -- This file exercises the joint-width ANSWER (per-group) path in isolation.
 -- The safe-UCQ Möbius route now shares the same recognition and takes

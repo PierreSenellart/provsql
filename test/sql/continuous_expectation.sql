@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Pin the MC RNG: any branch that falls back to monteCarloScalarSamples
 -- below must be reproducible across runs.

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Basic CTE with provenance
 CREATE TABLE cte_result1 AS

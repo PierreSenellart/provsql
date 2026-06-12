@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Computing Shapley/Banzhaf values is currently ill-defined for circuits
 -- containing mulinput gates: the d-DNNF builder silently drops MULINs

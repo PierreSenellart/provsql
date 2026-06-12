@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Boolean analysis of a selection predicate that MIXES a probabilistic
 -- comparison (random_variable or aggregate) with an ordinary (regular-column)

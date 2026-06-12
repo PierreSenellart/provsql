@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- provsql.categorical(probs[], values[]) builds the same structural
 -- representation the Dirac-mixture-collapse simplifier produces: a

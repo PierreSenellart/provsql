@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Outer-join provenance (LEFT / RIGHT / FULL).  The planner lowers an outer
 -- join of two base relations into (matched) UNION ALL (null-padded antijoin

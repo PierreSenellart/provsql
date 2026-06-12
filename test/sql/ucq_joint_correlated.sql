@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql,public;
 SET provsql.provenance = 'boolean';
 
 -- The correlated regime of the joint-width UCQ compiler: facts whose

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- ----------------------------------------------------------------------
 -- Pin the BID (repair_key / gate_mulinput) arm of the marginal-vector

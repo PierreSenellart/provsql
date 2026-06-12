@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- A.  Constructor builds a gate_mixture with three wires
 -- [p_token (gate_input), x_token, y_token] and returns a random_variable.

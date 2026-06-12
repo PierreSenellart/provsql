@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 /* The capability semiring: ⊕ = bitwise OR (alternatives combine
    permissively), ⊗ = bitwise AND (joins require both flags),

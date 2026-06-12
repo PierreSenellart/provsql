@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Same 3-way times circuit as tseytin_cnf.sql: personnel 5/6/7 with
 -- probabilities 0.5/0.6/0.7 (set by probability_setup). The variable

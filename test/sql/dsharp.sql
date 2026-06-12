@@ -1,7 +1,6 @@
 \set ECHO none
 \if `which dsharp > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE dsharp_result AS
 SELECT city, probability_evaluate(provenance(),'compilation','dsharp') AS prob

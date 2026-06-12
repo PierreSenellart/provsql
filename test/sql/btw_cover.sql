@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Reachability self-join conjunctions: "are these k vertices all
 -- reachable" -- FROM reach r1, ..., reach rk with one constant node

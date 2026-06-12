@@ -10,7 +10,6 @@
 -- Shortest path from root to leaf has length 1; longest has length 2.
 -- Longest-path semantics report depth=2 for leaf.
 \pset format unaligned
-SET search_path TO public, provsql;
 
 CREATE TABLE cs_t(id int);
 INSERT INTO cs_t VALUES (1);
@@ -20,9 +19,9 @@ DO $$
 DECLARE leaf uuid; inner_g uuid; root uuid;
 BEGIN
   SELECT provsql INTO leaf FROM cs_t WHERE id = 1;
-  inner_g := uuid_generate_v5(uuid_ns_provsql(),
+  inner_g := public.uuid_generate_v5(uuid_ns_provsql(),
                               concat('cs-depth-inner', leaf));
-  root    := uuid_generate_v5(uuid_ns_provsql(),
+  root    := public.uuid_generate_v5(uuid_ns_provsql(),
                               concat('cs-depth-root', leaf));
   PERFORM create_gate(inner_g, 'times', ARRAY[leaf]);
   PERFORM create_gate(root,    'times', ARRAY[inner_g, leaf]);

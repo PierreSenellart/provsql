@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE pw_result AS
 SELECT city, probability_evaluate(provenance(),'possible-worlds') AS prob

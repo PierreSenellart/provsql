@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- The sampler uses std::mt19937_64 seeded from provsql.monte_carlo_seed
 -- so all assertions in this file are deterministic across runs.

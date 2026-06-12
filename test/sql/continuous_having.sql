@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Seed the MC RNG so the reported probabilities are reproducible
 -- across runs.  Each section is structured as a tolerance check

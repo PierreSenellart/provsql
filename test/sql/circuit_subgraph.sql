@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Single input leaf: no children, only the root row at depth 0.
 CREATE TABLE cs_q AS SELECT provenance() AS p FROM personnel WHERE name='John';

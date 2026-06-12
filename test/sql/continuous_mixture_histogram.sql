@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Bimodal Gaussian mixture: two well-separated narrow normals.
 -- rv_histogram samples rv_mc_samples draws from each branch with

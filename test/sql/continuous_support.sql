@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Support intervals for base distributions: matches the closed-form
 -- supports propagated by RangeCheck.intervalOf.

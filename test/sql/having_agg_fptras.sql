@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- The apx-safe corner of the HAVING trichotomy (Re & Suciu 2009, VLDB J.).
 -- An aggregate whose value-support exceeds BOTH exact weighted-sum evaluators --

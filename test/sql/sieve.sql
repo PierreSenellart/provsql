@@ -8,7 +8,6 @@
 -- Circuits are built from the public token combinators with
 -- provsql.boolean_provenance off so the load-time folding leaves the shape.
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 SET provsql.provenance = 'semiring';
 
 CREATE TABLE sv_in(id int);

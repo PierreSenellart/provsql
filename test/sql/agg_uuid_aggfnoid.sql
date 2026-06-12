@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Regression for the agg-gate UUID collision: provenance_aggregate(...)
 -- used to derive the gate UUID from the children list alone. SUM(id)

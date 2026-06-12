@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Closed-form moments for a binary mixture must compose recursively
 -- through Expectation.cpp's rec_* dispatchers.  Pin a seed so the MC

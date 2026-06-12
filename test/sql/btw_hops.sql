@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Bounded-hop reachability: a hop-counting recursive CTE -- a counter
 -- column seeded by an integer constant, incremented in the recursive

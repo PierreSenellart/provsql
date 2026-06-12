@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Conditioning operator: the binary | (function alias cond) over uuid
 -- provenance tokens builds a terminal gate_conditioned that

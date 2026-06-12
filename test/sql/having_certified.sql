@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- The HAVING possible-worlds enumeration is a d-DNNF by construction
 -- when the group's contributors are independent base tuples: the world

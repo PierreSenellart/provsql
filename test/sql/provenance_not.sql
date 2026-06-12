@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Event negation: the prefix ! operator (function alias provenance_not) is the
 -- complement of a Boolean provenance event -- sugar for monus(one, x), i.e.

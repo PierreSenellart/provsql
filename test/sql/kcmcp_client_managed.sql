@@ -10,7 +10,6 @@
 -- in production.
 \if `test -x /tmp/tdkc-regress && echo true || echo false`
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Configure the managed server and let the supervisor worker launch it.
 ALTER SYSTEM SET provsql.kcmcp_server = '/tmp/tdkc-regress --kcmcp {endpoint}';

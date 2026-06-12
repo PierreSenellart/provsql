@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Safe-query rewrite (provsql.boolean_provenance = on) wraps every
 -- per-row root in a fresh gate_assumed.  The wrapper is a

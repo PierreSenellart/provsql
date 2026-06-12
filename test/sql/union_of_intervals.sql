@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Union of intervals semiring, Belkis Djeffal
 -- See https://inria.hal.science/hal-04342025

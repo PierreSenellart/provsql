@@ -11,7 +11,6 @@
 -- semiring evaluators incompatible with the Boolean assumption refuse.
 
 \pset format unaligned
-SET search_path TO public, provsql;
 
 CREATE TABLE bf_t(id int, lbl text);
 INSERT INTO bf_t VALUES (1, 'u'), (2, 'v');
@@ -39,7 +38,7 @@ BEGIN
   SELECT provsql INTO u FROM bf_t WHERE id = 1;
   SELECT provsql INTO v FROM bf_t WHERE id = 2;
   sub  := provenance_plus(ARRAY[u, v]);
-  root := uuid_generate_v5(uuid_ns_provsql(),
+  root := public.uuid_generate_v5(uuid_ns_provsql(),
                            concat('bf-tested-shared-sub', sub));
   PERFORM create_gate(root, 'times', ARRAY[sub, sub]);
   PERFORM set_config('bf.shared_root', root::text, false);
@@ -102,7 +101,7 @@ DO $$
 DECLARE u uuid; root uuid;
 BEGIN
   SELECT provsql INTO u FROM bf_t WHERE id = 1;
-  root := uuid_generate_v5(uuid_ns_provsql(), concat('bf-one-abs', u));
+  root := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-one-abs', u));
   PERFORM create_gate(root, 'plus', ARRAY[u, gate_one()]);
   PERFORM set_config('bf.one_root', root::text, false);
 END $$;
@@ -137,7 +136,7 @@ DO $$
 DECLARE u uuid; root uuid;
 BEGIN
   SELECT provsql INTO u FROM bf_t WHERE id = 1;
-  root := uuid_generate_v5(uuid_ns_provsql(), concat('bf-zero', u));
+  root := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-zero', u));
   PERFORM create_gate(root, 'plus', ARRAY[u, gate_zero()]);
   PERFORM set_config('bf.zero_root', root::text, false);
 END $$;
@@ -161,12 +160,12 @@ BEGIN
   SELECT provsql INTO v FROM bf_t WHERE id = 2;
   -- plus(u, times(u, v)) absorbs to u.  P(u) = 0.5.
   tab := provenance_times(u, v);
-  root_plus := uuid_generate_v5(uuid_ns_provsql(), concat('bf-abs-plus', tab));
+  root_plus := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-abs-plus', tab));
   PERFORM create_gate(root_plus, 'plus', ARRAY[u, tab]);
   PERFORM set_config('bf.abs_plus_root', root_plus::text, false);
   -- times(u, plus(u, v)) absorbs to u.  P(u) = 0.5.
   tab := provenance_plus(ARRAY[u, v]);
-  root_times := uuid_generate_v5(uuid_ns_provsql(), concat('bf-abs-times', tab));
+  root_times := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-abs-times', tab));
   PERFORM create_gate(root_times, 'times', ARRAY[u, tab]);
   PERFORM set_config('bf.abs_times_root', root_times::text, false);
 END $$;
@@ -280,9 +279,9 @@ BEGIN
   SELECT provsql INTO x FROM bf_t WHERE id = 1;
   SELECT provsql INTO a FROM bf_t WHERE id = 2;
   tab  := provenance_times(x, a);
-  t1   := uuid_generate_v5(uuid_ns_provsql(), concat('bf-share-one', x));
+  t1   := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-share-one', x));
   PERFORM create_gate(t1, 'times', ARRAY[x, gate_one()]);
-  root := uuid_generate_v5(uuid_ns_provsql(), concat('bf-share-root', x));
+  root := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-share-root', x));
   PERFORM create_gate(root, 'plus', ARRAY[tab, t1]);
   PERFORM set_config('bf.share_root', root::text, false);
 END $$;
@@ -314,10 +313,10 @@ DECLARE x uuid; y uuid; diag uuid; off_diag uuid; root uuid;
 BEGIN
   SELECT provsql INTO x FROM bf_t WHERE id = 1;
   SELECT provsql INTO y FROM bf_t WHERE id = 2;
-  diag := uuid_generate_v5(uuid_ns_provsql(), concat('bf-interleave-diag', x));
+  diag := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-interleave-diag', x));
   PERFORM create_gate(diag, 'times', ARRAY[x, x]);
   off_diag := provenance_times(x, y);
-  root := uuid_generate_v5(uuid_ns_provsql(), concat('bf-interleave', x));
+  root := public.uuid_generate_v5(uuid_ns_provsql(), concat('bf-interleave', x));
   PERFORM create_gate(root, 'plus', ARRAY[diag, off_diag]);
   PERFORM set_config('bf.interleave_root', root::text, false);
 END $$;

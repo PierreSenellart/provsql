@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Deterministic Monte Carlo with a pinned seed and a large sample
 -- budget; we compare empirical / analytical mean / variance within a

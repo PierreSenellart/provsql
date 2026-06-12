@@ -5,7 +5,6 @@
 -- `make installcheck` finds no socket and the test skips (kcmcp_client_endpoint_1.out).
 \if `test -S /tmp/.provsql-kcmcp-regress.sock && echo true || echo false`
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 SELECT register_tool(name=>'tdkc-regress', kind=>'kcmcp',
   operations=>ARRAY['compile'], input_formats=>ARRAY['dimacs-cnf'],

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Regression: get_gate_type used to populate the per-process circuit
 -- cache with an empty children list, causing the next get_children to

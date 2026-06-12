@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- AnalyticEvaluator: closed-form CDFs decide gate_cmps that reduce
 -- to (X cmp c) for a bare gate_rv leaf X and bare gate_value c, or

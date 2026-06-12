@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 CREATE TABLE distinct_result AS
   SELECT *, sr_formula(provenance(),'personnel_name') AS formula

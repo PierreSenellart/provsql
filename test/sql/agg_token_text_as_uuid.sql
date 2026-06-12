@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Cover the provsql.aggtoken_text_as_uuid GUC and its companion
 -- agg_token_value_text helper. The GUC controls how agg_token's

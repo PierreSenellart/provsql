@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 /* The max-min m-semiring: ⊕ = enum-max, ⊗ = enum-min. Fuzzy / trust
    shape: alternative derivations combine to the most permissive label,

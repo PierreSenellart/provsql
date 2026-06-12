@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql,public;
 
 -- The joint-width UCQ compiler evaluates an arbitrary union of conjunctive
 -- queries -- including the queries that are #P-hard under the Dalvi-Suciu

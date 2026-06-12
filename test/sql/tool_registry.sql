@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Start from a clean slate: the overrides table persists across sessions, so
 -- a previous run (or another test) must not bias the seed listing below.

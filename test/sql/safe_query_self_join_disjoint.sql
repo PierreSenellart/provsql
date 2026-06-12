@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- This test probes the 'independent' read-once method explicitly; the
 -- transparent joint-width substitution (which now also recognises the

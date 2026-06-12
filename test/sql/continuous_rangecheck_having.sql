@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- RangeCheck on HAVING-style cmps over gate_agg children: trivially
 -- decidable cases (count >= 0, count > n, sum bounds, min/max

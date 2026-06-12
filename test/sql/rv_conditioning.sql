@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 SET provsql.rv_mc_samples = 0;  -- closed-form only
 
 -- X | C conditions a random_variable on an event, returning a conditioned

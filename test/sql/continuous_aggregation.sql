@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- provsql.sum is the explicit
 -- aggregate that takes a random_variable per row and returns a

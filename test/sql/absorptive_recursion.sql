@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Recursive queries over cyclic data under the 'absorptive' provenance
 -- class: the fixpoint stops once every minimal (tuple-repetition-free)

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 -- One check probes that 'independent' rejects a non-read-once program; pin
 -- the joint-width debug GUC off so its higher (tractable) fallback does
 -- not mask that rejection.

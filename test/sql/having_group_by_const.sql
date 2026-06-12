@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- ----------------------------------------------------------------------
 -- Regression: GROUP BY a constant grouping key + a HAVING comparison

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- gate_annotation is a transparent single-child wrapper: identity for every
 -- consumer (probability + all semirings + PROV-XML), and -- unlike the

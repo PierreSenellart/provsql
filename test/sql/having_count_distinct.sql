@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- ----------------------------------------------------------------------
 -- HAVING COUNT(DISTINCT y) probability.  Regression for the bug where a

@@ -1,7 +1,6 @@
 \set ECHO none
 \if `which d4 > /dev/null 2>&1 && echo true || echo false`
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 CREATE TABLE d4_result AS
 SELECT city, probability_evaluate(provenance(),'compilation','d4') AS prob

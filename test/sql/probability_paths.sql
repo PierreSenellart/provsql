@@ -8,7 +8,6 @@
 -- exact applies does the path fall to its estimator (stopping-rule / monte-carlo).
 -- See src/probability_evaluate.cpp (the three-path dispatch).
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 SET provsql.provenance = 'semiring';
 SET provsql.monte_carlo_seed = 42;
 

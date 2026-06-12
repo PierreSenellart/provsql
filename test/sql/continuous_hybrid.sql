@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- HybridEvaluator simplifier: peephole rewrites on gate_arith
 -- subtrees that preserve the gate's scalar value in every world.

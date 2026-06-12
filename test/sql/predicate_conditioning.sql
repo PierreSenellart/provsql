@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 SET provsql.rv_mc_samples = 0;
 
 -- Natural Boolean-predicate conditioning: the right operand of | (and the

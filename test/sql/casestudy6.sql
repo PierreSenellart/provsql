@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Case Study 6: The City Air-Quality Sensor Network
 -- Tests the random_variable surface end-to-end: gate_rv leaves for the

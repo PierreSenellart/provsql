@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Each binary arithmetic operator builds a gate_arith carrying the
 -- expected provsql_arith_op tag in info1

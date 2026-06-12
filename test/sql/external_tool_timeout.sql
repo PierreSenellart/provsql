@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Regression: a long-running / hanging external compiler must be
 -- interruptible by statement_timeout (and pg_cancel_backend).  ProvSQL

@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Whole-tuple output conditioning: a given(c) term (equivalently the prefix
 -- | c operator) in the select list is a consumed marker -- the rewriter

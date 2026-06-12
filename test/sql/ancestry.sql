@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Exercises the per-table base-ancestor registry: get_ancestors /
 -- set_ancestors / remove_ancestors and the auto-population by

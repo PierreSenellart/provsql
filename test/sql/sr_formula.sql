@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 /* Example of provenance evaluation */
 CREATE TABLE result_formula AS SELECT

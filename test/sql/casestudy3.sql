@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Mini Case Study 3: wheelchair accessibility over synthetic GTFS data.
 -- Tests sr_boolean with integer 0/1 values in a UNION mapping table

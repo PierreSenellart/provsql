@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Self-contained fixture: group A has the non-mutually-exclusive values
 -- (x, y, x), group B the single value z.  The id-based provenance mapping

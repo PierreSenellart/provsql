@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Constructors create the right gate types and serialise their
 -- distribution parameters into the gate's extra byte string.

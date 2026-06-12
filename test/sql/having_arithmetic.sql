@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Constant arithmetic over an aggregate inside a HAVING comparison is folded
 -- into the threshold (sum(x)+1 > 16 == sum(x) > 15), so every arithmetic form

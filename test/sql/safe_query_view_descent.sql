@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test, provsql;
 
 -- Safe-query rewriter -- subquery-inlining pre-pass.  PG inlines a
 -- view into the outer Query as an RTE_SUBQUERY before the planner

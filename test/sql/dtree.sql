@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- The 'd-tree' method (src/DTree) refines the cheap leaf bound by independent
 -- decomposition and Shannon expansion: a deterministic anytime engine that is

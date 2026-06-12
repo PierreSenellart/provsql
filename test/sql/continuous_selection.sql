@@ -1,6 +1,5 @@
 \set ECHO none
 \pset format unaligned
-SET search_path TO provsql_test,provsql;
 
 -- Determinism for every Monte Carlo call below.
 SET provsql.monte_carlo_seed = 42;
