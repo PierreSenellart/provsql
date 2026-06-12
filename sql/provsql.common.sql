@@ -5302,7 +5302,7 @@ $$ LANGUAGE plpgsql VOLATILE;
 -- Safe-UCQ Möbius-inversion route (mobius_evaluate.cpp).
 --
 -- The last missing exact route of the Dalvi-Suciu dichotomy: UCQs that are
--- safe only because the #P-hard terms of their inclusion-exclusion expansion
+-- safe only because the \#P-hard terms of their inclusion-exclusion expansion
 -- carry a zero Möbius value on the CNF lattice and cancel (canonical witness:
 -- QW / q9).  Same TID gather as ucq_joint, then the lattice-walking compiler
 -- materialises a gate_mobius-rooted circuit (a signed combination over
@@ -5332,7 +5332,7 @@ CREATE OR REPLACE FUNCTION ucq_mobius_materialize_tracked(
  * @brief Compile the Möbius circuit and return the lattice statistics plus the
  *        probability (the demonstrability surface).  @c cancelled_hard is the
  *        single number that makes the mechanism legible: for q9 the 1 cancelled
- *        element is #P-hard, so the query is easy only because its hard part
+ *        element is \#P-hard, so the query is easy only because its hard part
  *        cancels.
  */
 CREATE OR REPLACE FUNCTION ucq_mobius_compile_stats(

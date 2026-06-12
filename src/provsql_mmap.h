@@ -96,15 +96,6 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
                                   const pg_uuid_t *children_data);
 
 /**
- * @brief Set a gate's info fields from in-extension C/C++ code.
- *
- * Internal entry point behind the SQL-callable @c set_infos().
- *
- * @param token  UUID of the gate.
- * @param info1  First (gate-type-specific) info value.
- * @param info2  Second info value.
- */
-/**
  * @brief Set an input gate's probability from in-extension C/C++ code.
  *
  * Internal entry point behind the SQL-callable @c set_prob().
@@ -116,6 +107,15 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
  */
 bool provsql_internal_set_prob(const pg_uuid_t *token, double prob);
 
+/**
+ * @brief Set a gate's info fields from in-extension C/C++ code.
+ *
+ * Internal entry point behind the SQL-callable @c set_infos().
+ *
+ * @param token  UUID of the gate.
+ * @param info1  First (gate-type-specific) info value.
+ * @param info2  Second info value.
+ */
 void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
                                 unsigned info2);
 

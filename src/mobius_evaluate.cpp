@@ -4,7 +4,7 @@
  *        route of the Dalvi-Suciu dichotomy).
  *
  * Some unions of conjunctive queries are safe (PTIME data complexity) only
- * because the #P-hard terms of their inclusion-exclusion expansion carry a
+ * because the \#P-hard terms of their inclusion-exclusion expansion carry a
  * zero Möbius value on the CNF lattice and cancel.  The canonical witness is
  * QW / q9 (Dalvi-Suciu 2012; Monet & Olteanu 2018).  No other ProvSQL route
  * handles it in PTIME: the safe-query rewriter is per-CQ and hierarchical, the
@@ -1080,7 +1080,7 @@ bool mobGather(Datum descriptor, MobAnswerCache *c)
  *
  * The root is a @c gate_mobius carrying the certified-independent Boolean
  * islands (the signed combination) and the lineage child; @c probability_evaluate
- * answers the #P-hard UCQ in PTIME through the fast Möbius route, and every other
+ * answers the \#P-hard UCQ in PTIME through the fast Möbius route, and every other
  * evaluator passes through to the lineage.  Declines raise an error so the SQL
  * wrapper falls back.
  */
