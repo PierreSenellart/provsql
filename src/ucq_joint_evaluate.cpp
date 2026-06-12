@@ -38,6 +38,7 @@ extern "C" {
 #include "utils/resowner.h"
 #include "utils/uuid.h"
 
+#include "compatibility.h"   /* TYPALIGN_INT fallback for PG < 13 */
 #include "provsql_utils.h"
 
 PG_FUNCTION_INFO_V1(ucq_joint_compile_stats);
