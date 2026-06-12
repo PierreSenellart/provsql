@@ -38,79 +38,64 @@ What each case study covers
 ---------------------------
 
 :doc:`Case study 1 -- Intelligence Agency <casestudy1>`
-    The broadest single tour of provenance *evaluation*. A
-    security-classification scenario over seven agents drives a custom
-    min-clearance semiring, where-provenance, circuit export
-    (PROV-XML, ``graph-easy``), and the full probability-method line-up
-    side by side (possible-worlds, Monte-Carlo, tree-decomposition, and
-    knowledge compilation through ``d4`` / ``c2d`` / ``dsharp`` /
+    The broadest tour of provenance *evaluation*: a security-classification
+    scenario over seven agents drives a custom min-clearance semiring,
+    where-provenance, circuit export, and the full probability-method
+    line-up side by side (possible-worlds, Monte-Carlo, tree-decomposition,
+    and knowledge compilation through ``d4`` / ``c2d`` / ``dsharp`` /
     ``minic2d``). Start here for a panoramic view.
 
 :doc:`Case study 2 -- Open Science Database <casestudy2>`
-    Evidence synthesis over a (fictional) biomedical literature corpus:
-    single-source vs. replicated claims, contradictory findings, and
-    strength-of-evidence ranking. This is the home of **Shapley and
-    Banzhaf** values -- attributing a result to the studies behind it --
-    alongside counting / why-provenance, a custom evidence-grade
-    semiring, ``HAVING``, and where-provenance.
+    Evidence synthesis over a fictional biomedical corpus -- single-source
+    vs. replicated claims, contradictions, strength-of-evidence ranking.
+    The home of **Shapley and Banzhaf** values, attributing a result to the
+    studies behind it.
 
 :doc:`Case study 3 -- Île-de-France Public Transit <casestudy3>`
     **Boolean provenance at real-world scale.** On the STIF GTFS dataset
-    (hundreds of routes, tens of thousands of stops) it answers a
-    reachability-and-accessibility question -- which stops are reachable
-    from Bagneux, and is the whole journey wheelchair-accessible -- where
-    a result token is true iff every record along the path carries the
-    accessibility flag.
+    (hundreds of routes, tens of thousands of stops) a result token is true
+    iff every record along the path carries the accessibility flag -- which
+    stops are reachable from Bagneux by a fully wheelchair-accessible
+    journey?
 
 :doc:`Case study 4 -- Government Ministers Over Time <casestudy4>`
-    The **temporal** extension and **data-modification tracking**. Over a
-    database of French and Singaporean ministers, every fact carries a
-    validity interval; the study demonstrates time-travel, history,
-    timeslice, and an ``INSERT`` / ``DELETE`` round-trip that is then
-    rolled back with ``undo``.
+    The **temporal** extension and **data-modification tracking**. Over
+    French and Singaporean ministers every fact carries a validity interval;
+    the study time-travels, takes history and timeslices, and rolls back an
+    ``INSERT`` / ``DELETE`` round-trip with ``undo``.
 
 :doc:`Case study 5 -- Wildlife Photo Archive <casestudy5>`
-    Uncertainty that comes out of a machine-learning detector. Candidate
-    species per bounding box are modelled with :sqlfunc:`repair_key` and
-    the ``mulinput`` gate (block-correlated alternatives); the study
-    contrasts probabilistic ranking against naive confidence
-    thresholding, and computes :sqlfunc:`expected` species counts.
+    Uncertainty from a machine-learning detector: candidate species per
+    bounding box modelled with :sqlfunc:`repair_key` and the ``mulinput``
+    gate (block-correlated alternatives). It contrasts probabilistic ranking
+    against naive confidence thresholding and computes :sqlfunc:`expected`
+    species counts.
 
 :doc:`Case study 6 -- City Air-Quality Sensor Network <casestudy6>`
-    The **continuous-distribution** surface, end to end: ``random_variable``
+    The **continuous-distribution** surface end to end: ``random_variable``
     columns (Normal / Uniform / Exponential / Erlang / categorical /
-    mixture), arithmetic and comparison on them, analytic moments and
-    Monte-Carlo fallback, and conditional inference. It is the first
-    study driven primarily through :doc:`ProvSQL Studio <studio>`, where
-    PDFs, mixture DAGs, and simplifier before/after views make the
-    machinery visible.
+    mixture), arithmetic and comparison on them, analytic moments with
+    Monte-Carlo fallback, and conditional inference. The first study driven
+    primarily through :doc:`ProvSQL Studio <studio>`.
 
 :doc:`Case study 7 -- Peer-Review Assignment and Knowledge Compilation <casestudy7>`
-    How the **shape of a query, together with the keys the schema
-    declares**, fixes the shape of the Boolean provenance circuit and
-    thereby which probability method is cheap. A peer-reviewing scenario
-    opens with one coverage question asked three ways -- safe by shape,
-    safe by a key, and genuinely :math:`\#P`-hard -- exposing the
-    knowledge-compilation pipeline (Tseytin CNF, d-DNNF compilation,
-    :sqlfunc:`ddnnf_stats`, the ``'boolean'``-class safe-query rewriter,
-    the external-tool registry). It then climbs three further rungs
-    that escape the hard case in different ways: a ``HAVING count(*)``
-    Poisson-binomial shortcut, an **inversion-free** self-join that is
-    linear-time from a query-derived variable order, and a
-    :sqlfunc:`repair_key` table whose block correlation stays tractable.
-    A closing section turns to **recursive** reachability as network
-    reliability. Also driven through Studio.
+    How a query's **shape, the schema's keys, and the structure of the
+    data** decide which probability method is cheap and which needs a
+    compiler. A peer-reviewing scenario organised by where tractability
+    comes from: the query is *safe* (the four Dalvi-Suciu routes, including
+    the **Möbius-cancellation** witness :math:`q_9`), the query is
+    :math:`\#P`-*hard* (the knowledge-compilation pipeline), or the *data*
+    is well-structured (the **joint-width** compiler and recursive network
+    reliability).
 
 :doc:`Case study 8 -- ProvSQL as a Probability Calculator <casestudy8>`
-    ProvSQL used as an **exact, correlation-aware probability calculator
-    driven in SQL**. Five textbook problems -- the base-rate fallacy
-    (discrete Bayes via the ``|`` conditioning operator), correlation that
-    breaks the independence formula, the ``probability_evaluate`` method
-    portfolio and its cost chooser, a continuous posterior by truncation
-    (``X | (X > k)``), and the conditional expectation of a probabilistic
-    aggregate -- each a one-line query, across all three carriers (discrete
-    events, random variables, aggregates), with ``|`` meaning "given"
-    throughout. A compact, notebook-first tour of the probability surface.
+    ProvSQL as an **exact, correlation-aware probability calculator driven
+    in SQL**: five textbook problems -- base-rate fallacy, correlation
+    breaking the independence formula, the method portfolio and its cost
+    chooser, a continuous posterior by truncation, the conditional
+    expectation of an aggregate -- each a one-line query with the ``|``
+    ("given") operator throughout. A compact, notebook-first tour of the
+    probability surface.
 
 .. _case-study-coverage:
 
@@ -234,6 +219,8 @@ Knowledge compilation and safe queries
    "Bounded-treewidth network reliability (recursive reachability)", "", "", "", "", "", "", "", "✓", ""
    "``provsql.classify_top_level`` GUC (TID/BID pills)", "", "", "", "", "", "", "", "✓", ""
    "Safe-query rewriter (hierarchical / read-once)", "", "", "", "", "", "", "", "✓", ""
+   "Joint-width UCQ compiler (bounded joint treewidth)", "", "", "", "", "", "", "", "✓", ""
+   "Möbius-inversion route (safe-by-cancellation UCQ)", "", "", "", "", "", "", "", "✓", ""
    "Tseytin CNF export (DIMACS)", "", "", "", "", "", "", "", "✓", ""
    "``tseytin_cnf`` / ``tseytin_cnf_mapping``", "", "", "", "", "", "", "", "✓", ""
    "``ddnnf_stats``", "", "", "", "", "", "", "", "✓", ""

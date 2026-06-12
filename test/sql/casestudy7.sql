@@ -146,6 +146,35 @@ INSERT INTO assignment(reviewer, paper) VALUES
   ('r4','p2'),('r4','p5');
 SELECT repair_key('assignment', 'reviewer');
 
+-- External-review pool for the Möbius (safe-by-cancellation) step: the
+-- canonical q9 / QW witness as four area chairs each running three
+-- assessment passes over four embargoed submissions, COMPLETE bipartite.
+-- Dense on purpose: on sparse data the joint-width route would bound it and
+-- mask the point; dense, its joint width exceeds the cap so that route
+-- declines and Möbius -- reading the structure off the query -- is the only
+-- exact one.  All tuples at probability 0.1 (keeps the answer off
+-- saturation).  Isolated (own c*/e* domain, no foreign keys).
+CREATE TABLE lead_chair (chair text PRIMARY KEY);
+CREATE TABLE urgent_sub (sub   text PRIMARY KEY);
+CREATE TABLE prescreen  (chair text, sub text, PRIMARY KEY (chair, sub));
+CREATE TABLE score_pass (chair text, sub text, PRIMARY KEY (chair, sub));
+CREATE TABLE flag_pass  (chair text, sub text, PRIMARY KEY (chair, sub));
+INSERT INTO lead_chair SELECT 'c'||g FROM generate_series(1,4) g;
+INSERT INTO urgent_sub SELECT 'e'||g FROM generate_series(1,4) g;
+INSERT INTO prescreen  SELECT 'c'||i, 'e'||j FROM generate_series(1,4) i, generate_series(1,4) j;
+INSERT INTO score_pass SELECT 'c'||i, 'e'||j FROM generate_series(1,4) i, generate_series(1,4) j;
+INSERT INTO flag_pass  SELECT 'c'||i, 'e'||j FROM generate_series(1,4) i, generate_series(1,4) j;
+SELECT add_provenance('lead_chair'); SELECT add_provenance('urgent_sub');
+SELECT add_provenance('prescreen');  SELECT add_provenance('score_pass');
+SELECT add_provenance('flag_pass');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.1) FROM lead_chair;
+  PERFORM set_prob(provenance(), 0.1) FROM urgent_sub;
+  PERFORM set_prob(provenance(), 0.1) FROM prescreen;
+  PERFORM set_prob(provenance(), 0.1) FROM score_pass;
+  PERFORM set_prob(provenance(), 0.1) FROM flag_pass;
+END $$;
+
 SELECT create_provenance_mapping('extends_label',  'extends',  'lbl');
 
 ALTER TABLE bid       DROP COLUMN conf, DROP COLUMN lbl;
@@ -224,6 +253,68 @@ CREATE TABLE cs7_hard AS
 SELECT remove_provenance('cs7_hard');
 SELECT hard_exact FROM cs7_hard;
 DROP TABLE cs7_hard;
+
+-- ---------------------------------------------------------------------
+-- Part A, safe by cancellation (Möbius).  The dense q9 / QW external pool:
+-- a safe UCQ that is neither hierarchical nor inversion-free, tractable only
+-- because its #P-hard term carries a zero Möbius coefficient.  Under the
+-- DEFAULT routing (joint-width on, Möbius on) the dense data pushes the
+-- joint width past the cap so the joint route declines and Möbius fires:
+-- the root is a gate_mobius and the exact answer is 0.056923.  The literal
+-- lineage is carried on the gate, so other evaluations still pass through.
+-- ---------------------------------------------------------------------
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = on;
+SET provsql.mobius = on;
+CREATE TABLE cs7_mobius AS
+  SELECT provenance() AS tok FROM (
+    SELECT 1 FROM lead_chair r, prescreen a1, flag_pass a3, urgent_sub t3
+      WHERE r.chair = a1.chair AND a3.sub = t3.sub
+    UNION
+    SELECT 1 FROM prescreen b1, score_pass b2, flag_pass b3, urgent_sub tb
+      WHERE b1.chair = b2.chair AND b1.sub = b2.sub AND b3.sub = tb.sub
+    UNION
+    SELECT 1 FROM score_pass c2, flag_pass c3, flag_pass c3b, urgent_sub tc
+      WHERE c2.chair = c3.chair AND c2.sub = c3.sub AND c3b.sub = tc.sub
+    UNION
+    SELECT 1 FROM lead_chair d, prescreen d1, prescreen d1b,
+                  score_pass d2, score_pass d2b, flag_pass d3
+      WHERE d.chair = d1.chair AND d1b.chair = d2.chair AND d1b.sub = d2.sub
+        AND d2b.chair = d3.chair AND d2b.sub = d3.sub) q;
+SELECT remove_provenance('cs7_mobius');
+SET provsql.joint_width = off;
+SELECT get_gate_type(tok) AS mobius_root,
+       round(probability_evaluate(tok)::numeric, 6) AS mobius_prob
+  FROM cs7_mobius;
+DROP TABLE cs7_mobius;
+
+-- Routing guard (the case study's premise): under the DEFAULT routing every
+-- question fires its INTENDED method and no route pre-empts another.  Möbius
+-- has precedence among the hard-UCQ routes, so guard that it fires ONLY for
+-- the safe-by-cancellation q9 pool: the genuinely-hard coverage queries (a
+-- single non-hierarchical CQ, and a correlated one) are NOT safe by
+-- cancellation, so Möbius must decline them and the joint-width compiler must
+-- take over.
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = on;
+SET provsql.mobius = on;
+DO $$
+DECLARE g text;
+BEGIN
+  SELECT get_gate_type(provenance()) INTO g
+    FROM (SELECT DISTINCT 1 FROM bid b, expertise e, topic_of t
+          WHERE b.reviewer=e.reviewer AND e.topic=t.topic AND t.paper=b.paper) q;
+  IF g = 'mobius' THEN
+    RAISE EXCEPTION 'Mobius wrongly pre-empted the hard coverage (root %)', g;
+  END IF;
+  SELECT get_gate_type(provenance()) INTO g
+    FROM (SELECT DISTINCT 1 FROM assignment a, expertise e, topic_of t
+          WHERE a.reviewer=e.reviewer AND e.topic=t.topic AND t.paper=a.paper) q;
+  IF g = 'mobius' THEN
+    RAISE EXCEPTION 'Mobius wrongly pre-empted the correlated coverage (root %)', g;
+  END IF;
+END $$;
+SET provsql.joint_width = off;
 
 -- ---------------------------------------------------------------------
 -- Step 6: HAVING count(*) pre-pass.
@@ -436,4 +527,5 @@ DROP TABLE cs7_conn;
 SET provsql.provenance = 'semiring';
 
 DROP TABLE bid, expertise, topic_of, extends, coreview, assignment,
-           reviewers, papers, topics, extends_label CASCADE;
+           reviewers, papers, topics, extends_label,
+           lead_chair, urgent_sub, prescreen, score_pass, flag_pass CASCADE;

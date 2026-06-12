@@ -31,8 +31,11 @@ DROP TABLE IF EXISTS assignment CASCADE;
 DROP TABLE IF EXISTS reviewers CASCADE;
 DROP TABLE IF EXISTS papers CASCADE;
 DROP TABLE IF EXISTS topics CASCADE;
+DROP TABLE IF EXISTS lead_chair, urgent_sub, prescreen, score_pass, flag_pass CASCADE;
 DROP TABLE IF EXISTS bid_label, expertise_label, topic_of_label,
-                     extends_label, coreview_label;
+                     extends_label, coreview_label,
+                     lead_chair_label, urgent_sub_label, prescreen_label,
+                     score_pass_label, flag_pass_label;
 
 -- Dimension tables (deterministic, no provenance).
 DROP TABLE IF EXISTS reviewers CASCADE;
@@ -254,6 +257,63 @@ SELECT set_prob(provenance(), 0.3) FROM champion;
 SELECT create_provenance_mapping('champion_label', 'champion', 'lbl');
 ALTER TABLE champion DROP COLUMN lbl;
 
+-- Möbius-cancellation demo fixture (Part A, "safe by cancellation").  The
+-- canonical Dalvi-Suciu witness q9 / QW: a UNION of conjunctive queries
+-- that is SAFE -- PTIME data complexity -- yet only because the #P-hard
+-- term of its inclusion-exclusion expansion carries a zero Möbius
+-- coefficient and cancels.  No circuit-level method keeps up (q9 has no
+-- polynomial-size OBDD / FBDD / d-DNNF), and on dense data its *joint*
+-- treewidth is unbounded too, so the joint-width route of Part C declines
+-- and the Möbius route -- which reads the structure off the QUERY, not the
+-- data -- is the only exact one.  That is why this fixture must be DENSE:
+-- on a sparse instance the joint width is bounded and Part C's compiler
+-- would handle it, hiding the route this step exists to show.
+--
+-- Dressed as a second-tier external review pool, isolated from the core
+-- instance (its own c*/e* domain, no foreign keys, so it reaches none of
+-- the coverage / recursive queries): four area chairs (c1..c4) each run
+-- three independent assessment passes -- a prescreen, a score and a flag --
+-- over four embargoed submissions (e1..e4), COMPLETE bipartite so the joint
+-- width genuinely grows; `lead_chair` marks the senior chairs and
+-- `urgent_sub` the time-critical submissions.  Mapped onto q9's
+-- R(x), S1(x,y), S2(x,y), S3(x,y), T(y) as
+-- lead_chair / prescreen / score_pass / flag_pass / urgent_sub.  The union
+-- query has no tidy English gloss -- its safety is purely structural -- and
+-- that is exactly the point.  All tuples carry probability 0.1, low enough
+-- that the exact answer stays away from saturation.
+DROP TABLE IF EXISTS lead_chair, urgent_sub, prescreen, score_pass, flag_pass CASCADE;
+CREATE TABLE lead_chair (chair TEXT NOT NULL, conf DOUBLE PRECISION, lbl TEXT, PRIMARY KEY(chair));
+CREATE TABLE urgent_sub (sub   TEXT NOT NULL, conf DOUBLE PRECISION, lbl TEXT, PRIMARY KEY(sub));
+CREATE TABLE prescreen  (chair TEXT, sub TEXT, conf DOUBLE PRECISION, lbl TEXT, PRIMARY KEY(chair, sub));
+CREATE TABLE score_pass (chair TEXT, sub TEXT, conf DOUBLE PRECISION, lbl TEXT, PRIMARY KEY(chair, sub));
+CREATE TABLE flag_pass  (chair TEXT, sub TEXT, conf DOUBLE PRECISION, lbl TEXT, PRIMARY KEY(chair, sub));
+INSERT INTO lead_chair(chair, conf) SELECT 'c'||g, 0.1 FROM generate_series(1,4) g;
+INSERT INTO urgent_sub(sub,   conf) SELECT 'e'||g, 0.1 FROM generate_series(1,4) g;
+INSERT INTO prescreen(chair, sub, conf)
+  SELECT 'c'||i, 'e'||j, 0.1 FROM generate_series(1,4) i, generate_series(1,4) j;
+INSERT INTO score_pass(chair, sub, conf)
+  SELECT 'c'||i, 'e'||j, 0.1 FROM generate_series(1,4) i, generate_series(1,4) j;
+INSERT INTO flag_pass(chair, sub, conf)
+  SELECT 'c'||i, 'e'||j, 0.1 FROM generate_series(1,4) i, generate_series(1,4) j;
+UPDATE lead_chair SET lbl = format('lead(%s)', chair);
+UPDATE urgent_sub SET lbl = format('urgent(%s)', sub);
+UPDATE prescreen  SET lbl = format('pre(%s,%s)', chair, sub);
+UPDATE score_pass SET lbl = format('score(%s,%s)', chair, sub);
+UPDATE flag_pass  SET lbl = format('flag(%s,%s)', chair, sub);
+SELECT add_provenance('lead_chair'); SELECT add_provenance('urgent_sub');
+SELECT add_provenance('prescreen');  SELECT add_provenance('score_pass');
+SELECT add_provenance('flag_pass');
+SELECT set_prob(provenance(), conf) FROM lead_chair;
+SELECT set_prob(provenance(), conf) FROM urgent_sub;
+SELECT set_prob(provenance(), conf) FROM prescreen;
+SELECT set_prob(provenance(), conf) FROM score_pass;
+SELECT set_prob(provenance(), conf) FROM flag_pass;
+SELECT create_provenance_mapping('lead_chair_label', 'lead_chair', 'lbl');
+SELECT create_provenance_mapping('urgent_sub_label', 'urgent_sub', 'lbl');
+SELECT create_provenance_mapping('prescreen_label',  'prescreen',  'lbl');
+SELECT create_provenance_mapping('score_pass_label', 'score_pass', 'lbl');
+SELECT create_provenance_mapping('flag_pass_label',  'flag_pass',  'lbl');
+
 -- Label mappings so the Studio eval-strip's sr_formula / sr_why / sr_how
 -- and PROV-XML export name the leaves instead of showing raw UUIDs. The
 -- `lbl` columns exist only to feed create_provenance_mapping, which copies
@@ -276,7 +336,12 @@ CREATE TABLE label AS
   UNION ALL SELECT value, provenance FROM extends_label
   UNION ALL SELECT value, provenance FROM coreview_label
   UNION ALL SELECT value, provenance FROM recommend_label
-  UNION ALL SELECT value, provenance FROM champion_label;
+  UNION ALL SELECT value, provenance FROM champion_label
+  UNION ALL SELECT value, provenance FROM lead_chair_label
+  UNION ALL SELECT value, provenance FROM urgent_sub_label
+  UNION ALL SELECT value, provenance FROM prescreen_label
+  UNION ALL SELECT value, provenance FROM score_pass_label
+  UNION ALL SELECT value, provenance FROM flag_pass_label;
 CREATE INDEX ON label(provenance);
 
 -- `conf` only fed set_prob and `lbl` only fed create_provenance_mapping;
@@ -286,6 +351,11 @@ ALTER TABLE expertise DROP COLUMN conf, DROP COLUMN lbl;
 ALTER TABLE topic_of  DROP COLUMN conf, DROP COLUMN lbl;
 ALTER TABLE extends   DROP COLUMN conf, DROP COLUMN lbl;
 ALTER TABLE coreview  DROP COLUMN conf, DROP COLUMN lbl;
+ALTER TABLE lead_chair DROP COLUMN conf, DROP COLUMN lbl;
+ALTER TABLE urgent_sub DROP COLUMN conf, DROP COLUMN lbl;
+ALTER TABLE prescreen  DROP COLUMN conf, DROP COLUMN lbl;
+ALTER TABLE score_pass DROP COLUMN conf, DROP COLUMN lbl;
+ALTER TABLE flag_pass  DROP COLUMN conf, DROP COLUMN lbl;
 
 \echo
 \echo '----------------------------------------------------------------------'

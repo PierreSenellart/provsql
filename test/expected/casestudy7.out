@@ -17,6 +17,21 @@ add_provenance
 repair_key
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
 create_provenance_mapping
 
 (1 row)
@@ -43,6 +58,12 @@ remove_provenance
 (1 row)
 hard_exact
 0.881791
+(1 row)
+remove_provenance
+
+(1 row)
+mobius_root|mobius_prob
+mobius|0.056923
 (1 row)
 remove_provenance
 
