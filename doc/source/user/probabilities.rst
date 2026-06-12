@@ -613,123 +613,6 @@ chooser; set ``provsql.verbose_level`` to confirm which route ran.
 :doc:`Case Study 7 <casestudy7>`, Step 9, walks a worked example over
 both independent and :sqlfunc:`repair_key`-correlated reviewing data.
 
-.. _safe-ucq-mobius:
-
-Safe UCQs that need Möbius inversion
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The query-side routes above stop short of one corner of the
-Dalvi-Suciu dichotomy: unions of conjunctive queries that are
-**safe** -- PTIME data complexity -- yet are neither hierarchical nor
-inversion-free, so they are tractable *only because* the :math:`\#P`-hard
-terms of their inclusion-exclusion expansion cancel.  The canonical
-witness, due to Dalvi & Suciu and named :math:`q_9` / :math:`Q_W`, is
-built from the four hard-boundary patterns
-:math:`h_0=R(x),S_1(x,y)`, :math:`h_1=S_1(x,y),S_2(x,y)`,
-:math:`h_2=S_2(x,y),S_3(x,y)`, :math:`h_3=S_3(x,y),T(y)` as
-
-.. math::
-
-   q_9 = (h_2\vee h_3)\wedge(h_0\vee h_3)\wedge(h_1\vee h_3)
-         \wedge(h_0\vee h_1\vee h_2).
-
-Writing :math:`P(q_9)` by inclusion-exclusion on the CNF lattice and
-grouping the terms up to logical equivalence, the conjunction of all
-four patterns -- the one :math:`\#P`-hard element, with no separator --
-acquires a **zero Möbius coefficient** and never has to be evaluated;
-every surviving term is a safe disjunctive sentence.  ProvSQL computes
-this exactly: it builds the CNF lattice over the disjuncts' connected
-components, collapses elements up to logical equivalence (homomorphism),
-reads off the integer coefficients, and recurses by the standard
-lifted-inference steps (independent union of disjoint vocabularies, an
-independent project at a *separator* variable, an inner Möbius step) down
-to read-once islands over the data :cite:`DBLP:journals/jacm/DalviS12`.
-(The lattice / Möbius computation follows Dalvi, Schnaitter & Suciu,
-*Computing query probability with incidence algebras*, PODS 2010; Monet &
-Olteanu, AMW 2018, compute these lattices at scale.)  The route is the
-first integration of this complete safe-UCQ step in a query planner;
-:math:`q_9` provably has no polynomial OBDD / FBDD / **decision**-DNNF
-:cite:`DBLP:journals/mst/AmarilliCMS20` -- the monotone, decision-based
-representations ProvSQL's compilers target -- so any polynomial method over
-them *must* use subtraction somewhere, here at the root.  (Whether a
-polynomial *general* d-DNNF exists for :math:`q_9` is open: the lower
-bounds are for the decision classes, and surprising polynomial
-constructions are known for some other inversion queries, so the absence of
-*any* tractable circuit is conjectured, not proved.)
-
-Like the joint-width route, it is part of the Boolean machinery, fires
-**automatically** when a UCQ-existence shape the safe-query rewriter and
-the inversion-free certifier both declined is formed (a ``SELECT
-DISTINCT`` / ``GROUP BY`` over a ``UNION``), and answers
-``probability_evaluate(provenance())`` exactly with no method named:
-
-.. code-block:: postgresql
-
-    SET provsql.provenance = 'boolean';
-
-    -- q9 / QW: #P-hard, exact only because its hard part cancels.
-    -- Each UNION arm is one disjunct (a conjunction of the h_i); the
-    -- existence is formed by the UNION dedup.
-    SELECT probability_evaluate(provenance())
-    FROM (
-      SELECT 1 FROM r, s1, s3 a, t        -- h0, h3
-        WHERE r.x = s1.x AND a.y = t.y
-      UNION
-      SELECT 1 FROM s1, s2, s3 a, t       -- h1, h3
-        WHERE s1.x = s2.x AND s1.y = s2.y AND a.y = t.y
-      UNION
-      SELECT 1 FROM s2, s3, s3 b, t       -- h2, h3
-        WHERE s2.x = s3.x AND s2.y = s3.y AND b.y = t.y
-      UNION
-      SELECT 1 FROM r, s1, s1 b, s2, s2 c, s3   -- h0, h1, h2
-        WHERE r.x = s1.x AND b.x = s2.x AND b.y = s2.y
-          AND c.x = s3.x AND c.y = s3.y
-    ) q;
-
-The per-row token is rooted at a single new gate -- a *signed Möbius
-combination* over its certified-independent children -- which the default
-probability route evaluates in one linear pass (the islands read-once, the
-root a signed sum of their probabilities).  Crucially, this is a
-**probability shortcut layered over the normal provenance**, not a
-replacement for it (the model is the ``inversion-free`` certificate, not a
-measure-only gate): the gate carries the query's **literal lineage** as a
-transparent child, so every
-*other* evaluation -- ``shapley``, ``banzhaf``, a named probability method
-such as ``possible-worlds``, PROV export -- passes straight through to that
-lineage and answers exactly as it would for the ordinary provenance of the
-query (necessarily slower -- the literal lineage is the very
-:math:`\#P`-hard circuit the cancellation sidesteps -- but available).  Only
-the default / ``mobius`` probability takes the fast cancelling route.
-
-**Cost and priority.**  The route is **supra-linear**: its lifted recursion
-fans out over a variable's active domain at each independent project, so it
-runs in :math:`O(|D|^e)`, the degree the query's essential-variable count --
-more expensive, by a polynomial factor, than the *linear* hierarchical and
-inversion-free routes.  So among the **query-side** routes those two run
-first, and Möbius only when they decline.  Among the routes for a recognised
-*hard* UCQ, however, **Möbius takes precedence over the joint-width
-compiler**: where it applies it is a *guaranteed*-PTIME exact route, whereas
-the joint-width compiler's success on exactly these queries is unproven --
-their joint treewidth need not be bounded -- and it can grind to its state
-cap before declining, so trying Möbius first short-circuits past that.  (An
-engineering preference, not a theorem: no polynomial d-D is *known* for
-:math:`q_9`, but none is *proved* impossible.)  A data-cost cap
-(``provsql.mobius_max_gates``) makes the route decline gracefully -- to the
-joint-width compiler, then the general chooser -- on a high-level query
-whose :math:`|D|^e` would out-cost them.
-
-Inputs must be tuple-independent (lifted inference is sound only under
-independence); v1 supports *reduced-form* UCQs: no relation repeated within
-a single conjunct's homomorphic core, no constants, and -- the soundness
-guards -- no bag multiplicity and no overlapping self-join slots (two facts
-sharing an element tuple, or one tuple feeding two slots, carry a
-correlation the element-keyed islands cannot represent).  Anything outside
-that does not fire and the query falls back to the joint-width compiler, or
-the literal circuit and the general chooser.  ``provsql.mobius`` (the
-precedence route) and ``provsql.joint_width`` are independent debug
-switches, both on by default; turning both off compares against the literal
-lineage.
-
 .. _forcing-a-method:
 
 Forcing a specific method
@@ -1098,6 +981,46 @@ practice this means: turn the GUC on for probability-heavy
 workloads on hierarchical CQs, turn it off (or re-evaluate in a
 fresh session) before running ``sr_counting``, ``sr_how``,
 ``sr_why`` on the same circuit.
+
+.. _safe-ucq-mobius:
+
+Möbius inversion for safe UCQs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some unions of conjunctive queries are *safe* (PTIME data complexity)
+while being neither hierarchical nor inversion-free: they are
+tractable only because the :math:`\#P`-hard terms of their
+inclusion-exclusion expansion carry a zero Möbius coefficient and
+cancel.  The canonical witness is Dalvi & Suciu's :math:`q_9` /
+:math:`Q_W` :cite:`DBLP:journals/jacm/DalviS12`; the lattice
+computation follows Dalvi, Schnaitter & Suciu (PODS 2010).  Under the
+``'boolean'`` provenance class, when the safe-query rewriter and the
+inversion-free certifier both decline a UCQ-existence shape (a
+``SELECT DISTINCT`` / ``GROUP BY`` over a ``UNION``), ProvSQL
+recognises this class and roots the provenance in a *signed Möbius
+combination* over read-once islands, which the default probability
+route evaluates in one linear pass; no method needs to be named.
+:doc:`Case Study 7 <casestudy7>` runs the complete :math:`q_9`
+example.
+
+Like the safe-query rewrite, this is a shortcut, not a different
+result: the gate keeps the query's literal lineage as a transparent
+child, so :sqlfunc:`shapley`, :sqlfunc:`banzhaf`, PROV export, and
+any *named* probability method (``possible-worlds``, …) answer
+exactly as on the ordinary provenance, necessarily more slowly, since
+the literal lineage is the very :math:`\#P`-hard circuit the
+cancellation sidesteps.  Only the default / ``mobius`` probability
+takes the fast route.
+
+The route runs in :math:`O(|D|^e)` (:math:`e` the essential-variable
+count), so the linear hierarchical and inversion-free routes are
+tried first; where it applies, it takes precedence over the
+:ref:`joint-width compiler <bounded-joint-width>`, whose success on
+these queries is not guaranteed.  Inputs must be tuple-independent
+and the UCQ in reduced form (no constants, no bag multiplicity, no
+overlapping self-join slots); anything else falls back to joint
+width, then the general chooser.  ``provsql.mobius`` (on by default)
+and the ``provsql.mobius_max_gates`` data-cost cap control the route.
 
 .. _having-shortcuts:
 
