@@ -976,7 +976,7 @@ char *provsql_joint_width_descriptor(const constants_t *constants, Query *q,
      * lifted into the relation scans above).  No pin at all is the Boolean
      * existence; an un-pinnable group key (an expression) declines.  Without
      * a GROUP BY, the exposed bare tracked Vars are the heads (the
-     * historical form). */
+     * un-grouped form). */
     {
     bool   clean = true;
     List  *hv = NIL, *hx = NIL;

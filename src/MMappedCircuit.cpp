@@ -742,8 +742,8 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
        || type==gate_assumed || type==gate_mobius) {
       /* gate_assumed carries its assumption kind ('boolean' /
        * 'absorptive') in extra; gate_mobius carries its per-child integer
-       * coefficients ("uuid:coeff" tokens); gates from stores predating the
-       * label have none and default to the historical 'boolean' at
+       * coefficients ("uuid:coeff" tokens); gates stored without the
+       * label have none and default to 'boolean' at
        * evaluation. */
       auto extra = getExtra(uuid);
       result.setExtra(id, extra);

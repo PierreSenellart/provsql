@@ -1,11 +1,11 @@
 /**
  * @file JointEncoding.cpp
- * @brief Implementation of Phase A: the data-graph fast-path encoding.
+ * @brief The data-graph fast-path encoding.
  *
  * See @c JointEncoding.h for the design.  This translation unit
  * implements the §3.5 regime (independent @c gate_input tokens, joint
- * graph = Gaifman graph of the facts); the correlated regime's circuit
- * slice extraction is layered on in a later milestone.
+ * graph = Gaifman graph of the facts); it does not handle the
+ * correlated regime's circuit slice extraction.
  */
 #include "JointEncoding.h"
 

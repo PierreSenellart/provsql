@@ -8,7 +8,7 @@
  * The @c MethodCatalog is the registry the dispatcher in
  * @c probability_evaluate.cpp consults: a named request resolves through
  * @c byName(); the default (empty-method) request runs @c chooseAndRun(), which
- * reproduces the historical independent -> inversion-free -> compilation ladder
+ * runs the independent -> inversion-free -> compilation ladder
  * as the @c Exact-tolerance instance of the chooser.
  *
  * This header carries only the public interface.  The concrete method classes,
@@ -44,10 +44,9 @@ namespace provsql {
  * confidence @c 1-delta; @c Additive promises @c |p̂-p| <= epsilon with the same
  * confidence.  Admissible method sets nest @c Exact ⊂ @c Relative ⊂ @c Additive.
  *
- * Phase 1 plumbs the tolerance but does not yet drive selection: named methods
- * dispatch by name and the empty method runs the exact ladder.  Tolerance-driven
- * selection across the approximate members arrives with the relative/additive
- * paths (later phases).
+ * The tolerance is recorded but does not by itself drive method selection:
+ * named methods dispatch by name and the empty method set runs the exact
+ * ladder.
  */
 enum class ToleranceKind { Exact, Relative, Additive };
 
@@ -86,8 +85,8 @@ struct EvalContext;
  *
  * @c evaluate throws @c CircuitException when the method cannot be applied to
  * the circuit; @c chooseAndRun relies on that to fall through the default
- * ladder, while @c byName lets it propagate (matching the historical explicit
- * method behaviour).
+ * ladder, while @c byName lets it propagate (an explicitly named method
+ * reports the failure instead of silently falling back).
  */
 class ProbabilityMethod {
 public:

@@ -48,7 +48,7 @@ CREATE TYPE provenance_gate AS
                       -- wrapped sub-circuit was computed under the
                       -- assumption named by the gate's extra label --
                       -- 'boolean' (e.g. the safe-query rewrite; the
-                      -- historical default when the label is absent) or
+                      -- default when the label is absent) or
                       -- 'absorptive' (cyclic recursion truncated at the
                       -- absorptive value fixpoint).  Transparent for
                       -- evaluation semirings satisfying the assumption,
@@ -650,9 +650,8 @@ CREATE OR REPLACE FUNCTION get_ancestors(relid OID)
  * Two jobs:
  *
  *  1. Fill @c NEW.provsql with a fresh @c uuid_generate_v4 leaf when
- *     the user did not supply one (this replaces the column DEFAULT
- *     that @c add_provenance used to install: a real DEFAULT would
- *     fire before the trigger sees the row, so we could not tell
+ *     the user did not supply one (a column DEFAULT would not do here:
+ *     it fires before the trigger sees the row, so we could not tell
  *     "user omitted the column" from "user supplied a value").
  *  2. When the user does supply a non-NULL @c provsql on @c INSERT,
  *     or changes it on @c UPDATE, flip the table's per-table
@@ -1057,8 +1056,8 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
  * self-join conjunctions of reachability tokens, a certified
  * equivalent (the all-members-reachable circuit; see
  * @c plant_reach_cover).  Ordinary creation never writes under that
- * recipe, so a hit is always a deliberate plant; the historical
- * order-dependent recipe is used unchanged otherwise, so ordinary
+ * recipe, so a hit is always a deliberate plant; the ordinary
+ * order-dependent recipe is used otherwise, so ordinary
  * times gates (and their formula rendering) are untouched.
  */
 CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
@@ -1207,7 +1206,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
  * address of a vertex's per-length tokens, a certified gate over its
  * native within-bound circuit, keeping the natural hop-discarding query
  * on the linear evaluation route.  Absent a canonical gate, the
- * historical order-dependent recipe is used unchanged, so ordinary plus
+ * ordinary order-dependent recipe is used, so ordinary plus
  * gates (and their formula rendering) are untouched.
  */
 CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
@@ -2643,8 +2642,8 @@ CREATE OPERATOR > (
  * Never actually called; lets the parser accept agg_token \<op\> agg_token
  * (e.g. sum(x) > sum(y) on materialised tokens), which the ProvSQL
  * rewriter lowers to a gate_cmp at plan time.  Declaring this diagonal
- * also disambiguates `s = s2` (previously "operator is not unique"
- * because both agg_token -> uuid and agg_token -> numeric casts applied).
+ * also disambiguates `s = s2` (otherwise "operator is not unique",
+ * because both agg_token -> uuid and agg_token -> numeric casts apply).
  */
 CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
 RETURNS boolean
@@ -3752,7 +3751,7 @@ $$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 /**
  * @name Aggregates over random_variable
  *
- * Phase 1 of the SUM-over-RV story: an overload of the standard
+ * An overload of the standard
  * @c sum aggregate that takes a @c random_variable per row and returns
  * the @c random_variable representing the (provenance-weighted) sum.
  * Lives in the @c provsql schema so a @c sum(random_variable) call
@@ -5446,7 +5445,7 @@ $$ LANGUAGE plpgsql VOLATILE;
 
 /**
  * @brief Möbius lattice statistics + probability from a descriptor: the
- *        demonstrability SRF (mirrors mobius_compile_stats in doc/TODO).  Gathers
+ *        demonstrability SRF.  Gathers
  *        the same TID facts as @c ucq_mobius_provenance, then runs the columnar
  *        @c ucq_mobius_compile_stats.
  */

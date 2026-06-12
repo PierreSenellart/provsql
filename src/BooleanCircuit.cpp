@@ -87,12 +87,11 @@ namespace {
  * Ganak, SharpSAT-TD, and DPMC each emit their final count on a
  * line like @c "c s exact arb float 0.4350..." or
  * @c "c s exact arb int 12345" (and DPMC also accepts the older
- * @c "s wmc N" shape). Historically we kept the right-most
- * whitespace-separated token and fed it to @c std::stod; that
- * relies on the value always being last on the line, which the
- * DPMC source itself notes is not stable across versions (a
- * trailing @c "(cputime ...)" suffix would silently corrupt the
- * parse).
+ * @c "s wmc N" shape). Keeping the right-most whitespace-separated
+ * token and feeding it to @c std::stod would rely on the value always
+ * being last on the line, which the DPMC source itself notes is not
+ * stable across versions (a trailing @c "(cputime ...)" suffix would
+ * silently corrupt the parse).
  *
  * This helper scans tokens right-to-left and returns the
  * right-most one that parses as a @c double or as a
@@ -1357,9 +1356,9 @@ dDNNF BooleanCircuit::compilation(gate_t g, std::string compiler,
   // so a statement_timeout / pg_cancel_backend surfaces as 57014 here
   // rather than being masked by the "killed by signal" throw.
   //
-  // (The pre-`-dDNNF` d4 CLI is no longer retried as a compiled-in special
-  // case: a deployment still on it can register a tool with the old argtpl,
-  // e.g. register_tool('d4-old', argtpl => '{in} -out={out}', ...).)
+  // (An older d4 CLI without `-dDNNF` is not handled as a compiled-in
+  // special case: a deployment using it can register a tool with the
+  // appropriate argtpl, e.g. register_tool('d4-old', argtpl => '{in} -out={out}', ...).)
   CHECK_FOR_INTERRUPTS();
 
   if(retvalue)
@@ -1558,8 +1557,8 @@ dDNNF BooleanCircuit::parseDDNNF(std::istream &in,
 // registry by logical name, checks its binary and dependencies resolve,
 // writes the weighted CNF in the convention its `parser` implies, runs the
 // record's argtpl and reads the count back the same way -- so the four
-// historical per-counter methods (ganak, sharpsat-td, dpmc, weightmc) become
-// one, and a new wmc tool speaking a known convention is registrable without
+// per-counter methods (ganak, sharpsat-td, dpmc, weightmc) share one
+// runner, and a wmc tool speaking a known convention is registrable without
 // code.  The two conventions, keyed by `parser`:
 //   wmc-line  MCC-2024 weighted DIMACS in ("c t wmc" + "c p weight" lines);
 //             the count on a "c s exact" / "s wmc" line out.

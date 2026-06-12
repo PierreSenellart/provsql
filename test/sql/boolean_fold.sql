@@ -299,10 +299,10 @@ SET provsql.provenance = 'semiring';
 --     root = plus(times(x, x), times(x, y)).
 --     B1 dedups times(x, x) to a single-wire times(x) ; the dominating
 --     literal x is exposed as a direct sibling of the plus only once
---     foldSemiringIdentities rewrites that wrapper to x.  The historical
---     "B-rules to fixpoint, THEN collapse once" order surfaced x too
---     late and left plus(x, times(x, y)) -- not read-once, so
---     independent refused even with boolean_provenance on.  Interleaving
+--     foldSemiringIdentities rewrites that wrapper to x.  A
+--     "B-rules to fixpoint, THEN collapse once" order would surface x too
+--     late and leave plus(x, times(x, y)) -- not read-once, so
+--     independent would refuse even with boolean_provenance on.  Interleaving
 --     the two passes to a joint fixpoint absorbs times(x, y) and
 --     collapses the whole circuit to the single leaf x.
 --

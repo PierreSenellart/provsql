@@ -37,10 +37,10 @@ using Clauses = std::vector<std::set<gate_t> >;
  * identical @c Clauses representation (same clause order, each clause a sorted
  * @c std::set) and therefore hash identically.  Collisions fall back to the
  * vector/set @c operator== the @c unordered_map applies, so the hash needs only
- * to be well-distributed, not perfect -- the lookup stays exact.  This replaces
- * the former @c std::map whose @c O(log n) lookups each ran a lexicographic
- * compare over @c vector<set<gate_t>> (the costly per-node key op flagged in the
- * d-tree TODO); the hash makes lookups average @c O(clause-set size).
+ * to be well-distributed, not perfect -- the lookup stays exact.  This avoids
+ * a @c std::map whose @c O(log n) lookups would each run a lexicographic
+ * compare over @c vector<set<gate_t>> (a costly per-node key operation);
+ * the hash makes lookups average @c O(clause-set size).
  */
 struct ClausesHash {
   std::size_t operator()(const Clauses &cls) const

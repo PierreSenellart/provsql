@@ -1007,7 +1007,7 @@ SELECT remove_provenance('mp3');
 SELECT a, p FROM mp3 ORDER BY a;
 DROP TABLE mp3;
 
--- The EXCEPT form computes the same probabilities (the historical workaround).
+-- The EXCEPT form computes the same probabilities (an equivalent formulation).
 CREATE TABLE mp4 AS
   SELECT a, round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM (SELECT a FROM mp_r EXCEPT

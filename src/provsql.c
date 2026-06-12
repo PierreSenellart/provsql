@@ -1136,10 +1136,10 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
  * ordinary tracked relation.
  *
  * Returns @c true on success, @c false if the shape is unsupported (the caller
- * falls back to the historical error).  Boolean provenance, acyclic data, and
- * UNION (set) recursion only; the driver guards non-termination.  This is a
- * feasibility prototype: it performs SPI work and temp-table creation during
- * planning, and recognises only the linear/UNION shape.  See poc/recursive/.
+ * falls back to the normal error).  Boolean provenance, acyclic data, and
+ * UNION (set) recursion only; the driver guards non-termination.  It performs
+ * SPI work and temp-table creation during planning, and recognises only the
+ * linear/UNION shape.
  */
 static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                                 LoweredCte *entry) {
@@ -2490,8 +2490,7 @@ static Expr *combine_prov_atts(const constants_t *constants,
  * @brief Inline rewrite of an RV-returning aggregate into the same
  *        aggregate over provenance-wrapped per-row arguments.
  *
- * Originally Phase 1 of the SUM-over-RV story (see @c aggregation-of-rvs.md);
- * extended to any aggregate whose result type is @c random_variable
+ * Handles any aggregate whose result type is @c random_variable
  * (e.g. @c provsql.sum, @c provsql.avg).  Replaces @c agg(@c x) with an
  * Aggref whose per-row argument is lifted through @c rv_aggregate_semimod
  * to attach the row's provenance: each row contributes
@@ -2598,7 +2597,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
      * from CAST(val AS VARCHAR), nonsensical for an RV), each per-row
      * argument is wrapped in mixture(prov, rv, as_random(0)) and the
      * original aggregate's SFUNC / FFUNC decide what gate shape to
-     * build from the resulting mixtures.  See aggregation-of-rvs.md. */
+     * build from the resulting mixtures. */
     if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
         agg_ref->aggtype == constants->OID_TYPE_RANDOM_VARIABLE) {
       return make_rv_aggregate_expression(constants, agg_ref, prov_atts, op);
@@ -3869,12 +3868,11 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
   return false;
 }
 
-/* The earlier RV-only WHERE walker (@c extract_rv_cmps_from_quals)
- * has been folded into the unified classifier
- * @c migrate_probabilistic_quals further down in this file; both the
- * agg_token and the random_variable migration paths are now special
- * cases of one walk over @c q->jointree->quals.  See the comment on
- * @c qual_class for the routing matrix. */
+/* WHERE conjuncts comparing @c random_variable values are classified
+ * by the unified classifier @c migrate_probabilistic_quals further down
+ * in this file; both the agg_token and the random_variable migration
+ * paths are special cases of one walk over @c q->jointree->quals.  See
+ * the comment on @c qual_class for the routing matrix. */
 
 /**
  * @brief Build the @c ucq_joint_provenance(descriptor) call substituted for
@@ -5901,7 +5899,7 @@ static void transform_distinct_into_group_by(Query *q) {
  * Called twice on the main rewrite path: once *before* @c inline_ctes()
  * so the recursive-reachability detectors see the @c GROUP @c BY form
  * (a @c SELECT @c DISTINCT region aggregation is provenance-identical
- * to its @c GROUP @c BY twin), and once at the historical late site --
+ * to its @c GROUP @c BY twin), and once at the late site --
  * idempotent, since the first call clears @c distinctClause, so the
  * second is a no-op for any query the first already normalised.  The
  * target list carries only the user's columns at both call sites (the
@@ -7024,7 +7022,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
  * null-padded row (r, NULL) of a LEFT JOIN appears only in the *smaller*
  * worlds where the right side has no match for r, so for a left row that does
  * match in the actual instance ProvSQL has nothing to annotate.  The
- * RTE_JOIN arm of process_query historically treats LEFT/FULL/RIGHT exactly
+ * RTE_JOIN arm of process_query treats LEFT/FULL/RIGHT exactly
  * like INNER, emitting only the matched branch.
  *
  * The fix is a structural transform applied in the planner hook before
@@ -10331,8 +10329,7 @@ static void build_column_map(Query *q, int **columns, int *nbcols) {
 /**
  * @brief Categorisation of a top-level WHERE conjunct.
  *
- * Drives the unified WHERE classifier that replaced the original pair
- * @c migrate_aggtoken_quals_to_having + @c extract_rv_cmps_from_quals.
+ * Drives the unified WHERE classifier.
  * Both probabilistic flavours (agg_token's "moved to HAVING" world and
  * random_variable's "lifted to provenance" world) are special cases of
  * "this conjunct involves a probabilistic value the executor cannot
@@ -10425,18 +10422,14 @@ static void error_for_mixed_qual(qual_class c)
  * @brief Unified WHERE classifier &ndash; routes each top-level conjunct
  *        to the right evaluation site in a single pass.
  *
- * Replaces and consolidates the original
- * @c migrate_aggtoken_quals_to_having (agg-only) and
- * @c extract_rv_cmps_from_quals (rv-only).  The two old functions were
- * structurally isomorphic: each walked the WHERE clause, classified
- * each top-level conjunct, and routed pure-X conjuncts somewhere
- * semantic (HAVING vs the returned rv_cmps list); the deterministic
- * conjuncts stayed in WHERE.  Doing it in one pass means the rare
- * conjunct that mixes agg_token and random_variable (which neither old
- * function would have caught cleanly) gets a deterministic, useful
+ * Walks the WHERE clause, classifies each top-level conjunct, and
+ * routes pure-agg_token conjuncts to HAVING and pure-random_variable
+ * conjuncts to the returned rv_cmps list, leaving the deterministic
+ * conjuncts in WHERE.  Doing it in one pass means the rare conjunct
+ * that mixes agg_token and random_variable gets a deterministic, useful
  * error message.
  *
- * Supported shapes mirror the union of the two predecessors:
+ * Supported shapes:
  * - Whole WHERE is a single conjunct: classify and route or error.
  * - Top-level AND of conjuncts: classify each, route, and (after
  *   walking) collapse the AND if it has zero or one remaining children
@@ -12169,7 +12162,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * inline_ctes) key on groupClause, and a DISTINCT aggregation is
    * provenance-identical to its GROUP BY twin -- normalising here lets
    * them recognise it with no DISTINCT-specific arm.  Idempotent with
-   * the historical late site below. */
+   * the late site below. */
   if (provsql_active)
     normalize_distinct_into_group_by(q);
 
@@ -12474,10 +12467,8 @@ static Query *process_query(const constants_t *constants, Query *q,
       /* Single unified pass over WHERE: each top-level conjunct is
        * routed to the right evaluation site (HAVING for agg_token,
        * the returned rv_cmps list for random_variable, left in WHERE
-       * otherwise).  Mixed shapes raise a clear error.  Replaces the
-       * historical pair migrate_aggtoken_quals_to_having +
-       * extract_rv_cmps_from_quals; see the qual_class doc above for
-       * the routing matrix.
+       * otherwise).  Mixed shapes raise a clear error.  See the
+       * qual_class doc above for the routing matrix.
        *
        * Must run before replace_aggregations_by_provenance_aggregate
        * so the lifted RV cmps factor into each row's contribution to

@@ -245,7 +245,7 @@ virtual bool compatibleWithBooleanRewrite() const {
  * result; scalar semirings have nothing to mark.
  *
  * @return @c false by default (the hooks below then go unused and the
- *         historical constructions are kept verbatim).
+ *         default constructions are used).
  */
 virtual bool certifying() const {
   return false;

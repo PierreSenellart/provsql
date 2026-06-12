@@ -35,7 +35,7 @@
  *
  * - @c BoolOps -- plain reachability: the state is the transitively
  *   closed reachability relation over the domain (a bitset), composed
- *   by Warshall closure.  This is the historical behaviour.
+ *   by Warshall closure.  This is the default behaviour.
  * - @c HopOps -- bounded-hop reachability: each relation entry is the
  *   *set of achievable walk lengths* up to the hop bound (a bitmask),
  *   composed in the capped min-plus-set semiring by the algebraic-path
@@ -882,8 +882,7 @@ gate_t runReachabilityDP(const std::vector<ReachabilityCompiler::EdgeRow> &rows,
    * elimination whose neighbourhood exceeds the cap -- rejects every
    * adversarial family tried (cliques, supercritical random graphs) at
    * least as fast as the O(V+E) peel, while an always-on probe would tax
-   * every *accepted* compilation by a linear pass.  See the
-   * bounded-treewidth TODO for the numbers. */
+   * every *accepted* compilation by a linear pass. */
   std::unordered_map<unsigned long, bag_t> elimination_bag;
   const TreeDecomposition td(std::move(graph), &elimination_bag);
   stats.data_treewidth = td.getTreewidth();

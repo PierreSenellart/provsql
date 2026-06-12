@@ -254,7 +254,7 @@ string trim_arg(const string &s)
  *
  * @c kv holds the @c key=value pairs (key lower-cased, @c eps folded to
  * @c epsilon); @c positional holds the comma-separated tokens that carry no
- * @c '=' -- the historical bare-number (@c monte-carlo) and
+ * @c '=' -- the bare-number (@c monte-carlo) and
  * @c 'delta;epsilon' / @c 'tool;args' (@c weightmc / @c wmc) shortcuts.
  */
 struct MethodArgs {
@@ -272,11 +272,11 @@ struct MethodArgs {
  *
  * The grammar is shared by every method: a comma-separated list whose
  * @c key=value items populate @c MethodArgs::kv and whose bare items (no
- * @c '=') go verbatim into @c MethodArgs::positional.  None of the historical
- * shortcuts used a comma, so each survives as a single positional token (a
+ * @c '=') go verbatim into @c MethodArgs::positional.  None of these
+ * shortcuts use a comma, so each survives as a single positional token (a
  * bare integer for @c monte-carlo, @c 'delta;epsilon' for @c weightmc,
  * @c 'tool;args' for @c wmc), letting the canonical @c key=value form and the
- * old form coexist.
+ * shorthand form coexist.
  */
 MethodArgs parse_method_args(const string &args)
 {
@@ -779,12 +779,10 @@ dDNNF buildInversionFreeDDNNF(pg_uuid_t token)
 // ---------------------------------------------------------------------------
 // Probability-method catalog (see ProbabilityMethod.h).
 //
-// Each historical dispatch branch becomes a ProbabilityMethod object.  Phase 1
-// is a behaviour-preserving refactor: chooseAndRun reproduces the
-// independent -> inversion-free -> compilation default ladder exactly, and
-// byName reproduces each explicit method.  The RV+monte-carlo special case and
-// every probability-side pre-pass stay where they are in
-// probability_evaluate_internal.
+// Each dispatch branch is a ProbabilityMethod object: chooseAndRun runs the
+// independent -> inversion-free -> compilation default ladder, and
+// byName runs each explicit method.  The RV+monte-carlo special case and
+// every probability-side pre-pass stay in probability_evaluate_internal.
 // ---------------------------------------------------------------------------
 
 // Forward declaration: the whole-circuit (eps,delta)-relative stopping-rule
@@ -888,7 +886,7 @@ static double pow2_clamped(size_t k)
 /// Per-evaluation circuit state threaded to a method's evaluate().  The Boolean
 /// view @c c is built once in probability_evaluate_internal; methods that need
 /// the multivalued rewrite trigger it (idempotently) through this context, so
-/// the rewrite fires exactly when the historical post-rewrite branch did.
+/// the rewrite fires exactly for the methods that need it.
 struct EvalContext {
   // Generic-circuit state is needed only by the methods that consult the
   // original circuit (inversion-free, stopping-rule); the d-D-construction

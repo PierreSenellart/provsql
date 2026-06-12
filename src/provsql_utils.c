@@ -585,7 +585,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID_OPTIONAL(assumed);
   /* The 'assumed' label was 'assumed_boolean' before 1.10.0; ALTER TYPE
    * ... RENAME VALUE keeps the enum value's OID, so accepting the
-   * historical label is equivalent -- and necessary when this cache is
+   * former label is equivalent -- and necessary when this cache is
    * built in a session that later runs the upgrade chain across the
    * rename (the extension-upgrade test does exactly that). */
   if(constants.GATE_TYPE_TO_OID[gate_assumed] == InvalidOid)

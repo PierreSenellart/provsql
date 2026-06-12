@@ -21,8 +21,8 @@
  * sound screen there (no correlation edges exist for Prop. 4.2.11 to
  * exploit).  Correlated inputs -- facts whose provenance tokens are
  * internal gates over shared events -- additionally contribute the
- * circuit slice's vertices and wires (handled by the gate machinery of
- * later milestones); their shared event leaves become real shared
+ * circuit slice's vertices and wires (handled by the gate
+ * machinery); their shared event leaves become real shared
  * vertices, so the co-occurrence cliques of Prop. 4.3.2 arise
  * automatically.
  */

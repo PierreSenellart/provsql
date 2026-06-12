@@ -4,16 +4,16 @@
  *
  * ProvSQL shells out to several knowledge compilers / model counters /
  * visualisers (@c d4, @c d4v2, @c c2d, @c minic2d, @c dsharp, @c ganak,
- * @c weightmc, @c graph-easy).  Historically the set of tools, their
- * executable names, and which one is preferred for a given operation were
- * compiled in as string literals scattered across a dozen call sites.  This
- * registry turns that into a single in-memory table of @ref provsql::ToolRecord, so
+ * @c weightmc, @c graph-easy).  Rather than compiling the set of tools,
+ * their executable names, and which one is preferred for a given operation
+ * in as string literals scattered across many call sites, this
+ * registry holds a single in-memory table of @ref provsql::ToolRecord, so
  * the dispatchers query metadata instead of testing literals.
  *
- * The registry is seeded at first use with exactly the tools ProvSQL has
- * always known about, with their current invocations and a default
- * preference order, so the out-of-the-box behaviour is unchanged: a fresh
- * backend behaves identically with no registration call.  An administrator
+ * The registry is seeded at first use with the tools ProvSQL knows
+ * about, with their default invocations and a default
+ * preference order, so a fresh backend works out of the box with no
+ * registration call.  An administrator
  * may then add / repoint / reorder / disable tools at run time through the
  * SQL surface (@c provsql.register_tool, @c provsql.unregister_tool,
  * @c provsql.set_tool_enabled, @c provsql.set_tool_preference, and the

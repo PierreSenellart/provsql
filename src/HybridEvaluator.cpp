@@ -1230,8 +1230,8 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g,
      *    The three families are mutually exclusive on the underlying
      *    spec (a Uniform-bearing wire fails the normal- and Erlang-
      *    closure filters), so order does not matter for correctness;
-     *    we keep the historical order for the first two and append
-     *    the new rule at the end. */
+     *    we try normal-closure, then Erlang-closure, then
+     *    uniform-closure. */
     if (op == PROVSQL_ARITH_PLUS) {
       if (try_normal_closure(gc, g))  { ++local; break; }
       if (try_erlang_closure(gc, g))  { ++local; break; }

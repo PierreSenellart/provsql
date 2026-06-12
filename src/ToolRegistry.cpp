@@ -2,10 +2,10 @@
  * @file ToolRegistry.cpp
  * @brief Seed and mutation logic for the external-tool registry.
  *
- * The seed mirrors exactly the tools ProvSQL has always known about, with
- * their default executable names and a preference order that keeps the
- * historical selection (@c d4 first among compilers, matching the
- * @c provsql.fallback_compiler default).  See @ref ToolRegistry.h.
+ * The seed lists the tools ProvSQL knows about, with
+ * their default executable names and a preference order that keeps
+ * @c d4 first among compilers, matching the
+ * @c provsql.fallback_compiler default.  See @ref ToolRegistry.h.
  */
 #include "ToolRegistry.h"
 
@@ -47,7 +47,7 @@ void ToolRegistry::seed()
   // Knowledge compilers reading a Tseytin DIMACS CNF and emitting a d-DNNF.
   // The single tolerant `nnf` parser auto-detects the c2d/d4 magic header,
   // so it reads both the d4-family (header-less) and classic forms.
-  // Preference reproduces the historical "d4 is the default" bias.
+  // Preference keeps @c d4 as the default compiler.
   records_.push_back({"d4",      "cli", "d4",      {"compile"}, {"dimacs-cnf"},
                       "ddnnf-nnf", "nnf", 100, true, {}, "-dDNNF {in} -out={out}"});
   // d4v2 also accepts a BC-S1.2 circuit (native, structure-preserving): it is

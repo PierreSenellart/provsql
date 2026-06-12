@@ -5,7 +5,7 @@ SET search_path TO provsql_test,provsql;
 -- Regression test for tree-decomposition probability evaluation on
 -- circuits containing mulinput gates (produced by repair_key).
 --
--- This is the minimal reproducer from TODO_bug.md.  Both
+-- This is the minimal reproducer.  Both
 -- 'tree-decomposition' and the default method are expected to agree
 -- with 'possible-worlds' on this scenario.
 

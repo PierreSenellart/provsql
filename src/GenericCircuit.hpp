@@ -120,8 +120,8 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     case gate_assumed:
       /* Structural assumption marker: the wrapped sub-circuit was
        * computed under the assumption named by the gate's label (the
-       * extra string; gates from stores predating the label default to
-       * the historical 'boolean').  Identity for semirings satisfying
+       * extra string; a gate stored without a label defaults to
+       * 'boolean').  Identity for semirings satisfying
        * the assumption; fatal for the rest, since otherwise we would
        * silently return a value the semiring's semantics does not
        * justify.

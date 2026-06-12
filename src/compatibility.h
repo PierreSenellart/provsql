@@ -103,7 +103,7 @@ List *list_insert_nth(List *list, int pos, void *datum);
 /** @brief Alignment codes for the array routines (@c construct_array /
  * @c deconstruct_array).  The @c TYPALIGN_* macros (in @c catalog/pg_type.h)
  * were introduced in PostgreSQL 13; on PG 10-12 the alignment is passed as
- * the historical @c 'i' / @c 'c' characters. */
+ * the older @c 'i' / @c 'c' characters. */
 #define TYPALIGN_INT 'i'
 #define TYPALIGN_CHAR 'c'
 #endif

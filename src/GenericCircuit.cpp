@@ -61,8 +61,8 @@ bool GenericCircuit::foldSemiringIdentities()
 
   /* Cumulative @c gate -> final-target redirection accumulated across
    * iterations.  We do NOT mutate a collapsed gate to carry its
-   * target's content (the historical Phase 3): for a target that is a
-   * shared @c gate_input that would duplicate the Bernoulli variable
+   * target's content (the naive content-copy approach): for a target
+   * that is a shared @c gate_input that would duplicate the Bernoulli variable
    * into an independent copy under the wrong UUID, over-counting the
    * probability of every non-read-once circuit (a single shared edge
    * in a recursive reachability lineage, say).  Instead we rewire each
@@ -313,12 +313,11 @@ void GenericCircuit::foldBooleanIdentities()
 {
   /* Interleave the Boolean rule sweep with the semiring-safe collapse
    * to a JOINT fixpoint.  Running the Boolean rules to their own
-   * fixpoint and only THEN collapsing once (the historical order)
-   * missed absorptions whose dominating literal is exposed by a
-   * collapse: a diagonal @c gate_times(x, x) is deduped to a
-   * single-wire @c gate_times by B1, but only @c foldSemiringIdentities
-   * rewrites that wrapper to @c x, so a later B3 pass never saw @c x as
-   * a sibling.  Alternating until neither pass changes anything closes
+   * fixpoint and only THEN collapsing once would miss absorptions
+   * whose dominating literal is exposed by a collapse: a diagonal
+   * @c gate_times(x, x) is deduped to a single-wire @c gate_times by
+   * B1, but only @c foldSemiringIdentities rewrites that wrapper to
+   * @c x, so a later B3 pass would never see @c x as a sibling.  Alternating until neither pass changes anything closes
    * that gap and leaves a circuit on which no rule applies.
    *
    * Termination: every rule (idempotence, plus-with-one, absorption,

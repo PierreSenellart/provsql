@@ -2,13 +2,13 @@
 \pset format unaligned
 SET search_path TO provsql_test, provsql;
 
--- Phase 1 of the SUM-over-RV story: provsql.sum is the explicit
+-- provsql.sum is the explicit
 -- aggregate that takes a random_variable per row and returns a
 -- random_variable representing the (provenance-weighted) sum.  In a
 -- provenance-tracked query the planner-hook rewriter wraps each row's
 -- argument in mixture(prov_token, x, as_random(0)) so the effective
 -- semantics are SUM(x) = sum_i 1{phi_i} * X_i (semimodule provenance,
--- M = random_variable).  See aggregation-of-rvs.md.
+-- M = random_variable).
 
 -- Pin the MC RNG and sample budget so the cases that fall back to MC
 -- (coupling-through-shared-atoms and coupling-through-shared-RVs) are

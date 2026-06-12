@@ -14,8 +14,8 @@
  * identifies variables (structure); a single-relation predicate is a
  * selection (a pre-filter); everything else is residual.
  *
- * Historically these lived in @c safe_query.c; they carry no
- * safety-specific logic and are reused verbatim.
+ * They carry no safety-specific logic, so both the safe-query and
+ * joint-width rewriters share them.
  */
 #ifndef QUAL_CLASSIFY_H
 #define QUAL_CLASSIFY_H

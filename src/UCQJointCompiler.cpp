@@ -10,7 +10,7 @@
  * bottom-up sweep over a min-fill tree decomposition of the joint
  * (here, Gaifman) graph of the facts, the Boolean UCQ read off the root
  * table.  The correlated regime (in-bag gate valuations, MULVAR blocks)
- * is layered on the same DP core in a later milestone.
+ * is not handled by this fast path.
  *
  * ### The homomorphism-type state
  *

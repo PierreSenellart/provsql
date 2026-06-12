@@ -31,7 +31,7 @@
  * independent-project, inner Möbius step) into certified-independent Boolean
  * islands, combined at the root @c gate_mobius by the signed coefficients.
  *
- * v1 restrictions (see doc/TODO/mobius.md): reduced-form UCQs (no relation
+ * Restrictions: reduced-form UCQs (no relation
  * repeated within a disjunct, no repeated variable inside an atom, no
  * constants), tuple-independent (TID) inputs.  Anything outside that declines
  * (a C++ exception caught at the SQL boundary), so the query falls back to the
@@ -750,8 +750,8 @@ pg_uuid_t MobiusCompiler::compile(const Sentence &sentence0, bool top)
     // One disjunct (a CQ): split into variable-connected components and AND
     // them.  Independence of the product needs the components to use disjoint
     // relation symbols (reduced form); a shared symbol is a within-disjunct
-    // self-join (or a ground/var correlation on one relation) -- decline (that
-    // is Increment 3, ranking/shattering).
+    // self-join (or a ground/var correlation on one relation) -- decline
+    // (handling it would need ranking/shattering).
     std::vector<Disjunct> comps = componentsOf(s[0]);
     if(comps.size() > 1) {
       for(std::size_t i=0;i<comps.size();++i)
@@ -761,8 +761,8 @@ pg_uuid_t MobiusCompiler::compile(const Sentence &sentence0, bool top)
           for(const auto &a : comps[j])
             if(ri.count(a.rel))
               throw MobiusDecline("Möbius: within-disjunct self-join (a "
-                "relation shared by two components) -- needs ranking "
-                "(Increment 3)");
+                "relation shared by two components) -- needs "
+                "ranking/shattering");
         }
       std::vector<pg_uuid_t> ch;
       for(auto &c : comps) { Sentence one{c}; ch.push_back(compile(one,false)); }
