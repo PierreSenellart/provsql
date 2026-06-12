@@ -52,9 +52,9 @@ AggregationOperator getAggregationOperator(Oid oid)
     op = AggregationOperator::AVG;
   } else if(func_name == "array_agg") {
     op = AggregationOperator::ARRAY_AGG;
-  } else if(func_name == "and" || func_name=="every") {
+  } else if(func_name == "bool_and" || func_name == "every") {
     op = AggregationOperator::AND;
-  } else if(func_name == "or") {
+  } else if(func_name == "bool_or") {
     op = AggregationOperator::OR;
   } else {
     provsql_error("Aggregation operator %s not supported", func_name.c_str());

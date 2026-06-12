@@ -1,0 +1,14 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|bool_or|bool_and|every|array_agg
+A|a1*true∨a2*false|a1*true∧a2*false|a1*true∧a2*false|[a1*1,a2*2]
+B|b1*true|b1*true|b1*true|[b1*3]
+(2 rows)

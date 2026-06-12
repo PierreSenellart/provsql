@@ -36,6 +36,7 @@ test: deterministic union_all union nested_union union_nary distinct group_by_pr
 test: cte
 test: active
 test: aggregation
+test: agg_kinds
 test: aggregate_null
 test: outer_join
 test: scalar_subquery
