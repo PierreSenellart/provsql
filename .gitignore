@@ -11,6 +11,14 @@ compile_commands.json
 tdkc
 provsql_migrate_mmap
 test.log
+# Coverage build artefacts (make coverage): gcovr report + gcov data
+# (anchored: /coverage/ is the generated report, NOT the test/coverage/ sources)
+/coverage/
+src/*.gcno
+src/*.gcda
+src/semiring/*.gcno
+src/semiring/*.gcda
+*.gcov
 .ccls-cache/
 doc/doxygen-*/
 .cache/

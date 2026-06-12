@@ -20,6 +20,26 @@ default:
 test: tdkc
 	bash -c "set -o pipefail && bash test/kcmcp/with-tdkc.sh make installcheck 2>&1 | tee test.log" || $(PAGER) `grep regression.diffs test.log | perl -pe 's/.*?"//;s/".*//'`
 
+# Test coverage: rebuild the C/C++ extension instrumented, then run the full
+# suite against a throwaway PostgreSQL cluster owned by the invoking user (see
+# test/coverage/run-coverage.sh). Produces a gcovr line+branch report under
+# coverage/ plus coverage/zero_call.txt, the provsql functions the suite never
+# calls. The cluster loads the instrumented build from a private staging prefix,
+# so NOTHING is installed into the system PostgreSQL and no sudo is needed; this
+# requires PostgreSQL >= 18. See test/coverage/README.md. Needs gcovr
+# (pipx install gcovr). tdkc is (re)built uninstrumented so the kcmcp client
+# tests run instead of skipping.
+#
+#   make coverage
+#   make coverage PROVSQL_COVERAGE_PORT=55000 GCOVR=~/.local/bin/gcovr
+GCOVR ?= gcovr
+coverage:
+	$(MAKE) -f $(INTERNAL) clean $(ARGS)
+	$(MAKE) -f $(INTERNAL) -j $(NPROC) COVERAGE=1 $(ARGS)
+	$(MAKE) -f $(INTERNAL) tdkc $(ARGS)
+	GCOVR="$(GCOVR)" bash test/coverage/run-coverage.sh
+	@echo "The system PostgreSQL was untouched; restore the normal local build with: make"
+
 # Upgrade-chain parity: a database upgraded from 1.0.0 must be
 # catalog-identical to a fresh install (the strong form of the
 # extension_upgrade canary; run before every release). Pass psql
@@ -116,7 +136,7 @@ studio-test: studio-lint
 playground-test: playground
 	cd studio && python3 -m pytest tests/web
 
-.PHONY: default test upgrade-parity-test docs website deploy wasm playground deploy-playground playground-test studio studio-lint studio-test tdkc provsql_migrate_mmap
+.PHONY: default test coverage upgrade-parity-test docs website deploy wasm playground deploy-playground playground-test studio studio-lint studio-test tdkc provsql_migrate_mmap
 
 tdkc provsql_migrate_mmap:
 	$(MAKE) -f $(INTERNAL) $@ $(ARGS)

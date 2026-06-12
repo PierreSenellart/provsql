@@ -55,7 +55,7 @@ endif
 endif
 
 DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(BASE_INSTALL) $(UPGRADE_SCRIPTS) $(DEV_UPGRADE)
-EXTRA_CLEAN = sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV_UPGRADE) tdkc provsql_migrate_mmap test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files
+EXTRA_CLEAN = sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV_UPGRADE) tdkc provsql_migrate_mmap test/schedule $(EXTENSION).control doc/doxygen-*/ doc/source/_build doc/source/c/files.rst doc/source/c/files src/*.gcno src/*.gcda src/semiring/*.gcno src/semiring/*.gcda coverage
 
 # We want REGRESS to be empty, since we are going to provide a schedule
 # of tests. But we want REGRESS to be defined, otherwise installcheck
@@ -75,6 +75,17 @@ EXTRA_REGRESS_OPTS =
 
 ifdef DEBUG
 PG_CPPFLAGS += -O0 -g
+endif
+
+# Coverage build (driven by `make coverage`). gcov line/branch counters with
+# LTO disabled (LTO mangles gcov's line mapping) and -O0 (faithful source
+# mapping). PG_CPPFLAGS lands after CFLAGS in both the C and C++ recipes, so
+# -fno-lto / -O0 override the PGXS defaults. Profile updates are atomic because
+# many backends write the same .gcda concurrently. --coverage also goes to the
+# link so libgcov is pulled in.
+ifdef COVERAGE
+PG_CPPFLAGS  += --coverage -fno-lto -O0 -fprofile-update=atomic
+LINKER_FLAGS += --coverage -fno-lto
 endif
 
 # Disable JIT code generation, due to various bugs, see in particular
