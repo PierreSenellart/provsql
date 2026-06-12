@@ -126,4 +126,47 @@ SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TAB
 CREATE TABLE tt_r AS SELECT sr_formula(provenance(),'ttm') AS f FROM tt GROUP BY g HAVING sum(x) > sum(y);
 SELECT remove_provenance('tt_r'); SELECT f FROM tt_r; DROP TABLE tt_r;
 
+\echo '# further operators and aggregates resolved by the same enumeration.  The'
+\echo '# three non-empty worlds {t1},{t2},{t1,t2} (each 0.25) have aggregates'
+\echo '#   {t1}:  sum_x 10 sum_y 5  count 1  min_x 10 max_x 10 avg_x 10'
+\echo '#   {t2}:  sum_x 20 sum_y 30 count 1  min_x 20 max_x 20 avg_x 20'
+\echo '#   both:  sum_x 30 sum_y 35 count 2  min_x 10 max_x 20 avg_x 15'
+\echo '#   sum(x)-sum(y) > 0   (subtraction; only {t1}: 10-5>0)         -> 0.25'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING sum(x)-sum(y) > 0;
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   -sum(x) > -sum(y)   (unary minus both sides; == sum(x)<sum(y)) -> 0.5'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING -sum(x) > -sum(y);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   sum(x) < sum(y)     (LT; {t2},{t1,t2})                        -> 0.5'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING sum(x) < sum(y);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   sum(x) <= sum(y)    (LE; same worlds)                         -> 0.5'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING sum(x) <= sum(y);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   sum(x) <> sum(y)    (NE; all three worlds differ)             -> 0.75'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING sum(x) <> sum(y);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   count(*) > sum(y)-sum(x)  (count aggregate; only {t1}: 1>-5)  -> 0.25'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING count(*) > sum(y)-sum(x);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   avg(x) > min(x)     (avg vs min; only {t1,t2}: 15>10)         -> 0.25'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING avg(x) > min(x);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+\echo '#   max(x) <> min(x)    (max vs min; only {t1,t2}: 20<>10)        -> 0.25'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt GROUP BY g HAVING max(x) <> min(x);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+
+\echo '# correlated contributors: joining every row against a shared one-row table'
+\echo '# makes each provenance a conjunction (row AND switch), no longer a set of'
+\echo '# independent literals, so the worlds combine in the non-certified m-semiring.'
+\echo '# sum(x) > sum(y) now also needs the switch present: the 0.25 above times'
+\echo '# P(switch) = 0.5.'
+CREATE TABLE ttsw(z int); INSERT INTO ttsw VALUES (1);
+SELECT add_provenance('ttsw');
+DO $$ BEGIN PERFORM provsql.set_prob(provsql.provenance(), 0.5) FROM provsql_test.ttsw; END $$;
+\echo '#   sum(x) > sum(y) over tt, ttsw                                -> 0.125'
+CREATE TABLE tt_r AS SELECT probability_evaluate(provenance()) p FROM tt, ttsw GROUP BY g HAVING sum(x) > sum(y);
+SELECT remove_provenance('tt_r'); SELECT round(p::numeric,4) FROM tt_r; DROP TABLE tt_r;
+DROP TABLE ttsw;
+
 DROP TABLE tt;

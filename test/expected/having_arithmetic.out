@@ -278,3 +278,79 @@ remove_provenance
 f
 t1 ⊗ (𝟙 ⊖ t2)
 (1 row)
+# further operators and aggregates resolved by the same enumeration.  The
+# three non-empty worlds {t1},{t2},{t1,t2} (each 0.25) have aggregates
+#   {t1}:  sum_x 10 sum_y 5  count 1  min_x 10 max_x 10 avg_x 10
+#   {t2}:  sum_x 20 sum_y 30 count 1  min_x 20 max_x 20 avg_x 20
+#   both:  sum_x 30 sum_y 35 count 2  min_x 10 max_x 20 avg_x 15
+#   sum(x)-sum(y) > 0   (subtraction; only {t1}: 10-5>0)         -> 0.25
+remove_provenance
+
+(1 row)
+round
+0.2500
+(1 row)
+#   -sum(x) > -sum(y)   (unary minus both sides; == sum(x)<sum(y)) -> 0.5
+remove_provenance
+
+(1 row)
+round
+0.5000
+(1 row)
+#   sum(x) < sum(y)     (LT; {t2},{t1,t2})                        -> 0.5
+remove_provenance
+
+(1 row)
+round
+0.5000
+(1 row)
+#   sum(x) <= sum(y)    (LE; same worlds)                         -> 0.5
+remove_provenance
+
+(1 row)
+round
+0.5000
+(1 row)
+#   sum(x) <> sum(y)    (NE; all three worlds differ)             -> 0.75
+remove_provenance
+
+(1 row)
+round
+0.7500
+(1 row)
+#   count(*) > sum(y)-sum(x)  (count aggregate; only {t1}: 1>-5)  -> 0.25
+remove_provenance
+
+(1 row)
+round
+0.2500
+(1 row)
+#   avg(x) > min(x)     (avg vs min; only {t1,t2}: 15>10)         -> 0.25
+remove_provenance
+
+(1 row)
+round
+0.2500
+(1 row)
+#   max(x) <> min(x)    (max vs min; only {t1,t2}: 20<>10)        -> 0.25
+remove_provenance
+
+(1 row)
+round
+0.2500
+(1 row)
+# correlated contributors: joining every row against a shared one-row table
+# makes each provenance a conjunction (row AND switch), no longer a set of
+# independent literals, so the worlds combine in the non-certified m-semiring.
+# sum(x) > sum(y) now also needs the switch present: the 0.25 above times
+# P(switch) = 0.5.
+add_provenance
+
+(1 row)
+#   sum(x) > sum(y) over tt, ttsw                                -> 0.125
+remove_provenance
+
+(1 row)
+round
+0.1250
+(1 row)
