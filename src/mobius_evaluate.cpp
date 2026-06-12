@@ -42,6 +42,7 @@ extern "C" {
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "access/htup_details.h"   /* heap_form_tuple (PG 10 declares it here) */
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "executor/spi.h"
@@ -50,6 +51,7 @@ extern "C" {
 #include "utils/resowner.h"
 #include "utils/uuid.h"
 
+#include "compatibility.h"   /* TYPALIGN_INT / TYPALIGN_CHAR fallback for PG < 13 */
 #include "provsql_utils.h"
 #include "provsql_mmap.h"
 
