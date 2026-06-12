@@ -37,6 +37,10 @@ bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::s
 bool aggtype_is_text(unsigned oid);
 bool aggtype_is_integer(unsigned oid);
 bool aggtype_is_boolean(unsigned oid);
+// True if @p oid is boolean, or an array whose element type is boolean.  Used
+// by the array_agg comparison to reconcile PostgreSQL's two boolean text forms
+// (scalar 'true'/'false' vs array-element 't'/'f').
+bool aggtype_elem_is_boolean(unsigned oid);
 bool aggtype_is_numeric(unsigned oid);
 bool parse_array_literal(const std::string &s, std::vector<std::string> &out);
 bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale);
@@ -435,6 +439,19 @@ void provsql_having(
           if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
           vals.push_back(m_str);
           kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
+        }
+
+        // Boolean elements: the row values carry the scalar bool text
+        // ('true'/'false') while the constant array's elements come back in
+        // PostgreSQL's array form ('t'/'f').  Canonicalise both sides so the
+        // text comparison below sees the same representation.
+        if (aggtype_elem_is_boolean(aggtype)) {
+          auto canon_bool = [](std::string &s) {
+            if (s == "t" || s == "true"  || s == "1") s = "true";
+            else if (s == "f" || s == "false" || s == "0") s = "false";
+          };
+          for (auto &e : target) canon_bool(e);
+          for (auto &v : vals)   canon_bool(v);
         }
 
         auto worlds = enumerate_array_agg_worlds(

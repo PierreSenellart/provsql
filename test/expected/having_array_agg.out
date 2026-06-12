@@ -30,3 +30,27 @@ q|g|p
 text =[a,b]|A|0.2500
 text =[a,b]|B|0.0000
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+bool =[t]|A|0.2500
+bool =[t]|B|0.5000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+bool =[f,t]|A|0.2500
+bool =[f,t]|B|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+bool <>[t]|A|0.5000
+bool <>[t]|B|0.0000
+(2 rows)

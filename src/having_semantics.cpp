@@ -49,6 +49,17 @@ bool aggtype_is_boolean(unsigned oid) {
   return oid == BOOLOID;
 }
 
+// array_agg's result type is the array type (e.g. boolean[]); its element type
+// is the comparison domain.  PostgreSQL serialises a scalar bool as
+// 'true'/'false' but a bool array element as 't'/'f', so the array_agg
+// comparison must know when the elements are boolean to reconcile the two.
+bool aggtype_elem_is_boolean(unsigned oid) {
+  if (oid == BOOLOID)
+    return true;
+  Oid elem = get_element_type(oid);
+  return elem == BOOLOID;
+}
+
 // Types handled by the numeric comparison domain (scaled to a common integer
 // grid).  choose() over these is evaluated there -- including ordering
 // comparisons; choose() over any other type falls to the value-as-text domain.

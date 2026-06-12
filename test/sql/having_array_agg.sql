@@ -31,5 +31,29 @@ CREATE TABLE r4 AS SELECT g, round(probability_evaluate(provenance())::numeric,4
   FROM haa GROUP BY g HAVING array_agg(nm ORDER BY nm) = ARRAY['a','b'];
 SELECT remove_provenance('r4'); SELECT 'text =[a,b]' AS q, g, p FROM r4 ORDER BY g;
 
+-- Boolean elements: PostgreSQL renders a scalar bool as 'true'/'false' but a
+-- bool array element as 't'/'f'; the array_agg comparison reconciles the two so
+-- the value-as-text match works.  hb: A = {true, false}, B = {true}, p = 0.5.
+CREATE TABLE hb(g text, flag boolean);
+INSERT INTO hb VALUES ('A', true), ('A', false), ('B', true);
+SELECT add_provenance('hb');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM hb; END $$;
+
+-- = ARRAY[true]: only the true row present.                      A 0.25  B 0.5
+CREATE TABLE r5 AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM hb GROUP BY g HAVING array_agg(flag ORDER BY flag) = ARRAY[true];
+SELECT remove_provenance('r5'); SELECT 'bool =[t]' AS q, g, p FROM r5 ORDER BY g;
+
+-- = ARRAY[false,true]: both A-rows present (ordered).            A 0.25  B 0
+CREATE TABLE r6 AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM hb GROUP BY g HAVING array_agg(flag ORDER BY flag) = ARRAY[false,true];
+SELECT remove_provenance('r6'); SELECT 'bool =[f,t]' AS q, g, p FROM r6 ORDER BY g;
+
+-- <> ARRAY[true]: non-empty and not exactly [true].              A 0.5   B 0
+CREATE TABLE r7 AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM hb GROUP BY g HAVING array_agg(flag ORDER BY flag) <> ARRAY[true];
+SELECT remove_provenance('r7'); SELECT 'bool <>[t]' AS q, g, p FROM r7 ORDER BY g;
+
 DROP TABLE r1; DROP TABLE r2; DROP TABLE r3; DROP TABLE r4;
-DROP TABLE haa;
+DROP TABLE r5; DROP TABLE r6; DROP TABLE r7;
+DROP TABLE haa; DROP TABLE hb;
