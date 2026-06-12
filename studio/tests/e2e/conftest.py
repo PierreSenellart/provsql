@@ -111,6 +111,13 @@ def cs2_studio_url(cs2_dsn: str) -> str:
 
 
 @pytest.fixture(scope="session")
+def cs8_studio_url(cs8_dsn: str) -> str:
+    """Studio against the Case Study 8 database (`public` schema; the notebook
+    creates its own tables)."""
+    yield from _serve_studio(cs8_dsn, "public")
+
+
+@pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
     # Pin a deterministic viewport so layout-sensitive selectors stay stable
     # across hosts; matches the desktop breakpoint the UI is designed for.

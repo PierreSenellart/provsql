@@ -182,6 +182,37 @@ def cs2_dsn() -> str:
             admin.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
 
 
+@pytest.fixture(scope="session")
+def cs8_dsn() -> str:
+    """A fresh database with only the provsql extension installed, for the
+    Case Study 8 notebook walkthrough.  CS8 is notebook-first and fully
+    self-contained -- its cells create every table inline -- so the database
+    needs nothing but the extension.  Overridable with
+    `PROVSQL_STUDIO_CS8_DSN`."""
+    override = os.environ.get("PROVSQL_STUDIO_CS8_DSN")
+    if override:
+        yield override
+        return
+
+    suffix = secrets.token_hex(4)
+    db_name = f"provsql_studio_cs8_{suffix}"
+    admin_dsn = "dbname=postgres"
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{db_name}"')
+    try:
+        with psycopg.connect(f"dbname={db_name}", autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS provsql CASCADE")
+        yield f"dbname={db_name}"
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            admin.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+
+
 @pytest.fixture()
 def app(test_dsn: str, tmp_path, monkeypatch):
     """Per-test Flask app bound to the test DSN, with the schema search_path
