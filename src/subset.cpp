@@ -461,3 +461,25 @@ std::vector<mask_t> enumerate_valid_worlds(
 
   return enumerate_exhaustive(values, constant, op, agg_kind, absorptive, upset);
 }
+
+std::vector<mask_t> enumerate_array_agg_worlds(
+  const std::vector<std::string> &vals,
+  const std::vector<std::string> &target,
+  bool want_equal)
+{
+  const size_t n = vals.size();
+  std::vector<mask_t> worlds;
+  mask_t mask(n);
+
+  // increment() starts from the all-absent mask and never yields it, so the
+  // empty group (which never satisfies a HAVING clause) is excluded for free.
+  while(increment(mask)) {
+    std::vector<std::string> present;
+    present.reserve(n);
+    for(size_t i = 0; i < n; ++i)
+      if(mask[i]) present.push_back(vals[i]);
+    if((present == target) == want_equal)
+      worlds.push_back(mask);
+  }
+  return worlds;
+}

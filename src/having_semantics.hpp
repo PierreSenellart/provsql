@@ -40,6 +40,7 @@ bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::s
 bool aggtype_is_text(unsigned oid);
 bool aggtype_is_integer(unsigned oid);
 bool aggtype_is_boolean(unsigned oid);
+bool parse_array_literal(const std::string &s, std::vector<std::string> &out);
 bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale);
 bool rescale_to(long mantissa, int scale, int target_scale, long &out);
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok);
@@ -326,6 +327,80 @@ void provsql_having(
         else
           pw_out = S.times(
             std::vector<typename SemiringT::value_type>{none_factor, some_value});
+        return true;
+      }
+
+      // ---- Array comparison domain: array_agg(x) against a constant array.
+      //      No aggregate-specific optimization (the general pipeline): scan the
+      //      non-empty worlds whose ordered present elements equal (=) or differ
+      //      (<>) from the constant array, then combine those worlds in the
+      //      m-semiring.  Elements are compared as their text representations,
+      //      so any element type works. ----
+      if (agg_kind == AggregationOperator::ARRAY_AGG) {
+        if (effective_op != ComparisonOperator::EQ &&
+            effective_op != ComparisonOperator::NE)
+          throw std::runtime_error(
+            "only = and <> are supported when comparing array_agg() with a "
+            "constant array in HAVING");
+
+        std::string C_str;
+        if (!extract_constant_string(c, const_side, C_str)) return false;
+        std::vector<std::string> target;
+        if (!parse_array_literal(C_str, target)) return false;
+
+        std::vector<std::string> vals;
+        std::vector<typename SemiringT::value_type> kvals;
+        vals.reserve(children.size());
+        kvals.reserve(children.size());
+        for (gate_t ch : children) {
+          if (c.getGateType(ch) != gate_semimod) return false;
+          std::string m_str;
+          gate_t k_gate{};
+          if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
+          vals.push_back(m_str);
+          kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
+        }
+
+        auto worlds = enumerate_array_agg_worlds(
+          vals, target, effective_op == ComparisonOperator::EQ);
+        if (worlds.empty()) { pw_out = S.zero(); return true; }
+
+        if (certifiable_contributors(kvals)) {
+          std::vector<typename SemiringT::value_type> disjuncts;
+          disjuncts.reserve(worlds.size());
+          for (const auto &mask : worlds) {
+            std::vector<typename SemiringT::value_type> present, missing;
+            for (size_t i = 0; i < kvals.size(); ++i)
+              (mask[i] ? present : missing).push_back(kvals[i]);
+            disjuncts.push_back(S.certified_world_term(present, missing));
+          }
+          pw_out = S.certified_exclusive_plus(disjuncts);
+          return true;
+        }
+
+        const auto one = S.one();
+        std::vector<typename SemiringT::value_type> disjuncts;
+        disjuncts.reserve(worlds.size());
+        for (const auto &mask : worlds) {
+          std::vector<typename SemiringT::value_type> present, missing;
+          for (size_t i = 0; i < kvals.size(); ++i) {
+            if (mask[i]) {
+              if (kvals[i] != one) present.push_back(kvals[i]);
+            } else if (kvals[i] != S.zero())
+              missing.push_back(kvals[i]);
+          }
+          auto present_prod = S.times(present);
+          if (missing.empty())
+            disjuncts.push_back(present_prod);
+          else {
+            auto term = S.monus(one, S.plus(missing));
+            if (present_prod != one)
+              term = S.times(std::vector<typename SemiringT::value_type>{
+                present_prod, term});
+            disjuncts.push_back(term);
+          }
+        }
+        pw_out = S.plus(disjuncts);
         return true;
       }
 

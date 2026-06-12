@@ -1,0 +1,32 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+int =[1,2]|A|0.2500
+int =[1,2]|B|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+int =[1]|A|0.2500
+int =[1]|B|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+int <>[1,2]|A|0.5000
+int <>[1,2]|B|0.5000
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+text =[a,b]|A|0.2500
+text =[a,b]|B|0.0000
+(2 rows)

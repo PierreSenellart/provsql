@@ -16,6 +16,7 @@
 #define SUBSET_HPP
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "Aggregation.h"
@@ -87,6 +88,27 @@ bool agg_cmp_holds_in_world(
   long constant,
   ComparisonOperator op,
   AggregationOperator agg_kind
+  );
+
+/**
+ * @brief Enumerate the non-empty worlds whose ordered present elements equal
+ *        (@p want_equal true) or differ from (@p want_equal false) @p target.
+ *
+ * The general @c array_agg() HAVING pipeline: no aggregate-specific shortcut,
+ * just an exhaustive scan that compares, in each world, the array of present
+ * tuples' element texts (kept in the aggregate's input order) against the
+ * constant array.  Element values are compared as their text representations,
+ * so any element type is supported for @c = / @c <>.
+ *
+ * @param vals        Per-tuple element text (in the aggregate's input order).
+ * @param target      The constant array's element texts.
+ * @param want_equal  @c true for @c =, @c false for @c <>.
+ * @return            Vector of bitmasks, one per valid world.
+ */
+std::vector<mask_t> enumerate_array_agg_worlds(
+  const std::vector<std::string> &vals,
+  const std::vector<std::string> &target,
+  bool want_equal
   );
 
 #endif /* SUBSET_HPP */

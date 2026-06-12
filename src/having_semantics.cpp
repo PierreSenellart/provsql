@@ -49,6 +49,43 @@ bool aggtype_is_boolean(unsigned oid) {
   return oid == BOOLOID;
 }
 
+// Parse a PostgreSQL array output literal -- "{1,2}", "{a,\"b,c\"}" -- into its
+// top-level element texts (surrounding double quotes removed, backslash escapes
+// resolved).  Returns false on a malformed or nested-array literal.  Sufficient
+// for one-dimensional arrays of scalar elements, which is what array_agg over a
+// provenance-tracked column produces.
+bool parse_array_literal(const std::string &s, std::vector<std::string> &out) {
+  out.clear();
+  size_t i = 0, n = s.size();
+  while (i < n && isspace((unsigned char) s[i])) i++;
+  if (i >= n || s[i] != '{') return false;
+  i++;
+  while (i < n && isspace((unsigned char) s[i])) i++;
+  if (i < n && s[i] == '}') return true;   // empty array
+  while (i < n) {
+    std::string elem;
+    while (i < n && isspace((unsigned char) s[i])) i++;
+    if (i < n && s[i] == '"') {
+      i++;
+      while (i < n && s[i] != '"') {
+        if (s[i] == '\\' && i + 1 < n) { elem.push_back(s[i + 1]); i += 2; }
+        else { elem.push_back(s[i]); i++; }
+      }
+      if (i >= n) return false;
+      i++;   // closing quote
+    } else {
+      while (i < n && s[i] != ',' && s[i] != '}') { elem.push_back(s[i]); i++; }
+      while (!elem.empty() && isspace((unsigned char) elem.back())) elem.pop_back();
+    }
+    out.push_back(elem);
+    while (i < n && isspace((unsigned char) s[i])) i++;
+    if (i < n && s[i] == ',') { i++; continue; }
+    if (i < n && s[i] == '}') return true;
+    return false;
+  }
+  return false;
+}
+
 // Parse a plain decimal literal ("-12.340", "6", "6.5") into a scaled
 // integer: the value is @c mantissa * 10^(-scale).  Returns false on
 // exponential notation, inf / nan, or anything that is not a plain
