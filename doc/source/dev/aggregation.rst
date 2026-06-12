@@ -244,10 +244,20 @@ Currently Supported Aggregates
 ------------------------------
 
 The :cfunc:`AggregationOperator` enum in :cfile:`Aggregation.h`
-lists the operators currently implemented in |cpp|: ``COUNT``
+lists the operators recognised in |cpp|: ``COUNT``
 (normalised to ``SUM`` over ``INT``), ``SUM``, ``MIN``, ``MAX``,
-``AVG``, ``AND``, ``OR``, ``CHOOSE``, and ``ARRAY_AGG``.  Adding
-to this list is the topic of the next section.
+``AVG``, ``AND``, ``OR``, ``CHOOSE``, and ``ARRAY_AGG``.  Only the
+aggregates the Monte-Carlo sampler and the subset enumerator
+evaluate *directly* get an :cfunc:`Aggregator` accumulator (the
+numeric ones -- ``SUM`` / ``COUNT`` / ``MIN`` / ``MAX`` / ``AVG``
+-- and ``CHOOSE``); the boolean aggregates (``bool_and`` /
+``bool_or`` / ``every``) and ``array_agg`` exist only as enum
+values for routing, because their ``HAVING`` comparisons are
+resolved entirely by the m-semiring rewrite in
+:cfile:`having_semantics.cpp` (two-value characterisation and
+possible-worlds enumeration respectively) and never reach the
+deterministic sampler.  Adding to the accumulator list is the
+topic of the next section.
 
 
 Random-Variable Aggregates
@@ -325,8 +335,8 @@ combine the values incrementally.
 3. **Implement the accumulator.**  Add a templated
    :cfunc:`Aggregator` subclass in :cfile:`Aggregation.cpp` next
    to the existing ones (:cfunc:`SumAgg`, :cfunc:`MinAgg`,
-   :cfunc:`AvgAgg`, etc.).  The class implements four virtual
-   methods:
+   :cfunc:`AvgAgg`, etc.).  The interface is three virtual
+   methods (``resultType()`` defaults to ``inputType()``):
 
    .. code-block:: cpp
 
@@ -342,12 +352,14 @@ combine the values incrementally.
         AggValue finalize() const override {
           return has ? AggValue{acc} : AggValue{};
         }
-        AggregationOperator op() const override {
-          return AggregationOperator::BIT_AND;
-        }
         ValueType inputType() const override { return ValueType::INT; }
-        ValueType resultType() const override { return ValueType::INT; }
       };
+
+   An accumulator is only warranted for an aggregate the sampler /
+   enumerator must evaluate on concrete values; an aggregate whose
+   ``HAVING`` semantics are resolved by the m-semiring rewrite
+   (like the boolean aggregates and ``array_agg``) needs only the
+   enum value and routing in :cfile:`having_semantics.cpp`.
 
 4. **Instantiate the accumulator.**  Extend :cfunc:`makeAggregator`
    in :cfile:`Aggregation.cpp` with a case that creates the right

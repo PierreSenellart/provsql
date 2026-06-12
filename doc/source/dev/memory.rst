@@ -159,6 +159,17 @@ float8-mode parsers (``extract_constant_C`` and
 representation, and the choice of parser is made by the consumer
 at evaluation time based on the gate's surrounding context.
 
+Beyond ``gate_value`` literals, the ``extra`` blob carries the
+``gate_assumed`` assumption label, ``gate_annotation`` certificates,
+``gate_rv`` distribution parameters, and the ``gate_mobius``
+per-child coefficient map (which :cfunc:`MMappedCircuit`'s extra-copy
+path preserves verbatim, the same mechanism as ``gate_arith``).  The
+``info1`` field doubles as the persisted **d-DNNF certificate** on
+``gate_plus`` / ``gate_times`` gates (deterministic / decomposable
+bits, written via the internal ``set_infos`` entry point by the
+reachability and joint-width compilers and loaded back by
+:cfunc:`createGenericCircuit`).
+
 :cfunc:`MMappedVector` (:cfile:`MMappedVector.h` /
 :cfile:`MMappedVector.hpp`) provides a ``std::vector``-like interface
 over an mmap region, supporting ``push_back``, random access, and
@@ -299,6 +310,19 @@ for a cache miss, or because an earlier call in the same
 backend wrote it through), so the persistent store always
 reflects the complete circuit even though each individual
 lookup may resolve locally.
+
+The data-decomposition compilers add a second, coarser per-backend
+cache on top: a set of already-materialised root tokens, so
+re-materialising an unchanged certified circuit (a warm rerun of the
+same reachability or joint-width query) skips the per-gate IPC
+entirely.  It is sound for the same reason the gate cache is: the
+store is append-only and the worker pipe ordered, so a token seen
+created by this backend can never designate anything else.  The
+compilers also materialise at **content-addressed** UUIDs (v5 hashes
+of the construction recipe, including the *plus-canonical* and
+*times-canonical* namespaces probed by :sqlfunc:`provenance_plus` /
+:sqlfunc:`provenance_times`), so any query phrasing that combines the
+same token multiset lands on the already-planted gates.
 
 
 Reading Circuits Back

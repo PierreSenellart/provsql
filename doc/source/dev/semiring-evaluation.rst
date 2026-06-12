@@ -180,23 +180,29 @@ Boolean-Rewrite Compatibility
 
 The safe-query rewriter (see :doc:`query-rewriting` and
 :doc:`../user/probabilities`) emits circuits whose root is wrapped
-in a ``gate_assumed_boolean`` marker, signalling that the rewrite
+in a ``gate_assumed`` marker labelled ``'boolean'`` (created by
+:sqlfunc:`provenance_assume`), signalling that the rewrite
 preserves only Boolean semantics, not arbitrary semiring
-semantics.  Each semiring declares its compatibility with this
-rewrite by overriding a virtual predicate inherited from
+semantics.  An ``'absorptive'`` label plays the same role for the
+constructions sound in every absorptive semiring (cyclic-recursion
+truncation, the reachability route).  Each semiring declares its
+compatibility by overriding virtual predicates inherited from
 :cfunc:`Semiring`:
 
 .. code-block:: cpp
 
    virtual bool compatibleWithBooleanRewrite() const override { return true; }
+   virtual bool absorptive() const override { return true; }
 
-The predicate is read by
+The predicates are read by
 :cfunc:`provenance_evaluate_compiled_internal`
 (``src/provenance_evaluate_compiled.cpp``) immediately before the
-``evaluate<S>`` template call.  When the root carries the
-``gate_assumed_boolean`` marker and the chosen semiring's
-predicate returns ``false``, the dispatcher raises a structured
-error rather than silently producing an incorrect value.
+``evaluate<S>`` template call.  When the root carries an assumption
+marker the chosen semiring's predicate does not license
+(``compatibleWithBooleanRewrite()`` for ``'boolean'``,
+``absorptive()`` for ``'absorptive'``), the dispatcher raises a
+structured error rather than silently producing an incorrect
+value.
 
 Per-semiring decisions (see each override under
 ``src/semiring/*.h``) :
@@ -222,9 +228,10 @@ flag, so it round-trips through circuit serialisation and is
 visible to every downstream consumer (semiring evaluators,
 PROV-XML export, ``view_circuit``, ProvSQL Studio's circuit
 view).  The wrapping happens at the end of the safe-query
-rewriter via :sqlfunc:`assume_boolean`, which creates a
-single-input ``gate_assumed_boolean`` wrapping the original root.
-The evaluator template treats the wrapper transparently for
+rewriter via :sqlfunc:`provenance_assume` (the historical
+:sqlfunc:`assume_boolean` is a thin ``'boolean'``-label wrapper),
+which creates a single-input ``gate_assumed`` over the original
+root.  The evaluator template treats the wrapper transparently for
 compatible semirings ; only the dispatcher's pre-evaluation check
 distinguishes them.
 
@@ -234,22 +241,24 @@ Boolean-Identity Folding
 In addition to the universal
 ``GenericCircuit::foldSemiringIdentities`` pass (which
 collapses identities and absorbers shared by every semiring),
-ProvSQL runs an opt-in
-``GenericCircuit::foldBooleanIdentities`` pass at circuit-load
-time when the provenance class is ``'boolean'``.  It applies three
-Boolean-specific rewrite rules and wraps each rewritten gate in a
-``gate_assumed_boolean`` marker (same mechanism as the safe-query
-rewriter, so the resulting circuit refuses non-Boolean-compatible
-semirings) :
+ProvSQL runs opt-in load-time folds split by the semiring class
+that justifies them.  Under provenance class ``'absorptive'`` or
+``'boolean'``, ``GenericCircuit::foldAbsorptiveIdentities`` applies
+the rules sound in **every absorptive semiring**:
 
 - **B1, idempotence** : ``plus(x, x, ...) -> x`` after deduplication.
 - **B2, plus-with-one absorber** : ``plus(one, ...) -> one``.
-- **B3, absorption** : ``plus(u, times(u, v)) -> u`` and
-  ``times(u, plus(u, v)) -> u``.
+- **B3, plus-absorbs-times** : ``plus(u, times(u, v)) -> u``.
 
-The pass is gated by the ``'boolean'`` provenance class because the
-rewrites are sound only when evaluated under a Boolean-faithful
-semiring ; the gate-level marker enforces this at evaluation time.
+Under ``'boolean'`` only, ``GenericCircuit::foldBooleanIdentities``
+adds the rules that fail in tropical-like semirings
+(times-idempotence and ``times(u, plus(u, v)) -> u``).  Each
+rewritten gate is recorded in an assumption side band
+(``absorptive_assumed`` / Boolean, checked *before* the
+memoisation lookup so a fold that collapses a marked gate onto a
+preloaded input leaf still refuses an incompatible evaluation);
+the acceptance predicate is the semiring's ``absorptive()`` or
+``compatibleWithBooleanRewrite()`` as above.
 
 B3 only fires when the dominating literal ``u`` is a *direct* sibling
 of the parent, and that literal is frequently exposed only **after** a
@@ -404,6 +413,20 @@ function), the call chain is:
 4. The ``pec_*`` helper instantiates the semiring class and calls
    ``GenericCircuit::evaluate<S>(root, mapping)``, which performs a
    post-order DAG traversal applying semiring operations at each gate.
+   The traversal is **memoised** (a shared sub-DAG is evaluated once,
+   not once per path -- the difference between linear and exponential
+   on diamond-heavy circuits) and **iterative** (an explicit
+   post-order stack with the memo map as value store), so circuits as
+   deep as the data -- e.g. the compiled reachability ladders -- do
+   not hit PostgreSQL's ``max_stack_depth``.
+
+One memory-lifetime constraint applies to pass-by-reference
+carriers: annotation rows are collected as *text* while the SPI
+connection is open and parsed only after ``SPI_finish``, and any
+constants a semiring caches (e.g. ``IntervalUnion``'s zero / one
+multiranges) must be built lazily at evaluation time -- anything
+parsed inside the SPI procedure context is freed by ``SPI_finish``
+before evaluation reads it.
 
 
 Symbolic Representation Semirings

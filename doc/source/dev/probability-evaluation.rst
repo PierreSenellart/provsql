@@ -28,10 +28,23 @@ persistent circuit store and then calls
 :cfunc:`probability_evaluate_internal` (in
 :cfile:`probability_evaluate.cpp`).
 
-:cfunc:`probability_evaluate_internal` receives the method name as
-a string and dispatches via a chain of ``if`` / ``else if`` branches.
-There is **no registration mechanism** -- methods are hardcoded in
-the dispatcher.
+:cfunc:`probability_evaluate_internal` receives the method name (or
+the requested guarantee) and dispatches through the
+:cfunc:`MethodCatalog` singleton: each method is a
+:cfunc:`ProbabilityMethod` subclass registered with
+:cfunc:`MethodCatalog::registerMethod` at static-initialisation time,
+and the catalog either resolves an explicitly named method or runs
+its cost-based chooser over the admissible ones.  Two declarative
+flags shape the dispatch: ``handlesMultivalued()`` (the BID →
+Boolean rewrite of ``gate_mulinput`` blocks is applied centrally
+before any method that does not handle blocks natively -- only
+``independent`` opts out), and ``producesDD()`` / ``buildDD()`` for
+the d-DNNF constructors the makeDD ``auto`` route selects among.
+Two gate types short-circuit the chooser entirely: a
+``gate_conditioned`` root is evaluated as the conditional
+P(target ∧ evidence) / P(evidence), and a ``gate_mobius`` root is
+non-Boolean and routes directly to the ``mobius`` method (see
+below).
 
 
 Background: d-DNNF, Tseytin, Knowledge Compilation
@@ -361,6 +374,16 @@ Currently Supported Methods
        compiler named, the highest-preference available one, to
        produce a :cfunc:`dDNNF`, then
        :cfunc:`dDNNF::probabilityEvaluation`.
+   * - ``"mobius"``
+     - :cfile:`mobius_evaluate.cpp` -- exact route for a
+       ``gate_mobius``-rooted token (the safe-UCQ Möbius-inversion
+       route): one linear sweep evaluates each certified-independent
+       island read-once and combines the island probabilities with the
+       persisted signed integer coefficients.  A Möbius root is
+       non-Boolean, so the dispatcher routes it here directly; naming
+       ``mobius`` on any other token is an error, while naming any
+       *other* method on a Möbius root evaluates the transparent
+       lineage child instead (same value, no shortcut).
    * - ``""`` (default)
      - Fallback chain: try ``independent``; then, when the root carries an
        inversion-free certificate and ``provsql.inversion_free`` is on, the
@@ -415,8 +438,21 @@ serialise via ``toNNF`` / report compiler stats and require a compiler-style
 d-DNNF in negation normal form, which ``interpret-as-dd``'s internal NOTs
 violate, so they keep the external-compilation default.
 
-Approximation-guarantee NOTICE
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Per-gate d-DNNF certificates and the island discipline
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A ``gate_plus`` / ``gate_times`` gate whose ``info1`` carries the
+persisted certificate bits is deterministic / decomposable **by
+construction** -- stamped by the reachability and joint-width
+compilers and by the certified HAVING enumerations.  ``independent``
+and ``interpret-as-dd`` consume the certificates through an *island
+discipline*: inside a certified region, sharing is licensed (the gate
+is evaluated once and its probability reused), while an input shared
+across two distinct islands -- cross-island entanglement the
+certificates cannot vouch for -- throws, falling back to the general
+methods.  The island walk is iterative (path-like certified circuits
+are as deep as the data) and registers a BID block's key variable
+once per island, so ``repair_key`` circuits stay on the linear route.
 
 The approximate methods (``monte-carlo``, ``karp-luby``, and ``weightmc`` /
 ``wmc`` with an approximate counter) return an estimate that carries an
@@ -1245,40 +1281,31 @@ method string -- it is the value the user passes to
         // Return the probability.
       }
 
-3. **Add a dispatch branch** in :cfunc:`probability_evaluate_internal`
-   in :cfile:`probability_evaluate.cpp`.  The exact location depends
-   on the method's characteristics:
+3. **Register the method in the catalog**: subclass
+   :cfunc:`ProbabilityMethod` (interface in
+   :cfile:`ProbabilityMethod.h`) in
+   :cfile:`probability_evaluate.cpp` next to ``MonteCarloMethod`` and
+   friends, overriding ``name()``, ``evaluate()``,
+   ``guaranteeKind()`` and the cost model, and add a
+   ``registerMethod(std::make_unique<MyMethod>())`` line to the
+   one-time registration block.  Three optional overrides matter:
 
-   - If the algorithm requires a *Boolean* circuit (no multivalued
-     inputs -- see :ref:`bids-and-multivalued-inputs`), add the
-     branch **after** the call to
-     :cfunc:`BooleanCircuit::rewriteMultivaluedGates`.  That is the
-     case for most approximate methods.
-   - If the algorithm operates directly on the raw circuit (like
-     ``independent``), add it **before**
-     :cfunc:`BooleanCircuit::rewriteMultivaluedGates`.
-   - If the algorithm produces a d-DNNF and you want it to benefit
-     from the linear-time d-DNNF evaluator, add it to
-     :cfunc:`BooleanCircuit::makeDD` instead and route your dispatch
-     branch through :cfunc:`BooleanCircuit::makeDD`.
+   - ``handlesMultivalued()``: return ``true`` only if the algorithm
+     reads ``gate_mulinput`` blocks natively (like ``independent``);
+     otherwise the dispatcher rewrites multivalued gates to Boolean
+     before calling you (see :ref:`bids-and-multivalued-inputs`).
+   - ``applicable()``: structural preconditions (e.g. ``mobius``
+     requires a ``gate_mobius`` root); keeps the method out of the
+     chooser where it cannot run.
+   - ``producesDD()`` / ``buildDD()``: implement these if the method
+     constructs a d-DNNF, so the makeDD ``auto`` route (Shapley /
+     Banzhaf) can select it too.
 
-   Example for an approximate method that takes a numeric argument:
-
-   .. code-block:: cpp
-
-      } else if(method == "mymethod") {
-        int param;
-        try { param = std::stoi(args); }
-        catch(const std::invalid_argument &) {
-          provsql_error("mymethod requires a numeric argument");
-        }
-        result = c.myMethod(gate, param);
-      }
-
-4. **(Optional) Extend the default fallback chain.**  If the method
-   is a good universal choice, update :cfunc:`BooleanCircuit::makeDD`
-   and/or the default branch in :cfunc:`probability_evaluate_internal`
-   to try it before falling back to ``compilation`` with ``d4``.
+4. **(Optional) Join the default chain** by overriding
+   ``inDefaultChain()`` and ``estimatedCost()``: the chooser is a
+   uniform-cost search over the registered methods' estimates, so a
+   well-calibrated cost model is what ranks the method -- there is no
+   hand-kept fallback order to edit.
 
 5. **Add a regression test** under ``test/sql/`` and register it in
    ``test/schedule.common``.  Follow the skip-if-missing pattern

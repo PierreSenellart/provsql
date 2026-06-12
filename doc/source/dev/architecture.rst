@@ -17,7 +17,8 @@ on demand.
 
 When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
 
-1. Registers six GUC (Grand Unified Configuration) variables:
+1. Registers the GUC (Grand Unified Configuration) variables; the
+   most central are:
 
    - ``provsql.active`` -- enable/disable provenance tracking (default: on).
    - ``provsql.provenance`` -- the provenance class: 'where' / 'semiring' (default) / 'absorptive' / 'boolean'.
@@ -31,6 +32,12 @@ When PostgreSQL starts, it calls :cfunc:`_PG_init`, which:
    - ``provsql.tool_search_path`` -- colon-separated directories prepended
      to ``PATH`` when invoking external tools (d4, c2d, minic2d, dsharp,
      weightmc, graph-easy); see :cfile:`external_tool.cpp`.
+
+   Further GUCs gate individual routes and optimizations
+   (``provsql.joint_width``, ``provsql.mobius``,
+   ``provsql.simplify_on_load``, ...); grep :cfile:`provsql.c` for
+   ``DefineCustom`` for the full list, and see :doc:`/user/configuration`
+   for the user-facing reference.
 
 2. Installs the **planner hook** (:cfunc:`provsql_planner`) by saving
    the previous hook in ``prev_planner`` and replacing ``planner_hook``.
@@ -84,6 +91,13 @@ and algorithms are in |cpp|.
 - :cfile:`classify_query.c` / :cfile:`classify_query.h` --
   query-time TID / BID / OPAQUE classifier exposed through the
   ``provsql.classify_top_level`` GUC.
+- :cfile:`qual_classify.c` / :cfile:`qual_classify.h` -- shared
+  predicate-tree helpers (AND flattening, equijoin / constant-selection
+  recognition, per-relation qual splitting) consumed by both the
+  safe-query rewriter and the joint-width recogniser.
+- :cfile:`joint_width_query.c` -- planner-time recogniser for the
+  joint-width and Möbius UCQ routes (descriptor extraction, transparent
+  ``ucq_joint_provenance`` / ``ucq_mobius_provenance`` substitution).
 
 *Utilities and shared state*
 
@@ -166,6 +180,22 @@ and algorithms are in |cpp|.
 - :cfile:`Aggregation.h` / :cfile:`Aggregation.cpp` -- aggregate
   operator enum, accumulator interface, and built-in accumulators
   (see :doc:`aggregation`).
+
+*Data-decomposition compilers (reachability, joint-width, Möbius)*
+
+- :cfile:`ReachabilityCompiler.cpp` / :cfile:`reachability_evaluate.cpp`
+  -- bounded-treewidth reachability compiler (single-target,
+  all-targets, bounded-hop, any-reach, k-terminal DPs) and its
+  columnar SQL entry points.
+- :cfile:`UCQJointCompiler.cpp` / :cfile:`JointEncoding.cpp` /
+  :cfile:`ucq_joint_evaluate.cpp` -- joint-width UCQ compiler
+  (encoding, merged data+circuit DP, per-answer single sweep) and its
+  materialisation entry points.
+- :cfile:`mobius_evaluate.cpp` -- Möbius-inversion compiler for safe
+  UCQs (CNF lattice, lifted-inference recursion, ``gate_mobius``
+  construction).
+- :cfile:`CertifiedDDMaterialize.cpp` -- shared content-addressed
+  materialisation of certified d-D circuits into the mmap store.
 
 *Probability, Shapley, knowledge compilation*
 
@@ -352,11 +382,13 @@ defined in :cfile:`provsql_utils.h`:
        a Bernoulli weight. The wire vector is ``[p, x, y]`` for a
        Bernoulli mixture or ``[key, mul_1, …, mul_n]`` for a
        categorical block.
-   * - ``gate_assumed_boolean``
-     - Transparent single-child marker wrapping a per-row root, added by
-       the safe-query rewriter to record that the rewrite assumed a
-       Boolean semiring. Inert (identity) for every evaluator; see
-       :doc:`semiring-evaluation`.
+   * - ``gate_assumed``
+     - Single-child marker wrapping a per-row root computed under a
+       provenance-class assumption; the assumption kind is a label in
+       ``extra`` (``'boolean'`` from the safe-query rewriter,
+       ``'absorptive'`` from cyclic-recursion truncation and the
+       reachability route). Identity for compatible evaluators, fatal
+       error for the rest; see :doc:`semiring-evaluation`.
    * - ``gate_annotation``
      - Transparent single-child marker carrying an ``extra`` payload
        (the inversion-free certificate on a per-row root, or a per-input
@@ -364,13 +396,33 @@ defined in :cfile:`provsql_utils.h`:
        ``extra`` (so two annotations over the same child with different
        ``extra`` are distinct gates); inert (identity) for every
        evaluator. See :ref:`inversion-free-path`.
+   * - ``gate_conditioned``
+     - Conditioning marker with children ``[target, evidence]``:
+       measure-only, ``probability_evaluate`` returns
+       P(target ∧ evidence) / P(evidence) and the RV / ``agg_token``
+       evaluators the restricted distribution; terminal for the uuid
+       carrier and refused by every general ``sr_*`` semiring
+       (normalisation is not a semiring operation).
+   * - ``gate_mobius``
+     - Signed Möbius combination: measure-only, one integer coefficient
+       per child stored in ``extra`` (the ``gate_arith`` precedent);
+       ``probability_evaluate`` returns Σᵢ coeffᵢ · P(childᵢ). The
+       query's literal lineage is a designated transparent child
+       (marked ``L:<uuid>`` in ``extra``), so semiring evaluation,
+       Shapley and named probability methods pass through to it.
 
 The three random-variable gate types (``gate_rv``, ``gate_arith``,
-``gate_mixture``) and the two transparent marker gates
-(``gate_assumed_boolean``, ``gate_annotation``) are appended to the enum
+``gate_mixture``), the marker gates (``gate_assumed``,
+``gate_annotation``) and the measure-only gates (``gate_conditioned``,
+``gate_mobius``) are appended to the enum
 before ``gate_invalid``, with no renumbering of older values. See
 :doc:`continuous-distributions` for the full architecture of the
-continuous-distribution surface.
+continuous-distribution surface.  ``gate_plus`` / ``gate_times`` gates
+may additionally carry a persisted d-DNNF certificate in ``info1``
+(deterministic / decomposable by construction), stamped by the
+reachability and joint-width compilers and the certified HAVING
+enumerations, and consumed by the ``independent`` and
+``interpret-as-dd`` evaluators (see :doc:`probability-evaluation`).
 
 Edges (wires) connect parent gates to their children, forming the
 provenance formula for each query result tuple.

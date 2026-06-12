@@ -100,13 +100,36 @@ left at the wrong context, shell operators left unfilled by
 COMMUTATOR / NEGATOR forward references, and functions created in the
 wrong schema by a script lacking ``SET search_path``.
 
+Coverage
+--------
+
+.. code-block:: bash
+
+   make coverage
+   make coverage PROVSQL_COVERAGE_PORT=55000 GCOVR=~/.local/bin/gcovr
+
+``make coverage`` rebuilds the C/|cpp| extension instrumented with
+gcov, runs the full suite against a throwaway PostgreSQL cluster
+owned by the invoking user (nothing is installed into the system
+PostgreSQL, no sudo; requires PostgreSQL >= 18 and ``gcovr``), and
+produces a line+branch report under ``coverage/`` plus
+``coverage/zero_call.txt``, the list of provsql functions the suite
+never calls -- filtered to genuine gaps (catalog-detected I/O / cast
+/ aggregate support functions and planner-substituted placeholders
+are excluded).  See ``test/coverage/README.md``.  Afterwards the
+working tree holds instrumented objects: run ``make clean && make``
+before a normal ``make install``, or the relink fails at server
+start with an undefined ``__gcov`` symbol.
+
 
 Writing a New Test
 ------------------
 
 1. **Create the SQL file** ``test/sql/<name>.sql``.  Write the SQL
-   statements that exercise the feature you are testing.  Include
-   ``SET`` commands if needed (e.g., ``SET search_path TO public, provsql;``).
+   statements that exercise the feature you are testing.  The
+   ``search_path`` is set once at the database level by
+   ``setup.sql`` (``ALTER DATABASE ... SET search_path``); do not
+   ``SET`` it per test unless you need a non-standard path.
 
 2. **Generate expected output**.  Run the test once and capture the
    output:
@@ -198,3 +221,23 @@ Common causes of failure:
   ``test/sql/distinct.sql`` for examples.
 - **Floating-point precision**: probability results may differ slightly
   across platforms.  Use ``ROUND()`` in tests.
+- **Platform-dependent error CONTEXT**: an error raised inside a
+  plpgsql wrapper carries a ``CONTEXT`` block whose text can vary
+  across platforms (e.g. whitespace from a blanked ``INTO``).  Set
+  ``\set VERBOSITY terse`` around the statement so only the stable
+  message line is compared (see ``test/sql/ucq_joint.sql``).
+
+Asserting that a planner route fired
+------------------------------------
+
+Value-equality assertions cannot tell a specialized route from its
+fallback when both produce the same number (which is the point of a
+transparent route).  The robust idiom is a plan-based check: a small
+plpgsql helper runs ``EXPLAIN (VERBOSE, COSTS OFF)`` on the query and
+asserts that the plan text contains the substituted function name
+(e.g. ``ucq_joint_provenance_answer``).  See ``jw_fires()`` in
+``test/sql/ucq_joint_answers.sql``; token *inequality* against the
+standard provenance is a weaker alternative (it fails to detect a
+silent fallback whose value happens to agree, which is how a
+joint-width recogniser bug stayed hidden until the firing check was
+added).

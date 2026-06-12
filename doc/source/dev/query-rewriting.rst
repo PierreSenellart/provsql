@@ -179,7 +179,20 @@ Non-recursive common table expressions (``WITH`` clauses) are
 inlined as subqueries in the range table via :cfunc:`inline_ctes`.
 This converts ``RTE_CTE`` entries to ``RTE_SUBQUERY`` so that the
 subsequent recursive processing can track provenance through them.
-Recursive CTEs are not supported and raise an error.
+Recursive CTEs are handled by ``lower_recursive_cte`` (inside
+:cfunc:`inline_ctes`): under the ``'boolean'`` or ``'absorptive'``
+provenance class, recognised reachability shapes are driven through
+the bounded-treewidth compiler and other recursive queries through
+the generic fixpoint ``eval_recursive`` (see
+:ref:`recursive-lowering` below); outside those classes a recursive
+CTE raises an error.
+
+Before any of this, :cfunc:`normalize_distinct_into_group_by` turns a
+guarded ``SELECT DISTINCT`` into its provenance-identical
+``GROUP BY`` form -- it must run **before** :cfunc:`inline_ctes`
+because the reachability-aggregation detectors inside it key on
+``groupClause`` (a historical late call site still catches
+``DISTINCT`` introduced by intervening rewrites).
 
 Inlining happens before set-operation handling because ``UNION`` /
 ``EXCEPT`` branches may reference CTEs.
@@ -298,6 +311,17 @@ After aggregation rewriting:
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.
 
+- A bare boolean aggregate in ``HAVING`` (``bool_or(x)``,
+  ``NOT (every(x))``) is first normalised to the ``agg = true``
+  comparison form by :cfunc:`normalize_bool_agg_having`, so the
+  m-semiring routing sees a uniform aggregate-vs-constant shape.
+
+- An ordered aggregate's ``ORDER BY`` (``aggorder``) is carried onto
+  the internal token-collecting ``array_agg`` built by
+  :cfunc:`make_aggregation_expression`, so order-sensitive HAVING
+  comparisons (``array_agg(x ORDER BY k) = ARRAY[...]``) see the
+  user's order regardless of plan shape and PostgreSQL version.
+
 See :doc:`aggregation` for the semantics of the ``agg`` /
 ``semimod`` / ``value`` gates produced here, and for the exact
 shape of the :sqlfunc:`provenance_aggregate` call that replaces each
@@ -373,6 +397,16 @@ list looking for calls to the :sqlfunc:`provenance` SQL function.  Each
 occurrence is replaced with the computed provenance expression, so
 that ``SELECT provenance() FROM ...`` returns the actual provenance
 token.
+
+A :sqlfunc:`provenance` call inside a simple scalar SubLink is an
+**inert** scope-local fetch: it resolves to the inner query's token
+without coupling the outer query to it.  The conditioning surface
+(the binary ``|`` operator / :sqlfunc:`cond`, the prefix
+:sqlfunc:`given` whole-tuple rewriter, the prefix ``!`` /
+:sqlfunc:`provenance_not`, and the natural ``X | (predicate)`` form
+for the uuid, ``random_variable`` and ``agg_token`` carriers) is
+rewritten here too, building terminal ``gate_conditioned`` gates; see
+:doc:`/user/conditioning` for the semantics.
 
 
 Rewriting Rules and Formal Semantics
@@ -535,11 +569,14 @@ malformed circuit:
    * - ``QUAL_DETERMINISTIC``
      - Ordinary SQL, left untouched.
    * - Mixed-error classes
-     - Quals that conjoin a probabilistic comparator with another
-       in the same node, or that compare an RV against an
-       agg_token, raise a structured error so users see the
-       offending shape rather than a downstream evaluation
-       failure.
+     - Quals that compare an RV against an agg_token raise a
+       structured error so users see the offending shape rather
+       than a downstream evaluation failure.  A *regular*
+       (deterministic) comparison conjoined with a probabilistic one
+       in the same predicate is accepted: the Boolean analysis keeps
+       the deterministic leaf as an ordinary-comparison node and
+       routes only the probabilistic part into the circuit (needed
+       by the conditioning surface's mixed predicates).
 
 For ``QUAL_PURE_RV``, the planner-hook path also covers the
 corner case of ``WHERE rv > 2`` on a FROM-less ``SELECT``: there
@@ -681,9 +718,17 @@ pattern as ``rewrite_agg_distinct``).  When it rejects, it returns
 unchanged.
 
 The root gate of every rewritten circuit is wrapped in a
-``gate_assumed_boolean`` marker (see :doc:`semiring-evaluation`)
-so that semirings whose algebra is not Boolean-faithful refuse to
-evaluate it at runtime.
+``gate_assumed`` marker labelled ``'boolean'`` (see
+:doc:`semiring-evaluation`) so that semirings whose algebra is not
+Boolean-faithful refuse to evaluate it at runtime.
+
+The predicate-tree analyses the detector relies on -- AND flattening,
+``Var = Var`` equijoin and ``Var = Const`` selection recognition,
+splitting a conjunction into per-relation selections and the
+cross-relation residual -- live in the shared
+:cfile:`qual_classify.c` module (``qc_flatten_and``, ``qc_is_var_eq``,
+``qc_is_var_const_eq``, ``qc_split_quals``), which the joint-width
+recogniser below consumes as well.
 
 FD-Aware Extensions
 ^^^^^^^^^^^^^^^^^^^
@@ -834,6 +879,59 @@ regression tests live in ``test/sql/safe_query_const_sel.sql``,
 ``safe_query_inner_join.sql`` (JoinExpr flattening), and
 ``safe_query_ancestry_disjoint.sql`` (ancestry-based disjointness
 gate).
+
+.. _recursive-lowering:
+
+Recursive-Reachability Lowering
+-------------------------------
+
+Under the ``'boolean'`` or ``'absorptive'`` provenance class,
+``lower_recursive_cte`` pattern-matches a recursive CTE against
+the reachability shapes (a constant or ``SELECT v FROM sources`` base
+arm; a recursive arm joining a tracked edge relation on a
+mergejoinable equality, including the undirected ``CASE`` /
+``IN (src, dst)`` spelling, deterministic edge filters, derived edge
+subqueries, and the hop-counting bounded variant) and, on a match,
+drives ``provsql.eval_reachability``: gather the edges (consulting the
+table-characterisation registry for TID / BID fast paths), compile all
+reachable vertices along a tree decomposition of the data graph
+(:cfile:`ReachabilityCompiler.cpp`), materialise the certified
+circuits, and fill the working table.  Any failure (treewidth cap,
+non-input tokens, unrecognised shape) falls back to the generic
+fixpoint ``eval_recursive`` with a verbosity-gated notice.
+
+Above the CTE, ``detect_reach_aggregations`` recognises
+``GROUP BY`` / ``DISTINCT`` aggregations over ``reach JOIN members``
+(planting per-group any-member circuits at plus-canonical addresses,
+with deterministic member-local filters pushed into the gathering)
+and reachability self-join conjunctions (k-terminal coverage, planted
+at times-canonical addresses); see :doc:`/user/probabilities` for the
+user-level semantics.
+
+Joint-Width and Möbius Substitution
+-----------------------------------
+
+Still under the ``'boolean'`` class, :cfile:`joint_width_query.c`
+recognises UCQ-existence and per-answer shapes over tracked relations
+-- comma lists, ``JOIN ... ON``, subquery pull-up, ``UNION`` as a
+multi-disjunct UCQ, ``GROUP BY`` heads of any type, single-relation
+prefilters split off via ``qc_split_quals`` -- and substitutes a
+transparent provenance expression: :sqlfunc:`ucq_mobius_provenance`
+(``_answer``) when the Möbius recogniser accepts (safe UCQs needing
+Möbius inversion; declines unless every fact token is a bare
+``gate_input``), else :sqlfunc:`ucq_joint_provenance` (``_answer``)
+for the joint-width compiler.  Both materialise certified circuits
+under a subtransaction and fall back to the standard token on any
+failure, so a recognised query never errors.
+
+Route precedence is enforced by an ``in_boolean_rewrite`` flag
+threaded through :cfunc:`process_query` /
+:cfunc:`get_provenance_attributes` into subqueries: when the
+safe-query rewriter or the inversion-free certifier has committed to
+a subtree, the joint-width / Möbius recognisers decline throughout
+it.  The overall order is therefore safe-query and inversion-free
+first (linear), then Möbius (guaranteed PTIME where it fires), then
+joint width.
 
 .. _tid-bid-propagation:
 
