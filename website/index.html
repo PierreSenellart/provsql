@@ -68,8 +68,9 @@ feature_row:
       meets it: independent evaluation, tree decomposition, d-DNNF
       knowledge compilation, certified-bounds d-trees, sieve, Monte Carlo,
       Karp-Luby, or weighted model counting. Tractable classes
-      (hierarchical, FD-aware, inversion-free queries) are recognised at
-      the planner and evaluated in linear time.
+      (hierarchical, FD-aware, inversion-free, and Möbius-invertible
+      safe queries) are recognised at the planner and evaluated in
+      polynomial time.
     url: "/docs/user/probabilities.html"
     btn_label: "Probability docs"
     btn_class: "btn--primary"
@@ -124,12 +125,14 @@ feature_row:
     btn_label: "Conditioning docs"
     btn_class: "btn--primary"
   - title: "Shapley &amp; Banzhaf Values"
-    image_path: /assets/images/shapley.png
-    alt: "Image-retrieval demo screenshot: per-object table showing the probability and Shapley value of each predicted object contributing to a probabilistic count query, with the highest-contribution row highlighted."
+    image_path: /assets/images/studio/contributions-mode.png
+    alt: "ProvSQL Studio Contributions mode: a replication-study query result is pinned and the three contributing studies are ranked by their signed Shapley contribution bars."
     excerpt: >
       Quantify each input tuple's contribution to a query answer
       through Shapley and Banzhaf values, computed in a single
-      circuit traversal.
+      circuit traversal – and explore them visually in Studio's
+      *Contributions* mode: pin a result tuple, get a ranked
+      per-input bar chart.
     url: "/docs/user/shapley.html"
     btn_label: "Shapley docs"
     btn_class: "btn--primary"

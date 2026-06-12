@@ -1272,6 +1272,15 @@ extension version.
        example notebooks re-run cleanly) and the ``agg_token``
        arithmetic operator surface whose ``gate_arith`` tokens record
        their computed value.
+   * - ``1.6.x``
+     - ``≥ 1.10.0``
+     - Adds :ref:`Contributions mode <studio-contributions-mode>`
+       (per-input Shapley / Banzhaf bars, over
+       :sqlfunc:`shapley_all_vars` and the 1.10.0 cost-selected
+       d-DNNF construction) and renders 1.10.0's new constructs:
+       the four-way provenance-scheme selector with the :sc:`A`
+       badge, the :sc:`D` certificate badge, conditioned gates, and
+       Möbius (μ) nodes.  Notebook Markdown cells render math.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to
