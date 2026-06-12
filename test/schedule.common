@@ -70,6 +70,7 @@ test: sr_boolexpr probability_having probability_having_avg_min_max having_boole
 test: having_bool_agg
 test: having_array_agg
 test: having_choose
+test: having_correlated
 test: having_count_distinct
 test: scalar_empty_having
 test: having_sum_zero
