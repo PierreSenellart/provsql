@@ -1,0 +1,44 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+or=true|A|0.5000
+or=true|B|0.5000
+or=true|C|0.7500
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+or=false|A|0.2500
+or=false|B|0.0000
+or=false|C|0.1250
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+and=true|A|0.2500
+and=true|B|0.5000
+and=true|C|0.3750
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+every=true|A|0.2500
+every=true|B|0.5000
+every=true|C|0.3750
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+and=false|A|0.5000
+and=false|B|0.0000
+and=false|C|0.5000
+(3 rows)

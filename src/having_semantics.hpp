@@ -39,6 +39,7 @@ bool semimod_extract_M_and_K(GenericCircuit &c, gate_t semimod_gate, int &m_out,
 bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::string &m_out, gate_t &k_gate_out);
 bool aggtype_is_text(unsigned oid);
 bool aggtype_is_integer(unsigned oid);
+bool aggtype_is_boolean(unsigned oid);
 bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale);
 bool rescale_to(long mantissa, int scale, int target_scale, long &out);
 ComparisonOperator map_cmp_op(GenericCircuit &c, gate_t cmp_gate, bool &ok);
@@ -201,6 +202,130 @@ void provsql_having(
                          prefix, absent});
         }
         pw_out = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
+        return true;
+      }
+
+      // ---- Boolean comparison domain: bool_or / bool_and (and the every
+      //      alias for bool_and) compared with a boolean constant.  A boolean
+      //      aggregate has only two possible values, so the worlds yielding the
+      //      wanted value are characterised directly in the m-semiring rather
+      //      than by a 2^n enumeration.  The rows partition by their value into
+      //      a class that must have at least one present member ("someE") and a
+      //      class that must be wholly absent ("noneF"):
+      //        bool_or  = true  : someE = true-rows                (false free)
+      //        bool_or  = false : someE = false-rows, noneF = true-rows
+      //        bool_and = true  : someE = true-rows,  noneF = false-rows
+      //        bool_and = false : someE = false-rows               (true free)
+      //      "at least one of someE present" telescopes by the first present
+      //      index (the choose pattern); "none of noneF present" is a product
+      //      of complements.  Non-empty groups are enforced by someE being
+      //      non-empty. ----
+      if (aggtype_is_boolean(aggtype)) {
+        if (agg_kind != AggregationOperator::OR &&
+            agg_kind != AggregationOperator::AND)
+          return false;
+        if (effective_op != ComparisonOperator::EQ &&
+            effective_op != ComparisonOperator::NE)
+          throw std::runtime_error(
+            "only = and <> are supported when comparing a boolean aggregate "
+            "(bool_or / bool_and / every) with a constant in HAVING");
+
+        auto parse_bool = [](const std::string &s, bool &ok) -> bool {
+          ok = true;
+          if (s == "t" || s == "true"  || s == "1") return true;
+          if (s == "f" || s == "false" || s == "0") return false;
+          ok = false; return false;
+        };
+
+        std::string C_str;
+        if (!extract_constant_string(c, const_side, C_str)) return false;
+        bool okc = false;
+        const bool C = parse_bool(C_str, okc);
+        if (!okc) return false;
+        // The aggregate value the satisfying worlds must produce.
+        const bool target = (effective_op == ComparisonOperator::EQ) ? C : !C;
+
+        std::vector<bool> vals;
+        std::vector<typename SemiringT::value_type> kvals;
+        vals.reserve(children.size());
+        kvals.reserve(children.size());
+        for (gate_t ch : children) {
+          if (c.getGateType(ch) != gate_semimod) return false;
+          std::string m_str;
+          gate_t k_gate{};
+          if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
+          bool okv = false;
+          const bool b = parse_bool(m_str, okv);
+          if (!okv) return false;
+          vals.push_back(b);
+          kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
+        }
+
+        const bool want_or = (agg_kind == AggregationOperator::OR);
+        std::vector<size_t> someE;   // at least one of these must be present
+        std::vector<size_t> noneF;   // all of these must be absent
+        if (want_or == target) {
+          // bool_or=true / bool_and=false: one trigger row suffices, the other
+          // class is free.
+          for (size_t i = 0; i < vals.size(); ++i)
+            if (vals[i] == want_or) someE.push_back(i);
+        } else {
+          // bool_or=false / bool_and=true: the trigger class must be wholly
+          // absent and the opposite class must have at least one present row.
+          for (size_t i = 0; i < vals.size(); ++i)
+            (vals[i] == want_or ? noneF : someE).push_back(i);
+        }
+
+        if (someE.empty()) { pw_out = S.zero(); return true; }
+
+        if (certifiable_contributors(kvals)) {
+          std::vector<typename SemiringT::value_type> disjuncts;
+          std::vector<typename SemiringT::value_type> before; // someE rows before i
+          for (size_t e : someE) {
+            std::vector<typename SemiringT::value_type> missing = before;
+            for (size_t f : noneF) missing.push_back(kvals[f]);
+            disjuncts.push_back(S.certified_world_term(
+              std::vector<typename SemiringT::value_type>{kvals[e]}, missing));
+            before.push_back(kvals[e]);
+          }
+          pw_out = S.certified_exclusive_plus(disjuncts);
+          return true;
+        }
+
+        const auto one = S.one();
+        // "none of noneF present": product of complements.
+        auto none_factor = one;
+        for (size_t f : noneF) {
+          auto absent = S.monus(one, kvals[f]);
+          none_factor = (none_factor == one)
+            ? absent
+            : S.times(std::vector<typename SemiringT::value_type>{none_factor,
+                                                                  absent});
+        }
+        // "at least one of someE present": telescope by first present index.
+        std::vector<typename SemiringT::value_type> disjuncts;
+        auto prefix = one;
+        for (size_t i : someE) {
+          if (prefix == one)
+            disjuncts.push_back(kvals[i]);
+          else if (kvals[i] == one)
+            disjuncts.push_back(prefix);
+          else
+            disjuncts.push_back(S.times(
+              std::vector<typename SemiringT::value_type>{kvals[i], prefix}));
+          auto absent = S.monus(one, kvals[i]);
+          prefix = (prefix == one)
+            ? absent
+            : S.times(std::vector<typename SemiringT::value_type>{prefix, absent});
+        }
+        auto some_value = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
+        if (none_factor == one)
+          pw_out = some_value;
+        else if (some_value == one)
+          pw_out = none_factor;
+        else
+          pw_out = S.times(
+            std::vector<typename SemiringT::value_type>{none_factor, some_value});
         return true;
       }
 

@@ -45,6 +45,10 @@ bool aggtype_is_integer(unsigned oid) {
   }
 }
 
+bool aggtype_is_boolean(unsigned oid) {
+  return oid == BOOLOID;
+}
+
 // Parse a plain decimal literal ("-12.340", "6", "6.5") into a scaled
 // integer: the value is @c mantissa * 10^(-scale).  Returns false on
 // exponential notation, inf / nan, or anything that is not a plain
