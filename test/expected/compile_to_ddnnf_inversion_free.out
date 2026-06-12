@@ -1,0 +1,22 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+nnf_header
+nnf 5 4 4
+(1 row)
+dot_prefix
+digraph
+(1 row)
+stats
+{"or": 0, "and": 1, "not": 0, "depth": 1, "edges": 4, "nodes": 5, "inputs": 4, "smooth": true, "compiler": "inversion-free", "treewidth": 1}
+(1 row)

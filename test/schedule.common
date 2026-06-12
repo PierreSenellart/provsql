@@ -109,7 +109,7 @@ test: large_circuit
 test: btw_reachability
 
 # Knowledge-compilation demo helpers (DOT/CNF surfaces)
-test: tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 compile_to_ddnnf_nnf ddnnf_stats tool_available circuit_subgraph_depth fallback_compiler_guc
+test: tseytin_cnf tseytin_cnf_mapping tree_decomposition_dot compile_to_ddnnf_dot compile_to_ddnnf_dot_d4v2 compile_to_ddnnf_nnf compile_to_ddnnf_inversion_free ddnnf_stats tool_available circuit_subgraph_depth fallback_compiler_guc
 
 # Expected Shapley and Banzhaf value computation
 test: shapley
