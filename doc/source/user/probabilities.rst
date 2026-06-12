@@ -317,7 +317,7 @@ Network reliability on bounded-treewidth graphs
 The first is *two-terminal network reliability*: the probability that a
 vertex is reachable from a source in a probabilistic graph, following the
 provenance refinement of Courcelle's theorem
-:cite:`DBLP:conf/icalp/AmarilliBS15`.  This problem is #P-hard in general,
+:cite:`DBLP:conf/icalp/AmarilliBS15`.  This problem is :math:`\#P`-hard in general,
 but becomes solvable in time *linear in the number of edges* when the
 graph has bounded treewidth – a property of many real networks
 (series-parallel and outerplanar networks, transit and utility networks,
@@ -555,7 +555,7 @@ Bounded joint width: hard UCQs over correlated data
 The query-side dichotomies – safe-query rewriting and the
 ``inversion-free`` class – make a *self-join-free hierarchical* or
 *inversion-free* query tractable, but only over **tuple-independent**
-inputs, and they give up on the genuinely #P-hard queries: the
+inputs, and they give up on the genuinely :math:`\#P`-hard queries: the
 textbook one is :math:`H_0 = R(x), S(x, y), T(y)`, and behind it the
 whole hard family :math:`H_k`.  ProvSQL evaluates these **exactly**
 when a different parameter is small – the **joint width**: the
@@ -565,7 +565,7 @@ instances whose data graph and whose lineage circuit are *both* of
 small treewidth yet whose joint width – and hardness – is large, so
 the bound has to be taken on the joint object (thesis Prop. 4.2.11);
 when it *is* bounded, the probability is linear in the data, even
-though the query is #P-hard and the inputs are arbitrarily correlated.
+though the query is :math:`\#P`-hard and the inputs are arbitrarily correlated.
 
 Like the reachability route above, the compilation is **data-side**: it
 runs along a tree decomposition of the data – for correlated inputs, of
@@ -576,7 +576,7 @@ external compiler and no knowledge-compilation step.
 The route is part of the Boolean machinery, so it takes the same opt-in
 as :ref:`safe-query rewriting <safe-query-rewriting>`: the ``'boolean'``
 provenance class, off by default.  Within that class it fires **automatically** – when a
-conjunctive query the safe-query rewriter declined (an unsafe / #P-hard
+conjunctive query the safe-query rewriter declined (an unsafe / :math:`\#P`-hard
 UCQ) has its *existence* formed (a ``SELECT DISTINCT`` or a
 ``GROUP BY``), the planner recognises the shape and replaces its
 provenance with the joint-width compiler's certified d-D, so

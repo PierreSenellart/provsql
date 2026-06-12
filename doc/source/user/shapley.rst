@@ -61,7 +61,7 @@ conventions as their Shapley counterparts:
 Computation Notes
 ------------------
 
-Shapley-value computation is generally #P-hard. ProvSQL compiles the
+Shapley-value computation is generally :math:`\#P`-hard. ProvSQL compiles the
 provenance circuit to a d-DNNF and evaluates it efficiently. The optional
 third argument selects the compilation method (``'tree-decomposition'``,
 ``'d4'``, ``'c2d'``, etc.), with the same semantics as for

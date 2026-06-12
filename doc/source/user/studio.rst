@@ -235,7 +235,7 @@ the underlying ``NOTICE`` carries.
 Per-query toggles
 ~~~~~~~~~~~~~~~~~
 
-A three-way :guilabel:`Provenance scheme` switch next to the
+A four-way :guilabel:`Provenance scheme` switch next to the
 query box selects which provenance behaviour the connection runs
 under for the next batch :
 
@@ -254,6 +254,12 @@ under for the next batch :
   Only Boolean-faithful semirings will evaluate the resulting
   circuit ; the eval-strip semiring picker filters incompatible
   entries out when the root carries the marker.
+* :guilabel:`Absorptive` : sets ``provsql.provenance = 'absorptive'``,
+  licensing constructions sound only for absorptive semirings --
+  chiefly stopping a cyclic recursive query at its absorptive-value
+  fixpoint (the minimal-paths semantics; see :ref:`network-reliability-btw`)
+  and the absorptive circuit simplifications.  Only absorptive (and
+  Boolean-rewrite-compatible) semirings then evaluate the circuit.
 
 The selected scheme is session-sticky : it persists across
 batches so two queries run with the same scheme without
