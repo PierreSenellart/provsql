@@ -930,15 +930,6 @@ double compute_expectation(const GenericCircuit &gc, gate_t root,
   return rec_expectation(gc, root, fp);
 }
 
-double compute_variance(const GenericCircuit &gc, gate_t root,
-                        std::optional<gate_t> event_root)
-{
-  if (event_root.has_value())
-    return conditional_central_moment(gc, root, 2, *event_root);
-  FootprintCache fp(gc);
-  return rec_variance(gc, root, fp);
-}
-
 double compute_raw_moment(const GenericCircuit &gc, gate_t root, unsigned k,
                           std::optional<gate_t> event_root)
 {

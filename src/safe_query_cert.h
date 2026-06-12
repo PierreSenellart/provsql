@@ -104,19 +104,6 @@ typedef struct SafeCertKey {
 } SafeCertKey;
 
 /**
- * @brief Serialise a per-input order key to a compact @c K-prefixed string
- *        (palloc'd).  Wire form:
- *        @c "K<factor> <root_len>:<root><sec_len>:<sec>" -- the byte-length
- *        prefixes keep arbitrary value text unambiguous.  Inverse of
- *        @c safe_cert_key_parse.  (The planner builds the equivalent string per
- *        row via @c inversion_free_key; this C form is for the evaluator and
- *        tests.)
- */
-extern char *safe_cert_key_serialise(const char *root, size_t root_len,
-                                     const char *sec, size_t sec_len,
-                                     int factor);
-
-/**
  * @brief Parse a @c K-prefixed order-key string into @p out.  On success
  *        @c out->root / @c out->sec point into @p str (valid for its lifetime).
  *        Returns @c false if @p str is NULL, not @c K-prefixed, or malformed

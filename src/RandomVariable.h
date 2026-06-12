@@ -63,14 +63,6 @@ struct DistributionSpec {
 std::optional<DistributionSpec> parse_distribution_spec(const std::string &s);
 
 /**
- * @brief Format a spec back into its on-disk text encoding.
- *
- * Inverse of @c parse_distribution_spec: round-trip safe up to the
- * precision of @c std::to_string for @c double.
- */
-std::string format_distribution_spec(const DistributionSpec &d);
-
-/**
  * @brief Strictly parse @p s as a @c double.
  *
  * Used by every consumer that has to interpret the @c extra byte

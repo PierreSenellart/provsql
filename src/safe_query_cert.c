@@ -15,7 +15,7 @@
  *
  * A per-input order key uses the sibling @c SAFE_CERT_EXTRA_PREFIX_KEY ('K')
  * form @c "K<factor> <root_len>:<root><sec_len>:<sec>", length-prefixed so the
- * class values may be arbitrary text (see @c safe_cert_key_serialise).
+ * class values may be arbitrary text (parsed by @c safe_cert_key_parse).
  *
  * All functions are pure (no SPI / no catalog access) so the parsers are safe
  * to call from the C++ evaluation side.
@@ -106,19 +106,6 @@ SafeCert *safe_cert_parse(const char *str)
 #undef READ_INT
 
   return cert;
-}
-
-char *safe_cert_key_serialise(const char *root, size_t root_len,
-                              const char *sec, size_t sec_len, int factor)
-{
-  StringInfoData s;
-  initStringInfo(&s);
-  appendStringInfoChar(&s, SAFE_CERT_EXTRA_PREFIX_KEY);
-  appendStringInfo(&s, "%d %zu:", factor, root_len);
-  appendBinaryStringInfo(&s, root, (int) root_len);
-  appendStringInfo(&s, "%zu:", sec_len);
-  appendBinaryStringInfo(&s, sec, (int) sec_len);
-  return s.data;
 }
 
 bool safe_cert_key_parse(const char *str, SafeCertKey *out)

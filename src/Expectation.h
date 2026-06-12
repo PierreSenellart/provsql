@@ -58,15 +58,6 @@ double compute_expectation(const GenericCircuit &gc, gate_t root,
                            std::optional<gate_t> event_root = std::nullopt);
 
 /**
- * @brief Compute @f$\mathrm{Var}[X]@f$ (or @f$\mathrm{Var}[X \mid A]@f$
- *        if @p event_root is set) over the scalar sub-circuit rooted
- *        at @p root.  Same exception contract as
- *        @c compute_expectation.
- */
-double compute_variance(const GenericCircuit &gc, gate_t root,
-                        std::optional<gate_t> event_root = std::nullopt);
-
-/**
  * @brief Compute the raw moment @f$E[X^k]@f$ (or @f$E[X^k \mid A]@f$
  *        if @p event_root is set) for @c k >= 0.
  *
@@ -79,8 +70,8 @@ double compute_raw_moment(const GenericCircuit &gc, gate_t root, unsigned k,
  * @brief Compute the central moment @f$E[(X - E[X])^k]@f$
  *        (or @f$E[(X - E[X \mid A])^k \mid A]@f$ if @p event_root is set).
  *
- * @c k = 0 returns 1; @c k = 1 returns 0; @c k = 2 returns
- * @c compute_variance.  Higher orders are obtained by binomial
+ * @c k = 0 returns 1; @c k = 1 returns 0; @c k = 2 returns the
+ * variance.  Higher orders are obtained by binomial
  * expansion in terms of the raw moments returned by
  * @c compute_raw_moment, which inherits the analytical / MC dispatch
  * described above.

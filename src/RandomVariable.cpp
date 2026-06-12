@@ -92,24 +92,6 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
   return std::nullopt;
 }
 
-std::string format_distribution_spec(const DistributionSpec &d)
-{
-  switch (d.kind) {
-    case DistKind::Normal:
-      return "normal:" + std::to_string(d.p1) + "," + std::to_string(d.p2);
-    case DistKind::Uniform:
-      return "uniform:" + std::to_string(d.p1) + "," + std::to_string(d.p2);
-    case DistKind::Exponential:
-      return "exponential:" + std::to_string(d.p1);
-    case DistKind::Erlang:
-      /* k is integer-valued; print as integer so the textual form
-       * matches what the SQL constructor writes. */
-      return "erlang:" + std::to_string(static_cast<long long>(d.p1))
-           + "," + std::to_string(d.p2);
-  }
-  return {};
-}
-
 double analytical_mean(const DistributionSpec &d)
 {
   switch (d.kind) {
