@@ -31,6 +31,13 @@ CREATE TABLE r4 AS SELECT g, round(probability_evaluate(provenance())::numeric,4
   FROM haa GROUP BY g HAVING array_agg(nm ORDER BY nm) = ARRAY['a','b'];
 SELECT remove_provenance('r4'); SELECT 'text =[a,b]' AS q, g, p FROM r4 ORDER BY g;
 
+-- ORDER BY a different column, descending: the comparison must follow the
+-- aggregate's ORDER BY, not the plan's row order (which only coincides when
+-- PostgreSQL >= 16 pre-sorts the ordered-aggregate input).      A 0.25  B 0
+CREATE TABLE r8 AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM haa GROUP BY g HAVING array_agg(v ORDER BY nm DESC) = ARRAY[2,1];
+SELECT remove_provenance('r8'); SELECT 'int desc=[2,1]' AS q, g, p FROM r8 ORDER BY g;
+
 -- Boolean elements: PostgreSQL renders a scalar bool as 'true'/'false' but a
 -- bool array element as 't'/'f'; the array_agg comparison reconciles the two so
 -- the value-as-text match works.  hb: A = {true, false}, B = {true}, p = 0.5.
@@ -55,5 +62,5 @@ CREATE TABLE r7 AS SELECT g, round(probability_evaluate(provenance())::numeric,4
 SELECT remove_provenance('r7'); SELECT 'bool <>[t]' AS q, g, p FROM r7 ORDER BY g;
 
 DROP TABLE r1; DROP TABLE r2; DROP TABLE r3; DROP TABLE r4;
-DROP TABLE r5; DROP TABLE r6; DROP TABLE r7;
+DROP TABLE r5; DROP TABLE r6; DROP TABLE r7; DROP TABLE r8;
 DROP TABLE haa; DROP TABLE hb;

@@ -30,6 +30,13 @@ q|g|p
 text =[a,b]|A|0.2500
 text =[a,b]|B|0.0000
 (2 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+int desc=[2,1]|A|0.2500
+int desc=[2,1]|B|0.0000
+(2 rows)
 add_provenance
 
 (1 row)

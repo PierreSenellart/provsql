@@ -2705,6 +2705,30 @@ static Expr *make_aggregation_expression(const constants_t *constants,
 
     agg->aggargtypes = list_make1_oid(constants->OID_TYPE_UUID);
 
+    /* An ordered aggregate (e.g. array_agg(x ORDER BY k)) is order-sensitive:
+     * the HAVING array_agg evaluator matches the per-row values against the
+     * constant array in children order, which is the order this token
+     * aggregate collects rows.  Carry the original ORDER BY over (sort keys
+     * re-attached as junk arguments) so that order is the user's on every
+     * PostgreSQL version; otherwise it is plan order, which only coincides
+     * when PG >= 16 pre-sorts the ordered-aggregate input
+     * (enable_presorted_aggregate). */
+    if (agg_ref->aggorder != NIL) {
+      AttrNumber sort_resno = 2;
+      ListCell *lc;
+      foreach (lc, agg_ref->args) {
+        TargetEntry *arg_te = (TargetEntry *)lfirst(lc);
+        TargetEntry *te_sort;
+        if (arg_te->ressortgroupref == 0)
+          continue;
+        te_sort = makeTargetEntry((Expr *)copyObject(arg_te->expr),
+                                  sort_resno++, NULL, true);
+        te_sort->ressortgroupref = arg_te->ressortgroupref;
+        agg->args = lappend(agg->args, te_sort);
+      }
+      agg->aggorder = (List *)copyObject((Node *)agg_ref->aggorder);
+    }
+
     // final aggregation function
     plus->funcid = constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
 
