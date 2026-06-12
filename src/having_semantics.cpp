@@ -49,6 +49,19 @@ bool aggtype_is_boolean(unsigned oid) {
   return oid == BOOLOID;
 }
 
+// Types handled by the numeric comparison domain (scaled to a common integer
+// grid).  choose() over these is evaluated there -- including ordering
+// comparisons; choose() over any other type falls to the value-as-text domain.
+bool aggtype_is_numeric(unsigned oid) {
+  switch (oid) {
+    case INT2OID: case INT4OID: case INT8OID:
+    case FLOAT4OID: case FLOAT8OID: case NUMERICOID:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Parse a PostgreSQL array output literal -- "{1,2}", "{a,\"b,c\"}" -- into its
 // top-level element texts (surrounding double quotes removed, backslash escapes
 // resolved).  Returns false on a malformed or nested-array literal.  Sufficient

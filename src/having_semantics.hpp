@@ -40,6 +40,7 @@ bool semimod_extract_string_and_K(GenericCircuit &c, gate_t semimod_gate, std::s
 bool aggtype_is_text(unsigned oid);
 bool aggtype_is_integer(unsigned oid);
 bool aggtype_is_boolean(unsigned oid);
+bool aggtype_is_numeric(unsigned oid);
 bool parse_array_literal(const std::string &s, std::vector<std::string> &out);
 bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale);
 bool rescale_to(long mantissa, int scale, int target_scale, long &out);
@@ -194,8 +195,14 @@ void provsql_having(
       AggregationOperator agg_kind = getAggregationOperator(c.getInfos(agg_side).first);
       const auto &children = c.getWires(agg_side);
 
-      // ---- Text comparison domain: choose() over a text constant. ----
-      if (aggtype_is_text(aggtype)) {
+      // ---- Value-as-text domain: choose() over a non-numeric scalar constant.
+      //      Covers text and any other type whose values round-trip through
+      //      their text representation (bool, date, uuid, enum, ...); numeric
+      //      choose() goes to the numeric domain below (which also supports the
+      //      ordering comparisons).  Only = / <> are exposed here. ----
+      if (aggtype_is_text(aggtype) ||
+          (agg_kind == AggregationOperator::CHOOSE &&
+           !aggtype_is_numeric(aggtype))) {
         std::string C_str;
         if (!extract_constant_string(c, const_side, C_str)) return false;
 
