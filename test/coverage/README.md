@@ -3,12 +3,17 @@
 `make coverage` measures how well the test suite exercises ProvSQL, at two
 granularities:
 
-- **Function-call coverage (all languages).** With `track_functions = all`, the
+- **Function-call coverage (plpgsql + C).** With `track_functions = all`, the
   server records a call count per function in `pg_stat_user_functions`. After
-  the run, `coverage/zero_call.txt` lists every `provsql` function with zero
-  calls (from `zero_call_functions.sql`). Reliable for `LANGUAGE C` and
-  `LANGUAGE plpgsql`; planner-inlined `LANGUAGE SQL` functions can show up even
-  when exercised (see the script's caveat).
+  the run, `coverage/zero_call.txt` lists `provsql` plpgsql/C functions with
+  zero calls (from `zero_call_functions.sql`). The coverage run drops the
+  `extension_upgrade` test from the schedule, because its `DROP EXTENSION` would
+  purge these counters (they are keyed by function OID). `LANGUAGE sql`
+  functions are excluded entirely — inlined SQL functions are never counted, so
+  they would always look uncalled. The plpgsql rows are reliable; a few C rows
+  (type I/O, casts, functions called only via `DirectFunctionCall`/SPI from the
+  C core) can still appear despite being exercised, so cross-check a C entry
+  against the gcovr line report.
 - **C/C++ line and branch coverage.** The extension is rebuilt with gcov
   instrumentation (`--coverage`, LTO off, `-O0`); `gcovr` then produces a
   per-file line **and branch** report under `coverage/` (open `index.html`).

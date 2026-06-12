@@ -78,6 +78,13 @@ EOF
 
 export PGHOST="$PGDIR" PGPORT PGUSER="$USER_NAME"
 
+# Generate the schedule, then drop extension_upgrade from THIS run: it does
+# DROP EXTENSION, which purges pg_stat_user_functions' per-function call counts
+# (they are keyed by OID), discarding the stats the rest of the suite built up.
+# Its C/C++ lines are covered by the rest of the suite anyway.
+"$MAKE" -f Makefile.internal test/schedule with_llvm=no >/dev/null
+sed -i '/^test: extension_upgrade$/d' test/schedule
+
 # Run the suite (installcheck mode, under the tdkc supervisor for the kcmcp
 # client tests). pg_regress connects to the temp cluster through PGHOST/PGPORT.
 echo "── running regression suite against the coverage cluster ──"
@@ -103,7 +110,7 @@ trap - EXIT
 rm -rf "$PGDIR" "$STAGE"
 
 echo "── building gcovr report ──"
-"$GCOVR" --root . --filter 'src/' --html-details coverage/index.html --txt --print-summary
+"$GCOVR" --root . --filter 'src/' --html-details coverage/index.html --print-summary
 
 echo
 echo "C/C++ line+branch report: coverage/index.html"
