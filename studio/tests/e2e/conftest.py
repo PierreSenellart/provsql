@@ -40,8 +40,10 @@ def _wait_until_up(url: str, timeout: float = 20.0) -> None:
     )
 
 
-@pytest.fixture(scope="session")
-def studio_url(test_dsn: str) -> str:
+def _serve_studio(dsn: str, search_path: str):
+    """Launch the Studio CLI against `dsn` with `search_path`, poll until the
+    HTTP server is up, yield the base URL, and tear the server down. Shared by
+    the personnel (`studio_url`) and Case-Study-7 (`cs7_studio_url`) harnesses."""
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     env = os.environ.copy()
@@ -63,10 +65,8 @@ def studio_url(test_dsn: str) -> str:
             sys.executable, "-m", "provsql_studio",
             "--host", "127.0.0.1",
             "--port", str(port),
-            "--dsn", test_dsn,
-            # The fixture creates `personnel` in the `provsql_test` schema
-            # (see `test/sql/add_provenance.sql`). Studio appends `provsql`.
-            "--search-path", "provsql_test",
+            "--dsn", dsn,
+            "--search-path", search_path,
             "--ignore-version",
         ]
         # Server output goes to a file, NOT a PIPE: nothing ever read
@@ -90,6 +90,18 @@ def studio_url(test_dsn: str) -> str:
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
+
+
+@pytest.fixture(scope="session")
+def studio_url(test_dsn: str) -> str:
+    """Studio against the personnel fixture (`provsql_test` schema)."""
+    yield from _serve_studio(test_dsn, "provsql_test")
+
+
+@pytest.fixture(scope="session")
+def cs7_studio_url(cs7_dsn: str) -> str:
+    """Studio against the Case Study 7 fixture (`public` schema)."""
+    yield from _serve_studio(cs7_dsn, "public")
 
 
 @pytest.fixture(scope="session")

@@ -26,6 +26,9 @@ SETUP_SQL_FILES = [
     REPO_ROOT / "test" / "sql" / "setup.sql",
     REPO_ROOT / "test" / "sql" / "add_provenance.sql",
 ]
+# The Case Study 7 fixture (peer-review data + the external-review pool that
+# drives the Möbius step), loaded into its own database for the e2e walkthrough.
+CASESTUDY7_SETUP = REPO_ROOT / "doc" / "casestudy7" / "setup.sql"
 
 
 def _read_setup_sql(path: Path) -> str:
@@ -75,6 +78,39 @@ def test_dsn() -> str:
     finally:
         with psycopg.connect(admin_dsn, autocommit=True) as admin:
             # Forcibly drop any leftover connections so DROP doesn't block.
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            admin.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+
+
+@pytest.fixture(scope="session")
+def cs7_dsn() -> str:
+    """A fresh database loaded with the Case Study 7 fixture
+    (`doc/casestudy7/setup.sql`): the peer-review relations plus the dense
+    external-review pool the Möbius step needs.  Mirrors `test_dsn`'s
+    create / load / drop lifecycle; overridable with `PROVSQL_STUDIO_CS7_DSN`."""
+    override = os.environ.get("PROVSQL_STUDIO_CS7_DSN")
+    if override:
+        yield override
+        return
+
+    suffix = secrets.token_hex(4)
+    db_name = f"provsql_studio_cs7_{suffix}"
+    admin_dsn = "dbname=postgres"
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{db_name}"')
+    try:
+        target_dsn = f"dbname={db_name}"
+        # setup.sql installs the extension itself; feed it the file contents
+        # with the psql meta-commands (\\echo) stripped.
+        with psycopg.connect(target_dsn, autocommit=True) as conn:
+            conn.execute(_read_setup_sql(CASESTUDY7_SETUP))
+        yield target_dsn
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
             admin.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE datname = %s AND pid <> pg_backend_pid()",
