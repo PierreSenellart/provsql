@@ -8,12 +8,19 @@ granularities:
   the run, `coverage/zero_call.txt` lists `provsql` plpgsql/C functions with
   zero calls (from `zero_call_functions.sql`). The coverage run drops the
   `extension_upgrade` test from the schedule, because its `DROP EXTENSION` would
-  purge these counters (they are keyed by function OID). `LANGUAGE sql`
-  functions are excluded entirely — inlined SQL functions are never counted, so
-  they would always look uncalled. The plpgsql rows are reliable; a few C rows
-  (type I/O, casts, functions called only via `DirectFunctionCall`/SPI from the
-  C core) can still appear despite being exercised, so cross-check a C entry
-  against the gcovr line report.
+  purge these counters (they are keyed by function OID).
+
+  `pg_stat_user_functions` only counts functions entered through the executor,
+  so `zero_call_functions.sql` filters out the categories it structurally never
+  counts, leaving *genuine* coverage gaps: `LANGUAGE sql` functions (inlined),
+  type input/output/cast functions and aggregate support functions (detected
+  from the catalogs), and ProvSQL's planner-rewritten placeholders/markers —
+  `provenance()`, the comparison operators, the `| (predicate)` conditioning
+  forms — which are declared for the parser but rewritten away before execution
+  (listed explicitly in the query; keep it in sync with the source's "Never
+  executes" / "Placeholder" comments). A few C rows reached only via
+  `DirectFunctionCall`/SPI from the C core can still slip through, so cross-check
+  a C entry against the gcovr line report; plpgsql rows are reliable.
 - **C/C++ line and branch coverage.** The extension is rebuilt with gcov
   instrumentation (`--coverage`, LTO off, `-O0`); `gcovr` then produces a
   per-file line **and branch** report under `coverage/` (open `index.html`).
