@@ -42,3 +42,27 @@ and=false|A|0.5000
 and=false|B|0.0000
 and=false|C|0.5000
 (3 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+bare bool_or|A|0.5000
+bare bool_or|B|0.5000
+bare bool_or|C|0.7500
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+not every|A|0.5000
+not every|B|0.0000
+not every|C|0.5000
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+not bool_or|A|0.2500
+not bool_or|B|0.0000
+not bool_or|C|0.1250
+(3 rows)

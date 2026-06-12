@@ -46,5 +46,26 @@ CREATE TABLE r5 AS SELECT g, round(probability_evaluate(provenance())::numeric,4
 SELECT remove_provenance('r5');
 SELECT 'and=false' AS q, g, p FROM r5 ORDER BY g;
 
+-- A bare boolean aggregate is accepted as a HAVING condition (≡ "= true"),
+-- and NOT of one is accepted too.
+-- HAVING bool_or(flag)       ≡ bool_or = true    A 0.5  B 0.5  C 0.75
+CREATE TABLE r6 AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM hba GROUP BY g HAVING bool_or(flag);
+SELECT remove_provenance('r6');
+SELECT 'bare bool_or' AS q, g, p FROM r6 ORDER BY g;
+
+-- HAVING NOT(every(flag))    ≡ bool_and = false   A 0.5  B 0    C 0.5
+CREATE TABLE r7 AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM hba GROUP BY g HAVING NOT(every(flag));
+SELECT remove_provenance('r7');
+SELECT 'not every' AS q, g, p FROM r7 ORDER BY g;
+
+-- HAVING NOT(bool_or(flag))  ≡ bool_or = false    A 0.25 B 0    C 0.125
+CREATE TABLE r8 AS SELECT g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM hba GROUP BY g HAVING NOT(bool_or(flag));
+SELECT remove_provenance('r8');
+SELECT 'not bool_or' AS q, g, p FROM r8 ORDER BY g;
+
 DROP TABLE r1; DROP TABLE r2; DROP TABLE r3; DROP TABLE r4; DROP TABLE r5;
+DROP TABLE r6; DROP TABLE r7; DROP TABLE r8;
 DROP TABLE hba;

@@ -2742,6 +2742,7 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
 /* Forward declaration: defined alongside the other tree walkers
  * further down in the file. */
 static bool needs_having_lift(Node *havingQual, const constants_t *constants);
+static Node *normalize_bool_agg_having(Node *n);
 static Node *peel_agg_casts(Node *n);
 static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants);
 
@@ -6820,6 +6821,53 @@ static bool having_lift_walker(Node *node, void *data) {
 static bool needs_having_lift(Node *havingQual, const constants_t *constants) {
   return expression_tree_walker(havingQual, having_lift_walker,
                                 (void *) constants);
+}
+
+/* bool_or / bool_and / its every() alias -- the boolean aggregates that the
+ * HAVING boolean-domain evaluator handles. */
+static bool is_supported_bool_agg(Oid aggfnoid) {
+  char *name = get_func_name(aggfnoid);
+  bool yes;
+  if (!name)
+    return false;
+  yes = strcmp(name, "bool_or") == 0 || strcmp(name, "bool_and") == 0 ||
+        strcmp(name, "every") == 0;
+  pfree(name);
+  return yes;
+}
+
+/* Normalise a bare boolean aggregate used directly as a HAVING condition --
+ * @c "HAVING bool_or(x)", @c "HAVING NOT(every(x))" -- into the explicit
+ * @c "agg = true" comparison, so the existing aggregate-comparison recognition
+ * (@c needs_having_lift) and the boolean-domain HAVING evaluator handle it.
+ * Descends the Boolean structure (AND / OR / NOT) but not into comparison
+ * operands: an aggregate already inside a comparison is left untouched. */
+static Node *normalize_bool_agg_having(Node *n) {
+  if (n == NULL)
+    return NULL;
+  if (IsA(n, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *) n;
+    ListCell *lc;
+    foreach (lc, be->args)
+      lfirst(lc) = normalize_bool_agg_having((Node *) lfirst(lc));
+    return n;
+  }
+  if (IsA(n, Aggref)) {
+    Aggref *ar = (Aggref *) n;
+    if (ar->aggtype == BOOLOID && is_supported_bool_agg(ar->aggfnoid)) {
+      OpExpr *eq = makeNode(OpExpr);
+      eq->opno = BooleanEqualOperator;
+      eq->opfuncid = get_opcode(BooleanEqualOperator);
+      eq->opresulttype = BOOLOID;
+      eq->opretset = false;
+      eq->opcollid = InvalidOid;
+      eq->inputcollid = InvalidOid;
+      eq->args = list_make2(ar, makeBoolConst(true, false));
+      eq->location = -1;
+      return (Node *) eq;
+    }
+  }
+  return n;
 }
 
 /**
@@ -12068,6 +12116,14 @@ static Query *process_query(const constants_t *constants, Query *q,
    * consumed here, not lifted as a WHERE qual). */
   if (provsql_active)
     rewrite_cond_predicates(constants, q);
+
+  /* Normalise a bare boolean aggregate used as a HAVING condition (HAVING
+   * bool_or(x), HAVING NOT(every(x))) to "agg = true", while the aggregate is
+   * still a raw Aggref -- before it is replaced by a provenance_aggregate.
+   * The existing aggregate-comparison recognition and the boolean-domain
+   * HAVING evaluator then handle it. */
+  if (provsql_active && q->havingQual != NULL)
+    q->havingQual = normalize_bool_agg_having((Node *) q->havingQual);
 
   if (q->rtable == NULL) {
     /* FROM-less SELECT: the rest of the rewriter indexes into
