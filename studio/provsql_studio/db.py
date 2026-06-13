@@ -693,6 +693,14 @@ def empty_database(pool: ConnectionPool) -> list[str]:
         # Pre-PG15 default grants on public, so unqualified CREATE TABLE
         # keeps working for every role that could before.
         cur.execute("GRANT USAGE, CREATE ON SCHEMA public TO PUBLIC")
+        # CREATE EXTENSION installs into the first existing schema on the
+        # session search_path. That search_path is inherited from the
+        # database default, which may point at a user schema we just
+        # dropped above (e.g. the regression fixture sets the DB-level
+        # search_path to provsql_test) -- leaving no valid creation
+        # target and a "no schema has been selected for creation" error.
+        # Pin it to the public schema we just recreated.
+        cur.execute("SET search_path TO public")
         cur.execute("CREATE EXTENSION IF NOT EXISTS provsql CASCADE")
     return schemas
 

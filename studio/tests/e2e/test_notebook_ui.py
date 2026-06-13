@@ -901,17 +901,34 @@ def test_empty_db_button_confirms_and_wipes(
         import psycopg
         from pathlib import Path
         repo = Path(__file__).resolve().parents[3]
+        # The fixture script expects a virgin database (plain CREATE EXTENSION
+        # and CREATE SCHEMA provsql_test); the wipe reinstalled provsql and
+        # leaves provsql_test (the active search_path schema) in place, so shed
+        # both first. The database-level search_path that the original setup.sql
+        # established (ALTER DATABASE ... SET search_path = provsql_test) must
+        # also be reset: once provsql_test is dropped it points at a missing
+        # schema, so the fresh sessions below would have no valid creation
+        # target and setup.sql's CREATE EXTENSION would fail with "no schema
+        # selected". setup.sql re-establishes the search_path itself.
         with psycopg.connect(test_dsn, autocommit=True) as conn:
-            # The fixture script expects a virgin database (plain
-            # CREATE EXTENSION); the wipe reinstalled provsql, so shed
-            # it first.
             conn.execute("DROP EXTENSION IF EXISTS provsql CASCADE")
             conn.execute("DROP SCHEMA IF EXISTS provsql CASCADE")
-            for fname in ("setup.sql", "add_provenance.sql"):
-                sql_text = "\n".join(
-                    line for line in
-                    (repo / "test" / "sql" / fname).read_text().splitlines()
-                    if not line.startswith("\\"))
+            conn.execute("DROP SCHEMA IF EXISTS provsql_test CASCADE")
+            conn.execute(
+                "DO $$ BEGIN EXECUTE format("
+                "'ALTER DATABASE %I RESET search_path', current_database());"
+                " END $$")
+        # Each file gets its own connection: setup.sql sets the search_path at
+        # the database level (ALTER DATABASE), which only takes effect for
+        # sessions opened afterwards, so add_provenance.sql must run in a fresh
+        # one to resolve the provsql schema -- the same reason conftest seeds
+        # per file.
+        for fname in ("setup.sql", "add_provenance.sql"):
+            sql_text = "\n".join(
+                line for line in
+                (repo / "test" / "sql" / fname).read_text().splitlines()
+                if not line.startswith("\\"))
+            with psycopg.connect(test_dsn, autocommit=True) as conn:
                 conn.execute(sql_text)
         # The restore re-created the extension behind the server's back;
         # bounce its pool (same-database connection switch) so later
