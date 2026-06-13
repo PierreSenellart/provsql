@@ -97,9 +97,14 @@ def test_dsn() -> str:
     try:
         target_dsn = f"dbname={db_name}"
         # setup.sql installs the extension itself (CREATE EXTENSION CASCADE,
-        # then a drop/recreate cycle). We just feed it the file contents.
-        with psycopg.connect(target_dsn, autocommit=True) as conn:
-            for sqlfile in SETUP_SQL_FILES:
+        # then a drop/recreate cycle) and establishes the database-level
+        # search_path via ALTER DATABASE. That default only applies to
+        # *future* sessions, so each file gets its own fresh connection:
+        # add_provenance.sql (which calls into the provsql schema unqualified)
+        # must run in a session opened after setup.sql committed, the way
+        # pg_regress runs every test file in a fresh session.
+        for sqlfile in SETUP_SQL_FILES:
+            with psycopg.connect(target_dsn, autocommit=True) as conn:
                 conn.execute(_read_setup_sql(sqlfile))
         yield target_dsn
     finally:
