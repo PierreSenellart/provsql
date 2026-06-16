@@ -66,3 +66,9 @@ remove_provenance
 scalar_count_col_empty_world
 0.5000
 (1 row)
+add_provenance
+
+(1 row)
+p_a_given_b|p_a_given_not_b|cond_gate_type|p_not_b
+0.3000|0.3000|conditioned|0.5000
+(1 row)

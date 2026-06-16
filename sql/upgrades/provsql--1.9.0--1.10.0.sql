@@ -2340,3 +2340,719 @@ BEGIN
   RETURN total;
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+-- ----------------------------------------------------------------------
+-- 1.10.0 completion: joint-width / Möbius / denial-constraint surface
+--
+-- The UCQ joint-width and Möbius-inversion exact routes and the prefix
+-- ! (event negation) operator joined the 1.10.0 SQL surface after the
+-- conditioning block above.  Replicate them here so an upgraded database
+-- matches a fresh install (mechanically verified by
+-- make upgrade-parity-test).  The cond and plant_reach_any_groups
+-- bodies are refreshed too: both gained code after they were first
+-- copied into this script.
+-- ----------------------------------------------------------------------
+
+-- mobius_or_null below is LANGUAGE sql and tests get_gate_type(...) =
+-- 'mobius'.  A fresh CREATE TYPE makes an enum label usable at once, but
+-- ALTER TYPE ... ADD VALUE does not until the (upgrade) transaction
+-- commits, so creating the function in this transaction would raise
+-- "unsafe use of new enum value".  Defer body validation for the rest
+-- of the transaction; the stored function bodies are unchanged.
+SET LOCAL check_function_bodies = off;
+
+-- Signed Möbius combination gate (measure-only); see the gate-type
+-- comment in provsql.common.sql.
+ALTER TYPE provenance_gate ADD VALUE IF NOT EXISTS 'mobius';
+
+CREATE OR REPLACE FUNCTION cond(target UUID, evidence UUID) RETURNS UUID AS
+$$
+DECLARE
+  tgt uuid;
+  ev  uuid;
+  jnt uuid;
+  result uuid;
+  ch uuid[];
+BEGIN
+  -- P(X | true) = P(X): conditioning on a certain / absent event is inert.
+  IF evidence IS NULL OR evidence = gate_one() THEN
+    RETURN target;
+  END IF;
+
+  -- A row with no provenance defaults to the certain event 1.
+  tgt := coalesce(target, gate_one());
+
+  IF get_gate_type(tgt) = 'conditioned' THEN
+    -- Sequential update (X | A) | B = X | (A ∧ B): fold B into both the
+    -- evidence and the joint of the inner gate so the result stays a single
+    -- gate_conditioned over the ORIGINAL target.
+    ch  := get_children(tgt);
+    tgt := ch[1];                              -- original target X
+    ev  := provenance_times(ch[2], evidence);  -- A ∧ B
+    jnt := provenance_times(ch[3], evidence);  -- (X ∧ A) ∧ B
+  ELSE
+    ev  := evidence;
+    jnt := provenance_times(tgt, evidence);    -- X ∧ C
+  END IF;
+
+  result := public.uuid_generate_v5(uuid_ns_provsql(),
+                                    concat('conditioned', tgt, ev, jnt));
+  PERFORM create_gate(result, 'conditioned', ARRAY[tgt, ev, jnt]);
+  RETURN result;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION provenance_not(event UUID) RETURNS UUID AS
+$$
+  SELECT provsql.provenance_monus(provsql.gate_one(), event);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+   SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
+  IN disjunct_nvars INT[],
+  IN atom_disjunct INT[],
+  IN atom_rel INT[],
+  IN atom_vars INT[],
+  IN atom_arity INT[],
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  IN fact_probs DOUBLE PRECISION[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
+  AS 'provsql','ucq_joint_compile_stats'
+  LANGUAGE C IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats(
+  IN query JSONB,
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  IN fact_probs DOUBLE PRECISION[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
+  AS $$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  SELECT s.probability, s.joint_treewidth, s.data_treewidth_lb,
+         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size,
+         s.n_enumerating
+    INTO probability, joint_treewidth, data_treewidth_lb,
+         circuit_treewidth_lb, n_bags, max_states, dd_size, n_enumerating
+    FROM ucq_joint_compile_stats(dnv, adisj, arel, avars, aarity,
+      fact_rel, fact_elems, fact_arity, fact_tokens, fact_probs) s;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
+  IN disjunct_nvars INT[],
+  IN atom_disjunct INT[],
+  IN atom_rel INT[],
+  IN atom_vars INT[],
+  IN atom_arity INT[],
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
+  AS 'provsql','ucq_joint_compile_stats_tracked'
+  LANGUAGE C STABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_compile_stats_tracked(
+  IN query JSONB,
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  OUT probability DOUBLE PRECISION,
+  OUT joint_treewidth INT,
+  OUT data_treewidth_lb INT,
+  OUT circuit_treewidth_lb INT,
+  OUT n_bags BIGINT,
+  OUT max_states BIGINT,
+  OUT dd_size BIGINT,
+  OUT n_enumerating INT)
+  AS $$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  SELECT s.probability, s.joint_treewidth, s.data_treewidth_lb,
+         s.circuit_treewidth_lb, s.n_bags, s.max_states, s.dd_size,
+         s.n_enumerating
+    INTO probability, joint_treewidth, data_treewidth_lb,
+         circuit_treewidth_lb, n_bags, max_states, dd_size, n_enumerating
+    FROM ucq_joint_compile_stats_tracked(dnv, adisj, arel, avars, aarity,
+      fact_rel, fact_elems, fact_arity, fact_tokens) s;
+END;
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_materialize_tracked(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[])
+  RETURNS UUID AS
+  'provsql','ucq_joint_materialize_tracked' LANGUAGE C VOLATILE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_materialize_tracked(
+  query JSONB,
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[])
+  RETURNS UUID AS $$
+DECLARE
+  dnv INT[] := '{}'; adisj INT[] := '{}'; arel INT[] := '{}';
+  avars INT[] := '{}'; aarity INT[] := '{}';
+  d JSONB; a JSONB; v TEXT; didx INT := 0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(query->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx;
+      arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+  RETURN ucq_joint_materialize_tracked(dnv, adisj, arel, avars, aarity,
+    fact_rel, fact_elems, fact_arity, fact_tokens);
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_provenance(
+  descriptor JSONB, fallback UUID DEFAULT NULL)
+RETURNS UUID AS $$
+DECLARE
+  legs text; sql text; saved text;
+  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
+  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}';
+  avars int[]:='{}'; aarity int[]:='{}';
+  d jsonb; a jsonb; v text; didx int:=0;
+BEGIN
+  -- Parse the UCQ structure into the columnar query arrays.
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  -- One UNION ALL leg per relation: (relation index, text element array,
+  -- provenance token).  No temp tables: a single gather query, with the
+  -- value-based dense element dictionary built inline.
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
+             rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel,
+             -- the lifted single-relation selection (a pre-filter), already
+             -- deparsed to SQL by the recogniser; '' / absent = unfiltered.
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val)
+  $q$, legs);
+
+  -- Read the raw rows with provenance rewriting disabled (we only read
+  -- the existing provsql column; this internal gather is not tracked).
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  PERFORM set_config('provsql.active', saved, true);
+
+  RETURN ucq_joint_materialize_tracked(dnv,adisj,arel,avars,aarity,
+    fact_rel,fact_elems,fact_arity,fact_tokens);
+EXCEPTION WHEN OTHERS THEN
+  -- The joint-width compiler declined (unsupported gate type, joint
+  -- width too large, ...): fall back to the normal provenance so the
+  -- query never fails.  Both give the same probability.
+  RETURN fallback;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION ucq_mobius_materialize_tracked(
+  disjunct_nvars INT[],
+  atom_disjunct INT[],
+  atom_rel INT[],
+  atom_vars INT[],
+  atom_arity INT[],
+  fact_rel INT[],
+  fact_elems INT[],
+  fact_arity INT[],
+  fact_tokens UUID[],
+  lineage UUID DEFAULT NULL)
+  RETURNS UUID AS
+  'provsql','ucq_mobius_materialize_tracked' LANGUAGE C VOLATILE;
+
+CREATE OR REPLACE FUNCTION ucq_mobius_compile_stats(
+  IN disjunct_nvars INT[],
+  IN atom_disjunct INT[],
+  IN atom_rel INT[],
+  IN atom_vars INT[],
+  IN atom_arity INT[],
+  IN fact_rel INT[],
+  IN fact_elems INT[],
+  IN fact_arity INT[],
+  IN fact_tokens UUID[],
+  OUT probability DOUBLE PRECISION,
+  OUT n_components INT,
+  OUT n_cnf_conjuncts INT,
+  OUT lattice_size INT,
+  OUT n_nonzero INT,
+  OUT n_cancelled INT,
+  OUT cancelled_hard BOOLEAN,
+  OUT dd_size BIGINT,
+  OUT memo_hits BIGINT)
+  AS 'provsql','ucq_mobius_compile_stats'
+  LANGUAGE C VOLATILE;
+
+CREATE OR REPLACE FUNCTION mobius_or_null(tok UUID)
+RETURNS UUID AS $$
+  SELECT CASE WHEN tok IS NOT NULL AND provsql.get_gate_type(tok) = 'mobius'
+              THEN tok END
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION ucq_mobius_provenance(
+  descriptor JSONB, fallback UUID DEFAULT NULL)
+RETURNS UUID AS $$
+DECLARE
+  legs text; sql text; saved text;
+  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
+  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}';
+  avars int[]:='{}'; aarity int[]:='{}';
+  d jsonb; a jsonb; v text; didx int:=0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
+             rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel,
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val)
+  $q$, legs);
+
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  PERFORM set_config('provsql.active', saved, true);
+
+  -- Pass the normal-provenance fallback as the lineage: it is carried on the
+  -- gate_mobius so the token still answers Shapley / semiring / PROV on the
+  -- literal lineage (the Möbius combination is a probability-only shortcut).
+  RETURN ucq_mobius_materialize_tracked(dnv,adisj,arel,avars,aarity,
+    fact_rel,fact_elems,fact_arity,fact_tokens, fallback);
+EXCEPTION WHEN OTHERS THEN
+  RETURN fallback;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION mobius_compile_stats(
+  IN descriptor JSONB,
+  OUT probability DOUBLE PRECISION,
+  OUT n_components INT,
+  OUT n_cnf_conjuncts INT,
+  OUT lattice_size INT,
+  OUT n_nonzero INT,
+  OUT n_cancelled INT,
+  OUT cancelled_hard BOOLEAN,
+  OUT dd_size BIGINT,
+  OUT memo_hits BIGINT)
+RETURNS RECORD AS $$
+DECLARE
+  legs text; sql text; saved text;
+  fact_rel int[]; fact_elems int[]; fact_arity int[]; fact_tokens uuid[];
+  dnv int[]:='{}'; adisj int[]:='{}'; arel int[]:='{}';
+  avars int[]:='{}'; aarity int[]:='{}';
+  d jsonb; a jsonb; v text; didx int:=0;
+BEGIN
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    dnv := dnv || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      adisj := adisj || didx; arel := arel || (a->>'rel')::int;
+      aarity := aarity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        avars := avars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s',
+             rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel,
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val)
+  $q$, legs);
+
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems;
+  PERFORM set_config('provsql.active', saved, true);
+
+  SELECT s.probability, s.n_components, s.n_cnf_conjuncts, s.lattice_size,
+         s.n_nonzero, s.n_cancelled, s.cancelled_hard, s.dd_size, s.memo_hits
+    INTO probability, n_components, n_cnf_conjuncts, lattice_size,
+         n_nonzero, n_cancelled, cancelled_hard, dd_size, memo_hits
+    FROM ucq_mobius_compile_stats(dnv,adisj,arel,avars,aarity,
+      fact_rel,fact_elems,fact_arity,fact_tokens) s;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_gather(
+  descriptor JSONB,
+  OUT disjunct_nvars INT[], OUT atom_disjunct INT[], OUT atom_rel INT[],
+  OUT atom_vars INT[], OUT atom_arity INT[],
+  OUT fact_rel INT[], OUT fact_elems INT[], OUT fact_arity INT[],
+  OUT fact_tokens UUID[], OUT val_by_id TEXT[])
+AS $$
+DECLARE
+  legs text; sql text; saved text; d jsonb; a jsonb; v text; didx int := 0;
+BEGIN
+  disjunct_nvars:='{}'; atom_disjunct:='{}'; atom_rel:='{}';
+  atom_vars:='{}'; atom_arity:='{}';
+  FOR d IN SELECT * FROM jsonb_array_elements(descriptor->'disjuncts') LOOP
+    disjunct_nvars := disjunct_nvars || (d->>'n_vars')::int;
+    FOR a IN SELECT * FROM jsonb_array_elements(d->'atoms') LOOP
+      atom_disjunct := atom_disjunct || didx;
+      atom_rel := atom_rel || (a->>'rel')::int;
+      atom_arity := atom_arity || jsonb_array_length(a->'vars');
+      FOR v IN SELECT * FROM jsonb_array_elements_text(a->'vars') LOOP
+        atom_vars := atom_vars || v::int;
+      END LOOP;
+    END LOOP;
+    didx := didx + 1;
+  END LOOP;
+
+  SELECT string_agg(
+           format('SELECT %s, ARRAY[%s]::text[], provsql FROM %s%s', rn - 1,
+             (SELECT string_agg(format('(%I)::text', c), ',')
+                FROM jsonb_array_elements_text(descriptor->'elem_cols'->(rn-1)::int) c),
+             rel,
+             CASE WHEN coalesce(descriptor->'rel_where'->>(rn-1)::int,'') <> ''
+                  THEN ' WHERE '||(descriptor->'rel_where'->>(rn-1)::int)
+                  ELSE '' END),
+           ' UNION ALL ')
+    INTO legs
+    FROM jsonb_array_elements_text(descriptor->'relations') WITH ORDINALITY t(rel, rn);
+
+  sql := format($q$
+    WITH facts(rel,elems,tok) AS (%s),
+         ord AS (SELECT row_number() OVER () AS ord, rel, elems, tok FROM facts),
+         dict AS (SELECT val, (dense_rank() OVER (ORDER BY val))-1 AS id
+                    FROM (SELECT DISTINCT unnest(elems) AS val FROM facts) u)
+    SELECT (SELECT array_agg(rel ORDER BY ord) FROM ord),
+           (SELECT array_agg(cardinality(elems) ORDER BY ord) FROM ord),
+           (SELECT array_agg(tok ORDER BY ord) FROM ord),
+           (SELECT array_agg(dd.id ORDER BY o.ord, e.k)
+              FROM ord o, LATERAL unnest(o.elems) WITH ORDINALITY e(val,k)
+              JOIN dict dd ON dd.val = e.val),
+           (SELECT array_agg(val ORDER BY id) FROM dict)
+  $q$, legs);
+
+  saved := current_setting('provsql.active', true);
+  PERFORM set_config('provsql.active','off', true);
+  EXECUTE sql INTO fact_rel, fact_arity, fact_tokens, fact_elems, val_by_id;
+  PERFORM set_config('provsql.active', saved, true);
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION ucq_joint_provenance_answer(
+  descriptor JSONB, head_vars INT[], head_vals TEXT[], fallback UUID DEFAULT NULL)
+RETURNS UUID AS 'provsql','ucq_joint_provenance_answer'
+LANGUAGE C STABLE;
+
+CREATE OR REPLACE FUNCTION ucq_mobius_provenance_answer(
+  descriptor JSONB, head_vars INT[], head_vals TEXT[], fallback UUID DEFAULT NULL)
+RETURNS UUID AS 'provsql','ucq_mobius_provenance_answer'
+LANGUAGE C STABLE;
+
+CREATE OR REPLACE FUNCTION plant_reach_any_groups(
+  work_name text,
+  node_attribute text,
+  member_rel regclass,
+  member_attribute text,
+  group_attribute text,
+  edge_rel regclass,
+  source_attribute text,
+  destination_attribute text,
+  source_value text,
+  directed boolean,
+  edge_quals text DEFAULT NULL,
+  source_rel regclass DEFAULT NULL,
+  source_rel_attribute text DEFAULT NULL,
+  edge_sql text DEFAULT NULL,
+  member_quals text DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  e record;
+  grp record;
+  m record;
+  sv text[];
+  st uuid[];
+  sp double precision[];
+  gids int[] := ARRAY[]::int[];
+  mids int[] := ARRAY[]::int[];
+  vid int;
+  canonical uuid;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  BEGIN
+    -- A tracked member relation would make the aggregated tokens
+    -- per-row products, not the bare reach tokens: nothing to plant.
+    IF EXISTS (SELECT 1 FROM pg_attribute
+               WHERE attrelid = member_rel AND attname = 'provsql'
+                 AND atttypid = 'uuid'::regtype AND NOT attisdropped) THEN
+      RETURN;
+    END IF;
+
+    IF source_rel IS NOT NULL THEN
+      SELECT g.source_values, g.source_tokens, g.source_probabilities
+        INTO sv, st, sp
+        FROM provsql.gather_reachability_sources(source_rel,
+                                                 source_rel_attribute) g;
+      IF sv IS NULL THEN
+        sv := ARRAY[]::text[];
+        st := ARRAY[]::uuid[];
+        sp := ARRAY[]::float8[];
+      END IF;
+    ELSE
+      sv := ARRAY[source_value];
+      st := ARRAY['00000000-0000-0000-0000-000000000000'::uuid];
+      sp := ARRAY[1.0::float8];
+    END IF;
+
+    e := provsql.gather_reachability_edges(edge_rel, source_attribute,
+                                           destination_attribute,
+                                           sv, edge_quals, edge_sql);
+
+    -- The groups, replicating the user's join semantics: per group, the
+    -- member vertices and the multiset of their reach tokens (with the
+    -- multiplicity the join produces).  Single-member groups need no
+    -- planting (provenance_plus passes a single token through).
+    -- Two steps: materialise the joined rows with their per-row tokens
+    -- (tracked CTAS, then strip the automatic provsql column), and only
+    -- then aggregate the now-plain table -- aggregating provenance()
+    -- inside a grouped tracked query would be rewritten as a
+    -- provenance-aware aggregation, which is not what the planting
+    -- needs.
+    DROP TABLE IF EXISTS provsql_reach_any_flat_tmp;
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_reach_any_flat_tmp AS '
+      || 'SELECT w.%1$I::text AS node_val, provsql.provenance() AS tok, '
+      || '       t.%5$I AS grp_key '
+      || 'FROM %2$I w JOIN %3$s t ON w.%1$I = t.%4$I'
+      -- The member-relation filter restricts which members participate
+      -- (deparsed table-qualified as t.column); the working table side
+      -- carries no provenance distinction here.
+      || coalesce(' WHERE ' || member_quals, ''),
+      node_attribute, work_name, member_rel::text, member_attribute,
+      group_attribute);
+    PERFORM provsql.remove_provenance('provsql_reach_any_flat_tmp');
+    DROP TABLE IF EXISTS provsql_reach_any_groups_tmp;
+    CREATE TEMP TABLE provsql_reach_any_groups_tmp AS
+      SELECT (row_number() OVER ())::int AS gid, members, toks FROM (
+        SELECT array_agg(node_val) AS members, array_agg(tok) AS toks
+        FROM provsql_reach_any_flat_tmp
+        GROUP BY grp_key HAVING count(*) >= 2) g;
+    DROP TABLE provsql_reach_any_flat_tmp;
+
+    FOR grp IN SELECT gid, members FROM provsql_reach_any_groups_tmp LOOP
+      FOR m IN SELECT DISTINCT unnest(grp.members) AS val LOOP
+        vid := array_position(e.vertices, m.val);
+        IF vid IS NOT NULL THEN
+          gids := gids || grp.gid;
+          mids := mids || vid;
+        END IF;
+      END LOOP;
+    END LOOP;
+    IF cardinality(gids) = 0 THEN
+      DROP TABLE provsql_reach_any_groups_tmp;
+      RETURN;
+    END IF;
+
+    FOR grp IN
+      SELECT a.group_id, a.token AS any_token, t.toks
+      FROM provsql.reachability_materialize_any(
+             e.sources, e.destinations, e.tokens, e.probabilities,
+             e.block_keys, e.block_indices, e.extra_ids, st, sp,
+             directed, gids, mids) a
+      JOIN provsql_reach_any_groups_tmp t ON t.gid = a.group_id
+    LOOP
+      canonical := public.uuid_generate_v5(
+        provsql.uuid_ns_provsql(),
+        concat('plus-canonical',
+               (SELECT array_agg(tok ORDER BY tok)
+                FROM unnest(grp.toks) tok)));
+      PERFORM provsql.create_gate(canonical, 'plus', ARRAY[grp.any_token]);
+      PERFORM provsql.set_infos(canonical, 1);
+    END LOOP;
+    DROP TABLE provsql_reach_any_groups_tmp;
+    IF verbosity >= 20 THEN
+      -- Lift the function-level client_min_messages = warning for the
+      -- one RAISE; the function-level SET restores the caller's value.
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: certified any-member gates planted for the aggregation of "%" by %.%',
+        work_name, member_rel, group_attribute;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    IF verbosity >= 10 THEN
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: any-member planting for "%" skipped (%)',
+        work_name, SQLERRM;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  END;
+END
+-- No SET search_path: the deparsed edge subquery must resolve against
+-- the caller's path; ProvSQL internals are schema-qualified.
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+
+-- Prefix ! : event negation (provenance_not).  Guarded so the script
+-- stays idempotent; the oprcode <> 0 test rejects a shell operator.
+DO $do$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_operator
+    WHERE oprname = '!' AND oprnamespace = 'provsql'::regnamespace
+      AND oprleft = 0 AND oprright = 'uuid'::regtype AND oprcode <> 0
+  ) THEN
+    CREATE OPERATOR ! (RIGHTARG=UUID, PROCEDURE=provenance_not);
+  END IF;
+END
+$do$;
+
+-- This upgrade appended values to the provenance_gate enum ('conditioned'
+-- above, 'mobius' here): force a fresh constant-OID lookup so a backend
+-- warmed under the previous version can create gates of the new types.
+SELECT reset_constants_cache();

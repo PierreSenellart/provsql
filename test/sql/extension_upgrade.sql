@@ -148,10 +148,41 @@ CREATE TABLE upgrade_cnt_r AS
 SELECT remove_provenance('upgrade_cnt_r');
 SELECT p AS scalar_count_col_empty_world FROM upgrade_cnt_r;
 
+-- 1.10.0 surface check: value-level conditioning (the | operator) and
+-- event negation (the prefix ! operator), two headline additions.  Over
+-- two independent rows a@p=0.3 and b@p=0.5: P(a | b) = P(a) = 0.3 and
+-- P(a | !b) = P(a) = 0.3 by independence, and P(!b) = 1 - 0.5 = 0.5.  The
+-- | builds a fresh gate of the new 'conditioned' enum value, so a correct
+-- result also confirms the upgrade reset the constants cache for the new
+-- gate types (otherwise create_gate raises "Invalid gate type") -- the
+-- same reset that makes the 'mobius' value resolvable.
+CREATE TABLE upgrade_cond (lbl text);
+INSERT INTO upgrade_cond VALUES ('a'), ('b');
+SELECT add_provenance('upgrade_cond');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.3) FROM upgrade_cond WHERE lbl = 'a';
+  PERFORM set_prob(provenance(), 0.5) FROM upgrade_cond WHERE lbl = 'b';
+END $$;
+SELECT round(probability_evaluate(
+           (SELECT provenance() FROM upgrade_cond WHERE lbl='a')
+           | (SELECT provenance() FROM upgrade_cond WHERE lbl='b'))::numeric, 4)
+         AS p_a_given_b,
+       round(probability_evaluate(
+           (SELECT provenance() FROM upgrade_cond WHERE lbl='a')
+           | (!(SELECT provenance() FROM upgrade_cond WHERE lbl='b')))::numeric, 4)
+         AS p_a_given_not_b,
+       get_gate_type(
+           (SELECT provenance() FROM upgrade_cond WHERE lbl='a')
+           | (SELECT provenance() FROM upgrade_cond WHERE lbl='b'))
+         AS cond_gate_type,
+       round(probability_evaluate(
+           !(SELECT provenance() FROM upgrade_cond WHERE lbl='b'))::numeric, 4)
+         AS p_not_b;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
            upgrade_smoke_right, upgrade_safe_q, upgrade_kc,
-           upgrade_cnt, upgrade_cnt_r;
+           upgrade_cnt, upgrade_cnt_r, upgrade_cond;
 RESET client_min_messages;
 
 \else
