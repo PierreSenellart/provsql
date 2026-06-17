@@ -169,6 +169,28 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
                     "recursion are genuinely infinite; on acyclic "
                     "data, re-run under the 'semiring' provenance "
                     "class.");
+          /* CAVEAT: absorptive() is a coarser gate than the compiled
+           * reachability route's actual soundness condition.  That route
+           * materialises its world enumeration with genuine negation: each
+           * absent edge surfaces as monus(one, edge) (BooleanGate::NOT
+           * lowered to gate_monus; see ReachabilityCompiler.cpp and
+           * CertifiedDDMaterialize.cpp).  The absorptive-quotient value
+           * comes out right only because, in every absorptive semiring we
+           * currently ship, (i) monus(one, x) is the times-neutral 'one' on
+           * a present-priced leaf, so the negative literals do not perturb
+           * the path-products, and (ii) any world a negative literal would
+           * kill is dominated by an edge-superset of equal value, hence
+           * absorbed.  semiring.absorptive() checks NEITHER property.  A
+           * future or user-defined absorptive m-semiring whose monus(one, .)
+           * is not the times-neutral, or whose monus is not
+           * "drop-if-dominated", would pass this gate yet read those
+           * monus(one, edge) gates with a value the path-sum argument does
+           * not justify -- a silently wrong result.  If such a semiring is
+           * added, strengthen this guard (e.g. assert monus(one, x) == one
+           * for present-priced leaves, or add a dedicated capability flag)
+           * rather than relying on absorptive() alone.  (Truncated cyclic
+           * recursion, the other 'absorptive' producer, ships only minimal
+           * derivations and carries no such negation, so it is unaffected.) */
         } else
           throw CircuitException(
                   "Unknown assumption marker '" + assumption + "'");
