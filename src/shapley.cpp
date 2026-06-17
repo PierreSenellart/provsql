@@ -9,10 +9,13 @@
  *   all input gates simultaneously (more efficient than calling @c shapley()
  *   once per variable).
  *
- * The @p method argument selects the computation algorithm:
+ * The @p method argument selects the d-DNNF construction:
+ * - empty / @c "default" / @c "auto": cost-select the cheapest route via the
+ *   probability catalog's chooser.
  * - @c "tree-decomposition": exact, polynomial if treewidth ≤ @c MAX_TREEWIDTH.
- * - @c "monte-carlo": approximate via random sampling.
- * - Any external d-DNNF compiler name (@c "d4", @c "c2d", etc.).
+ * - @c "interpret-as-dd": direct interpretation of the circuit as a d-DNNF.
+ * - @c "compilation": external knowledge compiler, named in @p args
+ *   (@c "d4", @c "c2d", …); empty @p args picks the highest-preference one.
  *
  * Banzhaf power index computation is exposed via the same internal helper
  * (@c shapley_internal with @c banzhaf=true), called by the
@@ -82,10 +85,10 @@ static double shapley_internal
 
   // Default / "auto": cost-select the d-D construction (interpret-as-dd /
   // tree-decomposition / compilation) via the probability catalog's chooser;
-  // "ladder" forces the old fixed chain; any other method is taken by name.
+  // any other method (tree-decomposition / interpret-as-dd / compilation, the
+  // latter with a compiler name in `args`) is taken by name.
   dDNNF dd = (method.empty() || method == "default" || method == "auto")
                ? provsql::makeDDAuto(c, root)
-               : method == "ladder" ? c.makeDD(root, "", args)
                : c.makeDD(root, method, args);
 
   dd.makeSmooth();
@@ -193,7 +196,6 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
 
     dDNNF dd = (method.empty() || method == "default" || method == "auto")
                  ? provsql::makeDDAuto(c, root)
-                 : method == "ladder" ? c.makeDD(root, "", args)
                  : c.makeDD(root, method, args);
     dd.makeSmooth();
     if(!banzhaf)

@@ -206,8 +206,9 @@ private:
 /// @c MethodCatalog::chooseAndBuildDD that builds the @c EvalContext from the
 /// Boolean view alone (the d-D portfolio needs no generic-circuit state); the
 /// callers that have a method/compiler request route the empty / "default" /
-/// "auto" case here and keep @c BooleanCircuit::makeDD for the named routes and
-/// the "ladder" (old fixed interpret -> tree-decomposition -> compiler) escape.
+/// "auto" case here and keep @c BooleanCircuit::makeDD for the named routes
+/// (tree-decomposition / interpret-as-dd / compilation, plus makeDD's own
+/// internal interpret -> tree-decomposition -> compiler fallback chain).
 dDNNF makeDDAuto(BooleanCircuit &c, gate_t g);
 
 }  // namespace provsql
