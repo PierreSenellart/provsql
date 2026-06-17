@@ -38,10 +38,10 @@ What each case study covers
 ---------------------------
 
 :doc:`Case study 1 -- Intelligence Agency <casestudy1>`
-    The broadest tour of provenance *evaluation*: a security-classification
-    scenario over seven agents drives a custom min-clearance semiring,
-    where-provenance, circuit export, and the full probability-method
-    line-up side by side (possible-worlds, Monte-Carlo, tree-decomposition,
+    The **broadest tour of provenance evaluation**: a security-classification
+    scenario over seven agents drives a **custom min-clearance semiring**,
+    **where-provenance**, **circuit export**, and the **full probability-method
+    line-up** side by side (possible-worlds, Monte-Carlo, tree-decomposition,
     and knowledge compilation through ``d4`` / ``c2d`` / ``dsharp`` /
     ``minic2d``). Start here for a panoramic view.
 
@@ -65,11 +65,11 @@ What each case study covers
     ``INSERT`` / ``DELETE`` round-trip with ``undo``.
 
 :doc:`Case study 5 -- Wildlife Photo Archive <casestudy5>`
-    Uncertainty from a machine-learning detector: candidate species per
-    bounding box modelled with :sqlfunc:`repair_key` and the ``mulinput``
-    gate (block-correlated alternatives). It contrasts probabilistic ranking
-    against naive confidence thresholding and computes :sqlfunc:`expected`
-    species counts.
+    Uncertainty from a machine-learning detector: **block-correlated
+    alternatives** via :sqlfunc:`repair_key` and the ``mulinput`` gate, with
+    candidate species per bounding box. It contrasts **probabilistic ranking**
+    against naive confidence thresholding and computes **expected species
+    counts** with :sqlfunc:`expected`.
 
 :doc:`Case study 6 -- City Air-Quality Sensor Network <casestudy6>`
     The **continuous-distribution** surface end to end: ``random_variable``
