@@ -270,15 +270,15 @@ treewidth relevant to each row (lineage, data, or joint treewidth), and
    | any         | TID / BID  | hierarchical,          | :math:`\Theta(|D|)`     | :cite:`DBLP:journals/vldb/DalviS07`     | :ref:`safe-query rewrite <safe-query-rewriting>`, then   |
    |             |            | **self-join-free** CQ  |                         | :cite:`DBLP:journals/jacm/DalviS12`     | ``independent``                                          |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
-   | any         | TID        | inversion-free UCQ     | :math:`O(|D|)`          | :cite:`DBLP:conf/icdt/JhaS11`           | inversion-free certificate, then ``inversion-free``      |
-   |             |            | (self-joins allowed)   |                         |                                         |                                                          |
+   | any         | TID        | inversion-free UCQ     | :math:`O(|D|)`          | :cite:`DBLP:conf/icdt/JhaS11`           | :ref:`inversion-free certification                       |
+   |             |            | (self-joins allowed)   |                         |                                         | <inversion-free-route>`, then ``inversion-free``         |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
    | any         | TID        | safe UCQ needing       |                         | :cite:`DBLP:journals/jacm/DalviS12`     | :ref:`Möbius compiler <safe-ucq-mobius>`, then           |
    |             |            | Möbius inversion       | :math:`O(|D|^e)`        |                                         | the signed Möbius sweep over ``independent``             |
    |             |            | (self-join-free)       |                         |                                         | islands                                                  |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
-   | any query whose **lineage** over this data and    | :math:`2^{O(k)}\,|D|`   | :cite:`DBLP:journals/mst/AmarilliCMS20` | ``tree-decomposition``                                   |
-   | annotations has treewidth ≤ k                     |                         |                                         |                                                          |
+   | any query whose **lineage** over this data and    | :math:`2^{O(k)}\,|D|`   | :cite:`DBLP:journals/mst/AmarilliCMS20` | in-process :ref:`tree-decomposition                      |
+   | annotations has treewidth ≤ k                     |                         |                                         | <in-process-compilers>` method                           |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
    | treewidth ≤ | TID / BID  | recursive reachability | :math:`2^{O(k^2)}\,|D|` | :cite:`DBLP:conf/icalp/AmarilliBS15`    | :ref:`reachability compiler <network-reliability-btw>`,  |
    | k (treelike)|            |                        |                         |                                         | then ``independent``                                     |
@@ -835,25 +835,15 @@ Each method in detail:
         SELECT probability_evaluate(provenance(), 'd-tree') FROM suspects;
 
 ``'inversion-free'``
-    Exact computation for the *inversion-free* ``UCQ(OBDD)`` class
-    :cite:`DBLP:conf/icdt/JhaS11`: hierarchical, tuple-independent queries
-    (possibly with self-joins) whose lineage admits a polynomial-size OBDD.
-    The path builds a structured d-DNNF over a query-derived variable order,
-    staying linear in the lineage where ``'tree-decomposition'`` would blow
-    up. It requires that the planner certified the query as inversion-free
-    (a certificate is attached to the provenance root); it errors otherwise.
-
-    The certifier lets a **non-tracked relation** be used as a transparent
-    filter, and **flattens SPJ subqueries and views** -- including a join
-    inside the view, a view referenced several times (a structured
-    self-join), and views-over-views -- before checking the class. An
-    aggregating or ``UNION`` view, a correlated subquery, or a query that
-    is genuinely non-hierarchical after flattening is not certified and
-    falls back to another method.
-
-    The default strategy already takes this path automatically when a
-    certificate is present (see below), so calling the method explicitly is
-    mainly useful for testing:
+    Exact, linear-time computation for the *inversion-free* ``UCQ(OBDD)``
+    class :cite:`DBLP:conf/icdt/JhaS11` -- hierarchical, tuple-independent
+    queries (self-joins allowed) whose lineage admits a polynomial-size
+    OBDD, where ``'tree-decomposition'`` would blow up.  It requires the
+    planner's inversion-free certificate on the provenance root and errors
+    without it.  The default strategy already takes this path automatically
+    when the certificate is present, so naming the method is mainly useful
+    for testing; see :ref:`inversion-free-route` for what the certifier
+    accepts:
 
     .. code-block:: postgresql
 
@@ -981,6 +971,50 @@ practice this means: turn the GUC on for probability-heavy
 workloads on hierarchical CQs, turn it off (or re-evaluate in a
 fresh session) before running ``sr_counting``, ``sr_how``,
 ``sr_why`` on the same circuit.
+
+.. _inversion-free-route:
+
+Inversion-free certification
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The *inversion-free* ``UCQ(OBDD)`` class of Jha & Suciu
+:cite:`DBLP:conf/icdt/JhaS11` -- hierarchical, tuple-independent queries
+whose lineage admits a polynomial-size OBDD -- is a second linear-time
+route for safe queries, a sibling of the :ref:`safe-query rewrite
+<safe-query-rewriting>`.  ProvSQL certifies the query, attaches the
+certificate to the provenance root, and the default chooser takes the
+route automatically, right after ``'independent'``, so no method need be
+named.  Where ``'tree-decomposition'`` would blow up because the lineage
+is not low-treewidth, the route builds a *structured* d-DNNF over a
+query-derived variable order that stays linear in the lineage, and
+``'inversion-free'`` reads it in one pass.
+
+It differs from the safe-query rewrite on three counts:
+
+- **Self-joins.**  The inversion-free class natively admits queries that
+  join a relation with itself; the safe-query rewrite targets
+  self-join-free CQs and recovers only limited self-join cases.
+- **Provenance scheme.**  The inversion-free path evaluates the literal
+  lineage unchanged, so it does **not** require the ``'boolean'``
+  provenance class -- it applies under the default semiring scheme too --
+  and is governed by its own ``provsql.inversion_free`` GUC (on by
+  default).  The safe-query rewrite restructures the query and fires only
+  under ``provsql.provenance = 'boolean'``.
+- **Edge cases.**  In exchange it certifies fewer shapes: the safe-query
+  rewrite recovers safety from functional dependencies and BID blocks
+  (see :ref:`safe-query-rewriting`), which the inversion-free certifier
+  does not -- its atoms must be strictly tuple-independent.  (A plain
+  constant selection is fine either way: the certifier treats it as a
+  transparent atom-local filter.)
+
+The certifier does let a **non-tracked relation** act as a transparent
+filter, and **flattens SPJ subqueries and views** before checking the
+class -- a join inside a view, a view referenced several times (a
+structured self-join), and views-over-views all reduce to their base
+atoms first.  An aggregating or ``UNION`` view, a correlated subquery,
+or a query still non-hierarchical after flattening is not certified and
+falls back to another method.  See :ref:`inversion-free-path` in the
+developer documentation for the full pipeline.
 
 .. _safe-ucq-mobius:
 

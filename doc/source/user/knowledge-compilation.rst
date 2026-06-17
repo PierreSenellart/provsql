@@ -264,6 +264,8 @@ summary in its subtitle, and the probability benchmark (below) adds a
 ``d-DNNF (n/e)`` column so the size of every compiler's output sits
 beside its run time in one table.
 
+.. _in-process-compilers:
+
 The in-process routes
 ---------------------
 

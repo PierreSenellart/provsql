@@ -244,7 +244,9 @@ point.
         AND d2b.chair = d3.chair AND d2b.sub = d3.sub
 
 Try :guilabel:`Marginal probability` with the toggle on :guilabel:`Boolean`:
-it returns the exact ``0.056923`` with no method named. Try any circuit
+it returns the exact ``0.056923`` with no method named (the chooser routes
+it through the Möbius compiler automatically; once the μ root is rendered you
+can also pick the ``mobius`` method explicitly). Try any circuit
 compiler instead and it blows up: :math:`q_9` provably has no polynomial
 OBDD / FBDD / decision-DNNF :cite:`DBLP:journals/mst/AmarilliCMS20`.
 
@@ -278,7 +280,7 @@ Dalvi-Suciu dichotomy made operational:
      - ProvSQL route
      - Witness in this Part
    * - its **shape** is hierarchical
-     - safe-query rewrite → ``independent``
+     - read-once lineage → ``independent`` (no rewrite)
      - coverage, all papers
    * - a **key** makes it read-once
      - safe-query rewrite (FD)
@@ -305,7 +307,7 @@ through knowledge compilation.
 The hard query, and what a compiler does with it
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-*Is **any** paper competently covered?*
+*Is* **any** *paper competently covered?*
 
 .. code-block:: postgresql
 
@@ -436,16 +438,14 @@ Read it per paper -- *for each paper, how competently is it covered?*
 
 .. code-block:: postgresql
 
-    SELECT t.paper, provenance()
+    SELECT t.paper
     FROM bid b, expertise e, topic_of t
     WHERE b.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = b.paper
     GROUP BY t.paper ORDER BY t.paper
 
 :guilabel:`Marginal probability` gives each group's value -- ``p1``
 ``0.425869``, ``p4`` ``0.300776`` -- matching a compiler to full precision,
-from the data's structure with no external tool. (Set
-``provsql.joint_width = off`` to revert to Part B's literal circuit and watch
-``independent`` start rejecting it again.)
+from the data's structure with no external tool.
 
 Correlated inputs
 ^^^^^^^^^^^^^^^^^
@@ -493,13 +493,15 @@ now over the correlated ``assignment`` table.
     FROM assignment a, expertise e, topic_of t
     WHERE a.reviewer = e.reviewer AND e.topic = t.topic AND t.paper = a.paper
 
-Try ``independent`` on the literal circuit: it **rejects** it (a reviewer's
-candidate papers are mutually exclusive, so the lineage is neither
-independent nor read-once), and Part A's routes do not apply to the cyclic
-shape. The joint-width route compiles it anyway: the joint treewidth -- data
-graph *plus* the ``repair_key`` exclusion blocks -- is bounded, so ProvSQL
-builds a certified d-D (each block stick-broken into shared independent
-events) that ``independent`` evaluates to the exact ``0.735868``. This is the
+Try ``independent`` with the toggle on :guilabel:`Semiring` (the literal
+circuit): it **rejects** it (a reviewer's candidate papers are mutually
+exclusive, so the lineage is neither independent nor read-once), and Part A's
+routes do not apply to the cyclic shape. Switch the toggle back to
+:guilabel:`Boolean` and the joint-width route compiles it anyway: the joint
+treewidth -- data graph *plus* the ``repair_key`` exclusion blocks -- is
+bounded, so ProvSQL builds a certified d-D (each block stick-broken into
+shared independent events) that ``independent`` evaluates to the exact
+``0.735868``. This is the
 one cell of the :ref:`tractability table <tractable-cases>` nothing else
 fills: :math:`\#P`-hard *and* correlated, exact and linear in the data.
 

@@ -305,3 +305,14 @@ body.ps-sidebar-collapsed .wy-nav-content {
     display: none;
   }
 }
+
+/* ---- Math in tables ----
+   imgmath renders math as SVG <img class="math">.  The RTD theme's
+   img{max-width:100%} (theme.css) shrinks them to the column width inside
+   the narrow cells of grid tables (e.g. the tractability table in
+   probabilities.rst), making the math illegibly small.  Let math images
+   keep their intrinsic size in table cells. */
+.rst-content table.docutils td img.math,
+.rst-content table.docutils th img.math {
+  max-width: none;
+}
