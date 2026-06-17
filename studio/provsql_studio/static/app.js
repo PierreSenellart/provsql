@@ -2309,11 +2309,16 @@
           </label>
           <label class="cv-contrib__ctl">
             <span>Method</span>
-            <select id="contrib-method" title="How the d-D circuit behind the contribution is built. 'auto' cost-selects the cheapest route (interpret-as-dd / tree-decomposition / compilation) like the probability chooser; the named routes force one; 'ladder' is the old fixed interpret → tree-decomposition → compiler chain.">
+            <select id="contrib-method" title="How the d-D circuit behind the contribution is built. 'auto' cost-selects the cheapest route (interpret-as-dd / tree-decomposition / compilation) like the probability chooser; the named routes force one. 'compilation' uses the external d-DNNF compiler picked beside it.">
               <option value="">auto (cost-based)</option>
               <option value="tree-decomposition">tree-decomposition</option>
               <option value="interpret-as-dd">interpret as d-D</option>
-              <option value="ladder">ladder (fixed chain)</option>
+              <option value="compilation">compilation</option>
+            </select>
+          </label>
+          <label class="cv-contrib__ctl" id="contrib-compiler-ctl" hidden>
+            <span>Compiler</span>
+            <select id="contrib-compiler" title="External d-DNNF compiler for the 'compilation' route, populated from the live tool registry (the same compilers Probability evaluate offers).">
             </select>
           </label>
           <label class="cv-contrib__ctl">
@@ -2322,10 +2327,15 @@
               <option value="">source row</option>
             </select>
           </label>
+          <button class="cv-tool cv-tool--toggle cv-contrib__uuids" id="contrib-show-uuids"
+                  type="button" aria-pressed="false" title="Show full UUIDs">
+            <i class="fas fa-fingerprint"></i>
+          </button>
         </div>
         <div class="cv-contrib__targetline">
           <span class="cv-contrib__targetlbl">Target</span>
           <span class="cv-contrib__target" id="contrib-target" title="">none pinned</span>
+          <span class="cv-contrib__time" id="contrib-time"></span>
         </div>
         <div class="cv-contrib__status" id="contrib-status" hidden></div>
         <div class="cv-contrib__chart" id="contrib-chart"></div>
@@ -2342,18 +2352,71 @@
     const state = { token: null };
     const chart     = document.getElementById('contrib-chart');
     const statusEl  = document.getElementById('contrib-status');
+    const timeEl    = document.getElementById('contrib-time');
     const measureSel = document.getElementById('contrib-measure');
     const methodSel  = document.getElementById('contrib-method');
     const mapSel     = document.getElementById('contrib-mapping');
+    const compilerSel = document.getElementById('contrib-compiler');
+    const compilerCtl = document.getElementById('contrib-compiler-ctl');
     const targetEl   = document.getElementById('contrib-target');
+    const uuidsBtn   = document.getElementById('contrib-show-uuids');
 
-    const shortToken = (s) =>
-      (s && String(s).length > 8) ? String(s).slice(0, 8) + '…' : String(s || '');
+    // Short / full UUID pair, matching the result table's formatCell output
+    // so the body-level `show-uuids` class (driven by the fingerprint toggle
+    // below) flips abbreviated vs full display here too, with no re-render.
+    const uuidPairHtml = (s) => {
+      const str = String(s == null ? '' : s);
+      const short = str.length > 4 ? str.slice(0, 4) + '…' : str;
+      return `<span class="wp-uuid" title="${escapeAttr(str)}">`
+           + `<span class="wp-uuid__short">${escapeHtml(short)}</span>`
+           + `<span class="wp-uuid__full">${escapeHtml(str)}</span>`
+           + `</span>`;
+    };
 
     populateContribMappings();
+    populateContribCompilers();
+
+    // The compiler picker only applies to the 'compilation' route; show it
+    // exactly when that method is selected, mirroring the eval strip.
+    const syncCompilerVisibility = () => {
+      if (compilerCtl) compilerCtl.hidden = (methodSel.value !== 'compilation');
+    };
+    methodSel.addEventListener('change', syncCompilerVisibility);
+    syncCompilerVisibility();
+
+    // Fingerprint toggle: expand every abbreviated UUID on the page (result
+    // table cells, target line, unresolved bar labels) to its full form via
+    // the shared `body.show-uuids` class the circuit toolbar also drives.
+    if (uuidsBtn) {
+      uuidsBtn.setAttribute('aria-pressed',
+        String(document.body.classList.contains('show-uuids')));
+      uuidsBtn.addEventListener('click', () => {
+        const on = !document.body.classList.contains('show-uuids');
+        document.body.classList.toggle('show-uuids', on);
+        uuidsBtn.setAttribute('aria-pressed', String(on));
+      });
+    }
+
+    // Click a contribution value to expand it to full precision (toggle) and
+    // copy that full-precision form to the clipboard. Mirrors the circuit
+    // eval strip's click-to-flip + copy on probability results.
+    chart.addEventListener('click', (e) => {
+      const val = e.target.closest('.cv-contrib__val.is-clickable');
+      if (!val) return;
+      const expanded = val.dataset.expanded === '1';
+      const next = expanded ? val.dataset.rounded : val.dataset.full;
+      if (next == null) return;
+      val.textContent = next;
+      val.dataset.expanded = expanded ? '' : '1';
+      val.title = expanded ? 'Click to show full precision and copy'
+                           : 'Click to show rounded value';
+      copyToClipboard(val.dataset.full || '');
+      val.classList.add('is-copied');
+      setTimeout(() => val.classList.remove('is-copied'), 800);
+    });
 
     // Re-fetch when a control changes, but only once a token is pinned.
-    [measureSel, methodSel, mapSel].forEach((el) => {
+    [measureSel, methodSel, mapSel, compilerSel].forEach((el) => {
       el.addEventListener('change', () => { if (state.token) fetchContributions(); });
     });
 
@@ -2395,27 +2458,69 @@
       }
     }
 
+    // Populate the compiler picker with the external d-DNNF compilers the
+    // backend can actually reach, reusing the eval strip's /api/kc/tools
+    // discovery (cached on Metadata).  In-process routes are separate Method
+    // options here, so only the external `compile` tools belong in this list.
+    // Soft-fail: a missing discovery surface leaves an empty box, and picking
+    // 'compilation' then surfaces a run-time error, as in the eval strip.
+    async function populateContribCompilers() {
+      if (!compilerSel) return;
+      const data = await refreshToolAvailability();
+      const entries = ((data && data.compile) || []).filter((t) => t.available);
+      compilerSel.replaceChildren();
+      for (const t of entries) {
+        const opt = document.createElement('option');
+        opt.value = t.name;
+        opt.textContent = _toolLabel(t.name);
+        compilerSel.appendChild(opt);
+      }
+      if (!entries.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '(no compiler available)';
+        opt.disabled = true;
+        compilerSel.appendChild(opt);
+      }
+    }
+
     async function fetchContributions() {
       const measure = measureSel.value;
       const method  = methodSel.value || null;
       const mapping = mapSel.value || null;
-      targetEl.textContent = state.token ? shortToken(state.token) : 'none pinned';
+      // The 'compilation' route names its external d-DNNF compiler through the
+      // `arguments` field (shapley_all_vars forwards it to makeDD/compilation);
+      // an empty value lets ProvSQL pick the highest-preference compiler.
+      const args = (method === 'compilation' && compilerSel)
+        ? (compilerSel.value || null) : null;
+      if (state.token) {
+        targetEl.innerHTML = uuidPairHtml(state.token);
+      } else {
+        targetEl.textContent = 'none pinned';
+      }
       targetEl.title = state.token || '';
+      if (timeEl) timeEl.textContent = '';
       statusEl.hidden = false;
       statusEl.textContent = 'Computing…';
       chart.innerHTML = '';
+      // Round-trip time, captured around the fetch + JSON parse the same way
+      // the circuit eval strip times /api/evaluate, so contribution cost is
+      // comparable across the Method routes.
+      const t0 = performance.now();
       let resp;
       try {
         resp = await fetch('/api/contributions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: state.token, measure, method, mapping }),
+          body: JSON.stringify({ token: state.token, measure, method, mapping, arguments: args }),
         });
       } catch (e) {
+        if (timeEl) timeEl.textContent = `· ${Math.round(performance.now() - t0)} ms`;
         statusEl.textContent = 'Network error: ' + e.message;
         return;
       }
       const data = await resp.json().catch(() => ({}));
+      if (timeEl) timeEl.textContent = `· ${Math.round(performance.now() - t0)} ms`;
       if (!resp.ok) {
         statusEl.textContent = data.detail || data.error || ('HTTP ' + resp.status);
         return;
@@ -2444,6 +2549,10 @@
       } else {
         statusEl.hidden = true;
       }
+      // Probability decimals follow the Config panel's setting (default 4),
+      // matching the circuit eval strip; the full-precision form is one click
+      // away and lands on the clipboard.
+      const dec = getProbDecimals();
       chart.innerHTML = shown.map((r) => {
         const v = (typeof r.value === 'number') ? r.value : null;
         const frac = v == null ? 0 : Math.abs(v) / maxAbs;
@@ -2452,17 +2561,22 @@
         const style = pos
           ? `left:50%;width:${half}%`
           : `left:${(50 - half).toFixed(2)}%;width:${half}%`;
-        const valTxt = v == null ? '—' : v.toFixed(4);
+        const rounded = v == null ? '—' : v.toFixed(dec);
+        const valAttrs = v == null ? ''
+          : ` data-full="${escapeAttr(String(v))}" data-rounded="${escapeAttr(rounded)}"`
+            + ` title="Click to show full precision and copy"`;
+        const valCls = 'cv-contrib__val' + (pos ? '' : ' is-neg')
+          + (v == null ? '' : ' is-clickable');
         const hasLabel = r.label != null && String(r.label) !== '';
         const labelHtml = hasLabel
           ? escapeHtml(String(r.label))
           : `<span class="cv-contrib__lazy" data-var="${escapeAttr(r.variable)}">`
-            + `${escapeHtml(shortToken(r.variable))}</span>`;
+            + uuidPairHtml(r.variable) + `</span>`;
         const titleAttr = escapeAttr(hasLabel ? String(r.label) : r.variable);
         return `<div class="cv-contrib__bar">
           <div class="cv-contrib__barhead">
             <span class="cv-contrib__label" title="${titleAttr}">${labelHtml}</span>
-            <span class="cv-contrib__val${pos ? '' : ' is-neg'}">${valTxt}</span>
+            <span class="${valCls}"${valAttrs}>${rounded}</span>
           </div>
           <div class="cv-contrib__track">
             <div class="cv-contrib__fill ${pos ? 'is-pos' : 'is-neg'}" style="${style}"></div>
@@ -2775,6 +2889,26 @@
   }
   function escapeAttr(s) {
     return escapeHtml(s).replace(/"/g, '&quot;');
+  }
+
+  // Copy plain text to the clipboard, with the same insecure-origin /
+  // older-browser fallback the circuit eval strip's copy button uses, so
+  // the click-to-copy contribution values also work on http:// dev servers.
+  async function copyToClipboard(text) {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      ta.remove();
+    }
   }
 
   function formatCell(v, typeName) {
@@ -3369,22 +3503,22 @@ function makeBlockRenderer(env, targets) {
           truncated.hidden = true;
         }
       }
-      // Auto-render the single clickable UUID: when a circuit-mode
-      // query returns exactly one cell the user could click through
-      // to a DAG, save them the click.  Two+ candidates stay
-      // ambiguous (let the user pick); zero means nothing to render.
-      // A subsequent where-mode-jump preloadCircuit still runs after
-      // this via setupCircuitMode's then() callback and overwrites
-      // the auto-rendered scene with the user-chosen one.
+      // Auto-render the single clickable UUID: when a circuit- or
+      // contributions-mode query returns exactly one cell the user
+      // could click through, save them the click.  Two+ candidates
+      // stay ambiguous (let the user pick); zero means nothing to
+      // render.  A subsequent where-mode-jump preload still runs after
+      // this via the mode's then() callback and overwrites the
+      // auto-rendered scene with the user-chosen one.
       //
       // Implementation: dispatch a synthetic click on the cell so the
-      // existing click handler (wired inside the setupCircuitMode IIFE)
-      // takes care of loadCircuit + ensureCircuitLib + the eval-strip
-      // re-bind.  This file's `renderBlocks` is at module-global
-      // scope and can't reach `loadCircuit` directly, but clicking the
-      // cell DOM element travels through whichever listener was
-      // installed for the current mode.
-      if (isCircuit) {
+      // existing click handler (wired inside the setupCircuitMode /
+      // setupContributionsMode IIFE) takes care of loadCircuit /
+      // fetchContributions.  This file's `renderBlocks` is at
+      // module-global scope and can't reach those directly, but
+      // clicking the cell DOM element travels through whichever
+      // listener was installed for the current mode.
+      if (isCircuit || env.mode === 'contributions') {
         const clickable = body.querySelectorAll('[data-circuit-uuid]');
         if (clickable.length === 1) {
           clickable[0].click();

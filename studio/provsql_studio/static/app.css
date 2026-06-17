@@ -3369,8 +3369,15 @@ table thead th[data-sort="desc"]::after {
 .cv-contrib__controls {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
   gap: 0.5rem;
 }
+/* The fingerprint toggle sits flush with the bottom of the labelled
+   selects (which carry a caption line above their control). */
+.cv-contrib__uuids { flex: none; }
+/* `.cv-contrib__ctl` sets display:flex, which outranks the UA `[hidden]`
+   rule; restore hiding so the Compiler control only shows for compilation. */
+.cv-contrib__ctl[hidden] { display: none; }
 .cv-contrib__ctl {
   display: flex;
   flex-direction: column;
@@ -3396,6 +3403,13 @@ table thead th[data-sort="desc"]::after {
 .cv-contrib__target {
   font-family: var(--mono, monospace);
   color: var(--purple-500);
+}
+/* Round-trip timing chip, mirroring the circuit eval strip's "· N ms". */
+.cv-contrib__time {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
 }
 .cv-contrib__status {
   font-size: 0.76rem;
@@ -3429,6 +3443,10 @@ table thead th[data-sort="desc"]::after {
   flex: none;
 }
 .cv-contrib__val.is-neg { color: var(--purple-500); }
+/* Click-to-expand: the value flips to full precision and copies it. */
+.cv-contrib__val.is-clickable { cursor: pointer; }
+.cv-contrib__val.is-clickable:hover { text-decoration: underline; }
+.cv-contrib__val.is-copied { color: var(--green-600, #2e7d32); }
 /* Diverging track with a centre baseline; positive bars grow right,
    negative bars grow left of centre. */
 .cv-contrib__track {
