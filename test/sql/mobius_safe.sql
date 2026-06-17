@@ -124,6 +124,24 @@ SELECT 'q9_named' AS q,
                provsql.ucq_mobius_provenance(:'q9_desc'::jsonb), 'mobius')::numeric,6)
          AS probability;
 
+-- Granted-tolerance paths ('relative' / 'additive') must take the fast exact
+-- Möbius route too: it is exact and linear, so it trivially meets any tolerance
+-- ("exact when cheap").  Before, they fell through to an FPRAS on the #P-hard
+-- literal lineage and could time out; both must now equal the default.
+SELECT 'q9_tolerance' AS q,
+       round(provsql.probability_evaluate(
+               provsql.ucq_mobius_provenance(:'q9_desc'::jsonb),
+               'relative', 'eps=0.1,delta=0.05')::numeric,6)
+         = round(provsql.probability_evaluate(
+               provsql.ucq_mobius_provenance(:'q9_desc'::jsonb))::numeric,6)
+         AS relative_exact,
+       round(provsql.probability_evaluate(
+               provsql.ucq_mobius_provenance(:'q9_desc'::jsonb),
+               'additive', 'eps=0.1,delta=0.05')::numeric,6)
+         = round(provsql.probability_evaluate(
+               provsql.ucq_mobius_provenance(:'q9_desc'::jsonb))::numeric,6)
+         AS additive_exact;
+
 -- Planner auto-routing ("just works"): q9 written as a plain SQL UNION (the
 -- existence formed by the UNION dedup), with the joint-width width screen
 -- forced to decline (joint_max_treewidth = 0) so the runtime hands off to the

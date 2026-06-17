@@ -38,6 +38,9 @@ q9_token|0.574136
 q|probability
 q9_named|0.574136
 (1 row)
+q|relative_exact|additive_exact
+q9_tolerance|t|t
+(1 row)
 q|root_gate|probability
 q9_planner|mobius|0.574136
 (1 row)

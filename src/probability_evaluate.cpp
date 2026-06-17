@@ -1959,13 +1959,18 @@ static Datum probability_evaluate_internal
   // is a signed combination Σ_i coeff_i · P(child_i) over certified-independent
   // islands -- a probability-only shortcut layered over the normal provenance,
   // which it carries as a designated "L:<uuid>" lineage child (modelled on
-  // 'inversion-free').  The default / exact / empty request and an explicit
-  // 'mobius' run the fast Möbius route; any OTHER named method is evaluated on
-  // the literal lineage (the same exact probability via, e.g., possible-worlds
-  // or monte-carlo -- slower, but the user keeps every method).
+  // 'inversion-free').  The default / exact / empty request and the granted-
+  // tolerance paths (relative / additive) run the fast Möbius route, as does an
+  // explicit 'mobius': the route is exact and linear, so it trivially meets any
+  // tolerance -- "exact when cheap", which is exactly what those paths want, and
+  // it avoids falling through to an FPRAS on the (#P-hard) literal lineage.  Any
+  // OTHER named method is evaluated on the literal lineage (the same exact
+  // probability via, e.g., possible-worlds or monte-carlo -- slower, but the
+  // user keeps every method).
   if(gc.getGateType(gc_root) == gate_mobius) {
     const bool is_path =
-      method.empty() || method == "default" || method == "exact";
+      method.empty() || method == "default" || method == "exact"
+      || method == "relative" || method == "additive";
     if(is_path || method == "mobius") {
       BooleanCircuit dummy;
       gate_t dummygate{};
