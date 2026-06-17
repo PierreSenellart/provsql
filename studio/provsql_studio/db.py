@@ -1085,6 +1085,7 @@ _PROBABILITY_METHODS = {
                           # returns exact when cheaply available, else MC
     "independent",
     "inversion-free",     # exact, requires an inversion-free certificate on the root
+    "mobius",             # exact, requires a Möbius (gate_mobius) root
     "tree-decomposition",
     "possible-worlds",
     "sieve",              # exact inclusion-exclusion over a monotone DNF

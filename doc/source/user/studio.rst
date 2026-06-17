@@ -402,8 +402,11 @@ custom and “Other” entries below:
   methods (``(default)``, ``independent``, ``possible-worlds``,
   ``tree-decomposition``, ``compilation``), weighted model counting
   (``wmc``, with a tool picker), and approximate methods
-  (``monte-carlo``, ``karp-luby``). PROV-XML export uses
-  :sqlfunc:`to_provxml`; see :doc:`export`.
+  (``monte-carlo``, ``karp-luby``). Two further exact methods appear
+  only when the target's structure admits them: ``inversion-free`` on a
+  root carrying an inversion-free certificate, and ``mobius`` on a
+  Möbius (μ) root. PROV-XML export uses :sqlfunc:`to_provxml`; see
+  :doc:`export`.
 
 The mapping picker filters on the selected semiring's expected value
 type: only ``boolean``-typed mappings appear under ``boolean``, only

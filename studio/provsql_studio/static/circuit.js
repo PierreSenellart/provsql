@@ -2232,6 +2232,17 @@
         ifOpt.disabled = ifOpt.hidden;
         if (ifOpt.hidden && meth.value === 'inversion-free') meth.value = 'exact';
       }
+      // The 'mobius' method applies only to a Möbius (μ) root: the C++
+      // MobiusMethod::applicable() requires the eval target's gate to be
+      // gate_mobius.  Offer it exactly when the current target is that gate;
+      // otherwise hide and bump a stale selection back to the default.
+      const targetIsMobius = gateType === 'mobius';
+      const mobOpt = meth.querySelector('option[value="mobius"]');
+      if (mobOpt) {
+        mobOpt.hidden = !targetIsMobius;
+        mobOpt.disabled = mobOpt.hidden;
+        if (mobOpt.hidden && meth.value === 'mobius') meth.value = 'exact';
+      }
       const comp = document.getElementById('eval-args-compiler');
       const ifComp = comp && comp.querySelector('option[value="inversion-free"]');
       if (ifComp) {

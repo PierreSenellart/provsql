@@ -2782,6 +2782,9 @@
               <!-- shown only when the root carries an inversion-free
                    certificate; toggled in syncDropdownVisibility -->
               <option value="inversion-free" hidden title="Exact polynomial-time path for the inversion-free UCQ(OBDD) class (hierarchical, tuple-independent queries): builds a structured d-DNNF over a query-derived variable order, staying linear in the lineage. Offered only because the planner attached an inversion-free certificate to this root.">inversion-free</option>
+              <!-- shown only when the eval target is a Möbius (μ) gate;
+                   toggled in syncDropdownVisibility -->
+              <option value="mobius" hidden title="Exact linear-time path for safe-by-cancellation UCQs: evaluates the signed Möbius combination Σ_i c_i·P(child_i) directly over its certified-independent islands. Offered only because the planner built a Möbius (μ) root for this token.">mobius</option>
               <option value="tree-decomposition" title="Exact evaluation via a tree decomposition of the Boolean circuit, compiled in-process to a d-DNNF (no external tool). Fails if the treewidth exceeds the supported maximum.">tree-decomposition</option>
               <option value="compilation" title="Exact evaluation by compiling the circuit to a d-DNNF with an external knowledge compiler (picked in the next dropdown), then evaluating the d-DNNF in linear time.">compilation</option>
             </optgroup>
