@@ -2528,6 +2528,53 @@
 
     // ── timeline rendering ──
     const parseT = (s) => (s == null ? null : Date.parse(s));
+
+    // Adaptive time axis: pick a tick granularity and label format from the
+    // domain span so the timeline stays legible at any scale -- seconds,
+    // minutes, hours, days, months, years. Returns ~7 {t, label} ticks.
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const pad2 = (n) => String(n).padStart(2, '0');
+    function axisTicks(t0, t1) {
+      const target = 7;
+      const SEC = 1000, MIN = 60*SEC, HR = 60*MIN, DAY = 24*HR;
+      const span = t1 - t0;
+      const out = [];
+      const push = (t, label) => { if (t >= t0 && t <= t1) out.push({ t, label }); };
+      const hm = (d) => `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+      if (span <= 2*DAY) {                       // sub-day: clock-time ticks
+        const steps = [SEC,5*SEC,15*SEC,30*SEC,MIN,5*MIN,15*MIN,30*MIN,HR,3*HR,6*HR,12*HR];
+        const step = steps.find((s) => span/s <= target) || DAY;
+        for (let t = Math.ceil(t0/step)*step; t <= t1; t += step) {
+          const d = new Date(t);
+          push(t, step < MIN ? `${hm(d)}:${pad2(d.getUTCSeconds())}` : hm(d));
+        }
+      } else if (span <= 90*DAY) {               // days: "Mon D"
+        const dstep = span <= 10*DAY ? DAY : span <= 24*DAY ? 2*DAY
+                    : span <= 60*DAY ? 7*DAY : 14*DAY;
+        for (let t = Math.ceil(t0/DAY)*DAY; t <= t1; t += dstep) {
+          const d = new Date(t);
+          push(t, `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`);
+        }
+      } else if (span <= 3*365*DAY) {            // months: "Mon YYYY"
+        const mstep = span <= 8*30*DAY ? 1 : 3;
+        const s = new Date(t0);
+        let cur = Date.UTC(s.getUTCFullYear(), s.getUTCMonth() + (s.getUTCDate() > 1 ? 1 : 0), 1);
+        while (cur <= t1) {
+          const d = new Date(cur);
+          push(cur, `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`);
+          cur = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + mstep, 1);
+        }
+      } else {                                   // years: "YYYY"
+        const y0 = new Date(t0).getUTCFullYear(), y1 = new Date(t1).getUTCFullYear();
+        const nice = [1,2,5,10,20,25,50,100,200,500];
+        const step = nice.find((s) => (y1 - y0)/s <= target) || 1000;
+        for (let y = Math.ceil(y0/step)*step; y <= y1; y += step) {
+          push(Date.UTC(y, 0, 1), `${y}`);
+        }
+      }
+      return out;
+    }
+
     function renderTimeline(data) {
       const rows = data.result || [];
       const segs = [];
@@ -2544,14 +2591,12 @@
       const xOf = (t) => ((t - t0) / span) * 100;        // percent
       const clampPct = (p) => Math.max(0, Math.min(100, p));
 
-      // Year ticks across the domain.
-      const y0 = new Date(t0).getUTCFullYear(), y1 = new Date(t1).getUTCFullYear();
-      const step = Math.max(1, Math.ceil((y1 - y0) / 8));
+      // Adaptive ticks chosen from the domain span (sec → years).
       let axis = '';
-      for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) {
-        const x = xOf(Date.UTC(y, 0, 1));
+      for (const tk of axisTicks(t0, t1)) {
+        const x = xOf(tk.t);
         if (x < 0 || x > 100) continue;
-        axis += `<div class="cv-temporal__tick" style="left:${x}%"><span>${y}</span></div>`;
+        axis += `<div class="cv-temporal__tick" style="left:${x}%"><span>${escapeHtml(tk.label)}</span></div>`;
       }
 
       const lanes = rows.map((r) => {
