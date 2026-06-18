@@ -9,7 +9,7 @@ name: in-process store smoke
 #
 # The full browser/PGlite build (a matched pglite.wasm + provsql.so), its
 # headless Node smoke test, and the Playwright browser e2e are reproduced
-# locally with `make wasm` / `make playground-test` (wasm/build-wasm.sh) rather
+# locally with `make wasm` / `make test-playground` (wasm/build-wasm.sh) rather
 # than in CI: that build is heavy, was only ever opt-in (never auto-triggered),
 # and the local script is the single source of truth.
 

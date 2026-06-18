@@ -88,10 +88,10 @@ studio/.venv/bin/playwright install --with-deps chromium
 
 # Run lint + the unit suite + the Playwright e2e smoke (against the
 # extension already installed on your local PostgreSQL).
-make studio-test
+make test-studio
 ```
 
-`make studio-test` chains `ruff check .` before `pytest tests`, so
+`make test-studio` chains `ruff check .` before `pytest tests`, so
 the same lint that gates CI also gates the local target. The
 release pipeline is documented in the [build-system
 chapter](https://provsql.org/docs/dev/build-system.html#studio-releases).
@@ -142,7 +142,7 @@ checker can validate them.
      Playwright smoke under `studio/tests/e2e/` that exercises
      the changed behaviour.
 3. Ensure the relevant local test target passes: `make test` for
-   extension changes, `make studio-test` for Studio changes (or
+   extension changes, `make test-studio` for Studio changes (or
    both if the change crosses the boundary).
 4. If your change touches the documentation, run `make docs` and
    confirm the coherence checker (`check-doc-links.py`) reports

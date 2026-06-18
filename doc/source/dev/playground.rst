@@ -180,13 +180,13 @@ Build, test, deploy
   artifacts from ``wasm/``: the matched PGlite dist and
   ``provsql.tar.gz``). ``make playground`` reuses the in-place artifacts;
   ``make wasm`` and the first build pass ``--pglite``/``--provsql``.
-* **Test**: ``make playground-test`` runs ``studio/tests/web/``, a
+* **Test**: ``make test-playground`` runs ``studio/tests/web/``, a
   headless-Chromium Playwright suite (JSPI is on by default in current
   Chromium) driving the real frontend + Python backend against the in-page
   PGlite. It covers boot, the query → circuit → semiring path, the ``/api``
   surface, database switching, Reset, deep links, sub-path portability, and
   a fully off-line boot. The browser build and this e2e run locally only (via
-  ``make wasm`` / ``make playground-test``), not in CI; the per-PR
+  ``make wasm`` / ``make test-playground``), not in CI; the per-PR
   ``.github/workflows/wasm.yml`` job covers just the cheaper in-process-store
   single-session smoke.
 * **Deploy** with ``make deploy-playground`` (rsync to

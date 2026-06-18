@@ -76,9 +76,9 @@ Upgrade-Chain Parity
 
 .. code-block:: bash
 
-   make upgrade-parity-test
+   make test-upgrade-parity
    # with psql options:
-   make upgrade-parity-test PSQL_ARGS=--port=5434
+   make test-upgrade-parity PSQL_ARGS=--port=5434
 
 ``test/upgrade_parity.sh`` builds one database through
 ``CREATE EXTENSION provsql VERSION '1.0.0'`` followed by

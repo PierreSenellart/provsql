@@ -408,7 +408,7 @@ not override the ``--search-path provsql_test`` we pass at
 startup) and drives the live UI through a ``chromium`` instance.
 
 Both suites live under the same ``pytest`` invocation: ``make
-studio-test`` from the repo root runs ``ruff check`` first, then
+test-studio`` from the repo root runs ``ruff check`` first, then
 ``pytest tests`` (which walks both directories). For
 finer-grained runs, ``pytest tests --ignore=tests/e2e`` skips the
 chromium tax.

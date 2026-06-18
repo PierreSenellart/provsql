@@ -78,7 +78,7 @@ jobs:
       - uses: ./.github/actions/install-knowledge-compilers
       - run: make -j$(nproc) && make tdkc && make provsql_migrate_mmap && make install
       - name: KCMCP protocol conformance (tdkc)
-        run: make kcmcp-tdkc-test
+        run: make test-kcmcp
       - run: echo "shared_preload_libraries = 'provsql'" >> /etc/postgresql/${{ matrix.pg }}/test/postgresql.conf
       - run: service postgresql restart
       - run: pg_isready -t 30

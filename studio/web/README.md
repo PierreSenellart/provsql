@@ -228,7 +228,7 @@ per-open PREP), and Reset drops user-created databases too.
 ## CI/CD
 
 - The WASM artifacts, `build.sh`, and the **browser e2e** (`studio/tests/web/`)
-  are built and run **locally** via `make wasm` / `make playground-test`
+  are built and run **locally** via `make wasm` / `make test-playground`
   (`wasm/build-wasm.sh`), not in CI -- that build is heavy and was only ever
   opt-in, so the local script is the single source of truth.
   [`.github/workflows/wasm.yml`](../../.github/workflows/wasm.yml) keeps just

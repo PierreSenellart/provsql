@@ -25,7 +25,7 @@ Tick the rows that apply to this PR.
 
 **Studio (Python / JS / CSS under `studio/`)**
 
-- [ ] `make studio-test` passes locally (chains `ruff check` and runs the unit + Playwright e2e suite under `studio/tests/`)
+- [ ] `make test-studio` passes locally (chains `ruff check` and runs the unit + Playwright e2e suite under `studio/tests/`)
 - [ ] New tests for the changed behaviour live in `studio/tests/` (pytest unit) or `studio/tests/e2e/` (Playwright smoke)
 
 **Documentation (`doc/`, applies to both components)**

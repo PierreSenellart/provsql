@@ -12,7 +12,9 @@ ProvSQL uses two Makefiles:
 
 - ``Makefile`` (top-level) -- user-facing targets: ``make``,
   ``make test``, ``make docs``, ``make website``, ``make deploy``.
-  This file delegates to ``Makefile.internal`` for the actual build.
+  ``make help`` prints the full grouped target menu. This file
+  delegates to ``Makefile.internal`` for the actual build (a mistyped
+  target is forwarded there and errors, rather than in the wrapper).
 
 - ``Makefile.internal`` -- the real build file, based on
   PostgreSQL's **PGXS** (PostgreSQL Extension Building Infrastructure).

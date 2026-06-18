@@ -37,7 +37,7 @@ any server that exists today.
    the protocol; ProvSQL itself keeps tree decomposition in process rather
    than talking to it over a socket.  ``test/kcmcp/conformance.py`` drives it
    through a handshake, ``compile``/``wmc`` requests, ``PING``/``PONG``, and
-   error cases (``make kcmcp-tdkc-test``).
+   error cases (``make test-kcmcp``).
 
 
 Design goals

@@ -75,7 +75,7 @@ jobs:
           fetch-depth: 0
       - run: make -j$(sysctl -n hw.ncpu) && make tdkc && make provsql_migrate_mmap && make install
       - name: KCMCP protocol conformance (tdkc)
-        run: make kcmcp-tdkc-test
+        run: make test-kcmcp
       # pg_isready does a single connection attempt; the -t flag is the
       # connection timeout, not a retry duration.  When the cluster is
       # mid-startup or in recovery, pg_isready returns 1 immediately.
