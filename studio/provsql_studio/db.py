@@ -1935,50 +1935,60 @@ def _parse_multirange(value) -> list[dict]:
     return out
 
 
-_TEMPORAL_SUBMODES = ("timetravel", "timeslice", "history", "query")
+_TEMPORAL_TIMEOPS = ("asof", "during", "history", "full")
 
 
 def temporal(
     pool: ConnectionPool,
     *,
+    source: str,
+    timeop: str,
     relation: str = "",
-    submode: str,
+    query: str | None = None,
+    mapping: str | None = None,
     at_time: str | None = None,
     from_time: str | None = None,
     to_time: str | None = None,
     col_names: list[str] | None = None,
     col_values: list[str] | None = None,
-    query: str | None = None,
-    mapping: str | None = None,
     statement_timeout: str,
     search_path: str = "",
     tool_search_path: str = "",
     extra_gucs: dict[str, str] | None = None,
 ) -> dict:
-    """Run a time-travel SRF for Temporal mode and return rows + validity.
+    """Place a relation's or a query's rows on a validity timeline.
 
-    Backs Temporal mode's control strip. `submode` selects the SRF:
-    `timetravel(relation, at_time)` (snapshot at an instant), `timeslice(
-    relation, from_time, to_time)` (rows valid during a window), or `history(
-    relation, col_names[], col_values[])` (all versions matching a key filter).
-    Each SRF returns `relation.*, sr_temporal(...)`; ProvSQL appends the
-    `provsql` token last, so the `AS (...)` clause is the relation's columns
-    (introspected from the catalog) followed by `valid_time tstzmultirange,
-    provsql uuid`. Every returned `valid_time` is parsed into a list of
-    `{lower, upper}` intervals for the timeline.
+    `source` is `'relation'` (a tracked table / temporal view) or `'query'`
+    (arbitrary SQL interpreted over the interval-union semiring via `mapping`).
+    `timeop` is the time operation, applied to either source:
+      * `'asof'`    -- rows valid at a single instant (`at_time`)
+      * `'during'`  -- rows valid during a window (`from_time`..`to_time`)
+      * `'history'` -- (relation only) versions matching a key-column filter
+      * `'full'`    -- (query only) every row, with its full validity
 
-    Returns `{result, kind, submode, relation, columns}` ready to JSON-encode.
-    Raises ValueError on bad input; propagates psycopg.Error to the caller."""
-    submode = (submode or "").strip().lower()
-    if submode not in _TEMPORAL_SUBMODES:
-        raise ValueError(f"unknown temporal submode: {submode!r}")
+    A relation source uses the `timetravel` / `timeslice` / `history` SRFs; a
+    query source wraps the SQL with `sr_temporal(provenance(), mapping) AS
+    valid_time` and filters on that. Each `valid_time` is parsed into
+    `[{lower, upper}]` intervals for the timeline.
 
-    map_match = None
-    if submode == "query":
-        # Arbitrary query interpreted over the interval-union semiring: validate
-        # the SQL and the validity mapping (sr_temporal's 2nd argument).
+    Returns `{result, kind, source, timeop, columns, sql}` ready to
+    JSON-encode. Raises ValueError on bad input; propagates psycopg.Error."""
+    source = (source or "").strip().lower()
+    timeop = (timeop or "").strip().lower()
+    if source not in ("relation", "query"):
+        raise ValueError(f"unknown temporal source: {source!r}")
+    if timeop not in _TEMPORAL_TIMEOPS:
+        raise ValueError(f"unknown temporal time operation: {timeop!r}")
+    if source == "relation" and timeop == "full":
+        raise ValueError("the 'full' operation applies to a query source")
+    if source == "query" and timeop == "history":
+        raise ValueError("the 'history' operation applies to a relation source")
+
+    map_match = match = None
+    names = values = None
+    if source == "query":
         if not (query or "").strip():
-            raise ValueError("query submode requires a SQL query")
+            raise ValueError("query source requires a SQL query")
         map_match = next(
             (x for x in list_temporal_mappings(pool) if x["qname"] == mapping), None
         )
@@ -1986,25 +1996,25 @@ def temporal(
             raise ValueError(f"unknown temporal mapping: {mapping!r}")
     else:
         match = next(
-            (x for x in list_temporal_relations(pool) if x["qname"] == relation),
-            None,
+            (x for x in list_temporal_relations(pool) if x["qname"] == relation), None
         )
         if match is None:
             raise ValueError(f"unknown temporal relation: {relation!r}")
         bare_name = match["name"]
-        if submode == "timetravel":
-            if not (at_time or "").strip():
-                raise ValueError("timetravel requires an instant (at_time)")
-        elif submode == "timeslice":
-            if not (from_time or "").strip() or not (to_time or "").strip():
-                raise ValueError("timeslice requires from_time and to_time")
-        else:  # history
-            names = [c for c in (col_names or []) if (c or "").strip()]
-            values = list(col_values or [])
-            if not names or len(names) != len(values):
-                raise ValueError(
-                    "history requires equal-length, non-empty col_names / col_values"
-                )
+
+    if timeop == "asof":
+        if not (at_time or "").strip():
+            raise ValueError("the 'as of' operation requires an instant (at_time)")
+    elif timeop == "during":
+        if not (from_time or "").strip() or not (to_time or "").strip():
+            raise ValueError("the 'during' operation requires from_time and to_time")
+    elif timeop == "history":
+        names = [c for c in (col_names or []) if (c or "").strip()]
+        values = list(col_values or [])
+        if not names or len(names) != len(values):
+            raise ValueError(
+                "history requires equal-length, non-empty col_names / col_values"
+            )
 
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -2031,28 +2041,43 @@ def temporal(
                 )
             )
 
-        if submode == "query":
+        if source == "query":
             # Arbitrary query over the interval-union semiring: wrap it to add
-            # the per-row validity. provenance() over the subquery is the row's
-            # provenance; ProvSQL appends `provsql` last, so the record is
-            # (the query's columns, valid_time, provsql), read off cur.description.
+            # the per-row validity, then apply the time operation as a filter on
+            # that computed column (mirroring what the SRFs do internally). The
+            # record is (the query's columns, valid_time, provsql), read off
+            # cur.description (ProvSQL appends `provsql` last).
             user_sql = (query or "").strip().rstrip(";")
-            full_query = sql.SQL(
-                "SELECT t.*,\n"
+            inner = sql.SQL(
+                "SELECT t0.*,\n"
                 "       provsql.sr_temporal(provsql.provenance(), {m}) AS valid_time\n"
-                "FROM (\n{q}\n) t"
+                "  FROM (\n{q}\n  ) t0"
             ).format(m=sql.Literal(map_match["qname"]), q=sql.SQL(user_sql))
+            if timeop == "asof":
+                where = sql.SQL("\nWHERE t.valid_time @> {at}::timestamptz").format(
+                    at=sql.Literal(at_time)
+                )
+            elif timeop == "during":
+                where = sql.SQL(
+                    "\nWHERE t.valid_time "
+                    "&& tstzrange({f}::timestamptz, {t}::timestamptz)"
+                ).format(f=sql.Literal(from_time), t=sql.Literal(to_time))
+            else:  # full
+                where = sql.SQL("")
+            full_query = sql.SQL("SELECT * FROM (\n{inner}\n) t{where}").format(
+                inner=inner, where=where
+            )
             cur.execute(full_query)
             rows = cur.fetchall()
             names_in_order = [d.name for d in cur.description]
             sql_text = full_query.as_string(conn)
         else:
-            # Build the SRF's `AS (...)` record shape. The SRF body is
+            # Relation source: the time-travel SRFs. Each SRF body is
             # `SELECT <relation>.*, sr_temporal(...)`; ProvSQL's hook strips any
             # real `provsql` column out of the `*`-expansion and re-appends a
             # single `provsql` last, after sr_temporal's validity. So the record
             # is always (the relation's non-provenance columns, valid_time,
-            # provsql) -- for both tables and views.
+            # provsql) -- for both tables and views. Introspect to build `AS`.
             cur.execute(
                 """
                 SELECT a.attname, format_type(a.atttypid, a.atttypmod)
@@ -2072,11 +2097,11 @@ def temporal(
             )
             names_in_order = [c[0] for c in out_cols]
 
-            if submode == "timetravel":
+            if timeop == "asof":
                 srf = sql.SQL("provsql.timetravel({rel}, {t}::timestamptz)").format(
                     rel=sql.Literal(bare_name), t=sql.Literal(at_time)
                 )
-            elif submode == "timeslice":
+            elif timeop == "during":
                 srf = sql.SQL(
                     "provsql.timeslice({rel}, {f}::timestamptz, {t}::timestamptz)"
                 ).format(
@@ -2084,7 +2109,7 @@ def temporal(
                     f=sql.Literal(from_time),
                     t=sql.Literal(to_time),
                 )
-            else:
+            else:  # history
                 srf = sql.SQL(
                     "provsql.history({rel}, {cn}::text[], {cv}::text[])"
                 ).format(
@@ -2129,7 +2154,8 @@ def temporal(
     return {
         "result": result,
         "kind": "temporal",
-        "submode": submode,
+        "source": source,
+        "timeop": timeop,
         "relation": relation,
         "columns": col_names_out,
         "sql": sql_text,

@@ -1036,14 +1036,16 @@ def create_app(
 
     @app.post("/api/temporal")
     def api_temporal():
-        # Temporal mode : run a time-travel SRF (timetravel / timeslice /
-        # history) over a relation and return rows + parsed validity
-        # intervals for the timeline.  Mirrors /api/contributions' GUC
+        # Temporal mode : place a relation's or a query's rows on a validity
+        # timeline. `source` (relation|query) x `timeop` (asof|during|history|
+        # full); relation sources use the time-travel SRFs, query sources wrap
+        # the SQL with sr_temporal and filter. Mirrors /api/contributions' GUC
         # composition and error shaping; backed by db.temporal.
         import psycopg
         payload = request.get_json(silent=True) or {}
+        source   = (payload.get("source") or "").strip().lower()
+        timeop   = (payload.get("timeop") or "").strip().lower()
         relation = (payload.get("relation") or "").strip()
-        submode  = (payload.get("submode") or "").strip().lower()
         col_names  = payload.get("col_names") if isinstance(
             payload.get("col_names"), list) else None
         col_values = payload.get("col_values") if isinstance(
@@ -1056,8 +1058,9 @@ def create_app(
         try:
             data = db.temporal(
                 get_pool(),
+                source=source,
+                timeop=timeop,
                 relation=relation,
-                submode=submode,
                 at_time=payload.get("at_time") or None,
                 from_time=payload.get("from_time") or None,
                 to_time=payload.get("to_time") or None,

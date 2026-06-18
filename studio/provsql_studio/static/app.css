@@ -3497,6 +3497,9 @@ table thead th[data-sort="desc"]::after {
   font-size: 0.72rem;
   color: var(--fg-2);
 }
+/* display:flex above outranks the UA [hidden] rule; restore hiding so the
+   relation / mapping pickers toggle with the chosen source. */
+.cv-temporal__ctl[hidden] { display: none; }
 .cv-temporal__ctl select,
 .cv-temporal__ctl input {
   font-size: 0.78rem;
@@ -3508,8 +3511,10 @@ table thead th[data-sort="desc"]::after {
 }
 .cv-temporal__inputs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }
 /* Segmented As-of / During / History-of selector. */
-.cv-temporal__modes { display: inline-flex; border: 1px solid var(--border-soft); border-radius: 5px; overflow: hidden; }
-.cv-temporal__mode {
+/* Segmented controls: Source (Relation | Query) and Time op (As of | …). */
+.cv-temporal__seg { display: inline-flex; border: 1px solid var(--border-soft); border-radius: 5px; overflow: hidden; }
+.cv-temporal__src,
+.cv-temporal__op {
   font-size: 0.76rem;
   padding: 0.2rem 0.5rem;
   border: 0;
@@ -3518,8 +3523,11 @@ table thead th[data-sort="desc"]::after {
   color: var(--fg-2);
   cursor: pointer;
 }
-.cv-temporal__mode:first-child { border-left: 0; }
-.cv-temporal__mode.is-active { background: var(--terracotta-500); color: #fff; }
+.cv-temporal__src:first-child,
+.cv-temporal__op:first-child { border-left: 0; }
+.cv-temporal__src.is-active,
+.cv-temporal__op.is-active { background: var(--terracotta-500); color: #fff; }
+.cv-temporal__op:disabled { color: var(--border-soft); cursor: not-allowed; background: #fafafa; }
 .cv-temporal__status { font-size: 0.76rem; color: var(--fg-muted); font-style: italic; }
 .cv-temporal__status.is-error { color: var(--terracotta-700, #a33); font-style: normal; }
 
