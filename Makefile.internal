@@ -209,8 +209,8 @@ tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp s
 	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -o tdkc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp src/kcmcp_protocol.cpp src/kcmcp_server.cpp src/dimacs_cnf.cpp
 
 # Build tdkc and run the KCMCP protocol conformance check against it.
-.PHONY: kcmcp-tdkc-test
-kcmcp-tdkc-test: tdkc
+.PHONY: test-kcmcp
+test-kcmcp: tdkc
 	python3 test/kcmcp/conformance.py ./tdkc
 
 provsql_migrate_mmap: src/provsql_migrate_mmap.cpp
