@@ -65,24 +65,15 @@ Each plan document follows a consistent layout:
   follow-ups (lazy Boolean build, guarantee propagation, independence-cert
   cache), RV-probability transparency, and d-tree research polish. Borders
   [`safe-query-followups.md`](safe-query-followups.md).
-- [`mobius.md`](mobius.md) : plan for the Möbius-inversion route, the
-  last missing exact route of the Dalvi-Suciu dichotomy -- UCQs that
-  are safe only because the hard terms of their inclusion-exclusion
-  expansion carry a zero Möbius value on the CNF lattice and cancel
-  (canonical witness: QW / q9).  Planner-time lattice analysis +
-  certificate, execution-time compiler emitting certified-independent
-  islands under a signed `gate_mobius` combination, linear evaluation;
-  fires only when the safe-query rewriter, the inversion-free
-  certificate and the joint-width route all pass.  Supersedes the
-  *Möbius / Monet* entry of
-  [`safe-query-followups.md`](safe-query-followups.md).
 - [`safe-query-followups.md`](safe-query-followups.md) : deferred ideas
   bordering the `provsql.boolean_provenance` work -- further Boolean-only
-  optimisations (independent-subtree detection, Möbius / Monet…), the
-  inversion-free `UCQ(OBDD)` extensions (UNION in a view, FD-aware orders),
-  discrete `random_variable` extensions, and the hierarchical-detector
+  optimisations (independent-subtree detection, the deferred intensional
+  Monet construction now that the extensional Möbius route has shipped),
+  the inversion-free `UCQ(OBDD)` extensions (UNION in a view, FD-aware
+  orders), discrete `random_variable` extensions, the hierarchical-detector
   follow-ups (FD-induced nested rewrite, soft keys, view-descent FD
-  chases, data-safe plans).
+  chases, data-safe plans), and the two deferred joint-width hardening
+  notes.
 - [`scalar-subqueries.md`](scalar-subqueries.md) : the remaining
   unsupported scalar-/correlated-subquery forms -- scalar sublinks nested
   in arithmetic (today a passthrough-with-warning; the decorrelation

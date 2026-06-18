@@ -9,11 +9,13 @@ For **every** open point, this file gives three things:
 3. an **after** sketch of what the behaviour would become once the point
    is implemented.
 
-Tested against **ProvSQL 1.10.0-dev** (the current `conditioning`-branch
-source, installed and `cmp`-verified identical to the built `provsql.so`)
-on **PostgreSQL 18**, on 2026-06-09. Each cluster was probed in its own
-throwaway database. Output blocks are verbatim; where a value is the
-analytically known answer it is noted inline.
+Tested against **ProvSQL 1.10.0** on **PostgreSQL 18**. Each cluster was
+probed in its own throwaway database; output blocks are verbatim, and
+where a value is the analytically known answer it is noted inline. The
+verbatim blocks were captured on 2026-06-09 against the pre-release build
+(then the `conditioning` branch, since merged and released as 1.10.0);
+every open-item behaviour here was re-verified against the released line
+on 2026-06-18 and still holds.
 
 Source plans: [`probability-evaluation.md`](probability-evaluation.md),
 [`safe-query-followups.md`](safe-query-followups.md),
@@ -50,23 +52,23 @@ Two findings from running the examples reshuffle the plan:
    (scalar §6). The `gate_arith` prerequisite has shipped; today a
    sublink nested in arithmetic silently under-approximates probability
    to 1.0 (verified). The single most "prereq just landed" item.
-2. **Studio Contributions mode** (studio §1). The backing
-   `shapley_all_vars` / `banzhaf_all_vars` are verified working; the gap
-   is pure UI chrome. Closes the CS2 §13–15 coverage gap.
-3. **Case-study quick wins** (case-studies, CS1/CS3/CS5 + the CS2
+2. **Case-study quick wins** (case-studies, CS1/CS3/CS5 + the CS2
    aggregate steps). Verified to need no engine work — pure tutorial
    prose closing feature-coverage-matrix cells.
 
+(Studio Contributions mode, previously the #2 Tier-1 item, shipped in
+Studio 1.6.0.)
+
 ### Tier 2 — reusable certificates / correctness hardening
 
-4. **Lean soundness proof of the bounded-treewidth deterministic-OR
+3. **Lean soundness proof of the bounded-treewidth deterministic-OR
    construction** (btw §1). `evaluateCertifiedIsland` plain-sums the btw
    constructor's marked state ORs, whose determinism is a global, not
    locally-checkable, property; a Lean proof of the constructor
    (categorical block model; block base case + state-OR exclusivity +
    `1−Σp` none-branch) backs that trust. Offline assurance — no runtime
    certificate, no code change.
-5. **UCQ(OBDD): UNION nested in a subquery/view** (safe §1). A *top-level*
+4. **UCQ(OBDD): UNION nested in a subquery/view** (safe §1). A *top-level*
    `UNION` is already certified branch-by-branch (recursive
    `process_query` re-entry); the gap is only a `UNION` inlined into one
    safe-query candidate (view / derived table), which lands as a
@@ -75,25 +77,25 @@ Two findings from running the examples reshuffle the plan:
    flattening extension, not a core change.
 ### Tier 3 — larger / workload-gated
 
-6.  HAVING exact residuals: coupled branch-spanning SUM (prob §2),
+5.  HAVING exact residuals: coupled branch-spanning SUM (prob §2),
     shared-contributor UNION/EXCEPT (prob §3).
-7.  Studio: Temporal mode (studio §2), result-table batch evaluation
-    (studio §3), notebook polish.
-8.  Larger CS2 / CS4 extensions (window-function caveat verified).
-9.  Continuous distributions: the §F.1 refactor, then the quick wins
+6.  Studio: Temporal mode (studio §1), result-table batch evaluation
+    (studio §2), notebook polish.
+7.  Larger CS2 / CS4 extensions (window-function caveat verified).
+8.  Continuous distributions: the §F.1 refactor, then the quick wins
     (Gamma, Log-normal, quantiles, RV-vs-RV comparators, GMM).
-10. Scalar subqueries: different-`(Q,corr)` multi-sublinks (hard error
+9. Scalar subqueries: different-`(Q,corr)` multi-sublinks (hard error
     today), `GROUP BY` body (hard error today).
-11. Bounded-treewidth Route C leftovers / Route 3 / non-recursive
+10. Bounded-treewidth Route C leftovers / Route 3 / non-recursive
     triggers (the in-star and chain shapes) — gated on a real workload,
     but see the robustness note (Route 3 removes an OOM-prone circuit).
 
 ### Tier 4 — research bets / explicitly deferred
 
-12. Conditioning: re-based materialised posterior, Shapley over evidence
+11. Conditioning: re-based materialised posterior, Shapley over evidence
     (verified refused today), soft/weighted conditioning (not a priority).
-13. SUM-safe rounding FPTRAS (prob §1) — research-grade, rare-event SUM.
-14. General-semiring width-aware evaluator + Route A automaton (btw §5,§6);
+12. SUM-safe rounding FPTRAS (prob §1) — research-grade, rare-event SUM.
+13. General-semiring width-aware evaluator + Route A automaton (btw §5,§6);
     Monet construction, per-branch FBDD orders, discrete RV families,
     self-joins-with-inversion (safe §2,§3,§5,§6); copulas / MVN /
     stochastic processes / do-calculus (continuous §A.5,§D.2,§D.3);
@@ -900,24 +902,10 @@ for §§A.1, A.2, A.4, B.1, B.3, C.1–C.3.
 ## Studio & case studies (studio.md, case-studies.md)
 
 These two plans are about UI / documentation, so the test confirms the
-**backing SQL capability** each item relies on.
+**backing SQL capability** each item relies on. (Contributions mode,
+previously §1 here, shipped in Studio 1.6.0.)
 
-### 1. Contributions mode (Shapley/Banzhaf heat-map) — backing works
-```sql
-SELECT * FROM shapley_all_vars('<and-of-two-rows uuid>'::uuid) ORDER BY value DESC;
-SELECT * FROM banzhaf_all_vars('<same uuid>'::uuid) ORDER BY value DESC;
-```
-```
--- shapley_all_vars:  two vars, value 0.24 each      -- banzhaf_all_vars: two vars, value 0.48 each
-```
-Both work when called on a literal UUID outside a tracked FROM (calling
-them via `LATERAL` on a tracked relation raises "FROM function with
-multiple output attributes not supported"; materialising tokens into a
-plain table and `CROSS JOIN LATERAL` works — the path Studio's result table
-already uses). **After** — pure Studio chrome: a mode tab, sidebar
-per-input bars, a "→ Contributions" per-row affordance.
-
-### 2. Time-travel / Temporal mode — backing works
+### 1. Time-travel / Temporal mode — backing works
 ```sql
 SET provsql.update_provenance='on';
 SELECT id, name, role, get_valid_time(provsql, 'temp_test') FROM temp_test;
@@ -930,7 +918,7 @@ return correct intervals end-to-end. **After** — a Temporal mode tab whose
 sidebar form drives the SRF calls and renders the `valid_time` column;
 no engine work.
 
-### 3. Result-table batch evaluation — backing works
+### 2. Result-table batch evaluation — backing works
 ```sql
 SELECT id, val, probability_evaluate(provenance()) FROM contrib_t;   -- one pass, per row
 ```
@@ -939,7 +927,7 @@ that batch-posts all UUIDs from the displayed `provsql` column and appends
 a result column. **After** — a result-table extension over `/api/evaluate`,
 reusing the existing dispatch.
 
-### 4. CS2: COUNT(DISTINCT) + string_agg — works
+### 3. CS2: COUNT(DISTINCT) + string_agg — works
 ```sql
 SELECT exposure, COUNT(DISTINCT study), string_agg(study, ', '), provenance()
 FROM studies GROUP BY exposure;
@@ -952,7 +940,7 @@ Both aggregates produce correct provenance; `(*)` marks values depending
 on several input tuples. **After** — a CS2 step with prose noting `(*)`
 and that `string_agg(DISTINCT ...)` deduplicates; no engine change.
 
-### 5. CS2: FILTER clause — works
+### 4. CS2: FILTER clause — works
 ```sql
 SELECT exposure, COUNT(*) FILTER (WHERE effect='beneficial'), COUNT(*) FILTER (WHERE effect='harmful'), provenance()
 FROM studies GROUP BY exposure;
@@ -963,7 +951,7 @@ FROM studies GROUP BY exposure;
 `FILTER` aggregates carry provenance correctly. **After** — a CS2 filtering
 step; no change required.
 
-### 6. CS2 / CS3: window functions — warn-and-degrade
+### 5. CS2 / CS3: window functions — warn-and-degrade
 ```sql
 SELECT study, RANK() OVER (PARTITION BY outcome ORDER BY study), provenance() FROM studies;
 ```
@@ -978,7 +966,7 @@ later becomes a join/filter key. **After** — case-study text uses the
 caveat; a future engine improvement could capture window-frame membership
 in the circuit (not a blocker).
 
-### 7. CS3: LATERAL — works (conservatively)
+### 6. CS3: LATERAL — works (conservatively)
 ```sql
 SELECT s.trip_id, s.stop_name, nxt.stop_name, provenance(), where_provenance(provenance())
 FROM stops s CROSS JOIN LATERAL (SELECT stop_name FROM stops
@@ -989,7 +977,7 @@ WHERE s.stop_name='Bagneux';
 correlated subquery (conservative but correct). **After** — a CS3 step,
 with prose noting the conservative formula.
 
-### 8. CS4: UPDATE + undo — works (with a token subtlety)
+### 7. CS4: UPDATE + undo — works (with a token subtlety)
 ```sql
 SET provsql.update_provenance='on';
 UPDATE ministers SET role='Interior' WHERE id=1;
@@ -1004,7 +992,7 @@ no-ops with a notice — the likely user mistake to document). **After** —
 a CS4 step using `get_valid_time` to make the reversion visible; no engine
 change.
 
-### 9. CS9 (future): UDFs and join-on-aggregate — genuinely engine-blocked
+### 8. CS9 (future): UDFs and join-on-aggregate — genuinely engine-blocked
 
 **(a) Provenance through a UDF.** A pure scalar UDF on one tracked row
 keeps that row's token (correct); a UDF that *reads a second tracked table*

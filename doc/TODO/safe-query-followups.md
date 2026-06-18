@@ -113,12 +113,18 @@ explicitly deferred until a real workload motivates it.
   constructing-then-evaluating Monet's circuit.  Revisit only if
   a benchmark surfaces where d4 visibly chokes on a safe
   non-hierarchical UCQ and Monet's construction plausibly helps.*
-  Superseded as the route to safe non-hierarchical UCQs by
-  [`mobius.md`](mobius.md), which plans the **extensional**
-  lattice-walking algorithm (Möbius certificate at plan time,
-  compile-at-execution circuit with a signed top combination);
-  the intensional construction above stays deferred on the same
-  grounds.
+  Superseded as the route to safe non-hierarchical UCQs by the
+  **extensional** Möbius-inversion route, which shipped in 1.10.0
+  (`src/mobius_evaluate.cpp`, the `gate_mobius` signed top
+  combination, the `mobius` method, `provsql.mobius` GUC): a Möbius
+  certificate at plan time and a compile-at-execution circuit of
+  certified-independent islands.  The intensional Monet construction
+  above stays deferred on the same grounds.
+  *One Möbius item remains open (research-flavoured, may never be
+  needed): "Increment 3", ranking / shattering for queries whose
+  reduced form still carries a within-disjunct self-join.  The
+  compiler currently declines those cases soundly rather than
+  ranking them.*
 
 ### Hierarchical-detector follow-ups (rewriter coverage)
 
@@ -248,3 +254,19 @@ the tradeoff described below.
      only fires when the user requests it.  ~200-300 LOC including
      parse-tree surgery for the new column and the composite
      block-key recording on the worker side.
+
+### Joint-width hardening (deferred)
+
+The joint-width UCQ compiler shipped end to end (M1-M4); two hardening
+items were deliberately left out of the first version and survive here
+as the only open notes from the retired joint-width specs:
+
+- **Binary-wire accumulation instead of ternary gate cliques.** The
+  current encoding emits ternary gate cliques along the elimination
+  order; a binary-wire accumulation would shrink the circuit on
+  high-degree states.  Accepted as-is for v1; a possible future
+  optimisation, not a correctness gap.
+- **Slice-size memory-abort GUC.** Only `provsql.joint_max_treewidth`
+  and `provsql.joint_max_states` bound the run today; a dedicated
+  slice-size budget that aborts gracefully on a memory blow-up (rather
+  than relying on the state cap) is unimplemented.

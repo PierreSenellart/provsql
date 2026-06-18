@@ -14,27 +14,7 @@ additive** – not algorithm picks; the chooser returns the cheapest *admissible
 method.  Every method declares `guaranteeKind` / `isDeterministic` / `applicable`
 / `estimatedCost`, so new work below must fit that frame.
 
-## 1. d-tree: closed
-
-The anytime engine handles arbitrary Boolean circuits (exact + certified bounds)
-under a per-method subproblem budget.  The BID / multivalued gap is fixed (the
-`ProbabilityMethod::handlesMultivalued()` central rewrite).  The two remaining
-polish ideas were evaluated and **dropped** -- recorded here so they are not
-re-attempted:
-
-- **Non-DNF exact auto-selection.**  To join the exact auto-chain the general
-  recursion needs a cost estimate, but the d-tree's cost has no usable proxy
-  (the code's own comment: "the treewidth proxy is NOT used -- it mispredicts
-  this engine").  Leaving it by-name-only for exact is the honest choice.
-- **Memoise the approximate path** (cache exact sub-results during an
-  approximate recursion).  *Tried.*  It speeds d-tree itself ~20-30%, but on
-  `big_rare` it makes the auto `relative` path **11x slower** (681 ms -> 7.9 s):
-  by letting d-tree converge within its step budget it suppresses the beneficial
-  escalation to `compilation:d4`, and keeping that escalation only where d4
-  actually wins requires the same (unsolvable) cost prediction as the item
-  above.  Net regression; reverted.
-
-## 2. The SUM-safe rounding FPTRAS (`AggFptrasMethod`)
+## 1. The SUM-safe rounding FPTRAS (`AggFptrasMethod`)
 
 The apx-safe `SUM` / `AVG` / `MIN` / `MAX` corner is already covered
 *approximately* by direct world-sampling (the DKLR stopping rule over the
@@ -99,35 +79,29 @@ New code `src/AggFptras.{h,cpp}`, consuming `AggMarginalEvaluator` internals
 **Research-grade; high risk of subtle statistical bias.** Deferred for
 collaborative implementation / review rather than autonomous coding.
 
-## 3. HAVING marginal-vector engine: exact residual shapes
+## 2. HAVING marginal-vector engine: exact residual shapes
 
-Approximate coverage of these exists (item 2's sampling); the open work is the
+Approximate coverage of these exists (item 1's sampling); the open work is the
 remaining **exact** (PTIME) coverage.  The laminar / cross-product engine covers
 COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
-- **Branch-spanning SUM** – both separable shapes are now exact in
-  `src/AggMarginalEvaluator.cpp`: *additively separable* (`sum(b+c)`,
-  `sum(2b-c+1)`) folds the per-factor joint `(sum, count)` distributions
-  (`sumCountPMF`, `recoverAdditiveSeparation`); *multiplicatively separable*
-  (`sum(b*c)`) is the product of per-factor weighted sums (`mulSeparableSumPMF`,
-  a pivot identity that avoids explicit factorisation). Remaining: genuinely
-  coupled values that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor;
-  may be `#P`-hard, self-gates back to enumeration today).
+- **Branch-spanning SUM** – the separable shapes (additively separable
+  `sum(b+c)` / `sum(2b-c+1)`, multiplicatively separable `sum(b*c)`) are now
+  exact in `src/AggMarginalEvaluator.cpp`. Remaining: genuinely coupled values
+  that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor; may be `#P`-hard,
+  self-gates back to enumeration today).
 - **UNION/EXCEPT over a join that re-uses a base tuple** – `(R⋈S) UNION (R⋈T)` →
   `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. The *independent* case (each
-  contributor's footprint private – the usual one) is now exact:
-  `contributorExactMarginal` (`src/AggMarginalEvaluator.cpp`) computes the
-  contributor's exact marginal by brute force over its private leaves and models
-  it as an independent one-alternative block (reusing the BID categorical
-  machinery), for every aggregate; pinned by `test/sql/having_union.sql`.
-  Remaining: a base tuple shared *across* a group's contributors, which couples
-  them – the safe-query / read-once-rewriter problem, `#P`-hard in general.
+  contributor's footprint private) is now exact (`contributorExactMarginal`,
+  pinned by `test/sql/having_union.sql`). Remaining: a base tuple shared *across*
+  a group's contributors, which couples them – the safe-query / read-once-rewriter
+  problem, `#P`-hard in general.
 
-## 4. Method-catalog follow-ups
+## 3. Method-catalog follow-ups
 
 - **Lazy Boolean build.** RV / HAVING circuits with no Boolean view fall to a
   small top-level estimator outside the catalog (the surviving-aggregate sampler
-  routing of item 2 is a partial step). A true lazy Boolean build would fold even
+  routing of item 1 is a partial step). A true lazy Boolean build would fold even
   those into `chooseAndRun` so all three paths are catalog-driven uniformly.
 - **Guarantee propagation** (decompose the whole-query `(ε,δ)` at
   **independence-certified gates only**): independent-OR `ε ≈ max(ε₁,ε₂)`,
@@ -144,12 +118,12 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   independence certificates remain to be cached lazily. Optional: expose a
   `provsql.methods` SQL view (name, guarantee kind, applicability) for Studio.
 
-## 5. RV probability transparency
+## 4. RV probability transparency
 
 - Route the RV *probability* case `P(X<c)` through `stopping-rule` (today it goes
   through fixed-sample / analytic paths only).
 
-## 6. d-tree research polish
+## 5. d-tree research polish
 
 - **Tractable variable-elimination order** (Olteanu-Huang-Koch Sec. VI-B,
   Lemma 6.8) for a guaranteed poly-size d-tree on hierarchical / `IQ` queries.
@@ -177,3 +151,12 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   semiring evaluation that non-probability semirings rely on.
 - The Boolean-only and safe-query follow-ups this note borders on are in
   [`safe-query-followups.md`](safe-query-followups.md).
+- **d-tree is closed** (anytime engine over arbitrary Boolean circuits, exact +
+  certified bounds, BID / multivalued via the `handlesMultivalued()` rewrite).
+  Two polish ideas were evaluated and **dropped** -- recorded so they are not
+  re-attempted: (1) *non-DNF exact auto-selection* -- the d-tree's cost has no
+  usable proxy ("the treewidth proxy is NOT used -- it mispredicts this
+  engine"), so it stays by-name-only for exact; (2) *memoising the approximate
+  path* -- tried, speeds d-tree ~20-30% but makes the auto `relative` path 11x
+  slower on `big_rare` (681 ms -> 7.9 s) by suppressing the beneficial
+  escalation to `compilation:d4`; net regression, reverted.
