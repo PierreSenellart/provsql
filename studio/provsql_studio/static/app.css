@@ -3559,6 +3559,14 @@ table thead th[data-sort="desc"]::after {
 }
 .cv-temporal__bar.is-open-l { border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .cv-temporal__bar.is-open-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* −∞ / ∞ markers at the open end of an unbounded interval. */
+.cv-temporal__inf {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  color: #fff; font-size: 0.74rem; line-height: 1; font-weight: 700;
+  pointer-events: none;
+}
+.cv-temporal__inf.is-l { left: 3px; }
+.cv-temporal__inf.is-r { right: 3px; }
 /* Draggable "As of" playhead. */
 .cv-temporal__playhead {
   position: absolute; top: -2px; bottom: -2px; width: 2px;

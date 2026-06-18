@@ -2612,6 +2612,20 @@
       return out;
     }
 
+    // With a single instant in the domain there is no span to scale from, so
+    // infer a sensible window from how "round" the instant is: a year boundary
+    // implies a years-wide window, a time-of-day implies an hours-wide one, etc.
+    function singleInstantWindow(t) {
+      const d = new Date(t), DAY = 86400000;
+      let half;
+      if (d.getUTCSeconds() !== 0) half = 60*1000;                           // → seconds axis
+      else if (d.getUTCMinutes() !== 0 || d.getUTCHours() !== 0) half = 3*3600*1000; // → hours
+      else if (d.getUTCDate() !== 1) half = 5*DAY;                           // → days
+      else if (d.getUTCMonth() !== 0) half = 183*DAY;                        // → months
+      else half = 3*365*DAY;                                                 // → years
+      return [t - half, t + half];
+    }
+
     function renderTimeline(data) {
       const rows = data.result || [];
       const segs = [];
@@ -2620,17 +2634,32 @@
         if (lo != null) segs.push(lo);
         if (hi != null) segs.push(hi);
       }));
-      if (!segs.length) { tl.innerHTML = ''; return; }
-      let t0 = Math.min(...segs), t1 = Math.max(...segs);
-      if (t0 === t1) { t1 = t0 + 86400000; }            // a 1-day window if degenerate
+      if (!rows.length) { tl.innerHTML = ''; return; }
+      // The domain is anchored by the finite interval endpoints. How many there
+      // are decides what scale, if any, we can show:
+      //   0  -- every interval is (−∞,+∞): nothing anchors a scale, so we show
+      //         full-width bars and omit the (meaningless) axis;
+      //   1  -- a single instant, or a one-sided [t,∞) / (−∞,t]: no span, so we
+      //         infer a window from how precisely that instant is given;
+      //   >1 -- a real span: the adaptive axis picks the granularity.
+      const noRef = !segs.length;
+      let t0, t1;
+      if (noRef) {
+        const now = Date.now();
+        t0 = now - 365 * 86400000; t1 = now + 365 * 86400000;   // nominal, axis omitted
+      } else {
+        t0 = Math.min(...segs); t1 = Math.max(...segs);
+        if (t0 === t1) { const w = singleInstantWindow(t0); t0 = w[0]; t1 = w[1]; }
+      }
       const pad = (t1 - t0) * 0.04; t0 -= pad; t1 += pad;
       const span = t1 - t0;
       const xOf = (t) => ((t - t0) / span) * 100;        // percent
       const clampPct = (p) => Math.max(0, Math.min(100, p));
 
-      // Adaptive ticks chosen from the domain span (sec → years).
+      // Adaptive ticks chosen from the domain span (sec → years); none when
+      // there is no finite reference point to anchor them.
       let axis = '';
-      for (const tk of axisTicks(t0, t1)) {
+      for (const tk of (noRef ? [] : axisTicks(t0, t1))) {
         const x = xOf(tk.t);
         if (x < 0 || x > 100) continue;
         axis += `<div class="cv-temporal__tick" style="left:${x}%"><span>${escapeHtml(tk.label)}</span></div>`;
@@ -2647,7 +2676,10 @@
           const b = clampPct(xOf(hi == null ? t1 : hi));
           const open = (lo == null ? ' is-open-l' : '') + (hi == null ? ' is-open-r' : '');
           const tip = `${iv.lower || '−∞'} → ${iv.upper || '+∞'}`;
-          return `<div class="cv-temporal__bar${open}" style="left:${a}%;width:${Math.max(0.4, b - a)}%" title="${escapeAttr(tip)}"></div>`;
+          // Mark unbounded intervals with −∞ / ∞ at the open end of the bar.
+          const inf = (lo == null ? '<span class="cv-temporal__inf is-l">−∞</span>' : '')
+                    + (hi == null ? '<span class="cv-temporal__inf is-r">∞</span>' : '');
+          return `<div class="cv-temporal__bar${open}" style="left:${a}%;width:${Math.max(0.4, b - a)}%" title="${escapeAttr(tip)}">${inf}</div>`;
         }).join('');
         return `<div class="cv-temporal__lane" data-uuid="${escapeAttr(r.provsql || '')}">`
              + `<div class="cv-temporal__lanelbl" title="${escapeAttr(label)}">${escapeHtml(label || '(row)')}</div>`
