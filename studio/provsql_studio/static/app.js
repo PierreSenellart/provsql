@@ -2443,6 +2443,22 @@
     // Re-draw from the box when the user edits the query (query source only).
     if (reqEl) reqEl.addEventListener('change', () => { if (state.source === 'query') debouncedFetch(); });
 
+    // "Send query" activates Query source and draws the timeline from the box.
+    // The form's inline onsubmit already runs the query into the result table,
+    // so we skip fetchTemporal's mirror to avoid running it twice.
+    const qForm = document.querySelector('.wp-form');
+    if (qForm) {
+      qForm.addEventListener('submit', async () => {
+        if (state.source !== 'query') {
+          state.source = 'query';
+          await populateMappings();
+          syncAvailability();
+          renderInputs();
+        }
+        fetchTemporal({ skipMirror: true });
+      });
+    }
+
     syncAvailability();
     populateRelations();
     renderInputs();
@@ -2485,7 +2501,8 @@
       statusEl.classList.toggle('is-error', !!isError);
     }
 
-    async function fetchTemporal() {
+    async function fetchTemporal(opts) {
+      const skipMirror = !!(opts && opts.skipMirror);
       const body = { source: state.source, timeop: state.timeop };
       if (state.source === 'query') {
         body.query = reqEl ? reqEl.value : '';
@@ -2520,8 +2537,8 @@
       renderTimeline(data);
       // Mirror the rows into the shared result table so the query box, the
       // result table, and the timeline all agree (the table is the tabular
-      // companion to the timeline). The box already holds the SQL to run.
-      if (reqEl && reqEl.value.trim()) {
+      // companion to the timeline). Skipped when "Send query" already ran it.
+      if (!skipMirror && reqEl && reqEl.value.trim()) {
         try { runQuery({ preventDefault() {} }); } catch (e) { /* table is secondary */ }
       }
     }
