@@ -2356,8 +2356,21 @@
     const opBtns  = Array.from(document.querySelectorAll('.cv-temporal__op'));
     const reqEl   = document.getElementById('request');
 
-    const isoDay = (d) => (d || '').slice(0, 10);
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // datetime-local wants `YYYY-MM-DDTHH:MM`; normalise a stored value (which
+    // may be a bare date carried over from elsewhere) to that. Times are UTC,
+    // matching the backend (which runs at UTC).
+    const isoLocal = (d) => {
+      const s = String(d || '');
+      if (!s) return '';
+      return s.length <= 10 ? s + 'T00:00' : s.slice(0, 16);
+    };
+    const nowLocal = new Date().toISOString().slice(0, 16);
+    // Parse an At value (bare date or datetime-local) as a UTC instant (ms).
+    const atToMs = (s) => {
+      const v = String(s || '');
+      if (!v) return null;
+      return Date.parse((v.length <= 10 ? v + 'T00:00' : v.slice(0, 16)) + ':00Z');
+    };
     // The time operations (the same for either source).
     const OPS = { relation: ['asof', 'during', 'full'], query: ['asof', 'during', 'full'] };
 
@@ -2384,21 +2397,21 @@
     // Render the time-op inputs (date / window / key) into #temporal-inputs.
     function renderInputs() {
       if (state.timeop === 'asof') {
-        state.at = state.at || todayIso;
+        state.at = state.at || nowLocal;
         inputs.innerHTML =
           `<label class="cv-temporal__ctl"><span>At</span>`
-          + `<input type="date" id="temporal-at" value="${escapeAttr(isoDay(state.at))}"></label>`;
+          + `<input type="datetime-local" id="temporal-at" value="${escapeAttr(isoLocal(state.at))}"></label>`;
         document.getElementById('temporal-at').addEventListener('change', (e) => {
           state.at = e.target.value; debouncedFetch();
         });
       } else if (state.timeop === 'during') {
-        state.from = state.from || '2000-01-01';
-        state.to   = state.to   || todayIso;
+        state.from = state.from || '2000-01-01T00:00';
+        state.to   = state.to   || nowLocal;
         inputs.innerHTML =
           `<label class="cv-temporal__ctl"><span>From</span>`
-          + `<input type="date" id="temporal-from" value="${escapeAttr(isoDay(state.from))}"></label>`
+          + `<input type="datetime-local" id="temporal-from" value="${escapeAttr(isoLocal(state.from))}"></label>`
           + `<label class="cv-temporal__ctl"><span>To</span>`
-          + `<input type="date" id="temporal-to" value="${escapeAttr(isoDay(state.to))}"></label>`;
+          + `<input type="datetime-local" id="temporal-to" value="${escapeAttr(isoLocal(state.to))}"></label>`;
         document.getElementById('temporal-from').addEventListener('change', (e) => {
           state.from = e.target.value; debouncedFetch();
         });
@@ -2644,7 +2657,7 @@
       // "As of" scrubber: a draggable playhead at state.at.
       let playhead = '';
       if (state.timeop === 'asof' && state.at) {
-        const px = clampPct(xOf(parseT(state.at + 'T00:00:00Z')));
+        const px = clampPct(xOf(atToMs(state.at)));
         playhead = `<div class="cv-temporal__playhead" id="temporal-playhead" style="left:${px}%" title="Drag to time-travel"></div>`;
       }
 
@@ -2655,38 +2668,33 @@
       if (state.timeop === 'asof') wireScrubber(t0, span);
     }
 
-    // Drag the playhead → set state.at (UTC day) → debounced re-snapshot.
+    // Drag the playhead → set state.at (UTC, minute-precise) → re-snapshot.
+    // Granularity follows the span, matching the adaptive axis.
     function wireScrubber(t0, span) {
       const ph = document.getElementById('temporal-playhead');
       const axis = tl.querySelector('.cv-temporal__axis');
       if (!ph || !axis) return;
-      const toDate = (clientX) => {
+      const toT = (clientX) => {
         const rect = axis.getBoundingClientRect();
         const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        return new Date(t0 + frac * span).toISOString().slice(0, 10);
+        return t0 + frac * span;
+      };
+      const setAt = (t, immediate) => {
+        state.at = new Date(t).toISOString().slice(0, 16);
+        ph.style.left = Math.max(0, Math.min(100, ((t - t0) / span) * 100)) + '%';
+        const atInput = document.getElementById('temporal-at');
+        if (atInput) atInput.value = state.at;
+        if (immediate) fetchTemporal(); else debouncedFetch();
       };
       let dragging = false;
-      const onMove = (ev) => {
-        if (!dragging) return;
-        const day = toDate(ev.clientX);
-        state.at = day;
-        const px = ((Date.parse(day + 'T00:00:00Z') - t0) / span) * 100;
-        ph.style.left = Math.max(0, Math.min(100, px)) + '%';
-        const atInput = document.getElementById('temporal-at');
-        if (atInput) atInput.value = day;
-        debouncedFetch();
-      };
+      const onMove = (ev) => { if (dragging) setAt(toT(ev.clientX)); };
       ph.addEventListener('mousedown', (e) => { dragging = true; e.preventDefault(); });
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', () => { dragging = false; });
       // Clicking anywhere on the axis also moves the playhead.
       axis.addEventListener('click', (e) => {
         if (e.target === ph) return;
-        const day = toDate(e.clientX);
-        state.at = day;
-        const atInput = document.getElementById('temporal-at');
-        if (atInput) atInput.value = day;
-        fetchTemporal();
+        setAt(toT(e.clientX), true);
       });
     }
   }
