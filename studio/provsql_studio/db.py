@@ -1830,6 +1830,228 @@ def contributions(
     }
 
 
+def list_temporal_relations(pool: ConnectionPool) -> list[dict]:
+    """Candidate relations for Temporal mode's relation picker.
+
+    The time-travel SRFs (`timeslice` / `timetravel` / `history`) run over any
+    provenance-tracked relation -- a table with `add_provenance`, or a view /
+    materialised view that projects such tables (CS4's `person_position`). We
+    surface, from non-system / non-ProvSQL schemas, relations that either carry
+    a `tstzmultirange` column (the validity convention) or are a view / matview.
+    Returns `{schema, name, qname, display_name}`, qname-sorted."""
+    q = """
+        SELECT n.nspname AS schema, c.relname AS name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'provsql')
+          AND n.nspname NOT LIKE 'pg_%'
+          AND c.relkind IN ('r', 'v', 'm', 'p')
+          AND (
+            c.relkind IN ('v', 'm')
+            OR EXISTS (
+              SELECT 1 FROM pg_attribute a
+              WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                AND a.atttypid = 'pg_catalog.tstzmultirange'::regtype
+            )
+          )
+        ORDER BY n.nspname, c.relname
+    """
+    out: list[dict] = []
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(q)
+        for schema, name in cur.fetchall():
+            qname = f"{schema}.{name}" if schema != "public" else name
+            out.append(
+                {"schema": schema, "name": name, "qname": qname, "display_name": qname}
+            )
+    return out
+
+
+def _parse_multirange(value) -> list[dict]:
+    """Normalise a `tstzmultirange` value to `[{lower, upper}, ...]`.
+
+    psycopg returns it as a `Multirange` of `Range[datetime]`; each disjoint
+    sub-range becomes one `{lower, upper}` entry (ISO-8601 strings, or None for
+    an unbounded side) so the front-end can draw one timeline bar per range.
+    Falls back to a light text parse if a driver hands back the raw literal."""
+    if value is None:
+        return []
+    out: list[dict] = []
+    try:
+        for r in value:  # Multirange is iterable over its Range parts
+            lo = getattr(r, "lower", None)
+            hi = getattr(r, "upper", None)
+            out.append(
+                {
+                    "lower": lo.isoformat() if hasattr(lo, "isoformat") else (
+                        str(lo) if lo is not None else None),
+                    "upper": hi.isoformat() if hasattr(hi, "isoformat") else (
+                        str(hi) if hi is not None else None),
+                }
+            )
+        return out
+    except TypeError:
+        pass
+    # Fallback: parse `{["lo","hi"),...}` style text.
+    text = str(value).strip().lstrip("{").rstrip("}")
+    for part in re.findall(r"[\[(]([^,]*),([^\])]*)[\])]", text):
+        lo = part[0].strip().strip('"') or None
+        hi = part[1].strip().strip('"') or None
+        out.append({"lower": lo, "upper": hi})
+    return out
+
+
+_TEMPORAL_SUBMODES = ("timetravel", "timeslice", "history")
+
+
+def temporal(
+    pool: ConnectionPool,
+    *,
+    relation: str,
+    submode: str,
+    at_time: str | None = None,
+    from_time: str | None = None,
+    to_time: str | None = None,
+    col_names: list[str] | None = None,
+    col_values: list[str] | None = None,
+    statement_timeout: str,
+    search_path: str = "",
+    tool_search_path: str = "",
+    extra_gucs: dict[str, str] | None = None,
+) -> dict:
+    """Run a time-travel SRF for Temporal mode and return rows + validity.
+
+    Backs Temporal mode's control strip. `submode` selects the SRF:
+    `timetravel(relation, at_time)` (snapshot at an instant), `timeslice(
+    relation, from_time, to_time)` (rows valid during a window), or `history(
+    relation, col_names[], col_values[])` (all versions matching a key filter).
+    Each SRF returns `relation.*, sr_temporal(...)`; ProvSQL appends the
+    `provsql` token last, so the `AS (...)` clause is the relation's columns
+    (introspected from the catalog) followed by `valid_time tstzmultirange,
+    provsql uuid`. Every returned `valid_time` is parsed into a list of
+    `{lower, upper}` intervals for the timeline.
+
+    Returns `{result, kind, submode, relation, columns}` ready to JSON-encode.
+    Raises ValueError on bad input; propagates psycopg.Error to the caller."""
+    submode = (submode or "").strip().lower()
+    if submode not in _TEMPORAL_SUBMODES:
+        raise ValueError(f"unknown temporal submode: {submode!r}")
+    match = next(
+        (x for x in list_temporal_relations(pool) if x["qname"] == relation),
+        None,
+    )
+    if match is None:
+        raise ValueError(f"unknown temporal relation: {relation!r}")
+    bare_name = match["name"]
+
+    if submode == "timetravel":
+        if not (at_time or "").strip():
+            raise ValueError("timetravel requires an instant (at_time)")
+    elif submode == "timeslice":
+        if not (from_time or "").strip() or not (to_time or "").strip():
+            raise ValueError("timeslice requires from_time and to_time")
+    else:  # history
+        names = [c for c in (col_names or []) if (c or "").strip()]
+        values = list(col_values or [])
+        if not names or len(names) != len(values):
+            raise ValueError(
+                "history requires equal-length, non-empty col_names / col_values"
+            )
+
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("SET LOCAL statement_timeout = {}").format(
+                sql.Literal(statement_timeout)
+            )
+        )
+        if (search_path or "").strip():
+            target_path = compose_search_path(search_path, "")
+        else:
+            cur.execute("SHOW search_path")
+            target_path = compose_search_path("", cur.fetchone()[0])
+        cur.execute("SELECT set_config('search_path', %s, true)", (target_path,))
+        apply_tool_search_path(cur, tool_search_path)
+        # Validity intervals are stored at UTC midnight (the temporal data
+        # convention, cf. CS4); render them at UTC so the timeline gets clean
+        # ISO instants regardless of the server's timezone.
+        cur.execute("SET LOCAL timezone TO 'UTC'")
+        for guc_name, guc_val in (extra_gucs or {}).items():
+            cur.execute(
+                sql.SQL("SET LOCAL {} = {}").format(
+                    sql.Identifier(*guc_name.split(".")),
+                    sql.Literal(guc_val),
+                )
+            )
+
+        # Introspect the relation's user columns (the SRF returns them, in
+        # order, then sr_temporal's validity, then ProvSQL's appended provsql).
+        cur.execute(
+            """
+            SELECT a.attname, format_type(a.atttypid, a.atttypmod)
+            FROM pg_attribute a
+            WHERE a.attrelid = %s::regclass AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+            """,
+            (match["qname"],),
+        )
+        cols = cur.fetchall()
+        col_names_out = [c[0] for c in cols]
+        as_items = [
+            sql.SQL("{} {}").format(sql.Identifier(c[0]), sql.SQL(c[1])) for c in cols
+        ]
+        as_items.append(sql.SQL("valid_time tstzmultirange"))
+        as_items.append(sql.SQL("provsql uuid"))
+        as_clause = sql.SQL(", ").join(as_items)
+
+        if submode == "timetravel":
+            srf = sql.SQL("provsql.timetravel({rel}, {t}::timestamptz)").format(
+                rel=sql.Literal(bare_name), t=sql.Literal(at_time)
+            )
+        elif submode == "timeslice":
+            srf = sql.SQL(
+                "provsql.timeslice({rel}, {f}::timestamptz, {t}::timestamptz)"
+            ).format(
+                rel=sql.Literal(bare_name),
+                f=sql.Literal(from_time),
+                t=sql.Literal(to_time),
+            )
+        else:
+            srf = sql.SQL(
+                "provsql.history({rel}, {cn}::text[], {cv}::text[])"
+            ).format(
+                rel=sql.Literal(bare_name),
+                cn=sql.Literal(names),
+                cv=sql.Literal(values),
+            )
+
+        cur.execute(
+            sql.SQL("SELECT * FROM {srf} AS t({as_clause})").format(
+                srf=srf, as_clause=as_clause
+            )
+        )
+        rows = cur.fetchall()
+
+    valid_idx = len(col_names_out)  # valid_time position
+    prov_idx = valid_idx + 1
+    result = []
+    for row in rows:
+        entry = {
+            name: (str(row[i]) if row[i] is not None else None)
+            for i, name in enumerate(col_names_out)
+        }
+        entry["valid_time"] = _parse_multirange(row[valid_idx])
+        entry["provsql"] = str(row[prov_idx]) if row[prov_idx] is not None else None
+        result.append(entry)
+
+    return {
+        "result": result,
+        "kind": "temporal",
+        "submode": submode,
+        "relation": relation,
+        "columns": col_names_out,
+    }
+
+
 def _result_kind(semiring: str) -> str:
     if semiring in ("probability", "moment", "tropical", "viterbi", "lukasiewicz"):
         return "float"

@@ -185,6 +185,10 @@ def create_app(
     def contributions_shell():
         return _serve_shell("contributions")
 
+    @app.get("/temporal")
+    def temporal_shell():
+        return _serve_shell("temporal")
+
     @app.get("/static/<path:filename>")
     def static_file(filename: str):
         return send_from_directory(_STATIC_DIR, filename)
@@ -1013,6 +1017,63 @@ def create_app(
             diag = getattr(e, "diag", None)
             return jsonify({
                 "error": "contribution computation failed",
+                "sqlstate": diag.sqlstate if diag else None,
+                "detail": str(e).strip(),
+            }), 500
+        return jsonify(data)
+
+    @app.get("/api/temporal_relations")
+    def api_temporal_relations():
+        # Temporal mode : candidate relations for the relation picker
+        # (tracked tables / temporal views the time-travel SRFs accept).
+        return jsonify(db.list_temporal_relations(get_pool()))
+
+    @app.post("/api/temporal")
+    def api_temporal():
+        # Temporal mode : run a time-travel SRF (timetravel / timeslice /
+        # history) over a relation and return rows + parsed validity
+        # intervals for the timeline.  Mirrors /api/contributions' GUC
+        # composition and error shaping; backed by db.temporal.
+        import psycopg
+        payload = request.get_json(silent=True) or {}
+        relation = (payload.get("relation") or "").strip()
+        submode  = (payload.get("submode") or "").strip().lower()
+        col_names  = payload.get("col_names") if isinstance(
+            payload.get("col_names"), list) else None
+        col_values = payload.get("col_values") if isinstance(
+            payload.get("col_values"), list) else None
+        merged_gucs = _backend_gucs(
+            {str(k): str(v) for k, v in (payload.get("extra_gucs") or {}).items()}
+            if isinstance(payload.get("extra_gucs"), dict)
+            else None
+        )
+        try:
+            data = db.temporal(
+                get_pool(),
+                relation=relation,
+                submode=submode,
+                at_time=payload.get("at_time") or None,
+                from_time=payload.get("from_time") or None,
+                to_time=payload.get("to_time") or None,
+                col_names=col_names,
+                col_values=col_values,
+                statement_timeout=app.config["STATEMENT_TIMEOUT"],
+                search_path=app.config.get("SEARCH_PATH", ""),
+                tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),
+                extra_gucs=merged_gucs,
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except psycopg.errors.UndefinedFunction as e:
+            return jsonify({
+                "error": "temporal functions unavailable on this database "
+                         "(requires PostgreSQL >= 14)",
+                "detail": str(e).splitlines()[0],
+            }), 501
+        except psycopg.Error as e:
+            diag = getattr(e, "diag", None)
+            return jsonify({
+                "error": "temporal query failed",
                 "sqlstate": diag.sqlstate if diag else None,
                 "detail": str(e).strip(),
             }), 500
