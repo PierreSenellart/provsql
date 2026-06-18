@@ -659,9 +659,7 @@ mattered* to it. It is the visual counterpart of the :sqlfunc:`shapley`
 into an interactive, ranked heat-map.
 
 Queries are typed into the same `Query box`_ as in Circuit mode, under
-the same :guilabel:`Provenance scheme` (the default :guilabel:`Semiring`
-is the right choice; the contribution is computed over the Boolean
-circuit underneath). Run a query, then **click a result row's**
+the same :guilabel:`Provenance scheme`. Run a query, then **click a result row's**
 ``provsql`` **cell** to pin it as the *target tuple*: the contribution
 of every input tuple toward that target is computed and drawn in the
 sidebar. When the result has a single UUID-typed cell, it is pinned
@@ -713,11 +711,6 @@ routes can be compared on cost.
 Changing any control re-computes for the pinned target. A wide input
 relation can mint thousands of variables; the chart shows the top 200
 by magnitude and reports the total when it truncates.
-
-Conditioned tokens (``X | C``) are refused here, because the
-conditional indices are not a linear combination of the unconditioned
-ones; compute the index on the unconditioned token instead, or use
-:sqlfunc:`probability_evaluate` for the conditional probability.
 
 .. _studio-where-mode:
 
