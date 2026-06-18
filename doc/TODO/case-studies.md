@@ -30,20 +30,20 @@ case-study real estate:
   tuple-independent lineage. (``'weightmc'`` was dropped: the external
   weighted model counter is obsolete and typically not installed.)
 
-### CS2: Open Science Database
+### CS2: Open Science Database — DONE (3 aggregate steps)
 
-- `COUNT(DISTINCT study)` and `string_agg(study, ', ')` per
-  (exposure, outcome): a natural addition before or after Step 4
-  (single-source claims).
-- `FILTER` clause: `COUNT(*) FILTER (WHERE effect = 'beneficial')` per
-  exposure to rank exposures by net beneficial evidence.
-- Window functions: rank exposures by reliability-weighted study count
-  with `RANK() OVER (PARTITION BY outcome ORDER BY ...)`.
-- `UNION ALL`: merge "beneficial" and "harmful" findings into a single
-  signed-effect view, illustrating that ProvSQL combines provenance via ⊕.
-- `aggregation_evaluate`: extend the evidence-grade semiring (Step 6) to
-  a `GROUP BY outcome` query with a custom semimodule that aggregates
-  per-finding grades into a per-outcome grade.
+- Added Step 17 "Richer Aggregates": `COUNT(DISTINCT study)`,
+  `string_agg(study, ', ')`, and `COUNT(*) FILTER (WHERE effect =
+  'beneficial')` per (exposure, outcome) -- each returned as a tracked
+  agg_token.
+- Added Step 18 "Signed-Effect View with `UNION ALL`": beneficial and
+  harmful Coffee→CVD findings concatenated, each arm keeping its own
+  provenance.
+- Tested in `test/sql/casestudy2.sql`.
+- Window functions (`RANK`): **skipped** -- opaque to provenance
+  (warn-and-degrade); the matrix row was removed.
+- `aggregation_evaluate`: **dropped** as obsolete (no longer a useful
+  surface); its user-doc mentions are being removed separately.
 
 ### CS3: Île-de-France Public Transit — DONE (LATERAL)
 

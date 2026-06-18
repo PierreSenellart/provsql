@@ -121,7 +121,6 @@ and algorithms are in |cpp|.
   SQL function (reached only when a query bypasses the planner hook).
 - :cfile:`provenance_evaluate.c` -- SQL-level semiring evaluation
   (user-defined ``plus``/``times``/... functions).
-- :cfile:`aggregation_evaluate.c` -- aggregate evaluation entry point.
 - :cfile:`agg_token.c` / :cfile:`agg_token.h` -- the ``agg_token``
   composite type (UUID + running value).
 

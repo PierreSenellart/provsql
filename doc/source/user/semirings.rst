@@ -408,34 +408,12 @@ suite: :download:`test/sql/capability.sql <../../../test/sql/capability.sql>`
 :download:`test/sql/formula.sql <../../../test/sql/formula.sql>`
 (symbolic representation as a formula).
 
-For queries involving aggregation (``GROUP BY``), use
-:sqlfunc:`aggregation_evaluate` instead, which additionally takes the names
-of an aggregate finalization function and a semimodule operation:
-
-.. code-block:: postgresql
-
-    aggregation_evaluate(
-        token,                -- aggregate result (agg_token)
-        token2value,          -- mapping table
-        agg_final_function,   -- finalization function for the aggregate
-        agg_function,         -- aggregate function for group values
-        semimod_function,     -- semimodule scalar multiplication
-        element_one,          -- identity element
-        plus_function,
-        times_function,
-        monus_function,       -- optional
-        delta_function        -- optional
-    )
-
-See :download:`test/sql/aggregation.sql <../../../test/sql/aggregation.sql>`
-for a complete example of :sqlfunc:`aggregation_evaluate` usage.
-
 .. note::
 
-    :sqlfunc:`provenance_evaluate` and :sqlfunc:`aggregation_evaluate`
-    are PL/pgSQL functions that traverse the provenance circuit
-    recursively.  They do not support ``cmp`` gates introduced by
-    ``HAVING`` clauses; queries with ``HAVING`` will produce an error.
+    :sqlfunc:`provenance_evaluate` is a PL/pgSQL function that traverses
+    the provenance circuit recursively.  It does not support ``cmp`` gates
+    introduced by ``HAVING`` clauses; queries with ``HAVING`` will produce
+    an error.
     The built-in compiled semirings (:sqlfunc:`sr_formula`,
     :sqlfunc:`sr_counting`, etc.) are implemented in C, support all
     gate types including ``HAVING``, and are significantly faster.

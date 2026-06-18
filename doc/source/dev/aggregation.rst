@@ -386,7 +386,6 @@ combine the values incrementally.
    section above.
 
 Nothing else needs to change: the query rewriter, the
-:sqlfunc:`provenance_aggregate` SQL function, the :cfunc:`agg_token`
-composite type, and the :cfunc:`aggregation_evaluate` SQL
-dispatcher all operate on OIDs and metadata, so they pick up new
+:sqlfunc:`provenance_aggregate` SQL function, and the :cfunc:`agg_token`
+composite type all operate on OIDs and metadata, so they pick up new
 aggregates automatically once steps 1--4 are in place.

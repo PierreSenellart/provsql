@@ -143,7 +143,6 @@ _SQL_FUNC_MAP = {
     # (columnar internals; the user-facing route is WITH RECURSIVE under
     # provsql.boolean_provenance).
     'provenance_evaluate':      '/doxygen-sql/html/group__semiring__evaluation.html#ga0a30e01db8afbc4c645e2a2b4924d676',
-    'aggregation_evaluate':     '/doxygen-sql/html/group__semiring__evaluation.html#ga4d09bcd8d51cce333777694da8e593ba',
     'choose':                   '/doxygen-sql/html/group__choose__aggregate.html#ga020d50a4e5ed39e5d037dd5e313f8266',
     'explode_table':            '/doxygen-sql/html/group__choose__aggregate.html#ga1d3d4d92bd58980f300ffc53c2b467da',
     'shapley':                  '/doxygen-sql/html/group__probability.html#gac15ed9fd2522383b11c6d248d6d43b2c',
@@ -340,7 +339,6 @@ _C_FUNC_MAP = {
     'AggregationOperator':       '/doxygen-c/html/Aggregation_8h.html#a07e6885296f8f80441d5428bcf72af5a',
     'gate_type':                 '/doxygen-c/html/provsql__utils_8h.html#a8266c44a6cbf9e08d5f2b12cd3c3d92f',
     # Other functions
-    'aggregation_evaluate':      '/doxygen-c/html/aggregation__evaluate_8c.html#a4f4a0f60a801ee663671454787aecbab',
     'getGenericCircuit':         '/doxygen-c/html/CircuitFromMMap_8h.html#aea0e3c624d65cc59c68d313fbe0306af',
     'getBooleanCircuit':         '/doxygen-c/html/CircuitFromMMap_8h.html#a66a011a61d08d6fd604c4668a62d46d0',
     'provenance_evaluate_compiled_internal': '/doxygen-c/html/provenance__evaluate__compiled_8cpp.html#a3df67864ec62b62e0b10e5a3d7945c21',

@@ -159,13 +159,13 @@ Supported SQL constructs
    "GROUP BY", "", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
    "SELECT DISTINCT", "✓", "✓", "", "✓", "", "✓", "", "✓", ""
    "EXCEPT (monus)", "✓", "✓", "", "", "", "✓", "", "", ""
-   "UNION / UNION ALL", "", "", "", "", "", "", "✓", "✓", ""
+   "UNION / UNION ALL", "", "", "✓", "", "", "", "✓", "✓", ""
    "HAVING", "", "", "✓", "", "", "", "✓", "✓", ""
    "VALUES", "", "✓", "", "", "", "✓", "", "", ""
    "CTE (WITH)", "", "", "", "", "", "✓", "", "✓", "✓"
    "WITH RECURSIVE", "", "", "", "", "", "", "", "✓", ""
    "LATERAL", "", "", "", "✓", "", "", "✓", "", ""
-   "FILTER clause on aggregates", "", "", "", "", "", "", "", "", ""
+   "FILTER clause on aggregates", "", "", "✓", "", "", "", "", "", ""
    "CREATE TABLE AS SELECT", "✓", "", "", "✓", "✓", "✓", "", "", "✓"
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", ""
    "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", ""
@@ -180,8 +180,8 @@ Aggregation
 
    "COUNT / SUM / MIN / MAX / AVG", "", "", "✓", "✓", "", "✓", "", "✓", "✓"
    "``sum`` / ``avg`` / ``product`` over ``random_variable``", "", "", "", "", "", "", "✓", "", ""
-   "``string_agg`` / ``array_agg``", "", "", "", "", "", "", "", "", ""
-   "``COUNT(DISTINCT …)``", "", "", "", "", "", "", "", "", ""
+   "``string_agg`` / ``array_agg``", "", "", "✓", "", "", "", "", "", ""
+   "``COUNT(DISTINCT …)``", "", "", "✓", "", "", "", "", "", ""
    "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", "", ""
    "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", "", ""
    "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", "", ""
@@ -254,7 +254,6 @@ Semiring evaluation
    "``sr_minmax`` / ``sr_maxmin``", "", "✓", "", "", "", "", "", "", ""
    "``sr_temporal`` / ``sr_interval_num`` / ``sr_interval_int``", "", "", "", "", "✓", "", "", "", ""
    "Custom semiring via ``provenance_evaluate``", "", "", "✓", "", "", "", "", "", ""
-   "``aggregation_evaluate``", "", "", "", "", "", "", "", "", ""
 
 Probabilities
 ~~~~~~~~~~~~~
