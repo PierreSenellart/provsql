@@ -73,7 +73,7 @@
             </div>
 
             <p>
-              <a class="btn btn--primary btn--large" id="launch" href="app.html">Launch the Playground</a>
+              <a class="btn btn--primary btn--large" id="launch" href="app.html?nb=cs8">Launch the Playground</a>
               <a class="btn btn--info btn--large" id="launch-tutorial" href="app.html?nb=tutorial">Follow the interactive tutorial</a>
             </p>
             <p><small>First load fetches a few megabytes (PostgreSQL and Python,
@@ -163,10 +163,12 @@
   // JSPI feature detection. Shared deep links (?mode/?db/?q/?nb) go straight to
   // the app when JSPI is available; otherwise we always show this page so the
   // user sees the requirement instead of a silent hang. The Launch button
-  // carries the query string either way, so a deep link survives the landing.
+  // carries the query string when one is present (so a deep link survives the
+  // landing), and otherwise defaults to the case-study-8 notebook.
   var jspi = typeof WebAssembly !== 'undefined' && typeof WebAssembly.Suspending === 'function';
   var hasAppParams = /[?&](mode|db|q|nb)=/.test(location.search);
-  document.getElementById('launch').href = 'app.html' + location.search;
+  document.getElementById('launch').href =
+    'app.html' + (hasAppParams ? location.search : '?nb=cs8');
   if (jspi && hasAppParams) {
     location.replace('app.html' + location.search);
   } else if (!jspi) {
