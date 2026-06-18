@@ -2571,6 +2571,27 @@
     // minutes, hours, days, months, years. Returns ~7 {t, label} ticks.
     const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const pad2 = (n) => String(n).padStart(2, '0');
+    // Pretty-print a stored instant (ISO at UTC) for tooltips: date only at
+    // midnight, otherwise date + HH:MM (+ :SS only when non-zero).
+    const fmtInstant = (iso) => {
+      const t = Date.parse(iso);
+      if (isNaN(t)) return String(iso);
+      const d = new Date(t);
+      let s = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+      const H = d.getUTCHours(), Mi = d.getUTCMinutes(), Se = d.getUTCSeconds();
+      if (H || Mi || Se) {
+        s += ` ${pad2(H)}:${pad2(Mi)}`;
+        if (Se) s += `:${pad2(Se)}`;
+      }
+      return s;
+    };
+    // A half-open interval [lower, upper) in precise, readable form, with
+    // (−∞ / +∞) for unbounded ends.
+    const fmtInterval = (iv) => {
+      const lb = iv.lower == null ? '(−∞' : `[${fmtInstant(iv.lower)}`;
+      const ub = iv.upper == null ? '+∞)' : `${fmtInstant(iv.upper)})`;
+      return `${lb}, ${ub}`;
+    };
     function axisTicks(t0, t1) {
       const target = 7;
       const SEC = 1000, MIN = 60*SEC, HR = 60*MIN, DAY = 24*HR;
@@ -2670,12 +2691,21 @@
         // (e.g. a table's own `validity`) since the bars already show them.
         const label = state.columns.map((c) => r[c])
           .filter((v) => v != null && !/^\{[[(]/.test(String(v))).join(' · ');
-        const bars = (r.valid_time || []).map((iv) => {
+        const ivs = r.valid_time || [];
+        // Empty interval union: the row is valid at no time. Distinct from an
+        // unbounded interval (which draws a full-width bar) -- here there is no
+        // bar at all, so mark the empty track explicitly.
+        if (!ivs.length) {
+          return `<div class="cv-temporal__lane" data-uuid="${escapeAttr(r.provsql || '')}">`
+               + `<div class="cv-temporal__lanelbl" title="${escapeAttr(label)}">${escapeHtml(label || '(row)')}</div>`
+               + `<div class="cv-temporal__track"><span class="cv-temporal__never" title="Empty validity — valid at no time">∅ never</span></div></div>`;
+        }
+        const bars = ivs.map((iv) => {
           const lo = parseT(iv.lower), hi = parseT(iv.upper);
           const a = clampPct(xOf(lo == null ? t0 : lo));
           const b = clampPct(xOf(hi == null ? t1 : hi));
           const open = (lo == null ? ' is-open-l' : '') + (hi == null ? ' is-open-r' : '');
-          const tip = `${iv.lower || '−∞'} → ${iv.upper || '+∞'}`;
+          const tip = fmtInterval(iv);
           // Mark unbounded intervals with −∞ / ∞ at the open end of the bar.
           const inf = (lo == null ? '<span class="cv-temporal__inf is-l">−∞</span>' : '')
                     + (hi == null ? '<span class="cv-temporal__inf is-r">∞</span>' : '');
