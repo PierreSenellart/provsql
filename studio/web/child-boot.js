@@ -11,7 +11,7 @@
 // here.
 const asset = (p) => new URL(p, import.meta.url)
 const params = new URLSearchParams(location.search)
-const mode = ['where', 'notebook', 'contributions'].includes(params.get('mode')) ? params.get('mode') : 'circuit'
+const mode = ['where', 'notebook', 'contributions', 'temporal'].includes(params.get('mode')) ? params.get('mode') : 'circuit'
 document.body.className = 'mode-' + mode
 // A linked query is handed to app.js through the same sessionStorage channel
 // its mode-switch "carry" uses: ps.sql fills the box, ps.sql.ran replays it.
@@ -128,6 +128,7 @@ document.getElementById('tools-panel')?.remove()
       u.searchParams.set('mode',
         document.body.classList.contains('mode-where') ? 'where'
         : document.body.classList.contains('mode-contributions') ? 'contributions'
+        : document.body.classList.contains('mode-temporal') ? 'temporal'
         : document.body.classList.contains('mode-notebook') ? 'notebook' : 'circuit')
       let db = null
       try { db = (await (await fetch('/api/conn')).json()).database } catch (_e) { /* ignore */ }

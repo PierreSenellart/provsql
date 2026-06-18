@@ -3473,3 +3473,90 @@ table thead th[data-sort="desc"]::after {
 }
 .cv-contrib__fill.is-pos { background: var(--terracotta-500); }
 .cv-contrib__fill.is-neg { background: var(--purple-500); }
+
+/* ───────────────────────── Temporal mode ─────────────────────────
+   The control strip composes the time-travel SRFs; the timeline draws
+   one lane per result row, each validity sub-range as a bar, with a
+   draggable playhead for the "As of" (timetravel) submode. */
+.cv-temporal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.4rem 0.2rem;
+}
+.cv-temporal__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+.cv-temporal__ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--fg-2);
+}
+.cv-temporal__ctl select,
+.cv-temporal__ctl input {
+  font-size: 0.78rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--fg-1);
+}
+.cv-temporal__inputs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }
+/* Segmented As-of / During / History-of selector. */
+.cv-temporal__modes { display: inline-flex; border: 1px solid var(--border-soft); border-radius: 5px; overflow: hidden; }
+.cv-temporal__mode {
+  font-size: 0.76rem;
+  padding: 0.2rem 0.5rem;
+  border: 0;
+  border-left: 1px solid var(--border-soft);
+  background: #fff;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.cv-temporal__mode:first-child { border-left: 0; }
+.cv-temporal__mode.is-active { background: var(--terracotta-500); color: #fff; }
+.cv-temporal__status { font-size: 0.76rem; color: var(--fg-muted); font-style: italic; }
+.cv-temporal__status.is-error { color: var(--terracotta-700, #a33); font-style: normal; }
+
+/* Timeline canvas. */
+.cv-temporal__timeline { display: flex; flex-direction: column; gap: 0.2rem; }
+.cv-temporal__axis {
+  position: relative;
+  height: 1.1rem;
+  margin-left: 9rem;          /* aligns with the lane track (label gutter) */
+  border-bottom: 1px solid var(--border-soft);
+}
+.cv-temporal__tick { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--border-soft); }
+.cv-temporal__tick span {
+  position: absolute; bottom: 0.05rem; left: 2px;
+  font-size: 0.62rem; color: var(--fg-muted); font-variant-numeric: tabular-nums;
+}
+.cv-temporal__lanes { display: flex; flex-direction: column; }
+.cv-temporal__lane { display: flex; align-items: center; height: 1.5rem; }
+.cv-temporal__lanelbl {
+  width: 9rem; flex: none; padding-right: 0.4rem;
+  font-size: 0.72rem; color: var(--fg-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cv-temporal__track { position: relative; flex: 1; height: 0.85rem; background: var(--paper-2, #f4f1ec); border-radius: 3px; }
+.cv-temporal__bar {
+  position: absolute; top: 0; bottom: 0;
+  background: var(--terracotta-500); border-radius: 3px; min-width: 2px;
+  opacity: 0.9;
+}
+.cv-temporal__bar.is-open-l { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.cv-temporal__bar.is-open-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* Draggable "As of" playhead. */
+.cv-temporal__playhead {
+  position: absolute; top: -2px; bottom: -2px; width: 2px;
+  background: var(--purple-500); cursor: ew-resize; z-index: 3;
+}
+.cv-temporal__playhead::before {
+  content: ''; position: absolute; top: -4px; left: -4px;
+  border: 5px solid transparent; border-top-color: var(--purple-500);
+}

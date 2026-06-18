@@ -8,6 +8,7 @@
 (function () {
   const mode = document.body.classList.contains('mode-circuit') ? 'circuit'
              : document.body.classList.contains('mode-contributions') ? 'contributions'
+             : document.body.classList.contains('mode-temporal') ? 'temporal'
              : document.body.classList.contains('mode-notebook') ? 'notebook'
              : 'where';
 
@@ -569,6 +570,7 @@
   if (mode === 'where')              setupWhereMode();
   else if (mode === 'notebook')      setupNotebookMode();
   else if (mode === 'contributions') setupContributionsMode();
+  else if (mode === 'temporal')      setupTemporalMode();
   else                               setupCircuitMode();
 
   // The setup call has to come AFTER the SQL_KEYWORDS const declaration
@@ -2295,6 +2297,316 @@
   }
 
   /* ──────── Contributions mode ──────── */
+
+  // ─────────────────────── Temporal mode ───────────────────────
+  // A timeline over provenance validity. The control strip composes the
+  // time-travel SRFs (timetravel / timeslice / history) via /api/temporal;
+  // each returned row becomes one lane whose tstzmultirange renders as one
+  // bar per disjoint sub-range. "As of" adds a draggable scrubber that
+  // re-snapshots (debounced) as it moves.
+  function temporalSidebarHtml() {
+    return `
+      <div class="cv-temporal">
+        <div class="cv-temporal__controls" role="toolbar" aria-label="Temporal controls">
+          <label class="cv-temporal__ctl" id="temporal-rel-ctl">
+            <span>Relation</span>
+            <select id="temporal-relation" title="A provenance-tracked relation or temporal view the time-travel functions accept."></select>
+          </label>
+          <div class="cv-temporal__modes" role="radiogroup" aria-label="Temporal query">
+            <button type="button" class="cv-temporal__mode is-active" data-submode="timetravel" title="Snapshot valid at a single instant (timetravel).">As of</button>
+            <button type="button" class="cv-temporal__mode" data-submode="timeslice" title="Rows valid during a window (timeslice).">During</button>
+            <button type="button" class="cv-temporal__mode" data-submode="history" title="All versions matching a key column (history).">History of</button>
+            <button type="button" class="cv-temporal__mode" data-submode="query" title="Interpret the query in the box over the temporal (interval-union) semiring through a validity mapping.">Query</button>
+          </div>
+          <div class="cv-temporal__inputs" id="temporal-inputs"></div>
+        </div>
+        <div class="cv-temporal__status" id="temporal-status" hidden></div>
+        <div class="cv-temporal__timeline" id="temporal-timeline"></div>
+      </div>`;
+  }
+
+  function setupTemporalMode() {
+    document.getElementById('sidebar-title').textContent = 'Temporal';
+    document.getElementById('sidebar-body').innerHTML = temporalSidebarHtml();
+    document.getElementById('result-legend').innerHTML =
+      '<span class="wp-legend-swatch" style="background:var(--blue-500,#3b6ea5)"></span> '
+      + 'Pick a relation and a time query; each row is drawn on the timeline by its validity.';
+
+    const state = { submode: 'timetravel', relation: null,
+                    at: null, from: null, to: null, col: null, val: '',
+                    mapping: null, mappings: [], data: null };
+    const relSel  = document.getElementById('temporal-relation');
+    const relCtl  = document.getElementById('temporal-rel-ctl');
+    const inputs  = document.getElementById('temporal-inputs');
+    const statusEl = document.getElementById('temporal-status');
+    const tl       = document.getElementById('temporal-timeline');
+    const modeBtns = Array.from(document.querySelectorAll('.cv-temporal__mode'));
+
+    const isoDay = (d) => (d || '').slice(0, 10);
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    let debounceTimer = null;
+    const debouncedFetch = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(fetchTemporal, 160);
+    };
+
+    // Render the submode-specific inputs into #temporal-inputs.
+    function renderInputs() {
+      if (state.submode === 'timetravel') {
+        state.at = state.at || todayIso;
+        inputs.innerHTML =
+          `<label class="cv-temporal__ctl"><span>At</span>`
+          + `<input type="date" id="temporal-at" value="${escapeAttr(isoDay(state.at))}"></label>`;
+        document.getElementById('temporal-at').addEventListener('change', (e) => {
+          state.at = e.target.value; debouncedFetch();
+        });
+      } else if (state.submode === 'timeslice') {
+        state.from = state.from || '2000-01-01';
+        state.to   = state.to   || todayIso;
+        inputs.innerHTML =
+          `<label class="cv-temporal__ctl"><span>From</span>`
+          + `<input type="date" id="temporal-from" value="${escapeAttr(isoDay(state.from))}"></label>`
+          + `<label class="cv-temporal__ctl"><span>To</span>`
+          + `<input type="date" id="temporal-to" value="${escapeAttr(isoDay(state.to))}"></label>`;
+        document.getElementById('temporal-from').addEventListener('change', (e) => {
+          state.from = e.target.value; debouncedFetch();
+        });
+        document.getElementById('temporal-to').addEventListener('change', (e) => {
+          state.to = e.target.value; debouncedFetch();
+        });
+      } else if (state.submode === 'history') {
+        const colsOpts = (state.columns || [])
+          .map((c) => `<option value="${escapeAttr(c)}"${c === state.col ? ' selected' : ''}>${escapeHtml(c)}</option>`)
+          .join('');
+        inputs.innerHTML =
+          `<label class="cv-temporal__ctl"><span>Column</span>`
+          + `<select id="temporal-col">${colsOpts}</select></label>`
+          + `<label class="cv-temporal__ctl"><span>Value</span>`
+          + `<input type="text" id="temporal-val" value="${escapeAttr(state.val || '')}" placeholder="e.g. Prime Minister"></label>`;
+        document.getElementById('temporal-col').addEventListener('change', (e) => {
+          state.col = e.target.value; debouncedFetch();
+        });
+        document.getElementById('temporal-val').addEventListener('input', (e) => {
+          state.val = e.target.value; debouncedFetch();
+        });
+      } else { // query: arbitrary SQL (from the box) over the temporal semiring
+        const mapOpts = (state.mappings || [])
+          .map((m) => `<option value="${escapeAttr(m.qname)}"${m.qname === state.mapping ? ' selected' : ''}>${escapeHtml(m.display_name || m.qname)}</option>`)
+          .join('');
+        inputs.innerHTML =
+          `<label class="cv-temporal__ctl"><span>Validity mapping</span>`
+          + `<select id="temporal-mapping" title="The token→validity mapping sr_temporal evaluates over (e.g. time_validity_view).">${mapOpts}</select></label>`
+          + `<button type="button" class="cv-temporal__draw" id="temporal-draw" title="Run the query in the box over the temporal semiring and draw the timeline.">Draw timeline ▸</button>`;
+        document.getElementById('temporal-mapping').addEventListener('change', (e) => {
+          state.mapping = e.target.value; fetchTemporal();
+        });
+        document.getElementById('temporal-draw').addEventListener('click', fetchTemporal);
+      }
+      // The relation picker drives the SRF submodes only; hide it for query.
+      if (relCtl) relCtl.style.display = (state.submode === 'query') ? 'none' : '';
+    }
+
+    modeBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        modeBtns.forEach((b) => b.classList.toggle('is-active', b === btn));
+        state.submode = btn.dataset.submode;
+        renderInputs();
+        if (state.submode === 'query') {
+          populateMappings();
+          // Seed the box with a starter query unless it already holds the
+          // user's own SQL (i.e. not a generated SRF query).
+          const reqEl = document.getElementById('request');
+          if (reqEl && (!reqEl.value.trim() || /\bAS t\(/.test(reqEl.value)
+              || /provsql\.(timeslice|timetravel|history)/.test(reqEl.value))) {
+            reqEl.value = `SELECT *\nFROM ${state.relation || 'your_relation'}\nLIMIT 50`;
+          }
+          setStatus('Edit the query, pick a mapping, then Draw timeline ▸.');
+        } else {
+          fetchTemporal();
+        }
+      });
+    });
+
+    relSel.addEventListener('change', () => {
+      state.relation = relSel.value || null;
+      fetchTemporal();
+    });
+
+    populateRelations();
+    renderInputs();
+
+    async function populateRelations() {
+      let rows = [];
+      try {
+        const resp = await fetch('/api/temporal_relations');
+        if (resp.ok) rows = await resp.json();
+      } catch { /* leave empty; the picker just shows the placeholder */ }
+      relSel.innerHTML = '<option value="">— pick a relation —</option>'
+        + rows.map((m) => `<option value="${escapeAttr(m.qname)}">${escapeHtml(m.display_name || m.qname)}</option>`).join('');
+      // Auto-select a likely temporal view (one ending in _position / _validity
+      // is a mapping; prefer a plain view), else the first relation.
+      if (rows.length) {
+        const pref = rows.find((m) => !/_validity$/.test(m.name)) || rows[0];
+        relSel.value = pref.qname; state.relation = pref.qname; fetchTemporal();
+      }
+    }
+
+    async function populateMappings() {
+      if (!state.mappings.length) {
+        try {
+          const resp = await fetch('/api/temporal_mappings');
+          if (resp.ok) state.mappings = await resp.json();
+        } catch { /* leave empty; the picker shows nothing */ }
+      }
+      if (!state.mapping && state.mappings.length) state.mapping = state.mappings[0].qname;
+      if (state.submode === 'query') renderInputs();
+    }
+
+    function setStatus(msg, isError) {
+      if (!msg) { statusEl.hidden = true; statusEl.textContent = ''; return; }
+      statusEl.hidden = false;
+      statusEl.textContent = msg;
+      statusEl.classList.toggle('is-error', !!isError);
+    }
+
+    async function fetchTemporal() {
+      const body = { submode: state.submode };
+      if (state.submode === 'query') {
+        const reqEl = document.getElementById('request');
+        body.query = reqEl ? reqEl.value : '';
+        body.mapping = state.mapping;
+        if (!body.query.trim()) {
+          tl.innerHTML = ''; setStatus('Type a query in the box, then Draw timeline ▸.'); return;
+        }
+        if (!body.mapping) { setStatus('Pick a validity mapping.', true); return; }
+      } else {
+        if (!state.relation) { tl.innerHTML = ''; setStatus('Pick a relation to begin.'); return; }
+        body.relation = state.relation;
+        if (state.submode === 'timetravel') body.at_time = state.at;
+        else if (state.submode === 'timeslice') { body.from_time = state.from; body.to_time = state.to; }
+        else { body.col_names = [state.col]; body.col_values = [state.val]; }
+      }
+      setStatus('Querying…');
+      let data;
+      try {
+        const resp = await fetch('/api/temporal', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        data = await resp.json();
+        if (!resp.ok) { setStatus(data.error || 'Temporal query failed', true); return; }
+      } catch (e) { setStatus('Request failed: ' + e, true); return; }
+      state.data = data;
+      state.columns = data.columns || [];
+      // For the SRF submodes, show the composed SQL in the shared query box (the
+      // timeline is the view, this is the runnable query behind it). In query
+      // mode the box is the user's input, so leave it untouched.
+      const reqEl = document.getElementById('request');
+      if (state.submode !== 'query' && reqEl && data.sql) reqEl.value = data.sql;
+      // History needs a column picker; (re)render inputs once columns are known.
+      if (state.submode === 'history' && !state.col && state.columns.length) {
+        state.col = state.columns[0]; renderInputs();
+      }
+      setStatus(data.result.length ? '' : 'No rows match.');
+      renderTimeline(data);
+    }
+
+    // ── timeline rendering ──
+    const parseT = (s) => (s == null ? null : Date.parse(s));
+    function renderTimeline(data) {
+      const rows = data.result || [];
+      const segs = [];
+      rows.forEach((r) => (r.valid_time || []).forEach((iv) => {
+        const lo = parseT(iv.lower), hi = parseT(iv.upper);
+        if (lo != null) segs.push(lo);
+        if (hi != null) segs.push(hi);
+      }));
+      if (!segs.length) { tl.innerHTML = ''; return; }
+      let t0 = Math.min(...segs), t1 = Math.max(...segs);
+      if (t0 === t1) { t1 = t0 + 86400000; }            // a 1-day window if degenerate
+      const pad = (t1 - t0) * 0.04; t0 -= pad; t1 += pad;
+      const span = t1 - t0;
+      const xOf = (t) => ((t - t0) / span) * 100;        // percent
+      const clampPct = (p) => Math.max(0, Math.min(100, p));
+
+      // Year ticks across the domain.
+      const y0 = new Date(t0).getUTCFullYear(), y1 = new Date(t1).getUTCFullYear();
+      const step = Math.max(1, Math.ceil((y1 - y0) / 8));
+      let axis = '';
+      for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) {
+        const x = xOf(Date.UTC(y, 0, 1));
+        if (x < 0 || x > 100) continue;
+        axis += `<div class="cv-temporal__tick" style="left:${x}%"><span>${y}</span></div>`;
+      }
+
+      const lanes = rows.map((r) => {
+        // Label from the row's plain columns; skip multirange values
+        // (e.g. a table's own `validity`) since the bars already show them.
+        const label = state.columns.map((c) => r[c])
+          .filter((v) => v != null && !/^\{[[(]/.test(String(v))).join(' · ');
+        const bars = (r.valid_time || []).map((iv) => {
+          const lo = parseT(iv.lower), hi = parseT(iv.upper);
+          const a = clampPct(xOf(lo == null ? t0 : lo));
+          const b = clampPct(xOf(hi == null ? t1 : hi));
+          const open = (lo == null ? ' is-open-l' : '') + (hi == null ? ' is-open-r' : '');
+          const tip = `${iv.lower || '−∞'} → ${iv.upper || '+∞'}`;
+          return `<div class="cv-temporal__bar${open}" style="left:${a}%;width:${Math.max(0.4, b - a)}%" title="${escapeAttr(tip)}"></div>`;
+        }).join('');
+        return `<div class="cv-temporal__lane" data-uuid="${escapeAttr(r.provsql || '')}">`
+             + `<div class="cv-temporal__lanelbl" title="${escapeAttr(label)}">${escapeHtml(label || '(row)')}</div>`
+             + `<div class="cv-temporal__track">${bars}</div></div>`;
+      }).join('');
+
+      // "As of" scrubber: a draggable playhead at state.at.
+      let playhead = '';
+      if (state.submode === 'timetravel' && state.at) {
+        const px = clampPct(xOf(parseT(state.at + 'T00:00:00Z')));
+        playhead = `<div class="cv-temporal__playhead" id="temporal-playhead" style="left:${px}%" title="Drag to time-travel"></div>`;
+      }
+
+      tl.innerHTML =
+        `<div class="cv-temporal__axis">${axis}${playhead}</div>`
+        + `<div class="cv-temporal__lanes">${lanes}</div>`;
+
+      if (state.submode === 'timetravel') wireScrubber(t0, span);
+    }
+
+    // Drag the playhead → set state.at (UTC day) → debounced re-snapshot.
+    function wireScrubber(t0, span) {
+      const ph = document.getElementById('temporal-playhead');
+      const axis = tl.querySelector('.cv-temporal__axis');
+      if (!ph || !axis) return;
+      const toDate = (clientX) => {
+        const rect = axis.getBoundingClientRect();
+        const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        return new Date(t0 + frac * span).toISOString().slice(0, 10);
+      };
+      let dragging = false;
+      const onMove = (ev) => {
+        if (!dragging) return;
+        const day = toDate(ev.clientX);
+        state.at = day;
+        const px = ((Date.parse(day + 'T00:00:00Z') - t0) / span) * 100;
+        ph.style.left = Math.max(0, Math.min(100, px)) + '%';
+        const atInput = document.getElementById('temporal-at');
+        if (atInput) atInput.value = day;
+        debouncedFetch();
+      };
+      ph.addEventListener('mousedown', (e) => { dragging = true; e.preventDefault(); });
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', () => { dragging = false; });
+      // Clicking anywhere on the axis also moves the playhead.
+      axis.addEventListener('click', (e) => {
+        if (e.target === ph) return;
+        const day = toDate(e.clientX);
+        state.at = day;
+        const atInput = document.getElementById('temporal-at');
+        if (atInput) atInput.value = day;
+        fetchTemporal();
+      });
+    }
+  }
 
   function contributionsSidebarHtml() {
     return `

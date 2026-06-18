@@ -1028,6 +1028,12 @@ def create_app(
         # (tracked tables / temporal views the time-travel SRFs accept).
         return jsonify(db.list_temporal_relations(get_pool()))
 
+    @app.get("/api/temporal_mappings")
+    def api_temporal_mappings():
+        # Temporal mode : validity mappings for the 'query' submode
+        # (sr_temporal's 2nd argument; time_validity_view and *_validity).
+        return jsonify(db.list_temporal_mappings(get_pool()))
+
     @app.post("/api/temporal")
     def api_temporal():
         # Temporal mode : run a time-travel SRF (timetravel / timeslice /
@@ -1057,6 +1063,8 @@ def create_app(
                 to_time=payload.get("to_time") or None,
                 col_names=col_names,
                 col_values=col_values,
+                query=payload.get("query") or None,
+                mapping=payload.get("mapping") or None,
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],
                 search_path=app.config.get("SEARCH_PATH", ""),
                 tool_search_path=app.config.get("TOOL_SEARCH_PATH", ""),

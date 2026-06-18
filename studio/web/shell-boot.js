@@ -36,7 +36,7 @@ if (!params.has('mode') && !params.has('db') && !params.has('q') && !params.has(
     && !localStorage.getItem('ps.activeDb')) {
   params.set('nb', 'tutorial')
 }
-const mode = ['where', 'notebook', 'contributions'].includes(params.get('mode')) ? params.get('mode') : 'circuit'
+const mode = ['where', 'notebook', 'contributions', 'temporal'].includes(params.get('mode')) ? params.get('mode') : 'circuit'
 const linkedQuery = params.get('q')
 const linkedNotebook = params.get('nb')
 
