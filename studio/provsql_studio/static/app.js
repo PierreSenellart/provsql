@@ -2510,6 +2510,12 @@
       }
       setStatus(data.result.length ? '' : 'No rows match.');
       renderTimeline(data);
+      // Mirror the rows into the shared result table so the query box, the
+      // result table, and the timeline all agree (the table is the tabular
+      // companion to the timeline). The box already holds the SQL to run.
+      if (reqEl && reqEl.value.trim()) {
+        try { runQuery({ preventDefault() {} }); } catch (e) { /* table is secondary */ }
+      }
     }
 
     // ── timeline rendering ──
