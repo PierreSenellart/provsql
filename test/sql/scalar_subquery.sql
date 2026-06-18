@@ -815,13 +815,16 @@ DROP TABLE di1;
 DROP TABLE di_q;
 DROP TABLE di_r;
 
--- Part 22: a scalar subquery nested inside a larger expression (arithmetic) is
--- NOT decorrelatable, but instead of rejecting it ProvSQL lets it through with a
--- warning: Postgres evaluates the sublink (the value is correct), the row keeps
--- only the OUTER relation's provenance, and the subquery's data is treated as
--- certain.  Contrast a direct comparison (no arithmetic), which still decorrelates
--- into a gated cmp.  A genuinely unsupported DIRECT form (a GROUP BY body) still
--- raises the clean error.
+-- Part 22: a scalar subquery nested inside TARGET-LIST arithmetic is now
+-- decorrelated like a direct entry: the sublink is lifted to choose() in place,
+-- left under its surrounding +,-,*,/ (and casts), and the agg_token operator
+-- overloads carry the subquery's provenance through the arithmetic as a
+-- gate_arith token.  So the value is tracked (an agg_token, "v (*)"), not the
+-- old outer-only passthrough.  The row still exists for every ne_r row (the
+-- LEFT JOIN keeps it), so its existence probability p is 1; the carried
+-- provenance lives in the value token (its circuit reaches ne_q's leaves).
+-- A sublink nested in WHERE arithmetic ("(SELECT…)+1 > k") is not yet lifted,
+-- so it still passes through with a warning; a GROUP BY body still errors.
 CREATE TABLE ne_r(a int, k int);
 CREATE TABLE ne_q(k int, x int);
 INSERT INTO ne_r VALUES (10,1),(20,2),(30,3);
@@ -833,7 +836,7 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM ne_q;
 END $$;
 
--- target-list arithmetic: value = x+1 (correct), provenance is outer-only so p=1.
+-- target-list arithmetic: value = x+1, now a tracked agg_token (no warning).
 CREATE TABLE ne1 AS
   SELECT ne_r.a AS a,
          (SELECT ne_q.x FROM ne_q WHERE ne_q.k = ne_r.k) + 1 AS v1,
@@ -841,9 +844,26 @@ CREATE TABLE ne1 AS
   FROM ne_r;
 SELECT remove_provenance('ne1');
 SELECT a, v1, p FROM ne1 ORDER BY a;
+-- The value token is a gate_arith carrying ne_q's provenance (was outer-only):
+-- the root is 'arith' and its circuit reaches an 'input' leaf (ne_q's tuple).
+SELECT a, get_gate_type(agg_token_uuid(v1)) AS v1_gate,
+       EXISTS (SELECT 1 FROM circuit_subgraph(agg_token_uuid(v1), 12)
+               WHERE gate_type = 'input') AS reaches_input
+FROM ne1 ORDER BY a;
 DROP TABLE ne1;
 
--- WHERE arithmetic: x+1 > 150 keeps a=20,30; provenance outer-only so p=1.
+-- Division forces an int->numeric cast around the sublink; the cast is peeled
+-- (matching the downstream agg_token resolution) so it is tracked too.
+CREATE TABLE ne3 AS
+  SELECT ne_r.a AS a,
+         (SELECT ne_q.x FROM ne_q WHERE ne_q.k = ne_r.k) / 4.0 AS v1
+  FROM ne_r;
+SELECT remove_provenance('ne3');
+SELECT a, v1, get_gate_type(agg_token_uuid(v1)) AS v1_gate FROM ne3 ORDER BY a;
+DROP TABLE ne3;
+
+-- WHERE arithmetic: still passes through with a warning (not yet lifted);
+-- x+1 > 150 keeps a=20,30; provenance outer-only so p=1.
 CREATE TABLE ne2 AS
   SELECT ne_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM ne_r WHERE (SELECT ne_q.x FROM ne_q WHERE ne_q.k = ne_r.k) + 1 > 150;

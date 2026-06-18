@@ -454,14 +454,26 @@ add_provenance
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: scalar subquery nested in an expression is not tracked; its data is treated as certain and the result keeps only the outer provenance
 remove_provenance
 
 (1 row)
 a|v1|p
-10|101|1.0000
-20|201|1.0000
-30|301|1.0000
+10|101 (*)|1.0000
+20|201 (*)|1.0000
+30|301 (*)|1.0000
+(3 rows)
+a|v1_gate|reaches_input
+10|arith|t
+20|arith|t
+30|arith|t
+(3 rows)
+remove_provenance
+
+(1 row)
+a|v1|v1_gate
+10|25.0000000000000000 (*)|arith
+20|50.0000000000000000 (*)|arith
+30|75.0000000000000000 (*)|arith
 (3 rows)
 WARNING:  ProvSQL: scalar subquery nested in an expression is not tracked; its data is treated as certain and the result keeps only the outer provenance
 remove_provenance

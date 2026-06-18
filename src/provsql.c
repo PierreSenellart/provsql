@@ -9510,6 +9510,85 @@ static bool oj_sub_bodies_coalescible(Query *a, Query *b) {
 }
 
 /**
+ * @brief Is @p node a binary/unary @c +,-,*,/ operator expression?
+ *
+ * Mirrors the predicate in @c try_swap_agg_arith: exactly the arithmetic
+ * operators whose @c agg_token overloads build a @c gate_arith token that
+ * carries provenance through the operation.  Used to decide whether a scalar
+ * sublink nested inside a target-list expression sits in provenance-carrying
+ * arithmetic (so it can be lifted to @c choose()) or in something opaque (a
+ * function call, @c CASE …) that cannot propagate provenance.
+ */
+static bool oj_is_arith_opexpr(Node *node) {
+  char *opname;
+  bool is_arith;
+  int nargs;
+  if (node == NULL || !IsA(node, OpExpr))
+    return false;
+  nargs = list_length(((OpExpr *)node)->args);
+  if (nargs < 1 || nargs > 2)
+    return false;
+  opname = get_opname(((OpExpr *)node)->opno);
+  if (opname == NULL)
+    return false;
+  is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
+             strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0;
+  pfree(opname);
+  return is_arith;
+}
+
+/**
+ * @brief Is SubLink @p sl reachable from @p node through arithmetic only?
+ *
+ * True iff @p sl is nested inside @p node through a chain of nothing but
+ * arithmetic @c OpExprs (@c oj_is_arith_opexpr) and casts.  Cast peeling uses
+ * @c peel_agg_casts -- the same @c RelabelType / 1-arg cast @c FuncExpr set the
+ * downstream @c try_swap_agg_arith peels -- so detection and execution agree
+ * (e.g. an @c int sublink divided by a @c numeric: the implicit cast is peeled
+ * here and again when the agg_token operator is resolved).  Such a sublink can
+ * be lifted to a @c choose() aggregate in place: the surrounding @c +,-,*,/
+ * then carry the subquery's provenance via @c gate_arith.  Any other enclosing
+ * node returns @c false, leaving the sublink to the warning passthrough (its
+ * provenance genuinely cannot flow through, e.g. a non-cast function argument).
+ */
+static bool oj_tl_sublink_in_arith(Node *node, SubLink *sl) {
+  if (node == NULL)
+    return false;
+  node = peel_agg_casts(node);
+  if (node == (Node *)sl)
+    return true;
+  if (oj_is_arith_opexpr(node)) {
+    ListCell *lc;
+    foreach (lc, ((OpExpr *)node)->args)
+      if (oj_tl_sublink_in_arith((Node *)lfirst(lc), sl))
+        return true;
+  }
+  return false;
+}
+
+/** @brief Context for @c oj_replace_sublink_mut. */
+typedef struct oj_replace_sublink_ctx {
+  SubLink *target; /* the SubLink node to swap out (matched by pointer) */
+  Node *repl;      /* what to put in its place (the choose() Aggref) */
+} oj_replace_sublink_ctx;
+
+/**
+ * @brief Replace one specific @c SubLink node with @p repl, in place.
+ *
+ * Used to lift a sublink nested in target-list arithmetic to its @c choose()
+ * aggregate without disturbing the surrounding operators, so the arithmetic
+ * survives and carries the lifted token's provenance.
+ */
+static Node *oj_replace_sublink_mut(Node *node, void *cx) {
+  oj_replace_sublink_ctx *c = (oj_replace_sublink_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (node == (Node *)c->target)
+    return c->repl;
+  return expression_tree_mutator(node, oj_replace_sublink_mut, cx);
+}
+
+/**
  * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
  *
  * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
@@ -9539,6 +9618,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   bool is_limit1 = false; /* ORDER BY … LIMIT 1 value body: argmax via choose */
   bool is_distinct = false; /* SELECT DISTINCT body: count(DISTINCT v) <= 1 gate */
   bool coalesce = false; /* >1 target-list sublinks sharing one (Q, corr) */
+  bool nested_in_tl = false; /* the lone sublink is nested in target-list arithmetic */
   List *co_sls = NIL, *co_tes = NIL; /* parallel: each sublink + its target entry */
   Expr *repl_expr; /* what replaces the SubLink: choose(val) or the aggregate */
 
@@ -9612,18 +9692,35 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     }
   }
   if (sl_te == NULL) {
-    if (n_tl_sublinks > 0)
-      return false; /* nested in a target-list expression */
-    in_where = true;
-    /* A WHERE SubLink must be a direct operand of a comparison (its value is
-     * lifted to a HAVING cmp gate on choose()).  If it is nested inside
-     * arithmetic -- (SELECT …) + 1 > k -- the comparison cannot be lifted; bail
-     * so the caller passes the sublink through with a warning instead. */
-    {
-      List *direct = NIL;
-      collect_direct_qual_sublinks(q->jointree->quals, &direct);
-      if (!list_member_ptr(direct, sl))
-        return false;
+    if (n_tl_sublinks > 0) {
+      /* Nested inside a target-list expression.  If the enclosing operators are
+       * all agg_token-tracked arithmetic (+,-,*,/, casts), lift the sublink to
+       * choose() in place below: the surrounding arithmetic then carries the
+       * subquery's provenance through a gate_arith token.  Any other nesting
+       * (function argument, CASE, …) cannot propagate provenance, so bail and
+       * let the caller pass it through with a warning. */
+      foreach (lc, q->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc);
+        if (te->expr && oj_tl_sublink_in_arith((Node *)te->expr, sl)) {
+          sl_te = te;
+          nested_in_tl = true;
+          break;
+        }
+      }
+      if (!nested_in_tl)
+        return false; /* non-arithmetic target-list nesting */
+    } else {
+      in_where = true;
+      /* A WHERE SubLink must be a direct operand of a comparison (its value is
+       * lifted to a HAVING cmp gate on choose()).  If it is nested inside
+       * arithmetic -- (SELECT …) + 1 > k -- the comparison cannot be lifted; bail
+       * so the caller passes the sublink through with a warning instead. */
+      {
+        List *direct = NIL;
+        collect_direct_qual_sublinks(q->jointree->quals, &direct);
+        if (!list_member_ptr(direct, sl))
+          return false;
+      }
     }
   }
   } /* end single-sublink branch */
@@ -9707,6 +9804,12 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
      * wrap only re-finds one.  Restrict coalesce to a single base R (the common
      * case); a wrap-needing R with several sublinks stays for a later pass. */
     if (coalesce)
+      return false;
+    /* A nested-in-arithmetic sublink over a multi-table / subquery FROM (the
+     * wrap path) is deferred: oj_wrap_outer_from re-finds the sublink's target
+     * entry by exact pointer below, which a nested sublink would not match.
+     * Decline before the wrap mutates q, so the warning passthrough applies. */
+    if (nested_in_tl)
       return false;
     if (!oj_wrap_outer_from(constants, q, sl, in_where))
       return false;
@@ -9889,6 +9992,14 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
                                          exprType((Node *)vi),
                                          exprType((Node *)vi), vi);
     }
+  } else if (nested_in_tl) {
+    /* Swap just the SubLink node inside the target expression for choose(),
+     * leaving the surrounding arithmetic; the agg_token operator overloads
+     * (try_swap_agg_arith) later carry the lifted token through +,-,*,/. */
+    oj_replace_sublink_ctx rc;
+    rc.target = sl;
+    rc.repl = (Node *)repl_expr;
+    sl_te->expr = (Expr *)oj_replace_sublink_mut((Node *)sl_te->expr, &rc);
   } else if (!in_where)
     sl_te->expr = repl_expr;
 

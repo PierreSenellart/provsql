@@ -48,16 +48,17 @@ Two findings from running the examples reshuffle the plan:
 
 ### Tier 1 — ready now, prerequisite in place, clear win
 
-1. **Scalar-subquery decorrelation via `agg_token` arithmetic**
-   (scalar §6). The `gate_arith` prerequisite has shipped; today a
-   sublink nested in arithmetic silently under-approximates probability
-   to 1.0 (verified). The single most "prereq just landed" item.
-2. **Case-study quick wins** (case-studies, CS1/CS3/CS5 + the CS2
+1. **Case-study quick wins** (case-studies, CS1/CS3/CS5 + the CS2
    aggregate steps). Verified to need no engine work — pure tutorial
    prose closing feature-coverage-matrix cells.
 
-(Studio Contributions mode, previously the #2 Tier-1 item, shipped in
-Studio 1.6.0.)
+(Studio Contributions mode, previously a Tier-1 item, shipped in
+Studio 1.6.0.  Scalar-subquery decorrelation via `agg_token` arithmetic,
+the other Tier-1 item, shipped for the *target-list* case: a sublink
+nested in target-list arithmetic / casts is now lifted to `choose()` in
+place and carries the subquery's provenance through `+ - * /` as a
+`gate_arith` token — see scalar §5 below.  The *WHERE*-nested form
+remains open.)
 
 ### Tier 2 — reusable certificates / correctness hardening
 
@@ -504,30 +505,34 @@ lands as a parameter on the existing gate, with the dispatcher routing
 out-of-[0,1] synthetic intermediates exact-only. Hard conditioning is the
 weight→∞ limit.
 
-### 5. Nested scalar sublink in arithmetic (passthrough with warning)
+### 5. Nested scalar sublink in target-list arithmetic — SHIPPED (target-list); WHERE form open
 
 **Example**
 ```sql
 -- qq probs 0.5; subquery nested in "+ 1" (not a direct target entry)
-SELECT rr.a, (SELECT qq.x FROM qq WHERE qq.k = rr.k) + 1 AS v1,
-       probability_evaluate(provenance()) AS p FROM rr;
+SELECT rr.a, (SELECT qq.x FROM qq WHERE qq.k = rr.k) + 1 AS v1 FROM rr;
 ```
 
-**Current behavior**
-```
-ATTENTION:  ProvSQL: scalar subquery nested in an expression is not tracked; its data is
-treated as certain and the result keeps only the outer provenance
- a  | v1  |   p
-----+-----+--------
- 10 | 101 | 1.0000     (qq tuples are 0.5, but p=1.0: uncertainty under-approximated)
-```
-The value x+1 is correct, but the row keeps only rr's provenance —
-probability is silently 1.0.
+**Current behavior** — the sublink is now lifted to `choose()` in place under
+the `+ 1`, and the agg_token arithmetic carries qq's provenance through it as a
+`gate_arith` token (no warning).  The value is tracked ("`101 (*)`"); its circuit
+root is `arith` over the `choose(qq.x)` aggregate, reaching qq's input leaves.
+Covers `+ - * /`, unary `-`, compound nesting (`*2+3`), and int→numeric casts /
+division (`/ 4.0`, `::numeric + 0.5`).  See `decorrelate_scalar_sublinks` /
+`oj_tl_sublink_in_arith` in `src/provsql.c`, Part 22 of
+`test/sql/scalar_subquery.sql`.
 
-**After** — wire the shipped native `agg_token` arithmetic (`gate_arith`)
-into the decorrelation path so the `agg_token` survives the surrounding
-`+`/`-`/`*`/`/` and the nested sublink lifts into a `choose()` like a
-direct target entry, carrying qq's provenance through the arithmetic.
+```
+ a  |   v1    |   p
+----+---------+--------
+ 10 | 101 (*) | 1.0000   (row exists via the LEFT JOIN; provenance is in v1's token)
+```
+
+**Still open** — a sublink nested in WHERE arithmetic
+(`… WHERE (SELECT …)+1 > k`) still passes through with a warning: the comparison
+would have to lift to a HAVING `cmp` gate over `choose(qq.x)+1` rather than over a
+bare `choose(qq.x)`.  Opaque (non-cast) function-argument nestings stay a
+passthrough by design.
 
 ### 6. Correlated sublinks over different (Q, corr) (hard error)
 
