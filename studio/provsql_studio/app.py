@@ -1046,10 +1046,6 @@ def create_app(
         source   = (payload.get("source") or "").strip().lower()
         timeop   = (payload.get("timeop") or "").strip().lower()
         relation = (payload.get("relation") or "").strip()
-        col_names  = payload.get("col_names") if isinstance(
-            payload.get("col_names"), list) else None
-        col_values = payload.get("col_values") if isinstance(
-            payload.get("col_values"), list) else None
         merged_gucs = _backend_gucs(
             {str(k): str(v) for k, v in (payload.get("extra_gucs") or {}).items()}
             if isinstance(payload.get("extra_gucs"), dict)
@@ -1064,8 +1060,6 @@ def create_app(
                 at_time=payload.get("at_time") or None,
                 from_time=payload.get("from_time") or None,
                 to_time=payload.get("to_time") or None,
-                col_names=col_names,
-                col_values=col_values,
                 query=payload.get("query") or None,
                 mapping=payload.get("mapping") or None,
                 statement_timeout=app.config["STATEMENT_TIMEOUT"],

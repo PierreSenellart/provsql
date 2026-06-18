@@ -2302,10 +2302,11 @@
   // A timeline over provenance validity. Two orthogonal controls: a SOURCE
   // (a tracked Relation, or an arbitrary Query interpreted over the temporal
   // semiring via a validity mapping) and a TIME operation (As of / During /
-  // History of / Full). A relation source uses the timetravel/timeslice/
-  // history SRFs; a query source wraps the SQL with sr_temporal and filters on
-  // it. Each returned row is one lane; its tstzmultirange is one bar per
-  // disjoint sub-range. "As of" adds a draggable scrubber (debounced).
+  // Full). Both sources go through one mechanism: the SQL is wrapped with
+  // sr_temporal as `valid_time` and the time op is applied as a filter on it
+  // (this supersedes the timetravel/timeslice/history SRFs). Each returned row
+  // is one lane; its tstzmultirange is one bar per disjoint sub-range. "As of"
+  // adds a draggable scrubber (debounced).
   function temporalSidebarHtml() {
     return `
       <div class="cv-temporal">
@@ -2325,8 +2326,7 @@
           <div class="cv-temporal__seg" role="radiogroup" aria-label="Time operation">
             <button type="button" class="cv-temporal__op is-active" data-timeop="asof" title="Rows valid at a single instant.">As of</button>
             <button type="button" class="cv-temporal__op" data-timeop="during" title="Rows valid during a window.">During</button>
-            <button type="button" class="cv-temporal__op" data-timeop="history" title="All versions matching a key column (relation only).">History of</button>
-            <button type="button" class="cv-temporal__op" data-timeop="full" title="Every row, with its full validity (query only).">Full</button>
+            <button type="button" class="cv-temporal__op" data-timeop="full" title="Every row, with its full validity (no time filter).">Full</button>
           </div>
           <div class="cv-temporal__inputs" id="temporal-inputs"></div>
         </div>
@@ -2358,8 +2358,8 @@
 
     const isoDay = (d) => (d || '').slice(0, 10);
     const todayIso = new Date().toISOString().slice(0, 10);
-    // The time operations valid for each source.
-    const OPS = { relation: ['asof', 'during', 'history'], query: ['asof', 'during', 'full'] };
+    // The time operations (the same for either source).
+    const OPS = { relation: ['asof', 'during', 'full'], query: ['asof', 'during', 'full'] };
 
     let debounceTimer = null;
     const debouncedFetch = () => {
@@ -2404,21 +2404,6 @@
         });
         document.getElementById('temporal-to').addEventListener('change', (e) => {
           state.to = e.target.value; debouncedFetch();
-        });
-      } else if (state.timeop === 'history') {
-        const colsOpts = (state.columns || [])
-          .map((c) => `<option value="${escapeAttr(c)}"${c === state.col ? ' selected' : ''}>${escapeHtml(c)}</option>`)
-          .join('');
-        inputs.innerHTML =
-          `<label class="cv-temporal__ctl"><span>Column</span>`
-          + `<select id="temporal-col">${colsOpts}</select></label>`
-          + `<label class="cv-temporal__ctl"><span>Value</span>`
-          + `<input type="text" id="temporal-val" value="${escapeAttr(state.val || '')}" placeholder="e.g. Prime Minister"></label>`;
-        document.getElementById('temporal-col').addEventListener('change', (e) => {
-          state.col = e.target.value; debouncedFetch();
-        });
-        document.getElementById('temporal-val').addEventListener('input', (e) => {
-          state.val = e.target.value; debouncedFetch();
         });
       } else { // full: no time inputs (every row, full validity)
         inputs.innerHTML = '';
@@ -2515,7 +2500,6 @@
       }
       if (state.timeop === 'asof') body.at_time = state.at;
       else if (state.timeop === 'during') { body.from_time = state.from; body.to_time = state.to; }
-      else if (state.timeop === 'history') { body.col_names = [state.col]; body.col_values = [state.val]; }
       setStatus('Querying…');
       let data;
       try {
@@ -2532,10 +2516,6 @@
       // (the timeline is the view, this is the runnable query behind it). For a
       // query source the box is the user's input, so leave it untouched.
       if (state.source !== 'query' && reqEl && data.sql) reqEl.value = data.sql;
-      // History needs a column picker; (re)render inputs once columns are known.
-      if (state.timeop === 'history' && !state.col && state.columns.length) {
-        state.col = state.columns[0]; renderInputs();
-      }
       setStatus(data.result.length ? '' : 'No rows match.');
       renderTimeline(data);
       // Mirror the rows into the shared result table so the query box, the

@@ -1935,7 +1935,10 @@ def _parse_multirange(value) -> list[dict]:
     return out
 
 
-_TEMPORAL_TIMEOPS = ("asof", "during", "history", "full")
+_TEMPORAL_TIMEOPS = ("asof", "during", "full")
+# The canonical token->validity mapping ProvSQL ships; the default for a
+# relation source (the user-facing query source picks its own).
+_TEMPORAL_DEFAULT_MAPPING = "provsql.time_validity_view"
 
 
 def temporal(
@@ -1949,8 +1952,6 @@ def temporal(
     at_time: str | None = None,
     from_time: str | None = None,
     to_time: str | None = None,
-    col_names: list[str] | None = None,
-    col_values: list[str] | None = None,
     statement_timeout: str,
     search_path: str = "",
     tool_search_path: str = "",
@@ -1958,18 +1959,20 @@ def temporal(
 ) -> dict:
     """Place a relation's or a query's rows on a validity timeline.
 
-    `source` is `'relation'` (a tracked table / temporal view) or `'query'`
-    (arbitrary SQL interpreted over the interval-union semiring via `mapping`).
-    `timeop` is the time operation, applied to either source:
-      * `'asof'`    -- rows valid at a single instant (`at_time`)
-      * `'during'`  -- rows valid during a window (`from_time`..`to_time`)
-      * `'history'` -- (relation only) versions matching a key-column filter
-      * `'full'`    -- (query only) every row, with its full validity
+    One uniform mechanism for both sources: the underlying SQL is wrapped with
+    `sr_temporal(provenance(), mapping) AS valid_time`, and the time operation
+    is applied as a filter on that computed column. (This supersedes ProvSQL's
+    `timetravel` / `timeslice` / `history` SRFs, which remain the convenience
+    surface for raw SQL.)
 
-    A relation source uses the `timetravel` / `timeslice` / `history` SRFs; a
-    query source wraps the SQL with `sr_temporal(provenance(), mapping) AS
-    valid_time` and filters on that. Each `valid_time` is parsed into
-    `[{lower, upper}]` intervals for the timeline.
+    `source` is `'relation'` (a tracked table / temporal view -- the SQL is
+    `SELECT * FROM <relation>`, mapped through the canonical
+    `time_validity_view`) or `'query'` (arbitrary SQL via the chosen `mapping`).
+    `timeop` is the time operation:
+      * `'asof'`   -- rows valid at a single instant (`at_time`)
+      * `'during'` -- rows valid during a window (`from_time`..`to_time`)
+      * `'full'`   -- every row, with its full validity (no time filter)
+    Each `valid_time` is parsed into `[{lower, upper}]` intervals.
 
     Returns `{result, kind, source, timeop, columns, sql}` ready to
     JSON-encode. Raises ValueError on bad input; propagates psycopg.Error."""
@@ -1979,13 +1982,7 @@ def temporal(
         raise ValueError(f"unknown temporal source: {source!r}")
     if timeop not in _TEMPORAL_TIMEOPS:
         raise ValueError(f"unknown temporal time operation: {timeop!r}")
-    if source == "relation" and timeop == "full":
-        raise ValueError("the 'full' operation applies to a query source")
-    if source == "query" and timeop == "history":
-        raise ValueError("the 'history' operation applies to a relation source")
 
-    map_match = match = None
-    names = values = None
     if source == "query":
         if not (query or "").strip():
             raise ValueError("query source requires a SQL query")
@@ -1994,13 +1991,14 @@ def temporal(
         )
         if map_match is None:
             raise ValueError(f"unknown temporal mapping: {mapping!r}")
+        map_qname = map_match["qname"]
     else:
         match = next(
             (x for x in list_temporal_relations(pool) if x["qname"] == relation), None
         )
         if match is None:
             raise ValueError(f"unknown temporal relation: {relation!r}")
-        bare_name = match["name"]
+        map_qname = _TEMPORAL_DEFAULT_MAPPING
 
     if timeop == "asof":
         if not (at_time or "").strip():
@@ -2008,13 +2006,6 @@ def temporal(
     elif timeop == "during":
         if not (from_time or "").strip() or not (to_time or "").strip():
             raise ValueError("the 'during' operation requires from_time and to_time")
-    elif timeop == "history":
-        names = [c for c in (col_names or []) if (c or "").strip()]
-        values = list(col_values or [])
-        if not names or len(names) != len(values):
-            raise ValueError(
-                "history requires equal-length, non-empty col_names / col_values"
-            )
 
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -2041,88 +2032,44 @@ def temporal(
                 )
             )
 
+        # One mechanism for both sources, mirroring the SRF bodies: project the
+        # underlying columns plus sr_temporal AS `valid_time`, and apply the
+        # time op as a base-level filter that RE-EVALUATES sr_temporal (not the
+        # computed alias). Filtering at the same level as provenance() -- rather
+        # than in an outer query over a tracked subquery -- is what keeps
+        # ProvSQL's hook from mis-tracking the multirange operator on a table's
+        # provsql column. ProvSQL appends a single `provsql` last, so the record
+        # is (the underlying columns, valid_time, provsql), read off
+        # cur.description.
+        srt = sql.SQL("provsql.sr_temporal(provsql.provenance(), {m})").format(
+            m=sql.Literal(map_qname)
+        )
         if source == "query":
-            # Arbitrary query over the interval-union semiring: wrap it to add
-            # the per-row validity, then apply the time operation as a filter on
-            # that computed column (mirroring what the SRFs do internally). The
-            # record is (the query's columns, valid_time, provsql), read off
-            # cur.description (ProvSQL appends `provsql` last).
-            user_sql = (query or "").strip().rstrip(";")
-            inner = sql.SQL(
-                "SELECT t0.*,\n"
-                "       provsql.sr_temporal(provsql.provenance(), {m}) AS valid_time\n"
-                "  FROM (\n{q}\n  ) t0"
-            ).format(m=sql.Literal(map_match["qname"]), q=sql.SQL(user_sql))
-            if timeop == "asof":
-                where = sql.SQL("\nWHERE t.valid_time @> {at}::timestamptz").format(
-                    at=sql.Literal(at_time)
-                )
-            elif timeop == "during":
-                where = sql.SQL(
-                    "\nWHERE t.valid_time "
-                    "&& tstzrange({f}::timestamptz, {t}::timestamptz)"
-                ).format(f=sql.Literal(from_time), t=sql.Literal(to_time))
-            else:  # full
-                where = sql.SQL("")
-            full_query = sql.SQL("SELECT * FROM (\n{inner}\n) t{where}").format(
-                inner=inner, where=where
+            star = sql.SQL("t0.*")
+            from_clause = sql.SQL("(\n{q}\n  ) t0").format(
+                q=sql.SQL((query or "").strip().rstrip(";"))
             )
-            cur.execute(full_query)
-            rows = cur.fetchall()
-            names_in_order = [d.name for d in cur.description]
-            sql_text = full_query.as_string(conn)
         else:
-            # Relation source: the time-travel SRFs. Each SRF body is
-            # `SELECT <relation>.*, sr_temporal(...)`; ProvSQL's hook strips any
-            # real `provsql` column out of the `*`-expansion and re-appends a
-            # single `provsql` last, after sr_temporal's validity. So the record
-            # is always (the relation's non-provenance columns, valid_time,
-            # provsql) -- for both tables and views. Introspect to build `AS`.
-            cur.execute(
-                """
-                SELECT a.attname, format_type(a.atttypid, a.atttypmod)
-                FROM pg_attribute a
-                WHERE a.attrelid = %s::regclass AND a.attnum > 0
-                  AND NOT a.attisdropped AND a.attname <> 'provsql'
-                ORDER BY a.attnum
-                """,
-                (match["qname"],),
+            rel = sql.Identifier(match["schema"], match["name"])
+            star = sql.SQL("{}.*").format(rel)
+            from_clause = rel
+        if timeop == "asof":
+            where = sql.SQL("\nWHERE {srt} @> {at}::timestamptz").format(
+                srt=srt, at=sql.Literal(at_time)
             )
-            out_cols = list(cur.fetchall())  # [(name, type), ...] in record order
-            out_cols.append(("valid_time", "tstzmultirange"))
-            out_cols.append(("provsql", "uuid"))
-            as_clause = sql.SQL(", ").join(
-                sql.SQL("{} {}").format(sql.Identifier(c[0]), sql.SQL(c[1]))
-                for c in out_cols
-            )
-            names_in_order = [c[0] for c in out_cols]
-
-            if timeop == "asof":
-                srf = sql.SQL("provsql.timetravel({rel}, {t}::timestamptz)").format(
-                    rel=sql.Literal(bare_name), t=sql.Literal(at_time)
-                )
-            elif timeop == "during":
-                srf = sql.SQL(
-                    "provsql.timeslice({rel}, {f}::timestamptz, {t}::timestamptz)"
-                ).format(
-                    rel=sql.Literal(bare_name),
-                    f=sql.Literal(from_time),
-                    t=sql.Literal(to_time),
-                )
-            else:  # history
-                srf = sql.SQL(
-                    "provsql.history({rel}, {cn}::text[], {cv}::text[])"
-                ).format(
-                    rel=sql.Literal(bare_name),
-                    cn=sql.Literal(names),
-                    cv=sql.Literal(values),
-                )
-            full_query = sql.SQL("SELECT * FROM {srf} AS t({as_clause})").format(
-                srf=srf, as_clause=as_clause
-            )
-            cur.execute(full_query)
-            rows = cur.fetchall()
-            sql_text = full_query.as_string(conn).replace(" AS t(", "\n  AS t(")
+        elif timeop == "during":
+            where = sql.SQL(
+                "\nWHERE {srt} && tstzrange({f}::timestamptz, {t}::timestamptz)"
+            ).format(srt=srt, f=sql.Literal(from_time), t=sql.Literal(to_time))
+        else:  # full
+            where = sql.SQL("")
+        full_query = sql.SQL(
+            "SELECT {star},\n       {srt} AS valid_time\n  FROM {frm}{where}"
+        ).format(star=star, srt=srt, frm=from_clause, where=where)
+        cur.execute(full_query)
+        rows = cur.fetchall()
+        names_in_order = [d.name for d in cur.description]
+        sql_text = full_query.as_string(conn)
 
         # Locate roles by name (shared by both paths). An untracked query may
         # yield no provsql column; tolerate that.
