@@ -14,6 +14,85 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.6.0] - 2026-06-18
+
+Companion release for ProvSQL extension 1.10.0. The headline feature
+is **Contributions mode**, a per-input Shapley / Banzhaf heat-map over
+a query result; the release also renders every circuit construct the
+extension 1.10.0 routes produce (absorptive class, d-D certificates,
+conditioned gates, Möbius nodes), and brings a series of Playground
+and notebook improvements driven by first-user feedback. Requires
+extension **>= 1.10.0**.
+
+### Highlights
+
+- **Contributions mode.** A fifth mode alongside Circuit, Where,
+  Notebook and the query views: click a result cell to pin it as the
+  target and get signed per-input contribution bars (Shapley or
+  Banzhaf, backed by `shapley_all_vars`), with measure / method /
+  mapping controls; source rows are labelled by their column values
+  in table order, and the Method control exposes the extension's
+  cost-based (`auto`) vs historical (`ladder`) d-DNNF construction
+  routes. Covered in the user guide and a "Seeing it in Studio" coda
+  to case study 2. With five modes, the mode switcher becomes a
+  dropdown showing the current mode.
+- **Absorptive provenance class.** The scheme selector becomes
+  four-way (`where` / `semiring` / `absorptive` / `boolean`),
+  including per-cell overrides in notebooks; absorptive-assumed
+  circuits get an amber **A** badge and narrow the semiring menu to
+  what is sound (strictly for cyclic-recursion truncation roots,
+  leniently for load-time absorptive folds); a new "Tropical
+  (min-plus, nonnegative)" entry in the eval strip makes min-cost
+  reachability on cyclic data evaluable in one click.
+- **Certificates and the new gates, rendered.** A green **D** badge
+  marks gates carrying the persisted d-D certificate (deterministic /
+  decomposable tooltips and an inspector row), joining the B / A / IF
+  badges; surviving `assume()` wrappers get their own glyph;
+  conditioned gates display with labelled evidence / query children;
+  and a `gate_mobius` renders as a μ node with each child edge
+  carrying its signed integer coefficient and the transparent lineage
+  child labelled `lineage`.
+- **Notebooks: math and more.** Markdown cells render LaTeX math via
+  vendored KaTeX (auto-render, no CDN); notebooks gain a table of
+  contents, internal links and a close-all action; the Load button
+  also accepts a plain `.sql` file, appended as a ready-to-run cell.
+- **Playground onboarding and data loading.** The landing page gains
+  a call-to-action to the interactive tutorial plus per-case-study
+  notebook links, and a first visit opens the tutorial notebook
+  directly; boot, database switch and Reset show a modal busy overlay
+  instead of a passive status bar. The in-browser psycopg shim
+  implements `cursor.copy()`, so dump-style `COPY ... FROM stdin`
+  loads (notably the bundled notebooks' data cells) actually populate
+  tables; `?nb=` deep links open the notebook's bound database.
+
+### Improvements
+
+- SQL arriving via paste, drop, `?q=` links or a loaded file is
+  cleaned of invisible Unicode (non-breaking spaces, zero-width and
+  bidi characters, BOM) that PostgreSQL rejects with cryptic syntax
+  errors, in both the query box and notebook cells.
+- TID / BID pills are shared across views, approximation guarantees
+  render uniformly, and aggregate moments display exactly where the
+  extension computes them exactly.
+- The absorptive badge placement is harmonised with the Boolean badge
+  and the certificate frontier tag.
+
+### Bug fixes
+
+- Playground: the application `search_path` puts `public` first, so
+  unqualified `CREATE TABLE` (notably the notebooks' setup cells) no
+  longer lands in the `provsql` schema, which left the Schema panel
+  empty after Run all.
+- Playground: the case-study-8 deep link works (Markdown/KaTeX assets
+  resolve under a sub-path, and the database is pre-created).
+- The mode menu no longer renders white-on-white items.
+
+### Demo and tests
+
+- End-to-end suites walk case studies 2 (Contributions), 7 and 8
+  through the live UI; the per-cell scheme cycle covers absorptive;
+  navigation timeouts are sized for loaded CI runners.
+
 ## [1.5.0] - 2026-06-05
 
 Companion release for ProvSQL extension 1.9.0. Two headline features:
