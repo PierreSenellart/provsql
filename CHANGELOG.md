@@ -5,6 +5,188 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.10.0] - 2026-06-18
+
+ProvSQL 1.10.0 is about exact probability evaluation for query shapes
+that used to be out of reach: recursive reachability (network
+reliability) compiled along a tree decomposition of the data,
+a joint-width compiler for unsafe UCQs over correlated inputs, the
+Möbius-inversion route that completes the safe-UCQ dichotomy, an
+absorptive provenance class that makes semiring evaluation meaningful
+on cyclic recursion (min-cost paths and friends), and a conditioning
+surface (the `|` operator) that turns ProvSQL into a probability
+calculator. HAVING gains boolean-aggregate, `array_agg` and
+generalized `choose()` comparisons, and Shapley/Banzhaf computation
+picks its d-DNNF construction route by cost.
+
+#### Recursive reachability on bounded-treewidth data
+
+- **Network reliability through a plain `WITH RECURSIVE` query.**
+  Under `provsql.provenance = 'boolean'`, recursive reachability
+  queries over a tracked edge relation are recognised and compiled
+  along a tree decomposition of the data graph into
+  deterministic-decomposable (d-D) circuits, by construction and
+  certified per gate: linear size for fixed data treewidth, cyclic
+  graphs native, evaluated linearly by the certificate-aware
+  `independent` method. An undirected cyclic ladder with 2998
+  probabilistic edges answers exactly in ~0.3 s through the plain
+  recursive query, where the generic Boolean fixpoint exceeded two
+  minutes at 28 edges. Any unrecognised shape (or a treewidth above
+  the cap) falls back to the generic route with a notice.
+- **Recognised variants.** Directed and undirected connectivity,
+  deterministic edge-column filters, multi-source base arms
+  (`SELECT v FROM sources`, probabilistic source sets included),
+  `repair_key` BID edge blocks (compiled as native (k+1)-way
+  branchings), join-defined edge subqueries with disjoint-support
+  tokens, and bounded-hop reachability (the hop-counting CTE) via
+  walk-length-set states.
+- **Reachability aggregations.** `GROUP BY` over reach joined with a
+  member relation evaluates per-group "some member reached"
+  reliability exactly (one shared bottom-up sweep across all groups);
+  `SELECT DISTINCT` is recognised as the GROUP BY twin;
+  member-relation filters push into the planting; and self-join
+  conjunctions (`FROM reach r1, reach r2 WHERE ...`) compile the
+  k-terminal coverage event, giving k-terminal reliability and, under
+  nonnegative min-plus, exact directed Steiner cost.
+
+#### Absorptive provenance and cyclic recursion
+
+- **One provenance class GUC.** The session GUCs collapse into
+  `provsql.provenance = where | semiring (default) | absorptive |
+  boolean`; the Boolean-assumption marker generalises to a labelled
+  `assume()` gate.
+- **Cyclic recursion, exactly.** Under an absorptive class, recursive
+  queries on cyclic data stop at the absorptive value fixpoint and
+  their tokens carry an 'absorptive' marker: accepted by absorptive
+  evaluations, refused with a clear error by counting, why-provenance
+  and unrestricted tropical. `sr_tropical(token, true)` (nonnegative
+  min-plus) gives exact min-cost reachability on cyclic graphs;
+  Viterbi (most-reliable path), max-min (widest path), Łukasiewicz
+  and temporal validity ranges all read the compiled reachability
+  circuits exactly.
+- **Absorptive folds.** The load-time simplification rules are split
+  by the semiring class that justifies them; plus-idempotence and the
+  absorption laws sound in every absorptive semiring now fire under
+  the absorptive class.
+
+#### Joint-width compiler for unsafe UCQs
+
+- **Transparent recognition.** Under Boolean provenance, unsafe UCQs
+  (the genuinely #P-hard shapes) are recognised at planning time
+  (`provsql.joint_width`, default on) and compiled along a joint
+  decomposition of data and circuit into a certified d-D, including
+  over *correlated* inputs (view-derived lineage, shared events,
+  `repair_key` blocks), the regime where the treewidth of the data or
+  of the circuit alone says nothing. A cheap width screen
+  (`provsql.joint_max_treewidth`) declines cleanly to the standard
+  route.
+- **Boolean and per-answer.** Existence queries and per-answer
+  `GROUP BY` / `DISTINCT` heads of any type are covered, across
+  comma-list, `JOIN ... ON`, subquery and `UNION` (multi-disjunct
+  UCQ) spellings, with single-relation predicates pushed into the
+  gathering; a single top-down dynamic program emits one circuit root
+  per answer, making a k-answer query linear in k. The materialised
+  token is ordinary provenance: `shapley()`, `expected()` and every
+  named probability method work on it unchanged.
+- **Compile stats.** `ucq_joint_compile_stats` reports the realised
+  widths and the essential-variable count mined from functional
+  dependencies that hold on the gathered data.
+
+#### Möbius inversion: the last safe-UCQ route
+
+- **Safe by cancellation.** UCQs that are safe only because their
+  #P-hard inclusion-exclusion terms carry zero Möbius value (the
+  dichotomy's q9/QW witnesses) are now answered in polynomial time: a
+  measure-only `gate_mobius` combines lifted-inference read-once
+  islands with signed integer coefficients, while a transparent
+  lineage child keeps Shapley, semiring evaluation, possible worlds
+  and PROV export on the literal provenance. Takes precedence over
+  joint-width when both apply; `provsql.mobius` GUC; first-class
+  `'mobius'` method name; Boolean and per-answer forms.
+
+#### Conditioning: ProvSQL as a probability calculator
+
+- **The `|` operator.** Condition any provenance token on an event:
+  `P(Q | W)` via the binary `|` (function `cond()`), whole-tuple
+  conditioning via the prefix `given()`, conditioned
+  `random_variable` and `agg_token` distributions (`rv | C`,
+  `agg | C`, composable, with arithmetic over the conditioned
+  distributions and exact analytical histograms for closed-form
+  shapes), and the natural `X | (predicate)` form for every carrier.
+- **Denial constraints.** The prefix `!` (function `provenance_not`)
+  negates a Boolean provenance event, giving the `Q | !W`
+  denial-constraint form.
+- **Mixed predicates.** Regular comparisons mixed with probabilistic
+  ones are accepted in WHERE/HAVING conditions; unsupported
+  combinations (e.g. Shapley on a conditioned token) refuse with
+  clear errors.
+
+#### HAVING
+
+- **Boolean aggregates.** `bool_and` / `bool_or` / `every` carry
+  provenance, compare against constants via an exact two-value
+  characterisation, and work bare (`HAVING bool_or(x)`,
+  `NOT (every(x))`).
+- **`array_agg` comparisons.** `array_agg(...) = / <> ARRAY[...]`
+  over any element type via possible-worlds enumeration, following
+  the aggregate's ORDER BY on every PostgreSQL version and
+  reconciling PostgreSQL's two boolean text forms.
+- **`choose()` over any type.** Equality comparisons of `choose()`
+  over non-numeric values (booleans, dates, UUIDs, ...) through the
+  value-as-text domain.
+- **Certified enumerations.** When a possible-worlds expansion has
+  independent contributors, it is built as a certified d-DNNF and
+  evaluated exactly and linearly (AVG vs constant, arithmetic over
+  several aggregates, choose-vs-text); correlated contributors keep
+  their previous routes.
+
+#### Probability engine
+
+- **Cost-selected d-DNNF construction.** `shapley()`, `banzhaf()` and
+  `shapley_all_vars()` pick among the d-DNNF constructors with the
+  method catalog's cost-based chooser by default (`'auto'`; pass
+  `'ladder'` to force the historical chain).
+- **BID circuits everywhere.** A declarative dispatch flag routes
+  `repair_key` / multivalued circuits through the Boolean rewrite for
+  every Boolean-only method, so `d-tree` (and future methods) handle
+  them instead of erroring.
+- **Deep and shared circuits.** Semiring evaluation is memoised and
+  iterative: shared sub-DAGs are no longer re-expanded per path
+  (exponential worst case) and circuits as deep as the data no longer
+  hit the stack-depth ceiling.
+
+#### Robustness
+
+- Fixed a use-after-free in compiled semiring evaluation over
+  pass-by-reference carriers: every `sr_temporal` / `sr_interval_*`
+  call read freed memory and could fail on larger circuits.
+- Fixed `interpret-as-dd` returning probability 0 on circuits with
+  De Morgan'd ORs (NOT gates were treated as leaves).
+- HAVING `array_agg(bool)` vs a constant bool array no longer always
+  fails, and the comparison no longer depends on the executor's row
+  order (PostgreSQL 16+ masked this by pre-sorting ordered-aggregate
+  input).
+
+#### Documentation
+
+- The probability chapter is reorganised user-workflow-first and
+  gains a tractable-cases grid (data, annotation, query class, data
+  complexity, mechanism) covering all routes, with the method
+  catalogue completed.
+- New Conditioning chapter; case study 7 restructured into parts A/B/C
+  (cyclic reachability through the absorptive class, the
+  bounded-treewidth reliability route, joint-width and Möbius); new
+  case study 8, "ProvSQL as a probability calculator", notebook-first.
+- A floating button (and `\` shortcut) collapses the documentation
+  sidebar; sitemap, per-page meta descriptions and Open Graph tags
+  across the site.
+
+#### Development
+
+- `make coverage` builds a gcov-instrumented extension, runs the
+  suite in a throwaway cluster and reports line and never-called
+  function coverage.
+
 ## [1.9.0] - 2026-06-06
 
 ProvSQL 1.9.0 brings broad support for subqueries outside FROM and for
