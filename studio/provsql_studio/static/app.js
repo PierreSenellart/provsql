@@ -2459,9 +2459,16 @@
       });
     }
 
+    // Arriving from another mode with a query that was run there: start in
+    // Query source and draw its timeline -- the same as hitting Send query.
+    // (carriedRan is module-scoped; the box was already restored.)
+    const carriedQuery = carriedRan && reqEl && !!reqEl.value.trim();
+    if (carriedQuery) state.source = 'query';
+
     syncAvailability();
-    populateRelations();
+    populateRelations();   // populates the picker; auto-fetches only if source is relation
     renderInputs();
+    if (carriedQuery) populateMappings().then(() => fetchTemporal());
 
     async function populateRelations() {
       let rows = [];
