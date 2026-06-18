@@ -102,3 +102,13 @@ id|exp_detections|exp_total_conf
 9|1.7100|1.4705
 22|4.3800|2.9976
 (5 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+photo_id|species_id|confidence|prob
+6|7|0.91|0.9100
+9|13|0.92|0.9200
+(2 rows)

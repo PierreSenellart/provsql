@@ -495,6 +495,17 @@ external binary required). It is often the fastest exact method on simple
 queries, but it fails on circuits with high treewidth – when that happens,
 fall back to ``'compilation'`` or one of the other methods.
 
+One further method is worth knowing. ``'independent'`` is the cheapest of
+all – it multiplies and adds marginal probabilities directly – but it
+applies only when the lineage is *independent*, with no input tuple shared
+between the branches of an :math:`\oplus` or :math:`\otimes`. The path
+query above is **not** independent (the self-join ``m2.x = m1.y`` makes the
+two matrix lookups share tuples), so
+``probability_evaluate(provenance(), 'independent')`` raises
+``ProvSQL: Not an independent circuit`` rather than returning a wrong
+answer; it is the method to reach for on genuinely tuple-independent
+lineage.
+
 
 Step 14: The Boolean Expression Behind a Token
 ------------------------------------------------

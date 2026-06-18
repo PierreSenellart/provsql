@@ -307,6 +307,24 @@ WHERE id IN (1, 5, 7, 9, 22)  -- representative photos
 ORDER BY id;
 DROP TABLE result_cs5_expected;
 
+-- Step 11: INSERT ... SELECT into a provenance-tracked target inherits the
+-- source rows' provenance tokens, so a probability over the copied rows equals
+-- the source detection confidence (prob == confidence).
+CREATE TABLE confident_detections (photo_id int, bbox_id int, species_id int, confidence double precision);
+SELECT add_provenance('confident_detections');
+INSERT INTO confident_detections (photo_id, bbox_id, species_id, confidence)
+SELECT photo_id, bbox_id, species_id, confidence FROM detection WHERE confidence >= 0.9;
+
+CREATE TABLE result_cs5_confident AS
+SELECT photo_id, species_id, confidence,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM confident_detections;
+SELECT remove_provenance('result_cs5_confident');
+SELECT photo_id, species_id, confidence, prob FROM result_cs5_confident
+ORDER BY photo_id, species_id;
+DROP TABLE result_cs5_confident;
+DROP TABLE confident_detections;
+
 -- Clean up
 DROP TABLE species_mapping;
 DROP TABLE detection;

@@ -27,6 +27,13 @@ DestB|1 ⊗ 1 ⊗ 0 ⊗ 1
 remove_provenance
 
 (1 row)
+route_long_name|next_stop|accessible
+Line 1|DestA|t
+Line 1|DestB|f
+(2 rows)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

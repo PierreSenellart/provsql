@@ -438,3 +438,45 @@ Both queries use ProvSQL's :sqlfunc:`expected` operator, which computes
 the expected value of a SQL aggregate over the probabilistic database
 defined by the per-row probabilities set in Step 6. Photos with many
 high-confidence detections rank highest on both metrics.
+
+
+Step 11: Materialising a Subset with ``INSERT … SELECT``
+---------------------------------------------------------
+
+Copying provenance-tracked rows into another **provenance-tracked** table
+preserves their lineage: the inserted rows keep their source tokens rather
+than getting fresh ones. Collect the high-confidence detections into a
+``confident_detections`` table – enable provenance on the target *first*,
+then populate it with ``INSERT … SELECT``:
+
+.. code-block:: postgresql
+
+    CREATE TABLE confident_detections (
+      photo_id   integer,
+      bbox_id    integer,
+      species_id integer,
+      confidence double precision);
+    SELECT add_provenance('confident_detections');
+
+    INSERT INTO confident_detections (photo_id, bbox_id, species_id, confidence)
+    SELECT photo_id, bbox_id, species_id, confidence
+    FROM detection
+    WHERE confidence >= 0.9;
+
+Each inserted row inherits the provenance token of the ``detection`` row it
+came from, so a probability computed over ``confident_detections`` matches the
+one over the original row – the lineage followed the data:
+
+.. code-block:: postgresql
+
+    SELECT photo_id, species_id, confidence,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM confident_detections
+    ORDER BY photo_id, species_id;
+
+.. note::
+
+   The target table must be provenance-tracked before the insert. Inserting
+   provenance-tracked rows into an *untracked* table drops the lineage, with
+   a warning; use :sqlfunc:`add_provenance` on the target first (or
+   ``CREATE TABLE … AS SELECT``, which carries provenance through directly).

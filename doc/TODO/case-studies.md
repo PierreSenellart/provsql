@@ -22,13 +22,13 @@ case-study real estate:
 
 ## Plan
 
-### CS1: Intelligence Agency
+### CS1: Intelligence Agency — DONE (independent)
 
-- Add the `'independent'` and `'weightmc'` probability methods to the
-  benchmark in Step 13. The step already compares possible-worlds,
-  monte-carlo, tree-decomposition, and compilation/d4; `'independent'`
-  is a useful teaching point because it succeeds or errors depending on
-  circuit shape.
+- Added the `'independent'` method as a prose teaching point after the
+  Step 13 benchmark: it errors ``Not an independent circuit`` on the
+  correlated path query, so it is the method for genuinely
+  tuple-independent lineage. (``'weightmc'`` was dropped: the external
+  weighted model counter is obsolete and typically not installed.)
 
 ### CS2: Open Science Database
 
@@ -45,13 +45,18 @@ case-study real estate:
   a `GROUP BY outcome` query with a custom semimodule that aggregates
   per-finding grades into a per-outcome grade.
 
-### CS3: Île-de-France Public Transit
+### CS3: Île-de-France Public Transit — DONE (LATERAL)
 
-- `LATERAL`: for each route, find the next reachable stop with a
-  `LATERAL (SELECT ... LIMIT 1)`. Reads naturally as "what comes after
-  Bagneux on this line".
-- Window functions: `ROW_NUMBER() OVER (PARTITION BY trip_id ORDER BY
-  stop_sequence)` to enumerate Bagneux's position along each trip.
+- `LATERAL`: added Step 6 "The Next Stop on Each Line" -- a
+  `LATERAL (SELECT ... ORDER BY stop_sequence LIMIT 1)` giving the next
+  stop after Bagneux per line, with `sr_boolean` accessibility of the hop.
+  Provenance flows through the lateral even though `stop_times` / `routes`
+  are untracked (they contribute certain provenance, as in any join).
+  Tested in `test/sql/casestudy3.sql` (DestA accessible, DestB not).
+- Window functions (`ROW_NUMBER`): **skipped**. Window functions are
+  opaque to provenance (they warn-and-degrade: "window functions are not
+  supported; provenance is tracked per input row only"), so this would
+  document a limitation rather than a working feature.
 
 ### CS4: Government Ministers
 
@@ -62,16 +67,19 @@ case-study real estate:
   Step 6 with an `UPDATE holds SET ...`, then `undo` it. UPDATE is
   documented but not shown in any case study.
 
-### CS5: Wildlife Photo Archive
+### CS5: Wildlife Photo Archive — DONE (INSERT … SELECT)
 
-- Add `'independent'` to Step 4 (before the `repair_key` step): the
-  naive conjunctive query is independent-shaped, so the explicit method
-  call succeeds and produces the instructive wrong answer that motivates
-  Step 5.
-- `INSERT ... SELECT` with provenance propagation: materialise a
-  `confident_detections` provenance-tracked table from a
-  high-confidence filter, showing that inserted rows inherit source
-  provenance rather than fresh tokens.
+- `INSERT ... SELECT` with provenance propagation: added Step 11
+  materialising a `confident_detections` provenance-tracked table from a
+  high-confidence filter; the inserted rows inherit the source detection
+  tokens (prob == confidence). The target must be provenance-tracked
+  first (inserting into an untracked table drops the lineage with a
+  warning). Tested in `test/sql/casestudy5.sql`.
+- `'independent'` on the naive query: **skipped**. The premise was wrong —
+  the naive self-join over photo 5's shared deer/fox candidates is *not*
+  independent, so `'independent'` errors ``Not an independent circuit``
+  (a guard, not a silent over-estimate). CS1 already documents
+  `'independent'` as prose.
 
 ### Future case study (UDFs / aggregate joins / `choose`)
 

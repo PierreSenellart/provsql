@@ -232,3 +232,43 @@ as the accessibility barrier. Note that there are several stops named
     WHERE s0.stop_name = 'Bagneux'
       AND r2.route_long_name = '391'
       AND s2.stop_name = 'Paul Bert';
+
+
+Step 6: The Next Stop on Each Line (``LATERAL``)
+-------------------------------------------------
+
+Step 3 listed *every* reachable stop. A ``LATERAL`` subquery asks a more
+focused question – for each line through Bagneux, what is the *very next*
+stop after it on that trip:
+
+.. code-block:: postgresql
+
+    SELECT DISTINCT r.route_long_name,
+           nxt.stop_name AS next_stop,
+           sr_boolean(provenance(), 'wheelchair') AS accessible
+    FROM stops s0
+    JOIN stops      s1 ON s1.parent_station = s0.stop_id
+    JOIN stop_times t1 ON s1.stop_id = t1.stop_id
+    JOIN trips      u  ON u.trip_id = t1.trip_id
+    JOIN routes     r  ON r.route_id = u.route_id
+    JOIN LATERAL (
+      SELECT s2.stop_name
+      FROM stop_times t2
+      JOIN stops      s2 ON s2.stop_id = t2.stop_id
+      WHERE t2.trip_id = t1.trip_id
+        AND t2.stop_sequence > t1.stop_sequence
+      ORDER BY t2.stop_sequence
+      LIMIT 1
+    ) nxt ON true
+    WHERE s0.stop_name = 'Bagneux'
+    ORDER BY r.route_long_name, nxt.stop_name;
+
+The ``LATERAL`` subquery runs once per outer row and may reference its
+columns (``t1.trip_id``, ``t1.stop_sequence``); the ``ORDER BY … LIMIT 1``
+keeps only the immediately following stop. Provenance flows through it
+unchanged: ``stops`` and ``trips`` are provenance-tracked (the untracked
+``stop_times`` and ``routes`` contribute *certain* provenance, exactly as in
+an ordinary join), so each ``(line, next stop)`` row carries the lineage of
+the records that produced it. Feeding that row's ``provenance()`` to
+:sqlfunc:`sr_boolean` therefore reports whether the hop to the next stop is
+wheelchair-accessible, just as the per-destination query of Step 4 did.

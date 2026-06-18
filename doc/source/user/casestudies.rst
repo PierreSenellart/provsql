@@ -164,12 +164,11 @@ Supported SQL constructs
    "VALUES", "", "✓", "", "", "", "✓", "", "", ""
    "CTE (WITH)", "", "", "", "", "", "✓", "", "✓", "✓"
    "WITH RECURSIVE", "", "", "", "", "", "", "", "✓", ""
-   "LATERAL", "", "", "", "", "", "", "✓", "", ""
-   "Window functions", "", "", "", "", "", "", "", "", ""
+   "LATERAL", "", "", "", "✓", "", "", "✓", "", ""
    "FILTER clause on aggregates", "", "", "", "", "", "", "", "", ""
    "CREATE TABLE AS SELECT", "✓", "", "", "✓", "✓", "✓", "", "", "✓"
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", ""
-   "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "", "", "", ""
+   "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", ""
 
 Aggregation
 ~~~~~~~~~~~
@@ -271,7 +270,7 @@ Probabilities
    "Conditioning operator ``|`` / ``cond`` / ``given``", "", "", "", "", "", "", "", "", "✓"
    "``P(A | B)`` conditional probability", "", "", "", "", "", "", "", "", "✓"
    "``expected(X | C)`` / ``variance(X | C)`` (conditional moments)", "", "", "", "", "", "", "", "", "✓"
-   "``'independent'`` method", "", "", "", "", "", "", "✓", "✓", "✓"
+   "``'independent'`` method", "", "(✓)", "", "", "", "", "✓", "✓", "✓"
    "``'possible-worlds'`` method", "✓", "✓", "", "", "", "", "", "", "✓"
    "``'monte-carlo'`` method", "(✓)", "✓", "", "", "", "", "✓", "✓", "✓"
    "``'tree-decomposition'`` method", "(✓)", "✓", "", "", "", "✓", "✓", "✓", ""
