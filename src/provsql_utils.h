@@ -373,6 +373,20 @@ extern int provsql_joint_max_treewidth;
  * 1<<16. */
 extern int provsql_joint_max_states;
 
+/* Recognise unsafe UCQs at planner time and route their existence provenance
+ * through the joint-width compiler (on by default); provsql.joint_width is a
+ * debug-only switch to disable it. */
+extern bool provsql_joint_width;
+
+/* Try the safe-UCQ Möbius-inversion route before the joint-width compiler,
+ * short-circuiting on success (on by default); provsql.mobius is a debug-only
+ * switch to disable it. */
+extern bool provsql_mobius;
+
+/* Data-cost cap of the Möbius route: it declines once its compile has built
+ * more than this many gates; provsql.mobius_max_gates GUC. */
+extern int provsql_mobius_max_gates;
+
 /** @brief When @c true (default), every @c GenericCircuit returned by
  * @c getGenericCircuit is run through the universal cmp-resolution
  * passes (RangeCheck for now, plus any future passes that decide
