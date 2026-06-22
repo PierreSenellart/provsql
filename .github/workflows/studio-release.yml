@@ -53,7 +53,7 @@ jobs:
     steps:
       - run: pg-start 16 libboost-dev libboost-serialization-dev graphviz
       - run: pg_dropcluster 16 main
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
       - uses: actions/setup-python@v6
@@ -80,7 +80,7 @@ jobs:
     needs: [version, gate]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
       - uses: actions/setup-python@v6
@@ -140,7 +140,7 @@ jobs:
     permissions:
       contents: write  # gh release create writes to refs/tags releases.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.tag }}
       - uses: actions/download-artifact@v8

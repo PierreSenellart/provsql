@@ -31,7 +31,7 @@ jobs:
     container: pgxn/pgxn-tools
     steps:
       - run: pg-start 17 libboost-dev libboost-serialization-dev unzip uuid-dev
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
           fetch-depth: 0

@@ -33,7 +33,7 @@ jobs:
     name: ✨ ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -45,7 +45,7 @@ jobs:
     name: 📓 example-notebook drift
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # The committed studio/provsql_studio/notebooks/*.ipynb are GENERATED
       # from the annotated user-guide .rst (+ spliced setup.sql) by
       # studio/scripts/rst2nb.py; they are committed because the PyPI wheel
@@ -73,7 +73,7 @@ jobs:
     name: 📦 sdist + wheel + --help
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -97,7 +97,7 @@ jobs:
         pg: [14, 15, 16]
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: make -j$(nproc)
       # Stage what test/e2e need (.so, .control, sql/*) under /tmp/inst
       # via DESTDIR, then tar it. We tar because `actions/upload-artifact@v4`
@@ -125,7 +125,7 @@ jobs:
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz
       - run: pg_dropcluster ${{ matrix.pg }} main
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
@@ -164,7 +164,7 @@ jobs:
     steps:
       - run: pg-start ${{ matrix.pg }} libboost-dev libboost-serialization-dev graphviz
       - run: pg_dropcluster ${{ matrix.pg }} main
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
