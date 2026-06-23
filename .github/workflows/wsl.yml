@@ -73,7 +73,7 @@ jobs:
       # Full history + tags are needed so Makefile.internal's
       # `git describe --tags` resolves LATEST_RELEASE and the
       # extension_upgrade regression test runs.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
           fetch-depth: 0
