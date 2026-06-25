@@ -13,9 +13,13 @@
 -- request lands on a fast method; together they exercise the WHOLE portfolio.
 -- Refreshed after (a) the d-tree was generalised off monotone DNF to arbitrary
 -- circuits -- so it is now a candidate on the CNF / cycle shapes and wins many
--- approximate cells it previously could not enter -- and (b) speculative
+-- approximate cells it previously could not enter -- (b) speculative
 -- execution: the chooser budgets the d-tree (and tree-decomposition) at the
--- next-best method's cost and escalates on overrun.
+-- next-best method's cost and escalates on overrun -- and (c) the sieve cost
+-- recalibration, after which kl_fav's 12-clause DNF undercuts the d-tree on
+-- the exact / additive / deterministic cells (m=12 -> 2^12 sieve beats the
+-- d-tree's S*m there), so kl_fav now picks sieve outside the loose-relative
+-- cell where karp-luby still wins.
 --
 --  circuit       exact           rel eps=.1      rel eps=.3      additive      det delta=0
 --  readonce      independent     independent     independent     independent   independent
@@ -32,7 +36,7 @@
 --  cliqueCNF14   possible-worlds d-tree          stopping-rule   monte-carlo   d-tree
 --  cliqueCNF18   compilation:d4  d-tree          stopping-rule   monte-carlo   d-tree
 --  sieve_fav     sieve           sieve           karp-luby       sieve         sieve
---  kl_fav        d-tree          d-tree          karp-luby       monte-carlo   d-tree
+--  kl_fav        sieve           sieve           karp-luby       sieve         sieve
 --  invfree       inversion-free  inversion-free  inversion-free  inversion-free inversion-free
 --
 -- [*] big_rare rel eps=.1 escalates d-tree -> compilation because the d-tree's
@@ -53,7 +57,7 @@
 \timing off
 \set ECHO none
 SET search_path TO provsql_test, provsql;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 DROP TABLE IF EXISTS bench_v CASCADE;
 CREATE TABLE bench_v(id int);
@@ -193,7 +197,7 @@ RESET provsql.active;
 -- S(x,y),A(x,y),S(x,z),B(x,z) with many (y,z) derivations for x=1 yields a
 -- non-read-once, N=42 inversion-free circuit: independent throws and possible-
 -- worlds is 2^42, so the chooser takes the inversion-free structured d-DNNF.
-SET provsql.boolean_provenance = on;
+SET provsql.provenance = 'boolean';
 DROP TABLE IF EXISTS ifr_s, ifr_a, ifr_b CASCADE;
 CREATE TABLE ifr_s(x int, c2 int); INSERT INTO ifr_s SELECT 1, g FROM generate_series(1,14) g; SELECT add_provenance('ifr_s');
 CREATE TABLE ifr_a(x int, c2 int); INSERT INTO ifr_a SELECT 1, g FROM generate_series(1,14) g; SELECT add_provenance('ifr_a');
@@ -205,7 +209,7 @@ CREATE TEMP TABLE ifr_block AS
 SELECT remove_provenance('ifr_block');
 INSERT INTO bench_tok(name,descr,tok)
   SELECT 'invfree','self-join S,A,S,B, N=42 (inversion-free, real query)', p FROM ifr_block;
-SET provsql.boolean_provenance = off;
+SET provsql.provenance = 'semiring';
 
 -- Timing harness: ms per (circuit, method); inapplicable methods recorded as NULL.
 DROP TABLE IF EXISTS bench_res CASCADE;
@@ -284,6 +288,170 @@ SELECT circuit,
        max(resolved) FILTER (WHERE method='AUTO det d=0')    AS det_d0
 FROM bench_res GROUP BY seq, circuit ORDER BY seq;
 
+-- ---------------------------------------------------------------------
+-- Route reachability: the query-driven compilers a hand-built circuit cannot
+-- exercise.  joint-width and the safe-query read-once rewrite are NOT distinct
+-- chooser methods -- each fires at provenance-BUILD time and substitutes a
+-- certified deterministic-decomposable (d-D) circuit that 'independent' reads
+-- in linear time; Möbius IS a distinct method (a gate_mobius root).  Reported
+-- as a pivot uniform with the auto-chooser table above: the resolved method
+-- per guarantee (exact / relative / additive / deterministic).  Each route
+-- yields ONE method across every guarantee ("exact when cheap": the d-D /
+-- Möbius value trivially meets any tolerance).  The route_off column is what
+-- the SAME query lands on with the build-time compiler disabled -- a heavier
+-- method (tree-decomposition / d-tree for joint-width; the inversion-free
+-- structured d-DNNF for safe-query, a hierarchical query being inversion-free
+-- too, so the rewrite's gain is letting the cheapest method apply), or
+-- intractable for Möbius (q9 has no polynomial circuit).  Tiny data on purpose
+-- -- the point is the route taken, not scale.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS route_long CASCADE;
+CREATE TABLE route_long(route text, query text, request text, method text, prob numeric);
+
+-- joint-width: the #P-hard H0 = R(x), S(x,y), T(y) over a complete bipartite
+-- [3]x[3] instance (both x and y shared across answers -> not read-once;
+-- joint treewidth 3, bounded -- [4]x[4] already exceeds joint_max_states and
+-- the route declines).  ON: the joint-width compiler emits a d-D and
+-- 'independent' reads it.  OFF: the literal circuit is not a d-D, so the
+-- chooser uses a heavier eval-time method (tree-decomposition / d-tree).
+DROP TABLE IF EXISTS jw_r, jw_s, jw_t CASCADE;
+CREATE TABLE jw_r(x int); CREATE TABLE jw_s(x int, y int); CREATE TABLE jw_t(y int);
+INSERT INTO jw_r SELECT i FROM generate_series(1,3) i;
+INSERT INTO jw_t SELECT j FROM generate_series(1,3) j;
+INSERT INTO jw_s SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
+SELECT add_provenance('jw_r'); SELECT add_provenance('jw_s'); SELECT add_provenance('jw_t');
+DO $$ BEGIN PERFORM set_prob(provsql,0.4) FROM jw_r; PERFORM set_prob(provsql,0.4) FROM jw_s; PERFORM set_prob(provsql,0.4) FROM jw_t; END $$;
+
+-- safe-query rewrite: the hierarchical self-join R(x,y1), R(x,y2) grouped by
+-- x.  ON ('boolean' class): the read-once rewrite makes the lineage read-once
+-- so 'independent' is exact.  OFF ('semiring'): the literal lineage shares
+-- tuples across (y1,y2) pairs -> not read-once, so the chooser pays for the
+-- inversion-free structured d-DNNF instead.
+DROP TABLE IF EXISTS sq_r CASCADE;
+CREATE TABLE sq_r(x int, y int);
+INSERT INTO sq_r SELECT 1, g FROM generate_series(1,8) g;
+SELECT add_provenance('sq_r');
+DO $$ BEGIN PERFORM set_prob(provsql,0.3) FROM sq_r; END $$;
+
+-- Möbius: q9/QW (Dalvi--Suciu), a SAFE UCQ that is PTIME only because the
+-- #P-hard term of its inclusion-exclusion expansion carries a zero Möbius
+-- coefficient and cancels.  q9 provably has no polynomial OBDD / FBDD /
+-- dec-DNNF, so the literal route is intractable (DNF here -- see
+-- ucq_mobius_bench.sql); the Möbius compiler reads the structure off the
+-- QUERY and stays linear, the one query-driven route that IS a distinct
+-- chooser method ('mobius').  Tiny complete [3]x[3] instance.
+DROP TABLE IF EXISTS mob_r, mob_s1, mob_s2, mob_s3, mob_t CASCADE;
+CREATE TABLE mob_r(x int);  INSERT INTO mob_r SELECT i FROM generate_series(1,3) i;
+CREATE TABLE mob_t(y int);  INSERT INTO mob_t SELECT j FROM generate_series(1,3) j;
+CREATE TABLE mob_s1(x int, y int); CREATE TABLE mob_s2(x int, y int); CREATE TABLE mob_s3(x int, y int);
+INSERT INTO mob_s1 SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
+INSERT INTO mob_s2 SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
+INSERT INTO mob_s3 SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
+SELECT add_provenance('mob_r'); SELECT add_provenance('mob_t');
+SELECT add_provenance('mob_s1'); SELECT add_provenance('mob_s2'); SELECT add_provenance('mob_s3');
+DO $$ BEGIN PERFORM set_prob(provsql,0.1) FROM mob_r; PERFORM set_prob(provsql,0.1) FROM mob_t;
+  PERFORM set_prob(provsql,0.1) FROM mob_s1; PERFORM set_prob(provsql,0.1) FROM mob_s2;
+  PERFORM set_prob(provsql,0.1) FROM mob_s3; END $$;
+
+DO $$
+DECLARE v double precision; i int;
+  -- same five requests as the auto-chooser table above, plus 'route_off'.
+  reqs text[][] := ARRAY[['exact',NULL,'exact'],
+                         ['relative','epsilon=0.1,delta=0.05','rel_tight'],
+                         ['relative','epsilon=0.3,delta=0.2','rel_loose'],
+                         ['additive','epsilon=0.1,delta=0.05','additive'],
+                         ['additive','epsilon=0.1,delta=0','det_d0']];
+BEGIN
+  -- ===== joint-width: build the d-D (joint_width on), eval each guarantee =====
+  PERFORM set_config('provsql.provenance','boolean',false);
+  PERFORM set_config('provsql.mobius','off',false);
+  PERFORM set_config('provsql.joint_width','on',false);
+  CREATE TEMP TABLE _jw1 AS SELECT provenance() AS p FROM (
+    SELECT DISTINCT 1 FROM jw_r, jw_s, jw_t WHERE jw_r.x=jw_s.x AND jw_s.y=jw_t.y) q;
+  PERFORM remove_provenance('_jw1');
+  FOR i IN 1..array_length(reqs,1) LOOP
+    PERFORM set_config('provsql.last_eval_method','',false);
+    SELECT round(probability_evaluate(p, reqs[i][1], reqs[i][2])::numeric,6) INTO v FROM _jw1;
+    INSERT INTO route_long VALUES ('joint-width','H0 R(x),S(x,y),T(y) complete [3]x[3]',
+      reqs[i][3], current_setting('provsql.last_eval_method'), v);
+  END LOOP;
+  -- route_off: literal circuit (joint_width off), default chooser
+  PERFORM set_config('provsql.joint_width','off',false);
+  CREATE TEMP TABLE _jw0 AS SELECT provenance() AS p FROM (
+    SELECT DISTINCT 1 FROM jw_r, jw_s, jw_t WHERE jw_r.x=jw_s.x AND jw_s.y=jw_t.y) q;
+  PERFORM remove_provenance('_jw0');
+  PERFORM set_config('provsql.last_eval_method','',false);
+  SELECT round(probability_evaluate(p)::numeric,6) INTO v FROM _jw0;
+  INSERT INTO route_long VALUES ('joint-width',NULL,'route_off',
+    current_setting('provsql.last_eval_method'), v);
+
+  -- ===== safe-query: read-once rewrite ('boolean'), eval each guarantee =====
+  PERFORM set_config('provsql.provenance','boolean',false);
+  PERFORM set_config('provsql.joint_width','off',false);
+  CREATE TEMP TABLE _sq1 AS
+    SELECT a.x, provenance() AS p FROM sq_r a, sq_r b WHERE a.x=b.x GROUP BY a.x;
+  PERFORM remove_provenance('_sq1');
+  FOR i IN 1..array_length(reqs,1) LOOP
+    PERFORM set_config('provsql.last_eval_method','',false);
+    SELECT round(probability_evaluate(p, reqs[i][1], reqs[i][2])::numeric,6) INTO v FROM _sq1;
+    INSERT INTO route_long VALUES ('safe-query','hierarchical self-join R(x,y1),R(x,y2)',
+      reqs[i][3], current_setting('provsql.last_eval_method'), v);
+  END LOOP;
+  -- route_off: literal lineage ('semiring')
+  PERFORM set_config('provsql.provenance','semiring',false);
+  CREATE TEMP TABLE _sq0 AS
+    SELECT a.x, provenance() AS p FROM sq_r a, sq_r b WHERE a.x=b.x GROUP BY a.x;
+  PERFORM remove_provenance('_sq0');
+  PERFORM set_config('provsql.last_eval_method','',false);
+  SELECT round(probability_evaluate(p)::numeric,6) INTO v FROM _sq0;
+  INSERT INTO route_long VALUES ('safe-query',NULL,'route_off',
+    current_setting('provsql.last_eval_method'), v);
+
+  -- ===== Möbius: gate_mobius root, eval each guarantee (literal intractable,
+  -- so no route_off run -- q9 has no polynomial circuit; ucq_mobius_bench times
+  -- it).  The Möbius route is exact, so it serves every tolerance ('mobius'). =
+  PERFORM set_config('provsql.provenance','boolean',false);
+  PERFORM set_config('provsql.mobius','on',false);
+  CREATE TEMP TABLE _mob AS SELECT provenance() AS p FROM (
+      SELECT 1 FROM mob_r, mob_s1 a1, mob_s3 a3, mob_t t3 WHERE mob_r.x=a1.x AND a3.y=t3.y
+      UNION SELECT 1 FROM mob_s1 b1, mob_s2 b2, mob_s3 b3, mob_t tb
+        WHERE b1.x=b2.x AND b1.y=b2.y AND b3.y=tb.y
+      UNION SELECT 1 FROM mob_s2 c2, mob_s3 c3, mob_s3 c3b, mob_t tc
+        WHERE c2.x=c3.x AND c2.y=c3.y AND c3b.y=tc.y
+      UNION SELECT 1 FROM mob_r d, mob_s1 d1, mob_s1 d1b, mob_s2 d2, mob_s2 d2b, mob_s3 d3
+        WHERE d.x=d1.x AND d1b.x=d2.x AND d1b.y=d2.y AND d2b.x=d3.x AND d2b.y=d3.y) qq;
+  PERFORM remove_provenance('_mob');
+  FOR i IN 1..array_length(reqs,1) LOOP
+    PERFORM set_config('provsql.last_eval_method','',false);
+    SELECT round(probability_evaluate(p, reqs[i][1], reqs[i][2])::numeric,6) INTO v FROM _mob;
+    INSERT INTO route_long VALUES ('mobius','q9/QW safe UCQ, complete [3]x[3]',
+      reqs[i][3], current_setting('provsql.last_eval_method'), v);
+  END LOOP;
+  INSERT INTO route_long VALUES ('mobius',NULL,'route_off','DNF (no poly circuit)',NULL);
+END $$;
+RESET provsql.provenance; RESET provsql.mobius; RESET provsql.joint_width;
+
+-- Uniform with the auto-chooser table above, for the query-driven routes.  Each
+-- route's BUILD-time compiler yields a d-D (joint-width, safe-query) or a
+-- gate_mobius root (Möbius), and the SAME method then serves every guarantee
+-- ("exact when cheap": the exact value trivially meets any tolerance).
+-- route_off is what the same query lands on with the build-time compiler
+-- disabled -- a heavier method, or intractable for Möbius.
+SELECT route,
+       max(method) FILTER (WHERE request='exact')     AS exact,
+       max(method) FILTER (WHERE request='rel_tight') AS rel_tight,
+       max(method) FILTER (WHERE request='rel_loose') AS rel_loose,
+       max(method) FILTER (WHERE request='additive')  AS additive,
+       max(method) FILTER (WHERE request='det_d0')    AS det_d0,
+       max(method) FILTER (WHERE request='route_off') AS route_off
+FROM route_long GROUP BY route ORDER BY route;
+DROP TABLE route_long;
+SELECT remove_provenance('jw_r'); SELECT remove_provenance('jw_s'); SELECT remove_provenance('jw_t');
+SELECT remove_provenance('sq_r');
+SELECT remove_provenance('mob_r'); SELECT remove_provenance('mob_t');
+SELECT remove_provenance('mob_s1'); SELECT remove_provenance('mob_s2'); SELECT remove_provenance('mob_s3');
+DROP TABLE jw_r, jw_s, jw_t, sq_r, mob_r, mob_s1, mob_s2, mob_s3, mob_t;
+
 DROP TABLE bench_res; DROP TABLE bench_tok;
 SELECT remove_provenance('bench_v'); DROP TABLE bench_v;
-RESET provsql.boolean_provenance;
+RESET provsql.provenance;
