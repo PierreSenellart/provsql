@@ -1884,6 +1884,23 @@ static void run_stopping_rule(GenericCircuit &gc, gate_t gc_root,
   actual_method = "stopping-rule";
 }
 
+/// Record the method just used in the @c provsql.last_eval_method GUC
+/// (comma-separated, deduplicated across calls in the session) so callers can
+/// inspect which evaluation strategy the default auto-selection settled on.
+/// Shared by the main dispatch and the early-returning gate_mobius route.
+static void record_last_eval_method(const std::string &actual_method)
+{
+  if(actual_method.empty())
+    return;
+  std::string current = provsql_last_eval_method ? provsql_last_eval_method : "";
+  if(current.find(actual_method) == std::string::npos) {
+    if(!current.empty()) current += ",";
+    current += actual_method;
+    SetConfigOption("provsql.last_eval_method", current.c_str(),
+                    PGC_USERSET, PGC_S_SESSION);
+  }
+}
+
 /**
  * @brief Core implementation of probability evaluation for a circuit token.
  * @param token   UUID of the root provenance gate.
@@ -1978,9 +1995,12 @@ static Datum probability_evaluate_internal
       provsql::EvalContext ctx{&gc, gc_root, token, dummy, dummygate, &dummymap,
                                /*inv_free_cert=*/false, args,
                                /*explicitly_named=*/!is_path, 0, 0};
-      PG_RETURN_FLOAT8(
-        provsql::MethodCatalog::instance().byName("mobius")->evaluate(
-          ctx, provsql::Tolerance{}));
+      double r = provsql::MethodCatalog::instance().byName("mobius")->evaluate(
+          ctx, provsql::Tolerance{});
+      // This route returns early (below the main dispatch's recording block),
+      // so record the method here -- otherwise last_eval_method stays empty.
+      record_last_eval_method(ctx.actual_method);
+      PG_RETURN_FLOAT8(r);
     }
     // Another named method: fall through to the literal lineage (the "L:"
     // child, read from the raw circuit) and recurse with the requested method.
@@ -2350,18 +2370,9 @@ static Datum probability_evaluate_internal
     provsql_error("%s", e.what());
   }
 
-  // Record the method just used in provsql.last_eval_method (comma-separated,
-  // deduplicated across calls in the session) so callers can inspect which
-  // evaluation strategy the default auto-selection settled on.
-  if(!actual_method.empty()) {
-    string current = provsql_last_eval_method ? provsql_last_eval_method : "";
-    if(current.find(actual_method) == string::npos) {
-      if(!current.empty()) current += ",";
-      current += actual_method;
-      SetConfigOption("provsql.last_eval_method", current.c_str(),
-                      PGC_USERSET, PGC_S_SESSION);
-    }
-  }
+  // Record the method just used (see record_last_eval_method) so callers can
+  // inspect which evaluation strategy the default auto-selection settled on.
+  record_last_eval_method(actual_method);
 
   provsql_interrupted = false;
   signal (SIGINT, prev_sigint_handler);

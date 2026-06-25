@@ -82,5 +82,49 @@ SELECT probability_evaluate(current_setting('lem.ladder')::uuid) IS NOT NULL AS 
 SHOW provsql.last_eval_method;
 RESET provsql.provenance;
 
+-- Möbius route: q9/QW is a safe UCQ tractable only because the #P-hard term of
+-- its inclusion-exclusion expansion cancels; a gate_mobius root is evaluated by
+-- the dedicated 'mobius' method.  That route returns early, before the main
+-- recording path, so this guards that last_eval_method is still set -- both for
+-- the default chooser and the explicit method (regression for the early-return
+-- that left it empty).
+SET provsql.provenance = 'boolean';
+SET provsql.mobius = on;
+SET provsql.joint_width = off;
+CREATE TABLE q9r(x int);  INSERT INTO q9r SELECT i FROM generate_series(1,3) i;
+CREATE TABLE q9t(y int);  INSERT INTO q9t SELECT j FROM generate_series(1,3) j;
+CREATE TABLE q9s1(x int, y int); CREATE TABLE q9s2(x int, y int); CREATE TABLE q9s3(x int, y int);
+INSERT INTO q9s1 SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
+INSERT INTO q9s2 SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
+INSERT INTO q9s3 SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
+SELECT add_provenance('q9r'); SELECT add_provenance('q9t');
+SELECT add_provenance('q9s1'); SELECT add_provenance('q9s2'); SELECT add_provenance('q9s3');
+DO $$ BEGIN PERFORM set_prob(provenance(),0.1) FROM q9r; PERFORM set_prob(provenance(),0.1) FROM q9t;
+  PERFORM set_prob(provenance(),0.1) FROM q9s1; PERFORM set_prob(provenance(),0.1) FROM q9s2;
+  PERFORM set_prob(provenance(),0.1) FROM q9s3; END $$;
+CREATE TEMP TABLE q9tok AS SELECT provenance() AS p FROM (
+    SELECT 1 FROM q9r, q9s1 a1, q9s3 a3, q9t t3 WHERE q9r.x=a1.x AND a3.y=t3.y
+    UNION SELECT 1 FROM q9s1 b1, q9s2 b2, q9s3 b3, q9t tb WHERE b1.x=b2.x AND b1.y=b2.y AND b3.y=tb.y
+    UNION SELECT 1 FROM q9s2 c2, q9s3 c3, q9s3 c3b, q9t tc WHERE c2.x=c3.x AND c2.y=c3.y AND c3b.y=tc.y
+    UNION SELECT 1 FROM q9r d, q9s1 d1, q9s1 d1b, q9s2 d2, q9s2 d2b, q9s3 d3
+      WHERE d.x=d1.x AND d1b.x=d2.x AND d1b.y=d2.y AND d2b.x=d3.x AND d2b.y=d3.y) qq;
+SELECT remove_provenance('q9tok');
+
+-- default (cost-driven) chooser routes the gate_mobius root to 'mobius'
+SET provsql.last_eval_method = '';
+SELECT probability_evaluate(p) IS NOT NULL AS ran FROM q9tok;
+SHOW provsql.last_eval_method;
+
+-- explicit 'mobius' likewise records
+SET provsql.last_eval_method = '';
+SELECT probability_evaluate(p, 'mobius') IS NOT NULL AS ran FROM q9tok;
+SHOW provsql.last_eval_method;
+
+DROP TABLE q9tok;
+SELECT remove_provenance('q9r'); SELECT remove_provenance('q9t');
+SELECT remove_provenance('q9s1'); SELECT remove_provenance('q9s2'); SELECT remove_provenance('q9s3');
+DROP TABLE q9r, q9t, q9s1, q9s2, q9s3;
+RESET provsql.provenance; RESET provsql.mobius; RESET provsql.joint_width;
+
 SELECT remove_provenance('lem');
 DROP TABLE lem;
