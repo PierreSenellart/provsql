@@ -2321,7 +2321,7 @@
           </label>
           <label class="cv-temporal__ctl" id="temporal-map-ctl" hidden>
             <span>Validity mapping</span>
-            <select id="temporal-mapping" title="The token→validity mapping sr_temporal evaluates over (e.g. time_validity_view)."></select>
+            <select id="temporal-mapping" title="The token→validity mapping sr_temporal evaluates over. Defaults to time_validity_view (the mapping update_provenance maintains); pick a single table's own *_validity view to resolve just that table."></select>
           </label>
           <div class="cv-temporal__seg" role="radiogroup" aria-label="Time operation">
             <button type="button" class="cv-temporal__op is-active" data-timeop="asof" title="Rows valid at a single instant.">As of</button>
@@ -2384,7 +2384,9 @@
     // current source, snapping the selection if it became invalid.
     function syncAvailability() {
       if (relCtl) relCtl.hidden = state.source !== 'relation';
-      if (mapCtl) mapCtl.hidden = state.source !== 'query';
+      // The validity mapping applies to both sources: the relation source
+      // defaults it to time_validity_view, the query source must pick one.
+      if (mapCtl) mapCtl.hidden = false;
       const valid = OPS[state.source];
       if (!valid.includes(state.timeop)) state.timeop = valid[0];
       opBtns.forEach((b) => {
@@ -2435,6 +2437,7 @@
           if (reqEl && (!reqEl.value.trim() || /\bAS t\(/.test(reqEl.value)
               || /provsql\.(timeslice|timetravel|history)/.test(reqEl.value))) {
             reqEl.value = `SELECT *\nFROM ${state.relation || 'your_relation'}\nLIMIT 50`;
+            reqEl.dispatchEvent(new Event('input'));  // refresh syntax highlight
           }
         }
         fetchTemporal();
@@ -2479,9 +2482,13 @@
     if (carriedQuery) state.source = 'query';
 
     syncAvailability();
-    populateRelations();   // populates the picker; auto-fetches only if source is relation
     renderInputs();
-    if (carriedQuery) populateMappings().then(() => fetchTemporal());
+    // Fill the mapping picker for both sources (default = time_validity_view)
+    // before the relation picker, so its auto-fetch sends the resolved mapping.
+    populateMappings().then(() => {
+      populateRelations();   // auto-fetches only if the source is relation
+      if (carriedQuery) fetchTemporal();
+    });
 
     async function populateRelations() {
       let rows = [];
@@ -2534,6 +2541,8 @@
       } else {
         if (!state.relation) { tl.innerHTML = ''; setStatus('Pick a relation to begin.'); return; }
         body.relation = state.relation;
+        // Optional: the backend defaults to time_validity_view when omitted.
+        body.mapping = state.mapping;
       }
       if (state.timeop === 'asof') body.at_time = state.at;
       else if (state.timeop === 'during') { body.from_time = state.from; body.to_time = state.to; }
@@ -2549,10 +2558,16 @@
       } catch (e) { setStatus('Request failed: ' + e, true); return; }
       state.data = data;
       state.columns = data.columns || [];
-      // For a relation source, show the composed SQL in the shared query box
-      // (the timeline is the view, this is the runnable query behind it). For a
-      // query source the box is the user's input, so leave it untouched.
-      if (state.source !== 'query' && reqEl && data.sql) reqEl.value = data.sql;
+      // For a relation source, show the plain `SELECT * FROM <relation>` in the
+      // shared query box -- by analogy with the query source, the box holds the
+      // base query, not the composed sr_temporal projection and time-op filter
+      // (those are applied behind the scenes, just as a user's own query is in
+      // the query source). For a query source the box is the user's input, so
+      // leave it untouched.
+      if (state.source !== 'query' && reqEl && state.relation) {
+        reqEl.value = `SELECT * FROM ${state.relation}`;
+        reqEl.dispatchEvent(new Event('input'));  // refresh syntax highlight
+      }
       setStatus(data.result.length ? '' : 'No rows match.');
       renderTimeline(data);
       // Mirror the rows into the shared result table so the query box, the

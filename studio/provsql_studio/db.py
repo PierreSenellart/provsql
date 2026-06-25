@@ -1936,9 +1936,30 @@ def _parse_multirange(value) -> list[dict]:
 
 
 _TEMPORAL_TIMEOPS = ("asof", "during", "full")
-# The canonical token->validity mapping ProvSQL ships; the default for a
-# relation source (the user-facing query source picks its own).
+# The canonical token->validity mapping ProvSQL ships (maintained by
+# update_provenance); the default mapping for a relation source. The user may
+# override it with any mapping in either source.
 _TEMPORAL_DEFAULT_MAPPING = "provsql.time_validity_view"
+
+
+def _resolve_temporal_mapping(
+    pool: ConnectionPool, mapping: str | None, *, default: str | None = None
+) -> str:
+    """Validate a chosen validity mapping, falling back to `default`.
+
+    Returns the canonical qname. A non-empty `mapping` must match a known
+    mapping (else ValueError); an empty one yields `default`, or raises when no
+    default is given (the query source has no canonical mapping)."""
+    if (mapping or "").strip():
+        m = next(
+            (x for x in list_temporal_mappings(pool) if x["qname"] == mapping), None
+        )
+        if m is None:
+            raise ValueError(f"unknown temporal mapping: {mapping!r}")
+        return m["qname"]
+    if default is None:
+        raise ValueError("a validity mapping is required")
+    return default
 
 
 def temporal(
@@ -1966,8 +1987,9 @@ def temporal(
     surface for raw SQL.)
 
     `source` is `'relation'` (a tracked table / temporal view -- the SQL is
-    `SELECT * FROM <relation>`, mapped through the canonical
-    `time_validity_view`) or `'query'` (arbitrary SQL via the chosen `mapping`).
+    `SELECT * FROM <relation>`, mapped through `mapping`, defaulting to the
+    canonical `time_validity_view`) or `'query'` (arbitrary SQL, `mapping`
+    required). In both sources the user may pick any validity mapping.
     `timeop` is the time operation:
       * `'asof'`   -- rows valid at a single instant (`at_time`)
       * `'during'` -- rows valid during a window (`from_time`..`to_time`)
@@ -1986,19 +2008,21 @@ def temporal(
     if source == "query":
         if not (query or "").strip():
             raise ValueError("query source requires a SQL query")
-        map_match = next(
-            (x for x in list_temporal_mappings(pool) if x["qname"] == mapping), None
-        )
-        if map_match is None:
-            raise ValueError(f"unknown temporal mapping: {mapping!r}")
-        map_qname = map_match["qname"]
+        # The query source has no canonical mapping (the SQL is arbitrary), so a
+        # mapping must be chosen.
+        map_qname = _resolve_temporal_mapping(pool, mapping)
     else:
         match = next(
             (x for x in list_temporal_relations(pool) if x["qname"] == relation), None
         )
         if match is None:
             raise ValueError(f"unknown temporal relation: {relation!r}")
-        map_qname = _TEMPORAL_DEFAULT_MAPPING
+        # time_validity_view is the default (it is the mapping update_provenance
+        # maintains), but the user may select any mapping -- e.g. a single
+        # table's own *_validity view.
+        map_qname = _resolve_temporal_mapping(
+            pool, mapping, default=_TEMPORAL_DEFAULT_MAPPING
+        )
 
     if timeop == "asof":
         if not (at_time or "").strip():
