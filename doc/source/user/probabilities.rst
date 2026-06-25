@@ -261,7 +261,7 @@ The query conditions are stated over classes of the relational calculus --
 (UCQ) -- which ProvSQL recognises from the structure of ordinary SQL queries.
 All complexities are **data complexity**: the query is fixed, so its size is
 not counted.  :math:`|D|` is the input size (number of tuples), :math:`k` the
-treewidth relevant to each row (lineage, data, or joint treewidth), and
+treewidth relevant to each row (provenance, data, or joint treewidth), and
 :math:`e` the number of essential query variables.
 
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
@@ -277,7 +277,7 @@ treewidth relevant to each row (lineage, data, or joint treewidth), and
    |             |            | Möbius inversion       | :math:`O(|D|^e)`        |                                         | the signed Möbius sweep over ``independent``             |
    |             |            | (self-join-free)       |                         |                                         | islands                                                  |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
-   | any query whose **lineage** over this data and    | :math:`2^{O(k)}\,|D|`   | :cite:`DBLP:journals/mst/AmarilliCMS20` | in-process :ref:`tree-decomposition                      |
+   | any query whose **provenance** over this data and | :math:`2^{O(k)}\,|D|`   | :cite:`DBLP:journals/mst/AmarilliCMS20` | in-process :ref:`tree-decomposition                      |
    | annotations has treewidth ≤ k                     |                         |                                         | <in-process-compilers>` method                           |
    +-------------+------------+------------------------+-------------------------+-----------------------------------------+----------------------------------------------------------+
    | treewidth ≤ | TID / BID  | recursive reachability | :math:`2^{O(k^2)}\,|D|` | :cite:`DBLP:conf/icalp/AmarilliBS15`    | :ref:`reachability compiler <network-reliability-btw>`,  |
@@ -291,10 +291,10 @@ treewidth relevant to each row (lineage, data, or joint treewidth), and
 For the exact guarantee, the :ref:`cost-based chooser <probability-guarantees>`
 always tries ``independent`` and ``inversion-free`` when their certificate
 applies (they are cheap and read-once-friendly), and tries
-``tree-decomposition`` when it estimates the lineage treewidth low enough to
+``tree-decomposition`` when it estimates the provenance treewidth low enough to
 stand a chance.
 
-Outside these sufficient conditions, when the lineage is genuinely
+Outside these sufficient conditions, when the provenance is genuinely
 :math:`\#P`-hard with no structure to exploit, no exact polynomial guarantee
 remains, and ProvSQL falls back to knowledge compilation (``compilation`` /
 ``wmc``) for an exact answer or to an FPRAS (``monte-carlo`` / ``karp-luby``)
@@ -325,7 +325,7 @@ workflow graphs…).
 
 The interface is an ordinary recursive reachability query.  Under
 ``provsql.provenance = 'absorptive'`` or ``'boolean'`` (the compiled
-circuit is the exact Boolean function of the lineage but only the
+circuit is the exact Boolean function of the provenance but only the
 *absorptive quotient* of the infinite recursive semiring provenance,
 so it lives in the same regime that already governs recursion on
 cyclic data; see :ref:`provsql-provenance-class`), the query rewriter
@@ -543,7 +543,7 @@ when the fallback fires, or 20 to confirm the compiled route.
 On a 2×n ladder network (treewidth 2), the integrated route answers
 exactly over 1,500 probabilistic edges in under 200 ms end to end,
 and the columnar form compiles 300,000 edges in seconds – where
-evaluating the equivalent recursive query's lineage crosses the
+evaluating the equivalent recursive query's provenance crosses the
 circuit-treewidth cap at a few dozen edges, and the cyclic/undirected
 case exceeds minutes already at thirty edges.
 
@@ -561,7 +561,7 @@ whole hard family :math:`H_k`.  ProvSQL evaluates these **exactly**
 when a different parameter is small – the **joint width**: the
 treewidth of the data graph *together with* its correlation structure,
 not of either alone :cite:`Amarilli2016thesis` (§4.2).  There are
-instances whose data graph and whose lineage circuit are *both* of
+instances whose data graph and whose provenance circuit are *both* of
 small treewidth yet whose joint width – and hardness – is large, so
 the bound has to be taken on the joint object (thesis Prop. 4.2.11);
 when it *is* bounded, the probability is linear in the data, even
@@ -603,7 +603,7 @@ single gather + decomposition + sweep.
 
 Because the bound is on the joint object, the route stays exact where
 every query-side method is inapplicable: over **correlated** inputs
-(:sqlfunc:`repair_key` blocks, view-derived lineage), the one cell of
+(:sqlfunc:`repair_key` blocks, view-derived provenance), the one cell of
 the :ref:`tractability table <tractable-cases>` that nothing else fills.
 When the joint width exceeds the supported cap, or the query is not a
 recognised UCQ-existence shape, the substitution simply does not fire
@@ -634,7 +634,7 @@ table summarises where each shines:
      - Best when (query / provenance circuit)
    * - ``independent``
      - exact
-     - Read-once lineage (self-join-free / hierarchical CQs, each input tuple used
+     - Read-once provenance (self-join-free / hierarchical CQs, each input tuple used
        at most once) and certified d-D circuits (from the safe-query, reachability
        and joint-width compilers).  Linear time.
    * - ``inversion-free``
@@ -654,10 +654,10 @@ table summarises where each shines:
        ``2^N`` worlds.
    * - ``sieve``
      - exact
-     - Few clauses: a small monotone-DNF lineage (inclusion-exclusion).
+     - Few clauses: a small monotone-DNF provenance (inclusion-exclusion).
    * - ``tree-decomposition``
      - exact
-     - Low-treewidth lineage -- path-, cycle- or band-shaped join graphs; no
+     - Low-treewidth provenance -- path-, cycle- or band-shaped join graphs; no
        external tool needed.
    * - ``d-tree``
      - exact / certified bounds
@@ -666,11 +666,11 @@ table summarises where each shines:
        it serves a ``δ = 0`` request.
    * - ``compilation`` (``d4`` / ``c2d`` / …)
      - exact
-     - Hard lineage with hidden structure a knowledge compiler can exploit;
+     - Hard provenance with hidden structure a knowledge compiler can exploit;
        last-resort, needs an external tool (see :doc:`knowledge-compilation`).
    * - ``wmc`` (``ganak`` / ``sharpsat-td`` / ``dpmc`` / ``weightmc``)
      - depends on tool
-     - Hard lineage better suited to a weighted model counter than to a d-DNNF
+     - Hard provenance better suited to a weighted model counter than to a d-DNNF
        compiler; an alternative external-tool route to ``compilation``.  Exact for
        ``ganak`` / ``sharpsat-td`` / ``dpmc``; ``weightmc`` is an approximate
        ``(ε, δ)`` counter.
@@ -683,13 +683,13 @@ table summarises where each shines:
    * - ``stopping-rule``
      - relative ``(ε, δ)``
      - A universal relative estimator for any circuit -- including
-       random-variable and HAVING-aggregate lineage.
+       random-variable and HAVING-aggregate provenance.
 
 Each method in detail:
 
 ``'independent'``
     Exact computation by a single linear pass that treats each gate as
-    independent.  It is correct on **read-once** lineage (each input tuple
+    independent.  It is correct on **read-once** provenance (each input tuple
     used at most once) and on **certified d-D circuits** -- the
     deterministic-and-decomposable circuits the safe-query, reachability and
     joint-width compilers emit, whose ``plus`` / ``times`` gates carry a
@@ -711,7 +711,7 @@ Each method in detail:
 
 ``'sieve'``
     Exact computation by inclusion-exclusion over the clauses of a monotone-DNF
-    lineage, in time ``O(S × 2^m)`` for ``m`` clauses.  The chooser prefers it
+    provenance, in time ``O(S × 2^m)`` for ``m`` clauses.  The chooser prefers it
     over ``'possible-worlds'`` when there are fewer clauses than input tuples,
     and over the compilers when ``m`` is small.  It applies only to a
     DNF-shaped circuit and errors when the clause count exceeds 24:
@@ -752,7 +752,7 @@ Each method in detail:
     Carlo's *absolute* ``ε`` (see ``'monte-carlo'`` above) says nothing. It
     applies to **DNF-shaped** circuits:
     a monotone disjunction (top-level ``OR``) of conjunctions (``AND``) of
-    input leaves -- the lineage shape of a union of conjunctive queries over a
+    input leaves -- the provenance shape of a union of conjunctive queries over a
     tuple-independent database. Leaves may be shared across clauses. The
     method errors (it does not silently fall back) on any other shape:
     negation (``EXCEPT``/``monus``), comparison (``HAVING``), aggregation,
@@ -791,7 +791,7 @@ Each method in detail:
 
 ``'stopping-rule'``
     A universal **relative** ``(ε, δ)`` estimator that runs on the generic
-    circuit, so unlike ``'karp-luby'`` it applies to **any** lineage -- plain
+    circuit, so unlike ``'karp-luby'`` it applies to **any** provenance -- plain
     Boolean, random-variable, or HAVING-aggregate alike.  It samples under an
     optimal stopping rule, halting as soon as the estimate is provably within
     the relative target, in ``O(S / (p ε²) · ln(1/δ))`` for an output of
@@ -822,11 +822,11 @@ Each method in detail:
     components of the clause graph) and Shannon expansion on the most frequent
     variable until the interval is narrow enough, or exact (width 0).  It fills
     two corners the other exact methods do not: it returns an exact value where
-    the lineage treewidth **exceeds** ``'tree-decomposition'``'s cap, and --
+    the provenance treewidth **exceeds** ``'tree-decomposition'``'s cap, and --
     being *deterministic*, at a cost independent of ``δ`` -- it is the method
     that honours a ``δ = 0`` (no-failure) approximate request, returning a
     certified interval rather than a point estimate.  It works on any Boolean
-    circuit (a monotone-DNF lineage takes an optimised path).  Called by name
+    circuit (a monotone-DNF provenance takes an optimised path).  Called by name
     with no third argument it refines to the exact value; given an accuracy
     target it stops at a certified interval of that width:
 
@@ -837,7 +837,7 @@ Each method in detail:
 ``'inversion-free'``
     Exact, linear-time computation for the *inversion-free* ``UCQ(OBDD)``
     class :cite:`DBLP:conf/icdt/JhaS11` -- hierarchical, tuple-independent
-    queries (self-joins allowed) whose lineage admits a polynomial-size
+    queries (self-joins allowed) whose provenance admits a polynomial-size
     OBDD, where ``'tree-decomposition'`` would blow up.  It requires the
     planner's inversion-free certificate on the provenance root and errors
     without it.  The default strategy already takes this path automatically
@@ -859,9 +859,9 @@ Each method in detail:
     is a linear sweep that sums the certified-independent islands'
     probabilities with the stored integer coefficients (it errors on a token
     that is not ``gate_mobius``-rooted).  This is the *fast* route only: the
-    gate carries the query's literal lineage, so naming **another** method on
+    gate carries the query's literal provenance, so naming **another** method on
     the same token (``'possible-worlds'``, ``'monte-carlo'``, ...), or asking
-    for ``shapley`` / ``banzhaf``, evaluates that lineage instead and returns
+    for ``shapley`` / ``banzhaf``, evaluates that provenance instead and returns
     the same exact answer (slower).  The default strategy already takes the
     fast Möbius path automatically for a ``gate_mobius``-rooted token, so
     naming it explicitly is mainly useful for testing:
@@ -913,7 +913,7 @@ Default strategy (no second argument)
     :ref:`above <probability-guarantees>`) runs the cheapest exact method
     applicable to the circuit: typically ``independent`` or
     ``inversion-free`` for safe queries, ``tree-decomposition`` for
-    low-treewidth lineage, falling back to ``compilation`` with the
+    low-treewidth provenance, falling back to ``compilation`` with the
     compiler named by ``provsql.fallback_compiler`` (default ``'d4'``,
     see :doc:`configuration`) when no in-process method fits. Optimistic
     picks run under a budget and escalate automatically, so a pathological
@@ -979,14 +979,14 @@ Inversion-free certification
 
 The *inversion-free* ``UCQ(OBDD)`` class of Jha & Suciu
 :cite:`DBLP:conf/icdt/JhaS11` -- hierarchical, tuple-independent queries
-whose lineage admits a polynomial-size OBDD -- is a second linear-time
+whose provenance admits a polynomial-size OBDD -- is a second linear-time
 route for safe queries, a sibling of the :ref:`safe-query rewrite
 <safe-query-rewriting>`.  ProvSQL certifies the query, attaches the
 certificate to the provenance root, and the default chooser takes the
 route automatically, right after ``'independent'``, so no method need be
-named.  Where ``'tree-decomposition'`` would blow up because the lineage
+named.  Where ``'tree-decomposition'`` would blow up because the provenance
 is not low-treewidth, the route builds a *structured* d-DNNF over a
-query-derived variable order that stays linear in the lineage, and
+query-derived variable order that stays linear in the provenance, and
 ``'inversion-free'`` reads it in one pass.
 
 It differs from the safe-query rewrite on three counts:
@@ -995,7 +995,7 @@ It differs from the safe-query rewrite on three counts:
   join a relation with itself; the safe-query rewrite targets
   self-join-free CQs and recovers only limited self-join cases.
 - **Provenance scheme.**  The inversion-free path evaluates the literal
-  lineage unchanged, so it does **not** require the ``'boolean'``
+  provenance unchanged, so it does **not** require the ``'boolean'``
   provenance class -- it applies under the default semiring scheme too --
   and is governed by its own ``provsql.inversion_free`` GUC (on by
   default).  The safe-query rewrite restructures the query and fires only
@@ -1038,11 +1038,11 @@ route evaluates in one linear pass; no method needs to be named.
 example.
 
 Like the safe-query rewrite, this is a shortcut, not a different
-result: the gate keeps the query's literal lineage as a transparent
+result: the gate keeps the query's literal provenance as a transparent
 child, so :sqlfunc:`shapley`, :sqlfunc:`banzhaf`, PROV export, and
 any *named* probability method (``possible-worlds``, …) answer
 exactly as on the ordinary provenance, necessarily more slowly, since
-the literal lineage is the very :math:`\#P`-hard circuit the
+the literal provenance is the very :math:`\#P`-hard circuit the
 cancellation sidesteps.  Only the default / ``mobius`` probability
 takes the fast route.
 
