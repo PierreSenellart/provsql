@@ -52,12 +52,16 @@ country_codes = sorted({row["countryCode"] for row in data if row.get("countryCo
 writers = {}      # cc -> (person_writer, position_writer, party_writer)
 file_handles = []
 
+# newline='' is required by the csv module; combined with lineterminator='\n'
+# on the writers it yields LF-only line endings instead of the default CRLF.
 for cc in country_codes:
-    pe = open(cc + "_person.csv",   'w', encoding='utf-8')
-    po = open(cc + "_position.csv", 'w', encoding='utf-8')
-    pa = open(cc + "_party.csv",    'w', encoding='utf-8')
+    pe = open(cc + "_person.csv",   'w', encoding='utf-8', newline='')
+    po = open(cc + "_position.csv", 'w', encoding='utf-8', newline='')
+    pa = open(cc + "_party.csv",    'w', encoding='utf-8', newline='')
     file_handles += [pe, po, pa]
-    pe_w, po_w, pa_w = csv.writer(pe), csv.writer(po), csv.writer(pa)
+    pe_w = csv.writer(pe, lineterminator='\n')
+    po_w = csv.writer(po, lineterminator='\n')
+    pa_w = csv.writer(pa, lineterminator='\n')
     pe_w.writerow(["id", "name", "gender", "birth", "death"])
     po_w.writerow(["id", "position", "country", "start", "until"])
     pa_w.writerow(["id", "party"])

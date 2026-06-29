@@ -31,7 +31,9 @@ SELECT DISTINCT ?person ?genderLabel ?personLabel ?ministerLabel ?countryCode
   BIND(STR(?death) AS ?deathISO)
   BIND("COUNTRY_CODE" AS ?countryCode)
 
-  # English-first labels; French only as fallback for positions with no English label.
-  # Non-English labels are filtered out by json2csv.py.
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en,fr". }
+  # English-first labels; French, then the language-agnostic "mul" label, as
+  # fallbacks for entries with no English label (without "mul", persons whose
+  # name lives only in the language-agnostic label, e.g. Michel Rocard, fall
+  # back to the bare QID). Non-English position labels are filtered by json2csv.py.
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en,fr,mul". }
 }
