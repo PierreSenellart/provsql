@@ -4,7 +4,7 @@ ProvSQL Studio
 ProvSQL Studio is a Python-backed web UI for the ProvSQL extension. It
 runs as a separate package, connects to any PostgreSQL database with
 ProvSQL installed, and lets you inspect provenance interactively
-through four complementary modes:
+through five complementary modes:
 
 * **Circuit mode** renders the provenance directed acyclic graph
   (DAG) behind a result's UUID or aggregate token, with frontier
@@ -16,6 +16,9 @@ through four complementary modes:
 * **Where mode** highlights the source cells that contributed to each
   output value, against the live content of the provenance-tracked
   relations.
+* **Temporal mode** places the rows of a relation or a query on a
+  :doc:`validity timeline <temporal>`, with as-of, during, and
+  full-history time operations (requires PostgreSQL 14+).
 * **Notebook mode** is a `Jupyter <https://jupyter.org/>`_-style
   notebook -- SQL, Markdown,
   circuit and evaluation cells over a persistent database session --
@@ -772,6 +775,81 @@ silently drops the wrap and surfaces an INFO banner instead of
 raising. This is the right default for case-study scripts that do
 bulk setup before the first interesting ``SELECT``.
 
+.. _studio-temporal-mode:
+
+Temporal mode
+-------------
+
+Temporal mode places the rows of a relation or a query on a **validity
+timeline**, reading the per-token validity that ProvSQL's temporal
+surface maintains (see :doc:`temporal`). It is available when the
+extension's temporal functions are present, which requires
+PostgreSQL 14+.
+
+.. figure:: /_static/studio/temporal-mode.png
+   :alt: Studio Temporal mode: the source and time-operation controls on
+         the left, a During window over two Prime-Minister terms on the
+         timeline, and the matching rows in the result table.
+
+   Temporal mode: a ``During`` window over ``cs4_holds``; the in-window
+   portion of each term is drawn at full strength, the rest dimmed.
+
+Two orthogonal controls drive the view:
+
+* **Source** -- either a :guilabel:`Relation` (a provenance-tracked
+  table or a temporal view) or a :guilabel:`Query` (arbitrary SQL, typed
+  into the same `Query box`_).
+* **Time operation** -- :guilabel:`As of` (an instant),
+  :guilabel:`During` (a window), or :guilabel:`Full` (every row, with its
+  full validity).
+
+Both sources use one mechanism: the SQL is wrapped with
+:sqlfunc:`sr_temporal` over a **validity mapping**, and the time
+operation re-evaluates it as a base-level filter (mirroring the
+:sqlfunc:`timeslice` / :sqlfunc:`timetravel` SRF bodies). A validity
+mapping is a ``(provenance, value <multirange>)`` view, such as one made
+by :sqlfunc:`create_provenance_mapping_view`; the
+:guilabel:`Validity mapping` picker lists every such view, with the
+canonical ``provsql.time_validity_view`` (the union ProvSQL maintains)
+first. The Relation source defaults to that canonical mapping; the Query
+source, whose SQL is arbitrary, requires an explicit choice.
+
+.. _studio-temporal-timeline:
+
+Reading the timeline
+^^^^^^^^^^^^^^^^^^^^^
+
+Each result row gets one **lane**, and every disjoint sub-range of its
+validity is drawn as a **bar**. The time axis adapts its granularity to
+the span -- seconds, minutes, hours, days, months, or years -- and a
+caption to the left of the axis carries the coarse component the tick
+labels omit (the date for a clock-time axis, the year for a day axis).
+Where that coarse unit rolls over mid-axis -- a new day, a new year --
+the tick at the boundary is marked with the new date or year.
+
+* :guilabel:`As of` adds a draggable **scrubber**: drag the playhead (or
+  click the axis) to time-travel, and the lanes re-filter to the rows
+  valid at that instant.
+* :guilabel:`During` frames the window. The bars keep their full
+  validity -- the overlap filter selects rows whose validity *meets* the
+  window, it does not clip them, mirroring :sqlfunc:`timeslice` -- while
+  everything outside ``[from, to)`` is dimmed and the window bounds are
+  marked.
+
+Three validity shapes get an explicit marker rather than an ordinary
+bar: an **unbounded** end (``-∞`` / ``∞``) runs the bar to the axis edge;
+a single **instant** infers a narrow window from the instant's
+precision; and an **empty union** (a row valid at no time) shows a
+centred ``∅ never``. Hovering a bar reveals its precise half-open
+interval, e.g. ``[2016-01-01, 2022-01-01)``. All instants are rendered
+and parsed at UTC.
+
+The result table on the right mirrors the timeline's rows; the
+underlying ``SELECT`` (with its :sqlfunc:`sr_temporal` wrap and time
+filter) is available from the query box, so a timeline view can be
+copied out as ordinary SQL. The :doc:`case study <casestudy4>` walks
+through the same operations on a worked dataset.
+
 .. _studio-notebook-mode:
 
 Notebook mode
@@ -1291,6 +1369,17 @@ extension version.
        the four-way provenance-scheme selector with the :sc:`A`
        badge, the :sc:`D` certificate badge, conditioned gates, and
        Möbius (μ) nodes.  Notebook Markdown cells render math.
+   * - ``1.7.x``
+     - ``≥ 1.10.0``
+     - Adds :ref:`Temporal mode <studio-temporal-mode>`: the validity
+       timeline with the Source (relation / query) x time-operation
+       (as-of / during / full) controls, the validity-mapping picker,
+       the adaptive axis with its date / year caption and rollover
+       markers, the as-of scrubber, and the during window frame. Builds
+       on the extension's temporal surface (:sqlfunc:`sr_temporal`,
+       :sqlfunc:`create_provenance_mapping_view`, ``time_validity_view``),
+       which needs no version beyond the 1.10.0 floor but does require
+       the server to be PostgreSQL 14+. See :doc:`temporal`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to
