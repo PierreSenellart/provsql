@@ -17,17 +17,6 @@ below makes the rewriter, the simplifier, the analytic and
 Monte-Carlo paths, and conditional inference all visible in the
 canvas.
 
-.. nb:skip
-.. tip::
-
-   **Follow along in your browser, no install.** This Studio-driven case study
-   runs in full in the ProvSQL Playground: open it `as a runnable notebook
-   <https://provsql.org/playground/?nb=cs6>`_, or open the bare `cs6 database
-   <https://provsql.org/playground/?db=cs6>`_ and follow the Studio steps as
-   you read; the continuous-distribution surface (analytic moments and Monte
-   Carlo) needs no external tools. See the
-   :ref:`Playground note <playground-note>`.
-
 The Scenario
 ------------
 
@@ -77,6 +66,17 @@ Your tasks:
 
 Setup
 -----
+
+.. nb:skip
+.. tip::
+
+   **Prefer not to install? Use the Playground.** Instead of the manual setup
+   below, run this Studio-driven case study in full in the ProvSQL Playground:
+   open it `as a runnable notebook <https://provsql.org/playground/?nb=cs6>`_,
+   or open the bare `cs6 database <https://provsql.org/playground/?db=cs6>`_ and
+   follow the Studio steps as you read; the continuous-distribution surface
+   (analytic moments and Monte Carlo) needs no external tools. See the
+   :ref:`Playground note <playground-note>`.
 
 .. nb:omit-begin
 

@@ -27,19 +27,6 @@ tractability comes from*:
   easy on *this* data, because ProvSQL compiles along the structure of the
   data itself.
 
-.. nb:skip
-.. tip::
-
-   **Follow along in your browser, no install.** Open this case study `as a
-   runnable notebook in the ProvSQL Playground
-   <https://provsql.org/playground/?nb=cs7>`_, or open the bare `cs7 database
-   <https://provsql.org/playground/?db=cs7>`_ and follow the Studio steps as
-   you read. The steps that call an *external* compiler (``d4``, ``c2d``) will
-   not run in the Playground, which bundles none; the built-in
-   tree-decomposition compiler and everything else do, so the in-process
-   comparison is fully reproducible. See the :ref:`Playground note
-   <playground-note>`.
-
 The data
 --------
 
@@ -63,6 +50,19 @@ collaboration graphs -- are introduced where first used.
 
 Setup
 -----
+
+.. nb:skip
+.. tip::
+
+   **Prefer not to install? Use the Playground.** You can skip the manual setup
+   below: open this case study `as a runnable notebook in the ProvSQL
+   Playground <https://provsql.org/playground/?nb=cs7>`_, or open the bare `cs7
+   database <https://provsql.org/playground/?db=cs7>`_ and follow the Studio
+   steps as you read. The steps that call an *external* compiler (``d4``,
+   ``c2d``) will not run in the Playground, which bundles none; the built-in
+   tree-decomposition compiler and everything else do, so the in-process
+   comparison is fully reproducible. See the :ref:`Playground note
+   <playground-note>`.
 
 .. nb:omit-begin
 

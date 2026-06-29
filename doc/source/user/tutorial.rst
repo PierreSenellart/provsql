@@ -39,13 +39,16 @@ power of provenance management and probabilistic databases.
    evaluation strip that drives the semiring and probability calls
    the tutorial introduces.
 
+Setup
+-----
+
 .. nb:skip
 .. tip::
 
-   **Follow along in your browser, no install.** Open this chapter `as a
-   runnable notebook in the ProvSQL Playground
-   <https://provsql.org/playground/?nb=tutorial>`_ -- every query below is a
-   cell, and the opening cells set up the database for you. If you would
+   **Prefer not to install? Use the Playground.** You can skip the manual
+   setup below: open this chapter `as a runnable notebook in the ProvSQL
+   Playground <https://provsql.org/playground/?nb=tutorial>`_ (every query is a
+   cell, and the opening cells set up the database for you). If you would
    rather keep reading this page, open the bare `tutorial database
    <https://provsql.org/playground/?db=tutorial>`_ instead and run the
    queries as you read (the notebook shows the exercise solutions inline,
@@ -55,9 +58,6 @@ power of provenance management and probabilistic databases.
    there; the default probability methods still work (they use the built-in
    tree-decomposition compiler), as does everything else. See the
    :ref:`Playground note <playground-note>`.
-
-Setup
------
 
 .. nb:omit-begin
 

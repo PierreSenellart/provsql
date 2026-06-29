@@ -11,22 +11,6 @@ custom semiring capability, where-provenance, probability computation
 with multiple algorithms, and circuit export through a
 security-classification scenario.
 
-.. nb:skip
-.. tip::
-
-   **Follow along in your browser, no install.** Open this case study `as a
-   runnable notebook in the ProvSQL Playground
-   <https://provsql.org/playground/?nb=cs1>`_ -- every query below is a cell,
-   and the opening cells set up the database for you -- or open the bare `cs1
-   database <https://provsql.org/playground/?db=cs1>`_ and run the queries as
-   you read. The Playground bundles no external tools, so the steps that call
-   an external knowledge compiler (``d4``, ``c2d``…) or the ``graph-easy``
-   ASCII renderer (:sqlfunc:`view_circuit`) detect its absence and report it
-   instead of returning a result -- the cells still run cleanly; the default
-   probability methods work throughout (they use the built-in
-   tree-decomposition compiler), as does everything else. See the
-   :ref:`Playground note <playground-note>`.
-
 The Scenario
 ------------
 
@@ -45,6 +29,22 @@ from *unclassified* to *top secret*. Your tasks:
 
 Setup
 -----
+
+.. nb:skip
+.. tip::
+
+   **Prefer not to install? Use the Playground.** You can skip the manual
+   setup below: open this case study `as a runnable notebook in the ProvSQL
+   Playground <https://provsql.org/playground/?nb=cs1>`_ (every query is a
+   cell, and the opening cells set up the database for you), or open the bare
+   `cs1 database <https://provsql.org/playground/?db=cs1>`_ and run the queries
+   as you read. The Playground bundles no external tools, so the steps that
+   call an external knowledge compiler (``d4``, ``c2d``…) or the ``graph-easy``
+   ASCII renderer (:sqlfunc:`view_circuit`) detect its absence and report it
+   instead of returning a result -- the cells still run cleanly; the default
+   probability methods work throughout (they use the built-in
+   tree-decomposition compiler), as does everything else. See the
+   :ref:`Playground note <playground-note>`.
 
 .. nb:omit-begin
 

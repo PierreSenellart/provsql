@@ -15,15 +15,6 @@ interval* during which it was true, and we explore that history through
 timeline with as-of, during, and full-history time operations -- with
 the underlying SQL shown alongside each step.
 
-.. nb:skip
-.. tip::
-
-   **Follow along in your browser, no install.** Open the `cs4 database in the
-   ProvSQL Playground <https://provsql.org/playground/?db=cs4&mode=temporal>`_;
-   it opens straight in Temporal mode, ready to follow along as you read. The
-   Playground bundles no external tools, but Temporal mode needs none. See the
-   :ref:`Playground note <playground-note>`.
-
 .. note::
 
    The data was imported semi-automatically from
@@ -45,6 +36,16 @@ the time intervals during which the fact was true. We will:
 
 Setup
 -----
+
+.. nb:skip
+.. tip::
+
+   **Prefer not to install? Use the Playground.** Instead of the manual setup
+   below, open the `cs4 database in the ProvSQL Playground
+   <https://provsql.org/playground/?db=cs4&mode=temporal>`_; it ships this case
+   study's data pre-loaded and opens straight in Temporal mode, ready to follow
+   along as you read. The Playground bundles no external tools, but Temporal
+   mode needs none. See the :ref:`Playground note <playground-note>`.
 
 .. nb:omit-begin
 

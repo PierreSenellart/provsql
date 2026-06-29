@@ -7,23 +7,6 @@ Case Study: Open Science Database
 This case study introduces a broader set of ProvSQL features through a
 realistic scientific literature analysis scenario.
 
-.. nb:skip
-.. tip::
-
-   **Follow along in your browser, no install.** Open this case study `as a
-   runnable notebook in the ProvSQL Playground
-   <https://provsql.org/playground/?nb=cs2>`_ -- every query below is a cell,
-   and the opening cells set up the database for you. If you would rather
-   keep reading this page, open the bare `cs2 database
-   <https://provsql.org/playground/?db=cs2>`_ instead and run the queries as
-   you read (the notebook shows the exercise solutions inline, while this
-   page keeps them folded). The Playground bundles no external tools, so a
-   step that explicitly calls an external knowledge compiler (``d4``,
-   ``c2d``…) or the ``graph-easy`` ASCII renderer will not run there; the
-   default probability methods still work (they use the built-in
-   tree-decomposition compiler), as does everything else. See the
-   :ref:`Playground note <playground-note>`.
-
 The Scenario
 ------------
 
@@ -51,6 +34,23 @@ Your tasks:
 
 Setup
 -----
+
+.. nb:skip
+.. tip::
+
+   **Prefer not to install? Use the Playground.** You can skip the manual
+   setup below: open this case study `as a runnable notebook in the ProvSQL
+   Playground <https://provsql.org/playground/?nb=cs2>`_ (every query is a
+   cell, and the opening cells set up the database for you). If you would
+   rather keep reading this page, open the bare `cs2 database
+   <https://provsql.org/playground/?db=cs2>`_ instead and run the queries as
+   you read (the notebook shows the exercise solutions inline, while this
+   page keeps them folded). The Playground bundles no external tools, so a
+   step that explicitly calls an external knowledge compiler (``d4``,
+   ``c2d``…) or the ``graph-easy`` ASCII renderer will not run there; the
+   default probability methods still work (they use the built-in
+   tree-decomposition compiler), as does everything else. See the
+   :ref:`Playground note <playground-note>`.
 
 .. nb:omit-begin
 
