@@ -113,16 +113,18 @@ every position Jacques Chirac has held:
          Prime Minister lane carrying two separate bars for his 1974-1976
          and 1986-1988 terms.
 
-   `Chirac's <https://en.wikipedia.org/wiki/Jacques_Chirac>`_ career, one
-   lane per position; the Prime Minister lane carries two disjoint bars --
-   his 1974-1976 term and the
+   `Chirac's <https://en.wikipedia.org/wiki/Jacques_Chirac>`_ career, the
+   lanes ordered :guilabel:`by start`; the Prime Minister lane carries two
+   disjoint bars -- his 1974-1976 term and the
    `1986-1988 cohabitation <https://en.wikipedia.org/wiki/Cohabitation_(government)>`_.
 
 Each position becomes a lane, drawn over the full span of time it was
-held. Where a post was held in separate spells -- Prime Minister in
-1974-1976 and again during the 1986-1988 cohabitation -- the lane shows
-two disjoint bars: the timeline is drawing the *union of validity
-intervals* that :sqlfunc:`sr_temporal` computes over each row's
+held; setting the :guilabel:`Order` control to :guilabel:`by start` lists
+them in the order he took them up -- Minister Delegate, Agriculture, the
+Interior, then Prime Minister. Where a post was held in separate spells --
+Prime Minister in 1974-1976 and again during the 1986-1988 cohabitation --
+the lane shows two disjoint bars: the timeline is drawing the *union of
+validity intervals* that :sqlfunc:`sr_temporal` computes over each row's
 provenance circuit. The equivalent SQL, which Temporal mode runs for
 you, is:
 
