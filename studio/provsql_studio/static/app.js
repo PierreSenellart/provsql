@@ -2389,6 +2389,38 @@
       debounceTimer = setTimeout(fetchTemporal, 200);
     };
 
+    // Persist the Temporal UI across a plain page reload (sessionStorage,
+    // per tab). A mode switch carries its own query via `ps.sql` and takes
+    // precedence (see the init below); this only handles reloads.
+    const TEMPORAL_KEY = 'ps.temporal';
+    function saveTemporalState() {
+      try {
+        sessionStorage.setItem(TEMPORAL_KEY, JSON.stringify({
+          source: state.source, timeop: state.timeop, relation: state.relation,
+          mapping: state.mapping, sort: state.sort,
+          at: state.at, from: state.from, to: state.to,
+          query: state.source === 'query' && reqEl ? reqEl.value : '',
+        }));
+      } catch (e) { /* storage disabled / quota: non-fatal */ }
+    }
+    function restoreTemporalState() {
+      let saved = null;
+      try { saved = JSON.parse(sessionStorage.getItem(TEMPORAL_KEY) || 'null'); }
+      catch (e) { saved = null; }
+      if (!saved) return false;
+      if (saved.source === 'relation' || saved.source === 'query') state.source = saved.source;
+      if (OPS[state.source] && OPS[state.source].includes(saved.timeop)) state.timeop = saved.timeop;
+      state.relation = saved.relation || null;
+      state.mapping = saved.mapping || null;
+      state.sort = saved.sort || '';
+      state.at = saved.at || null; state.from = saved.from || null; state.to = saved.to || null;
+      if (state.source === 'query' && saved.query && reqEl) {
+        reqEl.value = saved.query;
+        reqEl.dispatchEvent(new Event('input'));  // refresh syntax highlight
+      }
+      return true;
+    }
+
     // Show the right source control; enable only the time ops valid for the
     // current source, snapping the selection if it became invalid.
     function syncAvailability() {
@@ -2471,6 +2503,7 @@
     if (sortSel) sortSel.addEventListener('change', () => {
       state.sort = sortSel.value;
       if (state.data) renderTimeline(state.data);
+      saveTemporalState();
     });
     // Re-draw from the box when the user edits the query (query source only).
     if (reqEl) reqEl.addEventListener('change', () => { if (state.source === 'query') debouncedFetch(); });
@@ -2496,6 +2529,11 @@
     // (carriedRan is module-scoped; the box was already restored.)
     const carriedQuery = carriedRan && reqEl && !!reqEl.value.trim();
     if (carriedQuery) state.source = 'query';
+    // Otherwise, on a plain reload, restore the prior Temporal UI (source,
+    // time op, relation/mapping, order, instants, and a Query-source query) so
+    // a reload does not silently fall back to the Relation display.
+    else restoreTemporalState();
+    if (sortSel) sortSel.value = state.sort;
 
     syncAvailability();
     renderInputs();
@@ -2503,7 +2541,9 @@
     // before the relation picker, so its auto-fetch sends the resolved mapping.
     populateMappings().then(() => {
       populateRelations();   // auto-fetches only if the source is relation
-      if (carriedQuery) fetchTemporal();
+      // A carried or restored Query source does not fetch via populateRelations;
+      // draw it here once the mapping picker is filled.
+      if (state.source === 'query' && reqEl && reqEl.value.trim()) fetchTemporal();
     });
 
     async function populateRelations() {
@@ -2514,10 +2554,12 @@
       } catch { /* leave empty; the picker just shows the placeholder */ }
       relSel.innerHTML = '<option value="">— pick a relation —</option>'
         + rows.map((m) => `<option value="${escapeAttr(m.qname)}">${escapeHtml(m.display_name || m.qname)}</option>`).join('');
-      // Auto-select a likely temporal view (one ending in _validity is a
-      // mapping; prefer a plain view), else the first relation.
+      // Keep a restored relation if it is still offered; otherwise auto-select
+      // a likely temporal view (one ending in _validity is a mapping; prefer a
+      // plain view), else the first relation.
       if (rows.length) {
-        const pref = rows.find((m) => !/_validity$/.test(m.name)) || rows[0];
+        const pref = (state.relation && rows.find((m) => m.qname === state.relation))
+          || rows.find((m) => !/_validity$/.test(m.name)) || rows[0];
         relSel.value = pref.qname; state.relation = pref.qname;
         if (state.source === 'relation') fetchTemporal();
       }
@@ -2586,6 +2628,7 @@
       }
       setStatus(data.result.length ? '' : 'No rows match.');
       renderTimeline(data);
+      saveTemporalState();
       // Mirror the rows into the shared result table so the query box, the
       // result table, and the timeline all agree (the table is the tabular
       // companion to the timeline). Skipped when "Send query" already ran it.

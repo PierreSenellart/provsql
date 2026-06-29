@@ -5,6 +5,8 @@ TEMPORAL_SETUP): the source x timeop controls, the During window frame, the
 axis date caption, and the empty-union marker."""
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import Page, expect
 
 
@@ -79,6 +81,26 @@ def test_order_by_start_resorts_lanes(
     expect(lane0).to_contain_text("3", timeout=8000)   # query order: id 3 (2022) first
     page.locator("#temporal-sort").select_option("start")
     expect(lane0).to_contain_text("1")                 # by start: id 1 (2010) first
+
+
+def test_reload_restores_query_source(
+    page: Page, temporal_studio_url: str
+) -> None:
+    """A plain page reload restores the Temporal UI (source, query, time op)
+    rather than silently falling back to the Relation display."""
+    _goto_temporal(page, temporal_studio_url)
+    page.locator('.cv-temporal__src[data-source="query"]').click()
+    page.locator('.cv-temporal__op[data-timeop="full"]').click()
+    page.locator("#request").fill("SELECT * FROM sensor")
+    page.locator("#temporal-mapping").select_option("public.sensor_validity")
+    expect(page.locator(".cv-temporal__lane")).to_have_count(3, timeout=8000)
+
+    page.reload(wait_until="networkidle")
+    # Still in Query source, query preserved, timeline redrawn -- not reverted.
+    expect(page.locator('.cv-temporal__src[data-source="query"]')).to_have_class(
+        re.compile(r"\bis-active\b"), timeout=8000)
+    expect(page.locator("#request")).to_have_value("SELECT * FROM sensor")
+    expect(page.locator(".cv-temporal__lane")).to_have_count(3, timeout=8000)
 
 
 def test_empty_union_renders_never_marker(
