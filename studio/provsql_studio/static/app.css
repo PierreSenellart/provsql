@@ -3532,7 +3532,23 @@ table thead th[data-sort="desc"]::after {
 .cv-temporal__status.is-error { color: var(--terracotta-700, #a33); font-style: normal; }
 
 /* Timeline canvas. */
-.cv-temporal__timeline { display: flex; flex-direction: column; gap: 0.2rem; }
+.cv-temporal__timeline { position: relative; display: flex; flex-direction: column; gap: 0.2rem; }
+/* "During" window frame: an overlay aligned to the track region (past the
+   9rem label gutter, matching the axis margin) that dims everything outside
+   the [from, to) window and marks its bounds. pointer-events stay off so bar
+   tooltips show through. */
+.cv-temporal__woverlay {
+  position: absolute; top: 0; bottom: 0; left: 9rem; right: 0;
+  pointer-events: none; z-index: 2;
+}
+.cv-temporal__wmask {
+  position: absolute; top: 0; bottom: 0;
+  background: var(--bg-canvas, #f4f0fa); opacity: 0.6;
+}
+.cv-temporal__wedge {
+  position: absolute; top: 0; bottom: 0;
+  border-left: 1px dashed var(--terracotta-500); opacity: 0.65;
+}
 .cv-temporal__axis {
   position: relative;
   height: 1.1rem;

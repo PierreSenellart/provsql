@@ -2671,6 +2671,18 @@
         if (hi != null) segs.push(hi);
       }));
       if (!rows.length) { tl.innerHTML = ''; return; }
+      // "During" window bounds (datetime-local -> UTC ms), anchored into the
+      // domain so the window frame stays visible even when it extends past
+      // every bar. The row filter is overlap (a row shows if its validity
+      // meets the window at all, cf. timeslice); the frame only emphasises the
+      // in-window portion, it does not clip the bars.
+      const during = state.timeop === 'during';
+      let wlo = null, whi = null;
+      if (during) {
+        wlo = atToMs(state.from); whi = atToMs(state.to);
+        if (wlo != null) segs.push(wlo);
+        if (whi != null) segs.push(whi);
+      }
       // The domain is anchored by the finite interval endpoints. How many there
       // are decides what scale, if any, we can show:
       //   0  -- every interval is (−∞,+∞): nothing anchors a scale, so we show
@@ -2738,9 +2750,25 @@
         playhead = `<div class="cv-temporal__playhead" id="temporal-playhead" style="left:${px}%" title="Drag to time-travel"></div>`;
       }
 
+      // "During" window frame: two translucent masks dim everything outside
+      // [from, to) so the in-window portion of each (full) bar reads at full
+      // strength, with dashed edges at the window bounds.
+      let windowFrame = '';
+      if (during && wlo != null && whi != null) {
+        const wa = clampPct(xOf(wlo)), wb = clampPct(xOf(whi));
+        windowFrame =
+          `<div class="cv-temporal__woverlay">`
+          + `<div class="cv-temporal__wmask" style="left:0;width:${wa}%"></div>`
+          + `<div class="cv-temporal__wmask" style="left:${wb}%;right:0"></div>`
+          + `<div class="cv-temporal__wedge" style="left:${wa}%"></div>`
+          + `<div class="cv-temporal__wedge" style="left:${wb}%"></div>`
+          + `</div>`;
+      }
+
       tl.innerHTML =
         `<div class="cv-temporal__axis">${axis}${playhead}</div>`
-        + `<div class="cv-temporal__lanes">${lanes}</div>`;
+        + `<div class="cv-temporal__lanes">${lanes}</div>`
+        + windowFrame;
 
       if (state.timeop === 'asof') wireScrubber(t0, span);
     }
