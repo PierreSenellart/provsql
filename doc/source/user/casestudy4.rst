@@ -101,26 +101,30 @@ The full history of a person (Full)
 -----------------------------------
 
 With the **Query** source and the :guilabel:`Full` operation, ask for
-Jacques Chirac's time as Prime Minister:
+every position Jacques Chirac has held:
 
 .. code-block:: postgresql
 
-    SELECT name, position FROM person_position
-    WHERE name = 'Jacques Chirac' AND position = 'Prime Minister of France';
+    SELECT position FROM person_position WHERE name = 'Jacques Chirac';
 
 .. figure:: /_static/casestudy4/cs4-full-chirac.png
-   :alt: Temporal mode, Full: a single lane for Jacques Chirac as Prime
-         Minister, with two separate bars for his 1974-1976 and
-         1986-1988 terms.
+   :alt: Temporal mode, Full: four lanes for Jacques Chirac's positions
+         (Minister Delegate, Agriculture, Interior, Prime Minister), the
+         Prime Minister lane carrying two separate bars for his 1974-1976
+         and 1986-1988 terms.
 
-   `Chirac's <https://en.wikipedia.org/wiki/Jacques_Chirac>`_ single
-   lane carries two disjoint bars -- his 1974-1976 term and the
+   `Chirac's <https://en.wikipedia.org/wiki/Jacques_Chirac>`_ career, one
+   lane per position; the Prime Minister lane carries two disjoint bars --
+   his 1974-1976 term and the
    `1986-1988 cohabitation <https://en.wikipedia.org/wiki/Cohabitation_(government)>`_.
 
-The two terms appear as two disjoint bars in one lane: the timeline is
-drawing the *union of validity intervals* that :sqlfunc:`sr_temporal`
-computes over the row's provenance circuit. The equivalent SQL, which
-Temporal mode runs for you, is:
+Each position becomes a lane, drawn over the full span of time it was
+held. Where a post was held in separate spells -- Prime Minister in
+1974-1976 and again during the 1986-1988 cohabitation -- the lane shows
+two disjoint bars: the timeline is drawing the *union of validity
+intervals* that :sqlfunc:`sr_temporal` computes over each row's
+provenance circuit. The equivalent SQL, which Temporal mode runs for
+you, is:
 
 .. code-block:: postgresql
 
