@@ -1393,16 +1393,17 @@ extension version.
        badge, the :sc:`D` certificate badge, conditioned gates, and
        Möbius (μ) nodes.  Notebook Markdown cells render math.
    * - ``1.7.x``
-     - ``≥ 1.10.0``
+     - ``≥ 1.11.0``
      - Adds :ref:`Temporal mode <studio-temporal-mode>`: the validity
        timeline with the Source (relation / query) x time-operation
        (as-of / during / full) controls, the validity-mapping picker,
        the adaptive axis with its date / year caption and rollover
        markers, the as-of scrubber, and the during window frame. Builds
        on the extension's temporal surface (:sqlfunc:`sr_temporal`,
-       :sqlfunc:`create_provenance_mapping`, ``time_validity_view``),
-       which needs no version beyond the 1.10.0 floor but does require
-       the server to be PostgreSQL 14+. See :doc:`temporal`.
+       :sqlfunc:`create_provenance_mapping`, ``time_validity_view``), and
+       requires 1.11.0 for its fixes to **maintained** provenance mappings
+       -- the self-maintaining ``time_validity_view`` the timeline reads --
+       and the server to be PostgreSQL 14+. See :doc:`temporal`.
 
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to
