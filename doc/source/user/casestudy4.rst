@@ -138,30 +138,30 @@ you, is:
 A snapshot in time (As of)
 --------------------------
 
-Switch the operation to :guilabel:`As of` and set the instant to
-``1981-07-01``. Filter to ministerial posts so the snapshot stays
-readable:
-
-.. code-block:: postgresql
-
-    SELECT position, name FROM person_position WHERE position LIKE 'Minister%';
+So far we typed SQL into the **Query** source; the **Relation** source is
+quicker when you just want a tracked table or view on the timeline. Pick
+``person_position`` from the :guilabel:`Relation` selector, switch the
+operation to :guilabel:`As of`, and set the instant to ``1981-07-01``:
 
 .. figure:: /_static/casestudy4/cs4-asof-1981.png
-   :alt: Temporal mode, As of 1981-07-01: nine minister lanes valid at
-         the playhead, including Robert Badinter as Minister of Justice.
+   :alt: Temporal mode, As of 1981-07-01, over the person_position
+         relation: ten lanes valid at the playhead -- the Mauroy
+         government, with Pierre Mauroy as Prime Minister and Robert
+         Badinter at Justice.
 
    The government in place just after the
-   `Socialist victory of June 1981 <https://en.wikipedia.org/wiki/1981_French_legislative_election>`_,
-   with `Robert Badinter <https://en.wikipedia.org/wiki/Robert_Badinter>`_
+   `Socialist victory of June 1981 <https://en.wikipedia.org/wiki/1981_French_legislative_election>`_:
+   `Pierre Mauroy <https://en.wikipedia.org/wiki/Pierre_Mauroy>`_ as Prime
+   Minister, `Robert Badinter <https://en.wikipedia.org/wiki/Robert_Badinter>`_
    at Justice. Drag the playhead to travel through time.
 
-Only the rows valid at the playhead stay on the timeline -- the ministers
-of the government installed after the Socialist victory, among them
-Badinter (Justice),
+Only the rows valid at the playhead stay on the timeline -- the Mauroy
+cabinet installed after the Socialist victory, among them Mauroy (Prime
+Minister), Badinter (Justice),
 `Jacques Delors <https://en.wikipedia.org/wiki/Jacques_Delors>`_ (Economy)
 and `Jack Lang <https://en.wikipedia.org/wiki/Jack_Lang_(French_politician)>`_
 (Culture). Drag the **playhead** (or click the axis) to scrub through
-time and watch the cabinet change. The SQL equivalent is
+time and watch the government change. The SQL equivalent is
 :sqlfunc:`timetravel`:
 
 .. code-block:: postgresql
