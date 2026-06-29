@@ -118,6 +118,12 @@ def cs8_studio_url(cs8_dsn: str) -> str:
 
 
 @pytest.fixture(scope="session")
+def temporal_studio_url(temporal_dsn: str) -> str:
+    """Studio against the Temporal fixture (`public` schema)."""
+    yield from _serve_studio(temporal_dsn, "public")
+
+
+@pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
     # Pin a deterministic viewport so layout-sensitive selectors stay stable
     # across hosts; matches the desktop breakpoint the UI is designed for.
