@@ -9,20 +9,19 @@ Case Study: Government Ministers Over Time
 
 This case study, introduced in :cite:`DBLP:conf/pw/WidiaatmajaDDS25`,
 applies ProvSQL's temporal extension to a database of French and
-Singaporean government ministers, demonstrating how provenance tracks
-the *validity interval* of every fact and supports time-travel,
-history, and data-modification undo.
+Singaporean government ministers. Every fact carries the *validity
+interval* during which it was true, and we explore that history through
+:ref:`Studio's Temporal mode <studio-temporal-mode>` -- a validity
+timeline with as-of, during, and full-history time operations -- with
+the underlying SQL shown alongside each step.
 
 .. nb:skip
 .. tip::
 
    **Follow along in your browser, no install.** Open the `cs4 database in the
-   ProvSQL Playground <https://provsql.org/playground/?db=cs4>`_ and run these
-   queries as you read. The Playground bundles no external tools, so a step
-   that explicitly calls an external knowledge compiler (``d4``, ``c2d``…) or
-   the ``graph-easy`` ASCII renderer will not run there; the default
-   probability methods still work (they use the built-in tree-decomposition
-   compiler), as does everything else. See the
+   ProvSQL Playground <https://provsql.org/playground/?db=cs4&mode=temporal>`_;
+   it opens straight in Temporal mode, ready to follow along as you read. The
+   Playground bundles no external tools, but Temporal mode needs none. See the
    :ref:`Playground note <playground-note>`.
 
 .. note::
@@ -32,18 +31,17 @@ history, and data-modification undo.
    It was current as of early 2026 and does not reflect subsequent political
    appointments.
 
-The Scenario
+The scenario
 ------------
 
 A database records which person held which governmental position and when.
 Each row has a ``validity`` column of type ``tstzmultirange`` that describes
-the time intervals during which the fact was true. Your tasks:
+the time intervals during which the fact was true. We will:
 
-* find the full history of a person's positions,
-* see who held a given role at a specific date,
-* track all versions of a position through time,
+* reconstruct the full history of a person's positions,
+* snapshot the government as it stood on a given date,
+* list everyone who served during a window of time, and
 * fire an official and then undo that action.
-
 
 Setup
 -----
@@ -52,148 +50,114 @@ Setup
 
 This case study assumes a working ProvSQL installation on PostgreSQL 14 or
 later (see :doc:`getting-provsql`).  The data files are included in the
-ProvSQL source distribution under ``doc/casestudy4/data/``.  Run the setup script from that
-directory:
+ProvSQL source distribution under ``doc/casestudy4/data/``.  Run the setup
+script from that directory:
 
 .. code-block:: bash
 
     cd /path/to/provsql/doc/casestudy4/data
     psql -d mydb -f ../setup.sql
 
-
 .. nb:omit-end
 
 .. nb:setup: ../../casestudy4/setup.sql
 
-This creates three tables:
-
-* ``person`` – politicians with name, gender, birth/death dates, and a
-  ``validity tstzmultirange`` column.
-* ``holds`` – which person held which position in which country, with a
-  ``validity tstzmultirange`` column.
-* ``party`` – party memberships.
-
-The script also:
+This creates three tables -- ``person`` (politicians, with a
+``validity tstzmultirange`` column), ``holds`` (which person held which
+position in which country, again with a ``validity``), and ``party``
+(party memberships) -- then:
 
 * calls :sqlfunc:`add_provenance` on ``person`` and ``holds``,
-* creates ``person_validity`` and ``holds_validity`` views via
+* creates ``person_validity`` and ``holds_validity`` mapping views via
   :sqlfunc:`create_provenance_mapping_view`, and
 * extends ProvSQL's ``time_validity_view`` to incorporate both.
 
+The convenience view ``person_position`` joins ``person`` and ``holds``
+for French officials; it is the relation we place on the timeline below.
 
-Step 1: Explore the Database
------------------------------
+Opening Temporal mode
+---------------------
 
-.. nb:omit-begin
+Point Studio at the database and pick **Temporal** from the mode switcher
+(see :ref:`the mode reference <studio-temporal-mode>` for the full UI):
 
-At the start of every session, set the search path and timezone:
+.. code-block:: bash
 
-.. code-block:: postgresql
+    provsql-studio --dsn "dbname=mydb" --search-path "public, provsql"
 
-    SET search_path TO public, provsql;
-    SET timezone TO 'UTC';
+Two controls drive every view that follows:
 
-.. nb:omit-end
+* **Source** -- a tracked **Relation** (such as the ``person_position``
+  view) or an arbitrary **Query** typed into the query box.
+* **Time operation** -- :guilabel:`Full` (every row, full validity),
+  :guilabel:`As of` (an instant), or :guilabel:`During` (a window).
 
-.. nb:sql: SET timezone TO 'UTC';
+Each row is wrapped with :sqlfunc:`sr_temporal` over a **validity
+mapping**; leave it at the canonical ``provsql.time_validity_view`` that
+``setup.sql`` maintains. All instants are handled at UTC.
 
-Inspect the tables:
+The full history of a person (Full)
+-----------------------------------
 
-.. code-block:: postgresql
-
-    SELECT * FROM person LIMIT 5;
-    SELECT * FROM holds  LIMIT 5;
-
-Every row carries a ``validity`` column (a ``tstzmultirange``) indicating
-the period during which the row was true.
-
-The convenience view ``person_position`` joins ``person`` and ``holds`` for
-French officials. Due to imprecisions in the Wikidata import, the view may
-include entries for people who held positions in other countries; filtering
-by a well-known position gives cleaner results:
+With the **Query** source and the :guilabel:`Full` operation, ask for
+Jacques Chirac's time as Prime Minister:
 
 .. code-block:: postgresql
 
-    SELECT * FROM person_position
-    WHERE position = 'Prime Minister of France'
-    ORDER BY name;
+    SELECT name, position FROM person_position
+    WHERE name = 'Jacques Chirac' AND position = 'Prime Minister of France';
 
+.. figure:: /_static/casestudy4/cs4-full-chirac.png
+   :alt: Temporal mode, Full: a single lane for Jacques Chirac as Prime
+         Minister, with two separate bars for his 1974-1976 and
+         1986-1988 terms.
 
-Step 2: Union of Temporal Intervals
--------------------------------------
+   `Chirac's <https://en.wikipedia.org/wiki/Jacques_Chirac>`_ single
+   lane carries two disjoint bars -- his 1974-1976 term and the
+   `1986-1988 cohabitation <https://en.wikipedia.org/wiki/Cohabitation_(government)>`_.
 
-:sqlfunc:`sr_temporal` is a compiled semiring evaluation that computes
-the *union of all temporal validity intervals* across the provenance circuit
-of a result row.  Use it to reconstruct the full history of Jacques Chirac's
-positions:
+The two terms appear as two disjoint bars in one lane: the timeline is
+drawing the *union of validity intervals* that :sqlfunc:`sr_temporal`
+computes over the row's provenance circuit. The equivalent SQL, which
+Temporal mode runs for you, is:
 
 .. code-block:: postgresql
 
     SELECT position,
            sr_temporal(provenance(), 'time_validity_view') AS valid
-    FROM person
-    JOIN holds ON person.id = holds.id
+    FROM person JOIN holds ON person.id = holds.id
     WHERE name = 'Jacques Chirac'
     GROUP BY position
     ORDER BY valid;
 
-Each row shows a position together with the union of all time windows during
-which `Chirac <https://en.wikipedia.org/wiki/Jacques_Chirac>`_ held it.
-His two terms as Prime Minister (1974–1976 and the
-`1986–1988 cohabitation <https://en.wikipedia.org/wiki/Cohabitation_(government)>`_)
-appear as two disjoint intervals in the multirange.
+A snapshot in time (As of)
+--------------------------
 
-
-Step 3: Timeslice – Who Was in Government During Macron's First Term?
-----------------------------------------------------------------------
-
-:sqlfunc:`timeslice` returns all rows of a view that were valid during a
-given time window:
+Switch the operation to :guilabel:`As of` and set the instant to
+``1981-07-01``. Filter to ministerial posts so the snapshot stays
+readable:
 
 .. code-block:: postgresql
 
-    SELECT name, validity FROM
-      timeslice('person_position', '2017-05-16', '2022-05-13')
-      AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
-    ORDER BY validity;
+    SELECT position, name FROM person_position WHERE position LIKE 'Minister%';
 
-Every minister whose tenure overlapped
-`Macron's first presidential term <https://en.wikipedia.org/wiki/Presidency_of_Emmanuel_Macron>`_
-(May 2017 – May 2022) appears, together with their validity interval
-intersected with the query window.
+.. figure:: /_static/casestudy4/cs4-asof-1981.png
+   :alt: Temporal mode, As of 1981-07-01: nine minister lanes valid at
+         the playhead, including Robert Badinter as Minister of Justice.
 
-.. note::
+   The government in place just after the
+   `Socialist victory of June 1981 <https://en.wikipedia.org/wiki/1981_French_legislative_election>`_,
+   with `Robert Badinter <https://en.wikipedia.org/wiki/Robert_Badinter>`_
+   at Justice. Drag the playhead to travel through time.
 
-   :sqlfunc:`timeslice` uses the ``time_validity_view`` mapping set up by
-   ``setup.sql`` to look up the validity interval for each provenance token.
-   The returned ``validity`` is the *union* over all provenance sources, which
-   for a simple view equals the row's own validity column.
-
-
-Step 4: History – All Holders of the Minister of Justice Role
---------------------------------------------------------------
-
-:sqlfunc:`history` returns all versions of rows that match a set of column
-filters, showing the full temporal evolution of a role:
-
-.. code-block:: postgresql
-
-    SELECT name, validity FROM
-      history('person_position',
-              ARRAY['position'],
-              ARRAY['Minister of Justice'])
-      AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
-    ORDER BY validity;
-
-The result lists every person who served as Minister of Justice, ordered
-by their validity interval.
-
-
-Step 5: Timetravel – The Socialist Government of July 1981
------------------------------------------------------------
-
-:sqlfunc:`timetravel` returns a snapshot of a table or view as it was at a
-single point in time:
+Only the rows valid at the playhead stay on the timeline -- the ministers
+of the government installed after the Socialist victory, among them
+Badinter (Justice),
+`Jacques Delors <https://en.wikipedia.org/wiki/Jacques_Delors>`_ (Economy)
+and `Jack Lang <https://en.wikipedia.org/wiki/Jack_Lang_(French_politician)>`_
+(Culture). Drag the **playhead** (or click the axis) to scrub through
+time and watch the cabinet change. The SQL equivalent is
+:sqlfunc:`timetravel`:
 
 .. code-block:: postgresql
 
@@ -202,30 +166,79 @@ single point in time:
       AS tt(name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
     ORDER BY position;
 
-This reconstructs the French government installed after the
-`Socialist Party's victory in the June 1981 legislative elections
-<https://en.wikipedia.org/wiki/1981_French_legislative_election>`_,
-with ministers such as
-`Robert Badinter <https://en.wikipedia.org/wiki/Robert_Badinter>`_ (Justice),
-`Jacques Delors <https://en.wikipedia.org/wiki/Jacques_Delors>`_ (Economy),
-and `Jack Lang <https://en.wikipedia.org/wiki/Jack_Lang_(French_politician)>`_ (Culture).
+.. note::
 
+   Under :guilabel:`As of` (and :guilabel:`During`) the result table on
+   the right shows the *full* query, while the timeline shows just the
+   rows valid at the chosen time -- so the tuple count there can exceed
+   the number of lanes.
 
-Step 6: Data Modification – Replace the Prime Minister
--------------------------------------------------------
+A window of time (During)
+-------------------------
 
-.. important::
+Switch to :guilabel:`During` and set the window to Macron's first term,
+``2017-05-16`` to ``2022-05-13``, over the Prime Ministers:
 
-   Steps 6 and 7 require ``provsql.update_provenance`` to be enabled.
-   Run this before proceeding:
+.. code-block:: postgresql
 
-   .. code-block:: postgresql
+    SELECT name, position FROM person_position
+    WHERE position = 'Prime Minister of France';
 
-       SET provsql.update_provenance = on;
+.. figure:: /_static/casestudy4/cs4-during-macron.png
+   :alt: Temporal mode, During Macron's first term: Edouard Philippe and
+         Jean Castex framed within the dimmed window.
 
-ProvSQL intercepts every DML statement and records it in
-``update_provenance``.  First, record who currently holds the position,
-then dismiss them and appoint a placeholder:
+   The two Prime Ministers who served during
+   `Macron's first term <https://en.wikipedia.org/wiki/Presidency_of_Emmanuel_Macron>`_:
+   Édouard Philippe, then Jean Castex.
+
+Every row whose validity *meets* the window appears, with the in-window
+portion of each bar at full strength and the rest dimmed. The bars are
+**not** clipped to the window -- you still see each full term -- matching
+the semantics of :sqlfunc:`timeslice`:
+
+.. code-block:: postgresql
+
+    SELECT name, validity FROM
+      timeslice('person_position', '2017-05-16', '2022-05-13')
+      AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
+    ORDER BY validity;
+
+The full history of a role (Full)
+---------------------------------
+
+Keep the **Query** source on :guilabel:`Full` and list every holder of a
+role to read its succession as a stack of lanes:
+
+.. code-block:: postgresql
+
+    SELECT name, position FROM person_position
+    WHERE position = 'Minister of Justice';
+
+This is the timeline form of :sqlfunc:`history`, which returns all
+versions of rows matching a set of column filters:
+
+.. code-block:: postgresql
+
+    SELECT name, validity FROM
+      history('person_position', ARRAY['position'], ARRAY['Minister of Justice'])
+      AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
+    ORDER BY validity;
+
+Beyond the timeline: editing history
+------------------------------------
+
+Temporal mode is read-only. To *change* the data -- and have ProvSQL
+track the change -- drop to SQL. These steps require
+``provsql.update_provenance``:
+
+.. code-block:: postgresql
+
+    SET provsql.update_provenance = on;
+
+**Replace the Prime Minister.** ProvSQL intercepts every DML statement
+and records it in ``update_provenance``. Note who currently holds the
+position, then dismiss them and appoint a placeholder:
 
 .. code-block:: postgresql
 
@@ -244,63 +257,31 @@ then dismiss them and appoint a placeholder:
     INSERT INTO holds (id, position, country)
       VALUES (100000, 'Prime Minister of France', 'FR');
 
-Verify the change:
-
-.. code-block:: postgresql
-
-    SELECT name, position FROM timetravel('person_position', NOW())
-      AS tt(name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
-    WHERE position = 'Prime Minister of France';
-
-You should see Jeanne Dupont, not the original Prime Minister.
-
-Also inspect the fired PM's history post-firing:
+Re-open Temporal mode (or run :sqlfunc:`timetravel` at ``NOW()``): the
+current Prime Minister is now Jeanne Dupont, and the dismissed minister's
+Prime Minister bar has gained a finite upper bound at the deletion
+instant:
 
 .. code-block:: postgresql
 
     SELECT position,
            sr_temporal(provenance(), 'time_validity_view') AS valid
-    FROM person
-    JOIN holds ON person.id = holds.id
+    FROM person JOIN holds ON person.id = holds.id
     JOIN fired_pm ON person.id = fired_pm.id
     GROUP BY position;
 
-Their Prime Minister interval now has a finite upper bound (the deletion
-timestamp).
-
-
-Step 7: Undo – Reinstate the Original Prime Minister
------------------------------------------------------
-
-The ``update_provenance`` table records every DML query with its
-provenance token.  :sqlfunc:`undo` reverses any single recorded operation:
+**Undo.** The ``update_provenance`` table records every DML query with
+its provenance token; :sqlfunc:`undo` reverses any recorded operation:
 
 .. code-block:: postgresql
 
     SELECT undo(provenance()) FROM update_provenance;
 
-This replays all recorded operations in reverse, restoring the original
-state.  Re-query to confirm the original Prime Minister is back:
-
-.. code-block:: postgresql
-
-    SELECT name, position FROM timetravel('person_position', NOW())
-      AS tt(name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
-    WHERE position = 'Prime Minister of France';
-
-And verify their interval is again open-ended:
-
-.. code-block:: postgresql
-
-    SELECT position,
-           sr_temporal(provenance(), 'time_validity_view') AS valid
-    FROM person
-    JOIN holds ON person.id = holds.id
-    JOIN fired_pm ON person.id = fired_pm.id
-    GROUP BY position;
+Re-querying confirms the original Prime Minister is back and their
+Prime Minister interval is open-ended once more.
 
 .. note::
 
-   :sqlfunc:`undo` reverses each recorded operation independently.
-   The ``update_provenance`` table persists across sessions; clear it
-   with ``DELETE FROM update_provenance`` when it is no longer needed.
+   :sqlfunc:`undo` reverses each recorded operation independently. The
+   ``update_provenance`` table persists across sessions; clear it with
+   ``DELETE FROM update_provenance`` when it is no longer needed.
