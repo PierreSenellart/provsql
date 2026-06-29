@@ -2645,6 +2645,23 @@
           push(Date.UTC(y, 0, 1), `${y}`);
         }
       }
+      // Annotate the ticks where the coarse unit the labels omit rolls over (a
+      // new date on a clock axis, a new year on a "Mon D" day axis), so a
+      // context change is visible at its position, not only in the caption.
+      const coarse = span <= 2*DAY ? 'date' : span <= 90*DAY ? 'year' : null;
+      if (coarse) {
+        const keyOf = (d) => coarse === 'date'
+          ? `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`
+          : `${d.getUTCFullYear()}`;
+        const ctxOf = (d) => coarse === 'date'
+          ? `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}` : `${d.getUTCFullYear()}`;
+        let prev = keyOf(new Date(t0));
+        for (const tk of out) {
+          const d = new Date(tk.t), k = keyOf(d);
+          if (k !== prev) tk.ctx = ctxOf(d);
+          prev = k;
+        }
+      }
       return out;
     }
 
@@ -2653,18 +2670,14 @@
     // day ticks omit the year. Months/years ticks already carry it (empty). A
     // span that crosses the coarse boundary is shown as a range.
     function axisContext(t0, t1) {
-      const DAY = 86400000, span = t1 - t0;
-      const d0 = new Date(t0), d1 = new Date(t1);
-      const ymd = (d) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth()+1)}-${pad2(d.getUTCDate())}`;
-      if (span <= 2*DAY) {            // clock-time ticks -> show the date
-        const a = ymd(d0), b = ymd(d1);
-        return a === b ? a : `${a} → ${b}`;
-      }
-      if (span <= 90*DAY) {           // "Mon D" ticks -> show the year
-        const a = d0.getUTCFullYear(), b = d1.getUTCFullYear();
-        return a === b ? `${a}` : `${a} → ${b}`;
-      }
-      return '';                      // "Mon YYYY" / "YYYY" already self-contained
+      const DAY = 86400000, span = t1 - t0, d0 = new Date(t0);
+      // The caption anchors the *start* of the axis; later context changes are
+      // marked inline at the tick where they happen (see axisTicks' tk.ctx).
+      if (span <= 2*DAY)            // clock-time ticks -> show the start date
+        return `${d0.getUTCFullYear()}-${pad2(d0.getUTCMonth()+1)}-${pad2(d0.getUTCDate())}`;
+      if (span <= 90*DAY)           // "Mon D" ticks -> show the start year
+        return `${d0.getUTCFullYear()}`;
+      return '';                    // "Mon YYYY" / "YYYY" already self-contained
     }
 
     // With a single instant in the domain there is no span to scale from, so
@@ -2729,7 +2742,10 @@
       for (const tk of (noRef ? [] : axisTicks(t0, t1))) {
         const x = xOf(tk.t);
         if (x < 0 || x > 100) continue;
-        axis += `<div class="cv-temporal__tick" style="left:${x}%"><span>${escapeHtml(tk.label)}</span></div>`;
+        const bnd = tk.ctx ? ' is-boundary' : '';
+        const ctxSpan = tk.ctx
+          ? `<span class="cv-temporal__tickctx">${escapeHtml(tk.ctx)}</span>` : '';
+        axis += `<div class="cv-temporal__tick${bnd}" style="left:${x}%">${ctxSpan}<span>${escapeHtml(tk.label)}</span></div>`;
       }
       // Coarse date/year context the tick labels omit (e.g. "2024-03-15" over a
       // minutes axis), shown as a caption in the axis label gutter.
