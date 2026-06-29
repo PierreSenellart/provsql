@@ -2509,8 +2509,8 @@
     if (reqEl) reqEl.addEventListener('change', () => { if (state.source === 'query') debouncedFetch(); });
 
     // "Send query" activates Query source and draws the timeline from the box.
-    // The form's inline onsubmit already runs the query into the result table,
-    // so we skip fetchTemporal's mirror to avoid running it twice.
+    // The form's inline runQuery is a no-op in Temporal mode, so this single
+    // fetchTemporal is the only execution (it also fills the result table).
     const qForm = document.querySelector('.wp-form');
     if (qForm) {
       qForm.addEventListener('submit', async () => {
@@ -2520,7 +2520,7 @@
           syncAvailability();
           renderInputs();
         }
-        fetchTemporal({ skipMirror: true });
+        fetchTemporal();
       });
     }
 
@@ -2589,8 +2589,10 @@
       if (isError) tl.innerHTML = '';
     }
 
-    async function fetchTemporal(opts) {
-      const skipMirror = !!(opts && opts.skipMirror);
+    async function fetchTemporal() {
+      // Cancel any pending debounced fetch so one user action runs the query
+      // exactly once (a blur + a click, say, must not both fire it).
+      clearTimeout(debounceTimer);
       const body = { source: state.source, timeop: state.timeop };
       if (state.source === 'query') {
         body.query = reqEl ? reqEl.value : '';
@@ -2609,14 +2611,30 @@
       else if (state.timeop === 'during') { body.from_time = state.from; body.to_time = state.to; }
       setStatus('Querying…');
       let data;
+      const t0 = performance.now();
       try {
         const resp = await fetch('/api/temporal', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         data = await resp.json();
-        if (!resp.ok) { setStatus(data.error || 'Temporal query failed', true); return; }
+        if (!resp.ok) {
+          // A query source that cannot be placed on a timeline (no provenance
+          // column, a DDL statement, multiple statements, ...) still has output
+          // worth showing: run it once for the result table and clear the
+          // timeline. (Relation sources are always wrappable, so a failure
+          // there is a real error.)
+          if (state.source === 'query') {
+            tl.innerHTML = '';
+            setStatus('No timeline for this query.');
+            await runQuery({ preventDefault() {} }, { force: true });
+          } else {
+            setStatus(data.error || 'Temporal query failed', true);
+          }
+          return;
+        }
       } catch (e) { setStatus('Request failed: ' + e, true); return; }
+      const dt = Math.round(performance.now() - t0);
       state.data = data;
       state.columns = data.columns || [];
       // For a relation source, show the plain `SELECT * FROM <relation>` in the
@@ -2632,12 +2650,42 @@
       setStatus(data.result.length ? '' : 'No rows match.');
       renderTimeline(data);
       saveTemporalState();
-      // Mirror the rows into the shared result table so the query box, the
-      // result table, and the timeline all agree (the table is the tabular
-      // companion to the timeline). Skipped when "Send query" already ran it.
-      if (!skipMirror && reqEl && reqEl.value.trim()) {
-        try { runQuery({ preventDefault() {} }); } catch (e) { /* table is secondary */ }
+      // The result table is the tabular companion to the timeline, rendered
+      // from this same single response -- so the query is never re-executed.
+      renderTemporalResultTable(data, dt);
+    }
+
+    // Fill the shared result table from the temporal response (cells are not
+    // clickable in Temporal mode, so a plain table suffices).  `provsql` is
+    // appended as the trailing column, matching the other modes' result pane.
+    function renderTemporalResultTable(data, dt) {
+      const head = document.getElementById('result-head');
+      const tbody = document.getElementById('result-body');
+      const count = document.getElementById('result-count');
+      const noun = document.getElementById('result-noun');
+      const time = document.getElementById('result-time');
+      const banners = document.getElementById('result-banners');
+      const cols = (data.columns || []).concat('provsql');
+      const rows = data.result || [];
+      if (head) {
+        head.innerHTML = '<tr>' + cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('') + '</tr>';
       }
+      if (tbody) {
+        tbody.innerHTML = rows.length
+          ? rows.map((r) => {
+              const userCells = (r.cells || []).map((v) =>
+                `<td>${v == null ? '' : escapeHtml(String(v))}</td>`).join('');
+              // formatCell abbreviates the uuid (4 hex + ellipsis, full on
+              // hover / "Show UUIDs"), matching the other modes' result pane.
+              const provCell = `<td>${r.provsql == null ? '' : formatCell(r.provsql, 'uuid')}</td>`;
+              return '<tr>' + userCells + provCell + '</tr>';
+            }).join('')
+          : '<tr><td style="opacity:.6; text-align:center; padding:1rem">(no rows)</td></tr>';
+      }
+      if (count) count.textContent = rows.length;
+      if (noun) noun.textContent = rows.length === 1 ? 'tuple' : 'tuples';
+      if (time && dt != null) time.textContent = dt;
+      if (banners) banners.innerHTML = '';
     }
 
     // ── timeline rendering ──
@@ -4219,10 +4267,20 @@ function makeBlockRenderer(env, targets) {
 window.ProvsqlStudio = window.ProvsqlStudio || {};
 window.ProvsqlStudio.makeBlockRenderer = makeBlockRenderer;
 
-async function runQuery(ev) {
+async function runQuery(ev, opts) {
   ev.preventDefault();
 
   const env = window.__provsqlStudio || { mode: 'where', escapeHtml: s => s, escapeAttr: s => s, formatCell: v => v };
+  // Temporal mode runs the query exactly once, server-side, inside the
+  // sr_temporal wrap (the timeline fetch), and fills the result table from
+  // that single response.  Executing /api/exec here would run the query a
+  // second time -- harmless for a SELECT but destructive for a side-effecting
+  // one like SELECT undo(...).  So this inline-onsubmit handler is a no-op in
+  // Temporal mode; setupTemporalMode's submit listener drives the single run.
+  // The one exception is `opts.force`: when the query cannot be placed on a
+  // timeline (no provenance, DDL, multiple statements), fetchTemporal calls
+  // back here to show the query's output -- the only execution in that case.
+  if (env.mode === 'temporal' && !(opts && opts.force)) return false;
   // Last-line cleanup for invisible Unicode, covering entry paths the paste
   // hook does not see (?q= deep links, programmatic fills): fix the textarea
   // in place so what runs is what the user sees highlighted.

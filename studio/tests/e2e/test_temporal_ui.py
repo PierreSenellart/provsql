@@ -107,7 +107,8 @@ def test_failed_query_clears_timeline(
     page: Page, temporal_studio_url: str
 ) -> None:
     """A query that errors must erase the timeline, not leave the previous
-    result on screen behind the error banner."""
+    result on screen. A query source falls back to running the query for the
+    result table, so the error surfaces there rather than on the timeline."""
     _goto_temporal(page, temporal_studio_url)
     page.locator('.cv-temporal__src[data-source="query"]').click()
     page.locator('.cv-temporal__op[data-timeop="full"]').click()
@@ -115,11 +116,61 @@ def test_failed_query_clears_timeline(
     page.locator("#temporal-mapping").select_option("public.sensor_validity")
     expect(page.locator(".cv-temporal__lane")).to_have_count(3, timeout=8000)
 
-    # A failing query (unknown relation) -> error banner, and no stale lanes.
+    # A failing query (unknown relation): no stale lanes, and the real error
+    # shows in the result area (via the /api/exec fallback).
     page.locator("#request").fill("SELECT * FROM no_such_table_xyz")
     page.locator("#request").dispatch_event("change")
-    expect(page.locator(".cv-temporal__status.is-error")).to_be_visible(timeout=8000)
-    expect(page.locator(".cv-temporal__lane")).to_have_count(0)
+    expect(page.locator(".cv-temporal__lane")).to_have_count(0, timeout=8000)
+    expect(page.locator("#result-banners")).to_contain_text("does not exist", timeout=8000)
+
+
+def test_query_runs_exactly_once(
+    page: Page, temporal_studio_url: str
+) -> None:
+    """A Send in Temporal mode executes the underlying query exactly once,
+    via /api/temporal (which also fills the result table), never a second
+    time via /api/exec -- which would double-run a side-effecting query such
+    as SELECT undo(...). Also checks the result table is rendered from that
+    single response (the query columns plus a trailing provsql column)."""
+    _goto_temporal(page, temporal_studio_url)
+    page.locator('.cv-temporal__src[data-source="query"]').click()
+    page.locator('.cv-temporal__op[data-timeop="full"]').click()
+    page.locator("#request").fill("SELECT reading FROM sensor")
+    page.locator("#temporal-mapping").select_option("public.sensor_validity")
+    expect(page.locator(".cv-temporal__lane").first).to_be_visible(timeout=8000)
+
+    calls = {"exec": 0, "temporal": 0}
+
+    def _count(r):
+        if "/api/exec" in r.url:
+            calls["exec"] += 1
+        elif "/api/temporal" in r.url:
+            calls["temporal"] += 1
+
+    page.on("request", _count)
+    page.locator("#run-btn").click()
+    expect(page.locator(".cv-temporal__lane")).to_have_count(3, timeout=8000)
+    page.wait_for_timeout(500)
+    assert calls == {"exec": 0, "temporal": 1}, calls
+    # Result table came from the temporal response: query column + provsql.
+    cols = page.eval_on_selector_all("#result-head th", "e => e.map(x => x.textContent)")
+    assert cols == ["reading", "provsql"], cols
+
+
+def test_non_temporal_query_still_shows_output(
+    page: Page, temporal_studio_url: str
+) -> None:
+    """A query that cannot be placed on a timeline (no provenance column) still
+    shows its output in the result table, with an empty timeline (it falls back
+    to running the query for the result table)."""
+    _goto_temporal(page, temporal_studio_url)
+    page.locator('.cv-temporal__src[data-source="query"]').click()
+    page.locator('.cv-temporal__op[data-timeop="full"]').click()
+    page.locator("#request").fill("SELECT 42 AS answer")
+    page.locator("#temporal-mapping").select_option("provsql.time_validity_view")
+    page.locator("#run-btn").click()
+    expect(page.locator(".cv-temporal__lane")).to_have_count(0, timeout=8000)
+    expect(page.locator("#result-body")).to_contain_text("42", timeout=8000)
 
 
 def test_empty_union_renders_never_marker(
