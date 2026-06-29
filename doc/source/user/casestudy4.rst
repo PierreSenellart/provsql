@@ -248,6 +248,9 @@ track the change -- drop to SQL. These steps require
 
     SET provsql.update_provenance = on;
 
+In Studio you can instead flip the :guilabel:`update_provenance` toggle
+beside the query box, which sets the same GUC for the session.
+
 **Replace the Prime Minister.** ProvSQL intercepts every DML statement
 and records it in ``update_provenance``. Note who currently holds the
 position, then dismiss them and appoint a placeholder:
