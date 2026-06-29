@@ -28,7 +28,10 @@ help:
 	cp $(BRANDING)/favicon.ico _static/favicon.ico
 	cp -r $(BRANDING)/fonts/.  _static/fonts
 	cp $(BRANDING)/fonts-face.css _static/fonts-face.css
-	# Build Doxygen outputs
+	# Build Doxygen outputs.  Remove the previous output first: Doxygen does
+	# not prune files/index entries for entities that have since been deleted,
+	# so a stale build would keep advertising removed functions.
+	rm -rf ../doxygen-c ../doxygen-sql
 	doxygen Doxyfile-c
 	doxygen Doxyfile-sql
 	# Copy fonts and favicon into each Doxygen HTML output
