@@ -3602,8 +3602,9 @@ table thead th[data-sort="desc"]::after {
 .cv-temporal__inf.is-r { right: 3px; }
 /* Empty interval union: the row is valid at no time. */
 .cv-temporal__never {
-  position: absolute; left: 6px; top: 50%; transform: translateY(-50%);
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   color: var(--fg-muted, #8a8079); font-size: 0.72rem; font-style: italic;
+  white-space: nowrap;
 }
 /* Draggable "As of" playhead. */
 .cv-temporal__playhead {

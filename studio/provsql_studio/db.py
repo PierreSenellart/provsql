@@ -1838,6 +1838,9 @@ def list_temporal_relations(pool: ConnectionPool) -> list[dict]:
     materialised view that projects such tables (CS4's `person_position`). We
     surface, from non-system / non-ProvSQL schemas, relations that either carry
     a `tstzmultirange` column (the validity convention) or are a view / matview.
+    Provenance-mapping views (the `(provenance, value <multirange>)` shape made
+    by `create_provenance_mapping_view`) are excluded -- they belong in the
+    mapping picker, not as relations to inspect.
     Returns `{schema, name, qname, display_name}`, qname-sorted."""
     q = """
         SELECT n.nspname AS schema, c.relname AS name
@@ -1853,6 +1856,15 @@ def list_temporal_relations(pool: ConnectionPool) -> list[dict]:
               WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
                 AND a.atttypid = 'pg_catalog.tstzmultirange'::regtype
             )
+          )
+          AND NOT (
+            EXISTS (SELECT 1 FROM pg_attribute a
+                    WHERE a.attrelid = c.oid AND a.attname = 'provenance'
+                      AND NOT a.attisdropped)
+            AND EXISTS (SELECT 1 FROM pg_attribute a
+                        WHERE a.attrelid = c.oid AND a.attname = 'value'
+                          AND NOT a.attisdropped
+                          AND format_type(a.atttypid, -1) LIKE '%%multirange')
           )
         ORDER BY n.nspname, c.relname
     """
