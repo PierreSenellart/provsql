@@ -624,3 +624,25 @@ details[open] > div {
     margin-bottom: 0;
   }
 }
+
+// Studio modes list on the overview page: icon-led, brand-coloured glyphs.
+ul.studio-modes {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 0;
+
+  li {
+    position: relative;
+    padding-left: 2em;
+    margin-bottom: 0.5em;
+  }
+
+  > li > i.fas {
+    position: absolute;
+    left: 0;
+    top: 0.2em;
+    width: 1.4em;
+    text-align: center;
+    color: #6B4FA0;
+  }
+}

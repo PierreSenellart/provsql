@@ -97,14 +97,19 @@ database](/docs/user/temporal.html), time-travel queries included.
 inspection that pairs with the extension. It runs as a separate Python
 package (on PyPI as
 [`provsql-studio`](https://pypi.org/project/provsql-studio/)), connects
-to any ProvSQL-enabled PostgreSQL database, and offers three
-complementary modes: a **Circuit** view that renders the provenance DAG
-behind a result token with on-the-fly semiring evaluation on any pinned
-subnode, a **Where** view that highlights, on hover, the source cells
-that contributed to each output value, and a **Notebook** mode –
-Jupyter-style notebooks with SQL, Markdown, circuit, and evaluation
-cells, saved and loaded as standard `.ipynb` files. The tutorial and
-case studies of the documentation ship as runnable example notebooks.
+to any ProvSQL-enabled PostgreSQL database, through five complementary
+modes:
+
+<ul class="studio-modes">
+  <li><i class="fas fa-project-diagram"></i> <a href="/docs/user/studio.html#studio-circuit-mode"><strong>Circuit</strong></a> – render the provenance DAG behind a result token, with on-the-fly semiring evaluation on any pinned subnode.</li>
+  <li><i class="fas fa-chart-bar"></i> <a href="/docs/user/studio.html#studio-contributions-mode"><strong>Contributions</strong></a> – rank the input tuples by their signed Shapley or Banzhaf contribution to a pinned answer.</li>
+  <li><i class="fas fa-search-location"></i> <a href="/docs/user/studio.html#studio-where-mode"><strong>Where</strong></a> – highlight, on hover, the source cells that contributed to each output value.</li>
+  <li><i class="fas fa-clock"></i> <a href="/docs/user/studio.html#studio-temporal-mode"><strong>Temporal</strong></a> – place the rows of a relation or a query on a validity timeline: as-of, during, and full-history views.</li>
+  <li><i class="fas fa-book-open"></i> <a href="/docs/user/studio.html#studio-notebook-mode"><strong>Notebook</strong></a> – Jupyter-style notebooks with SQL, Markdown, circuit, and evaluation cells, saved and loaded as standard <code>.ipynb</code> files.</li>
+</ul>
+
+The tutorial and case studies of the documentation ship as runnable
+example notebooks.
 
 ## ProvSQL Playground {#playground}
 

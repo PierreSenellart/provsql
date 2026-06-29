@@ -149,13 +149,15 @@ feature_row:
     btn_class: "btn--primary"
   - title: "Temporal &amp; Update Provenance"
     image_path: /assets/images/temporal.png
-    alt: "ProvSQL Studio query result: French prime ministers with the validity time interval (a tstzmultirange) during which each held office, every row provenance-tracked (PROV-TID)."
+    alt: "ProvSQL Studio Temporal mode: French prime ministers drawn on a UTC timeline by the validity interval during which each held office, beside the query that produced them, every row provenance-tracked (PROV-TID)."
     excerpt: >
       Provenance of data modifications: `INSERT` / `UPDATE` / `DELETE` are
       tracked as update gates, enabling audit and undo. Combined with the
       interval-union semiring, validity timestamps turn a
       provenance-tracked database into a temporal one – time-travel
-      queries included.
+      queries included, and explore them visually in Studio's *Temporal*
+      mode: as-of, during, and full-history views on an interactive
+      timeline.
     url: "/docs/user/temporal.html"
     btn_label: "Temporal docs"
     btn_class: "btn--primary"
@@ -174,11 +176,12 @@ feature_row:
     image_path: /assets/images/studio/circuit-mode.png
     alt: "ProvSQL Studio Circuit mode: the provenance DAG behind a query result – a plus gate over four times gates over labelled input gates, with an inversion-free certificate badge on the root."
     excerpt: >
-      A web UI for provenance inspection, in three modes: render the
+      A web UI for provenance inspection, in five modes: render the
       circuit DAG behind any result token and evaluate any compiled
-      semiring on a pinned subnode, hover output cells to highlight the
-      source rows that produced them, or work in notebooks. Available on
-      PyPI as
+      semiring on a pinned subnode, rank inputs by their Shapley
+      contribution, hover output cells to highlight the source rows that
+      produced them, place rows on a validity timeline, or work in
+      notebooks. Available on PyPI as
       [`provsql-studio`](https://pypi.org/project/provsql-studio/).
     url: "/docs/user/studio.html"
     btn_label: "Studio docs"
