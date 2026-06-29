@@ -3555,6 +3555,15 @@ table thead th[data-sort="desc"]::after {
   margin-left: 9rem;          /* aligns with the lane track (label gutter) */
   border-bottom: 1px solid var(--border-soft);
 }
+/* Coarse date/year caption for sub-day / day axes, right-aligned in the label
+   gutter so it reads as a header for the tick row. */
+.cv-temporal__axisctx {
+  position: absolute; top: 0; left: 0; width: 8.6rem; height: 1.1rem;
+  display: flex; align-items: flex-end; justify-content: flex-end;
+  padding-right: 0.4rem;
+  font-size: 0.62rem; font-weight: 600; color: var(--fg-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 .cv-temporal__tick { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--border-soft); }
 .cv-temporal__tick span {
   position: absolute; bottom: 0.05rem; left: 2px;

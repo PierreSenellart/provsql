@@ -2648,6 +2648,25 @@
       return out;
     }
 
+    // The coarse "big picture" component the tick labels omit, shown once as an
+    // axis caption: sub-day ticks are clock times, so surface the date; "Mon D"
+    // day ticks omit the year. Months/years ticks already carry it (empty). A
+    // span that crosses the coarse boundary is shown as a range.
+    function axisContext(t0, t1) {
+      const DAY = 86400000, span = t1 - t0;
+      const d0 = new Date(t0), d1 = new Date(t1);
+      const ymd = (d) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth()+1)}-${pad2(d.getUTCDate())}`;
+      if (span <= 2*DAY) {            // clock-time ticks -> show the date
+        const a = ymd(d0), b = ymd(d1);
+        return a === b ? a : `${a} → ${b}`;
+      }
+      if (span <= 90*DAY) {           // "Mon D" ticks -> show the year
+        const a = d0.getUTCFullYear(), b = d1.getUTCFullYear();
+        return a === b ? `${a}` : `${a} → ${b}`;
+      }
+      return '';                      // "Mon YYYY" / "YYYY" already self-contained
+    }
+
     // With a single instant in the domain there is no span to scale from, so
     // infer a sensible window from how "round" the instant is: a year boundary
     // implies a years-wide window, a time-of-day implies an hours-wide one, etc.
@@ -2712,6 +2731,9 @@
         if (x < 0 || x > 100) continue;
         axis += `<div class="cv-temporal__tick" style="left:${x}%"><span>${escapeHtml(tk.label)}</span></div>`;
       }
+      // Coarse date/year context the tick labels omit (e.g. "2024-03-15" over a
+      // minutes axis), shown as a caption in the axis label gutter.
+      const axisCtx = noRef ? '' : axisContext(t0, t1);
 
       const lanes = rows.map((r) => {
         // Label from the row's plain columns; skip multirange values
@@ -2766,7 +2788,8 @@
       }
 
       tl.innerHTML =
-        `<div class="cv-temporal__axis">${axis}${playhead}</div>`
+        (axisCtx ? `<div class="cv-temporal__axisctx" title="Date context for the axis below">${escapeHtml(axisCtx)}</div>` : '')
+        + `<div class="cv-temporal__axis">${axis}${playhead}</div>`
         + `<div class="cv-temporal__lanes">${lanes}</div>`
         + windowFrame;
 
