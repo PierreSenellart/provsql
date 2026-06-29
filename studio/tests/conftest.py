@@ -58,6 +58,73 @@ CREATE VIEW f_replicated AS
 """
 
 
+# Temporal-mode fixture: the CS4 personnel/holds tenure data (table, a join
+# view, and the extended time_validity_view) plus a handful of small tables
+# that exercise the timeline's edge cases (sub-minute scale, a single instant,
+# an unbounded validity, an empty union, and a two-component multirange). All
+# validity is set BEFORE add_provenance so the update trigger does not fire.
+TEMPORAL_SETUP = """
+SET search_path TO public, provsql;
+SET TIME ZONE 'UTC';
+
+CREATE TABLE cs4_person (id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+                         validity tstzmultirange);
+CREATE TABLE cs4_holds (id INTEGER REFERENCES cs4_person(id), position TEXT NOT NULL,
+                        country CHAR(2) NOT NULL, validity tstzmultirange,
+                        PRIMARY KEY (id, position));
+INSERT INTO cs4_person (id, name, validity) VALUES
+  (1, 'Alice Blanc',  tstzmultirange(tstzrange('1960-01-01+00', NULL))),
+  (2, 'Bernard Chai', tstzmultirange(tstzrange('1965-01-01+00', NULL))),
+  (3, 'Carla Diop',   tstzmultirange(tstzrange('1970-01-01+00', NULL)));
+INSERT INTO cs4_holds (id, position, country, validity) VALUES
+  (1, 'Prime Minister', 'FR', tstzmultirange(tstzrange('2010-01-01+00','2016-01-01+00'))),
+  (2, 'Prime Minister', 'FR', tstzmultirange(tstzrange('2016-01-01+00','2022-01-01+00'))),
+  (3, 'Prime Minister', 'FR', tstzmultirange(tstzrange('2022-01-01+00', NULL)));
+SELECT add_provenance('cs4_person');
+SELECT add_provenance('cs4_holds');
+SELECT create_provenance_mapping_view('cs4_person_validity', 'cs4_person', 'validity');
+SELECT create_provenance_mapping_view('cs4_holds_validity',  'cs4_holds',  'validity');
+ALTER VIEW provsql.time_validity_view RENAME TO time_validity_view_cs4_save;
+CREATE VIEW provsql.time_validity_view AS
+    SELECT * FROM provsql.time_validity_view_cs4_save
+  UNION ALL SELECT * FROM cs4_person_validity
+  UNION ALL SELECT * FROM cs4_holds_validity;
+CREATE VIEW cs4_person_position AS
+  SELECT DISTINCT name, position
+  FROM cs4_person JOIN cs4_holds ON cs4_person.id = cs4_holds.id
+  WHERE country = 'FR';
+
+CREATE TABLE sensor (id int, reading text, validity tstzmultirange);
+INSERT INTO sensor VALUES
+  (1, 'A', tstzmultirange(tstzrange('2024-03-15 14:00+00','2024-03-15 14:05+00'))),
+  (2, 'B', tstzmultirange(tstzrange('2024-03-15 14:03+00','2024-03-15 14:12+00'))),
+  (3, 'C', tstzmultirange(tstzrange('2024-03-15 14:10+00','2024-03-15 14:30+00')));
+SELECT add_provenance('sensor');
+SELECT create_provenance_mapping_view('sensor_validity', 'sensor', 'validity');
+
+CREATE TABLE degen (id int, label text, validity tstzmultirange);
+INSERT INTO degen VALUES
+  (1, 'point',   tstzmultirange(tstzrange('2018-03-15 14:30+00','2018-03-15 14:30+00','[]'))),
+  (2, 'alltime', tstzmultirange(tstzrange(NULL, NULL)));
+SELECT add_provenance('degen');
+SELECT create_provenance_mapping_view('degen_validity', 'degen', 'validity');
+
+CREATE TABLE emptyval (id int, label text, validity tstzmultirange);
+INSERT INTO emptyval VALUES
+  (1, 'normal', tstzmultirange(tstzrange('2016-01-01+00','2022-01-01+00'))),
+  (2, 'never',  tstzmultirange());
+SELECT add_provenance('emptyval');
+SELECT create_provenance_mapping_view('emptyval_validity', 'emptyval', 'validity');
+
+CREATE TABLE multi (id int, label text, validity tstzmultirange);
+INSERT INTO multi VALUES
+  (1, 'twoparts', tstzmultirange(tstzrange('2000-01-01+00','2001-01-01+00'),
+                                 tstzrange('2010-01-01+00','2011-01-01+00')));
+SELECT add_provenance('multi');
+SELECT create_provenance_mapping_view('multi_validity', 'multi', 'validity');
+"""
+
+
 def _read_setup_sql(path: Path) -> str:
     """Strip pg_regress meta-commands (\\set, \\pset) so we can run the file
     directly via psycopg without psql. Both setup files start with a couple
@@ -218,6 +285,37 @@ def cs8_dsn() -> str:
             admin.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
 
 
+@pytest.fixture(scope="session")
+def temporal_dsn() -> str:
+    """A fresh database loaded with the Temporal-mode fixture (`TEMPORAL_SETUP`):
+    the CS4 tenure data, a join view, the extended time_validity_view, and the
+    small edge-case tables. Mirrors the other `*_dsn` lifecycles; overridable
+    with `PROVSQL_STUDIO_TEMPORAL_DSN`."""
+    override = os.environ.get("PROVSQL_STUDIO_TEMPORAL_DSN")
+    if override:
+        yield override
+        return
+
+    suffix = secrets.token_hex(4)
+    db_name = f"provsql_studio_temporal_{suffix}"
+    admin_dsn = "dbname=postgres"
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{db_name}"')
+    try:
+        with psycopg.connect(f"dbname={db_name}", autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS provsql CASCADE")
+            conn.execute(TEMPORAL_SETUP)
+        yield f"dbname={db_name}"
+    finally:
+        with psycopg.connect(admin_dsn, autocommit=True) as admin:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+            admin.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+
+
 @pytest.fixture()
 def app(test_dsn: str, tmp_path, monkeypatch):
     """Per-test Flask app bound to the test DSN, with the schema search_path
@@ -260,3 +358,27 @@ def app(test_dsn: str, tmp_path, monkeypatch):
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture()
+def temporal_app(temporal_dsn: str, tmp_path, monkeypatch):
+    """Per-test Flask app bound to the Temporal fixture DB, search_path set to
+    `public, provsql` so the fixture's relations and mappings resolve. Same
+    config-dir redirect and pool teardown as `app`."""
+    monkeypatch.setenv("PROVSQL_STUDIO_CONFIG_DIR", str(tmp_path / "studio_cfg"))
+    app = create_app(dsn=f"{temporal_dsn} options='-c search_path=public,provsql'")
+    app.config.update(TESTING=True)
+    try:
+        yield app
+    finally:
+        pool = app.extensions.get("provsql_pool")
+        if pool is not None:
+            try:
+                pool.close()
+            except Exception:
+                pass
+
+
+@pytest.fixture()
+def temporal_client(temporal_app):
+    return temporal_app.test_client()
