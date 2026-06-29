@@ -272,10 +272,12 @@ position, then dismiss them and appoint a placeholder:
     INSERT INTO holds (id, position, country)
       VALUES (100000, 'Prime Minister of France', 'FR');
 
-Re-open Temporal mode (or run :sqlfunc:`timetravel` at ``NOW()``): the
-current Prime Minister is now Jeanne Dupont, and the dismissed minister's
-Prime Minister bar has gained a finite upper bound at the deletion
-instant:
+Put the Prime Ministers back on the timeline -- the **Query** source over
+``SELECT name FROM person_position WHERE position = 'Prime Minister of
+France'`` with :guilabel:`As of` set to the present -- and Jeanne Dupont
+is now the current holder. The dismissed minister's own Prime Minister bar
+has gained a finite upper bound at the deletion instant, which you can
+read off directly:
 
 .. code-block:: postgresql
 
@@ -292,8 +294,8 @@ its provenance token; :sqlfunc:`undo` reverses any recorded operation:
 
     SELECT undo(provenance()) FROM update_provenance;
 
-Re-querying confirms the original Prime Minister is back and their
-Prime Minister interval is open-ended once more.
+Running the same Prime-Minister query again confirms the original holder
+is back, their Prime Minister interval open-ended once more.
 
 .. note::
 
