@@ -69,8 +69,9 @@ position in which country, again with a ``validity``), and ``party``
 (party memberships) -- then:
 
 * calls :sqlfunc:`add_provenance` on ``person`` and ``holds``,
-* creates ``person_validity`` and ``holds_validity`` mapping views via
-  :sqlfunc:`create_provenance_mapping_view`, and
+* creates maintained ``person_validity`` and ``holds_validity`` mappings via
+  :sqlfunc:`create_provenance_mapping` (``maintained => true``, so they stay
+  correct when the data is modified later), and
 * extends ProvSQL's ``time_validity_view`` to incorporate both.
 
 The convenience view ``person_position`` joins ``person`` and ``holds``

@@ -139,7 +139,7 @@ Setup and basics
    "``remove_provenance``", "", "", "", "", "", "✓", "", "", ""
    "``provenance()`` (SELECT-list)", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
    "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "", "✓", ""
-   "``create_provenance_mapping_view``", "", "", "", "", "✓", "", "", "", ""
+   "``create_provenance_mapping`` (``maintained``)", "", "", "", "", "✓", "", "", "", ""
    "Hand-built mapping table", "", "", "", "", "", "✓", "", "", ""
    "``setup_search_path``", "(✓)", "", "", "", "", "", "", "", ""
    "``provsql.active`` GUC", "", "", "", "", "", "", "", "", ""

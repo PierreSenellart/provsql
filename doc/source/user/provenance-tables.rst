@@ -118,19 +118,23 @@ Use :sqlfunc:`create_provenance_mapping` to create one:
     SELECT create_provenance_mapping('my_mapping', 'mytable', 'column_name');
 
 The mapping is stored as an ordinary PostgreSQL table called ``my_mapping``
-with two columns: ``token`` (uuid) and ``value`` (text or numeric, depending
-on the source column type).
+with two columns: ``provenance`` (uuid) and ``value`` (the source column's
+type).  By default it is a one-off snapshot of the table as it stands.
 
-Alternatively, :sqlfunc:`create_provenance_mapping_view` creates a *view*
-instead of a table.  The view always reflects the current state of the
-source table, which is useful when the table is frequently updated:
+Pass ``maintained => true`` to keep it current instead:
 
 .. code-block:: postgresql
 
-    SELECT create_provenance_mapping_view('my_mapping_view', 'mytable', 'column_name');
+    SELECT create_provenance_mapping('my_mapping', 'mytable', 'column_name',
+                                     maintained => true);
 
-The view can be used anywhere a table-based mapping is expected (e.g., as
-the second argument to semiring evaluation functions).
+A maintained mapping is extended automatically as new rows are inserted, and
+-- crucially -- it stays correct under data modification: a delete or update
+rewrites a row's ``provsql`` into a compound gate, but the value remains keyed
+to the original input token, so evaluation still resolves it.  This matters
+for :doc:`temporal <temporal>` validity, where a row deleted at time *T* must
+keep its original interval bounded at *T* rather than losing it.  A maintained
+mapping requires ``column_name`` to be a plain column.
 
 ProvSQL Studio
 ---------------

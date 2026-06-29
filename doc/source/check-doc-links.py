@@ -152,6 +152,10 @@ INTERNAL_FUNCTIONS = {
     # the plpgsql filter as members of the `provsql` namespace.  Not callable
     # functions; users read the table (or the time_validity_view), not these.
     'provsql', 'query', 'query_type', 'ts', 'username', 'valid_time',
+    # `value` is the column alias the filter picks up from the
+    # time_validity_view `CREATE VIEW ... AS SELECT valid_time AS value`
+    # definition; a mapping column, not a callable function.
+    'value',
     # GUC variables (not functions)
     'aggtoken_text_as_uuid', 'tool_search_path', 'boolean_provenance',
     # random_variable type internals (I/O, internal builder,

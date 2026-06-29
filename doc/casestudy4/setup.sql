@@ -59,9 +59,10 @@ SET search_path TO public, provsql;
 SELECT add_provenance('person');
 SELECT add_provenance('holds');
 
--- Create temporal validity mappings
-SELECT create_provenance_mapping_view('person_validity', 'person', 'validity');
-SELECT create_provenance_mapping_view('holds_validity',  'holds',  'validity');
+-- Create maintained temporal validity mappings (kept current as rows are
+-- inserted, and correct after data modification rewrites a row's provsql)
+SELECT create_provenance_mapping('person_validity', 'person', 'validity', maintained => true);
+SELECT create_provenance_mapping('holds_validity',  'holds',  'validity', maintained => true);
 
 -- Extend the global time_validity_view to include both mappings
 ALTER VIEW provsql.time_validity_view RENAME TO time_validity_view_update;

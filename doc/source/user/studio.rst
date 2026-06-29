@@ -807,9 +807,9 @@ Both sources use one mechanism: the SQL is wrapped with
 :sqlfunc:`sr_temporal` over a **validity mapping**, and the time
 operation re-evaluates it as a base-level filter (mirroring the
 :sqlfunc:`timeslice` / :sqlfunc:`timetravel` SRF bodies). A validity
-mapping is a ``(provenance, value <multirange>)`` view, such as one made
-by :sqlfunc:`create_provenance_mapping_view`; the
-:guilabel:`Validity mapping` picker lists every such view, with the
+mapping is a ``(provenance, value <multirange>)`` relation, such as one made
+by :sqlfunc:`create_provenance_mapping` (``maintained => true``); the
+:guilabel:`Validity mapping` picker lists every such relation, with the
 canonical ``provsql.time_validity_view`` (the union ProvSQL maintains)
 first. The Relation source defaults to that canonical mapping; the Query
 source, whose SQL is arbitrary, requires an explicit choice.
@@ -1088,9 +1088,9 @@ pills:
   rewriter consults to decide whether a query is in scope for
   the ``'boolean'`` provenance class.
 * :sc:`mapping` (gold) on a relation shaped
-  ``(value <T>, provenance uuid)``, including views from
-  :sqlfunc:`create_provenance_mapping_view`. The two pills are
-  mutually exclusive: a mapping view that also carries a planner-
+  ``(value <T>, provenance uuid)``, such as one from
+  :sqlfunc:`create_provenance_mapping`. The two pills are
+  mutually exclusive: a mapping that also carries a planner-
   injected ``provsql`` column is classified as :sc:`mapping` (the
   more specific category).
 
@@ -1383,7 +1383,7 @@ extension version.
        the adaptive axis with its date / year caption and rollover
        markers, the as-of scrubber, and the during window frame. Builds
        on the extension's temporal surface (:sqlfunc:`sr_temporal`,
-       :sqlfunc:`create_provenance_mapping_view`, ``time_validity_view``),
+       :sqlfunc:`create_provenance_mapping`, ``time_validity_view``),
        which needs no version beyond the 1.10.0 floor but does require
        the server to be PostgreSQL 14+. See :doc:`temporal`.
 
