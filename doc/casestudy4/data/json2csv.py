@@ -100,7 +100,7 @@ for row in data:
             end = death
         if start is not None and (
                 (end is None and start > '1950') or
-                (end is not None and end >= start)):
+                (end is not None and end > start)):
             po_w.writerow([pid, position, cc, start, end])
 
     party = row.get("partyLabel")
