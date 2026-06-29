@@ -179,10 +179,27 @@ SELECT round(probability_evaluate(
            !(SELECT provenance() FROM upgrade_cond WHERE lbl='b'))::numeric, 4)
          AS p_not_b;
 
+-- 1.11.0 surface check: maintained provenance mappings.  A mapping created
+-- with maintained => true registers in the new provenance_mapping_registry
+-- and is extended by provenance_guard on each genuine insert, so a row
+-- inserted *after* the mapping shows up in it.  Exercises the whole chain the
+-- upgrade installs: the new create_provenance_mapping signature, the registry
+-- table, and the guard's append path (create_provenance_mapping_view, the old
+-- view-based helper, is dropped by the same upgrade).
+CREATE TABLE upgrade_maint (lbl text);
+INSERT INTO upgrade_maint VALUES ('first');
+SELECT add_provenance('upgrade_maint');
+SELECT create_provenance_mapping('upgrade_maint_map', 'upgrade_maint', 'lbl',
+                                 maintained => true);
+INSERT INTO upgrade_maint (lbl) VALUES ('second');
+SELECT string_agg(value, ',' ORDER BY value) AS maintained_mapping_values
+  FROM upgrade_maint_map;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
            upgrade_smoke_right, upgrade_safe_q, upgrade_kc,
-           upgrade_cnt, upgrade_cnt_r, upgrade_cond;
+           upgrade_cnt, upgrade_cnt_r, upgrade_cond,
+           upgrade_maint, upgrade_maint_map;
 RESET client_min_messages;
 
 \else

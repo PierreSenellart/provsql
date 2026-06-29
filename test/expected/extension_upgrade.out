@@ -72,3 +72,12 @@ add_provenance
 p_a_given_b|p_a_given_not_b|cond_gate_type|p_not_b
 0.3000|0.3000|conditioned|0.5000
 (1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+maintained_mapping_values
+first,second
+(1 row)
