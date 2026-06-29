@@ -148,6 +148,16 @@ def test_multicomponent_multirange_splits(temporal_client):
     assert _years(d["result"][0]["valid_time"]) == [("2000", "2001"), ("2010", "2011")]
 
 
+def test_duplicate_column_names_kept_in_cells(temporal_client):
+    # Two columns aliased to the same name collapse in the name-keyed row dict,
+    # but `cells` keeps both values positionally so the lane label is correct.
+    d = _temporal(temporal_client, source="query",
+                  query="SELECT reading AS x, id::text AS x FROM sensor WHERE id = 1",
+                  mapping="public.sensor_validity", timeop="full").get_json()
+    assert d["columns"] == ["x", "x"]
+    assert d["result"][0]["cells"] == ["A", "1"]
+
+
 def test_parse_multirange_none():
     assert _parse_multirange(None) == []
 

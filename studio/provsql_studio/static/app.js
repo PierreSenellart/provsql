@@ -2833,9 +2833,11 @@
       const axisCtx = noRef ? '' : axisContext(t0, t1);
 
       const lanes = rows.map((r) => {
-        // Label from the row's plain columns; skip multirange values
-        // (e.g. a table's own `validity`) since the bars already show them.
-        const label = state.columns.map((c) => r[c])
+        // Label from the row's plain columns (positional, so duplicate column
+        // names keep every value); skip multirange values (e.g. a table's own
+        // `validity`) since the bars already show them.
+        const cells = r.cells || state.columns.map((c) => r[c]);
+        const label = cells
           .filter((v) => v != null && !/^\{[[(]/.test(String(v))).join(' · ');
         const ivs = r.valid_time || [];
         // Empty interval union: the row is valid at no time. Distinct from an

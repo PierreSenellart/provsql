@@ -2126,6 +2126,13 @@ def temporal(
         entry = {
             n: (str(row[i]) if row[i] is not None else None) for i, n in display
         }
+        # Positional copy of the display cells, aligned with `columns`. The
+        # name-keyed entries above collapse columns that share a name (e.g.
+        # two `SELECT ... AS x`); `cells` keeps every value so the lane label
+        # stays correct.
+        entry["cells"] = [
+            (str(row[i]) if row[i] is not None else None) for i, _ in display
+        ]
         entry["valid_time"] = _parse_multirange(row[valid_idx])
         entry["provsql"] = (
             str(row[prov_idx])
