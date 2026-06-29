@@ -2584,6 +2584,9 @@
       statusEl.hidden = false;
       statusEl.textContent = msg;
       statusEl.classList.toggle('is-error', !!isError);
+      // An error means there is nothing to show: clear any stale timeline so a
+      // failed query never leaves the previous result on screen.
+      if (isError) tl.innerHTML = '';
     }
 
     async function fetchTemporal(opts) {

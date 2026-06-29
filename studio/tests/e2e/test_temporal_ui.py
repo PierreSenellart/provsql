@@ -103,6 +103,25 @@ def test_reload_restores_query_source(
     expect(page.locator(".cv-temporal__lane")).to_have_count(3, timeout=8000)
 
 
+def test_failed_query_clears_timeline(
+    page: Page, temporal_studio_url: str
+) -> None:
+    """A query that errors must erase the timeline, not leave the previous
+    result on screen behind the error banner."""
+    _goto_temporal(page, temporal_studio_url)
+    page.locator('.cv-temporal__src[data-source="query"]').click()
+    page.locator('.cv-temporal__op[data-timeop="full"]').click()
+    page.locator("#request").fill("SELECT * FROM sensor")
+    page.locator("#temporal-mapping").select_option("public.sensor_validity")
+    expect(page.locator(".cv-temporal__lane")).to_have_count(3, timeout=8000)
+
+    # A failing query (unknown relation) -> error banner, and no stale lanes.
+    page.locator("#request").fill("SELECT * FROM no_such_table_xyz")
+    page.locator("#request").dispatch_event("change")
+    expect(page.locator(".cv-temporal__status.is-error")).to_be_visible(timeout=8000)
+    expect(page.locator(".cv-temporal__lane")).to_have_count(0)
+
+
 def test_empty_union_renders_never_marker(
     page: Page, temporal_studio_url: str
 ) -> None:
