@@ -82,8 +82,8 @@ INSERT INTO cs4_holds (id, position, country, validity) VALUES
   (3, 'Prime Minister', 'FR', tstzmultirange(tstzrange('2022-01-01+00', NULL)));
 SELECT add_provenance('cs4_person');
 SELECT add_provenance('cs4_holds');
-SELECT create_provenance_mapping_view('cs4_person_validity', 'cs4_person', 'validity');
-SELECT create_provenance_mapping_view('cs4_holds_validity',  'cs4_holds',  'validity');
+SELECT create_provenance_mapping('cs4_person_validity', 'cs4_person', 'validity', maintained => true);
+SELECT create_provenance_mapping('cs4_holds_validity',  'cs4_holds',  'validity', maintained => true);
 ALTER VIEW provsql.time_validity_view RENAME TO time_validity_view_cs4_save;
 CREATE VIEW provsql.time_validity_view AS
     SELECT * FROM provsql.time_validity_view_cs4_save
@@ -100,28 +100,28 @@ INSERT INTO sensor VALUES
   (2, 'B', tstzmultirange(tstzrange('2024-03-15 14:03+00','2024-03-15 14:12+00'))),
   (3, 'C', tstzmultirange(tstzrange('2024-03-15 14:10+00','2024-03-15 14:30+00')));
 SELECT add_provenance('sensor');
-SELECT create_provenance_mapping_view('sensor_validity', 'sensor', 'validity');
+SELECT create_provenance_mapping('sensor_validity', 'sensor', 'validity', maintained => true);
 
 CREATE TABLE degen (id int, label text, validity tstzmultirange);
 INSERT INTO degen VALUES
   (1, 'point',   tstzmultirange(tstzrange('2018-03-15 14:30+00','2018-03-15 14:30+00','[]'))),
   (2, 'alltime', tstzmultirange(tstzrange(NULL, NULL)));
 SELECT add_provenance('degen');
-SELECT create_provenance_mapping_view('degen_validity', 'degen', 'validity');
+SELECT create_provenance_mapping('degen_validity', 'degen', 'validity', maintained => true);
 
 CREATE TABLE emptyval (id int, label text, validity tstzmultirange);
 INSERT INTO emptyval VALUES
   (1, 'normal', tstzmultirange(tstzrange('2016-01-01+00','2022-01-01+00'))),
   (2, 'never',  tstzmultirange());
 SELECT add_provenance('emptyval');
-SELECT create_provenance_mapping_view('emptyval_validity', 'emptyval', 'validity');
+SELECT create_provenance_mapping('emptyval_validity', 'emptyval', 'validity', maintained => true);
 
 CREATE TABLE multi (id int, label text, validity tstzmultirange);
 INSERT INTO multi VALUES
   (1, 'twoparts', tstzmultirange(tstzrange('2000-01-01+00','2001-01-01+00'),
                                  tstzrange('2010-01-01+00','2011-01-01+00')));
 SELECT add_provenance('multi');
-SELECT create_provenance_mapping_view('multi_validity', 'multi', 'validity');
+SELECT create_provenance_mapping('multi_validity', 'multi', 'validity', maintained => true);
 """
 
 

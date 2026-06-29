@@ -1838,9 +1838,9 @@ def list_temporal_relations(pool: ConnectionPool) -> list[dict]:
     materialised view that projects such tables (CS4's `person_position`). We
     surface, from non-system / non-ProvSQL schemas, relations that either carry
     a `tstzmultirange` column (the validity convention) or are a view / matview.
-    Provenance-mapping views (the `(provenance, value <multirange>)` shape made
-    by `create_provenance_mapping_view`) are excluded -- they belong in the
-    mapping picker, not as relations to inspect.
+    Provenance mappings (the `(provenance, value <multirange>)` shape made by
+    `create_provenance_mapping`) are excluded -- they belong in the mapping
+    picker, not as relations to inspect.
     Returns `{schema, name, qname, display_name}`, qname-sorted."""
     q = """
         SELECT n.nspname AS schema, c.relname AS name
@@ -1883,8 +1883,9 @@ def list_temporal_mappings(pool: ConnectionPool) -> list[dict]:
     """Validity mappings for the `query` submode (sr_temporal's 2nd argument).
 
     A temporal mapping carries `(provenance uuid, value <multi>range)` -- the
-    per-token validity. `create_provenance_mapping_view(... 'validity')` makes
-    one; `provsql.time_validity_view` is the canonical union of all of them.
+    per-token validity. `create_provenance_mapping(... 'validity', maintained
+    => true)` makes one; `provsql.time_validity_view` is the canonical union of
+    all of them.
     Returns `{schema, name, qname, display_name}`, qname-sorted, with
     time_validity_view first when present (the usual choice)."""
     q = """
