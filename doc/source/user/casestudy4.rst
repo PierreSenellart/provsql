@@ -207,6 +207,7 @@ the semantics of :sqlfunc:`timeslice`:
     SELECT name, validity FROM
       timeslice('person_position', '2017-05-16', '2022-05-13')
       AS (name TEXT, position TEXT, validity tstzmultirange, provsql uuid)
+    WHERE position = 'Prime Minister of France'
     ORDER BY validity;
 
 The full history of a role (Full)
