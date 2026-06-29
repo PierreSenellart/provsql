@@ -3500,6 +3500,17 @@ table thead th[data-sort="desc"]::after {
 /* display:flex above outranks the UA [hidden] rule; restore hiding so the
    relation / mapping pickers toggle with the chosen source. */
 .cv-temporal__ctl[hidden] { display: none; }
+/* "UTC" markers: on the As of / During picker labels and pinned to the axis,
+   making the (UTC) timezone explicit since it is the same everywhere. */
+.cv-temporal__tz {
+  font-size: 0.82em; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--fg-muted, #8a8079);
+}
+.cv-temporal__axistz {
+  position: absolute; top: 0.05rem; right: 2px;
+  font-size: 0.6rem; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--fg-muted, #8a8079);
+}
 .cv-temporal__ctl select,
 .cv-temporal__ctl input {
   font-size: 0.78rem;

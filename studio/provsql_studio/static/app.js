@@ -2442,7 +2442,7 @@
       if (state.timeop === 'asof') {
         state.at = state.at || nowLocal;
         inputs.innerHTML =
-          `<label class="cv-temporal__ctl"><span>At</span>`
+          `<label class="cv-temporal__ctl"><span>At <span class="cv-temporal__tz">UTC</span></span>`
           + `<input type="datetime-local" id="temporal-at" value="${escapeAttr(isoLocal(state.at))}"></label>`;
         document.getElementById('temporal-at').addEventListener('change', (e) => {
           state.at = e.target.value; debouncedFetch();
@@ -2451,9 +2451,9 @@
         state.from = state.from || '2000-01-01T00:00';
         state.to   = state.to   || nowLocal;
         inputs.innerHTML =
-          `<label class="cv-temporal__ctl"><span>From</span>`
+          `<label class="cv-temporal__ctl"><span>From <span class="cv-temporal__tz">UTC</span></span>`
           + `<input type="datetime-local" id="temporal-from" value="${escapeAttr(isoLocal(state.from))}"></label>`
-          + `<label class="cv-temporal__ctl"><span>To</span>`
+          + `<label class="cv-temporal__ctl"><span>To <span class="cv-temporal__tz">UTC</span></span>`
           + `<input type="datetime-local" id="temporal-to" value="${escapeAttr(isoLocal(state.to))}"></label>`;
         document.getElementById('temporal-from').addEventListener('change', (e) => {
           state.from = e.target.value; debouncedFetch();
@@ -2888,7 +2888,9 @@
 
       tl.innerHTML =
         (axisCtx ? `<div class="cv-temporal__axisctx" title="Date context for the axis below">${escapeHtml(axisCtx)}</div>` : '')
-        + `<div class="cv-temporal__axis">${axis}${playhead}</div>`
+        + `<div class="cv-temporal__axis">${axis}${playhead}`
+        + (noRef ? '' : `<span class="cv-temporal__axistz" title="All times are shown and entered in UTC">UTC</span>`)
+        + `</div>`
         + `<div class="cv-temporal__lanes">${lanes}</div>`
         + windowFrame;
 
