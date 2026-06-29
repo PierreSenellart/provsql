@@ -218,7 +218,7 @@ role to read its succession as a stack of lanes:
 
 .. code-block:: postgresql
 
-    SELECT name, position FROM person_position
+    SELECT name FROM person_position
     WHERE position = 'Minister of Justice';
 
 This is the timeline form of :sqlfunc:`history`, which returns all
