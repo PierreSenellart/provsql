@@ -158,6 +158,24 @@ def test_duplicate_column_names_kept_in_cells(temporal_client):
     assert d["result"][0]["cells"] == ["A", "1"]
 
 
+def test_query_without_provenance_gives_clear_error(temporal_client):
+    # A query that reads no provenance-tracked relation has no provenance
+    # column; the error must explain that, not just "temporal query failed".
+    r = _temporal(temporal_client, source="query", query="SELECT 1 AS x",
+                  mapping="public.sensor_validity", timeop="full")
+    assert r.status_code == 400
+    assert "no provenance column" in r.get_json()["error"]
+
+
+def test_sql_error_surfaces_postgres_message(temporal_client):
+    # A genuine SQL error surfaces PostgreSQL's own message to the user.
+    r = _temporal(temporal_client, source="query",
+                  query="SELECT * FROM no_such_table_xyz",
+                  mapping="public.sensor_validity", timeop="full")
+    assert r.status_code == 500
+    assert "does not exist" in r.get_json()["error"]
+
+
 def test_parse_multirange_none():
     assert _parse_multirange(None) == []
 

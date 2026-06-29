@@ -1077,8 +1077,26 @@ def create_app(
             }), 501
         except psycopg.Error as e:
             diag = getattr(e, "diag", None)
+            primary = ((diag.message_primary if diag and diag.message_primary
+                        else str(e)) or "").strip()
+            # The most common -- and least obvious -- failure: the query reads no
+            # provenance-tracked relation, so provenance() has nothing to
+            # resolve and there is no validity to draw. Translate ProvSQL's
+            # internal error into actionable guidance (a client error, not 500).
+            if "without provenance" in primary:
+                return jsonify({
+                    "error": "This query has no provenance column, so there is "
+                             "no validity to place on the timeline. Use a query "
+                             "that reads from a provenance-tracked relation (one "
+                             "set up with add_provenance) or a temporal view.",
+                    "sqlstate": diag.sqlstate if diag else None,
+                    "detail": primary,
+                }), 400
+            # Otherwise surface PostgreSQL's own message (the front-end shows
+            # only `error`, so "temporal query failed" alone told the user
+            # nothing about what actually went wrong).
             return jsonify({
-                "error": "temporal query failed",
+                "error": "Temporal query failed: " + primary,
                 "sqlstate": diag.sqlstate if diag else None,
                 "detail": str(e).strip(),
             }), 500
