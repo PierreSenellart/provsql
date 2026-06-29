@@ -264,6 +264,15 @@ under for the next batch :
   and the absorptive circuit simplifications.  Only absorptive (and
   Boolean-rewrite-compatible) semirings then evaluate the circuit.
 
+Three modes lock this switch rather than leaving it free.  Where
+mode (above) pins it to :guilabel:`Where`.  **Contributions** and
+**Temporal** modes pin it to :guilabel:`Boolean` : both read the
+circuit purely as a Boolean function -- Shapley/Banzhaf weights,
+respectively the Boolean-to-temporal homomorphism -- so the
+provenance class cannot change their result, while :guilabel:`Boolean`
+additionally enables the safe-query rewriter.  The switch is freely
+user-controllable only in Circuit and Notebook modes.
+
 The selected scheme is session-sticky : it persists across
 batches so two queries run with the same scheme without
 re-toggling.  An ``update_provenance`` (``provsql.update_provenance``)
@@ -661,8 +670,10 @@ mattered* to it. It is the visual counterpart of the :sqlfunc:`shapley`
 :sqlfunc:`shapley_all_vars` / :sqlfunc:`banzhaf_all_vars` enumeration
 into an interactive, ranked heat-map.
 
-Queries are typed into the same `Query box`_ as in Circuit mode, under
-the same :guilabel:`Provenance scheme`. Run a query, then **click a result row's**
+Queries are typed into the same `Query box`_ as in Circuit mode, though
+the :guilabel:`Provenance scheme` is locked to :guilabel:`Boolean`
+(Shapley/Banzhaf read the circuit as a Boolean function, so the scheme
+cannot affect the contributions). Run a query, then **click a result row's**
 ``provsql`` **cell** to pin it as the *target tuple*: the contribution
 of every input tuple toward that target is computed and drawn in the
 sidebar. When the result has a single UUID-typed cell, it is pinned
@@ -802,6 +813,12 @@ Two orthogonal controls drive the view:
 * **Time operation** -- :guilabel:`As of` (an instant),
   :guilabel:`During` (a window), or :guilabel:`Full` (every row, with its
   full validity).
+
+For a :guilabel:`Query` source the :guilabel:`Provenance scheme` switch
+is locked to :guilabel:`Boolean`, as in Contributions mode :
+:sqlfunc:`sr_temporal` lifts a Boolean reading of the circuit through
+the Boolean-to-temporal homomorphism, so the scheme cannot change the
+timeline.
 
 Both sources use one mechanism: the SQL is wrapped with
 :sqlfunc:`sr_temporal` over a **validity mapping**, and the time

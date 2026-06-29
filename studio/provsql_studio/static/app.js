@@ -2198,11 +2198,26 @@
       radios.forEach((r) => { r.checked = (r.value === m); });
     };
 
-    if (mode === 'where') {
-      setMode('where');
+    // Modes that fix the provenance scheme. Where needs where-provenance
+    // (the cell-highlight wrap calls where_provenance()). Contributions
+    // (Shapley/Banzhaf) and Temporal (via the Boolean->temporal
+    // homomorphism) only ever read the circuit as a Boolean function, so
+    // they always run under Boolean provenance -- which also enables the
+    // safe-query rewriter. The lock flips the radio programmatically (no
+    // `change` event), so it never overwrites the persisted Circuit-mode
+    // pick: a circuit->locked->circuit round-trip restores the user's pick.
+    const lockedScheme = mode === 'where' ? 'where'
+                       : (mode === 'contributions' || mode === 'temporal') ? 'boolean'
+                       : null;
+    if (lockedScheme) {
+      setMode(lockedScheme);
       fs.classList.add('is-locked');
-      fs.title = 'Where UI mode requires where-provenance (the cell-highlight wrap depends on it). '
-               + 'Switch to Circuit mode to pick Boolean or Semiring.';
+      fs.title = mode === 'where'
+        ? 'Where UI mode requires where-provenance (the cell-highlight wrap depends on it). '
+          + 'Switch to Circuit mode to pick Boolean or Semiring.'
+        : 'This mode reads the circuit as a Boolean function, so it always runs under '
+          + 'Boolean provenance (which also enables the safe-query rewriter). '
+          + 'Switch to Circuit mode to pick another scheme.';
       radios.forEach((r) => { r.disabled = true; });
     } else {
       setMode(['where', 'boolean', 'absorptive'].includes(savedMode) ? savedMode : 'semiring');
@@ -2210,7 +2225,7 @@
     up.checked = savedUpdate;
 
     fs.addEventListener('change', () => {
-      if (mode === 'where') return;
+      if (lockedScheme) return;
       const picked = fs.querySelector('input[name="prov-scheme"]:checked');
       if (picked) sessionStorage.setItem('ps.opt.provScheme', picked.value);
     });

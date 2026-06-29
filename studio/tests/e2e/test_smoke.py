@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from playwright.sync_api import Page, expect
 
 
@@ -361,3 +362,25 @@ def test_where_mode_locks_prov_scheme_to_where(
     expect(where_radio).to_be_disabled()
     boolean_radio = page.locator('input[name="prov-scheme"][value="boolean"]')
     expect(boolean_radio).to_be_disabled()
+
+
+@pytest.mark.parametrize("mode", ["contributions", "temporal"])
+def test_boolean_only_modes_lock_prov_scheme_to_boolean(
+    page: Page, studio_url: str, mode: str
+) -> None:
+    """Contributions (Shapley/Banzhaf) and Temporal (Boolean->temporal
+    homomorphism) only ever read the circuit as a Boolean function, so
+    they lock the selector to Boolean: the answer is scheme-invariant and
+    Boolean also unlocks the safe-query rewriter. The lock must mark the
+    fieldset, pin Boolean, and disable every radio (incl. semiring) so it
+    cannot be overridden, mirroring the Where lock."""
+    page.goto(studio_url + "/" + mode)
+    expect(page.locator("body")).to_have_class(f"mode-{mode}", timeout=5000)
+
+    fs = page.locator("#prov-scheme-fieldset")
+    expect(fs).to_have_class("wp-prov-scheme is-locked")
+    boolean_radio = page.locator('input[name="prov-scheme"][value="boolean"]')
+    expect(boolean_radio).to_be_checked()
+    expect(boolean_radio).to_be_disabled()
+    semiring_radio = page.locator('input[name="prov-scheme"][value="semiring"]')
+    expect(semiring_radio).to_be_disabled()

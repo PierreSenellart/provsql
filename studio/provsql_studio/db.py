@@ -2068,6 +2068,14 @@ def temporal(
                     sql.Literal(guc_val),
                 )
             )
+        # Temporal reads the circuit only through sr_temporal, i.e. as a
+        # Boolean function lifted by the Boolean->temporal homomorphism, so
+        # the answer is invariant under the provenance class. Force 'boolean'
+        # (set after extra_gucs, so it is authoritative): for a query source
+        # this unlocks the safe-query rewriter when minting the wrap's gates;
+        # for a relation source it is inert (no token combination happens).
+        # Mirrors Studio's UI lock of the scheme selector in temporal mode.
+        cur.execute("SET LOCAL provsql.provenance = 'boolean'")
 
         # One mechanism for both sources, mirroring the SRF bodies: project the
         # underlying columns plus sr_temporal AS `valid_time`, and apply the
