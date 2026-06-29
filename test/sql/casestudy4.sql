@@ -50,9 +50,10 @@ DELETE FROM update_provenance;
 SELECT add_provenance('cs4_person');
 SELECT add_provenance('cs4_holds');
 
--- Create validity mapping views
-SELECT create_provenance_mapping_view('cs4_person_validity', 'cs4_person', 'validity');
-SELECT create_provenance_mapping_view('cs4_holds_validity',  'cs4_holds',  'validity');
+-- Create maintained validity mappings (kept current as rows are inserted, and
+-- correct after data modification rewrites a row's provsql)
+SELECT create_provenance_mapping('cs4_person_validity', 'cs4_person', 'validity', maintained => true);
+SELECT create_provenance_mapping('cs4_holds_validity',  'cs4_holds',  'validity', maintained => true);
 
 -- Extend the time_validity_view to include person and holds validity sources
 ALTER VIEW provsql.time_validity_view RENAME TO time_validity_view_cs4_save;
@@ -148,11 +149,12 @@ SELECT remove_provenance('result_cs4_undo');
 SELECT name, position FROM result_cs4_undo ORDER BY name;
 DROP TABLE result_cs4_undo;
 
--- Clean up (order matters: drop views that depend on tables first)
+-- Clean up (order matters: drop views that depend on tables first; the
+-- *_validity mappings are now maintained tables, not views)
 DROP VIEW cs4_person_position;
 DROP VIEW provsql.time_validity_view;
-DROP VIEW cs4_holds_validity;
-DROP VIEW cs4_person_validity;
+DROP TABLE cs4_holds_validity;
+DROP TABLE cs4_person_validity;
 ALTER VIEW provsql.time_validity_view_cs4_save RENAME TO time_validity_view;
 DROP TABLE cs4_holds;
 DROP TABLE cs4_person;

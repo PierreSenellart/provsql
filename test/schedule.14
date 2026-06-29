@@ -11,6 +11,7 @@ test: update_undo
 test: sr_temporal
 test: union_tstzintervals
 test: temporal_functions
+test: maintained_temporal_mapping
 
 # Interval-union semiring over numeric / int4 multiranges
 test: sr_interval_num sr_interval_int

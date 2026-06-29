@@ -5,10 +5,10 @@ add_provenance
 add_provenance
 
 (1 row)
-create_provenance_mapping_view
+create_provenance_mapping
 
 (1 row)
-create_provenance_mapping_view
+create_provenance_mapping
 
 (1 row)
 remove_provenance

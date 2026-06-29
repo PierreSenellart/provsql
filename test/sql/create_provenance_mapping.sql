@@ -9,35 +9,30 @@ SELECT create_provenance_mapping('Personnel_Id','personnel','id','t');
 SELECT value FROM "Personnel_Id";
 DROP TABLE "Personnel_Id";
 
--- View-based mapping
-SELECT create_provenance_mapping_view('personnel_id_view','personnel','id');
+-- Mapping used with sr_formula
+SELECT create_provenance_mapping('personnel_name_map','personnel','name');
 
-CREATE TABLE view_result AS SELECT value FROM personnel_id_view;
-SELECT remove_provenance('view_result');
-SELECT * FROM view_result ORDER BY value;
-DROP TABLE view_result;
-DROP VIEW personnel_id_view;
-
-SELECT create_provenance_mapping_view('Personnel_Id_View','personnel','id','t');
-
-CREATE TABLE view_result2 AS SELECT value FROM "Personnel_Id_View";
-SELECT remove_provenance('view_result2');
-SELECT * FROM view_result2 ORDER BY value;
-DROP TABLE view_result2;
-DROP VIEW "Personnel_Id_View";
-
--- View-based mapping used with sr_formula
-SELECT create_provenance_mapping_view('personnel_name_view','personnel','name');
-
-CREATE TABLE view_formula_result AS
-SELECT name, city, sr_formula(provenance(), 'personnel_name_view') AS formula
+CREATE TABLE formula_result AS
+SELECT name, city, sr_formula(provenance(), 'personnel_name_map') AS formula
 FROM personnel WHERE city='Paris';
 
-SELECT remove_provenance('view_formula_result');
-SELECT * FROM view_formula_result ORDER BY name;
+SELECT remove_provenance('formula_result');
+SELECT * FROM formula_result ORDER BY name;
 
-DROP TABLE view_formula_result;
-DROP VIEW personnel_name_view;
+DROP TABLE formula_result;
+DROP TABLE personnel_name_map;
+
+-- Maintained mapping: a row inserted after the mapping is created is appended
+-- automatically (keyed to its fresh input token), so it resolves like the
+-- snapshot rows.
+CREATE TABLE maint_src(id int, lbl text);
+INSERT INTO maint_src VALUES (1, 'one');
+SELECT add_provenance('maint_src');
+SELECT create_provenance_mapping('maint_map', 'maint_src', 'lbl', maintained => true);
+INSERT INTO maint_src(id, lbl) VALUES (2, 'two');
+SELECT value FROM maint_map ORDER BY value;
+DROP TABLE maint_map;
+DROP TABLE maint_src;
 
 -- NULL mapping values: a mapping row whose value is NULL contributes
 -- no entry (the unmapped leaf falls back to the semiring's one());

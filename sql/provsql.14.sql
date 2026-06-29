@@ -623,7 +623,12 @@ BEGIN
 END;
 $$;
 
-SELECT create_provenance_mapping_view('time_validity_view', 'update_provenance', 'valid_time');
+-- The base validity mapping is a plain view over the data-modification log:
+-- update_provenance is append-only and never has its provsql rewritten, so a
+-- view stays correct (unlike a tracked table's mapping, which must be a
+-- maintained mapping table -- see create_provenance_mapping(maintained)).
+CREATE VIEW provsql.time_validity_view AS
+  SELECT valid_time AS value, provsql AS provenance FROM provsql.update_provenance;
 
 /** @} */
 

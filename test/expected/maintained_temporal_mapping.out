@@ -1,0 +1,20 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+holder|valid
+Alice|{["2000-01-01 00:00:00+00","2010-01-01 00:00:00+00")}
+Bob|{["2020-01-01 00:00:00+00",)}
+(2 rows)
+remove_provenance
+
+(1 row)
+holder|valid
+Bob|{["2020-01-01 00:00:00+00","2026-01-01 00:00:00+00")}
+(1 row)

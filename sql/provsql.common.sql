@@ -663,10 +663,27 @@ CREATE OR REPLACE FUNCTION get_ancestors(relid OID)
  */
 CREATE OR REPLACE FUNCTION provenance_guard()
   RETURNS TRIGGER AS $$
+DECLARE
+  _m RECORD;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW.provsql IS NULL THEN
+      -- A genuine insert: mint a fresh atomic input variable. This is the
+      -- one place a new input token is born, so it is also where any
+      -- maintained mapping on this table is extended (keyed to that token).
+      -- Data-modification re-insertions (INSERT ... SELECT * FROM OLD_TABLE)
+      -- carry a supplied provsql and take the ELSE branch, so they are
+      -- correctly skipped: the validity stays keyed to the original input,
+      -- which is exactly the child a later monus/update gate wraps.
       NEW.provsql := public.uuid_generate_v4();
+      FOR _m IN SELECT mapping, attribute
+                  FROM provsql.provenance_mapping_registry WHERE source = TG_RELID
+      LOOP
+        EXECUTE format(
+          'INSERT INTO %s(value, provenance) SELECT ($1).%I, $2',
+          _m.mapping::regclass, _m.attribute)
+          USING NEW, NEW.provsql;
+      END LOOP;
     ELSE
       PERFORM provsql.set_table_info(TG_RELID, 'opaque');
     END IF;
@@ -904,6 +921,9 @@ BEGIN
      WHERE object_type IN ('table', 'foreign table', 'materialized view')
   LOOP
     PERFORM provsql.remove_table_info(r.objid);
+    -- Forget any maintained mapping whose source or mapping table is gone.
+    DELETE FROM provsql.provenance_mapping_registry
+     WHERE source = r.objid OR mapping = r.objid;
   END LOOP;
 END
 $$ LANGUAGE plpgsql;
@@ -913,6 +933,24 @@ DROP EVENT TRIGGER IF EXISTS provsql_cleanup_table_info;
 -- @c FUNCTION alias) so the extension installs on PG 10 too.
 CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
   EXECUTE PROCEDURE provsql.cleanup_table_info();
+
+/**
+ * @brief Registry of maintained provenance mappings
+ *
+ * Each row records that mapping table @c mapping is kept current for the
+ * @c attribute column of the provenance-tracked @c source table: every
+ * genuine insert into @c source appends @c (value, provenance) to it (see
+ * @c provenance_guard).  Keyed on the mapping table, indexed on the source
+ * so the guard can look up a table's mappings cheaply.  Entries are removed
+ * when either table is dropped (see @c cleanup_table_info).
+ */
+CREATE TABLE IF NOT EXISTS provsql.provenance_mapping_registry(
+  mapping   oid PRIMARY KEY,
+  source    oid NOT NULL,
+  attribute name NOT NULL
+);
+CREATE INDEX IF NOT EXISTS provenance_mapping_registry_source_idx
+  ON provsql.provenance_mapping_registry(source);
 
 /**
  * @brief Create a provenance mapping table from an attribute
@@ -926,12 +964,19 @@ CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
  * @param oldtbl source table with provenance tracking
  * @param att attribute whose values populate the mapping
  * @param preserve_case if true, quote the table name to preserve case
+ * @param maintained if true, register the mapping so later inserts into
+ *        @c oldtbl keep it current, and it stays correct after data
+ *        modification (deletes/updates rewrite a row's provsql, but the
+ *        validity stays keyed to the original input token).  @c att must
+ *        then be a plain column name.  When false (the default) the table is
+ *        a one-off snapshot.
  */
 CREATE OR REPLACE FUNCTION create_provenance_mapping(
   newtbl text,
   oldtbl regclass,
   att text,
-  preserve_case bool DEFAULT 'f'
+  preserve_case bool DEFAULT 'f',
+  maintained bool DEFAULT false
 ) RETURNS void AS
 $$
 DECLARE
@@ -960,48 +1005,20 @@ BEGIN
     EXECUTE format('CREATE TABLE %s AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
     EXECUTE format('CREATE INDEX ON %s(provenance)', newtbl);
   END IF;
+  IF maintained THEN
+    -- Register so genuine inserts into oldtbl keep the mapping current
+    -- (see provenance_guard); keyed to the input token, so it survives the
+    -- provsql rewrites that data modification performs.
+    INSERT INTO provsql.provenance_mapping_registry(mapping, source, attribute)
+      VALUES (
+        (CASE WHEN preserve_case THEN to_regclass(format('%I', newtbl))
+              ELSE to_regclass(newtbl) END)::oid,
+        oldtbl::oid, att)
+      ON CONFLICT (mapping)
+        DO UPDATE SET source = EXCLUDED.source, attribute = EXCLUDED.attribute;
+  END IF;
 END
 $$ LANGUAGE plpgsql;
-
-/**
- * @brief Create a view mapping provenance tokens to attribute values
- *
- * Like create_provenance_mapping but creates a view instead of a table,
- * so it always reflects the current state of the source table.
- *
- * @param newview name of the view to create
- * @param oldtbl source table with provenance tracking
- * @param att attribute whose values populate the mapping
- * @param preserve_case if true, quote the view name to preserve case
- */
-CREATE OR REPLACE FUNCTION create_provenance_mapping_view(
-  newview text,
-  oldtbl regclass,
-  att text,
-  preserve_case bool DEFAULT false
-)
-RETURNS void
-LANGUAGE plpgsql
-AS
-$$
-BEGIN
-  IF preserve_case THEN
-    EXECUTE format(
-      'CREATE OR REPLACE VIEW %I AS SELECT %s AS value, provsql AS provenance FROM %s',
-      newview,
-      att,
-      oldtbl
-    );
-  ELSE
-    EXECUTE format(
-      'CREATE OR REPLACE VIEW %s AS SELECT %s AS value, provsql AS provenance FROM %s',
-      newview,
-      att,
-      oldtbl
-    );
-  END IF;
-END;
-$$;
 
 /** @} */
 

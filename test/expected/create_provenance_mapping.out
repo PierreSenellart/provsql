@@ -23,37 +23,7 @@ value
 6
 7
 (7 rows)
-create_provenance_mapping_view
-
-(1 row)
-remove_provenance
-
-(1 row)
-value
-1
-2
-3
-4
-5
-6
-7
-(7 rows)
-create_provenance_mapping_view
-
-(1 row)
-remove_provenance
-
-(1 row)
-value
-1
-2
-3
-4
-5
-6
-7
-(7 rows)
-create_provenance_mapping_view
+create_provenance_mapping
 
 (1 row)
 remove_provenance
@@ -64,6 +34,16 @@ Dave|Paris|Dave
 Magdalen|Paris|Magdalen
 Nancy|Paris|Nancy
 (3 rows)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+value
+one
+two
+(2 rows)
 add_provenance
 
 (1 row)
