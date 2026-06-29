@@ -176,10 +176,10 @@ time and watch the government change. The SQL equivalent is
 
 .. note::
 
-   Under :guilabel:`As of` (and :guilabel:`During`) the result table on
-   the right shows the *full* query, while the timeline shows just the
-   rows valid at the chosen time -- so the tuple count there can exceed
-   the number of lanes.
+   Under :guilabel:`As of` and :guilabel:`During`, the query runs once and
+   the result table on the right lists exactly the rows drawn on the
+   timeline -- the table and the lanes always agree, each row carrying its
+   full validity in the ``valid_time`` column.
 
 A window of time (During)
 -------------------------
