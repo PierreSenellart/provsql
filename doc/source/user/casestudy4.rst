@@ -253,11 +253,13 @@ beside the query box, which sets the same GUC for the session.
 
 **Replace the Prime Minister.** ProvSQL intercepts every DML statement
 and records it in ``update_provenance``. Note who currently holds the
-position, then dismiss them and appoint a placeholder:
+position in a plain table -- a regular table, not ``TEMP``, so it survives
+the later steps (Studio runs each step in its own session) -- then dismiss
+them and appoint a placeholder:
 
 .. code-block:: postgresql
 
-    CREATE TEMP TABLE fired_pm AS
+    CREATE TABLE fired_pm AS
       SELECT person.id, name FROM person
       JOIN holds ON person.id = holds.id
       WHERE position = 'Prime Minister of France'
@@ -305,4 +307,5 @@ is back, their Prime Minister interval open-ended once more.
 
    :sqlfunc:`undo` reverses each recorded operation independently. The
    ``update_provenance`` table persists across sessions; clear it with
-   ``DELETE FROM update_provenance`` when it is no longer needed.
+   ``DELETE FROM update_provenance`` when it is no longer needed, and drop
+   the scratch table with ``DROP TABLE fired_pm``.
