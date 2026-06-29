@@ -2328,6 +2328,14 @@
             <button type="button" class="cv-temporal__op" data-timeop="during" title="Rows valid during a window.">During</button>
             <button type="button" class="cv-temporal__op" data-timeop="full" title="Every row, with its full validity (no time filter).">Full</button>
           </div>
+          <label class="cv-temporal__ctl">
+            <span>Order</span>
+            <select id="temporal-sort" title="Order the timeline lanes: as the query returns them, or chronologically by each row's validity (earliest start, or latest end). Sorts the rows already on the timeline -- no need to add ORDER BY to the query.">
+              <option value="">as queried</option>
+              <option value="start">by start</option>
+              <option value="end">by end</option>
+            </select>
+          </label>
           <div class="cv-temporal__inputs" id="temporal-inputs"></div>
         </div>
         <div class="cv-temporal__status" id="temporal-status" hidden></div>
@@ -2344,7 +2352,8 @@
 
     const state = { source: 'relation', timeop: 'asof', relation: null,
                     at: null, from: null, to: null, col: null, val: '',
-                    mapping: null, mappings: [], columns: [], data: null };
+                    mapping: null, mappings: [], columns: [], data: null,
+                    sort: '' };
     const relSel  = document.getElementById('temporal-relation');
     const relCtl  = document.getElementById('temporal-rel-ctl');
     const mapSel  = document.getElementById('temporal-mapping');
@@ -2456,6 +2465,13 @@
 
     relSel.addEventListener('change', () => { state.relation = relSel.value || null; fetchTemporal(); });
     mapSel.addEventListener('change', () => { state.mapping = mapSel.value || null; fetchTemporal(); });
+    // Lane order is a client-side re-sort of the rows already fetched -- no
+    // round-trip, and no need to thread ORDER BY sr_temporal(...) into a query.
+    const sortSel = document.getElementById('temporal-sort');
+    if (sortSel) sortSel.addEventListener('change', () => {
+      state.sort = sortSel.value;
+      if (state.data) renderTimeline(state.data);
+    });
     // Re-draw from the box when the user edits the query (query source only).
     if (reqEl) reqEl.addEventListener('change', () => { if (state.source === 'query') debouncedFetch(); });
 
@@ -2694,8 +2710,27 @@
       return [t - half, t + half];
     }
 
+    // Chronological sort key for a row: earliest finite start (−∞ first) for
+    // 'start', latest finite end (+∞ last) for 'end'; an empty validity union
+    // (valid at no time) sorts last either way.
+    function rowTimeKey(r, which) {
+      const ivs = r.valid_time || [];
+      if (!ivs.length) return Infinity;
+      return which === 'end'
+        ? Math.max(...ivs.map((iv) => (iv.upper == null ? Infinity : Date.parse(iv.upper))))
+        : Math.min(...ivs.map((iv) => (iv.lower == null ? -Infinity : Date.parse(iv.lower))));
+    }
+
     function renderTimeline(data) {
-      const rows = data.result || [];
+      let rows = data.result || [];
+      // Optional chronological re-sort of the lanes (stable: equal keys keep
+      // the query's order). Sort a copy so the source data is left untouched.
+      if (state.sort) {
+        rows = rows.slice().sort((a, b) => {
+          const ka = rowTimeKey(a, state.sort), kb = rowTimeKey(b, state.sort);
+          return ka === kb ? 0 : (ka < kb ? -1 : 1);
+        });
+      }
       const segs = [];
       rows.forEach((r) => (r.valid_time || []).forEach((iv) => {
         const lo = parseT(iv.lower), hi = parseT(iv.upper);

@@ -63,6 +63,24 @@ def test_query_source_shows_axis_date_caption(
     expect(page.locator(".cv-temporal__axisctx")).to_have_text("2024-03-15", timeout=8000)
 
 
+def test_order_by_start_resorts_lanes(
+    page: Page, temporal_studio_url: str
+) -> None:
+    """The Order control re-sorts the lanes client-side by validity. A query
+    deliberately returned in reverse-chronological order (id DESC over the
+    three Prime-Minister terms) shows id 3 first; switching Order to 'by start'
+    floats the earliest term (id 1) to the top."""
+    _goto_temporal(page, temporal_studio_url)
+    page.locator('.cv-temporal__src[data-source="query"]').click()
+    page.locator('.cv-temporal__op[data-timeop="full"]').click()
+    page.locator("#request").fill("SELECT * FROM cs4_holds ORDER BY id DESC")
+    page.locator("#temporal-mapping").select_option("provsql.time_validity_view")
+    lane0 = page.locator(".cv-temporal__lane").first.locator(".cv-temporal__lanelbl")
+    expect(lane0).to_contain_text("3", timeout=8000)   # query order: id 3 (2022) first
+    page.locator("#temporal-sort").select_option("start")
+    expect(lane0).to_contain_text("1")                 # by start: id 1 (2010) first
+
+
 def test_empty_union_renders_never_marker(
     page: Page, temporal_studio_url: str
 ) -> None:
