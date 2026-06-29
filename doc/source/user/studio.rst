@@ -836,6 +836,12 @@ the tick at the boundary is marked with the new date or year.
   everything outside ``[from, to)`` is dimmed and the window bounds are
   marked.
 
+By default the lanes follow the query's own order. The :guilabel:`Order`
+control re-sorts them chronologically -- :guilabel:`by start` (earliest
+validity first) or :guilabel:`by end` -- entirely client-side, so a
+succession of ministers or roles reads in time order without threading an
+``ORDER BY sr_temporal(...)`` into the query.
+
 Three validity shapes get an explicit marker rather than an ordinary
 bar: an **unbounded** end (``-∞`` / ``∞``) runs the bar to the axis edge;
 a single **instant** infers a narrow window from the instant's

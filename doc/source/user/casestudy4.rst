@@ -221,6 +221,10 @@ role to read its succession as a stack of lanes:
     SELECT name FROM person_position
     WHERE position = 'Minister of Justice';
 
+Set the :guilabel:`Order` control to :guilabel:`by start` to read the
+holders in chronological order -- the natural way to follow a role through
+time -- without adding any sort to the query.
+
 This is the timeline form of :sqlfunc:`history`, which returns all
 versions of rows matching a set of column filters:
 
