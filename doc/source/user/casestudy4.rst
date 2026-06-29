@@ -275,24 +275,19 @@ them and appoint a placeholder:
     INSERT INTO holds (id, position, country)
       VALUES (100000, 'Prime Minister of France', 'FR');
 
-Put the Prime Ministers back on the timeline -- the **Query** source with
-:guilabel:`As of` set to the present:
+Put the Prime Ministers back on the timeline (the **Query** source):
 
 .. code-block:: postgresql
 
     SELECT name FROM person_position WHERE position = 'Prime Minister of France';
 
-Jeanne Dupont is now the current holder. The dismissed minister's own
-Prime Minister bar has gained a finite upper bound at the deletion
-instant, which you can read off directly:
-
-.. code-block:: postgresql
-
-    SELECT position,
-           sr_temporal(provenance(), 'time_validity_view') AS valid
-    FROM person JOIN holds ON person.id = holds.id
-    JOIN fired_pm ON person.id = fired_pm.id
-    GROUP BY position;
+With :guilabel:`As of` set to the present, Jeanne Dupont is the sole holder.
+To watch the dismissal land on the timeline, switch to :guilabel:`During`
+over a recent window -- say 2010 to the present -- so only the latest
+holders are in view: the just-dismissed minister's lane, which ran
+open-ended off the right edge before, now closes at the deletion instant.
+This is the maintained validity mapping at work: the dismissed row keeps its
+original start, bounded at the deletion (see :doc:`provenance-tables`).
 
 **Undo.** The ``update_provenance`` table records every DML query with
 its provenance token; :sqlfunc:`undo` reverses any recorded operation:
@@ -303,10 +298,3 @@ its provenance token; :sqlfunc:`undo` reverses any recorded operation:
 
 Running the same Prime-Minister query again confirms the original holder
 is back, their Prime Minister interval open-ended once more.
-
-.. note::
-
-   :sqlfunc:`undo` reverses each recorded operation independently. The
-   ``update_provenance`` table persists across sessions; clear it with
-   ``DELETE FROM update_provenance`` when it is no longer needed, and drop
-   the scratch table with ``DROP TABLE fired_pm``.
