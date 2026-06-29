@@ -272,12 +272,16 @@ position, then dismiss them and appoint a placeholder:
     INSERT INTO holds (id, position, country)
       VALUES (100000, 'Prime Minister of France', 'FR');
 
-Put the Prime Ministers back on the timeline -- the **Query** source over
-``SELECT name FROM person_position WHERE position = 'Prime Minister of
-France'`` with :guilabel:`As of` set to the present -- and Jeanne Dupont
-is now the current holder. The dismissed minister's own Prime Minister bar
-has gained a finite upper bound at the deletion instant, which you can
-read off directly:
+Put the Prime Ministers back on the timeline -- the **Query** source with
+:guilabel:`As of` set to the present:
+
+.. code-block:: postgresql
+
+    SELECT name FROM person_position WHERE position = 'Prime Minister of France';
+
+Jeanne Dupont is now the current holder. The dismissed minister's own
+Prime Minister bar has gained a finite upper bound at the deletion
+instant, which you can read off directly:
 
 .. code-block:: postgresql
 
