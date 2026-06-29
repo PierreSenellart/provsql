@@ -8,6 +8,7 @@ Temporal-mode shots used by the docs:
   doc/source/_static/casestudy4/cs4-asof-1981.png
   doc/source/_static/casestudy4/cs4-during-macron.png   (all three on cs4)
   doc/source/_static/casestudy4/cs4-full-chirac.png
+  website/assets/images/temporal.png   (provsql.org hero, the During scene)
 
 Each shot drives the live timeline through the same controls the e2e
 suite exercises (tests/e2e/test_temporal_ui.py). Temporal mode locks the
@@ -35,6 +36,7 @@ from playwright.sync_api import expect, sync_playwright
 REPO = Path(__file__).resolve().parents[2]
 STUDIO_OUT = REPO / "doc" / "source" / "_static" / "studio"
 CS4_OUT = REPO / "doc" / "source" / "_static" / "casestudy4"
+WEBSITE_OUT = REPO / "website" / "assets" / "images"
 PORT = 8079
 URL = f"http://127.0.0.1:{PORT}"
 
@@ -70,16 +72,17 @@ def studio_server(dsn):
             server.wait()
 
 
-def new_temporal_page(browser, height):
+def new_temporal_page(browser, height, width=1400, scale=2):
     """A UTC-timezoned page at the temporal-shot viewport, in Temporal mode.
 
     The shot is the viewport (not full-page): `height` is chosen per shot so
     the top-anchored controls + timeline + first result rows are framed as the
-    docs show, at deviceScaleFactor 2 (so 1400 x height -> 2800 x 2*height px).
+    target shows. The doc shots use 1400 x height at deviceScaleFactor 2 (so
+    2800 px wide); the website hero uses its own 1920 x height at scale 1.
     """
     ctx = browser.new_context(
-        viewport={"width": 1400, "height": height},
-        device_scale_factor=2,
+        viewport={"width": width, "height": height},
+        device_scale_factor=scale,
         timezone_id="UTC",
     )
     page = ctx.new_page()
@@ -206,6 +209,18 @@ with sync_playwright() as p:
         set_timeop(page, "full")
         set_sort(page, "start")
         capture(page, CS4_OUT / "cs4-full-chirac.png", 4)
+        page.context.close()
+
+        # website hero (provsql.org landing page): the During-Macron scene at
+        # the site's own 1920 x 1042 scale-1 framing.
+        page = new_temporal_page(browser, 1042, width=1920, scale=1)
+        use_query_source(page, "SELECT name, position FROM person_position\n"
+                                " WHERE position = 'Prime Minister of France'")
+        pick_mapping(page)
+        set_timeop(page, "during")
+        set_instant(page, "from", "2017-05-16T00:00")
+        set_instant(page, "to", "2022-05-13T00:00")
+        capture(page, WEBSITE_OUT / "temporal.png", 2)
         page.context.close()
 
     browser.close()

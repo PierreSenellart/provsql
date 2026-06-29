@@ -10,6 +10,9 @@ doc/source/_static/studio/:
   contributions-mode.png   the ranked per-study Shapley bars for the
                            pinned replicated finding
 
+The same shot is also written to website/assets/images/studio/ as the
+provsql.org Contributions hero (identical framing).
+
 Run from studio/ with the dev venv (playwright + chromium installed):
 
     .venv/bin/python scripts/contrib_doc_shot.py
@@ -27,6 +30,9 @@ from playwright.sync_api import expect, sync_playwright
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "doc" / "source" / "_static" / "studio"
+# The provsql.org landing page reuses this exact shot (same 1920x976 framing)
+# as its Contributions hero, so write it there too.
+WEB_OUT = REPO / "website" / "assets" / "images" / "studio"
 PORT = 8078
 URL = f"http://127.0.0.1:{PORT}"
 
@@ -81,6 +87,8 @@ try:
 
         page.screenshot(path=str(OUT / "contributions-mode.png"))
         print("contributions-mode.png")
+        page.screenshot(path=str(WEB_OUT / "contributions-mode.png"))
+        print("website contributions-mode.png")
         browser.close()
 finally:
     server.terminate()
