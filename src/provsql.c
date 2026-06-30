@@ -12200,11 +12200,11 @@ static InvFreeMarkerCtx *build_inversion_free_union_ctx(const constants_t *const
     return NULL;
 
   /* The outer FROM must be exactly one inner UNION (ALL) subquery (plus, on
-   * PG 16+, the synthetic group RTE): any other real RTE means the plus root
+   * PG 18+, the synthetic group RTE): any other real RTE means the plus root
    * also factors in a join, which this per-arm marker model does not cover. */
   for (i = 0; i < N; i++) {
     RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, i);
-#if PG_VERSION_NUM >= 160000
+#if PG_VERSION_NUM >= 180000
     if (r->rtekind == RTE_GROUP)
       continue;
 #endif
