@@ -60,7 +60,7 @@ jobs:
       - run: apt -y install python3-breathe python3-sphinx-rtd-theme python3-sphinx-copybutton python3-sphinx-sitemap python3-sphinxext-opengraph python3-pybtex python3-sphinxcontrib.bibtex graphviz wget postgresql-server-dev-all
       - name: Cache Doxygen
         id: cache-doxygen
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /usr/local/bin/doxygen
           key: doxygen-1.16.1-${{ runner.os }}
