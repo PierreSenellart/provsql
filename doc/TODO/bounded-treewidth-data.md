@@ -51,42 +51,6 @@ treewidth, which changes *what circuit we construct*.
 
 ## Open work
 
-### Verified mulinput-OR certificate (correctness hardening)
-
-The BID route marks a block's `plus(mulins)` *deterministic* and the
-certified-island evaluator trusts the mark (sums the alternatives, registers the
-block key once, reads the none branch as `monus(one, plus(mulins))` = `1 - Σp`).
-That trust is unproven. (The read-once `independent` evaluator, by contrast,
-*verifies* a block directly -- its OR case groups `MULIN` children by block key
-and sums within a block -- so the obligation is specifically about
-`evaluateCertifiedIsland`, which plain-sums marked ORs *without* that check, and
-about the constructor's internal *state* ORs whose determinism is global, not
-locally checkable.) The to-do is a Lean statement backing it (a spec the C++
-must meet, not a verification of the C++ itself), in the **probability / WMC**
-semantics only -- the absorptive-semiring BID path is a separate question.
-
-Modeling choice (the crux): model a block as one *categorical* random variable
-`B : Fin (k+1)` with `μ(B=i)=p_i` (i<k), `μ(B=k)=1-Σp`, and the mulinput as the
-event `m_i := {B = i}` -- not as independent Booleans with an at-most-one
-constraint. Then the three block lemmas are near-immediate:
-
-- `mulin_disjoint : i ≠ j → Disjoint (m_i) (m_j)`   (licenses the deterministic-OR mark)
-- `mulin_or_prob  : Pr[⋃ᵢ m_i] = Σᵢ pᵢ`             (the sum is exact)
-- `mulin_none     : Pr[(⋃ᵢ m_i)ᶜ] = 1 - Σᵢ pᵢ`      (the `monus(one,·)` none branch)
-
-The content is the soundness theorem they feed: lifting d-DNNF WMC correctness
-from *free Boolean variables* to *categorical block variables*. The structural
-evaluator (`detOR` → sum, `decAND` → product, `NOT` → `1-`, leaf → weight) equals
-`Pr[⟦C⟧]` when every marked-OR has pairwise-disjoint children as events, every
-marked-AND has children with disjoint **support counted by block** (this is what
-"register the key once" implements -- all `m_{b,*}` share block `b`), and every
-NOT is over a sub-circuit *complete over its support* (the block's outcomes
-partition into the OR and the none-complement, which is why `1-Σ` is legitimate
-where general d-DNNF forbids negation). Minimal first target: the three lemmas
-plus single-block soundness; the multi-block theorem with the support /
-island discipline is most of a general d-DNNF-correctness development and should
-be scoped deliberately.
-
 ### Route 3 -- `costar` threshold half (structural factoring)
 
 The remaining non-recursive blow-up: the in-star self-join `SELECT DISTINCT 1
@@ -196,9 +160,7 @@ acyclic relational case.
 
 ## Priorities
 
-1. **Verified mulinput-OR certificate** -- bounded correctness-hardening; the
-   only open item with a clear, self-contained deliverable.
-2. **Route 3 / non-recursive triggers** -- structural detection; scope only if a
+1. **Route 3 / non-recursive triggers** -- structural detection; scope only if a
    real workload exhibits the in-star or chain shapes.
-3. **General-semiring width-aware evaluator** and **Route A** -- the research
+2. **General-semiring width-aware evaluator** and **Route A** -- the research
    bets, deferred until the lighter levers prove insufficient.

@@ -49,13 +49,6 @@ Two findings from running the examples reshuffle the plan:
 
 ### Tier 2 — reusable certificates / correctness hardening
 
-3. **Lean soundness proof of the bounded-treewidth deterministic-OR
-   construction** (btw §1). `evaluateCertifiedIsland` plain-sums the btw
-   constructor's marked state ORs, whose determinism is a global, not
-   locally-checkable, property; a Lean proof of the constructor
-   (categorical block model; block base case + state-OR exclusivity +
-   `1−Σp` none-branch) backs that trust. Offline assurance — no runtime
-   certificate, no code change.
 4. **UCQ(OBDD): UNION nested in a subquery/view** (safe §1). A *top-level*
    `UNION` is already certified branch-by-branch (recursive
    `process_query` re-entry); the gap is only a `UNION` inlined into one
@@ -564,42 +557,6 @@ Deferred.
 Observable signals: the route's NOTICEs (`SET provsql.verbose_level=20`
 for certification, `>=10` for fallback) and the root gate type (a
 certified reachability root is wrapped `assumed` with `info1=1`).
-
-### 1. Verified mulinput-OR certificate (correctness hardening)
-
-A verification gap (a Lean obligation), not a runtime bug: a `repair_key`
-block consumed by the reachability route, whose `plus(mulinput)` is marked
-deterministic and trusted unproven.
-
-**Example**
-```sql
-SET provsql.provenance = 'boolean';
-SELECT repair_key('btwr_bid','src');   -- node 1: edge to 2 XOR to 3
-WITH RECURSIVE reach(node) AS (
-    SELECT 1 UNION SELECT e.dst FROM btwr_bid e JOIN reach r ON e.src=r.node)
-SELECT node, probability_evaluate(provenance()) FROM reach;
-```
-
-**Current behavior** (`verbose_level=20`)
-```
-NOTICE:  ProvSQL: catalog characterises btwr_bid as BID
-NOTICE:  ProvSQL: recursive CTE "reach" compiled along a tree decomposition of btwr_bid
- node |   prob       node |  root   | certified
-------+--------     ------+---------+-----------
-    1 | 1.000000        1 | assumed |         1
-    2 | 0.500000        2 | assumed |         1
-    4 | 1.000000        4 | assumed |         1
-```
-The BID block is recognised, compiled along the decomposition, and every
-root carries the d-DNNF certificate; the answer is exact. The
-deterministic-OR / `1-Σp` none-branch the evaluator relies on is *sound but
-unverified*.
-
-**After** — a Lean spec modelling each block as one categorical variable
-`B : Fin (k+1)` (lemmas `mulin_disjoint`, `mulin_or_prob`, `mulin_none`)
-certifies the deterministic-OR mark and the `1-Σp` none branch, lifting
-d-DNNF WMC correctness from free Boolean to categorical block variables;
-no behavioural change.
 
 ### 2. Route 3 — in-star self-join threshold-2 blow-up
 

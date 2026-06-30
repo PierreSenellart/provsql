@@ -24,12 +24,13 @@ Each plan document follows a consistent layout:
 - [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
   feasibility study for exploiting bounded treewidth of the input data
   (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017).
-  With Route C (decomposition-aligned reachability compilation) already
-  shipped, the open work is: the verified mulinput-OR (Lean) certificate,
-  Route 3 structural factoring, the Route C leftovers (shared-support
-  join-defined edges, non-recursive triggers, any-reach collector chains,
-  k-terminal side filters), a treewidth-aware general m-semiring
-  evaluator, and the full Route A MSO / tree-automaton pipeline.
+  With Route C (decomposition-aligned reachability compilation) shipped
+  and the mulinput-OR deterministic mark now backed by a Lean soundness
+  proof, the open work is: Route 3 structural factoring, the Route C
+  leftovers (shared-support join-defined edges, non-recursive triggers,
+  any-reach collector chains, k-terminal side filters), a treewidth-aware
+  general m-semiring evaluator, and the full Route A MSO / tree-automaton
+  pipeline.
 - [`conditioning.md`](conditioning.md) : the conditioning primitive,
   unifying discrete tuple-correlation (MarkoViews, Jha & Suciu PVLDB
   2012) and continuous random variables as one operation at two carriers.
