@@ -616,12 +616,13 @@ SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS ua_if
 --      per-tuple lineage is the OR of the branch lineages.  A deduplicating
 --      UNION lowers to a GROUP BY over UNION ALL whose per-group root is the
 --      provenance_plus OR; here that lowered shape is exercised directly
---      (GROUP BY x over an inner UNION ALL).  With disjoint branch relations the
---      OR decomposes (orDecompose), the certificate lands on the plus root, and
---      the structured d-DNNF stays polynomial.  x=1 comes from both branches
---      (each 0.5^4 = 0.0625) -> 1-(1-0.0625)^2 = 0.12109375; x=2 from the second
---      branch only -> 0.0625.  Expect one acceptance NOTICE per arm;
---      inversion-free == possible-worlds.
+--      (GROUP BY x over an inner UNION ALL).  The detector runs jointly on a
+--      synthetic merge of both arms (8 atoms, head columns equated), so a single
+--      certificate lands on the plus root; disjoint branches still collapse via
+--      orDecompose and the structured d-DNNF stays polynomial.  x=1 comes from
+--      both branches (each 0.5^4 = 0.0625) -> 1-(1-0.0625)^2 = 0.12109375; x=2
+--      from the second branch only -> 0.0625.  Expect one joint acceptance
+--      NOTICE; inversion-free == possible-worlds.
 CREATE TABLE ifu_s(x int, c2 int);
 INSERT INTO ifu_s VALUES (1,10),(1,20),(2,30),(2,40);
 SELECT add_provenance('ifu_s');
@@ -650,6 +651,34 @@ SELECT remove_provenance('ifr_union');
 SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 8)  AS u_if,
           round(probability_evaluate(p, 'possible-worlds')::numeric, 8) AS u_pw
   FROM ifr_union ORDER BY x;
+
+-- (14) UNION of BRANCH-OVERLAPPING inversion-free CQs: q(x) :- R(x),S(x) UNION
+--      R(x),T(x), where R is SHARED across the two arms.  Inversion-freeness is
+--      then a *joint* property -- a per-arm analysis cannot see the shared R --
+--      so the detector merges both arms into one synthetic query (R becomes a
+--      single relation symbol spanning the OR) and certifies the whole UCQ.  The
+--      structured d-DNNF decides the shared root R first, then the disjoint S/T,
+--      staying polynomial where orDecompose alone could not factor the OR.
+--      Lineage R(x) ^ (S(x) v T(x)): x=2 (in both S and T) -> 0.5*(1-0.5^2)=0.375;
+--      x=1 (S only) and x=3 (T only) -> 0.25.  inversion-free == possible-worlds.
+CREATE TABLE ifo_r(x int); INSERT INTO ifo_r VALUES (1),(2),(3); SELECT add_provenance('ifo_r');
+CREATE TABLE ifo_s(x int); INSERT INTO ifo_s VALUES (1),(2);     SELECT add_provenance('ifo_s');
+CREATE TABLE ifo_t(x int); INSERT INTO ifo_t VALUES (2),(3);     SELECT add_provenance('ifo_t');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifo_r;
+  PERFORM set_prob(provsql, 0.5) FROM ifo_s;
+  PERFORM set_prob(provsql, 0.5) FROM ifo_t;
+END $$;
+CREATE TEMP TABLE ifr_overlap AS
+  SELECT x, provenance() AS p FROM (
+    SELECT r.x AS x FROM ifo_r r, ifo_s s WHERE r.x = s.x
+    UNION ALL
+    SELECT r.x AS x FROM ifo_r r, ifo_t t WHERE r.x = t.x
+  ) q GROUP BY x;
+SELECT remove_provenance('ifr_overlap');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 8)  AS o_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 8) AS o_pw
+  FROM ifr_overlap ORDER BY x;
 
 RESET provsql.provenance;
 RESET provsql.verbose_level;

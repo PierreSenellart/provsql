@@ -41,20 +41,28 @@ have all landed.
       carried verbatim by the union.  A top-level union's arms inherit
       `top_level` (`get_provenance_attributes`) and each single-CQ arm certifies
       its own root with the existing detector.  No `SafeCert` change, no OR.
-    - **M2 -- `UNION` (set), branch-disjoint (done).**  A non-`ALL` `UNION` is
-      lowered to an outer `GROUP BY` over `UNION ALL`, whose per-group root is
-      `provenance_plus(array_agg(...))` -- the OR.  `build_inversion_free_union_ctx`
-      puts the recipe on that plus root and threads each arm's `K` markers into
-      the inner arms (recursive `build_inversion_free_ctx` per arm; totality
-      check at `collect_inversion_free_keys`).  Restricted to arms with
-      pairwise-disjoint base relations and a deduplicating-group root, so it is
-      polynomial via `orDecompose` and never preempts the joint-width / Möbius
-      routes that own the overlapping case.
-    - **M3 -- joint order (open).**  Extend the detector to a cross-branch `G_prec`
-      (one class space, global relation-symbol ranks, branches linked through
-      the head columns) so *overlapping* unions are polynomial too.  Needs a
-      multi-branch `SafeCert` (today strictly single-CQ).  This is the full
-      Jha & Suciu UCQ(OBDD) characterisation.
+    - **M2/M3 -- `UNION` (set), full joint UCQ(OBDD) (done).**  A non-`ALL`
+      `UNION` is lowered to an outer `GROUP BY` over `UNION ALL`, whose per-group
+      root is `provenance_plus(array_agg(...))` -- the OR.
+      `build_inversion_free_union_ctx` (in `src/provsql.c`) builds a *synthetic
+      merged SPJ query* of every arm's base atoms -- arm variables offset into one
+      range table, the arms' head columns equated, each arm's `WHERE` pulled up --
+      and runs the existing detector on it via `inversion_free_analyze`.  A
+      relation shared between arms thereby becomes one relation symbol, so
+      positional consistency and the precedence graph span the whole UCQ: that is
+      exactly Thm 4.2's *joint* inversion-free condition, so **overlapping** arms
+      (where per-arm analysis cannot see the shared relation, e.g.
+      `R(x),S(x) UNION R(x),T(x)`) are certified and stay polynomial -- the
+      structured d-DNNF decides the shared root first, then the disjoint
+      remainder.  The per-atom markers map back to each arm (base relations keep
+      positions `1..n_i`; PG 18's group RTE is appended last and stripped); the
+      recipe lands on the plus root.  Gated to a pure deduplicating-group root
+      with flat base-relation arms (`hasAggs`/`HAVING` excluded), so HAVING /
+      count-PMF / joint-width shapes are untouched, and non-inversion-free unions
+      decline to the joint-width / Möbius chain (no preemption).  No `SafeCert`
+      change was needed: the evaluator routes on the recipe's *presence* and the
+      cross-branch order comes from the per-input `K` keys (column-value text +
+      the joint factor).
   - **Functional dependencies do not fit this builder.**  The canonical
     FD-tractable queries (the H-query `R(x),S(x,y),T(y)` under a PK on `S`,
     the two-PK triangle) have no single root class, which the detector and
