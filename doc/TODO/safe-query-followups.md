@@ -36,18 +36,21 @@ have all landed.
     keys (column-value text), and `StructuredDNNFBuilder` already expands an
     OR/`gate_plus` root to DNF and Shannon-decomposes it (`orDecompose`
     splits variable-disjoint OR components).  Milestones:
-    - **M1 -- `UNION ALL`.**  Each arm's per-row root is a single-branch
+    - **M1 -- `UNION ALL` (done).**  Each arm's per-row root is a single-branch
       conjunction (`make_provenance_expression`, `SR_PLUS` -> `linitial`),
-      carried verbatim by the union.  So let a top-level union's arms inherit
-      `top_level` and each single-CQ arm certifies its own root with the
-      existing detector.  No `SafeCert` change, no OR.
-    - **M2 -- `UNION` (set), plumbing.**  A non-`ALL` `UNION` is lowered to an
-      outer `GROUP BY` over `UNION ALL`, whose per-group root is
-      `provenance_plus(array_agg(...))` -- the OR.  Put the recipe on that
-      plus root and per-branch `K` markers into each inner arm (totality
-      check at `collect_inversion_free_keys`).  Correct for all unions;
-      **polynomial for branch-disjoint** ones via `orDecompose`.
-    - **M3 -- joint order.**  Extend the detector to a cross-branch `G_prec`
+      carried verbatim by the union.  A top-level union's arms inherit
+      `top_level` (`get_provenance_attributes`) and each single-CQ arm certifies
+      its own root with the existing detector.  No `SafeCert` change, no OR.
+    - **M2 -- `UNION` (set), branch-disjoint (done).**  A non-`ALL` `UNION` is
+      lowered to an outer `GROUP BY` over `UNION ALL`, whose per-group root is
+      `provenance_plus(array_agg(...))` -- the OR.  `build_inversion_free_union_ctx`
+      puts the recipe on that plus root and threads each arm's `K` markers into
+      the inner arms (recursive `build_inversion_free_ctx` per arm; totality
+      check at `collect_inversion_free_keys`).  Restricted to arms with
+      pairwise-disjoint base relations and a deduplicating-group root, so it is
+      polynomial via `orDecompose` and never preempts the joint-width / Möbius
+      routes that own the overlapping case.
+    - **M3 -- joint order (open).**  Extend the detector to a cross-branch `G_prec`
       (one class space, global relation-symbol ranks, branches linked through
       the head columns) so *overlapping* unions are polynomial too.  Needs a
       multi-branch `SafeCert` (today strictly single-CQ).  This is the full

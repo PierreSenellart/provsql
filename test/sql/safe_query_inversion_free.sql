@@ -611,5 +611,45 @@ SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS ua_if
           round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ua_pw
   FROM ifr_ua ORDER BY x, ua_if;
 
+-- (13) UNION (set semantics) of two BRANCH-DISJOINT inversion-free witnesses.
+--      Jha & Suciu's UCQ(OBDD) tractability is a *set*-semantics result: the
+--      per-tuple lineage is the OR of the branch lineages.  A deduplicating
+--      UNION lowers to a GROUP BY over UNION ALL whose per-group root is the
+--      provenance_plus OR; here that lowered shape is exercised directly
+--      (GROUP BY x over an inner UNION ALL).  With disjoint branch relations the
+--      OR decomposes (orDecompose), the certificate lands on the plus root, and
+--      the structured d-DNNF stays polynomial.  x=1 comes from both branches
+--      (each 0.5^4 = 0.0625) -> 1-(1-0.0625)^2 = 0.12109375; x=2 from the second
+--      branch only -> 0.0625.  Expect one acceptance NOTICE per arm;
+--      inversion-free == possible-worlds.
+CREATE TABLE ifu_s(x int, c2 int);
+INSERT INTO ifu_s VALUES (1,10),(1,20),(2,30),(2,40);
+SELECT add_provenance('ifu_s');
+CREATE TABLE ifu_a(x int, c2 int);
+INSERT INTO ifu_a VALUES (1,10),(2,30);
+SELECT add_provenance('ifu_a');
+CREATE TABLE ifu_b(x int, c2 int);
+INSERT INTO ifu_b VALUES (1,20),(2,40);
+SELECT add_provenance('ifu_b');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ifu_s;
+  PERFORM set_prob(provsql, 0.5) FROM ifu_a;
+  PERFORM set_prob(provsql, 0.5) FROM ifu_b;
+END $$;
+CREATE TEMP TABLE ifr_union AS
+  SELECT x, provenance() AS p FROM (
+    SELECT s1.x AS x FROM ifr_s s1, ifr_a a, ifr_s s2, ifr_b b
+     WHERE s1.x = a.x AND s1.c2 = a.c2 AND s1.x = s2.x
+       AND s2.x = b.x AND s2.c2 = b.c2
+    UNION ALL
+    SELECT s1.x AS x FROM ifu_s s1, ifu_a a, ifu_s s2, ifu_b b
+     WHERE s1.x = a.x AND s1.c2 = a.c2 AND s1.x = s2.x
+       AND s2.x = b.x AND s2.c2 = b.c2
+  ) q GROUP BY x;
+SELECT remove_provenance('ifr_union');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 8)  AS u_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 8) AS u_pw
+  FROM ifr_union ORDER BY x;
+
 RESET provsql.provenance;
 RESET provsql.verbose_level;

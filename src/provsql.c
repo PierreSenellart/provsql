@@ -12100,6 +12100,140 @@ static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
 }
 
 /**
+ * @brief Collect the base relation OIDs reachable from @p q (recursing into
+ *        subquery RTEs) onto @p list, for the branch-disjointness test below.
+ */
+static List *inv_free_collect_base_relids(Query *q, List *list) {
+  ListCell *lc;
+  if (q == NULL)
+    return list;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    if (r->rtekind == RTE_RELATION && OidIsValid(r->relid))
+      list = lappend_oid(list, r->relid);
+    else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL)
+      list = inv_free_collect_base_relids(r->subquery, list);
+  }
+  return list;
+}
+
+/**
+ * @brief Build the inversion-free marker context for a UNION of branch-disjoint
+ *        inversion-free branches (the set-semantics UCQ case).
+ *
+ * A deduplicating @c UNION is lowered by @c rewrite_non_all_into_external_group_by
+ * to an outer @c GROUP @c BY over an inner @c UNION @c ALL subquery, whose
+ * per-group provenance root is @c provenance_plus(array_agg(...)) -- the OR of
+ * the contributing branch tokens (a user @c GROUP @c BY over a @c UNION @c ALL
+ * derived table has the same shape).  When every arm is itself inversion-free
+ * and the arms use pairwise-disjoint base relations, this assembles a marker
+ * context mirroring @p q: @c sub[inner_slot] is the inner union's context, whose
+ * @c sub[arm_i] is each arm's own context (a recursive @c build_inversion_free_ctx,
+ * so arm-internal grouping / SPJ views still resolve).  Every branch input is
+ * thus marked, so @c collect_inversion_free_keys sees a total order and
+ * @c StructuredDNNFBuilder Shannon-decomposes the plus root; branch-disjoint
+ * arms keep it polynomial via @c orDecompose (variable-disjoint OR components).
+ *
+ * The disjointness restriction keeps this sound *and* non-preempting: a @c UNION
+ * sharing relations across arms -- where inversion-freeness is a joint
+ * cross-branch property not yet modelled -- is left to the joint-width / Möbius
+ * routes by returning NULL.  Sets @p *cert_out to a serialised recipe (the
+ * evaluator routes on its *presence*; the order comes entirely from the
+ * per-input keys).  Returns NULL when @p q is not a group-over-UNION-ALL of
+ * branch-disjoint inversion-free arms, in which case the path declines and
+ * evaluation falls back.
+ */
+static InvFreeMarkerCtx *build_inversion_free_union_ctx(const constants_t *constants,
+                                                        Query *q, char **cert_out) {
+  int N = list_length(q->rtable), inner_slot = -1, i, narms;
+  Query *inner = NULL;
+  InvFreeMarkerCtx *ctx, *ctx_inner;
+  char *union_cert = NULL;
+  List **arm_relids;
+  ListCell *lc;
+
+  /* Only a deduplicating group has a provenance_plus OR root: the lowered
+   * UNION-distinct, or a user GROUP BY over a UNION ALL derived table.  A plain
+   * projection / join over a UNION ALL passes a single branch token through
+   * (no OR), so certifying it would wrongly mark its inputs. */
+  if (q->groupClause == NIL)
+    return NULL;
+
+  /* The outer FROM must be exactly one inner UNION (ALL) subquery (plus, on
+   * PG 16+, the synthetic group RTE): any other real RTE means the plus root
+   * also factors in a join, which this per-arm marker model does not cover. */
+  for (i = 0; i < N; i++) {
+    RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, i);
+#if PG_VERSION_NUM >= 160000
+    if (r->rtekind == RTE_GROUP)
+      continue;
+#endif
+    if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL
+        && r->subquery->setOperations != NULL
+        && IsA(r->subquery->setOperations, SetOperationStmt)
+        && ((SetOperationStmt *) r->subquery->setOperations)->op == SETOP_UNION) {
+      if (inner_slot >= 0)
+        return NULL;                  /* more than one union subquery: out of scope */
+      inner_slot = i;
+      inner = r->subquery;
+    } else {
+      return NULL;                    /* a non-union real RTE: the root is not a pure union OR */
+    }
+  }
+  if (inner == NULL)
+    return NULL;
+
+  narms = list_length(inner->rtable);
+  if (narms < 2)
+    return NULL;
+  ctx_inner = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
+  ctx_inner->natoms  = narms;
+  ctx_inner->markers = (InvFreeMarker *) palloc0((size_t) narms * sizeof(InvFreeMarker));
+  ctx_inner->sub     = (InvFreeMarkerCtx **) palloc0((size_t) narms * sizeof(InvFreeMarkerCtx *));
+  arm_relids = (List **) palloc0((size_t) narms * sizeof(List *));
+
+  i = 0;
+  foreach (lc, inner->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *) lfirst(lc);
+    char *arm_cert = NULL;
+    InvFreeMarkerCtx *arm_ctx;
+    int j;
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL)
+      return NULL;                    /* a non-subquery arm: out of scope */
+    arm_ctx = build_inversion_free_ctx(constants, r->subquery, &arm_cert);
+    if (arm_ctx == NULL)
+      return NULL;                    /* arm not inversion-free: decline the union */
+    /* Branch-disjointness: this arm's base relations must not overlap any
+     * earlier arm's (shared relations make inversion-freeness a joint
+     * cross-branch property, deferred to the joint-order milestone). */
+    arm_relids[i] = inv_free_collect_base_relids(r->subquery, NIL);
+    for (j = 0; j < i; j++) {
+      ListCell *lci, *lcj;
+      foreach (lci, arm_relids[i]) {
+        foreach (lcj, arm_relids[j]) {
+          if (lfirst_oid(lci) == lfirst_oid(lcj))
+            return NULL;
+        }
+      }
+    }
+    ctx_inner->sub[i] = arm_ctx;
+    if (union_cert == NULL)
+      union_cert = arm_cert;          /* any valid recipe routes dispatch (presence only) */
+    i++;
+  }
+
+  ctx = (InvFreeMarkerCtx *) palloc0(sizeof(InvFreeMarkerCtx));
+  ctx->natoms  = N;
+  ctx->markers = (InvFreeMarker *) palloc0((size_t) N * sizeof(InvFreeMarker));
+  ctx->sub     = (InvFreeMarkerCtx **) palloc0((size_t) N * sizeof(InvFreeMarkerCtx *));
+  ctx->sub[inner_slot] = ctx_inner;
+
+  if (cert_out)
+    *cert_out = union_cert;
+  return ctx;
+}
+
+/**
  * @brief Process the inert provenance() fetches in one query's own clauses.
  *
  * Walks @p q's target list, jointree and HAVING for scalar SubLinks whose
@@ -12540,6 +12674,13 @@ static Query *process_query(const constants_t *constants, Query *q,
        * evaluation).  The evaluator's size-bounded mismatch backstop declines
        * if any marker fails to land on its input. */
       local_inv_ctx = build_inversion_free_ctx(constants, q, &inv_cert);
+      /* When q is not a single hierarchical CQ but a deduplicating UNION of
+       * branch-disjoint inversion-free arms (lowered to a GROUP BY over an
+       * inner UNION ALL, its per-group root the provenance_plus OR), certify it
+       * branch-by-branch: the recipe goes on the plus root and each arm's
+       * markers are threaded into the inner arms. */
+      if (local_inv_ctx == NULL)
+        local_inv_ctx = build_inversion_free_union_ctx(constants, q, &inv_cert);
     }
 
     /* Set difference (EXCEPT / EXCEPT ALL): group the right arm so the per-row
