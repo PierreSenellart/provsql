@@ -589,5 +589,27 @@ SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t3_if
           round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS t3_pw
   FROM ifn_t3 ORDER BY x;
 
+-- (12) Top-level UNION ALL of inversion-free branches.  UNION ALL is bag
+--      semantics (Jha & Suciu's UCQ(OBDD) result is set semantics): each output
+--      row's provenance is a *single* branch's conjunction, no cross-branch OR.
+--      So each arm certifies its own inversion-free root and the union carries
+--      that annotated token verbatim.  Branch 1 is the 4-atom self-join witness
+--      (only x=1 qualifies, 0.5^4); branch 2 a 2-atom read-once join A(x),B(x)
+--      (x=1 and x=2, 0.5^2 each).  Expect one acceptance NOTICE per arm, and
+--      per-row 'inversion-free' == 'possible-worlds'.
+CREATE TEMP TABLE ifr_ua AS
+  SELECT s1.x AS x, provenance() AS p
+    FROM ifr_s s1, ifr_a a, ifr_s s2, ifr_b b
+   WHERE s1.x = a.x AND s1.c2 = a.c2 AND s1.x = s2.x
+     AND s2.x = b.x AND s2.c2 = b.c2
+  UNION ALL
+  SELECT a.x AS x, provenance() AS p
+    FROM ifr_a a, ifr_b b
+   WHERE a.x = b.x;
+SELECT remove_provenance('ifr_ua');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS ua_if,
+          round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ua_pw
+  FROM ifr_ua ORDER BY x, ua_if;
+
 RESET provsql.provenance;
 RESET provsql.verbose_level;

@@ -323,3 +323,13 @@ x|t3_if|t3_pw
 2|0.200000|0.200000
 3|0.200000|0.200000
 (3 rows)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 4 atoms, 3 classes, root=0, order=[0,1,2] [certificate attached]
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+x|ua_if|ua_pw
+1|0.062500|0.062500
+1|0.250000|0.250000
+2|0.250000|0.250000
+(3 rows)

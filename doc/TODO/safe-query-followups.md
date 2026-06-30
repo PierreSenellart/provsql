@@ -20,20 +20,38 @@ have all landed.
   UCQ(OBDD) Path* section of
   :cfile:`doc/source/dev/probability-evaluation.rst`.  Three extensions to
   that class remain open, in increasing difficulty:
-  - **UNION nested in an inlined subquery / view** (the inlined body is a
-    `setOperations` UCQ): flatten per branch with the order markers fanned
-    across branches.  This is not really a *view* quirk -- a **top-level**
-    `UNION` is already handled, because the planner's recursive
-    `process_query` splits it branch-by-branch and each branch reaches the
-    safe-query gate (`is_safe_query_candidate`, which bails on
-    `setOperations`) on its own and is certified independently.  The gap is
-    only the *nested* case: a `UNION` inlined from a view / derived table
-    lands as a `setOperations` node *inside one* safe-query candidate's
-    scope, with no re-entry to split it, so the single global Prop. 4.5
-    order cannot span the branches.  The fix gives the nested case the
-    per-branch treatment the top-level case gets for free; the class is
-    defined for UCQs, so this is a flattening extension, not a core change,
-    and it declines gracefully today.  *Sensible next slice.*
+  - **`UNION` of inversion-free branches** (genuine multi-branch UCQs).
+    *Correction (verified on 1.11.0-dev):* the OBDD certificate is **not**
+    attached for any `UNION` today -- neither nested nor top-level.  The
+    detector (`inversion_free_analyze`) bails on `q->setOperations`, and the
+    per-root analysis is gated on `top_level`, while a union's arms are
+    `RTE_SUBQUERY` recursed with `top_level=false` (the per-branch recursion
+    the old note credited belongs to the *read-once* rewriter, not the OBDD
+    certificate).  Both forms decline gracefully to the generic chain and
+    stay correct.  Mind the semantics (Jha & Suciu, ICDT 2011, Thm 4.2 is a
+    **set**-semantics result; inversion-freeness is a *joint* property of the
+    whole UCQ, not "each branch is inversion-free").  Two facts make this
+    mostly planner-side plumbing: the evaluator already routes on the
+    *presence* of the `C` recipe and orders solely from the per-input `K`
+    keys (column-value text), and `StructuredDNNFBuilder` already expands an
+    OR/`gate_plus` root to DNF and Shannon-decomposes it (`orDecompose`
+    splits variable-disjoint OR components).  Milestones:
+    - **M1 -- `UNION ALL`.**  Each arm's per-row root is a single-branch
+      conjunction (`make_provenance_expression`, `SR_PLUS` -> `linitial`),
+      carried verbatim by the union.  So let a top-level union's arms inherit
+      `top_level` and each single-CQ arm certifies its own root with the
+      existing detector.  No `SafeCert` change, no OR.
+    - **M2 -- `UNION` (set), plumbing.**  A non-`ALL` `UNION` is lowered to an
+      outer `GROUP BY` over `UNION ALL`, whose per-group root is
+      `provenance_plus(array_agg(...))` -- the OR.  Put the recipe on that
+      plus root and per-branch `K` markers into each inner arm (totality
+      check at `collect_inversion_free_keys`).  Correct for all unions;
+      **polynomial for branch-disjoint** ones via `orDecompose`.
+    - **M3 -- joint order.**  Extend the detector to a cross-branch `G_prec`
+      (one class space, global relation-symbol ranks, branches linked through
+      the head columns) so *overlapping* unions are polynomial too.  Needs a
+      multi-branch `SafeCert` (today strictly single-CQ).  This is the full
+      Jha & Suciu UCQ(OBDD) characterisation.
   - **Functional dependencies do not fit this builder.**  The canonical
     FD-tractable queries (the H-query `R(x),S(x,y),T(y)` under a PK on `S`,
     the two-PK triangle) have no single root class, which the detector and

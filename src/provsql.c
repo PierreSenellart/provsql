@@ -1975,6 +1975,12 @@ static void inline_ctes(Query *q) {
  * @param in_boolean_rewrite  True when @p q lies under a safe-query (boolean)
  *                   rewrite; threaded into the subquery recursion so the
  *                   joint-width recogniser defers throughout the subtree.
+ * @param top_level  True when @p q's own per-row root is the one the user
+ *                   evaluates.  Threaded into the subquery recursion so that an
+ *                   arm of a top-level @c UNION / @c UNION @c ALL (whose per-row
+ *                   token becomes a union output row's provenance verbatim)
+ *                   inherits @c top_level and certifies its own inversion-free
+ *                   root; non-union subqueries in @c FROM never do.
  * @param inv_ctx    Inversion-free marker context for @p q, or @c NULL; its
  *                   per-subquery child context is threaded into each recursive
  *                   @c process_query call so a flattened view's base inputs
@@ -1983,7 +1989,7 @@ static void inline_ctes(Query *q) {
  *          query has no provenance-bearing relation.
  */
 static List *get_provenance_attributes(const constants_t *constants, Query *q,
-                                       bool in_boolean_rewrite,
+                                       bool in_boolean_rewrite, bool top_level,
                                        const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts = NIL;
 
@@ -2017,11 +2023,21 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
         ++attid;
       }
     } else if (r->rtekind == RTE_SUBQUERY) {
+      /* An arm of a top-level UNION / UNION ALL is itself a user-evaluated
+       * provenance root: UNION ALL carries each arm's per-row token verbatim
+       * (make_provenance_expression, SR_PLUS -> linitial), and a non-ALL
+       * UNION is lowered to an outer GROUP BY whose plus root is handled
+       * separately.  So such an arm inherits top_level, letting each
+       * single-CQ arm certify its own inversion-free root.  Non-union
+       * subqueries (views, derived tables in FROM) are never roots. */
+      bool arm_top_level = top_level && q->setOperations != NULL
+        && IsA(q->setOperations, SetOperationStmt)
+        && ((SetOperationStmt *) q->setOperations)->op == SETOP_UNION;
       bool *inner_removed = NULL;
       int old_targetlist_length =
         r->subquery->targetList ? r->subquery->targetList->length : 0;
       Query *new_subquery =
-        process_query(constants, r->subquery, &inner_removed, false, false,
+        process_query(constants, r->subquery, &inner_removed, false, arm_top_level,
                       in_boolean_rewrite,
                       (inv_ctx && rteid - 1 < (Index) inv_ctx->natoms)
                         ? inv_ctx->sub[rteid - 1] : NULL);
@@ -12535,7 +12551,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     // get_provenance_attributes will also recursively process subqueries
     // by calling process_query (threading each subquery's marker sub-context)
     prov_atts = get_provenance_attributes(constants, q, in_boolean_rewrite,
-                                          local_inv_ctx);
+                                          top_level, local_inv_ctx);
 
     /* Inversion-free path: wrap each certified atom's provenance token in its
      * per-input order marker.  prov_atts are base-relation Vars (the certified
