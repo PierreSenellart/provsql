@@ -29,12 +29,13 @@ Source plans: [`probability-evaluation.md`](probability-evaluation.md),
 
 Two findings from running the examples reshuffle the plan:
 
-- **Most case-study "quick wins" need no engine work at all.**
+- **Most case-study coverage gaps were chrome, not engine.**
   `COUNT(DISTINCT)`, `string_agg`, `FILTER`, `LATERAL`, `UPDATE`+`undo`,
-  and the temporal SRFs all already produce correct provenance; the gap
-  is purely tutorial / Studio chrome. Window functions warn-and-degrade
-  (documented caveat), and only UDF-internal-lineage and join-on-aggregate
-  are genuinely engine-blocked.
+  and the temporal SRFs all already produce correct provenance, so those
+  case-study extensions landed as pure tutorial / Studio work. Window
+  functions warn-and-degrade (documented caveat), and only
+  UDF-internal-lineage and join-on-aggregate remain genuinely
+  engine-blocked.
 - **Robustness, not just features.** Several exhaustive-method runs
   (`possible-worlds` on the Θ(n)-treewidth in-star self-join at n≈25–40;
   the pseudo-poly SUM enumeration on 40 large incommensurate values)
@@ -45,20 +46,6 @@ Two findings from running the examples reshuffle the plan:
   one — they remove circuits that can OOM the server.
 
 ## Priority ordering (cross-file)
-
-### Tier 1 — ready now, prerequisite in place, clear win
-
-1. **Case-study quick wins** (case-studies, CS1/CS3/CS5 + the CS2
-   aggregate steps). Verified to need no engine work — pure tutorial
-   prose closing feature-coverage-matrix cells.
-
-(Studio Contributions mode, previously a Tier-1 item, shipped in
-Studio 1.6.0.  Scalar-subquery decorrelation via `agg_token` arithmetic,
-the other Tier-1 item, shipped for the *target-list* case: a sublink
-nested in target-list arithmetic / casts is now lifted to `choose()` in
-place and carries the subquery's provenance through `+ - * /` as a
-`gate_arith` token — see scalar §5 below.  The *WHERE*-nested form
-remains open.)
 
 ### Tier 2 — reusable certificates / correctness hardening
 
@@ -80,9 +67,9 @@ remains open.)
 
 5.  HAVING exact residuals: coupled branch-spanning SUM (prob §2),
     shared-contributor UNION/EXCEPT (prob §3).
-6.  Studio: Temporal mode (studio §1), result-table batch evaluation
-    (studio §2), notebook polish.
-7.  Larger CS2 / CS4 extensions (window-function caveat verified).
+6.  Studio: result-table batch evaluation (studio §2), notebook polish.
+7.  CS4 extensions: direct `get_valid_time`, the `UPDATE`-for-DELETE+INSERT
+    swap (window-function caveat verified).
 8.  Continuous distributions: the §F.1 refactor, then the quick wins
     (Gamma, Log-normal, quantiles, RV-vs-RV comparators, GMM).
 9. Scalar subqueries: different-`(Q,corr)` multi-sublinks (hard error
@@ -907,21 +894,7 @@ for §§A.1, A.2, A.4, B.1, B.3, C.1–C.3.
 ## Studio & case studies (studio.md, case-studies.md)
 
 These two plans are about UI / documentation, so the test confirms the
-**backing SQL capability** each item relies on. (Contributions mode,
-previously §1 here, shipped in Studio 1.6.0.)
-
-### 1. Time-travel / Temporal mode — backing works
-```sql
-SET provsql.update_provenance='on';
-SELECT id, name, role, get_valid_time(provsql, 'temp_test') FROM temp_test;
-SELECT * FROM timeslice('temp_test', '2021-01-01+00','2021-12-31+00') AS (...);
-SELECT * FROM history('temp_test', ARRAY['id'], ARRAY['1']) AS (...);
-SELECT * FROM timetravel('temp_test', '2021-03-01+00') AS (...);
-```
-All four SRFs (`get_valid_time`, `timeslice`, `history`, `timetravel`)
-return correct intervals end-to-end. **After** — a Temporal mode tab whose
-sidebar form drives the SRF calls and renders the `valid_time` column;
-no engine work.
+**backing SQL capability** each item relies on.
 
 ### 2. Result-table batch evaluation — backing works
 ```sql
@@ -932,57 +905,7 @@ that batch-posts all UUIDs from the displayed `provsql` column and appends
 a result column. **After** — a result-table extension over `/api/evaluate`,
 reusing the existing dispatch.
 
-### 3. CS2: COUNT(DISTINCT) + string_agg — works
-```sql
-SELECT exposure, COUNT(DISTINCT study), string_agg(study, ', '), provenance()
-FROM studies GROUP BY exposure;
-```
-```
- aspirin   | 3 (*) | S1, S2, S3 (*) | <uuid>
- ibuprofen | 2 (*) | S1, S4, S4 (*) | <uuid>
-```
-Both aggregates produce correct provenance; `(*)` marks values depending
-on several input tuples. **After** — a CS2 step with prose noting `(*)`
-and that `string_agg(DISTINCT ...)` deduplicates; no engine change.
-
-### 4. CS2: FILTER clause — works
-```sql
-SELECT exposure, COUNT(*) FILTER (WHERE effect='beneficial'), COUNT(*) FILTER (WHERE effect='harmful'), provenance()
-FROM studies GROUP BY exposure;
-```
-```
- aspirin   | 2 (*) | 1 (*) | <uuid>     ibuprofen | 1 (*) | 2 (*) | <uuid>
-```
-`FILTER` aggregates carry provenance correctly. **After** — a CS2 filtering
-step; no change required.
-
-### 5. CS2 / CS3: window functions — warn-and-degrade
-```sql
-SELECT study, RANK() OVER (PARTITION BY outcome ORDER BY study), provenance() FROM studies;
-```
-```
-WARNING:  ProvSQL: window functions are not supported; provenance is tracked per input row only,
-          and the windowed computation is treated as an opaque scalar
--- query still returns, each row keeps its own input token
-```
-The query does not fail: each row's token is preserved and the rank is an
-opaque scalar. Acceptable when the rank is display-only; observable if it
-later becomes a join/filter key. **After** — case-study text uses the
-caveat; a future engine improvement could capture window-frame membership
-in the circuit (not a blocker).
-
-### 6. CS3: LATERAL — works (conservatively)
-```sql
-SELECT s.trip_id, s.stop_name, nxt.stop_name, provenance(), where_provenance(provenance())
-FROM stops s CROSS JOIN LATERAL (SELECT stop_name FROM stops
-   WHERE trip_id=s.trip_id AND stop_seq=s.stop_seq+1 LIMIT 1) nxt
-WHERE s.stop_name='Bagneux';
-```
-`LATERAL` works; the token captures all stops rows touched by the
-correlated subquery (conservative but correct). **After** — a CS3 step,
-with prose noting the conservative formula.
-
-### 7. CS4: UPDATE + undo — works (with a token subtlety)
+### 7. CS4: UPDATE + undo — backing works (with a token subtlety)
 ```sql
 SET provsql.update_provenance='on';
 UPDATE ministers SET role='Interior' WHERE id=1;
@@ -993,9 +916,10 @@ SELECT id, name, role, get_valid_time(provsql, 'ministers') FROM ministers;
 interval and "Finance" gains a new open interval (a two-period
 `tstzmultirange`). `undo()` takes the *query* token from
 `update_provenance`, not the row's `provsql` (passing the wrong token
-no-ops with a notice — the likely user mistake to document). **After** —
-a CS4 step using `get_valid_time` to make the reversion visible; no engine
-change.
+no-ops with a notice — the likely user mistake to document). The `undo`
+round-trip is already shown in the rebuilt CS4; what remains is a step
+calling `get_valid_time` directly to make the reversion visible and an
+explicit `UPDATE` replacing the DELETE + INSERT pair. No engine change.
 
 ### 8. CS9 (future): UDFs and join-on-aggregate — genuinely engine-blocked
 

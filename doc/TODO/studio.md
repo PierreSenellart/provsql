@@ -13,25 +13,9 @@ version streams, and CLI flags.
 
 ### New inspection modes
 
-The Temporal mode below shares the existing chrome (query box,
-result-table rendering, mode switcher) and adds its own sidebar
-plus per-cell click affordances. (Contributions mode shipped in
-Studio 1.6.0.)
-
-#### Time-travel / Temporal DB mode
-
-- Dedicated chrome for the temporal SRFs `timeslice` / `history` /
-  `timetravel` (CS4 §3–5). Sidebar = view picker + date / window /
-  column-filter that composes the SRF call; the result table
-  renders the SRF output. (The temporal *semiring* evaluation,
-  `sr_temporal`, is already in the eval-strip dropdown; this mode is
-  about the SRF surface.)
-- Motivation: the SRF call shape (`... AS (cols ...)`) plus the
-  date / window / filter inputs warrant their own chrome rather
-  than a generic eval-strip mini-panel.
-- Natural home for a future **"undo last DML"** button (CS4 §7)
-  that calls `SELECT undo(...)` server-side. Kept out of the
-  main modes for now since `update_provenance` is not yet mature
+- **"Undo last DML" button** (CS4 §7) that calls `SELECT undo(...)`
+  server-side, a leftover from the Temporal mode design. Kept out of
+  the main modes for now since `update_provenance` is not yet mature
   enough to expose prominently.
 
 ### Larger features

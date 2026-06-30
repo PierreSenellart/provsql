@@ -40,14 +40,13 @@ The prioritisation uses four labels:
 | 12 | Empirical CDF gate | Data-driven distributions | Mid-term |
 | 13 | GMM constructor | Data-driven distributions | Quick win |
 | 14 | Frozen-distribution snapshots | Data-driven distributions | Mid-term |
-| 15 | Conditioning as a gate (now [`conditioning.md`](conditioning.md)) | Structural extensions | Architectural |
-| 16 | Correlation / copulas | Structural extensions | Architectural |
-| 17 | Stochastic processes | Structural extensions | Architectural |
-| 18 | Causal interventions (`do`) | Structural extensions | Research |
-| 19 | Shapley over RV-valued payoffs | Provenance × probability | Research |
-| 20 | Provenance of sampled values | Provenance × probability | Research |
-| 21 | Per-distribution class hierarchy (`src/distributions/`) | Internal architecture | Architectural (prerequisite) |
-| 22 | Probabilistic-circuit subsystem (distribution-valued gates) | Structural extensions | Research (low priority) |
+| 15 | Correlation / copulas | Structural extensions | Architectural |
+| 16 | Stochastic processes | Structural extensions | Architectural |
+| 17 | Causal interventions (`do`) | Structural extensions | Research |
+| 18 | Shapley over RV-valued payoffs | Provenance × probability | Research |
+| 19 | Provenance of sampled values | Provenance × probability | Research |
+| 20 | Per-distribution class hierarchy (`src/distributions/`) | Internal architecture | Architectural (prerequisite) |
+| 21 | Probabilistic-circuit subsystem (distribution-valued gates) | Structural extensions | Research (low priority) |
 
 ---
 

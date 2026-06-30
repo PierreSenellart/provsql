@@ -68,7 +68,9 @@ explicitly deferred until a real workload motivates it.
   - COUNT(*) over Bernoulli presence-tokens is Poisson-binomial; same
     machinery as the landed `CountCmpEvaluator`, now generic to "the count
     of present rows is itself a random variable" rather than
-    Boolean-specific.
+    Boolean-specific.  (The count-PMF machinery itself has since landed in
+    `src/AggMarginalEvaluator.cpp` (`countPMF`); the remaining gap here is
+    discrete distributions in `gate_rv`, not the count convolution.)
   - General convolution of independent discrete RVs: O(C × N) DP for the
     surrounding cmp.
 

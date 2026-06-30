@@ -41,23 +41,6 @@ This is a different axis from the deferred item in
 subclasses"), which is treewidth of the *query hypergraph*. Here it is *data*
 treewidth, which changes *what circuit we construct*.
 
-## Done
-
-**Route C -- decomposition-aligned reachability compilation** (shipped, 1.10.0).
-`ReachabilityCompiler` (`src/ReachabilityCompiler.{h,cpp}`) compiles the
-recursive reachability shapes along a min-fill tree decomposition of the *data*
-graph into certified d-DNNFs, surfacing through the normal query rewriter under
-the `'absorptive'` / `'boolean'` provenance class with fallback to
-`eval_recursive`. Covers two-terminal and all-targets reliability, directed /
-undirected / cyclic data, BID (`repair_key`) blocks, multi-source base arms,
-join-defined edges (disjoint-support case), the table-characterisation registry
-fast path, bounded-hop reachability, cross-vertex any-reach aggregations (with a
-shared multi-group sweep), k-terminal / Steiner coverage, evaluation in any
-absorptive semiring (min-cost / Steiner via min-plus, Viterbi, max-min,
-Łukasiewicz, temporal-reachability via interval-union), and DISTINCT-shaped /
-member-filtered aggregation detection. Details in the git history and the user
-manual. The items below are what remains.
-
 ## Out of scope
 
 - **Query-hypergraph (query-side) treewidth** -- in

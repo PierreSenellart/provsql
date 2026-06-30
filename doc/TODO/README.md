@@ -24,32 +24,25 @@ Each plan document follows a consistent layout:
 - [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
   feasibility study for exploiting bounded treewidth of the input data
   (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017).
-  Route C has landed end to end: under `provsql.boolean_provenance`,
-  the query rewriter recognises recursive reachability (directed,
-  undirected, edge-filtered) over a tracked edge relation and compiles
-  every reachable vertex's provenance along a tree decomposition of
-  the data graph into certified d-DNNF tokens (linear size, cyclic
-  graphs native, plan-time fallback to the generic fixpoint), which
-  the standard surface evaluates linearly (`independent`,
-  `interpret-as-dd`, Shapley).  Open: multi-source base arms,
-  bounded-hop patterns, BID blocks, join-defined graphs, the full
-  data-decomposition + tree-automaton pipeline (now cheaper: emitted
-  gates only need the d-DNNF certificate), and a treewidth-aware
-  general m-semiring evaluator.
+  With Route C (decomposition-aligned reachability compilation) already
+  shipped, the open work is: the verified mulinput-OR (Lean) certificate,
+  Route 3 structural factoring, the Route C leftovers (shared-support
+  join-defined edges, non-recursive triggers, any-reach collector chains,
+  k-terminal side filters), a treewidth-aware general m-semiring
+  evaluator, and the full Route A MSO / tree-automaton pipeline.
 - [`conditioning.md`](conditioning.md) : the conditioning primitive,
   unifying discrete tuple-correlation (MarkoViews, Jha & Suciu PVLDB
   2012) and continuous random variables as one operation at two carriers.
-  Landed end to end: inert scope-local `provenance()`, the `|` / `cond` /
-  `given` surface and `gate_conditioned` gate (terminal for `uuid`,
-  composable for `rv` / `agg_token`), `probability_evaluate(A|B)`, and
-  the "probability calculator" case study 8. Open: arbitrary denial
-  constraints (general `¬W`), a re-based materialised discrete posterior
-  for re-composition, Shapley over evidence, and soft/weighted
-  conditioning (explicitly not a priority).
+  With the core surface (`|` / `cond` / `given`, `gate_conditioned`,
+  `probability_evaluate(A|B)`, the "probability calculator" case study 8)
+  already shipped, the open work is: arbitrary denial constraints
+  (general `¬W`), a re-based materialised discrete posterior for
+  re-composition, Shapley over evidence, and soft/weighted conditioning
+  (explicitly not a priority).
 - [`case-studies.md`](case-studies.md) : plan for closing the
-  feature-coverage gaps in the user tutorial and the existing case
-  studies by extending CS1-CS5, plus a future UDF / aggregate-join
-  study (CS8).
+  remaining feature-coverage gaps in the user tutorial and case
+  studies -- the CS4 temporal / data-modification extensions and a
+  future UDF / aggregate-join study (CS9).
 - [`continuous_distributions.md`](continuous_distributions.md) : roadmap
   for extending the continuous random-variable surface beyond the shipped
   Normal/Uniform/Exponential/Erlang/Categorical/Mixture baseline (further
@@ -80,7 +73,6 @@ Each plan document follows a consistent layout:
   follow-up now has its `agg_token`-arithmetic prerequisite in place),
   different-`(Q, corr)` multi-sublinks, and `GROUP BY` bodies.
 - [`studio.md`](studio.md) : open ProvSQL Studio work -- the
-  Contributions (Shapley / Banzhaf heat-map) and Time-travel / Temporal
-  modes, batch result-table evaluation, multi-user demo deployment,
-  and Notebook-mode polish (collapse / clear output, run-from-here,
-  per-cell row cap).
+  "undo last DML" button, batch result-table evaluation, multi-user
+  demo deployment, and Notebook-mode polish (collapse / clear output,
+  run-from-here, per-cell row cap).

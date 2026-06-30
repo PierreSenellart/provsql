@@ -132,11 +132,13 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
   shown insufficient.
 - **`O(depth)` leaf-closing form** (Sec. V-D) – a constant-factor refinement of
   the memoised recursion (the memo keys themselves are no longer the bottleneck).
-- **Paper benchmark.** `test/bench/dtree_bench.sql` exercises the full portfolio;
-  the one shape not yet reproduced is the paper's social-network experiment (the
+- **Paper benchmark.** `test/bench/dtree_bench.sql` exercises the full portfolio,
+  including static `triangle` and `ladder` (path) instances; what is not yet
+  reproduced is the paper's social-network experiment as a *sweep* — the
   **triangle** and **path-of-length-2** queries over a random graph of
-  tuple-independent edges, relative ε = 0.01) – d-tree should win by orders of
-  magnitude at high edge probabilities and track the sampler at small ones.
+  tuple-independent edges scaled across edge probability (relative ε = 0.01) –
+  where d-tree should win by orders of magnitude at high edge probabilities and
+  track the sampler at small ones.
 
 ## Implementation observations
 
