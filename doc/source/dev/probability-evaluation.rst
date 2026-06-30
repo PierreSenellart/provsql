@@ -1124,8 +1124,9 @@ The Inversion-Free ``UCQ(OBDD)`` Path
 The ``'inversion-free'`` method (and the default-chain rung that follows
 ``independent``) evaluates the *inversion-free* class of Jha and
 Suciu :cite:`DBLP:conf/icdt/JhaS11`: hierarchical, tuple-independent
-queries -- including self-joins -- whose lineage admits a polynomial-size
-OBDD. On these the generic ``'tree-decomposition'`` / compilation
+UCQs -- including self-joins and set-semantics ``UNION``\ s (the union of
+conjunctive queries the class is named for) -- whose lineage admits a
+polynomial-size OBDD. On these the generic ``'tree-decomposition'`` / compilation
 fallbacks can blow up (the lineage is not low-treewidth), yet a
 *structured* d-DNNF built over a query-derived variable order stays
 linear in the lineage.
@@ -1182,6 +1183,34 @@ Flattening pre-pass (``src/provsql.c``)
    On PostgreSQL 18 the synthetic ``RTE_GROUP`` of a ``GROUP BY`` query is
    stripped from the copy first. The original query is left intact; only
    transparent markers and a root certificate are added.
+
+Set-semantics ``UNION`` -- joint UCQ analysis (``src/provsql.c``)
+   Inversion-freeness of a ``UNION`` is a *joint* property of the whole UCQ
+   (a relation shared between two branches can introduce a cross-branch
+   inversion), so a per-arm analysis does not suffice. A deduplicating
+   ``UNION`` is lowered (by :cfunc:`rewrite_non_all_into_external_group_by`)
+   to an outer ``GROUP BY`` over an inner ``UNION ALL`` whose per-group root
+   is the ``provenance_plus`` OR of the branch tokens;
+   :cfunc:`build_inversion_free_union_ctx` certifies it by building a
+   *synthetic merged SPJ query* of every arm's base atoms -- arm variables
+   offset into one range table, the arms' head columns equated, each arm's
+   ``WHERE`` pulled up -- and running :cfunc:`inversion_free_analyze` on it.
+   A relation shared between arms thereby becomes one relation symbol, so
+   positional consistency and the precedence graph span the whole union --
+   exactly Theorem 4.2's joint condition -- making **overlapping** UCQs such
+   as ``q(x) :- R(x),S(x) ∪ R(x),T(x)`` (lineage ``R(x) ∧ (S(x) ∨ T(x))``)
+   tractable where a per-arm analysis, blind to the shared ``R``, could not.
+   The per-atom markers map back to each arm (base relations keep positions
+   ``1..nᵢ``; PG 18's group RTE is appended last and stripped) and the
+   recipe lands on the plus root; no multi-branch certificate is needed
+   because the order comes from the per-input keys. It fires only on a pure
+   deduplicating-group root over already-lowered ``UNION ALL`` arms that are
+   flat base-relation SPJs; ``HAVING`` / aggregate unions, a nested
+   not-yet-lowered non-``ALL`` ``UNION``, non-``Var`` head columns, and
+   non-inversion-free unions all decline to the generic / joint-width /
+   Möbius chain. A *top-level* ``UNION ALL`` is instead certified arm by arm
+   (each output row carries a single branch CQ): its arms inherit
+   ``top_level`` so each certifies its own root.
 
 Certificate and per-input markers (``src/safe_query_cert.{h,c}``)
    The recipe and the order are carried into the circuit on transparent
@@ -1242,14 +1271,15 @@ Dispatch (``src/probability_evaluate.cpp``)
 
 Shapes the analysis does not model cause detection to decline (no
 certificate): a BID/``gate_mulinput`` atom, a subquery the flattening
-pre-pass cannot inline (an *aggregating* view, a set-operation / ``UNION``
-view, a correlated or ``LATERAL`` subquery), or a flattened conjunction
-that is genuinely non-hierarchical (the H-query ``R(x),S(x,y),T(y)``). A
-malformed ``C``-prefixed payload fails to parse and is treated as an inert
-annotation. In every case evaluation falls back to the normal chain and
-stays correct. These declines -- and the positive cases (self-joins,
-non-integer key columns, deterministic-relation filters, single- and
-multi-relation SPJ views, views-over-views) -- are covered by
+pre-pass cannot inline (an *aggregating* view, a correlated or ``LATERAL``
+subquery, or a ``UNION`` outside the certifiable group-over-``UNION ALL``
+shape), or a flattened conjunction that is genuinely non-hierarchical (the
+H-query ``R(x),S(x,y),T(y)``). A malformed ``C``-prefixed payload fails to
+parse and is treated as an inert annotation. In every case evaluation falls
+back to the normal chain and stays correct. These declines -- and the
+positive cases (self-joins, non-integer key columns, deterministic-relation
+filters, single- and multi-relation SPJ views, views-over-views, and
+set-semantics ``UNION``\ s including overlapping ones) -- are covered by
 ``test/sql/safe_query_inversion_free.sql``.
 
 .. _adding-new-probability-method:

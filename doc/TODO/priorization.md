@@ -47,15 +47,6 @@ Two findings from running the examples reshuffle the plan:
 
 ## Priority ordering (cross-file)
 
-### Tier 2 — reusable certificates / correctness hardening
-
-4. **UCQ(OBDD): UNION nested in a subquery/view** (safe §1). A *top-level*
-   `UNION` is already certified branch-by-branch (recursive
-   `process_query` re-entry); the gap is only a `UNION` inlined into one
-   safe-query candidate (view / derived table), which lands as a
-   `setOperations` node the single global Prop. 4.5 order can't span.
-   Verified to decline gracefully; the "sensible next slice" — a
-   flattening extension, not a core change.
 ### Tier 3 — larger / workload-gated
 
 5.  HAVING exact residuals: coupled branch-spanning SUM (prob §2),
@@ -219,38 +210,6 @@ analytic-exact when available and `stopping-rule` otherwise.
 ---
 
 ## Safe-query rewriter (safe-query-followups.md)
-
-### 1. UCQ(OBDD): UNION nested in a subquery/view
-
-**Example**
-```sql
-CREATE VIEW v_join  AS SELECT bb.x FROM bb, aa WHERE bb.x = aa.x;              -- SPJ, inversion-free
-CREATE VIEW v_union AS SELECT x FROM bb WHERE x=1 UNION SELECT x FROM bb WHERE x=2;
-SELECT x, probability_evaluate(provenance(),'inversion-free') FROM v_join  GROUP BY x;   -- certifies
-SELECT x, probability_evaluate(provenance(),'inversion-free') FROM v_union GROUP BY x;   -- declines
-```
-
-**Current behavior**
-```
-====== JOIN view (inversion-free certifies) ======     x=1: 0.375   x=2: 0.25
-====== UNION view (declines under explicit method) ======
-ERREUR:  ProvSQL: method 'inversion-free' requires an inversion-free certificate on the provenance root
--- default chooser still answers:   x=1: 0.5   x=2: 0.5
-```
-The SPJ view inlines and is certified (0.375 = 1-(1-½)(1-¼)); the `UNION`
-view's `setOperations` body cannot be inlined, so no certificate is built
-and the explicit method errors while the default falls through to d4. Note
-this is *not* a view quirk: a **top-level** `UNION` is already certified
-branch-by-branch (the planner's recursive `process_query` splits it, and
-`is_safe_query_candidate` bails on `setOperations` so each branch is
-handled on its own). The gap is only a `UNION` *inlined* from a view /
-derived table, which lands inside one safe-query candidate with no re-entry
-to split it.
-
-**After** — fan the Prop. 4.5 order markers across the `UNION` branches and
-inline each as its own atom set, giving the nested case the per-branch
-treatment the top-level case already gets, so the structured-d-DNNF builder
-is reached per branch and it evaluates linearly.
 
 ### 2. UCQ(OBDD): functional dependencies (the H-query)
 

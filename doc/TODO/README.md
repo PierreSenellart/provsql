@@ -63,8 +63,9 @@ Each plan document follows a consistent layout:
   bordering the `provsql.boolean_provenance` work -- further Boolean-only
   optimisations (independent-subtree detection, the deferred intensional
   Monet construction now that the extensional Möbius route has shipped),
-  the inversion-free `UCQ(OBDD)` extensions (UNION in a view, FD-aware
-  orders), discrete `random_variable` extensions, the hierarchical-detector
+  the remaining inversion-free `UCQ(OBDD)` extensions (FD-aware /
+  per-branch FBDD orders; `UNION` support has shipped), discrete
+  `random_variable` extensions, the hierarchical-detector
   follow-ups (FD-induced nested rewrite, soft keys, view-descent FD
   chases, data-safe plans), and the two deferred joint-width hardening
   notes.
