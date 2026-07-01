@@ -152,3 +152,15 @@ remove_provenance
 empty_prod_kind|empty_prod_extra|empty_prod_mean|empty_prod_variance
 value|1|t|t
 (1 row)
+cat_sum_exact|cat_prod_exact|cat_avg_exact
+t|t|t
+(1 row)
+cat_max_mc|cat_min_mc
+t|t
+(1 row)
+mix_sum_exact|mix_prod_exact|mix_avg_exact
+t|t|t
+(1 row)
+mix_max_mc|mix_min_mc
+t|t
+(1 row)

@@ -4096,6 +4096,8 @@ DECLARE
   denom_token uuid;
   denom_state uuid[] := '{}';
   one_uuid uuid;
+  zero_uuid uuid;
+  is_wrap boolean;
   gtype provsql.provenance_gate;
   children uuid[];
   prov_i uuid;
@@ -4110,11 +4112,21 @@ BEGIN
 
   one_uuid := (
                 provsql.as_random(1::double precision))::uuid;
+  zero_uuid := (provsql.as_random(0::double precision))::uuid;
 
   FOR i IN 1..n LOOP
     gtype := provsql.get_gate_type(state[i]);
+    is_wrap := false;
     IF gtype = 'mixture'::provsql.provenance_gate THEN
       children := provsql.get_children(state[i]);
+      -- Only a genuine per-row provenance wrap
+      -- mixture(prov, rv, as_random(0)) contributes a provenance-weighted
+      -- 1 to the denominator; a categorical ([key, mul_1, ...]) or a user
+      -- mixture(p, X, Y) with a non-zero else-branch is itself an ordinary
+      -- scalar RV value (one unconditional row), counted as 1.
+      is_wrap := array_length(children, 1) = 3 AND children[3] = zero_uuid;
+    END IF;
+    IF is_wrap THEN
       prov_i := children[1];
       denom_state := array_append(
         denom_state,
@@ -4191,12 +4203,15 @@ DECLARE
   i integer;
   prod_state uuid[] := '{}';
   one_rv provsql.random_variable;
+  zero_uuid uuid;
+  is_wrap boolean;
   gtype provsql.provenance_gate;
   children uuid[];
   prov_i uuid;
   x_uuid uuid;
 BEGIN
   one_rv := provsql.as_random(1::double precision);
+  zero_uuid := (provsql.as_random(0::double precision))::uuid;
 
   IF state IS NULL THEN
     RETURN one_rv;
@@ -4208,8 +4223,17 @@ BEGIN
 
   FOR i IN 1..n LOOP
     gtype := provsql.get_gate_type(state[i]);
+    is_wrap := false;
     IF gtype = 'mixture'::provsql.provenance_gate THEN
       children := provsql.get_children(state[i]);
+      -- Only a genuine per-row provenance wrap
+      -- mixture(prov, rv, as_random(0)) gets its else-branch patched to
+      -- the multiplicative identity.  A categorical ([key, mul_1, ...])
+      -- or a user mixture(p, X, Y) with a non-zero else-branch is itself
+      -- an ordinary scalar RV value and passes through unchanged.
+      is_wrap := array_length(children, 1) = 3 AND children[3] = zero_uuid;
+    END IF;
+    IF is_wrap THEN
       prov_i := children[1];
       x_uuid := children[2];
       prod_state := array_append(
@@ -4269,12 +4293,18 @@ DECLARE
   i integer;
   os_state uuid[] := '{}';
   ident_rv provsql.random_variable;
+  zero_uuid uuid;
+  is_wrap boolean;
   gtype provsql.provenance_gate;
   children uuid[];
   prov_i uuid;
   x_uuid uuid;
 BEGIN
   ident_rv := provsql.as_random(identity);
+  -- The provenance wrap's else-branch is always as_random(0), regardless
+  -- of the aggregate; the order-statistic identity (-inf / +inf) is what
+  -- we patch it TO, not what we detect it BY.
+  zero_uuid := (provsql.as_random(0::double precision))::uuid;
   IF state IS NULL THEN
     RETURN ident_rv;
   END IF;
@@ -4285,8 +4315,17 @@ BEGIN
 
   FOR i IN 1..n LOOP
     gtype := provsql.get_gate_type(state[i]);
+    is_wrap := false;
     IF gtype = 'mixture'::provsql.provenance_gate THEN
       children := provsql.get_children(state[i]);
+      -- Only a genuine per-row provenance wrap
+      -- mixture(prov, rv, as_random(0)) gets its else-branch patched to
+      -- the order-statistic identity.  A categorical ([key, mul_1, ...])
+      -- or a user mixture(p, X, Y) with a non-zero else-branch is itself
+      -- an ordinary scalar RV value and passes through unchanged.
+      is_wrap := array_length(children, 1) = 3 AND children[3] = zero_uuid;
+    END IF;
+    IF is_wrap THEN
       prov_i := children[1];
       x_uuid := children[2];
       os_state := array_append(

@@ -524,5 +524,62 @@ SELECT get_gate_type(p::uuid)                AS empty_prod_kind,
 DROP TABLE empty_prod;
 DROP TABLE rv_prod_empty;
 
+-- ---------------------------------------------------------------------
+-- 9.  Aggregates over categorical / mixture RV values (untracked).
+-- ---------------------------------------------------------------------
+-- A categorical RV is itself a gate_mixture ([key, mul_1, ...]) and a
+-- user mixture(p, X, Y) is a gate_mixture too, so the product / avg /
+-- max / min FFUNCs must not mistake either for the C-side per-row
+-- provenance wrap mixture(prov, X, as_random(0)).  The wrap is
+-- recognised by its 3-child shape whose else-branch is the as_random(0)
+-- sentinel; every other gate_mixture passes through as a plain scalar RV
+-- value.  Untracked aggregate: the planner hook leaves the Aggref alone,
+-- so the FFUNC sees raw RV uuids directly.
+
+-- Five i.i.d. categorical draws, each 1.3 w.p. 0.5 else 0.9 (mean 1.1).
+CREATE TABLE agg_cat5 AS
+  SELECT provsql.categorical(ARRAY[0.5,0.5]::float8[],
+                             ARRAY[1.3,0.9]::float8[]) AS f
+  FROM generate_series(1, 5);
+
+-- sum / product / avg factor over the disjoint per-row footprints, so the
+-- closed-form evaluator is exact:
+--   E[sum] = 5 * 1.1 = 5.5 ; E[product] = 1.1^5 = 1.61051 ; E[avg] = 1.1
+SELECT abs(provsql.expected(provsql.sum(f))     - 5.5)     < 1e-9 AS cat_sum_exact,
+       abs(provsql.expected(provsql.product(f)) - 1.61051) < 1e-9 AS cat_prod_exact,
+       abs(provsql.expected(provsql.avg(f))     - 1.1)     < 1e-9 AS cat_avg_exact
+  FROM agg_cat5;
+
+-- max / min are order statistics of five i.i.d. two-point variables
+-- (MC-backed): E[max] = (1.3*31 + 0.9)/32 = 1.2875,
+--              E[min] = (0.9*31 + 1.3)/32 = 0.9125.
+SELECT abs(provsql.expected(provsql.max(f)) - 1.2875) < 0.05 AS cat_max_mc,
+       abs(provsql.expected(provsql.min(f)) - 0.9125) < 0.05 AS cat_min_mc
+  FROM agg_cat5;
+
+DROP TABLE agg_cat5;
+
+-- Five i.i.d. Bernoulli mixtures, each 2 w.p. 0.5 else 3 (mean 2.5).  A
+-- user mixture's else-branch must be preserved (it is a genuine RV value,
+-- not a wrap identity); otherwise product would collapse to 1.5^5 and max
+-- to -inf.
+CREATE TABLE agg_mix5 AS
+  SELECT provsql.mixture(0.5, provsql.as_random(2.0),
+                              provsql.as_random(3.0)) AS f
+  FROM generate_series(1, 5);
+
+--   E[sum] = 12.5 ; E[product] = 2.5^5 = 97.65625 ; E[avg] = 2.5
+SELECT abs(provsql.expected(provsql.sum(f))     - 12.5)     < 1e-9 AS mix_sum_exact,
+       abs(provsql.expected(provsql.product(f)) - 97.65625) < 1e-6 AS mix_prod_exact,
+       abs(provsql.expected(provsql.avg(f))     - 2.5)      < 1e-9 AS mix_avg_exact
+  FROM agg_mix5;
+
+-- E[max] = (3*31 + 2)/32 = 2.96875, E[min] = (2*31 + 3)/32 = 2.03125.
+SELECT abs(provsql.expected(provsql.max(f)) - 2.96875) < 0.05 AS mix_max_mc,
+       abs(provsql.expected(provsql.min(f)) - 2.03125) < 0.05 AS mix_min_mc
+  FROM agg_mix5;
+
+DROP TABLE agg_mix5;
+
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;
