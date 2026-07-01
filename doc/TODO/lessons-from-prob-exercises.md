@@ -1,15 +1,18 @@
 # Lessons from a probability-exercise feasibility study
 
-This file records the actionable items a survey of ~20 standard textbook
-probability exercises surfaced in ProvSQL's random-variable surface: one
-bug, one gap, one new feature, and one reinforcement of an existing
-roadmap item. It is a **to-do** document, not user documentation.
+This file records the actionable items two surveys of ~20 standard textbook
+probability exercises each surfaced in ProvSQL's random-variable surface: a
+bug, a gap, new features, reinforcements of existing roadmap items, and
+three design calls on how to close family / density gaps. It is a **to-do**
+document, not user documentation.
 
-The exercises were drawn from standard university problem sets (Emory Math
-Center's discrete-distribution set; the UT-Austin M362K final-practice set
-for continuous random variables). Every "works" and "fails" claim below
-was executed against **ProvSQL 1.11.0-dev on PostgreSQL 18** in throwaway
-databases; psql output is verbatim.
+The exercises were drawn from standard university problem sets: Emory Math
+Center's discrete-distribution set and the UT-Austin M362K final-practice
+set (first batch); the UConn probability workbook ch. 7, a Bayes' theorem
+problem set, Peter Dunn's *Theory of Statistical Distributions*, and
+Calcworkshop's Weibull/lognormal examples (second batch). Every "works" and
+"fails" claim below was executed against **ProvSQL 1.11.0-dev on PostgreSQL
+18** in throwaway databases; psql output is verbatim.
 
 Where a lesson reinforces an item already on the roadmap, this file points
 at that item in [`continuous_distributions.md`](continuous_distributions.md)
@@ -186,7 +189,7 @@ uniforms), which is unrepresentable purely for lack of roots:
 evaluator arm: everything lives in the generic `pow` (the `gate_arith POW`
 arm, its MC evaluation, and its domain guard). At most `sqrt` is an
 optional thin SQL alias `sqrt(random_variable) → X ^ 0.5`, mirroring how
-PostgreSQL offers `sqrt()` as sugar over `^` — pure convenience, zero new
+PostgreSQL offers `sqrt()` as sugar over `^` – pure convenience, zero new
 machinery. The real design point belongs to `pow`, not `sqrt`:
 
 - **Integer exponents are total** and already partly reachable (`X^2` is
@@ -203,3 +206,101 @@ machinery. The real design point belongs to `pow`, not `sqrt`:
 So the whole `sqrt` question reduces to a `pow` domain check plus, if
 desired, one-line SQL sugar. §B.3 should design the fractional-exponent
 domain semantics into `pow`; `sqrt` needs no separate treatment.
+
+## 5. Distribution families (from a second exercise batch)
+
+A second 20-exercise batch (discrete Bayes; geometric / negative-binomial /
+Poisson / hypergeometric; gamma / beta / Weibull / lognormal / Pareto;
+arbitrary-density integration) reconfirmed that the **family menu is the
+main gap**, and sharpened how to close it. What already works and needs no
+action: discrete Bayes via `repair_key` + the `|` operator (base-rate
+fallacy `P(disease | +) = 0.1654`, verified), order statistics, recognising
+a disguised supported family (`¼·x·e^(−x/2)` is `Erlang(2, ½)`,
+`expected` `= 4`), and the **monotone-threshold trick** (a lognormal
+`P(X > 12000)` needs no `exp`: it is `P(N > ln 12000)` on the underlying
+normal, verified `0.8918`).
+
+### 5.1 Most missing discrete families are a `categorical` wrapper away
+
+The count abstraction of hypergeometric, (truncated) Poisson, and negative
+binomial all have finite / truncatable support with a computable pmf, so
+each is a **convenience constructor that fills a `categorical`**, not new
+gate machinery: compute the pmf array in SQL, hand it to the existing
+categorical gate. Verified that the categorical path already answers such
+questions (e.g. binomial / dice sums). A native `gate_rv` family is only
+worth it where closed-form analytic moments / CDF are wanted instead of an
+enumerated pmf. This is the cheap way to land the §A.4 families
+(Poisson / Binomial / Geometric) and hypergeometric / negative binomial.
+
+### 5.2 Hypergeometric / sampling-without-replacement: count RV, not a `repair_key` generalisation
+
+Two different features, and for the exercises the cheap one wins:
+
+- A **`hypergeometric(N, K, n)` scalar count RV** (per §5.1, a
+  categorical-backed constructor) answers the textbook question
+  (`P(#successes > 3)`) directly. Recommended.
+- A **`repair_key` generalisation to k-subset draws** models the *actual
+  draw over actual tuples* – which rows were selected, the real negative
+  correlation, tracked in provenance and joinable against other queries on
+  the population. That is a heavier, separate *relational* feature (a
+  uniform distribution over k-subsets / k-permutations is a new provenance
+  construct, unlike `repair_key`'s single-choice-per-block), justified only
+  by a genuine database without-replacement-provenance use case, not by a
+  distribution exercise.
+
+Do not conflate them: ship the count RV; defer the relational k-subset
+construct until a real DB scenario needs tuple-level draw provenance.
+
+### 5.3 Weibull / Pareto / negative binomial belong on the roadmap
+
+Not currently tracked (unlike Gamma §A.1, Log-normal §A.2, Beta §A.3,
+Poisson / Binomial / Geometric §A.4). All three are mainstream:
+
+- **Weibull** – reliability / survival (time-to-failure; shape `k` tunes the
+  hazard: `k<1` infant mortality, `k=1` exponential, `k>1` wear-out),
+  warranty / maintenance ("B10 life"), and wind-speed modelling.
+- **Pareto** – heavy-tailed power laws (wealth, city / file sizes,
+  insurance / reinsurance large-loss and operational-risk modelling); the
+  tail dominates the total.
+- **Negative binomial** – waiting time to the `r`-th success, but chiefly
+  **overdispersed count data** (variance > mean, where Poisson fails):
+  insurance claims, ecology (species / parasite counts), and the standard
+  model for RNA-seq read counts. It is a Poisson-Gamma mixture.
+
+Continuous Weibull / Pareto ride on §B.3 (`log` / `pow` of an exponential /
+uniform) plus §A.1-style parametric class work; negative binomial rides on
+§5.1 (categorical) for the count abstraction.
+
+## 6. "Arbitrary user-defined density": land it as a numerical / tabulated gate, not symbolic
+
+The recurring "here is `f(x)`, now integrate" exercises split cleanly. The
+**symbolic** half – normalising constant in closed form, integrate to a
+CDF, differentiate, prove validity, derive the density of a transform – is
+**out of scope** (ProvSQL is not a CAS). But a user *supplying* a density
+and getting **numerical** answers is architecturally consistent, because
+Monte Carlo needs only a *sampler*:
+
+- With a sampler (rejection with a numeric envelope, or numeric
+  inverse-CDF), the whole MC surface opens up: moments, `variance`,
+  `P(comparison)`, arithmetic, conditioning by rejection. The analytic
+  closed-form paths simply never fire and fall to MC. **Exactness is the
+  casualty** – answers are sampled, not exact.
+
+Two constraints decide the shape:
+
+1. **Normalisation** is one numerical quadrature at construction (numerical,
+   not symbolic); needs finite support or an explicit tail model (the
+   unbounded `2/x²`-style densities are the awkward case).
+2. **The density must be C++-evaluable inside the sampler.** A per-sample
+   callback into the SQL executor is re-entrant and ruinously slow over
+   10k+ draws, so an arbitrary SQL lambda is out. Viable forms: a
+   **restricted, C++-evaluable expression AST** over one formal scalar
+   (reusing `gate_arith` / `gate_case`), or a **tabulated / piecewise**
+   density.
+
+**Recommendation.** Do not build "arbitrary analytic `f(x)`". Land it as the
+already-planned numerical / tabulated gate (§C.2 empirical samples, §C.3
+empirical CDF): a user with an analytic density tabulates or samples it and
+feeds that in – most of the value, none of the callback / symbolic-
+normalisation pain. Offer the restricted evaluable-AST density with
+numerical normalisation only if typing a formula is specifically wanted.
