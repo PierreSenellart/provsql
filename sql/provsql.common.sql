@@ -5115,6 +5115,67 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
+ * @brief Covariance Cov(X, Y) = E[XY] − E[X]·E[Y] of two random variables.
+ *
+ * The bivariate readout complementing the univariate moment surface
+ * (@ref expected / @ref variance / @ref moment / @ref central_moment).  It
+ * reduces entirely to the existing scalar machinery: @ref expected on the
+ * @c gate_arith @c TIMES product @c X*Y and on each factor.  The
+ * @c Expectation evaluator's @c FootprintCache structural-independence path
+ * makes it exact where it can -- disjoint @c gate_rv footprints give
+ * @c E[XY] = E[X]·E[Y] and hence an exact @c 0 -- and correlation-aware when
+ * @p x and @p y share leaves, with the whole-circuit Monte-Carlo net
+ * inherited for free.
+ *
+ * @param prov optional conditioning event (a provenance @c uuid); the
+ *   default @c gate_one() is the unconditional covariance.  Conditioning is
+ *   applied consistently to the product and to each factor, giving
+ *   @c Cov(X, Y | prov) = E[XY|prov] − E[X|prov]·E[Y|prov].
+ */
+CREATE OR REPLACE FUNCTION covariance(
+  x random_variable, y random_variable, prov uuid DEFAULT gate_one())
+  RETURNS double precision AS $$
+  SELECT provsql.expected(x * y, prov)
+       - provsql.expected(x, prov) * provsql.expected(y, prov);
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Standard deviation σ(X) = √Var(X) of a random variable.
+ *
+ * A thin numeric readout over @ref variance: the square root is taken on
+ * the scalar @c double result, so no RV-level @c sqrt is involved and this
+ * carries no dependency on RV function application (@c pow / @c sqrt).
+ * @c NULL propagates from a @c NULL input; the order-2 central moment is
+ * non-negative by construction, so the root is always real.
+ *
+ * @param prov optional conditioning event; default @c gate_one()
+ *   (unconditional).
+ */
+CREATE OR REPLACE FUNCTION stddev(
+  x random_variable, prov uuid DEFAULT gate_one())
+  RETURNS double precision AS $$
+  SELECT sqrt(provsql.variance(x, prov));
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/**
+ * @brief Pearson correlation ρ(X, Y) = Cov(X, Y) / (σ(X)·σ(Y)).
+ *
+ * A scalar division of @ref covariance by the two @ref stddev readouts.
+ * Returns @c NULL when either standard deviation is @c 0 (a degenerate /
+ * constant variable, for which correlation is undefined) rather than
+ * raising a division-by-zero.
+ *
+ * @param prov optional conditioning event; default @c gate_one()
+ *   (unconditional).
+ */
+CREATE OR REPLACE FUNCTION correlation(
+  x random_variable, y random_variable, prov uuid DEFAULT gate_one())
+  RETURNS double precision AS $$
+  SELECT provsql.covariance(x, y, prov)
+       / NULLIF(provsql.stddev(x, prov) * provsql.stddev(y, prov), 0);
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/**
  * @brief Compute the Shapley value of an input variable
  *
  * Measures the contribution of a specific input variable to the

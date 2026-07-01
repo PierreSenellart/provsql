@@ -1,0 +1,19 @@
+\set ECHO none
+indep_cov_zero|indep_corr_zero
+t|t
+(1 row)
+sd_normal|sd_uniform|sd_exp
+t|t|t
+(1 row)
+cov_self_is_var|corr_self_is_one
+t|t
+(1 row)
+sd_const_zero|corr_const_null
+t|t
+(1 row)
+remove_provenance
+
+(1 row)
+tri_cov_negative
+t
+(1 row)

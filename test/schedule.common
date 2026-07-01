@@ -186,6 +186,7 @@ test: continuous_mixture_hybrid
 test: continuous_categorical
 test: continuous_aggregation
 test: continuous_order_statistics
+test: continuous_covariance
 test: continuous_case
 test: continuous_having
 test: continuous_sample_truncated
