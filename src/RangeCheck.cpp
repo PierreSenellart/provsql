@@ -18,6 +18,7 @@
 #include "CircuitFromMMap.h"    // getGenericCircuit
 #include "Expectation.h"        // lift_conditioning
 #include "RandomVariable.h"     // parse_distribution_spec, DistKind
+#include "Distribution.h"       // makeDistribution -> per-family support()
 #include "provsql_utils_cpp.h"  // uuid2string
 
 #include <type_traits>          // std::is_same_v in truncateShape
@@ -124,18 +125,9 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
     case gate_rv: {
       auto spec = parse_distribution_spec(gc.getExtra(g));
       if (!spec) break;
-      switch (spec->kind) {
-        case DistKind::Normal:
-          /* Support is all of ℝ; Interval::all() is the default. */
-          break;
-        case DistKind::Uniform:
-          result = {spec->p1, spec->p2};
-          break;
-        case DistKind::Exponential:
-        case DistKind::Erlang:
-          result = {0.0, std::numeric_limits<double>::infinity()};
-          break;
-      }
+      // Natural support per family (Normal ℝ, Uniform [a,b], Exp/Erlang [0,∞)).
+      const DistSupport s = makeDistribution(*spec)->support();
+      result = {s.lo, s.hi};
       break;
     }
     case gate_arith: {
@@ -1443,15 +1435,9 @@ matchTruncatedSingleRv(const GenericCircuit &gc, gate_t root,
    * intersection seed for collectRvConstraints (which already
    * intersects internally, but the bare-natural case still needs
    * a baseline). */
-  double nat_lo = -std::numeric_limits<double>::infinity();
-  double nat_hi = +std::numeric_limits<double>::infinity();
-  switch (spec->kind) {
-    case DistKind::Normal:                                       break;
-    case DistKind::Uniform:     nat_lo = spec->p1;
-                                nat_hi = spec->p2;               break;
-    case DistKind::Exponential: nat_lo = 0.0;                    break;
-    case DistKind::Erlang:      nat_lo = 0.0;                    break;
-  }
+  const DistSupport nat_support = makeDistribution(*spec)->support();
+  double nat_lo = nat_support.lo;
+  double nat_hi = nat_support.hi;
 
   /* Unconditional path: return natural support, mark untruncated. */
   if (!event_root.has_value()
