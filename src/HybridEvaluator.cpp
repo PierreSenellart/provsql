@@ -126,6 +126,24 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
     case PROVSQL_ARITH_NEG:
       if (wires.size() != 1) return NaN;
       return -first;
+    case PROVSQL_ARITH_MAX: {
+      double r = first;
+      for (std::size_t i = 1; i < wires.size(); ++i) {
+        double v = try_eval_constant(gc, wires[i]);
+        if (std::isnan(v)) return NaN;
+        r = std::max(r, v);
+      }
+      return r;
+    }
+    case PROVSQL_ARITH_MIN: {
+      double r = first;
+      for (std::size_t i = 1; i < wires.size(); ++i) {
+        double v = try_eval_constant(gc, wires[i]);
+        if (std::isnan(v)) return NaN;
+        r = std::min(r, v);
+      }
+      return r;
+    }
   }
   return NaN;
 }
@@ -1499,13 +1517,18 @@ bool is_analytic_singleton_cmp(const GenericCircuit &gc, gate_t cmp_gate)
       (gc.isCategoricalMixture(wires[1]) && t0 == gate_value))
     return true;
 
-  /* X cmp Y both bare normals: AnalyticEvaluator's normal-diff
-   * shortcut applies. */
+  /* X cmp Y, both bare RVs of the same family with a closed-form
+   * comparison: AnalyticEvaluator's @c rvVsRvDecide handles Normal-Normal
+   * (normal-diff), Exp-Exp (rate ratio), and Uniform-Uniform (geometric).
+   * Two distinct bare-RV leaves are independent, so leaving them for the
+   * closed form is exact -- no MC needed. */
   if (t0 == gate_rv && t1 == gate_rv) {
     auto sx = parse_distribution_spec(gc.getExtra(wires[0]));
     auto sy = parse_distribution_spec(gc.getExtra(wires[1]));
-    if (sx && sy && sx->kind == DistKind::Normal
-                 && sy->kind == DistKind::Normal)
+    if (sx && sy && sx->kind == sy->kind &&
+        (sx->kind == DistKind::Normal ||
+         sx->kind == DistKind::Exponential ||
+         sx->kind == DistKind::Uniform))
       return true;
   }
   return false;

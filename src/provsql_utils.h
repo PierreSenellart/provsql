@@ -75,6 +75,7 @@ typedef enum gate_type {
   gate_annotation, ///< Transparent single-child wrapper carrying a query-level annotation in @c extra (inversion-free certificate / per-input order key); identity for EVERY evaluator, and -- unlike the children-only convention -- its UUID folds in @c extra so distinct annotations over the same child are distinct gates.
   gate_conditioned, ///< Conditioning marker with two children [target, evidence]: measure-only, @c probability_evaluate returns P(target ∧ evidence)/P(evidence) and the RV / agg_token evaluators the restricted distribution; for the uuid carrier a TERMINAL gate (never a semiring child), nested conditioning folding into a conjunction of evidence; refused by every general @c sr_* semiring (normalization is not a semiring operation).
   gate_mobius, ///< Signed Möbius combination: a MEASURE-only gate carrying one integer coefficient per child (in @c extra, the @c gate_arith precedent), @c probability_evaluate returns Σ_i coeff_i · P(child_i); the one new primitive of the safe-UCQ Möbius-inversion route (see @c MobiusCompiler.h), with certified-independent Boolean islands below it; refused by every general @c sr_* semiring (a signed combination is not a semiring operation).
+  gate_case, ///< N-ary guarded selection over scalar (RV) children: wires are [guard_1, value_1, ..., guard_k, value_k, default] (odd length 2k+1), first-match semantics -- the value of the first guard (a Boolean @c gate_cmp / event) that holds, else the default. Carries data only in its wires (the @c gate_conditioned precedent: no @c info / @c extra). RV/measure-carrier: a real arm in the MC sampler / RangeCheck / Expectation footprint, refused by every general @c sr_* semiring (a guarded selection is not a semiring operation).
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
@@ -114,7 +115,9 @@ typedef enum provsql_arith_op {
   PROVSQL_ARITH_TIMES = 1, ///< n-ary, product of children
   PROVSQL_ARITH_MINUS = 2, ///< binary, child0 - child1
   PROVSQL_ARITH_DIV   = 3, ///< binary, child0 / child1
-  PROVSQL_ARITH_NEG   = 4  ///< unary, -child0
+  PROVSQL_ARITH_NEG   = 4, ///< unary, -child0
+  PROVSQL_ARITH_MAX   = 5, ///< n-ary, max of children (order statistic; greatest / max aggregate)
+  PROVSQL_ARITH_MIN   = 6  ///< n-ary, min of children (order statistic; least / min aggregate)
 } provsql_arith_op;
 
 /** Names of gate types */
@@ -168,6 +171,13 @@ typedef struct constants_t {
   Oid OID_FUNCTION_GET_EXTRA;    ///< OID of the get_extra FUNCTION
   Oid OID_UNNEST; ///< OID of the unnest(anyarray) FUNCTION
   Oid OID_TYPE_RANDOM_VARIABLE; ///< OID of the random_variable TYPE
+  Oid OID_TYPE_RANDOM_VARIABLE_ARRAY; ///< OID of the random_variable[] TYPE
+  /** @name Order-statistic constructors the planner lifts a builtin
+   *  @c GREATEST / @c LEAST over @c random_variable arguments into. */
+  /**@{*/
+  Oid OID_FUNCTION_RV_GREATEST; ///< provsql.greatest(VARIADIC random_variable[])
+  Oid OID_FUNCTION_RV_LEAST;    ///< provsql.least(VARIADIC random_variable[])
+  /**@}*/
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
   Oid OID_FUNCTION_CHOOSE; ///< OID of the choose(anyelement) aggregate (keeps the first non-NULL value); used to decorrelate scalar subqueries into a LEFT JOIN + GROUP BY
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
@@ -240,6 +250,25 @@ typedef struct constants_t {
    *  (regular-type) comparison appearing inside a mixed conditioning
    *  predicate. */
   Oid OID_FUNCTION_REGULAR_INDICATOR;
+  /** @brief OID of the real @c provsql.probability_evaluate(uuid,text,text).
+   *  The target of the @c probability(<predicate>) rewrite: the planner emits
+   *  a call to it over the event token built from the Boolean argument. */
+  Oid OID_FUNCTION_PROBABILITY_EVALUATE;
+  /** @brief OID of the @c probability(boolean,text,text) placeholder.
+   *  When its argument carries a probabilistic (random_variable / aggregate)
+   *  comparison the planner rewrites the whole call into
+   *  @c probability_evaluate over the argument's event token; a purely
+   *  deterministic argument is left to the SQL body (which returns @c 1/0).
+   *  The predicate surface is only on @c probability, not
+   *  @c probability_evaluate, to avoid an unknown-literal overload ambiguity
+   *  (see @c sql/provsql.common.sql).  @c InvalidOid disables the rewrite. */
+  Oid OID_FUNCTION_PROBABILITY_PREDICATE;
+  /** @brief OID of @c provsql.rv_case(uuid[])->random_variable.
+   *  Builds a @c gate_case from the flattened
+   *  @c [guard_1, value_1, ..., default] wire list the planner emits for an
+   *  RV-typed @c CASE expression.  @c InvalidOid on a schema predating
+   *  @c gate_case (the @c CASE-over-RV rewrite is then disabled). */
+  Oid OID_FUNCTION_RV_CASE;
   bool ok; ///< true if constants were loaded
 } constants_t;
 

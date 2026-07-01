@@ -506,9 +506,20 @@ The chain (in order) :
   continuous-RV cmps (see the hybrid section below).
 - :cfunc:`runAnalyticEvaluator` : closed-form CDF for trivial RV cmp
   shapes (singleton bare ``gate_rv`` vs ``gate_value``, or two
-  bare normals).  Probability-specific (the resulting
-  ``gate_input`` carries a numeric probability with no semiring
-  meaning), so it runs here and not at load time.
+  bare RVs of the same family -- Normal-Normal via the normal
+  difference, Exponential-Exponential via ``λ_X / (λ_X + λ_Y)``,
+  Uniform-Uniform via the geometric area, in ``rvVsRvDecide``).
+  Probability-specific (the resulting ``gate_input`` carries a
+  numeric probability with no semiring meaning), so it runs here and
+  not at load time.  ``is_analytic_singleton_cmp`` in the hybrid
+  decomposer mirrors this shape list so an independent two-RV cmp is
+  left for the exact CDF rather than pre-empted by per-cmp Monte
+  Carlo.  The same family closed forms back the exact order-statistic
+  means (i.i.d. ``E[max]`` / ``E[min]`` in ``iidOrderStatMean``) and
+  the conditional moments over an RV-vs-RV comparison
+  (``E[X | X op Y]`` by a one-dimensional quadrature in
+  ``try_rvVsRv_conditional_moment``, exact for uniforms), both in
+  ``src/Expectation.cpp``.
 - :cfunc:`runCountCmpEvaluator` (gated by
   ``provsql.cmp_probability_evaluation``, hidden diagnostic
   default on) : recognises HAVING

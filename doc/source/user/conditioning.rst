@@ -77,6 +77,23 @@ comparisons, which the planner lifts into an evidence gate for you:
     WITH r AS (SELECT normal(20, 5) AS x)
     SELECT expected(x | (x > 25)) FROM r;
 
+The evidence may also compare the value against **another random
+variable**. Conditioning on such an RV-vs-RV comparison is evaluated by
+a one-dimensional quadrature over the independent operands -- exact for
+uniforms:
+
+.. code-block:: postgresql
+
+    -- E[X | X > Y] = 2/3 for two i.i.d. U(0,1); exact with MC disabled
+    SET provsql.rv_mc_samples = 0;
+    WITH r AS (SELECT uniform(0,1) AS x, uniform(0,1) AS y)
+    SELECT expected(x | (x > y)) FROM r;
+
+The dual question -- the *probability* a comparison holds rather than a
+conditioned moment -- is :sqlfunc:`probability` over the predicate:
+``probability(x > y)`` for two i.i.d. uniforms is exactly ``0.5``. See
+:doc:`continuous-distributions` for the comparison-event surface.
+
 The result of ``value | evidence`` is **terminal**: a conditioned value may
 only be conditioned further, never combined into a larger ``plus`` /
 ``times`` / ``monus`` / aggregate gate.

@@ -166,6 +166,23 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
           if (wires.size() != 1) break;
           result = neg(first);
           break;
+        case PROVSQL_ARITH_MAX:
+          /* max/min are monotone in each argument, so the support propagates
+           * directly and soundly (independent of any correlation between the
+           * children): [max(lo_i), max(hi_i)] resp. [min(lo_i), min(hi_i)]. */
+          result = first;
+          for (std::size_t i = 1; i < wires.size(); ++i) {
+            Interval o = intervalOf(gc, wires[i], cache);
+            result = { std::max(result.lo, o.lo), std::max(result.hi, o.hi) };
+          }
+          break;
+        case PROVSQL_ARITH_MIN:
+          result = first;
+          for (std::size_t i = 1; i < wires.size(); ++i) {
+            Interval o = intervalOf(gc, wires[i], cache);
+            result = { std::min(result.lo, o.lo), std::min(result.hi, o.hi) };
+          }
+          break;
       }
       break;
     }
@@ -209,6 +226,20 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
         Interval ix = intervalOf(gc, wires[1], cache);
         Interval iy = intervalOf(gc, wires[2], cache);
         result = {std::min(ix.lo, iy.lo), std::max(ix.hi, iy.hi)};
+      }
+      break;
+    }
+    case gate_case: {
+      /* Guarded selection [g_1, v_1, ..., g_k, v_k, default]: the result is
+       * always one of the value branches, so the support is the union of the
+       * values' supports (the guards only decide which one).  Values are the
+       * odd-indexed wires plus the final default. */
+      const auto &wires = gc.getWires(g);
+      if (wires.empty()) break;
+      result = intervalOf(gc, wires.back(), cache);  /* default */
+      for (std::size_t i = 1; i + 1 < wires.size(); i += 2) {
+        Interval o = intervalOf(gc, wires[i], cache);
+        result = { std::min(result.lo, o.lo), std::max(result.hi, o.hi) };
       }
       break;
     }

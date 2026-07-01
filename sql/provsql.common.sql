@@ -71,7 +71,7 @@ CREATE TYPE provenance_gate AS
                       -- nested conditioning folds into a conjunction of
                       -- evidence.  Refused by every general sr_* semiring
                       -- (normalization is not a semiring operation).
-    'mobius'          -- Signed Möbius combination over child islands: one
+    'mobius',         -- Signed Möbius combination over child islands: one
                       -- integer coefficient per child in @c extra (the
                       -- gate_arith precedent), probability_evaluate returns
                       -- Σ_i coeff_i · P(child_i).  The one new primitive of
@@ -79,6 +79,13 @@ CREATE TYPE provenance_gate AS
                       -- in the measure interpretation; refused by every
                       -- general sr_* semiring (a signed combination is not a
                       -- semiring operation).
+    'case'            -- N-ary guarded selection over scalar (RV) children:
+                      -- wires [guard_1, value_1, ..., guard_k, value_k,
+                      -- default], first-match semantics (the value of the
+                      -- first guard event that holds, else the default).
+                      -- Backs a CASE expression over random variables (and
+                      -- abs / clamp / ReLU as sugar).  RV/measure-carrier;
+                      -- refused by every general sr_* semiring.
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -1481,6 +1488,49 @@ BEGIN
   PERFORM create_gate(arith_token, 'arith', children);
   PERFORM set_infos(arith_token, op);
   RETURN arith_token;
+END
+$$ LANGUAGE plpgsql
+  SET search_path=provsql,pg_temp,public
+  SECURITY DEFINER
+  IMMUTABLE
+  PARALLEL SAFE
+  STRICT;
+
+/**
+ * @brief Create a guarded-selection gate over scalar (RV) children.
+ *
+ * Builds a deterministic @c gate_case from the flattened wire list
+ * @c [guard_1, value_1, ..., guard_k, value_k, default] (odd length): the
+ * value of the first guard event that holds, else the default (first-match
+ * semantics).  Each guard is a Boolean event token (a @c gate_cmp or Boolean
+ * combination); each value and the default are scalar-producing gates
+ * (@c gate_rv, @c gate_value, @c gate_arith, another @c gate_case, ...).  The
+ * token UUID is derived deterministically from @p children so identical
+ * @c CASE expressions share their gate.
+ *
+ * @param children  Flattened guard/value wires ending with the default
+ *                  (@c array_length must be odd and @c >= 1).
+ * @return  UUID of the (possibly pre-existing) @c gate_case.
+ */
+CREATE OR REPLACE FUNCTION provenance_case(
+  children UUID[]
+)
+RETURNS UUID AS
+$$
+DECLARE
+  case_token UUID;
+BEGIN
+  IF array_length(children, 1) IS NULL OR array_length(children, 1) % 2 = 0 THEN
+    RAISE EXCEPTION 'provenance_case expects an odd number of children '
+      '(guard/value pairs followed by a default), got %',
+      coalesce(array_length(children, 1), 0);
+  END IF;
+  case_token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('case', children::text)
+  );
+  PERFORM create_gate(case_token, 'case', children);
+  RETURN case_token;
 END
 $$ LANGUAGE plpgsql
   SET search_path=provsql,pg_temp,public
@@ -3645,6 +3695,48 @@ CREATE OPERATOR > (
 );
 
 /**
+ * @brief btree comparison support for @c random_variable -- always an error.
+ *
+ * A @c random_variable is a distribution, not a scalar, so it has no total
+ * order: sorting (@c ORDER @c BY), de-duplicating (@c DISTINCT), grouping, and
+ * the built-in @c GREATEST / @c LEAST all reduce to this btree comparison
+ * proc, which raises a clear diagnostic rather than a placeholder message.
+ *
+ * The proc exists only so a DEFAULT btree operator class can be declared for
+ * @c random_variable -- which is what lets PostgreSQL's @c GREATEST / @c LEAST
+ * grammar parse over random variables so the planner hook can lift it into a
+ * @c gate_arith @c MAX / @c MIN order statistic.  When the hook is active the
+ * @c GREATEST / @c LEAST node is rewritten before it ever calls this proc.
+ */
+CREATE OR REPLACE FUNCTION random_variable_btree_cmp(
+  a random_variable, b random_variable) RETURNS integer AS
+$$
+BEGIN
+  RAISE EXCEPTION 'comparison or ordering of random_variable values is '
+                  'meaningless: a random_variable is a distribution, not a scalar'
+    USING HINT =
+      'Compare them as a probabilistic event -- in a WHERE / JOIN clause or '
+      'with probability(x > y); take order statistics with provsql.greatest / '
+      'provsql.least (or the min / max aggregates); summarise numerically with '
+      'expected / variance / support.';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+-- DEFAULT btree operator class over the (planner-hook-lifted) comparison
+-- operators.  Its only purpose is to make GREATEST / LEAST over random_variable
+-- parse; every actual comparison it would drive (ORDER BY, DISTINCT, an
+-- un-rewritten GREATEST) funnels through random_variable_btree_cmp above and
+-- raises the "meaningless" diagnostic.
+CREATE OPERATOR CLASS random_variable_ops
+  DEFAULT FOR TYPE random_variable USING btree AS
+    OPERATOR 1 <,
+    OPERATOR 2 <=,
+    OPERATOR 3 =,
+    OPERATOR 4 >=,
+    OPERATOR 5 >,
+    FUNCTION 1 random_variable_btree_cmp(random_variable, random_variable);
+
+/**
  * @brief Condition a random variable on an event: @c "X | C".
  *
  * Returns a conditioned distribution that flows onward like any other
@@ -3762,6 +3854,95 @@ $$
     ELSE prov
   END;
 $$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
+ * @name Order statistics over random_variable
+ *
+ * Same-row @c greatest / @c least over @c random_variable arguments: the
+ * order-statistic counterpart of the element-wise @c "+ - * /" operators.
+ * They lower to a single @c gate_arith with the @c MAX / @c MIN opcode over
+ * the argument circuits, the same n-ary shape the @c max / @c min aggregates
+ * build.  Evaluation is Monte-Carlo-correct out of the box (@c std::max /
+ * @c std::min over the jointly-sampled children, so shared base RVs stay
+ * coupled); closed forms for i.i.d. families come from the analytic
+ * order-statistic pass.
+ *
+ * PostgreSQL's built-in @c GREATEST / @c LEAST are dedicated syntax (a
+ * @c MinMaxExpr requiring a btree comparison), not overloadable functions, so
+ * the surface is the schema-qualified @c provsql.greatest(...) /
+ * @c provsql.least(...).  @c NULL arguments are ignored, matching the built-in
+ * (an all-@c NULL / empty call returns @c NULL).
+ * @{
+ */
+
+-- "greatest" / "least" are col_name keywords, so the CREATE FUNCTION name
+-- must be quoted; callers reach them qualified as provsql.greatest(...).
+-- Idempotence: max / min ignore repeats, so identical children (same gate)
+-- are de-duplicated -- greatest(x, x, y) == greatest(x, y) -- and a single
+-- surviving child collapses to itself -- greatest(x) == x.  DISTINCT also sorts
+-- the children, so the argument order does not matter for gate sharing.  (Two
+-- independent draws of the same distribution are distinct gates and are NOT
+-- de-duplicated.)
+CREATE OR REPLACE FUNCTION "greatest"(VARIADIC args random_variable[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  children uuid[];
+BEGIN
+  IF args IS NULL THEN
+    RETURN NULL;
+  END IF;
+  SELECT array_agg(DISTINCT (a)::uuid) INTO children
+    FROM unnest(args) a WHERE a IS NOT NULL;
+  IF children IS NULL OR array_length(children, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF array_length(children, 1) = 1 THEN
+    RETURN provsql.random_variable_make(children[1]);
+  END IF;
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(5, children));  -- 5 = PROVSQL_ARITH_MAX
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION "least"(VARIADIC args random_variable[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  children uuid[];
+BEGIN
+  IF args IS NULL THEN
+    RETURN NULL;
+  END IF;
+  SELECT array_agg(DISTINCT (a)::uuid) INTO children
+    FROM unnest(args) a WHERE a IS NOT NULL;
+  IF children IS NULL OR array_length(children, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF array_length(children, 1) = 1 THEN
+    RETURN provsql.random_variable_make(children[1]);
+  END IF;
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(6, children));  -- 6 = PROVSQL_ARITH_MIN
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Build a @c random_variable from a guarded-selection @c gate_case.
+ *
+ * Thin @c random_variable wrapper over @c provenance_case (defined with the
+ * other gate builders, since it is uuid-only), the target of the planner-hook
+ * @c CASE-over-RV rewrite: the hook flattens the branches into
+ * @c [guard_1, value_1, ..., default] and emits this call so an RV-typed
+ * @c CASE surfaces as a first-class @c random_variable.
+ */
+CREATE OR REPLACE FUNCTION rv_case(
+  children UUID[]
+)
+RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(provsql.provenance_case(children));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @} */
 
@@ -4058,6 +4239,104 @@ CREATE AGGREGATE product(random_variable) (
   FINALFUNC = product_rv_ffunc
 );
 
+/**
+ * @brief Final function for @c max(random_variable) / @c min(random_variable).
+ *
+ * The order-statistic analogues of @c sum / @c product:
+ * @f[
+ *   \mathrm{MAX}(x) = \max_{i : \varphi_i} X_i, \qquad
+ *   \mathrm{MIN}(x) = \min_{i : \varphi_i} X_i.
+ * @f]
+ * A row absent in a world (its provenance @f$\varphi_i@f$ false) must not
+ * perturb the extremum, so it contributes the order-statistic identity:
+ * @f$-\infty@f$ for @c MAX, @f$+\infty@f$ for @c MIN.  The shared C-side wrap
+ * builds @c mixture(prov_i, X_i, as_random(0)) per row (like @c sum); this
+ * FFUNC patches each mixture's else-branch to @c as_random(∓∞) -- exactly the
+ * way @c product_rv_ffunc patches it to @c as_random(1) -- then builds a
+ * single @c gate_arith with the @c MAX / @c MIN opcode.
+ *
+ * Empty group: the identity (@f$-\infty@f$ / @f$+\infty@f$), the extremum
+ * counterpart to @c sum's @c as_random(0).  Singleton: the patched child
+ * directly.  Direct (untracked) call: state entries are raw RV uuids, passed
+ * through unchanged.
+ */
+CREATE OR REPLACE FUNCTION extremum_rv_ffunc(
+  state uuid[], op integer, identity double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  i integer;
+  os_state uuid[] := '{}';
+  ident_rv provsql.random_variable;
+  gtype provsql.provenance_gate;
+  children uuid[];
+  prov_i uuid;
+  x_uuid uuid;
+BEGIN
+  ident_rv := provsql.as_random(identity);
+  IF state IS NULL THEN
+    RETURN ident_rv;
+  END IF;
+  n := array_length(state, 1);
+  IF n IS NULL THEN
+    RETURN ident_rv;
+  END IF;
+
+  FOR i IN 1..n LOOP
+    gtype := provsql.get_gate_type(state[i]);
+    IF gtype = 'mixture'::provsql.provenance_gate THEN
+      children := provsql.get_children(state[i]);
+      prov_i := children[1];
+      x_uuid := children[2];
+      os_state := array_append(
+        os_state,
+        (
+          provsql.mixture(
+            prov_i,
+            provsql.random_variable_make(x_uuid),
+            ident_rv))::uuid);
+    ELSE
+      os_state := array_append(os_state, state[i]);
+    END IF;
+  END LOOP;
+
+  IF n = 1 THEN
+    RETURN provsql.random_variable_make(os_state[1]);
+  END IF;
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(op, os_state));
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION max_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+  -- 5 = PROVSQL_ARITH_MAX; empty-group / row-absent identity -inf.
+  SELECT provsql.extremum_rv_ffunc(state, 5, '-Infinity'::double precision);
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION min_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+  -- 6 = PROVSQL_ARITH_MIN; empty-group / row-absent identity +inf.
+  SELECT provsql.extremum_rv_ffunc(state, 6, 'Infinity'::double precision);
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE max(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = max_rv_ffunc
+);
+
+CREATE AGGREGATE min(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = min_rv_ffunc
+);
+
 /** @} */
 
 /** @} */
@@ -4225,6 +4504,62 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   arguments text = NULL)
   RETURNS DOUBLE PRECISION AS
   'provsql','probability_evaluate' LANGUAGE C STABLE;
+
+/**
+ * @brief Short alias of @c probability_evaluate.
+ *
+ * Bound to the same C symbol as @c probability_evaluate, so
+ * @c probability(token) is exactly @c probability_evaluate(token).
+ * Provided to match the concise polymorphic surface of @c expected,
+ * @c variance, and @c support: callers are not forced to spell out
+ * @c probability_evaluate.
+ *
+ * @param token provenance token to evaluate
+ * @param method knowledge compilation method (NULL for default)
+ * @param arguments additional arguments for the method
+ */
+CREATE OR REPLACE FUNCTION probability(
+  token UUID,
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS
+  'provsql','probability_evaluate' LANGUAGE C STABLE;
+
+/**
+ * @brief Probability of a Boolean event over random variables.
+ *
+ * The @c (boolean) overload of @c probability lets a query ask for the
+ * probability of an event with the natural infix grammar, e.g.
+ * @c probability(x @c > @c y @c AND @c x @c < @c z).  When the argument
+ * carries a probabilistic (random_variable / aggregate) comparison, the
+ * planner hook intercepts the call and rewrites it into
+ * @c probability_evaluate over the argument's event token (a @c gate_cmp /
+ * Boolean combination); the body below is then never reached.
+ *
+ * When the argument is a purely deterministic Boolean (no probabilistic
+ * comparison) the hook leaves the call alone and the body runs, so the
+ * probability of a definite event is simply @c 1 when it holds and @c 0 when
+ * it does not (@c NULL propagates).  This makes @c probability total over
+ * Booleans -- @c probability(1 @c > @c 0) is @c 1, @c probability(region @c =
+ * @c 'north') is a per-row @c 0/1 -- and it works even with
+ * @c provsql.active off.  @c NOT strict so a default-NULL @c method does not
+ * short-circuit the cast.
+ *
+ * The predicate surface deliberately lives only on the short @c probability
+ * name, not on @c probability_evaluate: a Boolean overload of the latter
+ * would make @c probability_evaluate('<uuid-as-text>') ambiguous (an unknown
+ * literal matches both the @c uuid and the @c boolean overload), breaking
+ * existing string-literal callers.  @c probability is new, so it carries the
+ * predicate overload without that hazard.
+ */
+CREATE OR REPLACE FUNCTION probability(
+  predicate boolean,
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS
+$$
+  SELECT predicate::integer::double precision;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /**
  * @brief Cheap certified probability interval of a DNF-shaped circuit.

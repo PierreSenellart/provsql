@@ -374,8 +374,10 @@ defined in :cfile:`provsql_utils.h`:
        ``erlang:k,λ``).
    * - ``gate_arith``
      - ``N``-ary arithmetic over scalar children. The operator tag
-       (``provsql_arith_op``: PLUS / TIMES / MINUS / DIV / NEG) is
-       stored in ``info1``.
+       (``provsql_arith_op``: PLUS / TIMES / MINUS / DIV / NEG /
+       MAX / MIN) is stored in ``info1``. MAX / MIN are the order
+       statistics behind ``greatest`` / ``least`` and the
+       RV ``min`` / ``max`` aggregates.
    * - ``gate_mixture``
      - Probabilistic mixture of scalar random-variable roots gated by
        a Bernoulli weight. The wire vector is ``[p, x, y]`` for a
@@ -409,9 +411,19 @@ defined in :cfile:`provsql_utils.h`:
        query's literal lineage is a designated transparent child
        (marked ``L:<uuid>`` in ``extra``), so semiring evaluation,
        Shapley and named probability methods pass through to it.
+   * - ``gate_case``
+     - ``N``-ary guarded selection over scalar (RV) children: wires
+       ``[guard_1, value_1, …, guard_k, value_k, default]`` with
+       first-match semantics (the value of the first guard event that
+       holds, else the default). Backs a ``CASE`` over random variables
+       (and ``abs`` / ``clamp`` / ReLU as sugar). Carries data only in
+       its wires (the ``gate_conditioned`` precedent). RV/measure-carrier:
+       real arms in the Monte-Carlo sampler, ``RangeCheck``, and the
+       ``Expectation`` footprint, refused by every general ``sr_*``
+       semiring.
 
-The three random-variable gate types (``gate_rv``, ``gate_arith``,
-``gate_mixture``), the marker gates (``gate_assumed``,
+The random-variable gate types (``gate_rv``, ``gate_arith``,
+``gate_mixture``, ``gate_case``), the marker gates (``gate_assumed``,
 ``gate_annotation``) and the measure-only gates (``gate_conditioned``,
 ``gate_mobius``) are appended to the enum
 before ``gate_invalid``, with no renumbering of older values. See

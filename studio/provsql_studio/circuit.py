@@ -43,6 +43,8 @@ _GATE_LABEL = {
     "conditioned": "∣",   # A given B (the conditioning bar)
     "mobius":   "μ",      # signed Möbius combination (the Möbius function μ);
                           # each child edge is labelled with its coefficient
+    "case":     "⇢",      # guarded selection over RVs (CASE): first-matching
+                          # guard's value; children are guard/value pairs + default
     # An assumption wrapper normally elides into a badge on its child
     # (_elide_markers); it renders as its own node only when its child
     # lies beyond the scene frontier.
@@ -60,6 +62,8 @@ _ARITH_OP_GLYPH = {
     2: "−",
     3: "÷",
     4: "−",
+    5: "max",   # PROVSQL_ARITH_MAX: n-ary order statistic (greatest / max)
+    6: "min",   # PROVSQL_ARITH_MIN: n-ary order statistic (least / min)
 }
 
 # Distribution-kind initials used in the in-circle label for gate_rv.

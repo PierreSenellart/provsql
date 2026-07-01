@@ -248,6 +248,19 @@ double Sampler::evalScalar(gate_t g)
             throw CircuitException("gate_arith NEG must be unary");
           result = -evalScalar(wires[0]);
           break;
+        case PROVSQL_ARITH_MAX:
+          // n-ary order statistic: max over the sampled children.  Shared
+          // base RVs stay coupled through rv_cache_, so max(x, y) with x,y
+          // over the same leaf draws them jointly (correct correlation).
+          result = evalScalar(wires[0]);
+          for(std::size_t i = 1; i < wires.size(); ++i)
+            result = std::max(result, evalScalar(wires[i]));
+          break;
+        case PROVSQL_ARITH_MIN:
+          result = evalScalar(wires[0]);
+          for(std::size_t i = 1; i < wires.size(); ++i)
+            result = std::min(result, evalScalar(wires[i]));
+          break;
         default:
           throw CircuitException(
                   "Unknown gate_arith operator tag: " +
@@ -390,6 +403,31 @@ double Sampler::evalScalar(gate_t g)
                 "[p_token, x_token, y_token]");
       result = evalBool(wires[0]) ? evalScalar(wires[1])
                                   : evalScalar(wires[2]);
+      break;
+    }
+    case gate_case:
+    {
+      // Guarded selection [g_1, v_1, ..., g_k, v_k, default] (2k+1 wires):
+      // first-match on the current draw.  Evaluating the guards through
+      // evalBool and the values through evalScalar in the same iteration
+      // keeps shared base RVs coupled (a value and a guard over the same leaf
+      // draw jointly), which is exactly why gate_case beats a mixture-of-
+      // conditioned lowering that would resample and lose the correlation.
+      const auto &wires = gc_.getWires(g);
+      if(wires.empty())
+        throw CircuitException(
+                "gate_case must have at least one child (the default)");
+      const std::size_t k = wires.size() / 2;
+      bool matched = false;
+      for(std::size_t i = 0; i < k; ++i) {
+        if(evalBool(wires[2 * i])) {
+          result = evalScalar(wires[2 * i + 1]);
+          matched = true;
+          break;
+        }
+      }
+      if(!matched)
+        result = evalScalar(wires.back());  // the default value
       break;
     }
     default:

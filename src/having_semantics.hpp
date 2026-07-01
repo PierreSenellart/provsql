@@ -687,6 +687,19 @@ void provsql_having(
             if (!eval(w[0], world, a, ai)) return false;
             out = -a; is_int = ai; return true;
           }
+          if (aop == PROVSQL_ARITH_MAX || aop == PROVSQL_ARITH_MIN) {
+            if (w.empty()) return false;
+            double r = 0; bool all_int = true, first = true;
+            for (gate_t ch : w) {
+              double v; bool vi;
+              if (!eval(ch, world, v, vi)) return false;
+              if (first) { r = v; first = false; }
+              else r = (aop == PROVSQL_ARITH_MAX) ? std::max(r, v)
+                                                  : std::min(r, v);
+              all_int = all_int && vi;
+            }
+            out = r; is_int = all_int; return true;
+          }
           return false;
         }
         return false;

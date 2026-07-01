@@ -5,6 +5,7 @@
  */
 #include "AnalyticEvaluator.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -173,6 +174,66 @@ double normalDiffDecide(const DistributionSpec &X,
   return cdfDecide(diff, op, 0.0);
 }
 
+/* ∫_c^d F_X(y) dy for X ~ Uniform(a, b) (b > a), i.e. the integral of the
+ * clamped ramp clamp((y-a)/(b-a), 0, 1) over [c, d].  Used by the
+ * Uniform-Uniform comparison closed form P(X < Y) = E_Y[F_X(Y)]. */
+double integralUniformCdf(double a, double b, double c, double d)
+{
+  double total = 0.0;
+  /* y in [a, b]: integrand (y-a)/(b-a) */
+  const double lo = std::max(c, a), hi = std::min(d, b);
+  if (hi > lo)
+    total += ((hi - a) * (hi - a) - (lo - a) * (lo - a)) / (2.0 * (b - a));
+  /* y >= b: integrand 1 */
+  const double lo2 = std::max(c, b);
+  if (d > lo2)
+    total += d - lo2;
+  /* y <= a: integrand 0 (contributes nothing) */
+  return total;
+}
+
+/* Closed-form P(X op Y) for two independent same-family RVs, or NaN if the
+ * family pair has no elementary closed form here (the caller then falls
+ * through to Monte Carlo).  Continuous throughout, so <,<= share a value and
+ * >,>= share its complement; EQ/NE are handled upstream by RangeCheck. */
+double rvVsRvDecide(const DistributionSpec &X, const DistributionSpec &Y,
+                    ComparisonOperator op)
+{
+  double pLess = std::numeric_limits<double>::quiet_NaN();  /* P(X < Y) */
+
+  if (X.kind == DistKind::Normal && Y.kind == DistKind::Normal)
+    return normalDiffDecide(X, Y, op);  /* already reduces < / > directly */
+
+  if (X.kind == DistKind::Exponential && Y.kind == DistKind::Exponential) {
+    /* P(X < Y) = λ_X / (λ_X + λ_Y) for independent exponentials. */
+    const double lx = X.p1, ly = Y.p1;
+    if (lx > 0.0 && ly > 0.0)
+      pLess = lx / (lx + ly);
+  } else if (X.kind == DistKind::Uniform && Y.kind == DistKind::Uniform) {
+    /* P(X < Y) = E_Y[F_X(Y)] = (1/(d-c)) ∫_c^d F_X(y) dy, geometric. */
+    const double a = X.p1, b = X.p2, c = Y.p1, d = Y.p2;
+    if (b > a && d > c)
+      pLess = integralUniformCdf(a, b, c, d) / (d - c);
+  }
+
+  if (std::isnan(pLess))
+    return pLess;
+  if (pLess < 0.0) pLess = 0.0;
+  if (pLess > 1.0) pLess = 1.0;
+  switch (op) {
+    case ComparisonOperator::LT:
+    case ComparisonOperator::LE:
+      return pLess;
+    case ComparisonOperator::GT:
+    case ComparisonOperator::GE:
+      return 1.0 - pLess;  /* P(X > Y) = 1 - P(X < Y), continuous */
+    case ComparisonOperator::EQ:
+    case ComparisonOperator::NE:
+      return std::numeric_limits<double>::quiet_NaN();
+  }
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
 /* Try to parse a @c gate_value's extra as a double.  Returns NaN on
  * any failure (caller treats NaN as "skip this cmp"). */
 double bareValue(const GenericCircuit &gc, gate_t g)
@@ -278,18 +339,16 @@ double tryAnalyticDecide(const GenericCircuit &gc, gate_t cmp_gate)
     if (!std::isnan(c)) return categoricalDecide(gc, rhs, flipCmpOp(op), c);
   }
 
-  /* X cmp Y, both bare normal RVs.  The @c X cmp X same-UUID case
-   * is handled upstream by RangeCheck's identity shortcut, so by the
-   * time we get here distinct UUIDs implies independence (each
-   * @c provsql.normal call mints a fresh @c uuid_generate_v4 token). */
+  /* X cmp Y, both bare RVs of the same family with a closed form
+   * (Normal-Normal, Exp-Exp, Uniform-Uniform).  The @c X cmp X same-UUID case
+   * is handled upstream by RangeCheck's identity shortcut, so by the time we
+   * get here distinct UUIDs implies independence (each RV constructor mints a
+   * fresh @c uuid_generate_v4 token). */
   {
     auto specX = bareRv(gc, lhs);
     auto specY = bareRv(gc, rhs);
-    if (specX && specY &&
-        specX->kind == DistKind::Normal &&
-        specY->kind == DistKind::Normal) {
-      return normalDiffDecide(*specX, *specY, op);
-    }
+    if (specX && specY)
+      return rvVsRvDecide(*specX, *specY, op);
   }
 
   return std::numeric_limits<double>::quiet_NaN();

@@ -60,6 +60,27 @@ SELECT abs(provsql.probability_evaluate(
              'independent') - 0.7602499389065234) < 1e-12
        AS normal_diff_exact;
 
+-- (6b) Exp-Exp closed form: P(Exp(2) < Exp(3)) = λ_X/(λ_X+λ_Y) = 2/5.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_lt(provsql.exponential(2), provsql.exponential(3)),
+             'independent') - 0.4) < 1e-12
+       AS exp_exp_lt_exact;
+
+-- (6c) Uniform-Uniform closed form: P(U(0,1) < U(0,1)) = 1/2 (geometric).
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_lt(provsql.uniform(0,1), provsql.uniform(0,1)),
+         'independent') = 0.5 AS unif_unif_lt_exact;
+
+-- (6d) Uniform-Uniform, disjoint supports: P(U(0,1) < U(2,3)) = 1 exactly.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_lt(provsql.uniform(0,1), provsql.uniform(2,3)),
+         'independent') = 1.0 AS unif_disjoint_exact;
+
+-- (6e) Uniform-Uniform, overlapping offset: P(U(0,2) < U(1,3)) = 7/8.
+SELECT provsql.probability_evaluate(
+         provsql.rv_cmp_lt(provsql.uniform(0,2), provsql.uniform(1,3)),
+         'independent') = 0.875 AS unif_offset_exact;
+
 -- (7) Continuous EQ: P(X = c) = 0 exactly for any continuous X.
 -- Resolved by RangeCheck's continuous-EQ/NE shortcut (universal:
 -- gate_zero / gate_one are valid in every semiring, so this lives

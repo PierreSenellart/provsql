@@ -73,12 +73,15 @@ Random-Variable Aggregates
 ---------------------------
 
 When the aggregated column has type ``random_variable``
-(see :doc:`continuous-distributions`), three aggregates lift
-the standard arithmetic aggregates to the distribution algebra:
+(see :doc:`continuous-distributions`), the standard arithmetic
+aggregates lift to the distribution algebra:
 :sqlfunc:`sum`, :sqlfunc:`avg`, and
-:sqlfunc:`product`. Each returns a ``random_variable``
-rather than a scalar. See :ref:`continuous-aggregation` for the
-semantics, empty-group identities, and worked examples.
+:sqlfunc:`product`, plus the order statistics ``min`` and ``max``.
+Each returns a ``random_variable`` rather than a scalar; ``min`` /
+``max`` carry the empty-group identity ``+inf`` / ``-inf`` (the
+extremum counterparts to ``sum``'s ``0`` and ``product``'s ``1``).
+See :ref:`continuous-aggregation` for the semantics, empty-group
+identities, and worked examples.
 
 HAVING
 ------

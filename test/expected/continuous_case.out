@@ -1,0 +1,26 @@
+\set ECHO none
+case_max_ok|case_var_ok
+t|t
+(1 row)
+abs_ok
+t
+(1 row)
+relu_ok
+t
+(1 row)
+is_gate_case
+t
+(1 row)
+case_lo_0|case_hi_1
+t|t
+(1 row)
+case_sample_ok
+t
+(1 row)
+case_histogram_ok
+t
+(1 row)
+NOTICE:  case_semiring_refused=t
+continuous_case_done
+ok
+(1 row)

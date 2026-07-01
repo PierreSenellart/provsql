@@ -6,6 +6,7 @@
 #include "Expectation.h"
 
 #include "AnalyticEvaluator.h"
+#include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
 #include "BooleanCircuit.h"
 #include "Circuit.h"
 #include "CircuitFromMMap.h"
@@ -100,7 +101,12 @@ public:
       s.insert(g);
     } else if (type == gate_value) {
       // empty -- no RV reached
-    } else if (type == gate_arith) {
+    } else if (type == gate_arith || type == gate_case) {
+      // gate_arith: all children are scalar operands.  gate_case: the
+      // selected value depends on both the guards (which RVs they compare)
+      // and the value branches, so the footprint is the union over every
+      // wire -- a value and a guard sharing a leaf make the selection
+      // correlated, which must defeat the independence shortcuts.
       for (gate_t c : gc_.getWires(g)) {
         const auto &cs = of(c);
         s.insert(cs.begin(), cs.end());
@@ -188,6 +194,84 @@ bool pairwise_disjoint(FootprintCache &fp, const std::vector<gate_t> &children)
     }
   }
   return true;
+}
+
+/* Closed-form E[max] / E[min] of a gate_arith MAX/MIN whose children are
+ * independent bare gate_rv leaves of the SAME family with the SAME parameters
+ * (the i.i.d. order statistic).  Returns std::nullopt when the shape is not
+ * i.i.d. bare-RV (mixture-wrapped aggregate children, mixed families, shared
+ * leaves, or a family without an elementary order-statistic mean) so the
+ * caller falls back to Monte Carlo.
+ *
+ * - i.i.d. Uniform(a, b):  E[max] = a + (b-a)·n/(n+1),  E[min] = a + (b-a)/(n+1).
+ * - i.i.d. Exponential(λ): E[min] = 1/(nλ),  E[max] = H_n/λ  (H_n harmonic).
+ *
+ * Normal and Erlang i.i.d. maxima have no elementary closed form (they need
+ * the 1-D order-statistic quadrature), so they decline here.
+ */
+std::optional<double>
+iidOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
+                 FootprintCache &fp)
+{
+  const auto &raw_wires = gc.getWires(g);
+  if (raw_wires.empty())
+    return std::nullopt;
+  /* Idempotence: max / min ignore repeats, so a child appearing more than
+   * once (the same gate) counts once.  De-duplicating here generalises the
+   * closed form to any MAX/MIN gate -- without it a repeated child would
+   * collide with itself in pairwise_disjoint and silently drop to MC. */
+  std::vector<gate_t> wires;
+  wires.reserve(raw_wires.size());
+  {
+    std::set<gate_t> seen;
+    for (gate_t c : raw_wires)
+      if (seen.insert(c).second)
+        wires.push_back(c);
+  }
+  if (!pairwise_disjoint(fp, wires))
+    return std::nullopt;  /* shared leaves -> correlated -> MC */
+
+  std::vector<DistributionSpec> specs;
+  specs.reserve(wires.size());
+  for (gate_t c : wires) {
+    if (gc.getGateType(c) != gate_rv)
+      return std::nullopt;  /* not a bare RV (e.g. a mixture wrap) */
+    auto s = parse_distribution_spec(gc.getExtra(c));
+    if (!s)
+      return std::nullopt;
+    specs.push_back(*s);
+  }
+
+  /* i.i.d.: identical family and parameters across all children. */
+  for (std::size_t i = 1; i < specs.size(); ++i)
+    if (specs[i].kind != specs[0].kind ||
+        specs[i].p1 != specs[0].p1 || specs[i].p2 != specs[0].p2)
+      return std::nullopt;
+
+  const std::size_t n = specs.size();
+  switch (specs[0].kind) {
+    case DistKind::Uniform: {
+      const double a = specs[0].p1, b = specs[0].p2;
+      const double frac = isMax ? static_cast<double>(n) / (n + 1)
+                                : 1.0 / (n + 1);
+      return a + (b - a) * frac;
+    }
+    case DistKind::Exponential: {
+      const double lambda = specs[0].p1;
+      if (!(lambda > 0.0))
+        return std::nullopt;
+      if (!isMax)
+        return 1.0 / (static_cast<double>(n) * lambda);  /* min of exps */
+      double H = 0.0;                                     /* max: harmonic */
+      for (std::size_t k = 1; k <= n; ++k)
+        H += 1.0 / static_cast<double>(k);
+      return H / lambda;
+    }
+    case DistKind::Normal:
+    case DistKind::Erlang:
+      return std::nullopt;  /* no elementary order-statistic mean */
+  }
+  return std::nullopt;
 }
 
 unsigned mc_samples_or_throw(const std::string &what)
@@ -548,6 +632,148 @@ try_truncated_closed_form(const GenericCircuit &gc, gate_t root,
   return total;
 }
 
+/* A conditioning event of the shape @c "X op Y", where the target @c X and the
+ * other operand @c Y are two independent bare @c gate_rv leaves. */
+struct RvVsRvCond {
+  DistributionSpec targetSpec;   /* X (the moment's target) */
+  DistributionSpec otherSpec;    /* Y */
+  bool targetGreater;            /* true for X > Y, false for X < Y */
+};
+
+/* Match @p event_root as a single @c gate_cmp comparing the target @p root
+ * (a bare RV X) with an independent bare RV Y.  Returns std::nullopt for any
+ * other shape (constant threshold -- handled by the truncation path;
+ * conjunctions; agg comparisons; shared operand) so the caller falls through. */
+std::optional<RvVsRvCond>
+matchRvVsRvConditional(const GenericCircuit &gc, gate_t root, gate_t event_root)
+{
+  if (gc.getGateType(root) != gate_rv || gc.getGateType(event_root) != gate_cmp)
+    return std::nullopt;
+  auto specX = parse_distribution_spec(gc.getExtra(root));
+  if (!specX) return std::nullopt;
+
+  const auto &wires = gc.getWires(event_root);
+  if (wires.size() != 2) return std::nullopt;
+  bool ok = false;
+  ComparisonOperator op = cmpOpFromOid(gc.getInfos(event_root).first, ok);
+  if (!ok || op == ComparisonOperator::EQ || op == ComparisonOperator::NE)
+    return std::nullopt;
+
+  gate_t other;
+  bool targetLeft;
+  if (wires[0] == root)      { other = wires[1]; targetLeft = true; }
+  else if (wires[1] == root) { other = wires[0]; targetLeft = false; }
+  else return std::nullopt;                 /* target not an operand */
+  if (other == root || gc.getGateType(other) != gate_rv)
+    return std::nullopt;                     /* X op X, or Y not a bare RV */
+  auto specY = parse_distribution_spec(gc.getExtra(other));
+  if (!specY) return std::nullopt;
+
+  /* targetGreater: does the event assert X > Y?  If X is the left operand,
+   * that is op in {GT,GE}; if X is the right operand (event Y op X), it is
+   * op in {LT,LE}. */
+  const bool greaterOp = (op == ComparisonOperator::GT ||
+                          op == ComparisonOperator::GE);
+  const bool lessOp = (op == ComparisonOperator::LT ||
+                       op == ComparisonOperator::LE);
+  bool targetGreater;
+  if (targetLeft)  targetGreater = greaterOp;
+  else             targetGreater = lessOp;
+  return RvVsRvCond{*specX, *specY, targetGreater};
+}
+
+/* A finite integration window covering essentially all of X's mass, used by
+ * the 1-D conditional-moment quadrature.  Bounded families give their exact
+ * support; unbounded ones a many-sigma / many-mean tail beyond which the
+ * density is numerically negligible. */
+bool rvIntegrationRange(const DistributionSpec &X, double &lo, double &hi)
+{
+  switch (X.kind) {
+    case DistKind::Uniform:
+      lo = X.p1; hi = X.p2; return hi > lo;
+    case DistKind::Normal:
+      if (!(X.p2 > 0.0)) return false;
+      lo = X.p1 - 12.0 * X.p2; hi = X.p1 + 12.0 * X.p2; return true;
+    case DistKind::Exponential:
+      if (!(X.p1 > 0.0)) return false;
+      lo = 0.0; hi = 40.0 / X.p1; return true;
+    case DistKind::Erlang:
+      if (!(X.p1 >= 1.0) || !(X.p2 > 0.0)) return false;
+      lo = 0.0; hi = (X.p1 + 12.0 * std::sqrt(X.p1)) / X.p2; return true;
+  }
+  return false;
+}
+
+/* E[X^k | X op Y] for independent X, Y via a 1-D quadrature:
+ *   E[X^k | X>Y] = (∫ x^k f_X(x) F_Y(x) dx) / (∫ f_X(x) F_Y(x) dx),
+ * and the X<Y case swaps F_Y for 1-F_Y.  Composite Simpson over X's support;
+ * exact for the Uniform-Uniform case (the integrands are low-degree
+ * polynomials), high-accuracy otherwise.  Returns NaN if the event mass is
+ * negligible or a density/CDF is undefined. */
+double rvVsRvConditionalMoment(const DistributionSpec &X,
+                               const DistributionSpec &Y,
+                               bool targetGreater, unsigned k)
+{
+  double lo, hi;
+  if (!rvIntegrationRange(X, lo, hi))
+    return std::numeric_limits<double>::quiet_NaN();
+
+  const int N = 4000;  /* even: composite Simpson */
+  const double h = (hi - lo) / N;
+  double num = 0.0, den = 0.0;
+  for (int i = 0; i <= N; ++i) {
+    const double x = lo + i * h;
+    const double fX = pdfAt(X, x);
+    const double FY = cdfAt(Y, x);
+    if (std::isnan(fX) || std::isnan(FY))
+      return std::numeric_limits<double>::quiet_NaN();
+    const double w = targetGreater ? FY : (1.0 - FY);  /* P(Y<x) / P(Y>x) */
+    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+    const double base = fX * w;
+    den += coeff * base;
+    num += coeff * std::pow(x, static_cast<double>(k)) * base;
+  }
+  den *= h / 3.0;
+  num *= h / 3.0;
+  if (!(den > 1e-12))
+    return std::numeric_limits<double>::quiet_NaN();
+  return num / den;
+}
+
+/* Closed-form (quadrature) E[X^k | X op Y] / central moment for an
+ * RV-vs-RV conditioning event.  Mirrors @c try_truncated_closed_form for the
+ * constant-threshold case. */
+std::optional<double>
+try_rvVsRv_conditional_moment(const GenericCircuit &gc, gate_t root,
+                              gate_t event_root, unsigned k, bool central)
+{
+  auto m = matchRvVsRvConditional(gc, root, event_root);
+  if (!m) return std::nullopt;
+
+  auto raw = [&](unsigned q) -> std::optional<double> {
+    if (q == 0) return 1.0;
+    double r = rvVsRvConditionalMoment(m->targetSpec, m->otherSpec,
+                                       m->targetGreater, q);
+    if (std::isnan(r)) return std::nullopt;
+    return r;
+  };
+
+  if (!central) return raw(k);
+
+  auto mu_opt = raw(1);
+  if (!mu_opt) return std::nullopt;
+  const double mu = *mu_opt;
+  if (k == 1) return 0.0;
+  double total = 0.0;
+  for (unsigned i = 0; i <= k; ++i) {
+    auto m_i = raw(i);
+    if (!m_i) return std::nullopt;
+    total += binomial(k, i)
+           * std::pow(-mu, static_cast<double>(k - i)) * (*m_i);
+  }
+  return total;
+}
+
 double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
 {
   const auto type = gc.getGateType(g);
@@ -599,6 +825,18 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           }
           return mc_raw_moment(gc, g, 1,
             "Expectation of gate_arith DIV with non-constant divisor");
+        }
+        case PROVSQL_ARITH_MAX:
+        case PROVSQL_ARITH_MIN: {
+          // Order statistics have no linearity to push through.  Closed form
+          // for i.i.d. Uniform / Exponential families over independent bare
+          // RVs (exact); Monte Carlo for everything else (mixed families,
+          // Normal / Erlang, shared leaves).
+          const bool isMax = (op == PROVSQL_ARITH_MAX);
+          if (auto v = iidOrderStatMean(gc, g, isMax, fp))
+            return *v;
+          return mc_raw_moment(gc, g, 1,
+            "Expectation of gate_arith " + std::string(isMax ? "MAX" : "MIN"));
         }
       }
       throw CircuitException(
@@ -706,6 +944,12 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_var(
             "Variance of gate_arith DIV with non-constant divisor");
         }
+        case PROVSQL_ARITH_MAX:
+        case PROVSQL_ARITH_MIN:
+          // No closed-form variance decomposition for order statistics; MC.
+          return mc_var(
+            "Variance of gate_arith " +
+            std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
       }
       throw CircuitException(
         "Variance: unknown gate_arith op tag: " +
@@ -841,6 +1085,12 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
           return mc_raw_moment(gc, g, k,
             "Raw moment of gate_arith DIV with non-constant divisor");
         }
+        case PROVSQL_ARITH_MAX:
+        case PROVSQL_ARITH_MIN:
+          // Order-statistic raw moments have no elementary decomposition; MC.
+          return mc_raw_moment(gc, g, k,
+            "Raw moment of gate_arith " +
+            std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
       }
       throw CircuitException(
         "Moment: unknown gate_arith op tag: " +
@@ -894,6 +1144,8 @@ double conditional_raw_moment(const GenericCircuit &gc, gate_t root,
   if (k == 0) return 1.0;
   if (auto cf = try_truncated_closed_form(gc, root, event_root, k, false))
     return *cf;
+  if (auto cf = try_rvVsRv_conditional_moment(gc, root, event_root, k, false))
+    return *cf;
   if (eventIsProvablyInfeasible(gc, root, event_root))
     raise_infeasible_event(gc, root);
   return mc_conditional_raw_moment(
@@ -908,6 +1160,8 @@ double conditional_central_moment(const GenericCircuit &gc, gate_t root,
   if (k == 0) return 1.0;
   if (k == 1) return 0.0;
   if (auto cf = try_truncated_closed_form(gc, root, event_root, k, true))
+    return *cf;
+  if (auto cf = try_rvVsRv_conditional_moment(gc, root, event_root, k, true))
     return *cf;
   if (eventIsProvablyInfeasible(gc, root, event_root))
     raise_infeasible_event(gc, root);

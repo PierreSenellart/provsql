@@ -68,7 +68,22 @@ def _load_sensors(test_dsn: str) -> None:
             "('s5', provsql.normal(0, 1)), "
             "('s6', provsql.exponential(0.4) + provsql.exponential(0.3)), "
             "('s7', provsql.categorical(ARRAY[0.3, 0.5, 0.2], "
-            "                           ARRAY[-1.0, 0.0, 2.0]))"
+            "                           ARRAY[-1.0, 0.0, 2.0])), "
+            # s8: a greatest() order statistic -> gate_arith with the MAX
+            # opcode (the "max" glyph); three distinct uniforms so the
+            # simplifier keeps the arith node.
+            "('s8', provsql.greatest(provsql.uniform(0, 1), "
+            "                        provsql.uniform(0, 2), "
+            "                        provsql.uniform(0, 3))), "
+            # s9: a CASE over random variables -> gate_case.  Built directly
+            # via rv_case (guard cmp uuid, value uuid, default uuid); the
+            # guard is over two overlapping uniforms so RangeCheck can't
+            # decide it at load time and the gate_cmp guard survives.
+            "('s9', provsql.rv_case(ARRAY["
+            "          provsql.rv_cmp_ge(provsql.uniform(0, 1), "
+            "                            provsql.uniform(0, 1)), "
+            "          (provsql.uniform(0, 1))::uuid, "
+            "          (provsql.uniform(0, 1))::uuid]))"
         )
         conn.execute("SELECT provsql.add_provenance('provsql_test.sensors')")
 
@@ -362,6 +377,65 @@ def test_overlay_absent_for_heterogeneous_exp_sum(
     expect(panel).to_be_visible(timeout=5000)
     expect(panel.locator(".cv-profile-bars")).to_have_count(1)
     expect(panel.locator("path.cv-profile-overlay")).to_have_count(0)
+
+
+def test_greatest_renders_max_arith(page: Page, studio_url: str) -> None:
+    """`greatest(u1, u2, u3)` is a gate_arith carrying the MAX opcode: the
+    arith node renders with the "max" glyph (PROVSQL_ARITH_MAX = 5 in
+    _ARITH_OP_GLYPH), proving the order-statistic opcode reaches the UI."""
+    page.goto(studio_url + "/circuit")
+    expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
+    _run_query_and_wait(page, "SELECT reading FROM sensors WHERE id = 's8';", 1)
+    headers = page.locator(
+        "#result-head th .wp-result__col-name"
+    ).all_text_contents()
+    col_idx = headers.index("reading")
+    page.locator("#result-body tr").first.locator("td").nth(col_idx).click()
+    expect(page.locator("#sidebar-body svg").first).to_be_visible(timeout=8000)
+    arith_nodes = page.locator(".node-group.node--arith")
+    expect(arith_nodes.first).to_be_visible(timeout=8000)
+    labels = arith_nodes.locator(".node-label").all_text_contents()
+    assert "max" in labels, (
+        f"Expected the MAX order-statistic glyph 'max' on the arith node; "
+        f"got {labels!r}"
+    )
+
+
+def test_case_renders_gate_case_with_roles_and_evaluates(
+    page: Page, studio_url: str
+) -> None:
+    """A CASE over random variables is a gate_case.  The node renders with
+    the guarded-selection glyph; its child edges carry the guard / value /
+    default role labels (verifying the 1-based child_pos labelling); and the
+    RV distribution-profile evaluator runs on it -- which succeeds only
+    because the eval strip offers the scalar surface for a gate_case root
+    (not the semiring menu) and rv_histogram accepts a gate_case root."""
+    _open_circuit_and_run_profile(
+        page, studio_url, "SELECT reading FROM sensors WHERE id = 's9';"
+    )
+    case_nodes = page.locator(".node-group.node--case")
+    expect(case_nodes.first).to_be_visible(timeout=8000)
+    glyphs = case_nodes.locator(".node-label").all_text_contents()
+    assert any("⇢" in g for g in glyphs), (
+        f"Expected the gate_case guarded-selection glyph; got {glyphs!r}"
+    )
+    # Edge role labels: guard_1 / value_1 / default (the wires are
+    # [guard, value, default], child_pos 1..3, 1-based).
+    edge_labels = page.locator("text.edge-pos").all_text_contents()
+    assert any(lbl.startswith("guard") for lbl in edge_labels), (
+        f"Expected a 'guard' edge label on the gate_case; got {edge_labels!r}"
+    )
+    assert any(lbl.startswith("value") for lbl in edge_labels), (
+        f"Expected a 'value' edge label on the gate_case; got {edge_labels!r}"
+    )
+    assert "default" in edge_labels, (
+        f"Expected a 'default' edge label on the gate_case; got {edge_labels!r}"
+    )
+    # The helper already waited for data-kind="distribution-profile", so the
+    # gate_case root was evaluated through the RV surface end to end.
+    panel = page.locator(".cv-profile-panel")
+    expect(panel).to_be_visible(timeout=5000)
+    expect(panel.locator(".cv-profile-bars")).to_have_count(1)
 
 
 def test_stems_rendered_for_categorical(

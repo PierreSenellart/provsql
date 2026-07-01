@@ -171,6 +171,20 @@ INTERNAL_FUNCTIONS = {
     # through the SQL `SET` / `RESET` documentation pages).
     'monte_carlo_seed', 'rv_mc_samples', 'simplify_on_load',
     'hybrid_evaluation',
+    # 'active' is the provsql.active GUC (planner-hook master switch),
+    # mentioned as `provsql.active` in several doc comments; not a function.
+    'active',
+    # Order statistics over random_variable: 'greatest' / 'least' are the
+    # same-row constructors (documented in prose in the continuous-distributions
+    # chapter; the bare GREATEST / LEAST grammar is lifted over RV arguments by
+    # the planner hook).  'random_variable_btree_cmp' is the btree comparison
+    # support that only exists so that grammar parses -- it always raises.
+    # 'extremum_rv_ffunc' / 'max_rv_ffunc' / 'min_rv_ffunc' are the min / max
+    # aggregate final functions, like sum_rv_ffunc; 'rv_case' / 'provenance_case'
+    # are the CASE-over-RV builders behind the planner-hook rewrite.
+    'greatest', 'least', 'random_variable_btree_cmp',
+    'extremum_rv_ffunc', 'max_rv_ffunc', 'min_rv_ffunc',
+    'rv_case', 'provenance_case',
     # ('simplified_circuit_subgraph' and 'rv_histogram' are now in
     # _SQL_FUNC_MAP, referenced from the user manual.)
     # random_variable arithmetic and comparison operator implementations

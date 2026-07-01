@@ -58,6 +58,8 @@
     2: 'minus (−)',
     3: 'divide (÷)',
     4: 'negate (−x)',
+    5: 'max',
+    6: 'min',
   };
 
   // ─── state ────────────────────────────────────────────────────────────
@@ -112,7 +114,7 @@
   // positional and get the semantic labels defined in EDGE_POS_LABEL
   // below.
   const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned', 'mobius']);
+                                 'conditioned', 'mobius', 'case']);
   // Per-(parent type, 1-based child_pos) edge-label overrides for
   // gates whose wires have well-known names.  Falls back to the bare
   // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
@@ -192,10 +194,24 @@
       return (n < 0 ? '−' : '+') + Math.abs(n);   // U+2212 minus sign
     return String(c);
   }
+  function _caseEdgeLabel(parent, child_pos) {
+    // gate_case wires (child_pos is 1-based, like every other gate):
+    // [guard_1, value_1, ..., guard_k, value_k, default].  The final wire
+    // (highest child_pos) is the ELSE default; the rest alternate
+    // odd = guard, even = value.
+    let maxPos = child_pos;
+    if (state.scene && state.scene.edges)
+      for (const e of state.scene.edges)
+        if (e.from === parent.id && e.child_pos > maxPos) maxPos = e.child_pos;
+    if (child_pos === maxPos) return 'default';
+    const i = Math.ceil(child_pos / 2);
+    return (child_pos % 2 === 1) ? `guard ${i}` : `value ${i}`;
+  }
   const EDGE_POS_LABEL = {
     mixture: _mixtureEdgeLabel,
     conditioned: _conditionedEdgeLabel,
     mobius: _mobiusEdgeLabel,
+    case: _caseEdgeLabel,
   };
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   // = and <> are commutative; lhs/rhs digits add noise for those cmp
@@ -1785,7 +1801,7 @@
   // the dropdown between the Boolean-method menu and the scalar-method
   // menu (distribution profile, PROV-XML).  Picked by inspecting the
   // eval target's gate type via state.scene.nodes.
-  const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value', 'mixture']);
+  const _SCALAR_GATE_TYPES = new Set(['rv', 'arith', 'value', 'mixture', 'case']);
   // KC scene "interior" nodes -- TD bags and d-DNNF AND/OR/NOT --
   // carry synthetic DOT-numbered ids that don't map to any
   // provenance gate.  Pinning one is fine for inspection (the

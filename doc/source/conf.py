@@ -137,6 +137,7 @@ _SQL_FUNC_MAP = {
     'provenance_plus':          '/doxygen-sql/html/group__semiring__operations.html#gaac5b2a2265ee8f8c9629c07d2d5ada84',
     'get_prob':                 '/doxygen-sql/html/group__gate__manipulation.html#ga859702367ce6d65ff3a020ed3122157d',
     'probability_evaluate':     '/doxygen-sql/html/group__probability.html#gad377e94cb1fff57141b1950cc4169c5e',
+    'probability':              '/doxygen-sql/html/group__probability.html#gaccdf10e34a493abff297547322752bf3',
     'probability_bounds':       '/doxygen-sql/html/group__probability.html#ga80dd344ea08b2743e2f69c7f854af7f2',
     # Two-terminal network reliability on bounded-treewidth data
     # (columnar internals; the user-facing route is WITH RECURSIVE under

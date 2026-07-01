@@ -48,3 +48,9 @@ t
 hist_lo_eq_3|hist_hi_eq_7
 t|t
 (1 row)
+cond_gt_two_thirds|cond_lt_one_third
+t|t
+(1 row)
+cond_infix_two_thirds
+t
+(1 row)

@@ -1,0 +1,47 @@
+\set ECHO none
+e_max_ok|e_min_ok|v_max_ok
+t|t|t
+(1 row)
+max_lo_0|max_hi_1
+t|t
+(1 row)
+e_max2_ok
+t
+(1 row)
+greatest_singleton|greatest_all_null
+t|t
+(1 row)
+agg_max_ok|agg_min_ok
+t|t
+(1 row)
+empty_max_neg_inf|empty_min_pos_inf
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+tracked_max_ok
+t
+(1 row)
+iid_unif_max_exact|iid_unif_min_exact
+t|t
+(1 row)
+iid_exp_min_exact|iid_exp_max_exact
+t|t
+(1 row)
+unif_ab_max_exact
+t
+(1 row)
+bare_greatest_exact|bare_least_exact
+t|t
+(1 row)
+dedup_same_gate|singleton_collapses|dedup_same_value
+t|t|t
+(1 row)
+NOTICE:  rv_order_by_rejected=t
+continuous_order_statistics_done
+ok
+(1 row)

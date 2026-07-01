@@ -170,6 +170,7 @@ test: continuous_union
 test: continuous_rangecheck
 test: continuous_rangecheck_having
 test: continuous_analytic
+test: continuous_comparison_surface
 test: continuous_expectation
 test: continuous_mc_transparency
 test: continuous_conditioning
@@ -184,6 +185,8 @@ test: continuous_mixture_histogram
 test: continuous_mixture_hybrid
 test: continuous_categorical
 test: continuous_aggregation
+test: continuous_order_statistics
+test: continuous_case
 test: continuous_having
 test: continuous_sample_truncated
 test: continuous_analytical_curves

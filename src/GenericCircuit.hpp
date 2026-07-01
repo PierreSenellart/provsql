@@ -346,6 +346,20 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       break;
     }
 
+    case gate_case:
+      /* Guarded selection over scalar (RV) children: a value chosen by the
+       * first satisfied guard event.  This is a measure/RV-carrier operation
+       * (the guards are probabilistic events, the values random variables), not
+       * a semiring one -- evaluable only through the random-variable / measure
+       * evaluators (expected / variance / support / probability / sample),
+       * exactly like gate_rv and gate_arith over RVs.  Refuse it here as the
+       * gate_conditioned arm above refuses conditioning. */
+      throw CircuitException(
+              "The requested semiring does not support a CASE / guarded "
+              "selection over random variables (gate_case): it is evaluable "
+              "only through the random-variable / measure surface "
+              "(expected / variance / support / probability / sample).");
+
     default:
       throw CircuitException("Invalid gate type for semiring evaluation");
     }

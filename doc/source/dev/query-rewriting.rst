@@ -589,6 +589,22 @@ result type (``OID_TYPE_RANDOM_VARIABLE`` vs
 RV-returning aggregate. See :doc:`continuous-distributions` for
 the broader architecture.
 
+Beyond the qual positions, ``rewrite_probability_events`` (run next
+to ``rewrite_cond_predicates`` in ``process_query``) lifts RV
+comparisons that appear as *values* in the ``SELECT`` target list: a
+projected ``x > y`` surfaces its ``gate_cmp`` token, and the
+``probability(<predicate>)`` Boolean overload is rewritten into
+:sqlfunc:`probability_evaluate` over the argument's event token
+(``predicate_to_condition_gate``, the same lift the conditioning
+surface uses). The same mutator carries a ``CaseExpr`` arm: an
+RV-typed searched ``CASE`` with an RV-comparison guard is flattened
+into a ``gate_case`` (``[guard_1, value_1, …, default]``) via
+``rv_case``. A builtin ``GREATEST`` / ``LEAST`` over
+``random_variable`` arguments -- which parses only because a default
+btree operator class is declared on the type -- is rewritten in the
+same pass into the ``provsql.greatest`` / ``provsql.least`` order-
+statistic constructor (a ``gate_arith`` ``MAX`` / ``MIN``).
+
 .. _safe-query-rewriter:
 
 Safe-Query Rewriter

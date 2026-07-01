@@ -32,11 +32,11 @@ The prioritisation uses four labels:
 | 4 | Poisson, Binomial, Geometric | Parametric distributions | Mid-term |
 | 5 | Multivariate Normal | Parametric distributions | Architectural |
 | 6 | Quantiles / inverse CDF | Expressivity completion | Quick win |
-| 7 | RV-vs-RV analytical comparisons | Expressivity completion | Quick win |
+| 7 | RV-vs-RV analytical comparisons | Expressivity completion | ◑ same-family (Normal/Exp/Uniform) shipped; mixed-family quadrature open |
 | 8 | Function application (`log`, `exp`…) | Expressivity completion | Mid-term |
-| 9 | Order statistics: `MIN`/`MAX`/percentile aggregates + `greatest`/`least` | Expressivity completion | Mid-term |
+| 9 | Order statistics: `MIN`/`MAX`/percentile aggregates + `greatest`/`least` | Expressivity completion | ◑ gate + `greatest`/`least` + `MIN`/`MAX` aggregates shipped; `percentile_cont` open |
 | 10 | Information-theoretic primitives (entropy, KL, MI) | Expressivity completion | Mid-term |
-| 11 | Comparison events as first-class values (`probability(pred)`, projected `x>y`, `probability` alias) | Expressivity completion | Quick win |
+| 11 | Comparison events as first-class values (`probability(pred)`, projected `x>y`, `probability` alias) | Expressivity completion | ✅ shipped (1.11.0-dev) |
 | 12 | Empirical samples gate | Data-driven distributions | Mid-term |
 | 13 | Empirical CDF gate | Data-driven distributions | Mid-term |
 | 14 | GMM constructor | Data-driven distributions | Quick win |
@@ -340,28 +340,31 @@ becomes one virtual call regardless of family, instead of a fresh
 switch on `DistKind` paralleling the existing PDF/CDF/moment
 switches.
 
-### B.2 RV-vs-RV analytical comparisons – **[Quick win]**
+### B.2 RV-vs-RV analytical comparisons – **[Quick win] – ◑ partly shipped**
 
-`gate_cmp` handles `X < c` brilliantly. The Normal-Normal case
-`P(X<Y) = Φ((μ_Y − μ_X) / √(σ_X² + σ_Y²))` has landed (`normalDiffDecide`
-in `AnalyticEvaluator.cpp`). Remaining families still fall back to MC even
-when there's a clean form – Exponential-Exponential has
-`P(X<Y) = λ_X / (λ_X + λ_Y)`, and the other parametric pairs have
-analogous closed forms.
+Same-family pairs are shipped (`rvVsRvDecide` in `AnalyticEvaluator.cpp`):
+Normal-Normal (`P(X<Y)=Φ(…)`), Exponential-Exponential
+(`P(X<Y)=λ_X/(λ_X+λ_Y)`), and Uniform-Uniform (geometric). They resolve
+exactly, and `is_analytic_singleton_cmp` leaves an independent two-RV cmp
+for the closed form instead of pre-empting it with per-cmp MC.
+
+**Remaining:** *mixed* independent families (e.g. Normal vs Exponential)
+still fall back to MC. Each has the 1-D quadrature
+`P(X<Y) = ∫ f_X(t) F_Y(t) dt` over the target's support — the same
+integrator the mixed-family order statistics need (§B.4) and the
+conditional-moment path already uses (`rvVsRvConditionalMoment` in
+`Expectation.cpp`).
 
 **Applicability.** A/B tests, rankings, tournament probabilities, "which
-sensor is reading higher" – any "which is bigger" comparison.
-
-**UI.** For the *evaluation* work here, no new surface: pairwise RV
-comparators are intercepted at plan time exactly like `X < c`, so this is
-purely adding lookup-table entries in `AnalyticEvaluator`. The *positions*
-in which that interception fires are a separate, currently-incomplete
-surface — see §B.6.
+sensor is reading higher".
 
 ### B.3 Function application beyond +, −, ×, ÷ – **[Mid-term]**
 
-`gate_arith` covers arithmetic. There's no `log`, `exp`, `sqrt`, `abs`,
-`pow`, or general monotonic transform. This bites immediately:
+The monotone-piecewise subset (`abs`, `clamp`, ReLU) already ships as
+`CASE`-over-RV sugar via the `gate_case` guarded selection (1.11.0-dev).
+What remains is the *smooth* transforms — `log`, `exp`, `sqrt`, `pow`,
+general monotonic maps — which `gate_case` cannot express. This bites
+immediately:
 
 - `log(lognormal) → normal` and `exp(normal) → lognormal` are the
   natural bridges between the two families; without them the simplifier
@@ -378,59 +381,28 @@ SELECT expected(log(asset_return))   -- log of lognormal → Normal
 FROM positions;
 ```
 
-### B.4 Order statistics: `MIN`/`MAX` aggregates and `greatest`/`least` – **[Mid-term]**
+### B.4 Order statistics: `MIN`/`MAX` aggregates and `greatest`/`least` – **[Mid-term] – ◑ mostly shipped**
 
-`MIN`, `MAX`, percentile aggregates over `random_variable` are listed as
-deferred in the 1.5.0 release notes. The theory is clean:
-`P(min < c) = 1 − ∏(1 − F_i(c))` for any family, and exponential-family
-min/max have especially nice closures (min of i.i.d. exponentials is
-exponential at the summed rate).
+Shipped: the N-ary `PROVSQL_ARITH_MAX`/`_MIN` gate opcodes (with real arms
+in `MonteCarloSampler`, `RangeCheck`, `Expectation`, `having_semantics`, and
+the `HybridEvaluator` constant folder); the same-row
+`provsql.greatest(variadic random_variable[])` / `least(...)` **and** the
+bare `GREATEST`/`LEAST` grammar (lifted at plan time — a default btree
+operator class on `random_variable` makes it parse, then the hook rewrites
+it), with idempotent de-duplication (`greatest(x,x,y)=greatest(x,y)`,
+`greatest(x)=x`); the RV-aware `MIN`/`MAX` aggregates (same
+`make_rv_aggregate_expression` path, empty-group identity `+inf`/`-inf`).
+Evaluation is MC-correct everywhere, and `E[max]`/`E[min]` are **exact** for
+i.i.d. Uniform (`n/(n+1)`, `1/(n+1)`) and i.i.d. Exponential (harmonic /
+summed-rate) via `iidOrderStatMean`.
 
-**Applicability.** Survival analysis (time-to-first-failure), competitive
-events, SLA tail-latency analysis; and the motivating case of this design
-thread – three `uniform(0,1)` columns `x,y,z` in one row, wanting
-`expected(max(x,y,z))` (analytic answer `3/4`).
+**Remaining:**
 
-**Shared substrate.** Both surfaces below reduce to *one* new gate: an
-N-ary `gate_arith` opcode `PROVSQL_ARITH_MAX` / `_MIN` (the
-`provsql_arith_op` enum is append-only, so adding opcodes is safe).
-Evaluation touch-points mirror the existing arith ops:
-
-- `MonteCarloSampler`: one `case` arm (`std::max`/`std::min` over sampled
-  children). Correct under shared base RVs because sampling happens inside
-  the joint circuit with `rv_cache_`.
-- `RangeCheck`: interval `[max(los), max(his)]` (resp. min) — monotone, so
-  support propagates directly.
-- `Expectation`: the non-linear arm. There is no linearity to push through
-  (unlike PLUS/MINUS/NEG), so closed-form `E[max]` needs the
-  order-statistic form (max-of-CDF integration; the i.i.d. and exponential
-  closures above), with MC as the correctness-preserving fallback until it
-  lands. This overlaps §B.2: both are "integrate over the region where one
-  RV beats the others."
-
-**UI — two coexisting forms over the same gate.**
-
-- *Aggregate* `MIN`/`MAX`/`percentile_cont` over a column or `GROUP BY`,
-  promoted to RV-aware versions exactly like the existing
-  `SUM`/`AVG`/`PRODUCT` aggregates (same `make_rv_aggregate_expression` /
-  `rv_aggregate_semimod` path; empty-group identity `+inf` for `MIN`,
-  `−inf` for `MAX`).
-- *Variadic scalar* `greatest(x, y, z)` / `least(...)` over RVs in the
-  **same row** — a distinct surface the aggregate cannot express, and the
-  shape of the motivating question. Lowers to the same `gate_arith(MAX, …)`
-  root. (`GREATEST`/`LEAST` are PostgreSQL syntax, not overloadable
-  operators, so this is a dedicated `provsql.greatest(variadic
-  random_variable[])` constructor plus, optionally, a planner-hook lift of
-  the builtin over RV arguments.)
-
-**Available today (workaround).** Before either lands, `E[max]` is already
-reachable through the shipped conditioning surface (see
-[`conditioning.md`](conditioning.md)) by decomposing over which variable is
-the max:
-`E[max] = Σ_v expected(v | v ≥ others) · P(v ≥ others)`. Concretely
-`expected(x | (x>y AND x>z))` returns `E[x | x is the max]`. It is
-MC-backed, since the RV-vs-RV comparison has no closed form yet (§B.2), and
-requires the caller to enumerate the `n` "which is largest" cases by hand.
+- *mixed independent families* — `E[max]`/`E[min]` via the 1-D quadrature
+  `E[max] = ∫ (1 − ∏ F_i(t)) dt` (resp. `∫ ∏(1 − F_i) dt`); currently MC.
+  Shares the integrator with the mixed-family comparison in §B.2.
+- `percentile_cont` — the third order-statistic aggregate; needs the
+  quantile / inverse-CDF surface (§B.1).
 
 ### B.5 Information-theoretic primitives – **[Mid-term]**
 
@@ -449,67 +421,24 @@ SELECT provsql.entropy(prior),
 FROM ...;
 ```
 
-### B.6 Comparison events as first-class values – **[Quick win]**
+### B.6 Comparison events as first-class values – **✅ shipped (1.11.0-dev)**
 
-An RV comparison such as `x > y` is not a definite Boolean: it is an
-*uncertain event*, whose natural value is a provenance token (`gate_cmp`).
-Today the planner hook rewrites RV comparisons into that token in only a
-few positions — WHERE / JOIN / HAVING quals and the right operand of the
-`|` conditioning operator. Everywhere else the comparison falls through to
-`random_variable_cmp_placeholder`, which raises. Two consequences a user
-hits immediately:
+Shipped, in `rewrite_probability_events` (`src/provsql.c`):
 
-```sql
--- (1) projected comparison: wanted = the event token, got = an error
-SELECT x > y FROM d;
---   ERROR: random_variable comparison must be rewritten by the ProvSQL
---          planner hook
+- a projected RV comparison (`SELECT x > y`) surfaces its `gate_cmp` event
+  token instead of raising in `random_variable_cmp_placeholder`;
+- the `probability(<predicate>)` Boolean overload evaluates an event with
+  the natural infix grammar (`probability(x>y AND x<z)`), and is **total**
+  over deterministic Booleans (`probability(1>0)=1`), so it works even with
+  `provsql.active` off. The predicate surface lives only on `probability`,
+  not `probability_evaluate` (a `boolean` overload of the long name would
+  make a `uuid`-as-text literal ambiguous);
+- `probability(token[, method[, arguments]])` is a short alias of
+  `probability_evaluate` on a `uuid`.
 
--- (2) probability of a predicate written naturally: no such overload
-SELECT probability_evaluate(x > y AND x < z) FROM d;
---   ERROR: function probability_evaluate(boolean) does not exist
-```
-
-The asymmetry is that `expected(x | (x>y AND x>z))` *does* work, only
-because `|` has a `(random_variable, boolean)` overload the hook is taught
-to rewrite. There is no `probability`-side counterpart. The current
-lowest-level escape hatch is explicit token construction —
-`probability_evaluate(provenance_times(rv_cmp_gt(x,y), rv_cmp_lt(x,z)))` —
-which works but abandons the infix grammar the branch otherwise preserves
-(cross-cutting principle 2).
-
-**Note.** `regular_indicator(boolean)` is *not* a route here: it lifts an
-*ordinary* deterministic comparison (`region = 'north'`) to a
-`gate_one()`/`gate_zero()` constant, and is emitted by the hook only for
-the regular conjunct of a *mixed* conditioning predicate. Its argument is
-an eager Boolean, so feeding it an RV comparison just triggers the
-placeholder inside the argument.
-
-**Work.**
-
-1. **Projected comparison → event token.** Extend the planner-hook rewrite
-   to recognise RV comparisons in the SELECT target list (and, generally,
-   as an argument sub-expression), surfacing `x > y` as its `gate_cmp`
-   `uuid` rather than raising. This is the same interception already done
-   for quals, applied to more parse positions.
-2. **`probability(<predicate>)` surface.** A `probability_evaluate(boolean)`
-   /  `probability(boolean)` placeholder overload (mirroring
-   `random_variable_cond_predicate`) that the hook rewrites, so
-   `probability(x>y AND x<z)` reads like `expected(x | …)` already does.
-   The general version of (1) subsumes it: once any RV-comparison Boolean
-   expression rewrites to its event token wherever it appears, an ordinary
-   `uuid`-argument `probability_evaluate` accepts it directly.
-
-**`probability` short alias.** Independently, add `probability(token uuid,
-method text = NULL, arguments text = NULL)` as a thin alias bound to the
-same `'provsql','probability_evaluate'` C symbol — matching the concise
-polymorphic surface (`expected`, `variance`, `support`) so callers are not
-forced to type `probability_evaluate`. Trivial, and it is the natural name
-the predicate overload above should take.
-
-**Applicability.** Ranking / tournament queries that want the *probability*
-a comparison holds (not a conditioned expectation), and any query that
-wants to project or store the comparison event for later evaluation.
+An RV-typed `CASE` over random variables also became first-class in the same
+release (the `gate_case` guarded selection — its own line in the roadmap was
+in the internal build sheet, not here).
 
 ---
 
@@ -1022,18 +951,18 @@ architectural risk:
    user-visible feature; cuts the per-family cost of everything below.
 2. **Quick wins, in parallel.** Gamma (§A.1) – the proof-of-concept
    for the new layout – together with Log-normal (§A.2), quantiles
-   (§B.1), RV-vs-RV comparisons (§B.2), the comparison-event surface and
-   `probability` alias (§B.6), and GMM constructor (§C.1).
-   All are small, mostly independent, and ship as one minor release. The
-   `probability` alias and §B.6's projected-event rewrite are the smallest
-   and unblock the ergonomic `probability(x>y AND …)` form.
+   (§B.1), and GMM constructor (§C.1). The comparison-event surface and
+   `probability` alias (§B.6) **shipped in 1.11.0-dev**; same-family
+   RV-vs-RV comparisons (§B.2) shipped, leaving only the mixed-family
+   quadrature.
 3. **Solid mid-term batch.** Beta (§A.3) and the discrete families
    (§A.4) round out the parametric set. Function application (§B.3)
    then unlocks the Normal ↔ Log-normal bridge analytically.
-   Order statistics — the `MIN`/`MAX` aggregates and the same-row
+   Order statistics — the `MIN`/`MAX` aggregates and same-row
    `greatest`/`least` over the shared `PROVSQL_ARITH_MAX`/`_MIN` gate
-   (§B.4) — and information-theoretic primitives (§B.5) close the
-   expressivity gap.
+   (§B.4) — **shipped in 1.11.0-dev** (mixed-family `E[max]`/`E[min]`
+   quadrature and `percentile_cont` remain); information-theoretic
+   primitives (§B.5) close the remaining expressivity gap.
 4. **Empirical track.** Samples gate (§C.2) and CDF gate (§C.3), then
    snapshot (§C.4). Each lands as a `Distribution` subclass under the
    §F.1 hierarchy, reusing the moment dispatchers already in place.

@@ -957,7 +957,7 @@
   // Child-position labelling rules, mirrored from circuit.js: only
   // gates whose argument order matters get the digits.
   const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned']);
+                                 'conditioned', 'case']);
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   const COMMUTATIVE_CMP = new Set(['=', '<>', '!=']);
   const NON_COMMUTATIVE_ARITH = new Set([2, 3]);   // MINUS, DIV

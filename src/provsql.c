@@ -3916,6 +3916,238 @@ check_expr_on_rv(Expr *expr, const constants_t *constants)
  * the comment on @c qual_class for the routing matrix. */
 
 /**
+ * @brief Does a searched @c CASE have at least one RV-comparison guard?
+ *
+ * The trigger for lowering an RV-typed @c CASE into a @c gate_case: a @c WHEN
+ * whose condition carries a random_variable comparison would otherwise raise
+ * in @c random_variable_cmp_placeholder.  A @c CASE over random_variable
+ * values with only deterministic guards evaluates fine at runtime and is left
+ * alone.
+ */
+static bool
+case_has_rv_cmp(CaseExpr *ce, const constants_t *constants)
+{
+  ListCell *lc;
+  foreach (lc, ce->args) {
+    CaseWhen *cw = (CaseWhen *)lfirst(lc);
+    if (expr_contains_rv_cmp((Node *)cw->expr, constants))
+      return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Lower an RV-typed searched @c CASE into a @c rv_case(...) call.
+ *
+ * Flattens @c "CASE WHEN c_1 THEN v_1 ... ELSE d END" into the wire list
+ * @c [guard_1, value_1, ..., guard_k, value_k, default] and emits
+ * @c rv_case(ARRAY[...]) (a @c random_variable).  Each guard is built with
+ * @c predicate_to_condition_gate (the same lift the WHERE / conditioning
+ * surfaces use, so a Boolean combination of RV comparisons -- optionally mixed
+ * with ordinary comparisons -- becomes one event token); each value and the
+ * default are relabelled random_variable -> uuid.  @p ce must already have had
+ * its sub-expressions mutated (so nested RV @c CASE values are themselves
+ * @c rv_case calls).
+ */
+static Node *
+build_rv_case(CaseExpr *ce, const constants_t *constants)
+{
+  List *elements = NIL;
+  ListCell *lc;
+  ArrayExpr *array;
+  FuncExpr *call;
+
+  foreach (lc, ce->args) {
+    CaseWhen *cw = (CaseWhen *)lfirst(lc);
+    FuncExpr *guard = predicate_to_condition_gate((Expr *)cw->expr,
+                                                  constants, false);
+    Expr *value = wrap_random_variable_uuid((Node *)cw->result, constants);
+    elements = lappend(elements, guard);
+    elements = lappend(elements, value);
+  }
+  /* the ELSE branch is the default value (always the last wire) */
+  elements = lappend(elements,
+                     wrap_random_variable_uuid((Node *)ce->defresult, constants));
+
+  array = makeNode(ArrayExpr);
+  array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  array->element_typeid = constants->OID_TYPE_UUID;
+  array->elements = elements;
+  array->location = -1;
+
+  call = makeNode(FuncExpr);
+  call->funcid = constants->OID_FUNCTION_RV_CASE;
+  call->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
+  call->funcretset = false;
+  call->funcvariadic = false;
+  call->funcformat = COERCE_EXPLICIT_CALL;
+  call->funccollid = InvalidOid;
+  call->inputcollid = InvalidOid;
+  call->args = list_make1(array);
+  call->location = ce->location;
+  return (Node *) call;
+}
+
+/**
+ * @brief Is @p node a projected random_variable comparison event?
+ *
+ * True when the (target-list) expression is itself a random_variable
+ * comparison -- a bare RV comparator @c OpExpr, or a Boolean combination of
+ * RV comparisons (optionally mixed with ordinary comparisons) carrying at
+ * least one RV comparison.  Such an expression is lifted into its event token
+ * (a @c gate_cmp uuid) so @c "SELECT x > y" surfaces the event rather than
+ * raising inside @c random_variable_cmp_placeholder.  Deterministic Booleans
+ * and agg-only comparisons are left untouched.
+ */
+static bool
+is_projected_rv_event(Node *node, const constants_t *constants)
+{
+  if (node == NULL)
+    return false;
+  if (!expr_contains_rv_cmp(node, constants))
+    return false;
+  if (IsA(node, OpExpr))
+    return rv_cmp_index(constants, ((OpExpr *)node)->opfuncid) >= 0;
+  if (IsA(node, BoolExpr))
+    return check_expr_on_rv((Expr *)node, constants);
+  return false;
+}
+
+/**
+ * @brief Mutator: lift the RV surface that can appear in the target list.
+ *
+ * Two rewrites, applied wherever they occur in the walked expression:
+ * - an RV-typed searched @c CASE with an RV-comparison guard becomes a
+ *   @c rv_case(...) call (a @c gate_case);
+ * - a @c probability(<predicate>) Boolean-overload call whose argument carries
+ *   a probabilistic comparison becomes @c probability_evaluate over the
+ *   argument's event token.  A purely-deterministic Boolean argument is left
+ *   in place -- the SQL body returns its @c 0/1 probability, keeping
+ *   @c probability total over Booleans.
+ *
+ * Recurses the whole (target-list) expression so both are rewritten wherever
+ * they appear (e.g. inside @c expected(CASE ... END)).
+ */
+static Node *
+rewrite_probability_event_mutator(Node *node, void *data)
+{
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return NULL;
+  /* Builtin GREATEST / LEAST over random_variable arguments -> the
+   * provsql.greatest / provsql.least order-statistic constructor (a
+   * gate_arith MAX / MIN).  Mutate the arguments first (an argument may itself
+   * be a lowerable RV CASE / GREATEST). */
+  if (IsA(node, MinMaxExpr)) {
+    MinMaxExpr *mm = (MinMaxExpr *)node;
+    if (mm->minmaxtype == constants->OID_TYPE_RANDOM_VARIABLE &&
+        OidIsValid(constants->OID_FUNCTION_RV_GREATEST) &&
+        OidIsValid(constants->OID_FUNCTION_RV_LEAST) &&
+        OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE_ARRAY)) {
+      FuncExpr *call = makeNode(FuncExpr);
+      ArrayExpr *arr = makeNode(ArrayExpr);
+      mm = (MinMaxExpr *)expression_tree_mutator(
+        node, rewrite_probability_event_mutator, data);
+      arr->array_typeid = constants->OID_TYPE_RANDOM_VARIABLE_ARRAY;
+      arr->element_typeid = constants->OID_TYPE_RANDOM_VARIABLE;
+      arr->multidims = false;
+      arr->elements = mm->args;
+      arr->location = -1;
+      call->funcid = (mm->op == IS_GREATEST)
+                       ? constants->OID_FUNCTION_RV_GREATEST
+                       : constants->OID_FUNCTION_RV_LEAST;
+      call->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
+      call->funcretset = false;
+      call->funcvariadic = true;  /* VARIADIC random_variable[] */
+      call->funcformat = COERCE_EXPLICIT_CALL;
+      call->funccollid = InvalidOid;
+      call->inputcollid = mm->inputcollid;
+      call->args = list_make1(arr);
+      call->location = mm->location;
+      return (Node *) call;
+    }
+  }
+  /* RV-typed searched CASE with an RV-comparison guard -> gate_case.  Mutate
+   * the CASE's own sub-expressions first (so nested RV cases, and RV
+   * comparisons inside guards, are already lowered), then flatten. */
+  if (IsA(node, CaseExpr)) {
+    CaseExpr *ce = (CaseExpr *)node;
+    if (ce->arg == NULL &&
+        OidIsValid(constants->OID_FUNCTION_RV_CASE) &&
+        ce->casetype == constants->OID_TYPE_RANDOM_VARIABLE &&
+        case_has_rv_cmp(ce, constants)) {
+      CaseExpr *mutated = (CaseExpr *)expression_tree_mutator(
+        node, rewrite_probability_event_mutator, data);
+      return build_rv_case(mutated, constants);
+    }
+  }
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)node;
+    if (fe->funcid == constants->OID_FUNCTION_PROBABILITY_PREDICATE &&
+        fe->args != NIL &&
+        expr_has_probabilistic_cmp((Node *)linitial(fe->args),
+                                   (void *)constants)) {
+      Expr *pred = (Expr *)linitial(fe->args);
+      FuncExpr *token = predicate_to_condition_gate(pred, constants, false);
+      FuncExpr *call = makeNode(FuncExpr);
+      /* probability_evaluate(token, method, arguments): pass method /
+       * arguments through if the caller supplied them, else NULL text. */
+      Node *method_arg = list_length(fe->args) >= 2
+                           ? (Node *) list_nth(fe->args, 1)
+                           : (Node *) makeNullConst(TEXTOID, -1, InvalidOid);
+      Node *args_arg = list_length(fe->args) >= 3
+                           ? (Node *) list_nth(fe->args, 2)
+                           : (Node *) makeNullConst(TEXTOID, -1, InvalidOid);
+      call->funcid = constants->OID_FUNCTION_PROBABILITY_EVALUATE;
+      call->funcresulttype = constants->OID_TYPE_FLOAT;
+      call->funcretset = false;
+      call->funcvariadic = false;
+      call->funcformat = COERCE_EXPLICIT_CALL;
+      call->funccollid = InvalidOid;
+      call->inputcollid = InvalidOid;
+      call->args = list_make3((Expr *)token, method_arg, args_arg);
+      call->location = fe->location;
+      return (Node *) call;
+    }
+  }
+  return expression_tree_mutator(node, rewrite_probability_event_mutator, data);
+}
+
+/**
+ * @brief Lift RV-comparison events in @p q's target list into their tokens.
+ *
+ * Two related rewrites over the SELECT list (only), run early in
+ * @c process_query next to @c rewrite_cond_predicates:
+ * - @c probability(<predicate>) / @c probability_evaluate(<predicate>)
+ *   Boolean overloads whose argument is a probabilistic event become
+ *   @c probability_evaluate over the event token;
+ * - a projected RV comparison (@c "SELECT x > y") surfaces its @c gate_cmp
+ *   uuid instead of raising in the runtime placeholder.
+ * WHERE / HAVING quals are deliberately untouched -- those filter positions
+ * are handled by @c migrate_probabilistic_quals.  A set-returning RV consumer
+ * over a CASE in the FROM list (@c "support(CASE ...)") is out of scope:
+ * materialise the CASE in a subquery / CTE first, then apply the consumer to
+ * the resulting @c random_variable column.  No-op on a schema predating the
+ * Boolean @c probability overloads.
+ */
+static void
+rewrite_probability_events(const constants_t *constants, Query *q)
+{
+  ListCell *lc;
+  if (!OidIsValid(constants->OID_FUNCTION_PROBABILITY_EVALUATE))
+    return;
+  q->targetList = (List *)expression_tree_mutator(
+    (Node *)q->targetList, rewrite_probability_event_mutator, (void *)constants);
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (is_projected_rv_event((Node *)te->expr, constants))
+      te->expr = (Expr *)predicate_to_condition_gate(te->expr, constants, false);
+  }
+}
+
+/**
  * @brief Build the @c ucq_joint_provenance(descriptor) call substituted for
  *        a recognised unsafe UCQ's existence provenance.
  *
@@ -6220,6 +6452,15 @@ static bool has_rv_or_provenance_call(Node *node, void *data) {
   if (IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *)node;
     if (f->funcid == constants->OID_FUNCTION_PROVENANCE)
+      return true;
+  }
+
+  /* A builtin GREATEST / LEAST over random_variable arguments: engage the
+   * gate so the planner hook lifts it into a gate_arith MAX / MIN order
+   * statistic (otherwise it would fall to the meaningless-comparison error). */
+  if (IsA(node, MinMaxExpr)) {
+    MinMaxExpr *mm = (MinMaxExpr *)node;
+    if (mm->minmaxtype == constants->OID_TYPE_RANDOM_VARIABLE)
       return true;
   }
 
@@ -12511,6 +12752,14 @@ static Query *process_query(const constants_t *constants, Query *q,
    * consumed here, not lifted as a WHERE qual). */
   if (provsql_active)
     rewrite_cond_predicates(constants, q);
+
+  /* Comparison-event surface: lift RV comparisons appearing in the SELECT
+   * target list -- a projected "x > y" and the probability(<predicate>)
+   * Boolean overloads -- into their gate_cmp event tokens.  Runs alongside
+   * rewrite_cond_predicates and, like it, only over the target list (WHERE /
+   * HAVING quals stay with migrate_probabilistic_quals). */
+  if (provsql_active)
+    rewrite_probability_events(constants, q);
 
   /* Normalise a bare boolean aggregate used as a HAVING condition (HAVING
    * bool_or(x), HAVING NOT(every(x))) to "agg = true", while the aggregate is

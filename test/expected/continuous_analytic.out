@@ -20,6 +20,18 @@ t
 normal_diff_exact
 t
 (1 row)
+exp_exp_lt_exact
+t
+(1 row)
+unif_unif_lt_exact
+t
+(1 row)
+unif_disjoint_exact
+t
+(1 row)
+unif_offset_exact
+t
+(1 row)
 continuous_eq_zero
 t
 (1 row)

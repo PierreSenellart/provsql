@@ -74,6 +74,7 @@ const char *gate_type_name[] = {
   "annotation",
   "conditioned",
   "mobius",
+  "case",
   "invalid"
 };
 
@@ -211,6 +212,21 @@ static Oid get_provsql_func_oid(char *s)
     return fcl->oid;
   else
     return 0;
+}
+
+/**
+ * @brief Return the OID of a @c provsql-schema function named @p s with a
+ *        specific argument-type signature.
+ *
+ * Unlike @c get_provsql_func_oid (which returns an arbitrary overload), this
+ * disambiguates overloaded functions by exact argument types.  Needed for the
+ * @c probability / @c probability_evaluate families, which now carry both a
+ * @c uuid and a @c boolean first-argument overload.  Returns 0 if not found.
+ */
+static Oid get_provsql_func_oid_args(char *s, int nargs, Oid *argtypes)
+{
+  return LookupFuncName(list_make2(makeString("provsql"), makeString(s)),
+                        nargs, argtypes, true /* missing_ok */);
 }
 
 /**
@@ -457,6 +473,18 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     CStringGetDatum("random_variable"),
     ObjectIdGetDatum(constants.OID_SCHEMA_PROVSQL)
     );
+  constants.OID_TYPE_RANDOM_VARIABLE_ARRAY =
+    OidIsValid(constants.OID_TYPE_RANDOM_VARIABLE)
+      ? get_array_type(constants.OID_TYPE_RANDOM_VARIABLE)
+      : InvalidOid;
+
+  /* provsql.greatest / provsql.least (VARIADIC random_variable[]): the
+   * order-statistic constructors the planner lifts a builtin GREATEST / LEAST
+   * over random_variable arguments into.  Optional (InvalidOid on older
+   * schemas disables the lift; the qualified provsql.greatest(...) still
+   * works). */
+  constants.OID_FUNCTION_RV_GREATEST = get_provsql_func_oid("greatest");
+  constants.OID_FUNCTION_RV_LEAST = get_provsql_func_oid("least");
 
   /* rv_aggregate_semimod helper used by the RV-returning aggregate
    * rewrite (sum, avg, and any future aggregate whose result type is
@@ -522,6 +550,25 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     get_provsql_func_oid("given_predicate");
   constants.OID_FUNCTION_REGULAR_INDICATOR =
     get_provsql_func_oid("regular_indicator");
+
+  /* probability(<predicate>) surface: the real probability_evaluate(uuid,
+   * text, text) is the rewrite target; probability(boolean, text, text) is
+   * the placeholder the planner lifts.  Disambiguated by argument type since
+   * each name is overloaded.  Optional (InvalidOid on schemas predating the
+   * boolean overload). */
+  {
+    Oid uuid_sig[3] = { constants.OID_TYPE_UUID, TEXTOID, TEXTOID };
+    Oid bool_sig[3] = { BOOLOID, TEXTOID, TEXTOID };
+    constants.OID_FUNCTION_PROBABILITY_EVALUATE =
+      get_provsql_func_oid_args("probability_evaluate", 3, uuid_sig);
+    constants.OID_FUNCTION_PROBABILITY_PREDICATE =
+      get_provsql_func_oid_args("probability", 3, bool_sig);
+  }
+
+  /* rv_case(uuid[]) -> random_variable: builds a gate_case from the planner's
+   * flattened guard/value wire list.  Optional (InvalidOid disables the
+   * CASE-over-RV rewrite on schemas predating gate_case). */
+  constants.OID_FUNCTION_RV_CASE = get_provsql_func_oid("rv_case");
 
   /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
    * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,
@@ -594,6 +641,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID_OPTIONAL(annotation);
   GET_GATE_TYPE_OID_OPTIONAL(conditioned);
   GET_GATE_TYPE_OID_OPTIONAL(mobius);
+  GET_GATE_TYPE_OID_OPTIONAL(case);
 
   constants.ok=true;
 

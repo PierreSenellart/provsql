@@ -90,6 +90,14 @@ query result holds, given the assigned input probabilities:
            probability_evaluate(provenance()) AS prob
     FROM suspects;
 
+:sqlfunc:`probability` is a short alias with the same arguments, to match
+the concise :sqlfunc:`expected` / :sqlfunc:`variance` / :sqlfunc:`support`
+surface. It also accepts a Boolean event directly --
+``probability(x > y)`` over ``random_variable`` columns, or
+``probability(1 > 0)`` on a deterministic event (total: ``1`` if it holds,
+``0`` otherwise) -- see the comparison-event surface in
+:doc:`continuous-distributions`.
+
 With no further argument it returns the **exact** probability.  An
 optional second argument names a computation method and a third passes
 method-specific parameters (a comma-separated ``key=value`` list, the

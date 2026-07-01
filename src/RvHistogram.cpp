@@ -141,7 +141,7 @@ rv_histogram(PG_FUNCTION_ARGS)
                          : 1u;
       emit_bin(out, first, v, v, n);
     } else if (t == gate_rv || t == gate_arith || t == gate_mixture
-               || t == gate_agg || t == gate_semimod) {
+               || t == gate_agg || t == gate_semimod || t == gate_case) {
       std::vector<double> samples;
       /* Exact analytical histogram: when the (peeled) root matches a
        * closed-form distribution -- a (truncated) Gaussian, a sum of
@@ -249,7 +249,7 @@ rv_histogram(PG_FUNCTION_ARGS)
       provsql_error(
         "rv_histogram: root gate type '%s' is not a scalar "
         "(expected gate_value, gate_rv, gate_arith, gate_mixture, "
-        "gate_agg, or gate_semimod)",
+        "gate_agg, gate_semimod, or gate_case)",
         type_name);
     }
   } catch (const std::exception &e) {

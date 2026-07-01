@@ -1,0 +1,25 @@
+\set ECHO none
+alias_agrees|alias_half
+t|t
+(1 row)
+projected_present|projected_is_uuid
+t|t
+(1 row)
+p_gt_half
+t
+(1 row)
+p_middle
+t
+(1 row)
+pe_uuid_unchanged
+t
+(1 row)
+p_mixed
+t
+(1 row)
+p_true|p_false|p_t|p_f|p_null
+1|0|1|0|t
+(1 row)
+continuous_comparison_surface_done
+ok
+(1 row)

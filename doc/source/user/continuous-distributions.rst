@@ -196,6 +196,92 @@ event on the row's provenance. End users never invoke the
 comparison procedures directly; the rewriter routes them through
 ``gate_cmp``.
 
+Order Statistics: greatest / least, min / max
+---------------------------------------------
+
+Order statistics over random variables come in two shapes, both
+lowering to one ``gate_arith`` node with a ``MAX`` or ``MIN`` opcode.
+
+The **same-row** form takes several random variables and returns
+their pointwise maximum or minimum:
+
+.. code-block:: postgresql
+
+    -- Three independent U(0,1) columns in one row.
+    CREATE TABLE d AS
+      SELECT uniform(0,1) AS x, uniform(0,1) AS y, uniform(0,1) AS z;
+
+    SELECT expected(greatest(x, y, z)) FROM d;   -- 0.75  (= 3/4)
+    SELECT expected(least(x, y, z))    FROM d;   -- 0.25  (= 1/4)
+    SELECT variance(greatest(x, y, z)) FROM d;   -- 0.0375 (Beta(3,1))
+
+The bare ``GREATEST`` / ``LEAST`` SQL grammar is lifted over
+``random_variable`` arguments by the planner hook (a fixed
+``provsql.greatest(variadic random_variable[])`` /
+``provsql.least(...)`` constructor is available too, and is the only
+form outside a planner-hook-rewritten query). ``NULL`` arguments are
+ignored, matching the built-in. Being max / min, they are
+**idempotent**: ``greatest(x, x, y)`` de-duplicates to
+``greatest(x, y)`` -- the same circuit gate -- and ``greatest(x)``
+collapses to ``x``. (Two *independent* draws of the same distribution
+are distinct gates and are not merged.)
+
+The **aggregate** form promotes ``min`` / ``max`` to RV-aware versions,
+exactly like the ``sum`` / ``avg`` / ``product`` aggregates:
+
+.. code-block:: postgresql
+
+    WITH s(r) AS (VALUES (uniform(0,1)), (uniform(0,1)), (uniform(0,1)))
+    SELECT expected(max(r)), expected(min(r)) FROM s;   -- 0.75, 0.25
+
+The empty-group identity is ``-inf`` for ``max`` and ``+inf`` for
+``min`` (the extremum counterparts to ``sum``'s ``0`` and
+``product``'s ``1``).
+
+Evaluation is Monte-Carlo-correct out of the box (the sampler takes
+``std::max`` / ``std::min`` over the jointly-drawn children, so shared
+base random variables stay coupled). Where the operands are
+independent and identically distributed, the mean is **exact**:
+``E[max]`` of ``n`` i.i.d. ``U(a,b)`` is ``a + (b-a)·n/(n+1)``,
+``E[min]`` is ``a + (b-a)/(n+1)``; i.i.d. exponentials give
+``E[min] = 1/(nλ)`` and ``E[max] = H_n/λ``. Ordering or de-duplicating
+a ``random_variable`` directly (``ORDER BY rv``, ``DISTINCT rv``) is
+meaningless -- a random variable is a distribution, not a scalar -- and
+raises a clear error pointing at the order-statistic constructors.
+
+CASE Over Random Variables
+--------------------------
+
+A searched ``CASE`` whose ``WHEN`` guards are random-variable
+comparisons and whose branches are random variables is lowered into a
+``gate_case`` guarded selection (the value of the first guard that
+holds, else the ``ELSE`` default):
+
+.. code-block:: postgresql
+
+    -- max, written as a CASE (equals greatest(x, y, z))
+    SELECT expected(CASE WHEN x >= y AND x >= z THEN x
+                         WHEN y >= z            THEN y
+                         ELSE z END) FROM d;             -- 0.75
+
+    -- abs:  E|N(0,1)| = sqrt(2/pi)
+    SELECT expected(CASE WHEN n >= 0 THEN n ELSE -n END)
+      FROM (SELECT normal(0,1) AS n) t;                  -- 0.7979
+
+    -- ReLU: E[max(N,0)] = 1/sqrt(2*pi)
+    SELECT expected(CASE WHEN n >= 0 THEN n ELSE as_random(0) END)
+      FROM (SELECT normal(0,1) AS n) t;                  -- 0.3989
+
+Integer / numeric branches are promoted through the implicit
+``as_random`` casts, so ``... THEN x ELSE 0 END`` is well-typed. This
+subsumes ``abs`` / ``clamp`` / ReLU and other monotone piecewise
+transforms as ``CASE`` sugar. Because the guards and branches are
+evaluated in the same Monte-Carlo draw, correlations through shared
+leaves are preserved. A ``CASE`` fed to a set-returning consumer
+(``support`` / ``rv_sample``) in the ``FROM`` clause must be
+materialised first (``CREATE TABLE ... AS SELECT CASE ...``), the same
+pattern the aggregates use.
+
 Probabilistic Queries
 ---------------------
 
@@ -234,6 +320,27 @@ follow the standard ProvSQL rewriting, with the join condition
 contributing a ``gate_cmp`` to the joined row's provenance.
 ``UNION ALL`` over RV-bearing relations produces the natural
 ``gate_plus`` over the two source rows' provenance.
+
+A comparison is also a first-class **value** wherever it is
+projected. ``SELECT x > y`` surfaces the event's ``gate_cmp`` token
+(a ``uuid``) rather than raising, and the ``probability(<predicate>)``
+overload asks for the probability of an event with the natural infix
+grammar:
+
+.. code-block:: postgresql
+
+    SELECT x > y FROM d;                        -- the event uuid
+    SELECT probability(x > y) FROM d;           -- 0.5
+    SELECT probability(x > y AND x < z) FROM d; -- 0.1667  (ordering y<x<z)
+
+``probability`` is also a short alias of
+:sqlfunc:`probability_evaluate` on a ``uuid``. Over a purely
+deterministic Boolean it is total -- ``probability(1 > 0)`` is ``1``,
+``probability(region = 'north')`` is a per-row ``0`` / ``1`` -- so it
+works on definite events too, even with ``provsql.active`` off. (The
+predicate overload lives only on the short ``probability`` name; a
+Boolean overload of ``probability_evaluate`` would make a
+``uuid``-as-text literal ambiguous.)
 
 Configuration of the Monte Carlo Sampler
 -----------------------------------------
@@ -304,7 +411,26 @@ the rewrites produced by the earlier ones:
   distribution's ``gate_cmp`` (e.g. ``Normal > 2``,
   ``Uniform <= 1.5``, ``Exponential >= λ⁻¹``) via the standard
   CDFs of the supported families, for any ``gate_cmp`` that
-  RangeCheck could not decide from the support alone.
+  RangeCheck could not decide from the support alone. It also
+  decides a comparison between **two independent random variables**
+  of the same family in closed form: Normal-Normal (the difference
+  is Normal), Exponential-Exponential
+  (``P(X < Y) = λ_X / (λ_X + λ_Y)``), and Uniform-Uniform (the
+  geometric area). So ``probability(x > y)`` for two i.i.d. uniforms
+  is exactly ``0.5``, and ``probability(a < b)`` for
+  ``a ~ Exp(2), b ~ Exp(3)`` is exactly ``0.4``, with no sampling.
+
+Two further analytic surfaces build on the same closed forms:
+**order-statistic means** are exact for i.i.d. families
+(``expected(greatest(x, y, z))`` of three i.i.d. uniforms is exactly
+``0.75``), and **conditioning on an RV-vs-RV comparison**
+(``expected(x | (x > y))``, or the two-argument
+``expected(x, rv_cmp_gt(x, y))``) is evaluated by a one-dimensional
+quadrature -- exact for uniforms (``E[X | X > Y] = 2/3``),
+high-accuracy for the other families. Setting
+``provsql.rv_mc_samples = 0`` forces every one of these onto its
+analytic path and raises rather than sampling if no closed form
+applies -- the way to assert that a query is answered exactly.
 
 A residual ``HybridEvaluator`` decomposer pass runs between
 RangeCheck and AnalyticEvaluator for continuous-island ``gate_cmp``

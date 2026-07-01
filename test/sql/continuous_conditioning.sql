@@ -361,4 +361,23 @@ SELECT (h.first_bin_lo)::numeric = 3 AS hist_lo_eq_3,
        ) h;
 
 RESET provsql.monte_carlo_seed;
+
+-- ---------------------------------------------------------------------
+-- 7. Conditioning on an RV-vs-RV comparison: E[X | X op Y] with X, Y two
+--    independent RVs.  Closed form via the 1-D order-statistic quadrature
+--    (exact for the Uniform-Uniform case), MC disabled.
+-- ---------------------------------------------------------------------
+SET provsql.rv_mc_samples = 0;
+
+-- E[X | X > Y] = 2/3, E[X | X < Y] = 1/3 for i.i.d. U(0,1) (exact).
+WITH r AS (SELECT provsql.uniform(0,1) AS x, provsql.uniform(0,1) AS y)
+SELECT abs(expected(x, rv_cmp_gt(x, y)) - 2.0/3) < 1e-9 AS cond_gt_two_thirds,
+       abs(expected(x, rv_cmp_lt(x, y)) - 1.0/3) < 1e-9 AS cond_lt_one_third
+  FROM r;
+
+-- The infix "X | (predicate)" surface agrees with the two-argument form.
+WITH r AS (SELECT provsql.uniform(0,1) AS x, provsql.uniform(0,1) AS y)
+SELECT abs(expected(x | (x > y)) - 2.0/3) < 1e-9 AS cond_infix_two_thirds
+  FROM r;
+
 RESET provsql.rv_mc_samples;
