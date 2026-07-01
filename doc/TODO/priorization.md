@@ -55,7 +55,9 @@ Two findings from running the examples reshuffle the plan:
 7.  CS4 extensions: direct `get_valid_time`, the `UPDATE`-for-DELETE+INSERT
     swap (window-function caveat verified).
 8.  Continuous distributions: the §F.1 refactor, then the quick wins
-    (Gamma, Log-normal, quantiles, RV-vs-RV comparators, GMM).
+    (Gamma, Log-normal, quantiles, RV-vs-RV comparators, GMM, and the
+    §B.6 comparison-event surface — whose `probability` alias and
+    projected-event rewrite are the smallest, refactor-independent items).
 9. Scalar subqueries: different-`(Q,corr)` multi-sublinks (hard error
     today), `GROUP BY` body (hard error today).
 10. Bounded-treewidth Route C leftovers / Route 3 / non-recursive
@@ -740,17 +742,54 @@ gate with a monotonic-transform whitelist (bounds transform for
 RangeCheck/Analytic, function applied per draw for MC); the
 `exp(normal)→lognormal` bridge unlocks §A.2 sum closure.
 
-### §B.4 Order-statistic aggregates
+### §B.4 Order statistics: `MIN`/`MAX` aggregates and `greatest`/`least`
 ```sql
-SELECT max(x) FROM rv_col;   -- x is random_variable
+SELECT max(x) FROM rv_col;              -- x is random_variable (over rows)
+SELECT provsql.expected(GREATEST(x,y,z)) FROM d;   -- three RV columns, one row
 ```
 ```
 ERROR:  function max(random_variable) does not exist     (min, percentile_cont likewise)
+ERROR:  could not identify a comparison function for type provsql.random_variable
 ```
-`SUM`/`AVG`/`PRODUCT` over `random_variable` exist; `MIN`/`MAX`/ordered-set
-do not. **After** — RV-aware min/max accumulating an order-statistic
-distribution (CDF of the min = `1−∏(1−Fᵢ)`; i.i.d. Exponential min is
-Exponential at the summed rate); `percentile_cont` needs §B.1.
+`SUM`/`AVG`/`PRODUCT` over `random_variable` exist; neither the
+`MIN`/`MAX`/ordered-set *aggregates* nor a same-row *variadic*
+`greatest`/`least` do (`GREATEST` needs btree ordering, which the RV type
+has no business providing). The motivating question — `E[max(x,y,z)]` for
+three `uniform(0,1)` columns, exact `3/4` — needs the variadic form, not
+the aggregate. **Reachable today** by decomposing over which column is the
+max via the shipped `|` surface: `expected(x | (x>y AND x>z))` returns
+`0.750` (`E[x | x is max]`; MC-backed, `rv_mc_samples>0`). **After** — one
+shared `PROVSQL_ARITH_MAX`/`_MIN` gate (append-only opcode) feeding both an
+RV-aware `min`/`max` aggregate (accumulating the order-statistic
+distribution: CDF of the min = `1−∏(1−Fᵢ)`; i.i.d. Exponential min is
+Exponential at the summed rate) and a variadic `greatest`/`least`; MC gives
+correct answers immediately, the closed-form `E[max]` is the §B.2-adjacent
+refinement; `percentile_cont` needs §B.1.
+
+### §B.6 Comparison events as first-class values
+```sql
+SELECT x > y FROM d;                              -- project the event
+SELECT probability_evaluate(x>y AND x<z) FROM d;  -- probability of a predicate
+```
+```
+ERROR:  random_variable comparison must be rewritten by the ProvSQL planner hook (is provsql.active off?)
+ERROR:  function probability_evaluate(boolean) does not exist
+```
+RV comparisons are rewritten into their `gate_cmp` token only in WHERE /
+JOIN / HAVING quals and the `|`-RHS; elsewhere they hit
+`random_variable_cmp_placeholder` and raise. So a projected `x>y` and a
+naturally-written `probability(x>y AND x<z)` both fail, even though
+`expected(x | (x>y AND x>z))` works (only because `|` has a
+`(random_variable, boolean)` overload the hook rewrites). Today's escape
+hatch is explicit token building:
+`probability_evaluate(provenance_times(rv_cmp_gt(x,y), rv_cmp_lt(x,z)))` →
+`0.16732` (≈ `1/6`, the ordering `y<x<z`). **After** — (1) broaden the
+hook to lift RV comparisons in the target list / general argument
+positions, surfacing `x>y` as its event token; (2) a
+`probability(boolean)` placeholder overload the hook rewrites, mirroring
+`random_variable_cond_predicate`; (3) a trivial `probability` alias bound
+to the same `probability_evaluate` C symbol, for the concise surface
+(`expected`/`variance`/`support`). All three are quick wins.
 
 ### §C.1/§C.2/§C.3 Empirical / GMM distributions
 ```sql
