@@ -11,6 +11,7 @@
 #include <string>
 
 #include "Circuit.h"  // CircuitException
+#include "Distribution.h"  // makeDistribution (per-family closed forms)
 
 namespace provsql {
 
@@ -92,117 +93,23 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
   return std::nullopt;
 }
 
+/* analytical_mean / analytical_variance / analytical_raw_moment are thin
+ * wrappers over the per-family Distribution closed forms (src/Distribution.*).
+ * The family-specific formulas live in the Distribution subclasses; these
+ * free functions stay as the stable call surface for existing consumers. */
 double analytical_mean(const DistributionSpec &d)
 {
-  switch (d.kind) {
-    case DistKind::Normal:      return d.p1;
-    case DistKind::Uniform:     return 0.5 * (d.p1 + d.p2);
-    case DistKind::Exponential: return 1.0 / d.p1;
-    case DistKind::Erlang:      return d.p1 / d.p2;
-  }
-  return 0.0;
+  return makeDistribution(d)->mean();
 }
 
 double analytical_variance(const DistributionSpec &d)
 {
-  switch (d.kind) {
-    case DistKind::Normal: {
-      const double sigma = d.p2;
-      return sigma * sigma;
-    }
-    case DistKind::Uniform: {
-      const double w = d.p2 - d.p1;
-      return (w * w) / 12.0;
-    }
-    case DistKind::Exponential: {
-      const double lambda = d.p1;
-      return 1.0 / (lambda * lambda);
-    }
-    case DistKind::Erlang: {
-      const double k = d.p1, lambda = d.p2;
-      return k / (lambda * lambda);
-    }
-  }
-  return 0.0;
+  return makeDistribution(d)->variance();
 }
-
-namespace {
-
-double factorial(unsigned k)
-{
-  double r = 1.0;
-  for (unsigned i = 2; i <= k; ++i) r *= static_cast<double>(i);
-  return r;
-}
-
-double binomial_coeff(unsigned n, unsigned k)
-{
-  if (k > n) return 0.0;
-  if (k > n - k) k = n - k;
-  double r = 1.0;
-  for (unsigned i = 1; i <= k; ++i) {
-    r *= static_cast<double>(n - i + 1);
-    r /= static_cast<double>(i);
-  }
-  return r;
-}
-
-// (j-1)!! with the empty-product convention (-1)!! = 1.
-//   j = 0  ->  1
-//   j = 2  ->  1!! = 1
-//   j = 4  ->  3!! = 3
-//   j = 6  ->  5!! = 15
-double double_factorial_minus_one(unsigned j)
-{
-  if (j == 0) return 1.0;
-  double r = 1.0;
-  for (unsigned i = 1; i < j; i += 2) r *= static_cast<double>(i);
-  return r;
-}
-
-}  // namespace
 
 double analytical_raw_moment(const DistributionSpec &d, unsigned k)
 {
-  if (k == 0) return 1.0;
-  if (k == 1) return analytical_mean(d);
-  switch (d.kind) {
-    case DistKind::Normal: {
-      const double mu    = d.p1;
-      const double sigma = d.p2;
-      // E[X^k] = sum_{j=0,2,...}^{k} C(k,j) mu^(k-j) sigma^j (j-1)!!
-      double total = 0.0;
-      for (unsigned j = 0; j <= k; j += 2) {
-        total += binomial_coeff(k, j)
-               * std::pow(mu, static_cast<double>(k - j))
-               * std::pow(sigma, static_cast<double>(j))
-               * double_factorial_minus_one(j);
-      }
-      return total;
-    }
-    case DistKind::Uniform: {
-      const double a   = d.p1;
-      const double b   = d.p2;
-      const double kp1 = static_cast<double>(k + 1);
-      return (std::pow(b, kp1) - std::pow(a, kp1)) / (kp1 * (b - a));
-    }
-    case DistKind::Exponential: {
-      const double lambda = d.p1;
-      return factorial(k) / std::pow(lambda, static_cast<double>(k));
-    }
-    case DistKind::Erlang: {
-      /* E[X^k] = Gamma(s + k) / (Gamma(s) lambda^k)
-       *        = s (s+1) ... (s+k-1) / lambda^k
-       * for integer shape s ≥ 1; the rising factorial is built as a
-       * plain double loop to keep the routine free of <cmath>'s tgamma
-       * (which is fine but unnecessary here since s is integer). */
-      const double s = d.p1, lambda = d.p2;
-      double rising = 1.0;
-      for (unsigned i = 0; i < k; ++i) rising *= (s + static_cast<double>(i));
-      return rising / std::pow(lambda, static_cast<double>(k));
-    }
-  }
-  return 0.0;
+  return makeDistribution(d)->rawMoment(k);
 }
 
 }  // namespace provsql
