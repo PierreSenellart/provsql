@@ -42,6 +42,10 @@
             + '(coefficient 0). Each child edge is labelled with its integer '
             + 'coefficient. A measure-only token: evaluate it for a '
             + 'probability, not a semiring.',
+    case:     'Case gate (⇢): guarded selection over RVs (CASE). Children are '
+            + 'guard/value pairs followed by a default; the value taken is that '
+            + 'of the first guard (a comparison event) that holds, else the '
+            + 'default.',
     'kc-and':   'AND gate',
     'kc-or':    'OR gate',
     'kc-not':   'NOT gate',
