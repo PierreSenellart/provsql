@@ -20,100 +20,19 @@ extern "C" {
 
 namespace provsql {
 
+/* pdfAt / cdfAt are the free-function entry points for the cold callers
+ * (single-RV-vs-constant decide, curve rendering, shape mass).  The
+ * per-family closed forms live in the Distribution subclasses; hot
+ * quadrature loops construct the Distribution once and call pdf/cdf on it
+ * directly rather than going through these per-point. */
 double pdfAt(const DistributionSpec &d, double c)
 {
-  double pdf_c = std::numeric_limits<double>::quiet_NaN();
-  switch (d.kind) {
-    case DistKind::Normal: {
-      /* f(c) = (1 / (σ √(2π))) · exp(-(c-μ)² / (2σ²)).  Numerically
-       * stable for any finite c; for c far in the tail the exp
-       * underflows to 0 cleanly. */
-      const double mu = d.p1, sigma = d.p2;
-      if (!(sigma > 0.0)) break;
-      static const double SQRT_2PI = std::sqrt(2.0 * M_PI);
-      const double z = (c - mu) / sigma;
-      pdf_c = std::exp(-0.5 * z * z) / (sigma * SQRT_2PI);
-      break;
-    }
-    case DistKind::Uniform: {
-      const double a = d.p1, b = d.p2;
-      if (!(b > a)) break;
-      pdf_c = (c < a || c > b) ? 0.0 : 1.0 / (b - a);
-      break;
-    }
-    case DistKind::Exponential: {
-      const double lambda = d.p1;
-      if (!(lambda > 0.0)) break;
-      pdf_c = (c < 0.0) ? 0.0 : lambda * std::exp(-lambda * c);
-      break;
-    }
-    case DistKind::Erlang: {
-      /* f(c; k, λ) = λ^k · c^(k-1) · e^(-λc) / (k-1)! for c >= 0.
-       * Same integer-k caveat as the CDF: non-integer shapes need
-       * the regularised lower incomplete gamma and are out of scope. */
-      const double s = d.p1, lambda = d.p2;
-      if (s < 1.0 || s != std::floor(s) || !(lambda > 0.0)) break;
-      if (c < 0.0) { pdf_c = 0.0; break; }
-      const unsigned long k = static_cast<unsigned long>(s);
-      /* (k-1)! is small for the typical Erlang shapes (k <= ~20);
-       * compute incrementally to keep precision. */
-      double fact = 1.0;
-      for (unsigned long i = 2; i < k; ++i) fact *= static_cast<double>(i);
-      pdf_c = std::pow(lambda, static_cast<double>(k))
-            * std::pow(c, static_cast<double>(k - 1))
-            * std::exp(-lambda * c)
-            / fact;
-      break;
-    }
-  }
-  return pdf_c;
+  return makeDistribution(d)->pdf(c);
 }
 
 double cdfAt(const DistributionSpec &d, double c)
 {
-  double cdf_c = std::numeric_limits<double>::quiet_NaN();
-  switch (d.kind) {
-    case DistKind::Normal: {
-      /* Φ((c - μ)/σ) = ½ (1 + erf((c - μ) / (σ √2))).  Standard
-       * formula; std::erf is C99 / C++11. */
-      static const double SQRT2 = std::sqrt(2.0);
-      double z = (c - d.p1) / d.p2;
-      cdf_c = 0.5 * (1.0 + std::erf(z / SQRT2));
-      break;
-    }
-    case DistKind::Uniform:
-      if (c <= d.p1)        cdf_c = 0.0;
-      else if (c >= d.p2)   cdf_c = 1.0;
-      else                  cdf_c = (c - d.p1) / (d.p2 - d.p1);
-      break;
-    case DistKind::Exponential:
-      if (c <= 0.0) cdf_c = 0.0;
-      else          cdf_c = -std::expm1(-d.p1 * c);  /* 1 - exp(-λc) */
-      break;
-    case DistKind::Erlang: {
-      /* For integer shape s ≥ 1, the Erlang CDF has the finite-sum
-       * form F(c; s, λ) = 1 - e^{-λc} Σ_{n=0..s-1} (λc)^n / n!.
-       * Numerically stable for the small-to-moderate s the simplifier
-       * produces (a SUM of k i.i.d. Exp gates).  Non-integer s would
-       * require the regularised lower incomplete gamma function, so
-       * we skip those cases by leaving cdf_c = NaN (caller treats NaN
-       * as "undecided" and the cmp falls through to MC). */
-      const double s = d.p1, lambda = d.p2;
-      if (s < 1.0 || s != std::floor(s)) break;
-      if (c <= 0.0) { cdf_c = 0.0; break; }
-      const double lc = lambda * c;
-      double term = 1.0;   /* (λc)^0 / 0! */
-      double sum  = 1.0;
-      const unsigned long k = static_cast<unsigned long>(s);
-      for (unsigned long n = 1; n < k; ++n) {
-        term *= lc / static_cast<double>(n);
-        sum  += term;
-      }
-      cdf_c = 1.0 - std::exp(-lc) * sum;
-      break;
-    }
-  }
-  return cdf_c;
+  return makeDistribution(d)->cdf(c);
 }
 
 namespace {
@@ -193,30 +112,26 @@ double integralUniformCdf(double a, double b, double c, double d)
   return total;
 }
 
-/* A finite integration window covering essentially all of a distribution's
- * mass (mirrors @c Expectation::rvIntegrationRange).  Bounded families give
- * their exact support; unbounded ones a many-sigma / many-mean tail. */
-bool rvSupportRange(const DistributionSpec &d, double &lo, double &hi)
-{
-  return makeDistribution(d)->integrationRange(lo, hi);
-}
-
 /* P(X < Y) for two independent RVs of possibly-different families, by the
  * 1-D quadrature P(X<Y) = ∫ (1 - F_Y(t)) f_X(t) dt over X's support
  * (composite Simpson).  NaN when a density / CDF is undefined (e.g. a
  * non-integer Erlang shape), so the caller falls back to Monte Carlo. */
 double mixedPairLess(const DistributionSpec &X, const DistributionSpec &Y)
 {
+  // Construct the two distributions once; the Simpson loop calls pdf/cdf on
+  // them per point (never re-constructing per point).
+  const auto dX = makeDistribution(X);
+  const auto dY = makeDistribution(Y);
   double lo, hi;
-  if (!rvSupportRange(X, lo, hi))
+  if (!dX->integrationRange(lo, hi))
     return std::numeric_limits<double>::quiet_NaN();
   const int N = 4000;
   const double h = (hi - lo) / N;
   double acc = 0.0;
   for (int i = 0; i <= N; ++i) {
     const double t = lo + i * h;
-    const double fX = pdfAt(X, t);
-    const double FY = cdfAt(Y, t);
+    const double fX = dX->pdf(t);
+    const double FY = dY->cdf(t);
     if (std::isnan(fX) || std::isnan(FY))
       return std::numeric_limits<double>::quiet_NaN();
     const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);

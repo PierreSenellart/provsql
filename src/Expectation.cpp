@@ -275,9 +275,6 @@ iidOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
   return std::nullopt;
 }
 
-/* Defined below (next to the conditional-moment quadrature). */
-bool rvIntegrationRange(const DistributionSpec &X, double &lo, double &hi);
-
 /* Closed-form (quadrature) E[max] / E[min] of a gate_arith MAX/MIN whose
  * children are independent bare gate_rv leaves of *any* families (mixed or
  * not-identical), generalising @c iidOrderStatMean.  Uses the layer-cake
@@ -303,7 +300,9 @@ mixedOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
   if (!pairwise_disjoint(fp, wires))
     return std::nullopt;
 
-  std::vector<DistributionSpec> specs;
+  // Construct each child's Distribution once; the Simpson loop below calls
+  // cdf on them per point (never re-constructing per point).
+  std::vector<std::unique_ptr<Distribution>> dists;
   double lo = 0.0, hi = 0.0;
   bool first = true;
   for (gate_t c : wires) {
@@ -312,12 +311,13 @@ mixedOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
     auto s = parse_distribution_spec(gc.getExtra(c));
     if (!s)
       return std::nullopt;
+    auto d = makeDistribution(*s);
     double clo, chi;
-    if (!rvIntegrationRange(*s, clo, chi))
+    if (!d->integrationRange(clo, chi))
       return std::nullopt;
     if (first) { lo = clo; hi = chi; first = false; }
     else       { lo = std::min(lo, clo); hi = std::max(hi, chi); }
-    specs.push_back(*s);
+    dists.push_back(std::move(d));
   }
   if (!(hi > lo))
     return std::nullopt;
@@ -330,16 +330,16 @@ mixedOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
     double integrand;
     if (isMax) {
       double prodF = 1.0;               /* ∏ F_i(t) = P(max ≤ t) */
-      for (const auto &s : specs) {
-        const double F = cdfAt(s, t);
+      for (const auto &d : dists) {
+        const double F = d->cdf(t);
         if (std::isnan(F)) return std::nullopt;
         prodF *= F;
       }
       integrand = 1.0 - prodF;          /* P(max > t) */
     } else {
       double prod1mF = 1.0;             /* ∏ (1 − F_i(t)) = P(min > t) */
-      for (const auto &s : specs) {
-        const double F = cdfAt(s, t);
+      for (const auto &d : dists) {
+        const double F = d->cdf(t);
         if (std::isnan(F)) return std::nullopt;
         prod1mF *= (1.0 - F);
       }
@@ -759,15 +759,6 @@ matchRvVsRvConditional(const GenericCircuit &gc, gate_t root, gate_t event_root)
   return RvVsRvCond{*specX, *specY, targetGreater};
 }
 
-/* A finite integration window covering essentially all of X's mass, used by
- * the 1-D conditional-moment quadrature.  Bounded families give their exact
- * support; unbounded ones a many-sigma / many-mean tail beyond which the
- * density is numerically negligible. */
-bool rvIntegrationRange(const DistributionSpec &X, double &lo, double &hi)
-{
-  return makeDistribution(X)->integrationRange(lo, hi);
-}
-
 /* E[X^k | X op Y] for independent X, Y via a 1-D quadrature:
  *   E[X^k | X>Y] = (∫ x^k f_X(x) F_Y(x) dx) / (∫ f_X(x) F_Y(x) dx),
  * and the X<Y case swaps F_Y for 1-F_Y.  Composite Simpson over X's support;
@@ -778,8 +769,12 @@ double rvVsRvConditionalMoment(const DistributionSpec &X,
                                const DistributionSpec &Y,
                                bool targetGreater, unsigned k)
 {
+  // Construct both distributions once; the Simpson loop calls pdf/cdf on
+  // them per point (never re-constructing per point).
+  const auto dX = makeDistribution(X);
+  const auto dY = makeDistribution(Y);
   double lo, hi;
-  if (!rvIntegrationRange(X, lo, hi))
+  if (!dX->integrationRange(lo, hi))
     return std::numeric_limits<double>::quiet_NaN();
 
   const int N = 4000;  /* even: composite Simpson */
@@ -787,8 +782,8 @@ double rvVsRvConditionalMoment(const DistributionSpec &X,
   double num = 0.0, den = 0.0;
   for (int i = 0; i <= N; ++i) {
     const double x = lo + i * h;
-    const double fX = pdfAt(X, x);
-    const double FY = cdfAt(Y, x);
+    const double fX = dX->pdf(x);
+    const double FY = dY->cdf(x);
     if (std::isnan(fX) || std::isnan(FY))
       return std::numeric_limits<double>::quiet_NaN();
     const double w = targetGreater ? FY : (1.0 - FY);  /* P(Y<x) / P(Y>x) */
