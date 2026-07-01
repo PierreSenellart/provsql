@@ -63,13 +63,20 @@ also a `gate_mixture` (`[key, mul_1, ...]`), so `children[2]` (a
 `mulinput`) was fed to `provsql.mixture` and rejected; a user
 `mixture(p, X, Y)` had its else-branch clobbered to the aggregate identity.
 
-Fix: the three FFUNCs treat an entry as a wrap only when it is a 3-child
-mixture whose else-branch is the `as_random(0)` sentinel; every other
-`gate_mixture` passes through as a plain scalar RV value (correct for the
-untracked case). Regression coverage is `continuous_aggregation.sql` §9
-(all five aggregates over untracked categorical and Bernoulli-mixture
-inputs). Tracked aggregates are unaffected: the wrap always pins its
-else-branch to `as_random(0)`.
+Fix: the recognition was removed rather than tightened. The planner hook
+(`make_rv_aggregate_expression`) now bakes each aggregate's identity
+element into the per-row wrap -- `mixture(prov, X, as_random(1))` for
+`product`, `as_random(∓inf)` for `max` / `min` -- so those final functions
+are plain folds that never inspect a gate; `avg` is rewritten to
+`rv_sum_or_null(sum-numerator) / sum(count)` (the `AVG = SUM / COUNT`
+identity over the provenance-weighted count) and likewise never inspects
+one. With nothing sniffing the wrap, the ambiguity is gone entirely,
+including the corner where a user `mixture(p, X, as_random(0))` (its
+else-branch being the additive identity) is structurally identical to the
+wrap. Regression coverage is `continuous_aggregation.sql` §9 (all five
+aggregates over untracked categorical, Bernoulli-mixture, and
+else-0-mixture inputs). Tracked aggregates build byte-identical circuits to
+before, so their moments and structure are unchanged.
 
 ## 2. Gap: conditional probability `P(A | B)` for two RV-comparison events
 
