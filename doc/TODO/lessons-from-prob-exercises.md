@@ -37,10 +37,10 @@ textbook resorts to an approximation:
   detection (`E[XY] = E[X]·E[Y]` for disjoint footprints; sum of i.i.d.
   exponentials folds to Erlang).
 
-## 1. Bug: `product()` aggregate over categorical / mixture RVs
+## 1. Bug (fixed): aggregates over categorical / mixture RV values
 
-The `product` aggregate is documented alongside `sum` / `avg` (which both
-work), but it raises on categorical (and any non-`gate_rv`) children:
+`product` was documented alongside `sum` / `avg` but raised on a
+categorical child:
 
 ```
 => SELECT expected(product(f)) FROM (
@@ -49,20 +49,27 @@ work), but it raises on categorical (and any non-`gate_rv`) children:
 ERROR:  provsql.mixture: x must be a scalar RV root (rv / value / arith / mixture), got mulinput
 ```
 
-The mathematically identical explicit product is exact:
+Investigation showed the blast radius was wider than the raise and wider
+than this one aggregate. The same root cause bit `max` / `min` identically
+(hard error on categoricals) and made `product` / `max` / `min` / `avg`
+**silently wrong** over an untracked *Bernoulli-mixture* value (`product`
+returned `1.5^5` for a true `2.5^5`; `max` returned `-inf`). Only `sum`
+was immune (it never inspects the per-row children).
 
-```
-=> SELECT expected(  categorical(ARRAY[0.5,0.5]::float8[], ARRAY[1.3,0.9]::float8[])
-                   * categorical(ARRAY[0.5,0.5]::float8[], ARRAY[1.3,0.9]::float8[])
-                   * categorical(ARRAY[0.5,0.5]::float8[], ARRAY[1.3,0.9]::float8[]) );
- 1.3310000000000004   -- = 1.1^3
-```
+Root cause: `product_rv_ffunc` / `extremum_rv_ffunc` / `avg_rv_ffunc`
+recognised the C-side per-row provenance wrap `mixture(prov, X,
+as_random(0))` by gate type alone (`gtype = 'mixture'`). A categorical is
+also a `gate_mixture` (`[key, mul_1, ...]`), so `children[2]` (a
+`mulinput`) was fed to `provsql.mixture` and rejected; a user
+`mixture(p, X, Y)` had its else-branch clobbered to the aggregate identity.
 
-So the failure is in the aggregate ffunc's handling of a `gate_mixture` /
-`mulinput`-rooted per-row child, not a modelling boundary. `sum` over the
-same categoricals works (verified: `sum` of 100 dice gives exact mean 350,
-variance 291.667). This is a plain bug: the `product_rv_ffunc` /
-`rv_aggregate_semimod` path should accept the same child shapes `sum` does.
+Fix: the three FFUNCs treat an entry as a wrap only when it is a 3-child
+mixture whose else-branch is the `as_random(0)` sentinel; every other
+`gate_mixture` passes through as a plain scalar RV value (correct for the
+untracked case). Regression coverage is `continuous_aggregation.sql` §9
+(all five aggregates over untracked categorical and Bernoulli-mixture
+inputs). Tracked aggregates are unaffected: the wrap always pins its
+else-branch to `as_random(0)`.
 
 ## 2. Gap: conditional probability `P(A | B)` for two RV-comparison events
 
