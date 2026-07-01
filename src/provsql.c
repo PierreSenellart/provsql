@@ -47,6 +47,7 @@
 #include "rewrite/rewriteManip.h"
 #include "parser/parse_relation.h"
 #include "utils/builtins.h"
+#include "utils/float.h"
 #include "parser/parsetree.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -2503,61 +2504,153 @@ static Expr *combine_prov_atts(const constants_t *constants,
 }
 
 /**
- * @brief Inline rewrite of an RV-returning aggregate into the same
- *        aggregate over provenance-wrapped per-row arguments.
+ * @brief Build an @c Aggref for an RV-summing aggregate over @p arg.
  *
- * Handles any aggregate whose result type is @c random_variable
- * (e.g. @c provsql.sum, @c provsql.avg).  Replaces @c agg(@c x) with an
- * Aggref whose per-row argument is lifted through @c rv_aggregate_semimod
- * to attach the row's provenance: each row contributes
- * @c mixture(prov_token, X_i, as_random(0)).  The aggregate itself
- * (@c aggfnoid) is preserved verbatim, so its SFUNC / FFUNC decide what
- * gate shape to build from the per-row mixtures.  In particular:
- *  - @c sum(random_variable) collects the mixtures into a single
- *    @c gate_arith @c PLUS root, realising
+ * Helper for the @c avg rewrite: the numerator uses @c rv_sum_or_null
+ * (@c NULL on an empty group) and the denominator uses @c sum, so the two
+ * differ only in @p aggfnoid.  @p arg is an @c Expr of type
+ * @c random_variable (the wrapped per-row contribution).
+ */
+static Aggref *build_rv_sum_aggref(const constants_t *constants,
+                                   Oid aggfnoid, Expr *arg) {
+  TargetEntry *te = makeNode(TargetEntry);
+  Aggref *agg = makeNode(Aggref);
+
+  te->resno = 1;
+  te->expr = arg;
+
+  agg->aggfnoid = aggfnoid;
+  agg->aggtype = constants->OID_TYPE_RANDOM_VARIABLE;
+  agg->aggargtypes = list_make1_oid(constants->OID_TYPE_RANDOM_VARIABLE);
+  agg->aggkind = AGGKIND_NORMAL;
+  agg->aggtranstype = InvalidOid;
+  agg->args = list_make1(te);
+  agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+  agg->aggno = agg->aggtransno = -1;
+#endif
+  return agg;
+}
+
+/**
+ * @brief Inline rewrite of an RV-returning aggregate, baking each
+ *        aggregate's identity element into the per-row provenance wrap.
+ *
+ * Handles any aggregate whose result type is @c random_variable.  Each row
+ * contributes @c mixture(prov_token, X_i, as_random(identity)), where the
+ * identity element is chosen per aggregate so the aggregate's final
+ * function is a plain fold with no gate inspection:
+ *  - @c sum : identity @c 0 (additive), realising
  *    @f$\mathrm{SUM}(x) = \sum_i \mathbf{1}\{\varphi_i\} \cdot X_i@f$;
- *  - @c avg(random_variable) walks each mixture to recover @c prov_i
- *    and emits @c gate_arith(DIV, @c sum(mixture(p_i,x_i,0)),
- *    @c sum(mixture(p_i,1,0))), the natural lift of "AVG = SUM / COUNT"
- *    into the @c random_variable algebra.
+ *  - @c product : identity @c 1 (multiplicative);
+ *  - @c max / @c min : identity @f$\mp\infty@f$ (order-statistic).
+ *
+ * @c avg is special: it is rewritten to
+ * @c rv_sum_or_null(rv_aggregate_semimod(prov, x)) @c /
+ * @c sum(rv_aggregate_indicator(prov)) -- the "AVG = SUM / COUNT" identity
+ * lifted into the @c random_variable algebra, with the provenance-weighted
+ * count as the denominator.  Both sums ride on @c sum's fold, so @c avg too
+ * never inspects a gate.
+ *
+ * Any RV aggregate not recognised here (a future addition, or an older
+ * schema whose helper OIDs are absent) falls back to the additive
+ * identity-@c 0 wrap and its own @c aggfnoid, the historical behaviour.
  *
  * Routing happens at @c make_aggregation_expression on
- * @c agg_ref->aggtype @c == @c OID_TYPE_RANDOM_VARIABLE, so any future
- * RV-returning aggregate inherits the same per-row provenance wrap
- * without further C-side dispatch.
- *
- * SR_PLUS (UNION outer level) is handled by the caller; this builder
- * never runs for SR_PLUS.
+ * @c agg_ref->aggtype @c == @c OID_TYPE_RANDOM_VARIABLE.  @c SR_PLUS (UNION
+ * outer level) is handled by the caller; this builder never runs for it.
  */
 static Expr *make_rv_aggregate_expression(const constants_t *constants,
                                           Aggref *agg_ref, List *prov_atts,
                                           semiring_operation op) {
   Expr *prov_expr = combine_prov_atts(constants, prov_atts, op);
   Expr *rv_arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
+  Oid aggfnoid = agg_ref->aggfnoid;
   FuncExpr *wrap;
   Aggref *new_agg;
   TargetEntry *te;
+  double identity = 0.0;
+  bool baked = false;
 
-  /* Wrap the per-row RV in mixture(prov, rv, as_random(0)) via the
-   * rv_aggregate_semimod SQL helper.  Going through the helper avoids
-   * having to look up the specific (uuid, random_variable,
-   * random_variable) overload of mixture and the (double precision)
-   * overload of as_random at OID-cache time. */
+  /* avg -> rv_sum_or_null(rv_aggregate_semimod(prov, x)) / sum(rv_aggregate_indicator(prov)).
+   * The numerator sums the per-row mixtures and the denominator sums the
+   * per-row provenance indicators (the provenance-weighted count), so avg
+   * inherits sum's sniff-free fold. */
+  if (OidIsValid(constants->OID_AGG_AVG_RV) &&
+      aggfnoid == constants->OID_AGG_AVG_RV &&
+      OidIsValid(constants->OID_AGG_SUM_RV) &&
+      OidIsValid(constants->OID_AGG_RV_SUM_OR_NULL) &&
+      OidIsValid(constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR) &&
+      OidIsValid(constants->OID_FUNCTION_RV_DIV)) {
+    FuncExpr *num_wrap = makeNode(FuncExpr);
+    FuncExpr *ind_wrap = makeNode(FuncExpr);
+    FuncExpr *div = makeNode(FuncExpr);
+
+    num_wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_SEMIMOD;
+    num_wrap->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
+    num_wrap->args = list_make2(prov_expr, rv_arg);
+    num_wrap->location = -1;
+
+    /* prov_expr is consumed again by the indicator wrap; copy it so the two
+     * Aggrefs own independent node trees. */
+    ind_wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR;
+    ind_wrap->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
+    ind_wrap->args = list_make1(copyObject(prov_expr));
+    ind_wrap->location = -1;
+
+    div->funcid = constants->OID_FUNCTION_RV_DIV;
+    div->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
+    /* Numerator uses rv_sum_or_null (NULL on empty) so an empty group
+     * divides to NULL; denominator is the ordinary provenance-weighted
+     * count sum. */
+    div->args = list_make2(
+      build_rv_sum_aggref(constants, constants->OID_AGG_RV_SUM_OR_NULL,
+                          (Expr *)num_wrap),
+      build_rv_sum_aggref(constants, constants->OID_AGG_SUM_RV,
+                          (Expr *)ind_wrap));
+    div->location = -1;
+    return (Expr *)div;
+  }
+
+  /* product / max / min bake their identity element into the wrap's
+   * else-branch; sum (and any unrecognised RV aggregate) keeps identity 0. */
+  if (OidIsValid(constants->OID_AGG_PRODUCT_RV) &&
+      aggfnoid == constants->OID_AGG_PRODUCT_RV) {
+    identity = 1.0;
+    baked = true;
+  } else if (OidIsValid(constants->OID_AGG_MAX_RV) &&
+             aggfnoid == constants->OID_AGG_MAX_RV) {
+    identity = -get_float8_infinity();
+    baked = true;
+  } else if (OidIsValid(constants->OID_AGG_MIN_RV) &&
+             aggfnoid == constants->OID_AGG_MIN_RV) {
+    identity = get_float8_infinity();
+    baked = true;
+  }
+
   wrap = makeNode(FuncExpr);
-  wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_SEMIMOD;
+  if (baked && OidIsValid(constants->OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID)) {
+    Const *id_const = makeConst(FLOAT8OID, -1, InvalidOid, sizeof(float8),
+                                Float8GetDatum(identity), false,
+                                FLOAT8PASSBYVAL);
+    wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID;
+    wrap->args = list_make3(prov_expr, rv_arg, id_const);
+  } else {
+    /* sum, and the fallback for any unrecognised RV aggregate: additive
+     * identity 0 via the two-argument wrap. */
+    wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_SEMIMOD;
+    wrap->args = list_make2(prov_expr, rv_arg);
+  }
   wrap->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
-  wrap->args = list_make2(prov_expr, rv_arg);
   wrap->location = -1;
 
-  /* Rebuild an Aggref calling the SAME aggregate (sum_rv, avg_rv, ...),
-   * but with the argument now wrapped.  Inherit the original Aggref's
-   * clause positioning; aggargtypes / aggtype stay random_variable. */
+  /* Rebuild an Aggref calling the SAME aggregate with the wrapped argument. */
   te = makeNode(TargetEntry);
   te->resno = 1;
   te->expr = (Expr *)wrap;
 
   new_agg = makeNode(Aggref);
-  new_agg->aggfnoid = agg_ref->aggfnoid;
+  new_agg->aggfnoid = aggfnoid;
   new_agg->aggtype = constants->OID_TYPE_RANDOM_VARIABLE;
   new_agg->aggargtypes = list_make1_oid(constants->OID_TYPE_RANDOM_VARIABLE);
   new_agg->aggkind = AGGKIND_NORMAL;

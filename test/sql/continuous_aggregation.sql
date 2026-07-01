@@ -528,13 +528,13 @@ DROP TABLE rv_prod_empty;
 -- 9.  Aggregates over categorical / mixture RV values (untracked).
 -- ---------------------------------------------------------------------
 -- A categorical RV is itself a gate_mixture ([key, mul_1, ...]) and a
--- user mixture(p, X, Y) is a gate_mixture too, so the product / avg /
--- max / min FFUNCs must not mistake either for the C-side per-row
--- provenance wrap mixture(prov, X, as_random(0)).  The wrap is
--- recognised by its 3-child shape whose else-branch is the as_random(0)
--- sentinel; every other gate_mixture passes through as a plain scalar RV
--- value.  Untracked aggregate: the planner hook leaves the Aggref alone,
--- so the FFUNC sees raw RV uuids directly.
+-- user mixture(p, X, Y) is a gate_mixture too.  In a provenance-tracked
+-- query the planner-hook wrap bakes each aggregate's identity element into
+-- the per-row contribution (product / max / min) or rewrites avg to
+-- sum/sum, so the final functions are plain folds that never inspect a
+-- gate.  An untracked aggregate is left alone by the hook, so the FFUNC
+-- folds the raw per-row RVs directly -- a categorical or a user mixture is
+-- just an ordinary scalar RV value, whatever its else-branch.
 
 -- Five i.i.d. categorical draws, each 1.3 w.p. 0.5 else 0.9 (mean 1.1).
 CREATE TABLE agg_cat5 AS
@@ -580,6 +580,32 @@ SELECT abs(provsql.expected(provsql.max(f)) - 2.96875) < 0.05 AS mix_max_mc,
   FROM agg_mix5;
 
 DROP TABLE agg_mix5;
+
+-- Three i.i.d. Bernoulli mixtures, each 3 w.p. 0.5 else 0 (mean 1.5).  The
+-- else-branch as_random(0) is exactly the additive identity the tracked
+-- wrap uses, so this is the sharpest check that no aggregate inspects the
+-- wrap: product / max / min fold the raw values (never patching an
+-- else-branch to their own identity), and avg counts each row once (never
+-- reading the mixing coin as provenance).
+CREATE TABLE agg_mix0 AS
+  SELECT provsql.mixture(0.5, provsql.as_random(3.0),
+                              provsql.as_random(0.0)) AS f
+  FROM generate_series(1, 3);
+
+--   E[sum] = 3 * 1.5 = 4.5 ; E[product] = 1.5^3 = 3.375 ; E[avg] = 1.5
+SELECT abs(provsql.expected(provsql.sum(f))     - 4.5)   < 1e-9 AS mix0_sum_exact,
+       abs(provsql.expected(provsql.product(f)) - 3.375) < 1e-6 AS mix0_prod_exact,
+       abs(provsql.expected(provsql.avg(f))     - 1.5)   < 1e-9 AS mix0_avg_exact
+  FROM agg_mix0;
+
+-- E[max] = 3*(1 - 0.5^3)         = 2.625 (all three would have to miss to
+--                                         leave the max at 0),
+-- E[min] = 3*0.5^3               = 0.375 (all three must hit to lift it to 3).
+SELECT abs(provsql.expected(provsql.max(f)) - 2.625) < 0.05 AS mix0_max_mc,
+       abs(provsql.expected(provsql.min(f)) - 0.375) < 0.05 AS mix0_min_mc
+  FROM agg_mix0;
+
+DROP TABLE agg_mix0;
 
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;

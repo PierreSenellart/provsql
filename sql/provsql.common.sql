@@ -3995,6 +3995,43 @@ $$
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /**
+ * @brief Identity-parameterised per-row wrap for an RV-returning aggregate.
+ *
+ * Generalises the two-argument @ref rv_aggregate_semimod: the else-branch
+ * (a row's contribution when its provenance is false) is
+ * @c as_random(@p identity) instead of the additive @c as_random(0).  The
+ * planner-hook rewrite bakes each aggregate's own identity element into the
+ * wrap -- @c 1 for @c product, @f$-\infty@f$ / @f$+\infty@f$ for @c max /
+ * @c min -- so the aggregate's final function is a plain fold over the
+ * per-row mixtures with no gate inspection.  @c sum keeps the two-argument
+ * form (@c identity @c = @c 0).
+ */
+CREATE OR REPLACE FUNCTION rv_aggregate_semimod(
+  prov uuid, rv random_variable, identity double precision)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.mixture(prov, rv, provsql.as_random(identity));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Per-row denominator wrap for @c avg(random_variable): the
+ *        provenance indicator @f$\mathbf{1}\{\varphi\}@f$.
+ *
+ * The row contributes @c 1 to the running count when present and @c 0 when
+ * absent, so @c sum over these wraps is the provenance-weighted count
+ * @f$\sum_i \mathbf{1}\{\varphi_i\}@f$.  The planner-hook rewrites
+ * @c avg(x) into @c rv_sum_or_null(rv_aggregate_semimod(prov, x)) @c /
+ * @c sum(rv_aggregate_indicator(prov)) -- the "@c AVG @c = @c SUM @c /
+ * @c COUNT" identity lifted into the @c random_variable algebra -- so
+ * @c avg rides entirely on @c sum's fold and never inspects a gate.
+ */
+CREATE OR REPLACE FUNCTION rv_aggregate_indicator(prov uuid)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.rv_aggregate_semimod(prov, provsql.as_random(1::double precision));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
  * @brief State-transition function for @c sum(random_variable).
  *
  * Appends the input RV's UUID to the running array.  NULL inputs are
@@ -4051,40 +4088,63 @@ CREATE AGGREGATE sum(random_variable) (
 );
 
 /**
+ * @brief Numerator final function for the @c avg rewrite: @c sum, but
+ *        @c NULL on an empty group.
+ *
+ * Identical to @ref sum_rv_ffunc except that an empty group returns
+ * @c NULL rather than the additive identity @c as_random(0).  The
+ * planner-hook @c avg rewrite emits
+ * @c rv_sum_or_null(rv_aggregate_semimod(prov, x)) @c /
+ * @c sum(rv_aggregate_indicator(prov)); @c random_variable_div is
+ * @c STRICT, so an empty group propagates the numerator's @c NULL and
+ * @c avg is @c NULL -- the standard SQL @c AVG convention -- while a
+ * non-empty group behaves exactly like @c sum.
+ */
+CREATE OR REPLACE FUNCTION rv_sum_or_null_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF array_length(state, 1) = 1 THEN
+    RETURN provsql.random_variable_make(state[1]);
+  END IF;
+  RETURN provsql.random_variable_make(
+    provsql.provenance_arith(0, state));  -- 0 = PROVSQL_ARITH_PLUS
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE rv_sum_or_null(random_variable) (
+  SFUNC     = sum_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = rv_sum_or_null_ffunc
+);
+
+/**
  * @brief Final function for @c avg(random_variable).
  *
- * Builds the natural lift of @c "AVG = SUM / COUNT" into the
+ * @c avg lifts the "@c AVG @c = @c SUM @c / @c COUNT" identity into the
  * @c random_variable algebra:
  * @f[
  *   \mathrm{AVG}(x) \;=\; \frac{\sum_i \mathbf{1}\{\varphi_i\} \cdot X_i}
- *                                {\sum_i \mathbf{1}\{\varphi_i\}}
+ *                                {\sum_i \mathbf{1}\{\varphi_i\}}.
  * @f]
- * realised as @c gate_arith(DIV, num, denom) where @c num is the
- * @c sum(random_variable) gate over the per-row mixtures and @c denom
- * is the @c sum(random_variable) gate over the same provenance gates
- * weighted by a per-row @c as_random(1) -- exactly the SQL pattern
- * "@c sum(x) @c / @c sum(as_random(1))" emitted as a single
- * @c random_variable token.
+ * In a provenance-tracked query the planner-hook rewrites @c avg(x) into
+ * @c rv_sum_or_null(rv_aggregate_semimod(prov, x)) @c /
+ * @c sum(rv_aggregate_indicator(prov)) (see
+ * @c make_rv_aggregate_expression), so both the numerator and the
+ * provenance-weighted count denominator are built by @c sum's fold and no
+ * gate is inspected.  This FFUNC is therefore reached only on an
+ * @em untracked call, where every row is unconditionally present: the
+ * numerator is @c sum over the raw per-row RVs and the denominator is the
+ * plain row count @c n (each row contributing @c as_random(1)).
  *
- * Reuses @c sum_rv_sfunc as the state-transition function so the
- * array of per-row UUIDs is collected identically to
- * @c sum(random_variable).  In a provenance-tracked query the
- * planner-hook rewriter routes RV-returning aggregates through
- * @c make_rv_aggregate_expression, which wraps each per-row argument
- * in @c mixture(prov_i, x_i, as_random(0)); the FFUNC then recovers
- * @c prov_i from each mixture's first child to construct the matching
- * @c mixture(prov_i, as_random(1), as_random(0)) for the denominator.
- * Outside a tracked query the per-row UUIDs are plain RV roots, in
- * which case each row contributes an unconditional @c as_random(1)
- * to the denominator -- the natural extension of "no provenance =
- * every row counts" used elsewhere in the extension.
- *
- * Empty group: returns @c NULL, matching the standard SQL @c AVG
- * convention.  This differs from @c sum(random_variable), which
- * returns the additive identity @c as_random(0) for an empty group;
- * for AVG the multiplicative identity is not the right answer and
- * the caller has no way to disambiguate "0 rows" from "rows that
- * sum to 0".
+ * Empty group: returns @c NULL, matching standard SQL @c AVG (and unlike
+ * @c sum, whose empty group is the additive identity @c as_random(0)):
+ * the caller cannot otherwise disambiguate "0 rows" from "rows summing
+ * to 0".
  */
 CREATE OR REPLACE FUNCTION avg_rv_ffunc(state uuid[])
   RETURNS random_variable AS
@@ -4096,11 +4156,6 @@ DECLARE
   denom_token uuid;
   denom_state uuid[] := '{}';
   one_uuid uuid;
-  zero_uuid uuid;
-  is_wrap boolean;
-  gtype provsql.provenance_gate;
-  children uuid[];
-  prov_i uuid;
 BEGIN
   IF state IS NULL THEN
     RETURN NULL;
@@ -4110,32 +4165,9 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  one_uuid := (
-                provsql.as_random(1::double precision))::uuid;
-  zero_uuid := (provsql.as_random(0::double precision))::uuid;
-
+  one_uuid := (provsql.as_random(1::double precision))::uuid;
   FOR i IN 1..n LOOP
-    gtype := provsql.get_gate_type(state[i]);
-    is_wrap := false;
-    IF gtype = 'mixture'::provsql.provenance_gate THEN
-      children := provsql.get_children(state[i]);
-      -- Only a genuine per-row provenance wrap
-      -- mixture(prov, rv, as_random(0)) contributes a provenance-weighted
-      -- 1 to the denominator; a categorical ([key, mul_1, ...]) or a user
-      -- mixture(p, X, Y) with a non-zero else-branch is itself an ordinary
-      -- scalar RV value (one unconditional row), counted as 1.
-      is_wrap := array_length(children, 1) = 3 AND children[3] = zero_uuid;
-    END IF;
-    IF is_wrap THEN
-      prov_i := children[1];
-      denom_state := array_append(
-        denom_state,
-        (
-          provsql.rv_aggregate_semimod(
-            prov_i, provsql.as_random(1::double precision)))::uuid);
-    ELSE
-      denom_state := array_append(denom_state, one_uuid);
-    END IF;
+    denom_state := array_append(denom_state, one_uuid);
   END LOOP;
 
   IF n = 1 THEN
@@ -4161,98 +4193,39 @@ CREATE AGGREGATE avg(random_variable) (
 );
 
 /**
- * @brief Final function for @c product(random_variable).
+ * @brief Final function for @c product(random_variable): fold a
+ *        @c gate_arith TIMES root over the per-row contributions.
  *
  * Multiplicative analogue of @c sum(random_variable):
  * @f[
  *   \mathrm{PRODUCT}(x) \;=\; \prod_i \big(\mathbf{1}\{\varphi_i\} \cdot X_i
  *                                          + \mathbf{1}\{\neg\varphi_i\} \cdot 1\big)
- *                       \;=\; \prod_{i : \varphi_i} X_i
+ *                       \;=\; \prod_{i : \varphi_i} X_i.
  * @f]
- * realised as @c gate_arith(TIMES, mixtures) over per-row contributions
- * whose @em else-branch is @c as_random(1) (the multiplicative
- * identity), so rows whose provenance is false contribute @c 1 to the
- * product instead of @c 0.
+ * Each per-row contribution already carries the multiplicative identity
+ * as its absent-row value: a provenance-tracked query wraps the argument
+ * as @c mixture(prov_i, X_i, as_random(1)) (identity baked in by the
+ * three-argument @ref rv_aggregate_semimod), and an untracked call passes
+ * the raw RV through.  So the FFUNC is a plain fold with no gate
+ * inspection: @c gate_arith(TIMES, state).
  *
- * The C-side wrap shared with @c sum / @c avg always builds
- * @c mixture(prov_i, X_i, as_random(0)); the PRODUCT FFUNC patches each
- * mixture's else-branch to @c as_random(1) by reconstructing the
- * mixture with the corrected else-arg.  Going through
- * @c provsql.mixture (rather than @c create_gate directly) keeps the
- * gate v5-hash consistent with any other mixture sharing the same
- * @c (prov_i, X_i, as_random(1)) triple.
- *
- * Reuses @c sum_rv_sfunc as the state-transition function.  Empty
- * group: returns the multiplicative identity @c as_random(1) -- the
- * natural counterpart to @c sum(random_variable)'s empty-group
- * @c as_random(0).
- *
- * Singleton group: returns the single patched child directly without
- * minting a useless single-child @c gate_arith TIMES root.
- *
- * Direct (untracked) call: state entries are raw RV uuids rather than
- * mixtures; pass them through unchanged so PRODUCT degenerates to the
- * straight RV product over all rows, the natural "no provenance =
- * every row counts" behaviour.
+ * Reuses @c sum_rv_sfunc as the state-transition function.  Empty group:
+ * the multiplicative identity @c as_random(1) -- the counterpart to
+ * @c sum's empty-group @c as_random(0).  Singleton group: the single
+ * child directly, without a one-child TIMES root.
  */
 CREATE OR REPLACE FUNCTION product_rv_ffunc(state uuid[])
   RETURNS random_variable AS
 $$
-DECLARE
-  n integer;
-  i integer;
-  prod_state uuid[] := '{}';
-  one_rv provsql.random_variable;
-  zero_uuid uuid;
-  is_wrap boolean;
-  gtype provsql.provenance_gate;
-  children uuid[];
-  prov_i uuid;
-  x_uuid uuid;
 BEGIN
-  one_rv := provsql.as_random(1::double precision);
-  zero_uuid := (provsql.as_random(0::double precision))::uuid;
-
-  IF state IS NULL THEN
-    RETURN one_rv;
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN provsql.as_random(1::double precision);
   END IF;
-  n := array_length(state, 1);
-  IF n IS NULL THEN
-    RETURN one_rv;
-  END IF;
-
-  FOR i IN 1..n LOOP
-    gtype := provsql.get_gate_type(state[i]);
-    is_wrap := false;
-    IF gtype = 'mixture'::provsql.provenance_gate THEN
-      children := provsql.get_children(state[i]);
-      -- Only a genuine per-row provenance wrap
-      -- mixture(prov, rv, as_random(0)) gets its else-branch patched to
-      -- the multiplicative identity.  A categorical ([key, mul_1, ...])
-      -- or a user mixture(p, X, Y) with a non-zero else-branch is itself
-      -- an ordinary scalar RV value and passes through unchanged.
-      is_wrap := array_length(children, 1) = 3 AND children[3] = zero_uuid;
-    END IF;
-    IF is_wrap THEN
-      prov_i := children[1];
-      x_uuid := children[2];
-      prod_state := array_append(
-        prod_state,
-        (
-          provsql.mixture(
-            prov_i,
-            provsql.random_variable_make(x_uuid),
-            one_rv))::uuid);
-    ELSE
-      prod_state := array_append(prod_state, state[i]);
-    END IF;
-  END LOOP;
-
-  IF n = 1 THEN
-    RETURN provsql.random_variable_make(prod_state[1]);
+  IF array_length(state, 1) = 1 THEN
+    RETURN provsql.random_variable_make(state[1]);
   END IF;
   RETURN provsql.random_variable_make(
-    provsql.provenance_arith(1, prod_state));  -- 1 = PROVSQL_ARITH_TIMES
+    provsql.provenance_arith(1, state));  -- 1 = PROVSQL_ARITH_TIMES
 END
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
@@ -4264,7 +4237,8 @@ CREATE AGGREGATE product(random_variable) (
 );
 
 /**
- * @brief Final function for @c max(random_variable) / @c min(random_variable).
+ * @brief Final function for @c max(random_variable) / @c min(random_variable):
+ *        fold a @c gate_arith MAX / MIN root over the per-row contributions.
  *
  * The order-statistic analogues of @c sum / @c product:
  * @f[
@@ -4272,79 +4246,31 @@ CREATE AGGREGATE product(random_variable) (
  *   \mathrm{MIN}(x) = \min_{i : \varphi_i} X_i.
  * @f]
  * A row absent in a world (its provenance @f$\varphi_i@f$ false) must not
- * perturb the extremum, so it contributes the order-statistic identity:
- * @f$-\infty@f$ for @c MAX, @f$+\infty@f$ for @c MIN.  The shared C-side wrap
- * builds @c mixture(prov_i, X_i, as_random(0)) per row (like @c sum); this
- * FFUNC patches each mixture's else-branch to @c as_random(∓∞) -- exactly the
- * way @c product_rv_ffunc patches it to @c as_random(1) -- then builds a
- * single @c gate_arith with the @c MAX / @c MIN opcode.
+ * perturb the extremum, so it contributes the order-statistic identity
+ * @f$\mp\infty@f$.  That identity is baked into each per-row contribution
+ * upstream: a provenance-tracked query wraps the argument as
+ * @c mixture(prov_i, X_i, as_random(∓∞)) (via the three-argument
+ * @ref rv_aggregate_semimod), and an untracked call passes the raw RV
+ * through.  So the FFUNC is a plain fold with no gate inspection:
+ * @c gate_arith(@p op, state).
  *
- * Empty group: the identity (@f$-\infty@f$ / @f$+\infty@f$), the extremum
- * counterpart to @c sum's @c as_random(0).  Singleton: the patched child
- * directly.  Direct (untracked) call: state entries are raw RV uuids, passed
- * through unchanged.
+ * Empty group: the identity @c as_random(@p identity) (@f$-\infty@f$ /
+ * @f$+\infty@f$), the extremum counterpart to @c sum's @c as_random(0).
+ * Singleton group: the single child directly.
  */
 CREATE OR REPLACE FUNCTION extremum_rv_ffunc(
   state uuid[], op integer, identity double precision)
   RETURNS random_variable AS
 $$
-DECLARE
-  n integer;
-  i integer;
-  os_state uuid[] := '{}';
-  ident_rv provsql.random_variable;
-  zero_uuid uuid;
-  is_wrap boolean;
-  gtype provsql.provenance_gate;
-  children uuid[];
-  prov_i uuid;
-  x_uuid uuid;
 BEGIN
-  ident_rv := provsql.as_random(identity);
-  -- The provenance wrap's else-branch is always as_random(0), regardless
-  -- of the aggregate; the order-statistic identity (-inf / +inf) is what
-  -- we patch it TO, not what we detect it BY.
-  zero_uuid := (provsql.as_random(0::double precision))::uuid;
-  IF state IS NULL THEN
-    RETURN ident_rv;
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN provsql.as_random(identity);
   END IF;
-  n := array_length(state, 1);
-  IF n IS NULL THEN
-    RETURN ident_rv;
-  END IF;
-
-  FOR i IN 1..n LOOP
-    gtype := provsql.get_gate_type(state[i]);
-    is_wrap := false;
-    IF gtype = 'mixture'::provsql.provenance_gate THEN
-      children := provsql.get_children(state[i]);
-      -- Only a genuine per-row provenance wrap
-      -- mixture(prov, rv, as_random(0)) gets its else-branch patched to
-      -- the order-statistic identity.  A categorical ([key, mul_1, ...])
-      -- or a user mixture(p, X, Y) with a non-zero else-branch is itself
-      -- an ordinary scalar RV value and passes through unchanged.
-      is_wrap := array_length(children, 1) = 3 AND children[3] = zero_uuid;
-    END IF;
-    IF is_wrap THEN
-      prov_i := children[1];
-      x_uuid := children[2];
-      os_state := array_append(
-        os_state,
-        (
-          provsql.mixture(
-            prov_i,
-            provsql.random_variable_make(x_uuid),
-            ident_rv))::uuid);
-    ELSE
-      os_state := array_append(os_state, state[i]);
-    END IF;
-  END LOOP;
-
-  IF n = 1 THEN
-    RETURN provsql.random_variable_make(os_state[1]);
+  IF array_length(state, 1) = 1 THEN
+    RETURN provsql.random_variable_make(state[1]);
   END IF;
   RETURN provsql.random_variable_make(
-    provsql.provenance_arith(op, os_state));
+    provsql.provenance_arith(op, state));
 END
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 

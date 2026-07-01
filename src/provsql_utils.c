@@ -493,8 +493,53 @@ static constants_t initialize_constants(bool failure_if_not_possible)
    * cached here; an InvalidOid for this helper just leaves the rewrite
    * disabled on older schemas that lack the continuous-distribution
    * surface (1.0.0 baseline used by extension_upgrade). */
-  constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD =
-    get_provsql_func_oid("rv_aggregate_semimod");
+  /* Disambiguate by signature: rv_aggregate_semimod is now overloaded
+   * (2-arg identity-0 wrap and 3-arg identity-parameterised wrap), so a
+   * bare-name lookup could return either.  Pin the 2-arg overload used for
+   * sum and the avg numerator. */
+  {
+    Oid semimod2[2] = { constants.OID_TYPE_UUID,
+                        constants.OID_TYPE_RANDOM_VARIABLE };
+    constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD =
+      get_provsql_func_oid_args("rv_aggregate_semimod", 2, semimod2);
+  }
+
+  /* Per-aggregate identity dispatch for the RV-aggregate rewrite: the
+   * 3-arg identity-parameterised wrap (product / max / min bake their
+   * identity element into the mixture), the avg denominator indicator, the
+   * RV division for avg's sum/sum rewrite, and the five RV-returning
+   * aggregate OIDs the rewrite keys on.  The `constants' struct is not
+   * zero-initialised, so every field is set unconditionally; the arg-typed
+   * lookups reference the random_variable type and are skipped (left
+   * InvalidOid) on a schema predating the continuous-distribution surface,
+   * which disables only the identity/avg refinements. */
+  constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID = InvalidOid;
+  constants.OID_FUNCTION_RV_AGGREGATE_INDICATOR = InvalidOid;
+  constants.OID_FUNCTION_RV_DIV = InvalidOid;
+  constants.OID_AGG_SUM_RV = InvalidOid;
+  constants.OID_AGG_PRODUCT_RV = InvalidOid;
+  constants.OID_AGG_AVG_RV = InvalidOid;
+  constants.OID_AGG_MAX_RV = InvalidOid;
+  constants.OID_AGG_MIN_RV = InvalidOid;
+  constants.OID_AGG_RV_SUM_OR_NULL = InvalidOid;
+  if (OidIsValid(constants.OID_TYPE_RANDOM_VARIABLE)) {
+    Oid rvarg[1] = { constants.OID_TYPE_RANDOM_VARIABLE };
+    Oid semimod3[3] = { constants.OID_TYPE_UUID,
+                        constants.OID_TYPE_RANDOM_VARIABLE, FLOAT8OID };
+    constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID =
+      get_provsql_func_oid_args("rv_aggregate_semimod", 3, semimod3);
+    constants.OID_FUNCTION_RV_AGGREGATE_INDICATOR =
+      get_provsql_func_oid("rv_aggregate_indicator");
+    constants.OID_FUNCTION_RV_DIV =
+      get_provsql_func_oid("random_variable_div");
+    constants.OID_AGG_SUM_RV     = get_provsql_func_oid_args("sum",     1, rvarg);
+    constants.OID_AGG_PRODUCT_RV = get_provsql_func_oid_args("product", 1, rvarg);
+    constants.OID_AGG_AVG_RV     = get_provsql_func_oid_args("avg",     1, rvarg);
+    constants.OID_AGG_MAX_RV     = get_provsql_func_oid_args("max",     1, rvarg);
+    constants.OID_AGG_MIN_RV     = get_provsql_func_oid_args("min",     1, rvarg);
+    constants.OID_AGG_RV_SUM_OR_NULL =
+      get_provsql_func_oid_args("rv_sum_or_null", 1, rvarg);
+  }
 
   /* choose(anyelement): keeps the first non-NULL value of a group.  Used by
    * the scalar-subquery decorrelation to pick the single matched value.

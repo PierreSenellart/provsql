@@ -178,7 +178,21 @@ typedef struct constants_t {
   Oid OID_FUNCTION_RV_GREATEST; ///< provsql.greatest(VARIADIC random_variable[])
   Oid OID_FUNCTION_RV_LEAST;    ///< provsql.least(VARIADIC random_variable[])
   /**@}*/
-  Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod helper (uuid, rv -> rv) used to wrap each per-row argument of an RV-returning aggregate (sum, avg, ...)
+  Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod(uuid, rv) -> rv: wraps a per-row argument as mixture(prov, rv, as_random(0)) (identity 0, for sum / avg-numerator)
+  Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID; ///< OID of the 3-arg rv_aggregate_semimod(uuid, rv, float8): identity-parameterised wrap mixture(prov, rv, as_random(identity)) for product / max / min
+  Oid OID_FUNCTION_RV_AGGREGATE_INDICATOR; ///< OID of rv_aggregate_indicator(uuid) -> rv: the avg denominator wrap mixture(prov, 1, 0)
+  Oid OID_FUNCTION_RV_DIV; ///< OID of random_variable_div(rv, rv) -> rv: builds the avg num/denom division gate
+  /** @brief OIDs of the RV-returning aggregates, keyed for the per-aggregate
+   *  identity dispatch in @c make_rv_aggregate_expression (product / max /
+   *  min bake their identity into the wrap; avg rewrites to sum/sum). */
+  /**@{*/
+  Oid OID_AGG_SUM_RV;     ///< provsql.sum(random_variable)
+  Oid OID_AGG_PRODUCT_RV; ///< provsql.product(random_variable)
+  Oid OID_AGG_AVG_RV;     ///< provsql.avg(random_variable)
+  Oid OID_AGG_MAX_RV;     ///< provsql.max(random_variable)
+  Oid OID_AGG_MIN_RV;     ///< provsql.min(random_variable)
+  Oid OID_AGG_RV_SUM_OR_NULL; ///< provsql.rv_sum_or_null(random_variable): the avg-numerator sum, NULL on an empty group (so avg is NULL for an empty group after STRICT division)
+  /**@}*/
   Oid OID_FUNCTION_CHOOSE; ///< OID of the choose(anyelement) aggregate (keeps the first non-NULL value); used to decorrelate scalar subqueries into a LEFT JOIN + GROUP BY
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
    *

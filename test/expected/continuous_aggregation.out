@@ -164,3 +164,9 @@ t|t|t
 mix_max_mc|mix_min_mc
 t|t
 (1 row)
+mix0_sum_exact|mix0_prod_exact|mix0_avg_exact
+t|t|t
+(1 row)
+mix0_max_mc|mix0_min_mc
+t|t
+(1 row)
