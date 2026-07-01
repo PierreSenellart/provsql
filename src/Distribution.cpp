@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <utility>
 
 namespace provsql {
@@ -115,6 +116,18 @@ public:
   }
 };
 
+/* P(X < Y) for X, Y independent normals.  Reduces to P(X - Y < 0) with
+ * X - Y ~ N(μ_X - μ_Y, √(σ_X² + σ_Y²)). */
+double normalPairLess(const Distribution &X, const Distribution &Y)
+{
+  return NormalDistribution(
+    X.p1() - Y.p1(),
+    std::sqrt(X.p2() * X.p2() + Y.p2() * Y.p2())).cdf(0.0);
+}
+
+[[maybe_unused]] const ComparatorRuleRegistrar normal_less_rule(
+  DistKind::Normal, DistKind::Normal, &normalPairLess);
+
 /** @brief Uniform on [a=p1, b=p2]. */
 class UniformDistribution final : public BaseDistribution {
 public:
@@ -159,6 +172,35 @@ public:
   }
 };
 
+/* ∫_c^d F_X(y) dy for X ~ Uniform(a, b) (b > a), i.e. the integral of the
+ * clamped ramp clamp((y-a)/(b-a), 0, 1) over [c, d].  Used by the
+ * Uniform-Uniform comparison closed form P(X < Y) = E_Y[F_X(Y)]. */
+double integralUniformCdf(double a, double b, double c, double d)
+{
+  double total = 0.0;
+  /* y in [a, b]: integrand (y-a)/(b-a) */
+  const double lo = std::max(c, a), hi = std::min(d, b);
+  if (hi > lo)
+    total += ((hi - a) * (hi - a) - (lo - a) * (lo - a)) / (2.0 * (b - a));
+  /* y >= b: integrand 1 */
+  const double lo2 = std::max(c, b);
+  if (d > lo2)
+    total += d - lo2;
+  /* y <= a: integrand 0 (contributes nothing) */
+  return total;
+}
+
+/* P(X < Y) = E_Y[F_X(Y)] = (1/(d-c)) ∫_c^d F_X(y) dy, geometric. */
+double uniformPairLess(const Distribution &X, const Distribution &Y)
+{
+  const double a = X.p1(), b = X.p2(), c = Y.p1(), d = Y.p2();
+  if (!(b > a && d > c)) return kNaN;
+  return integralUniformCdf(a, b, c, d) / (d - c);
+}
+
+[[maybe_unused]] const ComparatorRuleRegistrar uniform_less_rule(
+  DistKind::Uniform, DistKind::Uniform, &uniformPairLess);
+
 /** @brief Exponential(λ=p1). p2 unused. */
 class ExponentialDistribution final : public BaseDistribution {
 public:
@@ -196,6 +238,17 @@ public:
     return d(rng);
   }
 };
+
+/* P(X < Y) = λ_X / (λ_X + λ_Y) for independent exponentials. */
+double exponentialPairLess(const Distribution &X, const Distribution &Y)
+{
+  const double lx = X.p1(), ly = Y.p1();
+  if (!(lx > 0.0 && ly > 0.0)) return kNaN;
+  return lx / (lx + ly);
+}
+
+[[maybe_unused]] const ComparatorRuleRegistrar exponential_less_rule(
+  DistKind::Exponential, DistKind::Exponential, &exponentialPairLess);
 
 /** @brief Erlang(k=p1 integer≥1, λ=p2). */
 class ErlangDistribution final : public BaseDistribution {
@@ -257,7 +310,60 @@ public:
   }
 };
 
+/* Function-local static so registration (dynamic initialisation of the
+ * per-family ComparatorRuleRegistrar objects) never observes an
+ * uninitialised map, whatever the TU initialisation order. */
+std::map<std::pair<DistKind, DistKind>, ComparatorRule> &comparatorRules()
+{
+  static std::map<std::pair<DistKind, DistKind>, ComparatorRule> rules;
+  return rules;
+}
+
+/* Registry-miss default: P(X < Y) by the 1-D quadrature
+ * P(X<Y) = ∫ (1 - F_Y(t)) f_X(t) dt over X's integration range (composite
+ * Simpson).  Family-agnostic -- needs only pdf / cdf / integrationRange.
+ * NaN when a density / CDF is undefined (e.g. a non-integer Erlang shape),
+ * so the caller falls back to Monte Carlo. */
+double quadraturePairLess(const Distribution &X, const Distribution &Y)
+{
+  double lo, hi;
+  if (!X.integrationRange(lo, hi))
+    return kNaN;
+  const int N = 4000;
+  const double h = (hi - lo) / N;
+  double acc = 0.0;
+  for (int i = 0; i <= N; ++i) {
+    const double t = lo + i * h;
+    const double fX = X.pdf(t);
+    const double FY = Y.cdf(t);
+    if (std::isnan(fX) || std::isnan(FY))
+      return kNaN;
+    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+    acc += coeff * (1.0 - FY) * fX;
+  }
+  return acc * h / 3.0;
+}
+
 }  // namespace
+
+void registerComparatorRule(DistKind x, DistKind y, ComparatorRule rule)
+{
+  comparatorRules()[{x, y}] = rule;
+}
+
+double comparatorPairLess(const Distribution &X, const Distribution &Y)
+{
+  const auto &rules = comparatorRules();
+  const auto it = rules.find({X.kind(), Y.kind()});
+  double pLess = kNaN;
+  if (it != rules.end())
+    pLess = it->second(X, Y);
+  /* Registry miss, or a rule that declined (parameter guard, or a shape
+   * outside its closed form): generic quadrature. */
+  if (std::isnan(pLess))
+    pLess = quadraturePairLess(X, Y);
+  return pLess;
+}
 
 std::unique_ptr<Distribution> makeDistribution(const DistributionSpec &spec)
 {

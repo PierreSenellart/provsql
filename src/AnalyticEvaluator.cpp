@@ -13,7 +13,7 @@
 
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
 #include "RandomVariable.h"     // parse_distribution_spec, parseDoubleStrict, DistKind
-#include "Distribution.h"       // makeDistribution -> integrationRange
+#include "Distribution.h"       // makeDistribution, comparatorPairLess
 extern "C" {
 #include "provsql_utils.h"      // gate_type
 }
@@ -81,94 +81,19 @@ ComparisonOperator flipCmpOp(ComparisonOperator op)
   return op;
 }
 
-/* X cmp Y for X, Y independent normals.  Reduces to (X - Y) cmp 0
- * with X - Y ~ N(μ_X - μ_Y, σ_X² + σ_Y²). */
-double normalDiffDecide(const DistributionSpec &X,
-                        const DistributionSpec &Y,
-                        ComparisonOperator op)
-{
-  DistributionSpec diff;
-  diff.kind = DistKind::Normal;
-  diff.p1 = X.p1 - Y.p1;
-  diff.p2 = std::sqrt(X.p2 * X.p2 + Y.p2 * Y.p2);
-  return cdfDecide(diff, op, 0.0);
-}
-
-/* ∫_c^d F_X(y) dy for X ~ Uniform(a, b) (b > a), i.e. the integral of the
- * clamped ramp clamp((y-a)/(b-a), 0, 1) over [c, d].  Used by the
- * Uniform-Uniform comparison closed form P(X < Y) = E_Y[F_X(Y)]. */
-double integralUniformCdf(double a, double b, double c, double d)
-{
-  double total = 0.0;
-  /* y in [a, b]: integrand (y-a)/(b-a) */
-  const double lo = std::max(c, a), hi = std::min(d, b);
-  if (hi > lo)
-    total += ((hi - a) * (hi - a) - (lo - a) * (lo - a)) / (2.0 * (b - a));
-  /* y >= b: integrand 1 */
-  const double lo2 = std::max(c, b);
-  if (d > lo2)
-    total += d - lo2;
-  /* y <= a: integrand 0 (contributes nothing) */
-  return total;
-}
-
-/* P(X < Y) for two independent RVs of possibly-different families, by the
- * 1-D quadrature P(X<Y) = ∫ (1 - F_Y(t)) f_X(t) dt over X's support
- * (composite Simpson).  NaN when a density / CDF is undefined (e.g. a
- * non-integer Erlang shape), so the caller falls back to Monte Carlo. */
-double mixedPairLess(const DistributionSpec &X, const DistributionSpec &Y)
-{
-  // Construct the two distributions once; the Simpson loop calls pdf/cdf on
-  // them per point (never re-constructing per point).
-  const auto dX = makeDistribution(X);
-  const auto dY = makeDistribution(Y);
-  double lo, hi;
-  if (!dX->integrationRange(lo, hi))
-    return std::numeric_limits<double>::quiet_NaN();
-  const int N = 4000;
-  const double h = (hi - lo) / N;
-  double acc = 0.0;
-  for (int i = 0; i <= N; ++i) {
-    const double t = lo + i * h;
-    const double fX = dX->pdf(t);
-    const double FY = dY->cdf(t);
-    if (std::isnan(fX) || std::isnan(FY))
-      return std::numeric_limits<double>::quiet_NaN();
-    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
-    acc += coeff * (1.0 - FY) * fX;
-  }
-  return acc * h / 3.0;
-}
-
-/* P(X op Y) for two independent RVs: the same-family closed forms
- * (Normal-Normal difference, Exp-Exp rate ratio, Uniform-Uniform geometric),
- * else the mixed-family 1-D quadrature.  NaN if nothing applies (caller falls
- * back to Monte Carlo).  Continuous throughout, so <,<= share a value and
- * >,>= share its complement; EQ/NE are handled upstream by RangeCheck. */
+/* P(X op Y) for two independent RVs: the ComparatorRuleRegistry closed
+ * forms (Normal-Normal difference, Exp-Exp rate ratio, Uniform-Uniform
+ * geometric, registered by the family implementations), else the
+ * family-agnostic 1-D quadrature -- both behind comparatorPairLess.  NaN if
+ * nothing applies (caller falls back to Monte Carlo).  Continuous
+ * throughout, so <,<= share a value and >,>= share its complement; EQ/NE
+ * are handled upstream by RangeCheck. */
 double rvVsRvDecide(const DistributionSpec &X, const DistributionSpec &Y,
                     ComparisonOperator op)
 {
-  double pLess = std::numeric_limits<double>::quiet_NaN();  /* P(X < Y) */
-
-  if (X.kind == DistKind::Normal && Y.kind == DistKind::Normal)
-    return normalDiffDecide(X, Y, op);  /* already reduces < / > directly */
-
-  if (X.kind == DistKind::Exponential && Y.kind == DistKind::Exponential) {
-    /* P(X < Y) = λ_X / (λ_X + λ_Y) for independent exponentials. */
-    const double lx = X.p1, ly = Y.p1;
-    if (lx > 0.0 && ly > 0.0)
-      pLess = lx / (lx + ly);
-  } else if (X.kind == DistKind::Uniform && Y.kind == DistKind::Uniform) {
-    /* P(X < Y) = E_Y[F_X(Y)] = (1/(d-c)) ∫_c^d F_X(y) dy, geometric. */
-    const double a = X.p1, b = X.p2, c = Y.p1, d = Y.p2;
-    if (b > a && d > c)
-      pLess = integralUniformCdf(a, b, c, d) / (d - c);
-  }
-
-  /* Mixed independent families (or a same-family shape the closed form
-   * declined): 1-D quadrature. */
-  if (std::isnan(pLess))
-    pLess = mixedPairLess(X, Y);
+  const auto dX = makeDistribution(X);
+  const auto dY = makeDistribution(Y);
+  double pLess = comparatorPairLess(*dX, *dY);  /* P(X < Y) */
 
   if (std::isnan(pLess))
     return pLess;
