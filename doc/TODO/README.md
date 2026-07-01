@@ -44,6 +44,14 @@ Each plan document follows a consistent layout:
   remaining feature-coverage gaps in the user tutorial and case
   studies -- the CS4 temporal / data-modification extensions and a
   future UDF / aggregate-join study (CS9).
+- [`case_aggregation.md`](case_aggregation.md) : feasibility study for a
+  searched `CASE` guarded by aggregate comparisons (`CASE WHEN SUM(x) > 3
+  THEN SUM(y) ELSE SUM(z) END`), lowering the `agg_token`-typed `CASE` to
+  the existing carrier-agnostic `gate_case`. Exact evaluation reuses the
+  structure-aware HAVING possible-worlds evaluator (`provsql_having`):
+  correlation between guard and arm is free by co-enumeration, and the
+  PICKFIRST / monotone closed forms carry into value-carrying selection,
+  with `2^n` co-enumeration and Monte Carlo as backstops.
 - [`continuous_distributions.md`](continuous_distributions.md) : roadmap
   for extending the continuous random-variable surface beyond the shipped
   Normal/Uniform/Exponential/Erlang/Categorical/Mixture baseline (further
