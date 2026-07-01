@@ -100,31 +100,35 @@ Keeps the per-family files from re-creating the row-major coupling.
   the per-term mean / variance math (`try_normal_closure:488`, uniform affine `:620`).
 
 ## Status
-Committed:
-- `f84f6df9` — `src/Distribution.{h,cpp}` (4 families: moments / pdf / cdf / support / sample
-  + `makeDistribution`); `RandomVariable.cpp` moment free-functions (`analytical_mean` /
-  `variance` / `raw_moment`) migrated.
-- `f5b0c07a` — `RangeCheck` support switches → `Distribution::support()`.
+Committed (all 235 tests green after each; interface lives in `src/Distribution.{h,cpp}`):
+- `f84f6df9` — 4 family classes (moments / pdf / cdf / support / sample) + `makeDistribution`;
+  `RandomVariable.cpp` moment free-functions.
+- `f5b0c07a` — `RangeCheck` support → `Distribution::support()`.
+- `5f942d67` — `integrationRange` + `plotRange` on the interface; migrated
+  `Expectation::rvIntegrationRange`, `AnalyticEvaluator::rvSupportRange`,
+  `RvAnalyticalCurves::bare_x_range`.
+- `6c1f624c` — `pdfAt`/`cdfAt` bodies delegate; the three Simpson loops (`mixedPairLess`,
+  `mixedOrderStatMean`, `rvVsRvConditionalMoment`) construct the `Distribution` **once before
+  the loop**; dead `rvSupportRange`/`rvIntegrationRange` removed. Cold callers (`cdfDecide`,
+  `shape_mass`, `bare_pdf`/`bare_cdf`) keep the delegating free functions.
+- `860b560f` — plain MC sampler: a per-`gate_rv` `Distribution` cache on `Sampler` (persists
+  across iterations, not cleared in `resetIteration`); RNG bit-identical.
 
-UNCOMMITTED (green, all 235 tests pass — left for review, not committed per instruction):
-- Interface extended with `integrationRange` + `plotRange` (impl in all 4 families).
-- `Expectation::rvIntegrationRange` and `AnalyticEvaluator::rvSupportRange` → `integrationRange`.
-- `RvAnalyticalCurves::bare_x_range` → `plotRange`.
+**All analytic consumers + plain sampling are now on virtual dispatch.** Remaining
+`DistKind` switches, by area:
+1. **Comparators** — `AnalyticEvaluator::rvVsRvDecide` / `normalDiffDecide` →
+   `ComparatorRuleRegistry` (Normal-Normal difference, Exp-Exp ratio, Uniform-Uniform;
+   a miss falls to the already-migrated `mixedPairLess` quadrature).
+2. **Closures** — `HybridEvaluator::try_normal_closure` / `try_erlang_closure` /
+   `try_neg_rv` / `try_times_scalar_rv` + the inline serialise → `ClosureRuleRegistry` +
+   `affine(a,b)` + `serialise()` (relocate `double_to_text`).
+3. **Truncated** — `MonteCarloSampler` truncated sampler + `Expectation::try_truncated_closed_form`
+   → `truncatedRawMoment` + `sampleTruncated` + optional `quantile` (relocate `inv_phi`).
+4. **Order statistics** — `Expectation::iidOrderStatMean` → a per-family method (Uniform/Exp
+   closed forms; Normal/Erlang nullopt).
+5. **Parse** — `RandomVariable::parse_distribution_spec` → optional `Distribution::parse` factory.
 
-So every **per-gate / per-RV** (non-hot) consumer is now on virtual dispatch. What remains
-is the **hot-path + restructuring** half:
-1. `pdfAt` / `cdfAt` (AnalyticEvaluator, `SITE 1`/`SITE 2`) — delegate the free-function
-   bodies AND rewire the three Simpson loops (`mixedPairLess`, `Expectation::mixedOrderStatMean`,
-   `rvVsRvConditionalMoment`) to construct the `Distribution` **once before the loop** and call
-   `d->pdf/cdf` inside (never per point — the arbitrated decision). Cold callers (`cdfDecide`,
-   `shape_mass`, `bare_pdf`/`bare_cdf`) keep the delegating free functions.
-2. Sampler (`MonteCarloSampler` plain + truncated) — per-draw, so also construct-once (per
-   gate, per iteration); the truncated path needs the optional `quantile` (relocate `inv_phi`).
-3. Add `affine(a,b)` + optional `quantile` + `serialise` (relocate `double_to_text` from
-   `HybridEvaluator.cpp`) to the interface.
-4. The two static-registered registries lifting `try_normal_closure` / `try_erlang_closure`
-   (Closure) and `rvVsRvDecide` / `normalDiffDecide` (Comparator).
-5. Split `src/Distribution.{h,cpp}` → `src/distributions/` one file per family (add
-   `src/distributions/*.cpp` to the `OBJS` glob in `Makefile.internal`).
-6. Gamma (§3.1) as the one-file proof-of-concept — needs 1 + 4 done so a new family flows
-   through pdf/cdf/comparators without editing them.
+Then split `src/Distribution.{h,cpp}` → `src/distributions/` one file per family (add
+`src/distributions/*.cpp` to the `OBJS` glob in `Makefile.internal`), and Gamma (§3.1) — whose
+general-shape CDF needs a regularised-lower-incomplete-gamma implementation, unlike the
+integer-shape Erlang finite sum.
