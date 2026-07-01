@@ -1517,18 +1517,15 @@ bool is_analytic_singleton_cmp(const GenericCircuit &gc, gate_t cmp_gate)
       (gc.isCategoricalMixture(wires[1]) && t0 == gate_value))
     return true;
 
-  /* X cmp Y, both bare RVs of the same family with a closed-form
-   * comparison: AnalyticEvaluator's @c rvVsRvDecide handles Normal-Normal
-   * (normal-diff), Exp-Exp (rate ratio), and Uniform-Uniform (geometric).
-   * Two distinct bare-RV leaves are independent, so leaving them for the
-   * closed form is exact -- no MC needed. */
+  /* X cmp Y, two distinct bare RVs: AnalyticEvaluator's @c rvVsRvDecide
+   * decides it -- a same-family closed form (Normal-Normal, Exp-Exp,
+   * Uniform-Uniform) or the mixed-family 1-D quadrature.  Two distinct
+   * bare-RV leaves are independent, so leaving them for that path is exact
+   * (or high-accuracy), never a per-cmp MC. */
   if (t0 == gate_rv && t1 == gate_rv) {
     auto sx = parse_distribution_spec(gc.getExtra(wires[0]));
     auto sy = parse_distribution_spec(gc.getExtra(wires[1]));
-    if (sx && sy && sx->kind == sy->kind &&
-        (sx->kind == DistKind::Normal ||
-         sx->kind == DistKind::Exponential ||
-         sx->kind == DistKind::Uniform))
+    if (sx && sy)
       return true;
   }
   return false;

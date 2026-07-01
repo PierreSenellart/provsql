@@ -192,9 +192,55 @@ double integralUniformCdf(double a, double b, double c, double d)
   return total;
 }
 
-/* Closed-form P(X op Y) for two independent same-family RVs, or NaN if the
- * family pair has no elementary closed form here (the caller then falls
- * through to Monte Carlo).  Continuous throughout, so <,<= share a value and
+/* A finite integration window covering essentially all of a distribution's
+ * mass (mirrors @c Expectation::rvIntegrationRange).  Bounded families give
+ * their exact support; unbounded ones a many-sigma / many-mean tail. */
+bool rvSupportRange(const DistributionSpec &d, double &lo, double &hi)
+{
+  switch (d.kind) {
+    case DistKind::Uniform:
+      lo = d.p1; hi = d.p2; return hi > lo;
+    case DistKind::Normal:
+      if (!(d.p2 > 0.0)) return false;
+      lo = d.p1 - 12.0 * d.p2; hi = d.p1 + 12.0 * d.p2; return true;
+    case DistKind::Exponential:
+      if (!(d.p1 > 0.0)) return false;
+      lo = 0.0; hi = 40.0 / d.p1; return true;
+    case DistKind::Erlang:
+      if (!(d.p1 >= 1.0) || !(d.p2 > 0.0)) return false;
+      lo = 0.0; hi = (d.p1 + 12.0 * std::sqrt(d.p1)) / d.p2; return true;
+  }
+  return false;
+}
+
+/* P(X < Y) for two independent RVs of possibly-different families, by the
+ * 1-D quadrature P(X<Y) = ∫ (1 - F_Y(t)) f_X(t) dt over X's support
+ * (composite Simpson).  NaN when a density / CDF is undefined (e.g. a
+ * non-integer Erlang shape), so the caller falls back to Monte Carlo. */
+double mixedPairLess(const DistributionSpec &X, const DistributionSpec &Y)
+{
+  double lo, hi;
+  if (!rvSupportRange(X, lo, hi))
+    return std::numeric_limits<double>::quiet_NaN();
+  const int N = 4000;
+  const double h = (hi - lo) / N;
+  double acc = 0.0;
+  for (int i = 0; i <= N; ++i) {
+    const double t = lo + i * h;
+    const double fX = pdfAt(X, t);
+    const double FY = cdfAt(Y, t);
+    if (std::isnan(fX) || std::isnan(FY))
+      return std::numeric_limits<double>::quiet_NaN();
+    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+    acc += coeff * (1.0 - FY) * fX;
+  }
+  return acc * h / 3.0;
+}
+
+/* P(X op Y) for two independent RVs: the same-family closed forms
+ * (Normal-Normal difference, Exp-Exp rate ratio, Uniform-Uniform geometric),
+ * else the mixed-family 1-D quadrature.  NaN if nothing applies (caller falls
+ * back to Monte Carlo).  Continuous throughout, so <,<= share a value and
  * >,>= share its complement; EQ/NE are handled upstream by RangeCheck. */
 double rvVsRvDecide(const DistributionSpec &X, const DistributionSpec &Y,
                     ComparisonOperator op)
@@ -215,6 +261,11 @@ double rvVsRvDecide(const DistributionSpec &X, const DistributionSpec &Y,
     if (b > a && d > c)
       pLess = integralUniformCdf(a, b, c, d) / (d - c);
   }
+
+  /* Mixed independent families (or a same-family shape the closed form
+   * declined): 1-D quadrature. */
+  if (std::isnan(pLess))
+    pLess = mixedPairLess(X, Y);
 
   if (std::isnan(pLess))
     return pLess;

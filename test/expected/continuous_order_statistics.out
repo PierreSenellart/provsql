@@ -35,6 +35,9 @@ t|t
 unif_ab_max_exact
 t
 (1 row)
+mixed_min_quadrature|mixed_max_quadrature
+t|t
+(1 row)
 bare_greatest_exact|bare_least_exact
 t|t
 (1 row)

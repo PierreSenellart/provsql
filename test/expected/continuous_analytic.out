@@ -32,6 +32,9 @@ t
 unif_offset_exact
 t
 (1 row)
+mixed_exp_unif_quadrature
+t
+(1 row)
 continuous_eq_zero
 t
 (1 row)

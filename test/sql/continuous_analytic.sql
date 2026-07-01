@@ -81,6 +81,13 @@ SELECT provsql.probability_evaluate(
          provsql.rv_cmp_lt(provsql.uniform(0,2), provsql.uniform(1,3)),
          'independent') = 0.875 AS unif_offset_exact;
 
+-- (6f) Mixed independent families via the 1-D quadrature ∫(1-F_Y)f_X dt:
+-- P(Exp(1) < U(0,1)) = ∫_0^1 (1 - e^{-u}) du = 1/e.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_lt(provsql.exponential(1), provsql.uniform(0,1)),
+             'independent') - exp(-1)) < 1e-6
+       AS mixed_exp_unif_quadrature;
+
 -- (7) Continuous EQ: P(X = c) = 0 exactly for any continuous X.
 -- Resolved by RangeCheck's continuous-EQ/NE shortcut (universal:
 -- gate_zero / gate_one are valid in every semiring, so this lives

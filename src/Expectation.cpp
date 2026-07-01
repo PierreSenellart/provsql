@@ -274,6 +274,82 @@ iidOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
   return std::nullopt;
 }
 
+/* Defined below (next to the conditional-moment quadrature). */
+bool rvIntegrationRange(const DistributionSpec &X, double &lo, double &hi);
+
+/* Closed-form (quadrature) E[max] / E[min] of a gate_arith MAX/MIN whose
+ * children are independent bare gate_rv leaves of *any* families (mixed or
+ * not-identical), generalising @c iidOrderStatMean.  Uses the layer-cake
+ * identity over a window [lo, hi] covering every child's support:
+ *   E[max] = lo + ∫ (1 − ∏ F_i(t)) dt,   E[min] = lo + ∫ ∏ (1 − F_i(t)) dt.
+ * Composite Simpson.  std::nullopt on shared leaves, a non-bare-RV child, or
+ * a distribution whose CDF is undefined (e.g. non-integer Erlang), so the
+ * caller falls back to Monte Carlo. */
+std::optional<double>
+mixedOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
+                   FootprintCache &fp)
+{
+  const auto &raw_wires = gc.getWires(g);
+  if (raw_wires.empty())
+    return std::nullopt;
+  std::vector<gate_t> wires;
+  {
+    std::set<gate_t> seen;
+    for (gate_t c : raw_wires)
+      if (seen.insert(c).second)
+        wires.push_back(c);
+  }
+  if (!pairwise_disjoint(fp, wires))
+    return std::nullopt;
+
+  std::vector<DistributionSpec> specs;
+  double lo = 0.0, hi = 0.0;
+  bool first = true;
+  for (gate_t c : wires) {
+    if (gc.getGateType(c) != gate_rv)
+      return std::nullopt;
+    auto s = parse_distribution_spec(gc.getExtra(c));
+    if (!s)
+      return std::nullopt;
+    double clo, chi;
+    if (!rvIntegrationRange(*s, clo, chi))
+      return std::nullopt;
+    if (first) { lo = clo; hi = chi; first = false; }
+    else       { lo = std::min(lo, clo); hi = std::max(hi, chi); }
+    specs.push_back(*s);
+  }
+  if (!(hi > lo))
+    return std::nullopt;
+
+  const int N = 4000;
+  const double h = (hi - lo) / N;
+  double acc = 0.0;
+  for (int i = 0; i <= N; ++i) {
+    const double t = lo + i * h;
+    double integrand;
+    if (isMax) {
+      double prodF = 1.0;               /* ∏ F_i(t) = P(max ≤ t) */
+      for (const auto &s : specs) {
+        const double F = cdfAt(s, t);
+        if (std::isnan(F)) return std::nullopt;
+        prodF *= F;
+      }
+      integrand = 1.0 - prodF;          /* P(max > t) */
+    } else {
+      double prod1mF = 1.0;             /* ∏ (1 − F_i(t)) = P(min > t) */
+      for (const auto &s : specs) {
+        const double F = cdfAt(s, t);
+        if (std::isnan(F)) return std::nullopt;
+        prod1mF *= (1.0 - F);
+      }
+      integrand = prod1mF;
+    }
+    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+    acc += coeff * integrand;
+  }
+  return lo + acc * h / 3.0;
+}
+
 unsigned mc_samples_or_throw(const std::string &what)
 {
   const int n = provsql_rv_mc_samples;
@@ -828,12 +904,15 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
         }
         case PROVSQL_ARITH_MAX:
         case PROVSQL_ARITH_MIN: {
-          // Order statistics have no linearity to push through.  Closed form
-          // for i.i.d. Uniform / Exponential families over independent bare
-          // RVs (exact); Monte Carlo for everything else (mixed families,
-          // Normal / Erlang, shared leaves).
+          // Order statistics have no linearity to push through.  Exact
+          // closed form for i.i.d. Uniform / Exponential; the layer-cake
+          // 1-D quadrature for any other independent bare-RV mix (mixed
+          // families, non-identical parameters, Normal); Monte Carlo only
+          // when leaves are shared / correlated.
           const bool isMax = (op == PROVSQL_ARITH_MAX);
           if (auto v = iidOrderStatMean(gc, g, isMax, fp))
+            return *v;
+          if (auto v = mixedOrderStatMean(gc, g, isMax, fp))
             return *v;
           return mc_raw_moment(gc, g, 1,
             "Expectation of gate_arith " + std::string(isMax ? "MAX" : "MIN"));

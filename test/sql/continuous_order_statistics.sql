@@ -83,6 +83,15 @@ SELECT expected(provsql.least(exponential(1), exponential(1))) = 0.5 AS iid_exp_
 SELECT abs(expected(provsql.greatest(uniform(2,6), uniform(2,6))) - 14.0/3) < 1e-12
        AS unif_ab_max_exact;
 
+-- Mixed independent families via the layer-cake quadrature
+-- E[max] = ∫(1-∏F_i), E[min] = ∫∏(1-F_i).  For U(0,1) and Exp(1):
+-- E[min] = ∫_0^1 (1-t) e^{-t} dt = 1/e; E[max] = 1.5 - 1/e (exact references).
+SELECT abs(expected(provsql.least(uniform(0,1), exponential(1))) - exp(-1)) < 1e-6
+         AS mixed_min_quadrature,
+       abs(expected(provsql.greatest(uniform(0,1), exponential(1)))
+             - (1.5 - exp(-1))) < 1e-6
+         AS mixed_max_quadrature;
+
 -- The builtin GREATEST / LEAST grammar is lifted over random_variable args
 -- into the same order statistic, so bare greatest(x,y,z) works and matches
 -- the schema-qualified form exactly.

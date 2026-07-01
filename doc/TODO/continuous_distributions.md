@@ -32,9 +32,9 @@ The prioritisation uses four labels:
 | 4 | Poisson, Binomial, Geometric | Parametric distributions | Mid-term |
 | 5 | Multivariate Normal | Parametric distributions | Architectural |
 | 6 | Quantiles / inverse CDF | Expressivity completion | Quick win |
-| 7 | RV-vs-RV analytical comparisons | Expressivity completion | ◑ same-family (Normal/Exp/Uniform) shipped; mixed-family quadrature open |
+| 7 | RV-vs-RV analytical comparisons | Expressivity completion | ✅ shipped (1.11.0-dev; same-family + mixed-family quadrature) |
 | 8 | Function application (`log`, `exp`…) | Expressivity completion | Mid-term |
-| 9 | Order statistics: `MIN`/`MAX`/percentile aggregates + `greatest`/`least` | Expressivity completion | ◑ gate + `greatest`/`least` + `MIN`/`MAX` aggregates shipped; `percentile_cont` open |
+| 9 | Order statistics: `MIN`/`MAX`/percentile aggregates + `greatest`/`least` | Expressivity completion | ✅ shipped (1.11.0-dev; `percentile_cont` still open) |
 | 10 | Information-theoretic primitives (entropy, KL, MI) | Expressivity completion | Mid-term |
 | 11 | Comparison events as first-class values (`probability(pred)`, projected `x>y`, `probability` alias) | Expressivity completion | ✅ shipped (1.11.0-dev) |
 | 12 | Empirical samples gate | Data-driven distributions | Mid-term |
@@ -340,23 +340,15 @@ becomes one virtual call regardless of family, instead of a fresh
 switch on `DistKind` paralleling the existing PDF/CDF/moment
 switches.
 
-### B.2 RV-vs-RV analytical comparisons – **[Quick win] – ◑ partly shipped**
+### B.2 RV-vs-RV analytical comparisons – **✅ shipped (1.11.0-dev)**
 
-Same-family pairs are shipped (`rvVsRvDecide` in `AnalyticEvaluator.cpp`):
-Normal-Normal (`P(X<Y)=Φ(…)`), Exponential-Exponential
-(`P(X<Y)=λ_X/(λ_X+λ_Y)`), and Uniform-Uniform (geometric). They resolve
-exactly, and `is_analytic_singleton_cmp` leaves an independent two-RV cmp
-for the closed form instead of pre-empting it with per-cmp MC.
-
-**Remaining:** *mixed* independent families (e.g. Normal vs Exponential)
-still fall back to MC. Each has the 1-D quadrature
-`P(X<Y) = ∫ f_X(t) F_Y(t) dt` over the target's support — the same
-integrator the mixed-family order statistics need (§B.4) and the
-conditional-moment path already uses (`rvVsRvConditionalMoment` in
-`Expectation.cpp`).
-
-**Applicability.** A/B tests, rankings, tournament probabilities, "which
-sensor is reading higher".
+`rvVsRvDecide` in `AnalyticEvaluator.cpp`: same-family closed forms
+(Normal-Normal difference, Exp-Exp `λ_X/(λ_X+λ_Y)`, Uniform-Uniform
+geometric) and, for *mixed* independent families, the 1-D quadrature
+`P(X<Y) = ∫ (1 − F_Y(t)) f_X(t) dt`. `is_analytic_singleton_cmp` leaves any
+independent two-RV cmp for that path instead of pre-empting it with per-cmp
+MC, so `probability(x op y)` is exact / high-accuracy for every family pair
+(only genuinely-shared leaves fall back to MC).
 
 ### B.3 Function application beyond +, −, ×, ÷ – **[Mid-term]**
 
@@ -396,13 +388,13 @@ Evaluation is MC-correct everywhere, and `E[max]`/`E[min]` are **exact** for
 i.i.d. Uniform (`n/(n+1)`, `1/(n+1)`) and i.i.d. Exponential (harmonic /
 summed-rate) via `iidOrderStatMean`.
 
-**Remaining:**
+Mixed / non-i.i.d. independent families are also exact now, via the
+layer-cake quadrature `E[max] = lo + ∫ (1 − ∏ F_i(t)) dt` (resp.
+`∫ ∏(1 − F_i) dt`) in `mixedOrderStatMean`; only shared-leaf correlation
+falls back to MC.
 
-- *mixed independent families* — `E[max]`/`E[min]` via the 1-D quadrature
-  `E[max] = ∫ (1 − ∏ F_i(t)) dt` (resp. `∫ ∏(1 − F_i) dt`); currently MC.
-  Shares the integrator with the mixed-family comparison in §B.2.
-- `percentile_cont` — the third order-statistic aggregate; needs the
-  quantile / inverse-CDF surface (§B.1).
+**Remaining:** `percentile_cont` — the third order-statistic aggregate;
+needs the quantile / inverse-CDF surface (§B.1).
 
 ### B.5 Information-theoretic primitives – **[Mid-term]**
 
@@ -952,17 +944,16 @@ architectural risk:
 2. **Quick wins, in parallel.** Gamma (§A.1) – the proof-of-concept
    for the new layout – together with Log-normal (§A.2), quantiles
    (§B.1), and GMM constructor (§C.1). The comparison-event surface and
-   `probability` alias (§B.6) **shipped in 1.11.0-dev**; same-family
-   RV-vs-RV comparisons (§B.2) shipped, leaving only the mixed-family
-   quadrature.
+   `probability` alias (§B.6) and RV-vs-RV comparisons (§B.2, same-family +
+   mixed-family quadrature) **shipped in 1.11.0-dev**.
 3. **Solid mid-term batch.** Beta (§A.3) and the discrete families
    (§A.4) round out the parametric set. Function application (§B.3)
    then unlocks the Normal ↔ Log-normal bridge analytically.
    Order statistics — the `MIN`/`MAX` aggregates and same-row
    `greatest`/`least` over the shared `PROVSQL_ARITH_MAX`/`_MIN` gate
-   (§B.4) — **shipped in 1.11.0-dev** (mixed-family `E[max]`/`E[min]`
-   quadrature and `percentile_cont` remain); information-theoretic
-   primitives (§B.5) close the remaining expressivity gap.
+   (§B.4) — **shipped in 1.11.0-dev** (only `percentile_cont` remains);
+   information-theoretic primitives (§B.5) close the remaining
+   expressivity gap.
 4. **Empirical track.** Samples gate (§C.2) and CDF gate (§C.3), then
    snapshot (§C.4). Each lands as a `Distribution` subclass under the
    §F.1 hierarchy, reusing the moment dispatchers already in place.
