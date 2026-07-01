@@ -5,6 +5,7 @@
 #include "MonteCarloSampler.h"
 #include "Aggregation.h"
 #include "RandomVariable.h"
+#include "Distribution.h"  // makeDistribution -> per-family sample()
 #include "RangeCheck.h"        // collectRvConstraints
 #include "Circuit.h"
 
@@ -75,6 +76,10 @@ private:
   std::mt19937_64 &rng_;
   std::unordered_map<gate_t, bool> bool_cache_;
   std::unordered_map<gate_t, double> scalar_cache_;
+  // Per-gate_rv Distribution, constructed once and reused across iterations
+  // (NOT cleared in resetIteration): sampling then never re-parses the spec
+  // or re-constructs the Distribution per draw.
+  std::unordered_map<gate_t, std::unique_ptr<Distribution>> dist_cache_;
 };
 
 bool Sampler::evalBool(gate_t g)
@@ -188,35 +193,15 @@ double Sampler::evalScalar(gate_t g)
       break;
     case gate_rv:
     {
-      auto spec = parse_distribution_spec(gc_.getExtra(g));
-      if(!spec)
-        throw CircuitException(
-                "Malformed gate_rv extra: " + gc_.getExtra(g));
-      switch(spec->kind) {
-        case DistKind::Normal: {
-          std::normal_distribution<double> d(spec->p1, spec->p2);
-          result = d(rng_);
-          break;
-        }
-        case DistKind::Uniform: {
-          std::uniform_real_distribution<double> d(spec->p1, spec->p2);
-          result = d(rng_);
-          break;
-        }
-        case DistKind::Exponential: {
-          std::exponential_distribution<double> d(spec->p1);
-          result = d(rng_);
-          break;
-        }
-        case DistKind::Erlang: {
-          /* Gamma(shape, scale) with integer shape k and scale 1/λ
-           * samples Erlang(k, λ) directly.  std::gamma_distribution
-           * uses the rate's inverse as its scale parameter. */
-          std::gamma_distribution<double> d(spec->p1, 1.0 / spec->p2);
-          result = d(rng_);
-          break;
-        }
+      auto dit = dist_cache_.find(g);
+      if(dit == dist_cache_.end()) {
+        auto spec = parse_distribution_spec(gc_.getExtra(g));
+        if(!spec)
+          throw CircuitException(
+                  "Malformed gate_rv extra: " + gc_.getExtra(g));
+        dit = dist_cache_.emplace(g, makeDistribution(*spec)).first;
       }
+      result = dit->second->sample(rng_);
       break;
     }
     case gate_arith:
