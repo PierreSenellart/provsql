@@ -11,8 +11,10 @@
  */
 #include "Distribution.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace provsql {
 
@@ -95,6 +97,18 @@ public:
     return 0.5 * (1.0 + std::erf(z / SQRT2));
   }
   DistSupport support() const override { return {-kInf, kInf}; }
+  bool integrationRange(double &lo, double &hi) const override {
+    if (!(p2_ > 0.0)) return false;
+    lo = p1_ - 12.0 * p2_;
+    hi = p1_ + 12.0 * p2_;
+    return true;
+  }
+  std::pair<double, double> plotRange(double trunc_lo, double trunc_hi) const override {
+    double lo = trunc_lo, hi = trunc_hi;
+    if (!std::isfinite(lo)) lo = p1_ - 4.0 * p2_;
+    if (!std::isfinite(hi)) hi = p1_ + 4.0 * p2_;
+    return {lo, hi};
+  }
   double sample(std::mt19937_64 &rng) const override {
     std::normal_distribution<double> d(p1_, p2_);
     return d(rng);
@@ -127,6 +141,18 @@ public:
     return (c - p1_) / (p2_ - p1_);
   }
   DistSupport support() const override { return {p1_, p2_}; }
+  bool integrationRange(double &lo, double &hi) const override {
+    lo = p1_;
+    hi = p2_;
+    return hi > lo;
+  }
+  std::pair<double, double> plotRange(double trunc_lo, double trunc_hi) const override {
+    double lo = trunc_lo, hi = trunc_hi;
+    const double pad = 0.15 * (p2_ - p1_);
+    lo = std::isfinite(lo) ? std::max(lo, p1_ - pad) : p1_ - pad;
+    hi = std::isfinite(hi) ? std::min(hi, p2_ + pad) : p2_ + pad;
+    return {lo, hi};
+  }
   double sample(std::mt19937_64 &rng) const override {
     std::uniform_real_distribution<double> d(p1_, p2_);
     return d(rng);
@@ -153,6 +179,18 @@ public:
     return (c <= 0.0) ? 0.0 : -std::expm1(-p1_ * c);  // 1 - exp(-λc)
   }
   DistSupport support() const override { return {0.0, kInf}; }
+  bool integrationRange(double &lo, double &hi) const override {
+    if (!(p1_ > 0.0)) return false;
+    lo = 0.0;
+    hi = 40.0 / p1_;
+    return true;
+  }
+  std::pair<double, double> plotRange(double trunc_lo, double trunc_hi) const override {
+    double lo = trunc_lo, hi = trunc_hi;
+    if (!std::isfinite(lo)) lo = 0.0;
+    if (!std::isfinite(hi)) hi = 6.0 / p1_;
+    return {lo, hi};
+  }
   double sample(std::mt19937_64 &rng) const override {
     std::exponential_distribution<double> d(p1_);
     return d(rng);
@@ -200,6 +238,18 @@ public:
     return 1.0 - std::exp(-lc) * sum;
   }
   DistSupport support() const override { return {0.0, kInf}; }
+  bool integrationRange(double &lo, double &hi) const override {
+    if (!(p1_ >= 1.0 && p2_ > 0.0)) return false;
+    lo = 0.0;
+    hi = (p1_ + 12.0 * std::sqrt(p1_)) / p2_;
+    return true;
+  }
+  std::pair<double, double> plotRange(double trunc_lo, double trunc_hi) const override {
+    double lo = trunc_lo, hi = trunc_hi;
+    if (!std::isfinite(lo)) lo = 0.0;
+    if (!std::isfinite(hi)) hi = std::max(2.0 * p1_ / p2_, 6.0 / p2_);
+    return {lo, hi};
+  }
   double sample(std::mt19937_64 &rng) const override {
     // Gamma(shape=k, scale=1/λ) samples Erlang(k, λ) directly.
     std::gamma_distribution<double> d(p1_, 1.0 / p2_);

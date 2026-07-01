@@ -53,6 +53,7 @@ PG_FUNCTION_INFO_V1(rv_analytical_curves);
 #include "GenericCircuit.h"
 #include "HybridEvaluator.h"    // runHybridSimplifier
 #include "RandomVariable.h"     // DistKind
+#include "Distribution.h"       // makeDistribution -> plotRange
 #include "RangeCheck.h"         // matchClosedFormDistribution + variant
 #include "provsql_utils_cpp.h"
 
@@ -86,37 +87,7 @@ std::pair<double, double>
 bare_x_range(const provsql::DistributionSpec &spec,
              double trunc_lo, double trunc_hi)
 {
-  double lo = trunc_lo, hi = trunc_hi;
-  switch (spec.kind) {
-    case provsql::DistKind::Normal: {
-      const double mu = spec.p1, sigma = spec.p2;
-      if (!std::isfinite(lo)) lo = mu - 4.0 * sigma;
-      if (!std::isfinite(hi)) hi = mu + 4.0 * sigma;
-      break;
-    }
-    case provsql::DistKind::Uniform: {
-      const double a = spec.p1, b = spec.p2;
-      const double pad = 0.15 * (b - a);
-      if (!std::isfinite(lo)) lo = a - pad;
-      else                    lo = std::max(lo, a - pad);
-      if (!std::isfinite(hi)) hi = b + pad;
-      else                    hi = std::min(hi, b + pad);
-      break;
-    }
-    case provsql::DistKind::Exponential: {
-      const double lambda = spec.p1;
-      if (!std::isfinite(lo)) lo = 0.0;
-      if (!std::isfinite(hi)) hi = 6.0 / lambda;
-      break;
-    }
-    case provsql::DistKind::Erlang: {
-      const double k = spec.p1, lambda = spec.p2;
-      if (!std::isfinite(lo)) lo = 0.0;
-      if (!std::isfinite(hi)) hi = std::max(2.0 * k / lambda, 6.0 / lambda);
-      break;
-    }
-  }
-  return {lo, hi};
+  return provsql::makeDistribution(spec)->plotRange(trunc_lo, trunc_hi);
 }
 
 /**

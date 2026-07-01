@@ -20,6 +20,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <utility>
 
 #include "RandomVariable.h"  // DistKind, DistributionSpec
 
@@ -66,6 +67,20 @@ public:
 
   /** @brief Natural support interval of X. */
   virtual DistSupport support() const = 0;
+
+  /**
+   * @brief Finite window [lo, hi] covering essentially all of X's mass, for
+   *        numerical quadrature.  Returns false (leaving @p lo / @p hi
+   *        untouched) when the parameters are degenerate.
+   */
+  virtual bool integrationRange(double &lo, double &hi) const = 0;
+
+  /**
+   * @brief Plot x-window given optional truncation bounds (±infinity means
+   *        "unbounded on that side"); used by the SVG curve renderer.
+   */
+  virtual std::pair<double, double> plotRange(double trunc_lo,
+                                              double trunc_hi) const = 0;
 
   /** @brief Draw one sample using the shared MC generator. */
   virtual double sample(std::mt19937_64 &rng) const = 0;

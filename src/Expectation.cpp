@@ -12,6 +12,7 @@
 #include "CircuitFromMMap.h"
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
+#include "Distribution.h"  // makeDistribution -> integrationRange
 #include "RangeCheck.h"
 #include "provsql_utils_cpp.h"
 #include "semiring/BoolExpr.h"
@@ -764,20 +765,7 @@ matchRvVsRvConditional(const GenericCircuit &gc, gate_t root, gate_t event_root)
  * density is numerically negligible. */
 bool rvIntegrationRange(const DistributionSpec &X, double &lo, double &hi)
 {
-  switch (X.kind) {
-    case DistKind::Uniform:
-      lo = X.p1; hi = X.p2; return hi > lo;
-    case DistKind::Normal:
-      if (!(X.p2 > 0.0)) return false;
-      lo = X.p1 - 12.0 * X.p2; hi = X.p1 + 12.0 * X.p2; return true;
-    case DistKind::Exponential:
-      if (!(X.p1 > 0.0)) return false;
-      lo = 0.0; hi = 40.0 / X.p1; return true;
-    case DistKind::Erlang:
-      if (!(X.p1 >= 1.0) || !(X.p2 > 0.0)) return false;
-      lo = 0.0; hi = (X.p1 + 12.0 * std::sqrt(X.p1)) / X.p2; return true;
-  }
-  return false;
+  return makeDistribution(X)->integrationRange(lo, hi);
 }
 
 /* E[X^k | X op Y] for independent X, Y via a 1-D quadrature:

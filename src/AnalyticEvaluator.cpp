@@ -13,6 +13,7 @@
 
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
 #include "RandomVariable.h"     // parse_distribution_spec, parseDoubleStrict, DistKind
+#include "Distribution.h"       // makeDistribution -> integrationRange
 extern "C" {
 #include "provsql_utils.h"      // gate_type
 }
@@ -197,20 +198,7 @@ double integralUniformCdf(double a, double b, double c, double d)
  * their exact support; unbounded ones a many-sigma / many-mean tail. */
 bool rvSupportRange(const DistributionSpec &d, double &lo, double &hi)
 {
-  switch (d.kind) {
-    case DistKind::Uniform:
-      lo = d.p1; hi = d.p2; return hi > lo;
-    case DistKind::Normal:
-      if (!(d.p2 > 0.0)) return false;
-      lo = d.p1 - 12.0 * d.p2; hi = d.p1 + 12.0 * d.p2; return true;
-    case DistKind::Exponential:
-      if (!(d.p1 > 0.0)) return false;
-      lo = 0.0; hi = 40.0 / d.p1; return true;
-    case DistKind::Erlang:
-      if (!(d.p1 >= 1.0) || !(d.p2 > 0.0)) return false;
-      lo = 0.0; hi = (d.p1 + 12.0 * std::sqrt(d.p1)) / d.p2; return true;
-  }
-  return false;
+  return makeDistribution(d)->integrationRange(lo, hi);
 }
 
 /* P(X < Y) for two independent RVs of possibly-different families, by the
