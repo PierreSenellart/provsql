@@ -1500,11 +1500,19 @@ detect_shared_scalar(const GenericCircuit &gc,
  * otherwise (a @c gate_arith composite, or an Erlang with
  * non-integer shape) we fall back to MC by sampling the scalar
  * @p samples times and binning into intervals.
+ *
+ * Returns @c true when the group was resolved.  When the analytical
+ * CDF is unavailable and @p allow_mc is false (@c rv_mc_samples = 0),
+ * returns @c false without touching the circuit: the caller then
+ * raises rather than letting each cmp collapse to an independent
+ * marginal (which would silently return the product of the marginals
+ * for correlated events).
  */
-void inline_fast_path(GenericCircuit &gc,
+bool inline_fast_path(GenericCircuit &gc,
                       const std::vector<gate_t> &cmps,
                       const FastPathInfo &info,
-                      unsigned samples)
+                      unsigned samples,
+                      bool allow_mc)
 {
   /* Sort + dedup thresholds; the resulting m distinct boundaries
    * partition R into m+1 open intervals
@@ -1548,6 +1556,12 @@ void inline_fast_path(GenericCircuit &gc,
     }
   }
   if (!analytical) {
+    /* No closed-form CDF for the shared scalar (a gate_arith composite,
+     * or a non-integer-shape Erlang): the joint needs MC binning.  With
+     * MC disabled we cannot resolve it correctly -- decline so the caller
+     * raises, rather than leaving the cmps for an independent per-cmp
+     * collapse that would silently return the product of the marginals. */
+    if (!allow_mc) return false;
     auto draws = monteCarloScalarSamples(gc, info.scalar, samples);
     for (double s : draws) {
       auto it = std::upper_bound(ts.begin(), ts.end(), s);
@@ -1602,6 +1616,7 @@ void inline_fast_path(GenericCircuit &gc,
     }
     gc.resolveToPlus(cmps[j], std::move(plus_wires));
   }
+  return true;
 }
 
 /**
@@ -1672,7 +1687,18 @@ void inline_joint_table(GenericCircuit &gc,
 
 unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
 {
-  if (samples == 0) return 0;
+  /* @c rv_mc_samples = 0 does NOT short-circuit the decomposer: the
+   * monotone-shared-scalar fast path resolves a group of comparisons
+   * against constants on one bare @c gate_rv analytically (via the CDF,
+   * no sampling), which is exactly the correlation-aware joint a
+   * conditioning like @c "(x >= 2000) | (x >= 1000)" needs.  Skipping
+   * the decomposer here would leave those cmps for @c runAnalyticEvaluator
+   * to collapse one at a time, silently returning the product of the
+   * marginals for correlated events.  Only the genuinely MC-bound arms
+   * (a composite shared scalar, an RV-vs-RV joint table, a non-analytic
+   * singleton) are gated on @p allow_mc; under @c samples = 0 a correlated
+   * island with no closed form raises rather than falling back silently. */
+  const bool allow_mc = (samples > 0);
 
   /* Snapshot all gate_cmp ids that look like continuous islands.
    * Each call later mutates a snapshot entry from @c gate_cmp to
@@ -1751,6 +1777,10 @@ unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
        * case with an analytical answer.  Otherwise MC-marginalise
        * into a Bernoulli leaf here. */
       if (is_analytic_singleton_cmp(gc, group[0])) continue;
+      /* A non-analytic singleton needs MC.  With MC disabled leave the
+       * cmp for the downstream "undecidable + rv_mc_samples = 0" raise
+       * (a singleton has no cross-cmp correlation to lose). */
+      if (!allow_mc) continue;
       double p = monteCarloRV(gc, group[0], samples);
       gc.resolveCmpToBernoulli(group[0], p);
       ++resolved;
@@ -1768,10 +1798,29 @@ unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
      * enough; larger groups keep their cmps as gate_cmp and fall
      * through to whole-circuit MC. */
     if (auto info = detect_shared_scalar(gc, group)) {
-      inline_fast_path(gc, group, *info, samples);
-      resolved += static_cast<unsigned>(group.size());
-      continue;
+      if (inline_fast_path(gc, group, *info, samples, allow_mc)) {
+        resolved += static_cast<unsigned>(group.size());
+        continue;
+      }
+      /* Shared scalar with no closed-form CDF and MC disabled: raise
+       * rather than let the cmps collapse to independent marginals. */
+      throw CircuitException(
+        "the joint probability of correlated comparison events over a "
+        "composite quantity needs Monte Carlo, but provsql.rv_mc_samples "
+        "= 0 disables it; set provsql.rv_mc_samples > 0 (comparisons "
+        "against constants on a single distribution stay analytical)");
     }
+
+    /* Generic joint island (e.g. RV-vs-RV comparisons sharing a leaf):
+     * only the 2^k MC joint table can evaluate it correctly.  With MC
+     * disabled, raise rather than leave the cmps for an independent
+     * per-cmp collapse that silently returns the product of marginals. */
+    if (!allow_mc)
+      throw CircuitException(
+        "the joint probability of correlated comparison events needs "
+        "Monte Carlo, but provsql.rv_mc_samples = 0 disables it; set "
+        "provsql.rv_mc_samples > 0 (comparisons against constants on a "
+        "single distribution stay analytical)");
 
     if (group.size() > JOINT_TABLE_K_MAX) continue;
 
