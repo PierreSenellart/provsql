@@ -49,7 +49,7 @@ trap cleanup EXIT
 # Fresh cluster, fresh staging, fresh execution data.
 [ -d "$PGDIR" ] && { "$BIN/pg_ctl" -D "$PGDIR" stop -m immediate >/dev/null 2>&1 || true; }
 rm -rf "$PGDIR" "$STAGE"
-rm -f src/*.gcda src/semiring/*.gcda
+rm -f src/*.gcda src/semiring/*.gcda src/distributions/*.gcda
 
 # Stage the instrumented extension into a private prefix (no sudo, no system
 # install). COVERAGE=1 keeps the build instrumented even if anything relinks.

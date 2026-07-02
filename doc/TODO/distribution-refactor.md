@@ -100,35 +100,40 @@ Keeps the per-family files from re-creating the row-major coupling.
   the per-term mean / variance math (`try_normal_closure:488`, uniform affine `:620`).
 
 ## Status
-Committed (all 235 tests green after each; interface lives in `src/Distribution.{h,cpp}`):
+
+**Migration complete.** All 235 tests green after each step; every
+`DistKind` switch outside `src/distributions/` is gone.
+
 - `f84f6df9` — 4 family classes (moments / pdf / cdf / support / sample) + `makeDistribution`;
   `RandomVariable.cpp` moment free-functions.
 - `f5b0c07a` — `RangeCheck` support → `Distribution::support()`.
-- `5f942d67` — `integrationRange` + `plotRange` on the interface; migrated
-  `Expectation::rvIntegrationRange`, `AnalyticEvaluator::rvSupportRange`,
-  `RvAnalyticalCurves::bare_x_range`.
-- `6c1f624c` — `pdfAt`/`cdfAt` bodies delegate; the three Simpson loops (`mixedPairLess`,
-  `mixedOrderStatMean`, `rvVsRvConditionalMoment`) construct the `Distribution` **once before
-  the loop**; dead `rvSupportRange`/`rvIntegrationRange` removed. Cold callers (`cdfDecide`,
-  `shape_mass`, `bare_pdf`/`bare_cdf`) keep the delegating free functions.
-- `860b560f` — plain MC sampler: a per-`gate_rv` `Distribution` cache on `Sampler` (persists
-  across iterations, not cleared in `resetIteration`); RNG bit-identical.
+- `5f942d67` — `integrationRange` + `plotRange`; migrated `Expectation::rvIntegrationRange`,
+  `AnalyticEvaluator::rvSupportRange`, `RvAnalyticalCurves::bare_x_range`.
+- `6c1f624c` — `pdfAt`/`cdfAt` delegate; Simpson loops construct the `Distribution` once.
+- `860b560f` — plain MC sampler: per-`gate_rv` `Distribution` cache on `Sampler`.
+- `6ac651f4` — comparators: `ComparatorRuleRegistry` (P(X<Y) rules keyed on the family
+  pair; all ordered comparators reduce to P(X<Y), so no op in the key), generic Simpson
+  quadrature as the registry-miss default, self-registration via `ComparatorRuleRegistrar`.
+- `e33600a7` — closures: `ClosureRuleRegistry` + `try_sum_closure` replaces the three
+  per-family PLUS closures in `HybridEvaluator`; rules take the whole term list (bit-exact
+  accumulation, no pairwise re-serialisation); `affine(a,b)` (+ `scale`/`negate` wrappers),
+  `serialise()`, `asDirac()` on the interface; `double_to_text` relocated to
+  `RandomVariable.{h,cpp}` beside `parseDoubleStrict`.
+- `fbd08b60` — truncated: `truncatedRawMoment` + `sampleTruncated` + optional `quantile`
+  (BSM `inv_phi` relocated); `Expectation::try_truncated_closed_form` and
+  `MonteCarloSampler::try_truncated_closed_form_sample` are family-agnostic.
+- `bdc106c2` — order statistics: `iidOrderStatMean` per-family method.
+- `adf2509e` — parse/factory: `DistributionRegistry` (kind + name token + arity + factory,
+  self-registered); `makeDistribution` and `parse_distribution_spec` dispatch through it.
+- `b8c14b2e` — split into `src/distributions/`: `Distribution.h` (interface + registry
+  APIs), `Distribution.cpp` (registries + drivers + quadrature fallback),
+  `DistributionCommon.h` (internal: `kNaN`/`kInf`, `binomial_coeff`, `BaseDistribution`),
+  one self-contained file per family (`normal.cpp`, `uniform.cpp`, `exponential.cpp`,
+  `erlang.cpp`; classes file-local, reachable only through the registrars).
+  `Makefile.internal` globs `src/distributions/*.cpp` into OBJS.
 
-**All analytic consumers + plain sampling are now on virtual dispatch.** Remaining
-`DistKind` switches, by area:
-1. **Comparators** — `AnalyticEvaluator::rvVsRvDecide` / `normalDiffDecide` →
-   `ComparatorRuleRegistry` (Normal-Normal difference, Exp-Exp ratio, Uniform-Uniform;
-   a miss falls to the already-migrated `mixedPairLess` quadrature).
-2. **Closures** — `HybridEvaluator::try_normal_closure` / `try_erlang_closure` /
-   `try_neg_rv` / `try_times_scalar_rv` + the inline serialise → `ClosureRuleRegistry` +
-   `affine(a,b)` + `serialise()` (relocate `double_to_text`).
-3. **Truncated** — `MonteCarloSampler` truncated sampler + `Expectation::try_truncated_closed_form`
-   → `truncatedRawMoment` + `sampleTruncated` + optional `quantile` (relocate `inv_phi`).
-4. **Order statistics** — `Expectation::iidOrderStatMean` → a per-family method (Uniform/Exp
-   closed forms; Normal/Erlang nullopt).
-5. **Parse** — `RandomVariable::parse_distribution_spec` → optional `Distribution::parse` factory.
-
-Then split `src/Distribution.{h,cpp}` → `src/distributions/` one file per family (add
-`src/distributions/*.cpp` to the `OBJS` glob in `Makefile.internal`), and Gamma (§3.1) — whose
+Adding a family is now one new `src/distributions/<name>.cpp` (class + registrars) plus
+the `DistKind` enum value in `RandomVariable.h` and the SQL constructor surface.
+Remaining follow-up: Gamma (§3.1) as the first proof-of-concept family — its
 general-shape CDF needs a regularised-lower-incomplete-gamma implementation, unlike the
 integer-shape Erlang finite sum.
