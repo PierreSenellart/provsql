@@ -20,6 +20,9 @@ p_default|p_independent|mc_ok
 e_x|e_given_referral|var_given_referral|support_lower
 20.000|27.626|4.977|25
 (1 row)
+p_severe_given_referred|matches_bayes
+0.1434|t
+(1 row)
 region|e_total|e_total_given_highday
 North|3.50|5.50
 (1 row)

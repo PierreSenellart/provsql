@@ -94,6 +94,23 @@ conditioned moment -- is :sqlfunc:`probability` over the predicate:
 ``probability(x > y)`` for two i.i.d. uniforms is exactly ``0.5``. See
 :doc:`continuous-distributions` for the comparison-event surface.
 
+The evidence side may itself be a comparison rather than a pre-built
+token, so a conditional probability over two comparison events is
+written directly: ``probability((A) | (B))`` is the correlation-aware
+:math:`\Pr(A \wedge B) / \Pr(B)`. For example, with
+``x ~ Normal(1500, 400)`` and the nested events ``{x >= 2000} ⊂
+{x >= 1000}``:
+
+.. code-block:: postgresql
+
+    WITH r AS (SELECT normal(1500, 400) AS x)
+    SELECT probability((x >= 2000) | (x >= 1000)) FROM r;  -- 0.1181
+
+Both comparisons share the ``x`` leaf, so the joint keeps the
+dependence (it is not ``Pr(A)·Pr(B)``); comparisons against constants on
+one distribution are resolved analytically and stay exact even at
+``provsql.rv_mc_samples = 0``.
+
 The result of ``value | evidence`` is **terminal**: a conditioned value may
 only be conditioned further, never combined into a larger ``plus`` /
 ``times`` / ``monus`` / aggregate gate.

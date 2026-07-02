@@ -319,6 +319,7 @@ Continuous random variables
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", "", "✓"
    "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "✓", "", "✓"
    "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "(✓)"
+   "``probability((A) | (B))`` over two comparison events", "", "", "", "", "", "", "", "", "✓"
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", "", ""
    "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", "", ""
 

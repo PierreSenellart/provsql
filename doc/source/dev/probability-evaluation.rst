@@ -1109,7 +1109,14 @@ The hybrid evaluator has three passes:
   the remaining cmps are partitioned by base-RV footprints into
   *islands*; single-cmp islands marginalise via
   :cfunc:`runAnalyticEvaluator`'s closed-form CDF; multi-cmp islands
-  with shared base RVs go through the joint table.
+  with shared base RVs go through the joint table. The
+  monotone-shared-scalar arm of the joint table is analytical (CDF
+  intervals) for a bare ``gate_rv`` scalar, so it runs even at
+  ``provsql.rv_mc_samples = 0`` -- keeping a correlated conjunction
+  / conditioning like ``probability((x ≥ 2000) | (x ≥ 1000))`` exact
+  instead of collapsing to the product of the marginals; a
+  correlated island that genuinely needs MC raises at ``0`` rather
+  than falling back to that product.
 
 See :doc:`continuous-distributions` for the full simplifier rule
 set and the island-decomposition algorithm.

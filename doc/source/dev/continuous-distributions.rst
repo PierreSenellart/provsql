@@ -328,6 +328,23 @@ probabilistic comparison is rewritten to
 token (a purely deterministic argument falls through to the SQL
 body, ``predicate::integer::double precision``).
 
+Conditioning two comparison events, ``(A) | (B)``, is handled by
+the same ``rewrite_cond_predicate_mutator`` that lowers the
+``carrier | (predicate)`` placeholders. An ``random_variable`` /
+``agg_token`` comparison is statically ``boolean``-typed, so
+``(A) | (B)`` is a ``boolean | boolean`` operator (backed by the
+raising placeholder ``predicate_cond_predicate``, registered as
+``OID_FUNCTION_PREDICATE_COND_PREDICATE``); unlike the
+carrier-passthrough ``cond_predicate`` shape, *both* operands are
+predicates. The mutator lowers each through
+``predicate_to_condition_gate`` and emits
+``cond(target_gate, evidence_gate)``, whose
+:sqlfunc:`probability_evaluate` is the correlation-aware
+:math:`\Pr(A \wedge B) / \Pr(B)`. Because the operator returns
+``uuid``, ``(A) | (B)`` is a first-class event token in every
+position -- a :sqlfunc:`probability` argument, a projected
+column, or the left operand of a further ``|``.
+
 A short-cut handles the corner case of ``WHERE rv > 2`` on a
 query that touches no provenance-tracked relation: there is
 nothing to conjoin into, so the rewriter synthesises a
@@ -675,6 +692,24 @@ circuit, it runs:
    comparators (typical of range queries on a single column):
    the joint event reduces to an interval on the underlying
    scalar and one analytical CDF call per endpoint.
+
+   This fast path is **analytical** when the shared scalar is a
+   bare ``gate_rv`` with a closed-form CDF, so the decomposer
+   deliberately does **not** short-circuit on
+   ``provsql.rv_mc_samples = 0``: skipping it would leave the
+   correlated cmps for ``AnalyticEvaluator`` to collapse one at a
+   time, silently returning the *product of the marginals* for
+   events that share a leaf (e.g. ``Pr(x ≥ 2000 ∧ x ≥ 1000)``
+   coming back as ``Pr(x ≥ 2000)·Pr(x ≥ 1000)`` rather than
+   ``Pr(x ≥ 2000)``). Only the genuinely MC-bound arms -- a
+   composite (non-``gate_rv``) shared scalar, an RV-vs-RV joint
+   table, a non-analytic singleton -- are gated on
+   ``rv_mc_samples > 0``; under ``0`` a correlated island with no
+   closed form **raises** (a ``CircuitException`` surfaced as a
+   clean error) rather than falling back to the independent
+   product. This is what makes ``probability((A) | (B))`` over
+   two shared-leaf comparisons exact even with the MC fallback
+   disabled.
 
 4. **Universal semiring-identity collapse** after RangeCheck
    has decided every decidable cmp.

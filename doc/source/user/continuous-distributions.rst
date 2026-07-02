@@ -463,6 +463,30 @@ predicate overload lives only on the short ``probability`` name; a
 Boolean overload of ``probability_evaluate`` would make a
 ``uuid``-as-text literal ambiguous.)
 
+Two comparison events can be conditioned with the same ``|`` operator
+that conditions a random variable (:doc:`conditioning`): ``(A) | (B)``
+reads "``A`` given ``B``" and evaluates the correlation-aware
+:math:`\Pr(A \wedge B) / \Pr(B)`. Because both comparisons are written
+in place they are statically ``boolean``-typed, so the whole ``(A) |
+(B)`` resolves to a first-class event token (a ``uuid``), usable as a
+:sqlfunc:`probability` argument, a projected column, or a further
+``|``:
+
+.. code-block:: postgresql
+
+    -- x ~ Normal(1500, 400); {x >= 2000} ⊂ {x >= 1000}
+    SELECT probability((x >= 2000) | (x >= 1000)) FROM d;  -- 0.1181
+
+The joint is *not* the product of the marginals: both comparisons share
+the ``x`` leaf, so ``Pr(x >= 2000 ∧ x >= 1000) = Pr(x >= 2000)``. For a
+group of comparisons against constants on a single distribution the
+joint is resolved analytically (through the CDF), so the answer is exact
+regardless of ``provsql.rv_mc_samples`` -- including ``0``. A genuinely
+correlated joint with no closed form (comparisons between two random
+variables that share a leaf) needs Monte Carlo; with
+``provsql.rv_mc_samples = 0`` such a query raises rather than silently
+returning the independent-product approximation.
+
 Configuration of the Monte Carlo Sampler
 -----------------------------------------
 

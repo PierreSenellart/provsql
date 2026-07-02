@@ -428,6 +428,25 @@ inspect whole. Print it:
 mean, and variance reported alongside: the same conditioned variable you
 just took moments of, now seen as a whole distribution.
 
+The same ``|`` also conditions one *event* on another, so a conditional
+probability reads directly. Among referred patients (biomarker above 25),
+how many are in fact severe (above 30)? That is
+:math:`\Pr(x > 30 \mid x > 25)`, written by conditioning the two comparison
+events:
+
+.. code-block:: postgresql
+
+    WITH r AS (SELECT normal(20, 5) AS x)
+    SELECT probability((x > 30) | (x > 25)) FROM r;
+
+About **0.14**: roughly one referral in seven crosses the severe line. Both
+comparisons read the *same* ``x``, so ProvSQL keeps the dependence and
+returns the correlation-aware :math:`\Pr(x > 30 \wedge x > 25) / \Pr(x >
+25) = \Pr(x > 30) / \Pr(x > 25)` (since ``{x > 30} ⊂ {x > 25}``), not the
+product of the two marginals. It is a comparison against a constant on one
+distribution, so the answer is closed-form -- exact even with
+``provsql.rv_mc_samples = 0``.
+
 Problem 5: A Probabilistic Total
 --------------------------------
 

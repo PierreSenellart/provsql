@@ -70,6 +70,15 @@ SELECT round(expected(r.x)::numeric,3)               AS e_x,
        (support(r.x | (r.x > 25))).lo                AS support_lower
 FROM r;
 
+-- Problem 4 (cont.): conditional probability of one event given another.
+-- P(x>30 | x>25) = P(x>30)/P(x>25) (correlation-aware; {x>30} subset {x>25}),
+-- exact/closed-form even at rv_mc_samples = 0.
+WITH r AS (SELECT normal(20,5) AS x)
+SELECT round(probability((r.x > 30) | (r.x > 25))::numeric,4) AS p_severe_given_referred,
+       abs(probability((r.x > 30) | (r.x > 25))
+           - probability(r.x > 30) / probability(r.x > 25)) < 1e-9 AS matches_bayes
+FROM r;
+
 -- Problem 5: conditional expectation of a probabilistic aggregate.  The
 -- moments are materialised under the rewriter, then read back (the result
 -- table carries no content-addressed token, so the output is deterministic).
