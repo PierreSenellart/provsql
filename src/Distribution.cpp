@@ -407,6 +407,12 @@ double normalPairLess(const Distribution &X, const Distribution &Y)
 [[maybe_unused]] const ComparatorRuleRegistrar normal_less_rule(
   DistKind::Normal, DistKind::Normal, &normalPairLess);
 
+[[maybe_unused]] const DistributionFamilyRegistrar normal_family(
+  DistKind::Normal, "normal", 2,
+  [](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<NormalDistribution>(p1, p2);
+  });
+
 /** @brief Uniform on [a=p1, b=p2]. */
 class UniformDistribution final : public BaseDistribution {
 public:
@@ -549,6 +555,12 @@ double uniformPairLess(const Distribution &X, const Distribution &Y)
 [[maybe_unused]] const ComparatorRuleRegistrar uniform_less_rule(
   DistKind::Uniform, DistKind::Uniform, &uniformPairLess);
 
+[[maybe_unused]] const DistributionFamilyRegistrar uniform_family(
+  DistKind::Uniform, "uniform", 2,
+  [](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<UniformDistribution>(p1, p2);
+  });
+
 /** @brief Exponential(λ=p1). p2 unused. */
 class ExponentialDistribution final : public BaseDistribution {
 public:
@@ -657,6 +669,12 @@ double exponentialPairLess(const Distribution &X, const Distribution &Y)
 
 [[maybe_unused]] const ComparatorRuleRegistrar exponential_less_rule(
   DistKind::Exponential, DistKind::Exponential, &exponentialPairLess);
+
+[[maybe_unused]] const DistributionFamilyRegistrar exponential_family(
+  DistKind::Exponential, "exponential", 1,
+  [](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<ExponentialDistribution>(p1, p2);
+  });
 
 /** @brief Erlang(k=p1 integer≥1, λ=p2). */
 class ErlangDistribution final : public BaseDistribution {
@@ -774,6 +792,12 @@ erlangSumRule(const std::vector<ClosureTerm> &terms)
   {DistKind::Erlang,      DistKind::Erlang,      &erlangSumRule},
 };
 
+[[maybe_unused]] const DistributionFamilyRegistrar erlang_family(
+  DistKind::Erlang, "erlang", 2,
+  [](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<ErlangDistribution>(p1, p2);
+  });
+
 /* Function-local statics so registration (dynamic initialisation of the
  * per-family registrar objects) never observes an uninitialised map,
  * whatever the TU initialisation order. */
@@ -787,6 +811,23 @@ std::map<std::pair<DistKind, DistKind>, ClosureRule> &closureRules()
 {
   static std::map<std::pair<DistKind, DistKind>, ClosureRule> rules;
   return rules;
+}
+
+struct FamilyRecord {
+  DistributionFamily descriptor;
+  DistributionFactory factory;
+};
+
+std::map<DistKind, FamilyRecord> &familiesByKind()
+{
+  static std::map<DistKind, FamilyRecord> families;
+  return families;
+}
+
+std::map<std::string, FamilyRecord> &familiesByName()
+{
+  static std::map<std::string, FamilyRecord> families;
+  return families;
 }
 
 /* Registry-miss default: P(X < Y) by the 1-D quadrature
@@ -864,19 +905,30 @@ double comparatorPairLess(const Distribution &X, const Distribution &Y)
   return pLess;
 }
 
+void registerDistributionFamily(DistKind kind, const char *name,
+                                unsigned nparams,
+                                DistributionFactory factory)
+{
+  const FamilyRecord record{{kind, nparams}, factory};
+  familiesByKind()[kind] = record;
+  familiesByName()[name] = record;
+}
+
+std::optional<DistributionFamily> lookupDistributionFamily(
+  const std::string &name)
+{
+  const auto &families = familiesByName();
+  const auto it = families.find(name);
+  if (it == families.end()) return std::nullopt;
+  return it->second.descriptor;
+}
+
 std::unique_ptr<Distribution> makeDistribution(const DistributionSpec &spec)
 {
-  switch (spec.kind) {
-    case DistKind::Normal:
-      return std::make_unique<NormalDistribution>(spec.p1, spec.p2);
-    case DistKind::Uniform:
-      return std::make_unique<UniformDistribution>(spec.p1, spec.p2);
-    case DistKind::Exponential:
-      return std::make_unique<ExponentialDistribution>(spec.p1, spec.p2);
-    case DistKind::Erlang:
-      return std::make_unique<ErlangDistribution>(spec.p1, spec.p2);
-  }
-  return nullptr;
+  const auto &families = familiesByKind();
+  const auto it = families.find(spec.kind);
+  if (it == families.end()) return nullptr;
+  return it->second.factory(spec.p1, spec.p2);
 }
 
 }  // namespace provsql

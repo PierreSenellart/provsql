@@ -86,30 +86,23 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
   strip(kind_str);
   strip(params);
 
+  /* Resolve the family name through the DistributionRegistry so a new
+   * family's token is recognised without touching this parser. */
+  const auto family = lookupDistributionFamily(kind_str);
+  if (!family) return std::nullopt;
+
   DistributionSpec out{};
-  if (kind_str == "normal" || kind_str == "uniform") {
+  out.kind = family->kind;
+  if (family->nparams == 2) {
     const auto comma = params.find(',');
     if (comma == std::string::npos) return std::nullopt;
     if (!parse_double(params.substr(0, comma), out.p1)) return std::nullopt;
     if (!parse_double(params.substr(comma + 1), out.p2)) return std::nullopt;
-    out.kind = (kind_str == "normal") ? DistKind::Normal : DistKind::Uniform;
-    return out;
-  }
-  if (kind_str == "exponential") {
+  } else {
     if (!parse_double(params, out.p1)) return std::nullopt;
     out.p2 = 0.0;
-    out.kind = DistKind::Exponential;
-    return out;
   }
-  if (kind_str == "erlang") {
-    const auto comma = params.find(',');
-    if (comma == std::string::npos) return std::nullopt;
-    if (!parse_double(params.substr(0, comma), out.p1)) return std::nullopt;
-    if (!parse_double(params.substr(comma + 1), out.p2)) return std::nullopt;
-    out.kind = DistKind::Erlang;
-    return out;
-  }
-  return std::nullopt;
+  return out;
 }
 
 /* analytical_mean / analytical_variance / analytical_raw_moment are thin

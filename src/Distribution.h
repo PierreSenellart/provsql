@@ -210,6 +210,54 @@ public:
 std::unique_ptr<Distribution> makeDistribution(const DistributionSpec &spec);
 
 /**
+ * @name DistributionRegistry — family descriptor table
+ *
+ * Family implementations self-register their identity at static
+ * initialisation: the @c DistKind tag, the on-disk name token (the part
+ * before the colon in a @c gate_rv @c extra), the parameter count, and
+ * the constructor.  @c makeDistribution and @c parse_distribution_spec
+ * dispatch through this table, so adding a family means one new
+ * implementation file with one registrar -- no existing factory or
+ * parser code is touched.
+ */
+///@{
+
+/** @brief Construct a family instance from its (up to) two parameters. */
+using DistributionFactory =
+  std::unique_ptr<Distribution> (*)(double p1, double p2);
+
+/** @brief A registered family's name / arity descriptor. */
+struct DistributionFamily {
+  DistKind kind;
+  unsigned nparams;   ///< 1 or 2 (a 1-parameter family leaves p2 = 0)
+};
+
+/** @brief Register a family; called by the registrar at static init. */
+void registerDistributionFamily(DistKind kind, const char *name,
+                                unsigned nparams,
+                                DistributionFactory factory);
+
+/** @brief Static-initialisation helper: one per family implementation. */
+struct DistributionFamilyRegistrar {
+  DistributionFamilyRegistrar(DistKind kind, const char *name,
+                              unsigned nparams,
+                              DistributionFactory factory) {
+    registerDistributionFamily(kind, name, nparams, factory);
+  }
+};
+
+/**
+ * @brief Look up a family by its on-disk name token.
+ *
+ * Used by @c parse_distribution_spec to resolve the kind and expected
+ * parameter count; @c std::nullopt for an unknown name.
+ */
+std::optional<DistributionFamily> lookupDistributionFamily(
+  const std::string &name);
+
+///@}
+
+/**
  * @name ComparatorRuleRegistry — pairwise §B.2 closed forms
  *
  * Closed-form @f$P(X < Y)@f$ for an ordered pair of independent RV
