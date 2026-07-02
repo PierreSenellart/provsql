@@ -235,7 +235,7 @@ double Sampler::evalScalar(gate_t g)
           break;
         case PROVSQL_ARITH_MAX:
           // n-ary order statistic: max over the sampled children.  Shared
-          // base RVs stay coupled through rv_cache_, so max(x, y) with x,y
+          // base RVs stay coupled through scalar_cache_, so max(x, y) with x,y
           // over the same leaf draws them jointly (correct correlation).
           result = evalScalar(wires[0]);
           for(std::size_t i = 1; i < wires.size(); ++i)

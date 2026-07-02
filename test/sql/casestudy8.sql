@@ -86,6 +86,34 @@ FROM p5;
 RESET provsql.active;
 DROP TABLE p5;
 
+-- Problem 7: a skewed waiting time (log-normal), all closed-form under
+-- rv_mc_samples = 0.  Quantiles read the skew; exp(normal(mu,sigma)) folds
+-- to the same lognormal(mu,sigma) so the mean matches; the lognormal-vs-
+-- lognormal comparison has a registered closed form.
+WITH m AS (SELECT lognormal(1.6, 0.42) AS incubation)
+SELECT round(quantile(incubation, 0.5)::numeric, 2)  AS median_days,
+       round(quantile(incubation, 0.95)::numeric, 2) AS p95_days,
+       round(expected(incubation)::numeric, 2)       AS mean_days
+FROM m;
+SELECT abs(expected(exp(normal(1.6, 0.42))) - expected(lognormal(1.6, 0.42)))
+         < 1e-9 AS exp_normal_folds_to_lognormal;
+WITH s AS (SELECT lognormal(1.6, 0.42) AS wild, lognormal(1.9, 0.42) AS variant)
+SELECT round(probability(wild > variant)::numeric, 2) AS p_wild_longer FROM s;
+
+-- Problem 8: discrete counts (Poisson / Binomial enumerate exact mass) and a
+-- Beta posterior for an unknown rate (mean closed-form, quantiles by
+-- incomplete-beta bisection).  Still analytic (rv_mc_samples = 0).
+WITH d AS (SELECT poisson(6) AS cases)
+SELECT round(expected(cases)::numeric, 2)         AS mean_cases,
+       round(probability(cases > 10)::numeric, 3) AS p_alert
+FROM d;
+WITH b AS (SELECT binomial(20, 0.3) AS positives)
+SELECT round(probability(positives >= 10)::numeric, 3) AS p_ten_plus FROM b;
+SELECT round(expected(beta(3, 7))::numeric, 2)       AS rate_estimate,
+       round(quantile(beta(3, 7), 0.05)::numeric, 2) AS credible_lo,
+       round(quantile(beta(3, 7), 0.95)::numeric, 2) AS credible_hi;
+RESET provsql.rv_mc_samples;
+
 SELECT remove_provenance('casesum');
 SELECT remove_provenance('risk');
 SELECT remove_provenance('cases');

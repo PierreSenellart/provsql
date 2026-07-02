@@ -386,10 +386,17 @@ holds, else the ``ELSE`` default):
     SELECT expected(CASE WHEN n >= 0 THEN n ELSE as_random(0) END)
       FROM (SELECT normal(0,1) AS n) t;                  -- 0.3989
 
-Integer / numeric branches are promoted through the implicit
-``as_random`` casts, so ``... THEN x ELSE 0 END`` is well-typed. This
+Numeric branches must be lifted explicitly -- ``ELSE as_random(0)``
+or ``ELSE 0::random_variable``: PostgreSQL resolves ``CASE`` branch
+types within a single type *category* and does not consult the
+implicit numeric casts across categories (those do fire for operator
+arguments, so ``pm25 - 35`` needs no annotation). This
 subsumes ``abs`` / ``clamp`` / ReLU and other monotone piecewise
-transforms as ``CASE`` sugar. Because the guards and branches are
+transforms as ``CASE`` sugar. The lowering targets
+``rv_case``, a thin ``random_variable`` wrapper over
+``provenance_case`` -- which mints the ``gate_case`` from a
+``[guard₁, value₁, …, guardₖ, valueₖ, default]`` UUID array --
+and both are callable directly when assembling circuits by hand. Because the guards and branches are
 evaluated in the same Monte-Carlo draw, correlations through shared
 leaves are preserved. A ``CASE`` fed to a set-returning consumer
 (``support`` / ``rv_sample``) in the ``FROM`` clause must be
@@ -622,6 +629,32 @@ accept ``random_variable``, plain ``uuid``, ``numeric``, and
     ``prov``; for plain numeric input, returns the degenerate
     point ``[c, c]``; for an ``agg_token``, returns the
     closed-form support of the aggregation function.
+
+Three derived readouts complete the same-row second-moment
+surface (these take ``random_variable`` arguments from the *same
+row* -- they are not aggregates over a group of rows):
+
+:sqlfunc:`stddev` ``(x [, prov])``
+    Standard deviation ``sqrt(Var[x | prov])``.
+
+:sqlfunc:`covariance` ``(x, y [, prov])``
+    Covariance ``E[xy | prov] − E[x | prov]·E[y | prov]``.
+    Structurally independent arguments (disjoint base-RV
+    footprints) give an exact ``0``; arguments sharing leaves are
+    correlation-aware, analytically where the product has a
+    closed form and by Monte Carlo otherwise.
+
+:sqlfunc:`correlation` ``(x, y [, prov])``
+    Pearson correlation, the covariance normalised by the two
+    standard deviations. Returns ``NULL`` when either standard
+    deviation is zero (a degenerate, constant argument). All
+    moments are evaluated under the same conditioning event
+    ``prov``.
+
+.. code-block:: postgresql
+
+    -- shared drift leaf: both sensors move together
+    SELECT correlation(drift + noise_a, drift + noise_b) FROM s;
 
 End-to-end on the sensors fixture:
 
@@ -891,9 +924,13 @@ writing and tracked as separate follow-ups:
 
 - ``EXCEPT`` and ``SELECT DISTINCT`` on relations that carry
   ``random_variable`` columns.
-- ``MIN``, ``MAX``, percentile aggregates over
-  ``random_variable``, and the broader covariance family
-  (``covar_pop``, ``stddev`` …).
+- The SQL-standard *aggregate* second-moment and percentile forms
+  over ``random_variable`` rows (``covar_pop`` / ``covar_samp`` /
+  ``corr`` / ``stddev_pop`` / ``stddev_samp``,
+  ``percentile_cont``). The same-row scalar readouts
+  :sqlfunc:`covariance` / :sqlfunc:`correlation` /
+  :sqlfunc:`stddev` and the ``min`` / ``max`` aggregates are
+  available (see above).
 - Where-provenance crossed with random variables (the
   column-level tracking layered on top of an RV-bearing query is
   not yet defined).

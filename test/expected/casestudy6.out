@@ -91,3 +91,63 @@ id|ind_equals_td|ind_close_to_mc
 7|t|t
 8|t|t
 (8 rows)
+remove_provenance
+
+(1 row)
+district|worst_root|worst_mean_plausible
+centre|arith|t
+east|arith|t
+(2 rows)
+remove_provenance
+
+(1 row)
+pairwise_max_analytic
+t
+(1 row)
+remove_provenance
+
+(1 row)
+id|p95_exact
+1|t
+3|t
+5|t
+7|t
+(4 rows)
+remove_provenance
+
+(1 row)
+id|cond_median_exact
+1|t
+5|t
+(2 rows)
+remove_provenance
+
+(1 row)
+id|excess_close_to_closed_form
+1|t
+5|t
+(2 rows)
+remove_provenance
+
+(1 row)
+cov_indep_exact|sd_exact
+t|t
+(1 row)
+remove_provenance
+
+(1 row)
+cov_shared_close|corr_shared_close
+t|t
+(1 row)
+gamma_mean_exact|gamma_var_exact|chi2_crit_exact
+t|t|t
+(1 row)
+weibull_first_failure_exact|weibull_lifetime_exact
+t|t
+(1 row)
+pareto_mean_exact|pareto_p95_exact|pareto_divergent_mean_honest
+t|t|t
+(1 row)
+mixed_family_quadrature_exact
+t
+(1 row)

@@ -270,9 +270,9 @@ through a separate path: instead of producing a
 ``Aggref`` in an :cfunc:`agg_token`, it produces an aggregate
 that *returns* a ``random_variable`` root. The aggregate's
 result is the lifted scalar :math:`\sum_i \mathbf{1}\{\varphi_i\}
-\cdot X_i` (or its product / average analogue), realised as a
-single ``gate_arith`` over per-row ``gate_mixture``
-children.
+\cdot X_i` (or its product / average / extremum analogue),
+realised as a single ``gate_arith`` over per-row
+``gate_mixture`` children.
 
 The dispatch in :cfunc:`make_aggregation_expression` keys on
 ``aggtype`` (the aggregate's *result type* OID): when
@@ -280,13 +280,23 @@ The dispatch in :cfunc:`make_aggregation_expression` keys on
 ``X_i`` is wrapped in ``rv_aggregate_semimod``
 (a :sqlfunc:`mixture` over the row's provenance gate and
 the identity for the aggregate) *before* it reaches the SFUNC.
-The aggregate's SFUNC accumulates the wrapped per-row UUIDs;
-the FFUNC builds the final ``gate_arith`` root. The three
-RV-returning aggregates currently shipped –
-:sqlfunc:`sum`, :sqlfunc:`avg`,
-:sqlfunc:`product` – share an
-``INITCOND = '{}'`` so the FFUNC runs even on an empty group,
-with per-aggregate empty-group identities.
+The identity is dispatched per aggregate — ``0`` for
+:sqlfunc:`sum`, and through the three-argument
+identity-parameterised form of ``rv_aggregate_semimod``, ``1``
+for :sqlfunc:`product`, ``-Infinity`` for :sqlfunc:`max`,
+``+Infinity`` for :sqlfunc:`min` — so a row absent in a world
+contributes the fold's identity rather than perturbing it.
+:sqlfunc:`avg` is rewritten at the same site into the
+"AVG = SUM / COUNT" identity (a numerator sum over the wrapped
+rows divided by a sum of ``mixture(prov_i, 1, 0)`` indicators).
+The aggregate's SFUNC accumulates the wrapped per-row UUIDs; the
+FFUNC is then a plain fold building the final ``gate_arith``
+root (``PLUS`` / ``TIMES`` / ``MAX`` / ``MIN``). The
+RV-returning aggregates currently shipped – :sqlfunc:`sum`,
+:sqlfunc:`avg`, :sqlfunc:`product`, :sqlfunc:`max`,
+:sqlfunc:`min` – share an ``INITCOND = '{}'`` so the FFUNC runs
+even on an empty group, with per-aggregate empty-group
+identities.
 
 This is the *semimodule-of-mixtures* shape: rather than minting a
 new M-polymorphic ``gate_agg`` that would require parallel

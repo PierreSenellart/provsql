@@ -214,6 +214,12 @@ _SQL_FUNC_MAP = {
     'moment':                   '/doxygen-sql/html/group__probability.html#gad4666dfca3ec9eb3b5b7bcb2a1ad51ad',
     'central_moment':           '/doxygen-sql/html/group__probability.html#gaeb533aa10cd3104d5b45b5c4e006d30c',
     'support':                  '/doxygen-sql/html/group__probability.html#gab17c5b012153cf3c202bf1d3bb440cd3',
+    'covariance':               '/doxygen-sql/html/group__probability.html#ga0609748f9d8bbd0769f53c6f68f872a0',
+    'correlation':              '/doxygen-sql/html/group__probability.html#ga5ba06cdd25f3577aba0365c36f84925d',
+    'stddev':                   '/doxygen-sql/html/group__probability.html#ga80a0c4d6a8b8d1a46fd199e8d81e2fc6',
+    # min / max order-statistic aggregates over random_variable
+    'min':                      '/doxygen-sql/html/group__random__variable__type.html#ga9b318ccf480eb3b6f2e267a1aef93f57',
+    'max':                      '/doxygen-sql/html/group__random__variable__type.html#ga3fcaf990d98dd7d9fe28b87f2ef88079',
     # Sampling / histogram / simplifier introspection
     'rv_histogram':             '/doxygen-sql/html/group__circuit__introspection.html#ga53efbd4d68e0de0ca979cf52528c63db',
     'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#ga9db6bcdca7f5d52bc46a7c2e671a62fd',

@@ -62,7 +62,17 @@ Your tasks:
 * filter on the expected value of an aggregated random variable,
   combine today's and yesterday's batches with ``UNION ALL``, and
   compare probability methods (``'independent'`` vs
-  ``'monte-carlo'`` vs ``'tree-decomposition'``) side by side.
+  ``'monte-carlo'`` vs ``'tree-decomposition'``) side by side;
+* find the *worst* reading per district with the order-statistic
+  surface (``greatest`` and the ``max`` aggregate);
+* read percentiles and conditional medians off :sqlfunc:`quantile`;
+* clamp the exceedance over a threshold with ``CASE`` and take its
+  expectation;
+* couple two sensors through a shared plume and measure it with
+  :sqlfunc:`covariance` / :sqlfunc:`correlation`;
+* model drift, lifetime, and episodic spikes with the Gamma,
+  Weibull, and Pareto families, including a mixed-family
+  probability computed by quadrature.
 
 Setup
 -----
@@ -394,9 +404,11 @@ clear the conditioning; the panel reverts to the unconditional
 mean :math:`\mu`. Click the muted badge to restore the row
 provenance.
 
-The closed-form truncation table covers Normal (Mills ratio),
-Uniform (intersected support), and Exponential (memorylessness on
-a lower bound or finite-interval truncation). For other shapes,
+The closed-form truncation table covers every family implementing
+truncated moments -- Normal (Mills ratio), Uniform (intersected
+support), Exponential (memorylessness on a lower bound or
+finite-interval truncation), Log-normal, Weibull, Pareto (tail
+self-similarity), and Beta. For other shapes,
 the joint circuit between ``pm25`` and the row's provenance is
 loaded with shared ``gate_rv`` leaves correctly coupled, and the
 conditional moment is estimated by rejection sampling at budget
@@ -520,6 +532,205 @@ method against the same pinned subnode shows the analytic
 ``independent`` and ``tree-decomposition`` returning the same
 value to full precision, while ``monte-carlo`` returns a
 Hoeffding-bounded estimate that tightens as ``n`` grows.
+
+Step 11: The Worst Reading in a District
+-----------------------------------------
+
+Which district had the worst air this morning? The question asks
+for the distribution of the *maximum* over each district's
+readings -- an order statistic, not a sum. The ``max`` aggregate
+over a ``random_variable`` column builds exactly that:
+
+.. code-block:: postgresql
+
+    SELECT s.district, expected(max(r.pm25)) AS worst_mean
+    FROM readings r JOIN stations s ON s.id = r.station_id
+    GROUP BY s.district
+    ORDER BY s.district
+
+The *centre* district's worst reading averages ≈ 40.0 -- its
+``N(40, 4)`` reading dominates the maximum -- and *east* comes out
+at ≈ 39.6, driven by the heavy right tails of ``Exp(0.04)`` and
+``Erlang(3, 0.1)`` even though both means sit near 25–30. Note how
+the extremum tells a different story from Step 5's averages
+(≈ 25.5 and ≈ 21.6): the east district looks fine on average and
+just as alarming at the extreme. Clicking a ``worst_mean``
+input cell's circuit shows a ``gate_arith`` ``MAX`` root over the
+per-row mixtures; a row absent in a world contributes ``-∞``, the
+order-statistic identity, so it never perturbs the maximum.
+Because the children here are mixtures (not bare leaves), the
+expectation is estimated by Monte Carlo.
+
+The same-row form is ``greatest`` / ``least``
+(quoted, as they shadow SQL keywords):
+
+.. code-block:: postgresql
+
+    SELECT expected(provsql.greatest(a.pm25, b.pm25)) AS worse_of_two
+    FROM readings a, readings b
+    WHERE a.id = 1 AND b.id = 2
+
+Here the children *are* independent bare leaves (``N(28, 2)`` and
+``U(10, 22)``), so the mean is computed analytically by the
+layer-cake integral -- ≈ 28.00003, barely above the normal's mean,
+since the uniform almost never wins.
+
+Step 12: Percentiles and Exceedance Margins
+--------------------------------------------
+
+:sqlfunc:`quantile` reads the inverse CDF off any reading --
+the natural regulatory question is "what level is only exceeded
+5% of the time?":
+
+.. code-block:: postgresql
+
+    SELECT id, station_id, quantile(pm25, 0.95) AS p95
+    FROM readings
+    WHERE id IN (1, 3, 5, 7)
+    ORDER BY id
+
+Each family answers through its own inverse CDF: the normals give
+``μ + 1.645·σ`` (≈ 31.29 for ``N(28, 2)``, ≈ 46.58 for
+``N(40, 4)``), the exponential gives ``−ln(0.05)/λ ≈ 74.89``, and
+the Erlang -- which has no elementary inverse -- is bisected on its
+closed-form CDF to ≈ 62.96. No sampling is involved in any of
+these.
+
+Quantiles compose with conditioning: the median of a reading
+*given* that it crossed the Unhealthy line is the ``p = 0.5``
+quantile of the truncated distribution, again in closed form:
+
+.. code-block:: postgresql
+
+    SELECT id, quantile(pm25, 0.5, provenance()) AS median_given_high
+    FROM readings
+    WHERE pm25 > 35 AND station_id = 's1'
+    ORDER BY id
+
+Row 1 (``N(28, 2)``, for which the event is a far tail) gives
+≈ 35.36, just above the threshold; row 5 (``N(40, 4)``) gives
+≈ 40.53.
+
+Step 13: Expected Excess via CASE
+----------------------------------
+
+*How far* above the threshold does a station land, on average?
+The excess ``max(pm25 − 35, 0)`` is a piecewise transform, written
+as a searched ``CASE`` (which the planner lowers into a
+``gate_case`` guarded selection, see :doc:`the continuous
+distributions chapter <continuous-distributions>`):
+
+.. code-block:: postgresql
+
+    SELECT id,
+           expected(CASE WHEN pm25 > 35 THEN pm25 - 35
+                         ELSE as_random(0) END) AS expected_excess
+    FROM readings
+    WHERE station_id = 's1'
+    ORDER BY id
+
+The guard and the branches are evaluated in the same Monte-Carlo
+draw, so the correlation between "the reading exceeded 35" and
+"by how much" is preserved exactly. Row 1 returns ≈ 0.0002 --
+``N(28, 2)`` essentially never crosses -- while row 5 returns
+≈ 5.2, matching the closed-form partial expectation
+:math:`\sigma\,\phi(\alpha) + (\mu - 35)\,\Phi(-\alpha)` with
+:math:`\alpha = (35 - \mu)/\sigma` (≈ 5.2024 for ``N(40, 4)``)
+to within sampler noise. Note the explicit ``as_random(0)`` (or
+equivalently ``0::random_variable``) on the ``ELSE`` branch:
+``CASE`` type resolution needs the branches in a single type
+category, so a bare numeric literal will not lift on its own.
+
+Step 14: Correlated Sensors
+----------------------------
+
+The two centre-district stations sit a few hundred metres apart;
+on a windy day both are shifted by the same dust plume. Model the
+plume once and add it to both readings -- the shared leaf is what
+makes them correlated -- then measure it:
+
+.. code-block:: postgresql
+
+    WITH plume AS (SELECT provsql.normal(0, 3) AS dust)
+    SELECT covariance(a.pm25 + p.dust, b.pm25 + p.dust)  AS cov_shared,
+           correlation(a.pm25 + p.dust, b.pm25 + p.dust) AS corr_shared,
+           covariance(a.pm25, b.pm25)                    AS cov_indep,
+           stddev(a.pm25)                                AS sd_a
+    FROM readings a, readings b, plume p
+    WHERE a.id = 1 AND b.id = 2
+
+The two raw readings are structurally independent -- their base-RV
+footprints are disjoint -- so ``cov_indep`` is *exactly* ``0``
+(no sampling), and ``sd_a`` is exactly ``2``. The plume-shifted
+pair shares the ``dust`` leaf: in theory
+``Cov = Var(dust) = 9`` and
+``ρ = 9 / √((4+9)·(12+9)) ≈ 0.545``; the readouts land near
+those values (≈ 9.8 and ≈ 0.59 at seed 42), estimated by Monte
+Carlo since the cross-moment ``E[xy]`` over a shared leaf has no
+closed form.
+
+Step 15: Drift, Lifetime, and Spikes: More Families
+----------------------------------------------------
+
+The vendor spec sheets bring in three more families, all
+available as constructors (see :doc:`the chapter on continuous
+distributions <continuous-distributions>`). The multi-pass unit's
+zero drift accumulates as a Gamma; its per-batch drift check is a
+chi-squared test statistic:
+
+.. code-block:: postgresql
+
+    SELECT expected(provsql.gamma(2.5, 0.5))       AS drift_mean,
+           variance(provsql.gamma(2.5, 0.5))       AS drift_var,
+           quantile(provsql.chi_squared(4), 0.95)  AS chi2_crit
+
+``Gamma(k = 2.5, λ = 0.5)`` has mean ``k/λ = 5`` and variance
+``k/λ² = 10``, both exact; the χ²₄ critical value comes out
+≈ 9.4877, bisected on the regularised-incomplete-gamma CDF.
+
+Sensor lifetimes are Weibull. A station carrying two redundant
+units fails over to the second when the first dies; the time to
+*first* failure is the minimum of the two lifetimes:
+
+.. code-block:: postgresql
+
+    SELECT expected(provsql.least(provsql.weibull(1.5, 4.0),
+                                  provsql.weibull(1.5, 4.0))) AS first_failure,
+           expected(provsql.weibull(1.5, 4.0))                AS single_lifetime
+
+A single ``Weibull(k = 1.5, λ = 4)`` unit lasts
+``λ·Γ(1 + 1/k) ≈ 3.61`` years on average; the minimum of two
+i.i.d. Weibulls is again Weibull (min-stability), so the first
+failure at ``≈ 2.27`` years is computed in closed form.
+
+Construction-season episodic spikes are heavy-tailed -- a Pareto
+over a 30 μg/m³ floor:
+
+.. code-block:: postgresql
+
+    SELECT expected(provsql.pareto(30, 2.5))       AS spike_mean,
+           quantile(provsql.pareto(30, 2.5), 0.95) AS spike_p95,
+           expected(provsql.pareto(30, 1.0))       AS undefined_mean
+
+The ``α = 2.5`` spike averages ``α·xₘ/(α−1) = 50`` with a 95th
+percentile near 99.4 -- the heavy tail at work. The last column
+shows moment honesty: ``Pareto(30, 1)`` has *no* finite mean, and
+ProvSQL reports ``Infinity`` rather than estimating a divergent
+integral.
+
+Finally, does a spike beat the noisy high reading? A Pareto vs
+Normal comparison has no registered closed form, so ProvSQL
+integrates the pair by quadrature -- exact-grade, no sampling:
+
+.. code-block:: postgresql
+
+    SELECT probability(x > y) AS p_spike_beats_normal
+    FROM (SELECT provsql.pareto(30, 2.5) AS x,
+                 provsql.normal(45, 5)   AS y) t
+
+which returns ≈ 0.384: even though the spike's *mean* (50) is
+above the normal's (45), the spike spends most of its mass near
+its 30 floor and only wins through its tail.
 
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full surface and

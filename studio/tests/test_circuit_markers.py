@@ -84,3 +84,18 @@ def test_elide_markers_noop_without_wrappers():
     rows = [_row("t", None, None, "times"), _row("i", "t", 0, "input")]
     out, root, markers = circuit._elide_markers(rows, "t")
     assert out == rows and root == "t" and markers == {}
+
+
+def test_gate_label_case_gate_glyph():
+    # gate_case (the CASE-over-random_variable lowering: abs / ReLU / clamp)
+    # renders with its own arrow glyph, so the guarded-selection node is
+    # distinguishable in the circuit canvas.
+    assert circuit._gate_label({"gate_type": "case"}) == "⇢"
+
+
+def test_gate_label_transform_arith_opcodes():
+    # The transform gate_arith opcodes (POW=7 / LN=8 / EXP=9) render their
+    # operator glyph; POW is the caret, matching the `^` SQL operator.
+    assert circuit._gate_label({"gate_type": "arith", "info1": "7"}) == "^"
+    assert circuit._gate_label({"gate_type": "arith", "info1": "8"}) == "ln"
+    assert circuit._gate_label({"gate_type": "arith", "info1": "9"}) == "exp"

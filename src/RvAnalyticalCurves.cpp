@@ -20,9 +20,11 @@
  * drawn from @c rv_histogram.
  *
  * Supported shapes:
- *   - bare @c gate_rv root (Normal / Uniform / Exponential / Erlang
- *     with integer shape), optionally truncated by an AND-conjunct
- *     event extracted via @c collectRvConstraints;
+ *   - bare @c gate_rv root of any registered family (window, density,
+ *     and distribution via @c Distribution::plotRange / @c pdf /
+ *     @c cdf; a NaN pdf/cdf on the grid returns @c NULL), optionally
+ *     truncated by an AND-conjunct event extracted via
+ *     @c collectRvConstraints;
  *   - Dirac point (@c gate_value with finite extra, surfaced by
  *     @c provsql.as_random);
  *   - categorical-form @c gate_mixture (one @c {key, mul_1..n});
@@ -30,8 +32,8 @@
  *     two recursively-matched shapes; @c p_token must be a bare
  *     @c gate_input (compound Boolean @c p bails).
  *
- * Truncation is honoured only on the bare-RV path; mixtures /
- * categoricals / Diracs are matched only with a trivial event.
+ * A non-trivial conditioning event is honoured on all four arms via
+ * @c truncateShape (see @c matchClosedFormDistribution).
  *
  * @see provsql::matchClosedFormDistribution in RangeCheck.h
  */

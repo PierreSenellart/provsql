@@ -33,7 +33,7 @@ The Scenario
 
 An epidemiology desk at a public-health agency keeps a small probabilistic
 model of a screening programme and reaches for ProvSQL whenever a question
-needs probabilistic evaluation. Five such questions follow; each is a
+needs probabilistic evaluation. Eight such questions follow; each is a
 recognisable textbook problem, and we work through each one step by step,
 building its model and then asking the calculator.
 
@@ -579,14 +579,129 @@ query: ``!`` turns any forbidden pattern into evidence, the way
 :sqlfunc:`repair_key` turns a key into mutual exclusion, but without being
 limited to keys.
 
+Problem 7: A Skewed Waiting Time
+--------------------------------
+
+Problem 4's biomarker was symmetric -- a Normal. But *durations* -- an
+incubation period, a time to recovery -- are not: they cannot go
+negative and they carry a long right tail. The natural model is a
+`log-normal <https://en.wikipedia.org/wiki/Log-normal_distribution>`_
+distribution, and ProvSQL has it as a constructor. Keep
+``provsql.rv_mc_samples = 0`` from Problem 4 -- everything below is
+closed-form.
+
+Model the incubation period (in days) of our pathogen as
+``lognormal(1.6, 0.42)`` -- the two parameters are the mean and standard
+deviation *of the underlying normal*, not of the duration itself, so the
+shape is easiest to read through its quantiles:
+
+.. code-block:: postgresql
+
+    WITH m AS (SELECT lognormal(1.6, 0.42) AS incubation)
+    SELECT quantile(incubation, 0.5)  AS median_days,
+           quantile(incubation, 0.95) AS p95_days,
+           expected(incubation)       AS mean_days
+    FROM m;
+
+The median is about **4.95** days, but the mean is higher, **5.41** --
+the hallmark of a right-skewed distribution, where the long tail pulls
+the average above the typical case. The 95th percentile sits at **9.88**
+days: a quarantine window of ten days clears 95% of cases. That is the
+question quantiles answer directly and moments cannot.
+
+The log-normal earns its name through a transform: the ``exp`` of a
+Normal *is* a log-normal, and ProvSQL folds the two forms into the same
+distribution. Building the incubation the long way, as ``exp`` of the
+underlying normal, gives an identical mean:
+
+.. code-block:: postgresql
+
+    SELECT expected(exp(normal(1.6, 0.42))) AS mean_via_exp;
+
+**5.41** again -- the simplifier recognised ``exp(normal(μ, σ))`` as
+``lognormal(μ, σ)`` and evaluated the closed form, no sampling. The
+transform functions (``exp``, ``ln``, ``pow``, ``sqrt``) compose with
+the whole surface.
+
+Finally, two strains with different incubation profiles -- which tends
+to keep a contact infectious longer? A wild type at
+``lognormal(1.6, 0.42)`` against a slower variant at
+``lognormal(1.9, 0.42)``:
+
+.. code-block:: postgresql
+
+    WITH s AS (SELECT lognormal(1.6, 0.42) AS wild,
+                      lognormal(1.9, 0.42) AS variant)
+    SELECT probability(wild > variant) AS p_wild_longer FROM s;
+
+About **0.31**: the wild type outlasts the variant in under a third of
+pairings, since the variant's larger location parameter shifts its whole
+distribution right. The comparison is between two log-normals, which
+have a registered closed form -- exact, no Monte Carlo.
+
+Problem 8: How Many, and How Often
+----------------------------------
+
+Every continuous variable so far was a *measurement*. But an
+epidemiology desk also counts things -- cases per day, positives in a
+batch -- and counts are discrete. ProvSQL provides the standard discrete
+families as constructors (they enumerate their probability mass into a
+categorical under the hood, so moments, quantiles, and comparisons are
+all exact). Keep ``rv_mc_samples = 0``.
+
+Daily case counts in a stable outbreak follow a `Poisson
+<https://en.wikipedia.org/wiki/Poisson_distribution>`_ law. At an
+average of 6 cases a day, how often does a day break 10 -- the threshold
+that trips an alert?
+
+.. code-block:: postgresql
+
+    WITH d AS (SELECT poisson(6) AS cases)
+    SELECT expected(cases)       AS mean_cases,
+           probability(cases > 10) AS p_alert
+    FROM d;
+
+The mean is **6** by construction, and an alert fires on about **4.3%**
+of days -- rare, but not negligible. Now a screening batch: of 20
+contacts, each independently positive with probability 0.3, how likely
+are 10 or more positives? That is a `Binomial
+<https://en.wikipedia.org/wiki/Binomial_distribution>`_:
+
+.. code-block:: postgresql
+
+    WITH b AS (SELECT binomial(20, 0.3) AS positives)
+    SELECT probability(positives >= 10) AS p_ten_plus FROM b;
+
+About **4.8%**. Both probabilities are computed by enumerating the exact
+mass, so ``>`` and ``>=`` on a count are precise, not sampled.
+
+The count models above assumed a *known* rate. Often the rate is exactly
+what is uncertain -- an attack rate we have only estimated from a handful
+of cases. A `Beta <https://en.wikipedia.org/wiki/Beta_distribution>`_
+distribution is the natural model for an unknown probability, bounded to
+``[0, 1]``. Suppose 2 of 8 exposed contacts fell ill; a
+``beta(3, 7)`` posterior (a uniform prior updated by 2 successes and 6
+failures) summarises the attack rate:
+
+.. code-block:: postgresql
+
+    SELECT expected(beta(3, 7))       AS rate_estimate,
+           quantile(beta(3, 7), 0.05) AS credible_lo,
+           quantile(beta(3, 7), 0.95) AS credible_hi;
+
+The point estimate is **0.3**, with a 90% credible interval from about
+**0.10** to **0.55** -- wide, honestly reflecting only eight
+observations. The mean is closed-form; the Beta quantiles are found by
+bisecting its (incomplete-beta) CDF, again exactly and without sampling.
+
 Recap
 -----
 
-The six problems used one operator, ``|``, with a single meaning
+The eight problems used one operator, ``|``, with a single meaning
 throughout -- conditional probability, :math:`\Pr(A \mid B) = \Pr(A \wedge
 B) / \Pr(B)` -- over three kinds of value: discrete events (Problems 1-3
-and 6), a continuous ``random_variable`` (Problem 4), and a probabilistic
-aggregate
+and 6), a continuous ``random_variable`` (Problems 4, 7, and 8), and a
+probabilistic aggregate
 ``agg_token`` (Problem 5). A few mechanics recurred:
 
 * Each model was built and stored in the database. :sqlfunc:`add_provenance`

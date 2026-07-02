@@ -505,21 +505,27 @@ The chain (in order) :
   base-RV-footprint partitioning + per-island marginalisation for
   continuous-RV cmps (see the hybrid section below).
 - :cfunc:`runAnalyticEvaluator` : closed-form CDF for trivial RV cmp
-  shapes (singleton bare ``gate_rv`` vs ``gate_value``, or two
-  bare RVs of the same family -- Normal-Normal via the normal
-  difference, Exponential-Exponential via ``λ_X / (λ_X + λ_Y)``,
-  Uniform-Uniform via the geometric area, in ``rvVsRvDecide``).
+  shapes (singleton bare ``gate_rv`` vs ``gate_value`` via the
+  family's ``Distribution::cdf``, or two bare RVs decided in
+  ``rvVsRvDecide`` through the comparator-rule registry --
+  Normal-Normal via the normal difference,
+  Exponential-Exponential via ``λ_X / (λ_X + λ_Y)``,
+  Uniform-Uniform via the geometric area, plus the
+  Lognormal / Weibull / Pareto same-family rules -- with a
+  generic Simpson quadrature covering every unregistered,
+  including mixed-family, pair; see
+  :doc:`continuous-distributions`).
   Probability-specific (the resulting ``gate_input`` carries a
   numeric probability with no semiring meaning), so it runs here and
   not at load time.  ``is_analytic_singleton_cmp`` in the hybrid
   decomposer mirrors this shape list so an independent two-RV cmp is
   left for the exact CDF rather than pre-empted by per-cmp Monte
-  Carlo.  The same family closed forms back the exact order-statistic
-  means (i.i.d. ``E[max]`` / ``E[min]`` in ``iidOrderStatMean``) and
-  the conditional moments over an RV-vs-RV comparison
-  (``E[X | X op Y]`` by a one-dimensional quadrature in
-  ``try_rvVsRv_conditional_moment``, exact for uniforms), both in
-  ``src/Expectation.cpp``.
+  Carlo.  The same per-family closed forms back the exact
+  order-statistic means (i.i.d. ``E[max]`` / ``E[min]`` in
+  ``iidOrderStatMean``) and the conditional moments over an
+  RV-vs-RV comparison (``E[X | X op Y]`` by a one-dimensional
+  quadrature in ``try_rvVsRv_conditional_moment``, exact for
+  uniforms), both in ``src/Expectation.cpp``.
 - :cfunc:`runCountCmpEvaluator` (gated by
   ``provsql.cmp_probability_evaluation``, hidden diagnostic
   default on) : recognises HAVING
@@ -1079,7 +1085,7 @@ Hybrid Evaluation for Continuous Distributions
 ----------------------------------------------
 
 When the circuit being evaluated contains continuous gates
-(``gate_rv``, ``gate_arith``, ``gate_mixture``),
+(``gate_rv``, ``gate_arith``, ``gate_mixture``, ``gate_case``),
 a hybrid evaluator runs *before* the Boolean dispatch above. Its
 job is to fold every sub-circuit that has a closed-form analytical
 answer into a Bernoulli leaf so the resulting circuit is a normal
@@ -1093,10 +1099,12 @@ The hybrid evaluator has three passes:
   decidable from the support alone collapses to a Bernoulli
   ``gate_input`` with probability ``0`` or ``1``.
 - **Family-closure simplifier** (:cfunc:`runHybridSimplifier`):
-  linear combinations of independent normals fold into a single
-  normal; sums of i.i.d. exponentials with the same rate fold
-  into an Erlang; identity / single-child arith gates and
-  semiring identities collapse.
+  registry-driven family folds -- linear combinations of
+  independent normals into a single normal, same-rate
+  Exponential / Erlang / Gamma sums, lognormal products,
+  ``exp`` / ``ln`` transform images (``exp(Normal) →
+  Lognormal``) -- plus identity / single-child arith gates and
+  semiring-identity collapses.
 - **Island decomposition** (:cfunc:`runHybridDecomposer`):
   the remaining cmps are partitioned by base-RV footprints into
   *islands*; single-cmp islands marginalise via

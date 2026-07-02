@@ -90,12 +90,14 @@ What each case study covers
 
 :doc:`Case study 8 -- ProvSQL as a Probability Calculator <casestudy8>`
     ProvSQL as an **exact, correlation-aware probability calculator driven
-    in SQL**: five textbook problems -- base-rate fallacy, correlation
+    in SQL**: textbook problems -- base-rate fallacy, correlation
     breaking the independence formula, the method portfolio and its cost
     chooser, a continuous posterior by truncation, the conditional
-    expectation of an aggregate -- each a one-line query with the ``|``
-    ("given") operator throughout. A compact, notebook-first tour of the
-    probability surface.
+    expectation of an aggregate, denial constraints as evidence, a
+    skewed waiting time (log-normal + quantiles + transforms), and
+    discrete counts with a Beta rate posterior -- each a one-line query
+    with the ``|`` ("given") operator throughout. A compact,
+    notebook-first tour of the probability surface.
 
 .. _case-study-coverage:
 
@@ -300,19 +302,22 @@ Continuous random variables
    "``random_variable`` type / ``provsql.normal``", "", "", "", "", "", "", "✓", "", "✓"
    "``provsql.uniform`` / ``provsql.exponential``", "", "", "", "", "", "", "✓", "", ""
    "``provsql.erlang`` / ``provsql.categorical``", "", "", "", "", "", "", "✓", "", ""
-   "``provsql.gamma`` / ``provsql.chi_squared``", "", "", "", "", "", "", "", "", ""
-   "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", ""
-   "``provsql.weibull`` / ``provsql.pareto`` / ``provsql.beta``", "", "", "", "", "", "", "", "", ""
-   "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", ""
+   "``provsql.gamma`` / ``provsql.chi_squared``", "", "", "", "", "", "", "✓", "", ""
+   "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", "✓"
+   "``provsql.weibull`` / ``provsql.pareto`` / ``provsql.beta``", "", "", "", "", "", "", "✓", "", "✓"
+   "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", "✓"
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
    "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", ""
-   "Transforms ``^`` / ``pow`` / ``ln`` / ``exp`` / ``sqrt``", "", "", "", "", "", "", "", "", ""
-   "Comparison ``< <= = <> >= >`` (planner-hook rewrite)", "", "", "", "", "", "", "✓", "", "✓"
+   "Order statistics (``greatest`` / ``least``, ``max`` / ``min`` aggregate)", "", "", "", "", "", "", "✓", "", ""
+   "Transforms ``^`` / ``pow`` / ``ln`` / ``exp`` / ``sqrt``", "", "", "", "", "", "", "", "", "✓"
+   "``CASE`` over ``random_variable`` (``rv_case`` / abs / ReLU / clamp)", "", "", "", "", "", "", "✓", "", ""
+   "Comparison ``< <= = <> >= >`` (planner-hook rewrite, incl. mixed-family quadrature)", "", "", "", "", "", "", "✓", "", "✓"
    "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", "", "✓"
    "``variance(random_variable)``", "", "", "", "", "", "", "✓", "", "✓"
+   "``covariance`` / ``correlation`` / ``stddev`` (same-row)", "", "", "", "", "", "", "✓", "", ""
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", "", "✓"
-   "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "", "", ""
+   "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "✓", "", "✓"
    "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "(✓)"
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", "", ""
    "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", "", ""

@@ -23,6 +23,24 @@ e_x|e_given_referral|var_given_referral|support_lower
 region|e_total|e_total_given_highday
 North|3.50|5.50
 (1 row)
+median_days|p95_days|mean_days
+4.95|9.88|5.41
+(1 row)
+exp_normal_folds_to_lognormal
+t
+(1 row)
+p_wild_longer
+0.31
+(1 row)
+mean_cases|p_alert
+6.00|0.043
+(1 row)
+p_ten_plus
+0.048
+(1 row)
+rate_estimate|credible_lo|credible_hi
+0.30|0.10|0.55
+(1 row)
 remove_provenance
 
 (1 row)

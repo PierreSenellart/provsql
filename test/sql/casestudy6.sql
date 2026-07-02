@@ -250,6 +250,155 @@ SELECT id, ind_equals_td, ind_close_to_mc
 DROP TABLE result_cs6_methods;
 
 -- ---------------------------------------------------------------------
+-- Step 11: order statistics.  max(pm25) lowers to a gate_arith MAX root
+-- over per-row mixtures (absent-row identity -Infinity); the district
+-- means are MC at seed 42 (mixture children, no closed form): centre
+-- ~ 40.04 (dominated by its N(40,4)), east ~ 39.63 (heavy Exp / Erlang
+-- right tails).  The same-row greatest() over two independent bare
+-- leaves is analytic (layer-cake quadrature), proven by running it
+-- under rv_mc_samples = 0.
+-- ---------------------------------------------------------------------
+CREATE TABLE result_cs6_worst AS
+  SELECT s.district,
+         get_gate_type(max(r.pm25)::uuid) AS worst_root,
+         expected(max(r.pm25))            AS worst_mean
+    FROM readings r JOIN stations s ON s.id = r.station_id
+   GROUP BY s.district;
+SELECT remove_provenance('result_cs6_worst');
+SELECT district, worst_root,
+       worst_mean BETWEEN 39 AND 41 AS worst_mean_plausible
+  FROM result_cs6_worst ORDER BY district;
+DROP TABLE result_cs6_worst;
+
+SET provsql.rv_mc_samples = 0;
+CREATE TABLE result_cs6_greatest AS
+  SELECT abs(expected(provsql.greatest(a.pm25, b.pm25)) - 28.00003) < 1e-3
+           AS pairwise_max_analytic
+    FROM readings a, readings b
+   WHERE a.id = 1 AND b.id = 2;
+SELECT remove_provenance('result_cs6_greatest');
+SELECT pairwise_max_analytic FROM result_cs6_greatest;
+DROP TABLE result_cs6_greatest;
+
+-- ---------------------------------------------------------------------
+-- Step 12: quantiles, all closed-form (per-family inverse CDF; Erlang
+-- bisected on its regularised-incomplete-gamma CDF), still under
+-- rv_mc_samples = 0.  p95 references: N(28,2) -> 28 + 2 z_95, Exp(0.04)
+-- -> -ln(0.05)/0.04, N(40,4) -> 40 + 4 z_95, Erl(3,0.1) ~ 62.9579.
+-- The conditional median under pm25 > 35 is the truncated-normal
+-- inverse CDF at the rescaled u = F(35) + 0.5 (1 - F(35)).
+-- ---------------------------------------------------------------------
+CREATE TABLE result_cs6_p95 AS
+  SELECT id, quantile(pm25, 0.95) AS p95
+    FROM readings WHERE id IN (1, 3, 5, 7);
+SELECT remove_provenance('result_cs6_p95');
+SELECT id, abs(p95 - CASE id WHEN 1 THEN 31.289707253902947
+                             WHEN 3 THEN 74.89330683884975
+                             WHEN 5 THEN 46.57941450780589
+                             WHEN 7 THEN 62.957936218719865 END) < 1e-6
+         AS p95_exact
+  FROM result_cs6_p95 ORDER BY id;
+DROP TABLE result_cs6_p95;
+
+CREATE TABLE result_cs6_cond_median AS
+  SELECT id, quantile(pm25, 0.5, provenance()) AS median_given_high
+    FROM readings
+   WHERE pm25 > 35 AND station_id = 's1';
+SELECT remove_provenance('result_cs6_cond_median');
+SELECT id, abs(median_given_high - CASE id WHEN 1 THEN 35.36132427785059
+                                           WHEN 5 THEN 40.531206716705924 END) < 1e-6
+         AS cond_median_exact
+  FROM result_cs6_cond_median ORDER BY id;
+DROP TABLE result_cs6_cond_median;
+RESET provsql.rv_mc_samples;
+SET provsql.rv_mc_samples = 50000;
+
+-- ---------------------------------------------------------------------
+-- Step 13: expected excess over the threshold via CASE (gate_case,
+-- evaluated per-draw by MC; guard and branch share the pm25 leaf).
+-- Closed-form partial expectation for N(40,4): sigma phi(alpha) +
+-- (mu-35) Phi(-alpha) ~ 5.2024; N(28,2) essentially never crosses.
+-- The ELSE branch needs an explicit lift (as_random(0)): CASE branch
+-- types resolve within one type category.
+-- ---------------------------------------------------------------------
+CREATE TABLE result_cs6_excess AS
+  SELECT id,
+         expected(CASE WHEN pm25 > 35 THEN pm25 - 35
+                       ELSE as_random(0) END) AS expected_excess
+    FROM readings
+   WHERE station_id = 's1';
+SELECT remove_provenance('result_cs6_excess');
+SELECT id,
+       CASE id WHEN 1 THEN expected_excess BETWEEN 0 AND 0.01
+               WHEN 5 THEN abs(expected_excess - 5.2024) < 0.1 END
+         AS excess_close_to_closed_form
+  FROM result_cs6_excess ORDER BY id;
+DROP TABLE result_cs6_excess;
+
+-- ---------------------------------------------------------------------
+-- Step 14: covariance / correlation / stddev.  Disjoint footprints give
+-- an exact 0 covariance and exact stddev (no sampling: proven under
+-- rv_mc_samples = 0); a shared plume leaf makes the pair correlated,
+-- theory Cov = Var(dust) = 9 and rho = 9/sqrt(13*21) ~ 0.545, estimated
+-- by MC at seed 42 (E[xy] over a shared leaf has no closed form).
+-- ---------------------------------------------------------------------
+SET provsql.rv_mc_samples = 0;
+CREATE TABLE result_cs6_indep AS
+  SELECT covariance(a.pm25, b.pm25) = 0 AS cov_indep_exact,
+         stddev(a.pm25)            = 2 AS sd_exact
+    FROM readings a, readings b
+   WHERE a.id = 1 AND b.id = 2;
+SELECT remove_provenance('result_cs6_indep');
+SELECT cov_indep_exact, sd_exact FROM result_cs6_indep;
+DROP TABLE result_cs6_indep;
+RESET provsql.rv_mc_samples;
+SET provsql.rv_mc_samples = 50000;
+
+CREATE TABLE result_cs6_plume AS
+  WITH plume AS (SELECT provsql.normal(0, 3) AS dust)
+  SELECT abs(covariance(a.pm25 + p.dust, b.pm25 + p.dust) - 9) < 1.5
+           AS cov_shared_close,
+         abs(correlation(a.pm25 + p.dust, b.pm25 + p.dust) - 0.545) < 0.1
+           AS corr_shared_close
+    FROM readings a, readings b, plume p
+   WHERE a.id = 1 AND b.id = 2;
+SELECT remove_provenance('result_cs6_plume');
+SELECT cov_shared_close, corr_shared_close FROM result_cs6_plume;
+DROP TABLE result_cs6_plume;
+
+-- ---------------------------------------------------------------------
+-- Step 15: Gamma / Weibull / Pareto, all analytic (rv_mc_samples = 0
+-- throughout).  Gamma moments exact; chi-squared quantile bisected;
+-- Weibull min-stability gives the two-unit first failure in closed
+-- form; Pareto's alpha = 1 mean is honestly Infinity; the mixed-family
+-- Pareto-vs-Normal comparison routes through the generic quadrature.
+-- ---------------------------------------------------------------------
+SET provsql.rv_mc_samples = 0;
+SELECT expected(provsql.gamma(2.5, 0.5)) = 5   AS gamma_mean_exact,
+       variance(provsql.gamma(2.5, 0.5)) = 10  AS gamma_var_exact,
+       abs(quantile(provsql.chi_squared(4), 0.95) - 9.48772903678115) < 1e-6
+         AS chi2_crit_exact;
+
+SELECT abs(expected(provsql.least(provsql.weibull(1.5, 4.0),
+                                  provsql.weibull(1.5, 4.0)))
+           - 2.2747755945647903) < 1e-9         AS weibull_first_failure_exact,
+       abs(expected(provsql.weibull(1.5, 4.0))
+           - 3.6109811718037346) < 1e-9         AS weibull_lifetime_exact;
+
+SELECT expected(provsql.pareto(30, 2.5)) = 50   AS pareto_mean_exact,
+       abs(quantile(provsql.pareto(30, 2.5), 0.95) - 99.43362052019958) < 1e-6
+         AS pareto_p95_exact,
+       expected(provsql.pareto(30, 1.0)) = 'Infinity'::double precision
+         AS pareto_divergent_mean_honest;
+
+SELECT abs(probability(x > y) - 0.38396729360204274) < 1e-6
+         AS mixed_family_quadrature_exact
+  FROM (SELECT provsql.pareto(30, 2.5) AS x,
+               provsql.normal(45, 5)   AS y) t;
+RESET provsql.rv_mc_samples;
+SET provsql.rv_mc_samples = 50000;
+
+-- ---------------------------------------------------------------------
 -- Cleanup.
 -- ---------------------------------------------------------------------
 DROP TABLE historical_readings;
