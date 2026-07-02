@@ -88,6 +88,55 @@ public:
   virtual double sample(std::mt19937_64 &rng) const = 0;
 
   /**
+   * @brief Inverse CDF @f$Q(p) = F^{-1}(p)@f$ for @f$p \in (0, 1)@f$.
+   *
+   * @c std::nullopt when the family has no elementary inverse CDF
+   * (Erlang), so "unsupported" cannot be silently consumed -- callers
+   * branch on availability explicitly.  Normal uses the
+   * Beasley-Springer-Moro rational approximation (~1e-7 accuracy, ample
+   * for sampling); Uniform / Exponential invert exactly.  Behaviour at
+   * the endpoints is the family's (BSM diverges; clamp @p p strictly
+   * inside @c (0, 1) before calling).
+   */
+  virtual std::optional<double> quantile(double p) const {
+    return std::nullopt;
+  }
+
+  /**
+   * @brief Closed-form raw moment @f$E[X^k \mid lo < X < hi]@f$ of the
+   *        distribution truncated to @c [lo, hi] (±infinity for a
+   *        semi-infinite side).
+   *
+   * @c std::nullopt when the family has no closed form (Erlang: needs
+   * the regularised lower incomplete gamma) or the truncation is
+   * degenerate (mass below a numerical floor), so the caller falls
+   * through to MC rejection.  @p k is at least 1 (the caller
+   * short-circuits @c k @c = @c 0).
+   */
+  virtual std::optional<double> truncatedRawMoment(double lo, double hi,
+                                                   unsigned k) const {
+    (void) lo; (void) hi; (void) k;
+    return std::nullopt;
+  }
+
+  /**
+   * @brief Draw @p n rejection-free samples of X conditioned on
+   *        @c lo < X < hi (±infinity for a semi-infinite side).
+   *
+   * Each family uses its own exact scheme (interval intersection for
+   * Uniform, memorylessness / stable inverse-CDF for Exponential,
+   * inverse-CDF transform for Normal).  @c std::nullopt when the family
+   * has no scheme (Erlang: needs the inverse regularised incomplete
+   * gamma) or the truncation is degenerate / parameters invalid, so the
+   * caller's MC-rejection fallback can emit its usual diagnostics.
+   */
+  virtual std::optional<std::vector<double>> sampleTruncated(
+    std::mt19937_64 &rng, double lo, double hi, unsigned n) const {
+    (void) rng; (void) lo; (void) hi; (void) n;
+    return std::nullopt;
+  }
+
+  /**
    * @brief Closed-form location-scale transform @c a·X @c + @c b within
    *        the family.
    *
