@@ -134,6 +134,6 @@ Keeps the per-family files from re-creating the row-major coupling.
 
 Adding a family is now one new `src/distributions/<name>.cpp` (class + registrars) plus
 the `DistKind` enum value in `RandomVariable.h` and the SQL constructor surface.
-Remaining follow-up: Gamma (§3.1) as the first proof-of-concept family — its
-general-shape CDF needs a regularised-lower-incomplete-gamma implementation, unlike the
-integer-shape Erlang finite sum.
+Proof-of-concept validated: Gamma (§3.1, `72f20bb5`) landed as `gamma.cpp` (with a
+regularised-lower-incomplete-gamma CDF and a same-rate sum-closure rule) + the enum
+value + `provsql.gamma`/`chi_squared` constructors, touching no evaluator file.
