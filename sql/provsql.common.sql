@@ -3141,6 +3141,22 @@ END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
+ * @brief Catalog of the registered continuous-distribution families.
+ *
+ * One row per @c gate_rv family known to this build of the extension:
+ * @c name is the on-disk token (the part before the colon in the gate's
+ * @c extra encoding), @c nparams the parameter count, @c param_names the
+ * conventional parameter symbols in @c extra order (e.g.
+ * <tt>{μ, σ}</tt>), and @c label a short display glyph (e.g. @c "N",
+ * @c "Γ").  UI clients (ProvSQL Studio's circuit inspector) read this to
+ * render families they were not hard-coded for, so a newly added family
+ * shows up without a client release.
+ */
+CREATE OR REPLACE FUNCTION rv_families()
+  RETURNS TABLE(name TEXT, nparams INT, param_names TEXT[], label TEXT) AS
+  'provsql','rv_families' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
  * @brief Construct a probabilistic-mixture random variable.
  *
  * Returns a @c random_variable whose distribution is a Bernoulli

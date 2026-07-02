@@ -142,3 +142,11 @@ SELECT (provsql.as_random((-0)::float8))::uuid
      = (provsql.as_random((0)::float8))::uuid AS as_random_signed_zero_dedup;
 SELECT (provsql.uniform((-0)::float8, (0)::float8))::uuid
      = (provsql.as_random((0)::float8))::uuid AS uniform_signed_zero_dedup;
+
+-- The family catalog: one row per registered gate_rv family, with the
+-- on-disk name token, arity, conventional parameter symbols, and the
+-- short display label UI clients render.  A new family added under
+-- src/distributions/ must show up here (this listing is what keeps
+-- Studio's circuit inspector current without a client release).
+SELECT name, nparams, param_names, label
+  FROM provsql.rv_families() ORDER BY name;

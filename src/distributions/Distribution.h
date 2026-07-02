@@ -226,23 +226,36 @@ std::unique_ptr<Distribution> makeDistribution(const DistributionSpec &spec);
 using DistributionFactory =
   std::unique_ptr<Distribution> (*)(double p1, double p2);
 
-/** @brief A registered family's name / arity descriptor. */
+/**
+ * @brief A registered family's descriptor: parsing identity plus the
+ *        display metadata that UI clients (ProvSQL Studio) read through
+ *        @c provsql.rv_families() to render a family they were not
+ *        hard-coded for.
+ *
+ * @c label is a short glance-recognisable glyph for a node circle
+ * (e.g. "N", "Exp", "Γ"); @c param_names are the conventional parameter
+ * symbols in @c extra order (e.g. {"μ", "σ"}; the second entry is
+ * @c nullptr for a 1-parameter family).  Purely presentational choices
+ * beyond these (colours, geometry) stay client-side.
+ */
 struct DistributionFamily {
   DistKind kind;
   unsigned nparams;   ///< 1 or 2 (a 1-parameter family leaves p2 = 0)
+  const char *label;
+  const char *param_names[2];
 };
 
 /** @brief Register a family; called by the registrar at static init. */
-void registerDistributionFamily(DistKind kind, const char *name,
-                                unsigned nparams,
+void registerDistributionFamily(const char *name,
+                                const DistributionFamily &descriptor,
                                 DistributionFactory factory);
 
 /** @brief Static-initialisation helper: one per family implementation. */
 struct DistributionFamilyRegistrar {
-  DistributionFamilyRegistrar(DistKind kind, const char *name,
-                              unsigned nparams,
+  DistributionFamilyRegistrar(const char *name,
+                              const DistributionFamily &descriptor,
                               DistributionFactory factory) {
-    registerDistributionFamily(kind, name, nparams, factory);
+    registerDistributionFamily(name, descriptor, factory);
   }
 };
 
@@ -254,6 +267,14 @@ struct DistributionFamilyRegistrar {
  */
 std::optional<DistributionFamily> lookupDistributionFamily(
   const std::string &name);
+
+/**
+ * @brief Every registered family, sorted by name token.
+ *
+ * Backs the @c provsql.rv_families() catalog function.
+ */
+std::vector<std::pair<std::string, DistributionFamily>>
+listDistributionFamilies();
 
 ///@}
 

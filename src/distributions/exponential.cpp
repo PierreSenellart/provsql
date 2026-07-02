@@ -193,7 +193,7 @@ double exponentialPairLess(const Distribution &X, const Distribution &Y)
   DistKind::Exponential, DistKind::Exponential, &exponentialPairLess);
 
 [[maybe_unused]] const DistributionFamilyRegistrar exponential_family(
-  DistKind::Exponential, "exponential", 1,
+  "exponential", {DistKind::Exponential, 1, "Exp", {"λ", nullptr}},
   [](double p1, double p2) -> std::unique_ptr<Distribution> {
     return std::make_unique<ExponentialDistribution>(p1, p2);
   });

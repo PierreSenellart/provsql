@@ -140,7 +140,7 @@ erlangSumRule(const std::vector<ClosureTerm> &terms)
 };
 
 [[maybe_unused]] const DistributionFamilyRegistrar erlang_family(
-  DistKind::Erlang, "erlang", 2,
+  "erlang", {DistKind::Erlang, 2, "Erl", {"k", "λ"}},
   [](double p1, double p2) -> std::unique_ptr<Distribution> {
     return std::make_unique<ErlangDistribution>(p1, p2);
   });

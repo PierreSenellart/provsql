@@ -165,6 +165,13 @@ random_variable`` and ``double precision → random_variable``
 are installed. Writing ``WHERE reading > 2`` works without an
 explicit ``as_random(2)`` wrapper.
 
+The full list of registered families is introspectable with
+:sqlfunc:`rv_families`, which returns one row per family with its
+name token, parameter count, conventional parameter symbols, and a
+short display label. UI clients (such as :doc:`ProvSQL Studio
+<studio>`'s circuit inspector) read it so that families added to the
+extension render without a client upgrade.
+
 Arithmetic on Random Variables
 ------------------------------
 

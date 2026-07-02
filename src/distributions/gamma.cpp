@@ -129,6 +129,12 @@ public:
     double lo = trunc_lo, hi = trunc_hi;
     if (!std::isfinite(lo)) lo = 0.0;
     if (!std::isfinite(hi)) hi = std::max(2.0 * p1_ / p2_, 6.0 / p2_);
+    /* Shape < 1: the density has an integrable singularity at 0 (pdf(0)
+     * is NaN by design, so the quadratures decline).  Nudge the window's
+     * left edge just inside so a uniform plot grid never samples the
+     * singular endpoint -- otherwise every curve payload for a sub-1
+     * shape would be all-NaN-poisoned and dropped. */
+    if (p1_ < 1.0 && lo <= 0.0) lo = 0.005 * hi;
     return {lo, hi};
   }
   double sample(std::mt19937_64 &rng) const override {
@@ -175,7 +181,7 @@ gammaSumRule(const std::vector<ClosureTerm> &terms)
   DistKind::Gamma, DistKind::Gamma, &gammaSumRule);
 
 [[maybe_unused]] const DistributionFamilyRegistrar gamma_family(
-  DistKind::Gamma, "gamma", 2,
+  "gamma", {DistKind::Gamma, 2, "Γ", {"k", "λ"}},
   [](double p1, double p2) -> std::unique_ptr<Distribution> {
     return std::make_unique<GammaDistribution>(p1, p2);
   });

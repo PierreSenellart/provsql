@@ -127,13 +127,22 @@ double comparatorPairLess(const Distribution &X, const Distribution &Y)
   return pLess;
 }
 
-void registerDistributionFamily(DistKind kind, const char *name,
-                                unsigned nparams,
+void registerDistributionFamily(const char *name,
+                                const DistributionFamily &descriptor,
                                 DistributionFactory factory)
 {
-  const FamilyRecord record{{kind, nparams}, factory};
-  familiesByKind()[kind] = record;
+  const FamilyRecord record{descriptor, factory};
+  familiesByKind()[descriptor.kind] = record;
   familiesByName()[name] = record;
+}
+
+std::vector<std::pair<std::string, DistributionFamily>>
+listDistributionFamilies()
+{
+  std::vector<std::pair<std::string, DistributionFamily>> out;
+  for (const auto &entry : familiesByName())
+    out.emplace_back(entry.first, entry.second.descriptor);
+  return out;   /* std::map iteration order: sorted by name */
 }
 
 std::optional<DistributionFamily> lookupDistributionFamily(

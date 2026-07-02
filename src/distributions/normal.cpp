@@ -304,7 +304,7 @@ double normalPairLess(const Distribution &X, const Distribution &Y)
   DistKind::Normal, DistKind::Normal, &normalPairLess);
 
 [[maybe_unused]] const DistributionFamilyRegistrar normal_family(
-  DistKind::Normal, "normal", 2,
+  "normal", {DistKind::Normal, 2, "N", {"μ", "σ"}},
   [](double p1, double p2) -> std::unique_ptr<Distribution> {
     return std::make_unique<NormalDistribution>(p1, p2);
   });

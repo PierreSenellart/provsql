@@ -184,7 +184,7 @@ double uniformPairLess(const Distribution &X, const Distribution &Y)
   DistKind::Uniform, DistKind::Uniform, &uniformPairLess);
 
 [[maybe_unused]] const DistributionFamilyRegistrar uniform_family(
-  DistKind::Uniform, "uniform", 2,
+  "uniform", {DistKind::Uniform, 2, "U", {"a", "b"}},
   [](double p1, double p2) -> std::unique_ptr<Distribution> {
     return std::make_unique<UniformDistribution>(p1, p2);
   });
