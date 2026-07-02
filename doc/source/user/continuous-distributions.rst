@@ -8,8 +8,8 @@ as ``Normal(μ, σ)``, ``Uniform(a, b)``, or ``Exponential(λ)``;
 arithmetic and comparison work natively; the planner rewrites
 ``WHERE``, ``JOIN`` and ``UNION`` on random-variable columns
 transparently; and ``expected``, ``variance``, ``moment``,
-``support``, ``rv_sample`` and ``rv_histogram`` query the resulting
-distributions, conditioning on filter predicates when asked. Conditioning a
+``quantile``, ``support``, ``rv_sample`` and ``rv_histogram`` query the
+resulting distributions, conditioning on filter predicates when asked. Conditioning a
 random variable -- ``x | (x > k)``, which truncates and renormalises its
 distribution -- uses the same ``|`` operator that conditions discrete events
 and aggregates; see :doc:`conditioning`.
@@ -470,12 +470,12 @@ every downstream consumer (semiring evaluators, Monte Carlo,
 simplified form. Toggle it off only to inspect raw gate-creation
 structure for debugging.
 
-Moments and Support
--------------------
+Moments, Quantiles, and Support
+-------------------------------
 
-Five polymorphic dispatchers cover the moment surface; they accept
-``random_variable``, plain ``uuid``, ``numeric``, and ``agg_token``
-inputs and dispatch internally.
+Six polymorphic dispatchers cover the moment / quantile surface; they
+accept ``random_variable``, plain ``uuid``, ``numeric``, and
+``agg_token`` inputs and dispatch internally.
 
 :sqlfunc:`expected` ``(input [, prov [, method [, arguments]]])``
     Expectation ``E[input | prov]``. For a ``random_variable``,
@@ -501,6 +501,29 @@ inputs and dispatch internally.
     Central moment ``E[(input − E[input | prov])^k | prov]``.
     ``k = 0`` returns ``1``; ``k = 1`` returns ``0``; ``k = 2`` is
     equivalent to :sqlfunc:`variance`.
+
+:sqlfunc:`quantile` ``(input, p [, prov])``
+    p-quantile (inverse CDF)
+    ``F⁻¹(p) = min{x : P(input ≤ x | prov) ≥ p}`` for
+    ``p ∈ [0, 1]`` -- medians, percentiles, Value-at-Risk, credible
+    intervals. ``p = 0`` / ``p = 1`` return the (possibly infinite)
+    support edges. Exact for a bare random variable -- each family's
+    elementary inverse CDF where one exists, a monotone bisection of
+    the closed-form CDF otherwise (Erlang, Gamma) -- and for
+    categorical distributions (generalised inverse); conditioning
+    that reduces to an interval event truncates in closed form.
+    Compound expressions fall back to the empirical Monte Carlo
+    quantile with ``percentile_cont``-style interpolation (backed by
+    the :sqlfunc:`rv_quantile` C entry point). Plain numeric input is
+    its own quantile (a Dirac). ``agg_token`` input is not yet
+    supported.
+
+    .. code-block:: postgresql
+
+        SELECT quantile(posterior, 0.025) AS lower_95,
+               quantile(posterior, 0.5)   AS median,
+               quantile(posterior, 0.975) AS upper_95
+        FROM model_posteriors WHERE param = 'mu_revenue';
 
 :sqlfunc:`support` ``(input [, prov [, method [, arguments]]])``
     Support interval ``[lo, hi]``. For a ``random_variable``,

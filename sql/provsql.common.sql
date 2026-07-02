@@ -4976,6 +4976,76 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
 /**
+ * @brief Internal: rv-side quantile computation.
+ *
+ * C entry point behind the polymorphic @c quantile dispatcher.
+ * Closed-form inverse CDF where the family has one (Normal via
+ * Beasley-Springer-Moro polished by Newton steps, Uniform and
+ * Exponential by algebraic inversion), generic monotone-CDF bisection
+ * otherwise (Erlang, Gamma), exact generalised inverse for categorical
+ * mixtures, and the empirical Monte Carlo quantile for compound scalar
+ * circuits.  A non-trivial @p prov conditions (truncates) the
+ * distribution first, in closed form when the event reduces to an
+ * interval on a bare @c gate_rv.
+ */
+CREATE OR REPLACE FUNCTION rv_quantile(
+  token uuid, p double precision,
+  prov uuid DEFAULT gate_one())
+  RETURNS double precision
+  AS 'provsql','rv_quantile' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Compute the p-quantile (inverse CDF) of a probabilistic scalar
+ *
+ * @f$F^{-1}(p) = \min\{x : P(X \le x) \ge p\}@f$ for @f$p \in [0,1]@f$:
+ * medians (@c p = 0.5), percentiles, Value-at-Risk, and credible
+ * intervals.  @c p = 0 / @c p = 1 return the (possibly infinite)
+ * support edges.  Polymorphic dispatcher mirroring @c expected /
+ * @c moment: @c random_variable routes through @c rv_quantile
+ * (analytical inverse CDF / MC), plain numerics are their own quantile
+ * (a Dirac's inverse CDF is constant), and the optional @p prov
+ * argument conditions on a provenance event, e.g.
+ * <tt>quantile(x | (x > 0), 0.5)</tt> for the median of a truncated
+ * distribution.
+ */
+CREATE OR REPLACE FUNCTION quantile(
+  input ANYELEMENT,
+  p double precision,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+BEGIN
+  IF p IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF p <> p OR p < 0 OR p > 1 THEN
+    RAISE EXCEPTION 'quantile: p must be in [0, 1] (got %)', p;
+  END IF;
+
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance(): rv_quantile handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_quantile(
+      rv_conditioned_target((input::random_variable)::uuid), p,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) IN ('smallint'::regtype, 'integer'::regtype,
+                          'bigint'::regtype, 'numeric'::regtype,
+                          'real'::regtype, 'double precision'::regtype) THEN
+    -- A deterministic scalar is a Dirac: every quantile is the value.
+    RETURN input::double precision;
+  END IF;
+
+  RAISE EXCEPTION 'quantile() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+/**
  * @brief Internal: rv-side support computation
  *
  * Lifts @c provsql::compute_support out of @c RangeCheck.cpp -- the

@@ -25,8 +25,10 @@ extern "C" {
 #include "provsql_error.h"
 
 PG_FUNCTION_INFO_V1(rv_moment);
+PG_FUNCTION_INFO_V1(rv_quantile);
 }
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <string>
@@ -1094,6 +1096,134 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k,
   return total;
 }
 
+/* ─────────────────────── quantiles (§B.1) ─────────────────────── */
+
+namespace {
+
+/* Empirical p-quantile with the linear-interpolation convention
+ * PostgreSQL's percentile_cont uses (type 7: h = p·(n-1)).  NaN
+ * observations (sampling-undefined worlds, e.g. empty-group SQL NULLs
+ * from gate_agg) are dropped like the MC moment estimators do; NaN if
+ * every sample was undefined. */
+double empirical_quantile(std::vector<double> xs, double p)
+{
+  xs.erase(std::remove_if(xs.begin(), xs.end(),
+                          [](double x) { return std::isnan(x); }),
+           xs.end());
+  if (xs.empty()) return std::numeric_limits<double>::quiet_NaN();
+  std::sort(xs.begin(), xs.end());
+  if (p <= 0.0) return xs.front();
+  if (p >= 1.0) return xs.back();
+  const double h = p * static_cast<double>(xs.size() - 1);
+  const std::size_t i = static_cast<std::size_t>(h);
+  if (i + 1 >= xs.size()) return xs.back();
+  const double frac = h - static_cast<double>(i);
+  return xs[i] + frac * (xs[i + 1] - xs[i]);
+}
+
+/* Exact quantile of a categorical-form gate_mixture: the generalised
+ * inverse F⁻¹(p) = min{v : F(v) >= p} over the (value, mass) outcomes.
+ * nullopt if an outcome's value fails to parse (falls to MC). */
+std::optional<double> categorical_quantile(const GenericCircuit &gc,
+                                           gate_t mix, double p)
+{
+  const auto &wires = gc.getWires(mix);
+  std::vector<std::pair<double, double>> outcomes;
+  outcomes.reserve(wires.size());
+  for (std::size_t i = 1; i < wires.size(); ++i) {
+    double v;
+    try { v = parseDoubleStrict(gc.getExtra(wires[i])); }
+    catch (const CircuitException &) { return std::nullopt; }
+    outcomes.emplace_back(v, gc.getProb(wires[i]));
+  }
+  if (outcomes.empty()) return std::nullopt;
+  std::sort(outcomes.begin(), outcomes.end());
+  double cum = 0.0;
+  for (const auto &vp : outcomes) {
+    cum += vp.second;
+    if (cum >= p && cum > 0.0) return vp.first;
+  }
+  return outcomes.back().first;   /* p ≈ 1 vs. mass-sum roundoff */
+}
+
+/* Closed-form (or numerically inverted) quantile of a bare gate_rv,
+ * optionally truncated to [lo, hi] by a conditioning event: the
+ * truncated quantile is Q(F(lo) + p·(F(hi) − F(lo))).  Tries the
+ * family's elementary inverse CDF first, then the generic monotone
+ * CDF bisection (Erlang / Gamma); nullopt when neither decides, so
+ * the caller falls to MC. */
+std::optional<double> analytic_rv_quantile(const DistributionSpec &spec,
+                                           double p, double lo, double hi)
+{
+  const auto dist = makeDistribution(spec);
+  if (p <= 0.0 || p >= 1.0) {
+    /* Quantile limits are the (truncated) support edges. */
+    const auto sup = dist->support();
+    return (p <= 0.0) ? std::max(sup.lo, lo) : std::min(sup.hi, hi);
+  }
+  double u = p;
+  if (std::isfinite(lo) || std::isfinite(hi)) {
+    const double f_lo = std::isfinite(lo) ? dist->cdf(lo) : 0.0;
+    const double f_hi = std::isfinite(hi) ? dist->cdf(hi) : 1.0;
+    if (std::isnan(f_lo) || std::isnan(f_hi)) return std::nullopt;
+    const double mass = f_hi - f_lo;
+    if (mass < 1e-12) return std::nullopt;   /* vanishing mass: MC's call */
+    u = f_lo + p * mass;
+  }
+  double q = std::numeric_limits<double>::quiet_NaN();
+  if (auto cf = dist->quantile(u)) q = *cf;
+  if (std::isnan(q)) q = numericQuantile(*dist, u);
+  if (std::isnan(q)) return std::nullopt;
+  /* Clamp defensively into the truncation interval (roundoff in u). */
+  if (q < lo) q = lo;
+  if (q > hi) q = hi;
+  return q;
+}
+
+}  // namespace
+
+double compute_quantile(const GenericCircuit &gc, gate_t root, double p,
+                        std::optional<gate_t> event_root)
+{
+  const double inf = std::numeric_limits<double>::infinity();
+
+  if (event_root.has_value()) {
+    /* Bare RV under an interval event: exact truncated quantile. */
+    if (auto m = matchTruncatedSingleRv(gc, root, *event_root)) {
+      if (auto q = analytic_rv_quantile(m->spec, p, m->lo, m->hi))
+        return *q;
+    }
+    if (eventIsProvablyInfeasible(gc, root, *event_root))
+      raise_infeasible_event(gc, root);
+    auto cs = monteCarloConditionalScalarSamples(
+                gc, root, *event_root,
+                mc_samples_or_throw("Conditional quantile"));
+    check_acceptance_or_throw(cs, "Conditional quantile");
+    return empirical_quantile(std::move(cs.accepted), p);
+  }
+
+  const auto type = gc.getGateType(root);
+  if (type == gate_value) {
+    /* Dirac at c: every quantile is c. */
+    try { return parseDoubleStrict(gc.getExtra(root)); }
+    catch (const CircuitException &) { /* fall through to MC */ }
+  } else if (type == gate_rv) {
+    if (auto spec = parse_distribution_spec(gc.getExtra(root)))
+      if (auto q = analytic_rv_quantile(*spec, p, -inf, inf))
+        return *q;
+  } else if (type == gate_mixture && gc.isCategoricalMixture(root)) {
+    if (auto q = categorical_quantile(gc, root, p))
+      return *q;
+  }
+
+  /* Compound scalar circuits (arith trees, Bernoulli mixtures, ...):
+   * quantiles do not decompose like moments, so estimate from the
+   * empirical distribution at the rv_mc_samples budget. */
+  return empirical_quantile(
+    monteCarloScalarSamples(gc, root, mc_samples_or_throw("Quantile")),
+    p);
+}
+
 /**
  * @brief Lift conditioning out of a scalar arithmetic expression.
  *
@@ -1236,6 +1366,47 @@ Datum rv_moment(PG_FUNCTION_ARGS)
     provsql_error("rv_moment: %s", e.what());
   } catch (...) {
     provsql_error("rv_moment: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief SQL: rv_quantile(token uuid, p float8,
+ *                         prov uuid DEFAULT gate_one()) -> float8
+ *
+ * C entry point behind the polymorphic @c quantile SQL dispatcher.
+ * Same conditioning plumbing as @c rv_moment (joint circuit, nested
+ * @c gate_conditioned lifting); the evaluation itself is
+ * @c compute_quantile: closed-form / numerically inverted CDF for a
+ * (possibly truncated) bare @c gate_rv, exact generalised inverse for
+ * a categorical mixture, empirical MC quantile for compound circuits.
+ */
+Datum rv_quantile(PG_FUNCTION_ARGS)
+{
+  try {
+    pg_uuid_t *token = PG_GETARG_UUID_P(0);
+    const double p = PG_GETARG_FLOAT8(1);
+    pg_uuid_t *prov = PG_GETARG_UUID_P(2);
+
+    if (std::isnan(p) || p < 0.0 || p > 1.0)
+      provsql_error("rv_quantile: p must be in [0, 1] (got %g)", p);
+
+    gate_t root_gate, event_gate;
+    auto gc = getJointCircuit(*token, *prov, root_gate, event_gate);
+
+    /* gate_one event = unconditional after load-time simplification. */
+    std::optional<gate_t> event_opt;
+    if (gc.getGateType(event_gate) != gate_one)
+      event_opt = event_gate;
+
+    root_gate = provsql::lift_conditioning(gc, root_gate, event_opt);
+
+    return Float8GetDatum(
+      provsql::compute_quantile(gc, root_gate, p, event_opt));
+  } catch (const std::exception &e) {
+    provsql_error("rv_quantile: %s", e.what());
+  } catch (...) {
+    provsql_error("rv_quantile: unknown exception");
   }
   PG_RETURN_NULL();
 }

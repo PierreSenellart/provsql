@@ -210,7 +210,17 @@ public:
   }
   std::optional<double> quantile(double p) const override {
     if (!(p2_ > 0.0)) return std::nullopt;
-    return p1_ + p2_ * inv_phi(p);
+    /* Beasley-Springer-Moro start (~1e-7), polished to machine
+     * precision by two Newton steps on Φ(z) - p (φ(z) > 0 everywhere,
+     * so the iteration is well-defined; the first step already lands
+     * within ~1e-14). */
+    double z = inv_phi(p);
+    for (int i = 0; i < 2; ++i) {
+      const double d = phi(z);
+      if (!(d > 0.0)) break;   /* far tail: φ underflowed, keep BSM */
+      z -= (Phi(z) - p) / d;
+    }
+    return p1_ + p2_ * z;
   }
   std::optional<double> truncatedRawMoment(double lo, double hi,
                                            unsigned k) const override {

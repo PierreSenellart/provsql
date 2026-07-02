@@ -279,6 +279,21 @@ listDistributionFamilies();
 ///@}
 
 /**
+ * @brief Numeric inverse CDF: monotone bisection of @c cdf() over the
+ *        family's integration window.
+ *
+ * Family-agnostic fallback for families whose @c quantile() declines
+ * (no elementary inverse CDF -- Erlang, Gamma): needs only @c cdf and
+ * @c integrationRange, converges to ~1 ulp, and is deterministic, so
+ * the quantile readout stays analytic instead of dropping to Monte
+ * Carlo.  @p p outside the window's mass clamps to the window edge
+ * (the window covers all but a vanishing tail).  NaN when the CDF or
+ * the window is unavailable, matching the NaN-as-undecided contract of
+ * the other analytic paths.
+ */
+double numericQuantile(const Distribution &d, double p);
+
+/**
  * @name ComparatorRuleRegistry — pairwise §B.2 closed forms
  *
  * Closed-form @f$P(X < Y)@f$ for an ordered pair of independent RV

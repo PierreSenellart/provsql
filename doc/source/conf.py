@@ -185,6 +185,8 @@ _SQL_FUNC_MAP = {
     'gamma':                    '/doxygen-sql/html/group__random__variable__type.html#ga776a6709b93af800a8d91f8196314e79',
     'chi_squared':              '/doxygen-sql/html/group__random__variable__type.html#gac74b146395e656c35c7613280d00d264',
     'rv_families':              '/doxygen-sql/html/group__random__variable__type.html#gacc3de72dc4ca6e0d8978254954bec306',
+    'quantile':                 '/doxygen-sql/html/group__probability.html#ga8719863e74eb534690c43a9365b68dbc',
+    'rv_quantile':              '/doxygen-sql/html/group__probability.html#ga651c4b49df124157aae60ab1bfb92b89',
     'categorical':              '/doxygen-sql/html/group__random__variable__type.html#ga7dd6e75bde4c70b80c07e5e29478a801',
     'mixture':                  '/doxygen-sql/html/group__random__variable__type.html#gab2b650b7c42f7e0ab69c91d447a756b0',
     'as_random':                '/doxygen-sql/html/group__random__variable__type.html#ga493b093cde0b627ee7bd02cd54b31802',

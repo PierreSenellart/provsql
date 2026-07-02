@@ -80,6 +80,23 @@ double compute_central_moment(const GenericCircuit &gc, gate_t root, unsigned k,
                               std::optional<gate_t> event_root = std::nullopt);
 
 /**
+ * @brief Compute the p-quantile @f$F^{-1}(p)@f$ of the scalar rooted at
+ *        @p root (of the truncated distribution if @p event_root is set).
+ *
+ * Requires @f$p \in [0, 1]@f$ (the caller validates); @c p = 0 / 1
+ * return the (truncated) support edges.  Analytic for a bare
+ * @c gate_rv -- the family's elementary inverse CDF where one exists,
+ * the generic monotone-CDF bisection (@c numericQuantile) otherwise --
+ * and exact for a categorical mixture; compound scalar circuits fall
+ * back to the empirical Monte Carlo quantile (linear interpolation,
+ * the @c percentile_cont convention) at the @c provsql.rv_mc_samples
+ * budget, with the same conditional-acceptance guards as the moment
+ * estimators.
+ */
+double compute_quantile(const GenericCircuit &gc, gate_t root, double p,
+                        std::optional<gate_t> event_root = std::nullopt);
+
+/**
  * @brief Probability that the Boolean subcircuit rooted at @p boolRoot
  *        evaluates to @c true under the tuple-independent
  *        probabilistic-database model.

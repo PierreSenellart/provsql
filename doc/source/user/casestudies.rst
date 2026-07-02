@@ -308,6 +308,7 @@ Continuous random variables
    "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", "", "✓"
    "``variance(random_variable)``", "", "", "", "", "", "", "✓", "", "✓"
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", "", "✓"
+   "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "", "", ""
    "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "(✓)"
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", "", ""
    "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", "", ""

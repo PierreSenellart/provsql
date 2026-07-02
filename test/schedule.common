@@ -173,6 +173,7 @@ test: continuous_analytic
 test: continuous_gamma
 test: continuous_comparison_surface
 test: continuous_expectation
+test: continuous_quantile
 test: continuous_mc_transparency
 test: continuous_conditioning
 test: continuous_support

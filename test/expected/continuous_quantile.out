@@ -1,0 +1,91 @@
+\set ECHO none
+normal_median_exact
+t
+(1 row)
+normal_q975_exact
+t
+(1 row)
+normal_affine_exact
+t
+(1 row)
+uniform_q25_exact
+t
+(1 row)
+uniform_median_exact
+t
+(1 row)
+exponential_median_exact
+t
+(1 row)
+erlang_bisection_exact
+t
+(1 row)
+gamma_bisection_exact
+t
+(1 row)
+normal_q0_lo
+t
+(1 row)
+normal_q1_hi
+t
+(1 row)
+uniform_q0_lo
+t
+(1 row)
+uniform_q1_hi
+t
+(1 row)
+exponential_q0_lo
+t
+(1 row)
+numeric_dirac
+t
+(1 row)
+integer_dirac
+t
+(1 row)
+as_random_dirac
+t
+(1 row)
+cat_q10|cat_q20_boundary|cat_median|cat_q90
+t|t|t|t
+(1 row)
+halfnormal_median_exact
+t
+(1 row)
+trunc_uniform_q25_exact
+t
+(1 row)
+trunc_exponential_median_exact
+t
+(1 row)
+analytic_without_mc
+t
+(1 row)
+erlang_without_mc
+t
+(1 row)
+product_median_mc
+t
+(1 row)
+ERROR:  quantile: p must be in [0, 1] (got 1.5)
+ERROR:  quantile: p must be in [0, 1] (got -0.1)
+ERROR:  quantile: p must be in [0, 1] (got NaN)
+null_p
+t
+(1 row)
+null_rv
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|median_within_tolerance
+a|t
+(1 row)
+continuous_quantile_done
+ok
+(1 row)

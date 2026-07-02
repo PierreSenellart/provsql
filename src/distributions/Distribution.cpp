@@ -113,6 +113,32 @@ std::unique_ptr<Distribution> closePlusTerms(
   return rule(terms);
 }
 
+double numericQuantile(const Distribution &d, double p)
+{
+  double lo, hi;
+  if (!d.integrationRange(lo, hi))
+    return kNaN;
+  const double f_lo = d.cdf(lo), f_hi = d.cdf(hi);
+  if (std::isnan(f_lo) || std::isnan(f_hi) || !(f_lo <= f_hi))
+    return kNaN;
+  if (p <= f_lo) return lo;
+  if (p >= f_hi) return hi;
+  /* The CDF is monotone, so plain bisection is unconditionally
+   * convergent; 200 halvings exhaust double precision from any
+   * starting window long before the bound. */
+  for (int i = 0; i < 200; ++i) {
+    const double mid = 0.5 * (lo + hi);
+    if (!(mid > lo && mid < hi))
+      break;   /* interval narrowed to adjacent doubles */
+    const double f = d.cdf(mid);
+    if (std::isnan(f))
+      return kNaN;
+    if (f < p) lo = mid;
+    else       hi = mid;
+  }
+  return 0.5 * (lo + hi);
+}
+
 double comparatorPairLess(const Distribution &X, const Distribution &Y)
 {
   const auto &rules = comparatorRules();
