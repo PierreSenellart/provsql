@@ -33,7 +33,8 @@ RESET provsql.rv_mc_samples;
 
 -- (2) RangeCheck: sound support propagation through the transforms.
 SELECT lo, hi FROM support(provsql.exp(provsql.normal(0, 1)));   -- [0, inf)
-SELECT lo, hi FROM support(provsql.ln(provsql.uniform(1, 10)));  -- [0, ln 10]
+-- Round hi: ln(10) prints 15 sig digits on PG<12 vs shortest-round-trip on PG>=12.
+SELECT lo, round(hi::numeric, 6) AS hi FROM support(provsql.ln(provsql.uniform(1, 10)));  -- [0, ln 10]
 SELECT lo, hi FROM support(provsql.sqrt(provsql.uniform(0, 4))); -- [0, 2]
 SELECT lo, hi
   FROM support(provsql.uniform(1, 2) ^ provsql.normal(0, 1));    -- [0, inf)
@@ -74,9 +75,23 @@ SELECT abs(provsql.probability_evaluate(
 
 -- (5) Out-of-domain draws raise actionable errors (never a silently
 -- dropped NaN, which would bias the estimate).
+-- Assert the error class/prefix, not the offending draw: the exact draw is
+-- RNG-stream-dependent and differs across C++ stdlibs (libstdc++ vs libc++).
 \set VERBOSITY terse
-SELECT provsql.expected(provsql.ln(provsql.normal(0, 1)));
-SELECT provsql.expected(provsql.sqrt(provsql.normal(0, 1)));
+DO $$ BEGIN
+  PERFORM provsql.expected(provsql.ln(provsql.normal(0, 1)));
+  RAISE EXCEPTION 'expected an ln domain error, none was raised';
+EXCEPTION WHEN others THEN
+  IF SQLERRM LIKE '%ln: negative draw%' THEN RAISE NOTICE 'ln_domain_error_raised';
+  ELSE RAISE; END IF;
+END $$;
+DO $$ BEGIN
+  PERFORM provsql.expected(provsql.sqrt(provsql.normal(0, 1)));
+  RAISE EXCEPTION 'expected a sqrt/pow domain error, none was raised';
+EXCEPTION WHEN others THEN
+  IF SQLERRM LIKE '%pow: negative base drawn%' THEN RAISE NOTICE 'sqrt_domain_error_raised';
+  ELSE RAISE; END IF;
+END $$;
 \set VERBOSITY default
 -- The hinted rewrite works: E[sqrt(greatest(Z, 0))] ≈ 0.41108947933.
 SELECT abs(provsql.expected(provsql.sqrt(provsql.greatest(

@@ -352,13 +352,17 @@ SELECT remove_provenance('result_cs6_indep');
 SELECT cov_indep_exact, sd_exact FROM result_cs6_indep;
 DROP TABLE result_cs6_indep;
 RESET provsql.rv_mc_samples;
-SET provsql.rv_mc_samples = 50000;
+SET provsql.rv_mc_samples = 100000;
 
+-- Bands are deliberately loose: the MC estimate converges to cov=9, corr~0.545
+-- on every platform, but the exact draw stream differs across C++ stdlibs
+-- (libstdc++ vs libc++), so a tight band is not portable. This still rejects a
+-- wrong implementation (independent plume -> cov~0, corr~0).
 CREATE TABLE result_cs6_plume AS
   WITH plume AS (SELECT provsql.normal(0, 3) AS dust)
-  SELECT abs(covariance(a.pm25 + p.dust, b.pm25 + p.dust) - 9) < 1.5
+  SELECT abs(covariance(a.pm25 + p.dust, b.pm25 + p.dust) - 9) < 3
            AS cov_shared_close,
-         abs(correlation(a.pm25 + p.dust, b.pm25 + p.dust) - 0.545) < 0.1
+         abs(correlation(a.pm25 + p.dust, b.pm25 + p.dust) - 0.545) < 0.2
            AS corr_shared_close
     FROM readings a, readings b, plume p
    WHERE a.id = 1 AND b.id = 2;

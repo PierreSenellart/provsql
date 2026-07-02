@@ -22,7 +22,7 @@ lo|hi
 0|Infinity
 (1 row)
 lo|hi
-0|2.302585092994046
+0|2.302585
 (1 row)
 lo|hi
 0|2
@@ -51,8 +51,8 @@ t
 lognormal_tail_mc
 t
 (1 row)
-ERROR:  ProvSQL: rv_moment: ln: negative draw (-0.574095); ln is only defined on [0, +Infinity) -- restrict the argument's support
-ERROR:  ProvSQL: rv_moment: pow: negative base drawn with a non-integer exponent (-0.574095 ^ 0.500000); restrict the base to be non-negative, e.g. pow(greatest(x, 0), p)
+NOTICE:  ln_domain_error_raised
+NOTICE:  sqrt_domain_error_raised
 sqrt_clamped_mc
 t
 (1 row)
