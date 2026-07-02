@@ -906,6 +906,29 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
         for r in rows
         if r["parent"] is not None
     ]
+
+    # Special-cased display: a POW gate whose exponent child (child_pos 2;
+    # circuit_subgraph numbers children WITH ORDINALITY, 1-based) is the
+    # constant 0.5 IS a square root -- the SQL sqrt() sugar builds exactly
+    # this shape -- so render √ instead of the generic ^.  The detection
+    # needs the child node, hence this post-pass rather than _gate_label;
+    # an exponent beyond the render depth keeps ^.
+    by_id = {n["id"]: n for n in nodes}
+    for e in edges:
+        if e["child_pos"] != 2:
+            continue
+        parent_n = by_id.get(e["from"])
+        child_n = by_id.get(e["to"])
+        if (parent_n is None or child_n is None
+                or parent_n["type"] != "arith" or parent_n["label"] != "^"
+                or child_n["type"] != "value"):
+            continue
+        try:
+            if float(child_n["extra"]) == 0.5:
+                parent_n["label"] = "√"
+        except (TypeError, ValueError):
+            pass
+
     return {"nodes": nodes, "edges": edges, "root": root,
             "eval_root": eval_root, "depth": depth}
 

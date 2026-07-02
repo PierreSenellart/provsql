@@ -3675,7 +3675,11 @@
       // as TEXT so the value is a string here); map to a name+glyph so
       // the user doesn't have to remember enum order.
       const tag = node.info1 == null ? null : Number(node.info1);
-      const name = Number.isFinite(tag) ? ARITH_OP_NAME[tag] : null;
+      // The server relabels a POW gate with a constant-0.5 exponent as
+      // the square root it is (the sqrt() SQL sugar); mirror that in
+      // the operator row.
+      const name = node.label === '√' ? 'sqrt (^ 0.5)'
+        : Number.isFinite(tag) ? ARITH_OP_NAME[tag] : null;
       if (name) out.push({ label: 'operator', value: name });
       else if (node.info1 != null) out.push({ label: 'operator', value: node.info1 });
     } else {
