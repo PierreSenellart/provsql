@@ -2838,6 +2838,11 @@ CREATE OPERATOR <> (
  *  <tt>provsql.erlang(k, λ)</tt>, <tt>provsql.gamma(k, λ)</tt>,
  *  <tt>provsql.chi_squared(k)</tt>, <tt>provsql.lognormal(μ, σ)</tt>,
  *  <tt>provsql.weibull(k, λ)</tt>, <tt>provsql.pareto(xₘ, α)</tt>,
+ *  the discrete count constructors (<tt>provsql.poisson(λ)</tt>,
+ *  <tt>provsql.binomial(n, p)</tt>, <tt>provsql.geometric(p)</tt>,
+ *  <tt>provsql.hypergeometric(N, K, n)</tt>,
+ *  <tt>provsql.negative_binomial(r, p)</tt>, all lowering to
+ *  @c categorical via @c categorical_from_log_pmf),
  *  and <tt>provsql.as_random(c)</tt>.
  *  Operator overloads
  *  (<tt>+ - * /</tt> and the six comparators) are defined further
@@ -3259,6 +3264,300 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'pareto:' || xm || ',' || alpha);
   RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Build a discrete (categorical) random variable from outcomes
+ *        and UNNORMALISED log-masses
+ *
+ * The shared back end of the discrete count constructors (@c poisson,
+ * @c binomial, @c geometric, @c hypergeometric,
+ * @c negative_binomial), and directly usable for any custom discrete
+ * pmf: the log-masses are shifted by their maximum (so only relative
+ * magnitudes matter and no @c exp underflows), outcomes whose relative
+ * mass is below <tt>1e-15</tt> are dropped, and the rest is
+ * renormalised before being handed to @c categorical.  Working in log
+ * space keeps arbitrarily large parameters stable (e.g. a
+ * <tt>Poisson(1000)</tt> pmf whose linear-space recurrence would
+ * underflow at @c exp(-1000)).
+ *
+ * @param outcomes  outcome values, same length as @p log_pmf
+ * @param log_pmf   natural logs of the (unnormalised) masses
+ */
+CREATE OR REPLACE FUNCTION categorical_from_log_pmf(
+  outcomes double precision[], log_pmf double precision[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n int := array_length(outcomes, 1);
+  max_lp double precision := '-Infinity';
+  kept_o double precision[] := '{}';
+  kept_p double precision[] := '{}';
+  total double precision := 0;
+  v double precision;
+  i int;
+BEGIN
+  IF n IS NULL OR n = 0 OR n <> coalesce(array_length(log_pmf, 1), 0) THEN
+    RAISE EXCEPTION 'provsql.categorical_from_log_pmf: outcomes and log_pmf must be non-empty arrays of the same length';
+  END IF;
+  FOR i IN 1..n LOOP
+    IF log_pmf[i] > max_lp THEN max_lp := log_pmf[i]; END IF;
+  END LOOP;
+  IF max_lp = '-Infinity' THEN
+    RAISE EXCEPTION 'provsql.categorical_from_log_pmf: all masses are zero';
+  END IF;
+  FOR i IN 1..n LOOP
+    v := exp(log_pmf[i] - max_lp);
+    IF v >= 1e-15 THEN
+      kept_o := array_append(kept_o, outcomes[i]);
+      kept_p := array_append(kept_p, v);
+      total := total + v;
+    END IF;
+  END LOOP;
+  FOR i IN 1..array_length(kept_p, 1) LOOP
+    kept_p[i] := kept_p[i] / total;
+  END LOOP;
+  RETURN provsql.categorical(kept_p, kept_o);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a Poisson random variable with mean @p lambda, as a
+ *        truncated categorical
+ *
+ * The pmf is enumerated over <tt>[max(0, λ-12√λ), λ+12√λ+30]</tt> (the
+ * omitted tails carry ~1e-30 of mass) by the log-space recurrence
+ * <tt>ln p(k+1) = ln p(k) + ln λ - ln(k+1)</tt> and handed to
+ * @c categorical_from_log_pmf, so moments, quantiles, and (in)equality
+ * comparisons are exact over the enumerated support.  @c lambda = 0 is
+ * a Dirac at @c 0 (routed through @c as_random); supports up to 10000
+ * outcomes (λ up to ~170000), beyond which it raises -- approximate
+ * huge means by @c normal(λ, √λ) instead.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Poisson_distribution">Wikipedia: Poisson distribution</a>
+ */
+CREATE OR REPLACE FUNCTION poisson(lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  lo int;
+  hi int;
+  outcomes double precision[] := '{}';
+  lps double precision[] := '{}';
+  lp double precision := 0;
+  k int;
+BEGIN
+  IF NOT provsql.is_finite_float8(lambda) OR lambda < 0 THEN
+    RAISE EXCEPTION 'provsql.poisson: lambda must be finite and non-negative (got %)', lambda;
+  END IF;
+  IF lambda = 0 THEN
+    RETURN provsql.as_random(0);
+  END IF;
+  lo := greatest(0, floor(lambda - 12 * sqrt(lambda)))::int;
+  hi := ceil(lambda + 12 * sqrt(lambda))::int + 30;
+  IF hi - lo + 1 > 10000 THEN
+    RAISE EXCEPTION 'provsql.poisson: support window of % outcomes exceeds 10000; approximate with normal(%, sqrt(%))', hi - lo + 1, lambda, lambda;
+  END IF;
+  -- ln p(0) = -λ; walk the recurrence, keeping only the window.
+  lp := -lambda;
+  FOR k IN 1..hi LOOP
+    lp := lp + ln(lambda) - ln(k::double precision);
+    IF k >= lo THEN
+      outcomes := array_append(outcomes, k::double precision);
+      lps := array_append(lps, lp);
+    END IF;
+  END LOOP;
+  IF lo = 0 THEN
+    outcomes := array_prepend(0::double precision, outcomes);
+    lps := array_prepend(-lambda, lps);
+  END IF;
+  RETURN provsql.categorical_from_log_pmf(outcomes, lps);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a Binomial(n, p) random variable (number of
+ *        successes in @p n independent trials), as a categorical
+ *
+ * Enumerated over <tt>{0..n}</tt> by the log-space recurrence
+ * <tt>ln p(k+1) = ln p(k) + ln((n-k)/(k+1)) + ln(p/(1-p))</tt>
+ * (outcomes below 1e-15 relative mass are dropped).  @c p = 0 /
+ * @c p = 1 are Diracs at @c 0 / @c n; @c n is capped at 10000.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Binomial_distribution">Wikipedia: Binomial distribution</a>
+ */
+CREATE OR REPLACE FUNCTION binomial(n integer, p double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  outcomes double precision[] := '{}';
+  lps double precision[] := '{}';
+  lp double precision;
+  k int;
+BEGIN
+  IF n IS NULL OR n < 0 THEN
+    RAISE EXCEPTION 'provsql.binomial: n must be non-negative (got %)', n;
+  END IF;
+  IF NOT provsql.is_finite_float8(p) OR p < 0 OR p > 1 THEN
+    RAISE EXCEPTION 'provsql.binomial: p must be in [0, 1] (got %)', p;
+  END IF;
+  IF n > 10000 THEN
+    RAISE EXCEPTION 'provsql.binomial: n = % exceeds 10000; approximate with normal(n*p, sqrt(n*p*(1-p)))', n;
+  END IF;
+  IF n = 0 OR p = 0 THEN
+    RETURN provsql.as_random(0);
+  END IF;
+  IF p = 1 THEN
+    RETURN provsql.as_random(n);
+  END IF;
+  lp := n * ln(1 - p);   -- ln p(0)
+  outcomes := array_append(outcomes, 0::double precision);
+  lps := array_append(lps, lp);
+  FOR k IN 0..(n - 1) LOOP
+    lp := lp + ln((n - k)::double precision / (k + 1)) + ln(p / (1 - p));
+    outcomes := array_append(outcomes, (k + 1)::double precision);
+    lps := array_append(lps, lp);
+  END LOOP;
+  RETURN provsql.categorical_from_log_pmf(outcomes, lps);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a Geometric(p) random variable -- the number of
+ *        TRIALS up to and including the first success (support
+ *        starting at 1; subtract 1 for the failures convention)
+ *
+ * <tt>P(X = k) = (1-p)^{k-1} p</tt>, enumerated up to the 1e-15
+ * relative-mass tail and renormalised.  @c p = 1 is a Dirac at @c 1.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Geometric_distribution">Wikipedia: Geometric distribution</a>
+ */
+CREATE OR REPLACE FUNCTION geometric(p double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  k_max int;
+  outcomes double precision[] := '{}';
+  lps double precision[] := '{}';
+  k int;
+BEGIN
+  IF NOT provsql.is_finite_float8(p) OR p <= 0 OR p > 1 THEN
+    RAISE EXCEPTION 'provsql.geometric: p must be in (0, 1] (got %)', p;
+  END IF;
+  IF p = 1 THEN
+    RETURN provsql.as_random(1);
+  END IF;
+  k_max := 1 + ceil(ln(1e-15) / ln(1 - p))::int;
+  IF k_max > 10000 THEN
+    RAISE EXCEPTION 'provsql.geometric: support window of % outcomes exceeds 10000 (p = % is too small); approximate with exponential(%)', k_max, p, p;
+  END IF;
+  FOR k IN 1..k_max LOOP
+    outcomes := array_append(outcomes, k::double precision);
+    lps := array_append(lps, (k - 1) * ln(1 - p) + ln(p));
+  END LOOP;
+  RETURN provsql.categorical_from_log_pmf(outcomes, lps);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a Hypergeometric(N, K, n) random variable: the
+ *        number of marked items among @p n draws WITHOUT replacement
+ *        from a population of @p pop_n items of which @p k_marked are
+ *        marked
+ *
+ * The exact finite support <tt>[max(0, n-(N-K)), min(n, K)]</tt> is
+ * enumerated by the pmf ratio recurrence (in log space, so large
+ * populations cannot overflow) and normalised -- exact "sampling
+ * without replacement" probabilities with no combinatorial functions
+ * needed.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Hypergeometric_distribution">Wikipedia: Hypergeometric distribution</a>
+ */
+CREATE OR REPLACE FUNCTION hypergeometric(pop_n integer, k_marked integer, n integer)
+  RETURNS random_variable AS
+$$
+DECLARE
+  lo int;
+  hi int;
+  outcomes double precision[] := '{}';
+  lps double precision[] := '{}';
+  lp double precision := 0;   -- relative log-mass; normalised later
+  k int;
+BEGIN
+  IF pop_n IS NULL OR k_marked IS NULL OR n IS NULL
+     OR pop_n < 0 OR k_marked < 0 OR n < 0
+     OR k_marked > pop_n OR n > pop_n THEN
+    RAISE EXCEPTION 'provsql.hypergeometric: need 0 <= k_marked, n <= pop_n (got pop_n=%, k_marked=%, n=%)', pop_n, k_marked, n;
+  END IF;
+  lo := greatest(0, n - (pop_n - k_marked));
+  hi := least(n, k_marked);
+  IF hi - lo + 1 > 10000 THEN
+    RAISE EXCEPTION 'provsql.hypergeometric: support window of % outcomes exceeds 10000', hi - lo + 1;
+  END IF;
+  outcomes := array_append(outcomes, lo::double precision);
+  lps := array_append(lps, lp);
+  FOR k IN lo..(hi - 1) LOOP
+    -- pmf(k+1)/pmf(k) = (K-k)(n-k) / ((k+1)(N-K-n+k+1))
+    lp := lp + ln((k_marked - k)::double precision * (n - k))
+             - ln((k + 1)::double precision * (pop_n - k_marked - n + k + 1));
+    outcomes := array_append(outcomes, (k + 1)::double precision);
+    lps := array_append(lps, lp);
+  END LOOP;
+  RETURN provsql.categorical_from_log_pmf(outcomes, lps);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a negative-binomial random variable: the number of
+ *        FAILURES before the @p r-th success (support starting at 0),
+ *        with real @p r > 0 allowed (the Polya / overdispersed-count
+ *        parameterisation, the Poisson-Gamma mixture)
+ *
+ * <tt>P(X = k) = C(k+r-1, k) p^r (1-p)^k</tt>, enumerated by the
+ * log-space recurrence
+ * <tt>ln p(k+1) = ln p(k) + ln((k+r)/(k+1)) + ln(1-p)</tt> up to the
+ * 1e-15 relative-mass tail.  @c p = 1 is a Dirac at @c 0.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Negative_binomial_distribution">Wikipedia: Negative binomial distribution</a>
+ */
+CREATE OR REPLACE FUNCTION negative_binomial(r double precision, p double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  outcomes double precision[] := '{}';
+  lps double precision[] := '{}';
+  lp double precision;
+  max_lp double precision;
+  mean double precision;
+  k int := 0;
+BEGIN
+  IF NOT provsql.is_finite_float8(r) OR r <= 0 THEN
+    RAISE EXCEPTION 'provsql.negative_binomial: r must be finite and strictly positive (got %)', r;
+  END IF;
+  IF NOT provsql.is_finite_float8(p) OR p <= 0 OR p > 1 THEN
+    RAISE EXCEPTION 'provsql.negative_binomial: p must be in (0, 1] (got %)', p;
+  END IF;
+  IF p = 1 THEN
+    RETURN provsql.as_random(0);
+  END IF;
+  mean := r * (1 - p) / p;
+  lp := r * ln(p);   -- ln p(0)
+  max_lp := lp;
+  outcomes := array_append(outcomes, 0::double precision);
+  lps := array_append(lps, lp);
+  LOOP
+    lp := lp + ln((k + r) / (k + 1)) + ln(1 - p);
+    k := k + 1;
+    IF lp > max_lp THEN max_lp := lp; END IF;
+    outcomes := array_append(outcomes, k::double precision);
+    lps := array_append(lps, lp);
+    EXIT WHEN k > mean AND lp < max_lp + ln(1e-15);
+    IF k >= 10000 THEN
+      RAISE EXCEPTION 'provsql.negative_binomial: support window exceeds 10000 outcomes (r=%, p=%)', r, p;
+    END IF;
+  END LOOP;
+  RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 

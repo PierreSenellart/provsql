@@ -303,6 +303,7 @@ Continuous random variables
    "``provsql.gamma`` / ``provsql.chi_squared``", "", "", "", "", "", "", "", "", ""
    "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", ""
    "``provsql.weibull`` / ``provsql.pareto``", "", "", "", "", "", "", "", "", ""
+   "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", ""
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
    "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", ""

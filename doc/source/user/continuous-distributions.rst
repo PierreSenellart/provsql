@@ -195,6 +195,24 @@ shared underlying randomness.
     ``+0.0`` so the two zeros refer to the same gate. See `Wikipedia
     <https://en.wikipedia.org/wiki/Degenerate_distribution>`__.
 
+**Discrete count constructors.** :sqlfunc:`poisson` ``(lambda)``,
+:sqlfunc:`binomial` ``(n, p)``, :sqlfunc:`geometric` ``(p)`` (number of
+*trials*, support starting at 1), :sqlfunc:`hypergeometric`
+``(pop_n, k_marked, n)`` (draws without replacement), and
+:sqlfunc:`negative_binomial` ``(r, p)`` (failures before the ``r``-th
+success, real ``r > 0`` allowed for overdispersed counts) are
+convenience constructors over :sqlfunc:`categorical`: each enumerates
+its pmf -- in log space, so large parameters stay stable -- into a
+categorical gate via the shared :sqlfunc:`categorical_from_log_pmf`
+(itself directly usable for custom discrete pmfs from unnormalised
+log-masses). Moments, quantiles, and comparisons -- including exact
+``=`` / ``<>`` point masses, which continuous distributions decide as
+0/1 -- are exact over the enumerated support; infinite supports are
+truncated at a 1e-15 relative-mass tail and renormalised, and a
+10000-outcome cap raises with the suggested continuous approximation.
+Degenerate parameters (``poisson(0)``, ``binomial(n, 1)``, ...) route
+through :sqlfunc:`as_random`.
+
 Implicit casts ``integer → random_variable``, ``numeric →
 random_variable`` and ``double precision → random_variable``
 are installed. Writing ``WHERE reading > 2`` works without an

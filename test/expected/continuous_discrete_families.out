@@ -1,0 +1,74 @@
+\set ECHO none
+poisson_mean_exact
+t
+(1 row)
+poisson_var_exact
+t
+(1 row)
+poisson_cdf_exact
+t
+(1 row)
+poisson_median
+t
+(1 row)
+poisson_large_lambda_stable
+t
+(1 row)
+binomial_mean_exact
+t
+(1 row)
+binomial_var_exact
+t
+(1 row)
+binomial_point_mass_exact
+t
+(1 row)
+geometric_mean_exact
+t
+(1 row)
+geometric_var_exact
+t
+(1 row)
+geometric_survival_exact
+t
+(1 row)
+hypergeometric_mean_exact
+t
+(1 row)
+hypergeometric_var_exact
+t
+(1 row)
+hypergeometric_point_mass_exact
+t
+(1 row)
+negbin_mean_exact
+t
+(1 row)
+negbin_var_exact
+t
+(1 row)
+custom_log_pmf_exact
+t
+(1 row)
+poisson_zero_dirac
+t
+(1 row)
+binomial_certain_dirac
+t
+(1 row)
+geometric_certain_dirac
+t
+(1 row)
+negbin_certain_dirac
+t
+(1 row)
+ERROR:  provsql.poisson: lambda must be finite and non-negative (got -1)
+ERROR:  provsql.poisson: support window of 75927 outcomes exceeds 10000; approximate with normal(10000000, sqrt(10000000))
+ERROR:  provsql.binomial: n must be non-negative (got -1)
+ERROR:  provsql.binomial: p must be in [0, 1] (got 1.5)
+ERROR:  provsql.geometric: p must be in (0, 1] (got 0)
+ERROR:  provsql.hypergeometric: need 0 <= k_marked, n <= pop_n (got pop_n=10, k_marked=12, n=3)
+ERROR:  provsql.negative_binomial: r must be finite and strictly positive (got 0)
+continuous_discrete_families_done
+ok
+(1 row)
