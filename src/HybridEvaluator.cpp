@@ -1683,6 +1683,177 @@ void inline_joint_table(GenericCircuit &gc,
   }
 }
 
+/**
+ * @brief A group of comparisons all sharing one pivot bare RV X, each against
+ *        an independent bare RV or a constant.  Unlike the monotone-shared-
+ *        scalar fast path (all thresholds constant on one line), the other
+ *        operands are themselves random, so the joint of the k comparisons is
+ *        a 2^k table of pivot-conjunction integrals rather than a partition of
+ *        one line into intervals.  This is the RV-vs-RV correlated-join island,
+ *        e.g. @c "(x>y) AND (x>z)" or the conditioning @c "(x>y) | (x>z)".
+ */
+struct PivotIslandInfo {
+  DistributionSpec pivotSpec;
+  struct Factor {
+    bool isConst;
+    DistributionSpec other;   /* valid iff !isConst */
+    double konst;             /* valid iff isConst */
+    bool trueIsGreater;       /* cmp true  <=>  X > operand */
+  };
+  std::vector<Factor> factors;   /* one per cmp, index = bit position */
+};
+
+/* Detect a shared-pivot-RV island: every cmp compares a common pivot bare RV X
+ * against an independent bare RV (distinct leaf, appearing once) or a constant.
+ * nullopt otherwise (no common pivot, a shared/repeated other RV, an agg cmp,
+ * EQ/NE, or a non-bare operand). */
+std::optional<PivotIslandInfo>
+detect_shared_pivot_rv(const GenericCircuit &gc,
+                       const std::vector<gate_t> &cmps)
+{
+  gate_t pivot = static_cast<gate_t>(-1);
+  bool havePivot = false;
+  std::optional<DistributionSpec> pivotSpec;
+  PivotIslandInfo info;
+  std::unordered_set<gate_t> othersSeen;
+
+  for (gate_t c : cmps) {
+    if (gc.getGateType(c) != gate_cmp) return std::nullopt;
+    const auto &w = gc.getWires(c);
+    if (w.size() != 2) return std::nullopt;
+    bool ok = false;
+    ComparisonOperator op = cmpOpFromOid(gc.getInfos(c).first, ok);
+    if (!ok || op == ComparisonOperator::EQ || op == ComparisonOperator::NE)
+      return std::nullopt;
+
+    /* Find which side is the pivot: a bare gate_rv consistent across cmps. */
+    gate_t pv, other; bool pivotLeft;
+    if (gc.getGateType(w[0]) == gate_rv &&
+        (!havePivot || w[0] == pivot)) { pv = w[0]; other = w[1]; pivotLeft = true; }
+    else if (gc.getGateType(w[1]) == gate_rv &&
+        (!havePivot || w[1] == pivot)) { pv = w[1]; other = w[0]; pivotLeft = false; }
+    else return std::nullopt;
+
+    if (!havePivot) {
+      auto sp = parse_distribution_spec(gc.getExtra(pv));
+      if (!sp) return std::nullopt;
+      pivot = pv; pivotSpec = *sp; havePivot = true;
+    }
+
+    const bool greaterOp = (op == ComparisonOperator::GT ||
+                            op == ComparisonOperator::GE);
+    const bool lessOp    = (op == ComparisonOperator::LT ||
+                            op == ComparisonOperator::LE);
+    const bool trueIsGreater = pivotLeft ? greaterOp : lessOp;
+
+    PivotIslandInfo::Factor f;
+    f.trueIsGreater = trueIsGreater;
+    if (gc.getGateType(other) == gate_value) {
+      f.isConst = true;
+      try { f.konst = parseDoubleStrict(gc.getExtra(other)); }
+      catch (const CircuitException &) { return std::nullopt; }
+    } else if (gc.getGateType(other) == gate_rv && other != pivot) {
+      if (!othersSeen.insert(other).second) return std::nullopt;  /* shared -> dependent */
+      auto sp = parse_distribution_spec(gc.getExtra(other));
+      if (!sp) return std::nullopt;
+      f.isConst = false;
+      f.other = *sp;
+    } else return std::nullopt;
+    info.factors.push_back(std::move(f));
+  }
+  if (!havePivot) return std::nullopt;
+  info.pivotSpec = *pivotSpec;
+  return info;
+}
+
+/* Install an analytic 2^k joint table for a shared-pivot-RV island.  Cell
+ * probability for outcome word w is P(∧_j cmp_j == bit_j(w)) computed as the
+ * pivot-conjunction integral ∫ f_X(x) Π_j W_j(x) dx, where W_j weights the
+ * region making cmp_j equal to its bit: an RV factor contributes F_Y(x) or
+ * 1-F_Y(x), a constant factor clips the integration window.  Mirrors
+ * @c inline_joint_table's circuit surgery (one key, one mulinput per positive
+ * outcome, each cmp -> gate_plus over the outcomes with its bit set), so the
+ * downstream Boolean OR/AND observes the correct correlated joint.  Returns
+ * false (touching nothing) if a density/CDF is undefined, so the caller can
+ * raise or fall back to MC. */
+bool inline_analytic_pivot_joint_table(GenericCircuit &gc,
+                                       const std::vector<gate_t> &cmps,
+                                       const PivotIslandInfo &info)
+{
+  const unsigned k = static_cast<unsigned>(cmps.size());
+  const std::size_t nb_outcomes = std::size_t{1} << k;
+
+  const auto dX = makeDistribution(info.pivotSpec);
+  double lo0, hi0;
+  if (!dX->integrationRange(lo0, hi0)) return false;
+
+  /* Construct each RV factor's distribution once. */
+  std::vector<std::unique_ptr<Distribution>> otherDist(k);
+  for (unsigned j = 0; j < k; ++j)
+    if (!info.factors[j].isConst)
+      otherDist[j] = makeDistribution(info.factors[j].other);
+
+  const int N = 4000;  /* even: composite Simpson */
+  std::vector<double> probs(nb_outcomes, 0.0);
+  for (std::size_t w = 0; w < nb_outcomes; ++w) {
+    /* Constant factors clip the window for this cell. */
+    double lo = lo0, hi = hi0;
+    for (unsigned j = 0; j < k; ++j) {
+      if (!info.factors[j].isConst) continue;
+      const bool bit = (w >> j) & 1u;
+      /* "X > c" holds in this cell iff (trueIsGreater == bit). */
+      const bool greater = (info.factors[j].trueIsGreater == bit);
+      if (greater) lo = std::max(lo, info.factors[j].konst);
+      else         hi = std::min(hi, info.factors[j].konst);
+    }
+    if (!(hi > lo)) { probs[w] = 0.0; continue; }
+
+    const double h = (hi - lo) / N;
+    double acc = 0.0;
+    bool bad = false;
+    for (int i = 0; i <= N && !bad; ++i) {
+      const double x = lo + i * h;
+      const double fX = dX->pdf(x);
+      if (std::isnan(fX)) { bad = true; break; }
+      double weight = fX;
+      for (unsigned j = 0; j < k; ++j) {
+        if (info.factors[j].isConst) continue;
+        const bool bit = (w >> j) & 1u;
+        const bool greater = (info.factors[j].trueIsGreater == bit);
+        const double FY = otherDist[j]->cdf(x);
+        if (std::isnan(FY)) { bad = true; break; }
+        weight *= greater ? FY : (1.0 - FY);
+      }
+      if (bad) break;
+      const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+      acc += coeff * weight;
+    }
+    if (bad) return false;
+    probs[w] = acc * h / 3.0;
+  }
+
+  /* Circuit surgery: one shared key, one mulinput per positive outcome, each
+   * cmp rewritten as gate_plus over the outcomes whose bit it owns. */
+  gate_t key = gc.addAnonymousInputGate(1.0);
+  std::vector<gate_t> mul_for_outcome(nb_outcomes, static_cast<gate_t>(-1));
+  for (std::size_t w = 0; w < nb_outcomes; ++w) {
+    if (probs[w] <= 0.0) continue;
+    mul_for_outcome[w] =
+      gc.addAnonymousMulinputGate(key, probs[w], static_cast<unsigned>(w));
+  }
+  for (unsigned i = 0; i < k; ++i) {
+    std::vector<gate_t> plus_wires;
+    for (std::size_t w = 0; w < nb_outcomes; ++w) {
+      if ((w & (std::size_t{1} << i)) == 0) continue;
+      gate_t mw = mul_for_outcome[w];
+      if (mw == static_cast<gate_t>(-1)) continue;
+      plus_wires.push_back(mw);
+    }
+    gc.resolveToPlus(cmps[i], std::move(plus_wires));
+  }
+  return true;
+}
+
 }  // namespace
 
 unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
@@ -1809,6 +1980,21 @@ unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
         "composite quantity needs Monte Carlo, but provsql.rv_mc_samples "
         "= 0 disables it; set provsql.rv_mc_samples > 0 (comparisons "
         "against constants on a single distribution stay analytical)");
+    }
+
+    /* Shared-pivot-RV island (e.g. `x>y AND x>z`, or the conditioning
+     * `(x>y)|(x>z)`): the k comparisons share one pivot bare RV X against
+     * independent operands, so the 2^k joint is a table of pivot-conjunction
+     * integrals -- exact (quadrature), no MC.  Preferred even when MC is
+     * available (no sampling noise); resolves the `rv_mc_samples = 0` case
+     * that would otherwise raise below. */
+    if (auto pinfo = detect_shared_pivot_rv(gc, group)) {
+      if (inline_analytic_pivot_joint_table(gc, group, *pinfo)) {
+        resolved += static_cast<unsigned>(group.size());
+        continue;
+      }
+      /* Integration declined (undefined density/CDF): fall through to MC or
+       * the raise below. */
     }
 
     /* Generic joint island (e.g. RV-vs-RV comparisons sharing a leaf):

@@ -8,6 +8,27 @@ t
 relu_ok
 t
 (1 row)
+abs_exact|abs_var_exact
+t|t
+(1 row)
+relu_exact
+t
+(1 row)
+clamp_exact
+t
+(1 row)
+max_exact|max_var_exact
+t|t
+(1 row)
+min_exact
+t
+(1 row)
+threeway_max_exact|threeway_max_var_exact
+t|t
+(1 row)
+threeway_min_exact
+t
+(1 row)
 is_gate_case
 t
 (1 row)

@@ -78,10 +78,11 @@ its interaction with the moment evaluators is covered in
     wrapper ``rv_case``), the target of the planner hook's
     lowering of SQL ``CASE`` over ``random_variable`` branches.
     It is a real arm in the MC sampler, in RangeCheck (support =
-    union of the value branches), and in the Expectation
-    footprint; like every measure-carrier gate it is refused by
-    the general ``sr_*`` semirings (a guarded selection is not a
-    semiring operation).
+    union of the value branches), and in the Expectation evaluator
+    (closed-form moments via the guard-partition integrator below,
+    Monte Carlo otherwise); like every measure-carrier gate it is
+    refused by the general ``sr_*`` semirings (a guarded selection
+    is not a semiring operation).
 
 In addition, ``gate_value`` gains a *float8 mode*: the
 ``extra`` blob is parsed via ``extract_constant_double``
@@ -194,6 +195,50 @@ Pareto; the rest bisect); closed-form i.i.d. order-statistic
 means need ``iidOrderStatMean`` (Uniform, Exponential, Weibull,
 Pareto). A missing capability falls through to quadrature,
 bisection, or Monte Carlo as appropriate.
+
+The guard-partition integrator
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``gate_case`` moments and conjunction conditioning are evaluated in
+closed form (:cfile:`Expectation.cpp`), not sampled, whenever the shape
+reduces to a **one-dimensional pivot-conjunction integral**
+:math:`\int x^k f_X(x)\,\prod_j W_j(x)\,dx`, where each factor
+:math:`W_j` is a partner variable's CDF :math:`F_{Y_j}(x)` (for
+:math:`X > Y_j`) or its complement, and constant comparisons clip the
+integration window (``pivotConjunctionIntegral``, composite Simpson,
+exact for the polynomial uniform integrands). The shared partner
+variables are marginalised analytically because distinct bare
+``gate_rv`` leaves are independent. Three ``gate_case`` tiers feed it:
+
+- **single-pivot piecewise** (``singlePivotCaseRawMoment``): every guard
+  compares one pivot RV to a constant and every branch is affine in it
+  (``abs`` / ``clamp`` / ReLU); partitions the pivot's support at the
+  thresholds and accumulates ``truncatedRawMoment`` over each interval;
+- **two-arm two-RV** (``twoArmCaseRawMoment``): a single guard between
+  two distinct RVs, each branch affine in one operand (min / max pair);
+- **order statistic** (``orderStatCaseRawMoment``): a first-match
+  tournament recognised as ``max`` / ``min`` of the branch RVs by
+  simulating the selection over every strict ordering (``n!``, capped),
+  then summed as one pivot-conjunction integral per RV-is-extremum term.
+
+Conjunction conditioning ``E[X^k | ∧_j (X op Y_j)]`` is the ratio
+:math:`I_k / I_0` of two such integrals
+(``matchPivotConjunctionConditional`` /
+``try_pivotConjunction_conditional_moment``), slotting into the
+conditional-moment chain after the single-comparison truncation and
+rv-vs-rv paths.
+
+The **probability** side of the same shape -- a correlated island of
+comparisons all sharing one pivot RV, e.g. ``probability((x>y)|(x>z))``
+-- is resolved by an analytic :math:`2^k` joint table in
+:cfile:`HybridEvaluator.cpp` (``detect_shared_pivot_rv`` /
+``inline_analytic_pivot_joint_table``): each outcome word's cell
+probability is one pivot-conjunction integral, installed as mulinputs
+under a shared key exactly like the Monte-Carlo ``inline_joint_table``.
+This is the RV-vs-RV analogue of the monotone-shared-scalar fast path
+(``detect_shared_scalar``), which handles the all-constant-threshold
+case; both keep correlated comparison joints exact at
+``rv_mc_samples = 0`` instead of collapsing to a product of marginals.
 
 SQL Surface
 -----------

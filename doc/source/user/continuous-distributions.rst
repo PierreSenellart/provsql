@@ -396,9 +396,23 @@ transforms as ``CASE`` sugar. The lowering targets
 ``rv_case``, a thin ``random_variable`` wrapper over
 ``provenance_case`` -- which mints the ``gate_case`` from a
 ``[guard₁, value₁, …, guardₖ, valueₖ, default]`` UUID array --
-and both are callable directly when assembling circuits by hand. Because the guards and branches are
-evaluated in the same Monte-Carlo draw, correlations through shared
-leaves are preserved. A ``CASE`` fed to a set-returning consumer
+and both are callable directly when assembling circuits by hand.
+Correlations through shared leaves are always preserved: the guards and
+branches see one consistent draw.
+
+Moments (``expected`` / ``variance`` / ``moment``) of a ``CASE`` are
+returned in **closed form**, without Monte Carlo, for the common shapes
+-- so they are exact even under ``SET provsql.rv_mc_samples = 0``:
+
+- a **piecewise function of one random variable** (guards compare it to
+  constants, branches are affine in it): ``abs`` / ``clamp`` / ReLU and
+  the like, integrated over the branch intervals;
+- a **two-way min / max** (``CASE WHEN x >= y THEN x ELSE y``), and more
+  generally a first-match tournament that computes the **max or min of
+  several** random variables (recognised as an order statistic).
+
+Other multi-variable ``CASE`` shapes fall back to Monte Carlo (or raise
+under ``rv_mc_samples = 0``). A ``CASE`` fed to a set-returning consumer
 (``support`` / ``rv_sample``) in the ``FROM`` clause must be
 materialised first (``CREATE TABLE ... AS SELECT CASE ...``), the same
 pattern the aggregates use.

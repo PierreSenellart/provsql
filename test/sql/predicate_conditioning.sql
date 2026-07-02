@@ -129,12 +129,26 @@ SELECT abs(probability((x >= 2000) | (x >= 1000))
          AS conjunction_exact_at_zero_samples
 FROM r;
 
--- A correlated joint with no closed form (RV-vs-RV comparisons sharing a leaf)
--- genuinely needs Monte Carlo.  Under rv_mc_samples = 0 it now RAISES rather
--- than silently returning the product of the marginals.
-\set VERBOSITY terse
+-- A correlated RV-vs-RV joint sharing a leaf (x compared to two independent
+-- RVs) is resolved analytically via the shared-pivot joint table: the k
+-- comparisons share the pivot x, so the 2^k joint is a table of pivot-
+-- conjunction integrals -- exact even under rv_mc_samples = 0.  For i.i.d.
+-- N(0,1), Pr(x>y ∧ x>z) = 1/3 (x is the max) and Pr(x>z) = 1/2, so the
+-- conditional Pr((x>y) | (x>z)) = 2/3.
 WITH r AS (SELECT normal(0, 1) AS x, normal(0, 1) AS y, normal(0, 1) AS z)
-SELECT probability((x > y) | (x > z)) FROM r;
-\set VERBOSITY default
+SELECT abs(probability((x > y) | (x > z)) - 2.0/3) < 1e-6
+         AS pivot_joint_cond_exact_at_zero,
+       abs(probability((x > y) AND (x > z)) - 1.0/3) < 1e-6
+         AS pivot_joint_and_exact_at_zero
+FROM r;
+
+-- The moment side of the same conjunction: E[X | X>Y ∧ X>Z] conditions X on
+-- being the max of three i.i.d. U(0,1), i.e. X | A ~ Beta(3,1): mean 3/4,
+-- variance 3/80.  The guard-partition integrator evaluates the ratio of the
+-- two pivot-conjunction integrals exactly, no Monte Carlo.
+WITH r AS (SELECT uniform(0,1) AS x, uniform(0,1) AS y, uniform(0,1) AS z)
+SELECT abs(expected(x | (x > y AND x > z)) - 0.75) < 1e-6 AS cond_moment_exact,
+       abs(variance(x | (x > y AND x > z)) - 3.0/80) < 1e-6 AS cond_var_exact
+FROM r;
 RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;

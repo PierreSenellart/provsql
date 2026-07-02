@@ -657,6 +657,164 @@ try_rvVsRv_conditional_moment(const GenericCircuit &gc, gate_t root,
   return total;
 }
 
+/* One comparison of a pivot RV X against another operand, a factor in the
+ * pivot-conjunction integrand.  `other` is an independent bare RV (its CDF
+ * weights the integrand) or, when `isConst`, a constant threshold that clips
+ * the integration window.  `pivotGreater` is true when the factor asserts
+ * X > operand. */
+struct PivotFactor {
+  bool isConst;
+  DistributionSpec other;   /* valid iff !isConst */
+  double konst;             /* valid iff isConst */
+  bool pivotGreater;
+};
+
+/* ∫ x^k f_X(x) Π_j W_j(x) dx over X's support, where each RV factor contributes
+ * W_j(x) = F_{Y_j}(x)  for X>Y_j  and  1-F_{Y_j}(x)  for X<Y_j, and each
+ * constant factor clips the window to {x : x>c} / {x : x<c}.  With k=0 this is
+ * the joint probability P(∧_j comparisons).  Because the comparisons all share
+ * the single pivot X and the other operands are independent, marginalising each
+ * Y_j analytically collapses the joint to this 1-D integral.  Composite Simpson
+ * (exact for the polynomial integrands of the Uniform case).  Returns NaN if a
+ * density / CDF is undefined. */
+double pivotConjunctionIntegral(const DistributionSpec &X,
+                                const std::vector<PivotFactor> &factors,
+                                unsigned k)
+{
+  const auto dX = makeDistribution(X);
+  double lo, hi;
+  if (!dX->integrationRange(lo, hi))
+    return std::numeric_limits<double>::quiet_NaN();
+  for (const auto &f : factors)
+    if (f.isConst) {
+      if (f.pivotGreater) lo = std::max(lo, f.konst);
+      else                hi = std::min(hi, f.konst);
+    }
+  if (!(hi > lo)) return 0.0;
+
+  std::vector<std::unique_ptr<Distribution>> others;
+  std::vector<bool> greater;
+  for (const auto &f : factors)
+    if (!f.isConst) {
+      others.push_back(makeDistribution(f.other));
+      greater.push_back(f.pivotGreater);
+    }
+
+  const int N = 4000;  /* even: composite Simpson */
+  const double h = (hi - lo) / N;
+  double acc = 0.0;
+  for (int i = 0; i <= N; ++i) {
+    const double x = lo + i * h;
+    const double fX = dX->pdf(x);
+    if (std::isnan(fX)) return std::numeric_limits<double>::quiet_NaN();
+    double w = fX;
+    for (std::size_t j = 0; j < others.size(); ++j) {
+      const double FY = others[j]->cdf(x);
+      if (std::isnan(FY)) return std::numeric_limits<double>::quiet_NaN();
+      w *= greater[j] ? FY : (1.0 - FY);
+    }
+    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+    acc += coeff * std::pow(x, static_cast<double>(k)) * w;
+  }
+  return acc * h / 3.0;
+}
+
+/* A conditioning event that is a conjunction of comparisons all sharing the
+ * target bare RV X, each against an independent bare RV or a constant. */
+struct PivotConjunctionCond {
+  DistributionSpec targetSpec;
+  std::vector<PivotFactor> factors;
+};
+
+/* Match @p event_root as a @c gate_times (AND) of >=2 @c gate_cmp, each
+ * comparing the target @p root (bare RV X) with an independent bare RV or a
+ * constant.  Returns nullopt for a single comparison (the truncation / rvVsRv
+ * paths own that), an agg comparison, a cmp not involving X, a non-bare other
+ * operand, or a repeated / shared other operand (would break independence). */
+std::optional<PivotConjunctionCond>
+matchPivotConjunctionConditional(const GenericCircuit &gc, gate_t root,
+                                 gate_t event_root)
+{
+  if (gc.getGateType(root) != gate_rv ||
+      gc.getGateType(event_root) != gate_times)
+    return std::nullopt;
+  auto specX = parse_distribution_spec(gc.getExtra(root));
+  if (!specX) return std::nullopt;
+
+  const auto &kids = gc.getWires(event_root);
+  if (kids.size() < 2) return std::nullopt;
+  std::vector<PivotFactor> factors;
+  std::set<gate_t> othersSeen;
+  for (gate_t c : kids) {
+    if (gc.getGateType(c) != gate_cmp) return std::nullopt;
+    const auto &w = gc.getWires(c);
+    if (w.size() != 2) return std::nullopt;
+    bool ok = false;
+    ComparisonOperator op = cmpOpFromOid(gc.getInfos(c).first, ok);
+    if (!ok || op == ComparisonOperator::EQ || op == ComparisonOperator::NE)
+      return std::nullopt;
+    gate_t other; bool targetLeft;
+    if (w[0] == root)      { other = w[1]; targetLeft = true; }
+    else if (w[1] == root) { other = w[0]; targetLeft = false; }
+    else return std::nullopt;
+    const bool greaterOp = (op == ComparisonOperator::GT ||
+                            op == ComparisonOperator::GE);
+    const bool lessOp    = (op == ComparisonOperator::LT ||
+                            op == ComparisonOperator::LE);
+    const bool pivotGreater = targetLeft ? greaterOp : lessOp;
+
+    PivotFactor f;
+    if (gc.getGateType(other) == gate_value) {
+      f = {true, DistributionSpec{}, parseDoubleStrict(gc.getExtra(other)),
+           pivotGreater};
+    } else if (gc.getGateType(other) == gate_rv && other != root) {
+      if (!othersSeen.insert(other).second) return std::nullopt;
+      auto specY = parse_distribution_spec(gc.getExtra(other));
+      if (!specY) return std::nullopt;
+      f = {false, *specY, 0.0, pivotGreater};
+    } else return std::nullopt;
+    factors.push_back(std::move(f));
+  }
+  return PivotConjunctionCond{*specX, std::move(factors)};
+}
+
+/* Closed-form (quadrature) E[X^k | ∧_j (X op Y_j)] for a conjunction of
+ * comparisons sharing the target X.  E[X^k | A] = I_k / I_0 with
+ * I_q = ∫ x^q f_X Π_j W_j dx; central via the usual binomial expansion. */
+std::optional<double>
+try_pivotConjunction_conditional_moment(const GenericCircuit &gc, gate_t root,
+                                        gate_t event_root, unsigned k,
+                                        bool central)
+{
+  auto m = matchPivotConjunctionConditional(gc, root, event_root);
+  if (!m) return std::nullopt;
+
+  const double den = pivotConjunctionIntegral(m->targetSpec, m->factors, 0);
+  if (std::isnan(den) || !(den > 1e-12))
+    return std::nullopt;   /* negligible / undefined event -> infeasible or MC */
+  auto raw = [&](unsigned q) -> std::optional<double> {
+    if (q == 0) return 1.0;
+    const double num = pivotConjunctionIntegral(m->targetSpec, m->factors, q);
+    if (std::isnan(num)) return std::nullopt;
+    return num / den;
+  };
+
+  if (!central) return raw(k);
+
+  auto mu_opt = raw(1);
+  if (!mu_opt) return std::nullopt;
+  const double mu = *mu_opt;
+  if (k == 1) return 0.0;
+  double total = 0.0;
+  for (unsigned i = 0; i <= k; ++i) {
+    auto m_i = raw(i);
+    if (!m_i) return std::nullopt;
+    total += binomial(k, i)
+           * std::pow(-mu, static_cast<double>(k - i)) * (*m_i);
+  }
+  return total;
+}
+
 /* Closed-form image of a unary LN / EXP transform over a bare gate_rv
  * child, via the TransformRuleRegistry (exp(normal) is lognormal,
  * ln(lognormal) is normal).  Read-only: unlike the hybrid simplifier's
@@ -721,6 +879,390 @@ std::unique_ptr<Distribution> product_image(const GenericCircuit &gc,
   if (!combined) return nullptr;
   if (c_total != 1.0) return combined->scale(c_total);
   return combined;
+}
+
+/* ------------------------------------------------------------------------
+ * Tier A of the gate_case guard-partition integrator: a CASE that is a
+ * piecewise function of a SINGLE pivot random variable X.  Every guard is a
+ * bare gate_cmp comparing X against a constant, and every arm value (and the
+ * default) is affine in X -- a constant, or a*X + b.  This is exactly the
+ * abs / ReLU / clamp piecewise-sugar shape.
+ *
+ * Since the whole CASE depends on one RV, E[case^k] is a 1-D integral that
+ * partitions X's support at the guard thresholds: on each sub-interval a
+ * single arm fires (first-match, reproducing MonteCarloSampler's order), and
+ * its affine value's k-th moment over that interval is a binomial combination
+ * of the truncated raw moments
+ *   ∫_lo^hi x^j f(x) dx = truncatedRawMoment(lo,hi,j) · (F(hi)-F(lo)).
+ * Returns std::nullopt when the shape is not single-pivot-affine or the family
+ * lacks a closed-form truncated moment, so the caller falls back to MC. */
+
+struct AffineArm { double a, b; };   /* value = a*X + b */
+
+std::optional<AffineArm>
+affineInPivot(const GenericCircuit &gc, gate_t arm, gate_t pivot)
+{
+  const auto t = gc.getGateType(arm);
+  if (t == gate_value)
+    return AffineArm{0.0, parseDoubleStrict(gc.getExtra(arm))};
+  if (t == gate_rv)
+    return (arm == pivot) ? std::optional<AffineArm>(AffineArm{1.0, 0.0})
+                          : std::nullopt;
+  if (t == gate_arith) {
+    const auto op = static_cast<provsql_arith_op>(gc.getInfos(arm).first);
+    const auto &w = gc.getWires(arm);
+    auto isPivot = [&](gate_t x) {
+      return gc.getGateType(x) == gate_rv && x == pivot;
+    };
+    auto constVal = [&](gate_t x, double &out) {
+      if (gc.getGateType(x) != gate_value) return false;
+      out = parseDoubleStrict(gc.getExtra(x));
+      return true;
+    };
+    double c;
+    if (op == PROVSQL_ARITH_NEG && w.size() == 1 && isPivot(w[0]))
+      return AffineArm{-1.0, 0.0};
+    if (op == PROVSQL_ARITH_PLUS && w.size() == 2) {
+      if (isPivot(w[0]) && constVal(w[1], c)) return AffineArm{1.0, c};
+      if (isPivot(w[1]) && constVal(w[0], c)) return AffineArm{1.0, c};
+    }
+    if (op == PROVSQL_ARITH_MINUS && w.size() == 2) {
+      if (isPivot(w[0]) && constVal(w[1], c)) return AffineArm{1.0, -c};   /* X - c */
+      if (isPivot(w[1]) && constVal(w[0], c)) return AffineArm{-1.0, c};   /* c - X */
+    }
+    if (op == PROVSQL_ARITH_TIMES && w.size() == 2) {
+      if (isPivot(w[0]) && constVal(w[1], c)) return AffineArm{c, 0.0};
+      if (isPivot(w[1]) && constVal(w[0], c)) return AffineArm{c, 0.0};
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<double>
+singlePivotCaseRawMoment(const GenericCircuit &gc, gate_t g, unsigned k)
+{
+  if (gc.getGateType(g) != gate_case) return std::nullopt;
+  const auto &wires = gc.getWires(g);
+  if (wires.size() < 3 || wires.size() % 2 == 0) return std::nullopt;
+  const std::size_t m = wires.size() / 2;   /* guard/value pairs */
+
+  /* ---- identify the common pivot RV and each guard's constant threshold ---- */
+  gate_t pivot{}; bool havePivot = false;
+  struct Guard { double c; ComparisonOperator op; bool pivotLeft; };
+  std::vector<Guard> guards;
+  guards.reserve(m);
+  for (std::size_t i = 0; i < m; ++i) {
+    gate_t gd = wires[2 * i];
+    if (gc.getGateType(gd) != gate_cmp) return std::nullopt;
+    const auto &gw = gc.getWires(gd);
+    if (gw.size() != 2) return std::nullopt;
+    bool ok = false;
+    ComparisonOperator op = cmpOpFromOid(gc.getInfos(gd).first, ok);
+    if (!ok || op == ComparisonOperator::EQ || op == ComparisonOperator::NE)
+      return std::nullopt;
+    gate_t rvSide, constSide; bool pivotLeft;
+    if (gc.getGateType(gw[0]) == gate_rv && gc.getGateType(gw[1]) == gate_value) {
+      rvSide = gw[0]; constSide = gw[1]; pivotLeft = true;
+    } else if (gc.getGateType(gw[1]) == gate_rv &&
+               gc.getGateType(gw[0]) == gate_value) {
+      rvSide = gw[1]; constSide = gw[0]; pivotLeft = false;
+    } else return std::nullopt;
+    if (!havePivot) { pivot = rvSide; havePivot = true; }
+    else if (rvSide != pivot) return std::nullopt;  /* multi-pivot -> Tier B */
+    guards.push_back({parseDoubleStrict(gc.getExtra(constSide)), op, pivotLeft});
+  }
+  if (!havePivot) return std::nullopt;
+
+  auto spec = parse_distribution_spec(gc.getExtra(pivot));
+  if (!spec) return std::nullopt;
+  const auto dist = makeDistribution(*spec);
+
+  /* ---- classify each arm (values then default) as affine in the pivot ---- */
+  std::vector<AffineArm> arms;   /* arms[0..m-1] value branches, arms[m] default */
+  arms.reserve(m + 1);
+  for (std::size_t i = 0; i < m; ++i) {
+    auto af = affineInPivot(gc, wires[2 * i + 1], pivot);
+    if (!af) return std::nullopt;
+    arms.push_back(*af);
+  }
+  {
+    auto af = affineInPivot(gc, wires.back(), pivot);
+    if (!af) return std::nullopt;
+    arms.push_back(*af);
+  }
+
+  /* First-match arm selection at a pivot value x (guards are half-lines, so
+   * this is constant across the open interior of every partition segment). */
+  auto guardTrue = [](const Guard &gd, double x) -> bool {
+    const double lhs = gd.pivotLeft ? x    : gd.c;
+    const double rhs = gd.pivotLeft ? gd.c : x;
+    switch (gd.op) {
+      case ComparisonOperator::LT: return lhs <  rhs;
+      case ComparisonOperator::LE: return lhs <= rhs;
+      case ComparisonOperator::GT: return lhs >  rhs;
+      case ComparisonOperator::GE: return lhs >= rhs;
+      default:                     return false;
+    }
+  };
+  auto pickArm = [&](double x) -> const AffineArm & {
+    for (std::size_t i = 0; i < m; ++i)
+      if (guardTrue(guards[i], x)) return arms[i];
+    return arms[m];
+  };
+
+  /* ---- partition the pivot's support at the (sorted, deduped) thresholds ---- */
+  std::vector<double> cuts;
+  for (const auto &gd : guards) cuts.push_back(gd.c);
+  std::sort(cuts.begin(), cuts.end());
+  cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+
+  const double NINF = -std::numeric_limits<double>::infinity();
+  const double PINF =  std::numeric_limits<double>::infinity();
+
+  double total = 0.0;
+  const std::size_t nseg = cuts.size() + 1;
+  for (std::size_t s = 0; s < nseg; ++s) {
+    const double lo = (s == 0)           ? NINF : cuts[s - 1];
+    const double hi = (s == cuts.size()) ? PINF : cuts[s];
+    if (lo == hi) continue;
+
+    double t;                            /* interior test point of (lo, hi) */
+    if (lo == NINF && hi == PINF) t = 0.0;
+    else if (lo == NINF)          t = hi - 1.0;
+    else if (hi == PINF)          t = lo + 1.0;
+    else                          t = 0.5 * (lo + hi);
+    const AffineArm &arm = pickArm(t);
+
+    const double dF = dist->cdf(hi) - dist->cdf(lo);
+    if (std::isnan(dF)) return std::nullopt;
+    if (dF <= 0.0) continue;
+
+    /* E[(aX+b)^k · 1(lo<X<hi)] = Σ_j C(k,j) a^j b^{k-j} ∫ x^j f dx. */
+    for (unsigned j = 0; j <= k; ++j) {
+      const double aj = std::pow(arm.a, static_cast<double>(j));
+      if (aj == 0.0) continue;          /* constant arm: only the j=0 term */
+      const double coef = binomial(k, j) * aj
+                        * std::pow(arm.b, static_cast<double>(k - j));
+      if (coef == 0.0) continue;
+      double intj;
+      if (j == 0) {
+        intj = dF;
+      } else {
+        auto trm = dist->truncatedRawMoment(lo, hi, j);
+        if (!trm) return std::nullopt;  /* family lacks the closed form -> MC */
+        intj = *trm * dF;
+      }
+      total += coef * intj;
+    }
+  }
+  return total;
+}
+
+/* Tier B of the guard-partition integrator: a two-arm CASE
+ *   CASE WHEN (a op b) THEN A ELSE B
+ * whose single guard compares two DISTINCT independent bare RVs a, b, and whose
+ * arms A (under the guard) and B (under its complement) are each affine in one
+ * of a, b.  Each arm's contribution is a 1-D integral over its value's pivot
+ * RV, the other operand marginalised to a CDF weight -- exactly the pivot-
+ * conjunction integral with a single factor.  nullopt for any other shape
+ * (guard vs a constant is Tier A; >2 arms; an arm not affine in a comparison
+ * operand; a family without a usable pdf/cdf), so the caller falls to MC. */
+std::optional<double>
+twoArmCaseRawMoment(const GenericCircuit &gc, gate_t g, unsigned k)
+{
+  if (gc.getGateType(g) != gate_case) return std::nullopt;
+  const auto &wires = gc.getWires(g);
+  if (wires.size() != 3) return std::nullopt;   /* one guard/value + default */
+  gate_t guard = wires[0];
+  if (gc.getGateType(guard) != gate_cmp) return std::nullopt;
+  const auto &gw = gc.getWires(guard);
+  if (gw.size() != 2) return std::nullopt;
+  bool ok = false;
+  ComparisonOperator op = cmpOpFromOid(gc.getInfos(guard).first, ok);
+  if (!ok || op == ComparisonOperator::EQ || op == ComparisonOperator::NE)
+    return std::nullopt;
+  gate_t a = gw[0], b = gw[1];
+  if (gc.getGateType(a) != gate_rv || gc.getGateType(b) != gate_rv || a == b)
+    return std::nullopt;
+  auto specA = parse_distribution_spec(gc.getExtra(a));
+  auto specB = parse_distribution_spec(gc.getExtra(b));
+  if (!specA || !specB) return std::nullopt;
+  /* op GT/GE with a as the left operand => the guard asserts a > b. */
+  const bool guard_a_gt_b = (op == ComparisonOperator::GT ||
+                             op == ComparisonOperator::GE);
+
+  /* E[value^k · 1(region)] for an arm whose value is affine in a or b, where
+   * `regionAgtB` says the arm's region is (a > b). */
+  auto armContribution = [&](gate_t armGate, bool regionAgtB)
+                          -> std::optional<double> {
+    for (int which = 0; which < 2; ++which) {
+      gate_t pv = (which == 0) ? a : b;
+      auto af = affineInPivot(gc, armGate, pv);
+      if (!af) continue;
+      const DistributionSpec &pvSpec = (which == 0) ? *specA : *specB;
+      const DistributionSpec &otSpec = (which == 0) ? *specB : *specA;
+      /* Weight orientation: with pivot a the region a>b integrates b to F_b(a);
+       * with pivot b the same region means b<a, i.e. 1-F_a(b). */
+      const bool pivotGreater = (which == 0) ? regionAgtB : !regionAgtB;
+      const PivotFactor f{false, otSpec, 0.0, pivotGreater};
+      double total = 0.0;
+      for (unsigned j = 0; j <= k; ++j) {
+        const double aj = std::pow(af->a, static_cast<double>(j));
+        if (aj == 0.0) continue;
+        const double coef = binomial(k, j) * aj
+                          * std::pow(af->b, static_cast<double>(k - j));
+        if (coef == 0.0) continue;
+        const double I = pivotConjunctionIntegral(pvSpec, {f}, j);
+        if (std::isnan(I)) return std::nullopt;
+        total += coef * I;
+      }
+      return total;
+    }
+    return std::nullopt;   /* arm not affine in either comparison operand */
+  };
+
+  auto c0 = armContribution(wires[1], guard_a_gt_b);    /* value under guard */
+  if (!c0) return std::nullopt;
+  auto c1 = armContribution(wires[2], !guard_a_gt_b);   /* default under ¬guard */
+  if (!c1) return std::nullopt;
+  return *c0 + *c1;
+}
+
+/* Evaluate a gate_case guard (a bare gate_cmp, or an AND/OR tree of them over
+ * value RVs) under a strict ordering `rank` of the RVs (higher rank = larger
+ * value).  Returns nullopt if the guard references a constant, an RV outside
+ * `rank`, or an unsupported gate -- i.e. the CASE is not a pure RV tournament. */
+std::optional<bool>
+evalGuardUnderOrder(const GenericCircuit &gc, gate_t guard,
+                    const std::unordered_map<gate_t, int> &rank)
+{
+  const auto t = gc.getGateType(guard);
+  if (t == gate_cmp) {
+    const auto &w = gc.getWires(guard);
+    if (w.size() != 2) return std::nullopt;
+    bool ok = false;
+    ComparisonOperator op = cmpOpFromOid(gc.getInfos(guard).first, ok);
+    if (!ok) return std::nullopt;
+    auto ia = rank.find(w[0]), ib = rank.find(w[1]);
+    if (ia == rank.end() || ib == rank.end()) return std::nullopt;
+    const int ra = ia->second, rb = ib->second;   /* distinct RVs -> ra != rb */
+    switch (op) {
+      case ComparisonOperator::LT:
+      case ComparisonOperator::LE: return ra < rb;
+      case ComparisonOperator::GT:
+      case ComparisonOperator::GE: return ra > rb;
+      case ComparisonOperator::EQ: return false;   /* a.s. for continuous RVs */
+      case ComparisonOperator::NE: return true;
+    }
+    return std::nullopt;
+  }
+  if (t == gate_times || t == gate_plus) {
+    const bool isAnd = (t == gate_times);
+    bool acc = isAnd;
+    for (gate_t c : gc.getWires(guard)) {
+      auto v = evalGuardUnderOrder(gc, c, rank);
+      if (!v) return std::nullopt;
+      acc = isAnd ? (acc && *v) : (acc || *v);
+    }
+    return acc;
+  }
+  return std::nullopt;
+}
+
+/* Tier C: a first-match gate_case that computes the max or min of a set of
+ * independent bare RVs.  Recognised by simulating the first-match selection
+ * over every strict ordering of the value RVs (continuous RVs tie with
+ * probability 0, so strict orders capture the a.s. behaviour): if the selected
+ * value is always the maximum (resp. minimum), the CASE is that order
+ * statistic, whose k-th moment is
+ *   Σ_i ∫ x^k f_{X_i}(x) Π_{j≠i} F_{X_j}(x) dx      (max; min flips F to 1-F),
+ * a sum of pivot-conjunction integrals.  Guards may be AND/OR trees of RV-vs-RV
+ * comparisons among the value RVs; a constant or an outside RV in a guard, a
+ * non-bare-RV arm, or too many RVs (the n! simulation is capped) decline. */
+std::optional<double>
+orderStatCaseRawMoment(const GenericCircuit &gc, gate_t g, unsigned k)
+{
+  if (gc.getGateType(g) != gate_case) return std::nullopt;
+  const auto &wires = gc.getWires(g);
+  if (wires.size() < 3 || wires.size() % 2 == 0) return std::nullopt;
+  const std::size_t m = wires.size() / 2;
+
+  /* Arms (values + default) must all be bare RVs; collect the distinct set. */
+  std::vector<gate_t> armRV(m + 1);
+  std::vector<gate_t> uniq;
+  std::unordered_map<gate_t, DistributionSpec> specOf;
+  auto noteRV = [&](gate_t v) -> bool {
+    if (gc.getGateType(v) != gate_rv) return false;
+    if (specOf.find(v) == specOf.end()) {
+      auto sp = parse_distribution_spec(gc.getExtra(v));
+      if (!sp) return false;
+      specOf.emplace(v, *sp);
+      uniq.push_back(v);
+    }
+    return true;
+  };
+  for (std::size_t i = 0; i < m; ++i) {
+    armRV[i] = wires[2 * i + 1];
+    if (!noteRV(armRV[i])) return std::nullopt;
+  }
+  armRV[m] = wires.back();
+  if (!noteRV(armRV[m])) return std::nullopt;
+
+  const std::size_t n = uniq.size();
+  if (n < 2 || n > 7) return std::nullopt;   /* n! simulation cap */
+
+  /* Guards must reference only the value RVs (checked implicitly by
+   * evalGuardUnderOrder, which declines on any leaf outside `rank`). */
+  std::vector<gate_t> guards(m);
+  for (std::size_t i = 0; i < m; ++i) guards[i] = wires[2 * i];
+
+  /* Simulate first-match over every strict ordering of the RVs. */
+  std::vector<std::size_t> perm(n);
+  for (std::size_t i = 0; i < n; ++i) perm[i] = i;
+  bool alwaysMax = true, alwaysMin = true;
+  do {
+    std::unordered_map<gate_t, int> rank;
+    for (std::size_t i = 0; i < n; ++i) rank[uniq[perm[i]]] = static_cast<int>(i);
+    /* max / min RV under this ordering (highest / lowest rank). */
+    gate_t maxRV = uniq[perm[n - 1]], minRV = uniq[perm[0]];
+
+    gate_t selected = armRV[m];   /* default if no guard fires */
+    for (std::size_t i = 0; i < m; ++i) {
+      auto gv = evalGuardUnderOrder(gc, guards[i], rank);
+      if (!gv) return std::nullopt;
+      if (*gv) { selected = armRV[i]; break; }
+    }
+    if (selected != maxRV) alwaysMax = false;
+    if (selected != minRV) alwaysMin = false;
+    if (!alwaysMax && !alwaysMin) return std::nullopt;
+  } while (std::next_permutation(perm.begin(), perm.end()));
+
+  const bool isMax = alwaysMax;   /* prefer max if (degenerately) both hold */
+
+  /* Σ_i ∫ x^k f_{X_i} Π_{j≠i} (F_{X_j} or 1-F_{X_j}) dx. */
+  double total = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    std::vector<PivotFactor> factors;
+    factors.reserve(n - 1);
+    for (std::size_t j = 0; j < n; ++j) {
+      if (j == i) continue;
+      factors.push_back({false, specOf.at(uniq[j]), 0.0, isMax});
+    }
+    const double I = pivotConjunctionIntegral(specOf.at(uniq[i]), factors, k);
+    if (std::isnan(I)) return std::nullopt;
+    total += I;
+  }
+  return total;
+}
+
+/* Analytic k-th raw moment of a gate_case, trying each guard-partition tier. */
+std::optional<double>
+caseAnalyticRawMoment(const GenericCircuit &gc, gate_t g, unsigned k)
+{
+  if (auto v = singlePivotCaseRawMoment(gc, g, k)) return v;
+  if (auto v = twoArmCaseRawMoment(gc, g, k)) return v;
+  if (auto v = orderStatCaseRawMoment(gc, g, k)) return v;
+  return std::nullopt;
 }
 
 double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
@@ -830,6 +1372,10 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
       return pi        * rec_expectation(gc, wires[1], fp)
            + (1.0 - pi) * rec_expectation(gc, wires[2], fp);
     }
+    case gate_case:
+      if (auto v = caseAnalyticRawMoment(gc, g, 1))
+        return *v;
+      return mc_raw_moment(gc, g, 1, "Expectation of gate type gate_case");
     default:
       return mc_raw_moment(gc, g, 1,
         "Expectation of gate type " + std::string(gate_type_name[type]));
@@ -952,6 +1498,14 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
       return pi        * (vx + ex * ex)
            + (1.0 - pi) * (vy + ey * ey)
            - em * em;
+    }
+    case gate_case: {
+      if (auto m2 = caseAnalyticRawMoment(gc, g, 2))
+        if (auto m1 = caseAnalyticRawMoment(gc, g, 1))
+          return *m2 - (*m1) * (*m1);
+      const std::string what = "Variance of gate type gate_case";
+      const double mu = mc_raw_moment(gc, g, 1, what);
+      return mc_central_moment(gc, g, 2, mu, what);
     }
     default: {
       const std::string what =
@@ -1093,6 +1647,10 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
       return pi        * rec_raw_moment(gc, wires[1], k, fp)
            + (1.0 - pi) * rec_raw_moment(gc, wires[2], k, fp);
     }
+    case gate_case:
+      if (auto v = caseAnalyticRawMoment(gc, g, k))
+        return *v;
+      return mc_raw_moment(gc, g, k, "Raw moment of gate type gate_case");
     default:
       return mc_raw_moment(gc, g, k,
         "Raw moment of gate type " + std::string(gate_type_name[type]));
@@ -1123,6 +1681,9 @@ double conditional_raw_moment(const GenericCircuit &gc, gate_t root,
     return *cf;
   if (auto cf = try_rvVsRv_conditional_moment(gc, root, event_root, k, false))
     return *cf;
+  if (auto cf = try_pivotConjunction_conditional_moment(gc, root, event_root,
+                                                        k, false))
+    return *cf;
   if (eventIsProvablyInfeasible(gc, root, event_root))
     raise_infeasible_event(gc, root);
   return mc_conditional_raw_moment(
@@ -1139,6 +1700,9 @@ double conditional_central_moment(const GenericCircuit &gc, gate_t root,
   if (auto cf = try_truncated_closed_form(gc, root, event_root, k, true))
     return *cf;
   if (auto cf = try_rvVsRv_conditional_moment(gc, root, event_root, k, true))
+    return *cf;
+  if (auto cf = try_pivotConjunction_conditional_moment(gc, root, event_root,
+                                                        k, true))
     return *cf;
   if (eventIsProvablyInfeasible(gc, root, event_root))
     raise_infeasible_event(gc, root);

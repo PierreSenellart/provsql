@@ -111,6 +111,26 @@ dependence (it is not ``Pr(A)·Pr(B)``); comparisons against constants on
 one distribution are resolved analytically and stay exact even at
 ``provsql.rv_mc_samples = 0``.
 
+The same holds when a shared random variable is compared against *other*
+random variables rather than constants -- e.g. conditioning on which of
+several variables is largest. Both the probability and the moment sides
+are exact (no Monte Carlo):
+
+.. code-block:: postgresql
+
+    WITH r AS (SELECT uniform(0,1) x, uniform(0,1) y, uniform(0,1) z)
+    SELECT probability((x > y) | (x > z))          AS pr,      -- 0.6667
+           expected(x | (x > y AND x > z))         AS cond_e,  -- 0.75
+           variance(x | (x > y AND x > z))         AS cond_v   -- 0.0375
+    FROM r;
+
+The event ``x > y AND x > z`` says ``x`` is the largest of the three, so
+``x`` conditioned on it is ``Beta(3,1)`` (mean ``3/4``, variance
+``3/80``). ProvSQL evaluates these by marginalising each independent
+partner variable analytically, leaving a one-dimensional integral over
+the shared variable -- exact for the uniform case and high-accuracy
+otherwise.
+
 The result of ``value | evidence`` is **terminal**: a conditioned value may
 only be conditioned further, never combined into a larger ``plus`` /
 ``times`` / ``monus`` / aggregate gate.
