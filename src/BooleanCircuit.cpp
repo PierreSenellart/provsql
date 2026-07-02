@@ -828,10 +828,30 @@ void BooleanCircuit::dnfBounds(
 
 double BooleanCircuit::possibleWorlds(gate_t g) const
 {
-  if(inputs.size()>=8*sizeof(unsigned long long))
+  /* Enumerate only the inputs reachable from g.  An input the root does
+   * not reach factors out of every world (its two branches sum to 1), so
+   * restricting the enumeration returns the identical probability -- and
+   * the circuit object routinely carries gates the evaluated root no
+   * longer reaches (e.g. a categorical mulinput block whose comparison
+   * the analytic pre-pass collapsed to a single Bernoulli), which would
+   * otherwise inflate the enumeration exponentially for nothing. */
+  std::set<gate_t> rinputs;
+  {
+    std::unordered_set<gate_t> seen;
+    std::stack<gate_t> stk;
+    stk.push(g);
+    while(!stk.empty()) {
+      gate_t u = stk.top(); stk.pop();
+      if(!seen.insert(u).second) continue;
+      if(getGateType(u) == BooleanGate::IN) rinputs.insert(u);
+      for(gate_t w: getWires(u)) stk.push(w);
+    }
+  }
+
+  if(rinputs.size()>=8*sizeof(unsigned long long))
     throw CircuitException("Too many possible worlds to iterate over");
 
-  unsigned long long nb=(1ULL<<inputs.size());
+  unsigned long long nb=(1ULL<<rinputs.size());
   double totalp=0.;
 
   for(unsigned long long i=0; i < nb; ++i) {
@@ -839,7 +859,7 @@ double BooleanCircuit::possibleWorlds(gate_t g) const
     double p = 1;
 
     unsigned j=0;
-    for(gate_t in : inputs) {
+    for(gate_t in : rinputs) {
       if(i & (1ULL << j)) {
         s.insert(in);
         p*=getProb(in);
