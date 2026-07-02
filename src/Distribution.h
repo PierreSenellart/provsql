@@ -17,6 +17,7 @@
 #ifndef PROVSQL_DISTRIBUTION_H
 #define PROVSQL_DISTRIBUTION_H
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <random>
@@ -133,6 +134,25 @@ public:
   virtual std::optional<std::vector<double>> sampleTruncated(
     std::mt19937_64 &rng, double lo, double hi, unsigned n) const {
     (void) rng; (void) lo; (void) hi; (void) n;
+    return std::nullopt;
+  }
+
+  /**
+   * @brief Closed-form mean of the max / min of @p n i.i.d. copies of X.
+   *
+   * - Uniform(a, b): @c E[max] @c = @c a + (b-a)·n/(n+1),
+   *   @c E[min] @c = @c a + (b-a)/(n+1).
+   * - Exponential(λ): @c E[min] @c = @c 1/(nλ), @c E[max] @c = @c H_n/λ
+   *   (harmonic number), for @c λ > 0.
+   *
+   * @c std::nullopt when the family has no elementary order-statistic
+   * mean (Normal, Erlang -- those need the 1-D layer-cake quadrature) or
+   * the parameters are degenerate, so the caller falls back to
+   * quadrature / Monte Carlo.
+   */
+  virtual std::optional<double> iidOrderStatMean(std::size_t n,
+                                                 bool isMax) const {
+    (void) n; (void) isMax;
     return std::nullopt;
   }
 

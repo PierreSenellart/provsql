@@ -204,11 +204,10 @@ bool pairwise_disjoint(FootprintCache &fp, const std::vector<gate_t> &children)
  * leaves, or a family without an elementary order-statistic mean) so the
  * caller falls back to Monte Carlo.
  *
- * - i.i.d. Uniform(a, b):  E[max] = a + (b-a)·n/(n+1),  E[min] = a + (b-a)/(n+1).
- * - i.i.d. Exponential(λ): E[min] = 1/(nλ),  E[max] = H_n/λ  (H_n harmonic).
- *
- * Normal and Erlang i.i.d. maxima have no elementary closed form (they need
- * the 1-D order-statistic quadrature), so they decline here.
+ * The per-family closed forms live in @c Distribution::iidOrderStatMean
+ * (Uniform, Exponential; Normal and Erlang i.i.d. maxima have no elementary
+ * closed form -- they need the 1-D order-statistic quadrature -- so they
+ * decline there).
  */
 std::optional<double>
 iidOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
@@ -249,30 +248,7 @@ iidOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
         specs[i].p1 != specs[0].p1 || specs[i].p2 != specs[0].p2)
       return std::nullopt;
 
-  const std::size_t n = specs.size();
-  switch (specs[0].kind) {
-    case DistKind::Uniform: {
-      const double a = specs[0].p1, b = specs[0].p2;
-      const double frac = isMax ? static_cast<double>(n) / (n + 1)
-                                : 1.0 / (n + 1);
-      return a + (b - a) * frac;
-    }
-    case DistKind::Exponential: {
-      const double lambda = specs[0].p1;
-      if (!(lambda > 0.0))
-        return std::nullopt;
-      if (!isMax)
-        return 1.0 / (static_cast<double>(n) * lambda);  /* min of exps */
-      double H = 0.0;                                     /* max: harmonic */
-      for (std::size_t k = 1; k <= n; ++k)
-        H += 1.0 / static_cast<double>(k);
-      return H / lambda;
-    }
-    case DistKind::Normal:
-    case DistKind::Erlang:
-      return std::nullopt;  /* no elementary order-statistic mean */
-  }
-  return std::nullopt;
+  return makeDistribution(specs[0])->iidOrderStatMean(specs.size(), isMax);
 }
 
 /* Closed-form (quadrature) E[max] / E[min] of a gate_arith MAX/MIN whose

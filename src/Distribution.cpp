@@ -470,6 +470,13 @@ public:
     for (unsigned i = 0; i < n; ++i) out.push_back(U(rng));
     return out;
   }
+  std::optional<double> iidOrderStatMean(std::size_t n,
+                                         bool isMax) const override {
+    const double a = p1_, b = p2_;
+    const double frac = isMax ? static_cast<double>(n) / (n + 1)
+                              : 1.0 / (n + 1);
+    return a + (b - a) * frac;
+  }
   std::unique_ptr<Distribution> affine(double a, double b) const override {
     if (a == 0.0) return nullptr;
     /* A negative coefficient flips the bounds. */
@@ -615,6 +622,18 @@ public:
       out.push_back(-std::log1p(-u) / lambda);
     }
     return out;
+  }
+  std::optional<double> iidOrderStatMean(std::size_t n,
+                                         bool isMax) const override {
+    const double lambda = p1_;
+    if (!(lambda > 0.0))
+      return std::nullopt;
+    if (!isMax)
+      return 1.0 / (static_cast<double>(n) * lambda);  /* min of exps */
+    double H = 0.0;                                     /* max: harmonic */
+    for (std::size_t k = 1; k <= n; ++k)
+      H += 1.0 / static_cast<double>(k);
+    return H / lambda;
   }
   std::unique_ptr<Distribution> affine(double a, double b) const override {
     /* Closed under positive scaling only: a negative coefficient flips
