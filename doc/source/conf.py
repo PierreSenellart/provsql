@@ -182,6 +182,8 @@ _SQL_FUNC_MAP = {
     'uniform':                  '/doxygen-sql/html/group__random__variable__type.html#ga9f416167141b28eb56f3ae2d340785b8',
     'exponential':              '/doxygen-sql/html/group__random__variable__type.html#ga1b3c2233e34a026b8c32c81828c3ca83',
     'erlang':                   '/doxygen-sql/html/group__random__variable__type.html#ga4a6880ef663e073e187de58628107f2d',
+    'gamma':                    '/doxygen-sql/html/group__random__variable__type.html#ga776a6709b93af800a8d91f8196314e79',
+    'chi_squared':              '/doxygen-sql/html/group__random__variable__type.html#gac74b146395e656c35c7613280d00d264',
     'categorical':              '/doxygen-sql/html/group__random__variable__type.html#ga7dd6e75bde4c70b80c07e5e29478a801',
     'mixture':                  '/doxygen-sql/html/group__random__variable__type.html#gab2b650b7c42f7e0ab69c91d447a756b0',
     'as_random':                '/doxygen-sql/html/group__random__variable__type.html#ga493b093cde0b627ee7bd02cd54b31802',

@@ -1,0 +1,54 @@
+\set ECHO none
+gamma_mean_exact
+t
+(1 row)
+gamma_var_exact
+t
+(1 row)
+gamma_m2_exact
+t
+(1 row)
+lo|hi
+0|Infinity
+(1 row)
+gamma_cdf_series_exact
+t
+(1 row)
+gamma_cdf_cf_exact
+t
+(1 row)
+chisq1_sugar_exact
+t
+(1 row)
+chisq4_via_erlang_exact
+t
+(1 row)
+gamma_integer_routes_to_erlang
+t
+(1 row)
+gamma_sum_closure_exact
+t
+(1 row)
+gamma_scale_fold_exact
+t
+(1 row)
+gamma_vs_gamma_mc_within_tolerance
+t
+(1 row)
+ERROR:  provsql.gamma: k must be strictly positive (got 0)
+ERROR:  provsql.gamma: lambda must be strictly positive (got 0)
+ERROR:  provsql.gamma: k must be finite (got NaN)
+ERROR:  provsql.chi_squared: k must be strictly positive (got -1)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+a|t
+b|t
+(2 rows)
+continuous_gamma_done
+ok
+(1 row)

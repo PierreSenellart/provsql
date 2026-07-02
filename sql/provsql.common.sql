@@ -2835,7 +2835,8 @@ CREATE OPERATOR <> (
  *
  *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
  *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
- *  <tt>provsql.erlang(k, λ)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  <tt>provsql.erlang(k, λ)</tt>, <tt>provsql.gamma(k, λ)</tt>,
+ *  <tt>provsql.chi_squared(k)</tt>, and <tt>provsql.as_random(c)</tt>.
  *  Operator overloads
  *  (<tt>+ - * /</tt> and the six comparators) are defined further
  *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
@@ -3060,6 +3061,82 @@ BEGIN
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'erlang:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a gamma-distribution random variable with shape @p k
+ *        (any positive real) and rate @p lambda
+ *
+ * The gamma distribution generalises Erlang to non-integer shape; its
+ * CDF is the regularised lower incomplete gamma, evaluated in closed
+ * form by the analytic passes.  Sums of independent gammas with the
+ * same rate fold to a single gamma in the simplifier.
+ *
+ * Validation:
+ * - @p k must be finite and strictly positive.  An integer @p k (in
+ *   @c integer range) is silently routed through @c erlang -- the gamma
+ *   with integer shape *is* Erlang -- so <tt>gamma(2, λ)</tt> shares
+ *   its gate encoding and closure interplay with <tt>erlang(2, λ)</tt>.
+ * - @p lambda must be finite and strictly positive.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Gamma_distribution">Wikipedia: Gamma distribution</a>
+ */
+CREATE OR REPLACE FUNCTION gamma(k double precision, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(k) THEN
+    RAISE EXCEPTION 'provsql.gamma: k must be finite (got %)', k;
+  END IF;
+  IF k <= 0 THEN
+    RAISE EXCEPTION 'provsql.gamma: k must be strictly positive (got %)', k;
+  END IF;
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.gamma: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.gamma: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  IF k = floor(k) AND k <= 2147483647 THEN
+    RETURN provsql.erlang(k::integer, lambda);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'gamma:' || k || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a chi-squared random variable with @p k degrees of
+ *        freedom: syntactic sugar for <tt>gamma(k/2, 1/2)</tt>
+ *
+ * @p k is accepted as @c double @c precision so fractional degrees of
+ * freedom work; it must be finite and strictly positive.  Even degrees
+ * of freedom route through @c erlang via @c gamma's integer-shape rule.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Chi-squared_distribution">Wikipedia: Chi-squared distribution</a>
+ */
+CREATE OR REPLACE FUNCTION chi_squared(k double precision)
+  RETURNS random_variable AS
+$$
+BEGIN
+  IF NOT provsql.is_finite_float8(k) THEN
+    RAISE EXCEPTION 'provsql.chi_squared: k must be finite (got %)', k;
+  END IF;
+  IF k <= 0 THEN
+    RAISE EXCEPTION 'provsql.chi_squared: k must be strictly positive (got %)', k;
+  END IF;
+  RETURN provsql.gamma(k / 2, 0.5);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 

@@ -38,8 +38,8 @@ struct DistSupport {
 /**
  * @brief Abstract per-family continuous distribution.
  *
- * Concrete subclasses (Normal / Uniform / Exponential / Erlang) hold the
- * two parameters and implement the family-specific closed forms.  The
+ * Concrete subclasses (Normal / Uniform / Exponential / Erlang / Gamma)
+ * hold the two parameters and implement the family-specific closed forms.  The
  * interface grows as consumers migrate off their @c DistKind switches; the
  * methods below are the family-local ones (pairwise closure / comparison
  * rules live in separate registries, not here).

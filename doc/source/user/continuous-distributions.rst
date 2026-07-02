@@ -107,6 +107,23 @@ shared underlying randomness.
     :sqlfunc:`exponential` to share its gate. See `Wikipedia
     <https://en.wikipedia.org/wiki/Erlang_distribution>`__.
 
+:sqlfunc:`gamma` ``(k, lambda)``
+    ``Gamma(k, λ)`` with shape ``k > 0`` (any positive real, not
+    just an integer) and rate ``λ > 0``; mean ``k/λ``. Its CDF is
+    the regularised lower incomplete gamma, evaluated in closed
+    form, and independent gammas with the same rate sum to a gamma.
+    An integer ``k`` is silently routed through :sqlfunc:`erlang`
+    (the gamma with integer shape *is* Erlang) so the two spellings
+    share their gate encoding. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Gamma_distribution>`__.
+
+:sqlfunc:`chi_squared` ``(k)``
+    Chi-squared with ``k > 0`` degrees of freedom: syntactic sugar
+    for ``gamma(k/2, 0.5)``. Fractional degrees of freedom are
+    accepted; even ones route through :sqlfunc:`erlang` via the
+    integer-shape rule above. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Chi-squared_distribution>`__.
+
 :sqlfunc:`categorical` ``(probs, outcomes)``
     Discrete distribution over the values in ``outcomes`` with the
     corresponding probabilities in ``probs``. Both arrays must have
@@ -178,9 +195,9 @@ later, when the value is queried via
   family-preserving combination: a sum of independent normals is
   another normal; a scalar shift, scale, or negation of a normal
   preserves the family; the sum of ``k`` i.i.d. exponentials with
-  the same rate is an Erlang; a linear combination of disjoint
-  random variables has closed-form mean and variance. The result
-  is exact.
+  the same rate is an Erlang; independent same-rate gammas sum to
+  a gamma; a linear combination of disjoint random variables has
+  closed-form mean and variance. The result is exact.
 - **Monte Carlo fallback**, when no closed form applies, e.g. a
   product of two non-trivial random variables. The sampler draws
   independent values from each leaf, evaluates the arithmetic

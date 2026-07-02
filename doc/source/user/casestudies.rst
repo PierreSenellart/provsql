@@ -73,7 +73,7 @@ What each case study covers
 
 :doc:`Case study 6 -- City Air-Quality Sensor Network <casestudy6>`
     The **continuous-distribution** surface end to end: ``random_variable``
-    columns (Normal / Uniform / Exponential / Erlang / categorical /
+    columns (Normal / Uniform / Exponential / Erlang / Gamma / categorical /
     mixture), arithmetic and comparison on them, analytic moments with
     Monte-Carlo fallback, and conditional inference. The first study driven
     primarily through :doc:`ProvSQL Studio <studio>`.
@@ -300,6 +300,7 @@ Continuous random variables
    "``random_variable`` type / ``provsql.normal``", "", "", "", "", "", "", "✓", "", "✓"
    "``provsql.uniform`` / ``provsql.exponential``", "", "", "", "", "", "", "✓", "", ""
    "``provsql.erlang`` / ``provsql.categorical``", "", "", "", "", "", "", "✓", "", ""
+   "``provsql.gamma`` / ``provsql.chi_squared``", "", "", "", "", "", "", "", "", ""
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
    "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", ""

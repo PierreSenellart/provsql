@@ -29,11 +29,16 @@ enum class DistKind {
   Normal,      ///< Normal (Gaussian): p1=μ, p2=σ
   Uniform,     ///< Uniform on [a,b]: p1=a, p2=b
   Exponential, ///< Exponential: p1=λ, p2 unused
-  Erlang       ///< Erlang: p1=k (positive integer), p2=λ.  Sum of k
+  Erlang,      ///< Erlang: p1=k (positive integer), p2=λ.  Sum of k
                ///< i.i.d. @c Exp(λ); support @c [0, +∞).  The
                ///< parameter @c k is stored in @c p1 as a double but
                ///< must be integer-valued ≥ 1 for any consumer that
                ///< uses the finite-sum CDF / sampler.
+  Gamma        ///< Gamma: p1=k (shape, any positive real), p2=λ (rate);
+               ///< support @c [0, +∞).  The general-shape counterpart
+               ///< of Erlang (the SQL constructor routes integer shapes
+               ///< through Erlang); CDF via the regularised lower
+               ///< incomplete gamma.
 };
 
 /**
@@ -41,7 +46,7 @@ enum class DistKind {
  *
  * Stored in the @c extra byte string of a @c gate_rv as
  * <tt>"normal:μ,σ"</tt>, <tt>"uniform:a,b"</tt>, <tt>"exponential:λ"</tt>,
- * or <tt>"erlang:k,λ"</tt>.
+ * <tt>"erlang:k,λ"</tt>, or <tt>"gamma:k,λ"</tt>.
  */
 struct DistributionSpec {
   DistKind kind;
@@ -53,9 +58,9 @@ struct DistributionSpec {
  * @brief Parse the on-disk text encoding of a @c gate_rv distribution.
  *
  * Accepts <tt>"normal:μ,σ"</tt>, <tt>"uniform:a,b"</tt>,
- * <tt>"exponential:λ"</tt>, and <tt>"erlang:k,λ"</tt>, with parameters
- * parseable as @c double.  Whitespace around the kind name and
- * parameters is tolerated.
+ * <tt>"exponential:λ"</tt>, <tt>"erlang:k,λ"</tt>, and
+ * <tt>"gamma:k,λ"</tt>, with parameters parseable as @c double.
+ * Whitespace around the kind name and parameters is tolerated.
  *
  * @param s The byte string read from @c MMappedCircuit::getExtra.
  * @return The parsed spec, or @c std::nullopt on malformed input.
@@ -97,7 +102,7 @@ std::string double_to_text(double v);
  * - Normal(μ, σ):     μ
  * - Uniform(a, b):    (a + b) / 2
  * - Exponential(λ):   1 / λ
- * - Erlang(k, λ):     k / λ
+ * - Erlang / Gamma(k, λ): k / λ
  */
 double analytical_mean(const DistributionSpec &d);
 
@@ -107,7 +112,7 @@ double analytical_mean(const DistributionSpec &d);
  * - Normal(μ, σ):     σ²
  * - Uniform(a, b):    (b − a)² / 12
  * - Exponential(λ):   1 / λ²
- * - Erlang(k, λ):     k / λ²
+ * - Erlang / Gamma(k, λ): k / λ²
  */
 double analytical_variance(const DistributionSpec &d);
 
@@ -120,9 +125,9 @@ double analytical_variance(const DistributionSpec &d);
  *   are zero for odd @f$j@f$).
  * - Uniform(a, b):    @f$(b^{k+1} - a^{k+1}) / ((k+1)(b-a))@f$.
  * - Exponential(λ):   @f$k! / \lambda^k@f$.
- * - Erlang(s, λ):
+ * - Erlang / Gamma(s, λ):
  *   @f$\Gamma(s+k) / (\Gamma(s) \lambda^k) = s(s+1)\cdots(s+k-1) / \lambda^k@f$
- *   for integer shape @f$s@f$.
+ *   (the rising factorial is valid for any real shape @f$s > 0@f$).
  *
  * Returns 1 for @f$k = 0@f$ and @c analytical_mean for @f$k = 1@f$.
  */
