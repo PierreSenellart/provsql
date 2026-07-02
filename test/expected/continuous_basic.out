@@ -129,5 +129,7 @@ exponential|1|{λ}|Exp
 gamma|2|{k,λ}|Γ
 lognormal|2|{μ,σ}|LogN
 normal|2|{μ,σ}|N
+pareto|2|{xₘ,α}|Par
 uniform|2|{a,b}|U
-(6 rows)
+weibull|2|{k,λ}|Wbl
+(8 rows)

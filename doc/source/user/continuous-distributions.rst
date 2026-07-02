@@ -137,6 +137,28 @@ shared underlying randomness.
     :sqlfunc:`as_random` as a Dirac at ``exp(μ)``). See `Wikipedia
     <https://en.wikipedia.org/wiki/Log-normal_distribution>`__.
 
+:sqlfunc:`weibull` ``(k, lambda)``
+    ``Weibull(k, λ)`` with shape ``k > 0`` and *scale* ``λ > 0`` (the
+    63.2% quantile -- not a rate; ``k = 1`` is the exponential with
+    rate ``1/λ`` and routes through :sqlfunc:`exponential`). The
+    reliability/survival family: ``k`` tunes the hazard (``k < 1``
+    infant mortality, ``k > 1`` wear-out). Quantiles are exact,
+    truncated moments are closed-form, same-shape comparisons have a
+    closed form, and the min of i.i.d. Weibulls is again Weibull
+    (min-stability). See `Wikipedia
+    <https://en.wikipedia.org/wiki/Weibull_distribution>`__.
+
+:sqlfunc:`pareto` ``(xm, alpha)``
+    ``Pareto(xₘ, α)`` with scale (minimum) ``xₘ > 0`` and shape
+    ``α > 0``: the canonical heavy-tailed power law. Divergent moments
+    are reported honestly as ``Infinity`` (the mean for ``α ≤ 1``, the
+    variance for ``α ≤ 2``) rather than estimated; quantiles, truncated
+    moments (self-similarity: ``X | X > a`` is ``Pareto(a, α)``), and
+    Pareto-vs-Pareto comparisons are exact for any parameters --
+    important because the tail is exactly where sampling and quadrature
+    struggle. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Pareto_distribution>`__.
+
 :sqlfunc:`categorical` ``(probs, outcomes)``
     Discrete distribution over the values in ``outcomes`` with the
     corresponding probabilities in ``probs``. Both arrays must have

@@ -2837,6 +2837,7 @@ CREATE OPERATOR <> (
  *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
  *  <tt>provsql.erlang(k, λ)</tt>, <tt>provsql.gamma(k, λ)</tt>,
  *  <tt>provsql.chi_squared(k)</tt>, <tt>provsql.lognormal(μ, σ)</tt>,
+ *  <tt>provsql.weibull(k, λ)</tt>, <tt>provsql.pareto(xₘ, α)</tt>,
  *  and <tt>provsql.as_random(c)</tt>.
  *  Operator overloads
  *  (<tt>+ - * /</tt> and the six comparators) are defined further
@@ -3179,6 +3180,84 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'lognormal:' || mu || ',' || sigma);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a Weibull random variable with shape @p k and
+ *        scale @p lambda
+ *
+ * @p lambda is the SCALE (the 63.2% quantile), not a rate: @c k = 1 is
+ * the exponential with rate <tt>1/lambda</tt>, and that case is
+ * silently routed through @c exponential to share its gate.  The shape
+ * tunes the hazard: @c k < 1 infant mortality, @c k > 1 wear-out.
+ * Quantiles are exact, truncated moments are closed-form (via the
+ * regularised incomplete gamma), and the min of i.i.d. Weibulls has a
+ * closed-form mean (min-stability).
+ *
+ * Validation: both parameters must be finite and strictly positive.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Weibull_distribution">Wikipedia: Weibull distribution</a>
+ */
+CREATE OR REPLACE FUNCTION weibull(k double precision, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(k) OR NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.weibull: parameters must be finite (got k=%, lambda=%)', k, lambda;
+  END IF;
+  IF k <= 0 OR lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.weibull: parameters must be strictly positive (got k=%, lambda=%)', k, lambda;
+  END IF;
+  IF k = 1 THEN
+    RETURN provsql.exponential(1 / lambda);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'weibull:' || k || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a Pareto random variable with scale (minimum)
+ *        @p xm and shape @p alpha
+ *
+ * The canonical heavy-tailed power law.  Raw moments are @b infinite
+ * for <tt>alpha <= k</tt> and reported as <tt>Infinity</tt> (the mean
+ * for <tt>alpha <= 1</tt>, the variance for <tt>alpha <= 2</tt>)
+ * rather than estimated; quantiles, truncated moments, conditional
+ * sampling (self-similarity: <tt>X | X > a</tt> is Pareto(a, alpha)),
+ * and Pareto-vs-Pareto comparisons are all exact.
+ *
+ * Validation: both parameters must be finite and strictly positive.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Pareto_distribution">Wikipedia: Pareto distribution</a>
+ */
+CREATE OR REPLACE FUNCTION pareto(xm double precision, alpha double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(xm) OR NOT provsql.is_finite_float8(alpha) THEN
+    RAISE EXCEPTION 'provsql.pareto: parameters must be finite (got xm=%, alpha=%)', xm, alpha;
+  END IF;
+  IF xm <= 0 OR alpha <= 0 THEN
+    RAISE EXCEPTION 'provsql.pareto: parameters must be strictly positive (got xm=%, alpha=%)', xm, alpha;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'pareto:' || xm || ',' || alpha);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;

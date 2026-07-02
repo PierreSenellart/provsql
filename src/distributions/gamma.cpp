@@ -30,54 +30,6 @@ namespace provsql {
 
 namespace {
 
-/**
- * @brief Regularised lower incomplete gamma @f$P(a, x) = \gamma(a, x) /
- *        \Gamma(a)@f$ for @c a > 0, @c x >= 0.
- *
- * Series expansion of @f$\gamma(a, x)@f$ for @c x < @c a + 1, modified
- * Lentz continued fraction for the complement @f$Q(a, x)@f$ otherwise --
- * each converges fast in its region (Numerical Recipes §6.2).  NaN on
- * invalid @p a or non-convergence, so callers fall through to Monte
- * Carlo.
- */
-double gammaP(double a, double x)
-{
-  if (!(a > 0.0) || std::isnan(x)) return kNaN;
-  if (x <= 0.0) return 0.0;
-  const double lg = std::lgamma(a);
-  if (x < a + 1.0) {
-    /* γ(a,x) = e^{-x} x^a Σ_{n≥0} x^n Γ(a)/Γ(a+1+n). */
-    double ap = a, sum = 1.0 / a, del = sum;
-    for (int n = 0; n < 500; ++n) {
-      ap += 1.0;
-      del *= x / ap;
-      sum += del;
-      if (std::fabs(del) < std::fabs(sum) * 1e-15)
-        return sum * std::exp(-x + a * std::log(x) - lg);
-    }
-    return kNaN;
-  }
-  /* Q(a,x) = e^{-x} x^a / Γ(a) · 1/(x+1-a- 1(1-a)/(x+3-a- ...)). */
-  const double FPMIN = 1e-300;
-  double b = x + 1.0 - a, c = 1.0 / FPMIN, d = 1.0 / b, h = d;
-  for (int i = 1; i <= 500; ++i) {
-    const double an = -static_cast<double>(i) * (static_cast<double>(i) - a);
-    b += 2.0;
-    d = an * d + b;
-    if (std::fabs(d) < FPMIN) d = FPMIN;
-    c = b + an / c;
-    if (std::fabs(c) < FPMIN) c = FPMIN;
-    d = 1.0 / d;
-    const double del = d * c;
-    h *= del;
-    if (std::fabs(del - 1.0) < 1e-15) {
-      const double q = std::exp(-x + a * std::log(x) - lg) * h;
-      return 1.0 - q;
-    }
-  }
-  return kNaN;
-}
-
 /** @brief Gamma(k=p1 shape > 0, λ=p2 rate > 0). */
 class GammaDistribution final : public BaseDistribution {
 public:

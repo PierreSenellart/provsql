@@ -691,7 +691,7 @@ std::unique_ptr<Distribution> product_image(const GenericCircuit &gc,
                                             gate_t g)
 {
   const auto &wires = gc.getWires(g);
-  if (wires.size() < 2) return nullptr;
+  if (wires.empty()) return nullptr;
   double c_total = 1.0;
   std::vector<std::unique_ptr<Distribution>> dists;
   std::vector<const Distribution *> factors;
@@ -710,8 +710,14 @@ std::unique_ptr<Distribution> product_image(const GenericCircuit &gc,
     dists.push_back(makeDistribution(*spec));
     factors.push_back(dists.back().get());
   }
-  if (factors.size() < 2) return nullptr;
-  auto combined = closeProductFactors(factors);
+  if (factors.empty()) return nullptr;
+  /* A single RV with scalar factors is just the affine image; two or
+   * more dispatch through the product registry. */
+  std::unique_ptr<Distribution> combined;
+  if (factors.size() == 1)
+    combined = std::move(dists.front());
+  else
+    combined = closeProductFactors(factors);
   if (!combined) return nullptr;
   if (c_total != 1.0) return combined->scale(c_total);
   return combined;

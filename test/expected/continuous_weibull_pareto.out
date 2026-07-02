@@ -1,0 +1,81 @@
+\set ECHO none
+weibull_mean_exact
+t
+(1 row)
+weibull_var_exact
+t
+(1 row)
+weibull_cdf_exact
+t
+(1 row)
+weibull_quantile_exact
+t
+(1 row)
+lo|hi
+0|Infinity
+(1 row)
+weibull_same_shape_exact
+t
+(1 row)
+weibull_truncated_mean_exact
+t
+(1 row)
+weibull_min_exact
+t
+(1 row)
+weibull_scaled_quantile_exact
+t
+(1 row)
+weibull_k1_routes_to_exponential
+t
+(1 row)
+pareto_mean_exact
+t
+(1 row)
+pareto_var_exact
+t
+(1 row)
+pareto_mean_divergent
+t
+(1 row)
+pareto_var_divergent
+t
+(1 row)
+pareto_cdf_exact
+t
+(1 row)
+pareto_quantile_exact
+t
+(1 row)
+lo|hi
+2|Infinity
+(1 row)
+pareto_same_scale_exact
+t
+(1 row)
+pareto_cross_scale_exact
+t
+(1 row)
+pareto_truncated_mean_exact
+t
+(1 row)
+pareto_min_exact
+t
+(1 row)
+weibull_sampler_mc
+t
+(1 row)
+pareto_sampler_mc
+t
+(1 row)
+ERROR:  provsql.weibull: parameters must be strictly positive (got k=0, lambda=1)
+ERROR:  provsql.weibull: parameters must be finite (got k=1, lambda=Infinity)
+ERROR:  provsql.pareto: parameters must be strictly positive (got xm=-1, alpha=2)
+ERROR:  provsql.pareto: parameters must be strictly positive (got xm=1, alpha=0)
+name|nparams|param_names|label
+pareto|2|{xₘ,α}|Par
+weibull|2|{k,λ}|Wbl
+(2 rows)
+continuous_weibull_pareto_done
+ok
+(1 row)
