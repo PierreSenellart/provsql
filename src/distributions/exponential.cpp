@@ -4,9 +4,8 @@
  *
  * Self-contained family implementation: the class is file-local and
  * reaches the evaluators only through the registrars at the bottom
- * (DistributionRegistry factory + pairwise comparator / closure rules).
- * The closed forms were relocated verbatim from the pre-refactor
- * @c DistKind switches, so behaviour is preserved by construction.
+ * (DistributionRegistry descriptor + pairwise comparator / closure
+ * rules).
  */
 #include "DistributionCommon.h"
 
@@ -87,7 +86,7 @@ double truncated_exponential_raw_moment(double lambda, double a, double b,
 class ExponentialDistribution final : public BaseDistribution {
 public:
   using BaseDistribution::BaseDistribution;
-  DistKind kind() const override { return DistKind::Exponential; }
+  const DistributionFamily &family() const override;
   double mean() const override { return 1.0 / p1_; }
   double variance() const override { return 1.0 / (p1_ * p1_); }
   double rawMoment(unsigned k) const override {
@@ -181,6 +180,17 @@ public:
   }
 };
 
+const DistributionFamily exponential_family = {
+  "exponential", 1, "Exp", {"λ", nullptr},
+  +[](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<ExponentialDistribution>(p1, p2);
+  }};
+
+const DistributionFamily &ExponentialDistribution::family() const
+{
+  return exponential_family;
+}
+
 /* P(X < Y) = λ_X / (λ_X + λ_Y) for independent exponentials. */
 double exponentialPairLess(const Distribution &X, const Distribution &Y)
 {
@@ -190,13 +200,10 @@ double exponentialPairLess(const Distribution &X, const Distribution &Y)
 }
 
 [[maybe_unused]] const ComparatorRuleRegistrar exponential_less_rule(
-  DistKind::Exponential, DistKind::Exponential, &exponentialPairLess);
+  "exponential", "exponential", &exponentialPairLess);
 
-[[maybe_unused]] const DistributionFamilyRegistrar exponential_family(
-  "exponential", {DistKind::Exponential, 1, "Exp", {"λ", nullptr}},
-  [](double p1, double p2) -> std::unique_ptr<Distribution> {
-    return std::make_unique<ExponentialDistribution>(p1, p2);
-  });
+[[maybe_unused]] const DistributionFamilyRegistrar exponential_family_registrar(
+  exponential_family);
 
 }  // namespace
 

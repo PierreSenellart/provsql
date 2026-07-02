@@ -4,14 +4,14 @@
  *
  * Self-contained family implementation: the class is file-local and
  * reaches the evaluators only through the registrars at the bottom
- * (DistributionRegistry factory + pairwise comparator / closure rules).
- * The closed forms were relocated verbatim from the pre-refactor
- * @c DistKind switches, so behaviour is preserved by construction.
+ * (DistributionRegistry descriptor + pairwise comparator / closure
+ * rules).
  */
 #include "DistributionCommon.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <random>
@@ -27,7 +27,7 @@ namespace {
 class ErlangDistribution final : public BaseDistribution {
 public:
   using BaseDistribution::BaseDistribution;
-  DistKind kind() const override { return DistKind::Erlang; }
+  const DistributionFamily &family() const override;
   double mean() const override { return p1_ / p2_; }
   double variance() const override { return p1_ / (p2_ * p2_); }
   double rawMoment(unsigned k) const override {
@@ -99,6 +99,17 @@ public:
   }
 };
 
+const DistributionFamily erlang_family = {
+  "erlang", 2, "Erl", {"k", "λ"},
+  +[](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<ErlangDistribution>(p1, p2);
+  }};
+
+const DistributionFamily &ErlangDistribution::family() const
+{
+  return erlang_family;
+}
+
 /* (Exp|Erlang, +, Exp|Erlang), same rate: Erlang(Σkᵢ, λ) with
  * Exp ≡ Erlang(1, λ).  Strict shape: unscaled, unshifted, no additive
  * constants (any of those leaves the family; hypoexponential /
@@ -113,7 +124,7 @@ erlangSumRule(const std::vector<ClosureTerm> &terms)
     if (t.a != 1.0 || t.b != 0.0) return nullptr;   /* scaled / shifted */
     double w_lambda;
     unsigned long w_shape;
-    if (t.dist->kind() == DistKind::Exponential) {
+    if (std::strcmp(t.dist->family().name, "exponential") == 0) {
       w_lambda = t.dist->p1();
       w_shape  = 1;
     } else {
@@ -133,17 +144,14 @@ erlangSumRule(const std::vector<ClosureTerm> &terms)
 }
 
 [[maybe_unused]] const ClosureRuleRegistrar erlang_sum_rules[] = {
-  {DistKind::Exponential, DistKind::Exponential, &erlangSumRule},
-  {DistKind::Exponential, DistKind::Erlang,      &erlangSumRule},
-  {DistKind::Erlang,      DistKind::Exponential, &erlangSumRule},
-  {DistKind::Erlang,      DistKind::Erlang,      &erlangSumRule},
+  {"exponential", "exponential", &erlangSumRule},
+  {"exponential", "erlang",      &erlangSumRule},
+  {"erlang",      "exponential", &erlangSumRule},
+  {"erlang",      "erlang",      &erlangSumRule},
 };
 
-[[maybe_unused]] const DistributionFamilyRegistrar erlang_family(
-  "erlang", {DistKind::Erlang, 2, "Erl", {"k", "λ"}},
-  [](double p1, double p2) -> std::unique_ptr<Distribution> {
-    return std::make_unique<ErlangDistribution>(p1, p2);
-  });
+[[maybe_unused]] const DistributionFamilyRegistrar erlang_family_registrar(
+  erlang_family);
 
 }  // namespace
 

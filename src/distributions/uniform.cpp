@@ -4,9 +4,8 @@
  *
  * Self-contained family implementation: the class is file-local and
  * reaches the evaluators only through the registrars at the bottom
- * (DistributionRegistry factory + pairwise comparator / closure rules).
- * The closed forms were relocated verbatim from the pre-refactor
- * @c DistKind switches, so behaviour is preserved by construction.
+ * (DistributionRegistry descriptor + pairwise comparator / closure
+ * rules).
  */
 #include "DistributionCommon.h"
 
@@ -45,7 +44,7 @@ double truncated_uniform_raw_moment(double p1, double p2, double a, double b,
 class UniformDistribution final : public BaseDistribution {
 public:
   using BaseDistribution::BaseDistribution;
-  DistKind kind() const override { return DistKind::Uniform; }
+  const DistributionFamily &family() const override;
   double mean() const override { return 0.5 * (p1_ + p2_); }
   double variance() const override {
     const double w = p2_ - p1_;
@@ -124,6 +123,17 @@ public:
   }
 };
 
+const DistributionFamily uniform_family = {
+  "uniform", 2, "U", {"a", "b"},
+  +[](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<UniformDistribution>(p1, p2);
+  }};
+
+const DistributionFamily &UniformDistribution::family() const
+{
+  return uniform_family;
+}
+
 /* (Uniform, +, Uniform): NOT closed for two distinct uniforms (the sum
  * has a triangular / trapezoidal density), which the rule expresses by
  * declining a second Uniform term.  A single (possibly scaled / negated)
@@ -152,7 +162,7 @@ uniformSumRule(const std::vector<ClosureTerm> &terms)
 }
 
 [[maybe_unused]] const ClosureRuleRegistrar uniform_sum_rule(
-  DistKind::Uniform, DistKind::Uniform, &uniformSumRule);
+  "uniform", "uniform", &uniformSumRule);
 
 /* ∫_c^d F_X(y) dy for X ~ Uniform(a, b) (b > a), i.e. the integral of the
  * clamped ramp clamp((y-a)/(b-a), 0, 1) over [c, d].  Used by the
@@ -181,13 +191,10 @@ double uniformPairLess(const Distribution &X, const Distribution &Y)
 }
 
 [[maybe_unused]] const ComparatorRuleRegistrar uniform_less_rule(
-  DistKind::Uniform, DistKind::Uniform, &uniformPairLess);
+  "uniform", "uniform", &uniformPairLess);
 
-[[maybe_unused]] const DistributionFamilyRegistrar uniform_family(
-  "uniform", {DistKind::Uniform, 2, "U", {"a", "b"}},
-  [](double p1, double p2) -> std::unique_ptr<Distribution> {
-    return std::make_unique<UniformDistribution>(p1, p2);
-  });
+[[maybe_unused]] const DistributionFamilyRegistrar uniform_family_registrar(
+  uniform_family);
 
 }  // namespace
 

@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <map>
+#include <string>
 #include <utility>
 
 namespace provsql {
@@ -23,32 +24,23 @@ namespace {
 /* Function-local statics so registration (dynamic initialisation of the
  * per-family registrar objects) never observes an uninitialised map,
  * whatever the TU initialisation order. */
-std::map<std::pair<DistKind, DistKind>, ComparatorRule> &comparatorRules()
+using FamilyPair = std::pair<std::string, std::string>;
+
+std::map<FamilyPair, ComparatorRule> &comparatorRules()
 {
-  static std::map<std::pair<DistKind, DistKind>, ComparatorRule> rules;
+  static std::map<FamilyPair, ComparatorRule> rules;
   return rules;
 }
 
-std::map<std::pair<DistKind, DistKind>, ClosureRule> &closureRules()
+std::map<FamilyPair, ClosureRule> &closureRules()
 {
-  static std::map<std::pair<DistKind, DistKind>, ClosureRule> rules;
+  static std::map<FamilyPair, ClosureRule> rules;
   return rules;
 }
 
-struct FamilyRecord {
-  DistributionFamily descriptor;
-  DistributionFactory factory;
-};
-
-std::map<DistKind, FamilyRecord> &familiesByKind()
+std::map<std::string, const DistributionFamily *> &familiesByName()
 {
-  static std::map<DistKind, FamilyRecord> families;
-  return families;
-}
-
-std::map<std::string, FamilyRecord> &familiesByName()
-{
-  static std::map<std::string, FamilyRecord> families;
+  static std::map<std::string, const DistributionFamily *> families;
   return families;
 }
 
@@ -79,12 +71,13 @@ double quadraturePairLess(const Distribution &X, const Distribution &Y)
 
 }  // namespace
 
-void registerComparatorRule(DistKind x, DistKind y, ComparatorRule rule)
+void registerComparatorRule(const char *x, const char *y,
+                            ComparatorRule rule)
 {
   comparatorRules()[{x, y}] = rule;
 }
 
-void registerClosureRule(DistKind x, DistKind y, ClosureRule rule)
+void registerClosureRule(const char *x, const char *y, ClosureRule rule)
 {
   closureRules()[{x, y}] = rule;
 }
@@ -94,18 +87,16 @@ std::unique_ptr<Distribution> closePlusTerms(
 {
   const auto &rules = closureRules();
   ClosureRule rule = nullptr;
-  bool first = true;
-  DistKind k0{};
+  const char *n0 = nullptr;
   for (const auto &t : terms) {
     if (!t.dist) continue;
-    if (first) {
-      first = false;
-      k0 = t.dist->kind();
-      const auto it = rules.find({k0, k0});
+    if (!n0) {
+      n0 = t.dist->family().name;
+      const auto it = rules.find({n0, n0});
       if (it == rules.end()) return nullptr;
       rule = it->second;
     } else {
-      const auto it = rules.find({k0, t.dist->kind()});
+      const auto it = rules.find({n0, t.dist->family().name});
       if (it == rules.end() || it->second != rule) return nullptr;
     }
   }
@@ -142,7 +133,7 @@ double numericQuantile(const Distribution &d, double p)
 double comparatorPairLess(const Distribution &X, const Distribution &Y)
 {
   const auto &rules = comparatorRules();
-  const auto it = rules.find({X.kind(), Y.kind()});
+  const auto it = rules.find({X.family().name, Y.family().name});
   double pLess = kNaN;
   if (it != rules.end())
     pLess = it->second(X, Y);
@@ -153,39 +144,30 @@ double comparatorPairLess(const Distribution &X, const Distribution &Y)
   return pLess;
 }
 
-void registerDistributionFamily(const char *name,
-                                const DistributionFamily &descriptor,
-                                DistributionFactory factory)
+void registerDistributionFamily(const DistributionFamily &descriptor)
 {
-  const FamilyRecord record{descriptor, factory};
-  familiesByKind()[descriptor.kind] = record;
-  familiesByName()[name] = record;
+  familiesByName()[descriptor.name] = &descriptor;
 }
 
-std::vector<std::pair<std::string, DistributionFamily>>
-listDistributionFamilies()
+std::vector<const DistributionFamily *> listDistributionFamilies()
 {
-  std::vector<std::pair<std::string, DistributionFamily>> out;
+  std::vector<const DistributionFamily *> out;
   for (const auto &entry : familiesByName())
-    out.emplace_back(entry.first, entry.second.descriptor);
+    out.push_back(entry.second);
   return out;   /* std::map iteration order: sorted by name */
 }
 
-std::optional<DistributionFamily> lookupDistributionFamily(
-  const std::string &name)
+const DistributionFamily *lookupDistributionFamily(const std::string &name)
 {
   const auto &families = familiesByName();
   const auto it = families.find(name);
-  if (it == families.end()) return std::nullopt;
-  return it->second.descriptor;
+  return it == families.end() ? nullptr : it->second;
 }
 
 std::unique_ptr<Distribution> makeDistribution(const DistributionSpec &spec)
 {
-  const auto &families = familiesByKind();
-  const auto it = families.find(spec.kind);
-  if (it == families.end()) return nullptr;
-  return it->second.factory(spec.p1, spec.p2);
+  if (!spec.family) return nullptr;
+  return spec.family->factory(spec.p1, spec.p2);
 }
 
 }  // namespace provsql

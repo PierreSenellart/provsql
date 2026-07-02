@@ -133,7 +133,12 @@ Keeps the per-family files from re-creating the row-major coupling.
   `Makefile.internal` globs `src/distributions/*.cpp` into OBJS.
 
 Adding a family is now one new `src/distributions/<name>.cpp` (class + registrars) plus
-the `DistKind` enum value in `RandomVariable.h` and the SQL constructor surface.
+the SQL constructor surface — nothing else.  The `DistKind` enum was subsequently
+removed entirely: `DistributionSpec` carries the interned `DistributionFamily*`
+descriptor (registered by each family file, with the factory and display metadata on
+the descriptor), the pairwise rule registries are keyed on family *name tokens* (so a
+cross-family rule such as Erlang's Exp/Erlang sum closure has no static-init-order
+dependency on another file), and family identity is pointer comparison.
 Proof-of-concept validated: Gamma (§3.1, `72f20bb5`) landed as `gamma.cpp` (with a
-regularised-lower-incomplete-gamma CDF and a same-rate sum-closure rule) + the enum
-value + `provsql.gamma`/`chi_squared` constructors, touching no evaluator file.
+regularised-lower-incomplete-gamma CDF and a same-rate sum-closure rule) +
+`provsql.gamma`/`chi_squared` constructors, touching no evaluator file.

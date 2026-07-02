@@ -3,16 +3,18 @@
  * @brief Per-family polymorphic view over a continuous @c gate_rv
  *        distribution (§F.1 class hierarchy).
  *
- * Replaces the @c DistKind @c switch blocks scattered across the RV
- * evaluators with one virtual dispatch per family.  A @c Distribution is a
- * transient view constructed from a parsed @c DistributionSpec via
- * @ref makeDistribution -- there is no gate-ABI or on-disk change; the
- * @c extra text encoding and @c DistributionSpec POD are unchanged.
+ * Every RV evaluator dispatches through this interface (one virtual call
+ * per family) and the registries below; family identity is the interned
+ * @c DistributionFamily descriptor each implementation file registers --
+ * there is no family enum anywhere.  A @c Distribution is a transient
+ * view constructed from a parsed @c DistributionSpec via
+ * @ref makeDistribution; the on-disk @c extra text encoding stores the
+ * family's name token.
  *
- * Adding a family becomes a new subclass + a factory arm (the migration is
- * ongoing; see @c doc/TODO/distribution-refactor.md).  Methods that a
- * family cannot answer follow the existing NaN-as-undecided contract so the
- * analytic paths fall back to Monte Carlo unchanged.
+ * Adding a family is one new self-registering implementation file under
+ * @c src/distributions/ (plus its SQL constructor).  Methods a family
+ * cannot answer follow the NaN-as-undecided contract so the analytic
+ * paths fall back to Monte Carlo unchanged.
  */
 #ifndef PROVSQL_DISTRIBUTION_H
 #define PROVSQL_DISTRIBUTION_H
@@ -25,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-#include "../RandomVariable.h"  // DistKind, DistributionSpec
+#include "../RandomVariable.h"  // DistributionSpec
 
 namespace provsql {
 
@@ -39,10 +41,9 @@ struct DistSupport {
  * @brief Abstract per-family continuous distribution.
  *
  * Concrete subclasses (Normal / Uniform / Exponential / Erlang / Gamma)
- * hold the two parameters and implement the family-specific closed forms.  The
- * interface grows as consumers migrate off their @c DistKind switches; the
- * methods below are the family-local ones (pairwise closure / comparison
- * rules live in separate registries, not here).
+ * hold the two parameters and implement the family-specific closed forms.
+ * The methods below are the family-local ones (pairwise closure /
+ * comparison rules live in separate registries, not here).
  */
 class Distribution {
 public:
@@ -50,7 +51,13 @@ public:
 
   /** @name Identity (parameters, for the i.i.d. equality test) */
   ///@{
-  virtual DistKind kind() const = 0;
+  /**
+   * @brief The family's interned registry descriptor.
+   *
+   * One instance per family, so @c &family() (or comparing
+   * @c family().name) is family identity.
+   */
+  virtual const DistributionFamily &family() const = 0;
   virtual double p1() const = 0;
   virtual double p2() const = 0;
   ///@}
@@ -202,23 +209,23 @@ public:
 /**
  * @brief Construct the per-family @c Distribution for a parsed spec.
  *
- * Returns @c nullptr only for an unknown @c DistKind (never for the four
- * built-in families).  Parameter-validity guards live in the family
- * methods (e.g. @c pdf returns NaN for a non-positive σ), matching the
- * pre-refactor behaviour.
+ * Returns @c nullptr only for a spec with a null family pointer (which
+ * @c parse_distribution_spec never produces).  Parameter-validity guards
+ * live in the family methods (e.g. @c pdf returns NaN for a
+ * non-positive σ).
  */
 std::unique_ptr<Distribution> makeDistribution(const DistributionSpec &spec);
 
 /**
  * @name DistributionRegistry — family descriptor table
  *
- * Family implementations self-register their identity at static
- * initialisation: the @c DistKind tag, the on-disk name token (the part
- * before the colon in a @c gate_rv @c extra), the parameter count, and
+ * Family implementations self-register their descriptor at static
+ * initialisation: the on-disk name token (the part before the colon in a
+ * @c gate_rv @c extra), the parameter count, the display metadata, and
  * the constructor.  @c makeDistribution and @c parse_distribution_spec
  * dispatch through this table, so adding a family means one new
- * implementation file with one registrar -- no existing factory or
- * parser code is touched.
+ * implementation file with one registrar -- no existing factory, parser,
+ * or header is touched.
  */
 ///@{
 
@@ -227,54 +234,56 @@ using DistributionFactory =
   std::unique_ptr<Distribution> (*)(double p1, double p2);
 
 /**
- * @brief A registered family's descriptor: parsing identity plus the
- *        display metadata that UI clients (ProvSQL Studio) read through
- *        @c provsql.rv_families() to render a family they were not
- *        hard-coded for.
+ * @brief A registered family's descriptor: its complete identity.
  *
- * @c label is a short glance-recognisable glyph for a node circle
- * (e.g. "N", "Exp", "Γ"); @c param_names are the conventional parameter
- * symbols in @c extra order (e.g. {"μ", "σ"}; the second entry is
- * @c nullptr for a 1-parameter family).  Purely presentational choices
- * beyond these (colours, geometry) stay client-side.
+ * @c name is the on-disk token (the part before the colon in a
+ * @c gate_rv @c extra); @c factory constructs an instance from the
+ * parsed parameters; @c label / @c param_names are the display metadata
+ * UI clients (ProvSQL Studio) read through @c provsql.rv_families() --
+ * a short glance-recognisable glyph for a node circle (e.g. "N", "Exp",
+ * "Γ") and the conventional parameter symbols in @c extra order
+ * (e.g. {"μ", "σ"}; the second entry is @c nullptr for a 1-parameter
+ * family).  Purely presentational choices beyond these (colours,
+ * geometry) stay client-side.
+ *
+ * Each family implementation file defines exactly ONE descriptor with
+ * static storage duration and registers its address, so the pointer is
+ * an interned family identity (this is what @c DistributionSpec and
+ * @c Distribution::family() carry; there is no family enum to extend).
  */
 struct DistributionFamily {
-  DistKind kind;
+  const char *name;
   unsigned nparams;   ///< 1 or 2 (a 1-parameter family leaves p2 = 0)
   const char *label;
   const char *param_names[2];
+  DistributionFactory factory;
 };
 
 /** @brief Register a family; called by the registrar at static init. */
-void registerDistributionFamily(const char *name,
-                                const DistributionFamily &descriptor,
-                                DistributionFactory factory);
+void registerDistributionFamily(const DistributionFamily &descriptor);
 
 /** @brief Static-initialisation helper: one per family implementation. */
 struct DistributionFamilyRegistrar {
-  DistributionFamilyRegistrar(const char *name,
-                              const DistributionFamily &descriptor,
-                              DistributionFactory factory) {
-    registerDistributionFamily(name, descriptor, factory);
+  explicit DistributionFamilyRegistrar(const DistributionFamily &descriptor) {
+    registerDistributionFamily(descriptor);
   }
 };
 
 /**
  * @brief Look up a family by its on-disk name token.
  *
- * Used by @c parse_distribution_spec to resolve the kind and expected
- * parameter count; @c std::nullopt for an unknown name.
+ * Used by @c parse_distribution_spec to resolve the interned
+ * descriptor and expected parameter count; @c nullptr for an unknown
+ * name.
  */
-std::optional<DistributionFamily> lookupDistributionFamily(
-  const std::string &name);
+const DistributionFamily *lookupDistributionFamily(const std::string &name);
 
 /**
  * @brief Every registered family, sorted by name token.
  *
  * Backs the @c provsql.rv_families() catalog function.
  */
-std::vector<std::pair<std::string, DistributionFamily>>
-listDistributionFamilies();
+std::vector<const DistributionFamily *> listDistributionFamilies();
 
 ///@}
 
@@ -317,12 +326,20 @@ double numericQuantile(const Distribution &d, double p);
 using ComparatorRule = double (*)(const Distribution &X,
                                   const Distribution &Y);
 
-/** @brief Register the @f$P(X < Y)@f$ closed form for a family pair. */
-void registerComparatorRule(DistKind x, DistKind y, ComparatorRule rule);
+/**
+ * @brief Register the @f$P(X < Y)@f$ closed form for a family pair.
+ *
+ * Keyed by the families' name tokens rather than descriptor pointers so
+ * a family file can register a cross-family rule without depending on
+ * another file's static-initialisation order.
+ */
+void registerComparatorRule(const char *x, const char *y,
+                            ComparatorRule rule);
 
 /** @brief Static-initialisation helper: one per registered family pair. */
 struct ComparatorRuleRegistrar {
-  ComparatorRuleRegistrar(DistKind x, DistKind y, ComparatorRule rule) {
+  ComparatorRuleRegistrar(const char *x, const char *y,
+                          ComparatorRule rule) {
     registerComparatorRule(x, y, rule);
   }
 };
@@ -382,12 +399,15 @@ struct ClosureTerm {
 using ClosureRule =
   std::unique_ptr<Distribution> (*)(const std::vector<ClosureTerm> &terms);
 
-/** @brief Register the sum-closure rule for a family pair. */
-void registerClosureRule(DistKind x, DistKind y, ClosureRule rule);
+/**
+ * @brief Register the sum-closure rule for a family pair (name-token
+ *        keyed, like the comparator rules).
+ */
+void registerClosureRule(const char *x, const char *y, ClosureRule rule);
 
 /** @brief Static-initialisation helper: one per registered family pair. */
 struct ClosureRuleRegistrar {
-  ClosureRuleRegistrar(DistKind x, DistKind y, ClosureRule rule) {
+  ClosureRuleRegistrar(const char *x, const char *y, ClosureRule rule) {
     registerClosureRule(x, y, rule);
   }
 };

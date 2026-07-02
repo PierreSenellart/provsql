@@ -100,7 +100,7 @@ collectRvConstraints(const GenericCircuit &gc, gate_t event_root,
  * @c (0, +&infin;)).
  */
 struct TruncatedSingleRv {
-  DistributionSpec spec;  ///< Parsed kind + parameters
+  DistributionSpec spec;  ///< Parsed family + parameters
   double lo;              ///< Lower bound (-INF if unbounded)
   double hi;              ///< Upper bound (+INF if unbounded)
   bool truncated;         ///< True iff the bounds came from a

@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
-#include "RandomVariable.h"     // parse_distribution_spec, parseDoubleStrict, DistKind
+#include "RandomVariable.h"     // parse_distribution_spec, parseDoubleStrict
 #include "distributions/Distribution.h"       // makeDistribution, comparatorPairLess
 extern "C" {
 #include "provsql_utils.h"      // gate_type

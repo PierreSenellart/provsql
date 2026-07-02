@@ -4,9 +4,8 @@
  *
  * Self-contained family implementation: the class is file-local and
  * reaches the evaluators only through the registrars at the bottom
- * (DistributionRegistry factory + pairwise comparator / closure rules).
- * The closed forms were relocated verbatim from the pre-refactor
- * @c DistKind switches, so behaviour is preserved by construction.
+ * (DistributionRegistry descriptor + pairwise comparator / closure
+ * rules).
  */
 #include "DistributionCommon.h"
 
@@ -163,7 +162,7 @@ double truncated_normal_raw_moment(double mu, double sigma, double a, double b,
 class NormalDistribution final : public BaseDistribution {
 public:
   using BaseDistribution::BaseDistribution;
-  DistKind kind() const override { return DistKind::Normal; }
+  const DistributionFamily &family() const override;
   double mean() const override { return p1_; }
   double variance() const override { return p2_ * p2_; }
   double rawMoment(unsigned k) const override {
@@ -274,6 +273,17 @@ public:
   }
 };
 
+const DistributionFamily normal_family = {
+  "normal", 2, "N", {"μ", "σ"},
+  +[](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<NormalDistribution>(p1, p2);
+  }};
+
+const DistributionFamily &NormalDistribution::family() const
+{
+  return normal_family;
+}
+
 /* (Normal, +, Normal): every term a·Zᵢ + bᵢ over independent normals
  * sums to Normal(Σ(aᵢμᵢ + bᵢ), √(Σ aᵢ²σᵢ²)).  A degenerate total
  * variance would make the closure a Dirac at the total mean; decline and
@@ -299,7 +309,7 @@ normalSumRule(const std::vector<ClosureTerm> &terms)
 }
 
 [[maybe_unused]] const ClosureRuleRegistrar normal_sum_rule(
-  DistKind::Normal, DistKind::Normal, &normalSumRule);
+  "normal", "normal", &normalSumRule);
 
 /* P(X < Y) for X, Y independent normals.  Reduces to P(X - Y < 0) with
  * X - Y ~ N(μ_X - μ_Y, √(σ_X² + σ_Y²)). */
@@ -311,13 +321,10 @@ double normalPairLess(const Distribution &X, const Distribution &Y)
 }
 
 [[maybe_unused]] const ComparatorRuleRegistrar normal_less_rule(
-  DistKind::Normal, DistKind::Normal, &normalPairLess);
+  "normal", "normal", &normalPairLess);
 
-[[maybe_unused]] const DistributionFamilyRegistrar normal_family(
-  "normal", {DistKind::Normal, 2, "N", {"μ", "σ"}},
-  [](double p1, double p2) -> std::unique_ptr<Distribution> {
-    return std::make_unique<NormalDistribution>(p1, p2);
-  });
+[[maybe_unused]] const DistributionFamilyRegistrar normal_family_registrar(
+  normal_family);
 
 }  // namespace
 

@@ -88,11 +88,11 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
 
   /* Resolve the family name through the DistributionRegistry so a new
    * family's token is recognised without touching this parser. */
-  const auto family = lookupDistributionFamily(kind_str);
+  const DistributionFamily *family = lookupDistributionFamily(kind_str);
   if (!family) return std::nullopt;
 
   DistributionSpec out{};
-  out.kind = family->kind;
+  out.family = family;
   if (family->nparams == 2) {
     const auto comma = params.find(',');
     if (comma == std::string::npos) return std::nullopt;

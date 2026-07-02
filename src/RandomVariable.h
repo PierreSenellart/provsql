@@ -22,36 +22,23 @@
 
 namespace provsql {
 
-/**
- * @brief Continuous distribution kinds supported by @c gate_rv.
- */
-enum class DistKind {
-  Normal,      ///< Normal (Gaussian): p1=μ, p2=σ
-  Uniform,     ///< Uniform on [a,b]: p1=a, p2=b
-  Exponential, ///< Exponential: p1=λ, p2 unused
-  Erlang,      ///< Erlang: p1=k (positive integer), p2=λ.  Sum of k
-               ///< i.i.d. @c Exp(λ); support @c [0, +∞).  The
-               ///< parameter @c k is stored in @c p1 as a double but
-               ///< must be integer-valued ≥ 1 for any consumer that
-               ///< uses the finite-sum CDF / sampler.
-  Gamma        ///< Gamma: p1=k (shape, any positive real), p2=λ (rate);
-               ///< support @c [0, +∞).  The general-shape counterpart
-               ///< of Erlang (the SQL constructor routes integer shapes
-               ///< through Erlang); CDF via the regularised lower
-               ///< incomplete gamma.
-};
+struct DistributionFamily;  // src/distributions/Distribution.h
 
 /**
- * @brief Parsed distribution spec (kind + up to two parameters).
+ * @brief Parsed distribution spec (family + up to two parameters).
  *
  * Stored in the @c extra byte string of a @c gate_rv as
  * <tt>"normal:μ,σ"</tt>, <tt>"uniform:a,b"</tt>, <tt>"exponential:λ"</tt>,
- * <tt>"erlang:k,λ"</tt>, or <tt>"gamma:k,λ"</tt>.
+ * <tt>"erlang:k,λ"</tt>, <tt>"gamma:k,λ"</tt>, ...  @c family points at
+ * the interned registry descriptor of the parsed name token (one
+ * instance per family, so plain pointer comparison is family
+ * identity); there is deliberately no family enum -- adding a family
+ * registers a new descriptor without touching any shared header.
  */
 struct DistributionSpec {
-  DistKind kind;
-  double p1;  ///< First parameter (μ, a, or λ)
-  double p2;  ///< Second parameter (σ or b; unused for Exponential)
+  const DistributionFamily *family;
+  double p1;  ///< First parameter (μ, a, k, or λ)
+  double p2;  ///< Second parameter (σ, b, or λ; unused for 1-parameter families)
 };
 
 /**

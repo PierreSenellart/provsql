@@ -82,7 +82,7 @@ double gammaP(double a, double x)
 class GammaDistribution final : public BaseDistribution {
 public:
   using BaseDistribution::BaseDistribution;
-  DistKind kind() const override { return DistKind::Gamma; }
+  const DistributionFamily &family() const override;
   double mean() const override { return p1_ / p2_; }
   double variance() const override { return p1_ / (p2_ * p2_); }
   double rawMoment(unsigned k) const override {
@@ -153,6 +153,17 @@ public:
   }
 };
 
+const DistributionFamily gamma_family = {
+  "gamma", 2, "Γ", {"k", "λ"},
+  +[](double p1, double p2) -> std::unique_ptr<Distribution> {
+    return std::make_unique<GammaDistribution>(p1, p2);
+  }};
+
+const DistributionFamily &GammaDistribution::family() const
+{
+  return gamma_family;
+}
+
 /* (Gamma, +, Gamma), same rate: Gamma(Σkᵢ, λ) for independent terms.
  * Strict shape like the Erlang rule: unscaled, unshifted, no additive
  * constants, rates exactly equal.  Mixed Gamma + Exponential / Erlang
@@ -178,13 +189,10 @@ gammaSumRule(const std::vector<ClosureTerm> &terms)
 }
 
 [[maybe_unused]] const ClosureRuleRegistrar gamma_sum_rule(
-  DistKind::Gamma, DistKind::Gamma, &gammaSumRule);
+  "gamma", "gamma", &gammaSumRule);
 
-[[maybe_unused]] const DistributionFamilyRegistrar gamma_family(
-  "gamma", {DistKind::Gamma, 2, "Γ", {"k", "λ"}},
-  [](double p1, double p2) -> std::unique_ptr<Distribution> {
-    return std::make_unique<GammaDistribution>(p1, p2);
-  });
+[[maybe_unused]] const DistributionFamilyRegistrar gamma_family_registrar(
+  gamma_family);
 
 }  // namespace
 

@@ -17,7 +17,7 @@
 #include "AnalyticEvaluator.h"  // cdfAt for shape_mass under truncation
 #include "CircuitFromMMap.h"    // getGenericCircuit
 #include "Expectation.h"        // lift_conditioning
-#include "RandomVariable.h"     // parse_distribution_spec, DistKind
+#include "RandomVariable.h"     // parse_distribution_spec
 #include "distributions/Distribution.h"       // makeDistribution -> per-family support()
 #include "provsql_utils_cpp.h"  // uuid2string
 

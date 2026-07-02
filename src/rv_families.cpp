@@ -74,19 +74,16 @@ rv_families(PG_FUNCTION_ARGS)
   rsinfo->setDesc = tupdesc;
 
   try {
-    for (const auto &entry : provsql::listDistributionFamilies()) {
-      const std::string &name = entry.first;
-      const provsql::DistributionFamily &fam = entry.second;
-
+    for (const provsql::DistributionFamily *fam :
+         provsql::listDistributionFamilies()) {
       Datum values[4];
       bool nulls[4] = {false, false, false, false};
 
-      values[0] = PointerGetDatum(cstring_to_text_with_len(name.data(),
-                                                           name.size()));
-      values[1] = Int32GetDatum(static_cast<int32>(fam.nparams));
-      values[2] = param_names_to_text_array(fam);
-      values[3] = PointerGetDatum(cstring_to_text(fam.label ? fam.label
-                                                            : ""));
+      values[0] = PointerGetDatum(cstring_to_text(fam->name));
+      values[1] = Int32GetDatum(static_cast<int32>(fam->nparams));
+      values[2] = param_names_to_text_array(*fam);
+      values[3] = PointerGetDatum(cstring_to_text(fam->label ? fam->label
+                                                             : ""));
 
       tuplestore_putvalues(tupstore, tupdesc, values, nulls);
     }

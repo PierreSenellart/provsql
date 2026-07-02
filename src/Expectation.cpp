@@ -244,9 +244,11 @@ iidOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
     specs.push_back(*s);
   }
 
-  /* i.i.d.: identical family and parameters across all children. */
+  /* i.i.d.: identical family and parameters across all children (the
+   * family descriptor is interned, so pointer comparison is family
+   * identity). */
   for (std::size_t i = 1; i < specs.size(); ++i)
-    if (specs[i].kind != specs[0].kind ||
+    if (specs[i].family != specs[0].family ||
         specs[i].p1 != specs[0].p1 || specs[i].p2 != specs[0].p2)
       return std::nullopt;
 

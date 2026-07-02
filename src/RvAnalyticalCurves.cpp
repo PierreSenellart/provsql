@@ -52,7 +52,7 @@ PG_FUNCTION_INFO_V1(rv_analytical_curves);
 #include "Expectation.h"        // lift_conditioning
 #include "GenericCircuit.h"
 #include "HybridEvaluator.h"    // runHybridSimplifier
-#include "RandomVariable.h"     // DistKind
+#include "RandomVariable.h"     // DistributionSpec
 #include "distributions/Distribution.h"       // makeDistribution -> plotRange
 #include "RangeCheck.h"         // matchClosedFormDistribution + variant
 #include "provsql_utils_cpp.h"
