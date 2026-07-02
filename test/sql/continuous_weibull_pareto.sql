@@ -87,6 +87,17 @@ SELECT abs(provsql.probability_evaluate(
              'independent') - 11.0 / 12) < 1e-15
        AS pareto_cross_scale_exact;
 
+-- A mixed-family pair is a registry miss and routes through the
+-- generic quadrature, which must integrate over the NARROWER window:
+-- the Pareto's own power-law window is xₘ·10^{9/α}, far too wide for
+-- the fixed panel budget, while the other side's window resolves fine
+-- against the Pareto's exact CDF.
+-- P(Par(1,3) < U(2,4)) = 1 - (2⁻² - 4⁻²)/((3-1)·(4-2)) = 61/64.
+SELECT abs(provsql.probability_evaluate(
+             provsql.rv_cmp_lt(provsql.pareto(1, 3), provsql.uniform(2, 4)),
+             'independent') - 61.0 / 64) < 1e-9
+       AS pareto_mixed_quadrature_exact;
+
 -- (11) Self-similarity: X | X > a is Pareto(a, α), so the truncated
 -- mean E[Par(1,3) | X > 2] is the Pareto(2,3) mean, 3.
 WITH r AS (SELECT provsql.pareto(1, 3) AS x)

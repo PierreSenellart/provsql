@@ -56,6 +56,9 @@ t
 pareto_cross_scale_exact
 t
 (1 row)
+pareto_mixed_quadrature_exact
+t
+(1 row)
 pareto_truncated_mean_exact
 t
 (1 row)

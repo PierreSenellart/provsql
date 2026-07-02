@@ -56,27 +56,39 @@ std::map<std::string, const DistributionFamily *> &familiesByName()
   return families;
 }
 
-/* Registry-miss default: P(X < Y) by the 1-D quadrature
- * P(X<Y) = ∫ (1 - F_Y(t)) f_X(t) dt over X's integration range (composite
- * Simpson).  Family-agnostic -- needs only pdf / cdf / integrationRange.
- * NaN when a density / CDF is undefined (e.g. a non-integer Erlang shape),
- * so the caller falls back to Monte Carlo. */
+/* Registry-miss default: P(X < Y) by a 1-D composite-Simpson quadrature.
+ * Two equivalent identities are available --
+ *   P(X<Y) = ∫ (1 - F_Y(t)) f_X(t) dt   over X's integration range,
+ *   P(X<Y) = ∫ F_X(t) f_Y(t) dt         over Y's integration range --
+ * and the fixed panel budget resolves the narrower window better, so the
+ * side with the narrower range is the one integrated over.  A heavy tail
+ * (Pareto with small α) blows its own window up to xₘ·10^{9/α}, leaving
+ * ~30-unit panels across the density peak; integrating the *other*,
+ * well-conditioned density against the heavy tail's exact CDF instead
+ * keeps the answer exact-grade.  Family-agnostic -- needs only pdf /
+ * cdf / integrationRange.  NaN when a density / CDF is undefined (e.g.
+ * a non-integer Erlang shape), so the caller falls back to Monte Carlo. */
 double quadraturePairLess(const Distribution &X, const Distribution &Y)
 {
-  double lo, hi;
-  if (!X.integrationRange(lo, hi))
+  double xlo, xhi, ylo, yhi;
+  const bool xok = X.integrationRange(xlo, xhi);
+  const bool yok = Y.integrationRange(ylo, yhi);
+  if (!xok && !yok)
     return kNaN;
+  const bool overX = xok && (!yok || (xhi - xlo) <= (yhi - ylo));
+  const double lo = overX ? xlo : ylo;
+  const double hi = overX ? xhi : yhi;
   const int N = 4000;
   const double h = (hi - lo) / N;
   double acc = 0.0;
   for (int i = 0; i <= N; ++i) {
     const double t = lo + i * h;
-    const double fX = X.pdf(t);
-    const double FY = Y.cdf(t);
-    if (std::isnan(fX) || std::isnan(FY))
+    const double f = overX ? X.pdf(t) : Y.pdf(t);
+    const double F = overX ? Y.cdf(t) : X.cdf(t);
+    if (std::isnan(f) || std::isnan(F))
       return kNaN;
     const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
-    acc += coeff * (1.0 - FY) * fX;
+    acc += coeff * (overX ? (1.0 - F) : F) * f;
   }
   return acc * h / 3.0;
 }
