@@ -1,6 +1,7 @@
 !*.out
 *.so
 src/*.o
+src/distributions/*.o
 src/*.bc
 sql/provsql--*.sql
 sql/provsql.sql
@@ -18,6 +19,8 @@ src/*.gcno
 src/*.gcda
 src/semiring/*.gcno
 src/semiring/*.gcda
+src/distributions/*.gcno
+src/distributions/*.gcda
 *.gcov
 .ccls-cache/
 doc/doxygen-*/
