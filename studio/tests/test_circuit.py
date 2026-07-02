@@ -720,7 +720,9 @@ def test_arith_transform_labels(client, test_dsn):
     """The gate_arith transform opcodes label correctly in the scene --
     '^' (POW), 'ln', 'exp' -- and a POW gate whose exponent child is the
     constant 0.5 renders as the square root it is ('√'), matching the
-    sqrt() SQL sugar that builds exactly that shape."""
+    sqrt() SQL sugar that builds exactly that shape.  A transform with a
+    registered closed-form image folds in the simplified view instead:
+    exp(normal) renders as the lognormal it is."""
     with psycopg.connect(
         f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
         autocommit=True,
@@ -729,8 +731,9 @@ def test_arith_transform_labels(client, test_dsn):
             "SELECT (provsql.sqrt(provsql.uniform(0, 1)))::uuid::text,"
             "       (provsql.uniform(0, 1) ^ 0.25)::uuid::text,"
             "       (provsql.ln(provsql.uniform(1, 2)))::uuid::text,"
+            "       (provsql.exp(provsql.uniform(1, 2)))::uuid::text,"
             "       (provsql.exp(provsql.normal(0, 1)))::uuid::text")
-        sqrt_root, pow_root, ln_root, exp_root = cur.fetchone()
+        sqrt_root, pow_root, ln_root, exp_root, bridge_root = cur.fetchone()
 
     for root, expected_label in [(sqrt_root, "√"), (pow_root, "^"),
                                  (ln_root, "ln"), (exp_root, "exp")]:
@@ -741,3 +744,10 @@ def test_arith_transform_labels(client, test_dsn):
         rootn = nodes_by_id[root]
         assert rootn["type"] == "arith", rootn
         assert rootn["label"] == expected_label, rootn
+
+    resp = client.get(f"/api/circuit/{bridge_root}?depth=2")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+    rootn = {n["id"]: n for n in scene["nodes"]}[bridge_root]
+    assert rootn["type"] == "rv", rootn
+    assert rootn["label"] == "LogN(0,1)", rootn
