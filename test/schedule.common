@@ -41,6 +41,7 @@ test: aggregate_null
 test: outer_join
 test: scalar_subquery
 test: agg_distinct agg_order_by agg_arithmetic
+test: agg_case
 test: agg_token_text_as_uuid
 test: create_as
 test: insert_select_provenance

@@ -189,6 +189,46 @@ Comparing any other aggregate (``min``, ``max``, ``sum``…) with a text
 constant is **not** implemented and raises an error, since its
 possible-world value is not decided occurrence by occurrence.
 
+CASE over aggregates
+--------------------
+
+A searched ``CASE`` whose ``WHEN`` guards are aggregate comparisons and whose
+branches are aggregates is a **guarded selection over aggregates**: which branch
+is taken depends on the (uncertain) input provenance, so the result is itself an
+aggregate-carrier ``agg_token``.
+
+.. code-block:: postgresql
+
+    SELECT district,
+           CASE WHEN sum(pm25) > 300 THEN max(pm25)
+                WHEN avg(pm25) > 50   THEN avg(pm25)
+                ELSE 0 END AS headline
+    FROM readings GROUP BY district;
+
+The result flows onward exactly like a bare aggregate:
+:sqlfunc:`expected`, :sqlfunc:`variance`, and :sqlfunc:`moment` report the
+distribution of the selected value over the possible worlds. Evaluation is
+**exact** (no Monte Carlo -- correct even under
+``SET provsql.rv_mc_samples = 0``):
+
+.. math::
+
+    E[\text{pick}^k] = \sum_i \Pr(R_i)\; E[\text{value}_i^k \mid R_i],
+
+summed over the first-match regions
+:math:`R_i = \lnot g_1 \wedge \dots \wedge \lnot g_{i-1} \wedge g_i` (the
+``ELSE`` region is "all guards false"). The regions are mutually exclusive, and
+the correlation between a guard and its branch (they share input tuples) is
+carried by the conditioning, exactly as in ``HAVING``. This covers branches
+that are a single aggregate (``sum`` / ``count`` / ``min`` / ``max``), a numeric
+constant (``ELSE 0``), or a nested ``CASE``.
+
+A branch that is an **arithmetic combination** of aggregates
+(``THEN sum(y) + sum(z)``) has no exact closed form -- the region probabilities
+stay exact, but that branch's conditional moment is estimated by Monte Carlo, so
+it needs ``provsql.rv_mc_samples > 0``. (This is the same limitation the moment
+surface has for a bare ``sum(x) + sum(y)``.)
+
 Joining and exploding aggregated provenance
 --------------------------------------------
 

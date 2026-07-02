@@ -173,6 +173,7 @@ typedef struct constants_t {
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
   Oid OID_FUNCTION_NOT_EQUAL_UUID; ///< OID of the = operator on UUIDs FUNCTION
   Oid OID_FUNCTION_AGG_TOKEN_UUID; ///< OID of the agg_token_uuid FUNCTION
+  Oid OID_FUNCTION_AGG_VALUE_GATE;      ///< agg_value_gate(numeric) -> uuid
   Oid OID_FUNCTION_GET_CHILDREN; ///< OID of the get_children FUNCTION
   Oid OID_FUNCTION_GET_EXTRA;    ///< OID of the get_extra FUNCTION
   Oid OID_UNNEST; ///< OID of the unnest(anyarray) FUNCTION
@@ -290,6 +291,10 @@ typedef struct constants_t {
    *  RV-typed @c CASE expression.  @c InvalidOid on a schema predating
    *  @c gate_case (the @c CASE-over-RV rewrite is then disabled). */
   Oid OID_FUNCTION_RV_CASE;
+  /** @brief OID of @c agg_case(uuid[]), the @c agg_token constructor the
+   *  planner hook lowers an aggregate-carrier @c CASE into.  @c InvalidOid on
+   *  a schema predating it (the rewrite is then disabled). */
+  Oid OID_FUNCTION_AGG_CASE;
   bool ok; ///< true if constants were loaded
 } constants_t;
 

@@ -399,3 +399,44 @@ Nothing else needs to change: the query rewriter, the
 :sqlfunc:`provenance_aggregate` SQL function, and the :cfunc:`agg_token`
 composite type all operate on OIDs and metadata, so they pick up new
 aggregates automatically once steps 1--4 are in place.
+
+CASE over aggregates
+--------------------
+
+A searched ``CASE`` whose branches are aggregates lowers to a ``gate_case``
+carried by an ``agg_token`` -- the aggregate-carrier counterpart of the
+RV-carrier ``CASE`` (:doc:`continuous-distributions`). The gate type is
+carrier-agnostic (its branch types discriminate the carrier), so no new gate or
+on-disk change is needed.
+
+**Planner lowering** (:cfile:`provsql.c`). Unlike the RV pass, which runs early,
+the aggregate-``CASE`` rewrite (``rewrite_agg_cases``) must run **after**
+``replace_aggregations_by_provenance_aggregate`` -- only then are the branch
+``sum(y)`` / guard ``sum(x) > 3`` lowered to ``agg_token`` and an agg comparison.
+It runs before ``insert_agg_token_casts`` so the result stays an ``agg_token``
+(rather than being cast to numeric, which would drop the provenance).
+``build_agg_case`` mirrors ``build_rv_case`` but lowers each guard with
+``having_Expr_to_provenance_cmp`` (the same evaluator as a ``HAVING``
+comparison, which the RV path's ``predicate_to_condition_gate`` cannot reach
+post-lowering because it dispatches on the now-absent ``Aggref``), and casts
+each branch value ``agg_token -> uuid`` (a constant branch is lifted with
+``agg_value_gate``, the agg-side ``as_random``). It emits ``agg_case(uuid[])``.
+
+**Exact evaluation** (``agg_raw_moment``). A ``case`` gate is handled by
+the possible-worlds identity
+:math:`E[\text{pick}^k] = \sum_i \Pr(R_i)\,E[\text{value}_i^k \mid R_i]` over the
+first-match regions :math:`R_i` (built with ``provenance_times`` /
+``provenance_not``). Both factors reuse existing exact machinery -- the Boolean
+``probability`` of the region and a recursive conditional ``agg_raw_moment`` of
+the branch -- so no new possible-worlds enumeration is written; the regions are
+mutually exclusive, so the terms sum without inclusion--exclusion. Per branch:
+a constant is a Dirac (:math:`c^k`), a single aggregate or nested ``CASE`` is
+exact via ``agg_raw_moment``, and an arithmetic / composite branch falls back to
+the Monte-Carlo scalar path (``rv_moment``), which composes ``gate_case`` with
+the aggregate leaves. The MC sampler already handles ``gate_case`` + ``gate_agg``
+with no change.
+
+Open: closed-form moments for arithmetic-combination branches (inherits the
+bare ``sum(x) + sum(y)`` limitation), and the deterministic display value shown
+in the token's cell (currently a placeholder; the probabilistic result via
+``expected`` / ``probability`` is unaffected).

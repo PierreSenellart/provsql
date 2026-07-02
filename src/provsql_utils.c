@@ -440,6 +440,10 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_FUNCTION_AGG_TOKEN_UUID = get_provsql_func_oid("agg_token_uuid");
   CheckOid(OID_FUNCTION_AGG_TOKEN_UUID);
 
+  /* Used by the aggregate-carrier CASE lowering (build_agg_case) to lift a
+   * numeric constant branch (e.g. `ELSE 0`) into a value gate. */
+  constants.OID_FUNCTION_AGG_VALUE_GATE = get_provsql_func_oid("agg_value_gate");
+
   /* The next two are used by the agg_token JOIN query rewriting. */
   constants.OID_FUNCTION_GET_CHILDREN = get_provsql_func_oid("get_children");
   CheckOid(OID_FUNCTION_GET_CHILDREN);
@@ -616,6 +620,10 @@ static constants_t initialize_constants(bool failure_if_not_possible)
    * flattened guard/value wire list.  Optional (InvalidOid disables the
    * CASE-over-RV rewrite on schemas predating gate_case). */
   constants.OID_FUNCTION_RV_CASE = get_provsql_func_oid("rv_case");
+
+  /* agg_case(uuid[]) -> agg_token: the aggregate-carrier analogue of rv_case.
+   * Optional (InvalidOid disables the CASE-over-aggregate rewrite). */
+  constants.OID_FUNCTION_AGG_CASE = get_provsql_func_oid("agg_case");
 
   /* random_variable_{eq,ne,le,lt,ge,gt} -- order matches the
    * ComparisonOperator enum in src/Aggregation.h (EQ=0, NE=1, LE=2,

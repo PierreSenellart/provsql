@@ -1,0 +1,37 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+root_gate
+case
+(1 row)
+e_pick|var_pick|m2_pick
+37.5000|1418.7500|2825.0000
+(1 row)
+add_provenance
+
+(1 row)
+e_certain|var_certain
+30.0000|0.0000
+(1 row)
+add_provenance
+
+(1 row)
+e_minmax|var_minmax
+14.8000|40.5600
+(1 row)
+add_provenance
+
+(1 row)
+e_const|var_const
+12.5000|168.7500
+(1 row)
+add_provenance
+
+(1 row)
+arith_branch_mc_close
+t
+(1 row)
+agg_case_done
+ok
+(1 row)

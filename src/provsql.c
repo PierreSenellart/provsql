@@ -4117,6 +4117,192 @@ build_rv_case(CaseExpr *ce, const constants_t *constants)
   return (Node *) call;
 }
 
+/* Strip one PostgreSQL cast layer (e.g. the agg_token -> numeric cast the
+ * aggregate-lowering pass wraps around a nested agg_token) and report whether
+ * the underlying expression is agg_token-typed. */
+static bool
+node_is_agg_token(Node *n, const constants_t *constants)
+{
+  if (n != NULL && IsA(n, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)n;
+    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+         fe->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(fe->args) == 1)
+      n = (Node *)linitial(fe->args);
+  }
+  return n != NULL && exprType(n) == constants->OID_TYPE_AGG_TOKEN;
+}
+
+/* Convert one agg-carrier CASE branch value into the UUID wire the gate_case
+ * expects: strip the cast the aggregate pass wrapped around it, then cast the
+ * bare agg_token to its UUID via agg_token_uuid (the same wrapper
+ * having_OpExpr_to_provenance_cmp uses for the aggregate side of a HAVING
+ * comparison).  Returns NULL for a branch that is not an agg_token (e.g. a bare
+ * numeric constant -- deferred), so the caller declines the whole CASE. */
+static Node *
+agg_arm_to_uuid(Node *arm, const constants_t *constants)
+{
+  Node *node = arm;
+  FuncExpr *castToUUID;
+
+  if (node != NULL && IsA(node, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)node;
+    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+         fe->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(fe->args) == 1)
+      node = (Node *)linitial(fe->args);
+  }
+  if (node == NULL)
+    return NULL;
+
+  if (exprType(node) == constants->OID_TYPE_AGG_TOKEN) {
+    castToUUID = makeNode(FuncExpr);
+    castToUUID->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+    castToUUID->funcresulttype = constants->OID_TYPE_UUID;
+    castToUUID->funcretset = false;
+    castToUUID->funcvariadic = false;
+    castToUUID->funcformat = COERCE_EXPLICIT_CALL;
+    castToUUID->funccollid = InvalidOid;
+    castToUUID->inputcollid = InvalidOid;
+    castToUUID->args = list_make1(node);
+    castToUUID->location = -1;
+    return (Node *)castToUUID;
+  }
+
+  /* A non-agg_token branch (e.g. a bare numeric constant `ELSE 0`, or a
+   * grouped column): lift it into a value gate via agg_value_gate, the
+   * aggregate-side analogue of as_random.  Coerce to numeric first (CASE
+   * branches are type-unified, so this is usually a no-op). */
+  if (OidIsValid(constants->OID_FUNCTION_AGG_VALUE_GATE)) {
+    FuncExpr *valueGate;
+    Node *numarg = node;
+    if (exprType(node) != NUMERICOID) {
+      numarg = coerce_to_target_type(NULL, node, exprType(node), NUMERICOID, -1,
+                                     COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
+                                     -1);
+      if (numarg == NULL)
+        return NULL;   /* not coercible to numeric -> decline the CASE */
+    }
+    valueGate = makeNode(FuncExpr);
+    valueGate->funcid = constants->OID_FUNCTION_AGG_VALUE_GATE;
+    valueGate->funcresulttype = constants->OID_TYPE_UUID;
+    valueGate->funcretset = false;
+    valueGate->funcvariadic = false;
+    valueGate->funcformat = COERCE_EXPLICIT_CALL;
+    valueGate->funccollid = InvalidOid;
+    valueGate->inputcollid = InvalidOid;
+    valueGate->args = list_make1(numarg);
+    valueGate->location = -1;
+    return (Node *)valueGate;
+  }
+  return NULL;
+}
+
+
+/* True for a searched CASE whose branches carry aggregate tokens -- the
+ * aggregate-carrier analogue of case_has_rv_cmp, checked after the aggregate
+ * pass has lowered the branch aggregates to agg_token. */
+static bool
+case_is_agg_carrier(CaseExpr *ce, const constants_t *constants)
+{
+  ListCell *lc;
+
+  if (ce->arg != NULL || !OidIsValid(constants->OID_FUNCTION_AGG_CASE))
+    return false;
+  foreach (lc, ce->args) {
+    CaseWhen *cw = (CaseWhen *)lfirst(lc);
+    if (node_is_agg_token((Node *)cw->result, constants))
+      return true;
+  }
+  return node_is_agg_token((Node *)ce->defresult, constants);
+}
+
+/* Build an agg_case(ARRAY[...]) -> agg_token from a searched CASE whose
+ * branches are aggregates.  Mirrors build_rv_case, but the guards are lowered
+ * by having_Expr_to_provenance_cmp (they compare agg_tokens, already lowered by
+ * the aggregate pass) and each branch value is cast agg_token -> UUID.  Returns
+ * NULL (declining, so the CASE is left untouched) if a guard or branch is not
+ * convertible. */
+static Node *
+build_agg_case(CaseExpr *ce, const constants_t *constants)
+{
+  List *elements = NIL;
+  ListCell *lc;
+  ArrayExpr *array;
+  FuncExpr *call;
+  Node *value;
+
+  foreach (lc, ce->args) {
+    CaseWhen *cw = (CaseWhen *)lfirst(lc);
+    FuncExpr *guard =
+      having_Expr_to_provenance_cmp((Expr *)cw->expr, constants, false);
+    if (guard == NULL)
+      return NULL;
+    value = agg_arm_to_uuid((Node *)cw->result, constants);
+    if (value == NULL)
+      return NULL;
+    elements = lappend(elements, guard);
+    elements = lappend(elements, value);
+  }
+  value = agg_arm_to_uuid((Node *)ce->defresult, constants);
+  if (value == NULL)
+    return NULL;
+  elements = lappend(elements, value);
+
+  array = makeNode(ArrayExpr);
+  array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  array->element_typeid = constants->OID_TYPE_UUID;
+  array->elements = elements;
+  array->location = -1;
+
+  call = makeNode(FuncExpr);
+  call->funcid = constants->OID_FUNCTION_AGG_CASE;
+  call->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
+  call->funcretset = false;
+  call->funcvariadic = false;
+  call->funcformat = COERCE_EXPLICIT_CALL;
+  call->funccollid = InvalidOid;
+  call->inputcollid = InvalidOid;
+  call->args = list_make1(array);
+  call->location = ce->location;
+  return (Node *)call;
+}
+
+/* Target-list mutator: lower each aggregate-carrier searched CASE into an
+ * agg_case gate_case.  Sub-expressions are mutated first so a CASE nested in a
+ * branch value lowers before its parent wraps it. */
+static Node *
+rewrite_agg_case_mutator(Node *node, void *context)
+{
+  const constants_t *constants = (const constants_t *)context;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, CaseExpr) && case_is_agg_carrier((CaseExpr *)node, constants)) {
+    CaseExpr *ce = (CaseExpr *)expression_tree_mutator(
+      node, rewrite_agg_case_mutator, context);
+    Node *lowered = build_agg_case(ce, constants);
+    return lowered != NULL ? lowered : (Node *)ce;
+  }
+  return expression_tree_mutator(node, rewrite_agg_case_mutator, context);
+}
+
+/* Lower aggregate-carrier CASEs in the target list, after the aggregate pass
+ * has turned the branch aggregates into agg_tokens. */
+static void
+rewrite_agg_cases(const constants_t *constants, Query *q)
+{
+  ListCell *lc;
+
+  if (!OidIsValid(constants->OID_FUNCTION_AGG_CASE))
+    return;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    te->expr =
+      (Expr *)rewrite_agg_case_mutator((Node *)te->expr, (void *)constants);
+  }
+}
+
 /**
  * @brief Is @p node a projected random_variable comparison event?
  *
@@ -13330,6 +13516,15 @@ static Query *process_query(const constants_t *constants, Query *q,
         replace_aggregations_by_provenance_aggregate(
           constants, q, prov_atts,
           has_union ? SR_PLUS : (has_difference ? SR_MONUS : SR_TIMES));
+
+        /* Lower a searched CASE whose branches are aggregates into an
+         * agg_case gate_case, now that the branch aggregates are agg_tokens
+         * (the guards compare agg_tokens, which having_Expr_to_provenance_cmp
+         * lowers exactly as it does a HAVING comparison).  Must run here, after
+         * the aggregate pass and before insert_agg_token_casts, so the result
+         * stays an agg_token instead of being cast to numeric (which would
+         * discard the provenance and corrupt the CASE). */
+        rewrite_agg_cases(constants, q);
 
         // If there are any sort clauses on something whose type is now
         // aggregate token, we throw an error: sorting aggregation values

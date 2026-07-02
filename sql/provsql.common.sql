@@ -4603,6 +4603,26 @@ $$
   SELECT provsql.random_variable_make(provsql.provenance_case(children));
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
+/**
+ * @brief Build an @c agg_token from a guarded-selection @c gate_case.
+ *
+ * The aggregate-carrier analogue of @c rv_case: a thin @c agg_token wrapper
+ * over the carrier-agnostic @c provenance_case, the target of the planner-hook
+ * lowering of a searched @c CASE whose guards are aggregate comparisons and
+ * whose branches are aggregates. The branches (and default) are already
+ * flattened into @c [guard_1, value_1, ..., default] UUIDs.  The display cell
+ * carries a placeholder value (@c 0): a CASE's value is world-dependent, so the
+ * result is produced by the measure evaluators (``expected`` / ``probability``
+ * / possible-worlds / Monte Carlo) from the gate, not the token's cell.
+ */
+CREATE OR REPLACE FUNCTION agg_case(
+  children UUID[]
+)
+RETURNS agg_token AS
+$$
+  SELECT provsql.agg_token_make(provsql.provenance_case(children), 0);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
 /** @} */
 
 /**
@@ -5302,6 +5322,71 @@ BEGIN
   IF k < 0 THEN
     RAISE EXCEPTION 'agg_raw_moment(): k must be non-negative (got %)', k;
   END IF;
+
+  -- Aggregate-carrier CASE (a gate_case over aggregate branches): a first-match
+  -- guarded selection.  E[pick^k] = Σ_i P(region_i) · E[value_i^k | region_i],
+  -- where region_i = (¬g_1 ∧ … ∧ ¬g_{i-1}) ∧ g_i is the world set that selects
+  -- branch i (the default's region is "all guards false").  Both factors are
+  -- exact: probability() over the guard event, and the conditional aggregate
+  -- moment (a recursive agg_raw_moment on the branch aggregate).  The regions
+  -- are mutually exclusive, so the terms sum with no inclusion-exclusion, and
+  -- correlation between a guard and its branch (shared input tuples) is carried
+  -- by the conditioning, exactly as HAVING carries it.  An outer conditioning
+  -- @p prov is conjoined into every region and divided out as P(prov).
+  IF get_gate_type(token) = 'case' THEN
+    IF k = 0 THEN
+      RETURN 1;
+    END IF;
+    DECLARE
+      wires uuid[] := get_children(token);
+      nw integer := array_length(get_children(token), 1);
+      m integer := (array_length(get_children(token), 1) - 1) / 2;
+      running_neg uuid := gate_one();
+      region_full uuid;
+      prov_p float8;
+      p float8;
+      total float8 := 0;
+      ci integer;
+      vuid uuid;
+      bm float8;
+    BEGIN
+      prov_p := probability(prov);
+      IF prov_p IS NULL OR prov_p <= 0 THEN
+        RETURN NULL;   -- impossible conditioning event
+      END IF;
+      -- Branches 1..m are the guarded WHENs; branch m+1 is the ELSE default,
+      -- whose region is "all guards false".
+      FOR ci IN 1 .. m + 1 LOOP
+        IF ci <= m THEN
+          region_full := provenance_times(running_neg, wires[2 * ci - 1], prov);
+          vuid := wires[2 * ci];
+          running_neg :=
+            provenance_times(running_neg, provenance_not(wires[2 * ci - 1]));
+        ELSE
+          region_full := provenance_times(running_neg, prov);
+          vuid := wires[nw];
+        END IF;
+        p := probability(region_full);
+        IF p > 0 THEN
+          -- E[value_i^k | region_i]: a constant branch is a Dirac (c^k, exact);
+          -- a single aggregate or nested CASE is exact via agg_raw_moment; an
+          -- arithmetic / composite branch takes the Monte-Carlo scalar path
+          -- (which composes with the aggregate leaves).
+          IF get_gate_type(vuid) = 'value' THEN
+            bm := power(CAST(get_extra(vuid) AS float8), k);
+          ELSIF get_gate_type(vuid) IN ('agg', 'case') THEN
+            bm := agg_raw_moment(agg_token_make(vuid, 0), k, region_full,
+                                 method, arguments);
+          ELSE
+            bm := rv_moment(vuid, k, false, region_full);
+          END IF;
+          total := total + (p / prov_p) * bm;
+        END IF;
+      END LOOP;
+      RETURN total;
+    END;
+  END IF;
+
   IF get_gate_type(token) <> 'agg' THEN
     IF get_gate_type(token) IN ('arith', 'conditioned') THEN
       RAISE EXCEPTION 'expected / variance / moment over an arithmetic '
