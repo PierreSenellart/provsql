@@ -175,7 +175,7 @@ extension render without a client upgrade.
 Arithmetic on Random Variables
 ------------------------------
 
-The four arithmetic operators ``+``, ``-``, ``*``, ``/`` and unary
+The arithmetic operators ``+``, ``-``, ``*``, ``/``, ``^`` and unary
 ``-`` are declared on ``(random_variable, random_variable)`` and
 return a fresh ``random_variable`` whose underlying gate is a
 ``gate_arith`` over the operand UUIDs. Mixing scalars and random
@@ -187,9 +187,33 @@ variables resolves through the implicit casts above:
     SELECT reading + 1            FROM sensor_readings;
     SELECT 2 * reading - 0.5      FROM sensor_readings;
     SELECT -reading               FROM sensor_readings;
+    SELECT reading ^ 0.25         FROM sensor_readings;
     SELECT r1.reading / r2.reading
       FROM sensor_readings r1, sensor_readings r2
      WHERE r1.id < r2.id;
+
+Beyond the operators, the nonlinear transforms :sqlfunc:`pow` /
+:sqlfunc:`power` (spellings of ``^``, gate
+:sqlfunc:`random_variable_pow`), :sqlfunc:`ln`, :sqlfunc:`exp`, and
+:sqlfunc:`sqrt` (pure sugar for ``^ 0.5``) apply per draw. They unlock
+generative constructions of dependent joints -- ``2 * u ^ 0.25`` is the
+inverse-CDF recipe for a marginal of a triangular joint density -- and
+the log/exp bridges used by log-normal-style models. Two domain rules
+apply, enforced at evaluation time with actionable errors rather than
+silently dropped draws (which would bias the estimate):
+
+- ``ln(x)`` requires the argument's support to be non-negative; a
+  negative draw raises (a draw of exactly ``0`` yields ``-Infinity``).
+- ``x ^ p`` with a **non-integer** exponent likewise requires a
+  non-negative base; a negative base draw raises, with the fix in the
+  message (``pow(greatest(x, 0), p)`` for the clamped branch). Integer
+  exponents are total: ``x ^ 2`` works for any ``x``.
+
+Moments have no linearity to push through a nonlinear map, so
+``expected`` / ``variance`` / ``quantile`` over a transform evaluate by
+Monte Carlo (constant subtrees still fold exactly, and
+:sqlfunc:`support` propagates sound intervals through ``^`` / ``ln`` /
+``exp``, so support-decidable comparisons stay exact).
 
 The arithmetic operators are *structural*: they record the
 operation in the circuit without evaluating it. Evaluation happens

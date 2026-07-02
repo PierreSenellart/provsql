@@ -1,0 +1,73 @@
+\set ECHO none
+exp_zero_folds
+t
+(1 row)
+exp_one_folds
+t
+(1 row)
+ln_one_folds
+t
+(1 row)
+pow_two_cubed_folds
+t
+(1 row)
+sqrt_via_operator_folds
+t
+(1 row)
+sqrt_sugar_folds
+t
+(1 row)
+ERROR:  ProvSQL: rv_moment: Expectation of a gate_arith nonlinear transform could not be decomposed analytically and provsql.rv_mc_samples = 0 disables the Monte Carlo fallback
+lo|hi
+0|Infinity
+(1 row)
+lo|hi
+0|2.302585092994046
+(1 row)
+lo|hi
+0|2
+(1 row)
+lo|hi
+0|Infinity
+(1 row)
+exp_positive_exact
+t
+(1 row)
+lognormal_mean_mc
+t
+(1 row)
+ln_uniform_mean_mc
+t
+(1 row)
+sqrt_uniform_mean_mc
+t
+(1 row)
+generative_pow_mc
+t
+(1 row)
+lognormal_median_mc
+t
+(1 row)
+lognormal_tail_mc
+t
+(1 row)
+ERROR:  ProvSQL: rv_moment: ln: negative draw (-0.574095); ln is only defined on [0, +Infinity) -- restrict the argument's support
+ERROR:  ProvSQL: rv_moment: pow: negative base drawn with a non-integer exponent (-0.574095 ^ 0.500000); restrict the base to be non-negative, e.g. pow(greatest(x, 0), p)
+sqrt_clamped_mc
+t
+(1 row)
+integer_pow_total_mc
+t
+(1 row)
+exp_unqualified|ln_unqualified|sqrt_unqualified|pow_unqualified|power_unqualified|caret_unqualified
+t|t|t|t|t|t
+(1 row)
+exp_numeric_unaffected|sqrt_numeric_unaffected|ln_numeric_unaffected|pow_numeric_unaffected|caret_numeric_unaffected
+t|t|t|t|t
+(1 row)
+sqrt_unqualified_folds|exp_unqualified_folds|pow_unqualified_folds
+t|t|t
+(1 row)
+continuous_transforms_done
+ok
+(1 row)

@@ -79,6 +79,44 @@ Interval mul(Interval a, Interval b)
  * The conservative all-real fallback is correct (any real value is
  * possible) but throws away precision &ndash; division by an interval
  * crossing zero is rare in our tests. */
+/* exp is monotone increasing and total (exp(-inf) = 0, exp(inf) = inf). */
+Interval expInt(Interval a) { return {std::exp(a.lo), std::exp(a.hi)}; }
+
+/* ln is monotone increasing on [0, inf); the part of an interval below
+ * 0 is a domain violation the sampler raises on, so the bound covers
+ * the draws that do evaluate (lo <= 0 maps to -inf via ln 0). */
+Interval lnInt(Interval a)
+{
+  const double lo = a.lo > 0.0 ? std::log(a.lo)
+                               : -std::numeric_limits<double>::infinity();
+  const double hi = a.hi > 0.0 ? std::log(a.hi)
+                               : -std::numeric_limits<double>::infinity();
+  return {lo, hi};
+}
+
+/* x^y over the interval box.  For a base interval entirely >= 0, x^y is
+ * monotone in each variable separately (in x for fixed y, in y for
+ * fixed x), so the extrema sit at the corners; 0^negative diverges to
+ * +inf, which std::pow reports directly.  A base interval extending
+ * below 0 keeps the conservative all-real bound: integer-exponent draws
+ * are legitimate there, and non-integer ones raise in the sampler. */
+Interval powInt(Interval b, Interval e)
+{
+  if (!(b.lo >= 0.0))
+    return Interval::all();
+  double lo = std::numeric_limits<double>::infinity();
+  double hi = -std::numeric_limits<double>::infinity();
+  for (double x : {b.lo, b.hi})
+    for (double y : {e.lo, e.hi}) {
+      const double v = std::pow(x, y);
+      if (std::isnan(v))
+        return Interval::all();
+      lo = std::min(lo, v);
+      hi = std::max(hi, v);
+    }
+  return {lo, hi};
+}
+
 Interval divInt(Interval a, Interval b)
 {
   if (b.lo <= 0.0 && b.hi >= 0.0)
@@ -174,6 +212,18 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
             Interval o = intervalOf(gc, wires[i], cache);
             result = { std::min(result.lo, o.lo), std::min(result.hi, o.hi) };
           }
+          break;
+        case PROVSQL_ARITH_POW:
+          if (wires.size() != 2) break;
+          result = powInt(first, intervalOf(gc, wires[1], cache));
+          break;
+        case PROVSQL_ARITH_LN:
+          if (wires.size() != 1) break;
+          result = lnInt(first);
+          break;
+        case PROVSQL_ARITH_EXP:
+          if (wires.size() != 1) break;
+          result = expInt(first);
           break;
       }
       break;

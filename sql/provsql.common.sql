@@ -3575,6 +3575,79 @@ $$
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /**
+ * @brief @c random_variable ^ @c random_variable (gate_arith POW).
+ *
+ * Real-valued branch only: evaluation raises if a negative base is
+ * drawn together with a non-integer exponent (write
+ * <tt>pow(greatest(x, 0), p)</tt> for the non-negative branch).
+ */
+CREATE OR REPLACE FUNCTION random_variable_pow(
+  a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      7,  -- PROVSQL_ARITH_POW
+      ARRAY[(a)::uuid,
+            (b)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Natural logarithm of a @c random_variable (gate_arith LN).
+ *
+ * Defined on @c [0, +Infinity): evaluation raises if a negative value
+ * is drawn (restrict the argument's support); a draw of exactly @c 0
+ * yields @c -Infinity.
+ */
+CREATE OR REPLACE FUNCTION ln(a random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      8,  -- PROVSQL_ARITH_LN
+      ARRAY[(a)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @c e^x for a @c random_variable (gate_arith EXP).  Total. */
+CREATE OR REPLACE FUNCTION exp(a random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_make(
+    provsql.provenance_arith(
+      9,  -- PROVSQL_ARITH_EXP
+      ARRAY[(a)::uuid]));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief @c pow / @c power spellings of the @c ^ operator, mirroring
+ *        PostgreSQL's numeric surface.  Scalar exponents resolve
+ *        through the implicit numeric-to-rv casts:
+ *        <tt>pow(x, 0.5)</tt> is <tt>x ^ 0.5</tt>.
+ */
+CREATE OR REPLACE FUNCTION pow(a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_pow(a, b);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION power(a random_variable, b random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_pow(a, b);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Square root of a @c random_variable: sugar for
+ *        <tt>x ^ 0.5</tt> (no gate or opcode of its own).  Evaluation
+ *        raises on a negative draw, like any non-integer exponent.
+ */
+CREATE OR REPLACE FUNCTION sqrt(a random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.random_variable_pow(a, provsql.as_random(0.5));
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
  * @brief Internal helper: float8-comparator OID for a given symbol.
  *
  * Wraps the @c '&lt;sym&gt;(double precision,double precision)'::regoperator
@@ -3737,6 +3810,12 @@ CREATE OPERATOR / (
 CREATE OPERATOR - (
   RIGHTARG  = random_variable,
   PROCEDURE = random_variable_neg
+);
+
+CREATE OPERATOR ^ (
+  LEFTARG    = random_variable,
+  RIGHTARG   = random_variable,
+  PROCEDURE  = random_variable_pow
 );
 
 CREATE OPERATOR < (

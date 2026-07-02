@@ -114,6 +114,24 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
       }
       return r;
     }
+    case PROVSQL_ARITH_POW: {
+      if (wires.size() != 2) return NaN;
+      double e = try_eval_constant(gc, wires[1]);
+      if (std::isnan(e)) return NaN;
+      /* A domain-violating constant (negative base, non-integer
+       * exponent) folds to NaN, which the NaN-as-sentinel convention
+       * reads as "couldn't fold": the gate stays intact and the
+       * sampler raises its actionable domain error instead of a
+       * silent NaN constant appearing in the circuit. */
+      return std::pow(first, e);
+    }
+    case PROVSQL_ARITH_LN:
+      if (wires.size() != 1) return NaN;
+      /* ln of a negative constant is NaN -> stays unfolded, same as POW. */
+      return std::log(first);
+    case PROVSQL_ARITH_EXP:
+      if (wires.size() != 1) return NaN;
+      return std::exp(first);
   }
   return NaN;
 }

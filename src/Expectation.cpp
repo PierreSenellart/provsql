@@ -722,6 +722,15 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_raw_moment(gc, g, 1,
             "Expectation of gate_arith " + std::string(isMax ? "MAX" : "MIN"));
         }
+        case PROVSQL_ARITH_POW:
+        case PROVSQL_ARITH_LN:
+        case PROVSQL_ARITH_EXP:
+          // Nonlinear transforms: expectation does not commute with the
+          // map, so there is no linearity to push through; the empirical
+          // estimate is the general answer (family-closure folds like
+          // exp(normal) -> lognormal are the simplifier's future job).
+          return mc_raw_moment(gc, g, 1,
+            "Expectation of a gate_arith nonlinear transform");
       }
       throw CircuitException(
         "Expectation: unknown gate_arith op tag: " +
@@ -834,6 +843,10 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_var(
             "Variance of gate_arith " +
             std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
+        case PROVSQL_ARITH_POW:
+        case PROVSQL_ARITH_LN:
+        case PROVSQL_ARITH_EXP:
+          return mc_var("Variance of a gate_arith nonlinear transform");
       }
       throw CircuitException(
         "Variance: unknown gate_arith op tag: " +
@@ -975,6 +988,11 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
           return mc_raw_moment(gc, g, k,
             "Raw moment of gate_arith " +
             std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
+        case PROVSQL_ARITH_POW:
+        case PROVSQL_ARITH_LN:
+        case PROVSQL_ARITH_EXP:
+          return mc_raw_moment(gc, g, k,
+            "Raw moment of a gate_arith nonlinear transform");
       }
       throw CircuitException(
         "Moment: unknown gate_arith op tag: " +

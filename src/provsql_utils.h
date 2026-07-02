@@ -117,7 +117,13 @@ typedef enum provsql_arith_op {
   PROVSQL_ARITH_DIV   = 3, ///< binary, child0 / child1
   PROVSQL_ARITH_NEG   = 4, ///< unary, -child0
   PROVSQL_ARITH_MAX   = 5, ///< n-ary, max of children (order statistic; greatest / max aggregate)
-  PROVSQL_ARITH_MIN   = 6  ///< n-ary, min of children (order statistic; least / min aggregate)
+  PROVSQL_ARITH_MIN   = 6, ///< n-ary, min of children (order statistic; least / min aggregate)
+  PROVSQL_ARITH_POW   = 7, ///< binary, child0 ^ child1 (real branch only:
+                           ///< a negative base drawn with a non-integer
+                           ///< exponent raises at evaluation)
+  PROVSQL_ARITH_LN    = 8, ///< unary, natural logarithm of child0
+                           ///< (a negative draw raises at evaluation)
+  PROVSQL_ARITH_EXP   = 9  ///< unary, e^child0
 } provsql_arith_op;
 
 /** Names of gate types */

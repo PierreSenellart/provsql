@@ -64,6 +64,9 @@ _ARITH_OP_GLYPH = {
     4: "−",
     5: "max",   # PROVSQL_ARITH_MAX: n-ary order statistic (greatest / max)
     6: "min",   # PROVSQL_ARITH_MIN: n-ary order statistic (least / min)
+    7: "^",     # PROVSQL_ARITH_POW: binary power
+    8: "ln",    # PROVSQL_ARITH_LN: natural logarithm
+    9: "exp",   # PROVSQL_ARITH_EXP: e^x
 }
 
 def _gate_label(row: dict, rv_families: dict | None = None) -> str:

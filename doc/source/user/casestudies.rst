@@ -304,6 +304,7 @@ Continuous random variables
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
    "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", ""
+   "Transforms ``^`` / ``pow`` / ``ln`` / ``exp`` / ``sqrt``", "", "", "", "", "", "", "", "", ""
    "Comparison ``< <= = <> >= >`` (planner-hook rewrite)", "", "", "", "", "", "", "✓", "", "✓"
    "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", "", "✓"
    "``variance(random_variable)``", "", "", "", "", "", "", "✓", "", "✓"

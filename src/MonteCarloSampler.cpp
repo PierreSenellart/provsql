@@ -246,6 +246,51 @@ double Sampler::evalScalar(gate_t g)
           for(std::size_t i = 1; i < wires.size(); ++i)
             result = std::min(result, evalScalar(wires[i]));
           break;
+        case PROVSQL_ARITH_POW:
+        {
+          if(wires.size() != 2)
+            throw CircuitException("gate_arith POW must be binary");
+          const double base = evalScalar(wires[0]);
+          const double expo = evalScalar(wires[1]);
+          result = std::pow(base, expo);
+          // std::pow is real-valued except for a negative base with a
+          // non-integer exponent.  A NaN there is a domain violation,
+          // not an undefined world: raise with the fix rather than let
+          // the moment estimators silently drop the draw as a missing
+          // observation (which would report a biased, implicitly
+          // conditioned answer).  NaN operands (undefined worlds, e.g.
+          // empty-group aggregates) still propagate as NaN.
+          if(std::isnan(result) && !std::isnan(base) && !std::isnan(expo))
+            throw CircuitException(
+                    "pow: negative base drawn with a non-integer exponent ("
+                    + std::to_string(base) + " ^ " + std::to_string(expo)
+                    + "); restrict the base to be non-negative, e.g. "
+                    "pow(greatest(x, 0), p)");
+          break;
+        }
+        case PROVSQL_ARITH_LN:
+        {
+          if(wires.size() != 1)
+            throw CircuitException("gate_arith LN must be unary");
+          const double x = evalScalar(wires[0]);
+          // Same rationale as POW: a negative draw is a domain
+          // violation, raised rather than silently conditioned away.
+          // x = 0 legitimately yields -Infinity (a boundary value of
+          // probability zero for continuous arguments); NaN operands
+          // propagate as undefined worlds.
+          if(x < 0.0)
+            throw CircuitException(
+                    "ln: negative draw (" + std::to_string(x)
+                    + "); ln is only defined on [0, +Infinity) -- "
+                    "restrict the argument's support");
+          result = std::log(x);
+          break;
+        }
+        case PROVSQL_ARITH_EXP:
+          if(wires.size() != 1)
+            throw CircuitException("gate_arith EXP must be unary");
+          result = std::exp(evalScalar(wires[0]));
+          break;
         default:
           throw CircuitException(
                   "Unknown gate_arith operator tag: " +
