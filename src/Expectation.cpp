@@ -12,7 +12,7 @@
 #include "CircuitFromMMap.h"
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
-#include "Distribution.h"  // makeDistribution -> integrationRange
+#include "distributions/Distribution.h"  // makeDistribution -> integrationRange
 #include "RangeCheck.h"
 #include "provsql_utils_cpp.h"
 #include "semiring/BoolExpr.h"

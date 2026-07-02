@@ -16,7 +16,7 @@
 #include <system_error>
 
 #include "Circuit.h"  // CircuitException
-#include "Distribution.h"  // makeDistribution (per-family closed forms)
+#include "distributions/Distribution.h"  // makeDistribution (per-family closed forms)
 
 namespace provsql {
 

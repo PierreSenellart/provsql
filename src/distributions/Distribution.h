@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "RandomVariable.h"  // DistKind, DistributionSpec
+#include "../RandomVariable.h"  // DistKind, DistributionSpec
 
 namespace provsql {
 

@@ -18,7 +18,7 @@
 #include "CircuitFromMMap.h"    // getGenericCircuit
 #include "Expectation.h"        // lift_conditioning
 #include "RandomVariable.h"     // parse_distribution_spec, DistKind
-#include "Distribution.h"       // makeDistribution -> per-family support()
+#include "distributions/Distribution.h"       // makeDistribution -> per-family support()
 #include "provsql_utils_cpp.h"  // uuid2string
 
 #include <type_traits>          // std::is_same_v in truncateShape

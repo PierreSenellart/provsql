@@ -5,7 +5,7 @@
 #include "MonteCarloSampler.h"
 #include "Aggregation.h"
 #include "RandomVariable.h"
-#include "Distribution.h"  // makeDistribution -> per-family sample()
+#include "distributions/Distribution.h"  // makeDistribution -> per-family sample()
 #include "RangeCheck.h"        // collectRvConstraints
 #include "Circuit.h"
 

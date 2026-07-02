@@ -9,7 +9,7 @@ MODULE_big = provsql
 # reader (dimacs_cnf), and the tdkc main (TreeDecompositionKnowledgeCompiler,
 # which calls kcmcp_serve()) -- is filtered out, like the provsql_migrate_mmap
 # tool; leaving the tdkc main in would make provsql.so reference kcmcp_serve.
-OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(filter-out src/provsql_migrate_mmap.o src/TreeDecompositionKnowledgeCompiler.o src/kcmcp_server.o src/dimacs_cnf.o,$(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp)))
+OBJS = $(patsubst %.c,%.o,$(wildcard src/*.c)) $(filter-out src/provsql_migrate_mmap.o src/TreeDecompositionKnowledgeCompiler.o src/kcmcp_server.o src/dimacs_cnf.o,$(patsubst %.cpp,%.o,$(wildcard src/*.cpp src/semiring/*.cpp src/distributions/*.cpp)))
 
 DOCS = $(wildcard doc/*.md)
 UPGRADE_SCRIPTS = $(wildcard sql/upgrades/$(EXTENSION)--*--*.sql)
@@ -101,7 +101,7 @@ include $(PGXS)
 
 all: $(DATA) $(MODULE_big)$(DLSUFFIX) test/schedule
 
-$(OBJS): $(wildcard src/*.h src/semiring/*.h src/*.hpp)
+$(OBJS): $(wildcard src/*.h src/semiring/*.h src/distributions/*.h src/*.hpp)
 
 sql/provsql.sql: sql/provsql.*.sql
 	cat sql/provsql.common.sql > sql/provsql.sql

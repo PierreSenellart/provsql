@@ -17,7 +17,7 @@
 
 #include "Aggregation.h"        // ComparisonOperator, cmpOpFromOid
 #include "AnalyticEvaluator.h"  // cdfAt
-#include "Distribution.h"       // makeDistribution, affine, closePlusTerms
+#include "distributions/Distribution.h"       // makeDistribution, affine, closePlusTerms
 #include "Expectation.h"        // evaluateBooleanProbability
 #include "MonteCarloSampler.h"  // monteCarloRV, monteCarloScalarSamples
 #include "RandomVariable.h"     // parse_distribution_spec, double_to_text
