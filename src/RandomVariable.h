@@ -77,6 +77,21 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s);
 double parseDoubleStrict(const std::string &s);
 
 /**
+ * @brief Format a double back into the canonical text form used by
+ *        @c gate_value extras and @c gate_rv distribution parameters
+ *        (the serialisation counterpart of @c parseDoubleStrict).
+ *
+ * @c std::to_chars produces the shortest decimal representation that
+ * round-trips through @c std::from_chars / @c std::stod, so round
+ * cases like @c 0.2 = 0.4/2 print as @c "0.2" rather than
+ * @c "0.20000000000000001" while irrational values fall back to
+ * whatever length is needed for exact recovery.  The legacy
+ * @c std::ostringstream @c << @c setprecision(17) path is kept as a
+ * defensive fallback in case @c to_chars fails (range / buffer).
+ */
+std::string double_to_text(double v);
+
+/**
  * @brief Closed-form expectation E[X] for a basic distribution.
  *
  * - Normal(μ, σ):     μ

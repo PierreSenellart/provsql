@@ -114,7 +114,47 @@ public:
     std::normal_distribution<double> d(p1_, p2_);
     return d(rng);
   }
+  std::unique_ptr<Distribution> affine(double a, double b) const override {
+    if (a == 0.0) return nullptr;
+    double mu = a * p1_;
+    if (b != 0.0) mu += b;
+    return std::make_unique<NormalDistribution>(mu, std::fabs(a) * p2_);
+  }
+  std::string serialise() const override {
+    return "normal:" + double_to_text(p1_) + "," + double_to_text(p2_);
+  }
+  std::optional<double> asDirac() const override {
+    if (p2_ == 0.0) return p1_;
+    return std::nullopt;
+  }
 };
+
+/* (Normal, +, Normal): every term a·Zᵢ + bᵢ over independent normals
+ * sums to Normal(Σ(aᵢμᵢ + bᵢ), √(Σ aᵢ²σᵢ²)).  A degenerate total
+ * variance would make the closure a Dirac at the total mean; decline and
+ * leave that to other passes (in practice unreachable: σ=0 normals are
+ * constructed as gate_value by provsql.normal, so total_var > 0 whenever
+ * the closure fires). */
+std::unique_ptr<Distribution>
+normalSumRule(const std::vector<ClosureTerm> &terms)
+{
+  double total_mean = 0.0;
+  double total_var  = 0.0;
+  for (const auto &t : terms) {
+    total_mean += t.b;
+    if (!t.dist) continue;
+    const double mu    = t.dist->p1();
+    const double sigma = t.dist->p2();
+    total_mean += t.a * mu;
+    total_var  += t.a * t.a * sigma * sigma;
+  }
+  if (total_var <= 0.0) return nullptr;
+  return std::make_unique<NormalDistribution>(total_mean,
+                                              std::sqrt(total_var));
+}
+
+[[maybe_unused]] const ClosureRuleRegistrar normal_sum_rule(
+  DistKind::Normal, DistKind::Normal, &normalSumRule);
 
 /* P(X < Y) for X, Y independent normals.  Reduces to P(X - Y < 0) with
  * X - Y ~ N(μ_X - μ_Y, √(σ_X² + σ_Y²)). */
@@ -170,7 +210,48 @@ public:
     std::uniform_real_distribution<double> d(p1_, p2_);
     return d(rng);
   }
+  std::unique_ptr<Distribution> affine(double a, double b) const override {
+    if (a == 0.0) return nullptr;
+    /* A negative coefficient flips the bounds. */
+    double lo = (a > 0.0) ? a * p1_ : a * p2_;
+    double hi = (a > 0.0) ? a * p2_ : a * p1_;
+    if (b != 0.0) { lo += b; hi += b; }
+    return std::make_unique<UniformDistribution>(lo, hi);
+  }
+  std::string serialise() const override {
+    return "uniform:" + double_to_text(p1_) + "," + double_to_text(p2_);
+  }
 };
+
+/* (Uniform, +, Uniform): NOT closed for two distinct uniforms (the sum
+ * has a triangular / trapezoidal density), which the rule expresses by
+ * declining a second Uniform term.  A single (possibly scaled / negated)
+ * Uniform plus any number of constants is just the affine transform
+ * a·U + Σb, with a negative coefficient flipping the bounds. */
+std::unique_ptr<Distribution>
+uniformSumRule(const std::vector<ClosureTerm> &terms)
+{
+  const ClosureTerm *uniform = nullptr;
+  for (const auto &t : terms) {
+    if (!t.dist) continue;
+    if (uniform) return nullptr;   /* second Uniform term */
+    uniform = &t;
+  }
+  /* Dispatch guarantees at least one RV term.  Every wire's additive
+   * offset folds into the global one: (a·U + b_term) + offsets =
+   * a·U + (b_term + offsets). */
+  double b_total = 0.0;
+  for (const auto &t : terms) b_total += t.b;
+  const double a  = uniform->a;
+  const double p1 = uniform->dist->p1();
+  const double p2 = uniform->dist->p2();
+  const double new_lo = (a > 0.0) ? a * p1 + b_total : a * p2 + b_total;
+  const double new_hi = (a > 0.0) ? a * p2 + b_total : a * p1 + b_total;
+  return std::make_unique<UniformDistribution>(new_lo, new_hi);
+}
+
+[[maybe_unused]] const ClosureRuleRegistrar uniform_sum_rule(
+  DistKind::Uniform, DistKind::Uniform, &uniformSumRule);
 
 /* ∫_c^d F_X(y) dy for X ~ Uniform(a, b) (b > a), i.e. the integral of the
  * clamped ramp clamp((y-a)/(b-a), 0, 1) over [c, d].  Used by the
@@ -236,6 +317,16 @@ public:
   double sample(std::mt19937_64 &rng) const override {
     std::exponential_distribution<double> d(p1_);
     return d(rng);
+  }
+  std::unique_ptr<Distribution> affine(double a, double b) const override {
+    /* Closed under positive scaling only: a negative coefficient flips
+     * the support to (-∞, 0] and an offset shifts it, neither of which
+     * is exponential. */
+    if (!(a > 0.0) || b != 0.0) return nullptr;
+    return std::make_unique<ExponentialDistribution>(p1_ / a, 0.0);
+  }
+  std::string serialise() const override {
+    return "exponential:" + double_to_text(p1_);
   }
 };
 
@@ -308,14 +399,76 @@ public:
     std::gamma_distribution<double> d(p1_, 1.0 / p2_);
     return d(rng);
   }
+  std::unique_ptr<Distribution> affine(double a, double b) const override {
+    /* Same positive-scaling-only closure as Exponential. */
+    if (!(a > 0.0) || b != 0.0) return nullptr;
+    /* Integer k stored in p1; non-integer is rejected upstream by the
+     * SQL constructor, but guard defensively. */
+    if (p1_ < 1.0 || p1_ != std::floor(p1_)) return nullptr;
+    return std::make_unique<ErlangDistribution>(p1_, p2_ / a);
+  }
+  std::string serialise() const override {
+    /* The integer shape prints without a decimal point / exponent
+     * whatever its magnitude, matching the constructor's encoding. */
+    if (p1_ >= 1.0 && p1_ == std::floor(p1_))
+      return "erlang:" + std::to_string(static_cast<unsigned long>(p1_))
+             + "," + double_to_text(p2_);
+    return "erlang:" + double_to_text(p1_) + "," + double_to_text(p2_);
+  }
 };
 
-/* Function-local static so registration (dynamic initialisation of the
- * per-family ComparatorRuleRegistrar objects) never observes an
- * uninitialised map, whatever the TU initialisation order. */
+/* (Exp|Erlang, +, Exp|Erlang), same rate: Erlang(Σkᵢ, λ) with
+ * Exp ≡ Erlang(1, λ).  Strict shape: unscaled, unshifted, no additive
+ * constants (any of those leaves the family; hypoexponential /
+ * different-rate sums are the sampler's job), rates exactly equal. */
+std::unique_ptr<Distribution>
+erlangSumRule(const std::vector<ClosureTerm> &terms)
+{
+  double lambda = kNaN;
+  unsigned long total_shape = 0;
+  for (const auto &t : terms) {
+    if (!t.dist) return nullptr;                    /* additive constant */
+    if (t.a != 1.0 || t.b != 0.0) return nullptr;   /* scaled / shifted */
+    double w_lambda;
+    unsigned long w_shape;
+    if (t.dist->kind() == DistKind::Exponential) {
+      w_lambda = t.dist->p1();
+      w_shape  = 1;
+    } else {
+      /* Integer k stored in p1; guard defensively so a corrupted extra
+       * cannot trigger an invalid shape sum. */
+      if (t.dist->p1() < 1.0 || t.dist->p1() != std::floor(t.dist->p1()))
+        return nullptr;
+      w_lambda = t.dist->p2();
+      w_shape  = static_cast<unsigned long>(t.dist->p1());
+    }
+    if (std::isnan(lambda))      lambda = w_lambda;
+    else if (lambda != w_lambda) return nullptr;    /* different rate */
+    total_shape += w_shape;
+  }
+  return std::make_unique<ErlangDistribution>(
+    static_cast<double>(total_shape), lambda);
+}
+
+[[maybe_unused]] const ClosureRuleRegistrar erlang_sum_rules[] = {
+  {DistKind::Exponential, DistKind::Exponential, &erlangSumRule},
+  {DistKind::Exponential, DistKind::Erlang,      &erlangSumRule},
+  {DistKind::Erlang,      DistKind::Exponential, &erlangSumRule},
+  {DistKind::Erlang,      DistKind::Erlang,      &erlangSumRule},
+};
+
+/* Function-local statics so registration (dynamic initialisation of the
+ * per-family registrar objects) never observes an uninitialised map,
+ * whatever the TU initialisation order. */
 std::map<std::pair<DistKind, DistKind>, ComparatorRule> &comparatorRules()
 {
   static std::map<std::pair<DistKind, DistKind>, ComparatorRule> rules;
+  return rules;
+}
+
+std::map<std::pair<DistKind, DistKind>, ClosureRule> &closureRules()
+{
+  static std::map<std::pair<DistKind, DistKind>, ClosureRule> rules;
   return rules;
 }
 
@@ -349,6 +502,35 @@ double quadraturePairLess(const Distribution &X, const Distribution &Y)
 void registerComparatorRule(DistKind x, DistKind y, ComparatorRule rule)
 {
   comparatorRules()[{x, y}] = rule;
+}
+
+void registerClosureRule(DistKind x, DistKind y, ClosureRule rule)
+{
+  closureRules()[{x, y}] = rule;
+}
+
+std::unique_ptr<Distribution> closePlusTerms(
+  const std::vector<ClosureTerm> &terms)
+{
+  const auto &rules = closureRules();
+  ClosureRule rule = nullptr;
+  bool first = true;
+  DistKind k0{};
+  for (const auto &t : terms) {
+    if (!t.dist) continue;
+    if (first) {
+      first = false;
+      k0 = t.dist->kind();
+      const auto it = rules.find({k0, k0});
+      if (it == rules.end()) return nullptr;
+      rule = it->second;
+    } else {
+      const auto it = rules.find({k0, t.dist->kind()});
+      if (it == rules.end() || it->second != rule) return nullptr;
+    }
+  }
+  if (!rule) return nullptr;   /* no RV term: the constant fold's job */
+  return rule(terms);
 }
 
 double comparatorPairLess(const Distribution &X, const Distribution &Y)

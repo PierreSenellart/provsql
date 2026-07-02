@@ -4,11 +4,16 @@
  */
 #include "RandomVariable.h"
 
+#include <array>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <exception>
+#include <iomanip>
+#include <sstream>
 #include <string>
+#include <system_error>
 
 #include "Circuit.h"  // CircuitException
 #include "Distribution.h"  // makeDistribution (per-family closed forms)
@@ -29,6 +34,20 @@ double parseDoubleStrict(const std::string &s)
   if (idx != s.size())
     throw CircuitException("Trailing characters in gate_value extra: " + s);
   return v;
+}
+
+/* std::ostringstream is used rather than std::snprintf in the fallback
+ * because including <cstdio> after PostgreSQL's port.h would expand
+ * std::snprintf to the non-existent std::pg_snprintf via the
+ * #define snprintf macro. */
+std::string double_to_text(double v)
+{
+  std::array<char, 32> buf;
+  auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
+  if (ec == std::errc{}) return std::string(buf.data(), ptr);
+  std::ostringstream oss;
+  oss << std::setprecision(17) << v;
+  return oss.str();
 }
 
 namespace {

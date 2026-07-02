@@ -18,9 +18,11 @@
 #define PROVSQL_DISTRIBUTION_H
 
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "RandomVariable.h"  // DistKind, DistributionSpec
 
@@ -84,6 +86,48 @@ public:
 
   /** @brief Draw one sample using the shared MC generator. */
   virtual double sample(std::mt19937_64 &rng) const = 0;
+
+  /**
+   * @brief Closed-form location-scale transform @c a·X @c + @c b within
+   *        the family.
+   *
+   * Returns the transformed distribution when the family is closed under
+   * these coefficients, @c nullptr when it is not: Exponential / Erlang
+   * decline @c a @c <= @c 0 (the support flips) and any non-zero offset
+   * (a shifted Erlang leaves the family); every family declines
+   * @c a @c == @c 0 (a Dirac is not in-family -- the constant-fold path
+   * is responsible for pure constants).
+   */
+  virtual std::unique_ptr<Distribution> affine(double a, double b) const = 0;
+
+  /** @brief Closed-form @c c·X (affine with no offset). */
+  std::unique_ptr<Distribution> scale(double c) const {
+    return affine(c, 0.0);
+  }
+
+  /** @brief Closed-form @c -X (affine with coefficient -1). */
+  std::unique_ptr<Distribution> negate() const {
+    return affine(-1.0, 0.0);
+  }
+
+  /**
+   * @brief The on-disk @c gate_rv @c extra text encoding
+   *        (e.g. <tt>"normal:2.5,0.5"</tt>), inverse of
+   *        @c parse_distribution_spec.
+   */
+  virtual std::string serialise() const = 0;
+
+  /**
+   * @brief The point-mass value when the parameters make the
+   *        distribution degenerate (a Dirac), @c std::nullopt for a
+   *        proper distribution.
+   *
+   * Only Normal reports one (σ == 0, e.g. after an underflowing scale
+   * fold); the simplifier collapses such a result to a plain constant.
+   * Families whose degenerate forms are still sampled as-is
+   * (Uniform(a, a)) do not report.
+   */
+  virtual std::optional<double> asDirac() const { return std::nullopt; }
 };
 
 /**
@@ -141,6 +185,73 @@ struct ComparatorRuleRegistrar {
  * non-integer Erlang shape), so the caller falls back to Monte Carlo.
  */
 double comparatorPairLess(const Distribution &X, const Distribution &Y);
+
+///@}
+
+/**
+ * @name ClosureRuleRegistry — pairwise family-closure folds on PLUS
+ *
+ * Closed-form folds of a sum of independent scalar terms into a single
+ * distribution (Normal + Normal, same-rate Exponential / Erlang chains).
+ * Like the comparator rules, pairwise behaviour stays out of the
+ * @c Distribution interface: family files self-register at static
+ * initialisation via @ref ClosureRuleRegistrar, keyed on the (ordered)
+ * pair of families that may meet in the sum, and a registry miss simply
+ * means the sum stays unfolded (Monte Carlo handles it).
+ *
+ * A rule receives the whole term list rather than reducing pairwise so
+ * its accumulation arithmetic (e.g. one variance sum with a single final
+ * square root) is not perturbed by intermediate re-serialisation.
+ */
+///@{
+
+/**
+ * @brief One wire of a PLUS under closure: @c a·Z @c + @c b for a base
+ *        RV @c Z (@c dist non-null), or a pure additive constant @c b
+ *        (@c dist null, @c a @c == @c 0).
+ *
+ * Structural concerns (base-RV identity, pairwise independence of the
+ * @c Z's) are the caller's responsibility; rules only see distributions
+ * and coefficients.
+ */
+struct ClosureTerm {
+  const Distribution *dist;
+  double a;
+  double b;
+};
+
+/**
+ * @brief A family sum-closure fold.  Returns the closed-form
+ *        distribution of the summed terms, or @c nullptr when the shape
+ *        is outside the closure (mixed rates, scaled / shifted terms a
+ *        family cannot absorb, degenerate variance...).
+ */
+using ClosureRule =
+  std::unique_ptr<Distribution> (*)(const std::vector<ClosureTerm> &terms);
+
+/** @brief Register the sum-closure rule for a family pair. */
+void registerClosureRule(DistKind x, DistKind y, ClosureRule rule);
+
+/** @brief Static-initialisation helper: one per registered family pair. */
+struct ClosureRuleRegistrar {
+  ClosureRuleRegistrar(DistKind x, DistKind y, ClosureRule rule) {
+    registerClosureRule(x, y, rule);
+  }
+};
+
+/**
+ * @brief Fold @c PLUS(terms) into a single distribution when a
+ *        registered closure covers every family in the sum.
+ *
+ * Dispatch: the first RV term's family is looked up against itself and
+ * against every other RV term's family; all lookups must resolve to the
+ * same rule (this is how the Exponential / Erlang pairs share one
+ * Erlang-sum rule).  Returns @c nullptr on any miss, on an
+ * inconsistent pair, when no RV term is present (the constant-fold
+ * path's job), or when the rule itself declines.
+ */
+std::unique_ptr<Distribution> closePlusTerms(
+  const std::vector<ClosureTerm> &terms);
 
 ///@}
 

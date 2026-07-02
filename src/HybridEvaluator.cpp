@@ -5,25 +5,22 @@
  */
 #include "HybridEvaluator.h"
 
-#include <array>
-#include <charconv>
 #include <cmath>
-#include <iomanip>
 #include <limits>
+#include <memory>
 #include <optional>
-#include <sstream>
 #include <stack>
 #include <string>
-#include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "Aggregation.h"        // ComparisonOperator, cmpOpFromOid
 #include "AnalyticEvaluator.h"  // cdfAt
+#include "Distribution.h"       // makeDistribution, affine, closePlusTerms
 #include "Expectation.h"        // evaluateBooleanProbability
 #include "MonteCarloSampler.h"  // monteCarloRV, monteCarloScalarSamples
-#include "RandomVariable.h"     // parse_distribution_spec, parseDoubleStrict, DistKind
+#include "RandomVariable.h"     // parse_distribution_spec, double_to_text
 extern "C" {
 #include "provsql_utils.h"      // gate_type, provsql_arith_op
 }
@@ -34,33 +31,6 @@ namespace provsql {
 namespace {
 
 constexpr double NaN = std::numeric_limits<double>::quiet_NaN();
-
-/**
- * @brief Format a double back into the canonical text form used by
- *        @c gate_value extras.
- *
- * @c std::to_chars produces the shortest decimal representation that
- * round-trips through @c std::from_chars / @c std::stod, so round
- * cases like @c 0.2 = 0.4/2 print as @c "0.2" rather than
- * @c "0.20000000000000001" while irrational values fall back to
- * whatever length is needed for exact recovery.  The legacy
- * @c std::ostringstream @c << @c setprecision(17) path is kept as a
- * defensive fallback in case @c to_chars fails (range / buffer).
- *
- * @c std::ostringstream is used rather than @c std::snprintf in the
- * fallback because including @c <cstdio> after PostgreSQL's @c port.h
- * would expand @c std::snprintf to the non-existent
- * @c std::pg_snprintf via the @c #define snprintf macro.
- */
-std::string double_to_text(double v)
-{
-  std::array<char, 32> buf;
-  auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
-  if (ec == std::errc{}) return std::string(buf.data(), ptr);
-  std::ostringstream oss;
-  oss << std::setprecision(17) << v;
-  return oss.str();
-}
 
 /**
  * @brief Try to evaluate a @c gate_arith subtree to a scalar constant.
@@ -187,51 +157,6 @@ void replace_with_value(GenericCircuit &gc, gate_t g, double c)
 }
 
 /**
- * @brief Rewrite @p g in place as a normal @c gate_rv with parameters
- *        @p mean and @p sigma.
- *
- * Used by the normal-family closure when a PLUS over linear
- * combinations of independent normals folds to a single normal.
- * Sigma is the standard deviation (consistent with the on-disk
- * @c "normal:μ,σ" encoding).
- */
-void replace_with_normal_rv(GenericCircuit &gc, gate_t g,
-                            double mean, double sigma)
-{
-  gc.resolveToRv(g, "normal:" + double_to_text(mean)
-                    + "," + double_to_text(sigma));
-}
-
-/**
- * @brief Rewrite @p g in place as an Erlang @c gate_rv with shape
- *        @p k and rate @p lambda.
- */
-void replace_with_erlang_rv(GenericCircuit &gc, gate_t g,
-                            unsigned long k, double lambda)
-{
-  gc.resolveToRv(g, "erlang:" + std::to_string(k)
-                    + "," + double_to_text(lambda));
-}
-
-/**
- * @brief Rewrite @p g in place as a uniform @c gate_rv on @c [lo, hi].
- *
- * Used by the uniform-family closure (additive offset on a single
- * uniform term inside a PLUS, possibly with a negative scalar
- * coefficient that flips the support bounds) and by @c try_neg_rv
- * when @c -U(a,b) folds to @c U(-b,-a).
- *
- * Caller is responsible for ordering @c lo <= @c hi (we don't sort
- * defensively, so a swap-bounds bug elsewhere shows up immediately).
- */
-void replace_with_uniform_rv(GenericCircuit &gc, gate_t g,
-                             double lo, double hi)
-{
-  gc.resolveToRv(g, "uniform:" + double_to_text(lo)
-                    + "," + double_to_text(hi));
-}
-
-/**
  * @brief Test whether wire @p g is a @c gate_value parseable to
  *        scalar @p target (within bit-exact equality).
  */
@@ -304,7 +229,7 @@ bool try_identity_drop(GenericCircuit &gc, gate_t g)
 
 /**
  * @brief Decomposition of a PLUS-wire as @c a*Z + b for the
- *        normal-family closure.
+ *        family sum closure.
  *
  * - @c rv_gate == invalid (sentinel @c (gate_t)-1) ⇒ pure constant
  *   wire: contributes @p b to the total mean, 0 to the total
@@ -314,7 +239,7 @@ bool try_identity_drop(GenericCircuit &gc, gate_t g)
  *   variance, and @p rv_gate to the footprint.
  */
 struct LinearTerm {
-  gate_t rv_gate;     ///< Base normal gate_rv, or invalid for constants.
+  gate_t rv_gate;     ///< Base gate_rv, or invalid for constants.
   double a;           ///< Scalar multiplier (0 for pure constants).
   double b;           ///< Additive offset (0 for pure RV wires).
 };
@@ -342,10 +267,11 @@ bool is_invalid(gate_t g) { return g == INVALID_GATE; }
  * non-foldable arith.  An undecomposable wire causes the caller to
  * bail.
  *
- * Distribution-kind filtering is the caller's responsibility:
- * @c try_normal_closure additionally requires every @p rv_gate to be
- * @c DistKind::Normal, while @c try_plus_aggregate is kind-agnostic
- * because the aggregation rewrite preserves the base-RV identity.
+ * Distribution-kind concerns are the caller's responsibility:
+ * @c try_sum_closure parses each base RV's spec and dispatches on the
+ * families present via the ClosureRuleRegistry, while
+ * @c try_plus_aggregate is kind-agnostic because the aggregation
+ * rewrite preserves the base-RV identity.
  */
 std::optional<LinearTerm>
 decompose_linear_term(const GenericCircuit &gc, gate_t g)
@@ -361,8 +287,8 @@ decompose_linear_term(const GenericCircuit &gc, gate_t g)
 
   if (t == gate_rv) {
     /* Any RV kind: aggregation only depends on identity, not on
-     * closed-form scaling.  The normal-family closure filters to
-     * @c DistKind::Normal externally. */
+     * closed-form scaling.  The sum closure dispatches on the family
+     * externally. */
     return LinearTerm{g, 1.0, 0.0};
   }
 
@@ -374,10 +300,10 @@ decompose_linear_term(const GenericCircuit &gc, gate_t g)
      * terms (e.g. @c X+X to @c 2·X, @c X-X to @c 0).  The in-place
      * op-change to TIMES then triggers @c try_mixture_lift to push the
      * scalar inside the branches (3-wire) or the mulinputs'
-     * value text (categorical).  The normal- and Erlang-family closures
-     * filter on the rv leaf's kind via @c parse_distribution_spec, which
-     * returns @c nullopt on a mixture's empty extra, so they
-     * automatically bail when the LHS-RV side is a mixture. */
+     * value text (categorical).  The sum closure parses the rv leaf's
+     * spec via @c parse_distribution_spec, which returns @c nullopt on
+     * a mixture's empty extra, so it automatically bails when the
+     * LHS-RV side is a mixture. */
     return LinearTerm{g, 1.0, 0.0};
   }
 
@@ -430,202 +356,74 @@ decompose_linear_term(const GenericCircuit &gc, gate_t g)
 }
 
 /**
- * @brief Normal-family closure on a @c PLUS gate.
+ * @brief Family closure on a @c PLUS gate, driven by the
+ *        @c ClosureRuleRegistry.
  *
- * If every wire decomposes to @c a*Z + b for an independent normal
- * @c Z, replaces the gate with a single normal @c gate_rv whose
- * parameters are the closed-form combinations.  Independence is
- * tested by collecting the base-RV footprint of each contributing
- * normal and requiring pairwise-disjoint footprints; the
- * @c decompose_normal_term restriction to bare normal leaves makes
- * the footprint just @c {Z_i} for each non-constant wire, so the
- * test reduces to "all @c Z_i are distinct UUIDs".
+ * Decomposes every wire to @c a*Z + b (via @c decompose_linear_term),
+ * parses each base RV's distribution, and hands the terms to
+ * @c closePlusTerms, which dispatches on the families present.  The
+ * registered rules cover:
  *
- * When every wire is a pure constant (all RV-side empty), the closure
- * is just the constant fold and we let the dedicated path handle it
- * &ndash; this routine returns @c false so the fixed-point loop
- * re-runs and the constant fold fires next.
+ * - Normal: any linear combination of independent normals (plus
+ *   constants) folds to a single normal;
+ * - Exponential / Erlang: an unscaled same-rate chain folds to
+ *   Erlang(Σk, λ) -- left-associative parsing of <tt>a + b + c</tt>
+ *   builds <tt>(a+b)+c</tt> which bottom-up simplifies to
+ *   Erlang(2)+c, so the rule accepts the mixed Erlang+Exp shape to
+ *   close the chain;
+ * - Uniform: a single (possibly scaled / negated) uniform plus
+ *   constants folds to the affine-transformed uniform, including the
+ *   post-MINUS-canonicalisation shapes @c c + (-U) and @c (-U) + c.
+ *   @c U + @c U is @b not closed (triangular density), which the rule
+ *   expresses by declining a second Uniform term.
+ *
+ * Independence is tested here, structurally: every non-constant term
+ * must have a distinct base-RV @c gate_t (each RV constructor mints a
+ * fresh UUID, so distinctness implies independence, and
+ * @c try_plus_aggregate runs first so shared-UUID terms were already
+ * consolidated).  A @c gate_mixture leaf has no parseable distribution
+ * spec, so mixture-bearing sums bail (they are @c try_mixture_lift's
+ * job).  When every wire is a pure constant the dispatch declines and
+ * the constant fold handles the gate on the next fixed-point iteration.
+ *
+ * Same coupling caveat as @c try_times_scalar_rv: replacing @p g with
+ * a fresh @c gate_rv mints a new RV identity.
  */
-bool try_normal_closure(GenericCircuit &gc, gate_t g)
+bool try_sum_closure(GenericCircuit &gc, gate_t g)
 {
   const auto &wires = gc.getWires(g);
   if (wires.size() < 2) return false;
 
-  std::vector<LinearTerm> terms;
-  terms.reserve(wires.size());
+  std::vector<LinearTerm> lterms;
+  lterms.reserve(wires.size());
   for (gate_t w : wires) {
     auto term = decompose_linear_term(gc, w);
     if (!term) return false;
-    /* The closure produces a single normal, so every non-constant
-     * term's base RV must itself be normal.  The generic decomposer
-     * does not filter by kind; we apply the filter here. */
-    if (!is_invalid(term->rv_gate)) {
-      auto spec = parse_distribution_spec(gc.getExtra(term->rv_gate));
-      if (!spec || spec->kind != DistKind::Normal) return false;
-    }
-    terms.push_back(*term);
+    lterms.push_back(*term);
   }
 
-  /* Independence test: every non-constant term must have a distinct
-   * Z gate_t.  We also need at least one non-constant term (otherwise
-   * this is the pure-constant case and constant folding handles it). */
+  /* Independence test + per-term distribution parse. */
+  std::vector<std::unique_ptr<Distribution>> dists(lterms.size());
+  std::vector<ClosureTerm> terms;
+  terms.reserve(lterms.size());
   std::unordered_set<gate_t> seen_rvs;
-  bool has_rv = false;
-  for (const auto &t : terms) {
-    if (is_invalid(t.rv_gate)) continue;
-    has_rv = true;
+  for (std::size_t i = 0; i < lterms.size(); ++i) {
+    const auto &t = lterms[i];
+    if (is_invalid(t.rv_gate)) {
+      terms.push_back({nullptr, t.a, t.b});
+      continue;
+    }
     if (!seen_rvs.insert(t.rv_gate).second) return false;  /* dependent */
-  }
-  if (!has_rv) return false;
-
-  double total_mean = 0.0;
-  double total_var  = 0.0;
-  for (const auto &t : terms) {
-    total_mean += t.b;
-    if (is_invalid(t.rv_gate)) continue;
     auto spec = parse_distribution_spec(gc.getExtra(t.rv_gate));
-    if (!spec || spec->kind != DistKind::Normal) return false;
-    const double mu    = spec->p1;
-    const double sigma = spec->p2;
-    total_mean += t.a * mu;
-    total_var  += t.a * t.a * sigma * sigma;
+    if (!spec) return false;   /* mixture / corrupted extra */
+    dists[i] = makeDistribution(*spec);
+    terms.push_back({dists[i].get(), t.a, t.b});
   }
 
-  /* Degenerate variance ⇒ the closure produces a Dirac at total_mean.
-   * We can keep this as a normal with σ=0, but the existing constructor
-   * silently routes σ=0 through @c as_random, and downstream consumers
-   * may not all handle σ=0 gracefully.  Skip and let other passes deal
-   * with it (in practice this branch is unreachable: we required at
-   * least one a≠0 term, and σ=0 normals are constructed as gate_value
-   * by @c provsql.normal, so total_var > 0 whenever the closure fires). */
-  if (total_var <= 0.0) return false;
+  auto folded = closePlusTerms(terms);
+  if (!folded) return false;
 
-  replace_with_normal_rv(gc, g, total_mean, std::sqrt(total_var));
-  return true;
-}
-
-/**
- * @brief Erlang-family closure on a @c PLUS gate.
- *
- * Fires only on the strict shape <tt>PLUS(E1, ..., Ek)</tt> with
- * k ≥ 2, each @c Ei a bare exponential @c gate_rv leaf, all rates
- * equal, all UUIDs distinct.  Replaces the gate with a single
- * Erlang(k, λ) @c gate_rv.  Mixed exponential/non-exponential wires
- * or different rates leave the gate untouched (hypoexponential is
- * outside the simplifier's family-closure scope; the sampler handles
- * those via per-iteration draws).
- */
-bool try_erlang_closure(GenericCircuit &gc, gate_t g)
-{
-  const auto &wires = gc.getWires(g);
-  if (wires.size() < 2) return false;
-
-  /* Accept any mix of bare Exp(λ) and Erlang(k, λ) gate_rv leaves
-   * with the same λ and pairwise-distinct UUIDs.  Left-associative
-   * parsing of `a + b + c` builds `(a+b)+c` which bottom-up
-   * simplifies to Erlang(2)+c, so the closure has to recognise the
-   * Erlang+Exp shape to close the chain.  Erlang(k1) + Erlang(k2) =
-   * Erlang(k1+k2) for the same rate; Exp is the k=1 case. */
-  double lambda = NaN;
-  unsigned long total_shape = 0;
-  std::unordered_set<gate_t> seen;
-  for (gate_t w : wires) {
-    if (gc.getGateType(w) != gate_rv) return false;
-    auto spec = parse_distribution_spec(gc.getExtra(w));
-    if (!spec) return false;
-    double w_lambda;
-    unsigned long w_shape;
-    if (spec->kind == DistKind::Exponential) {
-      w_lambda = spec->p1;
-      w_shape  = 1;
-    } else if (spec->kind == DistKind::Erlang) {
-      /* Integer k stored in p1; non-integer is rejected upstream by
-       * the constructor, but guard defensively here so a corrupted
-       * extra cannot trigger an invalid shape sum. */
-      if (spec->p1 < 1.0 || spec->p1 != std::floor(spec->p1)) return false;
-      w_lambda = spec->p2;
-      w_shape  = static_cast<unsigned long>(spec->p1);
-    } else {
-      return false;
-    }
-    if (!seen.insert(w).second)   return false;      /* shared UUID */
-    if (std::isnan(lambda))       lambda = w_lambda;
-    else if (lambda != w_lambda)  return false;      /* different rate */
-    total_shape += w_shape;
-  }
-
-  replace_with_erlang_rv(gc, g, total_shape, lambda);
-  return true;
-}
-
-/**
- * @brief Uniform-family closure on a @c PLUS gate.
- *
- * Fires when every wire decomposes (via @c decompose_linear_term) to
- * @c a*Z + b with at most one non-constant term whose @c gate_rv is a
- * Uniform.  The closure is @b not @c U + U: a sum of two distinct
- * uniforms is not uniform (it's a triangle / trapezoidal density), so
- * we bail when more than one Uniform term is present.  Any number of
- * pure-constant terms is fine (they collapse into a single additive
- * offset).
- *
- * For a single Uniform term <tt>a*U(p1, p2) + b_total</tt>:
- * - @c a > 0 ⇒ <tt>U(a*p1 + b_total, a*p2 + b_total)</tt>;
- * - @c a < 0 ⇒ <tt>U(a*p2 + b_total, a*p1 + b_total)</tt> (sign flip
- *   reorders the bounds).
- *
- * @c a == 0 is unreachable here: @c decompose_linear_term only assigns
- * @c a == 0 to pure-constant wires (where @c rv_gate is invalid), so a
- * Uniform-bearing term always has @c a != 0.  Same coupling caveat as
- * @c try_normal_closure: replacing @p g with a fresh @c gate_rv mints
- * a new RV identity, but @c try_plus_aggregate runs first and already
- * collapsed any shared-UUID U references, so by the time this rule
- * runs the surviving Uniform term has no sibling sharing its base RV.
- */
-bool try_uniform_closure(GenericCircuit &gc, gate_t g)
-{
-  const auto &wires = gc.getWires(g);
-  if (wires.size() < 2) return false;
-
-  std::vector<LinearTerm> terms;
-  terms.reserve(wires.size());
-  for (gate_t w : wires) {
-    auto term = decompose_linear_term(gc, w);
-    if (!term) return false;
-    if (!is_invalid(term->rv_gate)) {
-      auto spec = parse_distribution_spec(gc.getExtra(term->rv_gate));
-      if (!spec || spec->kind != DistKind::Uniform) return false;
-    }
-    terms.push_back(*term);
-  }
-
-  /* Exactly one Uniform term (U + U is not closed).  All other wires
-   * must be pure constants.  We also need at least one Uniform
-   * (otherwise the constant-fold path is responsible). */
-  const LinearTerm *uniform = nullptr;
-  for (const auto &t : terms) {
-    if (is_invalid(t.rv_gate)) continue;
-    if (uniform) return false;        /* second Uniform term */
-    uniform = &t;
-  }
-  if (!uniform) return false;
-
-  /* Sum every wire's additive offset.  The Uniform term's @c b is
-   * an additive offset on the same wire as the RV; the closure
-   * adds it to the global offset since (a*U + b_term) + offsets =
-   * a*U + (b_term + offsets). */
-  double b_total = 0.0;
-  for (const auto &t : terms) b_total += t.b;
-
-  auto spec = parse_distribution_spec(gc.getExtra(uniform->rv_gate));
-  if (!spec || spec->kind != DistKind::Uniform) return false;
-  const double a = uniform->a;
-  const double p1 = spec->p1;
-  const double p2 = spec->p2;
-  const double new_lo = (a > 0.0) ? a * p1 + b_total : a * p2 + b_total;
-  const double new_hi = (a > 0.0) ? a * p2 + b_total : a * p1 + b_total;
-
-  replace_with_uniform_rv(gc, g, new_lo, new_hi);
+  gc.resolveToRv(g, folded->serialise());
   return true;
 }
 
@@ -634,16 +432,10 @@ bool try_uniform_closure(GenericCircuit &gc, gate_t g)
  *        as a closed-form-negated @c gate_rv when @c Z's family admits
  *        one.
  *
- * Supported families:
- * - <tt>-Normal(μ, σ) = Normal(-μ, σ)</tt> (sign flip on mean, σ ≥ 0
- *   unchanged).
- * - <tt>-Uniform(a, b) = Uniform(-b, -a)</tt> (sign flip reorders the
- *   bounds).
- *
- * Not closed (rule bails):
- * - <tt>-Exponential(λ)</tt>: support flips to @c (-∞, 0], no longer
- *   exponential.
- * - <tt>-Erlang(k, λ)</tt>: same support-flip issue.
+ * Delegates to @c Distribution::negate (@c affine(-1, 0)): Normal and
+ * Uniform fold (<tt>-N(μ, σ) = N(-μ, σ)</tt>,
+ * <tt>-U(a, b) = U(-b, -a)</tt>); Exponential / Erlang decline (the
+ * support flips to @c (-∞, 0], leaving the family).
  *
  * Coupling discipline: same as @c try_times_scalar_rv.  Pass-2 gated
  * so a parent PLUS containing @c NEG(Z) and a sibling reference to the
@@ -663,18 +455,10 @@ bool try_neg_rv(GenericCircuit &gc, gate_t g)
   auto spec = parse_distribution_spec(gc.getExtra(wires[0]));
   if (!spec) return false;
 
-  switch (spec->kind) {
-    case DistKind::Normal:
-      replace_with_normal_rv(gc, g, -spec->p1, spec->p2);
-      return true;
-    case DistKind::Uniform:
-      replace_with_uniform_rv(gc, g, -spec->p2, -spec->p1);
-      return true;
-    case DistKind::Exponential:
-    case DistKind::Erlang:
-      return false;
-  }
-  return false;
+  auto negated = makeDistribution(*spec)->negate();
+  if (!negated) return false;
+  gc.resolveToRv(g, negated->serialise());
+  return true;
 }
 
 /**
@@ -691,7 +475,7 @@ bool try_neg_rv(GenericCircuit &gc, gate_t g)
  *
  * The two new branches are fresh @c gate_arith children built via
  * @c addAnonymousArithGate; each is then re-fed to @c apply_rules so
- * the existing normal-family / erlang-family closures get a chance
+ * the family sum closure gets a chance
  * to collapse them.  This is the source of the headline simplifier
  * gain for compound RV expressions: <tt>3 + mixture(p, N(0,1), N(2,1))</tt>
  * folds to <tt>mixture(p, N(3,1), N(5,1))</tt> in a single bottom-up
@@ -703,7 +487,7 @@ bool try_neg_rv(GenericCircuit &gc, gate_t g)
  * through their Bernoullis, which the current closures cannot
  * collapse further.  @c MINUS / @c DIV / @c NEG lifts are also out of
  * scope (the user requested only @c PLUS and @c TIMES); they can be
- * added in a follow-up once the @c try_normal_closure handles
+ * added in a follow-up once the sum closure handles
  * subtraction.
  *
  * Returns @c true if @p g was mutated.
@@ -839,7 +623,7 @@ bool try_mixture_lift(GenericCircuit &gc, gate_t g,
   gc.resolveToMixture(g, p_tok, new_x, new_y);
 
   /* Recursively fold the two new arith children so they get a chance
-   * to collapse via normal-family / erlang-family closures.  Each is
+   * to collapse via the family sum closure.  Each is
    * itself a gate_arith of the same op, with at least 2 wires (the
    * "others" we copied plus the branch RV), so apply_rules's
    * PLUS/TIMES path is the correct entry point.  The scalar-fold flag
@@ -858,27 +642,22 @@ bool try_mixture_lift(GenericCircuit &gc, gate_t g,
  *
  * Fires on a 2-wire @c TIMES whose wires are exactly one @c gate_value
  * (the scalar @c c) and one @c gate_rv leaf @c Z whose distribution
- * admits a closed-form scale transform:
- *
- * - <tt>c · Normal(μ, σ) = Normal(c·μ, |c|·σ)</tt> (any non-zero c).
- * - <tt>c · Uniform(a, b)</tt>: @c Uniform(c·a, c·b) for @c c > 0;
- *   @c Uniform(c·b, c·a) for @c c < 0.
- * - <tt>c · Exponential(λ) = Exponential(λ/c)</tt> for @c c > 0 only
- *   (negative scaling flips support to (-∞, 0] and is no longer
- *   exponential).
- * - <tt>c · Erlang(k, λ) = Erlang(k, λ/c)</tt> for @c c > 0 only.
+ * admits a closed-form scale transform, per @c Distribution::scale
+ * (@c affine(c, 0)): Normal for any non-zero @c c, Uniform for any
+ * non-zero @c c (a negative @c c flips the bounds), Exponential /
+ * Erlang for @c c > 0 only (negative scaling flips the support).
  *
  * The c=0 absorber and c=1 identity are handled by
  * @c try_identity_drop, so this rule defensively bails on them to
  * avoid a duplicate rewrite path.  RV kinds without a closed-form
  * scaling fall through.
  *
- * Coupling caveat (shared with @c try_normal_closure): replacing the
+ * Coupling caveat (shared with @c try_sum_closure): replacing the
  * TIMES with a fresh @c gate_rv mints a new RV identity at @p g, so
  * any other path that references @c Z and shares a downstream consumer
  * with @p g will see decoupled draws after the fold.  In practice the
  * rewrite path produces per-row orphan subtrees, so this is consistent
- * with the existing normal-family closure behaviour.
+ * with the family sum closure's behaviour.
  *
  * Returns @c true if @p g was mutated.
  */
@@ -913,47 +692,20 @@ bool try_times_scalar_rv(GenericCircuit &gc, gate_t g)
   auto spec = parse_distribution_spec(gc.getExtra(rv_side));
   if (!spec) return false;
 
-  switch (spec->kind) {
-    case DistKind::Normal: {
-      const double new_mu    = c * spec->p1;
-      const double new_sigma = std::fabs(c) * spec->p2;
-      /* Defensive: a zero-σ normal collapses to a Dirac.  σ=0 normals
-       * are normally constructed via @c as_random by @c provsql.normal,
-       * but if one slipped through (e.g. a future closure produced
-       * σ=0 from the linear combination), route it through value. */
-      if (new_sigma == 0.0) {
-        replace_with_value(gc, g, new_mu);
-      } else {
-        replace_with_normal_rv(gc, g, new_mu, new_sigma);
-      }
-      return true;
-    }
-    case DistKind::Uniform: {
-      const double a = spec->p1;
-      const double b = spec->p2;
-      const double lo = (c > 0.0) ? c * a : c * b;
-      const double hi = (c > 0.0) ? c * b : c * a;
-      replace_with_uniform_rv(gc, g, lo, hi);
-      return true;
-    }
-    case DistKind::Exponential: {
-      if (c <= 0.0) return false;
-      const double new_lambda = spec->p1 / c;
-      gc.resolveToRv(g, "exponential:" + double_to_text(new_lambda));
-      return true;
-    }
-    case DistKind::Erlang: {
-      if (c <= 0.0) return false;
-      /* spec->p1 is integer-valued by construction (the SQL constructor
-       * enforces k >= 1); guard defensively. */
-      if (spec->p1 < 1.0 || spec->p1 != std::floor(spec->p1)) return false;
-      const auto k = static_cast<unsigned long>(spec->p1);
-      const double new_lambda = spec->p2 / c;
-      replace_with_erlang_rv(gc, g, k, new_lambda);
-      return true;
-    }
+  auto scaled = makeDistribution(*spec)->scale(c);
+  if (!scaled) return false;
+
+  /* Defensive: a zero-σ normal collapses to a Dirac.  σ=0 normals
+   * are normally constructed via @c as_random by @c provsql.normal,
+   * but if one slipped through (e.g. a future closure produced
+   * σ=0 from the linear combination), route it through value. */
+  if (auto dirac = scaled->asDirac()) {
+    replace_with_value(gc, g, *dirac);
+    return true;
   }
-  return false;
+
+  gc.resolveToRv(g, scaled->serialise());
+  return true;
 }
 
 /**
@@ -975,13 +727,13 @@ bool try_times_scalar_rv(GenericCircuit &gc, gate_t g)
  * (minting fresh @c TIMES wrappers identical in shape to existing
  * input wires), so the rule bails to keep the simplifier idempotent.
  *
- * Unlike @c try_normal_closure / @c try_times_scalar_rv, this rule is
+ * Unlike @c try_sum_closure / @c try_times_scalar_rv, this rule is
  * @b safe under shared base-RV identity: the rebuild preserves every
  * @c rv_gate as a wire (wrapped in @c TIMES when its coefficient is
  * non-unit), so any other path that referenced @c Z continues to see
  * the same gate.  The subsequent fold of <tt>arith(TIMES, value:a, Z)</tt>
  * by @c try_times_scalar_rv inherits the same coupling caveat as the
- * existing normal-family closure (see its docstring).
+ * family sum closure (see its docstring).
  *
  * Returns @c true if @p g was mutated.
  */
@@ -1239,21 +991,11 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g,
       }
     }
 
-    /* 6. Family closures on PLUS.  Order:
-     *      - normal (handles every-wire-normal sums);
-     *      - erlang (handles every-wire-exp/erlang same-rate sums);
-     *      - uniform (handles at-most-one-Uniform + pure-constant
-     *        sums, including the post-MINUS-canonicalisation shapes
-     *        @c c + (-U) and @c (-U) + c).
-     *    The three families are mutually exclusive on the underlying
-     *    spec (a Uniform-bearing wire fails the normal- and Erlang-
-     *    closure filters), so order does not matter for correctness;
-     *    we try normal-closure, then Erlang-closure, then
-     *    uniform-closure. */
+    /* 6. Family closure on PLUS, dispatched on the families present
+     *    through the ClosureRuleRegistry (normal linear combinations;
+     *    same-rate Exp/Erlang chains; single-Uniform affine shapes). */
     if (op == PROVSQL_ARITH_PLUS) {
-      if (try_normal_closure(gc, g))  { ++local; break; }
-      if (try_erlang_closure(gc, g))  { ++local; break; }
-      if (try_uniform_closure(gc, g)) { ++local; break; }
+      if (try_sum_closure(gc, g)) { ++local; break; }
     }
 
     break;  /* no rule fired this iteration */
@@ -1334,7 +1076,7 @@ unsigned runHybridSimplifier(GenericCircuit &gc)
    * three on the shared base RV.  If the scalar fold had fired bottom-up
    * on the inner TIMES first it would have minted a fresh @c gate_rv
    * there, decoupling its identity from the sibling @c x and forcing
-   * the outer normal-closure path which assumes independence. */
+   * the outer sum-closure path which assumes independence. */
   {
     std::unordered_set<gate_t> done;
     const auto nb = gc.getNbGates();
