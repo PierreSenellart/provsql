@@ -657,6 +657,66 @@ try_rvVsRv_conditional_moment(const GenericCircuit &gc, gate_t root,
   return total;
 }
 
+/* Closed-form image of a unary LN / EXP transform over a bare gate_rv
+ * child, via the TransformRuleRegistry (exp(normal) is lognormal,
+ * ln(lognormal) is normal).  Read-only: unlike the hybrid simplifier's
+ * fold of the same shape, nothing is rewritten, so no shared-RV
+ * identity can be decoupled -- which is why the moment path may use it
+ * even though it deliberately does not run the simplifier.  nullptr
+ * when the child is not a bare parseable rv or no rule covers the
+ * family; the caller falls to MC. */
+std::unique_ptr<Distribution> transform_image(const GenericCircuit &gc,
+                                              gate_t g,
+                                              provsql_arith_op op)
+{
+  const char *transform = op == PROVSQL_ARITH_LN ? "ln"
+                        : op == PROVSQL_ARITH_EXP ? "exp"
+                        : nullptr;
+  if (!transform) return nullptr;
+  const auto &wires = gc.getWires(g);
+  if (wires.size() != 1 || gc.getGateType(wires[0]) != gate_rv)
+    return nullptr;
+  auto spec = parse_distribution_spec(gc.getExtra(wires[0]));
+  if (!spec) return nullptr;
+  return closeTransform(transform, *makeDistribution(*spec));
+}
+
+/* Closed-form distribution of a TIMES product over bare, pairwise
+ * distinct gate_rv factors (plus gate_value scalars), via the
+ * ProductRuleRegistry -- read-only, like transform_image, so no shared
+ * identity is disturbed.  Quantiles need it (they do not factor the way
+ * the disjoint-product moment shortcuts do); nullptr when the shape or
+ * family combination is outside the registered closures. */
+std::unique_ptr<Distribution> product_image(const GenericCircuit &gc,
+                                            gate_t g)
+{
+  const auto &wires = gc.getWires(g);
+  if (wires.size() < 2) return nullptr;
+  double c_total = 1.0;
+  std::vector<std::unique_ptr<Distribution>> dists;
+  std::vector<const Distribution *> factors;
+  std::set<gate_t> seen;
+  for (gate_t w : wires) {
+    const auto t = gc.getGateType(w);
+    if (t == gate_value) {
+      try { c_total *= parseDoubleStrict(gc.getExtra(w)); }
+      catch (const CircuitException &) { return nullptr; }
+      continue;
+    }
+    if (t != gate_rv) return nullptr;
+    if (!seen.insert(w).second) return nullptr;   /* dependent */
+    auto spec = parse_distribution_spec(gc.getExtra(w));
+    if (!spec) return nullptr;
+    dists.push_back(makeDistribution(*spec));
+    factors.push_back(dists.back().get());
+  }
+  if (factors.size() < 2) return nullptr;
+  auto combined = closeProductFactors(factors);
+  if (!combined) return nullptr;
+  if (c_total != 1.0) return combined->scale(c_total);
+  return combined;
+}
+
 double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
 {
   const auto type = gc.getGateType(g);
@@ -728,9 +788,12 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
         case PROVSQL_ARITH_LN:
         case PROVSQL_ARITH_EXP:
           // Nonlinear transforms: expectation does not commute with the
-          // map, so there is no linearity to push through; the empirical
-          // estimate is the general answer (family-closure folds like
-          // exp(normal) -> lognormal are the simplifier's future job).
+          // map, so there is no linearity to push through.  A registered
+          // closed-form image (exp(normal) is lognormal, ln(lognormal)
+          // is normal) gives the exact answer; otherwise the empirical
+          // estimate is the general one.
+          if (auto image = transform_image(gc, g, op))
+            return image->mean();
           return mc_raw_moment(gc, g, 1,
             "Expectation of a gate_arith nonlinear transform");
       }
@@ -848,6 +911,8 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
         case PROVSQL_ARITH_POW:
         case PROVSQL_ARITH_LN:
         case PROVSQL_ARITH_EXP:
+          if (auto image = transform_image(gc, g, op))
+            return image->variance();
           return mc_var("Variance of a gate_arith nonlinear transform");
       }
       throw CircuitException(
@@ -993,6 +1058,8 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
         case PROVSQL_ARITH_POW:
         case PROVSQL_ARITH_LN:
         case PROVSQL_ARITH_EXP:
+          if (auto image = transform_image(gc, g, op))
+            return image->rawMoment(k);
           return mc_raw_moment(gc, g, k,
             "Raw moment of a gate_arith nonlinear transform");
       }
@@ -1172,27 +1239,35 @@ std::optional<double> categorical_quantile(const GenericCircuit &gc,
  * family's elementary inverse CDF first, then the generic monotone
  * CDF bisection (Erlang / Gamma); nullopt when neither decides, so
  * the caller falls to MC. */
+std::optional<double> analytic_dist_quantile(const Distribution &dist,
+                                             double p, double lo, double hi);
+
 std::optional<double> analytic_rv_quantile(const DistributionSpec &spec,
                                            double p, double lo, double hi)
 {
-  const auto dist = makeDistribution(spec);
+  return analytic_dist_quantile(*makeDistribution(spec), p, lo, hi);
+}
+
+std::optional<double> analytic_dist_quantile(const Distribution &dist,
+                                             double p, double lo, double hi)
+{
   if (p <= 0.0 || p >= 1.0) {
     /* Quantile limits are the (truncated) support edges. */
-    const auto sup = dist->support();
+    const auto sup = dist.support();
     return (p <= 0.0) ? std::max(sup.lo, lo) : std::min(sup.hi, hi);
   }
   double u = p;
   if (std::isfinite(lo) || std::isfinite(hi)) {
-    const double f_lo = std::isfinite(lo) ? dist->cdf(lo) : 0.0;
-    const double f_hi = std::isfinite(hi) ? dist->cdf(hi) : 1.0;
+    const double f_lo = std::isfinite(lo) ? dist.cdf(lo) : 0.0;
+    const double f_hi = std::isfinite(hi) ? dist.cdf(hi) : 1.0;
     if (std::isnan(f_lo) || std::isnan(f_hi)) return std::nullopt;
     const double mass = f_hi - f_lo;
     if (mass < 1e-12) return std::nullopt;   /* vanishing mass: MC's call */
     u = f_lo + p * mass;
   }
   double q = std::numeric_limits<double>::quiet_NaN();
-  if (auto cf = dist->quantile(u)) q = *cf;
-  if (std::isnan(q)) q = numericQuantile(*dist, u);
+  if (auto cf = dist.quantile(u)) q = *cf;
+  if (std::isnan(q)) q = numericQuantile(dist, u);
   if (std::isnan(q)) return std::nullopt;
   /* Clamp defensively into the truncation interval (roundoff in u). */
   if (q < lo) q = lo;
@@ -1234,6 +1309,18 @@ double compute_quantile(const GenericCircuit &gc, gate_t root, double p,
   } else if (type == gate_mixture && gc.isCategoricalMixture(root)) {
     if (auto q = categorical_quantile(gc, root, p))
       return *q;
+  } else if (type == gate_arith) {
+    /* A unary LN / EXP transform, or a product of independent factors,
+     * with a registered closed-form image (exp(normal) is lognormal,
+     * lognormal products are lognormal, ...) has an exact quantile
+     * through the image distribution. */
+    const auto op = static_cast<provsql_arith_op>(gc.getInfos(root).first);
+    std::unique_ptr<Distribution> image =
+      (op == PROVSQL_ARITH_TIMES) ? product_image(gc, root)
+                                  : transform_image(gc, root, op);
+    if (image)
+      if (auto q = analytic_dist_quantile(*image, p, -inf, inf))
+        return *q;
   }
 
   /* Compound scalar circuits (arith trees, Bernoulli mixtures, ...):

@@ -38,6 +38,18 @@ std::map<FamilyPair, ClosureRule> &closureRules()
   return rules;
 }
 
+std::map<FamilyPair, ProductRule> &productRules()
+{
+  static std::map<FamilyPair, ProductRule> rules;
+  return rules;
+}
+
+std::map<FamilyPair, TransformRule> &transformRules()
+{
+  static std::map<FamilyPair, TransformRule> rules;
+  return rules;
+}
+
 std::map<std::string, const DistributionFamily *> &familiesByName()
 {
   static std::map<std::string, const DistributionFamily *> families;
@@ -80,6 +92,46 @@ void registerComparatorRule(const char *x, const char *y,
 void registerClosureRule(const char *x, const char *y, ClosureRule rule)
 {
   closureRules()[{x, y}] = rule;
+}
+
+void registerProductRule(const char *x, const char *y, ProductRule rule)
+{
+  productRules()[{x, y}] = rule;
+}
+
+void registerTransformRule(const char *transform, const char *family,
+                           TransformRule rule)
+{
+  transformRules()[{transform, family}] = rule;
+}
+
+std::unique_ptr<Distribution> closeProductFactors(
+  const std::vector<const Distribution *> &factors)
+{
+  const auto &rules = productRules();
+  ProductRule rule = nullptr;
+  const char *n0 = nullptr;
+  for (const Distribution *f : factors) {
+    if (!n0) {
+      n0 = f->family().name;
+      const auto it = rules.find({n0, n0});
+      if (it == rules.end()) return nullptr;
+      rule = it->second;
+    } else {
+      const auto it = rules.find({n0, f->family().name});
+      if (it == rules.end() || it->second != rule) return nullptr;
+    }
+  }
+  if (!rule) return nullptr;
+  return rule(factors);
+}
+
+std::unique_ptr<Distribution> closeTransform(const char *transform,
+                                             const Distribution &x)
+{
+  const auto &rules = transformRules();
+  const auto it = rules.find({transform, x.family().name});
+  return it == rules.end() ? nullptr : it->second(x);
 }
 
 std::unique_ptr<Distribution> closePlusTerms(

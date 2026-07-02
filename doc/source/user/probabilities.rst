@@ -237,7 +237,7 @@ Continuous random variables
 
 The discrete-Bernoulli setting above can be combined with a
 continuous tier: columns of type ``random_variable`` carry
-distributions (Normal, Uniform, Exponential, Erlang, Gamma, Categorical,
+distributions (Normal, Uniform, Exponential, Erlang, Gamma, Log-normal, Categorical,
 Mixture) rather than scalars, and ``WHERE`` predicates on these
 columns are rewritten into conditioning events on the row's
 provenance. Evaluation routes through Monte Carlo by default, with

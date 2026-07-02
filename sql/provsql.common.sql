@@ -2836,7 +2836,8 @@ CREATE OPERATOR <> (
  *  Constructors live in this group: <tt>provsql.normal(μ, σ)</tt>,
  *  <tt>provsql.uniform(a, b)</tt>, <tt>provsql.exponential(λ)</tt>,
  *  <tt>provsql.erlang(k, λ)</tt>, <tt>provsql.gamma(k, λ)</tt>,
- *  <tt>provsql.chi_squared(k)</tt>, and <tt>provsql.as_random(c)</tt>.
+ *  <tt>provsql.chi_squared(k)</tt>, <tt>provsql.lognormal(μ, σ)</tt>,
+ *  and <tt>provsql.as_random(c)</tt>.
  *  Operator overloads
  *  (<tt>+ - * /</tt> and the six comparators) are defined further
  *  below, alongside direct <tt>rv_cmp_*</tt> UUID constructors for
@@ -3137,6 +3138,48 @@ BEGIN
     RAISE EXCEPTION 'provsql.chi_squared: k must be strictly positive (got %)', k;
   END IF;
   RETURN provsql.gamma(k / 2, 0.5);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a log-normal random variable: @c exp of a
+ *        Normal(@p mu, @p sigma), parameterised by the underlying
+ *        normal (so its median is <tt>exp(mu)</tt> and its mean
+ *        <tt>exp(mu + sigma^2/2)</tt>)
+ *
+ * The multiplicative counterpart of @c normal: products of independent
+ * lognormals fold to a lognormal in the simplifier, and the
+ * <tt>exp(normal(...))</tt> / <tt>ln(lognormal(...))</tt> bridges fold
+ * in both directions, so log-scale models stay closed-form.
+ *
+ * Validation mirrors @c normal: both parameters must be finite,
+ * @p sigma non-negative; the degenerate @c sigma = 0 case is silently
+ * routed through @c as_random (a Dirac at <tt>exp(mu)</tt>).
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Log-normal_distribution">Wikipedia: Log-normal distribution</a>
+ */
+CREATE OR REPLACE FUNCTION lognormal(mu double precision, sigma double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(sigma) THEN
+    RAISE EXCEPTION 'provsql.lognormal: parameters must be finite (got mu=%, sigma=%)', mu, sigma;
+  END IF;
+  IF sigma < 0 THEN
+    RAISE EXCEPTION 'provsql.lognormal: sigma must be non-negative (got %)', sigma;
+  END IF;
+  IF sigma = 0 THEN
+    RETURN provsql.as_random(exp(mu));
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'lognormal:' || mu || ',' || sigma);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 

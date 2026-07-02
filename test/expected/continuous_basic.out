@@ -127,6 +127,7 @@ name|nparams|param_names|label
 erlang|2|{k,λ}|Erl
 exponential|1|{λ}|Exp
 gamma|2|{k,λ}|Γ
+lognormal|2|{μ,σ}|LogN
 normal|2|{μ,σ}|N
 uniform|2|{a,b}|U
-(5 rows)
+(6 rows)

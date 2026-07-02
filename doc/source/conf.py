@@ -183,6 +183,7 @@ _SQL_FUNC_MAP = {
     'exponential':              '/doxygen-sql/html/group__random__variable__type.html#ga1b3c2233e34a026b8c32c81828c3ca83',
     'erlang':                   '/doxygen-sql/html/group__random__variable__type.html#ga4a6880ef663e073e187de58628107f2d',
     'gamma':                    '/doxygen-sql/html/group__random__variable__type.html#ga776a6709b93af800a8d91f8196314e79',
+    'lognormal':                '/doxygen-sql/html/group__random__variable__type.html#ga7100d2e4a31f76561a65112659de300e',
     'chi_squared':              '/doxygen-sql/html/group__random__variable__type.html#gac74b146395e656c35c7613280d00d264',
     'rv_families':              '/doxygen-sql/html/group__random__variable__type.html#gacc3de72dc4ca6e0d8978254954bec306',
     'random_variable_pow':      '/doxygen-sql/html/group__random__variable__type.html#ga47b5791cbd8e6cb5a9d4f40938cb7cba',

@@ -413,6 +413,66 @@ struct ClosureRuleRegistrar {
 };
 
 /**
+ * @brief A family product-closure fold: the distribution of the product
+ *        of the (independent) @p factors, or @c nullptr when the shape
+ *        is outside the closure.  Scalar factors are the caller's job
+ *        (applied afterwards via @c affine).
+ */
+using ProductRule = std::unique_ptr<Distribution> (*)(
+  const std::vector<const Distribution *> &factors);
+
+/** @brief Register the product-closure rule for a family pair
+ *         (name-token keyed, like the sum-closure rules). */
+void registerProductRule(const char *x, const char *y, ProductRule rule);
+
+/** @brief Static-initialisation helper: one per registered family pair. */
+struct ProductRuleRegistrar {
+  ProductRuleRegistrar(const char *x, const char *y, ProductRule rule) {
+    registerProductRule(x, y, rule);
+  }
+};
+
+/**
+ * @brief Fold a product of independent factors into a single
+ *        distribution when a registered closure covers every family
+ *        present (same first-vs-each dispatch as @c closePlusTerms);
+ *        @c nullptr on any miss.
+ */
+std::unique_ptr<Distribution> closeProductFactors(
+  const std::vector<const Distribution *> &factors);
+
+/**
+ * @brief A closed-form image of a monotone transform of one family
+ *        (e.g. exp of a normal is a lognormal), or @c nullptr when the
+ *        family has none.
+ */
+using TransformRule = std::unique_ptr<Distribution> (*)(
+  const Distribution &x);
+
+/**
+ * @brief Register the image rule for @p transform ("ln" / "exp" / ...;
+ *        the evaluator maps its arith opcodes to these names, keeping
+ *        this registry opcode-free) applied to @p family.
+ */
+void registerTransformRule(const char *transform, const char *family,
+                           TransformRule rule);
+
+/** @brief Static-initialisation helper: one per registered transform. */
+struct TransformRuleRegistrar {
+  TransformRuleRegistrar(const char *transform, const char *family,
+                         TransformRule rule) {
+    registerTransformRule(transform, family, rule);
+  }
+};
+
+/**
+ * @brief The image distribution of @p transform applied to @p x, when
+ *        a registered rule covers @p x's family; @c nullptr otherwise.
+ */
+std::unique_ptr<Distribution> closeTransform(const char *transform,
+                                             const Distribution &x);
+
+/**
  * @brief Fold @c PLUS(terms) into a single distribution when a
  *        registered closure covers every family in the sum.
  *

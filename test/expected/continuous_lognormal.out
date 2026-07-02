@@ -1,0 +1,72 @@
+\set ECHO none
+lognormal_mean_exact
+t
+(1 row)
+lognormal_var_exact
+t
+(1 row)
+lognormal_m2_exact
+t
+(1 row)
+lognormal_median_mass_exact
+t
+(1 row)
+lognormal_cdf_exact
+t
+(1 row)
+lo|hi
+0|Infinity
+(1 row)
+lognormal_median_exact
+t
+(1 row)
+lognormal_q975_exact
+t
+(1 row)
+lognormal_vs_lognormal_exact
+t
+(1 row)
+exp_normal_bridge_exact
+t
+(1 row)
+ln_lognormal_bridge_exact
+t
+(1 row)
+exp_normal_quantile_exact
+t
+(1 row)
+exp_normal_sum_chain_exact
+t
+(1 row)
+lognormal_product_exact
+t
+(1 row)
+lognormal_scale_exact
+t
+(1 row)
+lognormal_scaled_product_exact
+t
+(1 row)
+lognormal_product_median_exact
+t
+(1 row)
+lognormal_product_var_exact
+t
+(1 row)
+lognormal_truncated_mean_exact
+t
+(1 row)
+lognormal_mixed_product_mc
+t
+(1 row)
+ERROR:  provsql.lognormal: parameters must be finite (got mu=NaN, sigma=1)
+ERROR:  provsql.lognormal: sigma must be non-negative (got -1)
+lognormal_sigma0_dedups
+t
+(1 row)
+name|nparams|param_names|label
+lognormal|2|{μ,σ}|LogN
+(1 row)
+continuous_lognormal_done
+ok
+(1 row)

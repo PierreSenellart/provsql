@@ -446,6 +446,83 @@ bool try_sum_closure(GenericCircuit &gc, gate_t g)
 }
 
 /**
+ * @brief Product closure on a @c TIMES gate, driven by the
+ *        @c ProductRuleRegistry.
+ *
+ * Wires must be @c gate_value factors (multiplied into one scalar) or
+ * bare @c gate_rv leaves with distinct UUIDs (independence, as in
+ * @c try_sum_closure); at least two RV factors, or the 2-wire
+ * scalar-times-RV shape is @c try_times_scalar_rv's job.  The
+ * registered rules cover lognormal products (parameters add in log
+ * space); the accumulated scalar then applies through the family's
+ * @c affine.  Same fresh-identity coupling caveat as the sum closure.
+ */
+bool try_product_closure(GenericCircuit &gc, gate_t g)
+{
+  const auto &wires = gc.getWires(g);
+  if (wires.size() < 2) return false;
+
+  double c_total = 1.0;
+  std::vector<std::unique_ptr<Distribution>> dists;
+  std::vector<const Distribution *> factors;
+  std::unordered_set<gate_t> seen_rvs;
+  for (gate_t w : wires) {
+    const auto t = gc.getGateType(w);
+    if (t == gate_value) {
+      try { c_total *= parseDoubleStrict(gc.getExtra(w)); }
+      catch (const CircuitException &) { return false; }
+      continue;
+    }
+    if (t != gate_rv) return false;
+    if (!seen_rvs.insert(w).second) return false;   /* dependent */
+    auto spec = parse_distribution_spec(gc.getExtra(w));
+    if (!spec) return false;
+    dists.push_back(makeDistribution(*spec));
+    factors.push_back(dists.back().get());
+  }
+  if (factors.size() < 2) return false;
+
+  auto combined = closeProductFactors(factors);
+  if (!combined) return false;
+  if (c_total != 1.0) {
+    combined = combined->scale(c_total);
+    if (!combined) return false;
+  }
+  gc.resolveToRv(g, combined->serialise());
+  return true;
+}
+
+/**
+ * @brief Transform closure on a unary @c LN / @c EXP gate, driven by
+ *        the @c TransformRuleRegistry.
+ *
+ * When the child is a bare @c gate_rv whose family registers a
+ * closed-form image (exp(normal) is lognormal, ln(lognormal) is
+ * normal), the gate folds to the image distribution -- the bottom-up
+ * pass has already folded the child, so chains like
+ * <tt>exp(normal + normal)</tt> collapse fully.  Same fresh-identity
+ * coupling caveat as the sum closure.
+ */
+bool try_transform_closure(GenericCircuit &gc, gate_t g)
+{
+  const auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
+  const char *transform = op == PROVSQL_ARITH_LN ? "ln"
+                        : op == PROVSQL_ARITH_EXP ? "exp"
+                        : nullptr;
+  if (!transform) return false;
+  const auto &wires = gc.getWires(g);
+  if (wires.size() != 1) return false;
+  if (gc.getGateType(wires[0]) != gate_rv) return false;
+  auto spec = parse_distribution_spec(gc.getExtra(wires[0]));
+  if (!spec) return false;
+
+  auto image = closeTransform(transform, *makeDistribution(*spec));
+  if (!image) return false;
+  gc.resolveToRv(g, image->serialise());
+  return true;
+}
+
+/**
  * @brief Negation closure on a bare @c gate_rv: rewrite @c arith(NEG, Z)
  *        as a closed-form-negated @c gate_rv when @c Z's family admits
  *        one.
@@ -1009,11 +1086,20 @@ unsigned apply_rules(GenericCircuit &gc, gate_t g,
       }
     }
 
-    /* 6. Family closure on PLUS, dispatched on the families present
-     *    through the ClosureRuleRegistry (normal linear combinations;
-     *    same-rate Exp/Erlang chains; single-Uniform affine shapes). */
+    /* 6. Family closures, dispatched on the families present through
+     *    the closure registries:
+     *      - PLUS: normal linear combinations, same-rate Exp/Erlang
+     *        chains, single-Uniform affine shapes;
+     *      - TIMES: lognormal products (parameters add in log space);
+     *      - LN / EXP: the normal <-> lognormal transform bridges. */
     if (op == PROVSQL_ARITH_PLUS) {
       if (try_sum_closure(gc, g)) { ++local; break; }
+    }
+    if (op == PROVSQL_ARITH_TIMES) {
+      if (try_product_closure(gc, g)) { ++local; break; }
+    }
+    if (op == PROVSQL_ARITH_LN || op == PROVSQL_ARITH_EXP) {
+      if (try_transform_closure(gc, g)) { ++local; break; }
     }
 
     break;  /* no rule fired this iteration */

@@ -124,6 +124,19 @@ shared underlying randomness.
     integer-shape rule above. See `Wikipedia
     <https://en.wikipedia.org/wiki/Chi-squared_distribution>`__.
 
+:sqlfunc:`lognormal` ``(mu, sigma)``
+    ``LogNormal(μ, σ)``: ``exp`` of a ``Normal(μ, σ)``, parameterised
+    by the underlying normal (median ``exp(μ)``, mean
+    ``exp(μ + σ²/2)``). The multiplicative counterpart of
+    :sqlfunc:`normal`: products of independent lognormals fold to a
+    lognormal, positive scalings shift ``μ`` by ``ln c``, and the
+    ``exp(normal(...))`` / ``ln(lognormal(...))`` bridges fold in both
+    directions, so log-scale models stay closed-form -- moments,
+    CDF, quantiles, and interval conditioning are all exact.
+    Validation mirrors :sqlfunc:`normal` (``σ = 0`` routes through
+    :sqlfunc:`as_random` as a Dirac at ``exp(μ)``). See `Wikipedia
+    <https://en.wikipedia.org/wiki/Log-normal_distribution>`__.
+
 :sqlfunc:`categorical` ``(probs, outcomes)``
     Discrete distribution over the values in ``outcomes`` with the
     corresponding probabilities in ``probs``. Both arrays must have
@@ -211,9 +224,11 @@ silently dropped draws (which would bias the estimate):
 
 Moments have no linearity to push through a nonlinear map, so
 ``expected`` / ``variance`` / ``quantile`` over a transform evaluate by
-Monte Carlo (constant subtrees still fold exactly, and
-:sqlfunc:`support` propagates sound intervals through ``^`` / ``ln`` /
-``exp``, so support-decidable comparisons stay exact).
+Monte Carlo -- except where a family registers a closed-form image:
+``exp`` of a normal is a lognormal and ``ln`` of a lognormal is a
+normal, so those moments and quantiles are exact. Constant subtrees
+fold exactly, and :sqlfunc:`support` propagates sound intervals through
+``^`` / ``ln`` / ``exp``, so support-decidable comparisons stay exact.
 
 The arithmetic operators are *structural*: they record the
 operation in the circuit without evaluating it. Evaluation happens
@@ -227,7 +242,9 @@ later, when the value is queried via
   another normal; a scalar shift, scale, or negation of a normal
   preserves the family; the sum of ``k`` i.i.d. exponentials with
   the same rate is an Erlang; independent same-rate gammas sum to
-  a gamma; a linear combination of disjoint random variables has
+  a gamma; products of independent lognormals are lognormal;
+  ``exp`` of a normal is a lognormal and ``ln`` of a lognormal is a
+  normal; a linear combination of disjoint random variables has
   closed-form mean and variance. The result is exact.
 - **Monte Carlo fallback**, when no closed form applies, e.g. a
   product of two non-trivial random variables. The sampler draws
