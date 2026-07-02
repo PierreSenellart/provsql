@@ -591,6 +591,8 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     get_provsql_func_oid("random_variable_cond_predicate");
   constants.OID_FUNCTION_AGG_COND_PREDICATE =
     get_provsql_func_oid("agg_token_cond_predicate");
+  constants.OID_FUNCTION_PREDICATE_COND_PREDICATE =
+    get_provsql_func_oid("predicate_cond_predicate");
   constants.OID_FUNCTION_GIVEN_PREDICATE =
     get_provsql_func_oid("given_predicate");
   constants.OID_FUNCTION_REGULAR_INDICATOR =

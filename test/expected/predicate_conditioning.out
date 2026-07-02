@@ -30,3 +30,16 @@ ERROR:  ProvSQL: the conditioning operator | needs a predicate with at least one
 remove_provenance
 
 (1 row)
+p_cond|matches_bayes_ratio
+0.11813|t
+(1 row)
+event_type
+uuid
+(1 row)
+independent_condition_noop
+t
+(1 row)
+cond_exact_at_zero_samples|conjunction_exact_at_zero_samples
+t|t
+(1 row)
+ERROR:  ProvSQL: probability_evaluate: the joint probability of correlated comparison events needs Monte Carlo, but provsql.rv_mc_samples = 0 disables it; set provsql.rv_mc_samples > 0 (comparisons against constants on a single distribution stay analytical)

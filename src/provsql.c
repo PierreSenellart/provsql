@@ -3876,6 +3876,40 @@ static Node *rewrite_cond_predicate_mutator(Node *node, void *data) {
     OpExpr *op = (OpExpr *)node;
     Oid cond_fn, result_type;
     bool is_prefix;
+    /* "(predicate) | (predicate)": both operands are comparison events
+     * (target | evidence), so neither the uuid | uuid (cond) nor the
+     * uuid | boolean (cond_predicate) shape applies.  Lower each Boolean
+     * operand to its condition gate and build cond(target, evidence), whose
+     * probability_evaluate is the correlation-aware Pr(target ∧ evidence) /
+     * Pr(evidence).  Handled before cond_predicate_target since its operands
+     * are both predicates rather than a pass-through carrier. */
+    if (OidIsValid(constants->OID_FUNCTION_PREDICATE_COND_PREDICATE) &&
+        op->opfuncid == constants->OID_FUNCTION_PREDICATE_COND_PREDICATE) {
+      FuncExpr *target_gate, *evidence_gate, *cond;
+      if (!expr_has_probabilistic_cmp((Node *)op, (void *)constants))
+        provsql_error("(predicate) | (predicate) needs at least one "
+                      "random_variable / aggregate comparison; conditioning "
+                      "two purely regular Booleans is not an event -- use a "
+                      "WHERE clause instead");
+      if (!OidIsValid(constants->OID_FUNCTION_COND))
+        provsql_error("conditioning two comparison events with | requires "
+                      "provsql.cond (schema too old)");
+      target_gate = predicate_to_condition_gate((Expr *)linitial(op->args),
+                                                constants, false);
+      evidence_gate = predicate_to_condition_gate((Expr *)llast(op->args),
+                                                  constants, false);
+      cond = makeNode(FuncExpr);
+      cond->funcid = constants->OID_FUNCTION_COND;
+      cond->funcresulttype = constants->OID_TYPE_UUID;
+      cond->funcretset = false;
+      cond->funcvariadic = false;
+      cond->funcformat = COERCE_EXPLICIT_CALL;
+      cond->funccollid = InvalidOid;
+      cond->inputcollid = InvalidOid;
+      cond->args = list_make2(target_gate, evidence_gate);
+      cond->location = op->location;
+      return (Node *) cond;
+    }
     if (cond_predicate_target(constants, op->opfuncid, &cond_fn, &result_type,
                               &is_prefix)) {
       FuncExpr *gate, *cond;

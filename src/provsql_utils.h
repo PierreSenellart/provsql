@@ -263,6 +263,7 @@ typedef struct constants_t {
   Oid OID_FUNCTION_COND_PREDICATE;      ///< cond_predicate(uuid,boolean)
   Oid OID_FUNCTION_RV_COND_PREDICATE;   ///< random_variable_cond_predicate(random_variable,boolean)
   Oid OID_FUNCTION_AGG_COND_PREDICATE;  ///< agg_token_cond_predicate(agg_token,boolean)
+  Oid OID_FUNCTION_PREDICATE_COND_PREDICATE; ///< predicate_cond_predicate(boolean,boolean) -- (A)|(B), both events
   Oid OID_FUNCTION_GIVEN_PREDICATE;     ///< given_predicate(boolean) -- prefix whole-tuple
   /**@}*/
   /** @brief OID of @c provsql.regular_indicator(boolean): the deterministic

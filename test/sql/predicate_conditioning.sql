@@ -83,3 +83,58 @@ SELECT remove_provenance('sr');
 DROP TABLE mixed_res;
 DROP TABLE aggr;
 DROP TABLE sr;
+
+-- Conditioning TWO comparison events with | : "(A) | (B)".  A random_variable
+-- / agg_token comparison is statically boolean-typed, so neither "uuid | uuid"
+-- nor "uuid | boolean" resolves; the boolean | boolean operator (planner-hook
+-- lowered to cond(A, B)) makes probability((A) | (B)) type-check and return the
+-- correlation-aware Pr(A ∧ B) / Pr(B).  The two comparisons share the x leaf,
+-- so the joint is NOT the product of marginals.  The monotone-shared-scalar
+-- fast path resolves the joint analytically (via the CDF), so the answer is
+-- exact and holds even with rv_mc_samples = 0 (below).
+--
+-- x ~ N(1500, 400): P(x>=2000)=0.10565, P(x>=1000)=0.89435; since {x>=2000} is
+-- a subset of {x>=1000}, P(x>=2000 | x>=1000) = P(x>=2000)/P(x>=1000) = 0.11813.
+SET provsql.rv_mc_samples = 100000;
+SET provsql.monte_carlo_seed = 42;
+WITH r AS (SELECT normal(1500, 400) AS x)
+SELECT round(probability((x >= 2000) | (x >= 1000))::numeric, 5) AS p_cond,
+       abs(probability((x >= 2000) | (x >= 1000))
+           - probability(x >= 2000) / probability(x >= 1000)) < 1e-9
+         AS matches_bayes_ratio
+FROM r;
+
+-- "A | B" is a first-class event token (uuid) in every position: a projected
+-- column surfaces the token, which probability_evaluate consumes directly.
+WITH r AS (SELECT normal(1500, 400) AS x)
+SELECT pg_typeof((x >= 2000) | (x >= 1000)) AS event_type FROM r;
+
+-- Conditioning on an independent event is a no-op: P(A | B) = P(A) when A and B
+-- share no random_variable leaf.
+WITH r AS (SELECT normal(1500, 400) AS x, normal(500, 400) AS y)
+SELECT abs(probability((x >= 2000) | (y >= 1000)) - probability(x >= 2000)) < 1e-9
+         AS independent_condition_noop
+FROM r;
+
+-- The shared-leaf joint (and hence the conditioning) is analytical: it is EXACT
+-- even under rv_mc_samples = 0.  Before the fast path was allowed to run at
+-- rv_mc_samples = 0, each comparison collapsed to its independent marginal and
+-- this silently returned Pr(A)·Pr(B) instead of the correlation-aware joint.
+SET provsql.rv_mc_samples = 0;
+WITH r AS (SELECT normal(1500, 400) AS x)
+SELECT abs(probability((x >= 2000) | (x >= 1000))
+           - probability(x >= 2000) / probability(x >= 1000)) < 1e-9
+         AS cond_exact_at_zero_samples,
+       abs(probability((x >= 2000) AND (x >= 1000)) - probability(x >= 2000)) < 1e-9
+         AS conjunction_exact_at_zero_samples
+FROM r;
+
+-- A correlated joint with no closed form (RV-vs-RV comparisons sharing a leaf)
+-- genuinely needs Monte Carlo.  Under rv_mc_samples = 0 it now RAISES rather
+-- than silently returning the product of the marginals.
+\set VERBOSITY terse
+WITH r AS (SELECT normal(0, 1) AS x, normal(0, 1) AS y, normal(0, 1) AS z)
+SELECT probability((x > y) | (x > z)) FROM r;
+\set VERBOSITY default
+RESET provsql.rv_mc_samples;
+RESET provsql.monte_carlo_seed;

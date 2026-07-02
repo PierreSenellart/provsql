@@ -343,6 +343,32 @@ $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 CREATE OPERATOR | (LEFTARG=UUID, RIGHTARG=boolean, PROCEDURE=cond_predicate);
 
 /**
+ * @brief Placeholder for @c "(predicate) | (predicate)" on two events.
+ *
+ * Conditions one comparison event on another when both operands are written
+ * as comparisons rather than pre-built tokens (e.g.
+ * @c "probability((x >= 2000) | (x >= 1000))"): an @c random_variable /
+ * @c agg_token comparison is statically @c boolean-typed, so neither the
+ * @c "uuid | uuid" (@c cond) nor the @c "uuid | boolean" (@c cond_predicate)
+ * operator resolves.  Never executes: the ProvSQL planner hook lowers each
+ * Boolean operand to its event gate and emits @c cond(target, evidence), so
+ * the result carries the correlation-aware @c Pr(A ∧ B) / Pr(B).  Returns
+ * @c uuid, so @c "A | B" is a first-class event token in every position
+ * (a @c probability(uuid) argument, a projected column, a further @c "|").
+ */
+CREATE OR REPLACE FUNCTION predicate_cond_predicate(target boolean, evidence boolean)
+  RETURNS UUID AS
+$$
+BEGIN
+  RAISE EXCEPTION '(predicate) | (predicate) must be rewritten by the ProvSQL '
+    'planner hook: both operands must be Boolean combinations of '
+    'random_variable / aggregate comparisons (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR | (LEFTARG=boolean, RIGHTARG=boolean, PROCEDURE=predicate_cond_predicate);
+
+/**
  * @brief Deterministic indicator gate for an ordinary (regular) comparison.
  *
  * The predicate-provenance of an ordinary comparison (both sides of regular
