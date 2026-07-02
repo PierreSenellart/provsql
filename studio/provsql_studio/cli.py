@@ -113,7 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
 # suffix on the installed version is accepted as the matching release
 # (e.g. `1.4.0-dev` is treated as `1.4.0`), so Studio can ride alongside
 # an unreleased extension build.
-REQUIRED_PROVSQL_VERSION = (1, 4, 0)
+REQUIRED_PROVSQL_VERSION = (1, 11, 0)
 
 _VERSION_RE = re.compile(r'^\s*(\d+)\.(\d+)(?:\.(\d+))?')
 

@@ -66,18 +66,7 @@ _ARITH_OP_GLYPH = {
     6: "min",   # PROVSQL_ARITH_MIN: n-ary order statistic (least / min)
 }
 
-# Distribution-kind initials used in the in-circle label for gate_rv.
-# Same logic as gate_value: the full encoding lives in `extra`; the
-# circle just needs a glance-recognisable hint.
-_RV_KIND_INITIAL = {
-    "normal":      "N",
-    "uniform":     "U",
-    "exponential": "Exp",
-    "erlang":      "Erl",
-}
-
-
-def _gate_label(row: dict) -> str:
+def _gate_label(row: dict, rv_families: dict | None = None) -> str:
     """Resolve the in-circle glyph for a row from the BFS subgraph.
 
     For most gate types this is the static map above. Three gates carry
@@ -115,7 +104,7 @@ def _gate_label(row: dict) -> str:
         # glance, mirroring gate_value's treatment.
         return _format_value_label(row["extra"])
     if t == "rv" and row.get("extra"):
-        return _format_rv_label(row["extra"])
+        return _format_rv_label(row["extra"], rv_families)
     if t == "arith":
         # circuit_subgraph returns info1 as TEXT (uniform-typed column); coerce
         # to int before the enum-tag lookup. Anything unparseable falls
@@ -210,10 +199,15 @@ def _format_value_label(extra: str) -> str:
         return _truncate(s)
 
 
-def _format_rv_label(extra: str) -> str:
+def _format_rv_label(extra: str, rv_families: dict | None = None) -> str:
     """Render the in-circle label for a gate_rv leaf from its extra text.
 
     Extra is "<kind>:<p1>[,<p2>]" (see src/RandomVariable.{h,cpp}).
+    The kind's glyph comes from the extension's family registry
+    (`rv_families`, keyed by name with a `label` entry, from
+    provsql.rv_families()) -- there is no client-side family table, so
+    a family added server-side labels correctly without a Studio
+    release; an unregistered kind falls through to the raw text.
     Numeric parameters are shortened to four significant figures so
     folded-distribution labels like
     "normal:23.333333333333336,1.6666666666666667" do not blow the
@@ -222,8 +216,9 @@ def _format_rv_label(extra: str) -> str:
     """
     s = str(extra).strip()
     kind, _, params = s.partition(":")
-    label = _RV_KIND_INITIAL.get(kind.strip().lower())
-    if label is None:
+    fam = (rv_families or {}).get(kind.strip().lower())
+    label = (fam or {}).get("label")
+    if not label:
         return s
     p = params.strip()
     if not p:
@@ -300,9 +295,11 @@ def get_circuit(
         overshot = _fetch_subgraph(
             pool, root, depth + 1,
             simplified=False, extra_gucs=extra_gucs)
+    rv_families = _fetch_rv_families(pool)
     if not overshot:
         return {"nodes": [], "edges": [], "root": root,
-                "eval_root": root, "depth": depth}
+                "eval_root": root, "depth": depth,
+                "rv_families": rv_families}
     raw = [r for r in overshot if r["depth"] <= depth]
     # circuit_subgraph emits one row per (parent, node) edge, so the cap
     # is on the count of distinct nodes within the kept depth, not on
@@ -329,7 +326,78 @@ def get_circuit(
     has_deeper: set[str] = {
         r["parent"] for r in overshot if r["depth"] == depth + 1 and r["parent"] is not None
     }
-    return _layout(raw, root=root, depth=depth, frontier_uuids=has_deeper)
+    payload = _layout(raw, root=root, depth=depth, frontier_uuids=has_deeper,
+                      rv_families=rv_families)
+    payload["rv_families"] = rv_families
+    _attach_rv_densities(pool, payload["nodes"])
+    return payload
+
+
+def _fetch_rv_families(pool: ConnectionPool) -> dict:
+    """The extension's continuous-distribution family registry, as
+    `{name: {nparams, param_names, label}}` from `provsql.rv_families()`.
+
+    This is the single source of RV-family rendering knowledge (labels
+    here, parameter symbols in circuit.js); the catalog function is part
+    of Studio's extension compatibility floor.
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, nparams, param_names, label"
+            "  FROM provsql.rv_families()"
+        )
+        return {
+            name: {"nparams": np, "param_names": pn, "label": label}
+            for name, np, pn, label in cur.fetchall()
+        }
+
+
+def _attach_rv_densities(pool: ConnectionPool, nodes: list[dict]) -> None:
+    """Attach a server-computed density preview to every bare `rv` leaf.
+
+    One batched `rv_analytical_curves` call over the scene's rv UUIDs
+    (unconditional: the inline inspector preview shows the leaf's own
+    distribution) sets `node["density"] = {"pdf": [{x, p}...], "mean": m}`;
+    the pdf grid already covers the family's plot range server-side, and
+    the front-end renders the preview from it alone.  The preview is
+    decorative, so a failure here (e.g. a malformed rv extra poisoning
+    the batch) skips it rather than failing the whole circuit render.
+    Synthetic simplifier-minted ids (`dec-in-N`...) are skipped: they
+    are not resolvable store UUIDs.
+    """
+    rv_ids = sorted({
+        n["id"] for n in nodes
+        if n.get("type") == "rv" and _looks_like_uuid(n["id"])
+    })
+    if not rv_ids:
+        return
+    import psycopg
+    by_id: dict[str, dict] = {}
+    try:
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT t.tok::text,"
+                "       provsql.rv_analytical_curves("
+                "         t.tok, 120, provsql.gate_one()),"
+                "       provsql.rv_moment(t.tok, 1, false, provsql.gate_one())"
+                "  FROM unnest(%s::uuid[]) AS t(tok)",
+                (rv_ids,),
+            )
+            for tok, curves, mean in cur.fetchall():
+                if isinstance(curves, str):
+                    curves = json.loads(curves)
+                if not isinstance(curves, dict) or not curves.get("pdf"):
+                    continue
+                by_id[tok] = {
+                    "pdf": curves["pdf"],
+                    "mean": mean if isinstance(mean, float) else None,
+                }
+    except psycopg.Error:
+        return
+    for n in nodes:
+        density = by_id.get(n["id"])
+        if density:
+            n["density"] = density
 
 
 def _fetch_subgraph(
@@ -721,7 +789,8 @@ def _elide_markers(
     return out, new_root, markers
 
 
-def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]) -> dict:
+def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str],
+            rv_families: dict | None = None) -> dict:
     """Run dot to assign x/y per node, then translate into the JSON shape
     consumed by the front-end."""
     # The token actually evaluated by the eval strip / benchmark.  Eliding a
@@ -767,7 +836,7 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
         nodes.append({
             "id":        r["node"],
             "type":      r["gate_type"],
-            "label":     _gate_label(r),
+            "label":     _gate_label(r, rv_families),
             "info1":     r["info1"],
             "info2":     r["info2"],
             "info1_name": r["info1_name"],

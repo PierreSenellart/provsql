@@ -654,3 +654,63 @@ def test_circuit_mobius_root_renders_as_mobius_with_coefficients(client, test_ds
         assert e["to"] in coeffs, (e["to"], coeffs)
         assert coeffs[e["to"]] in (-1, 1), coeffs[e["to"]]
     assert sorted(coeffs.values()) == [-1, -1, -1, 1, 1, 1, 1]
+
+
+# ──────── rv-family registry (provsql.rv_families) ────────
+
+
+def test_format_rv_label_uses_registry():
+    """The in-circle rv glyph comes from the extension's family registry
+    (the single source of family-rendering knowledge) -- so a family
+    added server-side (gamma) labels correctly without touching Studio;
+    a kind the registry doesn't know falls through to the raw text."""
+    from provsql_studio.circuit import _format_rv_label
+
+    fams = {
+        "normal": {"nparams": 2, "param_names": ["μ", "σ"], "label": "N"},
+        "gamma":  {"nparams": 2, "param_names": ["k", "λ"], "label": "Γ"},
+    }
+    assert _format_rv_label("normal:0,1", fams) == "N(0,1)"
+    assert _format_rv_label("gamma:2.5,0.4", fams) == "Γ(2.5,0.4)"
+    # Unregistered kind (or no registry at all): raw text passthrough.
+    assert _format_rv_label("weibull:1,2", fams) == "weibull:1,2"
+    assert _format_rv_label("normal:0,1") == "normal:0,1"
+
+
+def test_rv_family_registry_payload(client, test_dsn):
+    """/api/circuit carries the extension's rv-family registry
+    (`rv_families`) and a server-computed density preview per bare rv
+    leaf (`density`); the front-end renders labels, parameter symbols,
+    and the inline density from these alone (no client-side family
+    knowledge).  Both surfaces are part of Studio's extension
+    compatibility floor."""
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'",
+        autocommit=True,
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT (provsql.normal(2.5, 0.5))::uuid::text")
+        root = cur.fetchone()[0]
+
+    resp = client.get(f"/api/circuit/{root}?depth=1")
+    assert resp.status_code == 200, resp.data
+    scene = resp.get_json()
+    nodes_by_id = {n["id"]: n for n in scene["nodes"]}
+    rootn = nodes_by_id[root]
+    assert rootn["type"] == "rv"
+
+    # The four classic families plus gamma, with the display metadata
+    # the registrars carry.
+    fams = scene["rv_families"]
+    assert fams["normal"] == {
+        "nparams": 2, "param_names": ["μ", "σ"], "label": "N"}
+    assert fams["gamma"]["label"] == "Γ"
+    assert fams["gamma"]["param_names"] == ["k", "λ"]
+    assert fams["exponential"]["nparams"] == 1
+
+    # The bare rv leaf carries the server-sampled density preview: a
+    # pdf grid over the family's plot range plus the mean.
+    density = rootn.get("density")
+    assert density, rootn
+    assert len(density["pdf"]) >= 2
+    assert {"x", "p"} <= set(density["pdf"][0])
+    assert abs(density["mean"] - 2.5) < 1e-9

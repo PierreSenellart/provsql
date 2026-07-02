@@ -1405,6 +1405,15 @@ extension version.
        -- the self-maintaining ``time_validity_view`` the timeline reads --
        and the server to be PostgreSQL 14+. See :doc:`temporal`.
 
+       Also moves all RV-family rendering onto the extension's family
+       registry: circuit-inspector glyphs and parameter symbols come
+       from :sqlfunc:`rv_families` and the inline density preview from a
+       server-computed :sqlfunc:`rv_analytical_curves` grid, so families
+       added to the extension (1.11.0's ``gamma`` / ``chi_squared``)
+       render without a Studio upgrade -- and 1.11.0 is a hard floor:
+       Studio keeps no client-side family table.
+       See :doc:`continuous-distributions`.
+
 When the installed extension predates this minimum, Studio's startup
 check prints the mismatch and exits. Pass ``--ignore-version`` to
 override the check, for instance when running against a development

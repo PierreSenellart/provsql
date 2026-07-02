@@ -1230,7 +1230,7 @@
     }
     html += '</dl>';
     if (node.type === 'rv') {
-      const density = renderRvDensity(parseDistributionSpec(node.extra));
+      const density = renderRvDensity(node.density);
       if (density) html += density;
     }
     if (node.type === 'kc-bag') {
@@ -3693,6 +3693,10 @@
   // Parse the gate_rv `extra` text encoding into {kind, params, paramNames}.
   // Mirrors src/RandomVariable.cpp's parse_distribution_spec; returns null
   // on anything we don't recognise so callers fall back to the raw text.
+  // Family arity / parameter symbols come from the extension's family
+  // registry (`rv_families` in the scene payload, from
+  // provsql.rv_families()), so families added server-side parse without
+  // touching this file -- there is no client-side family table.
   function parseDistributionSpec(s) {
     if (!s) return null;
     const m = String(s).match(/^\s*([a-zA-Z]+)\s*(?::(.*))?$/);
@@ -3700,61 +3704,38 @@
     const kind = m[1].toLowerCase();
     const params = (m[2] || '')
       .split(',').map(x => Number(x.trim())).filter(x => Number.isFinite(x));
-    const meta = {
-      normal:      { params: 2, names: ['μ', 'σ'] },
-      uniform:     { params: 2, names: ['a', 'b'] },
-      exponential: { params: 1, names: ['λ'] },
-      erlang:      { params: 2, names: ['k', 'λ'] },
-    }[kind];
-    if (!meta || params.length < meta.params) return null;
-    return { kind, params: params.slice(0, meta.params), paramNames: meta.names };
+    const reg = (state.scene?.rv_families || {})[kind];
+    if (!reg || !(reg.nparams >= 1) || params.length < reg.nparams) return null;
+    return {
+      kind,
+      params: params.slice(0, reg.nparams),
+      paramNames: reg.param_names || [],
+    };
   }
 
-  // Render the analytical PDF of a parsed distribution spec into a small
-  // inline SVG. Returns an HTML string suitable for insertion into the
-  // inspector body. Returns "" when the spec is unrecognised so callers
-  // can simply skip the preview without a special case.
-  function renderRvDensity(spec) {
-    if (!spec) return '';
+  // Render the analytical PDF of a gate_rv leaf into a small inline SVG.
+  // Returns an HTML string suitable for insertion into the inspector
+  // body; "" when nothing renderable so callers can simply skip the
+  // preview without a special case.
+  //
+  // The data is the server-computed preview the circuit payload attaches
+  // per rv node ({pdf: [{x, p}...], mean}), sampled through the
+  // extension's Distribution registry -- pdf math and plot-range
+  // heuristics live server-side only, so every registered family
+  // renders without client-side code.
+  function renderRvDensity(density) {
     const W = 240, H = 100, padX = 6, padY = 6;
-    const samples = 120;
-    let lo, hi, pdf;
-    if (spec.kind === 'normal') {
-      const [mu, sigma] = spec.params;
-      if (!(sigma > 0)) return '';
-      lo = mu - 4 * sigma; hi = mu + 4 * sigma;
-      const k = 1 / (sigma * Math.sqrt(2 * Math.PI));
-      pdf = x => k * Math.exp(-0.5 * ((x - mu) / sigma) ** 2);
-    } else if (spec.kind === 'uniform') {
-      const [a, b] = spec.params;
-      if (!(b > a)) return '';
-      const margin = 0.15 * (b - a);
-      lo = a - margin; hi = b + margin;
-      const h = 1 / (b - a);
-      pdf = x => (x >= a && x <= b) ? h : 0;
-    } else if (spec.kind === 'exponential') {
-      const [lam] = spec.params;
-      if (!(lam > 0)) return '';
-      lo = 0; hi = 6 / lam;
-      pdf = x => x < 0 ? 0 : lam * Math.exp(-lam * x);
-    } else if (spec.kind === 'erlang') {
-      const [k, lam] = spec.params;
-      if (!(k >= 1) || !(lam > 0)) return '';
-      lo = 0; hi = Math.max(2 * k / lam, 6 / lam);
-      // (k-1)! via gamma; k is integer in practice but we tolerate float.
-      let fact = 1;
-      for (let i = 2; i < k; i++) fact *= i;
-      const norm = Math.pow(lam, k) / fact;
-      pdf = x => x < 0 ? 0 : norm * Math.pow(x, k - 1) * Math.exp(-lam * x);
-    } else {
-      return '';
-    }
     const xs = [], ys = [];
-    for (let i = 0; i <= samples; i++) {
-      const x = lo + (hi - lo) * (i / samples);
-      xs.push(x);
-      ys.push(pdf(x));
+    let mean = null;
+    if (density && Array.isArray(density.pdf) && density.pdf.length >= 2) {
+      for (const pt of density.pdf) {
+        xs.push(Number(pt.x));
+        ys.push(Number(pt.p));
+      }
+      if (Number.isFinite(Number(density.mean))) mean = Number(density.mean);
     }
+    const lo = xs[0], hi = xs[xs.length - 1];
+    if (!(lo < hi) || ys.some(y => !Number.isFinite(y) || y < 0)) return '';
     const yMax = Math.max(...ys, 1e-12);
     const sx = x => padX + (W - 2 * padX) * (x - lo) / (hi - lo);
     const sy = y => (H - padY) - (H - 2 * padY) * (y / yMax);
@@ -3763,15 +3744,9 @@
       `${sx(lo).toFixed(1)},${sy(0).toFixed(1)} `
       + pts + ' '
       + `${sx(hi).toFixed(1)},${sy(0).toFixed(1)}`;
-    // X-axis ticks at lo / mid / hi. The mean is the natural reference
-    // line for normal / exponential / erlang and the midpoint for
-    // uniform; render it as a faint dashed vertical.
+    // X-axis ticks at lo / mid / hi; the server-provided mean renders
+    // as a faint dashed vertical.
     let meanLine = '';
-    let mean = null;
-    if (spec.kind === 'normal')      mean = spec.params[0];
-    else if (spec.kind === 'uniform')     mean = (spec.params[0] + spec.params[1]) / 2;
-    else if (spec.kind === 'exponential') mean = 1 / spec.params[0];
-    else if (spec.kind === 'erlang')      mean = spec.params[0] / spec.params[1];
     if (mean != null && mean >= lo && mean <= hi) {
       meanLine =
         `<line x1="${sx(mean).toFixed(1)}" y1="${padY}" `
