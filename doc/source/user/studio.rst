@@ -556,7 +556,7 @@ user can verify by eye that the fold matched the distribution.
 
 The recognised shapes are:
 
-* a bare ``gate_rv`` of any registered family (Normal / Uniform / Exponential / Erlang / Gamma / Log-normal / Weibull / Pareto),
+* a bare ``gate_rv`` of any registered family (Normal / Uniform / Exponential / Erlang / Gamma / Log-normal / Weibull / Pareto / Beta),
   optionally with a one-interval conditioning event -- smooth
   curve;
 * a Dirac (``provsql.as_random(c)``) -- single stem at ``c``;

@@ -195,6 +195,15 @@ shared underlying randomness.
     ``+0.0`` so the two zeros refer to the same gate. See `Wikipedia
     <https://en.wikipedia.org/wiki/Degenerate_distribution>`__.
 
+:sqlfunc:`beta` ``(alpha, beta)``
+    ``Beta(α, β)`` on the unit interval, the conjugate prior of
+    Bernoulli/binomial success probabilities: closed-form moments, CDF
+    through the regularised incomplete beta, quantiles by CDF bisection
+    over the finite ``[0, 1]`` support, and closed-form truncated
+    moments under interval conditioning. ``Beta(1, 1)`` *is*
+    ``Uniform(0, 1)`` and routes through :sqlfunc:`uniform`. See
+    `Wikipedia <https://en.wikipedia.org/wiki/Beta_distribution>`__.
+
 **Discrete count constructors.** :sqlfunc:`poisson` ``(lambda)``,
 :sqlfunc:`binomial` ``(n, p)``, :sqlfunc:`geometric` ``(p)`` (number of
 *trials*, support starting at 1), :sqlfunc:`hypergeometric`

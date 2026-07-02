@@ -2838,6 +2838,7 @@ CREATE OPERATOR <> (
  *  <tt>provsql.erlang(k, λ)</tt>, <tt>provsql.gamma(k, λ)</tt>,
  *  <tt>provsql.chi_squared(k)</tt>, <tt>provsql.lognormal(μ, σ)</tt>,
  *  <tt>provsql.weibull(k, λ)</tt>, <tt>provsql.pareto(xₘ, α)</tt>,
+ *  <tt>provsql.beta(α, β)</tt>,
  *  the discrete count constructors (<tt>provsql.poisson(λ)</tt>,
  *  <tt>provsql.binomial(n, p)</tt>, <tt>provsql.geometric(p)</tt>,
  *  <tt>provsql.hypergeometric(N, K, n)</tt>,
@@ -3373,6 +3374,45 @@ BEGIN
     lps := array_prepend(-lambda, lps);
   END IF;
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a Beta(α, β) random variable on the unit interval
+ *
+ * The conjugate prior of Bernoulli / binomial success probabilities:
+ * closed-form moments, CDF through the regularised incomplete beta,
+ * quantiles through the generic CDF bisection over the finite
+ * @c [0, 1] support, and closed-form truncated moments (interval
+ * conditioning).  <tt>Beta(1, 1)</tt> IS <tt>Uniform(0, 1)</tt> and is
+ * silently routed through @c uniform to share its richer closed forms.
+ *
+ * Validation: both shapes must be finite and strictly positive.
+ *
+ * @warning <tt>VOLATILE</tt> is load-bearing; see the warning on
+ * @ref normal.
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Beta_distribution">Wikipedia: Beta distribution</a>
+ */
+CREATE OR REPLACE FUNCTION beta(alpha double precision, beta double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(alpha) OR NOT provsql.is_finite_float8(beta) THEN
+    RAISE EXCEPTION 'provsql.beta: parameters must be finite (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  IF alpha <= 0 OR beta <= 0 THEN
+    RAISE EXCEPTION 'provsql.beta: parameters must be strictly positive (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  IF alpha = 1 AND beta = 1 THEN
+    RETURN provsql.uniform(0, 1);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'beta:' || alpha || ',' || beta);
+  RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 

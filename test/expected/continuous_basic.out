@@ -124,6 +124,7 @@ uniform_signed_zero_dedup
 t
 (1 row)
 name|nparams|param_names|label
+beta|2|{α,β}|Β
 erlang|2|{k,λ}|Erl
 exponential|1|{λ}|Exp
 gamma|2|{k,λ}|Γ
@@ -132,4 +133,4 @@ normal|2|{μ,σ}|N
 pareto|2|{xₘ,α}|Par
 uniform|2|{a,b}|U
 weibull|2|{k,λ}|Wbl
-(8 rows)
+(9 rows)

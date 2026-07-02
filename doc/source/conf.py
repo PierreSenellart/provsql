@@ -191,6 +191,7 @@ _SQL_FUNC_MAP = {
     'hypergeometric':       '/doxygen-sql/html/group__random__variable__type.html#ga10806e844da0cdd7287122ac1d9aab77',
     'negative_binomial':    '/doxygen-sql/html/group__random__variable__type.html#ga6612a6051a0e05eb404343b3c74e2321',
     'poisson':              '/doxygen-sql/html/group__random__variable__type.html#gae7a2180ec2a0fe7130071addd371269e',
+    'beta':                     '/doxygen-sql/html/group__random__variable__type.html#gaba570aac369e4b643547f5752ecfd0d1',
     'pareto':                   '/doxygen-sql/html/group__random__variable__type.html#ga522f547a86bd4f56056a528fd16a6555',
     'chi_squared':              '/doxygen-sql/html/group__random__variable__type.html#gac74b146395e656c35c7613280d00d264',
     'rv_families':              '/doxygen-sql/html/group__random__variable__type.html#gacc3de72dc4ca6e0d8978254954bec306',

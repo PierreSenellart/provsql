@@ -173,6 +173,7 @@ test: continuous_rangecheck_having
 test: continuous_analytic
 test: continuous_gamma
 test: continuous_lognormal
+test: continuous_beta
 test: continuous_weibull_pareto
 test: continuous_discrete_families
 test: continuous_comparison_surface

@@ -1,0 +1,46 @@
+\set ECHO none
+beta_mean_exact
+t
+(1 row)
+beta_var_exact
+t
+(1 row)
+beta_m2_exact
+t
+(1 row)
+beta_symmetric_median
+t
+(1 row)
+beta_cdf_exact
+t
+(1 row)
+lo|hi
+0|1
+(1 row)
+beta_median_exact
+t
+(1 row)
+beta_quantile_roundtrip
+t
+(1 row)
+beta_vs_beta_quadrature
+t
+(1 row)
+beta_truncated_mean_exact
+t
+(1 row)
+beta_sampler_mc
+t
+(1 row)
+beta_uniform_routes
+t
+(1 row)
+ERROR:  provsql.beta: parameters must be strictly positive (got alpha=0, beta=1)
+ERROR:  provsql.beta: parameters must be strictly positive (got alpha=2, beta=-1)
+ERROR:  provsql.beta: parameters must be finite (got alpha=NaN, beta=2)
+name|nparams|param_names|label
+beta|2|{α,β}|Β
+(1 row)
+continuous_beta_done
+ok
+(1 row)
