@@ -47,7 +47,9 @@
 #include "rewrite/rewriteManip.h"
 #include "parser/parse_relation.h"
 #include "utils/builtins.h"
-#include "utils/float.h"
+#if PG_VERSION_NUM >= 120000
+#include "utils/float.h"                /* get_float8_infinity (moved out of builtins.h in PG12) */
+#endif
 #include "parser/parsetree.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
