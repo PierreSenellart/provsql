@@ -186,6 +186,7 @@ Aggregation
    "``COUNT(DISTINCT …)``", "", "", "✓", "", "", "", "", "", ""
    "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", "", ""
    "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", "", ""
+   "``CASE`` over aggregates (guarded selection, ``agg_case``)", "", "", "", "", "", "", "", "", ""
    "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", "", ""
    "``choose`` aggregate", "", "", "", "", "", "", "", "", ""
    "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", "", ""
