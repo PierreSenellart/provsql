@@ -89,6 +89,39 @@ SELECT remove_provenance('ns_q1');
 SELECT * FROM ns_q1 ORDER BY a NULLS LAST;
 DROP TABLE ns_q1;
 
+-- Q1 with a constant left operand: 1 NOT IN {NULL} is unknown whenever
+-- the subquery row is present, and the constant side needs no NULL
+-- guard: each row's probability is P(row ∧ ¬gs1) = 0.25.
+CREATE TABLE ns_q1c AS
+  SELECT a, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_gr WHERE 1 NOT IN (SELECT a FROM ns_gs);
+SELECT remove_provenance('ns_q1c');
+SELECT * FROM ns_q1c ORDER BY a NULLS LAST;
+DROP TABLE ns_q1c;
+
+-- Columns declared NOT NULL on both sides: the planner proves the
+-- guards unnecessary and the lift keeps its unguarded form; classic
+-- antijoin probabilities (row 1 never matches: 0.5; row 2 is removed
+-- by ns1: 0.25).
+CREATE TABLE ns_nnr(a int NOT NULL, name text);
+INSERT INTO ns_nnr VALUES (1,'nr1'),(2,'nr2');
+CREATE TABLE ns_nns(a int NOT NULL, name text);
+INSERT INTO ns_nns VALUES (2,'ns1');
+SELECT add_provenance('ns_nnr');
+SELECT add_provenance('ns_nns');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM ns_nnr;
+  PERFORM set_prob(provsql, 0.5) FROM ns_nns;
+END $$;
+CREATE TABLE ns_nn AS
+  SELECT a, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_nnr WHERE a NOT IN (SELECT a FROM ns_nns);
+SELECT remove_provenance('ns_nn');
+SELECT * FROM ns_nn ORDER BY a;
+DROP TABLE ns_nn;
+DROP TABLE ns_nnr;
+DROP TABLE ns_nns;
+
 -- Q2: NOT EXISTS.  gs.a = x is never true for gs1's NULL, so both rows
 -- are answers in every world containing them: probability 0.5.
 CREATE TABLE ns_q2 AS
@@ -254,6 +287,51 @@ SELECT remove_provenance('ns_lu');
 SELECT * FROM ns_lu ORDER BY ga NULLS LAST;
 DROP TABLE ns_lu;
 SELECT ns_u1.b FROM ns_u1 LEFT JOIN ns_gr ON ns_u1.a = ns_gr.a;
+
+-- RIGHT and FULL variants of the refusal: the null-padded side is the
+-- left arm (RIGHT) or both arms (FULL), and ns_gr is tracked.
+SELECT ns_gr.a FROM ns_gr RIGHT JOIN ns_u1 ON ns_gr.a = ns_u1.a;
+SELECT ns_gr.a FROM ns_gr FULL JOIN ns_u1 ON ns_gr.a = ns_u1.a;
+
+-- Allowed padded-side shapes: a VALUES list, and a nested join of
+-- untracked relations; rows keep the tracked arm's tokens.
+CREATE TABLE ns_lv AS
+  SELECT ns_gr.a AS ga, v.k,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_gr LEFT JOIN (VALUES (1),(7)) v(k) ON ns_gr.a = v.k;
+SELECT remove_provenance('ns_lv');
+SELECT * FROM ns_lv ORDER BY ga NULLS LAST;
+DROP TABLE ns_lv;
+
+CREATE TABLE ns_u2(a int, c int);
+INSERT INTO ns_u2 VALUES (1, 9);
+CREATE TABLE ns_ln AS
+  SELECT ns_gr.a AS ga,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_gr LEFT JOIN (ns_u1 JOIN ns_u2 ON ns_u1.a = ns_u2.a)
+       ON ns_gr.a = ns_u1.a;
+SELECT remove_provenance('ns_ln');
+SELECT * FROM ns_ln ORDER BY ga NULLS LAST;
+DROP TABLE ns_ln;
+
+-- A tracked relation inside a nested join on the null-padded side is
+-- refused like a direct one.
+SELECT ns_u1.b FROM ns_u1
+  LEFT JOIN (ns_u2 JOIN ns_gr ON ns_u2.a = ns_gr.a) ON ns_u1.a = ns_u2.a;
+
+-- A CTE over a tracked relation exposes its provsql column, so it counts
+-- as tracked on the padded side and is refused; an untracked function RTE
+-- there is allowed.
+WITH w AS (SELECT * FROM ns_gr)
+SELECT ns_u1.b FROM ns_u1 LEFT JOIN w ON ns_u1.a = w.a;
+CREATE TABLE ns_lf AS
+  SELECT ns_gr.a AS ga, g.k,
+         round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM ns_gr LEFT JOIN generate_series(1,2) g(k) ON ns_gr.a = g.k;
+SELECT remove_provenance('ns_lf');
+SELECT * FROM ns_lf ORDER BY ga NULLS LAST;
+DROP TABLE ns_lf;
+DROP TABLE ns_u2;
 DROP TABLE ns_u1;
 
 -- -------------------------------------------------------------------------

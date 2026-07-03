@@ -50,6 +50,26 @@ remove_provenance
 
 (1 row)
 a|p
+1|0.2500
+|0.2500
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|p
+1|0.5000
+2|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
 1|0.5000
 |0.5000
 (2 rows)
@@ -161,6 +181,31 @@ ga|b|p
 ||0.5000
 (2 rows)
 ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+ERROR:  ProvSQL: unsupported RIGHT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+ERROR:  ProvSQL: unsupported FULL JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+remove_provenance
+
+(1 row)
+ga|k|p
+1|1|0.5000
+||0.5000
+(2 rows)
+remove_provenance
+
+(1 row)
+ga|p
+1|0.5000
+|0.5000
+(2 rows)
+ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+remove_provenance
+
+(1 row)
+ga|k|p
+1|1|0.5000
+||0.5000
+(2 rows)
 add_provenance
 
 (1 row)

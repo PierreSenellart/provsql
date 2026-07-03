@@ -73,6 +73,9 @@ remove_provenance
 g|dflt
 1|f
 (1 row)
+plus_zero|delta_zero|semimod_zero
+f|f|f
+(1 row)
 dflt|bool|prs
 t|t|t
 (1 row)

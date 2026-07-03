@@ -1,0 +1,41 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+s_num|s_f8|s_i4|s_i8|s_txt|c_i4
+42|42|42|42|42|2
+(1 row)
+s_value
+42
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+lit_num
+42
+(1 row)
+WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+lit_i4
+42
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+empty_num_null|empty_f8_null|empty_i4_null|empty_i8_null|empty_value_null
+t|t|t|t|t
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+nullword_num_null
+t
+(1 row)
+ERROR:  invalid input syntax for agg_token: "garbage"
+LINE 1: SELECT 'garbage'::provsql.agg_token;
+               ^

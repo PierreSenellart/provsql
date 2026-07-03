@@ -65,9 +65,13 @@ DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM stp; END $$;
 -- Materialise the aggregate results, then read them back untracked so the
 -- (run-dependent) group provenance token is not printed.
 CREATE TABLE stq AS
-  SELECT g, covar_pop(x, y) AS c, stddev_pop(x) AS s FROM stp GROUP BY g;
+  SELECT g, covar_pop(x, y) AS c, covar_samp(x, y) AS cs, stddev_pop(x) AS s
+  FROM stp GROUP BY g;
 SET provsql.active = off;
 SELECT abs(expected(c) - 1.0) < 0.1 AS covar_pop_tracked_close FROM stq;
+-- covar_samp needs two rows: {r1,r2} is the only defined world, where it
+-- is 2 * covar_pop = 6; conditional-on-defined the expectation is exact.
+SELECT abs(expected(cs) - 6.0) < 0.05 AS covar_samp_tracked_close FROM stq;
 -- stddev_pop over the same tracked x = (1, 3): defined worlds
 -- {r1} -> 0, {r2} -> 0, {r1,r2} -> 1; E = 1/3.
 SELECT abs(expected(s) - 1.0/3) < 0.05 AS stddev_pop_tracked_close FROM stq;

@@ -128,6 +128,24 @@ SELECT * FROM big1;
 DROP TABLE big1;
 DROP TABLE big;
 
+-- Structural zero propagation through hand-built gates: an all-zero ⊕,
+-- a δ over zero, and a semimod whose provenance side is zero are all
+-- provably (universally) zero.
+DO $$
+DECLARE pz uuid := public.uuid_generate_v4();
+        dz uuid := public.uuid_generate_v4();
+        sz uuid := public.uuid_generate_v4();
+BEGIN
+  PERFORM create_gate(pz, 'plus',    ARRAY[gate_zero(), gate_zero()]);
+  PERFORM create_gate(dz, 'delta',   ARRAY[gate_zero()]);
+  PERFORM create_gate(sz, 'semimod', ARRAY[gate_zero(), gate_one()]);
+  CREATE TEMP TABLE zres AS
+    SELECT nonzero(pz) AS plus_zero, nonzero(dz) AS delta_zero,
+           nonzero(sz) AS semimod_zero;
+END $$;
+SELECT * FROM zres;
+DROP TABLE zres;
+
 -- A NULL token is the neutral 1: kept in every mode.
 SELECT nonzero(NULL) AS dflt, nonzero(NULL,'boolean') AS bool,
        present(NULL) AS prs;
