@@ -13,10 +13,9 @@ sampling, unless you ask) and *correlation-aware* (the provenance circuit
 tracks shared events, so joint and conditional probabilities come out right
 without independence assumptions or hand-rolled `inclusion--exclusion <https://en.wikipedia.org/wiki/Inclusion%E2%80%93exclusion_principle>`_).
 
-The thread tying the problems together is the conditioning operator ``|``:
-once a model is loaded, ``A | B`` reads as "``A`` given ``B``", for discrete
-events, for continuous random variables, and for probabilistic aggregates
-alike.
+A recurring thread is the conditioning operator ``|``: once a model is
+loaded, ``A | B`` reads as "``A`` given ``B``", for discrete events, for
+continuous random variables, and for probabilistic aggregates alike.
 
 .. nb:skip
 
@@ -794,11 +793,12 @@ Problem 11: Borrowed Posteriors and Forecast Tables
 Not every distribution on the desk was born in SQL. A modelling
 team hands over an MCMC posterior for the reproduction number ``R``
 as a bundle of draws; a simulation report tabulates days-to-recovery
-as a CDF. Both load directly (``rv_mc_samples = 0`` -- everything
-below is exact):
+as a CDF. Both load directly, and everything below is exact again --
+turn the sampler back off after Problem 10's excursion:
 
 .. code-block:: postgresql
 
+    SET provsql.rv_mc_samples = 0;
     WITH p AS (SELECT empirical_samples(
                  ARRAY[0.8, 0.9, 0.9, 1.0, 1.1, 1.1, 1.2, 1.4]) AS r)
     SELECT expected(r)          AS r_mean,
@@ -833,13 +833,14 @@ GMM. The mean is exact:
 Recap
 -----
 
-The first eight problems used one operator, ``|``, with a single meaning
+One operator, ``|``, carried the first six problems with a single meaning
 throughout -- conditional probability, :math:`\Pr(A \mid B) = \Pr(A \wedge
 B) / \Pr(B)` -- over three kinds of value: discrete events (Problems 1-3
-and 6), a continuous ``random_variable`` (Problems 4, 7, and 8), and a
-probabilistic aggregate
-``agg_token`` (Problem 5). Problems 9-11 layered onto the same
-random-variable surface the information-theoretic readouts
+and 6), a continuous ``random_variable`` (Problem 4), and a probabilistic
+aggregate ``agg_token`` (Problem 5). Problems 7 and 8 widened the
+random-variable vocabulary (the log-normal and its transforms, the
+discrete counts, the Beta rate, quantiles throughout), and Problems 9-11
+layered onto the same surface the information-theoretic readouts
 (:sqlfunc:`entropy`, :sqlfunc:`kl`) and the data-driven constructors
 (:sqlfunc:`gmm`, :sqlfunc:`empirical_samples` /
 :sqlfunc:`empirical_cdf`). A few mechanics recurred:
@@ -859,8 +860,10 @@ random-variable surface the information-theoretic readouts
   ProvSQL's 0.44 and the independence estimate 0.545 in Problem 2.
 * :sqlfunc:`probability_evaluate` returns an exact probability and selects the
   evaluation method itself; Studio's evaluation strip reports which one ran.
-  Sampling appears only where no exact method applies (the Monte-Carlo paths
-  in Problems 4 and 5), and then with a stated error guarantee.
+  Sampling appears only where no exact method applies (the full distribution
+  profiles in Problems 4 and 5, the mixture tail in Problem 10) or where you
+  request it (Problem 3's Monte-Carlo run), and then under an explicit
+  sample budget or error guarantee.
 
 None of this required leaving SQL: the questions were ordinary queries, and
 the probabilistic answers were functions applied to their provenance.

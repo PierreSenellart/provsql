@@ -378,9 +378,10 @@ the inclusion-weighted mean.
 
    The ``avg(pm25)`` cell for the *centre* district lowers to
    ``gate_arith(DIV, gate_arith(PLUS, mixtures), gate_arith(PLUS,
-   one-mixtures))``. The eight mixtures correspond to the four
-   stations × two timestamps that fall in the district; the
-   ``gate_rv`` leaves at the bottom are the per-reading
+   one-mixtures))``. The eight ``Mix`` nodes are the district's four
+   readings (two stations × two timestamps), each appearing once
+   under the numerator's sum and once under the denominator's count;
+   the ``gate_rv`` leaves at the bottom are the per-reading
    distributions; the ``ι`` leaves anchor each row's provenance.
 
 Step 6: Conditional Inference
@@ -557,7 +558,7 @@ over a ``random_variable`` column builds exactly that:
 
 The *centre* district's worst reading averages ≈ 40.0 -- its
 ``N(40, 4)`` reading dominates the maximum -- and *east* comes out
-at ≈ 39.6, driven by the heavy right tails of ``Exp(0.04)`` and
+at ≈ 39.2, driven by the heavy right tails of ``Exp(0.04)`` and
 ``Erlang(3, 0.1)`` even though both means sit near 25–30. Note how
 the extremum tells a different story from Step 5's averages
 (≈ 25.5 and ≈ 21.6): the east district looks fine on average and
@@ -568,12 +569,15 @@ order-statistic identity, so it never perturbs the maximum.
 Because the children here are mixtures (not bare leaves), the
 expectation is estimated by Monte Carlo.
 
-The same-row form is ``greatest`` / ``least``
-(quoted, as they shadow SQL keywords):
+The same-row form is ``greatest`` / ``least`` -- the SQL keywords,
+lifted over ``random_variable`` arguments by the planner hook; in a
+query that involves no provenance-tracked relation, reach them
+through the schema-qualified ``provsql.greatest(…)`` /
+``provsql.least(…)`` constructors instead, as Step 15 does:
 
 .. code-block:: postgresql
 
-    SELECT expected(provsql.greatest(a.pm25, b.pm25)) AS worse_of_two
+    SELECT expected(greatest(a.pm25, b.pm25)) AS worse_of_two
     FROM readings a, readings b
     WHERE a.id = 1 AND b.id = 2
 
@@ -636,14 +640,18 @@ distributions chapter <continuous-distributions>`):
     WHERE station_id = 's1'
     ORDER BY id
 
-The guard and the branches are evaluated in the same Monte-Carlo
-draw, so the correlation between "the reading exceeded 35" and
-"by how much" is preserved exactly. Row 1 returns ≈ 0.0002 --
-``N(28, 2)`` essentially never crosses -- while row 5 returns
-≈ 5.2, matching the closed-form partial expectation
+The guard and the branches read the same ``pm25``, and a piecewise
+function of one random variable is among the ``CASE`` shapes whose
+moments come back in closed form: the expectation integrates each
+branch over its guard's region, so the correlation between "the
+reading exceeded 35" and "by how much" is preserved exactly, with
+no sampling -- the answers hold even under
+``SET provsql.rv_mc_samples = 0``. Row 1 returns ≈ 0.0001 --
+``N(28, 2)`` essentially never crosses -- while row 5 returns the
+closed-form partial expectation
 :math:`\sigma\,\phi(\alpha) + (\mu - 35)\,\Phi(-\alpha)` with
-:math:`\alpha = (35 - \mu)/\sigma` (≈ 5.2024 for ``N(40, 4)``)
-to within sampler noise. Note the explicit ``as_random(0)`` (or
+:math:`\alpha = (35 - \mu)/\sigma`, ≈ 5.2023 for ``N(40, 4)``, to
+full precision. Note the explicit ``as_random(0)`` (or
 equivalently ``0::random_variable``) on the ``ELSE`` branch:
 ``CASE`` type resolution needs the branches in a single type
 category, so a bare numeric literal will not lift on its own.
@@ -672,7 +680,7 @@ footprints are disjoint -- so ``cov_indep`` is *exactly* ``0``
 pair shares the ``dust`` leaf: in theory
 ``Cov = Var(dust) = 9`` and
 ``ρ = 9 / √((4+9)·(12+9)) ≈ 0.545``; the readouts land near
-those values (≈ 9.8 and ≈ 0.59 at seed 42), estimated by Monte
+those values (≈ 10.2 and ≈ 0.62 at seed 42), estimated by Monte
 Carlo since the cross-moment ``E[xy]`` over a shared leaf has no
 closed form.
 
@@ -889,12 +897,13 @@ structural-independence test the moment evaluators use. The
 plume-shifted pair shares the ``dust`` leaf, and the readout
 estimates their mutual information by a 2-D histogram over
 *coupled* joint draws (each iteration draws the shared plume once
-and both sums observe it) -- about ``0.15`` nats at seed 42. For
+and both sums observe it) -- about ``0.21`` nats at seed 42. For
 a jointly-Gaussian pair with the Step 14 correlation
 :math:`\rho \approx 0.545` the closed form would give
 :math:`-\tfrac12\ln(1-\rho^2) \approx 0.176`; the estimate lands
-in that neighbourhood, slightly below since Riverside's uniform
-noise is not Gaussian.
+in that neighbourhood, a little above: the pair is not jointly
+Gaussian (Riverside's noise is uniform), and the plug-in histogram
+estimator carries a small upward bias.
 
 Step 19: An Offline Sensor Reports NULL
 ----------------------------------------

@@ -68,16 +68,21 @@ What each case study covers
     Uncertainty from a machine-learning detector: **block-correlated
     alternatives** via :sqlfunc:`repair_key` and the ``mulinput`` gate, with
     candidate species per bounding box. It contrasts **probabilistic ranking**
-    against naive confidence thresholding and computes **expected species
-    counts** with :sqlfunc:`expected`.
+    against naive confidence thresholding, computes **expected species
+    counts** with :sqlfunc:`expected`, and closes on **NULL semantics**:
+    ``EXCEPT``, ``NOT IN``, and ``NOT EXISTS`` giving three genuinely
+    different -- and possible-worlds-correct -- answers over unidentified
+    detections.
 
 :doc:`Case study 6 -- City Air-Quality Sensor Network <casestudy6>`
     The **continuous-distribution** surface end to end: ``random_variable``
-    columns (Normal / Uniform / Exponential / Erlang / Gamma / Log-normal / Weibull / Pareto / Beta / categorical /
-    mixture), arithmetic and comparison on them, analytic moments with
-    Monte-Carlo fallback, conditional inference, fleet statistics under
-    sensor dropout (``percentile_cont``, ``corr``), a ``CASE``-over-aggregates
-    triage headline, and mutual information. The first study driven
+    columns (Normal / Uniform / Exponential / Erlang noise models, joined
+    by the Gamma / Weibull / Pareto constructors and Bernoulli mixtures),
+    arithmetic, comparison, and ``CASE`` on them, analytic moments with
+    Monte-Carlo fallback, conditional inference, order statistics and
+    quantiles, fleet statistics under sensor dropout (``percentile_cont``,
+    ``corr``), a ``CASE``-over-aggregates triage headline, mutual
+    information, and NULL (offline-sensor) readings. The first study driven
     primarily through :doc:`ProvSQL Studio <studio>`.
 
 :doc:`Case study 7 -- Peer-Review Assignment and Knowledge Compilation <casestudy7>`
@@ -99,9 +104,10 @@ What each case study covers
     skewed waiting time (log-normal + quantiles + transforms),
     discrete counts with a Beta rate posterior, the information gain
     of a Bayesian update (entropy / KL), a Gaussian-mixture cohort,
-    and empirically-loaded posteriors and forecast tables -- each a
-    one-line query with the ``|`` ("given") operator throughout. A
-    compact, notebook-first tour of the probability surface.
+    and empirically-loaded posteriors and forecast tables -- each
+    answered by a one-line query, the conditioning ones through the
+    ``|`` ("given") operator. A compact, notebook-first tour of the
+    probability surface.
 
 .. _case-study-coverage:
 
@@ -176,6 +182,19 @@ Supported SQL constructs
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", ""
    "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", ""
 
+NULL values and zero-annotated rows
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. csv-table::
+   :class: coverage-matrix
+   :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
+   :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
+
+   "``present`` (drop zero-annotated rows)", "✓", "", "", "", "", "", "", "", ""
+   "``nonzero`` (semiring-parameterised zero test)", "(✓)", "", "", "", "", "", "", "", ""
+   "NULL-discriminating idioms (``EXCEPT`` vs ``NOT IN`` vs ``NOT EXISTS``)", "", "", "", "", "", "✓", "", "", ""
+   "NULL ``random_variable`` values (unknown comparisons, aggregate skipping)", "", "", "", "", "", "", "✓", "", ""
+
 Aggregation
 ~~~~~~~~~~~
 
@@ -192,7 +211,7 @@ Aggregation
    "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", "", ""
    "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", "", ""
    "``CASE`` over aggregates (guarded selection, ``agg_case``)", "", "", "", "", "", "", "✓", "", ""
-   "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "(✓)", "", ""
+   "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", "", ""
    "``choose`` aggregate", "", "", "", "", "", "", "", "", ""
    "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", "", ""
 
@@ -310,7 +329,8 @@ Continuous random variables
    "``provsql.erlang`` / ``provsql.categorical``", "", "", "", "", "", "", "✓", "", ""
    "``provsql.gamma`` / ``provsql.chi_squared``", "", "", "", "", "", "", "✓", "", ""
    "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", "✓"
-   "``provsql.weibull`` / ``provsql.pareto`` / ``provsql.beta``", "", "", "", "", "", "", "✓", "", "✓"
+   "``provsql.weibull`` / ``provsql.pareto``", "", "", "", "", "", "", "✓", "", ""
+   "``provsql.beta``", "", "", "", "", "", "", "", "", "✓"
    "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", "✓"
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
    "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""

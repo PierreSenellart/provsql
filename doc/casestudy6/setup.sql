@@ -64,8 +64,9 @@ INSERT INTO categories VALUES
   ('Moderate',   12.1,   35.0),
   ('Unhealthy',  35.1,   1000.0);
 
--- Today's readings.  Five rows of pm25, one per (station, sample),
--- exercising every distribution family plus the implicit numeric cast.
+-- Today's readings.  Eight rows of pm25, one per (station, sample),
+-- exercising the normal, uniform, exponential, and Erlang noise models
+-- plus the implicit numeric cast for the reference station.
 DROP TABLE IF EXISTS readings CASCADE;
 CREATE TABLE readings (
   id          INTEGER PRIMARY KEY,
