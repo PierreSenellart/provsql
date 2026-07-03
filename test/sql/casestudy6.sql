@@ -403,6 +403,124 @@ RESET provsql.rv_mc_samples;
 SET provsql.rv_mc_samples = 50000;
 
 -- ---------------------------------------------------------------------
+-- Step 16: SQL-standard statistic aggregates over RV rows under sensor
+-- dropout.  Row presence is pinned to the station's calibration
+-- probability; the certain reference pair (s4, values 15.0 / 16.5, p=1)
+-- gives exact Dirac statistics (stddev_pop = 0.75, corr with a
+-- rescaling = 1), and the district median's member set responds to
+-- dropout (banded MC assertion).
+-- ---------------------------------------------------------------------
+DO $$ BEGIN
+  PERFORM set_prob(r.provsql, cs.p)
+    FROM readings r JOIN calibration_status cs USING (station_id);
+END $$;
+
+CREATE TABLE result_cs6_statagg AS
+  SELECT expected(stddev_pop(pm25))     AS sd_ref,
+         expected(corr(pm25, pm25 * 2)) AS corr_ref
+    FROM readings
+   WHERE station_id = 's4';
+SELECT remove_provenance('result_cs6_statagg');
+SELECT sd_ref = 0.75 AS sd_ref_exact, corr_ref = 1 AS corr_ref_exact
+  FROM result_cs6_statagg;
+DROP TABLE result_cs6_statagg;
+
+CREATE TABLE result_cs6_median AS
+  SELECT s.district,
+         expected(percentile_cont(0.5)
+                  WITHIN GROUP (ORDER BY r.pm25)) AS median_pm25
+    FROM readings r JOIN stations s ON s.id = r.station_id
+   GROUP BY s.district;
+SELECT remove_provenance('result_cs6_median');
+-- Bands are loose (cross-stdlib draw streams); they still reject a
+-- median that ignores dropout or the member set.
+SELECT district,
+       CASE district
+         WHEN 'centre' THEN median_pm25 BETWEEN 20 AND 32
+         WHEN 'east'   THEN median_pm25 BETWEEN 12 AND 25
+       END AS median_in_band
+  FROM result_cs6_median ORDER BY district;
+DROP TABLE result_cs6_median;
+
+-- ---------------------------------------------------------------------
+-- Step 17: maintenance-triage headline via CASE over aggregates
+-- (agg_case).  Guards and branches are aggregates over the tracked
+-- calibration log (min / sum branches: exact possible-worlds machinery;
+-- an avg branch would take the Monte-Carlo path, its exact joint
+-- (sum, count) arm being unconditional-only);
+-- the display cell carries the actual-world CASE value, and the
+-- expectation is exact (rv_mc_samples = 0 throughout).
+--   One record per district is certain, so the group always exists and
+--   every world is enumerable by hand:
+--   centre: rows p-col {.95,.70}, probs {1.0,.8}:
+--     {both}.8 -> min .70 <= .8 -> min .70; {s1}.2 -> min .95 > .8 ->
+--     sum .95;  E = .8*.7 + .2*.95 = .75
+--   east: rows p-col {.60,1.00}, probs {.7,1.0}:
+--     {both}.7 -> min .6 -> .6; {s4}.3 -> min 1.0 > .8 -> sum 1.0
+--     E = .7*.6 + .3*1 = .72
+-- ---------------------------------------------------------------------
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 1.0) FROM stations;
+  PERFORM set_prob(provenance(),
+                   CASE station_id WHEN 's1' THEN 1.0
+                                   WHEN 's2' THEN 0.8
+                                   WHEN 's3' THEN 0.7
+                                   ELSE 1.0 END)
+    FROM calibration_status;
+END $$;
+
+SET provsql.rv_mc_samples = 0;
+CREATE TABLE result_cs6_headline AS
+  SELECT s.district,
+         CASE WHEN min(cs.p) > 0.8 THEN sum(cs.p)
+              ELSE min(cs.p) END AS confidence_headline
+    FROM calibration_status cs JOIN stations s ON s.id = cs.station_id
+   GROUP BY s.district;
+SET provsql.active = off;
+SELECT district,
+       get_gate_type(confidence_headline::uuid) AS headline_gate,
+       confidence_headline AS display
+  FROM result_cs6_headline ORDER BY district;
+SELECT district,
+       CASE district
+         WHEN 'centre' THEN abs(expected(confidence_headline) - 0.75) < 1e-9
+         WHEN 'east'   THEN abs(expected(confidence_headline) - 0.72) < 1e-9
+       END AS expected_headline_exact
+  FROM result_cs6_headline ORDER BY district;
+SET provsql.active = on;
+DROP TABLE result_cs6_headline;
+RESET provsql.rv_mc_samples;
+SET provsql.rv_mc_samples = 50000;
+
+-- ---------------------------------------------------------------------
+-- Step 18: mutual information.  Disjoint stochastic-leaf footprints
+-- give an exact 0 (no sampling: proven under rv_mc_samples = 0); the
+-- shared-plume pair is estimated by the 2-D histogram plug-in over
+-- coupled joint draws (Gaussian-pair theory ~ -ln(1-rho^2)/2 ~ 0.176
+-- at rho ~ .545; banded loosely for cross-stdlib portability).
+-- ---------------------------------------------------------------------
+SET provsql.rv_mc_samples = 0;
+CREATE TABLE result_cs6_mi_indep AS
+  SELECT mutual_information(a.pm25, b.pm25) = 0 AS mi_indep_exact
+    FROM readings a, readings b
+   WHERE a.id = 1 AND b.id = 2;
+SELECT remove_provenance('result_cs6_mi_indep');
+SELECT mi_indep_exact FROM result_cs6_mi_indep;
+DROP TABLE result_cs6_mi_indep;
+RESET provsql.rv_mc_samples;
+SET provsql.rv_mc_samples = 100000;
+
+CREATE TABLE result_cs6_mi_shared AS
+  WITH plume AS (SELECT provsql.normal(0, 3) AS dust)
+  SELECT mutual_information(a.pm25 + p.dust, b.pm25 + p.dust) AS mi_shared
+    FROM readings a, readings b, plume p
+   WHERE a.id = 1 AND b.id = 2;
+SELECT remove_provenance('result_cs6_mi_shared');
+SELECT mi_shared BETWEEN 0.05 AND 0.5 AS mi_shared_in_band
+  FROM result_cs6_mi_shared;
+DROP TABLE result_cs6_mi_shared;
+
+-- ---------------------------------------------------------------------
 -- Cleanup.
 -- ---------------------------------------------------------------------
 DROP TABLE historical_readings;

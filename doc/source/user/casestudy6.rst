@@ -72,7 +72,14 @@ Your tasks:
   :sqlfunc:`covariance` / :sqlfunc:`correlation`;
 * model drift, lifetime, and episodic spikes with the Gamma,
   Weibull, and Pareto families, including a mixed-family
-  probability computed by quadrature.
+  probability computed by quadrature;
+* compute fleet statistics under sensor dropout with the
+  SQL-standard statistic aggregates (:sqlfunc:`stddev_pop`,
+  :sqlfunc:`corr`, :sqlfunc:`percentile_cont`);
+* build a maintenance-triage headline with ``CASE`` over
+  aggregates and read its exact expectation;
+* quantify the shared-plume coupling in nats with
+  :sqlfunc:`mutual_information`.
 
 Setup
 -----
@@ -731,6 +738,163 @@ integrates the pair by quadrature -- exact-grade, no sampling:
 which returns ≈ 0.384: even though the spike's *mean* (50) is
 above the normal's (45), the spike spends most of its mass near
 its 30 floor and only wins through its tail.
+
+Step 16: Fleet Statistics Under Sensor Dropout
+-----------------------------------------------
+
+Every reading so far contributed unconditionally. Today's
+maintenance log says otherwise: a station out of calibration
+silently drops out of the feed. Pin each reading's provenance
+probability to its station's calibration probability, so a row is
+*present* only when its station is in calibration:
+
+.. code-block:: postgresql
+
+    DO $$ BEGIN
+      PERFORM set_prob(r.provsql, cs.p)
+        FROM readings r JOIN calibration_status cs USING (station_id);
+    END $$
+
+The SQL-standard statistic aggregates (:sqlfunc:`stddev_pop` /
+:sqlfunc:`stddev_samp`, :sqlfunc:`covar_pop` / :sqlfunc:`covar_samp` /
+:sqlfunc:`corr`, and the ordered-set :sqlfunc:`percentile_cont`) are
+lifted to ``random_variable`` rows with exactly these semantics: a
+row absent in a world drops out of every sum, the count, and the
+percentile's member set. Start where the answer is checkable by
+hand -- the reference station is always in calibration (``p = 1``)
+and its readings are lab-grade constants ``15.0`` and ``16.5``:
+
+.. code-block:: postgresql
+
+    SELECT expected(stddev_pop(pm25))     AS sd_ref,
+           expected(corr(pm25, pm25 * 2)) AS corr_ref
+    FROM readings
+    WHERE station_id = 's4'
+
+Both statistics are Dirac -- every Monte-Carlo draw is the same
+world and the same constants -- so the answers are exact:
+``sd_ref = 0.75`` (the population stddev of ``{15, 16.5}``) and
+``corr_ref = 1`` (a reading is perfectly correlated with its own
+rescaling, drawn once and observed by both argument positions).
+
+Now the probabilistic fleet: the *median* reading per district,
+where dropout changes the member set itself -- when Riverside
+Park is out of calibration (30% of days), both of its rows leave
+the group:
+
+.. code-block:: postgresql
+
+    SELECT s.district,
+           expected(percentile_cont(0.5)
+                    WITHIN GROUP (ORDER BY r.pm25)) AS median_pm25
+    FROM readings r JOIN stations s ON s.id = r.station_id
+    GROUP BY s.district
+
+The ``percentile_cont`` gate carries every row's presence
+indicator alongside its value (pin the result node and look for
+the ``p50`` circle in the canvas): per draw, the sampler keeps
+the values whose station is in calibration, sorts them, and
+interpolates. Under dropout the centre district's expected median
+lands around 26 -- pulled between the two Normal City-Centre
+readings and the two lower Riverside uniforms that are only
+present 70% of the time.
+
+Step 17: A Maintenance-Triage Headline via CASE over Aggregates
+----------------------------------------------------------------
+
+Which district needs the maintenance crew first? The desk wants a
+single *headline* number per district: if even the weakest
+station's calibration confidence clears 0.8, report the district's
+total confidence weight; otherwise flag the weakest station (the
+crew's target). That is a ``CASE`` whose guards **and** branches
+are aggregates -- the aggregate-carrier ``CASE`` (see :doc:`the
+aggregation chapter <aggregation>`), lowered to an ``agg_case``
+guarded selection. (The exact machinery covers ``sum`` / ``count``
+/ ``min`` / ``max`` guards and branches; an ``avg`` branch inside a
+``CASE`` takes the Monte-Carlo path, its exact arm being
+unconditional-only.) First make the maintenance log itself
+uncertain (each record is confirmed with a probability) and the
+station registry certain:
+
+.. code-block:: postgresql
+
+    DO $$ BEGIN
+      PERFORM set_prob(provenance(), 1.0) FROM stations;
+      PERFORM set_prob(provenance(),
+                       CASE station_id WHEN 's1' THEN 1.0
+                                       WHEN 's2' THEN 0.8
+                                       WHEN 's3' THEN 0.7
+                                       ELSE 1.0 END)
+        FROM calibration_status;
+    END $$
+
+One record per district is kept certain, so each district's group
+exists in every world (an all-absent group would produce no
+headline row at all).
+
+.. code-block:: postgresql
+
+    SELECT s.district,
+           CASE WHEN min(cs.p) > 0.8 THEN sum(cs.p)
+                ELSE min(cs.p) END AS confidence_headline
+    FROM calibration_status cs JOIN stations s ON s.id = cs.station_id
+    GROUP BY s.district
+
+The result cells display as ``0.7 (*)`` and ``0.6 (*)`` -- the
+``CASE`` evaluated on the actual data (with every record
+confirmed, both districts have a weak link below the bar, so each
+headlines its worst station), with the ``(*)`` marking a
+probabilistic aggregate whose value is world-dependent.
+The headline's distribution is evaluated *exactly* -- possible-worlds
+decomposition over the first-match regions, no Monte Carlo, correct
+even under ``SET provsql.rv_mc_samples = 0``:
+
+.. code-block:: postgresql
+
+    SELECT s.district,
+           expected(CASE WHEN min(cs.p) > 0.8 THEN sum(cs.p)
+                         ELSE min(cs.p) END) AS expected_headline
+    FROM calibration_status cs JOIN stations s ON s.id = cs.station_id
+    GROUP BY s.district
+
+For the centre district there are exactly two worlds: with both
+records confirmed (probability ``0.8``) the weakest link ``0.70``
+misses the bar and is the headline; with only City Centre's
+record confirmed (``0.2``) the sole confidence ``0.95`` clears it
+and the total ``0.95`` is reported. So
+:math:`E = 0.8 \cdot 0.70 + 0.2 \cdot 0.95 = 0.75` exactly -- and
+that is the value the query returns. The east district works out
+to :math:`0.7 \cdot 0.60 + 0.3 \cdot 1.00 = 0.72`.
+
+Step 18: Shared Information in Nats
+------------------------------------
+
+Step 14 measured the plume coupling with
+:sqlfunc:`correlation`; :sqlfunc:`mutual_information` is its
+information-theoretic counterpart -- symmetric, in nats, and zero
+*exactly* when the two variables share no randomness:
+
+.. code-block:: postgresql
+
+    WITH plume AS (SELECT provsql.normal(0, 3) AS dust)
+    SELECT mutual_information(a.pm25, b.pm25)  AS mi_indep,
+           mutual_information(a.pm25 + p.dust,
+                              b.pm25 + p.dust) AS mi_shared
+    FROM readings a, readings b, plume p
+    WHERE a.id = 1 AND b.id = 2
+
+``mi_indep`` is **exactly 0** with no sampling at all: the two
+raw readings have disjoint stochastic-leaf footprints, the same
+structural-independence test the moment evaluators use. The
+plume-shifted pair shares the ``dust`` leaf, and the readout
+estimates their mutual information by a 2-D histogram over
+*coupled* joint draws (each iteration draws the shared plume once
+and both sums observe it) -- about ``0.15`` nats at seed 42. For
+a jointly-Gaussian pair with the Step 14 correlation
+:math:`\rho \approx 0.545` the closed form would give
+:math:`-\tfrac12\ln(1-\rho^2) \approx 0.176`; the estimate lands
+in that neighbourhood, slightly below since Riverside's uniform
+noise is not Gaussian.
 
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full surface and

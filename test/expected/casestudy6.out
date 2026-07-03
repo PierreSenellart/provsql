@@ -151,3 +151,36 @@ t|t|t
 mixed_family_quadrature_exact
 t
 (1 row)
+remove_provenance
+
+(1 row)
+sd_ref_exact|corr_ref_exact
+t|t
+(1 row)
+remove_provenance
+
+(1 row)
+district|median_in_band
+centre|t
+east|t
+(2 rows)
+district|headline_gate|display
+centre|case|0.7 (*)
+east|case|0.6 (*)
+(2 rows)
+district|expected_headline_exact
+centre|t
+east|t
+(2 rows)
+remove_provenance
+
+(1 row)
+mi_indep_exact
+t
+(1 row)
+remove_provenance
+
+(1 row)
+mi_shared_in_band
+t
+(1 row)

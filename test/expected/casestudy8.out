@@ -44,6 +44,21 @@ p_ten_plus
 rate_estimate|credible_lo|credible_hi
 0.30|0.10|0.55
 (1 row)
+h_prior|h_posterior|information_gain|kl_equals_entropy_drop|kl_vs_point_mass
+0.000|-0.598|0.598|t|Infinity
+(1 row)
+mean_titre|var_titre
+22.50|153.25
+(1 row)
+p_report_close
+t
+(1 row)
+r_mean|p_epidemic_grows|r_median
+1.050|0.50|1.00
+(1 row)
+mean_days|days_lo|days_hi
+11.25|5|25
+(1 row)
 remove_provenance
 
 (1 row)

@@ -33,7 +33,7 @@ The Scenario
 
 An epidemiology desk at a public-health agency keeps a small probabilistic
 model of a screening programme and reaches for ProvSQL whenever a question
-needs probabilistic evaluation. Eight such questions follow; each is a
+needs probabilistic evaluation. Eleven such questions follow; each is a
 recognisable textbook problem, and we work through each one step by step,
 building its model and then asking the calculator.
 
@@ -713,15 +713,136 @@ The point estimate is **0.3**, with a 90% credible interval from about
 observations. The mean is closed-form; the Beta quantiles are found by
 bisecting its (incomplete-beta) CDF, again exactly and without sampling.
 
+Problem 9: How Much Did the Data Teach Us?
+------------------------------------------
+
+Problem 8 turned eight observations into a ``beta(3, 7)`` posterior.
+A natural follow-up question is *how much information* those
+observations carried. Information theory has standard answers, and
+ProvSQL exposes them as readouts (all in nats, still with
+``rv_mc_samples = 0``): :sqlfunc:`entropy` for the residual
+uncertainty of a distribution, and the `Kullback-Leibler divergence
+<https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence>`_
+:sqlfunc:`kl` for the distance the update moved us:
+
+.. code-block:: postgresql
+
+    WITH m AS (SELECT beta(1, 1) AS prior, beta(3, 7) AS posterior)
+    SELECT entropy(prior)      AS h_prior,
+           entropy(posterior)  AS h_posterior,
+           kl(posterior, prior) AS information_gain
+    FROM m;
+
+The uniform prior has differential entropy **0** (it *is*
+``Uniform(0, 1)``, whose entropy is ``ln 1``); the posterior comes out
+at about **−0.598** -- negative, as differential entropies of
+concentrated densities are -- so the update removed about **0.6 nats**
+of uncertainty. And ``kl(posterior, prior)`` returns exactly the same
+**0.598**: against a uniform prior, the divergence *is* the entropy
+drop (:math:`\int p \ln(p/1) = -H(p)`), a textbook identity the
+calculator reproduces from the defining integral, evaluated by
+quadrature on the two Beta densities.
+
+KL is honest about impossibility, too: collapse the posterior to its
+point estimate and ask for the divergence from it --
+``kl(posterior, as_random(0.3))`` -- and the answer is ``Infinity``.
+A point mass assigns probability zero to everything but ``0.3``, so
+no finite divergence from it exists (an absolute-continuity failure,
+reported as such rather than approximated).
+
+Problem 10: Two Subpopulations, One Measurement
+-----------------------------------------------
+
+Viral titres in the programme's cohort are bimodal: about 70% of
+cases are vaccinated break-throughs centred low, the rest an
+unvaccinated group centred high. The standard fitted-density shape
+for this is a `Gaussian mixture
+<https://en.wikipedia.org/wiki/Mixture_model>`_, and the
+:sqlfunc:`gmm` constructor loads one directly (here with weights,
+means, and standard deviations straight from the fit):
+
+.. code-block:: postgresql
+
+    WITH c AS (SELECT gmm(weights => ARRAY[0.7, 0.3],
+                          means   => ARRAY[15.0, 40.0],
+                          stddevs => ARRAY[4.0, 6.0]) AS titre)
+    SELECT expected(titre) AS mean_titre,
+           variance(titre) AS var_titre
+    FROM c;
+
+The mixture decomposes into ProvSQL's existing Bernoulli-mixture
+gates, so the moments are **exact** (``rv_mc_samples = 0``): the mean
+is :math:`0.7 \cdot 15 + 0.3 \cdot 40 = 22.5` and the variance
+:math:`0.7(16 + 225) + 0.3(36 + 1600) - 22.5^2 = 153.25`. A tail
+probability -- how many cases exceed the reporting threshold of 30 --
+rides Monte Carlo over the same gates:
+
+.. code-block:: postgresql
+
+    SET provsql.rv_mc_samples = 100000;
+    WITH c AS (SELECT gmm(ARRAY[0.7, 0.3], ARRAY[15.0, 40.0],
+                          ARRAY[4.0, 6.0]) AS titre)
+    SELECT probability(titre > 30) AS p_report FROM c;
+
+about **0.286**: essentially the unvaccinated component's mass above
+30 (:math:`0.3\,\Phi(10/6) \approx 0.286`), with a vanishing
+contribution from the low mode.
+
+Problem 11: Borrowed Posteriors and Forecast Tables
+---------------------------------------------------
+
+Not every distribution on the desk was born in SQL. A modelling
+team hands over an MCMC posterior for the reproduction number ``R``
+as a bundle of draws; a simulation report tabulates days-to-recovery
+as a CDF. Both load directly (``rv_mc_samples = 0`` -- everything
+below is exact):
+
+.. code-block:: postgresql
+
+    WITH p AS (SELECT empirical_samples(
+                 ARRAY[0.8, 0.9, 0.9, 1.0, 1.1, 1.1, 1.2, 1.4]) AS r)
+    SELECT expected(r)          AS r_mean,
+           probability(r > 1)   AS p_epidemic_grows,
+           quantile(r, 0.5)     AS r_median
+    FROM p;
+
+:sqlfunc:`empirical_samples` loads the draws as the empirical
+distribution (mass ``1/8`` per draw, duplicates merging), so the
+answers are the *sample* statistics, exactly: mean **1.05**,
+``P(R > 1)`` is the fraction of draws strictly above 1 -- **0.5** --
+decided analytically, and the median is the exact empirical quantile
+**1.0**.
+
+.. code-block:: postgresql
+
+    WITH f AS (SELECT empirical_cdf(
+                 grid => ARRAY[5.0, 10.0, 15.0, 25.0],
+                 cdf  => ARRAY[0.1, 0.5, 0.8, 1.0]) AS days)
+    SELECT expected(days)                   AS mean_days,
+           (support(days)).lo               AS lo,
+           (support(days)).hi               AS hi
+    FROM f;
+
+:sqlfunc:`empirical_cdf` reads the table as a piecewise-linear CDF --
+an atom of mass 0.1 at 5 days, then mass spread uniformly over each
+grid interval -- built from the same mixture gates as Problem 10's
+GMM. The mean is exact:
+:math:`0.1 \cdot 5 + 0.4 \cdot 7.5 + 0.3 \cdot 12.5 + 0.2 \cdot 20 =
+11.25` days, on the support ``[5, 25]``.
+
 Recap
 -----
 
-The eight problems used one operator, ``|``, with a single meaning
+The first eight problems used one operator, ``|``, with a single meaning
 throughout -- conditional probability, :math:`\Pr(A \mid B) = \Pr(A \wedge
 B) / \Pr(B)` -- over three kinds of value: discrete events (Problems 1-3
 and 6), a continuous ``random_variable`` (Problems 4, 7, and 8), and a
 probabilistic aggregate
-``agg_token`` (Problem 5). A few mechanics recurred:
+``agg_token`` (Problem 5). Problems 9-11 layered onto the same
+random-variable surface the information-theoretic readouts
+(:sqlfunc:`entropy`, :sqlfunc:`kl`) and the data-driven constructors
+(:sqlfunc:`gmm`, :sqlfunc:`empirical_samples` /
+:sqlfunc:`empirical_cdf`). A few mechanics recurred:
 
 * Each model was built and stored in the database. :sqlfunc:`add_provenance`
   registers a table for tuple-independent tracking and :sqlfunc:`set_prob`

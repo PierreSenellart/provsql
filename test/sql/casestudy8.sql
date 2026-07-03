@@ -121,6 +121,53 @@ SELECT round(probability(positives >= 10)::numeric, 3) AS p_ten_plus FROM b;
 SELECT round(expected(beta(3, 7))::numeric, 2)       AS rate_estimate,
        round(quantile(beta(3, 7), 0.05)::numeric, 2) AS credible_lo,
        round(quantile(beta(3, 7), 0.95)::numeric, 2) AS credible_hi;
+
+-- Problem 9: information gain of the Beta update (nats, analytic).  The
+-- uniform prior's differential entropy is 0; Beta(3,7)'s closed form is
+-- ln B(3,7) - 2 psi(3) - 6 psi(7) + 8 psi(10) = -0.59768...; against a
+-- uniform prior the KL divergence equals the entropy drop.  A point
+-- mass admits no finite divergence: absolute-continuity failure.
+WITH m AS (SELECT beta(1, 1) AS prior, beta(3, 7) AS posterior)
+SELECT round(entropy(prior)::numeric, 3)       AS h_prior,
+       round(entropy(posterior)::numeric, 3)   AS h_posterior,
+       round(kl(posterior, prior)::numeric, 3) AS information_gain,
+       abs(kl(posterior, prior) + entropy(posterior)) < 1e-6
+         AS kl_equals_entropy_drop,
+       kl(posterior, as_random(0.3)) AS kl_vs_point_mass
+FROM m;
+
+-- Problem 10: bimodal titre as a GMM.  Moments exact through the
+-- mixture recursion (mean .7*15+.3*40 = 22.5; var .7*(16+225)
+-- + .3*(36+1600) - 22.5^2 = 153.25); the tail probability rides MC.
+WITH c AS (SELECT gmm(ARRAY[0.7, 0.3], ARRAY[15.0, 40.0],
+                      ARRAY[4.0, 6.0]) AS titre)
+SELECT round(expected(titre)::numeric, 2) AS mean_titre,
+       round(variance(titre)::numeric, 2) AS var_titre
+FROM c;
+SET provsql.rv_mc_samples = 100000;
+WITH c AS (SELECT gmm(ARRAY[0.7, 0.3], ARRAY[15.0, 40.0],
+                      ARRAY[4.0, 6.0]) AS titre)
+SELECT abs(probability(titre > 30) - 0.2857) < 0.01 AS p_report_close FROM c;
+SET provsql.rv_mc_samples = 0;
+
+-- Problem 11: borrowed posteriors and forecast tables, all exact.  The
+-- empirical sample bundle is the ecdf (sample mean 1.05, P(R>1) the
+-- fraction of draws above 1, exact empirical median); the CDF table is
+-- an atom + uniform pieces (E = .1*5 + .4*7.5 + .3*12.5 + .2*20 =
+-- 11.25 on support [5, 25]).
+WITH p AS (SELECT empirical_samples(
+             ARRAY[0.8, 0.9, 0.9, 1.0, 1.1, 1.1, 1.2, 1.4]) AS r)
+SELECT round(expected(r)::numeric, 3)        AS r_mean,
+       round(probability(r > 1)::numeric, 2) AS p_epidemic_grows,
+       round(quantile(r, 0.5)::numeric, 2)   AS r_median
+FROM p;
+WITH f AS (SELECT empirical_cdf(
+             ARRAY[5.0, 10.0, 15.0, 25.0],
+             ARRAY[0.1, 0.5, 0.8, 1.0]) AS days)
+SELECT round(expected(days)::numeric, 2) AS mean_days,
+       (support(days)).lo                AS days_lo,
+       (support(days)).hi                AS days_hi
+FROM f;
 RESET provsql.rv_mc_samples;
 
 SELECT remove_provenance('casesum');

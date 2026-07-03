@@ -75,7 +75,9 @@ What each case study covers
     The **continuous-distribution** surface end to end: ``random_variable``
     columns (Normal / Uniform / Exponential / Erlang / Gamma / Log-normal / Weibull / Pareto / Beta / categorical /
     mixture), arithmetic and comparison on them, analytic moments with
-    Monte-Carlo fallback, and conditional inference. The first study driven
+    Monte-Carlo fallback, conditional inference, fleet statistics under
+    sensor dropout (``percentile_cont``, ``corr``), a ``CASE``-over-aggregates
+    triage headline, and mutual information. The first study driven
     primarily through :doc:`ProvSQL Studio <studio>`.
 
 :doc:`Case study 7 -- Peer-Review Assignment and Knowledge Compilation <casestudy7>`
@@ -94,10 +96,12 @@ What each case study covers
     breaking the independence formula, the method portfolio and its cost
     chooser, a continuous posterior by truncation, the conditional
     expectation of an aggregate, denial constraints as evidence, a
-    skewed waiting time (log-normal + quantiles + transforms), and
-    discrete counts with a Beta rate posterior -- each a one-line query
-    with the ``|`` ("given") operator throughout. A compact,
-    notebook-first tour of the probability surface.
+    skewed waiting time (log-normal + quantiles + transforms),
+    discrete counts with a Beta rate posterior, the information gain
+    of a Bayesian update (entropy / KL), a Gaussian-mixture cohort,
+    and empirically-loaded posteriors and forecast tables -- each a
+    one-line query with the ``|`` ("given") operator throughout. A
+    compact, notebook-first tour of the probability surface.
 
 .. _case-study-coverage:
 
@@ -182,12 +186,13 @@ Aggregation
 
    "COUNT / SUM / MIN / MAX / AVG", "", "", "✓", "✓", "", "✓", "", "✓", "✓"
    "``sum`` / ``avg`` / ``product`` over ``random_variable``", "", "", "", "", "", "", "✓", "", ""
+   "Statistic aggregates over ``random_variable`` (``covar_pop`` / ``corr`` / ``stddev_pop`` / ``percentile_cont``…)", "", "", "", "", "", "", "✓", "", ""
    "``string_agg`` / ``array_agg``", "", "", "✓", "", "", "", "", "", ""
    "``COUNT(DISTINCT …)``", "", "", "✓", "", "", "", "", "", ""
    "Arithmetic / cast on aggregate result", "", "", "✓", "", "", "", "", "", ""
    "Provenance-preserving ``agg_token`` arithmetic (``+ - * /``, agg-vs-agg, in HAVING)", "", "", "", "", "", "", "", "", ""
-   "``CASE`` over aggregates (guarded selection, ``agg_case``)", "", "", "", "", "", "", "", "", ""
-   "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "", "", ""
+   "``CASE`` over aggregates (guarded selection, ``agg_case``)", "", "", "", "", "", "", "✓", "", ""
+   "``agg_token_value_text`` / ``provsql.aggtoken_text_as_uuid`` GUC", "", "", "", "", "", "", "(✓)", "", ""
    "``choose`` aggregate", "", "", "", "", "", "", "", "", ""
    "``explode_table`` (``agg_token`` column to rows)", "", "", "", "", "", "", "", "", ""
 
@@ -317,6 +322,9 @@ Continuous random variables
    "``expected(random_variable)`` (unconditional)", "", "", "", "", "", "", "✓", "", "✓"
    "``variance(random_variable)``", "", "", "", "", "", "", "✓", "", "✓"
    "``covariance`` / ``correlation`` / ``stddev`` (same-row)", "", "", "", "", "", "", "✓", "", ""
+   "``entropy`` / ``kl`` / ``mutual_information``", "", "", "", "", "", "", "✓", "", "✓"
+   "``gmm`` (Gaussian-mixture constructor)", "", "", "", "", "", "", "", "", "✓"
+   "``empirical_samples`` / ``empirical_cdf`` (data-driven loaders)", "", "", "", "", "", "", "", "", "✓"
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", "", "✓"
    "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "✓", "", "✓"
    "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "(✓)"
