@@ -195,11 +195,49 @@ INSERT INTO upgrade_maint (lbl) VALUES ('second');
 SELECT string_agg(value, ',' ORDER BY value) AS maintained_mapping_values
   FROM upgrade_maint_map;
 
+-- 1.11.0 surface check: the continuous / aggregate batch.  One exact call
+-- per pillar the upgrade installs: a new distribution family (Beta
+-- quantile, incomplete-beta bisection), the gmm constructor (exact mixture
+-- moments), the empirical loader (analytic comparison against a constant),
+-- an information-theoretic readout (uniform differential entropy = ln 4),
+-- the RV statistic aggregates (Dirac rows: exact stddev_pop), and the
+-- aggregate-carrier CASE with its conditional-on-defined moment.  All
+-- analytic: rv_mc_samples = 0 proves no sampler fallback fires.
+SET provsql.rv_mc_samples = 0;
+SELECT round(quantile(beta(3, 7), 0.5)::numeric, 4)        AS beta_median,
+       round(expected(provsql.gmm(ARRAY[0.5, 0.5], ARRAY[0.0, 10.0],
+                                  ARRAY[1.0, 1.0]))::numeric, 4) AS gmm_mean,
+       round(probability(provsql.empirical_samples(
+               ARRAY[1.0, 2.0, 2.0, 3.0]) <= 2)::numeric, 4) AS ecdf_p,
+       round(entropy(provsql.uniform(0, 4))::numeric, 4)    AS h_uniform;
+CREATE TABLE upgrade_stat (v random_variable);
+INSERT INTO upgrade_stat VALUES (provsql.as_random(15.0)),
+                                (provsql.as_random(16.5));
+SET provsql.rv_mc_samples = 10000;
+SET provsql.monte_carlo_seed = 42;
+SELECT expected(stddev_pop(v)) = 0.75 AS stddev_pop_exact FROM upgrade_stat;
+SET provsql.rv_mc_samples = 0;
+CREATE TABLE upgrade_case (g int, x numeric);
+INSERT INTO upgrade_case VALUES (1, 10), (1, 100);
+SELECT add_provenance('upgrade_case');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM upgrade_case; END $$;
+CREATE TABLE upgrade_case_r AS
+  SELECT g, CASE WHEN sum(x) >= 100 THEN sum(x) ELSE min(x) END AS pick
+    FROM upgrade_case GROUP BY g;
+SET provsql.active = off;
+SELECT pick AS case_display,
+       round(expected(pick)::numeric, 4) AS case_expected
+  FROM upgrade_case_r;
+SET provsql.active = on;
+RESET provsql.rv_mc_samples;
+RESET provsql.monte_carlo_seed;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
            upgrade_smoke_right, upgrade_safe_q, upgrade_kc,
            upgrade_cnt, upgrade_cnt_r, upgrade_cond,
-           upgrade_maint, upgrade_maint_map;
+           upgrade_maint, upgrade_maint_map,
+           upgrade_stat, upgrade_case, upgrade_case_r;
 RESET client_min_messages;
 
 \else

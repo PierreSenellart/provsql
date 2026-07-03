@@ -81,3 +81,15 @@ create_provenance_mapping
 maintained_mapping_values
 first,second
 (1 row)
+beta_median|gmm_mean|ecdf_p|h_uniform
+0.2862|5.0000|0.7500|1.3863
+(1 row)
+stddev_pop_exact
+t
+(1 row)
+add_provenance
+
+(1 row)
+case_display|case_expected
+110 (*)|73.3333
+(1 row)
