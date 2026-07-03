@@ -630,7 +630,7 @@ turns the fallback into an exception so callers that need
 analytical answers can detect the silent fallback.
 
 Quantiles
-^^^^^^^^^
+~~~~~~~~~
 
 The polymorphic :sqlfunc:`quantile` dispatcher routes a
 ``random_variable`` to ``rv_quantile``, whose C implementation
@@ -655,7 +655,7 @@ inversion itself tries ``Distribution::quantile`` first and
 ``numericQuantile`` bisection second.
 
 Covariance, correlation, standard deviation
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The same-row second-moment readouts are pure SQL over the moment
 evaluator: :sqlfunc:`covariance` ``(x, y [, prov])`` is
