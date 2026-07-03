@@ -2250,6 +2250,126 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
 /**
+ * @brief Deterministic truth of a Boolean guard sub-circuit over aggregate
+ *        comparisons, evaluated in the actual world (all input tuples present).
+ *
+ * Guards are the shapes @c having_Expr_to_provenance_cmp mints: @c cmp gates
+ * over aggregate-valued children (comparison-operator OID in @c info1),
+ * @c times / @c plus combinations (AND / OR, with negation pushed into the
+ * comparison operators), and the @c one / @c zero indicators of regular
+ * (aggregate-free) conditions.  Uses Kleene three-valued logic: returns
+ * @c NULL on any other gate shape, or when an operand's deterministic value
+ * cannot be resolved.
+ */
+CREATE OR REPLACE FUNCTION agg_guard_holds(token UUID)
+  RETURNS boolean AS
+$$
+DECLARE
+  gt provenance_gate := get_gate_type(token);
+  ch uuid[];
+  opname text;
+  l numeric;
+  r numeric;
+  all_true boolean;
+  any_true boolean;
+  any_null boolean;
+BEGIN
+  IF gt = 'one' THEN
+    RETURN true;
+  ELSIF gt = 'zero' THEN
+    RETURN false;
+  ELSIF gt IN ('times', 'plus') THEN
+    SELECT bool_and(h), bool_or(h), bool_or(h IS NULL)
+      INTO all_true, any_true, any_null
+      FROM (SELECT provsql.agg_guard_holds(c) AS h
+            FROM unnest(get_children(token)) AS c) AS s;
+    IF gt = 'times' THEN
+      -- AND: false dominates unknown (bool_and skips NULL inputs, so it is
+      -- false exactly when some child is false).
+      RETURN CASE WHEN NOT all_true THEN false
+                  WHEN any_null THEN NULL
+                  ELSE true END;
+    ELSE
+      -- OR: true dominates unknown.
+      RETURN CASE WHEN any_true THEN true
+                  WHEN any_null THEN NULL
+                  ELSE false END;
+    END IF;
+  ELSIF gt = 'cmp' THEN
+    ch := get_children(token);
+    l := agg_gate_value(ch[1]);
+    r := agg_gate_value(ch[2]);
+    IF l IS NULL OR r IS NULL THEN
+      RETURN NULL;
+    END IF;
+    SELECT oprname INTO opname
+      FROM pg_catalog.pg_operator WHERE oid = (get_infos(token)).info1;
+    RETURN CASE opname
+      WHEN '<'  THEN l <  r
+      WHEN '<=' THEN l <= r
+      WHEN '='  THEN l =  r
+      WHEN '<>' THEN l <> r
+      WHEN '>=' THEN l >= r
+      WHEN '>'  THEN l >  r
+    END;
+  END IF;
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief Deterministic (actual-world) scalar value of an aggregate-carrying
+ *        gate.
+ *
+ * Resolves the value an aggregate expression takes on the actual data -- the
+ * value an @c agg_token display cell carries: @c agg / @c arith gates record
+ * it in @c extra (set by aggregate evaluation and @c agg_arith_make), a
+ * @c value gate carries its constant, a @c semimod wraps a value gate, a
+ * @c conditioned gate has its target's value, and a @c case gate selects the
+ * first branch whose guard holds in the actual world (per
+ * @c agg_guard_holds), else the default.  Returns @c NULL when the gate is
+ * not aggregate-carrying or the value cannot be resolved (e.g. a
+ * non-numeric aggregate).
+ */
+CREATE OR REPLACE FUNCTION agg_gate_value(token UUID)
+  RETURNS numeric AS
+$$
+DECLARE
+  gt provenance_gate := get_gate_type(token);
+  ch uuid[];
+  n integer;
+  holds boolean;
+BEGIN
+  IF gt IN ('agg', 'arith', 'value') THEN
+    BEGIN
+      RETURN get_extra(token)::numeric;
+    EXCEPTION WHEN others THEN
+      RETURN NULL;   -- non-numeric aggregate (e.g. min over text)
+    END;
+  ELSIF gt = 'semimod' THEN
+    RETURN agg_gate_value((get_children(token))[2]);
+  ELSIF gt = 'conditioned' THEN
+    RETURN agg_gate_value((get_children(token))[1]);
+  ELSIF gt = 'case' THEN
+    ch := get_children(token);
+    n := array_length(ch, 1);
+    FOR i IN 1 .. (n - 1) / 2 LOOP
+      holds := agg_guard_holds(ch[2 * i - 1]);
+      IF holds IS NULL THEN
+        RETURN NULL;
+      ELSIF holds THEN
+        RETURN agg_gate_value(ch[2 * i]);
+      END IF;
+    END LOOP;
+    RETURN agg_gate_value(ch[n]);
+  END IF;
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+/**
  * @brief Recover the @c "value (*)" display string for an aggregation gate
  *
  * Companion helper to the @c provsql.aggtoken_text_as_uuid GUC. With
@@ -2259,8 +2379,10 @@ CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLI
  * function takes such a UUID and returns the original @c "value (*)"
  * string by reading the gate's @c extra (set by aggregate evaluation
  * for @c agg gates, and by @c agg_arith_make for the @c arith gates
- * that agg_token arithmetic mints). Returns @c NULL if @p token does
- * not resolve to an @c agg or @c arith gate.
+ * that agg_token arithmetic mints); for the other aggregate-carrying
+ * gates (@c case, @c conditioned, @c semimod, @c value) the value is
+ * resolved through the circuit by @c agg_gate_value. Returns @c NULL
+ * if @p token does not resolve to an aggregate-carrying gate.
  *
  * @param token UUID of an @c agg gate (typically obtained from an
  *              @c agg_token cell when @c aggtoken_text_as_uuid is on,
@@ -2274,6 +2396,10 @@ $$
     -- (agg_token arithmetic): extra is recorded by agg_arith_make.
     WHEN provsql.get_gate_type(token) IN ('agg', 'arith')
       THEN provsql.get_extra(token) || ' (*)'
+    -- other aggregate-carrying gates: resolve the actual-world value
+    -- through the circuit.
+    WHEN provsql.get_gate_type(token) IN ('case', 'conditioned', 'semimod', 'value')
+      THEN provsql.agg_gate_value(token)::text || ' (*)'
     ELSE NULL
   END;
 $$ LANGUAGE sql STABLE STRICT PARALLEL SAFE;
@@ -4611,16 +4737,19 @@ $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
  * lowering of a searched @c CASE whose guards are aggregate comparisons and
  * whose branches are aggregates. The branches (and default) are already
  * flattened into @c [guard_1, value_1, ..., default] UUIDs.  The display cell
- * carries a placeholder value (@c 0): a CASE's value is world-dependent, so the
- * result is produced by the measure evaluators (``expected`` / ``probability``
- * / possible-worlds / Monte Carlo) from the gate, not the token's cell.
+ * carries the actual-world CASE value -- the branch selected on the actual
+ * data, resolved by @c agg_gate_value, exactly as a bare aggregate's cell
+ * carries its actual-world value.  The probabilistic result is produced by
+ * the measure evaluators (``expected`` / ``probability`` / possible-worlds /
+ * Monte Carlo) from the gate, not the token's cell.
  */
 CREATE OR REPLACE FUNCTION agg_case(
   children UUID[]
 )
 RETURNS agg_token AS
 $$
-  SELECT provsql.agg_token_make(provsql.provenance_case(children), 0);
+  SELECT provsql.agg_token_make(t, coalesce(provsql.agg_gate_value(t), 0))
+  FROM (SELECT provsql.provenance_case(children) AS t) AS s;
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /** @} */

@@ -205,7 +205,9 @@ aggregate-carrier ``agg_token``.
                 ELSE 0 END AS headline
     FROM readings GROUP BY district;
 
-The result flows onward exactly like a bare aggregate:
+The result flows onward exactly like a bare aggregate: its cell displays as
+``value (*)`` where the value is the ``CASE`` evaluated on the actual data
+(the branch selected when every input tuple is present), and
 :sqlfunc:`expected`, :sqlfunc:`variance`, and :sqlfunc:`moment` report the
 distribution of the selected value over the possible worlds. Evaluation is
 **exact** (no Monte Carlo -- correct even under

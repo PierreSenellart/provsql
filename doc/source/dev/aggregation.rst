@@ -436,7 +436,16 @@ the Monte-Carlo scalar path (``rv_moment``), which composes ``gate_case`` with
 the aggregate leaves. The MC sampler already handles ``gate_case`` + ``gate_agg``
 with no change.
 
+**Display.** The token's cell carries the actual-world CASE value, like any
+aggregate's cell: ``agg_case`` resolves it through the circuit with
+``agg_gate_value`` (``agg`` / ``arith`` / ``value`` gates read their recorded
+``extra``; a ``case`` walks its guards first-match via ``agg_guard_holds``,
+which evaluates each ``cmp`` gate on its operands' deterministic values under
+the operator recorded in ``info1``, with Kleene AND/OR for ``times`` /
+``plus`` combinations). ``agg_token_value_text`` uses the same walker for
+``case`` / ``conditioned`` / ``semimod`` / ``value`` roots, so every
+aggregate-carrying token renders as ``value (*)`` -- both in psql cells and in
+Studio result tables (which recover the display from the bare UUID).
+
 Open: closed-form moments for arithmetic-combination branches (inherits the
-bare ``sum(x) + sum(y)`` limitation), and the deterministic display value shown
-in the token's cell (currently a placeholder; the probabilistic result via
-``expected`` / ``probability`` is unaffected).
+bare ``sum(x) + sum(y)`` limitation).

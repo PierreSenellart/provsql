@@ -29,6 +29,11 @@ CREATE TABLE pick AS
 SET provsql.active = off;
 -- The branch lowered to a gate_case carried by an agg_token.
 SELECT get_gate_type(p::uuid) AS root_gate FROM pick;
+-- The token's cell carries the actual-world CASE value -- both tuples are
+-- present in the actual data, so sum(x)=6 > 3 selects sum(y)=30 -- and
+-- agg_token_value_text resolves the same display from the bare UUID.
+SELECT p AS display FROM pick;
+SELECT agg_token_value_text(p::uuid) AS display_from_uuid FROM pick;
 SELECT round(expected(p)::numeric,4)  AS e_pick,
        round(variance(p)::numeric,4)  AS var_pick,
        round(moment(p,2)::numeric,4)  AS m2_pick
@@ -60,6 +65,8 @@ DO $$ BEGIN PERFORM set_prob(provenance(), 1.0) FROM cm WHERE x = 3; END $$;
 CREATE TABLE pickm AS
   SELECT g, CASE WHEN sum(x) > 6 THEN max(y) ELSE min(y) END AS p FROM cm GROUP BY g;
 SET provsql.active = off;
+-- Actual world: sum(x)=9 > 6 selects max(y)=20.
+SELECT p AS display_minmax FROM pickm;
 SELECT round(expected(p)::numeric,4) AS e_minmax,
        round(variance(p)::numeric,4) AS var_minmax
 FROM pickm;
@@ -75,12 +82,16 @@ SELECT add_provenance('cc');
 DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cc; END $$;
 CREATE TABLE pickc AS
   SELECT g, CASE WHEN sum(x) > 3 THEN sum(y) ELSE 0 END AS p FROM cc GROUP BY g;
+-- Actual-world guard false: the default (a value gate) is displayed.
+CREATE TABLE pickc2 AS
+  SELECT g, CASE WHEN sum(x) > 100 THEN sum(y) ELSE 0 END AS p FROM cc GROUP BY g;
 SET provsql.active = off;
 SELECT round(expected(p)::numeric,4) AS e_const,
        round(variance(p)::numeric,4) AS var_const
 FROM pickc;
+SELECT p AS display_default FROM pickc2;
 SET provsql.active = on;
-DROP TABLE pickc; DROP TABLE cc;
+DROP TABLE pickc; DROP TABLE pickc2; DROP TABLE cc;
 
 -- Arithmetic branch (`sum(y)+sum(z)`): no exact possible-worlds moment for the
 -- arithmetic combination, so that branch's conditional moment is estimated by
@@ -95,6 +106,9 @@ CREATE TABLE picka AS
 SET provsql.rv_mc_samples = 500000;
 SET provsql.monte_carlo_seed = 1;
 SET provsql.active = off;
+-- Actual world: sum(x)=6 > 3 selects sum(y)+sum(z) = 330 (an arith gate,
+-- whose actual-world value agg_arith_make recorded in extra).
+SELECT p AS display_arith FROM picka;
 SELECT abs(expected(p) - 162.5) < 5 AS arith_branch_mc_close FROM picka;
 SET provsql.active = on;
 DROP TABLE picka; DROP TABLE ca;

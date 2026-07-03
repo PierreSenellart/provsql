@@ -19,6 +19,11 @@ Berlin|2 (*)
 New York|2 (*)
 Paris|3 (*)
 (3 rows)
+city|display_cond
+Berlin|2 (*)
+New York|2 (*)
+Paris|3 (*)
+(3 rows)
 not_an_agg
 t
 (1 row)

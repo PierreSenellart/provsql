@@ -31,6 +31,17 @@ SELECT city, agg_token_value_text(c::uuid) AS display
   FROM aggtok_demo
   ORDER BY city;
 
+-- A conditioned agg_token (gate_conditioned) resolves through its
+-- conditioning target: same "value (*)" display as the bare aggregate.
+SET provsql.active = off;
+SELECT city,
+       agg_token_value_text(agg_token_cond(c,
+         (SELECT provsql FROM personnel WHERE name = 'John'))::uuid)
+         AS display_cond
+  FROM aggtok_demo
+  ORDER BY city;
+SET provsql.active = on;
+
 -- Returns NULL for non-agg gates: the per-row provenance column on
 -- personnel is an input gate, not an agg. Wrap in a CTE + subquery
 -- so the agg_token_value_text result is the only printed column

@@ -5,6 +5,12 @@ add_provenance
 root_gate
 case
 (1 row)
+display
+30 (*)
+(1 row)
+display_from_uuid
+30 (*)
+(1 row)
 e_pick|var_pick|m2_pick
 37.5000|1418.7500|2825.0000
 (1 row)
@@ -17,6 +23,9 @@ e_certain|var_certain
 add_provenance
 
 (1 row)
+display_minmax
+20 (*)
+(1 row)
 e_minmax|var_minmax
 14.8000|40.5600
 (1 row)
@@ -26,8 +35,14 @@ add_provenance
 e_const|var_const
 12.5000|168.7500
 (1 row)
+display_default
+0 (*)
+(1 row)
 add_provenance
 
+(1 row)
+display_arith
+330 (*)
 (1 row)
 arith_branch_mc_close
 t
