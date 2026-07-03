@@ -177,6 +177,9 @@ test: continuous_lognormal
 test: continuous_beta
 test: continuous_weibull_pareto
 test: continuous_discrete_families
+test: continuous_gmm
+test: continuous_information
+test: continuous_empirical
 test: continuous_comparison_surface
 test: continuous_expectation
 test: continuous_quantile
@@ -195,6 +198,7 @@ test: continuous_categorical
 test: continuous_aggregation
 test: continuous_order_statistics
 test: continuous_covariance
+test: continuous_stat_aggregates
 test: continuous_case
 test: continuous_having
 test: continuous_sample_truncated

@@ -2614,6 +2614,96 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
     return (Expr *)div;
   }
 
+  /* SQL-standard statistic aggregates (covar_pop / covar_samp / corr /
+   * stddev_pop / stddev_samp / percentile_cont): rewrite to the internal
+   * indicator-carrying _impl aggregate, whose extra leading argument is the
+   * row's provenance indicator rv_aggregate_indicator(prov).  The _impl
+   * FFUNC weighs every sum by the indicator (and percentile membership by
+   * it), so absent rows drop out of the statistic. */
+  {
+    Oid impl_oid = InvalidOid;
+    bool is_percentile = false;
+    bool is_stat_agg = true;
+
+    if (OidIsValid(constants->OID_AGG_COVAR_POP_RV) &&
+        aggfnoid == constants->OID_AGG_COVAR_POP_RV)
+      impl_oid = constants->OID_AGG_RV_COVAR_POP_IMPL;
+    else if (OidIsValid(constants->OID_AGG_COVAR_SAMP_RV) &&
+             aggfnoid == constants->OID_AGG_COVAR_SAMP_RV)
+      impl_oid = constants->OID_AGG_RV_COVAR_SAMP_IMPL;
+    else if (OidIsValid(constants->OID_AGG_CORR_RV) &&
+             aggfnoid == constants->OID_AGG_CORR_RV)
+      impl_oid = constants->OID_AGG_RV_CORR_IMPL;
+    else if (OidIsValid(constants->OID_AGG_STDDEV_POP_RV) &&
+             aggfnoid == constants->OID_AGG_STDDEV_POP_RV)
+      impl_oid = constants->OID_AGG_RV_STDDEV_POP_IMPL;
+    else if (OidIsValid(constants->OID_AGG_STDDEV_SAMP_RV) &&
+             aggfnoid == constants->OID_AGG_STDDEV_SAMP_RV)
+      impl_oid = constants->OID_AGG_RV_STDDEV_SAMP_IMPL;
+    else if (OidIsValid(constants->OID_AGG_PERCENTILE_CONT_RV) &&
+             aggfnoid == constants->OID_AGG_PERCENTILE_CONT_RV) {
+      impl_oid = constants->OID_AGG_RV_PERCENTILE_IMPL;
+      is_percentile = true;
+    } else
+      is_stat_agg = false;
+
+    if (OidIsValid(impl_oid) &&
+        OidIsValid(constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR)) {
+      FuncExpr *ind_wrap = makeNode(FuncExpr);
+      Aggref *impl_agg = makeNode(Aggref);
+      List *arg_exprs = NIL;
+      List *arg_types = NIL;
+      ListCell *lc;
+      int resno = 1;
+
+      ind_wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR;
+      ind_wrap->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
+      ind_wrap->args = list_make1(prov_expr);
+      ind_wrap->location = -1;
+
+      if (is_percentile) {
+        /* percentile_cont(f) WITHIN GROUP (ORDER BY x) -> the NORMAL
+         * aggregate rv_percentile_impl(f, indicator, x).  The input order
+         * is irrelevant (the sampler sorts each draw), so the ordered-set
+         * shape is dropped; the direct argument becomes a per-row argument
+         * (constant within the group by the ordered-set contract). */
+        Expr *fraction = (Expr *)linitial(agg_ref->aggdirectargs);
+        arg_exprs = list_make1(copyObject(fraction));
+        arg_types = list_make1_oid(FLOAT8OID);
+      }
+      arg_exprs = lappend(arg_exprs, ind_wrap);
+      arg_types = lappend_oid(arg_types, constants->OID_TYPE_RANDOM_VARIABLE);
+      foreach (lc, agg_ref->args) {
+        TargetEntry *arg_te = (TargetEntry *)lfirst(lc);
+        arg_exprs = lappend(arg_exprs, arg_te->expr);
+        arg_types = lappend_oid(arg_types,
+                                constants->OID_TYPE_RANDOM_VARIABLE);
+      }
+
+      impl_agg->aggfnoid = impl_oid;
+      impl_agg->aggtype = constants->OID_TYPE_RANDOM_VARIABLE;
+      impl_agg->aggargtypes = arg_types;
+      impl_agg->aggkind = AGGKIND_NORMAL;
+      impl_agg->aggtranstype = InvalidOid;
+      impl_agg->args = NIL;
+      foreach (lc, arg_exprs) {
+        TargetEntry *arg_te = makeNode(TargetEntry);
+        arg_te->resno = resno++;
+        arg_te->expr = (Expr *)lfirst(lc);
+        impl_agg->args = lappend(impl_agg->args, arg_te);
+      }
+      impl_agg->location = agg_ref->location;
+#if PG_VERSION_NUM >= 140000
+      impl_agg->aggno = impl_agg->aggtransno = -1;
+#endif
+      return (Expr *)impl_agg;
+    }
+    if (is_stat_agg)
+      provsql_error("statistic aggregate over random_variable requires the "
+                    "rv_*_impl aggregates (schema too old; run ALTER "
+                    "EXTENSION provsql UPDATE)");
+  }
+
   /* product / max / min bake their identity element into the wrap's
    * else-branch; sum (and any unrecognised RV aggregate) keeps identity 0. */
   if (OidIsValid(constants->OID_AGG_PRODUCT_RV) &&

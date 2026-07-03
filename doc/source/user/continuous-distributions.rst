@@ -187,6 +187,65 @@ shared underlying randomness.
     See `Wikipedia
     <https://en.wikipedia.org/wiki/Mixture_distribution>`__.
 
+:sqlfunc:`gmm` ``(weights, means, stddevs)``
+    Gaussian mixture model: a categorical choice among ``Normal``
+    components, the ubiquitous fitted-density shape (EM output,
+    density estimation). Packaged as a stick-breaking cascade of
+    Bernoulli :sqlfunc:`mixture` nodes over :sqlfunc:`normal`
+    leaves, so no new machinery is involved: moments
+    (:sqlfunc:`expected`, :sqlfunc:`variance`…) are exact through
+    the mixture recursion and sampling is exact; comparisons
+    (``gmm(...) < c``) ride Monte Carlo. Arrays must have the same
+    length and the weights must sum to ``1`` within ``1e-9``;
+    zero-weight components are skipped and a single-component call
+    returns its Normal directly.
+
+    .. code-block:: postgresql
+
+        SELECT expected(provsql.gmm(
+          weights => ARRAY[0.3, 0.5, 0.2],
+          means   => ARRAY[120.0, 380.0, 1200.0],
+          stddevs => ARRAY[40.0, 90.0, 250.0]));   -- 466
+
+    See `Wikipedia
+    <https://en.wikipedia.org/wiki/Mixture_model>`__.
+
+:sqlfunc:`empirical_samples` ``(samples)``
+    The empirical distribution (ecdf) of a sample bundle -- an MCMC
+    posterior chain, variational or bootstrap draws, simulation
+    output: mass ``1/n`` on each draw, duplicates merging. Reduces
+    to :sqlfunc:`categorical`, so the exact discrete surface
+    applies: moments are the sample moments, comparisons against
+    constants are decided analytically ("fraction of samples below
+    ``c``"), and quantiles are exact empirical quantiles. At most
+    ``10000`` distinct values; thin or bin (``width_bucket``) larger
+    bundles.
+
+    .. code-block:: postgresql
+
+        INSERT INTO model_posteriors
+        SELECT param, provsql.empirical_samples(array_agg(value))
+        FROM mcmc_chain GROUP BY param;
+
+    See `Wikipedia
+    <https://en.wikipedia.org/wiki/Empirical_distribution_function>`__.
+
+:sqlfunc:`empirical_cdf` ``(grid, cdf)``
+    A tabulated, piecewise-linear CDF -- simulation percentile
+    tables, risk-model outputs, expert-elicited forecasts: the
+    distribution whose CDF is ``cdf[i]`` at ``grid[i]`` and linear
+    in between, with an atom of mass ``cdf[1]`` at the grid start
+    when positive. Packaged like :sqlfunc:`gmm` as a mixture of
+    :sqlfunc:`uniform` pieces, so moments and sampling are exact;
+    comparisons ride Monte Carlo. The grid must be strictly
+    increasing and the cdf non-decreasing, ending at ``1``.
+
+    .. code-block:: postgresql
+
+        SELECT expected(provsql.empirical_cdf(
+          grid => ARRAY[0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0],
+          cdf  => ARRAY[0.32, 0.51, 0.67, 0.82, 0.94, 0.99, 1.0]));
+
 :sqlfunc:`as_random` ``(c)``
     Lift a numeric constant into a deterministic ``random_variable``
     (a Dirac point mass at ``c``). Three overloads exist
@@ -694,6 +753,44 @@ row* -- they are not aggregates over a group of rows):
     -- shared drift leaf: both sensors move together
     SELECT correlation(drift + noise_a, drift + noise_b) FROM s;
 
+Three information-theoretic readouts (all in nats) complete the
+surface:
+
+:sqlfunc:`entropy` ``(x [, prov])``
+    Entropy ``H(x)``: Shannon entropy for a discrete distribution
+    (a categorical, a discrete count, a constant -- a point mass has
+    entropy ``0``), differential entropy for a continuous one
+    (exact quadrature of ``−f ln f``, including through
+    independent-arm mixture trees such as :sqlfunc:`gmm`'s).
+    Arithmetic composites and the conditional form (``prov``) are
+    estimated by a Monte Carlo histogram plug-in, so they need
+    ``provsql.rv_mc_samples > 0``.
+
+:sqlfunc:`kl` ``(p, q)``
+    Kullback-Leibler divergence ``KL(P ‖ Q)``, exact via the
+    defining sum (discrete-discrete) or integral
+    (continuous-continuous). ``Infinity`` when ``P`` is not
+    absolutely continuous with respect to ``Q``: an outcome of
+    ``P`` that ``Q`` gives zero mass, mismatched kinds, or a region
+    of ``P``'s support where ``Q``'s density (under)flows to zero.
+    Both arguments must resolve to closed-form densities;
+    arithmetic composites raise an error.
+
+:sqlfunc:`mutual_information` ``(x, y)``
+    Mutual information ``I(x; y)``: exactly ``0`` for structurally
+    independent arguments (disjoint base-RV footprints), ``H(x)``
+    for a discrete variable paired with itself (``Infinity`` for a
+    continuous one), and a 2-D histogram plug-in estimate over
+    coupled joint Monte Carlo draws for a genuinely correlated
+    pair (needs ``provsql.rv_mc_samples > 0``).
+
+.. code-block:: postgresql
+
+    SELECT kl(posterior, prior)           AS information_gain,
+           entropy(posterior)             AS residual_uncertainty,
+           mutual_information(x, x + eps) AS shared_information
+    FROM model;
+
 End-to-end on the sensors fixture:
 
 .. code-block:: postgresql
@@ -933,6 +1030,51 @@ deterministic scalars to ``random_variable`` columns:
 ``COUNT`` over a tracked ``random_variable`` column goes through
 the standard ``COUNT`` path on the ``provsql`` UUID column.
 
+The SQL-standard second-moment statistic aggregates are also lifted to
+``random_variable`` rows, with the same provenance-weighted semantics
+(a row absent in a world drops out of every sum, the count, and the
+percentile member set):
+
+:sqlfunc:`covar_pop` / :sqlfunc:`covar_samp` ``(random_variable, random_variable)`` ``RETURNS random_variable``
+    Population / sample covariance of the row pairs,
+    :math:`S_{XY}/N - (S_X/N)(S_Y/N)` and
+    :math:`(S_{XY} - S_X S_Y / N)/(N-1)` over the
+    indicator-weighted power sums. Rows with either side ``NULL``
+    are skipped (standard SQL); a world with :math:`N = 0` (or
+    :math:`N = 1` for the sample form) evaluates to ``NaN``, the
+    undefined-world convention the moment estimators skip.
+
+:sqlfunc:`corr` ``(random_variable, random_variable)`` ``RETURNS random_variable``
+    Pearson correlation
+    :math:`\mathrm{covar\_pop} / \sqrt{v_X\,v_Y}` (a zero-variance
+    world yields ``NaN``, matching SQL's ``NULL`` for a
+    zero-stddev input).
+
+:sqlfunc:`stddev_pop` / :sqlfunc:`stddev_samp` ``(random_variable)`` ``RETURNS random_variable``
+    Population / sample standard deviation (the variance is clamped
+    at ``0`` before the square root, so floating-point error can
+    never trip the ``pow`` domain guard).
+
+:sqlfunc:`percentile_cont` ``(fraction) WITHIN GROUP (ORDER BY random_variable)`` ``RETURNS random_variable``
+    The SQL-standard continuous percentile as an order statistic
+    over the group: per Monte Carlo draw, the values of the rows
+    present in that world are sorted and linearly interpolated at
+    the fraction. Requires provenance-tracked input: on an
+    untracked table the input sort has no meaningful order over
+    distributions and raises the usual ordering diagnostic (the
+    same behaviour as an un-rewritten ``GREATEST`` /
+    ``LEAST``).
+
+The statistics distribute over the possible worlds — the result is a
+``random_variable`` whose moments (:sqlfunc:`expected`,
+:sqlfunc:`variance`…) are estimated by Monte Carlo (there is no
+closed form for these compound circuits), so set
+``provsql.rv_mc_samples > 0``. Do not confuse the *aggregate*
+:sqlfunc:`corr` (one value per group of rows) with the *same-row
+scalar readouts* :sqlfunc:`covariance` / :sqlfunc:`correlation` /
+:sqlfunc:`stddev`, which take two RV expressions from a single row
+and return ``double precision``.
+
 Studio Integration
 ------------------
 
@@ -962,13 +1104,6 @@ writing and tracked as separate follow-ups:
 
 - ``EXCEPT`` and ``SELECT DISTINCT`` on relations that carry
   ``random_variable`` columns.
-- The SQL-standard *aggregate* second-moment and percentile forms
-  over ``random_variable`` rows (``covar_pop`` / ``covar_samp`` /
-  ``corr`` / ``stddev_pop`` / ``stddev_samp``,
-  ``percentile_cont``). The same-row scalar readouts
-  :sqlfunc:`covariance` / :sqlfunc:`correlation` /
-  :sqlfunc:`stddev` and the ``min`` / ``max`` aggregates are
-  available (see above).
 - Where-provenance crossed with random variables (the
   column-level tracking layered on top of an RV-bearing query is
   not yet defined).

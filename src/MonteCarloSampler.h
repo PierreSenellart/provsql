@@ -39,6 +39,7 @@
 #define PROVSQL_MONTE_CARLO_SAMPLER_H
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "GenericCircuit.h"
@@ -189,6 +190,19 @@ std::vector<double> monteCarloJointDistribution(
  */
 std::vector<double> monteCarloScalarSamples(
   const GenericCircuit &gc, gate_t root, unsigned samples);
+
+/**
+ * @brief Coupled per-iteration draws of two scalar roots.
+ *
+ * Each iteration resets the per-iteration cache once and evaluates both
+ * roots against it, so any stochastic leaf shared between @p root_a and
+ * @p root_b produces a single draw both observe: the returned pairs are
+ * samples from the JOINT distribution of (A, B).  Backs the
+ * mutual-information plug-in estimator.
+ */
+std::pair<std::vector<double>, std::vector<double>>
+monteCarloScalarPairSamples(const GenericCircuit &gc, gate_t root_a,
+                            gate_t root_b, unsigned samples);
 
 /**
  * @brief Outcome of a conditional Monte Carlo sampling pass.

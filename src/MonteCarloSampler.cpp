@@ -291,6 +291,51 @@ double Sampler::evalScalar(gate_t g)
             throw CircuitException("gate_arith EXP must be unary");
           result = std::exp(evalScalar(wires[0]));
           break;
+        case PROVSQL_ARITH_PERCENTILE:
+        {
+          // Continuous percentile (SQL percentile_cont) over the group's
+          // rows: wires are interleaved [ind_1, x_1, ..., ind_n, x_n],
+          // the fraction is text-encoded in extra.  Per draw, the values
+          // whose 0/1 presence indicator draws 1 are sorted and linearly
+          // interpolated at the fraction; a draw with no present row is
+          // NaN (undefined world, skipped by the moment estimators like
+          // an empty-group avg).
+          if(wires.size() < 2 || wires.size() % 2 != 0)
+            throw CircuitException(
+                    "gate_arith PERCENTILE must have interleaved "
+                    "indicator/value wires");
+          double fraction;
+          try {
+            fraction = std::stod(gc_.getExtra(g));
+          } catch(const std::exception &) {
+            throw CircuitException(
+                    "Malformed gate_arith PERCENTILE extra (expected the "
+                    "fraction): " + gc_.getExtra(g));
+          }
+          std::vector<double> members;
+          bool has_nan = false;
+          for(std::size_t i = 0; i < wires.size(); i += 2) {
+            if(evalScalar(wires[i]) >= 0.5) {
+              const double x = evalScalar(wires[i + 1]);
+              if(std::isnan(x))
+                has_nan = true;
+              else
+                members.push_back(x);
+            }
+          }
+          if(has_nan || members.empty()) {
+            result = std::numeric_limits<double>::quiet_NaN();
+            break;
+          }
+          std::sort(members.begin(), members.end());
+          const double pos = fraction * (members.size() - 1);
+          const std::size_t lo = static_cast<std::size_t>(pos);
+          const double frac = pos - static_cast<double>(lo);
+          result = (lo + 1 < members.size())
+            ? members[lo] + frac * (members[lo + 1] - members[lo])
+            : members[lo];
+          break;
+        }
         default:
           throw CircuitException(
                   "Unknown gate_arith operator tag: " +
@@ -589,6 +634,33 @@ std::vector<double> monteCarloScalarSamples(
               "Interrupted after " + std::to_string(i + 1) + " samples");
   }
   return out;
+}
+
+std::pair<std::vector<double>, std::vector<double>>
+monteCarloScalarPairSamples(const GenericCircuit &gc, gate_t root_a,
+                            gate_t root_b, unsigned samples)
+{
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  std::vector<double> out_a, out_b;
+  out_a.reserve(samples);
+  out_b.reserve(samples);
+  for(unsigned i = 0; i < samples; ++i) {
+    sampler.resetIteration();
+    /* Both roots are evaluated within the same iteration, so a gate_rv /
+     * gate_input leaf reachable from both shares its per-iteration draw:
+     * the pair (a_i, b_i) is a draw from the JOINT distribution, which is
+     * the whole point (mutual information over the marginals alone would
+     * be identically zero). */
+    out_a.push_back(sampler.evalScalar(root_a));
+    out_b.push_back(sampler.evalScalar(root_b));
+
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+  return {std::move(out_a), std::move(out_b)};
 }
 
 ConditionalScalarSamples monteCarloConditionalScalarSamples(

@@ -4026,6 +4026,260 @@ END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
+ * @brief Gaussian-mixture-model (GMM) constructor.
+ *
+ * Packages the common fitted-density pattern -- a categorical choice
+ * among Normal components -- into one call:
+ *
+ * @code
+ * provsql.gmm(weights => ARRAY[0.3, 0.5, 0.2],
+ *             means   => ARRAY[120.0, 380.0, 1200.0],
+ *             stddevs => ARRAY[40.0, 90.0, 250.0])
+ * @endcode
+ *
+ * No new gate: the mixture decomposes into a stick-breaking cascade of
+ * Bernoulli @c gate_mixture nodes over @c gate_rv Normal leaves
+ * (component @c i is selected with conditional probability
+ * @c w_i / (w_i + ... + w_n), so the joint selection probabilities are
+ * exactly @p weights), which every evaluator already handles: moments
+ * are closed-form through the mixture recursion, sampling is exact,
+ * and comparisons ride the existing mixture machinery.  Zero-weight
+ * components are skipped; a single positive-weight component returns
+ * its Normal directly (no mixture node).
+ *
+ * Validation mirrors @c categorical: same-length non-empty arrays,
+ * weights finite in <tt>[0, 1]</tt> summing to 1 within @c 1e-9; the
+ * component parameters are validated by @c provsql.normal (finite
+ * @c mu, non-negative @c sigma; @c sigma @c = @c 0 degenerates to a
+ * Dirac component).
+ *
+ * @sa @c mixture, @c categorical, @c normal
+ * @sa <a href="https://en.wikipedia.org/wiki/Mixture_model">Wikipedia: Mixture model</a>
+ */
+CREATE OR REPLACE FUNCTION gmm(
+  weights double precision[],
+  means   double precision[],
+  stddevs double precision[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  w_sum double precision := 0.0;
+  i integer;
+  acc random_variable := NULL;
+  remaining double precision := 0.0;
+BEGIN
+  IF weights IS NULL OR means IS NULL OR stddevs IS NULL THEN
+    RAISE EXCEPTION 'provsql.gmm: weights, means, and stddevs must be non-null';
+  END IF;
+  n := array_length(weights, 1);
+  IF n IS NULL OR n < 1 THEN
+    RAISE EXCEPTION 'provsql.gmm: weights must be non-empty';
+  END IF;
+  IF array_length(means, 1) <> n OR array_length(stddevs, 1) <> n THEN
+    RAISE EXCEPTION 'provsql.gmm: weights, means, and stddevs must have the same length (got %, %, %)',
+      n, array_length(means, 1), array_length(stddevs, 1);
+  END IF;
+  FOR i IN 1..n LOOP
+    IF weights[i] IS NULL OR weights[i] = 'NaN'::float8
+       OR weights[i] < 0 OR weights[i] > 1 THEN
+      RAISE EXCEPTION 'provsql.gmm: weights[%] must be in [0,1] (got %)',
+        i, weights[i];
+    END IF;
+    w_sum := w_sum + weights[i];
+  END LOOP;
+  IF abs(w_sum - 1.0) > 1e-9 THEN
+    RAISE EXCEPTION 'provsql.gmm: weights must sum to 1 within 1e-9 (got %)', w_sum;
+  END IF;
+
+  -- Stick-breaking, built back to front: acc holds the mixture of
+  -- components i+1..n, and prepending component i selects it with
+  -- conditional probability w_i / (w_i + ... + w_n).
+  FOR i IN REVERSE n..1 LOOP
+    IF weights[i] <= 0.0 THEN
+      CONTINUE;
+    END IF;
+    IF acc IS NULL THEN
+      acc := provsql.normal(means[i], stddevs[i]);
+      remaining := weights[i];
+    ELSE
+      remaining := remaining + weights[i];
+      acc := provsql.mixture(least(1.0, weights[i] / remaining),
+                             provsql.normal(means[i], stddevs[i]), acc);
+    END IF;
+  END LOOP;
+  RETURN acc;
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Empirical-samples constructor: the ecdf of a sample bundle as
+ *        a @c random_variable.
+ *
+ * Loads a Monte Carlo / MCMC / bootstrap sample array as the discrete
+ * distribution putting mass @c 1/n on each draw (duplicates merge, so a
+ * value drawn @c k times carries @c k/n) -- the standard empirical
+ * distribution.  Reduces entirely to @ref categorical, so the whole
+ * exact discrete surface applies: moments are the sample moments,
+ * comparisons against constants are decided analytically ("fraction of
+ * samples below c"), and quantiles are the exact empirical quantiles.
+ *
+ * @code
+ * -- Bulk load via array_agg over a sample table
+ * INSERT INTO model_posteriors
+ * SELECT param, provsql.empirical_samples(array_agg(value))
+ * FROM mcmc_chain GROUP BY param;
+ * @endcode
+ *
+ * At most 10000 distinct values (the categorical block cap): thin the
+ * chain or bin the samples (e.g. with @c width_bucket) beyond that.
+ *
+ * @sa @ref categorical, @ref empirical_cdf
+ * @sa <a href="https://en.wikipedia.org/wiki/Empirical_distribution_function">Wikipedia: Empirical distribution function</a>
+ */
+CREATE OR REPLACE FUNCTION empirical_samples(samples double precision[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  sorted double precision[];
+  outcomes double precision[] := '{}';
+  probs double precision[] := '{}';
+  v double precision;
+  prev double precision;
+  run integer := 0;
+  started boolean := false;
+BEGIN
+  n := array_length(samples, 1);
+  IF n IS NULL OR n < 1 THEN
+    RAISE EXCEPTION 'provsql.empirical_samples: samples must be non-empty';
+  END IF;
+  sorted := ARRAY(SELECT s FROM unnest(samples) AS s ORDER BY 1);
+  FOREACH v IN ARRAY sorted LOOP
+    IF v IS NULL OR v = 'NaN'::float8
+       OR v = 'Infinity'::float8 OR v = '-Infinity'::float8 THEN
+      RAISE EXCEPTION
+        'provsql.empirical_samples: samples must be finite (got %)', v;
+    END IF;
+    IF started AND v = prev THEN
+      run := run + 1;
+    ELSE
+      IF started THEN
+        outcomes := outcomes || prev;
+        probs := probs || (run::double precision / n);
+      END IF;
+      prev := v;
+      run := 1;
+      started := true;
+    END IF;
+  END LOOP;
+  outcomes := outcomes || prev;
+  probs := probs || (run::double precision / n);
+  IF array_length(outcomes, 1) > 10000 THEN
+    RAISE EXCEPTION
+      'provsql.empirical_samples: at most 10000 distinct values are '
+      'supported (got %); thin the chain or bin the samples (e.g. with '
+      'width_bucket)', array_length(outcomes, 1);
+  END IF;
+  RETURN provsql.categorical(probs, outcomes);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Empirical-CDF constructor: a piecewise-linear CDF table as a
+ *        @c random_variable.
+ *
+ * Loads a tabulated CDF -- simulation output percentile tables, risk
+ * models, expert-elicited forecasts -- as the distribution whose CDF is
+ * @c cdf[i] at @c grid[i], linear in between: mass
+ * @c cdf[i+1] @c - @c cdf[i] spread uniformly over
+ * <tt>(grid[i], grid[i+1])</tt>, plus (when @c cdf[1] @c > @c 0) an
+ * atom of mass @c cdf[1] at @c grid[1] for the probability at or below
+ * the grid start.  Packaged, like @ref gmm, as a stick-breaking cascade
+ * of Bernoulli @ref mixture nodes over @ref uniform components (and the
+ * optional @ref as_random atom), so moments and sampling are exact
+ * through the existing mixture machinery; comparisons ride Monte Carlo.
+ *
+ * @code
+ * provsql.empirical_cdf(
+ *   grid => ARRAY[0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0],
+ *   cdf  => ARRAY[0.32, 0.51, 0.67, 0.82, 0.94, 0.99, 1.0])
+ * @endcode
+ *
+ * Validation: same-length arrays of at least two entries, @p grid
+ * strictly increasing and finite, @p cdf non-decreasing within
+ * <tt>[0, 1]</tt> and ending at @c 1 within @c 1e-9.
+ *
+ * @sa @ref gmm, @ref empirical_samples
+ * @sa <a href="https://en.wikipedia.org/wiki/Cumulative_distribution_function">Wikipedia: Cumulative distribution function</a>
+ */
+CREATE OR REPLACE FUNCTION empirical_cdf(grid double precision[],
+                                         cdf double precision[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  i integer;
+  acc random_variable := NULL;
+  remaining double precision := 0.0;
+  w double precision;
+  comp random_variable;
+BEGIN
+  n := array_length(grid, 1);
+  IF n IS NULL OR n < 2 THEN
+    RAISE EXCEPTION 'provsql.empirical_cdf: grid must have at least two entries';
+  END IF;
+  IF array_length(cdf, 1) <> n THEN
+    RAISE EXCEPTION 'provsql.empirical_cdf: grid and cdf must have the same length (got % and %)',
+      n, array_length(cdf, 1);
+  END IF;
+  IF n > 10000 THEN
+    RAISE EXCEPTION 'provsql.empirical_cdf: at most 10000 grid points are supported (got %)', n;
+  END IF;
+  FOR i IN 1..n LOOP
+    IF grid[i] IS NULL OR grid[i] = 'NaN'::float8
+       OR grid[i] = 'Infinity'::float8 OR grid[i] = '-Infinity'::float8 THEN
+      RAISE EXCEPTION 'provsql.empirical_cdf: grid[%] must be finite (got %)', i, grid[i];
+    END IF;
+    IF i > 1 AND NOT grid[i] > grid[i-1] THEN
+      RAISE EXCEPTION 'provsql.empirical_cdf: grid must be strictly increasing (grid[%] = %, grid[%] = %)',
+        i-1, grid[i-1], i, grid[i];
+    END IF;
+    IF cdf[i] IS NULL OR cdf[i] = 'NaN'::float8 OR cdf[i] < 0 OR cdf[i] > 1 THEN
+      RAISE EXCEPTION 'provsql.empirical_cdf: cdf[%] must be in [0,1] (got %)', i, cdf[i];
+    END IF;
+    IF i > 1 AND cdf[i] < cdf[i-1] THEN
+      RAISE EXCEPTION 'provsql.empirical_cdf: cdf must be non-decreasing (cdf[%] = %, cdf[%] = %)',
+        i-1, cdf[i-1], i, cdf[i];
+    END IF;
+  END LOOP;
+  IF abs(cdf[n] - 1.0) > 1e-9 THEN
+    RAISE EXCEPTION 'provsql.empirical_cdf: cdf must end at 1 within 1e-9 (got %)', cdf[n];
+  END IF;
+
+  -- Stick-breaking cascade, back to front: component i = 1 is the atom
+  -- at the grid start (mass cdf[1]); component i >= 2 is
+  -- uniform(grid[i-1], grid[i]) with mass cdf[i] - cdf[i-1].
+  FOR i IN REVERSE n..1 LOOP
+    w := CASE WHEN i = 1 THEN cdf[1] ELSE cdf[i] - cdf[i-1] END;
+    IF w <= 0.0 THEN
+      CONTINUE;
+    END IF;
+    comp := CASE WHEN i = 1 THEN provsql.as_random(grid[1])
+                 ELSE provsql.uniform(grid[i-1], grid[i]) END;
+    IF acc IS NULL THEN
+      acc := comp;
+      remaining := w;
+    ELSE
+      remaining := remaining + w;
+      acc := provsql.mixture(least(1.0, w / remaining), comp, acc);
+    END IF;
+  END LOOP;
+  RETURN acc;
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
  * @brief Lift a deterministic constant into a random_variable
  *
  * Creates a <tt>gate_value</tt> carrying the constant's text form so
@@ -5110,6 +5364,490 @@ CREATE AGGREGATE min(random_variable) (
   FINALFUNC = min_rv_ffunc
 );
 
+-- ---------------------------------------------------------------------
+-- SQL-standard statistic aggregates over random_variable rows:
+-- covar_pop / covar_samp / corr (two-argument), stddev_pop / stddev_samp
+-- (one-argument), and the ordered-set percentile_cont.
+--
+-- Row presence is carried by a per-row 0/1 indicator RV: the public
+-- aggregates use the certain indicator as_random(1) (every row present),
+-- and a provenance-tracked query is rewritten by the planner hook
+-- (make_rv_aggregate_expression) to the rv_*_impl aggregates whose extra
+-- leading argument is rv_aggregate_indicator(prov), so a row absent in a
+-- world drops out of every sum, the count, and the percentile member set.
+-- The moment statistics are built from indicator-weighted power sums with
+-- existing gate_arith opcodes (e.g. covar_pop = SXY/N - (SX/N)(SY/N)); a
+-- world where the statistic is undefined (N = 0, or N = 1 for the sample
+-- forms) evaluates to NaN, the established undefined-world convention the
+-- moment estimators skip.  percentile_cont is the one gate the arithmetic
+-- cannot express: it mints the PROVSQL_ARITH_PERCENTILE gate_arith
+-- (interleaved [ind_1, x_1, ...] wires, fraction in extra) that the Monte
+-- Carlo sampler evaluates by sorting each draw's present values and
+-- interpolating.
+-- ---------------------------------------------------------------------
+
+/** @brief State transition for the one-argument RV statistic aggregates
+ *  (@c stddev_pop / @c stddev_samp): append the certain indicator and the
+ *  row's RV as a pair.  NULL rows are skipped (standard SQL). */
+CREATE OR REPLACE FUNCTION rv_stat1_sfunc(state uuid[], x random_variable)
+  RETURNS uuid[] AS
+$$
+  SELECT CASE
+    WHEN x IS NULL THEN state
+    ELSE state || ARRAY[(provsql.as_random(1::double precision))::uuid,
+                        (x)::uuid]
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/** @brief State transition for the two-argument RV statistic aggregates
+ *  (@c covar_pop / @c covar_samp / @c corr): append the certain indicator
+ *  and the row's RV pair as a triple.  Rows with either side NULL are
+ *  skipped (standard SQL covariance semantics). */
+CREATE OR REPLACE FUNCTION rv_stat2_sfunc(
+  state uuid[], x random_variable, y random_variable)
+  RETURNS uuid[] AS
+$$
+  SELECT CASE
+    WHEN x IS NULL OR y IS NULL THEN state
+    ELSE state || ARRAY[(provsql.as_random(1::double precision))::uuid,
+                        (x)::uuid, (y)::uuid]
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/** @brief Indicator-carrying state transition for the one-argument
+ *  @c rv_*_impl statistic aggregates: the planner-hook rewrite passes the
+ *  row's provenance indicator @c rv_aggregate_indicator(prov) as @p ind. */
+CREATE OR REPLACE FUNCTION rv_stat1_impl_sfunc(
+  state uuid[], ind random_variable, x random_variable)
+  RETURNS uuid[] AS
+$$
+  SELECT CASE
+    WHEN x IS NULL THEN state
+    ELSE state || ARRAY[coalesce((ind)::uuid,
+                          (provsql.as_random(1::double precision))::uuid),
+                        (x)::uuid]
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/** @brief Indicator-carrying state transition for the two-argument
+ *  @c rv_*_impl statistic aggregates. */
+CREATE OR REPLACE FUNCTION rv_stat2_impl_sfunc(
+  state uuid[], ind random_variable, x random_variable, y random_variable)
+  RETURNS uuid[] AS
+$$
+  SELECT CASE
+    WHEN x IS NULL OR y IS NULL THEN state
+    ELSE state || ARRAY[coalesce((ind)::uuid,
+                          (provsql.as_random(1::double precision))::uuid),
+                        (x)::uuid, (y)::uuid]
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/**
+ * @brief Mint the indicator-weighted power-sum gates shared by the
+ *        covariance / stddev final functions.
+ *
+ * @p state is the flat interleaved aggregate state -- pairs
+ * @c [ind, x, ...] (@p stride 2) or triples @c [ind, x, y, ...]
+ * (@p stride 3).  Emits @c gate_arith tokens for
+ * @f$N = \sum_i \mathbf{1}_i@f$, @f$SX = \sum_i \mathbf{1}_i x_i@f$,
+ * @f$SXX = \sum_i \mathbf{1}_i x_i^2@f$ and, at stride 3, @f$SY@f$,
+ * @f$SXY@f$, @f$SYY@f$.  The per-row indicator gate is shared between
+ * @f$N@f$ and every product it weighs, so the Monte Carlo per-iteration
+ * cache keeps the row's presence coupled across all the sums (and a
+ * repeated child @c [ind, x, x] reuses the same draw of @c x, giving
+ * @f$x^2@f$, not two independent draws).
+ */
+CREATE OR REPLACE FUNCTION rv_stat_sum_tokens(
+  state uuid[], stride integer,
+  OUT n_tok uuid, OUT sx_tok uuid, OUT sxx_tok uuid,
+  OUT sy_tok uuid, OUT sxy_tok uuid, OUT syy_tok uuid)
+AS
+$$
+DECLARE
+  nrows integer := coalesce(array_length(state, 1), 0) / stride;
+  inds uuid[] := '{}';
+  xs   uuid[] := '{}';
+  xxs  uuid[] := '{}';
+  ys   uuid[] := '{}';
+  xys  uuid[] := '{}';
+  yys  uuid[] := '{}';
+  ind uuid;
+  x uuid;
+  y uuid;
+BEGIN
+  FOR i IN 1..nrows LOOP
+    ind := state[(i-1) * stride + 1];
+    x   := state[(i-1) * stride + 2];
+    inds := array_append(inds, ind);
+    xs   := array_append(xs,  provenance_arith(1, ARRAY[ind, x]));
+    xxs  := array_append(xxs, provenance_arith(1, ARRAY[ind, x, x]));
+    IF stride = 3 THEN
+      y := state[(i-1) * stride + 3];
+      ys  := array_append(ys,  provenance_arith(1, ARRAY[ind, y]));
+      xys := array_append(xys, provenance_arith(1, ARRAY[ind, x, y]));
+      yys := array_append(yys, provenance_arith(1, ARRAY[ind, y, y]));
+    END IF;
+  END LOOP;
+  n_tok   := provenance_arith(0, inds);
+  sx_tok  := provenance_arith(0, xs);
+  sxx_tok := provenance_arith(0, xxs);
+  IF stride = 3 THEN
+    sy_tok  := provenance_arith(0, ys);
+    sxy_tok := provenance_arith(0, xys);
+    syy_tok := provenance_arith(0, yys);
+  END IF;
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+/** @brief Population-variance gate @f$SXX/N - (SX/N)^2@f$ from the
+ *  power-sum tokens. */
+CREATE OR REPLACE FUNCTION rv_stat_var_pop_token(
+  n_tok uuid, s_tok uuid, ss_tok uuid)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_arith(2, ARRAY[
+    provsql.provenance_arith(3, ARRAY[ss_tok, n_tok]),
+    provsql.provenance_arith(1, ARRAY[
+      provsql.provenance_arith(3, ARRAY[s_tok, n_tok]),
+      provsql.provenance_arith(3, ARRAY[s_tok, n_tok])])]);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Sample-variance gate @f$(SXX - SX^2/N) / (N - 1)@f$ from the
+ *  power-sum tokens (NaN in a world with @f$N \le 1@f$, the undefined-world
+ *  convention). */
+CREATE OR REPLACE FUNCTION rv_stat_var_samp_token(
+  n_tok uuid, s_tok uuid, ss_tok uuid)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_arith(3, ARRAY[
+    provsql.provenance_arith(2, ARRAY[
+      ss_tok,
+      provsql.provenance_arith(3, ARRAY[
+        provsql.provenance_arith(1, ARRAY[s_tok, s_tok]), n_tok])]),
+    provsql.provenance_arith(2, ARRAY[
+      n_tok, (provsql.as_random(1::double precision))::uuid])]);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief @f$\sqrt{\max(v, 0)}@f$ gate over a variance token: the max-clamp
+ *  removes the tiny negative values float error can produce (variance is
+ *  mathematically non-negative), so the POW domain guard never fires. */
+CREATE OR REPLACE FUNCTION rv_stat_sqrt_token(v_tok uuid)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_arith(7, ARRAY[
+    provsql.provenance_arith(5, ARRAY[
+      v_tok, (provsql.as_random(0::double precision))::uuid]),
+    (provsql.as_random(0.5::double precision))::uuid]);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Population-covariance gate @f$SXY/N - (SX/N)(SY/N)@f$ from the
+ *  power-sum tokens. */
+CREATE OR REPLACE FUNCTION rv_stat_covar_pop_token(
+  n_tok uuid, sx_tok uuid, sy_tok uuid, sxy_tok uuid)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_arith(2, ARRAY[
+    provsql.provenance_arith(3, ARRAY[sxy_tok, n_tok]),
+    provsql.provenance_arith(1, ARRAY[
+      provsql.provenance_arith(3, ARRAY[sx_tok, n_tok]),
+      provsql.provenance_arith(3, ARRAY[sy_tok, n_tok])])]);
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+/** @brief Final function for @c covar_pop(random_variable, random_variable). */
+CREATE OR REPLACE FUNCTION covar_pop_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  t record;
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  SELECT * INTO t FROM rv_stat_sum_tokens(state, 3);
+  RETURN random_variable_make(
+    rv_stat_covar_pop_token(t.n_tok, t.sx_tok, t.sy_tok, t.sxy_tok));
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+/** @brief Final function for @c covar_samp(random_variable, random_variable):
+ *  @f$(SXY - SX\,SY/N) / (N-1)@f$. */
+CREATE OR REPLACE FUNCTION covar_samp_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  t record;
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  SELECT * INTO t FROM rv_stat_sum_tokens(state, 3);
+  RETURN random_variable_make(
+    provenance_arith(3, ARRAY[
+      provenance_arith(2, ARRAY[
+        t.sxy_tok,
+        provenance_arith(3, ARRAY[
+          provenance_arith(1, ARRAY[t.sx_tok, t.sy_tok]), t.n_tok])]),
+      provenance_arith(2, ARRAY[
+        t.n_tok, (as_random(1::double precision))::uuid])]));
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+/** @brief Final function for @c corr(random_variable, random_variable):
+ *  @f$\mathrm{covar\_pop} / \sqrt{\max(v_x v_y, 0)}@f$ (a zero-variance
+ *  world divides to @f$\pm\infty@f$ / NaN, the undefined-world convention,
+ *  matching SQL's NULL for a zero-stddev input). */
+CREATE OR REPLACE FUNCTION corr_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  t record;
+  vx uuid;
+  vy uuid;
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  SELECT * INTO t FROM rv_stat_sum_tokens(state, 3);
+  vx := rv_stat_var_pop_token(t.n_tok, t.sx_tok, t.sxx_tok);
+  vy := rv_stat_var_pop_token(t.n_tok, t.sy_tok, t.syy_tok);
+  RETURN random_variable_make(
+    provenance_arith(3, ARRAY[
+      rv_stat_covar_pop_token(t.n_tok, t.sx_tok, t.sy_tok, t.sxy_tok),
+      rv_stat_sqrt_token(provenance_arith(1, ARRAY[vx, vy]))]));
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+/** @brief Final function for @c stddev_pop(random_variable). */
+CREATE OR REPLACE FUNCTION stddev_pop_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  t record;
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  SELECT * INTO t FROM rv_stat_sum_tokens(state, 2);
+  RETURN random_variable_make(
+    rv_stat_sqrt_token(
+      rv_stat_var_pop_token(t.n_tok, t.sx_tok, t.sxx_tok)));
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+/** @brief Final function for @c stddev_samp(random_variable). */
+CREATE OR REPLACE FUNCTION stddev_samp_rv_ffunc(state uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  t record;
+BEGIN
+  IF state IS NULL OR array_length(state, 1) IS NULL THEN
+    RETURN NULL;
+  END IF;
+  SELECT * INTO t FROM rv_stat_sum_tokens(state, 2);
+  RETURN random_variable_make(
+    rv_stat_sqrt_token(
+      rv_stat_var_samp_token(t.n_tok, t.sx_tok, t.sxx_tok)));
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE AGGREGATE covar_pop(random_variable, random_variable) (
+  SFUNC     = rv_stat2_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = covar_pop_rv_ffunc
+);
+
+CREATE AGGREGATE covar_samp(random_variable, random_variable) (
+  SFUNC     = rv_stat2_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = covar_samp_rv_ffunc
+);
+
+CREATE AGGREGATE corr(random_variable, random_variable) (
+  SFUNC     = rv_stat2_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = corr_rv_ffunc
+);
+
+CREATE AGGREGATE stddev_pop(random_variable) (
+  SFUNC     = rv_stat1_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = stddev_pop_rv_ffunc
+);
+
+CREATE AGGREGATE stddev_samp(random_variable) (
+  SFUNC     = rv_stat1_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = stddev_samp_rv_ffunc
+);
+
+-- The indicator-carrying rewrite targets (planner hook only; never called
+-- directly by users).
+
+CREATE AGGREGATE rv_covar_pop_impl(
+  random_variable, random_variable, random_variable) (
+  SFUNC     = rv_stat2_impl_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = covar_pop_rv_ffunc
+);
+
+CREATE AGGREGATE rv_covar_samp_impl(
+  random_variable, random_variable, random_variable) (
+  SFUNC     = rv_stat2_impl_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = covar_samp_rv_ffunc
+);
+
+CREATE AGGREGATE rv_corr_impl(
+  random_variable, random_variable, random_variable) (
+  SFUNC     = rv_stat2_impl_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = corr_rv_ffunc
+);
+
+CREATE AGGREGATE rv_stddev_pop_impl(random_variable, random_variable) (
+  SFUNC     = rv_stat1_impl_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = stddev_pop_rv_ffunc
+);
+
+CREATE AGGREGATE rv_stddev_samp_impl(random_variable, random_variable) (
+  SFUNC     = rv_stat1_impl_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = stddev_samp_rv_ffunc
+);
+
+/**
+ * @brief Mint the @c PROVSQL_ARITH_PERCENTILE gate: the continuous
+ *        percentile (SQL @c percentile_cont) over a group of RV rows.
+ *
+ * @p pairs is the interleaved wire list @c [ind_1, x_1, ..., ind_n, x_n]
+ * (each @p ind_i a 0/1 presence-indicator RV).  The @p fraction is
+ * text-encoded in the gate's @c extra and participates in the token UUID
+ * (two percentiles of the same group at different fractions are distinct
+ * gates).  Per Monte Carlo draw, the sampler collects the values whose
+ * indicator draws 1, sorts them, and linearly interpolates at the
+ * fraction; a draw with no present row is NaN (undefined world).
+ */
+CREATE OR REPLACE FUNCTION rv_percentile_make(fraction double precision,
+                                              pairs uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF fraction IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF fraction < 0 OR fraction > 1 THEN
+    RAISE EXCEPTION
+      'percentile_cont: fraction must be between 0 and 1 (got %)', fraction;
+  END IF;
+  token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('arith', '10', pairs::text, fraction::text));
+  PERFORM create_gate(token, 'arith', pairs);
+  PERFORM set_infos(token, 10);  -- 10 = PROVSQL_ARITH_PERCENTILE
+  PERFORM set_extra(token, fraction::text);
+  RETURN random_variable_make(token);
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+/** @brief State transition for the public ordered-set
+ *  @c percentile_cont(float8) WITHIN GROUP (ORDER BY random_variable):
+ *  append the certain indicator and the row's RV.  Only reachable on
+ *  untracked input (a provenance-tracked query is rewritten to
+ *  @c rv_percentile_impl before planning), where the sort over
+ *  @c random_variable raises the ordering-is-meaningless diagnostic
+ *  first -- so in practice this runs only for empty input. */
+CREATE OR REPLACE FUNCTION percentile_cont_rv_sfunc(
+  state uuid[], x random_variable)
+  RETURNS uuid[] AS
+$$
+  SELECT provsql.rv_stat1_sfunc(state, x);
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/** @brief Final function for the public ordered-set @c percentile_cont:
+ *  receives the direct @p fraction argument after the state. */
+CREATE OR REPLACE FUNCTION percentile_cont_rv_ffunc(
+  state uuid[], fraction double precision)
+  RETURNS random_variable AS
+$$
+  SELECT CASE
+    WHEN state IS NULL OR array_length(state, 1) IS NULL THEN NULL
+    ELSE provsql.rv_percentile_make(fraction, state)
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE percentile_cont(double precision ORDER BY random_variable) (
+  SFUNC     = percentile_cont_rv_sfunc,
+  STYPE     = uuid[],
+  INITCOND  = '{}',
+  FINALFUNC = percentile_cont_rv_ffunc
+);
+
+/** @brief Transition state for @c rv_percentile_impl: the fraction (from
+ *  the first row) plus the interleaved indicator/value token pairs. */
+CREATE TYPE rv_percentile_state AS (
+  fraction double precision,
+  tokens uuid[]
+);
+
+/** @brief State transition for @c rv_percentile_impl, the planner-hook
+ *  rewrite target of a provenance-tracked @c percentile_cont: stashes the
+ *  (group-constant) fraction and appends the indicator/value pair. */
+CREATE OR REPLACE FUNCTION rv_percentile_impl_sfunc(
+  state rv_percentile_state, fraction double precision,
+  ind random_variable, x random_variable)
+  RETURNS rv_percentile_state AS
+$$
+  SELECT ROW(
+    coalesce((state).fraction, fraction),
+    CASE
+      WHEN x IS NULL THEN (state).tokens
+      ELSE (state).tokens ||
+           ARRAY[coalesce((ind)::uuid,
+                   (provsql.as_random(1::double precision))::uuid),
+                 (x)::uuid]
+    END)::provsql.rv_percentile_state;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/** @brief Final function for @c rv_percentile_impl. */
+CREATE OR REPLACE FUNCTION rv_percentile_impl_ffunc(state rv_percentile_state)
+  RETURNS random_variable AS
+$$
+  SELECT CASE
+    WHEN state IS NULL OR array_length((state).tokens, 1) IS NULL THEN NULL
+    ELSE provsql.rv_percentile_make((state).fraction, (state).tokens)
+  END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE AGGREGATE rv_percentile_impl(
+  double precision, random_variable, random_variable) (
+  SFUNC     = rv_percentile_impl_sfunc,
+  STYPE     = rv_percentile_state,
+  INITCOND  = '(,"{}")',
+  FINALFUNC = rv_percentile_impl_ffunc
+);
+
 /** @} */
 
 /** @} */
@@ -6116,6 +6854,79 @@ CREATE OR REPLACE FUNCTION correlation(
   RETURNS double precision AS $$
   SELECT provsql.covariance(x, y, prov)
        / NULLIF(provsql.stddev(x, prov) * provsql.stddev(y, prov), 0);
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/** @brief C entry point behind @ref entropy (uuid-level binding). */
+CREATE OR REPLACE FUNCTION rv_entropy(token uuid, prov uuid)
+  RETURNS double precision
+  AS 'provsql','rv_entropy' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Entropy H(X) of a random variable, in nats.
+ *
+ * Shannon entropy for a discrete distribution (a categorical / discrete
+ * count / constant -- a point mass has entropy @c 0), differential
+ * entropy for a continuous one (quadrature of @c -f ln f over the
+ * family's integration range; also exact through independent-arm
+ * Bernoulli mixture trees such as @ref gmm's).  Shapes with no
+ * closed density (arithmetic composites) and the conditional form fall
+ * back to a Monte Carlo histogram plug-in estimate at the
+ * @c provsql.rv_mc_samples budget.
+ *
+ * @param prov optional conditioning event; default @c gate_one()
+ *   (unconditional).
+ */
+CREATE OR REPLACE FUNCTION entropy(
+  x random_variable, prov uuid DEFAULT gate_one())
+  RETURNS double precision AS $$
+  SELECT provsql.rv_entropy((x)::uuid, prov);
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/** @brief C entry point behind @ref kl (uuid-level binding). */
+CREATE OR REPLACE FUNCTION rv_kl(p uuid, q uuid)
+  RETURNS double precision
+  AS 'provsql','rv_kl' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Kullback-Leibler divergence KL(P || Q), in nats.
+ *
+ * Exact: the defining sum for two discrete distributions (matching
+ * outcomes by value) and the defining integral (quadrature over P's
+ * integration window) for two continuous ones, including
+ * independent-arm mixture trees.  Returns @c Infinity when P is not
+ * absolutely continuous with respect to Q -- an outcome of P that Q
+ * gives zero mass, mismatched kinds (discrete vs continuous), or a
+ * region of P's support where Q's density (under)flows to zero.  Both
+ * arguments must resolve to closed-form densities; arithmetic
+ * composites and conditioned variables raise.
+ */
+CREATE OR REPLACE FUNCTION kl(p random_variable, q random_variable)
+  RETURNS double precision AS $$
+  SELECT provsql.rv_kl((p)::uuid, (q)::uuid);
+$$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
+
+/** @brief C entry point behind @ref mutual_information (uuid-level
+ *  binding). */
+CREATE OR REPLACE FUNCTION rv_mutual_information(x uuid, y uuid)
+  RETURNS double precision
+  AS 'provsql','rv_mutual_information' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief Mutual information I(X; Y), in nats.
+ *
+ * Exactly @c 0 for structurally independent variables (disjoint
+ * stochastic-leaf footprints, the same test the moment evaluators use);
+ * @c H(X) for a discrete variable paired with itself and @c Infinity
+ * for a continuous one (I(X;X) diverges).  A genuinely correlated pair
+ * (shared leaves) is estimated by a 2-D histogram plug-in over coupled
+ * joint Monte Carlo draws -- both roots evaluated against the same
+ * per-iteration cache, so shared leaves keep their joint law -- at the
+ * @c provsql.rv_mc_samples budget.
+ */
+CREATE OR REPLACE FUNCTION mutual_information(
+  x random_variable, y random_variable)
+  RETURNS double precision AS $$
+  SELECT provsql.rv_mutual_information((x)::uuid, (y)::uuid);
 $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
 
 /**

@@ -1000,6 +1000,60 @@ M-polymorphic gate would have required a parallel evaluation
 path in every analytical evaluator. The semimodule-of-mixtures
 shape reuses what's there.
 
+Statistic aggregates
+~~~~~~~~~~~~~~~~~~~~
+
+The SQL-standard statistic aggregates (``covar_pop`` /
+``covar_samp`` / ``corr`` two-argument, ``stddev_pop`` /
+``stddev_samp`` one-argument, and the ordered-set
+``percentile_cont``) use a different wrap: instead of baking a
+fold identity into each row's mixture, they carry the row's
+*presence indicator* explicitly. The public aggregates append
+the certain indicator ``as_random(1)`` per row; a
+provenance-tracked query is rewritten by
+``make_rv_aggregate_expression`` to the internal ``rv_*_impl``
+aggregates, whose extra leading argument is
+``rv_aggregate_indicator(prov)`` (the ``mixture(prov, 1, 0)``
+indicator ``avg`` already uses), so absent rows drop out of
+every sum, the count, and the percentile member set.
+
+The moment statistics are then pure circuit *arithmetic* over
+indicator-weighted power sums — ``rv_stat_sum_tokens`` mints
+:math:`N = \sum \mathbf{1}_i`, :math:`S_X`, :math:`S_{XX}` (and
+:math:`S_Y, S_{XY}, S_{YY}` for the two-argument forms) as
+``gate_arith`` ``PLUS``-of-``TIMES`` trees, sharing each row's
+indicator gate between :math:`N` and every product it weighs so
+the Monte Carlo per-iteration cache keeps presence coupled
+across the sums (and a repeated wire ``[ind, x, x]`` reuses the
+same draw of ``x``, giving :math:`x^2`). No new opcode is
+needed: e.g. ``covar_pop`` is ``MINUS(DIV(SXY, N),
+TIMES(DIV(SX, N), DIV(SY, N)))``, and the stddevs clamp the
+variance with ``MAX(v, 0)`` before ``POW(·, 0.5)`` so
+floating-point error can never trip the ``pow`` domain guard.
+Undefined worlds (:math:`N = 0`; :math:`N = 1` for the sample
+forms; zero variance for ``corr``) evaluate to ``NaN``, the
+established convention the moment estimators skip.
+
+``percentile_cont`` is the one statistic arithmetic cannot
+express: it mints the appended ``PROVSQL_ARITH_PERCENTILE``
+(``= 10``) ``gate_arith`` whose wires are the interleaved
+``[ind_1, x_1, ..., ind_n, x_n]`` pairs and whose fraction is
+text-encoded in ``extra`` (and participates in the token UUID,
+so two fractions over the same group are distinct gates). The
+Monte Carlo sampler arm collects the values whose indicator
+draws 1, sorts, and linearly interpolates; ``RangeCheck``
+propagates the hull of the value wires' supports; the moment
+evaluators route it straight to the sampler (no closed form).
+Because the planner rewrite replaces the ordered-set ``Aggref``
+with the *normal* three-argument ``rv_percentile_impl`` before
+planning, the executor never sorts ``random_variable`` rows —
+the sort order is irrelevant to the gate — which is also why
+the untracked public form is unusable: its input sort funnels
+into ``random_variable_btree_cmp`` and raises. The fraction
+travels as the leading impl argument into a composite
+transition state (``rv_percentile_state``), since a normal
+aggregate's final function sees only the state.
+
 Studio Rendering
 ----------------
 

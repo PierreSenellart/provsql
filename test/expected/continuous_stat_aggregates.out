@@ -1,0 +1,40 @@
+\set ECHO none
+covar_pop|covar_samp|corr
+3.0000|6.0000|1.0000
+(1 row)
+stddev_pop|stddev_samp
+1.0000|1.4142
+(1 row)
+corr_self
+1.0000
+(1 row)
+add_provenance
+
+(1 row)
+covar_pop_tracked_close
+t
+(1 row)
+stddev_pop_tracked_close
+t
+(1 row)
+add_provenance
+
+(1 row)
+median_certain|q1_certain
+20.0000|15.0000
+(1 row)
+pct_gate|pct_op|pct_fraction
+arith|10|0.5
+(1 row)
+ERROR:  percentile_cont: fraction must be between 0 and 1 (got 1.5)
+CONTEXT:  PL/pgSQL function rv_percentile_make(double precision,uuid[]) line 9 at RAISE
+SQL function "rv_percentile_impl_ffunc" statement 1
+add_provenance
+
+(1 row)
+median_uncertain_close
+t
+(1 row)
+stat_aggregates_done
+ok
+(1 row)

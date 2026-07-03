@@ -225,6 +225,18 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
           if (wires.size() != 1) break;
           result = expInt(first);
           break;
+        case PROVSQL_ARITH_PERCENTILE:
+          /* Continuous percentile over interleaved [ind, x, ...] wires:
+           * every draw interpolates within the present values, so the hull
+           * of the value wires' supports is a sound bound regardless of
+           * which subset is present. */
+          if (wires.size() < 2 || wires.size() % 2 != 0) break;
+          result = intervalOf(gc, wires[1], cache);
+          for (std::size_t i = 3; i < wires.size(); i += 2) {
+            Interval o = intervalOf(gc, wires[i], cache);
+            result = { std::min(result.lo, o.lo), std::max(result.hi, o.hi) };
+          }
+          break;
       }
       break;
     }

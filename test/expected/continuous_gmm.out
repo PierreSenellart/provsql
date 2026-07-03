@@ -1,0 +1,28 @@
+\set ECHO none
+e_gmm
+466.0000
+(1 row)
+var_gmm
+164394.0000
+(1 row)
+p_lt_380_close
+t
+(1 row)
+single_component
+rv
+(1 row)
+e_single
+5.0000
+(1 row)
+e_dirac_mix
+15.0000
+(1 row)
+ERROR:  provsql.gmm: weights must sum to 1 within 1e-9 (got 1.1)
+CONTEXT:  PL/pgSQL function gmm(double precision[],double precision[],double precision[]) line 29 at RAISE
+ERROR:  provsql.gmm: weights, means, and stddevs must have the same length (got 2, 1, 2)
+CONTEXT:  PL/pgSQL function gmm(double precision[],double precision[],double precision[]) line 17 at RAISE
+ERROR:  provsql.gmm: weights[1] must be in [0,1] (got -0.5)
+CONTEXT:  PL/pgSQL function gmm(double precision[],double precision[],double precision[]) line 23 at RAISE
+gmm_done
+ok
+(1 row)

@@ -1,0 +1,49 @@
+\set ECHO none
+e_samples
+2.0000
+(1 row)
+var_samples
+0.5000
+(1 row)
+p_le_2
+0.7500
+(1 row)
+median_samples
+2.0000
+(1 row)
+h_samples
+1.0397
+(1 row)
+single_value
+value
+(1 row)
+ERROR:  provsql.empirical_samples: samples must be non-empty
+CONTEXT:  PL/pgSQL function empirical_samples(double precision[]) line 14 at RAISE
+ERROR:  provsql.empirical_samples: samples must be finite (got NaN)
+CONTEXT:  PL/pgSQL function empirical_samples(double precision[]) line 20 at RAISE
+e_cdf
+1.0000
+(1 row)
+var_cdf
+0.3333
+(1 row)
+e_cdf_atom
+0.7500
+(1 row)
+supp_lo|supp_hi
+0.0000|2.0000
+(1 row)
+e_rainfall
+1.3375
+(1 row)
+ERROR:  provsql.empirical_cdf: cdf must end at 1 within 1e-9 (got 0.9)
+CONTEXT:  PL/pgSQL function empirical_cdf(double precision[],double precision[]) line 39 at RAISE
+ERROR:  provsql.empirical_cdf: grid must be strictly increasing (grid[1] = 1, grid[2] = 0)
+CONTEXT:  PL/pgSQL function empirical_cdf(double precision[],double precision[]) line 27 at RAISE
+ERROR:  provsql.empirical_cdf: cdf must be non-decreasing (cdf[1] = 0.9, cdf[2] = 0.5)
+CONTEXT:  PL/pgSQL function empirical_cdf(double precision[],double precision[]) line 34 at RAISE
+ERROR:  provsql.empirical_cdf: grid must have at least two entries
+CONTEXT:  PL/pgSQL function empirical_cdf(double precision[],double precision[]) line 12 at RAISE
+empirical_done
+ok
+(1 row)

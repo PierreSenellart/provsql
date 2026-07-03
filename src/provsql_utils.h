@@ -123,7 +123,17 @@ typedef enum provsql_arith_op {
                            ///< exponent raises at evaluation)
   PROVSQL_ARITH_LN    = 8, ///< unary, natural logarithm of child0
                            ///< (a negative draw raises at evaluation)
-  PROVSQL_ARITH_EXP   = 9  ///< unary, e^child0
+  PROVSQL_ARITH_EXP   = 9, ///< unary, e^child0
+  PROVSQL_ARITH_PERCENTILE = 10 ///< continuous percentile (order-statistic
+                                ///< aggregate): wires are interleaved
+                                ///< [ind_1, x_1, ..., ind_n, x_n] (even
+                                ///< count) where ind_i is the row's 0/1
+                                ///< presence indicator; the fraction is
+                                ///< text-encoded in @c extra. Per draw:
+                                ///< the values whose indicator draws 1 are
+                                ///< sorted and linearly interpolated at the
+                                ///< fraction (SQL @c percentile_cont); an
+                                ///< empty draw is NaN (undefined world).
 } provsql_arith_op;
 
 /** Names of gate types */
@@ -199,6 +209,29 @@ typedef struct constants_t {
   Oid OID_AGG_MAX_RV;     ///< provsql.max(random_variable)
   Oid OID_AGG_MIN_RV;     ///< provsql.min(random_variable)
   Oid OID_AGG_RV_SUM_OR_NULL; ///< provsql.rv_sum_or_null(random_variable): the avg-numerator sum, NULL on an empty group (so avg is NULL for an empty group after STRICT division)
+  /**@}*/
+  /** @brief SQL-standard statistic aggregates over @c random_variable rows
+   *  and their internal indicator-carrying rewrite targets.
+   *
+   *  The public forms wrap every row with the certain indicator
+   *  @c as_random(1); a provenance-tracked query is rewritten by
+   *  @c make_rv_aggregate_expression to the @c _impl form whose extra
+   *  leading argument is the row's provenance indicator
+   *  @c rv_aggregate_indicator(prov), so absent rows drop out of the
+   *  statistic (count, sums, and the percentile's member set alike). */
+  /**@{*/
+  Oid OID_AGG_COVAR_POP_RV;   ///< provsql.covar_pop(rv, rv)
+  Oid OID_AGG_COVAR_SAMP_RV;  ///< provsql.covar_samp(rv, rv)
+  Oid OID_AGG_CORR_RV;        ///< provsql.corr(rv, rv)
+  Oid OID_AGG_STDDEV_POP_RV;  ///< provsql.stddev_pop(rv)
+  Oid OID_AGG_STDDEV_SAMP_RV; ///< provsql.stddev_samp(rv)
+  Oid OID_AGG_PERCENTILE_CONT_RV; ///< provsql.percentile_cont(float8) WITHIN GROUP (ORDER BY rv)
+  Oid OID_AGG_RV_COVAR_POP_IMPL;   ///< provsql.rv_covar_pop_impl(ind rv, x rv, y rv)
+  Oid OID_AGG_RV_COVAR_SAMP_IMPL;  ///< provsql.rv_covar_samp_impl(ind rv, x rv, y rv)
+  Oid OID_AGG_RV_CORR_IMPL;        ///< provsql.rv_corr_impl(ind rv, x rv, y rv)
+  Oid OID_AGG_RV_STDDEV_POP_IMPL;  ///< provsql.rv_stddev_pop_impl(ind rv, x rv)
+  Oid OID_AGG_RV_STDDEV_SAMP_IMPL; ///< provsql.rv_stddev_samp_impl(ind rv, x rv)
+  Oid OID_AGG_RV_PERCENTILE_IMPL;  ///< provsql.rv_percentile_impl(fraction float8, ind rv, x rv)
   /**@}*/
   Oid OID_FUNCTION_CHOOSE; ///< OID of the choose(anyelement) aggregate (keeps the first non-NULL value); used to decorrelate scalar subqueries into a LEFT JOIN + GROUP BY
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.

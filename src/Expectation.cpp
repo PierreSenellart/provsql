@@ -13,6 +13,7 @@
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
 #include "distributions/Distribution.h"  // makeDistribution -> integrationRange
+#include "PivotIntegration.h"  // simpsonIntegrate / binomial / centralFromRaw
 #include "RangeCheck.h"
 #include "provsql_utils_cpp.h"
 #include "semiring/BoolExpr.h"
@@ -302,33 +303,28 @@ mixedOrderStatMean(const GenericCircuit &gc, gate_t g, bool isMax,
   if (!(hi > lo))
     return std::nullopt;
 
-  const int N = 4000;
-  const double h = (hi - lo) / N;
-  double acc = 0.0;
-  for (int i = 0; i <= N; ++i) {
-    const double t = lo + i * h;
-    double integrand;
-    if (isMax) {
-      double prodF = 1.0;               /* ∏ F_i(t) = P(max ≤ t) */
-      for (const auto &d : dists) {
-        const double F = d->cdf(t);
-        if (std::isnan(F)) return std::nullopt;
-        prodF *= F;
+  const double integral = simpsonIntegrate(lo, hi, kSimpsonPanels,
+    [&](double t) {
+      if (isMax) {
+        double prodF = 1.0;             /* ∏ F_i(t) = P(max ≤ t) */
+        for (const auto &d : dists) {
+          const double F = d->cdf(t);
+          if (std::isnan(F)) return std::numeric_limits<double>::quiet_NaN();
+          prodF *= F;
+        }
+        return 1.0 - prodF;             /* P(max > t) */
       }
-      integrand = 1.0 - prodF;          /* P(max > t) */
-    } else {
       double prod1mF = 1.0;             /* ∏ (1 − F_i(t)) = P(min > t) */
       for (const auto &d : dists) {
         const double F = d->cdf(t);
-        if (std::isnan(F)) return std::nullopt;
+        if (std::isnan(F)) return std::numeric_limits<double>::quiet_NaN();
         prod1mF *= (1.0 - F);
       }
-      integrand = prod1mF;
-    }
-    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
-    acc += coeff * integrand;
-  }
-  return lo + acc * h / 3.0;
+      return prod1mF;
+    });
+  if (std::isnan(integral))
+    return std::nullopt;
+  return lo + integral;
 }
 
 unsigned mc_samples_or_throw(const std::string &what)
@@ -466,18 +462,6 @@ double mc_conditional_central_moment(const GenericCircuit &gc, gate_t g,
   return total / static_cast<double>(finite_count);
 }
 
-double binomial(unsigned n, unsigned k)
-{
-  if (k > n) return 0.0;
-  if (k > n - k) k = n - k;
-  double r = 1.0;
-  for (unsigned i = 1; i <= k; ++i) {
-    r *= static_cast<double>(n - i + 1);
-    r /= static_cast<double>(i);
-  }
-  return r;
-}
-
 double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp);
 double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp);
 double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
@@ -517,20 +501,8 @@ try_truncated_closed_form(const GenericCircuit &gc, gate_t root,
   };
 
   if (!central) return raw(k);
-
-  /* Central: E[(X - μ_A)^k | A] = Σ_{i=0..k} C(k,i) (-μ_A)^{k-i} E[X^i | A]. */
-  auto mu_opt = raw(1);
-  if (!mu_opt) return std::nullopt;
-  const double mu = *mu_opt;
-  if (k == 1) return 0.0;
-  double total = 0.0;
-  for (unsigned i = 0; i <= k; ++i) {
-    auto m_i = raw(i);
-    if (!m_i) return std::nullopt;
-    total += binomial(k, i)
-           * std::pow(-mu, static_cast<double>(k - i)) * (*m_i);
-  }
-  return total;
+  /* Central: E[(X - μ_A)^k | A] via the binomial expansion. */
+  return centralFromRaw(k, raw);
 }
 
 /* A conditioning event of the shape @c "X op Y", where the target @c X and the
@@ -601,24 +573,22 @@ double rvVsRvConditionalMoment(const DistributionSpec &X,
   if (!dX->integrationRange(lo, hi))
     return std::numeric_limits<double>::quiet_NaN();
 
-  const int N = 4000;  /* even: composite Simpson */
-  const double h = (hi - lo) / N;
-  double num = 0.0, den = 0.0;
-  for (int i = 0; i <= N; ++i) {
-    const double x = lo + i * h;
+  auto base = [&](double x) {
     const double fX = dX->pdf(x);
     const double FY = dY->cdf(x);
     if (std::isnan(fX) || std::isnan(FY))
       return std::numeric_limits<double>::quiet_NaN();
     const double w = targetGreater ? FY : (1.0 - FY);  /* P(Y<x) / P(Y>x) */
-    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
-    const double base = fX * w;
-    den += coeff * base;
-    num += coeff * std::pow(x, static_cast<double>(k)) * base;
-  }
-  den *= h / 3.0;
-  num *= h / 3.0;
-  if (!(den > 1e-12))
+    return fX * w;
+  };
+  const double den = simpsonIntegrate(lo, hi, kSimpsonPanels, base);
+  if (std::isnan(den) || !(den > 1e-12))
+    return std::numeric_limits<double>::quiet_NaN();
+  const double num = simpsonIntegrate(lo, hi, kSimpsonPanels,
+    [&](double x) {
+      return std::pow(x, static_cast<double>(k)) * base(x);
+    });
+  if (std::isnan(num))
     return std::numeric_limits<double>::quiet_NaN();
   return num / den;
 }
@@ -642,19 +612,7 @@ try_rvVsRv_conditional_moment(const GenericCircuit &gc, gate_t root,
   };
 
   if (!central) return raw(k);
-
-  auto mu_opt = raw(1);
-  if (!mu_opt) return std::nullopt;
-  const double mu = *mu_opt;
-  if (k == 1) return 0.0;
-  double total = 0.0;
-  for (unsigned i = 0; i <= k; ++i) {
-    auto m_i = raw(i);
-    if (!m_i) return std::nullopt;
-    total += binomial(k, i)
-           * std::pow(-mu, static_cast<double>(k - i)) * (*m_i);
-  }
-  return total;
+  return centralFromRaw(k, raw);
 }
 
 /* One comparison of a pivot RV X against another operand, a factor in the
@@ -700,11 +658,7 @@ double pivotConjunctionIntegral(const DistributionSpec &X,
       greater.push_back(f.pivotGreater);
     }
 
-  const int N = 4000;  /* even: composite Simpson */
-  const double h = (hi - lo) / N;
-  double acc = 0.0;
-  for (int i = 0; i <= N; ++i) {
-    const double x = lo + i * h;
+  return simpsonIntegrate(lo, hi, kSimpsonPanels, [&](double x) {
     const double fX = dX->pdf(x);
     if (std::isnan(fX)) return std::numeric_limits<double>::quiet_NaN();
     double w = fX;
@@ -713,10 +667,8 @@ double pivotConjunctionIntegral(const DistributionSpec &X,
       if (std::isnan(FY)) return std::numeric_limits<double>::quiet_NaN();
       w *= greater[j] ? FY : (1.0 - FY);
     }
-    const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
-    acc += coeff * std::pow(x, static_cast<double>(k)) * w;
-  }
-  return acc * h / 3.0;
+    return std::pow(x, static_cast<double>(k)) * w;
+  });
 }
 
 /* A conditioning event that is a conjunction of comparisons all sharing the
@@ -800,19 +752,7 @@ try_pivotConjunction_conditional_moment(const GenericCircuit &gc, gate_t root,
   };
 
   if (!central) return raw(k);
-
-  auto mu_opt = raw(1);
-  if (!mu_opt) return std::nullopt;
-  const double mu = *mu_opt;
-  if (k == 1) return 0.0;
-  double total = 0.0;
-  for (unsigned i = 0; i <= k; ++i) {
-    auto m_i = raw(i);
-    if (!m_i) return std::nullopt;
-    total += binomial(k, i)
-           * std::pow(-mu, static_cast<double>(k - i)) * (*m_i);
-  }
-  return total;
+  return centralFromRaw(k, raw);
 }
 
 /* Closed-form image of a unary LN / EXP transform over a bare gate_rv
@@ -1344,6 +1284,11 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
             return image->mean();
           return mc_raw_moment(gc, g, 1,
             "Expectation of a gate_arith nonlinear transform");
+        case PROVSQL_ARITH_PERCENTILE:
+          // Order-statistic aggregate over a random member set: no closed
+          // form; the sampler sorts and interpolates each draw.
+          return mc_raw_moment(gc, g, 1,
+            "Expectation of a gate_arith PERCENTILE");
       }
       throw CircuitException(
         "Expectation: unknown gate_arith op tag: " +
@@ -1466,6 +1411,8 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           if (auto image = transform_image(gc, g, op))
             return image->variance();
           return mc_var("Variance of a gate_arith nonlinear transform");
+        case PROVSQL_ARITH_PERCENTILE:
+          return mc_var("Variance of a gate_arith PERCENTILE");
       }
       throw CircuitException(
         "Variance: unknown gate_arith op tag: " +
@@ -1622,6 +1569,9 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
             return image->rawMoment(k);
           return mc_raw_moment(gc, g, k,
             "Raw moment of a gate_arith nonlinear transform");
+        case PROVSQL_ARITH_PERCENTILE:
+          return mc_raw_moment(gc, g, k,
+            "Raw moment of a gate_arith PERCENTILE");
       }
       throw CircuitException(
         "Moment: unknown gate_arith op tag: " +

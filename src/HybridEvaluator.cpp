@@ -20,6 +20,7 @@
 #include "distributions/Distribution.h"       // makeDistribution, affine, closePlusTerms
 #include "Expectation.h"        // evaluateBooleanProbability
 #include "MonteCarloSampler.h"  // monteCarloRV, monteCarloScalarSamples
+#include "PivotIntegration.h"   // simpsonIntegrate, kSimpsonPanels
 #include "RandomVariable.h"     // parse_distribution_spec, double_to_text
 extern "C" {
 #include "provsql_utils.h"      // gate_type, provsql_arith_op
@@ -132,6 +133,10 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
     case PROVSQL_ARITH_EXP:
       if (wires.size() != 1) return NaN;
       return std::exp(first);
+    case PROVSQL_ARITH_PERCENTILE:
+      /* An order-statistic aggregate over a random member set is never a
+       * constant: leave it for the sampler. */
+      return NaN;
   }
   return NaN;
 }
@@ -1793,7 +1798,6 @@ bool inline_analytic_pivot_joint_table(GenericCircuit &gc,
     if (!info.factors[j].isConst)
       otherDist[j] = makeDistribution(info.factors[j].other);
 
-  const int N = 4000;  /* even: composite Simpson */
   std::vector<double> probs(nb_outcomes, 0.0);
   for (std::size_t w = 0; w < nb_outcomes; ++w) {
     /* Constant factors clip the window for this cell. */
@@ -1808,28 +1812,23 @@ bool inline_analytic_pivot_joint_table(GenericCircuit &gc,
     }
     if (!(hi > lo)) { probs[w] = 0.0; continue; }
 
-    const double h = (hi - lo) / N;
-    double acc = 0.0;
-    bool bad = false;
-    for (int i = 0; i <= N && !bad; ++i) {
-      const double x = lo + i * h;
-      const double fX = dX->pdf(x);
-      if (std::isnan(fX)) { bad = true; break; }
-      double weight = fX;
-      for (unsigned j = 0; j < k; ++j) {
-        if (info.factors[j].isConst) continue;
-        const bool bit = (w >> j) & 1u;
-        const bool greater = (info.factors[j].trueIsGreater == bit);
-        const double FY = otherDist[j]->cdf(x);
-        if (std::isnan(FY)) { bad = true; break; }
-        weight *= greater ? FY : (1.0 - FY);
-      }
-      if (bad) break;
-      const double coeff = (i == 0 || i == N) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
-      acc += coeff * weight;
-    }
-    if (bad) return false;
-    probs[w] = acc * h / 3.0;
+    const double cell = simpsonIntegrate(lo, hi, kSimpsonPanels,
+      [&](double x) {
+        const double fX = dX->pdf(x);
+        if (std::isnan(fX)) return std::numeric_limits<double>::quiet_NaN();
+        double weight = fX;
+        for (unsigned j = 0; j < k; ++j) {
+          if (info.factors[j].isConst) continue;
+          const bool bit = (w >> j) & 1u;
+          const bool greater = (info.factors[j].trueIsGreater == bit);
+          const double FY = otherDist[j]->cdf(x);
+          if (std::isnan(FY)) return std::numeric_limits<double>::quiet_NaN();
+          weight *= greater ? FY : (1.0 - FY);
+        }
+        return weight;
+      });
+    if (std::isnan(cell)) return false;
+    probs[w] = cell;
   }
 
   /* Circuit surgery: one shared key, one mulinput per positive outcome, each

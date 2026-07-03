@@ -205,6 +205,9 @@ _SQL_FUNC_MAP = {
     'rv_quantile':              '/doxygen-sql/html/group__probability.html#ga651c4b49df124157aae60ab1bfb92b89',
     'categorical':              '/doxygen-sql/html/group__random__variable__type.html#ga7dd6e75bde4c70b80c07e5e29478a801',
     'mixture':                  '/doxygen-sql/html/group__random__variable__type.html#gab2b650b7c42f7e0ab69c91d447a756b0',
+    'gmm':                      '/doxygen-sql/html/group__random__variable__type.html#ga53bcd712cd3f65eecca542b319ce956b',
+    'empirical_samples':        '/doxygen-sql/html/group__random__variable__type.html#gaf535466e7c90cbc51faae65d07328d0e',
+    'empirical_cdf':            '/doxygen-sql/html/group__random__variable__type.html#gaea4e1e98bcdd567865d9dc6848f895bc',
     'as_random':                '/doxygen-sql/html/group__random__variable__type.html#ga493b093cde0b627ee7bd02cd54b31802',
     'sum':                      '/doxygen-sql/html/group__random__variable__type.html#ga80cd04941bd7d2fabbfa03b6eea5c280',
     'avg':                      '/doxygen-sql/html/group__random__variable__type.html#ga0243c3a6d53bdc36a89ce5131b38e504',
@@ -217,9 +220,20 @@ _SQL_FUNC_MAP = {
     'covariance':               '/doxygen-sql/html/group__probability.html#ga0609748f9d8bbd0769f53c6f68f872a0',
     'correlation':              '/doxygen-sql/html/group__probability.html#ga5ba06cdd25f3577aba0365c36f84925d',
     'stddev':                   '/doxygen-sql/html/group__probability.html#ga80a0c4d6a8b8d1a46fd199e8d81e2fc6',
+    # Information-theoretic readouts
+    'entropy':                  '/doxygen-sql/html/group__probability.html#ga0814fecbae00fed3acc59eb74bcdde5a',
+    'kl':                       '/doxygen-sql/html/group__probability.html#ga5e86eea45720a9357272978c207cde38',
+    'mutual_information':       '/doxygen-sql/html/group__probability.html#gaf6a4eca5920f7d3104f34daf63882fdc',
     # min / max order-statistic aggregates over random_variable
     'min':                      '/doxygen-sql/html/group__random__variable__type.html#ga9b318ccf480eb3b6f2e267a1aef93f57',
     'max':                      '/doxygen-sql/html/group__random__variable__type.html#ga3fcaf990d98dd7d9fe28b87f2ef88079',
+    # SQL-standard statistic aggregates over random_variable rows
+    'covar_pop':                '/doxygen-sql/html/group__random__variable__type.html#ga408f7aa85323dbc00d442ef1103ef090',
+    'covar_samp':               '/doxygen-sql/html/group__random__variable__type.html#ga0c9446d2022356b4f1e2a15b0aa2bb34',
+    'corr':                     '/doxygen-sql/html/group__random__variable__type.html#ga06a6b204167aac4c2ad1ec796ea30381',
+    'stddev_pop':               '/doxygen-sql/html/group__random__variable__type.html#gaa66c3ccc1b909f7a6d99065a02b93232',
+    'stddev_samp':              '/doxygen-sql/html/group__random__variable__type.html#gaee374ea088e28f2c4d44cceeb93d9849',
+    'percentile_cont':          '/doxygen-sql/html/group__random__variable__type.html#ga56bf38ee1c09ba139ae662c3a311d554',
     # Sampling / histogram / simplifier introspection
     'rv_histogram':             '/doxygen-sql/html/group__circuit__introspection.html#ga53efbd4d68e0de0ca979cf52528c63db',
     'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#ga9db6bcdca7f5d52bc46a7c2e671a62fd',

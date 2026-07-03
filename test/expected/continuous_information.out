@@ -1,0 +1,56 @@
+\set ECHO none
+h_normal
+2.1121
+(1 row)
+h_uniform
+1.3863
+(1 row)
+h_dirac
+0.0000
+(1 row)
+h_coin
+0.6931
+(1 row)
+h_gmm_separated
+t
+(1 row)
+kl_same
+0.0000
+(1 row)
+kl_shifted
+0.5000
+(1 row)
+kl_widened
+0.3181
+(1 row)
+kl_coins
+0.5108
+(1 row)
+kl_not_abscont
+Infinity
+(1 row)
+kl_mixed_kinds
+Infinity
+(1 row)
+ERROR:  ProvSQL: rv_kl: kl: both arguments must resolve to a closed-form density (a bare distribution constructor, a constant, a categorical, or a mixture of those with independent arms); arithmetic composites and conditioned variables are not supported
+CONTEXT:  SQL function "kl" statement 1
+mi_independent
+0.0000
+(1 row)
+mi_self_continuous
+Infinity
+(1 row)
+ERROR:  ProvSQL: rv_mutual_information: mutual_information has no closed form for this shape and provsql.rv_mc_samples = 0 disables the Monte Carlo fallback
+CONTEXT:  SQL function "mutual_information" statement 1
+mi_correlated_close
+t
+(1 row)
+h_composite_close
+t
+(1 row)
+h_conditional_close
+t
+(1 row)
+information_done
+ok
+(1 row)

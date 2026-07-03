@@ -526,8 +526,28 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   constants.OID_AGG_MAX_RV = InvalidOid;
   constants.OID_AGG_MIN_RV = InvalidOid;
   constants.OID_AGG_RV_SUM_OR_NULL = InvalidOid;
+  constants.OID_AGG_COVAR_POP_RV = InvalidOid;
+  constants.OID_AGG_COVAR_SAMP_RV = InvalidOid;
+  constants.OID_AGG_CORR_RV = InvalidOid;
+  constants.OID_AGG_STDDEV_POP_RV = InvalidOid;
+  constants.OID_AGG_STDDEV_SAMP_RV = InvalidOid;
+  constants.OID_AGG_PERCENTILE_CONT_RV = InvalidOid;
+  constants.OID_AGG_RV_COVAR_POP_IMPL = InvalidOid;
+  constants.OID_AGG_RV_COVAR_SAMP_IMPL = InvalidOid;
+  constants.OID_AGG_RV_CORR_IMPL = InvalidOid;
+  constants.OID_AGG_RV_STDDEV_POP_IMPL = InvalidOid;
+  constants.OID_AGG_RV_STDDEV_SAMP_IMPL = InvalidOid;
+  constants.OID_AGG_RV_PERCENTILE_IMPL = InvalidOid;
   if (OidIsValid(constants.OID_TYPE_RANDOM_VARIABLE)) {
     Oid rvarg[1] = { constants.OID_TYPE_RANDOM_VARIABLE };
+    Oid rvarg2[2] = { constants.OID_TYPE_RANDOM_VARIABLE,
+                      constants.OID_TYPE_RANDOM_VARIABLE };
+    Oid rvarg3[3] = { constants.OID_TYPE_RANDOM_VARIABLE,
+                      constants.OID_TYPE_RANDOM_VARIABLE,
+                      constants.OID_TYPE_RANDOM_VARIABLE };
+    Oid pctarg[2] = { FLOAT8OID, constants.OID_TYPE_RANDOM_VARIABLE };
+    Oid pctimplarg[3] = { FLOAT8OID, constants.OID_TYPE_RANDOM_VARIABLE,
+                          constants.OID_TYPE_RANDOM_VARIABLE };
     Oid semimod3[3] = { constants.OID_TYPE_UUID,
                         constants.OID_TYPE_RANDOM_VARIABLE, FLOAT8OID };
     constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID =
@@ -543,6 +563,34 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     constants.OID_AGG_MIN_RV     = get_provsql_func_oid_args("min",     1, rvarg);
     constants.OID_AGG_RV_SUM_OR_NULL =
       get_provsql_func_oid_args("rv_sum_or_null", 1, rvarg);
+    /* SQL-standard statistic aggregates over RV rows (public forms) and
+     * the indicator-carrying _impl rewrite targets.  Optional lookups:
+     * absent on schemas predating them, which leaves the public forms
+     * unrecognised so they run their own certain-row fold. */
+    constants.OID_AGG_COVAR_POP_RV =
+      get_provsql_func_oid_args("covar_pop", 2, rvarg2);
+    constants.OID_AGG_COVAR_SAMP_RV =
+      get_provsql_func_oid_args("covar_samp", 2, rvarg2);
+    constants.OID_AGG_CORR_RV =
+      get_provsql_func_oid_args("corr", 2, rvarg2);
+    constants.OID_AGG_STDDEV_POP_RV =
+      get_provsql_func_oid_args("stddev_pop", 1, rvarg);
+    constants.OID_AGG_STDDEV_SAMP_RV =
+      get_provsql_func_oid_args("stddev_samp", 1, rvarg);
+    constants.OID_AGG_PERCENTILE_CONT_RV =
+      get_provsql_func_oid_args("percentile_cont", 2, pctarg);
+    constants.OID_AGG_RV_COVAR_POP_IMPL =
+      get_provsql_func_oid_args("rv_covar_pop_impl", 3, rvarg3);
+    constants.OID_AGG_RV_COVAR_SAMP_IMPL =
+      get_provsql_func_oid_args("rv_covar_samp_impl", 3, rvarg3);
+    constants.OID_AGG_RV_CORR_IMPL =
+      get_provsql_func_oid_args("rv_corr_impl", 3, rvarg3);
+    constants.OID_AGG_RV_STDDEV_POP_IMPL =
+      get_provsql_func_oid_args("rv_stddev_pop_impl", 2, rvarg2);
+    constants.OID_AGG_RV_STDDEV_SAMP_IMPL =
+      get_provsql_func_oid_args("rv_stddev_samp_impl", 2, rvarg2);
+    constants.OID_AGG_RV_PERCENTILE_IMPL =
+      get_provsql_func_oid_args("rv_percentile_impl", 3, pctimplarg);
   }
 
   /* choose(anyelement): keeps the first non-NULL value of a group.  Used by
