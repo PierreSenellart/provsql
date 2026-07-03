@@ -973,6 +973,60 @@ def test_evaluate_moment_categorical(client):
     assert abs(float(resp.get_json()["result"]) - 0.276) < 1e-9
 
 
+def test_evaluate_quantile_categorical(client):
+    """The quantile evaluator threads the fraction through
+    `provsql.rv_quantile(token, p)`.  A categorical RV has exact
+    generalised-inverse quantiles: X ~ categorical({0.5, 0.3, 0.2},
+    {-1, 0, 1}) has F(-1) = 0.5, F(0) = 0.8, F(1) = 1, so
+    q(0.25) = -1, q(0.5) = -1, q(0.6) = 0, q(0.95) = 1."""
+    tok = _rv_uuid(
+        client,
+        "provsql.categorical(ARRAY[0.5, 0.3, 0.2]::float8[], "
+        "ARRAY[-1, 0, 1]::float8[])",
+    )
+    for p, expected in (("0.25", -1.0), ("0.5", -1.0),
+                        ("0.6", 0.0), ("0.95", 1.0)):
+        resp = client.post("/api/evaluate", json={
+            "token": tok, "semiring": "quantile", "arguments": p,
+        })
+        assert resp.status_code == 200, resp.data
+        body = resp.get_json()
+        assert body["kind"] == "float"
+        assert abs(float(body["result"]) - expected) < 1e-12, (p, body)
+
+    # The default fraction is the median.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "quantile",
+    })
+    assert resp.status_code == 200, resp.data
+    assert abs(float(resp.get_json()["result"]) - (-1.0)) < 1e-12
+
+    # Out-of-range fractions are rejected before reaching SQL.
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "quantile", "arguments": "1.5",
+    })
+    assert resp.status_code != 200
+
+
+def test_distribution_profile_entropy(client):
+    """The distribution profile carries an entropy headline stat: the
+    Shannon entropy for a discrete root (exact through the density-view
+    resolver), e.g. H = -(0.5 ln 0.5 + 0.3 ln 0.3 + 0.2 ln 0.2)
+    ~= 1.0297 nats for the categorical below."""
+    tok = _rv_uuid(
+        client,
+        "provsql.categorical(ARRAY[0.5, 0.3, 0.2]::float8[], "
+        "ARRAY[-1, 0, 1]::float8[])",
+    )
+    resp = client.post("/api/evaluate", json={
+        "token": tok, "semiring": "distribution-profile",
+    })
+    assert resp.status_code == 200, resp.data
+    r = resp.get_json()["result"]
+    assert "entropy" in r
+    assert abs(float(r["entropy"]) - 1.02965) < 1e-4
+
+
 def test_evaluate_moment_aggregate_exact(client):
     """An aggregate (agg_token) gate has an *exact* moment, computed by
     the agg_token dispatcher (moment / central_moment -> agg_raw_moment,

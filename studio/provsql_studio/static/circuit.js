@@ -1834,20 +1834,21 @@
   // the <select> gets hidden + disabled for the duration of the scalar
   // focus.  PROV-XML stays because it accepts any provenance gate.
   const _SCALAR_TARGET_OPTIONS = new Set([
-    'distribution-profile', 'moment', 'sample', 'prov-xml'
+    'distribution-profile', 'moment', 'quantile', 'sample', 'prov-xml'
   ]);
   // Options visible only on scalar targets.  Hidden + disabled when the
   // eval target is Boolean / aggregate / etc., so the user can't pick a
   // semiring whose SQL kernel doesn't accept this gate type.
   const _SCALAR_ONLY_OPTIONS = new Set([
-    'distribution-profile', 'moment', 'sample'
+    'distribution-profile', 'moment', 'quantile', 'sample'
   ]);
   // Semirings that accept an optional "Condition on" gate UUID,
-  // routed to provsql.rv_moment / rv_support / rv_histogram /
-  // rv_sample as the `prov` argument so the result is the conditional
-  // (truncated) distribution rather than the unconditional one.
+  // routed to provsql.rv_moment / rv_quantile / rv_support /
+  // rv_histogram / rv_sample as the `prov` argument so the result is
+  // the conditional (truncated) distribution rather than the
+  // unconditional one.
   const _CONDITION_OPTIONS = new Set([
-    'distribution-profile', 'moment', 'sample'
+    'distribution-profile', 'moment', 'quantile', 'sample'
   ]);
   // Non-_COMPILED_REGISTRY options that are also meaningless on
   // gate_agg / gate_semimod.  Probability and every KC helper need to
@@ -2368,6 +2369,8 @@
       } else if (v === 'moment') {
         wantedIds.add('eval-args-moment-k');
         wantedIds.add('eval-args-moment-central');
+      } else if (v === 'quantile') {
+        wantedIds.add('eval-args-quantile-p');
       } else if (v === 'sample') {
         wantedIds.add('eval-args-sample-n');
       }
@@ -3295,6 +3298,10 @@
       const k = (document.getElementById('eval-args-moment-k')?.value || '').trim();
       const c = (document.getElementById('eval-args-moment-central')?.value || 'false').trim();
       body.arguments = `${k};${c === 'true' ? 'central' : 'raw'}`;
+    } else if (semiring === 'quantile') {
+      // The backend reads `arguments` as the fraction p in [0, 1].
+      const p = (document.getElementById('eval-args-quantile-p')?.value || '').trim();
+      if (p) body.arguments = p;
     } else if (semiring === 'sample') {
       const n = (document.getElementById('eval-args-sample-n')?.value || '').trim();
       if (n) body.arguments = n;
@@ -4273,6 +4280,18 @@
       + ` role="img" aria-label="${ariaLabel}">${svgInner}</svg>`;
     const stddev = (Number.isFinite(variance) && variance >= 0)
       ? Math.sqrt(variance) : null;
+    // Entropy headline stat (nats): Shannon for a discrete root,
+    // differential for a continuous one.  The backend sends null when
+    // the entropy evaluator declines the shape (guarded savepoint), so
+    // the tile simply doesn't render there.
+    const entropy = Number(profile.entropy);
+    const entropySpan = Number.isFinite(entropy)
+      ? `<span class="cv-profile-stat"`
+        + ` title="entropy in nats (Shannon for a discrete distribution,`
+        + ` differential for a continuous one; Monte Carlo plug-in`
+        + ` estimate for composite or conditioned shapes)">`
+        + `H = ${escapeHtml(fmt(entropy))}</span>`
+      : '';
     // The toggle stores the JSON payload on the panel so the click
     // handler can re-render without re-fetching from the server.
     const toggleLabel = _mode === 'cdf' ? 'CDF' : 'PDF';
@@ -4298,6 +4317,7 @@
             + ` title="standard deviation (σ² = ${escapeHtml(fmt(variance))})">`
             + `σ = ${escapeHtml(fmt(stddev))}</span>`
           : `<span class="cv-profile-stat" title="variance">σ² = ${escapeHtml(fmt(variance))}</span>`)
+      + entropySpan
       + `<button type="button" class="cv-profile-toggle"`
       + ` title="Switch to ${toggleNext}">${toggleLabel}</button>`
       + `</div>`

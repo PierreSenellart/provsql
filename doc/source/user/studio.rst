@@ -537,7 +537,10 @@ For nodes whose underlying gate is a scalar random-variable root
 (``gate_rv``, ``gate_value`` in float8 mode, ``gate_arith``,
 ``gate_mixture``), the eval strip exposes a *Distribution profile*
 entry under the *Distribution* group. Running it returns
-header stats (mean :math:`\mu` and variance :math:`\sigma^2`),
+header stats (mean :math:`\mu`, variance :math:`\sigma^2`, and --
+where the entropy evaluator resolves the shape -- the entropy
+:math:`H` in nats, Shannon for a discrete root and differential
+for a continuous one, via :sqlfunc:`entropy`),
 an inline-SVG histogram of the sub-circuit's distribution, a
 PDF/CDF toggle, per-bar tooltips with :math:`\sigma` markers, and
 wheel-zoom on the value axis. The histogram is backed
@@ -611,7 +614,10 @@ surfaces an actionable hint pointing at ``provsql.rv_mc_samples``.
 
 The *Moment* entry on the same strip computes :sqlfunc:`moment`
 or :sqlfunc:`central_moment` for a chosen ``k`` (raw vs central
-toggle), and the *Support* entry returns the closed-form
+toggle), the *Quantile* entry computes the inverse CDF
+:sqlfunc:`quantile` at a chosen fraction ``p`` (``0.5`` -- the
+default -- is the median; ``0.95`` a 95th percentile / VaR),
+and the *Support* entry returns the closed-form
 :sqlfunc:`support` interval.
 
 .. _studio-circuit-conditioning:
@@ -621,8 +627,8 @@ Conditioning and the row-prov auto-preset
 
 The eval strip carries a *Condition on* text input that takes any
 provenance UUID, when populated, every distribution-shaped
-evaluation (profile, sample, moment, support) routes through the
-conditional path. Clicking a result-table cell auto-presets the
+evaluation (profile, sample, moment, quantile, support) routes
+through the conditional path. Clicking a result-table cell auto-presets the
 field to the row's provenance UUID, with a :guilabel:`Conditioned
 by:` :fa:`link` :guilabel:`row prov` badge visible underneath the
 input. Clicking the active

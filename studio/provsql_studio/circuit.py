@@ -67,6 +67,7 @@ _ARITH_OP_GLYPH = {
     7: "^",     # PROVSQL_ARITH_POW: binary power
     8: "ln",    # PROVSQL_ARITH_LN: natural logarithm
     9: "exp",   # PROVSQL_ARITH_EXP: e^x
+    10: "pct",  # PROVSQL_ARITH_PERCENTILE: percentile_cont over a group
 }
 
 def _gate_label(row: dict, rv_families: dict | None = None) -> str:
@@ -116,6 +117,15 @@ def _gate_label(row: dict, rv_families: dict | None = None) -> str:
             tag = int(row["info1"]) if row.get("info1") is not None else None
         except (TypeError, ValueError):
             tag = None
+        if tag == 10 and row.get("extra"):
+            # PROVSQL_ARITH_PERCENTILE carries its fraction in extra:
+            # render the standard percentile notation (p50 for the
+            # median, p99, p37.5…) instead of the generic "pct", which
+            # stays the fallback for an unparseable extra.
+            try:
+                return _truncate(f"p{float(row['extra']) * 100:g}")
+            except (TypeError, ValueError):
+                pass
         glyph = _ARITH_OP_GLYPH.get(tag)
         if glyph is not None:
             return glyph

@@ -99,3 +99,17 @@ def test_gate_label_transform_arith_opcodes():
     assert circuit._gate_label({"gate_type": "arith", "info1": "7"}) == "^"
     assert circuit._gate_label({"gate_type": "arith", "info1": "8"}) == "ln"
     assert circuit._gate_label({"gate_type": "arith", "info1": "9"}) == "exp"
+
+
+def test_gate_label_percentile_arith_opcode():
+    # PROVSQL_ARITH_PERCENTILE (10), the percentile_cont order-statistic
+    # aggregate gate: the fraction from extra renders in the standard
+    # percentile notation, with the bare "pct" glyph as the fallback for
+    # a missing / unparseable extra.
+    assert circuit._gate_label(
+        {"gate_type": "arith", "info1": "10", "extra": "0.5"}) == "p50"
+    assert circuit._gate_label(
+        {"gate_type": "arith", "info1": "10", "extra": "0.375"}) == "p37.5"
+    assert circuit._gate_label({"gate_type": "arith", "info1": "10"}) == "pct"
+    assert circuit._gate_label(
+        {"gate_type": "arith", "info1": "10", "extra": "bogus"}) == "pct"

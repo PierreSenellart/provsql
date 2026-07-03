@@ -1384,6 +1384,23 @@ def evaluate_circuit(
                 )
             )
             row = cur.fetchone()
+            # Entropy headline stat, guarded by a savepoint so shapes the
+            # entropy evaluator cannot resolve (composite circuits at
+            # rv_mc_samples = 0, aggregate roots it declines, an older
+            # extension without provsql.rv_entropy) degrade to a hidden
+            # tile instead of failing the whole profile.
+            entropy_val = None
+            cur.execute("SAVEPOINT profile_entropy")
+            try:
+                cur.execute(
+                    sql.SQL(
+                        "SELECT provsql.rv_entropy({tok}::uuid, {cond})"
+                    ).format(tok=sql.Literal(token), cond=cond_expr)
+                )
+                ent_row = cur.fetchone()
+                entropy_val = ent_row[0] if ent_row else None
+            except psycopg.Error:
+                cur.execute("ROLLBACK TO SAVEPOINT profile_entropy")
         if row:
             lo, hi, exp_val, var_val, hist, curves = row
         else:
@@ -1393,6 +1410,7 @@ def evaluate_circuit(
                 "support": [_to_jsonable(lo), _to_jsonable(hi)],
                 "expected": _to_jsonable(exp_val),
                 "variance": _to_jsonable(var_val),
+                "entropy": _to_jsonable(entropy_val),
                 # rv_histogram returns jsonb; psycopg surfaces it as a
                 # parsed Python list of {bin_lo, bin_hi, count} dicts that
                 # is already JSON-native, so bypass `_to_jsonable` (which
@@ -1476,6 +1494,41 @@ def evaluate_circuit(
         ).format(
             agg_fn=agg_fn, k=sql.Literal(k_value),
             central=sql.Literal(central), cond=cond_expr,
+            tok=sql.Literal(token),
+        )
+        params = ()
+    elif semiring == "quantile":
+        # Scalar-only evaluator that calls provsql.rv_quantile(token, p)
+        # directly.  `arguments` carries the fraction p in [0, 1]
+        # (default 0.5, the median).  Returns a single float8 result,
+        # rendered like Moment.
+        p_str = (arguments or "0.5").strip()
+        try:
+            p_value = float(p_str)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"quantile: p must be a number in [0, 1] (got {p_str!r})"
+            )
+        if not (0.0 <= p_value <= 1.0):
+            raise ValueError(
+                f"quantile: p must be in [0, 1] (got {p_value})"
+            )
+        cond_expr = (
+            sql.SQL("{}::uuid").format(sql.Literal(condition_uuid))
+            if condition_uuid
+            else sql.SQL("provsql.gate_one()")
+        )
+        # Unlike Moment (whose aggregate roots detour through the exact
+        # polymorphic dispatcher: its agg_token arm has the closed-form
+        # agg_raw_moment), quantile has no exact aggregate arm in the
+        # extension yet -- the polymorphic quantile() raises on
+        # agg_token.  rv_quantile covers every scalar root uniformly:
+        # analytical inverse CDF for closed-form shapes, empirical MC
+        # quantile (sampler gate_agg arm included) otherwise.
+        sql_stmt = sql.SQL(
+            "SELECT provsql.rv_quantile({tok}::uuid, {p}, {cond})"
+        ).format(
+            p=sql.Literal(p_value), cond=cond_expr,
             tok=sql.Literal(token),
         )
         params = ()
@@ -2162,7 +2215,8 @@ def temporal(
 
 
 def _result_kind(semiring: str) -> str:
-    if semiring in ("probability", "moment", "tropical", "viterbi", "lukasiewicz"):
+    if semiring in ("probability", "moment", "quantile",
+                    "tropical", "viterbi", "lukasiewicz"):
         return "float"
     if semiring == "counting":
         return "int"

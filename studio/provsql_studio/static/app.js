@@ -3443,6 +3443,7 @@
             <optgroup label="Distribution">
               <option value="distribution-profile">Distribution profile</option>
               <option value="moment">Moment</option>
+              <option value="quantile">Quantile</option>
               <option value="sample">Sample</option>
             </optgroup>
             <optgroup label="Probability">
@@ -3542,6 +3543,10 @@
             <option value="false">raw</option>
             <option value="true">central</option>
           </select>
+          <input type="number" class="cv-eval__args" id="eval-args-quantile-p" hidden
+                 min="0" max="1" step="0.05" placeholder="p" value="0.5"
+                 autocomplete="off" title="Quantile fraction p in [0, 1]: 0.5 is the median, 0.95 the 95th percentile / VaR; p = 0 and p = 1 give the support edges">
+
           <input type="number" class="cv-eval__args" id="eval-args-sample-n" hidden
                  min="1" step="1" placeholder="target n" value="100"
                  autocomplete="off"
