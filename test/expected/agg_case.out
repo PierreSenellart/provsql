@@ -47,6 +47,22 @@ display_arith
 arith_branch_mc_close
 t
 (1 row)
+add_provenance
+
+(1 row)
+e_cond_defined|var_cond_defined
+73.3333|2022.2222
+(1 row)
+never_defined_null
+t
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+g|p|p_type
+1|110|numeric
+(1 row)
 agg_case_done
 ok
 (1 row)

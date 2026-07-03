@@ -111,6 +111,24 @@ namespace provsql {
  */
 unsigned runAggMarginalEvaluator(GenericCircuit &gc);
 
+/**
+ * @brief Exact k-th raw moment of AVG = SUM/COUNT over independent rows,
+ *        conditional on COUNT >= 1.
+ *
+ * The "easy case" of the joint @c (sum,count) machinery: every semimod
+ * contributor must be a product of private @c gate_input leaves
+ * (@c parseProductContributor) and the rows pairwise leaf-disjoint, so the
+ * per-row inclusion indicators are independent and the joint PMF is a
+ * plain fold.  @c AVG over the empty world is @c NULL, so the moment
+ * conditions on the aggregate being defined (the MIN / MAX convention).
+ * Sets @p ok @c false -- the caller falls back to the Monte-Carlo scalar
+ * path -- on any other shape (shared leaves, compound contributors,
+ * non-numeric values, unset probabilities, support blow-up, or a
+ * never-defined aggregate).
+ */
+double aggAvgRawMomentExact(GenericCircuit &gc, gate_t agg_gate, unsigned k,
+                            bool &ok);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_AGG_MARGINAL_EVALUATOR_H

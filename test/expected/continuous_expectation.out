@@ -97,4 +97,5 @@ NOTICE:  agg_max_variance_consistent=t
 NOTICE:  agg_max_m3_nonneg=t
 NOTICE:  agg_max_m4_nonneg=t
 NOTICE:  agg_max_lyapunov=t
-NOTICE:  agg_avg_moment_raises=t
+NOTICE:  agg_avg_expected_defined=t
+NOTICE:  agg_avg_variance_consistent=t

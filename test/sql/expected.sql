@@ -30,4 +30,12 @@ DROP TABLE expected_result;
 
 -- Non-supported
 SELECT expected('toto'::text) FROM personnel;
-SELECT expected(AVG(id)) FROM personnel;
+
+-- AVG moments are supported: the exact independent-rows arm computes
+-- E[AVG | at least one row present] from the joint (sum, count)
+-- distribution, with no sampling.  Materialise + remove_provenance to
+-- keep the run-dependent group token out of the output.
+CREATE TABLE expected_result AS SELECT expected(AVG(id)) AS a FROM personnel;
+SELECT remove_provenance('expected_result');
+SELECT ROUND(a::numeric, 6) AS avg_expected FROM expected_result;
+DROP TABLE expected_result;

@@ -5,6 +5,7 @@
  */
 #include "Expectation.h"
 
+#include "AggMarginalEvaluator.h"  // aggAvgRawMomentExact
 #include "AnalyticEvaluator.h"
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
 #include "BooleanCircuit.h"
@@ -27,6 +28,7 @@ extern "C" {
 
 PG_FUNCTION_INFO_V1(rv_moment);
 PG_FUNCTION_INFO_V1(rv_quantile);
+PG_FUNCTION_INFO_V1(agg_avg_moment_exact);
 }
 
 #include <algorithm>
@@ -1952,6 +1954,42 @@ extern "C" {
  * conditional MC sampler relies on to couple the indicator's draw
  * with the value's draw.
  */
+/**
+ * @brief SQL: agg_avg_moment_exact(token uuid, k integer) -> float8
+ *
+ * The exact independent-rows arm behind @c agg_raw_moment's @c avg
+ * dispatch: E[AVG^k | COUNT >= 1] from the joint (sum, count) PMF over
+ * pairwise leaf-disjoint contributors (@c aggAvgRawMomentExact).
+ * Returns NULL when the shape is out of scope -- shared leaves, compound
+ * contributors, unset probabilities -- and the SQL caller falls back to
+ * the Monte-Carlo scalar path.
+ */
+Datum agg_avg_moment_exact(PG_FUNCTION_ARGS)
+{
+  try {
+    pg_uuid_t *token = PG_GETARG_UUID_P(0);
+    const int32 k_signed = PG_GETARG_INT32(1);
+
+    if (k_signed < 0)
+      provsql_error("agg_avg_moment_exact: k must be non-negative (got %d)",
+                    k_signed);
+
+    auto gc = getGenericCircuit(*token);
+    gate_t root = gc.getGate(uuid2string(*token));
+    bool ok = false;
+    const double r = provsql::aggAvgRawMomentExact(
+      gc, root, static_cast<unsigned>(k_signed), ok);
+    if (!ok)
+      PG_RETURN_NULL();
+    return Float8GetDatum(r);
+  } catch (const std::exception &e) {
+    provsql_error("agg_avg_moment_exact: %s", e.what());
+  } catch (...) {
+    provsql_error("agg_avg_moment_exact: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
 Datum rv_moment(PG_FUNCTION_ARGS)
 {
   try {

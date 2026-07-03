@@ -6207,6 +6207,30 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
     FuncExpr *fe = (FuncExpr *)result;
     if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
       maybe_cast_agg_token_args(fe->args, fe->funcid, constants);
+  } else if (IsA(result, CaseExpr)) {
+    /* A searched CASE whose branches became agg_token under a
+     * non-agg_token CASE type.  The agg_case lowering replaces the whole
+     * CASE when it applies; when it does not (a schema whose upgrade path
+     * predates agg_case, or a shape build_agg_case declines), the branches
+     * MUST be cast back to the CASE's result type: the executor would
+     * otherwise reinterpret the fixed-length agg_token datum as a value of
+     * the CASE type -- for a varlena type such as numeric that reads a
+     * garbage length header out of the token's UUID text and crashes (or
+     * silently corrupts the materialised tuple). */
+    CaseExpr *ce = (CaseExpr *)result;
+    if (ce->casetype != constants->OID_TYPE_AGG_TOKEN) {
+      ListCell *lc;
+      foreach (lc, ce->args) {
+        CaseWhen *cw = (CaseWhen *)lfirst(lc);
+        if (exprType((Node *)cw->result) == constants->OID_TYPE_AGG_TOKEN)
+          cw->result = (Expr *)cast_agg_token_to_type(
+            (Node *)cw->result, ce->casetype, constants);
+      }
+      if (ce->defresult != NULL &&
+          exprType((Node *)ce->defresult) == constants->OID_TYPE_AGG_TOKEN)
+        ce->defresult = (Expr *)cast_agg_token_to_type(
+          (Node *)ce->defresult, ce->casetype, constants);
+    }
   }
 
   return result;

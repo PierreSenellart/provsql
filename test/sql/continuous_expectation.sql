@@ -369,14 +369,20 @@ BEGIN
 END
 $$;
 
--- Unsupported aggregation function still raises clearly.
+-- AVG moments: exact via the joint (sum, count) arm, conditional on the
+-- aggregate being defined (COUNT >= 1), and internally consistent
+-- (Var = E[X^2] - E[X]^2 must hold exactly).
 DO $$
-DECLARE raised bool := false;
+DECLARE
+  av agg_token;
+  e1 float8; m2 float8; vc float8;
 BEGIN
-  PERFORM moment(avg(v), 2) FROM expectation_agg_t;
-EXCEPTION WHEN OTHERS THEN
-  raised := true;
-  RAISE NOTICE 'agg_avg_moment_raises=%', raised;
+  SELECT avg(t.v) INTO av FROM expectation_agg_t t;
+  e1 := moment(av, 1);
+  m2 := moment(av, 2);
+  vc := central_moment(av, 2);
+  RAISE NOTICE 'agg_avg_expected_defined=%', e1 IS NOT NULL;
+  RAISE NOTICE 'agg_avg_variance_consistent=%', abs(vc - (m2 - e1 * e1)) < 1e-9;
 END
 $$;
 

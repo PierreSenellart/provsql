@@ -215,15 +215,25 @@ distribution of the selected value over the possible worlds. Evaluation is
 
 .. math::
 
-    E[\text{pick}^k] = \sum_i \Pr(R_i)\; E[\text{value}_i^k \mid R_i],
+    E[\text{pick}^k \mid \text{defined}]
+      = \frac{\sum_i \Pr(R_i \wedge d_i)\;
+               E[\text{value}_i^k \mid R_i \wedge d_i]}
+              {\sum_i \Pr(R_i \wedge d_i)},
 
 summed over the first-match regions
 :math:`R_i = \lnot g_1 \wedge \dots \wedge \lnot g_{i-1} \wedge g_i` (the
-``ELSE`` region is "all guards false"). The regions are mutually exclusive, and
+``ELSE`` region is "all guards false"), each conjoined with the branch's
+*defined* event :math:`d_i` -- always true for ``sum`` / ``count`` and
+constants (the empty group is the real value 0), "some contributing row
+present" for ``min`` / ``max`` / ``avg``, which are ``NULL`` on an empty
+group. The moment thus conditions on the ``CASE``'s value being defined,
+the same convention as a bare ``min`` / ``max``, and is ``NULL`` only
+when the value never is. The regions are mutually exclusive, and
 the correlation between a guard and its branch (they share input tuples) is
 carried by the conditioning, exactly as in ``HAVING``. This covers branches
 that are a single aggregate (``sum`` / ``count`` / ``min`` / ``max``), a numeric
-constant (``ELSE 0``), or a nested ``CASE``.
+constant (``ELSE 0``), or a nested ``CASE``; an ``avg`` branch takes the
+Monte-Carlo path (its exact arm, below, is unconditional-only).
 
 A branch that is an **arithmetic combination** of aggregates
 (``THEN sum(y) + sum(z)``) has no exact closed form -- the region probabilities

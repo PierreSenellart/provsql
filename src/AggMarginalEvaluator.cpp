@@ -8,14 +8,17 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <numeric>
 #include <set>
+#include <type_traits>
 #include <vector>
 
 #include "Aggregation.h"          // AggregationOperator + ComparisonOperator
 #include "CmpEvaluatorCommon.h"   // matchAggCmp, computeRefCounts
+#include "RandomVariable.h"       // parseDoubleStrict
 
 extern "C" {
 #include "provsql_utils.h"        // gate_type enum
@@ -692,8 +695,19 @@ static bool sumSatisfies(long s, ComparisonOperator op, long C)
  * weighted sum to the others' counts -- so neither marginal alone carries
  * enough information and the per-factor *joint* must be folded.  Same
  * laminar recursion as @c sumPMF; clears @p ok on a non-laminar block, a
- * non-separable product value, or a support overflow. */
-using JointPMF = std::map<std::pair<long, long>, double>;
+ * non-separable product value, or a support overflow.
+ *
+ * Templated on the weight (sum-coordinate) type: the HAVING cmp path
+ * instantiates @c long (its constants and grid arithmetic are integer);
+ * the AVG moment instantiates @c double (arbitrary numeric row values).
+ * The singleton and laminar-shared-root branches are weight-agnostic;
+ * only the additive-separation recovery over a Cartesian-product block
+ * is genuinely integer arithmetic and is compiled for the integral
+ * instantiation alone (the double instantiation self-gates to the
+ * caller's fallback there). */
+template <typename W>
+using JointPMFT = std::map<std::pair<W, long>, double>;
+using JointPMF = JointPMFT<long>;
 
 /* Recover an additive separation of a product block's weights across its
  * factors: find per-factor part values @p partVals (aligned to
@@ -757,16 +771,17 @@ static bool recoverAdditiveSeparation(
   return true;
 }
 
-static JointPMF sumCountPMF(GenericCircuit &gc,
-                            std::vector<std::vector<gate_t>> contribs,
-                            std::vector<long> weights, bool &ok)
+template <typename W>
+static JointPMFT<W> sumCountPMF(GenericCircuit &gc,
+                                std::vector<std::vector<gate_t>> contribs,
+                                std::vector<W> weights, bool &ok)
 {
-  JointPMF total;
+  JointPMFT<W> total;
   total[{0, 0}] = 1.0;                             /* δ_(0,0) */
   if (contribs.empty()) return total;
 
   for (const auto &members : independenceBlocks(contribs)) {
-    JointPMF blockPMF;
+    JointPMFT<W> blockPMF;
     if (members.size() == 1) {
       double q = 1.0;
       for (gate_t l : contribs[members[0]]) q *= gc.getProb(l);
@@ -778,20 +793,22 @@ static JointPMF sumCountPMF(GenericCircuit &gc,
         /* Laminar shared root: disjoint mixture, recurse on residuals. */
         double p_root = 1.0;
         for (gate_t l : common) p_root *= gc.getProb(l);
-        std::vector<long> rweights;
+        std::vector<W> rweights;
         rweights.reserve(members.size());
         for (int m : members) rweights.push_back(weights[m]);
-        JointPMF inner = sumCountPMF(
+        JointPMFT<W> inner = sumCountPMF(
           gc, residualsOf(contribs, members, common), std::move(rweights), ok);
         if (!ok) return {};
         for (const auto &kv : inner) blockPMF[kv.first] += p_root * kv.second;
         blockPMF[{0, 0}] += 1.0 - p_root;          /* root absent: (0,0) */
-      } else {
+      } else if constexpr (std::is_integral_v<W>) {
         /* Cartesian product of independent factors.  An additively
          * separable value folds per-factor joints with the product
          * combinator (S,N) ⊗ (s,n) = (S·n + s·N, N·n), identity (0,1):
          * count multiplies, sum picks up each factor's weighted sum times
-         * the others' counts.  This is exactly Σ_f sum_f · ∏_{g≠f} cnt_g. */
+         * the others' counts.  This is exactly Σ_f sum_f · ∏_{g≠f} cnt_g.
+         * The separation recovery is exact integer grid arithmetic, hence
+         * integral instantiations only. */
         ProductDecomp pd = decomposeProduct(contribs, members);
         if (!pd.ok) { ok = false; return {}; }
         std::vector<std::vector<long>> partVals;
@@ -799,12 +816,12 @@ static JointPMF sumCountPMF(GenericCircuit &gc,
                                        partVals)) {
           ok = false; return {};                   /* value couples factors */
         }
-        JointPMF acc;
+        JointPMFT<W> acc;
         acc[{0, 1}] = 1.0;                          /* empty product: (0,1) */
         for (std::size_t f = 0; f < pd.parts.size(); ++f) {
-          JointPMF Jf = sumCountPMF(gc, pd.parts[f], partVals[f], ok);
+          JointPMFT<W> Jf = sumCountPMF(gc, pd.parts[f], partVals[f], ok);
           if (!ok) return {};
-          JointPMF nacc;
+          JointPMFT<W> nacc;
           for (const auto &a : acc)
             for (const auto &b : Jf)
               nacc[{a.first.first * b.first.second
@@ -814,10 +831,14 @@ static JointPMF sumCountPMF(GenericCircuit &gc,
           acc.swap(nacc);
         }
         blockPMF = std::move(acc);
+      } else {
+        /* Non-laminar product block under a non-integral weight type:
+         * out of the double instantiation's scope. */
+        ok = false; return {};
       }
     }
     /* Independent blocks: sums and counts add. */
-    JointPMF ntotal;
+    JointPMFT<W> ntotal;
     for (const auto &a : total)
       for (const auto &b : blockPMF)
         ntotal[{a.first.first + b.first.first,
@@ -1296,6 +1317,62 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
   }
 
   return resolved;
+}
+
+double aggAvgRawMomentExact(GenericCircuit &gc, gate_t g, unsigned k,
+                            bool &ok)
+{
+  ok = false;
+  if (gc.getGateType(g) != gate_agg) return 0.0;
+
+  /* Per-row (contributor leaf set, value) pairs from the semimod
+   * children -- the same contributor parse the HAVING cmp path uses. */
+  std::vector<std::vector<gate_t>> contribs;
+  std::vector<double> values;
+  for (gate_t sm : gc.getWires(g)) {
+    if (gc.getGateType(sm) != gate_semimod) return 0.0;
+    const auto &w = gc.getWires(sm);
+    if (w.size() != 2) return 0.0;
+    double v;
+    try {
+      v = parseDoubleStrict(gc.getExtra(w[1]));
+    } catch (const CircuitException &) {
+      return 0.0;                       /* non-numeric value: decline */
+    }
+    std::vector<gate_t> leaves;
+    if (!parseProductContributor(gc, w[0], leaves))
+      return 0.0;                       /* not a private product: decline */
+    contribs.push_back(std::move(leaves));
+    values.push_back(v);
+  }
+  for (const auto &c : contribs)
+    for (gate_t l : c)
+      if (std::isnan(gc.getProb(l))) return 0.0;   /* unset prob: decline */
+
+  /* Joint (sum, count) distribution via the shared HAVING machinery
+   * (double instantiation: independent rows fold directly, laminar
+   * shared-root groups recurse; a non-laminar product block self-gates). */
+  bool pmf_ok = true;
+  JointPMFT<double> pmf = sumCountPMF(gc, std::move(contribs),
+                                      std::move(values), pmf_ok);
+  if (!pmf_ok) return 0.0;
+
+  /* E[AVG^k | COUNT >= 1]: AVG over the empty world is NULL, so the
+   * moment conditions on the aggregate being defined -- the same
+   * convention as the MIN / MAX arms of agg_raw_moment. */
+  double num = 0.0, den = 0.0;
+  for (const auto &kv : pmf) {
+    if (kv.first.second < 1) continue;
+    den += kv.second;
+    num += kv.second * std::pow(kv.first.first
+                                  / static_cast<double>(kv.first.second),
+                                static_cast<double>(k));
+  }
+  if (!(den > 1e-12)) return 0.0;       /* never defined: decline (the MC
+                                           fallback then reports the same
+                                           undefined answer) */
+  ok = true;
+  return num / den;
 }
 
 }  // namespace provsql

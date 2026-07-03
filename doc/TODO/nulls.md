@@ -554,7 +554,20 @@ machinery (`src/MonteCarloSampler.cpp:352-363`); and `min`/`max`/`avg` of
 empty worlds are NaN, skipped by moment estimators. These are per-world
 conventions, not visible in the SQL answer of the original query, but they
 are user-observable through `expected(...)`/HAVING under MC, and belong in
-the P2 specification. The V4 fix belongs to this layer too: the group-level
+the P2 specification.
+
+**P2 decision (July 2026), moment-readout side**: the specified semantics
+for every aggregate-valued moment readout is **conditional-on-defined,
+NULL only when P(defined) = 0** — `sum`/`count` (and constants) are
+defined in every world (empty group = the real value 0), `min`/`max`/`avg`
+are defined iff some contributing row is present, and a `gate_case`'s
+value is defined iff its first-match selected branch's value is. The
+`agg_case` moment arm applies it via `agg_defined_event` (weights
+P(regionᵢ ∧ defᵢ), normalises by the defined mass — it previously
+mean-imputed the undefined worlds); the new `avg` arm of `agg_raw_moment`
+(exact joint (sum,count) over independent/laminar rows, MC fallback) uses
+the same convention, consistent with the samplers' NaN-skip. Regression
+coverage in `agg_case.sql` / `agg_avg_moment.sql`. The V4 fix belongs to this layer too: the group-level
 cmp construction needs the “group's aggregate is non-NULL in this world”
 factor, for which `having_NullTest_to_provenance` already provides the
 template.

@@ -1,0 +1,23 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+e_avg|var_avg
+55.0000|1350.0000
+(1 row)
+add_provenance
+
+(1 row)
+e_avg_laminar
+55.0000
+(1 row)
+ERROR:  ProvSQL: rv_moment: Conditional raw moment of gate type agg could not be decomposed analytically and provsql.rv_mc_samples = 0 disables the Monte Carlo fallback
+CONTEXT:  PL/pgSQL function agg_raw_moment(agg_token,integer,uuid,text,text) line 262 at RETURN
+PL/pgSQL function moment(anyelement,integer,uuid,text,text) line 15 at RETURN
+SQL function "expected" statement 1
+e_avg_cond_close
+t
+(1 row)
+agg_avg_moment_done
+ok
+(1 row)

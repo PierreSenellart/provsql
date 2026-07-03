@@ -422,19 +422,66 @@ post-lowering because it dispatches on the now-absent ``Aggref``), and casts
 each branch value ``agg_token -> uuid`` (a constant branch is lifted with
 ``agg_value_gate``, the agg-side ``as_random``). It emits ``agg_case(uuid[])``.
 
+**Degradation when the lowering does not apply.** A ``CASE`` the rewrite
+leaves alone -- the simple form ``CASE <arg> WHEN ...``, a shape
+``build_agg_case`` declines, or a schema whose upgrade path predates
+``agg_case`` (``OID_FUNCTION_AGG_CASE`` invalid) -- still carries
+``agg_token``-typed branches under the original (e.g. ``numeric``) CASE
+type. ``cast_agg_token_mutator`` therefore has a ``CaseExpr`` arm that
+casts such branches back to the CASE's result type (their actual-world
+values, with the provenance-loss warning). This is load-bearing: a bare
+117-byte fixed-length ``agg_token`` datum left under a varlena-typed CASE
+would be reinterpreted as a varlena whose "length" is UUID text bytes --
+a server crash in ``tts_virtual_materialize`` or silent tuple corruption.
+
 **Exact evaluation** (``agg_raw_moment``). A ``case`` gate is handled by
-the possible-worlds identity
-:math:`E[\text{pick}^k] = \sum_i \Pr(R_i)\,E[\text{value}_i^k \mid R_i]` over the
+the conditional-on-defined possible-worlds identity
+:math:`E[\text{pick}^k \mid \text{defined}] =
+\sum_i \Pr(R_i \wedge d_i)\,E[\text{value}_i^k \mid R_i \wedge d_i] /
+\sum_i \Pr(R_i \wedge d_i)` over the
 first-match regions :math:`R_i` (built with ``provenance_times`` /
-``provenance_not``). Both factors reuse existing exact machinery -- the Boolean
-``probability`` of the region and a recursive conditional ``agg_raw_moment`` of
-the branch -- so no new possible-worlds enumeration is written; the regions are
+``provenance_not``), each conjoined with the branch's *defined* event
+:math:`d_i` (``agg_defined_event``: ``gate_one`` for ``sum`` / ``count`` /
+constants, whose empty group is the real value 0; "some contributing row
+present" -- the OR of the semimod children's row tokens -- for ``min`` /
+``max`` / ``avg``, which are ``NULL`` on an empty group; recursive for a
+nested ``CASE``). The moment therefore conditions on the ``CASE``'s value
+being defined, matching the bare MIN / MAX convention, and returns ``NULL``
+only when the defined mass is zero; when every branch is defined
+everywhere the defined mass equals :math:`\Pr(\text{prov})` and the
+formula reduces to the plain region-weighted sum. Both factors reuse
+existing exact machinery -- the Boolean
+``probability`` of the region-and-defined event and a recursive conditional
+``agg_raw_moment`` of
+the branch (whose MIN / MAX / CASE arms condition on their own definedness
+within the region, so the two factors weigh the same worlds) -- so no new
+possible-worlds enumeration is written; the regions are
 mutually exclusive, so the terms sum without inclusion--exclusion. Per branch:
 a constant is a Dirac (:math:`c^k`), a single aggregate or nested ``CASE`` is
-exact via ``agg_raw_moment``, and an arithmetic / composite branch falls back to
+exact via ``agg_raw_moment``, and an arithmetic / composite / ``avg`` branch
+falls back to
 the Monte-Carlo scalar path (``rv_moment``), which composes ``gate_case`` with
 the aggregate leaves. The MC sampler already handles ``gate_case`` + ``gate_agg``
 with no change.
+
+**AVG moments** (``agg_raw_moment``'s ``avg`` arm). AVG = SUM/COUNT is a
+ratio of two correlated world-dependent quantities, so the SUM arm's
+k-tuple expansion does not apply. The exact arm
+(``agg_avg_moment_exact`` -> ``aggAvgRawMomentExact`` in
+:cfile:`AggMarginalEvaluator.cpp`) computes
+:math:`E[\text{AVG}^k \mid \text{COUNT} \ge 1] =
+\sum_{(s,c),\,c\ge 1} (s/c)^k\,\text{pmf}(s,c) / \Pr(c \ge 1)` from the
+joint :math:`(\text{sum}, \text{count})` distribution -- the
+``sumCountPMF`` machinery the HAVING comparison pre-pass already uses,
+now templated on the weight type (the integral instantiation keeps the
+HAVING path byte-identical; the ``double`` instantiation shares the
+independent-fold and laminar-shared-root branches, so join-anchored
+groups stay exact, and self-gates on the integer-only
+additive-separation product branch). Any out-of-scope shape -- an outer
+conditioning event, shared leaves beyond the laminar class, compound
+contributors -- falls back to the Monte-Carlo scalar path, whose
+NaN-skip on empty draws implements the same conditional-on-defined
+convention.
 
 **Display.** The token's cell carries the actual-world CASE value, like any
 aggregate's cell: ``agg_case`` resolves it through the circuit with

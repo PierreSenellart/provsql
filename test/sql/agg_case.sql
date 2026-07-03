@@ -116,4 +116,54 @@ DROP TABLE picka; DROP TABLE ca;
 RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;
 
+-- Conditional-on-defined semantics: the moment of a CASE conditions on
+-- its value being DEFINED (the MIN/MAX convention), NULL only when it
+-- never is.  Rows 10 and 100 each present with probability 1/2:
+--   {10,100} sum=110 >= 100 -> sum 110 ; {100} -> sum 100 ;
+--   {10} -> min 10 ; {} -> min over nothing: undefined (excluded,
+--   the defined mass renormalises).
+-- E[pick | defined]   = (110+100+10)/4 / (3/4) = 220/3  = 73.3333...
+-- Var[pick | defined] = 22200/3 - (220/3)^2 = 18200/9   = 2022.2222...
+CREATE TABLE cd2(g int, x numeric);
+INSERT INTO cd2 VALUES (1, 10), (1, 100);
+SELECT add_provenance('cd2');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cd2; END $$;
+SET provsql.rv_mc_samples = 0;
+CREATE TABLE pickd2 AS
+  SELECT g, CASE WHEN sum(x) >= 100 THEN sum(x) ELSE min(x) END AS p
+  FROM cd2 GROUP BY g;
+SET provsql.active = off;
+SELECT round(expected(p)::numeric, 4) AS e_cond_defined,
+       round(variance(p)::numeric, 4) AS var_cond_defined
+FROM pickd2;
+-- Conditioning on both rows absent: the CASE's value is never defined.
+SELECT expected(p,
+         (SELECT provenance_times(a.nt, b.nt)
+            FROM (SELECT provenance_not(provsql) AS nt FROM cd2 WHERE x = 10) a,
+                 (SELECT provenance_not(provsql) AS nt FROM cd2 WHERE x = 100) b))
+       IS NULL AS never_defined_null
+FROM pickd2;
+SET provsql.active = on;
+DROP TABLE pickd2; DROP TABLE cd2;
+RESET provsql.rv_mc_samples;
+
+-- A simple-form CASE (CASE <arg> WHEN ...) over aggregates is not a
+-- searched guarded selection, so the agg_case lowering leaves it alone.
+-- The branches must then degrade through the agg_token cast back to the
+-- CASE's numeric type (their actual-world values, provenance dropped
+-- with the usual warning) -- never bare agg_token datums under a numeric
+-- CASE type, which would be reinterpreted as a garbage varlena and
+-- corrupt (or crash on) the materialised tuple.  The same degradation
+-- protects searched CASEs on a schema whose upgrade path predates
+-- agg_case.
+CREATE TABLE cf(g int, x numeric);
+INSERT INTO cf VALUES (1, 10), (1, 100);
+SELECT add_provenance('cf');
+CREATE TABLE pickf AS
+  SELECT g, CASE g WHEN 1 THEN sum(x) ELSE min(x) END AS p FROM cf GROUP BY g;
+SET provsql.active = off;
+SELECT g, p, pg_typeof(p) AS p_type FROM pickf;
+SET provsql.active = on;
+DROP TABLE pickf; DROP TABLE cf;
+
 SELECT 'ok'::text AS agg_case_done;

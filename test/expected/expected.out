@@ -16,4 +16,9 @@ New York|1.07|1.07|1.79|1.64|1.71
 Paris|1.63|1.63|8.14|4.55|5.56
 (3 rows)
 ERROR:  moment() is not yet supported for input type text
-ERROR:  Cannot compute moment for aggregation function avg
+remove_provenance
+
+(1 row)
+avg_expected
+5.109393
+(1 row)

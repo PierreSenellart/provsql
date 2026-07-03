@@ -170,7 +170,13 @@ Expected values of aggregates
 
 For aggregate queries over a probabilistic table, the :sqlfunc:`expected`
 function computes the expected value of the aggregate result.  It
-supports ``COUNT``, ``SUM``, ``MIN``, and ``MAX``:
+supports ``COUNT``, ``SUM``, ``MIN``, ``MAX``, and ``AVG``.  ``MIN`` /
+``MAX`` / ``AVG`` are ``NULL`` on an empty group, so their expectations
+condition on the aggregate being *defined* (``NULL`` only when it never
+is); ``SUM`` / ``COUNT`` treat the all-rows-absent world as the real
+value 0.  ``AVG`` is exact over tuple-independent (or shared-anchor)
+groups via its joint (sum, count) distribution; other shapes are
+estimated by Monte Carlo at the ``provsql.rv_mc_samples`` budget:
 
 .. code-block:: postgresql
 
