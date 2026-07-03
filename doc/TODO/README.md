@@ -53,10 +53,10 @@ Each plan document follows a consistent layout:
   PICKFIRST / monotone closed forms carry into value-carrying selection,
   with `2^n` co-enumeration and Monte Carlo as backstops.
 - [`continuous_distributions.md`](continuous_distributions.md) : roadmap
-  for extending the continuous random-variable surface beyond the shipped
-  Normal/Uniform/Exponential/Erlang/Categorical/Mixture baseline (further
-  parametric families, quantiles / function application / order
-  statistics, empirical & structural distributions, conditioning, copulas).
+  of the still-open extensions to the continuous random-variable surface
+  (native analytic discrete families, multivariate Normal, CDF / monotone
+  transforms, frozen snapshots, copulas, stochastic processes,
+  do-calculus, and the provenance × probability research directions).
 - [`probability-evaluation.md`](probability-evaluation.md) : the
   **remaining** probability-method-selection work, atop the now-landed
   method catalog + three-path (exact / relative / additive) chooser:

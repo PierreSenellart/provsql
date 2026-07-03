@@ -28,11 +28,11 @@ Anchored on:
 ## Out of scope
 
 - Correlation primitives (`gate_copula`, `gate_mvnormal`): see
-  [`continuous_distributions.md`](continuous_distributions.md) §D.2,
-  §A.5. Conditioning *creates* correlation as a side effect; it is not a
+  [`continuous_distributions.md`](continuous_distributions.md) §D.1,
+  §A.2. Conditioning *creates* correlation as a side effect; it is not a
   substitute for an explicit joint-distribution primitive.
 - Causal interventions (`do`-calculus): a different operator
-  (`continuous_distributions.md` §D.4). Conditioning is observation
+  (`continuous_distributions.md` §D.3). Conditioning is observation
   (`see`), not intervention (`do`).
 
 ## Open work
