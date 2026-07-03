@@ -51,6 +51,7 @@ This documentation is organized into four parts:
    user/tutorial
    user/provenance-tables
    user/querying
+   user/nulls
    user/aggregation
    user/semirings
    user/probabilities

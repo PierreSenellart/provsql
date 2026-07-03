@@ -896,6 +896,40 @@ a jointly-Gaussian pair with the Step 14 correlation
 in that neighbourhood, slightly below since Riverside's uniform
 noise is not Gaussian.
 
+Step 19: An Offline Sensor Reports NULL
+----------------------------------------
+
+Sensors go offline. When Riverside Park misses its 10:00 sample, the
+natural encoding is a row whose ``pm25`` is **SQL NULL** -- there is no
+reading, not even an uncertain one:
+
+.. code-block:: postgresql
+
+    INSERT INTO readings (id, station_id, ts, pm25)
+    VALUES (9, 's2', '2026-05-12 10:00', NULL);
+
+Three things follow, each matching plain SQL:
+
+- **Threshold events are unknown, never true.** ``WHERE pm25 > 35``
+  over the offline row is *unknown* under SQL's three-valued logic in
+  every possible world, so the lifted comparison annotates the row with
+  the circuit's zero -- :sqlfunc:`probability_evaluate` returns exactly
+  0, with no sampling. (A NULL reading is not "certainly exceeding",
+  and not "possibly exceeding" either: it is no evidence at all.)
+- **``IS NULL`` is ordinary and deterministic.** ``WHERE pm25 IS NULL``
+  finds the offline row like any other predicate; PostgreSQL evaluates
+  it and provenance simply carries the row's token through.
+- **Aggregates skip the offline row.** ``expected(avg(pm25))`` over
+  Riverside Park is the same with or without row 9: the NULL reading
+  contributes to neither the sum nor the count. (Internally ``avg``
+  uses a per-row presence indicator that is NULL exactly when the value
+  is, so the offline row drops out of the denominator too.)
+
+Delete the placeholder row (``DELETE FROM readings WHERE id = 9``) to
+return to the running dataset. The general rules -- which predicates
+treat NULLs as unknown and what that means for the circuits -- are in
+:doc:`the NULL semantics chapter <nulls>`.
+
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full surface and
 :doc:`the Studio chapter <studio>` for the Studio reference.

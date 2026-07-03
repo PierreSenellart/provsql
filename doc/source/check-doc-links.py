@@ -119,10 +119,8 @@ INTERNAL_FUNCTIONS = {
     'reachability_materialize_hops', 'reachability_materialize_any',
     'reachability_materialize_cover',
     'plant_reach_any_groups', 'plant_reach_cover',
-    # Obsolete: the aggregation-over-GROUP-BY custom-semiring dispatcher.
-    # No longer documented for users (the agg_token aggregates cover the
-    # surface); the SQL function still exists but is not promoted.
-    'aggregation_evaluate',
+    # C backend of nonzero's default mode; users call nonzero()/present()
+    'true_nonzero',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',

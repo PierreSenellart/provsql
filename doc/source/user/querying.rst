@@ -65,6 +65,11 @@ The following SQL constructs are supported with full provenance tracking:
 * ``INSERT … SELECT`` (provenance propagated when target table is
   provenance-tracked)
 
+All of these follow SQL's semantics for NULL values (three-valued
+logic in predicates, syntactic matching in set operations and
+grouping, NULL-skipping aggregates); :doc:`the chapter on NULLs
+<nulls>` spells out the rules and their effect on provenance.
+
 Unsupported SQL Features
 -------------------------
 
@@ -83,6 +88,10 @@ will either raise an error or may cause incorrect provenance tracking:
   semantics), over cyclic data *without* an absorptive provenance class, or on
   PostgreSQL versions before 15
 * ``INTERSECT``
+* **Outer joins with a provenance-tracked relation on a null-padded
+  side**, beyond the supported two-relation shape (see
+  :doc:`the chapter on NULLs <nulls>`): refused with an explicit error;
+  an outer join whose null-padded side is untracked is fine
 * ``DISTINCT ON``
 * ``GROUPING SETS``, ``CUBE``, ``ROLLUP``
 * **Operations on aggregate results requiring comparison or duplicate

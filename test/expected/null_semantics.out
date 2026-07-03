@@ -1,0 +1,202 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|b|f
+1|10|r1
+3|30|r3
+3|30|r4
+|40|r5
+(4 rows)
+remove_provenance
+
+(1 row)
+a|f
+2|r2
+|r6
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.2500
+|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.5000
+|0.5000
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.5000
+|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+a|f|p
+1|r1 ⊖ gr1|0.2500
+2|r2|0.5000
+3|r3|0.5000
+3|r4|0.5000
+|r5 ⊖ gr2|0.2500
+|r6 ⊖ gr2|0.2500
+(6 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.0000
+|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+a|f
+1|r1
+2|r2
+3|r3 ⊕ r4
+|r5 ⊕ r6
+(4 rows)
+remove_provenance
+
+(1 row)
+a|f
+1|gr1
+|gr2 ⊕ gs1
+(2 rows)
+remove_provenance
+
+(1 row)
+a|sum_f|count_b_f|count_star_f|avg_f_is_null
+1|r1*10|r1*1|r1*1|f
+2||r2*0|r2*1|t
+3|r3*30+r4*30|r3*1+r4*1|r3*1+r4*1|f
+|r5*40|r5*1+r6*0|r5*1+r6*1|f
+(4 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.0000
+2|0.5000
+3|0.0000
+|0.2500
+(4 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.5000
+2|0.0000
+3|0.7500
+|0.5000
+(4 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.5000
+2|0.0000
+3|0.7500
+|0.5000
+(4 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.0000
+2|0.0000
+3|0.0000
+|0.0000
+(4 rows)
+remove_provenance
+
+(1 row)
+p
+0.0000
+(1 row)
+remove_provenance
+
+(1 row)
+ga|sa|p
+1|1|0.2500
+1||0.2500
+||0.5000
+(3 rows)
+remove_provenance
+
+(1 row)
+ga|b|p
+1|2|0.5000
+||0.5000
+(2 rows)
+ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+1|0.0000
+2|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+id|ok
+1|t
+2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+id|p
+2|1.0000
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+avg_e|sum_e|sd_e
+15.0000|30.0000|7.0711
+(1 row)
+pec_null_token
+t
+(1 row)
+wp_null_token
+t
+(1 row)
+ERROR:  ProvSQL: create_gate: children array must not contain NULL elements (filter them out before calling)

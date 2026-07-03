@@ -124,6 +124,19 @@ agg_token_cast(PG_FUNCTION_ARGS)
   PG_RETURN_TEXT_P(txt_result);
 }
 
+/**
+ * @brief True when an @c agg_token value string cannot carry a number.
+ *
+ * An empty or literal @c "NULL" value string (an aggregate whose value is
+ * SQL NULL) must convert to SQL NULL rather than feed the type-input
+ * function a string it rejects.
+ */
+static bool
+agg_token_val_is_null(const agg_token *aggtok)
+{
+  return aggtok->val[0] == '\0' || strcmp(aggtok->val, "NULL") == 0;
+}
+
 PG_FUNCTION_INFO_V1(agg_token_to_numeric);
 /**
  * @brief Cast an @c agg_token to @c numeric, extracting only the value.
@@ -138,6 +151,9 @@ agg_token_to_numeric(PG_FUNCTION_ARGS)
   Datum result;
 
   provsql_warning("converting agg_token to numeric: provenance information is lost");
+
+  if (agg_token_val_is_null(aggtok))
+    PG_RETURN_NULL();
 
   result = DirectFunctionCall3(numeric_in,
                                CStringGetDatum(aggtok->val),
@@ -163,6 +179,9 @@ agg_token_value(PG_FUNCTION_ARGS)
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
   Datum result;
 
+  if (agg_token_val_is_null(aggtok))
+    PG_RETURN_NULL();
+
   result = DirectFunctionCall3(numeric_in,
                                CStringGetDatum(aggtok->val),
                                ObjectIdGetDatum(InvalidOid),
@@ -185,6 +204,9 @@ agg_token_to_float8(PG_FUNCTION_ARGS)
 
   provsql_warning("converting agg_token to double precision: provenance information is lost");
 
+  if (agg_token_val_is_null(aggtok))
+    PG_RETURN_NULL();
+
   result = DirectFunctionCall1(float8in,
                                CStringGetDatum(aggtok->val));
   PG_RETURN_DATUM(result);
@@ -205,6 +227,9 @@ agg_token_to_int4(PG_FUNCTION_ARGS)
 
   provsql_warning("converting agg_token to integer: provenance information is lost");
 
+  if (agg_token_val_is_null(aggtok))
+    PG_RETURN_NULL();
+
   result = DirectFunctionCall1(int4in,
                                CStringGetDatum(aggtok->val));
   PG_RETURN_DATUM(result);
@@ -224,6 +249,9 @@ agg_token_to_int8(PG_FUNCTION_ARGS)
   Datum result;
 
   provsql_warning("converting agg_token to bigint: provenance information is lost");
+
+  if (agg_token_val_is_null(aggtok))
+    PG_RETURN_NULL();
 
   result = DirectFunctionCall1(int8in,
                                CStringGetDatum(aggtok->val));

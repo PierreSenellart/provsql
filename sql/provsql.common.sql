@@ -1118,6 +1118,13 @@ DECLARE
   filtered_tokens uuid[];
   canonical uuid;
 BEGIN
+  -- A NULL element reads as the ⊗-neutral 1: it is the token slot of an
+  -- untracked source (a join against an untracked table), which is
+  -- certain.  Contrast provenance_plus / provenance_monus, where NULL
+  -- reads as the ⊕- / ⊖-right-neutral 0: each combinator maps NULL to
+  -- its own neutral element.  Nothing may therefore hand a NULL to ⊗
+  -- meaning "false"; a comparison with a NULL operand goes through
+  -- provenance_cmp, which returns gate_zero for it.
   SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
 
   -- Dispatch on the FILTERED count: a single survivor short-circuits
@@ -1170,8 +1177,10 @@ BEGIN
   END IF;
 
   IF token2 IS NULL THEN
-    -- Special semantics, because of a LEFT OUTER JOIN used by the
-    -- difference operator: token2 NULL means there is no second argument
+    -- The ⊖-right-neutral 0: a NULL second argument is the no-match case
+    -- of the difference operator's LEFT OUTER JOIN (nothing to subtract),
+    -- so X ⊖ NULL = X ⊖ 0 = X.  Note this is NOT the NULL ≡ 1 reading of
+    -- provenance_times; each combinator maps NULL to its own neutral.
     RETURN token1;
   END IF;
 
@@ -1268,6 +1277,11 @@ DECLARE
   filtered_tokens uuid[];
   canonical uuid;
 BEGIN
+  -- A NULL element reads as the ⊕-neutral 0: it stands for a row absent
+  -- from the disjunction (a null-padded antijoin row whose token array
+  -- slot is NULL), not for an untracked source.  Contrast provenance_times,
+  -- where NULL reads as the ⊗-neutral 1 (untracked source): each
+  -- combinator maps NULL to its own neutral element.
   SELECT array_agg(t) FROM unnest(tokens) t
   WHERE t IS NOT NULL AND t <> gate_zero()
   INTO filtered_tokens;
@@ -1465,6 +1479,15 @@ $$
 DECLARE
   cmp_token UUID;
 BEGIN
+  -- A comparison with a NULL operand (a NULL random_variable cell, or an
+  -- aggregate that is NULL on the instance) is unknown under SQL's 3VL in
+  -- every possible world: the row is annotated zero.  The function must
+  -- not be STRICT: a NULL result would read as the neutral token
+  -- (provenance_times drops it), silently turning "unknown" into
+  -- "certainly true".
+  IF left_token IS NULL OR right_token IS NULL OR comparison_op IS NULL THEN
+    RETURN gate_zero();
+  END IF;
   -- deterministic v5 namespace id
   cmp_token := public.uuid_generate_v5(
     uuid_ns_provsql(),
@@ -1479,8 +1502,7 @@ $$ LANGUAGE plpgsql
   SET search_path=provsql,pg_temp,public
   SECURITY DEFINER
   IMMUTABLE
-  PARALLEL SAFE
-  STRICT;
+  PARALLEL SAFE;
 
 /**
  * @brief Create an arithmetic gate over scalar-valued provenance children
@@ -1731,63 +1753,6 @@ $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 
 /**
- * @brief Evaluate aggregate provenance over a user-defined semiring (PL/pgSQL version)
- *
- * Handles agg and semimod gates produced by GROUP BY queries.
- *
- * @param token provenance token to evaluate
- * @param token2value mapping table from tokens to semiring values
- * @param agg_function_final finalization function for the aggregate
- * @param agg_function aggregate combination function
- * @param semimod_function semimodule scalar multiplication function
- * @param element_one identity element of the semiring
- * @param value_type OID of the semiring value type
- * @param plus_function semiring addition
- * @param times_function semiring multiplication
- * @param monus_function semiring monus, or NULL
- * @param delta_function δ-semiring operator, or NULL
- */
-CREATE OR REPLACE FUNCTION aggregation_evaluate(
-  token UUID,
-  token2value regclass,
-  agg_function_final regproc,
-  agg_function regproc,
-  semimod_function regproc,
-  element_one anyelement,
-  value_type regtype,
-  plus_function regproc,
-  times_function regproc,
-  monus_function regproc,
-  delta_function regproc)
-  RETURNS anyelement AS
-$$
-DECLARE
-  gt provenance_gate;
-  result ALIAS FOR $0;
-BEGIN
-  SELECT get_gate_type(token) INTO gt;
-
-  IF gt IS NULL THEN
-    RETURN NULL;
-  ELSIF gt='agg' THEN
-    EXECUTE format('SELECT %I(%I(provsql.aggregation_evaluate(t,%L,%L,%L,%L,%L::%s,%L,%L,%L,%L,%L)),pp.proname::varchar) FROM
-                    unnest(get_children(%L)) AS t, pg_proc pp
-                    WHERE pp.oid=(get_infos(%L)).info1
-                    GROUP BY pp.proname',
-      agg_function_final, agg_function,token2value,agg_function_final,agg_function,semimod_function,element_one,value_type,value_type,plus_function,times_function,
-      monus_function,delta_function,token,token)
-    INTO result;
-  ELSE
-    -- gt='semimod'
-    EXECUTE format('SELECT %I(get_extra((get_children(%L))[2]),provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L))',
-      semimod_function,token,token,token2value,element_one,value_type,value_type,plus_function,times_function,monus_function,delta_function)
-    INTO result;
-  END IF;
-  RETURN result;
-END
-$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
-
-/**
  * @brief Evaluate provenance over a user-defined semiring (C version)
  *
  * Optimized C implementation of provenance_evaluate. Infers the
@@ -1811,21 +1776,6 @@ CREATE OR REPLACE FUNCTION provenance_evaluate(
   delta_function regproc = NULL)
   RETURNS anyelement AS
   'provsql','provenance_evaluate' LANGUAGE C STABLE;
-
-/** @brief Evaluate aggregate provenance over a user-defined semiring (C version) */
-CREATE OR REPLACE FUNCTION aggregation_evaluate(
-  token UUID,
-  token2value regclass,
-  agg_function_final regproc,
-  agg_function regproc,
-  semimod_function regproc,
-  element_one anyelement,
-  plus_function regproc,
-  times_function regproc,
-  monus_function regproc = NULL,
-  delta_function regproc = NULL)
-  RETURNS anyelement AS
-  'provsql','aggregation_evaluate' LANGUAGE C STABLE;
 
 /** @} */
 
@@ -5094,6 +5044,24 @@ $$
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
 /**
+ * @brief Value-aware presence indicator: NULL when the row's aggregated
+ *        value is NULL.
+ *
+ * SQL aggregates skip NULL inputs, so a NULL @c random_variable cell must
+ * not count in @c avg's denominator: the wrap yields NULL (which the
+ * @c sum fold skips) exactly when the value is NULL, and the plain
+ * one-argument indicator otherwise.  The planner-hook @c avg rewrite
+ * emits this form; the one-argument indicator remains for the internal
+ * public-form defaults.
+ */
+CREATE OR REPLACE FUNCTION rv_aggregate_indicator(prov uuid, rv random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT CASE WHEN rv IS NULL THEN NULL
+              ELSE provsql.rv_aggregate_indicator(prov) END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+/**
  * @brief State-transition function for @c sum(random_variable).
  *
  * Appends the input RV's UUID to the running array.  NULL inputs are
@@ -5871,12 +5839,14 @@ $$
 DECLARE
   delta_token uuid;
 BEGIN
-  IF token = gate_zero() OR token = gate_one() THEN
-    return token;
-  END IF;
-
+  -- NULL token ≡ 1 (untracked source), and δ(1) = 1.  Tested first: the
+  -- equality comparisons below are not NULL-safe.
   IF token IS NULL THEN
     return gate_one();
+  END IF;
+
+  IF token = gate_zero() OR token = gate_one() THEN
+    return token;
   END IF;
 
   delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
@@ -9309,6 +9279,73 @@ BEGIN
   );
 END
 $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+/** @brief Structural universal-zero test (C backend of nonzero's default mode) */
+CREATE FUNCTION true_nonzero(token uuid)
+  RETURNS boolean AS
+  'provsql', 'true_nonzero' LANGUAGE C PARALLEL SAFE STABLE;
+
+/**
+ * @brief Test whether a provenance annotation is nonzero.
+ *
+ * Returns false only on a *proof* that the annotation is zero; true
+ * otherwise, so filtering with <tt>WHERE nonzero(provenance())</tt> never
+ * discards a row whose annotation could be nonzero.
+ *
+ * The default mode (@p semiring NULL) tests *universal* zero-ness: zero in
+ * every (m-)semiring under every leaf valuation, decided by sound
+ * structural rules (zero propagation through the gates; a comparison gate
+ * whose satisfying-world set is empty).  Filtering on it can never
+ * contradict any downstream semiring evaluation.
+ *
+ * A named @p semiring evaluates the circuit there and tests against that
+ * semiring's zero: 'boolean' is presence in the vanilla SQL answer on this
+ * instance (the mode that filters, e.g., the null-padded arm of a
+ * difference), 'counting' is bag multiplicity.  An absent @p mapping reads
+ * every leaf as the semiring's one (true / 1); with a mapping, leaves take
+ * their mapped values.
+ *
+ * A NULL @p token reads as the neutral 1 (an untracked row): true.
+ *
+ * @param token    provenance token to test
+ * @param semiring NULL (universal zero test), 'boolean', or 'counting'
+ * @param mapping  optional mapping table from tokens to leaf values
+ */
+CREATE FUNCTION nonzero(token uuid,
+                        semiring text DEFAULT NULL,
+                        mapping regclass DEFAULT NULL)
+  RETURNS boolean AS
+$$
+BEGIN
+  IF token IS NULL THEN
+    RETURN true;
+  END IF;
+  IF semiring IS NULL THEN
+    RETURN provsql.true_nonzero(token);
+  ELSIF semiring = 'boolean' THEN
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'boolean', TRUE);
+  ELSIF semiring = 'counting' THEN
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'counting', 1) <> 0;
+  ELSE
+    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring;
+  END IF;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+/**
+ * @brief Presence in the vanilla SQL answer on this instance.
+ *
+ * Shorthand for <tt>nonzero(token, 'boolean')</tt> with every leaf true:
+ * <tt>WHERE present(provenance())</tt> restores the result set the query
+ * has without provenance tracking, filtering the zero-annotated extras
+ * (antijoin arms, failed HAVING groups, unknown comparisons) that the
+ * rewriting keeps visible.
+ */
+CREATE FUNCTION present(token uuid)
+  RETURNS boolean AS
+$$
+  SELECT provsql.nonzero(token, 'boolean');
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over the tropical (min-plus) m-semiring
  *

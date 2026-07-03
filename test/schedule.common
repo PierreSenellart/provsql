@@ -33,6 +33,8 @@ test: formula counting boolean
 
 # Test of various ProvSQL features and SQL language capabilities
 test: deterministic union_all union nested_union union_nary distinct group_by_provenance except null unsupported_features no_attribute resjunk values verbose_setops union_untracked
+test: null_semantics
+test: nonzero
 test: cte
 test: active
 test: aggregation

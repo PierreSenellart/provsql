@@ -184,3 +184,24 @@ remove_provenance
 mi_shared_in_band
 t
 (1 row)
+remove_provenance
+
+(1 row)
+id|p
+9|0.0000
+(1 row)
+remove_provenance
+
+(1 row)
+id|station_id
+9|s2
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+avg_skips_null
+t
+(1 row)

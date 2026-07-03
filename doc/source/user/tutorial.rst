@@ -260,6 +260,24 @@ formula for each tuple.
 
    </details>
 
+Look closely at the output: the contradicted sightings are *still
+there*, annotated with monus formulas of the form ``x ⊖ (…)``. This is
+deliberate -- across possible worlds such a row is a real answer
+whenever its contradicting sightings are absent, so ProvSQL keeps it
+rather than spend a provenance evaluation filtering it. When you want
+exactly the rows of the vanilla ``EXCEPT`` answer, say so explicitly
+with :sqlfunc:`present`:
+
+.. code-block:: postgresql
+
+    SELECT *, sr_formula(provenance(), 'witness_mapping')
+    FROM consistent_s
+    WHERE provsql.present(provenance());
+
+(:sqlfunc:`nonzero` is the general form, testing the annotation against
+a chosen semiring's zero; see :doc:`the chapter on NULL values and
+zero-annotated rows <nulls>`.)
+
 Step 7: Identify Suspects
 --------------------------
 

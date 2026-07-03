@@ -45,7 +45,8 @@ photo_id|species_id|gtype
 5|2|mulinput
 5|3|mulinput
 5|3|mulinput
-(8 rows)
+5||mulinput
+(9 rows)
 remove_provenance
 
 (1 row)
@@ -97,9 +98,9 @@ remove_provenance
 (1 row)
 id|exp_detections|exp_total_conf
 1|2.1400|1.5350
-5|2.4100|0.9861
+5|3.0100|1.3461
 7|2.5500|1.6465
-9|1.7100|1.4705
+9|2.2100|1.7205
 22|4.3800|2.9976
 (5 rows)
 add_provenance
@@ -112,3 +113,42 @@ photo_id|species_id|confidence|prob
 6|7|0.91|0.9100
 9|13|0.92|0.9200
 (2 rows)
+remove_provenance
+
+(1 row)
+species_id|prob
+1|0.0091
+2|0.7060
+3|0.0629
+5|0.2106
+6|0.2090
+7|0.1274
+9|0.8300
+|0.3000
+(8 rows)
+remove_provenance
+
+(1 row)
+species_id|prob
+1|0.0045
+2|0.3530
+3|0.0314
+5|0.1053
+6|0.1045
+7|0.0637
+9|0.4150
+|0.0000
+(8 rows)
+remove_provenance
+
+(1 row)
+species_id|prob
+1|0.0091
+2|0.7060
+3|0.0629
+5|0.2106
+6|0.2090
+7|0.1274
+9|0.8300
+|0.6000
+(8 rows)

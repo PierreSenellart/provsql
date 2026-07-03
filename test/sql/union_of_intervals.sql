@@ -81,7 +81,7 @@ FROM (
   WHERE P1.id < P2.id
 ) t;
 SELECT remove_provenance('union_intervals_result');
-SELECT * FROM union_intervals_result;
+SELECT * FROM union_intervals_result ORDER BY city;
 DROP TABLE union_intervals_result;
 
 CREATE TABLE union_intervals_result AS
@@ -95,6 +95,6 @@ FROM (
     WHERE P1.city = P2.city AND P1.id < P2.id
 ) t;
 SELECT remove_provenance('union_intervals_result');
-SELECT * FROM union_intervals_result;
+SELECT * FROM union_intervals_result ORDER BY city;
 DROP TABLE union_intervals_result;
 DROP TABLE time_validity;

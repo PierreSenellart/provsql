@@ -28,7 +28,7 @@ DROP TABLE IF EXISTS detection CASCADE;
 CREATE TABLE detection (
     photo_id   integer NOT NULL,
     bbox_id    integer NOT NULL,
-    species_id integer NOT NULL,
+    species_id integer,  -- NULL: animal detected, species unidentified
     confidence double precision NOT NULL
 );
 
@@ -91,6 +91,9 @@ COPY species (id, name, category) FROM stdin;
 -- Photo 9: deer + high-confidence dog (excluded from "deer, no dogs").
 -- Photo 14: deer + low-confidence near-miss dog (interesting EXCEPT case).
 -- Photo 22: ambiguous box plus several clear ones (mixed herd at Rannoch).
+-- Photos 5 and 9 each also have one *unidentified* detection (species_id
+--          NULL): the classifier saw an animal but assigned no species.
+--          These drive the NULL-semantics comparison of Step 12.
 TRUNCATE detection;
 COPY detection (photo_id, bbox_id, species_id, confidence) FROM stdin;
 1	1	1	0.78
@@ -107,6 +110,7 @@ COPY detection (photo_id, bbox_id, species_id, confidence) FROM stdin;
 5	3	1	0.38
 5	4	3	0.43
 5	5	3	0.48
+5	6	\N	0.60
 6	1	7	0.91
 7	1	1	0.76
 7	2	1	0.62
@@ -115,6 +119,7 @@ COPY detection (photo_id, bbox_id, species_id, confidence) FROM stdin;
 8	1	9	0.83
 9	1	1	0.79
 9	2	13	0.92
+9	3	\N	0.50
 10	1	1	0.73
 10	2	3	0.66
 11	1	5	0.74

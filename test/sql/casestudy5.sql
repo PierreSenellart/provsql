@@ -19,7 +19,7 @@ CREATE TABLE species (
 CREATE TABLE detection (
     photo_id   integer NOT NULL,
     bbox_id    integer NOT NULL,
-    species_id integer NOT NULL,
+    species_id integer,  -- NULL: animal detected, species unidentified
     confidence double precision NOT NULL
 );
 
@@ -87,6 +87,7 @@ COPY detection (photo_id, bbox_id, species_id, confidence) FROM stdin;
 5	3	1	0.38
 5	4	3	0.43
 5	5	3	0.48
+5	6	\N	0.60
 6	1	7	0.91
 7	1	1	0.76
 7	2	1	0.62
@@ -95,6 +96,7 @@ COPY detection (photo_id, bbox_id, species_id, confidence) FROM stdin;
 8	1	9	0.83
 9	1	1	0.79
 9	2	13	0.92
+9	3	\N	0.50
 10	1	1	0.73
 10	2	3	0.66
 11	1	5	0.74
@@ -324,6 +326,65 @@ SELECT photo_id, species_id, confidence, prob FROM result_cs5_confident
 ORDER BY photo_id, species_id;
 DROP TABLE result_cs5_confident;
 DROP TABLE confident_detections;
+
+-- Step 12: unidentified detections (NULL species_id) and the three kinds of
+-- "not": EXCEPT (syntactic set difference), NOT IN (unknown poisons every
+-- answer), NOT EXISTS (equality never matches a NULL).  Loch Torridon is
+-- photos 1-8, Glen Affric photos 9-15; both stations carry one unidentified
+-- detection (photo 5 at 0.60, photo 9 at 0.50).
+
+-- (a) EXCEPT: NULL matches NULL syntactically, so the Loch Torridon
+-- unidentified sighting is discounted by Glen Affric's.
+CREATE TABLE result_cs5_null_except AS
+SELECT species_id,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT species_id FROM detection WHERE photo_id BETWEEN 1 AND 8
+  EXCEPT
+  SELECT species_id FROM detection WHERE photo_id BETWEEN 9 AND 15
+) t;
+SELECT remove_provenance('result_cs5_null_except');
+SELECT species_id, prob FROM result_cs5_null_except
+ORDER BY species_id NULLS LAST;
+DROP TABLE result_cs5_null_except;
+
+-- (b) NOT IN: one unidentified sighting at Glen Affric makes "species_id
+-- NOT IN (Glen Affric)" unknown for every species, so every answer's
+-- probability carries the factor "the Glen Affric unidentified detection is
+-- a false positive" (0.5).
+CREATE TABLE result_cs5_null_notin AS
+SELECT species_id,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT DISTINCT species_id
+  FROM (SELECT species_id FROM detection
+        WHERE photo_id BETWEEN 1 AND 8
+          AND species_id NOT IN (SELECT species_id FROM detection
+                                 WHERE photo_id BETWEEN 9 AND 15)) lt
+) t;
+SELECT remove_provenance('result_cs5_null_notin');
+SELECT species_id, prob FROM result_cs5_null_notin
+ORDER BY species_id NULLS LAST;
+DROP TABLE result_cs5_null_notin;
+
+-- (c) NOT EXISTS: the equality inside never matches a NULL, so the
+-- unidentified sightings are simply ignored: Loch Torridon's own NULL row
+-- survives at its detection probability, and Glen Affric's removes nothing.
+CREATE TABLE result_cs5_null_notexists AS
+SELECT species_id,
+       ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+FROM (
+  SELECT DISTINCT species_id
+  FROM (SELECT species_id FROM detection d
+        WHERE photo_id BETWEEN 1 AND 8
+          AND NOT EXISTS (SELECT 1 FROM detection d2
+                          WHERE d2.photo_id BETWEEN 9 AND 15
+                            AND d2.species_id = d.species_id)) lt
+) t;
+SELECT remove_provenance('result_cs5_null_notexists');
+SELECT species_id, prob FROM result_cs5_null_notexists
+ORDER BY species_id NULLS LAST;
+DROP TABLE result_cs5_null_notexists;
 
 -- Clean up
 DROP TABLE species_mapping;

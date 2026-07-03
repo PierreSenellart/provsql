@@ -1,0 +1,90 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+dflt|bool|cnt|prs
+t|f|t|f
+(1 row)
+remove_provenance
+
+(1 row)
+a|dflt|bool|cnt|prs
+1|t|f|f|f
+(1 row)
+remove_provenance
+
+(1 row)
+a|dflt|prs
+1|f|f
+1|f|f
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+rk|sk|dflt|prs
+1|1|t|t
+1||t|f
+(2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|dflt|prs
+sum<5|1|f|f
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|dflt|prs
+sum>5|1|t|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|dflt
+1|t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|dflt
+1|f
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|dflt
+1|f
+(1 row)
+dflt|bool|prs
+t|t|t
+(1 row)
+remove_provenance
+
+(1 row)
+name|bool
+x|f
+y|t
+(2 rows)
+ERROR:  nonzero: unsupported semiring "formula" (supported: boolean, counting; NULL for the universal zero test)
+CONTEXT:  PL/pgSQL function nonzero(uuid,text,regclass) line 13 at RAISE
+remove_provenance
+
+(1 row)

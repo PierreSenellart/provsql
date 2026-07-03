@@ -2594,10 +2594,18 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
     num_wrap->location = -1;
 
     /* prov_expr is consumed again by the indicator wrap; copy it so the two
-     * Aggrefs own independent node trees. */
-    ind_wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR;
+     * Aggrefs own independent node trees.  The value-aware indicator is
+     * NULL exactly when the row's value is NULL, so a NULL cell drops out
+     * of the count as SQL's AVG requires (the one-argument form would
+     * deflate the average by counting the NULL-valued row). */
+    if (OidIsValid(constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR_VALUED)) {
+      ind_wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR_VALUED;
+      ind_wrap->args = list_make2(copyObject(prov_expr), copyObject(rv_arg));
+    } else {
+      ind_wrap->funcid = constants->OID_FUNCTION_RV_AGGREGATE_INDICATOR;
+      ind_wrap->args = list_make1(copyObject(prov_expr));
+    }
     ind_wrap->funcresulttype = constants->OID_TYPE_RANDOM_VARIABLE;
-    ind_wrap->args = list_make1(copyObject(prov_expr));
     ind_wrap->location = -1;
 
     div->funcid = constants->OID_FUNCTION_RV_DIV;
@@ -3680,6 +3688,21 @@ static FuncExpr *rv_Expr_to_provenance(Expr *expr,
                                        bool negated);
 
 /**
+ * @brief True when @p node is a NULL constant (through a coercion).
+ *
+ * Detects the literal @c NULL operand of a lifted comparison at planning
+ * time; a NULL flowing in at execution (a NULL @c random_variable cell)
+ * is caught by @c provenance_cmp instead.
+ */
+static bool
+is_null_constant_operand(Node *node)
+{
+  if (node && IsA(node, RelabelType))
+    node = (Node *)((RelabelType *)node)->arg;
+  return node && IsA(node, Const) && ((Const *)node)->constisnull;
+}
+
+/**
  * @brief Convert a single RV-comparison @c OpExpr into a
  *        @c provenance_cmp() FuncExpr returning UUID.
  *
@@ -3703,6 +3726,20 @@ rv_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants_t *constants,
   Oid       opno = opExpr->opno;
   Node     *left = (Node *)linitial(opExpr->args);
   Node     *right = (Node *)lsecond(opExpr->args);
+
+  /* A comparison with a NULL operand is unknown under SQL's 3VL in every
+   * world, and negation fixes unknown, so the lifted conjunct annotates
+   * the row zero whichever way the comparison points.  The runtime dual
+   * (a NULL random_variable cell reaching provenance_cmp) is handled by
+   * provenance_cmp itself returning gate_zero. */
+  if (is_null_constant_operand(left) || is_null_constant_operand(right)) {
+    FuncExpr *zero = makeNode(FuncExpr);
+    zero->funcid = constants->OID_FUNCTION_GATE_ZERO;
+    zero->funcresulttype = constants->OID_TYPE_UUID;
+    zero->args = NIL;
+    zero->location = opExpr->location;
+    return zero;
+  }
 
   if (negated) {
     opno = get_negator(opno);
@@ -7281,6 +7318,15 @@ static void collect_direct_qual_sublinks(Node *node, List **out) {
   }
 }
 
+static bool oj_wrap_body_with_match_ind(const constants_t *constants,
+                                        Query *sub);
+
+/** @brief Sentinel eref alias marking join RTEs that ProvSQL itself
+ *         constructs (the EXCEPT antijoin, the sublink decorrelation):
+ *         their monus construction accounts for the null-padded rows, so
+ *         @c check_unlowered_outer_joins skips them. */
+#define PROVSQL_JOIN_ALIAS "provsql_join"
+
 /** @brief Context for @c sublink_classify_walker. */
 typedef struct {
   const constants_t *constants;
@@ -7626,7 +7672,12 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     v = (Var *)te->expr;
 
     if (v->vartype != constants->OID_TYPE_UUID) {
-      OpExpr *oe = makeNode(OpExpr);
+      /* SQL's EXCEPT matches tuples syntactically (two NULLs are the same
+       * value), so the antijoin condition is the NULL-identical
+       * "l IS NOT DISTINCT FROM r" -- a DistinctExpr under a NOT -- and
+       * not the plain "=", which never matches a NULL row and would leave
+       * NULL rows of the left side unremoved. */
+      DistinctExpr *oe = makeNode(DistinctExpr);
       Oid opno = find_equality_operator(v->vartype, v->vartype);
       Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
       Form_pg_operator opform;
@@ -7666,7 +7717,10 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 
       oe->args = list_make2(leftArg, rightArg);
       oe->location = -1;
-      expr->args = lappend(expr->args, oe);
+      /* IS NOT DISTINCT FROM has no node of its own: it is the negation
+       * of the DistinctExpr. */
+      expr->args = lappend(expr->args,
+                           makeBoolExpr(NOT_EXPR, list_make1(oe), -1));
 
       ReleaseSysCache(opInfo);
     }
@@ -7737,7 +7791,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     }
 
     rte->alias = NULL;
-    rte->eref = makeAlias("unnamed_join", colnames);
+    rte->eref = makeAlias(PROVSQL_JOIN_ALIAS, colnames);
     rte->joinaliasvars = aliasvars;
 #if PG_VERSION_NUM >= 130000
     rte->joinleftcols = leftcols;
@@ -8433,6 +8487,103 @@ static Node *oj_outer_remap(Node *node, void *cx) {
     return node;
   }
   return expression_tree_mutator(node, oj_outer_remap, cx);
+}
+
+/**
+ * @brief Walker: does the jointree fragment @p n reference a
+ *        provenance-tracked RTE of @p q?
+ *
+ * Join arms are @c RangeTblRef leaves or nested @c JoinExpr nodes.  Base
+ * relations and subqueries are tested with @c oj_rte_has_provsql; any
+ * other RTE kind (CTE, function, VALUES) counts as tracked when its
+ * @c eref exposes a @c provsql column, the same name convention the
+ * provenance discovery matches on.
+ */
+static bool jointree_arm_has_tracked(const constants_t *constants,
+                                     Query *q, Node *n)
+{
+  if (n == NULL)
+    return false;
+  if (IsA(n, RangeTblRef)) {
+    RangeTblEntry *rte = rt_fetch(((RangeTblRef *)n)->rtindex, q->rtable);
+    ListCell *lc;
+    if (rte->rtekind == RTE_RELATION || rte->rtekind == RTE_SUBQUERY)
+      return oj_rte_has_provsql(constants, rte);
+    foreach (lc, rte->eref->colnames) {
+      if (!strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME))
+        return true;
+    }
+    return false;
+  }
+  if (IsA(n, JoinExpr))
+    return jointree_arm_has_tracked(constants, q, ((JoinExpr *)n)->larg) ||
+           jointree_arm_has_tracked(constants, q, ((JoinExpr *)n)->rarg);
+  if (IsA(n, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)n)->fromlist)
+      if (jointree_arm_has_tracked(constants, q, (Node *)lfirst(lc)))
+        return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Refuse outer joins that survived @c lower_outer_joins with a
+ *        provenance-tracked relation on a null-padded side.
+ *
+ * The @c RTE_JOIN arm of @c get_provenance_attributes treats every join
+ * like an inner join: a null-padded row would silently get the ⊗ of the
+ * in-scope tokens, although it exists only in the worlds where the
+ * tracked padded side has no match.  ProvSQL-generated antijoins carry
+ * the @c PROVSQL_JOIN_ALIAS sentinel and are sound (their monus accounts
+ * for the padding).  A user outer join whose padded side is fully
+ * untracked is also sound as-is: its match set is deterministic, so the
+ * padded rows correctly keep just the other arm's tokens.  Everything
+ * else raises, symmetrically with the semi/anti-join refusal.
+ */
+static void check_unlowered_outer_joins(const constants_t *constants,
+                                        Query *q, Node *n)
+{
+  JoinExpr *je;
+
+  if (n == NULL)
+    return;
+  if (IsA(n, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)n)->fromlist)
+      check_unlowered_outer_joins(constants, q, (Node *)lfirst(lc));
+    return;
+  }
+  if (!IsA(n, JoinExpr))
+    return;
+
+  je = (JoinExpr *)n;
+  check_unlowered_outer_joins(constants, q, je->larg);
+  check_unlowered_outer_joins(constants, q, je->rarg);
+
+  if (je->jointype != JOIN_LEFT && je->jointype != JOIN_RIGHT &&
+      je->jointype != JOIN_FULL)
+    return;
+
+  if (je->rtindex > 0) {
+    RangeTblEntry *jrte = rt_fetch(je->rtindex, q->rtable);
+    if (jrte->eref && jrte->eref->aliasname &&
+        !strcmp(jrte->eref->aliasname, PROVSQL_JOIN_ALIAS))
+      return;
+  }
+
+  if (((je->jointype == JOIN_LEFT || je->jointype == JOIN_FULL) &&
+       jointree_arm_has_tracked(constants, q, je->rarg)) ||
+      ((je->jointype == JOIN_RIGHT || je->jointype == JOIN_FULL) &&
+       jointree_arm_has_tracked(constants, q, je->larg)))
+    provsql_error(
+      "unsupported %s JOIN: a provenance-tracked relation sits on the "
+      "null-padded side of a join that could not be lowered (only a "
+      "two-relation outer join with no outer reference to the join RTE "
+      "is); rewrite the query or remove provenance from the null-padded "
+      "side",
+      je->jointype == JOIN_LEFT ? "LEFT"
+      : je->jointype == JOIN_RIGHT ? "RIGHT" : "FULL");
 }
 
 /**
@@ -9203,6 +9354,45 @@ static bool normalize_quantified_aggregate_sublinks(
 }
 
 /**
+ * @brief Conservative provably-not-NULL test for the sublink lift.
+ *
+ * True only for a non-NULL constant or (through binary-compatible
+ * coercions) a @c Var on a base-relation column declared @c NOT @c NULL,
+ * resolved in @p q at @p levelsup.  Everything else -- expressions,
+ * subquery outputs, outer-join-nullable Vars -- conservatively counts as
+ * nullable.
+ */
+static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup)
+{
+  while (e && IsA(e, RelabelType))
+    e = (Node *)((RelabelType *)e)->arg;
+  if (e == NULL)
+    return false;
+  if (IsA(e, Const))
+    return !((Const *)e)->constisnull;
+  if (IsA(e, Var)) {
+    const Var *v = (const Var *)e;
+    RangeTblEntry *rte;
+    HeapTuple atttup;
+    bool notnull;
+    if (v->varlevelsup != levelsup || v->varattno <= 0 ||
+        v->varno <= 0 || (int)v->varno > list_length(q->rtable))
+      return false;
+    rte = rt_fetch(v->varno, q->rtable);
+    if (rte->rtekind != RTE_RELATION)
+      return false;
+    atttup = SearchSysCache2(ATTNUM, ObjectIdGetDatum(rte->relid),
+                             Int16GetDatum(v->varattno));
+    if (!HeapTupleIsValid(atttup))
+      return false;
+    notnull = ((Form_pg_attribute) GETSTRUCT(atttup))->attnotnull;
+    ReleaseSysCache(atttup);
+    return notnull;
+  }
+  return false;
+}
+
+/**
  * @brief Build the per-row correlation for a quantified sublink (@c IN /
  *        @c op @c ANY / @c op @c ALL), setting @p *antijoin.
  *
@@ -9215,12 +9405,30 @@ static bool normalize_quantified_aggregate_sublinks(
  * antijoin (@c *antijoin = true, operator negated -- @c "∀q. x op q" =
  * @c "¬∃q. x ¬op q").  Returns @c NULL for unsupported shapes (a @c RowCompareExpr,
  * a multi-column @c ALL, a bad paramid…).
+ *
+ * NULL semantics: when the lift's @e final sense is the antijoin
+ * (@p neg XOR the base @c ALL sense -- @c NOT @c IN, @c op @c ALL,
+ * @c NOT @c (op @c ANY)), a subquery row makes the outer row a non-answer
+ * not only when the correlation is @e true but also when it is @e unknown
+ * (SQL's 3VL: negation fixes u and the top level then filters it), i.e.
+ * when either operand is NULL.  Each conjunct therefore becomes
+ * @c "(xᵢ ¬op qᵢ) OR xᵢ IS NULL OR qᵢ IS NULL", with the per-side guards
+ * omitted when that side is provably non-nullable (the common NULL-free
+ * path keeps its current form).  The semijoin sense needs no guards:
+ * matching only the rows where the correlation is @e true is exactly
+ * SQL's own conflation of u with f at the top level.  @p *guarded reports
+ * whether any guard was emitted (the caller must then re-key the count
+ * through @c oj_wrap_body_with_match_ind).
  */
-static Node *extract_quantified_corr(SubLink *sl, bool *antijoin) {
+static Node *extract_quantified_corr(SubLink *sl, bool *antijoin, bool neg,
+                                     const Query *outerq, bool *guarded) {
   Query *sub = (Query *)sl->subselect;
   List *opexprs, *conjs = NIL;
   ListCell *lc;
   bool negate_op;
+  bool null_guards;
+
+  *guarded = false;
 
   /* ANY (IN, op ANY) is a semijoin: ∃q. x op q.  ALL (op ALL) is its universal
    * dual: ∀q. x op q = ¬∃q. x ¬op q -- the antijoin, with the operator negated
@@ -9234,6 +9442,9 @@ static Node *extract_quantified_corr(SubLink *sl, bool *antijoin) {
   } else {
     return NULL;
   }
+
+  /* The final sense after an enclosing NOT; guards are an antijoin matter. */
+  null_guards = *antijoin ^ neg;
 
   /* The testexpr is a single "x op Param" (single-column), or -- only for a row
    * IN -- a BoolExpr AND of per-column "xᵢ = Paramᵢ". */
@@ -9268,18 +9479,49 @@ static Node *extract_quantified_corr(SubLink *sl, bool *antijoin) {
      * paramid-th output column for its PARAM_SUBLINK placeholder. */
     ci = copyObject((Node *)oe);
     if (negate_op) {
-      Oid neg = get_negator(((OpExpr *)ci)->opno);
-      if (!OidIsValid(neg))
+      Oid negop = get_negator(((OpExpr *)ci)->opno);
+      if (!OidIsValid(negop))
         return NULL;
-      ((OpExpr *)ci)->opno = neg;
-      ((OpExpr *)ci)->opfuncid = get_opcode(neg);
+      ((OpExpr *)ci)->opno = negop;
+      ((OpExpr *)ci)->opfuncid = get_opcode(negop);
     }
     IncrementVarSublevelsUp(ci, 1, 0);
     qcol = copyObject(
       (Node *)((TargetEntry *)list_nth(sub->targetList, p->paramid - 1))->expr);
     ctx.paramid = p->paramid;
     ctx.replacement = qcol;
-    conjs = lappend(conjs, oj_param_repl_mut(ci, &ctx));
+    ci = oj_param_repl_mut(ci, &ctx);
+
+    /* Antijoin sense: an unknown correlation also removes the outer row,
+     * so a NULL on either side counts as a match.  Guard only the sides
+     * that can actually be NULL. */
+    if (null_guards) {
+      List *disj = list_make1(ci);
+      /* The outer operand (tested against outerq before the sublevel
+       * sink, at levelsup 0). */
+      if (!expr_provably_not_null((Node *)linitial(((OpExpr *)oe)->args),
+                                  outerq, 0)) {
+        NullTest *nx = makeNode(NullTest);
+        nx->arg = (Expr *)copyObject(linitial(((OpExpr *)ci)->args));
+        nx->nulltesttype = IS_NULL;
+        nx->argisrow = false;
+        nx->location = -1;
+        disj = lappend(disj, nx);
+      }
+      if (!expr_provably_not_null(qcol, sub, 0)) {
+        NullTest *nq = makeNode(NullTest);
+        nq->arg = (Expr *)copyObject(qcol);
+        nq->nulltesttype = IS_NULL;
+        nq->argisrow = false;
+        nq->location = -1;
+        disj = lappend(disj, nq);
+      }
+      if (list_length(disj) > 1) {
+        ci = (Node *)makeBoolExpr(OR_EXPR, disj, -1);
+        *guarded = true;
+      }
+    }
+    conjs = lappend(conjs, ci);
   }
 
   if (conjs == NIL)
@@ -9340,12 +9582,27 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
         /* IN / NOT IN / op ANY / op ALL: correlation lifted from the testexpr.
          * ANY is a semijoin, ALL its antijoin dual; a wrapping NOT flips that. */
         bool base_antijoin;
-        Node *corr = extract_quantified_corr(sl, &base_antijoin);
+        bool guarded = false;
+        Node *corr = extract_quantified_corr(sl, &base_antijoin, neg, q,
+                                             &guarded);
         if (corr &&
             predicate_subselect_decorrelatable(constants,
-                                               (Query *)sl->subselect, true))
-          rewritten = build_count_predicate((Query *)sl->subselect, corr,
-                                            base_antijoin ^ neg);
+                                               (Query *)sl->subselect, true)) {
+          if (guarded) {
+            /* The guards let a matched Q row be NULL in every data column,
+             * so the count key must be the wrap's constant indicator;
+             * re-extract so the correlation targets the wrapped body. */
+            if (oj_wrap_body_with_match_ind(constants,
+                                            (Query *)sl->subselect))
+              corr = extract_quantified_corr(sl, &base_antijoin, neg, q,
+                                             &guarded);
+            else
+              corr = NULL;
+          }
+          if (corr)
+            rewritten = build_count_predicate((Query *)sl->subselect, corr,
+                                              base_antijoin ^ neg);
+        }
       }
     }
     newconjs = lappend(newconjs, rewritten ? rewritten : c);
@@ -9569,6 +9826,42 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
 #endif
   rtr->rtindex = 1;
   sub->jointree->fromlist = list_make1(rtr);
+  return true;
+}
+
+/** @brief Column name of the constant match indicator added by
+ *         @c oj_wrap_body_with_match_ind. */
+#define PROVSQL_MATCH_IND_COLNAME "provsql_match_ind"
+
+/**
+ * @brief Wrap a NULL-guarded antijoin body into a derived subquery @c D
+ *        carrying a constant match-indicator column.
+ *
+ * Under the 3VL guards of @c extract_quantified_corr a corr-matched @c Q row
+ * can be NULL in @e every data column, so after decorrelation no data column
+ * can key the matched / null-padded distinction that the @c count(*) @c ->
+ * @c count(Q.key) rewrite needs.  The indicator is a constant @c TRUE
+ * projected by @c D: non-NULL on every genuine row, NULL on the padded
+ * antijoin row like any other @c D column.  The @c aggstar arm of
+ * @c decorrelate_scalar_sublinks prefers it as the count key.
+ */
+static bool oj_wrap_body_with_match_ind(const constants_t *constants,
+                                        Query *sub) {
+  RangeTblEntry *d_rte;
+  Query *D;
+
+  if (!oj_wrap_body_from(constants, sub))
+    return false;
+
+  d_rte = (RangeTblEntry *)linitial(sub->rtable);
+  D = d_rte->subquery;
+  D->targetList = lappend(
+    D->targetList,
+    makeTargetEntry((Expr *)makeBoolConst(true, false),
+                    list_length(D->targetList) + 1,
+                    pstrdup(PROVSQL_MATCH_IND_COLNAME), false));
+  d_rte->eref->colnames = lappend(
+    d_rte->eref->colnames, makeString(pstrdup(PROVSQL_MATCH_IND_COLNAME)));
   return true;
 }
 
@@ -10580,7 +10873,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
     jrte->rtekind = RTE_JOIN;
     jrte->jointype = JOIN_LEFT;
     jrte->alias = NULL;
-    jrte->eref = makeAlias("unnamed_join", cn);
+    jrte->eref = makeAlias(PROVSQL_JOIN_ALIAS, cn);
     jrte->joinaliasvars = av;
 #if PG_VERSION_NUM >= 130000
     jrte->joinleftcols = lcols;
@@ -10618,12 +10911,30 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   if (is_agg_body) {
     Aggref *agg = (Aggref *)valexpr; /* the remapped body aggregate */
     if (agg->aggstar) {
-      Var *qkey = (Var *)copyObject(scan.found_var);
-      qkey->varno = Q_idx;
+      Var *qkey = NULL;
+      /* Prefer the constant match indicator projected by
+       * oj_wrap_body_with_match_ind: under the NULL-guarded antijoin
+       * correlation a matched row can be NULL in every data column, so
+       * only the indicator keys matched vs null-padded reliably. */
+      if (Q_rte_orig->rtekind == RTE_SUBQUERY) {
+        ListCell *klc;
+        foreach (klc, Q_rte_orig->subquery->targetList) {
+          TargetEntry *kte = (TargetEntry *)lfirst(klc);
+          if (!kte->resjunk && kte->resname &&
+              !strcmp(kte->resname, PROVSQL_MATCH_IND_COLNAME)) {
+            qkey = makeVar(Q_idx, kte->resno, BOOLOID, -1, InvalidOid, 0);
+            break;
+          }
+        }
+      }
+      if (qkey == NULL) {
+        qkey = (Var *)copyObject(scan.found_var);
+        qkey->varno = Q_idx;
 #if PG_VERSION_NUM >= 130000
-      qkey->varnosyn = 0;
-      qkey->varattnosyn = 0;
+        qkey->varnosyn = 0;
+        qkey->varattnosyn = 0;
 #endif
+      }
       repl_expr = (Expr *)oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype,
                                          (Expr *)qkey);
     } else {
@@ -13476,6 +13787,12 @@ static Query *process_query(const constants_t *constants, Query *q,
      * semantics α ⊖ ⊕β.  Must run before get_provenance_attributes processes
      * the arms. */
     group_set_difference_right_arm(constants, q);
+
+    /* Every rewrite that can absorb an outer join has run; what survives
+     * with a tracked null-padded side would be silently mis-tracked as an
+     * inner join. */
+    if (q->jointree)
+      check_unlowered_outer_joins(constants, q, (Node *)q->jointree);
 
     // get_provenance_attributes will also recursively process subqueries
     // by calling process_query (threading each subquery's marker sub-context)

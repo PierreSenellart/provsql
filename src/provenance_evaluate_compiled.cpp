@@ -156,6 +156,18 @@ bool join_with_temp_uuids(Oid table, const std::vector<std::string> &uuids) {
   if (SPI_connect() != SPI_OK_CONNECT)
     throw CircuitException("SPI_connect failed");
 
+  // No mapping given: run an empty join, so the provenance mapping stays
+  // empty and every leaf falls back to the semiring's one (the
+  // absent-mapping convention).
+  if (!OidIsValid(table)) {
+    if (SPI_exec("SELECT ''::text AS value, NULL::uuid AS provenance WHERE false",
+                 0) != SPI_OK_SELECT) {
+      SPI_finish();
+      throw CircuitException("Join query failed");
+    }
+    return false;
+  }
+
   char *table_name = get_rel_name(table);
   if (!table_name) {
     SPI_finish();
@@ -360,6 +372,13 @@ static Datum provenance_evaluate_compiled_internal
 /** @brief PostgreSQL-callable wrapper for provenance_evaluate_compiled(). */
 Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
 {
+  /* The sr_* SQL wrappers are STRICT, but the function itself is not:
+   * guard the required arguments rather than rely on the wrappers.  The
+   * mapping (argument 1) is legitimately NULL -- the no-mapping mode
+   * renders anonymous leaves -- and reads as InvalidOid below. */
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
+    PG_RETURN_NULL();
+
   try {
     Datum token = PG_GETARG_DATUM(0);
 

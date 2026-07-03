@@ -152,6 +152,8 @@ _SQL_FUNC_MAP = {
     'expected':                 '/doxygen-sql/html/group__probability.html#ga362bcce6a7edb8e25174e64017ae9aba',
     'sr_formula':               '/doxygen-sql/html/group__compiled__semirings.html#ga3aad4775805b92307f3ca9e1b9fbd4c5',
     'sr_boolean':               '/doxygen-sql/html/group__compiled__semirings.html#gad6d630b56fc0466db0a7907e67d69777',
+    'nonzero':                  '/doxygen-sql/html/group__compiled__semirings.html#ga3beadc3e5d5bc79bce563b382b4ec4ee',
+    'present':                  '/doxygen-sql/html/group__compiled__semirings.html#ga18e75add904f913d3593ae913b22913f',
     'sr_boolexpr':              '/doxygen-sql/html/group__compiled__semirings.html#gaf221001c4d22d033906fdcaa82864f7a',
     'sr_counting':              '/doxygen-sql/html/group__compiled__semirings.html#gadc339f3d4c3289e3b6fa89a9331ec051',
     'sr_why':                   '/doxygen-sql/html/group__compiled__semirings.html#ga477a71b9fe533fc607eb5fc5a7577680',

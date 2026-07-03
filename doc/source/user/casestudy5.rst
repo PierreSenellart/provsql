@@ -480,3 +480,88 @@ one over the original row – the lineage followed the data:
    provenance-tracked rows into an *untracked* table drops the lineage, with
    a warning; use :sqlfunc:`add_provenance` on the target first (or
    ``CREATE TABLE … AS SELECT``, which carries provenance through directly).
+
+
+Step 12: Unidentified Detections – Three Kinds of "Not"
+--------------------------------------------------------
+
+Two detections in the archive have **no species assignment**: the
+classifier saw an animal but could not identify it, and ``species_id``
+is NULL (photo 5 at Loch Torridon, confidence 0.60, and photo 9 at Glen
+Affric, confidence 0.50). NULLs make the three natural ways of asking
+"species detected at Loch Torridon but *not* at Glen Affric" genuinely
+different questions – in SQL itself, and therefore in the provenance
+and probabilities ProvSQL computes. Loch Torridon is photos 1–8 and
+Glen Affric photos 9–15, so the station restriction can be written on
+``photo_id`` directly.
+
+First, ``EXCEPT``. SQL set difference matches tuples *syntactically*:
+two NULLs count as the same value, so Loch Torridon's unidentified
+sighting is discounted by Glen Affric's:
+
+.. code-block:: postgresql
+
+    SELECT species_id,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+      SELECT species_id FROM detection WHERE photo_id BETWEEN 1 AND 8
+      EXCEPT
+      SELECT species_id FROM detection WHERE photo_id BETWEEN 9 AND 15
+    ) t
+    ORDER BY species_id NULLS LAST;
+
+The NULL row comes out at probability :math:`0.60 \times (1 - 0.50) =
+0.30`: an unidentified animal was seen at Loch Torridon *and* the Glen
+Affric unidentified detection is a false positive.
+
+Second, ``NOT IN``. Under SQL's three-valued logic, ``x NOT IN Q`` is
+*unknown* – and therefore not an answer – as soon as ``Q`` contains a
+NULL, whatever ``x`` is. A single unidentified sighting at Glen Affric
+poisons the certification of **every** species:
+
+.. code-block:: postgresql
+
+    SELECT species_id,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+      SELECT DISTINCT species_id
+      FROM (SELECT species_id FROM detection
+            WHERE photo_id BETWEEN 1 AND 8
+              AND species_id NOT IN (SELECT species_id FROM detection
+                                     WHERE photo_id BETWEEN 9 AND 15)) lt
+    ) t
+    ORDER BY species_id NULLS LAST;
+
+Every probability is exactly half its ``NOT EXISTS`` counterpart below:
+each answer now carries the extra factor "the Glen Affric unidentified
+detection is a false positive" (probability 0.50). The NULL row itself
+drops to essentially 0 – a NULL can only pass ``NOT IN`` against an
+empty set, i.e. in the worlds where *no* Glen Affric detection at all
+is a true positive.
+
+Third, ``NOT EXISTS`` with an explicit equality. ``d2.species_id =
+d.species_id`` is never *true* when either side is NULL, so the
+unidentified sightings are simply ignored: Glen Affric's removes
+nothing, and Loch Torridon's own NULL row survives at its full
+detection probability (0.60):
+
+.. code-block:: postgresql
+
+    SELECT species_id,
+           ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
+    FROM (
+      SELECT DISTINCT species_id
+      FROM (SELECT species_id FROM detection d
+            WHERE photo_id BETWEEN 1 AND 8
+              AND NOT EXISTS (SELECT 1 FROM detection d2
+                              WHERE d2.photo_id BETWEEN 9 AND 15
+                                AND d2.species_id = d.species_id)) lt
+    ) t
+    ORDER BY species_id NULLS LAST;
+
+Three idioms, three different answers – matching what vanilla SQL
+returns on each query, with possible-worlds-correct probabilities on
+top. The general rules behind this behavior (which comparisons treat
+NULLs as unknown, where SQL switches to syntactic matching, and what
+that means for provenance circuits) are spelled out in
+:doc:`the NULL semantics chapter <nulls>`.

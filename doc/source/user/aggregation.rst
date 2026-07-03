@@ -22,6 +22,12 @@ provenance tokens of all input tuples that contributed to the group:
 The resulting provenance token encodes *which* input tuples were combined
 to produce each aggregate value.
 
+NULL inputs are skipped exactly as SQL prescribes: a NULL-valued row
+contributes to ``count(*)`` but not to ``sum`` / ``avg`` / ``min`` /
+``max`` or ``count(col)``, and an all-NULL group's aggregate is NULL --
+including across possible worlds in ``HAVING`` (see :doc:`the chapter on
+NULLs <nulls>`).
+
 SELECT DISTINCT
 ----------------
 

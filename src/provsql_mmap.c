@@ -341,7 +341,10 @@ Datum create_gate(PG_FUNCTION_ARGS)
   if(children) {
     if(ARR_NDIM(children) > 1)
       provsql_error("Invalid multi-dimensional array passed to create_gate");
-    else if(ARR_NDIM(children) == 1)
+    if(array_contains_nulls(children))
+      provsql_error("create_gate: children array must not contain NULL "
+                    "elements (filter them out before calling)");
+    if(ARR_NDIM(children) == 1)
       nb_children = *ARR_DIMS(children);
   }
 

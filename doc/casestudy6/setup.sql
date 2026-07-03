@@ -71,7 +71,7 @@ CREATE TABLE readings (
   id          INTEGER PRIMARY KEY,
   station_id  TEXT NOT NULL REFERENCES stations(id),
   ts          TIMESTAMP NOT NULL,
-  pm25        provsql.random_variable NOT NULL
+  pm25        provsql.random_variable  -- NULL: sensor offline, no reading
 );
 
 TRUNCATE readings;

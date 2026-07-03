@@ -519,6 +519,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
    * which disables only the identity/avg refinements. */
   constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID = InvalidOid;
   constants.OID_FUNCTION_RV_AGGREGATE_INDICATOR = InvalidOid;
+  constants.OID_FUNCTION_RV_AGGREGATE_INDICATOR_VALUED = InvalidOid;
   constants.OID_FUNCTION_RV_DIV = InvalidOid;
   constants.OID_AGG_SUM_RV = InvalidOid;
   constants.OID_AGG_PRODUCT_RV = InvalidOid;
@@ -552,8 +553,17 @@ static constants_t initialize_constants(bool failure_if_not_possible)
                         constants.OID_TYPE_RANDOM_VARIABLE, FLOAT8OID };
     constants.OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID =
       get_provsql_func_oid_args("rv_aggregate_semimod", 3, semimod3);
-    constants.OID_FUNCTION_RV_AGGREGATE_INDICATOR =
-      get_provsql_func_oid("rv_aggregate_indicator");
+    {
+      /* rv_aggregate_indicator is overloaded: resolve each signature
+       * explicitly (the by-name lookup returns an arbitrary overload). */
+      Oid indarg1[1] = { constants.OID_TYPE_UUID };
+      Oid indarg2[2] = { constants.OID_TYPE_UUID,
+                         constants.OID_TYPE_RANDOM_VARIABLE };
+      constants.OID_FUNCTION_RV_AGGREGATE_INDICATOR =
+        get_provsql_func_oid_args("rv_aggregate_indicator", 1, indarg1);
+      constants.OID_FUNCTION_RV_AGGREGATE_INDICATOR_VALUED =
+        get_provsql_func_oid_args("rv_aggregate_indicator", 2, indarg2);
+    }
     constants.OID_FUNCTION_RV_DIV =
       get_provsql_func_oid("random_variable_div");
     constants.OID_AGG_SUM_RV     = get_provsql_func_oid_args("sum",     1, rvarg);

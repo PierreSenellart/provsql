@@ -1015,3 +1015,87 @@ exempted -- those go through the existing PK-unification /
 disjoint-constant rescues, which prove disjointness at the gate
 level on a same-relid basis (a coarser ancestry overlap check
 would undo those rescues).
+
+NULL Handling in the Rewriter
+------------------------------
+
+The user-level contract is in :doc:`/user/nulls`: predicates follow
+SQL's three-valued logic on the actual data, a condition evaluating to
+*unknown* annotates the tuple with the semiring zero, and set operations
+match tuples syntactically.  Deterministic predicates need no rewriter
+work (the executor evaluates them, 3VL included; only surviving rows'
+tokens are combined).  The rewriter must be NULL-aware exactly where it
+builds predicates of its own -- the negative fragment -- and in the
+comparison lift:
+
+- **EXCEPT antijoin matching.** :cfunc:`transform_except_into_join`
+  builds its per-column antijoin condition as
+  ``NOT (l IS DISTINCT FROM r)`` (a ``DistinctExpr`` under a ``NOT``),
+  not plain ``=``: SQL's set difference treats two NULLs as the same
+  value, and the outer dedup ``GROUP BY`` of the same rewrite already
+  groups NULL-identically.
+
+- **Quantified-sublink removal condition.** In
+  ``extract_quantified_corr``, when the lift's final sense is the
+  antijoin (``NOT IN``, ``op ALL``, ``NOT (op ANY)``), each correlation
+  conjunct becomes ``(x ¬op q) OR x IS NULL OR q IS NULL``: under 3VL an
+  *unknown* comparison also prevents the outer row from being an answer,
+  so a NULL on either side must count as a match of the removal
+  condition.  Per-side guards are skipped when that side is provably
+  non-nullable (``expr_provably_not_null``: non-NULL constants and
+  ``attnotnull`` base columns), which keeps the NULL-free path in its
+  historical form.  The semijoin sense needs no guards -- matching only
+  the *true* rows is SQL's own top-level conflation of unknown with
+  false.
+
+  With the guards, a correlation-matched subquery row can be NULL in
+  every data column, so no data column can key the
+  ``count(*) -> count(Q.key)`` rewrite that keeps the decorrelation's
+  null-padded row out of the count.  ``oj_wrap_body_with_match_ind``
+  therefore wraps the body into a derived subquery projecting a constant
+  ``provsql_match_ind`` column -- non-NULL on every genuine row,
+  NULL-padded on the antijoin row -- and the ``aggstar`` arm of
+  ``decorrelate_scalar_sublinks`` prefers it as the count key.
+
+- **Comparison gates.** ``rv_OpExpr_to_provenance_cmp`` emits
+  ``gate_zero`` at plan time when an operand is a NULL constant, and
+  ``provenance_cmp`` (deliberately not ``STRICT``) returns
+  ``gate_zero`` when a NULL flows in at execution -- a NULL
+  ``random_variable`` cell, or an aggregate that is NULL on the
+  instance.  A STRICT comparison would instead produce a NULL token that
+  ``provenance_times`` drops as the neutral 1, silently turning
+  "unknown" into "certainly true"; no rewrite may let that happen.
+
+- **Unlowered outer joins.** ``check_unlowered_outer_joins`` runs after
+  every outer-join-absorbing rewrite and raises when a
+  provenance-tracked relation sits on a null-padded side of a surviving
+  ``LEFT``/``RIGHT``/``FULL`` join (the ``RTE_JOIN`` discovery arm would
+  treat it as an inner join).  ProvSQL-generated antijoins are marked
+  with the ``PROVSQL_JOIN_ALIAS`` eref sentinel and skipped; a fully
+  untracked padded side is sound as-is and allowed.
+
+- **Aggregation.** ``provenance_semimod`` returns NULL for a NULL
+  aggregated value and ``provenance_aggregate`` strips those slots, so
+  NULL inputs never enter the semimodule combination; the ``count(expr)``
+  rewrite (``CASE WHEN expr IS NOT NULL THEN 1 ELSE 0 END``) preserves
+  count's all-rows view.  For ``avg`` over ``random_variable`` the
+  planner emits the two-argument, value-aware
+  ``rv_aggregate_indicator``, NULL exactly when the row's value
+  is NULL, so a NULL cell drops out of the denominator count as well.
+  The ``HAVING`` world enumeration counts a world as passing only when
+  the aggregate is defined there (see ``provsql_having``).
+
+NULL provenance *tokens* are a separate concern from data NULLs: each
+SQL combinator maps a NULL token slot to its own neutral element (⊗: 1,
+untracked source; ⊕ and the monus right-hand side: 0, absent row /
+no match; δ: 1).  The invariant that makes this sound is stated with the
+combinators in ``sql/provsql.common.sql`` and in :doc:`/user/nulls`: a
+NULL token never means "false" -- unknown conditions get an explicit
+``gate_zero``.
+
+Regression coverage: ``null_semantics.sql`` (the [GL17] ``NOT IN`` /
+``NOT EXISTS`` / ``EXCEPT`` trio with hand-computed probabilities, set
+and bag difference over NULLs, NULL grouping keys, NULL aggregates under
+``HAVING``, NULL ``random_variable`` comparisons and aggregates, and the
+outer-join refusal), plus the NULL steps of ``casestudy5.sql`` and
+``casestudy6.sql``.

@@ -198,6 +198,7 @@ typedef struct constants_t {
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD; ///< OID of rv_aggregate_semimod(uuid, rv) -> rv: wraps a per-row argument as mixture(prov, rv, as_random(0)) (identity 0, for sum / avg-numerator)
   Oid OID_FUNCTION_RV_AGGREGATE_SEMIMOD_ID; ///< OID of the 3-arg rv_aggregate_semimod(uuid, rv, float8): identity-parameterised wrap mixture(prov, rv, as_random(identity)) for product / max / min
   Oid OID_FUNCTION_RV_AGGREGATE_INDICATOR; ///< OID of rv_aggregate_indicator(uuid) -> rv: the avg denominator wrap mixture(prov, 1, 0)
+  Oid OID_FUNCTION_RV_AGGREGATE_INDICATOR_VALUED; ///< OID of rv_aggregate_indicator(uuid, rv) -> rv: NULL when the row's value is NULL (SQL NULL-skip for avg's count)
   Oid OID_FUNCTION_RV_DIV; ///< OID of random_variable_div(rv, rv) -> rv: builds the avg num/denom division gate
   /** @brief OIDs of the RV-returning aggregates, keyed for the per-aggregate
    *  identity dispatch in @c make_rv_aggregate_expression (product / max /

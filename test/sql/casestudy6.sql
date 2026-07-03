@@ -48,7 +48,7 @@ CREATE TABLE readings (
   id          integer PRIMARY KEY,
   station_id  text NOT NULL REFERENCES stations(id),
   ts          timestamp NOT NULL,
-  pm25        random_variable NOT NULL
+  pm25        random_variable  -- NULL: sensor offline, no reading
 );
 INSERT INTO readings (id, station_id, ts, pm25) VALUES
   (1, 's1', '2026-05-12 08:00', provsql.normal(28.0, 2.0)),
@@ -519,6 +519,46 @@ SELECT remove_provenance('result_cs6_mi_shared');
 SELECT mi_shared BETWEEN 0.05 AND 0.5 AS mi_shared_in_band
   FROM result_cs6_mi_shared;
 DROP TABLE result_cs6_mi_shared;
+
+-- ---------------------------------------------------------------------
+-- Step 19: an offline sensor reports NULL.  A comparison over the NULL
+-- reading is unknown in every world (probability exactly 0, a gate_zero
+-- conjunct -- never silently certain); IS NULL is an ordinary
+-- deterministic predicate; and aggregates skip the NULL reading in both
+-- their sum and their count.
+-- ---------------------------------------------------------------------
+INSERT INTO readings (id, station_id, ts, pm25)
+  VALUES (9, 's2', '2026-05-12 10:00', NULL);
+
+CREATE TABLE result_cs6_null_thresh AS
+  SELECT id, ROUND(probability_evaluate(provenance())::numeric, 4) AS p
+    FROM readings
+   WHERE pm25 > 35 AND ts = '2026-05-12 10:00';
+SELECT remove_provenance('result_cs6_null_thresh');
+SELECT id, p FROM result_cs6_null_thresh;
+DROP TABLE result_cs6_null_thresh;
+
+CREATE TABLE result_cs6_null_isnull AS
+  SELECT id, station_id FROM readings WHERE pm25 IS NULL;
+SELECT remove_provenance('result_cs6_null_isnull');
+SELECT id, station_id FROM result_cs6_null_isnull;
+DROP TABLE result_cs6_null_isnull;
+
+-- avg skips the NULL reading: same expected value with or without row 9.
+CREATE TABLE result_cs6_null_avg AS
+  SELECT round(expected(avg(pm25))::numeric, 4) AS with_null
+    FROM readings WHERE station_id = 's2';
+SELECT remove_provenance('result_cs6_null_avg');
+CREATE TABLE result_cs6_null_avg2 AS
+  SELECT round(expected(avg(pm25))::numeric, 4) AS without_null
+    FROM readings WHERE station_id = 's2' AND id <> 9;
+SELECT remove_provenance('result_cs6_null_avg2');
+SELECT a.with_null = b.without_null AS avg_skips_null
+  FROM result_cs6_null_avg a, result_cs6_null_avg2 b;
+DROP TABLE result_cs6_null_avg;
+DROP TABLE result_cs6_null_avg2;
+
+DELETE FROM readings WHERE id = 9;
 
 -- ---------------------------------------------------------------------
 -- Cleanup.

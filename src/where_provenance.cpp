@@ -56,12 +56,9 @@ static vector<pair<int,int> > parse_array(string s)
 
     int k=p.find(",",1);
     string s1=p.substr(1,k-1);
-    int i1;
-    if(s1=="NULL")
-      i1=0;
-    else
-      i1=stoi(p.substr(1,k-1));
-    int i2=stoi(p.substr(k+1,p.size()-k));
+    string s2=p.substr(k+1,p.size()-k);
+    int i1 = (s1=="NULL") ? 0 : stoi(s1);
+    int i2 = (s2=="NULL") ? 0 : stoi(s2);
     result.push_back(make_pair(i1,i2));
   }
 
@@ -177,6 +174,9 @@ static string where_provenance_internal
 /** @brief PostgreSQL-callable wrapper for where_provenance(). */
 Datum where_provenance(PG_FUNCTION_ARGS)
 {
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
   try {
     Datum token = PG_GETARG_DATUM(0);
 
