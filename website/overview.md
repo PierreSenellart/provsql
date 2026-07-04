@@ -71,11 +71,20 @@ escalating automatically under a budget. Because exact probability
 computation is #P-hard in general, an opt-in planner-side rewrite
 recognises tractable query classes – hierarchical conjunctive queries, a
 family of FD-aware extensions, and the broader inversion-free class –
-and evaluates them in linear time. Inputs may also be [continuous random
-variables](/docs/user/continuous-distributions.html) (Normal, Uniform,
-Exponential, Erlang, and mixtures), with expectations and moments
-computed analytically or by Monte Carlo. See the
-[probability documentation](/docs/user/probabilities.html).
+and evaluates them in linear time. Any query answer can also be
+[conditioned](/docs/user/conditioning.html) on an event with the `|`
+operator, turning ProvSQL into a probability calculator. Inputs may
+themselves be [continuous random
+variables](/docs/user/continuous-distributions.html): nine continuous
+families (Normal, Uniform, Exponential, Erlang, Gamma / chi-squared,
+log-normal, Weibull, Pareto, Beta), the common discrete count
+distributions (Poisson, binomial, geometric, hypergeometric, negative
+binomial), and categorical, Gaussian-mixture, and empirical
+distributions built from samples or a CDF table. Expectations,
+variances, higher moments, quantiles, and information-theoretic
+readouts (entropy, KL divergence, mutual information) are computed
+analytically where a closed form exists and by Monte Carlo otherwise.
+See the [probability documentation](/docs/user/probabilities.html).
 
 ## Aggregation, Updates, and Time {#aggregation}
 
