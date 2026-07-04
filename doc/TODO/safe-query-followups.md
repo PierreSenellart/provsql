@@ -16,53 +16,13 @@ have all landed.
   implemented (the `UCQ(OBDD)` rung of Jha & Suciu, ICDT 2011: a detector
   plus an in-process structured-d-DNNF builder over the Prop. 4.5
   query-derived order, with non-integer key columns, deterministic-relation
-  filters, and SPJ / nested view flattening); see the *Inversion-Free
-  UCQ(OBDD) Path* section of
-  :cfile:`doc/source/dev/probability-evaluation.rst`.  Three extensions to
+  filters, SPJ / nested view flattening, and `UNION` / `UNION ALL` of
+  inversion-free branches -- including overlapping arms, certified jointly
+  per Thm 4.2 via the synthetic merged SPJ query that
+  `build_inversion_free_union_ctx` in `src/provsql.c` hands to the
+  detector); see the *Inversion-Free UCQ(OBDD) Path* section of
+  :cfile:`doc/source/dev/probability-evaluation.rst`.  Two extensions to
   that class remain open, in increasing difficulty:
-  - **`UNION` of inversion-free branches** (genuine multi-branch UCQs).
-    *Correction (verified on 1.11.0-dev):* the OBDD certificate is **not**
-    attached for any `UNION` today -- neither nested nor top-level.  The
-    detector (`inversion_free_analyze`) bails on `q->setOperations`, and the
-    per-root analysis is gated on `top_level`, while a union's arms are
-    `RTE_SUBQUERY` recursed with `top_level=false` (the per-branch recursion
-    the old note credited belongs to the *read-once* rewriter, not the OBDD
-    certificate).  Both forms decline gracefully to the generic chain and
-    stay correct.  Mind the semantics (Jha & Suciu, ICDT 2011, Thm 4.2 is a
-    **set**-semantics result; inversion-freeness is a *joint* property of the
-    whole UCQ, not "each branch is inversion-free").  Two facts make this
-    mostly planner-side plumbing: the evaluator already routes on the
-    *presence* of the `C` recipe and orders solely from the per-input `K`
-    keys (column-value text), and `StructuredDNNFBuilder` already expands an
-    OR/`gate_plus` root to DNF and Shannon-decomposes it (`orDecompose`
-    splits variable-disjoint OR components).  Milestones:
-    - **M1 -- `UNION ALL` (done).**  Each arm's per-row root is a single-branch
-      conjunction (`make_provenance_expression`, `SR_PLUS` -> `linitial`),
-      carried verbatim by the union.  A top-level union's arms inherit
-      `top_level` (`get_provenance_attributes`) and each single-CQ arm certifies
-      its own root with the existing detector.  No `SafeCert` change, no OR.
-    - **M2/M3 -- `UNION` (set), full joint UCQ(OBDD) (done).**  A non-`ALL`
-      `UNION` is lowered to an outer `GROUP BY` over `UNION ALL`, whose per-group
-      root is `provenance_plus(array_agg(...))` -- the OR.
-      `build_inversion_free_union_ctx` (in `src/provsql.c`) builds a *synthetic
-      merged SPJ query* of every arm's base atoms -- arm variables offset into one
-      range table, the arms' head columns equated, each arm's `WHERE` pulled up --
-      and runs the existing detector on it via `inversion_free_analyze`.  A
-      relation shared between arms thereby becomes one relation symbol, so
-      positional consistency and the precedence graph span the whole UCQ: that is
-      exactly Thm 4.2's *joint* inversion-free condition, so **overlapping** arms
-      (where per-arm analysis cannot see the shared relation, e.g.
-      `R(x),S(x) UNION R(x),T(x)`) are certified and stay polynomial -- the
-      structured d-DNNF decides the shared root first, then the disjoint
-      remainder.  The per-atom markers map back to each arm (base relations keep
-      positions `1..n_i`; PG 18's group RTE is appended last and stripped); the
-      recipe lands on the plus root.  Gated to a pure deduplicating-group root
-      with flat base-relation arms (`hasAggs`/`HAVING` excluded), so HAVING /
-      count-PMF / joint-width shapes are untouched, and non-inversion-free unions
-      decline to the joint-width / Möbius chain (no preemption).  No `SafeCert`
-      change was needed: the evaluator routes on the recipe's *presence* and the
-      cross-branch order comes from the per-input `K` keys (column-value text +
-      the joint factor).
   - **Functional dependencies do not fit this builder.**  The canonical
     FD-tractable queries (the H-query `R(x),S(x,y),T(y)` under a PK on `S`,
     the two-PK triangle) have no single root class, which the detector and

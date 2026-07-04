@@ -120,8 +120,11 @@ COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
 ## 4. RV probability transparency
 
-- Route the RV *probability* case `P(X<c)` through `stopping-rule` (today it goes
-  through fixed-sample / analytic paths only).
+- Route the *default* (empty-method) RV probability case `P(X<c)` through
+  `stopping-rule`.  An explicit `relative` / `stopping-rule` request already
+  runs the adaptive stopping rule on an RV circuit; the default chain still
+  stops at the analytic pre-pass + `rv_mc_samples` fixed-sample fallback and
+  errors out when both decline, instead of falling to the adaptive estimator.
 
 ## 5. d-tree research polish
 

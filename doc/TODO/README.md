@@ -16,11 +16,6 @@ Each plan document follows a consistent layout:
 
 ## Contents
 
-- [`priorization.md`](priorization.md) : a cross-file prioritisation of
-  every open point, each with a concrete example, its **current
-  behaviour tested on the installed build** (verbatim output), and an
-  after-implementation sketch. Start here for the ship-order across all
-  the plans below; the per-plan files keep the full design rationale.
 - [`bounded-treewidth-data.md`](bounded-treewidth-data.md) :
   feasibility study for exploiting bounded treewidth of the input data
   (Courcelle's theorem and its provenance refinement, ABS 2015 / 2017).
@@ -44,14 +39,6 @@ Each plan document follows a consistent layout:
   remaining feature-coverage gaps in the user tutorial and case
   studies -- the CS4 temporal / data-modification extensions and a
   future UDF / aggregate-join study (CS9).
-- [`case_aggregation.md`](case_aggregation.md) : feasibility study for a
-  searched `CASE` guarded by aggregate comparisons (`CASE WHEN SUM(x) > 3
-  THEN SUM(y) ELSE SUM(z) END`), lowering the `agg_token`-typed `CASE` to
-  the existing carrier-agnostic `gate_case`. Exact evaluation reuses the
-  structure-aware HAVING possible-worlds evaluator (`provsql_having`):
-  correlation between guard and arm is free by co-enumeration, and the
-  PICKFIRST / monotone closed forms carry into value-carrying selection,
-  with `2^n` co-enumeration and Monte Carlo as backstops.
 - [`continuous_distributions.md`](continuous_distributions.md) : roadmap
   of the still-open extensions to the continuous random-variable surface
   (native analytic discrete families, multivariate Normal, CDF / monotone
