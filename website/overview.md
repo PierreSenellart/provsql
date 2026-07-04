@@ -75,9 +75,10 @@ and evaluates them in linear time. Any query answer can also be
 [conditioned](/docs/user/conditioning.html) on an event with the `|`
 operator, turning ProvSQL into a probability calculator. Inputs may
 themselves be [continuous random
-variables](/docs/user/continuous-distributions.html): nine continuous
+variables](/docs/user/continuous-distributions.html): eleven continuous
 families (Normal, Uniform, Exponential, Erlang, Gamma / chi-squared,
-log-normal, Weibull, Pareto, Beta), the common discrete count
+log-normal, Weibull, Pareto, Beta, inverse-gamma, inverse-Gaussian), the
+common discrete count
 distributions (Poisson, binomial, geometric, hypergeometric, negative
 binomial), and categorical, Gaussian-mixture, and empirical
 distributions built from samples or a CDF table. Expectations,
