@@ -44,6 +44,15 @@ Each plan document follows a consistent layout:
   (native analytic discrete families, multivariate Normal, CDF / monotone
   transforms, frozen snapshots, copulas, stochastic processes,
   do-calculus, and the provenance × probability research directions).
+- [`latent-variables.md`](latent-variables.md) : RV-valued distribution
+  parameters (compound / hierarchical distributions) and the posterior
+  inference they unlock. Part A is the forward generative model (MC-only,
+  no interface change); Part B is the likelihood-weighting /
+  self-normalised importance-sampling inference engine (the
+  soft/weighted conditioning [`conditioning.md`](conditioning.md)
+  deferred), with the marginal likelihood and Shapley-over-evidence
+  ([`continuous_distributions.md`](continuous_distributions.md) §E.1) as
+  byproducts; Part C defers SMC then MCMC.
 - [`probability-evaluation.md`](probability-evaluation.md) : the
   **remaining** probability-method-selection work, atop the now-landed
   method catalog + three-path (exact / relative / additive) chooser:
