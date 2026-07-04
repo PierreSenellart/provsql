@@ -3046,6 +3046,253 @@ CREATE OR REPLACE FUNCTION mutual_information(
   SELECT provsql.rv_mutual_information((x)::uuid, (y)::uuid);
 $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
 
+-- ---------------------------------------------------------------------
+-- NULL-semantics surface: the deprecated aggregation_evaluate driver is
+-- retired, the core combinators gain three-valued-logic NULL handling,
+-- avg gains its value-aware presence indicator, and the explicit
+-- zero-filtering predicates are added.  Bodies are transcribed verbatim
+-- from provsql.common.sql so md5(prosrc) matches a fresh install.
+-- ---------------------------------------------------------------------
+
+-- Retire both aggregation_evaluate overloads (a NULL-token crash vector).
+-- The C symbol stays in provsql.so as an always-NULL stub for the 1.0.0
+-- fixture; only the SQL surface is dropped.
+DROP FUNCTION IF EXISTS aggregation_evaluate(uuid, regclass, regproc, regproc, regproc, anyelement, regproc, regproc, regproc, regproc);
+DROP FUNCTION IF EXISTS aggregation_evaluate(uuid, regclass, regproc, regproc, regproc, anyelement, regtype, regproc, regproc, regproc, regproc);
+
+CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
+  RETURNS UUID AS
+$$
+DECLARE
+  times_token uuid;
+  filtered_tokens uuid[];
+  canonical uuid;
+BEGIN
+  -- A NULL element reads as the ⊗-neutral 1: it is the token slot of an
+  -- untracked source (a join against an untracked table), which is
+  -- certain.  Contrast provenance_plus / provenance_monus, where NULL
+  -- reads as the ⊕- / ⊖-right-neutral 0: each combinator maps NULL to
+  -- its own neutral element.  Nothing may therefore hand a NULL to ⊗
+  -- meaning "false"; a comparison with a NULL operand goes through
+  -- provenance_cmp, which returns gate_zero for it.
+  SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
+
+  -- Dispatch on the FILTERED count: a single survivor short-circuits
+  -- to that token directly (no useless single-child times gate); zero
+  -- survivors collapse to the identity. Using array_length(tokens, 1)
+  -- here would miss the [one, cmp] → [cmp] case, leaving the cmp wrapped
+  -- in a one-child times when its only sibling was gate_one().
+  CASE coalesce(array_length(filtered_tokens, 1), 0)
+    WHEN 0 THEN
+      times_token:=gate_one();
+    WHEN 1 THEN
+      times_token:=filtered_tokens[1];
+    ELSE
+      -- Computed separately from the filtering aggregate above: an
+      -- ORDER BY aggregate there would make the planner feed *both*
+      -- aggregates sorted input, scrambling the stored children order.
+      SELECT uuid_generate_v5(uuid_ns_provsql(),
+                              concat('times-canonical', array_agg(t ORDER BY t)))
+      FROM unnest(filtered_tokens) t
+      INTO canonical;
+      IF get_gate_type(canonical) = 'times' THEN
+        -- A deliberate pre-creation at the canonical address: same
+        -- children, same product.
+        times_token := canonical;
+      ELSE
+        times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',filtered_tokens));
+
+        PERFORM create_gate(times_token, 'times', ARRAY_AGG(t)) FROM UNNEST(filtered_tokens) AS t WHERE t IS NOT NULL;
+      END IF;
+  END CASE;
+
+  RETURN times_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
+  RETURNS UUID AS
+$$
+DECLARE
+  c INTEGER;
+  plus_token uuid;
+  filtered_tokens uuid[];
+  canonical uuid;
+BEGIN
+  -- A NULL element reads as the ⊕-neutral 0: it stands for a row absent
+  -- from the disjunction (a null-padded antijoin row whose token array
+  -- slot is NULL), not for an untracked source.  Contrast provenance_times,
+  -- where NULL reads as the ⊗-neutral 1 (untracked source): each
+  -- combinator maps NULL to its own neutral element.
+  SELECT array_agg(t) FROM unnest(tokens) t
+  WHERE t IS NOT NULL AND t <> gate_zero()
+  INTO filtered_tokens;
+
+  c:=array_length(filtered_tokens, 1);
+
+  IF c = 0 THEN
+    plus_token := gate_zero();
+  ELSIF c = 1 THEN
+    plus_token := filtered_tokens[1];
+  ELSE
+    -- Computed separately from the filtering aggregate above: an ORDER
+    -- BY aggregate there would make the planner feed *both* aggregates
+    -- sorted input, scrambling the stored (aggregation-order) children.
+    SELECT uuid_generate_v5(uuid_ns_provsql(),
+                            concat('plus-canonical', array_agg(t ORDER BY t)))
+    FROM unnest(filtered_tokens) t
+    INTO canonical;
+    IF get_gate_type(canonical) = 'plus' THEN
+      -- A deliberate pre-creation at the canonical address: same
+      -- children, same sum.
+      plus_token := canonical;
+    ELSE
+      plus_token := uuid_generate_v5(
+        uuid_ns_provsql(),
+        concat('plus', filtered_tokens));
+
+      PERFORM create_gate(plus_token, 'plus', filtered_tokens);
+    END IF;
+  END IF;
+
+  RETURN plus_token;
+END
+$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_monus(token1 UUID, token2 UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  monus_token uuid;
+BEGIN
+  IF token1 IS NULL THEN
+    RAISE EXCEPTION USING MESSAGE='provenance_monus is called with first argument NULL';
+  END IF;
+
+  IF token2 IS NULL THEN
+    -- The ⊖-right-neutral 0: a NULL second argument is the no-match case
+    -- of the difference operator's LEFT OUTER JOIN (nothing to subtract),
+    -- so X ⊖ NULL = X ⊖ 0 = X.  Note this is NOT the NULL ≡ 1 reading of
+    -- provenance_times; each combinator maps NULL to its own neutral.
+    RETURN token1;
+  END IF;
+
+  IF token1 = token2 THEN
+    -- X-X=0
+    monus_token:=gate_zero();
+  ELSIF token1 = gate_zero() THEN
+    -- 0-X=0
+    monus_token:=gate_zero();
+  ELSIF token2 = gate_zero() THEN
+    -- X-0=X
+    monus_token:=token1;
+  ELSE
+    monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
+    PERFORM create_gate(monus_token, 'monus', ARRAY[token1::uuid, token2::uuid]);
+  END IF;
+
+  RETURN monus_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_cmp(
+  left_token  UUID,
+  comparison_op OID,
+  right_token UUID
+)
+RETURNS UUID AS
+$$
+DECLARE
+  cmp_token UUID;
+BEGIN
+  -- A comparison with a NULL operand (a NULL random_variable cell, or an
+  -- aggregate that is NULL on the instance) is unknown under SQL's 3VL in
+  -- every possible world: the row is annotated zero.  The function must
+  -- not be STRICT: a NULL result would read as the neutral token
+  -- (provenance_times drops it), silently turning "unknown" into
+  -- "certainly true".
+  IF left_token IS NULL OR right_token IS NULL OR comparison_op IS NULL THEN
+    RETURN gate_zero();
+  END IF;
+  -- deterministic v5 namespace id
+  cmp_token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('cmp', left_token::text, comparison_op::text, right_token::text)
+  );
+  -- wire it up in the circuit
+  PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
+  PERFORM set_infos(cmp_token, comparison_op::integer);
+  RETURN cmp_token;
+END
+$$ LANGUAGE plpgsql
+  SET search_path=provsql,pg_temp,public
+  SECURITY DEFINER
+  IMMUTABLE
+  PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION provenance_delta
+  (token UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  delta_token uuid;
+BEGIN
+  -- NULL token ≡ 1 (untracked source), and δ(1) = 1.  Tested first: the
+  -- equality comparisons below are not NULL-safe.
+  IF token IS NULL THEN
+    return gate_one();
+  END IF;
+
+  IF token = gate_zero() OR token = gate_one() THEN
+    return token;
+  END IF;
+
+  delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
+
+  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
+
+  RETURN delta_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION rv_aggregate_indicator(prov uuid, rv random_variable)
+  RETURNS random_variable AS
+$$
+  SELECT CASE WHEN rv IS NULL THEN NULL
+              ELSE provsql.rv_aggregate_indicator(prov) END;
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION true_nonzero(token uuid)
+  RETURNS boolean AS
+  'provsql', 'true_nonzero' LANGUAGE C PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION nonzero(token uuid,
+                        semiring text DEFAULT NULL,
+                        mapping regclass DEFAULT NULL)
+  RETURNS boolean AS
+$$
+BEGIN
+  IF token IS NULL THEN
+    RETURN true;
+  END IF;
+  IF semiring IS NULL THEN
+    RETURN provsql.true_nonzero(token);
+  ELSIF semiring = 'boolean' THEN
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'boolean', TRUE);
+  ELSIF semiring = 'counting' THEN
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'counting', 1) <> 0;
+  ELSE
+    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring;
+  END IF;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION present(token uuid)
+  RETURNS boolean AS
+$$
+  SELECT provsql.nonzero(token, 'boolean');
+$$ LANGUAGE sql PARALLEL SAFE STABLE;
+
 -- A backend warmed under 1.10.0 caches InvalidOid for the new 'case' enum
 -- value; force a fresh lookup on the next get_constants() call.
 SELECT reset_constants_cache();
