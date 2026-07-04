@@ -126,6 +126,37 @@ unsigned runHybridSimplifier(GenericCircuit &gc);
 unsigned runConstantFold(GenericCircuit &gc);
 
 /**
+ * @brief Collapse degenerate Bernoulli @c gate_mixture gates whose
+ *        selector is certainly true (pi = 1) or certainly false
+ *        (pi = 0) to the corresponding arm.
+ *
+ * A classic 3-wire mixture @c mixture(p, X, Y) with @c P(p) = 1 is
+ * distributionally @c X (and @c Y when @c P(p) = 0).  The collapse is
+ * exact and correlation-safe precisely at those two points: a
+ * deterministic selector carries no coupling, so folding it does not
+ * decouple a selector shared across mixtures -- which is why only the
+ * exact 0/1 cases are admitted (a fractional pi genuinely couples the
+ * arms and must reach the sampler intact).  pi is taken only where it
+ * is known without a probability computation: a resolved
+ * @c gate_one / @c gate_zero selector, or a bare @c gate_input whose
+ * pinned probability is 1 or 0 (the latter includes the default 1 of a
+ * provenance-tracked but non-probabilistic tuple).  A compound Boolean
+ * selector is left for the probability-aware evaluators.
+ *
+ * The mixture is rewritten as a single-wire @c gate_arith @c PLUS
+ * passthrough to the surviving arm (@c liftConditionedToTarget), so it
+ * references rather than copies the survivor -- a shared survivor keeps
+ * its single gate identity.  Runs at load time before
+ * @c runConstantFold and @c foldSemiringIdentities, which then reduce
+ * the resulting passthroughs and any now-constant enclosing arithmetic
+ * (e.g. the provenance-weighted count in @c avg's denominator collapses
+ * to a @c gate_value, letting the analytic evaluator divide by it).
+ *
+ * @return Number of mixtures collapsed.
+ */
+unsigned foldDegenerateMixtures(GenericCircuit &gc);
+
+/**
  * @brief Marginalise unresolved continuous-island @c gate_cmp gates
  *        into Bernoulli @c gate_input leaves.
  *

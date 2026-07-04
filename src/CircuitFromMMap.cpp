@@ -150,6 +150,14 @@ static void applyLoadTimeSimplification(GenericCircuit &gc)
      * @c arith(NEG, value:c) where @c value:-c would round-trip
      * identically -- into the canonical form so downstream
      * @c collectRvConstraints / @c asRvVsConstCmp recognise them. */
+    /* Collapse Bernoulli mixtures whose selector is certainly true or
+     * false to the surviving arm, before constant folding: this turns a
+     * provenance-weighted count over prob-1 tuples (avg's denominator)
+     * into a plain sum of the constant 1, which runConstantFold then
+     * reduces to a gate_value the analytic DIV evaluator can divide by,
+     * and unwraps each numerator arm to its bare RV.  Only exact
+     * pi in {0,1} folds, so no fractional-Bernoulli coupling is lost. */
+    provsql::foldDegenerateMixtures(gc);
     provsql::runConstantFold(gc);
     gc.foldSemiringIdentities();
   }

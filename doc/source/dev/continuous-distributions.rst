@@ -948,6 +948,32 @@ rewrite. The family closures stay behind the separate
 inside the probability and view paths where the simplifier owns
 the rewritten subtree.
 
+Immediately before ``runConstantFold`` in the same load-time
+sequence, ``foldDegenerateMixtures`` collapses a classic Bernoulli
+``mixture(p, X, Y)`` whose selector ``p`` is *certainly* true or
+false to the surviving arm: ``X`` when :math:`\Pr(p) = 1`, ``Y``
+when :math:`\Pr(p) = 0`. The weight is read only where it is known
+without a probability computation — a resolved ``gate_one`` /
+``gate_zero`` selector, or a bare ``gate_input`` whose pinned
+probability is exactly ``1`` or ``0`` (the default ``1`` of a
+non-probabilistic tuple included). The collapse rewrites the
+mixture as a single-wire ``gate_arith`` ``PLUS`` passthrough to
+the survivor (``liftConditionedToTarget``), which *references*
+rather than copies it, so a shared survivor keeps its single gate
+identity and single Monte-Carlo draw; ``foldSemiringIdentities``
+then unwraps the passthrough. Ordering it before the constant fold
+is what lets a provenance-weighted count of certain tuples (the
+denominator of the ``avg`` rewrite, see *Aggregate Dispatch*)
+reduce to a ``gate_value``. The fold is exact and
+correlation-safe precisely at :math:`\pi \in \{0, 1\}`: a
+deterministic selector shared across several mixtures couples
+none of them, whereas a fractional selector genuinely does, so
+the pass admits only the two endpoints and leaves every
+fractional Bernoulli for the Monte-Carlo sampler. A compound
+Boolean selector — whose :math:`\Pr(p)` would need a (possibly
+#P-hard) evaluation and depends on mutable input probabilities —
+is left intact for the probability-aware evaluators.
+
 Aggregate Dispatch
 ------------------
 
@@ -975,6 +1001,27 @@ provenance-weighted sum (``rv_sum_or_null`` differs from
 the division propagates standard ``AVG`` semantics), and the
 denominator sums per-row ``mixture(prov_i, 1, 0)`` indicators —
 the count of *included* rows as a random variable.
+
+That denominator is a genuine random variable only when some row
+is *uncertainly* present. When every contributing tuple is
+certain — the default for a provenance-tracked but
+non-probabilistic table, where each input gate carries the
+default probability 1 — the count is deterministic, and
+``expected(avg(x))`` is simply ``E[SUM] / n``. The load-time
+``foldDegenerateMixtures`` pass (see *HybridEvaluator*) turns
+this into an analytic result: a Bernoulli
+``mixture`` whose selector is certainly true (:math:`\pi = 1`) or
+false (:math:`\pi = 0`) is collapsed to the surviving arm, so
+each denominator ``mixture(prov_i, 1, 0)`` becomes the constant
+``1`` and constant folding reduces the whole sum to the
+``gate_value`` :math:`n` that the analytic DIV-by-constant arm
+divides by (each numerator ``mixture(prov_i, X_i, 0)`` likewise
+unwraps to ``X_i``, leaving a plain sum of the row RVs). A
+fractional presence probability genuinely couples the numerator's
+random sum to the random count, so its mixtures are left intact
+and the ratio is estimated by Monte Carlo — the fold admits only
+the exact :math:`\pi \in \{0, 1\}` cases, where a deterministic
+selector carries no coupling to lose.
 
 With the identities pre-baked, the FFUNCs are plain folds with
 no gate inspection: a single ``gate_arith`` root (``PLUS`` /

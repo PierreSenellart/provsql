@@ -1173,6 +1173,61 @@ unsigned runConstantFold(GenericCircuit &gc)
   return counter;
 }
 
+unsigned foldDegenerateMixtures(GenericCircuit &gc)
+{
+  unsigned counter = 0;
+  const auto nb = gc.getNbGates();
+  for (std::size_t i = 0; i < nb; ++i) {
+    auto g = static_cast<gate_t>(i);
+    if (gc.getGateType(g) != gate_mixture) continue;
+    /* Categorical N-wire mixtures carry their masses in the mulinput
+     * wires, not a single Bernoulli selector; the degenerate collapse
+     * below is the classic 3-wire Bernoulli shape only. */
+    if (gc.isCategoricalMixture(g)) continue;
+    const auto &wires = gc.getWires(g);
+    if (wires.size() != 3) continue;
+
+    /* The mixing weight pi = P(selector = true).  We fold only when pi
+     * is known to be exactly 1 or 0 without a probability computation:
+     * a resolved identity selector (gate_one / gate_zero) or a bare
+     * Bernoulli gate_input whose pinned probability is 1 or 0.  In the
+     * loaded circuit an un-set_prob'd input carries the default
+     * probability 1 (GenericCircuit::setGate), which is exactly the
+     * "provenance-tracked but not probabilistic" tuple: certainly
+     * present.  A compound Boolean selector is left intact -- its pi
+     * would require a (possibly #P-hard) probability evaluation and
+     * depends on mutable input probabilities, so it belongs to the
+     * probability-aware evaluators, not this universal load-time pass. */
+    const gate_t sel = wires[0];
+    double pi;
+    switch (gc.getGateType(sel)) {
+      case gate_one:   pi = 1.0; break;
+      case gate_zero:  pi = 0.0; break;
+      case gate_input: pi = gc.getProb(sel); break;
+      default: continue;
+    }
+
+    /* A degenerate Bernoulli carries no coupling: collapsing the
+     * mixture to its surviving arm is exact even when the selector is
+     * shared with other mixtures (they too are deterministic).  This is
+     * unsound at any fractional pi, which is why the switch above admits
+     * only the exact 0/1 cases.  liftConditionedToTarget rewrites g as a
+     * single-wire arith PLUS REFERENCING the survivor, so a shared
+     * survivor RV keeps its single gate identity (and single MC draw);
+     * foldSemiringIdentities then collapses the passthrough wrapper, and
+     * a constant survivor lets runConstantFold reduce the enclosing sum
+     * (e.g. avg's provenance-weighted count) to a gate_value. */
+    if (pi == 1.0) {
+      gc.liftConditionedToTarget(g, wires[1]);
+      ++counter;
+    } else if (pi == 0.0) {
+      gc.liftConditionedToTarget(g, wires[2]);
+      ++counter;
+    }
+  }
+  return counter;
+}
+
 unsigned runHybridSimplifier(GenericCircuit &gc)
 {
   unsigned counter = 0;

@@ -309,9 +309,14 @@ DROP TABLE rv_count;
 -- 7a.  Deterministic provenance.
 --   AVG of N(1,1), N(2,1), N(3,1) under default prob=1.0:
 --     SUM = N(6, 3); SUM_ones = 3; AVG = N(2, 1/3).
---   The DIV gate doesn't have a closed-form evaluator in general, so
---   expected/variance go through Monte Carlo; tolerance 0.05 leaves
---   headroom for sampler noise at 50k samples.
+--   Every per-row mixture's selector is certainly true (default prob 1),
+--   so the load-time degenerate-mixture fold collapses each to its RV
+--   arm and the denominator's per-row mixture(prov, 1, 0) to the
+--   constant 1; constant folding then reduces the provenance-weighted
+--   count to the gate_value 3, and the analytic DIV-by-constant arm
+--   divides E[SUM] and Var[SUM] exactly.  No Monte Carlo: pinned to 1e-9
+--   (it fell back to MC before the fold, when the compound denominator
+--   was not recognised as constant).
 
 CREATE TABLE rv_avg_basic(label text, x random_variable);
 INSERT INTO rv_avg_basic VALUES
@@ -334,8 +339,8 @@ SELECT get_gate_type(m::uuid)                              AS root_kind,
        array_length(get_children((get_children(m::uuid))[2]), 1) AS den_arity
   FROM rv_avg_basic_res;
 
-SELECT abs(provsql.expected(m) - 2.0)       < 0.05 AS avg_basic_mean,
-       abs(provsql.variance(m) - 1.0 / 3.0) < 0.05 AS avg_basic_variance
+SELECT abs(provsql.expected(m) - 2.0)       < 1e-9 AS avg_basic_mean,
+       abs(provsql.variance(m) - 1.0 / 3.0) < 1e-9 AS avg_basic_variance
   FROM rv_avg_basic_res;
 
 DROP TABLE rv_avg_basic_res;
