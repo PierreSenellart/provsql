@@ -601,6 +601,50 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha double precision, beta double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(alpha) OR NOT provsql.is_finite_float8(beta) THEN
+    RAISE EXCEPTION 'provsql.inverse_gamma: parameters must be finite (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  IF alpha <= 0 OR beta <= 0 THEN
+    RAISE EXCEPTION 'provsql.inverse_gamma: parameters must be strictly positive (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'inverse_gamma:' || alpha || ',' || beta);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu double precision, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.inverse_gaussian: parameters must be finite (got mu=%, lambda=%)', mu, lambda;
+  END IF;
+  IF mu <= 0 OR lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.inverse_gaussian: parameters must be strictly positive (got mu=%, lambda=%)', mu, lambda;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'inverse_gaussian:' || mu || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION wald(mu double precision, lambda double precision)
+  RETURNS random_variable AS
+$$
+  SELECT provsql.inverse_gaussian(mu, lambda);
+$$ LANGUAGE sql VOLATILE PARALLEL SAFE;
+
 /**
  * @brief Build a discrete (categorical) random variable from outcomes
  *        and UNNORMALISED log-masses

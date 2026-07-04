@@ -128,9 +128,11 @@ beta|2|{α,β}|Β
 erlang|2|{k,λ}|Erl
 exponential|1|{λ}|Exp
 gamma|2|{k,λ}|Γ
+inverse_gamma|2|{α,β}|IΓ
+inverse_gaussian|2|{μ,λ}|IG
 lognormal|2|{μ,σ}|LogN
 normal|2|{μ,σ}|N
 pareto|2|{xₘ,α}|Par
 uniform|2|{a,b}|U
 weibull|2|{k,λ}|Wbl
-(9 rows)
+(11 rows)

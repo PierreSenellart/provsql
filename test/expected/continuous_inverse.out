@@ -1,0 +1,86 @@
+\set ECHO none
+igamma_mean_exact
+t
+(1 row)
+igamma_var_exact
+t
+(1 row)
+igamma_m2_exact
+t
+(1 row)
+igamma_mean_divergent
+t
+(1 row)
+igamma_var_divergent
+t
+(1 row)
+igamma_cdf_exact
+t
+(1 row)
+igamma_quantile_numeric
+t
+(1 row)
+lo|hi
+0|Infinity
+(1 row)
+igamma_scaled_mean_exact
+t
+(1 row)
+iwald_mean_exact
+t
+(1 row)
+iwald_var_exact
+t
+(1 row)
+iwald_m2_exact
+t
+(1 row)
+iwald_cdf_exact
+t
+(1 row)
+lo|hi
+0|Infinity
+(1 row)
+wald_alias_mean_exact
+t
+(1 row)
+wald_alias_encoding
+t
+(1 row)
+iwald_sum_closure_mean
+t
+(1 row)
+iwald_sum_closure_cdf
+t
+(1 row)
+iwald_scaled_mean_exact
+t
+(1 row)
+igamma_sampler_mc
+t
+(1 row)
+iwald_sampler_mc
+t
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|within_tolerance
+a|t
+b|t
+(2 rows)
+ERROR:  provsql.inverse_gamma: parameters must be strictly positive (got alpha=0, beta=1)
+ERROR:  provsql.inverse_gamma: parameters must be finite (got alpha=1, beta=Infinity)
+ERROR:  provsql.inverse_gaussian: parameters must be strictly positive (got mu=-1, lambda=2)
+ERROR:  provsql.inverse_gaussian: parameters must be strictly positive (got mu=1, lambda=0)
+ERROR:  provsql.inverse_gaussian: parameters must be strictly positive (got mu=2, lambda=-1)
+name|nparams|param_names|label
+inverse_gamma|2|{α,β}|IΓ
+inverse_gaussian|2|{μ,λ}|IG
+(2 rows)
+continuous_inverse_done
+ok
+(1 row)

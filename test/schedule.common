@@ -181,6 +181,7 @@ test: continuous_gamma
 test: continuous_lognormal
 test: continuous_beta
 test: continuous_weibull_pareto
+test: continuous_inverse
 test: continuous_discrete_families
 test: continuous_gmm
 test: continuous_information

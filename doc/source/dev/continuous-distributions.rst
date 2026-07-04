@@ -34,7 +34,7 @@ its interaction with the moment evaluators is covered in
     below), so the set of valid blobs grows with the registered
     families — currently ``normal``, ``uniform``, ``exponential``,
     ``erlang``, ``gamma``, ``lognormal``, ``weibull``, ``pareto``,
-    ``beta``.
+    ``beta``, ``inverse_gamma``, ``inverse_gaussian``.
 
     Categorical random variables share no ``gate_rv`` encoding;
     they are encoded as a block of ``gate_mulinput`` gates
@@ -102,7 +102,8 @@ the registries live in ``distributions/Distribution.cpp``;
 each family is one self-contained implementation file
 (``normal.cpp``, ``uniform.cpp``, ``exponential.cpp``,
 ``erlang.cpp``, ``gamma.cpp``, ``lognormal.cpp``,
-``weibull.cpp``, ``pareto.cpp``, ``beta.cpp``) sharing only the
+``weibull.cpp``, ``pareto.cpp``, ``beta.cpp``,
+``inverse_gamma.cpp``, ``inverse_gaussian.cpp``) sharing only the
 internal header ``DistributionCommon.h``.
 
 A ``Distribution`` is a transient per-family view constructed

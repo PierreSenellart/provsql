@@ -159,6 +159,26 @@ shared underlying randomness.
     struggle. See `Wikipedia
     <https://en.wikipedia.org/wiki/Pareto_distribution>`__.
 
+:sqlfunc:`inverse_gamma` ``(alpha, beta)``
+    ``InvGamma(α, β)`` with shape ``α > 0`` and scale ``β > 0``: the
+    distribution of ``1/Y`` for ``Y ~ gamma(α, β)`` (the conjugate
+    prior for a Gaussian variance). Its CDF is the regularised upper
+    incomplete gamma, so comparisons against a constant are exact;
+    divergent moments are reported honestly as ``Infinity`` (the mean
+    for ``α ≤ 1``, the variance for ``α ≤ 2``) rather than estimated,
+    and positive scalings rescale ``β``. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Inverse-gamma_distribution>`__.
+
+:sqlfunc:`inverse_gaussian` ``(mu, lambda)`` *(alias* :sqlfunc:`wald` *)*
+    ``IG(μ, λ)`` with mean ``μ > 0`` and shape ``λ > 0``: the
+    first-passage time of Brownian motion with drift. Its CDF has a
+    closed form in the standard normal ``Φ``, so comparisons and
+    quantiles are analytic and all raw moments are finite. Positive
+    scalings map ``c·IG(μ, λ)`` to ``IG(cμ, cλ)``, and a sum of
+    independent inverse Gaussians sharing the ratio ``λ/μ²`` folds to
+    a single inverse Gaussian. See `Wikipedia
+    <https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution>`__.
+
 :sqlfunc:`categorical` ``(probs, outcomes)``
     Discrete distribution over the values in ``outcomes`` with the
     corresponding probabilities in ``probs``. Both arrays must have
@@ -350,10 +370,12 @@ later, when the value is queried via
   another normal; a scalar shift, scale, or negation of a normal
   preserves the family; the sum of ``k`` i.i.d. exponentials with
   the same rate is an Erlang; independent same-rate gammas sum to
-  a gamma; products of independent lognormals are lognormal;
-  ``exp`` of a normal is a lognormal and ``ln`` of a lognormal is a
-  normal; a linear combination of disjoint random variables has
-  closed-form mean and variance. The result is exact.
+  a gamma; independent inverse Gaussians sharing the ratio
+  ``λ/μ²`` sum to an inverse Gaussian; products of independent
+  lognormals are lognormal; ``exp`` of a normal is a lognormal and
+  ``ln`` of a lognormal is a normal; a linear combination of
+  disjoint random variables has closed-form mean and variance. The
+  result is exact.
 - **Monte Carlo fallback**, when no closed form applies, e.g. a
   product of two non-trivial random variables. The sampler draws
   independent values from each leaf, evaluates the arithmetic
