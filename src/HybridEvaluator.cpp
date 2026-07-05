@@ -11,6 +11,7 @@
 #include <optional>
 #include <stack>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -32,6 +33,65 @@ namespace provsql {
 namespace {
 
 constexpr double NaN = std::numeric_limits<double>::quiet_NaN();
+
+/* Base @c gate_rv leaves whose sampled value must stay coupled across
+ * distinct comparators.  The identity-minting folds (@c try_sum_closure,
+ * @c try_times_scalar_rv, @c try_product_closure, @c try_transform_closure,
+ * @c try_neg_rv) replace their gate with a fresh @c gate_rv and orphan
+ * the base RV they consumed; that mints an independent draw.  Sound when
+ * the base RV feeds a single comparator side (its marginal is unchanged),
+ * but WRONG when the same leaf feeds two comparator sides that must see
+ * the same draw -- e.g. a latent parameter b feeding both `0 + b` and
+ * `1 + b`, two perfectly correlated events; folding each into an
+ * independent Normal silently applies the independence approximation.
+ *
+ * The set holds every base RV reachable from two or more @c gate_cmp
+ * wire-subtrees (counting both across-cmp sharing and a leaf feeding both
+ * sides of one cmp).  A leaf private to a single comparator side -- or to
+ * a non-comparator arith expression like `x + x`, which @c try_plus_aggregate
+ * folds while preserving the shared identity -- is absent, so those folds
+ * still fire.  When a candidate base RV is in this set the fold bails,
+ * leaving the @c gate_arith intact so the island decomposer descends to
+ * the shared leaf and couples the comparators.  Set for the duration of
+ * @c runHybridSimplifier; null (empty) elsewhere. */
+const std::unordered_set<gate_t> *g_shared_base_rvs = nullptr;
+
+inline bool is_shared_base_rv(gate_t rv)
+{
+  return g_shared_base_rvs != nullptr && g_shared_base_rvs->count(rv) != 0;
+}
+
+/* Collect the base @c gate_rv leaves reachable from @p start through
+ * @c gate_arith composition and @c gate_rv latent-parameter wires (a
+ * parametric RV couples through its parameter leaves).  Mirrors the
+ * cmp-footprint walk but seeded from a single gate, so it can be run
+ * once per comparator wire. */
+void collect_reachable_base_rvs(const GenericCircuit &gc, gate_t start,
+                                std::unordered_set<gate_t> &out)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  stk.push(start);
+  while (!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if (!seen.insert(g).second) continue;
+    auto t = gc.getGateType(g);
+    if (t == gate_rv) {
+      out.insert(g);
+      for (gate_t c : gc.getWires(g)) stk.push(c);   /* latent params */
+      continue;
+    }
+    if (t == gate_arith) {
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+      continue;
+    }
+    if (t == gate_mixture && !gc.isCategoricalMixture(g)) {
+      const auto &mw = gc.getWires(g);
+      if (mw.size() == 3) { stk.push(mw[1]); stk.push(mw[2]); }
+    }
+    /* gate_value / other: no base-RV identity below. */
+  }
+}
 
 /**
  * @brief Try to evaluate a @c gate_arith subtree to a scalar constant.
@@ -437,6 +497,10 @@ bool try_sum_closure(GenericCircuit &gc, gate_t g)
       continue;
     }
     if (!seen_rvs.insert(t.rv_gate).second) return false;  /* dependent */
+    /* A base RV shared with sibling subtrees must stay a live wire so
+     * downstream coupling survives; folding it into a fresh identity
+     * here would decouple the correlated events. */
+    if (is_shared_base_rv(t.rv_gate)) return false;
     auto spec = parse_distribution_spec(gc.getExtra(t.rv_gate));
     if (!spec) return false;   /* mixture / corrupted extra */
     dists[i] = makeDistribution(*spec);
@@ -480,6 +544,7 @@ bool try_product_closure(GenericCircuit &gc, gate_t g)
     }
     if (t != gate_rv) return false;
     if (!seen_rvs.insert(w).second) return false;   /* dependent */
+    if (is_shared_base_rv(w)) return false;         /* shared: keep live */
     auto spec = parse_distribution_spec(gc.getExtra(w));
     if (!spec) return false;
     dists.push_back(makeDistribution(*spec));
@@ -518,6 +583,7 @@ bool try_transform_closure(GenericCircuit &gc, gate_t g)
   const auto &wires = gc.getWires(g);
   if (wires.size() != 1) return false;
   if (gc.getGateType(wires[0]) != gate_rv) return false;
+  if (is_shared_base_rv(wires[0])) return false;   /* shared: keep live */
   auto spec = parse_distribution_spec(gc.getExtra(wires[0]));
   if (!spec) return false;
 
@@ -551,6 +617,7 @@ bool try_neg_rv(GenericCircuit &gc, gate_t g)
   const auto &wires = gc.getWires(g);
   if (wires.size() != 1) return false;
   if (gc.getGateType(wires[0]) != gate_rv) return false;
+  if (is_shared_base_rv(wires[0])) return false;   /* shared: keep live */
 
   auto spec = parse_distribution_spec(gc.getExtra(wires[0]));
   if (!spec) return false;
@@ -788,6 +855,8 @@ bool try_times_scalar_rv(GenericCircuit &gc, gate_t g)
   /* c=0 / c=1 are the identity-drop's job; bailing here keeps the
    * two rules' responsibilities disjoint. */
   if (c == 0.0 || c == 1.0) return false;
+
+  if (is_shared_base_rv(rv_side)) return false;   /* shared: keep live */
 
   auto spec = parse_distribution_spec(gc.getExtra(rv_side));
   if (!spec) return false;
@@ -1232,6 +1301,35 @@ unsigned runHybridSimplifier(GenericCircuit &gc)
 {
   unsigned counter = 0;
 
+  /* Base RVs that couple two or more comparator sides must not be folded
+   * into a fresh (independent) identity.  Census once over the loaded
+   * circuit: for every gate_cmp wire, collect the base RVs reachable
+   * through arith / latent-parameter edges; a leaf that shows up in two
+   * or more such per-wire footprints is coupling-critical.  Folds only
+   * ever remove references to a leaf, so the load-time census is a sound
+   * conservative guard for the whole run.  The identity-minting folds
+   * consult @c g_shared_base_rvs via @c is_shared_base_rv. */
+  std::unordered_set<gate_t> shared_base_rvs;
+  {
+    std::unordered_map<gate_t, unsigned> cmp_footprint_count;
+    const auto nb = gc.getNbGates();
+    for (std::size_t i = 0; i < nb; ++i) {
+      auto g = static_cast<gate_t>(i);
+      if (gc.getGateType(g) != gate_cmp) continue;
+      for (gate_t w : gc.getWires(g)) {
+        std::unordered_set<gate_t> fp;
+        collect_reachable_base_rvs(gc, w, fp);
+        for (gate_t rv : fp) ++cmp_footprint_count[rv];
+      }
+    }
+    for (const auto &[rv, n] : cmp_footprint_count)
+      if (n > 1) shared_base_rvs.insert(rv);
+  }
+  g_shared_base_rvs = &shared_base_rvs;
+  struct SharedGuard {
+    ~SharedGuard() { g_shared_base_rvs = nullptr; }
+  } shared_guard;
+
   /* Pass 1: bottom-up DFS applying every rule EXCEPT the scalar-times-RV
    * fold.  Deferring that one rule lets @c try_plus_aggregate see
    * @c arith(TIMES, value:c, X) shapes inside a parent PLUS -- the
@@ -1345,7 +1443,17 @@ void collect_cmp_rv_footprint(const GenericCircuit &gc, gate_t cmp_gate,
     gate_t g = stk.top(); stk.pop();
     if (!seen.insert(g).second) continue;
     auto t = gc.getGateType(g);
-    if (t == gate_rv) { fp.insert(g); continue; }
+    if (t == gate_rv) {
+      fp.insert(g);
+      /* A compound/latent RV carries its distribution parameters as
+       * wires (e.g. normal($0, 1) with $0 a shared scalar leaf).  Two
+       * comparators over RVs that share a latent parameter are
+       * correlated through it, so descend into the parameter subtrees
+       * and collect their base RVs as well.  A bare RV has no wires and
+       * this is a no-op. */
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+      continue;
+    }
     if (t == gate_arith) {
       for (gate_t c : gc.getWires(g)) stk.push(c);
       continue;

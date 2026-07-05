@@ -69,3 +69,31 @@ BEGIN
   SELECT expected(mu_prior | (y_new > 21.0 AND y_new < 21.2)) INTO post FROM newobs;
   RAISE NOTICE 'posterior_pulled_above_prior: %', (post > 20.2 AND post < 21.2);
 END $$;
+
+-- Correlated comparison events over a shared latent.  Two readings that share
+-- the drift d both crossing a threshold are POSITIVELY correlated: a large d
+-- lifts both, so the joint probability exceeds the product of the marginals.
+-- Give every reading its own drift and the same two events are independent
+-- (joint ~ product).  This is the load-time hazard the island decomposer
+-- guards against: the shared latent reaches each cmp only through the
+-- reading's mean parameter (d inside normal(mu + d, 0.3)) and through the
+-- mu + d sum, so folding either into a fresh independent Normal would silently
+-- decouple the events -- the independence approximation.  Seeded-MC checks.
+DO $$
+DECLARE e1 uuid; e2 uuid; f1 uuid; f2 uuid;
+        joint_s double precision; prod_s double precision;
+        joint_i double precision; prod_i double precision;
+BEGIN
+  SELECT provenance() INTO e1 FROM reading     WHERE id = 1 AND y > 20.2;
+  SELECT provenance() INTO e2 FROM reading     WHERE id = 2 AND y > 20.2;
+  SELECT provenance() INTO f1 FROM reading_ind WHERE id = 1 AND y > 20.2;
+  SELECT provenance() INTO f2 FROM reading_ind WHERE id = 2 AND y > 20.2;
+  joint_s := probability_evaluate(provenance_times(e1, e2), 'monte-carlo', '300000');
+  prod_s  := probability_evaluate(e1, 'monte-carlo', '300000')
+           * probability_evaluate(e2, 'monte-carlo', '300000');
+  joint_i := probability_evaluate(provenance_times(f1, f2), 'monte-carlo', '300000');
+  prod_i  := probability_evaluate(f1, 'monte-carlo', '300000')
+           * probability_evaluate(f2, 'monte-carlo', '300000');
+  RAISE NOTICE 'shared_events_positively_correlated: %', (joint_s > prod_s + 0.03);
+  RAISE NOTICE 'independent_events_uncorrelated: %', (abs(joint_i - prod_i) < 0.02);
+END $$;

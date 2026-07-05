@@ -6742,6 +6742,16 @@ CREATE OR REPLACE FUNCTION agg_avg_moment_exact(token uuid, k integer)
   RETURNS double precision
   AS 'provsql','agg_avg_moment_exact' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Collapsed (Rao-Blackwellised) raw moment E[C^k] of a correlated
+ *  COUNT / SUM whose per-row selection events are coupled through a single
+ *  shared continuous latent: 1-D quadrature over the latent, closed-form
+ *  per-row CDF given it (O(G·n), exact up to the grid).  NULL when the
+ *  circuit does not match the shared-latent pattern (caller falls back to
+ *  the exact n^k enumeration).  k in {1, 2}. */
+CREATE OR REPLACE FUNCTION agg_collapsed_moment(token uuid, k integer)
+  RETURNS double precision
+  AS 'provsql','agg_collapsed_moment' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /**
  * @brief Boolean event "this aggregate-carrying gate's value is defined
  *        (non-NULL) in the world".
@@ -6982,6 +6992,20 @@ BEGIN
     -- SUM = 0, so this stays consistent with k = 1 (= expected()).
     IF n = 0 THEN
       RETURN 0;
+    END IF;
+
+    -- Collapsed fast path: a correlated COUNT / SUM whose per-row selection
+    -- events share a single continuous latent has an O(G·n) 1-D quadrature,
+    -- vastly cheaper than the O(n^k) tuple enumeration below (which is the
+    -- O(n^2) pair-probability bottleneck for the variance).  Only fires
+    -- unconditionally (prov = one) and for k in {1, 2}; agg_collapsed_moment
+    -- returns NULL when the shared-latent pattern does not match, and we
+    -- fall through to the exact enumeration.
+    IF prov = gate_one() AND k <= 2 THEN
+      total := agg_collapsed_moment((token)::uuid, k);
+      IF total IS NOT NULL THEN
+        RETURN total;
+      END IF;
     END IF;
 
     -- Extract per-child token + value arrays.
