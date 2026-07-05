@@ -1145,3 +1145,68 @@ auto-preset is a client-side feature: clicking a result cell
 stamps the row's provenance UUID into the input and toggles the
 *Conditioned by* badge active. Manual edits stick within a row;
 row navigation resets the input to the new row's prov.
+
+Latent variables and posterior inference
+----------------------------------------
+
+A distribution parameter may be a scalar provenance token instead of a
+literal double, making the leaf a compound (hierarchical) distribution;
+conditioning such a leaf on observed data is likelihood-weighting
+posterior inference. Two mechanisms implement this.
+
+**Parameter wires on** ``gate_rv``. A ``gate_rv`` gained the ability to
+carry wires (it never did before, so no mmap format bump is needed). A
+parameter slot in the ``extra`` text is either a literal or a wire
+reference ``$i`` (0-based index into the gate's wire vector), e.g.
+``"normal:$0,1.0"``. ``DistributionSpec`` (the resolved
+``{family, double, double}`` POD every analytic call site consumes) is
+**unchanged**; a parallel template parser
+(``parse_distribution_template`` in ``src/RandomVariable.cpp``, returning
+``DistributionTemplate`` with per-slot ``DistributionParam``) keeps the
+literal-or-wire distinction, and ``parse_distribution_spec`` is now that
+template parse followed by an all-literal check -- so it *declines* a
+parametric leaf and every analytic path (``Expectation.cpp``,
+``AnalyticEvaluator.cpp``) falls through to Monte Carlo unchanged. The
+sampler's ``gate_rv`` arm (``src/MonteCarloSampler.cpp``) resolves wired
+parameters per iteration through ``evalScalar`` (so a shared latent lands
+in ``scalar_cache_`` and couples the leaves) and builds the family
+instance for that draw; ``integrationRange()`` is the family-agnostic
+domain guard for a drawn-out-of-support parameter. The
+``FootprintCache`` unions a latent leaf's parameter-wire footprints into
+its own, so two leaves sharing a latent are flagged dependent and the
+independence shortcuts defeat correctly. The ``DistributionFamily``
+factory and the ``Distribution`` interface are untouched -- only the
+parameters' *source* (sampled wire vs literal) changes.
+
+**The** ``gate_observe`` **evidence gate and importance sampling.**
+``gate_observe`` (append-only enum addition; one wire → the observed
+``gate_rv`` leaf, the datum in ``extra``) is an *evidence* node: it
+composes into an evidence circuit by ``gate_times`` exactly like a
+Boolean conditioning event, but contributes a continuous density factor.
+``Sampler::evalWeight`` walks the evidence circuit to a **weight** rather
+than a bool or scalar: a ``gate_observe`` returns its leaf's pdf at the
+datum (resolving the leaf's latent parameters through ``evalScalar``, so
+the weight and the value couple), a ``gate_times`` multiplies its
+children's weights, and any other subtree falls to ``evalBool`` for a
+``0/1`` weight -- so a purely Boolean evidence tree reproduces the
+rejection conditioning. ``importanceSampleConditional`` draws latents
+from the prior, weights each by ``evalWeight(evidence)``, and returns a
+``WeightedPosterior`` of ``(value, weight)`` particles plus the marginal
+likelihood ``P(data)`` (mean weight) and the effective sample size
+``(Σw)² / Σw²``. The moment / quantile / sample dispatchers route to it
+whenever ``circuitHasObserve`` finds a ``gate_observe`` in the evidence,
+computing weighted posterior statistics (``rv_sample`` resamples the
+particles, SIR). The whole readout goes through ``getJointCircuit`` so a
+latent shared between the root and the evidence is a single ``gate_t``.
+
+The SQL surface is :sqlfunc:`observe` / :sqlfunc:`and_agg` /
+:sqlfunc:`evidence` / :sqlfunc:`shapley_observe`, the token-accepting
+constructor overloads, and the ``provsql.ess_warn_fraction`` GUC.
+:sqlfunc:`shapley_observe` is connecting code: it enumerates the
+observation subsets, calls ``rv_moment`` for each coalition's posterior
+value, and combines them into the Shapley attribution -- exact, so capped
+at 12 observations. Sequential Monte Carlo (for the many-observations
+regime where the ESS collapses) and MCMC are deferred: the sampler is
+stateless (``resetIteration()`` wipes state each draw) and has no
+joint-density-at-an-assignment evaluation mode, which MCMC's acceptance
+ratio needs.

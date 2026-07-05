@@ -70,8 +70,16 @@ public:
 
   bool evalBool(gate_t g);
   double evalScalar(gate_t g);
+  double evalWeight(gate_t g);
 
 private:
+  /// Build the per-draw Distribution for a (possibly latent) gate_rv leaf,
+  /// resolving wired parameters through evalScalar (so a shared latent
+  /// lands in scalar_cache_ and couples the callers), with the
+  /// parameter-domain guard.  Outputs the resolved parameters in p1/p2.
+  std::unique_ptr<Distribution> buildRvDistribution(
+    gate_t leaf, const DistributionTemplate &tmpl, double &p1, double &p2);
+
   const GenericCircuit &gc_;
   std::mt19937_64 &rng_;
   std::unordered_map<gate_t, bool> bool_cache_;
@@ -193,15 +201,34 @@ double Sampler::evalScalar(gate_t g)
       break;
     case gate_rv:
     {
+      // Fast path: an all-literal leaf builds its Distribution once and
+      // reuses it across iterations (dist_cache_ is never reset), so
+      // sampling never re-parses the spec.  A latent (parametric) leaf,
+      // whose parameters are wire references resolved per iteration,
+      // bypasses that cache: its distribution changes every draw.
       auto dit = dist_cache_.find(g);
-      if(dit == dist_cache_.end()) {
-        auto spec = parse_distribution_spec(gc_.getExtra(g));
-        if(!spec)
-          throw CircuitException(
-                  "Malformed gate_rv extra: " + gc_.getExtra(g));
-        dit = dist_cache_.emplace(g, makeDistribution(*spec)).first;
+      if(dit != dist_cache_.end()) {
+        result = dit->second->sample(rng_);
+        break;
       }
-      result = dit->second->sample(rng_);
+      auto tmpl = parse_distribution_template(gc_.getExtra(g));
+      if(!tmpl)
+        throw CircuitException(
+                "Malformed gate_rv extra: " + gc_.getExtra(g));
+      if(!tmpl->parametric()) {
+        DistributionSpec spec{tmpl->family, tmpl->p1.literal, tmpl->p2.literal};
+        dit = dist_cache_.emplace(g, makeDistribution(spec)).first;
+        result = dit->second->sample(rng_);
+        break;
+      }
+      // Parametric leaf: resolve each wired parameter from the gate's
+      // wires via evalScalar (so a latent shared across leaves lands in
+      // scalar_cache_ and couples them), then build the family instance
+      // for this draw's parameters.  The (double,double) factory and the
+      // Distribution interface are untouched -- only the parameters'
+      // source changes.
+      double p1, p2;
+      result = buildRvDistribution(g, *tmpl, p1, p2)->sample(rng_);
       break;
     }
     case gate_arith:
@@ -515,6 +542,81 @@ double Sampler::evalScalar(gate_t g)
   return result;
 }
 
+std::unique_ptr<Distribution> Sampler::buildRvDistribution(
+  gate_t leaf, const DistributionTemplate &tmpl, double &p1, double &p2)
+{
+  const auto &w = gc_.getWires(leaf);
+  auto resolve = [&](const DistributionParam &p) {
+    return p.wire_slot < 0 ? p.literal : evalScalar(w[p.wire_slot]);
+  };
+  p1 = resolve(tmpl.p1);
+  p2 = resolve(tmpl.p2);
+  auto dist = tmpl.family->factory(p1, p2);
+  // Parameter-domain policy: a drawn parameter may fall outside the
+  // family's domain (a sampled scale/rate/shape <= 0).  Do NOT silently
+  // drop such a draw -- that implicitly truncates the prior and biases
+  // every downstream moment (same reasoning as the gate_arith POW / LN
+  // guards).  integrationRange() returns false exactly when the parameters
+  // are degenerate/out-of-domain, so it is the family-agnostic validity
+  // gate; raise a specific, actionable error.
+  double dlo, dhi;
+  if(!dist->integrationRange(dlo, dhi))
+    throw CircuitException(
+            "gate_rv " + std::string(tmpl.family->name)
+            + ": a parameter drawn outside the family's domain "
+            "(e.g. a scale/rate/shape <= 0: got "
+            + std::to_string(p1) + ", " + std::to_string(p2)
+            + "); put a positive-support prior on it, e.g. "
+            "gamma / lognormal");
+  return dist;
+}
+
+double Sampler::evalWeight(gate_t g)
+{
+  const auto type = gc_.getGateType(g);
+  const auto &wires = gc_.getWires(g);
+  switch(type) {
+    case gate_times: {
+      // Evidence conjunction: the product of the children's weights.
+      // Short-circuit on a zero factor (a rejected Boolean event or a
+      // datum outside a leaf's support) -- the particle is dead.
+      double w = 1.0;
+      for(gate_t c : wires) {
+        w *= evalWeight(c);
+        if(w == 0.0) return 0.0;
+      }
+      return w;
+    }
+    case gate_observe: {
+      // Continuous-density evidence: the observed leaf's pdf at the datum.
+      // Resolving the leaf's (possibly latent) parameters through
+      // evalScalar populates scalar_cache_, so a latent shared with the
+      // queried root couples the weight and the value.
+      if(wires.size() != 1)
+        throw CircuitException(
+                "gate_observe must have exactly one child (the observed leaf)");
+      const gate_t leaf = wires[0];
+      if(gc_.getGateType(leaf) != gate_rv)
+        throw CircuitException(
+                "gate_observe child must be a gate_rv leaf");
+      const double d = parseDoubleStrict(gc_.getExtra(g));
+      auto tmpl = parse_distribution_template(gc_.getExtra(leaf));
+      if(!tmpl)
+        throw CircuitException(
+                "gate_observe: malformed observed gate_rv extra: "
+                + gc_.getExtra(leaf));
+      double p1, p2;
+      return buildRvDistribution(leaf, *tmpl, p1, p2)->pdf(d);
+    }
+    default:
+      // Any other subtree is a Boolean conditioning event: a 0/1 weight,
+      // which is exactly rejection conditioning -- so a purely Boolean
+      // evidence tree through evalWeight reproduces
+      // monteCarloConditionalScalarSamples.
+      return evalBool(g) ? 1.0 : 0.0;
+  }
+}
+
 }  // namespace
 
 double monteCarloRV(const GenericCircuit &gc, gate_t root, unsigned samples)
@@ -706,6 +808,97 @@ try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
    * handles it. */
   std::mt19937_64 rng = seedRng();
   return makeDistribution(m->spec)->sampleTruncated(rng, m->lo, m->hi, n);
+}
+
+WeightedPosterior importanceSampleConditional(
+  const GenericCircuit &gc, gate_t root, gate_t evidence, unsigned samples)
+{
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  WeightedPosterior out;
+  out.particles.reserve(samples);
+
+  for(unsigned i = 0; i < samples; ++i) {
+    sampler.resetIteration();
+    /* Evaluate the evidence FIRST: this fills scalar_cache_ for every
+     * latent the evidence touches, so the subsequent evalScalar(root)
+     * reads the same latent draw -- coupling the weight and the value. */
+    const double w = sampler.evalWeight(evidence);
+    ++out.attempted;
+    if(w > 0.0) {
+      const double x = sampler.evalScalar(root);
+      out.particles.push_back({x, w});
+      out.weight_sum += w;
+      out.weight_sq_sum += w * w;
+    }
+    /* A zero-weight draw contributes 0 to every weighted sum but still
+     * counts in `attempted`, so evidence() = weight_sum / attempted is the
+     * marginal likelihood P(data). */
+
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+  return out;
+}
+
+double importanceEvidence(const GenericCircuit &gc, gate_t evidence,
+                          unsigned samples)
+{
+  if(samples == 0) return 0.0;
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  double sw = 0.0;
+  for(unsigned i = 0; i < samples; ++i) {
+    sampler.resetIteration();
+    sw += sampler.evalWeight(evidence);
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+  return sw / static_cast<double>(samples);
+}
+
+std::vector<double> posteriorResample(const WeightedPosterior &post,
+                                      unsigned n)
+{
+  std::vector<double> out;
+  if(post.particles.empty() || post.weight_sum <= 0.0) return out;
+  /* Cumulative weights for inverse-CDF resampling. */
+  std::vector<double> cum;
+  cum.reserve(post.particles.size());
+  double c = 0.0;
+  for(const auto &pw : post.particles) { c += pw.second; cum.push_back(c); }
+
+  std::mt19937_64 rng = seedRng();
+  std::uniform_real_distribution<double> u(0.0, c);
+  out.reserve(n);
+  for(unsigned i = 0; i < n; ++i) {
+    const double r = u(rng);
+    auto it = std::lower_bound(cum.begin(), cum.end(), r);
+    std::size_t idx = static_cast<std::size_t>(it - cum.begin());
+    if(idx >= post.particles.size()) idx = post.particles.size() - 1;
+    out.push_back(post.particles[idx].first);
+  }
+  return out;
+}
+
+bool circuitHasObserve(const GenericCircuit &gc, gate_t root)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stack;
+  stack.push(root);
+  while(!stack.empty()) {
+    gate_t g = stack.top();
+    stack.pop();
+    if(!seen.insert(g).second) continue;
+    if(gc.getGateType(g) == gate_observe)
+      return true;
+    for(gate_t c : gc.getWires(g)) stack.push(c);
+  }
+  return false;
 }
 
 bool circuitHasRV(const GenericCircuit &gc, gate_t root)

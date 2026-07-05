@@ -74,9 +74,38 @@ bool parse_double(const std::string &raw, double &out)
   }
 }
 
+/* Parse one parameter slot: a decimal literal or a wire reference "$i".
+ * A wired slot stores its 0-based wire index in wire_slot (literal
+ * unused); a literal slot keeps literal and leaves wire_slot < 0. */
+bool parse_param(const std::string &raw, DistributionParam &out)
+{
+  std::string s = raw;
+  strip(s);
+  if (s.empty()) return false;
+  if (s.front() == '$') {
+    std::string idx_str = s.substr(1);
+    strip(idx_str);
+    if (idx_str.empty()) return false;
+    try {
+      std::size_t idx = 0;
+      const long slot = std::stol(idx_str, &idx);
+      if (idx != idx_str.size() || slot < 0) return false;
+      out.literal = 0.0;
+      out.wire_slot = static_cast<int>(slot);
+      return true;
+    } catch (const std::exception &) {
+      return false;
+    }
+  }
+  if (!parse_double(s, out.literal)) return false;
+  out.wire_slot = -1;
+  return true;
+}
+
 }  // namespace
 
-std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
+std::optional<DistributionTemplate>
+parse_distribution_template(const std::string &s)
 {
   const auto colon = s.find(':');
   if (colon == std::string::npos) return std::nullopt;
@@ -91,17 +120,32 @@ std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
   const DistributionFamily *family = lookupDistributionFamily(kind_str);
   if (!family) return std::nullopt;
 
-  DistributionSpec out{};
+  DistributionTemplate out{};
   out.family = family;
   if (family->nparams == 2) {
     const auto comma = params.find(',');
     if (comma == std::string::npos) return std::nullopt;
-    if (!parse_double(params.substr(0, comma), out.p1)) return std::nullopt;
-    if (!parse_double(params.substr(comma + 1), out.p2)) return std::nullopt;
+    if (!parse_param(params.substr(0, comma), out.p1)) return std::nullopt;
+    if (!parse_param(params.substr(comma + 1), out.p2)) return std::nullopt;
   } else {
-    if (!parse_double(params, out.p1)) return std::nullopt;
-    out.p2 = 0.0;
+    if (!parse_param(params, out.p1)) return std::nullopt;
+    out.p2 = DistributionParam{0.0, -1};
   }
+  return out;
+}
+
+std::optional<DistributionSpec> parse_distribution_spec(const std::string &s)
+{
+  /* The resolved (all-literal) form: parse as a template, then require
+   * every parameter be a literal.  A parametric (wired) leaf has no
+   * constant-parameter closed form, so it deliberately declines here and
+   * every analytic call site falls through to the Monte Carlo path. */
+  auto tmpl = parse_distribution_template(s);
+  if (!tmpl || tmpl->parametric()) return std::nullopt;
+  DistributionSpec out{};
+  out.family = tmpl->family;
+  out.p1 = tmpl->p1.literal;
+  out.p2 = tmpl->p2.literal;
   return out;
 }
 

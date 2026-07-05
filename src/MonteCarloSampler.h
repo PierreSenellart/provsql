@@ -284,6 +284,96 @@ std::optional<std::vector<double>>
 try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
                                  gate_t event_root, unsigned n);
 
+/**
+ * @brief Outcome of a likelihood-weighting (importance-sampling) pass.
+ *
+ * Latent-variable posterior inference draws latents from the prior via the
+ * forward recursion and weights each draw by the observed leaves' densities
+ * at the data (self-normalised importance sampling; the continuous
+ * generalisation of rejection conditioning, which is the 0/1-weight case).
+ *
+ * @c particles holds one @c (x, w) pair per prior draw with @b positive
+ * weight (@c x = the queried root's value, @c w = the product of the
+ * evidence factors); the caller derives any weighted posterior statistic
+ * (mean, variance, quantile) from them.  @c weight_sum / @c weight_sq_sum
+ * accumulate over @b all @c attempted draws (a zero-weight draw contributes
+ * 0), so @c evidence() is the marginal likelihood @c P(data) and
+ * @c effectiveSampleSize() the ESS diagnostic.
+ */
+struct WeightedPosterior {
+  std::vector<std::pair<double, double>> particles;  ///< (x, w) with w > 0.
+  double weight_sum = 0.0;      ///< Sum of w over all attempted draws.
+  double weight_sq_sum = 0.0;   ///< Sum of w^2 over all attempted draws.
+  unsigned attempted = 0;       ///< Number of prior draws.
+
+  /// Marginal likelihood P(data): the mean raw importance weight.
+  double evidence() const {
+    return attempted ? weight_sum / static_cast<double>(attempted) : 0.0;
+  }
+  /// Effective sample size (Sum w)^2 / (Sum w^2); 0 when all weights are 0.
+  double effectiveSampleSize() const {
+    return weight_sq_sum > 0.0 ? (weight_sum * weight_sum) / weight_sq_sum : 0.0;
+  }
+};
+
+/**
+ * @brief Self-normalised importance sampling of @p root given @p evidence.
+ *
+ * For each of @p samples prior draws the shared @c Sampler resets its
+ * per-iteration caches, then:
+ *   1. evaluates @p evidence to an importance @b weight (@c evalWeight):
+ *      a @c gate_observe contributes its leaf's pdf at the datum, a Boolean
+ *      conditioning event contributes a 0/1 weight, a @c gate_times
+ *      multiplies its children's weights -- populating @c scalar_cache_ for
+ *      every latent the evidence touches;
+ *   2. if the weight is positive, evaluates @p root as a scalar using the
+ *      SAME caches, so a latent shared between @p root and @p evidence is
+ *      drawn once and the weight and the value observe it jointly;
+ *   3. records the @c (value, weight) particle.
+ *
+ * Coupling the weight and the value through one joint circuit
+ * (@c getJointCircuit) is what makes the shared latent a single @c gate_t;
+ * the particles are then draws from the posterior of @c root given the data.
+ *
+ * @param gc        Circuit (typically from @c getJointCircuit).
+ * @param root      Scalar gate whose posterior we sample.
+ * @param evidence  Evidence circuit (an @c and_agg conjunction of
+ *                  @c gate_observe / Boolean events).
+ * @param samples   Number of prior draws.
+ */
+WeightedPosterior importanceSampleConditional(
+  const GenericCircuit &gc, gate_t root, gate_t evidence, unsigned samples);
+
+/**
+ * @brief Marginal likelihood @c P(data) of @p evidence: the mean raw
+ *        importance weight over @p samples prior draws.
+ *
+ * The same quantity rejection conditioning computes as @c P(C), now a
+ * product of the observations' densities.  Backs @c provsql.evidence.
+ */
+double importanceEvidence(const GenericCircuit &gc, gate_t evidence,
+                          unsigned samples);
+
+/**
+ * @brief Sampling-importance-resampling: draw @p n posterior samples from a
+ *        weighted particle set (proportional to weight, with replacement).
+ *
+ * Turns the weighted particles of @c importanceSampleConditional into
+ * (approximately) unweighted posterior draws for @c rv_sample.  Returns an
+ * empty vector when there is no positive-weight particle.  The RNG is
+ * seeded from @c provsql.monte_carlo_seed, like every other sampling path.
+ */
+std::vector<double> posteriorResample(const WeightedPosterior &post,
+                                      unsigned n);
+
+/**
+ * @brief Whether the circuit reachable from @p root contains a
+ *        @c gate_observe -- the signal that a conditioning event is
+ *        continuous-density evidence and must be evaluated by importance
+ *        sampling rather than the analytic / rejection conditional paths.
+ */
+bool circuitHasObserve(const GenericCircuit &gc, gate_t root);
+
 }  // namespace provsql
 
 #endif  // PROVSQL_MONTE_CARLO_SAMPLER_H

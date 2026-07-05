@@ -28,6 +28,7 @@ extern "C" {
 
 PG_FUNCTION_INFO_V1(rv_moment);
 PG_FUNCTION_INFO_V1(rv_quantile);
+PG_FUNCTION_INFO_V1(rv_evidence);
 PG_FUNCTION_INFO_V1(agg_avg_moment_exact);
 }
 
@@ -89,6 +90,16 @@ double mixturePi(const GenericCircuit &gc, gate_t p)
     : evaluateBooleanProbability(gc, p);
 }
 
+/// True iff @p g is a @c gate_rv whose distribution has a wired (token)
+/// parameter -- a latent / compound leaf with no constant-parameter
+/// closed form, so every analytic path must fall through to Monte Carlo.
+bool rvIsParametric(const GenericCircuit &gc, gate_t g)
+{
+  if (gc.getGateType(g) != gate_rv) return false;
+  auto tmpl = parse_distribution_template(gc.getExtra(g));
+  return tmpl && tmpl->parametric();
+}
+
 /// Cache of the base-@c gate_rv UUID footprints reachable below each
 /// scalar gate, used as the structural-independence witness.  Two
 /// children of an arithmetic gate are independent iff their footprints
@@ -104,7 +115,19 @@ public:
     RvSet s;
     auto type = gc_.getGateType(g);
     if (type == gate_rv) {
+      // The leaf itself is a distinct random source (two independent
+      // normal(M,1) leaves share M but draw independently given it), so
+      // its own gate_t is always in the footprint.  A latent (parametric)
+      // leaf ALSO carries the footprints of its parameter wires, so two
+      // leaves sharing a latent M overlap on M and are correctly flagged
+      // dependent -- defeating the closed-form independence shortcuts and
+      // routing the whole expression to the MC path that couples them.
+      // A non-parametric leaf has no wires, so this is a no-op there.
       s.insert(g);
+      for (gate_t c : gc_.getWires(g)) {
+        const auto &cs = of(c);
+        s.insert(cs.begin(), cs.end());
+      }
     } else if (type == gate_value) {
       // empty -- no RV reached
     } else if (type == gate_arith || type == gate_case) {
@@ -468,6 +491,105 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp);
 double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp);
 double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
                       FootprintCache &fp);
+
+/* -----------------------------------------------------------------------
+ * Likelihood-weighting (importance-sampling) posterior readouts.
+ *
+ * When the conditioning event is continuous-density evidence (it contains
+ * a gate_observe), the analytic / rejection conditional paths do not apply:
+ * draw latents from the prior and weight each draw by the observations'
+ * densities, then report the weighted posterior statistic.  These helpers
+ * turn one importance-sampling pass (WeightedPosterior) into a posterior
+ * raw moment / central moment / quantile.
+ * -------------------------------------------------------------------- */
+
+/* Self-normalised weighted raw moment Σ w x^k / Σ w.  NaN particle values
+ * (sampling-undefined worlds, e.g. an empty-group aggregate) are skipped,
+ * mirroring the unconditional MC path. */
+double weightedRawMoment(const WeightedPosterior &post, unsigned k)
+{
+  double sw = 0.0, swx = 0.0;
+  for (const auto &[x, w] : post.particles) {
+    if (std::isnan(x)) continue;
+    sw  += w;
+    swx += w * std::pow(x, static_cast<double>(k));
+  }
+  if (sw <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+  return swx / sw;
+}
+
+/* Self-normalised weighted central moment Σ w (x-mu)^k / Σ w. */
+double weightedCentralMoment(const WeightedPosterior &post, unsigned k,
+                             double mu)
+{
+  double sw = 0.0, swd = 0.0;
+  for (const auto &[x, w] : post.particles) {
+    if (std::isnan(x)) continue;
+    sw  += w;
+    swd += w * std::pow(x - mu, static_cast<double>(k));
+  }
+  if (sw <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+  return swd / sw;
+}
+
+/* Weighted empirical p-quantile: sort particles by value, walk the
+ * cumulative weight, linearly interpolate at p·(Σw) (the percentile_cont
+ * convention generalised to weights). */
+double weightedQuantile(WeightedPosterior post, double p)
+{
+  auto &pts = post.particles;
+  pts.erase(std::remove_if(pts.begin(), pts.end(),
+                           [](const std::pair<double, double> &pw) {
+                             return std::isnan(pw.first);
+                           }),
+            pts.end());
+  if (pts.empty()) return std::numeric_limits<double>::quiet_NaN();
+  std::sort(pts.begin(), pts.end(),
+            [](const auto &a, const auto &b) { return a.first < b.first; });
+  double total = 0.0;
+  for (const auto &pw : pts) total += pw.second;
+  if (!(total > 0.0)) return pts.front().first;
+  const double target = p * total;
+  double cum = 0.0;
+  for (std::size_t i = 0; i < pts.size(); ++i) {
+    const double prev = cum;
+    cum += pts[i].second;
+    if (cum >= target) {
+      if (i == 0) return pts[0].first;
+      /* Linear interpolation between the two straddling particles at their
+       * cumulative-weight midpoints (matches the empirical MC quantile). */
+      const double frac = (pts[i].second > 0.0)
+                            ? (target - prev) / pts[i].second
+                            : 0.0;
+      return pts[i - 1].first + frac * (pts[i].first - pts[i - 1].first);
+    }
+  }
+  return pts.back().first;
+}
+
+/* Guard a posterior pass: raise on infeasible (no positive-weight draw)
+ * evidence, and warn when the effective sample size is degenerating. */
+void checkPosteriorOrThrow(const WeightedPosterior &post,
+                           const std::string &what)
+{
+  if (post.particles.empty() || post.weight_sum <= 0.0) {
+    throw CircuitException(
+      what + ": evidence is infeasible (no positive-weight draw among " +
+      std::to_string(post.attempted) +
+      " Monte Carlo samples); the observations may contradict the prior, "
+      "or raise provsql.rv_mc_samples");
+  }
+  const double ess = post.effectiveSampleSize();
+  const double nonzero = static_cast<double>(post.particles.size());
+  if (provsql_ess_warn_fraction > 0.0 &&
+      ess < provsql_ess_warn_fraction * nonzero) {
+    provsql_warning(
+      "%s: posterior effective sample size low (%.1f of %u accepted); "
+      "likelihood weighting is degenerating -- raise provsql.rv_mc_samples, "
+      "or the model has many observations per latent (defer to SMC)",
+      what.c_str(), ess, static_cast<unsigned>(post.particles.size()));
+  }
+}
 
 /**
  * @brief Try to evaluate @f$E[X^k \mid A]@f$ in closed form.
@@ -1214,6 +1336,14 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
     case gate_value:
       return parseDoubleStrict(gc.getExtra(g));
     case gate_rv: {
+      // A latent (parametric) leaf -- a parameter is itself a random
+      // variable -- has no constant-parameter closed form; sample the
+      // compound leaf.  E[normal(M,1)] = E[M] etc. is exact in
+      // expectation under MC.  A leaf sharing a latent with a sibling is
+      // never reached here: its parent arith sees the overlapping
+      // footprint and routes the whole (coupled) expression to MC.
+      if (rvIsParametric(gc, g))
+        return mc_raw_moment(gc, g, 1, "Expectation of a latent gate_rv");
       auto spec = parse_distribution_spec(gc.getExtra(g));
       if (!spec)
         throw CircuitException(
@@ -1336,6 +1466,14 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
     case gate_value:
       return 0.0;
     case gate_rv: {
+      // Latent (parametric) leaf: no constant-parameter closed form.
+      // Var(normal(M,1)) = 1 + Var(M) etc. is exact in expectation under
+      // MC (the sampler draws the latent then the leaf per iteration).
+      if (rvIsParametric(gc, g)) {
+        const std::string what = "Variance of a latent gate_rv";
+        const double mu = mc_raw_moment(gc, g, 1, what);
+        return mc_central_moment(gc, g, 2, mu, what);
+      }
       auto spec = parse_distribution_spec(gc.getExtra(g));
       if (!spec)
         throw CircuitException(
@@ -1477,6 +1615,9 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
       return std::pow(parseDoubleStrict(gc.getExtra(g)),
                       static_cast<double>(k));
     case gate_rv: {
+      // Latent (parametric) leaf: no constant-parameter closed form.
+      if (rvIsParametric(gc, g))
+        return mc_raw_moment(gc, g, k, "Raw moment of a latent gate_rv");
       auto spec = parse_distribution_spec(gc.getExtra(g));
       if (!spec)
         throw CircuitException(
@@ -1629,6 +1770,16 @@ double conditional_raw_moment(const GenericCircuit &gc, gate_t root,
                               unsigned k, gate_t event_root)
 {
   if (k == 0) return 1.0;
+  /* Continuous-density evidence (latent-variable posterior): likelihood
+   * weighting.  The closed-form / rejection paths below assume a bare-rv
+   * truncation event, so they do not apply. */
+  if (circuitHasObserve(gc, event_root)) {
+    const std::string what = "Posterior raw moment";
+    auto post = importanceSampleConditional(
+                  gc, root, event_root, mc_samples_or_throw(what));
+    checkPosteriorOrThrow(post, what);
+    return weightedRawMoment(post, k);
+  }
   if (auto cf = try_truncated_closed_form(gc, root, event_root, k, false))
     return *cf;
   if (auto cf = try_rvVsRv_conditional_moment(gc, root, event_root, k, false))
@@ -1649,6 +1800,16 @@ double conditional_central_moment(const GenericCircuit &gc, gate_t root,
 {
   if (k == 0) return 1.0;
   if (k == 1) return 0.0;
+  /* Continuous-density evidence: one importance-sampling pass yields both
+   * the posterior mean and the central moment (no resampling). */
+  if (circuitHasObserve(gc, event_root)) {
+    const std::string what = "Posterior central moment";
+    auto post = importanceSampleConditional(
+                  gc, root, event_root, mc_samples_or_throw(what));
+    checkPosteriorOrThrow(post, what);
+    const double mu = weightedRawMoment(post, 1);
+    return weightedCentralMoment(post, k, mu);
+  }
   if (auto cf = try_truncated_closed_form(gc, root, event_root, k, true))
     return *cf;
   if (auto cf = try_rvVsRv_conditional_moment(gc, root, event_root, k, true))
@@ -1805,6 +1966,14 @@ double compute_quantile(const GenericCircuit &gc, gate_t root, double p,
   const double inf = std::numeric_limits<double>::infinity();
 
   if (event_root.has_value()) {
+    /* Continuous-density evidence: weighted empirical posterior quantile. */
+    if (circuitHasObserve(gc, *event_root)) {
+      const std::string what = "Posterior quantile";
+      auto post = importanceSampleConditional(
+                    gc, root, *event_root, mc_samples_or_throw(what));
+      checkPosteriorOrThrow(post, what);
+      return weightedQuantile(std::move(post), p);
+    }
     /* Bare RV under an interval event: exact truncated quantile. */
     if (auto m = matchTruncatedSingleRv(gc, root, *event_root)) {
       if (auto q = analytic_rv_quantile(m->spec, p, m->lo, m->hi))
@@ -2072,6 +2241,35 @@ Datum rv_quantile(PG_FUNCTION_ARGS)
     provsql_error("rv_quantile: %s", e.what());
   } catch (...) {
     provsql_error("rv_quantile: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+/**
+ * @brief SQL: rv_evidence(evidence uuid) -> float8
+ *
+ * The marginal likelihood @c P(data) of an evidence circuit: the mean raw
+ * importance weight over @c provsql.rv_mc_samples prior draws (the same
+ * quantity rejection conditioning computes as @c P(C), now a product of the
+ * observations' densities).  Backs @c provsql.evidence.
+ */
+Datum rv_evidence(PG_FUNCTION_ARGS)
+{
+  try {
+    pg_uuid_t *token = PG_GETARG_UUID_P(0);
+    auto gc = getGenericCircuit(*token);
+    gate_t root = gc.getGate(uuid2string(*token));
+    if (provsql_rv_mc_samples == 0)
+      provsql_error(
+        "rv_evidence: provsql.rv_mc_samples is 0 (the marginal likelihood is "
+        "estimated by Monte Carlo); set it to a positive sample budget");
+    const double e = provsql::importanceEvidence(
+      gc, root, static_cast<unsigned>(provsql_rv_mc_samples));
+    return Float8GetDatum(e);
+  } catch (const std::exception &ex) {
+    provsql_error("rv_evidence: %s", ex.what());
+  } catch (...) {
+    provsql_error("rv_evidence: unknown exception");
   }
   PG_RETURN_NULL();
 }

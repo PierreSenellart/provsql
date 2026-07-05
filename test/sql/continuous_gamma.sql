@@ -94,7 +94,7 @@ RESET provsql.monte_carlo_seed;
 \set VERBOSITY terse
 SELECT provsql.gamma(0, 1);
 SELECT provsql.gamma(1, 0);
-SELECT provsql.gamma('NaN', 1);
+SELECT provsql.gamma('NaN'::double precision, 1);
 SELECT provsql.chi_squared(-1);
 \set VERBOSITY default
 

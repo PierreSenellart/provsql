@@ -1,0 +1,11 @@
+\set ECHO none
+NOTICE:  normal_normal_mean: t
+NOTICE:  normal_normal_var: t
+NOTICE:  normal_normal_median: t
+NOTICE:  normal_normal_evidence: t
+NOTICE:  gamma_exp_mean: t
+NOTICE:  gamma_exp_var: t
+NOTICE:  posterior_predictive_mean: t
+NOTICE:  shapley_outlier_dominates: t
+NOTICE:  shapley_efficiency: t
+NOTICE:  ess_posterior_mean_ok: t

@@ -1,0 +1,25 @@
+\set ECHO none
+compound_mean_zero
+t
+(1 row)
+compound_var_ten
+t
+(1 row)
+compound_exp_rate
+t
+(1 row)
+compound_gamma_rate
+t
+(1 row)
+NOTICE:  shared_latent_coupling: t
+NOTICE:  independent_latent_uncorrelated: t
+NOTICE:  domain_guard: t
+literal_mean_exact
+t
+(1 row)
+literal_var_exact
+t
+(1 row)
+literal_gamma_mean_exact
+t
+(1 row)

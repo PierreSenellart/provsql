@@ -1,5 +1,18 @@
 # Latent variables: RV-valued distribution parameters and posterior inference
 
+**Status.** Part A (forward generative model) and Part B (likelihood-weighting
+inference, including B.5 Shapley over evidence) are **shipped**; see
+`doc/source/user/continuous-distributions.rst` (§Latent variables and posterior
+inference), `doc/source/dev/continuous-distributions.rst`, and the
+`continuous_latent` / `continuous_posterior` regression tests. The SQL surface
+is `provsql.observe` / `and_agg` / `evidence` / `shapley_observe`, the
+token-accepting constructor overloads, and the `provsql.ess_warn_fraction` GUC;
+the one new gate type is `gate_observe`. **Part C (SMC, then MCMC) remains
+deferred** and workload-gated, as below. The release-time obligations in the
+final section (upgrade script for `gate_observe` + the new functions, the
+`extension_upgrade` canary) are still outstanding and belong to the next
+release, not to this feature's development.
+
 This plan covers letting a continuous distribution's **parameters** be
 scalar provenance tokens (`gate_rv`, `agg_token`, or a `gate_arith`
 composition of them) rather than concrete `double`s, and the inference

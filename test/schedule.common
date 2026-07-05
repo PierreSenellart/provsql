@@ -191,6 +191,8 @@ test: continuous_expectation
 test: continuous_quantile
 test: continuous_mc_transparency
 test: continuous_conditioning
+test: continuous_latent
+test: continuous_posterior
 test: continuous_support
 test: continuous_hybrid
 test: continuous_rv_histogram

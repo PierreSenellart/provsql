@@ -739,7 +739,8 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
 
     if(type==gate_project || type==gate_value || type==gate_agg
        || type==gate_rv || type==gate_mulinput || type==gate_annotation
-       || type==gate_assumed || type==gate_mobius || type==gate_arith) {
+       || type==gate_assumed || type==gate_mobius || type==gate_arith
+       || type==gate_observe) {
       /* gate_assumed carries its assumption kind ('boolean' /
        * 'absorptive') in extra; gate_mobius carries its per-child integer
        * coefficients ("uuid:coeff" tokens); a gate_arith PERCENTILE

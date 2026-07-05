@@ -1097,6 +1097,90 @@ scalar readouts* :sqlfunc:`covariance` / :sqlfunc:`correlation` /
 :sqlfunc:`stddev`, which take two RV expressions from a single row
 and return ``double precision``.
 
+Latent variables and posterior inference
+----------------------------------------
+
+A distribution parameter may itself be a **random variable** (or an
+``agg_token`` cast to ``uuid``) rather than a concrete number. The
+parameter is then a *latent* variable and the leaf a **compound
+(hierarchical) distribution** -- for instance a Normal whose mean is
+drawn from a broad prior::
+
+    -- M ~ Normal(0, 10);  X ~ Normal(M, 1):  a hierarchical model.
+    SELECT provsql.expected(provsql.normal(provsql.normal(0, 10), 1));
+
+Every constructor gains token-accepting overloads for each parameter
+position (``normal(random_variable, float8)``,
+``normal(float8, random_variable)``,
+``normal(random_variable, random_variable)``, and likewise for
+``uniform``, ``exponential``, ``gamma``, ``lognormal``, ``weibull``,
+``pareto``, ``beta``, ``inverse_gamma`` and ``inverse_gaussian``). A
+literal call still resolves to the plain numeric constructor, so the
+common case is unchanged.
+
+Compound leaves have no constant-parameter closed form, so their
+moments are estimated by Monte Carlo (set ``provsql.rv_mc_samples >
+0``). A latent **shared** across several leaves couples them: two
+``normal(M, 1)`` leaves over the *same* ``M`` are positively correlated,
+which is the informal way to reproduce a correlation without a
+multivariate primitive.
+
+.. note::
+
+   A drawn parameter that violates a family's support (a sampled scale
+   or rate ``≤ 0``) raises a specific error rather than being silently
+   dropped -- dropping it would truncate the prior and bias every moment.
+   Put a positive-support prior on such a parameter (e.g. ``gamma`` /
+   ``lognormal``).
+
+**Posterior inference (likelihood weighting).** Conditioning a latent on
+observed data is *posterior inference*. :sqlfunc:`observe` binds a datum
+to a latent-dependent leaf; :sqlfunc:`and_agg` conjoins the
+per-observation evidence into one evidence token; passing that token as
+the conditioning argument of any readout reports the **posterior**::
+
+    -- Prior mu ~ Normal(0, 10); observations x_i ~ Normal(mu, 1).
+    -- Posterior mean / variance of mu given the data:
+    WITH model AS (SELECT provsql.normal(0, 10) AS mu)
+    SELECT provsql.expected(mu, ev), provsql.variance(mu, ev)
+    FROM   model,
+    LATERAL (SELECT provsql.and_agg(
+                      provsql.observe(provsql.normal(mu, 1), x)) AS ev
+             FROM (VALUES (8.0), (10.0), (12.0)) AS obs(x)) e;
+
+The engine is **self-normalised importance sampling**: latents are drawn
+from the prior and each draw is weighted by the observations' densities
+at the data. It is the continuous generalisation of the rejection-based
+conditioning of :doc:`conditioning` -- a Boolean event contributes a
+``0/1`` weight, an ``observe`` contributes a pdf weight, through the same
+evidence conjunction. All of :sqlfunc:`expected`, :sqlfunc:`variance`,
+:sqlfunc:`moment`, :sqlfunc:`quantile` and :sqlfunc:`rv_sample` gain
+posteriors with no surface change; the posterior predictive is
+``rv_sample`` on a fresh leaf that reuses the latent.
+
+:sqlfunc:`observe` binds a datum to a **bare distribution leaf** only;
+observing a derived quantity (``observe(X + Y, d)``) is out of scope (it
+needs a change-of-variables density). The observations must share the
+latent through one query so the weight and the value see the same draw.
+
+**Marginal likelihood and diagnostics.** :sqlfunc:`evidence` returns the
+marginal likelihood ``P(data)`` (the mean importance weight -- the same
+quantity conditioning computes as ``P(C)``). When many observations pin
+one latent, the weights concentrate and the posterior *effective sample
+size* collapses; a ``WARNING`` fires once the ESS falls below
+``provsql.ess_warn_fraction`` of the accepted draws (raise
+``provsql.rv_mc_samples``, or defer to sequential Monte Carlo for the
+relational regime of one latent and many rows).
+
+**Explaining the posterior (Shapley over observations).** Because the
+importance weight is a product of per-observation density factors,
+dropping an observation is dropping one factor: the Shapley value of each
+``observe`` atom over a posterior moment answers *"which observation most
+shifted my posterior"* directly. :sqlfunc:`shapley_observe` returns each
+observation's attribution (the values sum to the prior→posterior shift);
+a dominant outlier gets the largest-magnitude value. It is exact over the
+observation subsets, so it is capped at 12 observations.
+
 Studio Integration
 ------------------
 

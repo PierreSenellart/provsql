@@ -79,13 +79,22 @@ CREATE TYPE provenance_gate AS
                       -- in the measure interpretation; refused by every
                       -- general sr_* semiring (a signed combination is not a
                       -- semiring operation).
-    'case'            -- N-ary guarded selection over scalar (RV) children:
+    'case',           -- N-ary guarded selection over scalar (RV) children:
                       -- wires [guard_1, value_1, ..., guard_k, value_k,
                       -- default], first-match semantics (the value of the
                       -- first guard event that holds, else the default).
                       -- Backs a CASE expression over random variables (and
                       -- abs / clamp / ReLU as sugar).  RV/measure-carrier;
                       -- refused by every general sr_* semiring.
+    'observe'         -- Latent-variable observation (likelihood-weighting
+                      -- evidence): one wire -> an observed bare gate_rv
+                      -- leaf, the datum in extra.  Contributes a
+                      -- continuous density factor (the leaf's pdf at the
+                      -- datum) rather than a Boolean truth value,
+                      -- composing into an evidence circuit by gate_times
+                      -- exactly like a conditioning event.  Evaluated only
+                      -- by the importance-sampling weight walk; refused by
+                      -- every Boolean / semiring evaluator.
     );
 
 /** @defgroup gate_manipulation Circuit gate manipulation
@@ -3007,6 +3016,201 @@ $$
   SELECT $1 <> 'NaN'::float8 AND $1 <> 'Infinity'::float8 AND $1 <> '-Infinity'::float8;
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
+/*
+ * Latent (token-valued) distribution parameters.
+ *
+ * A distribution parameter may be a scalar provenance token -- another
+ * random_variable (or an agg_token cast to uuid) -- rather than a
+ * concrete double.  The parameter is then a random variable itself,
+ * making the leaf a compound (hierarchical) distribution: e.g.
+ * normal(M, 1) with M ~ normal(0, 10).  The token constructors below
+ * wire such parameters as children of the gate_rv, encoding each wired
+ * slot as "$i" in the extra text (a literal slot keeps its decimal text,
+ * so an all-literal call is byte-identical to the plain numeric
+ * constructor).  Only the Monte Carlo sampler resolves the wires (per
+ * iteration); every analytic path recognises the wired form and falls
+ * through to MC.
+ */
+
+/**
+ * @brief Internal: build a two-parameter latent @c gate_rv.
+ *
+ * Each parameter is supplied as EITHER a token (@p pN_tok, a scalar
+ * gate @c uuid) OR a literal (@p pN_lit); exactly one is non-NULL per
+ * parameter.  Token parameters are appended to the gate's wire vector
+ * in order and referenced as @c "$i" in the @c extra text; literal
+ * parameters keep their decimal text.  Not @c STRICT: the NULLs are the
+ * literal-vs-token sentinels.
+ */
+CREATE OR REPLACE FUNCTION rv_parametric2(
+    family text,
+    p1_tok uuid, p1_lit double precision,
+    p2_tok uuid, p2_lit double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+  wires uuid[] := ARRAY[]::uuid[];
+  s1 text;
+  s2 text;
+BEGIN
+  IF p1_tok IS NOT NULL THEN
+    wires := wires || p1_tok;
+    s1 := '$' || (array_length(wires, 1) - 1);
+  ELSE
+    IF NOT provsql.is_finite_float8(p1_lit) THEN
+      RAISE EXCEPTION 'provsql.%: literal parameter must be finite (got %)',
+        family, p1_lit;
+    END IF;
+    s1 := p1_lit::text;
+  END IF;
+  IF p2_tok IS NOT NULL THEN
+    wires := wires || p2_tok;
+    s2 := '$' || (array_length(wires, 1) - 1);
+  ELSE
+    IF NOT provsql.is_finite_float8(p2_lit) THEN
+      RAISE EXCEPTION 'provsql.%: literal parameter must be finite (got %)',
+        family, p2_lit;
+    END IF;
+    s2 := p2_lit::text;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', wires);
+  PERFORM provsql.set_extra(token, family || ':' || s1 || ',' || s2);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Internal: build a one-parameter latent @c gate_rv (rate/scale).
+ */
+CREATE OR REPLACE FUNCTION rv_parametric1(family text, p_tok uuid)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', ARRAY[p_tok]);
+  PERFORM provsql.set_extra(token, family || ':$0');
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/*
+ * Token-accepting constructor overloads.  For each numeric family the
+ * three mixed-arity forms (token, literal), (literal, token), (token,
+ * token) let any parameter be a random_variable; an agg_token parameter
+ * is passed as @c (agg)::uuid::random_variable.  The all-literal call
+ * still resolves to the plain numeric constructor (an exact match beats
+ * the implicit numeric->random_variable cast), so the literal fast path
+ * is unchanged.  STRICT: a NULL parameter yields a NULL random_variable.
+ */
+
+-- normal(mu, sigma)
+CREATE OR REPLACE FUNCTION normal(mu random_variable, sigma double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION normal(mu double precision, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION normal(mu random_variable, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- uniform(a, b)
+CREATE OR REPLACE FUNCTION uniform(a random_variable, b double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION uniform(a double precision, b random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION uniform(a random_variable, b random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- exponential(lambda)
+CREATE OR REPLACE FUNCTION exponential(lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric1('exponential', ($1)::uuid); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- gamma(k, lambda)
+CREATE OR REPLACE FUNCTION gamma(k random_variable, lambda double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION gamma(k double precision, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION gamma(k random_variable, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- lognormal(mu, sigma)
+CREATE OR REPLACE FUNCTION lognormal(mu random_variable, sigma double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION lognormal(mu double precision, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION lognormal(mu random_variable, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- weibull(k, lambda)
+CREATE OR REPLACE FUNCTION weibull(k random_variable, lambda double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION weibull(k double precision, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION weibull(k random_variable, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- pareto(xm, alpha)
+CREATE OR REPLACE FUNCTION pareto(xm random_variable, alpha double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION pareto(xm double precision, alpha random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION pareto(xm random_variable, alpha random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- beta(alpha, beta)
+CREATE OR REPLACE FUNCTION beta(alpha random_variable, beta double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION beta(alpha double precision, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION beta(alpha random_variable, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- inverse_gamma(alpha, beta)
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha random_variable, beta double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha double precision, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha random_variable, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- inverse_gaussian(mu, lambda)
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu random_variable, lambda double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu double precision, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu random_variable, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
 /**
  * @brief Construct a normal-distribution random variable
  *
@@ -4930,6 +5134,235 @@ $$
     ELSE prov
   END;
 $$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/*
+ * Latent-variable posterior inference.
+ *
+ * Likelihood weighting (self-normalised importance sampling): bind an
+ * observed datum to a latent-dependent random-variable leaf with observe,
+ * conjoin the per-observation evidence with and_agg into a single evidence
+ * token, and pass it as the prov conditioning argument of any moment /
+ * quantile / sample readout.  Latents are drawn from the prior (the
+ * existing forward recursion) and each draw is weighted by the observed
+ * leaves' densities at the data; the readouts then report the posterior.
+ * It is the continuous generalisation of the rejection-based conditioning:
+ * a Boolean event in the evidence contributes a 0/1 weight, an observe
+ * contributes a pdf weight -- same evidence conjunction, same
+ * "P(query AND evidence)/P(evidence)" normaliser, now weighted.
+ */
+
+/**
+ * @brief Bind an observed datum to a random-variable leaf: @c observe(X, d).
+ *
+ * @p x MUST be a bare @c gate_rv leaf (typically a latent-parameterised
+ * one, e.g. @c normal(mu, 1) sharing a latent @c mu across rows).
+ * Returns an @b evidence uuid -- a @c gate_observe wrapping the leaf with
+ * the datum in @c extra -- that composes with other evidence through
+ * @c and_agg (a @c gate_times conjunction) and is consumed by the
+ * importance-sampling weight walk, contributing the factor @c f_X(d).
+ *
+ * A fresh gate is minted per call (each observation is a distinct
+ * evidence atom, so a repeated @c (leaf, datum) contributes its density
+ * factor once per row -- and each is a separate Shapley atom).  Observing
+ * a derived quantity (@c observe(X+Y, d)) is out of scope: it needs a
+ * change-of-variables density; a non-leaf argument is refused.
+ */
+CREATE OR REPLACE FUNCTION observe(x random_variable, datum double precision)
+  RETURNS uuid AS
+$$
+DECLARE
+  leaf uuid := (x)::uuid;
+  result uuid;
+BEGIN
+  IF provsql.get_gate_type(leaf) <> 'rv' THEN
+    RAISE EXCEPTION 'provsql.observe: the argument must be a bare '
+      'random-variable leaf (a gate_rv), got a % gate', provsql.get_gate_type(leaf)
+      USING HINT = 'observe binds a datum to a single distribution leaf; '
+        'observing a derived quantity (a sum, product, or comparison) needs '
+        'a change-of-variables density and is out of scope.';
+  END IF;
+  IF NOT provsql.is_finite_float8(datum) THEN
+    RAISE EXCEPTION 'provsql.observe: datum must be finite (got %)', datum;
+  END IF;
+  result := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(result, 'observe', ARRAY[leaf]);
+  PERFORM provsql.set_extra(result, datum::text);
+  RETURN result;
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Conjunction state function for @c and_agg (evidence @c gate_times).
+ *
+ * Not @c STRICT: @c provenance_times maps a @c NULL operand to the times
+ * neutral, so an empty group leaves the state @c NULL (no evidence) and a
+ * first row seeds it with that row's evidence.
+ */
+CREATE OR REPLACE FUNCTION and_agg_sfunc(state uuid, ev uuid)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_times(state, ev);
+$$ LANGUAGE sql PARALLEL SAFE;
+
+/**
+ * @brief Conjoin per-row evidence tokens into one evidence circuit.
+ *
+ * The evidence-conjunction counterpart used to fold one @c observe (or any
+ * Boolean conditioning event) per row into a single @c gate_times root, to
+ * be passed as the @c prov argument of the moment / quantile / sample
+ * readouts.  An empty group yields @c NULL (no evidence).
+ */
+CREATE OR REPLACE AGGREGATE and_agg(uuid) (
+  SFUNC = and_agg_sfunc,
+  STYPE = uuid
+);
+
+/**
+ * @brief Marginal likelihood @c P(data) of an evidence circuit.
+ *
+ * The mean raw importance weight over @c provsql.rv_mc_samples prior draws
+ * -- the same quantity rejection conditioning computes as @c P(C), now the
+ * product of the observations' densities.  @p evidence is an @c and_agg
+ * conjunction of @c observe tokens (and/or Boolean events).
+ */
+CREATE OR REPLACE FUNCTION evidence(evidence uuid)
+  RETURNS double precision
+  AS 'provsql','rv_evidence' LANGUAGE C STRICT PARALLEL SAFE;
+
+/**
+ * @brief The @c observe atoms of an evidence circuit.
+ *
+ * Collects every @c gate_observe leaf reachable through the @c gate_times
+ * conjunction spine (the shape @c and_agg builds -- a possibly left-nested
+ * tree, since @c provenance_times does not flatten).  Used by
+ * @c shapley_observe to recover the flat observation set regardless of the
+ * conjunction's nesting.
+ */
+CREATE OR REPLACE FUNCTION observe_atoms(evidence uuid)
+  RETURNS uuid[] AS
+$$
+  WITH RECURSIVE walk(tok) AS (
+    SELECT evidence
+    UNION
+    SELECT c
+    FROM walk, LATERAL unnest(provsql.get_children(walk.tok)) AS c
+    WHERE provsql.get_gate_type(walk.tok) = 'times'
+  )
+  SELECT array_agg(tok ORDER BY tok)
+  FROM walk
+  WHERE provsql.get_gate_type(tok) = 'observe';
+$$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief Shapley attribution of each observation to a posterior moment.
+ *
+ * "Which observation most shifted my posterior?"  Because the importance
+ * weight is a product of per-observation density factors, dropping an
+ * observation is dropping one factor: the classical Shapley value of each
+ * @c gate_observe atom over the coalitional value function
+ * @c "v(S) = payoff(target | observations in S)" is the attribution, a
+ * byproduct of the same likelihood-weighting machinery (see the
+ * explainable-inference angle in the continuous-distributions notes).
+ *
+ * @p target is the latent (its @c uuid); @p evidence is the @c and_agg
+ * conjunction of @c observe atoms; @p payoff is @c 'expected' or
+ * @c 'variance'.  Returns each observation atom with its Shapley value; the
+ * values sum to @c "payoff(target | all data) - payoff(target)" (Shapley
+ * efficiency: the total shift from prior to posterior).
+ *
+ * Exact enumeration over the @c 2^n observation subsets, so it is capped at
+ * @c n = 12 observations (sampling-based attribution for larger sets is
+ * future work); pin @c provsql.monte_carlo_seed so the coalitional value
+ * functions share common random numbers (lower-variance differences).
+ */
+CREATE OR REPLACE FUNCTION shapley_observe(
+    target uuid, evidence uuid, payoff text DEFAULT 'expected')
+  RETURNS TABLE(observation uuid, value double precision) AS
+$$
+DECLARE
+  atoms uuid[];
+  n int;
+  nmasks int;
+  pv double precision[];
+  popc int[];
+  fact double precision[];
+  mask int;
+  i int;
+  j int;
+  cnt int;
+  subset uuid[];
+  ev_s uuid;
+  sh double precision;
+  bit int;
+  s_size int;
+BEGIN
+  IF payoff NOT IN ('expected', 'variance') THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: payoff must be ''expected'' or '
+      '''variance'' (got %)', payoff;
+  END IF;
+  atoms := provsql.observe_atoms(evidence);
+  n := coalesce(array_length(atoms, 1), 0);
+  IF n = 0 THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: evidence contains no observe() '
+      'atoms (got a % gate)', provsql.get_gate_type(evidence);
+  END IF;
+  IF n > 12 THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: exact attribution over % '
+      'observations is exponential; capped at 12 (sampling-based '
+      'attribution is future work)', n;
+  END IF;
+
+  -- factorials 0!..n!  (fact[k+1] = k!)
+  fact := ARRAY[1::double precision];
+  FOR i IN 1..n LOOP fact := fact || (fact[i] * i); END LOOP;
+
+  nmasks := (1 << n);
+  pv   := array_fill(NULL::double precision, ARRAY[nmasks]);
+  popc := array_fill(0, ARRAY[nmasks]);
+
+  -- Payoff value function for every subset of observations.
+  FOR mask IN 0 .. nmasks - 1 LOOP
+    subset := ARRAY[]::uuid[];
+    cnt := 0;
+    FOR i IN 0 .. n - 1 LOOP
+      IF (mask >> i) & 1 = 1 THEN
+        subset := subset || atoms[i + 1];
+        cnt := cnt + 1;
+      END IF;
+    END LOOP;
+    popc[mask + 1] := cnt;
+    IF cnt = 0 THEN
+      ev_s := provsql.gate_one();              -- prior (no evidence)
+    ELSE
+      ev_s := provsql.provenance_times(VARIADIC subset);
+    END IF;
+    IF payoff = 'expected' THEN
+      pv[mask + 1] := provsql.rv_moment(target, 1, false, ev_s);
+    ELSE
+      pv[mask + 1] := provsql.rv_moment(target, 2, true, ev_s);
+    END IF;
+  END LOOP;
+
+  -- Shapley value of each observation atom.
+  FOR i IN 0 .. n - 1 LOOP
+    sh := 0;
+    bit := (1 << i);
+    FOR mask IN 0 .. nmasks - 1 LOOP
+      IF (mask >> i) & 1 = 0 THEN               -- subsets S not containing i
+        s_size := popc[mask + 1];
+        -- weight |S|! (n-|S|-1)! / n!
+        sh := sh + (fact[s_size + 1] * fact[n - s_size] / fact[n + 1])
+                 * (pv[(mask | bit) + 1] - pv[mask + 1]);
+      END IF;
+    END LOOP;
+    observation := atoms[i + 1];
+    value := sh;
+    RETURN NEXT;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 /**
  * @name Order statistics over random_variable

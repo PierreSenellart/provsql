@@ -79,6 +79,23 @@ rv_sample(PG_FUNCTION_ARGS)
     std::vector<double> samples;
     if (conditional) {
       const gate_t event = *event_opt;
+      /* Continuous-density evidence (latent-variable posterior): draw
+       * latents from the prior, weight by the observations' densities,
+       * and resample n posterior draws (SIR).  Posterior predictive is
+       * rv_sample on a fresh leaf that reuses the same latent. */
+      if (provsql::circuitHasObserve(gc, event)) {
+        const unsigned budget =
+          provsql_rv_mc_samples > 0
+            ? static_cast<unsigned>(provsql_rv_mc_samples) : 1000u * n;
+        auto post =
+          provsql::importanceSampleConditional(gc, root_gate, event, budget);
+        if (post.particles.empty() || post.weight_sum <= 0.0)
+          provsql_error(
+            "rv_sample: evidence is infeasible (no positive-weight draw "
+            "among %u Monte Carlo samples); the observations may contradict "
+            "the prior, or raise provsql.rv_mc_samples", budget);
+        samples = provsql::posteriorResample(post, n);
+      } else {
       /* Closed-form truncation fast path: when the root is a bare
        * gate_rv of a supported family (Uniform / Normal / Exponential)
        * and the event reduces to a single interval on it, we draw
@@ -111,6 +128,7 @@ rv_sample(PG_FUNCTION_ARGS)
                           cs.accepted.size(), cs.attempted)));
         }
         samples = std::move(cs.accepted);
+      }
       }
     } else {
       samples = provsql::monteCarloScalarSamples(gc, root_gate, n);

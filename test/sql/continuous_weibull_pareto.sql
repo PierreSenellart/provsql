@@ -124,7 +124,7 @@ RESET provsql.monte_carlo_seed;
 -- (14) Constructor validation.
 \set VERBOSITY terse
 SELECT provsql.weibull(0, 1);
-SELECT provsql.weibull(1, 'Infinity');
+SELECT provsql.weibull(1, 'Infinity'::double precision);
 SELECT provsql.pareto(-1, 2);
 SELECT provsql.pareto(1, 0);
 \set VERBOSITY default

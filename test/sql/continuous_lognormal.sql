@@ -107,7 +107,7 @@ RESET provsql.monte_carlo_seed;
 -- (9) Constructor validation; σ=0 routes through as_random (a Dirac at
 -- e^μ, sharing the constant's gate).
 \set VERBOSITY terse
-SELECT provsql.lognormal('NaN', 1);
+SELECT provsql.lognormal('NaN'::double precision, 1);
 SELECT provsql.lognormal(0, -1);
 \set VERBOSITY default
 SELECT (provsql.lognormal(1, 0))::uuid = (provsql.as_random(exp(1.0)))::uuid

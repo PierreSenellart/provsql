@@ -76,6 +76,7 @@ typedef enum gate_type {
   gate_conditioned, ///< Conditioning marker with two children [target, evidence]: measure-only, @c probability_evaluate returns P(target ∧ evidence)/P(evidence) and the RV / agg_token evaluators the restricted distribution; for the uuid carrier a TERMINAL gate (never a semiring child), nested conditioning folding into a conjunction of evidence; refused by every general @c sr_* semiring (normalization is not a semiring operation).
   gate_mobius, ///< Signed Möbius combination: a MEASURE-only gate carrying one integer coefficient per child (in @c extra, the @c gate_arith precedent), @c probability_evaluate returns Σ_i coeff_i · P(child_i); the one new primitive of the safe-UCQ Möbius-inversion route (see @c MobiusCompiler.h), with certified-independent Boolean islands below it; refused by every general @c sr_* semiring (a signed combination is not a semiring operation).
   gate_case, ///< N-ary guarded selection over scalar (RV) children: wires are [guard_1, value_1, ..., guard_k, value_k, default] (odd length 2k+1), first-match semantics -- the value of the first guard (a Boolean @c gate_cmp / event) that holds, else the default. Carries data only in its wires (the @c gate_conditioned precedent: no @c info / @c extra). RV/measure-carrier: a real arm in the MC sampler / RangeCheck / Expectation footprint, refused by every general @c sr_* semiring (a guarded selection is not a semiring operation).
+  gate_observe, ///< Latent-variable observation (likelihood-weighting evidence): one wire → an observed bare @c gate_rv leaf, the datum in @c extra. Contributes a continuous density factor (the leaf's pdf at the datum) instead of a Boolean truth value, composing into an evidence circuit by @c gate_times exactly like a conditioning event. Evaluated only by the importance-sampling weight walk (@c Sampler::evalWeight); refused by every Boolean / semiring evaluator (a density factor is not a semiring operation).
   gate_invalid,  ///< Invalid gate type
   nb_gate_types  ///< Total number of gate types
 } gate_type;
@@ -445,6 +446,13 @@ extern int provsql_monte_carlo_seed;
  * than sampling.  Useful for callers that want to guarantee
  * analytical-only evaluation. */
 extern int provsql_rv_mc_samples;
+
+/* Effective-sample-size warning threshold for likelihood-weighting posterior
+ * inference (@c provsql.ess_warn_fraction; default 0.1).  A readout over
+ * @c gate_observe evidence warns when the posterior ESS falls below this
+ * fraction of the accepted draws (the weights are degenerating).  0 silences
+ * the warning. */
+extern double provsql_ess_warn_fraction;
 
 /* Debug/safety hard cap on d-tree subproblems before the method bails to the
  * next (0 = off).  The chooser auto-budgets the d-tree at the next-best

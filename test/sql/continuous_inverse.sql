@@ -115,7 +115,7 @@ DROP TABLE inverse_sensors;
 -- (12) Constructor validation.
 \set VERBOSITY terse
 SELECT provsql.inverse_gamma(0, 1);
-SELECT provsql.inverse_gamma(1, 'Infinity');
+SELECT provsql.inverse_gamma(1, 'Infinity'::double precision);
 SELECT provsql.inverse_gaussian(-1, 2);
 SELECT provsql.inverse_gaussian(1, 0);
 SELECT provsql.wald(2, -1);

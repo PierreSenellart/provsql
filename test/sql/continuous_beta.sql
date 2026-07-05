@@ -65,7 +65,7 @@ SELECT provsql.get_extra((provsql.beta(1, 1))::uuid) = 'uniform:0,1'
 \set VERBOSITY terse
 SELECT provsql.beta(0, 1);
 SELECT provsql.beta(2, -1);
-SELECT provsql.beta('NaN', 2);
+SELECT provsql.beta('NaN'::double precision, 2);
 \set VERBOSITY default
 
 -- (9) The family registry lists it (Studio renders it with no client

@@ -97,6 +97,7 @@ char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit:
 char *provsql_kcmcp_server = NULL; ///< Launch command for the managed KCMCP server (with a @c {endpoint} placeholder); controlled by the @c provsql.kcmcp_server GUC. Empty means no managed server is launched.
 int provsql_monte_carlo_seed = -1; ///< Seed for the Monte Carlo sampler; -1 means non-deterministic (std::random_device); controlled by the @c provsql.monte_carlo_seed GUC
 int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-evaluator MC fallbacks; 0 disables fallback (callers raise instead); controlled by the @c provsql.rv_mc_samples GUC
+double provsql_ess_warn_fraction = 0.1; ///< Effective-sample-size warning threshold for likelihood weighting: warn when the posterior ESS falls below this fraction of the accepted draws; controlled by the @c provsql.ess_warn_fraction GUC
 int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subproblems before it bails (0 = off; the chooser auto-budgets at the next-best method's cost regardless); @c provsql.dtree_max_subproblems GUC
 int provsql_joint_max_treewidth = 10; ///< Maximum joint treewidth the joint-width UCQ compiler attempts before declining (caller falls back to the ladder); @c provsql.joint_max_treewidth GUC
 int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joint-width UCQ compiler (the true safety net); @c provsql.joint_max_states GUC
@@ -15175,6 +15176,26 @@ void _PG_init(void) {
                           10000,
                           0,
                           INT_MAX,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+
+  DefineCustomRealVariable("provsql.ess_warn_fraction",
+                          "Effective-sample-size warning threshold for likelihood weighting.",
+                          "Latent-variable posterior inference draws latents from "
+                          "the prior and weights them by the observed leaves' "
+                          "densities. When the posterior effective sample size "
+                          "(Sum(w)^2 / Sum(w^2)) falls below this fraction of the "
+                          "accepted draws, a warning is emitted: the weights are "
+                          "degenerating (raise provsql.rv_mc_samples, or the model "
+                          "has many observations per latent). Default 0.1; set to 0 "
+                          "to silence the warning.",
+                          &provsql_ess_warn_fraction,
+                          0.1,
+                          0.0,
+                          1.0,
                           PGC_USERSET,
                           0,
                           NULL,

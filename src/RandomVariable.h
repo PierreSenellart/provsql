@@ -42,6 +42,58 @@ struct DistributionSpec {
 };
 
 /**
+ * @brief One parameter slot of a @c gate_rv, either a literal or a wire.
+ *
+ * A latent-variable @c gate_rv (see the "Latent variables" surface)
+ * lets a distribution parameter be a scalar provenance token rather
+ * than a concrete double: the parameter is then a random variable
+ * itself, making the leaf a compound (hierarchical) distribution.  In
+ * the on-disk @c extra text a wired slot is written @c "$i" (0-based
+ * index into the gate's wire vector); a literal slot keeps its decimal
+ * text as before.  When @c wire_slot @c < @c 0 the slot is the literal
+ * @c literal; otherwise it is resolved from @c wires[wire_slot] at
+ * evaluation time.
+ */
+struct DistributionParam {
+  double literal;    ///< Value when @c wire_slot < 0.
+  int    wire_slot;  ///< >= 0: resolve from the gate's @c wires[wire_slot].
+};
+
+/**
+ * @brief A @c gate_rv distribution spec that may carry wired (token)
+ *        parameters -- the parse-time counterpart of @c DistributionSpec.
+ *
+ * @c DistributionSpec stays the fully-resolved @c {family, double, double}
+ * form every analytic call site consumes; this parallel template keeps the
+ * per-slot literal-or-wire distinction so the Monte Carlo sampler can
+ * resolve wired parameters per iteration.  @c parametric() is true when any
+ * slot is wired -- the signal every analytic path uses to fall through to
+ * Monte Carlo (a compound leaf has no constant-parameter closed form).
+ */
+struct DistributionTemplate {
+  const DistributionFamily *family;
+  DistributionParam p1, p2;
+  /// True iff any parameter is a wire reference (a compound / latent leaf).
+  bool parametric() const { return p1.wire_slot >= 0 || p2.wire_slot >= 0; }
+};
+
+/**
+ * @brief Parse the on-disk text encoding of a @c gate_rv distribution,
+ *        keeping wired (token) parameters as wire references.
+ *
+ * Accepts the same family tokens as @c parse_distribution_spec, but a
+ * parameter may be either a decimal literal or a wire reference @c "$i"
+ * (0-based index into the gate's wire vector).  The literal form is
+ * byte-identical to the pre-latent encoding, so an all-literal spec
+ * round-trips unchanged.
+ *
+ * @param s The byte string read from @c MMappedCircuit::getExtra.
+ * @return The parsed template, or @c std::nullopt on malformed input.
+ */
+std::optional<DistributionTemplate>
+parse_distribution_template(const std::string &s);
+
+/**
  * @brief Parse the on-disk text encoding of a @c gate_rv distribution.
  *
  * Accepts <tt>"normal:μ,σ"</tt>, <tt>"uniform:a,b"</tt>,
@@ -50,7 +102,10 @@ struct DistributionSpec {
  * Whitespace around the kind name and parameters is tolerated.
  *
  * @param s The byte string read from @c MMappedCircuit::getExtra.
- * @return The parsed spec, or @c std::nullopt on malformed input.
+ * @return The parsed spec, or @c std::nullopt on malformed input @b or
+ *         when any parameter is a wire reference (a compound / latent
+ *         leaf, which has no constant-parameter closed form -- use
+ *         @c parse_distribution_template for that case).
  */
 std::optional<DistributionSpec> parse_distribution_spec(const std::string &s);
 

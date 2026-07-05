@@ -75,6 +75,7 @@ const char *gate_type_name[] = {
   "conditioned",
   "mobius",
   "case",
+  "observe",
   "invalid"
 };
 
@@ -755,6 +756,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   GET_GATE_TYPE_OID_OPTIONAL(conditioned);
   GET_GATE_TYPE_OID_OPTIONAL(mobius);
   GET_GATE_TYPE_OID_OPTIONAL(case);
+  GET_GATE_TYPE_OID_OPTIONAL(observe);
 
   constants.ok=true;
 
