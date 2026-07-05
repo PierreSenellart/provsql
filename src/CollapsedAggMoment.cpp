@@ -119,6 +119,76 @@ double evalWithVar(const GenericCircuit &gc, gate_t g, gate_t var, double val)
   }
 }
 
+/// Resolve @p g to an affine form `slope·var + intercept` over the same ops
+/// @c evalWithVar handles, or std::nullopt when it is not affine in @p var
+/// (a genuinely non-linear b-dependence, or an unsupported gate).  A structural
+/// (not sampled) decomposition, so it never mis-classifies a non-linear link.
+/// In a shared-side link expression the only rv leaf present is @p var, so a
+/// @c gate_rv other than @p var cannot occur (it declines defensively anyway).
+std::optional<std::pair<double, double>>
+affineInVar(const GenericCircuit &gc, gate_t g, gate_t var)
+{
+  using R = std::optional<std::pair<double, double>>;
+  switch (gc.getGateType(g)) {
+    case gate_rv:
+      return (g == var) ? R({1.0, 0.0}) : std::nullopt;
+    case gate_value:
+      try { return R({0.0, parseDoubleStrict(gc.getExtra(g))}); }
+      catch (const CircuitException &) { return std::nullopt; }
+    case gate_arith: {
+      const auto op = static_cast<provsql_arith_op>(gc.getInfos(g).first);
+      const auto &w = gc.getWires(g);
+      switch (op) {
+        case PROVSQL_ARITH_PLUS: {
+          double s = 0.0, c = 0.0;
+          for (gate_t ch : w) {
+            auto a = affineInVar(gc, ch, var);
+            if (!a) return std::nullopt;
+            s += a->first; c += a->second;
+          }
+          return R({s, c});
+        }
+        case PROVSQL_ARITH_TIMES: {
+          double s = 0.0, c = 1.0;   // running affine product (starts at 1)
+          for (gate_t ch : w) {
+            auto a = affineInVar(gc, ch, var);
+            if (!a) return std::nullopt;
+            // (s·x + c)·(a.s·x + a.c) is affine only if a factor is constant.
+            if (s != 0.0 && a->first != 0.0) return std::nullopt;
+            const double ns = s * a->second + c * a->first;
+            c = c * a->second;
+            s = ns;
+          }
+          return R({s, c});
+        }
+        case PROVSQL_ARITH_MINUS: {
+          if (w.size() != 2) return std::nullopt;
+          auto a = affineInVar(gc, w[0], var), b = affineInVar(gc, w[1], var);
+          if (!a || !b) return std::nullopt;
+          return R({a->first - b->first, a->second - b->second});
+        }
+        case PROVSQL_ARITH_NEG: {
+          if (w.size() != 1) return std::nullopt;
+          auto a = affineInVar(gc, w[0], var);
+          if (!a) return std::nullopt;
+          return R({-a->first, -a->second});
+        }
+        case PROVSQL_ARITH_DIV: {
+          if (w.size() != 2) return std::nullopt;
+          auto a = affineInVar(gc, w[0], var), b = affineInVar(gc, w[1], var);
+          if (!a || !b) return std::nullopt;
+          if (b->first != 0.0 || b->second == 0.0) return std::nullopt;
+          return R({a->first / b->second, a->second / b->second});
+        }
+        default:
+          return std::nullopt;
+      }
+    }
+    default:
+      return std::nullopt;
+  }
+}
+
 /// One recognised per-row term: q_i(b) = bern · Pr[eps_i op_i g_i(b)].
 struct Term {
   const DistributionFamily *family;  ///< eps_i family (for the CDF)
@@ -127,6 +197,15 @@ struct Term {
   ComparisonOperator op;             ///< comparison, oriented "eps_i op g_i"
   double bern;                       ///< product of the constant Bernoulli inputs
   double value;                      ///< v_i (1 for COUNT; the summed value for SUM)
+
+  // Precomputed, b-invariant, so the O(G·n) grid loop touches no gate: the
+  // eps_i distribution is built once (its parameters are constant), and the
+  // shared-side link g_i(b) is resolved to an affine form slope·b + intercept
+  // whenever it is affine in the shared latent (the common alpha_i + b link),
+  // sparing the per-node evalWithVar walk and its std::map gate lookups.
+  std::shared_ptr<Distribution> dist;  ///< family->factory(p1, p2), cached
+  bool   affine = false;               ///< g_i(b) = slope·b + intercept
+  double slope = 0.0, intercept = 0.0; ///< valid iff affine
 };
 
 /// The recognised collapse: the shared latent, its distribution and quadrature
@@ -271,8 +350,16 @@ buildCollapsePlan(const GenericCircuit &gc, gate_t agg)
 
     auto spec = parse_distribution_spec(gc.getExtra(per_row));
     if (!spec) return std::nullopt;
-    terms.push_back({spec->family, spec->p1, spec->p2, shared_side, op,
-                     r.bern, r.value});
+    Term term{spec->family, spec->p1, spec->p2, shared_side, op,
+              r.bern, r.value};
+    term.dist = std::shared_ptr<Distribution>(
+                  spec->family->factory(spec->p1, spec->p2));
+    if (auto aff = affineInVar(gc, shared_side, shared)) {
+      term.affine = true;
+      term.slope = aff->first;
+      term.intercept = aff->second;
+    }
+    terms.push_back(std::move(term));
   }
 
   CollapsePlan plan;
@@ -317,10 +404,11 @@ bool perNodeProbs(const GenericCircuit &gc, const CollapsePlan &plan,
   q.clear();
   q.reserve(plan.terms.size());
   for (const auto &t : plan.terms) {
-    const double c = evalWithVar(gc, t.shared_side, plan.shared, b);
+    // Affine links resolve with no gate access; the rest keep the walk.
+    const double c = t.affine ? std::fma(t.slope, b, t.intercept)
+                              : evalWithVar(gc, t.shared_side, plan.shared, b);
     if (std::isnan(c)) return false;
-    auto dist = t.family->factory(t.p1, t.p2);
-    double F = dist->cdf(c);
+    double F = t.dist->cdf(c);
     if (std::isnan(F)) return false;
     if (F < 0.0) F = 0.0; else if (F > 1.0) F = 1.0;
     double qi;
