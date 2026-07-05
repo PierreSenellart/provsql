@@ -1,0 +1,7 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+NOTICE:  gamma_poisson_posterior_mean_exact: t
+NOTICE:  gamma_poisson_posterior_var_positive: t
+NOTICE:  beta_negbinom_posterior_mean_exact: t

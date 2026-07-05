@@ -11,6 +11,7 @@
 #include "BooleanCircuit.h"
 #include "Circuit.h"
 #include "CircuitFromMMap.h"
+#include "CollapsedAggMoment.h"    // collapsedConditionalMoment
 #include "ComparatorResolution.h"  // resolveComparators
 #include "ProbabilityMethod.h"     // booleanSubcircuitProbability
 #include "MonteCarloSampler.h"
@@ -1821,6 +1822,13 @@ double conditional_raw_moment(const GenericCircuit &gc, gate_t root,
                               unsigned k, gate_t event_root)
 {
   if (k == 0) return 1.0;
+  /* Collapsed exact posterior: a latent conditioned on a discrete rv over it
+   * equalling a correlated COUNT (Y(R) = C).  Rao-Blackwellises the count to a
+   * pmf by 1-D quadrature over its shared latent, then closes the R posterior
+   * by a second 1-D quadrature -- replacing the degenerating rejection sampler
+   * with an exact quadrature.  Declines (nullopt) on any shape mismatch. */
+  if (auto cf = collapsedConditionalMoment(gc, root, event_root, k))
+    return *cf;
   /* Continuous-density evidence (latent-variable posterior): likelihood
    * weighting.  The closed-form / rejection paths below assume a bare-rv
    * truncation event, so they do not apply. */
@@ -1851,6 +1859,13 @@ double conditional_central_moment(const GenericCircuit &gc, gate_t root,
 {
   if (k == 0) return 1.0;
   if (k == 1) return 0.0;
+  /* Collapsed exact posterior variance from the collapsed raw moments
+   * (Var = E[R^2|C] - E[R|C]^2); declines together with the mean. */
+  if (k == 2) {
+    auto m1 = collapsedConditionalMoment(gc, root, event_root, 1);
+    auto m2 = collapsedConditionalMoment(gc, root, event_root, 2);
+    if (m1 && m2) return *m2 - (*m1) * (*m1);
+  }
   /* Continuous-density evidence: one importance-sampling pass yields both
    * the posterior mean and the central moment (no resampling). */
   if (circuitHasObserve(gc, event_root)) {
