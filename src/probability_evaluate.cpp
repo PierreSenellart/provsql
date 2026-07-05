@@ -71,6 +71,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "StructuredDNNF.h"
 #include "DTree.h"
 #include "ProbabilityMethod.h"
+#include "ComparatorResolution.h"
 #include "having_semantics.hpp"
 #include "provsql_mmap.h"
 #include "safe_query_cert.h"
@@ -2040,153 +2041,14 @@ static Datum probability_evaluate_internal
     }
   }
 
-  // Hybrid-evaluator simplifier: constant-fold gate_arith subtrees,
-  // drop identity wires (0 from PLUS, 1 from TIMES), and collapse
-  // PLUS over independent normals or i.i.d. exponentials into a
-  // single gate_rv with the closed-form distribution.  Gated by
-  // provsql.hybrid_evaluation (default on) so the unfolded DAG can
-  // still be exercised end-to-end through the MC fallback during
-  // A/B-testing.  Runs before AnalyticEvaluator so newly-bare normal
-  // / Erlang leaves unlock the closed-form CDF on the surrounding
-  // cmp gate.  Runs before a re-pass of RangeCheck so that the
-  // joint-conjunction pass also benefits from constant folding
-  // (e.g. a cmp's `arith(NEG, value:100)` operand becomes a bare
-  // `value:-100` that the asRvVsConstCmp shape match accepts).
-  if (provsql_hybrid_evaluation) {
-    provsql::runHybridSimplifier(gc);
-    provsql::runRangeCheck(gc);
-  }
-
-  // Hybrid-evaluator island decomposer: handles continuous-island
-  // comparators by grouping them via base-RV footprint overlap.
-  // Multi-cmp shared-island groups get a joint-distribution table
-  // inlined as a mulinput block - via the monotone-shared-scalar
-  // fast path (k+1 mulinputs; interval probabilities exact via
-  // cdfAt when the shared scalar is a bare gate_rv, MC binning over
-  // k+1 intervals when it is a gate_arith composite) when all cmps
-  // share an lhs gate_t and have gate_value rhs, falling through to
-  // the generic 2^k MC joint table otherwise.  Singleton bare-RV
-  // cmps are left for AnalyticEvaluator (closed-form CDF on its own
-  // is cheaper than per-cmp MC); singleton gate_arith cmps get a
-  // per-cmp MC marginalisation here.  Either way the rewritten
-  // cmps become gate_plus over mulinputs (or gate_input
-  // Bernoullis), so the surrounding circuit is purely Boolean for
-  // the downstream pass.
-  //
-  // Runs BEFORE AnalyticEvaluator so shared bare-RV cmps reach the
-  // grouping logic - AnalyticEvaluator would otherwise resolve each
-  // independently into a Bernoulli, silently using the independence
-  // approximation on shared base RVs.  The trade-off: the fast
-  // path's mulinput block is a dependent circuit that
-  // BooleanCircuit::independentEvaluation rejects when the cmps
-  // combine via AND ('Not an independent circuit').  Callers that
-  // need shared-island dependence handling must use
-  // 'tree-decomposition' / 'monte-carlo' / external compilation;
-  // 'independent' remains correct only for circuits that ARE
-  // independent.
-  if (provsql_hybrid_evaluation) {
-    provsql::runHybridDecomposer(
-      gc, static_cast<unsigned>(provsql_rv_mc_samples));
-  }
-
-  // Probability-specific peephole: AnalyticEvaluator decides any
-  // residual continuous-RV comparators the decomposer left alone
-  // (singleton bare gate_rv vs gate_value, or two bare normals) by
-  // replacing them with Bernoulli gate_input gates carrying the
-  // analytical probability.  Always sound for probability
-  // evaluation; produces fractional probabilities so it is
-  // meaningful only on this path (not in getGenericCircuit, which
-  // is shared with semiring evaluators).
-  // Count gates reachable from the root before / after the
-  // probability-side pre-pass, so the user can see how much the
-  // shortcut shrank the circuit the downstream method actually sees.
-  auto count_reachable = [&](gate_t r) {
-    std::set<gate_t> seen;
-    std::stack<gate_t> stk;
-    stk.push(r);
-    while (!stk.empty()) {
-      gate_t g = stk.top(); stk.pop();
-      if (!seen.insert(g).second) continue;
-      for (gate_t c : gc.getWires(g)) stk.push(c);
-    }
-    return seen.size();
-  };
-  size_t gates_before = count_reachable(gc_root);
-  unsigned analytic_resolved = provsql::runAnalyticEvaluator(gc);
-
-  /* Closed-form cmp-probability evaluators : the Poisson-binomial
-   * pre-pass for HAVING COUNT(*) op C, the MIN / MAX closed forms, and
-   * the weighted-sum DP for SUM(a) op C, all over independent private
-   * contributors.  Each replaces a matched gate_cmp
-   * with a Bernoulli gate_input carrying the closed-form probability,
-   * so the surrounding circuit can skip the DNF that
-   * provsql_having's enumerate_valid_worlds would otherwise build.
-   * Same probability-side sound-only caveat as runAnalyticEvaluator :
-   * the gate_input carries a fractional probability so the rewrite
-   * lives here, not in getGenericCircuit.  Hidden behind
-   * provsql.cmp_probability_evaluation for developer A/B testing ;
-   * on by default. */
-  unsigned count_cmp_resolved = 0;
-  unsigned minmax_cmp_resolved = 0;
-  unsigned sum_cmp_resolved = 0;
-  unsigned agg_marginal_resolved = 0;
-  if (provsql_cmp_probability_evaluation) {
-    count_cmp_resolved = provsql::runCountCmpEvaluator(gc);
-    minmax_cmp_resolved = provsql::runMinMaxCmpEvaluator(gc);
-    sum_cmp_resolved = provsql::runSumCmpEvaluator(gc);
-    /* Safe-join COUNT / SUM / MIN / MAX: the hierarchical marginal-vector
-     * engine for the join shapes the flat pre-passes above cannot certify
-     * independent.  Runs last so it only ever sees the join-shaped cmps
-     * the flat passes left behind. */
-    agg_marginal_resolved = provsql::runAggMarginalEvaluator(gc);
-  }
-
-  /* Always-true HAVING rewrite (runs regardless of the Poisson-binomial
-   * GUC): catches @c COUNT <= K with @c K >= N (and dual cases for
-   * other aggregators) by rewriting the cmp to @c gate_plus over the
-   * agg's K-gates -- the "group is non-empty" indicator.  This is the
-   * sound TRUE-decision arm that @c runRangeCheck deliberately leaves
-   * undone (gate_one would credit the empty world); restricting it to
-   * the probability-evaluate path keeps the absorptive-semiring
-   * precondition satisfied. */
-  unsigned always_true_resolved = provsql::runHavingAlwaysTrueRewriter(gc);
-
-  /* If any probability-side pre-pass replaced a cmp with a closed-form
-   * Bernoulli or an OR rewrite, the formula the downstream tool sees
-   * is not the formula the user wrote: it has had part (or all) of its
-   * comparison structure folded before any d-DNNF compiler / weighted
-   * model counter is invoked. Emit a NOTICE (gated on
-   * provsql.verbose_level >= 5) so the user knows the requested
-   * method's reported timing and structure may not reflect work on
-   * the original formula. */
-  if (analytic_resolved + count_cmp_resolved + minmax_cmp_resolved
-        + sum_cmp_resolved + agg_marginal_resolved + always_true_resolved > 0
-      && provsql_verbose >= 5) {
-    size_t gates_after = count_reachable(gc_root);
-    std::vector<std::string> parts;
-    if (analytic_resolved > 0)
-      parts.push_back(std::to_string(analytic_resolved) + " analytic");
-    if (count_cmp_resolved > 0)
-      parts.push_back(std::to_string(count_cmp_resolved) + " Poisson-binomial");
-    if (minmax_cmp_resolved > 0)
-      parts.push_back(std::to_string(minmax_cmp_resolved) + " min/max");
-    if (sum_cmp_resolved > 0)
-      parts.push_back(std::to_string(sum_cmp_resolved) + " weighted-sum");
-    if (agg_marginal_resolved > 0)
-      parts.push_back(std::to_string(agg_marginal_resolved) + " safe-join aggregate");
-    if (always_true_resolved > 0)
-      parts.push_back(std::to_string(always_true_resolved) + " always-true");
-    std::string breakdown;
-    for (size_t i = 0; i < parts.size(); ++i) {
-      if (i > 0) breakdown += " + ";
-      breakdown += parts[i];
-    }
-    provsql_notice(
-      "gate_cmp expression was shortcut by probability-side pre-pass "
-      "(%s): provenance circuit reduced from %zu to %zu gates",
-      breakdown.c_str(), gates_before, gates_after);
-  }
-
+  // Resolve every RV / HAVING comparator into Boolean structure via the
+  // single shared pipeline (value simplifier + island decomposer +
+  // AnalyticEvaluator + the closed-form HAVING cmp evaluators + the
+  // always-true rewrite).  The probability path runs the full pipeline;
+  // the scalar-moment path calls the same function with simplify/decompose
+  // off (see ComparatorResolution.h).
+  provsql::resolveComparators(gc, gc_root, /*simplify=*/true,
+                              /*decompose=*/true);
   /* After every resolution pass has run, any gate_rv left in the
    * circuit reaches the BoolExpr translation in getBooleanCircuit
    * unchanged; that walk recurses into the surrounding gate_cmp and
