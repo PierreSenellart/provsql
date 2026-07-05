@@ -3019,6 +3019,26 @@ CREATE CAST (random_variable AS uuid) WITHOUT FUNCTION AS ASSIGNMENT;
 CREATE CAST (uuid AS random_variable) WITHOUT FUNCTION;
 
 /**
+ * @brief Coerce an @c agg_token to a @c random_variable (its circuit token).
+ *
+ * An aggregate over probabilistic tuples IS a random variable: its
+ * @c agg_token carries the provenance circuit of the aggregate distribution.
+ * Exposing that as a @c random_variable lets a comparison / conditioning
+ * predicate mix the two -- e.g. conditioning a latent leaf on a count,
+ * @c "R | (poisson(lambda) = C)" with @c C a @c count(*) agg_token -- resolve
+ * to the ordinary @c random_variable comparison operators (which the planner
+ * hook rewrites into a @c gate_cmp).  IMPLICIT so the mixed comparison
+ * type-checks without an explicit cast; the polymorphic dispatchers keep
+ * their exact @c agg_token overloads (an exact match beats the cast).
+ */
+CREATE OR REPLACE FUNCTION agg_token_to_random_variable(a agg_token)
+  RETURNS random_variable AS
+$$ SELECT provsql.random_variable_make(provsql.agg_token_uuid($1)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+CREATE CAST (agg_token AS random_variable)
+  WITH FUNCTION agg_token_to_random_variable(agg_token) AS IMPLICIT;
+
+/**
  * @brief Internal: true iff @p x is a finite (non-NaN, non-±∞) float8.
  *
  * PostgreSQL's <tt>isnan</tt> is defined for <tt>numeric</tt> only,
@@ -3132,6 +3152,17 @@ CREATE OR REPLACE FUNCTION normal(mu double precision, sigma random_variable)
   LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
 CREATE OR REPLACE FUNCTION normal(mu random_variable, sigma random_variable)
   RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+-- logistic(mu, s)
+CREATE OR REPLACE FUNCTION logistic(mu random_variable, s double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION logistic(mu double precision, s random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION logistic(mu random_variable, s random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
   LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
 
 -- uniform(a, b)
@@ -3273,6 +3304,47 @@ BEGIN
   token := public.uuid_generate_v4();
   PERFORM provsql.create_gate(token, 'rv');
   PERFORM provsql.set_extra(token, 'normal:' || mu || ',' || sigma);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Construct a logistic-distribution random variable Logistic(μ, s)
+ *
+ * The location-scale family whose CDF is the logistic sigmoid; a threshold
+ * event over a Logistic(0, 1) noise realises the logit link exactly
+ * (@c P(eps < score) = 1/(1 + exp(-score))), the natural link for a
+ * log-odds / latent-utility selection model.
+ *
+ * Validation:
+ * - @p mu and @p s must be finite.
+ * - @p s (the scale) must be non-negative; <tt>s = 0</tt> is the Dirac at
+ *   @p mu, routed through @c as_random(mu) as with @c normal's sigma = 0.
+ *
+ * @param mu  location (the mean and median).
+ * @param s   scale (> 0); the variance is @f$\pi^2 s^2 / 3@f$.
+ * @return    a @c random_variable token for Logistic(μ, s).
+ *
+ * @sa <a href="https://en.wikipedia.org/wiki/Logistic_distribution">Wikipedia: Logistic distribution</a>
+ */
+CREATE OR REPLACE FUNCTION logistic(mu double precision, s double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(s) THEN
+    RAISE EXCEPTION 'provsql.logistic: parameters must be finite (got mu=%, s=%)', mu, s;
+  END IF;
+  IF s < 0 THEN
+    RAISE EXCEPTION 'provsql.logistic: scale s must be non-negative (got %)', s;
+  END IF;
+  IF s = 0 THEN
+    RETURN provsql.as_random(mu);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'logistic:' || mu || ',' || s);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
