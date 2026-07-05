@@ -33,6 +33,7 @@
 // already makes among interpret-as-dd / tree-decomposition / compilation.
 class dDNNF;
 class BooleanCircuit;
+class GenericCircuit;
 enum class gate_t : size_t;
 
 namespace provsql {
@@ -210,6 +211,39 @@ private:
 /// (tree-decomposition / interpret-as-dd / compilation, plus makeDD's own
 /// internal interpret -> tree-decomposition -> compiler fallback chain).
 dDNNF makeDDAuto(BooleanCircuit &c, gate_t g);
+
+/**
+ * @brief Probability of the Boolean function rooted at @p root in @p gc --
+ *        THE single entry point over the method portfolio.
+ *
+ * @c getBooleanCircuit builds the Boolean view (HAVING semantics + BoolExpr
+ * translation); the empty / "default" / "exact" @p method then runs the
+ * cost-ordered auto-chooser (@c MethodCatalog::chooseAndRun), while a named
+ * method dispatches @c byName.  Every caller that needs "the probability of
+ * a Boolean subcircuit" -- the top-level @c probability_evaluate and the
+ * moment evaluator's mixture weights alike -- routes through here, so the
+ * Boolean-view build and the method portfolio are single-sourced.  @p gc's
+ * comparators should already be resolved (see @c resolveComparators in
+ * @c ComparatorResolution.h) for an exact result.
+ *
+ * @param method  "" / "default" / "exact" runs the auto-chooser; any other
+ *   name dispatches that method @c byName.
+ * @param args    method arguments (tolerance strings, compiler names).
+ * @param inv_free_cert  whether an inversion-free certificate is present
+ *   (unlocks the inversion-free method in the portfolio).
+ * @param mc_fallback  when true, a residual raw RV comparator the Boolean
+ *   translation rejects is estimated by @c monteCarloRV instead of raising
+ *   (the moment path opts in; @c probability_evaluate passes false so an
+ *   unresolved RV comparator surfaces its diagnostic).
+ * @param actual_method_out  if non-null, receives the method actually run
+ *   (for @c provsql.last_eval_method reporting).
+ */
+double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
+                                    const std::string &method = "",
+                                    const std::string &args = "",
+                                    bool inv_free_cert = false,
+                                    bool mc_fallback = true,
+                                    std::string *actual_method_out = nullptr);
 
 }  // namespace provsql
 

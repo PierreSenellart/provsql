@@ -1831,26 +1831,53 @@ const MethodCatalog &MethodCatalog::instance()
   return cat;
 }
 
-double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root)
+double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
+                                    const std::string &method,
+                                    const std::string &args,
+                                    bool inv_free_cert, bool mc_fallback,
+                                    std::string *actual_method_out)
 {
   const pg_uuid_t token = string2uuid(gc.getUUID(root));
-  static const std::string kNoArgs;
   try {
+    // The one place the Boolean view is built and the method portfolio is
+    // run: HAVING semantics + BoolExpr translation via getBooleanCircuit,
+    // then the empty / "default" / "exact" method runs the cost-ordered
+    // auto-chooser (chooseAndRun) while a named method dispatches byName.
     gate_t gate;
     std::unordered_map<gate_t, gate_t> gc_to_bc;
     BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
+    const bool is_path =
+      method.empty() || method == "default" || method == "exact";
     EvalContext ctx{&gc, root, token, c, gate, &gc_to_bc,
-                    /*inv_free_cert=*/false, kNoArgs,
-                    /*explicitly_named=*/false,
+                    inv_free_cert, args, /*explicitly_named=*/!is_path,
                     /*n_inputs=*/c.getInputs().size(),
                     /*circuit_size=*/c.getNbGates()};
-    return MethodCatalog::instance().chooseAndRun(ctx, Tolerance{});
+    double result;
+    if (is_path) {
+      result = MethodCatalog::instance().chooseAndRun(ctx, Tolerance{});
+    } else {
+      const ProbabilityMethod *m = MethodCatalog::instance().byName(method);
+      if (m == nullptr)
+        provsql_error("Wrong method '%s' for probability evaluation",
+                      method.c_str());
+      // A Boolean-only method named explicitly gets multivalued / BID
+      // blocks rewritten first (same declarative point as chooseAndRun).
+      if (!m->handlesMultivalued())
+        ctx.ensureMultivaluedRewritten();
+      result = m->evaluate(ctx, Tolerance{});
+    }
+    if (actual_method_out != nullptr)
+      *actual_method_out = ctx.actual_method;
+    return result;
   } catch (const semiring::SemiringException &) {
-    // Boolean translation met a raw RV comparator -- fall to MC below.
+    // Boolean translation met a raw RV comparator.
+    if (!mc_fallback) throw;
   } catch (const CircuitException &) {
-    // Exact portfolio exhausted (or the Boolean view could not be built);
-    // Monte Carlo is the universal fallback.
+    // Exact portfolio exhausted, or the Boolean view could not be built.
+    if (!mc_fallback) throw;
   }
+  // mc_fallback path: estimate the Boolean probability by Monte Carlo over
+  // the base RVs (the moment path's residual raw comparators land here).
   if (provsql_rv_mc_samples <= 0)
     throw CircuitException(
       "booleanSubcircuitProbability: a random-variable comparator could not "
@@ -2218,36 +2245,15 @@ static Datum probability_evaluate_internal
       unsigned long samples = monte_carlo_samples(parse_method_args(args));
       result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
     } else {
-      // Boolean-circuit path: applies HAVING semantics and BoolExpr translation,
-      // then dispatches through the method catalog.  The empty method (and its
-      // 'exact'/'default' aliases) runs the cost-ordered exact ladder
-      // (chooseAndRun); a named method dispatches by name.
-      gate_t gate;
-      std::unordered_map<gate_t, gate_t> gc_to_bc;
-      BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
-
-      const bool is_path = method.empty() || method == "default"
-                           || method == "exact";
-      provsql::EvalContext ctx{&gc, gc_root, token, c, gate, &gc_to_bc,
-                               inv_free_cert, args,
-                               /*explicitly_named=*/!is_path,
-                               /*n_inputs=*/c.getInputs().size(),
-                               /*circuit_size=*/c.getNbGates()};
-      const provsql::MethodCatalog &catalog = provsql::MethodCatalog::instance();
-      if(is_path) {
-        result = catalog.chooseAndRun(ctx, provsql::Tolerance{});
-      } else {
-        const provsql::ProbabilityMethod *m = catalog.byName(method);
-        if(m == nullptr)
-          provsql_error("Wrong method '%s' for probability evaluation",
-                        method.c_str());
-        // Same declarative rewrite point as chooseAndRun: a Boolean-only method
-        // named explicitly gets multivalued / BID blocks rewritten first.
-        if(!m->handlesMultivalued())
-          ctx.ensureMultivaluedRewritten();
-        result = m->evaluate(ctx, provsql::Tolerance{});
-      }
-      actual_method = ctx.actual_method;
+      // Boolean-circuit path: the single central entry point builds the
+      // Boolean view (HAVING semantics + BoolExpr translation) and runs the
+      // method portfolio (chooseAndRun for the empty / "default" / "exact"
+      // aliases, byName otherwise).  mc_fallback is false here so an
+      // unresolved RV comparator surfaces its diagnostic rather than
+      // silently sampling (the moment path opts into the MC fallback).
+      result = provsql::booleanSubcircuitProbability(
+        gc, gc_root, method, args, inv_free_cert,
+        /*mc_fallback=*/false, &actual_method);
     }
   } catch(CircuitException &e) {
     // If the exception was raised because a query cancel or statement

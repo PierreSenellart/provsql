@@ -11,7 +11,8 @@
 #include "BooleanCircuit.h"
 #include "Circuit.h"
 #include "CircuitFromMMap.h"
-#include "ComparatorResolution.h"  // resolveComparators, booleanSubcircuitProbability
+#include "ComparatorResolution.h"  // resolveComparators
+#include "ProbabilityMethod.h"     // booleanSubcircuitProbability
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
 #include "distributions/Distribution.h"  // makeDistribution -> integrationRange
