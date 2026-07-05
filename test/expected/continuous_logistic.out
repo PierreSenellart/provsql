@@ -1,0 +1,21 @@
+\set ECHO none
+mean_is_mu|var_is_pi2s2_3
+t|t
+(1 row)
+raw_moment2_exact
+t
+(1 row)
+quantile_is_logit|median_is_mu
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+NOTICE:  link_sigma_2: t
+NOTICE:  link_sigma_minus1: t
+affine_mean_exact|affine_var_exact
+t|t
+(1 row)
+degenerate_is_dirac|degenerate_var_zero
+t|t
+(1 row)

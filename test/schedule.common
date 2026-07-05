@@ -182,6 +182,7 @@ test: continuous_lognormal
 test: continuous_beta
 test: continuous_weibull_pareto
 test: continuous_inverse
+test: continuous_logistic
 test: continuous_discrete_families
 test: continuous_gmm
 test: continuous_information
@@ -195,6 +196,7 @@ test: continuous_latent
 test: continuous_posterior
 test: continuous_latent_aggregate
 test: continuous_latent_discrete
+test: continuous_latent_usecases
 test: continuous_support
 test: continuous_hybrid
 test: continuous_rv_histogram
