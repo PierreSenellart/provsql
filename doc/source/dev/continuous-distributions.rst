@@ -1213,13 +1213,34 @@ path ever integrates their pmf as a density.  They reuse the parametric-
 leaf mechanism wholesale, which is why the discrete conjugate posteriors
 (Gamma-Poisson, Beta-Binomial) fall out with no evaluator change.
 
-The SQL surface is :sqlfunc:`observe` / :sqlfunc:`and_agg` /
-:sqlfunc:`evidence` / :sqlfunc:`shapley_observe`, the token-accepting
-constructor overloads, and the ``provsql.ess_warn_fraction`` GUC.
-:sqlfunc:`shapley_observe` is connecting code: it enumerates the
-observation subsets, calls ``rv_moment`` for each coalition's posterior
-value, and combines them into the Shapley attribution -- exact, so capped
-at 12 observations. Sequential Monte Carlo (for the many-observations
+**The equality-form surface.** The user writes the natural
+conditional-equality ``X | (Y = c)`` (single) or ``given(Y = c)`` folded
+by :sqlfunc:`and_agg` (a table); ``observe`` is the internal primitive.
+The bridge is ``evidence_as_observation`` (SQL): when a conditioning event
+is a ``gate_cmp`` with the ``=`` operator, one side a bare ``gate_rv`` leaf
+and the other a constant, it is rewritten to a ``gate_observe`` at
+*construction* time -- so the stored evidence never reaches the load-time
+measure-zero fold. ``random_variable_cond`` (the ``|`` operator) and
+``given`` both apply it; ``given(boolean)`` (the renamed ``given_predicate``
+placeholder) is planner-rewritten from both the ``| (predicate)`` operator
+and the ``given(predicate)`` function call.
+
+This is where the ``Distribution::isDiscrete()`` flag earns its keep. A
+point event ``Y = c`` is measure-zero for a *continuous* leaf (folded to
+``gate_zero`` by ``RangeCheck``'s continuous EQ/NE shortcut and Dirac
+sum-product) but *positive-mass* for a discrete one; ``isDiscrete()`` (an
+authoritative per-family flag, propagated through transforms by
+``hasOnlyContinuousSupport`` / ``collectDiracMassMap``) keeps the discrete
+equality from folding, so a discrete *selection* (``probability(poisson =
+5)``) stays exact while a discrete/continuous *conditioning* ``Y = c`` is
+routed to likelihood weighting through the observe rewrite.
+
+The rest of the SQL surface is :sqlfunc:`evidence` /
+:sqlfunc:`shapley_observe`, the token-accepting constructor overloads, and
+the ``provsql.ess_warn_fraction`` GUC.  :sqlfunc:`shapley_observe` is
+connecting code: it enumerates the observation subsets, calls ``rv_moment``
+for each coalition's posterior value, and combines them into the Shapley
+attribution -- exact, so capped at 12 observations. Sequential Monte Carlo (for the many-observations
 regime where the ESS collapses) and MCMC are deferred: the sampler is
 stateless (``resetIteration()`` wipes state each draw) and has no
 joint-density-at-an-assignment evaluation mode, which MCMC's acceptance

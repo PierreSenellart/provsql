@@ -9,3 +9,5 @@ NOTICE:  posterior_predictive_mean: t
 NOTICE:  shapley_outlier_dominates: t
 NOTICE:  shapley_efficiency: t
 NOTICE:  ess_posterior_mean_ok: t
+NOTICE:  continuous_equality_form: t
+NOTICE:  given_aggregation_posterior: t

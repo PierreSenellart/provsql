@@ -36,6 +36,7 @@ public:
   const DistributionFamily &family() const override;
   double mean() const override { return p1_; }
   bool meanIsAffine() const override { return true; }   // mean = λ
+  bool isDiscrete() const override { return true; }
   double variance() const override { return p1_; }
   double rawMoment(unsigned k) const override {
     // Touchard recurrence: m_0 = 1, m_{j} = λ Σ_{i=0}^{j-1} C(j-1,i) m_i.

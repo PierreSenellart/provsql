@@ -86,6 +86,21 @@ public:
    */
   virtual bool meanIsAffine() const { return false; }
 
+  /**
+   * @brief Whether the family is discrete (integer-valued), so a point
+   *        event @c X @c = @c c carries positive mass.
+   *
+   * Default @c false (continuous).  The discrete families (Poisson,
+   * Binomial) override to @c true.  It is the authoritative, per-family
+   * signal -- not inferred -- that a point observation / conditioning
+   * event on a leaf of this family is @b feasible (a continuous point
+   * event is measure-zero, so it is only meaningful as a likelihood
+   * weight, never as a rejection interval).  @c pdf() already returns the
+   * pmf for a discrete family, so the density-weight path needs no special
+   * case beyond this classification.
+   */
+  virtual bool isDiscrete() const { return false; }
+
   /** @name Density / distribution */
   ///@{
   virtual double pdf(double x) const = 0;  ///< f(x); NaN if the family declines

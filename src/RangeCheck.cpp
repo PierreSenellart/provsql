@@ -769,9 +769,16 @@ bool hasOnlyContinuousSupport(const GenericCircuit &gc, gate_t g,
   bool result = false;
   auto t = gc.getGateType(g);
   switch (t) {
-    case gate_rv:
-      result = true;
+    case gate_rv: {
+      /* A discrete family (Poisson, Binomial) has point masses, so a point
+       * event X = c carries positive mass and must NOT take the continuous
+       * EQ/NE measure-zero shortcut.  isDiscrete() is the authoritative
+       * per-family flag (parse_distribution_template handles a latent /
+       * parametric leaf too); a malformed spec falls back to continuous. */
+      auto tmpl = parse_distribution_template(gc.getExtra(g));
+      result = !(tmpl && tmpl->family->factory(0.0, 0.0)->isDiscrete());
       break;
+    }
     case gate_value:
       result = false;
       break;
@@ -909,9 +916,21 @@ collectDiracMassMap(const GenericCircuit &gc, gate_t g,
       }
       break;
     }
-    case gate_rv:
-      result = DiracMap{};  /* continuous, no point masses */
+    case gate_rv: {
+      /* A CONTINUOUS leaf has no point masses (an empty map is exact: the
+       * Dirac sum-product then contributes zero, correct by measure zero).
+       * A DISCRETE leaf (Poisson, Binomial) DOES have point masses, but
+       * they are not statically enumerable (infinite / large support), so
+       * decline (nullopt) -- claiming an empty map here would make the
+       * sum-product read "no overlap" and wrongly fold X = c to false.
+       * isDiscrete() is the authoritative per-family flag. */
+      auto tmpl = parse_distribution_template(gc.getExtra(g));
+      if (tmpl && tmpl->family->factory(0.0, 0.0)->isDiscrete())
+        result = std::nullopt;
+      else
+        result = DiracMap{};
       break;
+    }
     case gate_mixture: {
       const auto &w = gc.getWires(g);
       if (gc.isCategoricalMixture(g)) {

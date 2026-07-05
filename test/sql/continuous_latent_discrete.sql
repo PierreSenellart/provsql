@@ -63,6 +63,23 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------
+-- Discrete point-event conditioning: a point event X = c on a discrete leaf
+-- carries positive mass, so it is FEASIBLE (a continuous X = c is measure-
+-- zero and folds away).  The natural equality form X | (Y = k) is the
+-- internal form of observe(Y, k) and gives the same posterior -- even under
+-- simplify_on_load, which must not fold the discrete equality to zero.
+-- ---------------------------------------------------------------------
+
+SET provsql.rv_mc_samples = 500000;
+DO $$
+DECLARE r random_variable := gamma(2, 1); via_observe double precision;
+BEGIN
+  via_observe := expected(r, observe(poisson(3 * r), 5));
+  RAISE NOTICE 'discrete_equality_matches_observe: %',
+    (abs(expected(r | (poisson(3 * r) = 5)) - via_observe) < 0.05);
+END $$;
+
+-- ---------------------------------------------------------------------
 -- Parameter-domain guard: a rate/probability prior that leaves the family's
 -- domain raises rather than silently truncating.
 -- ---------------------------------------------------------------------

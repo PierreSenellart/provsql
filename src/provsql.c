@@ -4074,6 +4074,35 @@ static Node *rewrite_cond_predicate_mutator(Node *node, void *data) {
       return (Node *) cond;
     }
   }
+  /* The function-call spelling given(predicate): the same whole-tuple /
+   * per-row-evidence marker as the prefix "| (predicate)" OpExpr above, but
+   * written as a function.  Lower its Boolean operand to a condition gate and
+   * emit given(gate) (the uuid carrier), which the output-conditioning
+   * rewriter strips at top level and evidence_as_observation turns into an
+   * observation when executed inside and_agg. */
+  if (IsA(node, FuncExpr) &&
+      OidIsValid(constants->OID_FUNCTION_GIVEN_PREDICATE) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_GIVEN_PREDICATE) {
+    FuncExpr *fe = (FuncExpr *)node;
+    Expr *pred = (Expr *)linitial(fe->args);
+    FuncExpr *gate, *given;
+    if (!expr_has_probabilistic_cmp((Node *)pred, (void *)constants))
+      provsql_error("given(predicate) needs a predicate with at least one "
+                    "random_variable / aggregate comparison; a purely regular "
+                    "condition is an ordinary filter -- use a WHERE clause");
+    gate = predicate_to_condition_gate(pred, constants, false);
+    given = makeNode(FuncExpr);
+    given->funcid = constants->OID_FUNCTION_GIVEN;
+    given->funcresulttype = constants->OID_TYPE_UUID;
+    given->funcretset = false;
+    given->funcvariadic = false;
+    given->funcformat = COERCE_EXPLICIT_CALL;
+    given->funccollid = InvalidOid;
+    given->inputcollid = InvalidOid;
+    given->args = list_make1(gate);
+    given->location = fe->location;
+    return (Node *) given;
+  }
   return expression_tree_mutator(node, rewrite_cond_predicate_mutator, data);
 }
 

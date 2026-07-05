@@ -132,3 +132,27 @@ BEGIN
   PERFORM set_config('client_min_messages', 'notice', true);
   RAISE NOTICE 'ess_posterior_mean_ok: %', (abs(m - 20.0) < 0.5);
 END $$;
+
+-- ---------------------------------------------------------------------
+-- The equality-form surface: "X | (Y = c)" (single conditioning) and
+-- "given(Y = c)" (per-row evidence for and_agg) route a continuous point
+-- observation to likelihood weighting -- the same posterior as the internal
+-- observe(), but the natural conditional-equality syntax.
+-- ---------------------------------------------------------------------
+
+SET provsql.ess_warn_fraction = 0;
+SET provsql.rv_mc_samples = 300000;
+DO $$
+DECLARE
+  mu random_variable := normal(0, 10);
+  ev uuid;
+BEGIN
+  -- single continuous conditioning on a point observation matches observe()
+  RAISE NOTICE 'continuous_equality_form: %',
+    (abs(expected(mu | (normal(mu, 1) = 8))
+       - expected(mu, observe(normal(mu, 1), 8))) < 0.1);
+  -- given(Y = c) aggregation reproduces the Normal-Normal posterior (9.9668)
+  SELECT and_agg(given(normal(mu, 1) = x)) INTO ev
+    FROM (VALUES (8.0::float8), (10.0), (12.0)) AS t(x);
+  RAISE NOTICE 'given_aggregation_posterior: %', (abs(expected(mu, ev) - 9.9668) < 0.1);
+END $$;

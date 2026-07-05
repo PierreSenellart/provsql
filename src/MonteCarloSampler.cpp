@@ -55,6 +55,35 @@ bool applyCmp(double l, ComparisonOperator op, double r)
   return false;
 }
 
+/// Recognise a point observation @c "Y = c": a @c gate_cmp with the @c EQ
+/// operator, one wire a bare @c gate_rv leaf @p leaf_out, the other a
+/// constant @c gate_value @p datum_out.  This is the internal form of
+/// @c observe(Y, c) -- the conditioning-evidence interpretation of the
+/// equality, a likelihood weight by the leaf's density/mass at @c c (a
+/// continuous point event is measure-zero as a rejection interval, so this
+/// is the only meaningful reading of it as evidence).  Returns @c false for
+/// an inequality, a non-leaf scalar, or a non-constant right side (those
+/// stay ordinary Boolean events).
+bool matchPointObservationCmp(const GenericCircuit &gc, gate_t g,
+                              gate_t &leaf_out, double &datum_out)
+{
+  if(gc.getGateType(g) != gate_cmp) return false;
+  const auto &wires = gc.getWires(g);
+  if(wires.size() != 2) return false;
+  bool ok = false;
+  ComparisonOperator op = cmpOpFromOid(gc.getInfos(g).first, ok);
+  if(!ok || op != ComparisonOperator::EQ) return false;
+  auto try_side = [&](gate_t rv_side, gate_t const_side) {
+    if(gc.getGateType(rv_side) != gate_rv) return false;
+    if(gc.getGateType(const_side) != gate_value) return false;
+    try { datum_out = parseDoubleStrict(gc.getExtra(const_side)); }
+    catch(const CircuitException &) { return false; }
+    leaf_out = rv_side;
+    return true;
+  };
+  return try_side(wires[0], wires[1]) || try_side(wires[1], wires[0]);
+}
+
 /// Per-iteration sampler state shared between the Boolean and scalar
 /// recursions.
 class Sampler {
@@ -608,6 +637,23 @@ double Sampler::evalWeight(gate_t g)
       double p1, p2;
       return buildRvDistribution(leaf, *tmpl, p1, p2)->pdf(d);
     }
+    case gate_cmp: {
+      // A point observation "Y = c" on a bare RV leaf is likelihood
+      // evidence (the internal form of observe(Y, c)): weight by the
+      // leaf's density / mass at c -- pdf for a continuous leaf, pmf for a
+      // discrete one (pdf() returns the pmf).  Any other cmp (inequality,
+      // non-leaf, non-constant) is an ordinary Boolean event: 0/1 weight.
+      gate_t leaf;
+      double datum;
+      if(matchPointObservationCmp(gc_, g, leaf, datum)) {
+        auto tmpl = parse_distribution_template(gc_.getExtra(leaf));
+        if(tmpl) {
+          double p1, p2;
+          return buildRvDistribution(leaf, *tmpl, p1, p2)->pdf(datum);
+        }
+      }
+      return evalBool(g) ? 1.0 : 0.0;
+    }
     default:
       // Any other subtree is a Boolean conditioning event: a 0/1 weight,
       // which is exactly rejection conditioning -- so a purely Boolean
@@ -894,7 +940,14 @@ bool circuitHasObserve(const GenericCircuit &gc, gate_t root)
     gate_t g = stack.top();
     stack.pop();
     if(!seen.insert(g).second) continue;
-    if(gc.getGateType(g) == gate_observe)
+    // Either an explicit gate_observe, or a point observation "Y = c" on a
+    // bare RV leaf (the equality-conditioning form) -- both are density /
+    // mass likelihood evidence the importance-sampling path must weight
+    // rather than reject.
+    gate_t leaf;
+    double datum;
+    if(gc.getGateType(g) == gate_observe
+       || matchPointObservationCmp(gc, g, leaf, datum))
       return true;
     for(gate_t c : gc.getWires(g)) stack.push(c);
   }

@@ -1155,37 +1155,51 @@ multivariate primitive.
    ``lognormal``).
 
 **Posterior inference (likelihood weighting).** Conditioning a latent on
-observed data is *posterior inference*. :sqlfunc:`observe` binds a datum
-to a latent-dependent leaf; :sqlfunc:`and_agg` conjoins the
-per-observation evidence into one evidence token; passing that token as
-the conditioning argument of any readout reports the **posterior**::
+an observed value is *posterior inference*, written with the natural
+**conditional-equality** form: ``X | (Y = c)`` observes that the leaf
+``Y`` took the value ``c``. For a single observation it reads exactly like
+truncation conditioning (:doc:`conditioning`), and for a table of
+observations :sqlfunc:`given` produces the per-row evidence that
+:sqlfunc:`and_agg` folds into one evidence token, passed as the
+conditioning argument of any readout::
 
-    -- Prior mu ~ Normal(0, 10); observations x_i ~ Normal(mu, 1).
-    -- Posterior mean / variance of mu given the data:
+    -- Single observation: posterior of mu given normal(mu, 1) = 8.
+    WITH model AS (SELECT provsql.normal(0, 10) AS mu)
+    SELECT provsql.expected(mu | (provsql.normal(mu, 1) = 8)) FROM model;
+
+    -- A table of observations x_i ~ Normal(mu, 1); posterior mean/variance:
     WITH model AS (SELECT provsql.normal(0, 10) AS mu)
     SELECT provsql.expected(mu, ev), provsql.variance(mu, ev)
     FROM   model,
     LATERAL (SELECT provsql.and_agg(
-                      provsql.observe(provsql.normal(mu, 1), x)) AS ev
+                      provsql.given(provsql.normal(mu, 1) = x)) AS ev
              FROM (VALUES (8.0), (10.0), (12.0)) AS obs(x)) e;
 
 The engine is **self-normalised importance sampling**: latents are drawn
 from the prior and each draw is weighted by the observations' densities
 at the data. It is the continuous generalisation of the rejection-based
-conditioning of :doc:`conditioning` -- a Boolean event contributes a
-``0/1`` weight, an ``observe`` contributes a pdf weight (a **pmf** weight
-for a discrete leaf), through the same evidence conjunction. All of
-:sqlfunc:`expected`, :sqlfunc:`variance`, :sqlfunc:`moment`,
-:sqlfunc:`quantile` and :sqlfunc:`rv_sample` gain posteriors with no
-surface change; the posterior predictive is ``rv_sample`` on a fresh leaf
-that reuses the latent. Conjugate models are recovered numerically to MC
-tolerance -- Normal-Normal, Gamma-Poisson (``observe`` on a
-``poisson(R)`` leaf), Beta-Binomial (on a ``binomial(n, p)`` leaf).
+conditioning of :doc:`conditioning` -- a Boolean *inequality* event
+(``Y > c``, a truncation) contributes a ``0/1`` weight, a point equality
+``Y = c`` contributes a pdf weight (a **pmf** weight for a discrete leaf),
+through the same evidence conjunction. All of :sqlfunc:`expected`,
+:sqlfunc:`variance`, :sqlfunc:`moment`, :sqlfunc:`quantile` and
+:sqlfunc:`rv_sample` gain posteriors with no surface change; the posterior
+predictive is ``rv_sample`` on a fresh leaf that reuses the latent.
+Conjugate models are recovered numerically to MC tolerance -- Normal-Normal,
+Gamma-Poisson (a ``poisson(R)`` leaf), Beta-Binomial (a ``binomial(n, p)``
+leaf).
 
-:sqlfunc:`observe` binds a datum to a **bare distribution leaf** only;
-observing a derived quantity (``observe(X + Y, d)``) is out of scope (it
-needs a change-of-variables density). The observations must share the
-latent through one query so the weight and the value see the same draw.
+.. note::
+
+   A continuous point event ``Y = c`` is measure-zero as a Boolean
+   *selection* (in a ``WHERE`` clause it matches nothing), but as a
+   *conditioning* event it is the well-defined observation of ``Y`` at
+   ``c`` -- the disintegration, computed by likelihood weighting. ProvSQL
+   routes the two readings apart automatically. ``Y`` must be a **bare
+   distribution leaf**: observing a derived quantity (``(X + Y) = d``)
+   needs a change-of-variables density and is out of scope, and the
+   observations must share the latent through one query so the weight and
+   the value see the same draw.
 
 **Marginal likelihood and diagnostics.** :sqlfunc:`evidence` returns the
 marginal likelihood ``P(data)`` (the mean importance weight -- the same

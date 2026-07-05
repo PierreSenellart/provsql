@@ -415,11 +415,20 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
  * correlate with the row's columns, so each tuple is conditioned on its own
  * evidence.  When the rewriter is inactive the call is a harmless identity
  * (it returns @p evidence as an ordinary column).
+ *
+ * When @b executed rather than stripped -- i.e. nested inside an expression,
+ * the idiom @c "and_agg(given(Y = d))" that folds one observation per row
+ * into a latent-variable evidence circuit -- a point-equality @c "Y = d" on
+ * a bare random-variable leaf is turned into likelihood-weighting evidence
+ * (@c evidence_as_observation); any other evidence passes through unchanged.
  */
 CREATE OR REPLACE FUNCTION given(evidence UUID) RETURNS UUID AS
 $$
-  SELECT evidence;
-$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+BEGIN
+  RETURN provsql.evidence_as_observation(evidence);
+END
+$$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 /**
  * @brief Prefix unary @c | : alias for @c given, @c "| evidence".
@@ -432,24 +441,31 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 CREATE OPERATOR | (RIGHTARG=UUID, PROCEDURE=given);
 
 /**
- * @brief Placeholder for the prefix @c "| (predicate)" whole-tuple form.
+ * @brief Conditioning-evidence from a predicate: @c "given(predicate)"
+ *        (also the prefix @c "| (predicate)").
  *
- * Lets the whole-tuple conditioning event be a natural Boolean predicate
- * (e.g. @c "SELECT a, | (sensor > 3) FROM readings") instead of a hand-built
- * gate.  Never executes: the planner converts the Boolean operand into a
- * condition gate and emits @c given, which the rewriter then strips and folds
- * into each output row's provenance.
+ * Two uses of the same marker:
+ * - whole-tuple output conditioning written as a select-list term, the
+ *   natural-predicate spelling of @c given (@c "SELECT a, given(sensor > 3)");
+ * - per-row evidence for a latent-variable posterior, folded with
+ *   @c and_agg -- @c "and_agg(given(normal(mu,1) = x))" turns each row's
+ *   observation into likelihood-weighting evidence.
+ *
+ * Never executes: the planner converts the Boolean operand into a condition
+ * gate and emits @c given(gate); a point-equality @c "Y = d" on a bare
+ * random-variable leaf then becomes an observation (see @c given(uuid) /
+ * @c evidence_as_observation).
  */
-CREATE OR REPLACE FUNCTION given_predicate(predicate boolean) RETURNS UUID AS
+CREATE OR REPLACE FUNCTION given(predicate boolean) RETURNS UUID AS
 $$
 BEGIN
-  RAISE EXCEPTION 'prefix | (predicate) must be rewritten by the ProvSQL '
-    'planner hook: the operand must be a Boolean combination of '
-    'random_variable / aggregate comparisons (is provsql.active off?)';
+  RAISE EXCEPTION 'given(predicate) / prefix | (predicate) must be rewritten '
+    'by the ProvSQL planner hook: the operand must be a Boolean combination '
+    'of random_variable / aggregate comparisons (is provsql.active off?)';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE OPERATOR | (RIGHTARG=boolean, PROCEDURE=given_predicate);
+CREATE OPERATOR | (RIGHTARG=boolean, PROCEDURE=given);
 
 /**
  * @brief Event negation: @c "! event" / @c "provenance_not(event)".
@@ -5078,6 +5094,14 @@ BEGIN
     RETURN rv;
   END IF;
 
+  -- A point-equality "Y = c" on a bare random-variable leaf is an
+  -- OBSERVATION, not a truncation: rewrite it to the internal likelihood-
+  -- weighting evidence (its density / mass at c).  This is what lets
+  -- "X | (normal(mu,1) = 8)" (a continuous point event, measure-zero as a
+  -- Boolean selection) condition as the disintegration rather than fold to
+  -- an infeasible event.
+  cond := provsql.evidence_as_observation(cond);
+
   tgt := (rv)::uuid;
   IF get_gate_type(tgt) = 'conditioned'
      AND array_length(get_children(tgt), 1) = 2 THEN
@@ -5185,7 +5209,59 @@ $$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
  */
 
 /**
- * @brief Bind an observed datum to a random-variable leaf: @c observe(X, d).
+ * @brief Internal: rewrite a point-equality conditioning event into an
+ *        observation.  If @p ev is a @c gate_cmp with the @c "=" operator,
+ *        one side a bare @c gate_rv leaf and the other a constant, return
+ *        @c observe(leaf, const); otherwise return @p ev unchanged.
+ *
+ * This is the bridge that makes the natural equality form the surface for
+ * likelihood-weighting conditioning: @c "X | (Y = c)" and @c "given(Y = c)"
+ * both produce a @c gate_cmp, which this turns into density evidence.  A
+ * point event on a bare leaf is only meaningful as an observation (a
+ * continuous @c "Y = c" is measure-zero as a Boolean selection), so the
+ * rewrite is unambiguous.  Non-equality / non-leaf events pass through as
+ * ordinary Boolean conditioning.
+ */
+CREATE OR REPLACE FUNCTION evidence_as_observation(ev uuid) RETURNS uuid AS
+$$
+DECLARE
+  ch uuid[];
+  i1 integer;
+  leaf uuid;
+  datum_gate uuid;
+BEGIN
+  IF ev IS NULL OR provsql.get_gate_type(ev) <> 'cmp' THEN
+    RETURN ev;
+  END IF;
+  ch := provsql.get_children(ev);
+  IF array_length(ch, 1) <> 2 THEN
+    RETURN ev;
+  END IF;
+  -- The cmp stores the comparison OPERATOR's OID in info1; match on its name
+  -- '=' the same way the C-side cmpOpFromOid does (get_opname), rather than a
+  -- fixed operator OID (which varies per install / carrier type).
+  SELECT info1 INTO i1 FROM provsql.get_infos(ev);
+  IF (SELECT oprname FROM pg_catalog.pg_operator WHERE oid = i1) IS DISTINCT FROM '=' THEN
+    RETURN ev;   -- not an equality
+  END IF;
+  IF provsql.get_gate_type(ch[1]) = 'rv'
+     AND provsql.get_gate_type(ch[2]) = 'value' THEN
+    leaf := ch[1]; datum_gate := ch[2];
+  ELSIF provsql.get_gate_type(ch[2]) = 'rv'
+        AND provsql.get_gate_type(ch[1]) = 'value' THEN
+    leaf := ch[2]; datum_gate := ch[1];
+  ELSE
+    RETURN ev;   -- not a bare-leaf-vs-constant point event
+  END IF;
+  RETURN provsql.observe((leaf)::random_variable,
+                         provsql.get_extra(datum_gate)::double precision);
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+/**
+ * @brief Internal: bind an observed datum to a random-variable leaf --
+ *        the likelihood-weighting evidence behind @c "X | (Y = d)".
  *
  * @p x MUST be a bare @c gate_rv leaf (typically a latent-parameterised
  * one, e.g. @c normal(mu, 1) sharing a latent @c mu across rows).
@@ -5193,6 +5269,10 @@ $$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
  * the datum in @c extra -- that composes with other evidence through
  * @c and_agg (a @c gate_times conjunction) and is consumed by the
  * importance-sampling weight walk, contributing the factor @c f_X(d).
+ *
+ * Internal: the user-facing surface is the equality form @c "X | (Y = d)"
+ * (single conditioning) and @c "given(Y = d)" (per-row evidence for
+ * @c and_agg), both of which route here through @c evidence_as_observation.
  *
  * A fresh gate is minted per call (each observation is a distinct
  * evidence atom, so a repeated @c (leaf, datum) contributes its density

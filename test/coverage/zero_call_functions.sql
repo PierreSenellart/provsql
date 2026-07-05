@@ -49,6 +49,6 @@ WHERE n.nspname = 'provsql'
         'provenance',
         'agg_token_comp_agg_token', 'agg_token_comp_numeric',
         'agg_token_comp_text', 'numeric_comp_agg_token', 'text_comp_agg_token',
-        'cond_predicate', 'given_predicate', 'agg_token_cond_predicate',
+        'cond_predicate', 'given', 'agg_token_cond_predicate',
         'random_variable_cond_predicate', 'random_variable_cmp_placeholder')
 ORDER BY l.lanname, 1;

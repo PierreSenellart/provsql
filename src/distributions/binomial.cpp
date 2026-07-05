@@ -36,6 +36,7 @@ public:
   long n() const { return static_cast<long>(std::llround(p1_)); }
 
   double mean() const override { return p1_ * p2_; }
+  bool isDiscrete() const override { return true; }
   double variance() const override { return p1_ * p2_ * (1.0 - p2_); }
   double rawMoment(unsigned k) const override {
     if (k == 0) return 1.0;

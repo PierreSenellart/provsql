@@ -242,7 +242,6 @@ _SQL_FUNC_MAP = {
     # Sampling / histogram / simplifier introspection
     'rv_histogram':             '/doxygen-sql/html/group__circuit__introspection.html#ga53efbd4d68e0de0ca979cf52528c63db',
     'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#ga9db6bcdca7f5d52bc46a7c2e671a62fd',
-    'observe':                  '/doxygen-sql/html/group__random__variable__type.html#ga1f4bb5ed226ac51ed700db1b5871ee5c',
     'and_agg':                  '/doxygen-sql/html/group__random__variable__type.html#ga58ddb30c7fe236720320eaf9e010c096',
     'evidence':                 '/doxygen-sql/html/group__random__variable__type.html#ga2e228aaa8005aa1b8b74353c9bf728a2',
     'shapley_observe':          '/doxygen-sql/html/group__random__variable__type.html#ga94fda2bf09c63ace28e2b9a0d370005e',

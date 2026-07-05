@@ -635,7 +635,13 @@ static constants_t initialize_constants(bool failure_if_not_possible)
    * whole-tuple output marker.  Optional: InvalidOid on a schema predating
    * the conditioning feature disables the given() rewrite. */
   constants.OID_FUNCTION_COND  = get_provsql_func_oid("cond");
-  constants.OID_FUNCTION_GIVEN = get_provsql_func_oid("given");
+  /* given is overloaded: given(uuid) is the evidence carrier / whole-tuple
+   * output marker; given(boolean) is the predicate placeholder the planner
+   * rewrites (both the function form and the prefix "| (predicate)"). */
+  {
+    Oid uuid_arg[1] = { constants.OID_TYPE_UUID };
+    constants.OID_FUNCTION_GIVEN = get_provsql_func_oid_args("given", 1, uuid_arg);
+  }
 
   /* random_variable_cond(random_variable,uuid) and its Boolean-predicate
    * placeholder random_variable_cond_predicate(random_variable,boolean): the
@@ -656,8 +662,11 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     get_provsql_func_oid("agg_token_cond_predicate");
   constants.OID_FUNCTION_PREDICATE_COND_PREDICATE =
     get_provsql_func_oid("predicate_cond_predicate");
-  constants.OID_FUNCTION_GIVEN_PREDICATE =
-    get_provsql_func_oid("given_predicate");
+  {
+    Oid bool_arg[1] = { constants.OID_TYPE_BOOL };
+    constants.OID_FUNCTION_GIVEN_PREDICATE =
+      get_provsql_func_oid_args("given", 1, bool_arg);
+  }
   constants.OID_FUNCTION_REGULAR_INDICATOR =
     get_provsql_func_oid("regular_indicator");
 
