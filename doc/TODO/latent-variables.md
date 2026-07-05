@@ -5,34 +5,60 @@ inference, including B.5 Shapley over evidence) are **shipped**; see
 `doc/source/user/continuous-distributions.rst` (§Latent variables and posterior
 inference), `doc/source/dev/continuous-distributions.rst`, and the
 `continuous_latent` / `continuous_posterior` / `continuous_latent_aggregate` /
-`continuous_latent_discrete` regression tests. The SQL surface is
-`provsql.observe` / `and_agg` / `evidence` / `shapley_observe`, the
-token-accepting constructor overloads, and the `provsql.ess_warn_fraction` GUC;
-the one new gate type is `gate_observe`. Two extensions landed on top of the
-original plan:
+`continuous_latent_discrete` / `continuous_latent_usecases` /
+`continuous_logistic` / `continuous_collapsed_posterior` regression tests. The
+SQL surface is `provsql.observe` / `and_agg` / `evidence` / `shapley_observe`,
+the conditioning operator `|` with an equality predicate (`X | (Y = c)`, and
+now `R | (Y(R) = C)` against a count `agg_token`), the token-accepting
+constructor overloads, and the `provsql.ess_warn_fraction` GUC; the one new
+gate type is `gate_observe`. Several extensions landed on top of the original
+plan:
 
 - **Exact compound-leaf mean** for families whose mean is affine in their
-  parameters (Normal, Uniform, inverse-Gaussian, Poisson): `E[X] = mean(E[θ])`
-  by linearity, so `expected(normal(uniform(0,1), 1))` is exact (no MC), and it
-  composes with the linearity/mixture recursion. Authoritative per-family
-  `Distribution::meanIsAffine()` flag.
-- **Discrete rv-parametrized families** `poisson(random_variable)` and
-  `binomial(integer, random_variable)` as parametric `gate_rv` leaves (new
-  `poisson`/`binomial` `Distribution` subclasses; the literal constructors keep
+  parameters (Normal, Uniform, inverse-Gaussian, Logistic, Poisson):
+  `E[X] = mean(E[θ])` by linearity, so `expected(normal(uniform(0,1), 1))` is
+  exact (no MC), and it composes with the linearity/mixture recursion.
+  Authoritative per-family `Distribution::meanIsAffine()` flag.
+- **Logistic(μ, s) family** -- the location-scale family whose CDF is the
+  sigmoid, so a threshold event over `Logistic(0,1)` noise realises the **logit
+  link** exactly (`P(eps < score) = sigma(score)`), the natural link for a
+  log-odds / latent-utility selection model (a Normal `eps` gives the probit,
+  off by a ~1.6 scale factor). `continuous_logistic` regression test.
+- **Discrete rv-parametrized families** `poisson(random_variable)`,
+  `binomial(integer, random_variable)`, `geometric(random_variable)` and
+  `negative_binomial(r, random_variable)` as parametric `gate_rv` leaves (self-
+  registering `Distribution` subclasses; the literal constructors keep
   enumerating an exact categorical). Unblocks the discrete conjugate posteriors
-  (Gamma-Poisson, Beta-Binomial) through the same `observe` machinery, with the
-  pmf as the likelihood weight.
+  (Gamma-Poisson, Beta-Binomial, Beta-Geometric, Beta-NegativeBinomial) through
+  the same `observe` machinery, with the pmf as the likelihood weight.
+  Hypergeometric stays literal-only: its three parameters (N, K, n) do not fit
+  the two-parameter `Distribution` ABI (widening it is the one remaining
+  discrete family's cost).
+- **`random_variable = agg_token` comparison** (an implicit cast -- an
+  aggregate IS a random variable) so a latent can be conditioned on a **count**,
+  e.g. `R | (poisson(scale*R) = count(*))`, resolving through the ordinary
+  comparison operators the planner hook already rewrites.
+- **Collapsed (Rao-Blackwellised) inference** -- both the correlated COUNT/SUM
+  moments (`CollapsedAggMoment`, `agg_collapsed_moment`) and the **exact
+  posterior of a latent conditioned on a correlated count**
+  (`collapsedConditionalMoment`): the per-tuple noise marginalises to the count
+  pmf (a Poisson-binomial 1-D quadrature over the shared latent), and the latent
+  posterior is a second 1-D quadrature weighted by the count likelihood
+  `L(r) = sum_j P(C=j) pmf_Y(j; theta(r))`. Exact (works at
+  `rv_mc_samples = 0`), `O(n^2 + G K)`, replacing the degenerating
+  point-equality importance sampler -- 100 tuples in ~40 ms, 500 in ~90 ms where
+  the sampler was hopeless. `continuous_collapsed_posterior` regression test.
 
 **Part C (SMC, then MCMC) remains deferred** and workload-gated, as below. The
-open follow-ups are the **collapsed / Rao-Blackwellized inference** direction
-(marginalize per-tuple noise to a link CDF, exact Poisson-binomial convolution
-of the independent-given-a-shared-latent indicators, 1-D quadrature over the
-shared cut-set the provenance circuit names) -- which is also what makes the
-large-scale correlated count tractable -- and recognising conjugacy to fire a
-closed form instead of importance sampling. The release-time obligations in the
-final section (upgrade script for `gate_observe` + the new functions, the
-`extension_upgrade` canary) are still outstanding and belong to the next
-release, not to this feature's development.
+collapse above already fires the exact posterior for its recognised shape (one
+shared latent, one comparison per row, a discrete rv over the conditioned
+latent equalling the count); the remaining open items are **recognising the
+collapse / conjugacy structure more broadly** (several shared latents, a SUM
+rather than a COUNT in the posterior, hierarchies of latents) and, for the
+truly intractable residue, Part C. The release-time obligations in the final
+section (upgrade script for `gate_observe` + the new functions, constructors and
+families, the `extension_upgrade` canary) are still outstanding and belong to
+the next release, not to this feature's development.
 
 This plan covers letting a continuous distribution's **parameters** be
 scalar provenance tokens (`gate_rv`, `agg_token`, or a `gate_arith`
@@ -85,7 +111,11 @@ Anchored on:
 - **Analytic conjugate closed forms** (Normal-Normal → Normal,
   Gamma-Poisson → NegBin, Beta-Bernoulli). A parametric leaf falls
   through to MC by design; recognising conjugacy and firing a closed
-  form is an optional simplifier follow-up (§A.4), not the MVP.
+  form is an optional simplifier follow-up (§A.4), not the MVP. *(Shipped
+  for one important shape: the collapsed posterior of a latent conditioned
+  on a correlated count -- `collapsedConditionalMoment` -- is exact by
+  quadrature and subsumes the Gamma-Poisson / Beta-Binomial update against
+  a count; general conjugacy detection remains the follow-up.)*
 
 ---
 
