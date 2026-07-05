@@ -1199,6 +1199,20 @@ computing weighted posterior statistics (``rv_sample`` resamples the
 particles, SIR). The whole readout goes through ``getJointCircuit`` so a
 latent shared between the root and the evidence is a single ``gate_t``.
 
+The **discrete** families (``poisson``, ``binomial``) are ordinary
+self-registering ``Distribution`` subclasses that happen to be integer-
+valued: ``sample()`` draws from ``std::poisson_distribution`` /
+``std::binomial_distribution``, ``pdf()`` is the pmf (the ``observe``
+likelihood weight), and ``integrationRange()`` doubles as the parameter-
+domain gate (``λ > 0``; ``0 ≤ p ≤ 1``).  They are only ever instantiated
+for a *latent* leaf -- ``poisson(random_variable)`` /
+``binomial(integer, random_variable)`` -- because the literal
+constructors still enumerate an exact categorical; and a parametric leaf
+is declined by ``parse_distribution_spec``, so no continuous-analytic
+path ever integrates their pmf as a density.  They reuse the parametric-
+leaf mechanism wholesale, which is why the discrete conjugate posteriors
+(Gamma-Poisson, Beta-Binomial) fall out with no evaluator change.
+
 The SQL surface is :sqlfunc:`observe` / :sqlfunc:`and_agg` /
 :sqlfunc:`evidence` / :sqlfunc:`shapley_observe`, the token-accepting
 constructor overloads, and the ``provsql.ess_warn_fraction`` GUC.

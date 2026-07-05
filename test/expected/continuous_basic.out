@@ -125,6 +125,7 @@ t
 (1 row)
 name|nparams|param_names|label
 beta|2|{α,β}|Β
+binomial|2|{n,p}|Bin
 erlang|2|{k,λ}|Erl
 exponential|1|{λ}|Exp
 gamma|2|{k,λ}|Γ
@@ -133,6 +134,7 @@ inverse_gaussian|2|{μ,λ}|IG
 lognormal|2|{μ,σ}|LogN
 normal|2|{μ,σ}|N
 pareto|2|{xₘ,α}|Par
+poisson|1|{λ}|Pois
 uniform|2|{a,b}|U
 weibull|2|{k,λ}|Wbl
-(11 rows)
+(13 rows)

@@ -3771,6 +3771,22 @@ END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
+ * @brief Poisson with a LATENT rate: @c poisson(random_variable).
+ *
+ * A latent (token-valued) rate cannot be enumerated into a categorical at
+ * construction, so this builds a parametric @c gate_rv leaf (family
+ * @c "poisson") wiring the rate, exactly like the continuous latent
+ * constructors.  Only the Monte Carlo sampler resolves the rate (per draw,
+ * then draws a Poisson); @c observe weights by the Poisson pmf; the mean is
+ * exact (E[Poisson(Λ)] = E[Λ], affine).  Unblocks discrete-likelihood
+ * posteriors such as @c "R | (poisson(120*R) = observed_count)".
+ */
+CREATE OR REPLACE FUNCTION poisson(lambda random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric1('poisson', ($1)::uuid); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+/**
  * @brief Construct a Beta(α, β) random variable on the unit interval
  *
  * The conjugate prior of Bernoulli / binomial success probabilities:
@@ -3855,6 +3871,23 @@ BEGIN
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/**
+ * @brief Binomial with a fixed trial count and a LATENT success
+ *        probability: @c binomial(integer, random_variable).
+ *
+ * @p n is a literal trial count; @p p is a latent (token-valued) success
+ * probability (e.g. @c "40.0 / N" for a latent population size @c N).
+ * Builds a parametric @c gate_rv leaf (family @c "binomial", @c extra
+ * @c "binomial:n,$0") the Monte Carlo sampler resolves per draw; @c observe
+ * weights by the Binomial pmf.  Unblocks capture-recapture-style posteriors
+ * such as @c "N | (binomial(50, 40.0/N) = recaptured_count)".
+ */
+CREATE OR REPLACE FUNCTION binomial(n integer, p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('binomial', NULL, $1::double precision,
+                                 ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
 
 /**
  * @brief Construct a Geometric(p) random variable -- the number of

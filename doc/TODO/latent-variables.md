@@ -4,11 +4,32 @@
 inference, including B.5 Shapley over evidence) are **shipped**; see
 `doc/source/user/continuous-distributions.rst` (§Latent variables and posterior
 inference), `doc/source/dev/continuous-distributions.rst`, and the
-`continuous_latent` / `continuous_posterior` regression tests. The SQL surface
-is `provsql.observe` / `and_agg` / `evidence` / `shapley_observe`, the
+`continuous_latent` / `continuous_posterior` / `continuous_latent_aggregate` /
+`continuous_latent_discrete` regression tests. The SQL surface is
+`provsql.observe` / `and_agg` / `evidence` / `shapley_observe`, the
 token-accepting constructor overloads, and the `provsql.ess_warn_fraction` GUC;
-the one new gate type is `gate_observe`. **Part C (SMC, then MCMC) remains
-deferred** and workload-gated, as below. The release-time obligations in the
+the one new gate type is `gate_observe`. Two extensions landed on top of the
+original plan:
+
+- **Exact compound-leaf mean** for families whose mean is affine in their
+  parameters (Normal, Uniform, inverse-Gaussian, Poisson): `E[X] = mean(E[θ])`
+  by linearity, so `expected(normal(uniform(0,1), 1))` is exact (no MC), and it
+  composes with the linearity/mixture recursion. Authoritative per-family
+  `Distribution::meanIsAffine()` flag.
+- **Discrete rv-parametrized families** `poisson(random_variable)` and
+  `binomial(integer, random_variable)` as parametric `gate_rv` leaves (new
+  `poisson`/`binomial` `Distribution` subclasses; the literal constructors keep
+  enumerating an exact categorical). Unblocks the discrete conjugate posteriors
+  (Gamma-Poisson, Beta-Binomial) through the same `observe` machinery, with the
+  pmf as the likelihood weight.
+
+**Part C (SMC, then MCMC) remains deferred** and workload-gated, as below. The
+open follow-ups are the **collapsed / Rao-Blackwellized inference** direction
+(marginalize per-tuple noise to a link CDF, exact Poisson-binomial convolution
+of the independent-given-a-shared-latent indicators, 1-D quadrature over the
+shared cut-set the provenance circuit names) -- which is also what makes the
+large-scale correlated count tractable -- and recognising conjugacy to fire a
+closed form instead of importance sampling. The release-time obligations in the
 final section (upgrade script for `gate_observe` + the new functions, the
 `extension_upgrade` canary) are still outstanding and belong to the next
 release, not to this feature's development.

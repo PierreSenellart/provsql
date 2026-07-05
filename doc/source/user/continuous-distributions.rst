@@ -1118,6 +1118,27 @@ position (``normal(random_variable, float8)``,
 literal call still resolves to the plain numeric constructor, so the
 common case is unchanged.
 
+The **discrete** families join in through ``poisson(random_variable)``
+and ``binomial(integer, random_variable)`` (a latent rate / success
+probability, e.g. ``poisson(120 * R)`` or ``binomial(50, 40.0 / N)``).
+A latent parameter cannot be enumerated into a categorical at
+construction, so these build a sampled leaf like the continuous ones;
+the literal ``poisson(λ)`` / ``binomial(n, p)`` still return the exact
+categorical. Their pmf is the ``observe`` likelihood weight, which makes
+the classic discrete conjugate updates (Gamma-Poisson, Beta-Binomial)
+available to the inference engine below.
+
+The **mean** of a compound leaf is exact (no Monte Carlo, and it works
+even with ``provsql.rv_mc_samples = 0``) whenever the family's mean is
+affine in its parameters -- Normal ``μ``, Uniform ``(a+b)/2``,
+inverse-Gaussian ``μ``, Poisson ``λ`` -- since
+``E[X] = E[mean(θ)] = mean(E[θ])`` by linearity of expectation, with no
+independence assumption. This composes with the ordinary linearity of
+``+``/``-``/scaling and mixtures, so ``E[·]`` stays exact over affine
+transforms and mixtures of tractable leaves; a genuinely nonlinear
+coupling (a product of shared variables, a nonlinear-mean family like
+Exponential ``1/λ``) is where it falls back to Monte Carlo.
+
 Compound leaves have no constant-parameter closed form, so their
 moments are estimated by Monte Carlo (set ``provsql.rv_mc_samples >
 0``). A latent **shared** across several leaves couples them: two
@@ -1152,11 +1173,14 @@ The engine is **self-normalised importance sampling**: latents are drawn
 from the prior and each draw is weighted by the observations' densities
 at the data. It is the continuous generalisation of the rejection-based
 conditioning of :doc:`conditioning` -- a Boolean event contributes a
-``0/1`` weight, an ``observe`` contributes a pdf weight, through the same
-evidence conjunction. All of :sqlfunc:`expected`, :sqlfunc:`variance`,
-:sqlfunc:`moment`, :sqlfunc:`quantile` and :sqlfunc:`rv_sample` gain
-posteriors with no surface change; the posterior predictive is
-``rv_sample`` on a fresh leaf that reuses the latent.
+``0/1`` weight, an ``observe`` contributes a pdf weight (a **pmf** weight
+for a discrete leaf), through the same evidence conjunction. All of
+:sqlfunc:`expected`, :sqlfunc:`variance`, :sqlfunc:`moment`,
+:sqlfunc:`quantile` and :sqlfunc:`rv_sample` gain posteriors with no
+surface change; the posterior predictive is ``rv_sample`` on a fresh leaf
+that reuses the latent. Conjugate models are recovered numerically to MC
+tolerance -- Normal-Normal, Gamma-Poisson (``observe`` on a
+``poisson(R)`` leaf), Beta-Binomial (on a ``binomial(n, p)`` leaf).
 
 :sqlfunc:`observe` binds a datum to a **bare distribution leaf** only;
 observing a derived quantity (``observe(X + Y, d)``) is out of scope (it

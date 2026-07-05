@@ -1,0 +1,15 @@
+\set ECHO none
+poisson_mean_exact
+t
+(1 row)
+poisson_var_total
+t
+(1 row)
+binomial_mean
+t
+(1 row)
+NOTICE:  gamma_poisson_mean: t
+NOTICE:  gamma_poisson_var: t
+NOTICE:  beta_binomial_mean: t
+NOTICE:  poisson_rate_guard: t
+NOTICE:  binomial_prob_guard: t
