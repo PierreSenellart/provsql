@@ -63,6 +63,34 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------
+-- Beta-Geometric conjugacy.  Prior p ~ Beta(2, 2); trials x_i ~ Geometric(p)
+-- on {1, 2, ...}; data {2, 3, 4} (n = 3, sum = 9).  Posterior
+-- p ~ Beta(2 + n, 2 + sum - n) = Beta(5, 8): mean = 5/13 = 0.3846.
+-- ---------------------------------------------------------------------
+
+DO $$
+DECLARE p random_variable := beta(2, 2); ev uuid;
+BEGIN
+  SELECT and_agg(observe(geometric(p), x)) INTO ev
+    FROM (VALUES (2.0::float8), (3.0), (4.0)) AS t(x);
+  RAISE NOTICE 'beta_geometric_mean: %', (abs(expected(p, ev) - 0.3846) < 0.02);
+END $$;
+
+-- ---------------------------------------------------------------------
+-- Beta-NegativeBinomial conjugacy.  Prior p ~ Beta(2, 2); failures k_i ~
+-- NegBinom(r = 5, p) on {0, 1, ...}; data {4, 6, 5} (n = 3, sum = 15).
+-- Posterior p ~ Beta(2 + n*r, 2 + sum) = Beta(17, 17): mean = 0.5.
+-- ---------------------------------------------------------------------
+
+DO $$
+DECLARE p random_variable := beta(2, 2); ev uuid;
+BEGIN
+  SELECT and_agg(observe(negative_binomial(5, p), k)) INTO ev
+    FROM (VALUES (4.0::float8), (6.0), (5.0)) AS t(k);
+  RAISE NOTICE 'beta_negbinom_mean: %', (abs(expected(p, ev) - 0.5) < 0.02);
+END $$;
+
+-- ---------------------------------------------------------------------
 -- Discrete point-event conditioning: a point event X = c on a discrete leaf
 -- carries positive mass, so it is FEASIBLE (a continuous X = c is measure-
 -- zero and folds away).  The natural equality form X | (Y = k) is the

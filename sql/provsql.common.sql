@@ -4015,6 +4015,19 @@ END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
 
 /**
+ * @brief Geometric with a LATENT success probability: @c geometric(random_variable).
+ *
+ * A latent (token-valued) @p p cannot be enumerated at construction, so this
+ * builds a parametric @c gate_rv leaf (family @c "geometric") wiring the
+ * probability, resolved per draw by the sampler.  @c observe weights by the
+ * geometric pmf; unblocks a Beta-Geometric conjugate posterior.
+ */
+CREATE OR REPLACE FUNCTION geometric(p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric1('geometric', ($1)::uuid); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+/**
  * @brief Construct a Hypergeometric(N, K, n) random variable: the
  *        number of marked items among @p n draws WITHOUT replacement
  *        from a population of @p pop_n items of which @p k_marked are
@@ -4114,6 +4127,26 @@ BEGIN
   RETURN provsql.categorical_from_log_pmf(outcomes, lps);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+/*
+ * NegativeBinomial with a LATENT parameter: the count r (number of successes)
+ * stays a plain number while the success probability p is a random_variable,
+ * built as a parametric gate_rv leaf (family "negative_binomial") -- the
+ * Beta-NegativeBinomial conjugate shape.  The all-random and latent-r forms
+ * are provided for uniformity with the continuous constructors.
+ */
+CREATE OR REPLACE FUNCTION negative_binomial(r double precision, p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('negative_binomial', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION negative_binomial(r random_variable, p double precision)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('negative_binomial', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION negative_binomial(r random_variable, p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('negative_binomial', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
 
 /**
  * @brief Catalog of the registered continuous-distribution families.

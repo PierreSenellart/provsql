@@ -11,6 +11,8 @@ t
 NOTICE:  gamma_poisson_mean: t
 NOTICE:  gamma_poisson_var: t
 NOTICE:  beta_binomial_mean: t
+NOTICE:  beta_geometric_mean: t
+NOTICE:  beta_negbinom_mean: t
 NOTICE:  discrete_equality_matches_observe: t
 NOTICE:  poisson_rate_guard: t
 NOTICE:  binomial_prob_guard: t

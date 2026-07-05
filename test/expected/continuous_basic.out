@@ -129,13 +129,15 @@ binomial|2|{n,p}|Bin
 erlang|2|{k,λ}|Erl
 exponential|1|{λ}|Exp
 gamma|2|{k,λ}|Γ
+geometric|1|{p}|Geo
 inverse_gamma|2|{α,β}|IΓ
 inverse_gaussian|2|{μ,λ}|IG
 logistic|2|{μ,s}|Lgs
 lognormal|2|{μ,σ}|LogN
+negative_binomial|2|{r,p}|NB
 normal|2|{μ,σ}|N
 pareto|2|{xₘ,α}|Par
 poisson|1|{λ}|Pois
 uniform|2|{a,b}|U
 weibull|2|{k,λ}|Wbl
-(14 rows)
+(16 rows)
