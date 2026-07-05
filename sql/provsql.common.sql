@@ -1116,6 +1116,17 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 /** @defgroup semiring_operations Semiring operations
  *  Functions that build provenance circuit gates for semiring operations.
  *  These are called internally by the query rewriter.
+ *
+ *  They are declared @c IMMUTABLE: each derives its gate UUID
+ *  deterministically from its arguments (a @c uuid5 content address) and
+ *  the @c create_gate write at that address is idempotent, so the token a
+ *  call returns is a pure function of its inputs.  The marking matters for
+ *  parallelism: PL/pgSQL runs a non-volatile function's inner SPI
+ *  read-only, so the per-row builders the rewriter injects into a scan do
+ *  not call @c CommandCounterIncrement -- which would raise "cannot start
+ *  commands during a parallel operation" once the enclosing statement has
+ *  gone parallel.  A @c VOLATILE builder both blocks that parallel plan and
+ *  loses the query-wide speed-up.
  *  @{
  */
 
@@ -1183,7 +1194,7 @@ BEGIN
 
   RETURN times_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Create a monus (difference) gate from two provenance tokens
@@ -6593,7 +6604,7 @@ BEGIN
 
   RETURN delta_token;
 END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Build an aggregate provenance gate from grouped tokens
@@ -6656,7 +6667,7 @@ BEGIN
 
   RETURN '( '||agg_tok||' , '||agg_val||' )';
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
 
 /**
  * @brief Create a semimodule scalar multiplication gate
@@ -6696,7 +6707,7 @@ BEGIN
 
   RETURN semimod_token;
 END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
 
 /** @} */
 

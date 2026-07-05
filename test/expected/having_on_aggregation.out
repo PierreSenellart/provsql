@@ -35,7 +35,7 @@ remove_provenance
 
 (1 row)
 formula
-(Susan ⊗ (𝟙 ⊖ Ellen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Ellen ⊗ Susan) ⊕ (Paul ⊗ (𝟙 ⊖ John)) ⊕ (John ⊗ (𝟙 ⊖ Paul)) ⊕ (John ⊗ Paul) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ Nancy ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Nancy ⊗ (𝟙 ⊖ Magdalen)) ⊕ (Dave ⊗ Magdalen ⊗ (𝟙 ⊖ Nancy))
+(Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Dave ⊗ Magdalen ⊗ (𝟙 ⊖ Nancy)) ⊕ (Dave ⊗ Nancy ⊗ (𝟙 ⊖ Magdalen)) ⊕ (Ellen ⊗ (𝟙 ⊖ Susan)) ⊕ (Ellen ⊗ Susan) ⊕ (John ⊗ (𝟙 ⊖ Paul)) ⊕ (John ⊗ Paul) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Magdalen ⊗ Nancy ⊗ (𝟙 ⊖ Dave)) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Paul ⊗ (𝟙 ⊖ John)) ⊕ (Susan ⊗ (𝟙 ⊖ Ellen))
 (1 row)
 remove_provenance
 

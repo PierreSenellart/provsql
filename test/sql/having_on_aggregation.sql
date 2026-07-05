@@ -60,6 +60,41 @@ FROM result_having_why_sum_geq7;
 
 DROP TABLE result_having_why_sum_geq7;
 
+-- Collapsing several groups into a single aggregate (GROUP BY 1) flattens
+-- every group's contribution into one top-level ⊕ sum, whose term order
+-- mirrors the aggregate's group-emission order -- plan- and system-dependent
+-- (hash-aggregate bucket order, parallelism, PostgreSQL version).  ⊕ is
+-- commutative, so canonicalise by sorting the depth-0 ⊕ terms before
+-- comparison (paren-aware: inner ⊕ inside "𝟙 ⊖ (a ⊕ b)" must not be split).
+CREATE FUNCTION sort_sum_terms(f text) RETURNS text AS $$
+DECLARE
+  sep   text := ' ' || chr(8853) || ' ';   -- ' ⊕ '
+  depth int := 0;
+  i     int := 1;
+  n     int := length(f);
+  ch    text;
+  buf   text := '';
+  terms text[] := ARRAY[]::text[];
+BEGIN
+  WHILE i <= n LOOP
+    IF depth = 0 AND substr(f, i, 3) = sep THEN
+      terms := terms || buf;
+      buf := '';
+      i := i + 3;
+      CONTINUE;
+    END IF;
+    ch := substr(f, i, 1);
+    IF    ch = '(' THEN depth := depth + 1;
+    ELSIF ch = ')' THEN depth := depth - 1;
+    END IF;
+    buf := buf || ch;
+    i := i + 1;
+  END LOOP;
+  terms := terms || buf;
+  RETURN array_to_string(ARRAY(SELECT unnest(terms) AS t ORDER BY t), sep);
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
 CREATE TABLE result_nested_having_formula AS
 SELECT 1, sr_formula(provenance(), 'personnel_name') AS formula
 FROM (
@@ -71,10 +106,11 @@ FROM (
 GROUP BY 1;
 
 SELECT remove_provenance('result_nested_having_formula');
-SELECT formula
+SELECT sort_sum_terms(formula) AS formula
 FROM result_nested_having_formula;
 
 DROP TABLE result_nested_having_formula;
+DROP FUNCTION sort_sum_terms(text);
 
 CREATE TABLE result_nested_having_why AS
 SELECT 1, sr_why(provenance(), 'personnel_name') AS formula
