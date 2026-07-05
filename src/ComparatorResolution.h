@@ -46,6 +46,26 @@ namespace provsql {
 void resolveComparators(GenericCircuit &gc, gate_t root,
                         bool simplify, bool decompose);
 
+/**
+ * @brief Probability of the Boolean function rooted at @p root in @p gc,
+ *        via the one central dispatch.
+ *
+ * @c getBooleanCircuit builds the Boolean view (HAVING semantics + BoolExpr
+ * translation); @c MethodCatalog::chooseAndRun then runs the cost-ordered
+ * exact/approximate portfolio (independent / tree-decomposition /
+ * compilation).  If the Boolean translation rejects a residual raw RV
+ * @c gate_cmp (a comparator neither @c resolveComparators nor the closed
+ * forms could eliminate), the probability is estimated by Monte-Carlo over
+ * the base RVs (@c monteCarloRV) instead of failing.  This is THE entry
+ * point every caller that needs "the probability of a Boolean subcircuit"
+ * routes through -- the top-level @c probability_evaluate and the moment
+ * evaluator's mixture weights alike -- so the method portfolio is
+ * single-sourced.  @p gc's comparators should already be resolved (see
+ * @c resolveComparators) for an exact result; the MC fallback covers what
+ * remains.
+ */
+double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root);
+
 }  // namespace provsql
 
 #endif /* COMPARATOR_RESOLUTION_H */

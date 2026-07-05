@@ -612,5 +612,61 @@ SELECT abs(provsql.expected(provsql.max(f)) - 2.625) < 0.05 AS mix0_max_mc,
 
 DROP TABLE agg_mix0;
 
+-- ---------------------------------------------------------------------
+-- 8.  COUNT of threshold crossings via sum(as_random(1)) WHERE rv > c.
+--     Each surviving row contributes mixture(rv > c, 1, 0), so the moment
+--     of the count is taken over Bernoulli presence weights whose selector
+--     is an RV comparison -- the moment path resolves that comparator
+--     through the same central Boolean-probability entry the probability
+--     path uses.  Independent comparators resolve to closed-form
+--     Bernoullis, so E and variance are EXACT; a shared latent couples the
+--     crossings and the variance rises above the independent value.
+-- ---------------------------------------------------------------------
+CREATE TABLE agg_cross(id int);
+INSERT INTO agg_cross VALUES (1), (2), (3);
+SELECT add_provenance('agg_cross');
+-- reading_i = Normal(0, 1) i.i.d.;  P(reading > 0.5) = 1 - Phi(0.5) = 0.308538.
+CREATE TABLE agg_cross_r AS
+  SELECT id, provsql.normal(0, 1) AS y FROM agg_cross;
+CREATE TABLE agg_cross_cnt AS
+  SELECT provsql.sum(provsql.as_random(1)) AS s FROM agg_cross_r WHERE y > 0.5;
+SELECT remove_provenance('agg_cross_cnt');
+-- E[C] = 3 * 0.308538 = 0.925613 ; Var[C] = 3 * 0.308538 * 0.691462 = 0.640047
+-- (independent Bernoulli sum -- both closed-form exact, no MC).
+SELECT abs(provsql.expected((SELECT s FROM agg_cross_cnt)) - 0.925613) < 1e-3
+         AS cross_count_mean_exact,
+       abs(provsql.variance((SELECT s FROM agg_cross_cnt)) - 0.640047) < 1e-3
+         AS cross_count_var_exact;
+DROP TABLE agg_cross, agg_cross_r, agg_cross_cnt;
+
+-- Shared latent d ~ Normal(0,1): reading_i = Normal(mu_i + d, 0.3).  The
+-- crossings co-vary, so the count variance exceeds the independent-drift
+-- value while the mean (linear) is unchanged.  Seeded-MC checks.
+CREATE TABLE agg_truth(id int, mu float);
+INSERT INTO agg_truth VALUES (1, 20.1), (2, 19.8), (3, 20.4), (4, 20.0), (5, 19.9);
+CREATE TABLE agg_drift(d random_variable);
+INSERT INTO agg_drift VALUES (provsql.normal(0, 1.0));
+CREATE TABLE agg_share AS
+  SELECT t.id, provsql.normal(mu + d, 0.3) AS y FROM agg_truth t, agg_drift;
+CREATE TABLE agg_indep AS
+  SELECT t.id, provsql.normal(mu + provsql.normal(0, 1.0), 0.3) AS y FROM agg_truth t;
+SELECT add_provenance('agg_share'); SELECT add_provenance('agg_indep');
+CREATE TABLE agg_share_cnt AS
+  SELECT provsql.sum(provsql.as_random(1)) AS s FROM agg_share WHERE y > 20.2;
+CREATE TABLE agg_indep_cnt AS
+  SELECT provsql.sum(provsql.as_random(1)) AS s FROM agg_indep WHERE y > 20.2;
+SELECT remove_provenance('agg_share_cnt'); SELECT remove_provenance('agg_indep_cnt');
+DO $$
+DECLARE es double precision; vs double precision; ei double precision; vi double precision;
+BEGIN
+  es := provsql.expected((SELECT s FROM agg_share_cnt));
+  vs := provsql.variance((SELECT s FROM agg_share_cnt));
+  ei := provsql.expected((SELECT s FROM agg_indep_cnt));
+  vi := provsql.variance((SELECT s FROM agg_indep_cnt));
+  RAISE NOTICE 'shared_count_mean_matches_independent: %', (abs(es - ei) < 0.2);
+  RAISE NOTICE 'shared_count_variance_exceeds_independent: %', (vs > 1.4 * vi);
+END $$;
+DROP TABLE agg_truth, agg_drift, agg_share, agg_indep, agg_share_cnt, agg_indep_cnt;
+
 RESET provsql.monte_carlo_seed;
 RESET provsql.rv_mc_samples;

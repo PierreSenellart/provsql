@@ -11,6 +11,7 @@
 #include "BooleanCircuit.h"
 #include "Circuit.h"
 #include "CircuitFromMMap.h"
+#include "ComparatorResolution.h"  // resolveComparators, booleanSubcircuitProbability
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
 #include "distributions/Distribution.h"  // makeDistribution -> integrationRange
@@ -35,44 +36,71 @@ PG_FUNCTION_INFO_V1(agg_avg_moment_exact);
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <stack>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace provsql {
 
+namespace {
+/// Copy the subtree rooted at @p root of @p gc into a fresh GenericCircuit
+/// @p sub (mirrors @c MMappedCircuit::createGenericCircuit, but from an
+/// in-memory circuit).  Lets the moment path resolve a mixture selector's
+/// comparators in isolation -- without mutating the surrounding moment
+/// circuit, whose gate_case guards and native RV comparisons must keep
+/// their raw comparator structure.
+void extractSubcircuit(const GenericCircuit &gc, gate_t root,
+                       GenericCircuit &sub, gate_t &sub_root)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  stk.push(root);
+  while (!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if (!seen.insert(g).second) continue;
+    const std::string u = gc.getUUID(g);
+    const gate_type t = gc.getGateType(g);
+    const gate_t id = sub.setGate(u, t);
+    const double pr = gc.getProb(g);
+    if (!std::isnan(pr)) sub.setProb(id, pr);
+    if (t == gate_mulinput || t == gate_eq || t == gate_agg || t == gate_cmp
+        || t == gate_arith) {
+      const auto infos = gc.getInfos(g);
+      sub.setInfos(id, infos.first, infos.second);
+    } else if (t == gate_plus || t == gate_times) {
+      const auto infos = gc.getInfos(g);
+      if (infos.first != 0 || infos.second != 0)
+        sub.setInfos(id, infos.first, infos.second);
+    }
+    if (t == gate_project || t == gate_value || t == gate_agg || t == gate_rv
+        || t == gate_mulinput || t == gate_annotation || t == gate_assumed
+        || t == gate_mobius || t == gate_arith || t == gate_observe)
+      sub.setExtra(id, gc.getExtra(g));
+    for (gate_t c : gc.getWires(g)) {
+      sub.addWire(id, sub.getGate(gc.getUUID(c)));
+      stk.push(c);
+    }
+  }
+  sub_root = sub.getGate(gc.getUUID(root));
+}
+}  // namespace
+
 double evaluateBooleanProbability(const GenericCircuit &gc, gate_t boolRoot)
 {
-  BooleanCircuit c;
-  std::unordered_map<gate_t, gate_t> gc_to_bc;
-  for (gate_t u : gc.getInputs()) {
-    gc_to_bc[u] = c.setGate(gc.getUUID(u), BooleanGate::IN, gc.getProb(u));
-  }
-  for (size_t i = 0; i < gc.getNbGates(); ++i) {
-    auto u = static_cast<gate_t>(i);
-    if (gc.getGateType(u) == gate_mulinput) {
-      gc_to_bc[u] = c.setGate(gc.getUUID(u), BooleanGate::MULIN, gc.getProb(u));
-      c.setInfo(gc_to_bc[u], gc.getInfos(u).first);
-      c.addWire(gc_to_bc[u], gc_to_bc[gc.getWires(u)[0]]);
-    }
-  }
-  semiring::BoolExpr semiring(c);
-  gate_t bcRoot = gc.evaluate(boolRoot, gc_to_bc, semiring);
-  propagateDNNFCertificate(gc, gc_to_bc, c);
-
-  try {
-    return c.independentEvaluation(bcRoot);
-  } catch (CircuitException &) {
-    if (provsql_rv_mc_samples <= 0) {
-      throw CircuitException(
-        "evaluateBooleanProbability: subcircuit could not be evaluated "
-        "independently and provsql.rv_mc_samples = 0 disables the "
-        "Monte Carlo fallback");
-    }
-    c.rewriteMultivaluedGates();
-    return c.monteCarlo(bcRoot,
-                        static_cast<unsigned>(provsql_rv_mc_samples));
-  }
+  // Route through the single central Boolean-probability entry point
+  // (getBooleanCircuit + MethodCatalog::chooseAndRun, MC fallback), rather
+  // than a hand-rolled Boolean build + independentEvaluation.  Any RV
+  // comparator in this Boolean function is resolved on an extracted COPY of
+  // the boolRoot subtree, so the resolution never touches the surrounding
+  // moment circuit (whose gate_case guards / native RV comparisons must
+  // keep their raw comparator for the correlation-aware value moment).
+  GenericCircuit sub;
+  gate_t sub_root;
+  extractSubcircuit(gc, boolRoot, sub, sub_root);
+  resolveComparators(sub, sub_root, /*simplify=*/false, /*decompose=*/false);
+  return booleanSubcircuitProbability(sub, sub_root);
 }
 
 namespace {

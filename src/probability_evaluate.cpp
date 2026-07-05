@@ -1831,6 +1831,34 @@ const MethodCatalog &MethodCatalog::instance()
   return cat;
 }
 
+double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root)
+{
+  const pg_uuid_t token = string2uuid(gc.getUUID(root));
+  static const std::string kNoArgs;
+  try {
+    gate_t gate;
+    std::unordered_map<gate_t, gate_t> gc_to_bc;
+    BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
+    EvalContext ctx{&gc, root, token, c, gate, &gc_to_bc,
+                    /*inv_free_cert=*/false, kNoArgs,
+                    /*explicitly_named=*/false,
+                    /*n_inputs=*/c.getInputs().size(),
+                    /*circuit_size=*/c.getNbGates()};
+    return MethodCatalog::instance().chooseAndRun(ctx, Tolerance{});
+  } catch (const semiring::SemiringException &) {
+    // Boolean translation met a raw RV comparator -- fall to MC below.
+  } catch (const CircuitException &) {
+    // Exact portfolio exhausted (or the Boolean view could not be built);
+    // Monte Carlo is the universal fallback.
+  }
+  if (provsql_rv_mc_samples <= 0)
+    throw CircuitException(
+      "booleanSubcircuitProbability: a random-variable comparator could not "
+      "be resolved to a Boolean and provsql.rv_mc_samples = 0 disables the "
+      "Monte Carlo fallback");
+  return monteCarloRV(gc, root, static_cast<int>(provsql_rv_mc_samples));
+}
+
 }  // namespace provsql
 
 // ---------------------------------------------------------------------------
