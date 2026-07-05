@@ -69,6 +69,23 @@ public:
   virtual double rawMoment(unsigned k) const = 0;  ///< E[X^k]
   ///@}
 
+  /**
+   * @brief Whether @c mean() is an affine function of the raw parameters
+   *        @c (p1, p2) -- i.e. @c mean = c0 + c1·p1 + c2·p2.
+   *
+   * Default @c false.  A family whose mean is a linear combination of its
+   * parameters (Normal @c μ, Uniform @c (a+b)/2, inverse-Gaussian @c μ)
+   * overrides to @c true.  This is the authoritative signal the latent-
+   * variable evaluator uses to keep the expectation of a compound (token-
+   * parameterised) leaf EXACT: when the mean is affine,
+   * @f$E[X] = E[\mathrm{mean}(\theta)] = \mathrm{mean}(E[\theta])@f$ by
+   * linearity of expectation (no independence assumption), so the evaluator
+   * recurses into the parameter wires instead of falling back to Monte
+   * Carlo.  Families with a nonlinear mean (Exponential @c 1/λ, Gamma
+   * @c k/λ, ...) keep the default and decline.
+   */
+  virtual bool meanIsAffine() const { return false; }
+
   /** @name Density / distribution */
   ///@{
   virtual double pdf(double x) const = 0;  ///< f(x); NaN if the family declines

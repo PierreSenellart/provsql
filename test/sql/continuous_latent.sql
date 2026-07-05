@@ -75,12 +75,15 @@ END $$;
 -- ---------------------------------------------------------------------
 -- Parameter-domain guard: a prior that can emit a scale <= 0 raises a
 -- specific, actionable error rather than silently truncating the prior.
+-- The variance depends on the scale, so it samples and the guard fires
+-- (the mean of a location family is scale-independent, so expected() of the
+-- same leaf legitimately never samples the scale -- see the affine section).
 -- ---------------------------------------------------------------------
 
 DO $$
 DECLARE r double precision;
 BEGIN
-  r := expected(normal(0, normal(0, 3)));   -- sigma latent draws <= 0
+  r := variance(normal(0, normal(0, 3)));   -- sigma latent draws <= 0
   RAISE NOTICE 'domain_guard: f (returned %)', r;
 EXCEPTION WHEN OTHERS THEN
   IF SQLERRM LIKE '%outside the family''s domain%' THEN
@@ -99,3 +102,24 @@ SET provsql.rv_mc_samples = 0;   -- forbid MC: literal path must be analytic
 SELECT expected(normal(2.5, 0.5)) = 2.5 AS literal_mean_exact;
 SELECT variance(normal(2.5, 0.5)) = 0.25 AS literal_var_exact;
 SELECT expected(gamma(2.0, 4.0)) = 0.5 AS literal_gamma_mean_exact;
+
+-- ---------------------------------------------------------------------
+-- Affine-mean fast path: the MEAN of a compound leaf is EXACT (no MC) when
+-- the family's mean is affine in its parameters (Normal μ, Uniform (a+b)/2,
+-- inverse-Gaussian μ), by linearity of expectation E[X] = mean(E[theta]).
+-- Still under rv_mc_samples = 0, so a leaf that took the MC path would throw.
+-- ---------------------------------------------------------------------
+
+SELECT expected(normal(uniform(0, 1), 1)) = 0.5 AS affine_normal_of_uniform;
+SELECT expected(normal(normal(0, 10), 1)) = 0.0 AS affine_normal_of_normal;
+SELECT expected(uniform(normal(2, 1), 5)) = 3.5 AS affine_uniform_of_normal;
+SELECT expected(inverse_gaussian(uniform(1, 3), 2)) = 2.0 AS affine_invgauss_mean;
+-- A nonlinear-mean family (Exponential 1/lambda) is NOT affine: it declines
+-- to MC and therefore raises under rv_mc_samples = 0.
+DO $$
+BEGIN
+  PERFORM expected(exponential(uniform(1, 3)));
+  RAISE NOTICE 'nonlinear_mean_declines_to_mc: f';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'nonlinear_mean_declines_to_mc: t';
+END $$;

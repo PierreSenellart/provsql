@@ -100,6 +100,14 @@ bool rvIsParametric(const GenericCircuit &gc, gate_t g)
   return tmpl && tmpl->parametric();
 }
 
+/// Whether the family of @p tmpl has a mean affine in its parameters, so the
+/// compound-leaf expectation is exact via @c mean(E[θ]) (see the
+/// @c meanIsAffine() doc).  The flag is authoritative, per-family.
+bool familyMeanIsAffine(const DistributionTemplate &tmpl)
+{
+  return tmpl.family->factory(0.0, 0.0)->meanIsAffine();
+}
+
 /// Cache of the base-@c gate_rv UUID footprints reachable below each
 /// scalar gate, used as the structural-independence witness.  Two
 /// children of an arithmetic gate are independent iff their footprints
@@ -1337,13 +1345,27 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
       return parseDoubleStrict(gc.getExtra(g));
     case gate_rv: {
       // A latent (parametric) leaf -- a parameter is itself a random
-      // variable -- has no constant-parameter closed form; sample the
-      // compound leaf.  E[normal(M,1)] = E[M] etc. is exact in
-      // expectation under MC.  A leaf sharing a latent with a sibling is
-      // never reached here: its parent arith sees the overlapping
-      // footprint and routes the whole (coupled) expression to MC.
-      if (rvIsParametric(gc, g))
+      // variable -- has no constant-parameter closed form.  But the MEAN
+      // still decomposes exactly when the family's mean is affine in its
+      // parameters (Normal mean = μ, Uniform mean = (a+b)/2, inverse-
+      // Gaussian mean = μ): E[X] = E[mean(θ)] = mean(E[θ]) by linearity of
+      // expectation (no independence assumption), so recurse into the
+      // parameter wires -- no MC.  Nonlinear means (Exponential 1/λ,
+      // Gamma k/λ, ...) keep meanIsAffine() = false and fall through to MC.
+      if (rvIsParametric(gc, g)) {
+        auto tmpl = parse_distribution_template(gc.getExtra(g));
+        if (tmpl && familyMeanIsAffine(*tmpl)) {
+          const auto &w = gc.getWires(g);
+          auto param_mean = [&](const DistributionParam &p) {
+            return p.wire_slot < 0 ? p.literal
+                                   : rec_expectation(gc, w[p.wire_slot], fp);
+          };
+          return tmpl->family
+                   ->factory(param_mean(tmpl->p1), param_mean(tmpl->p2))
+                   ->mean();
+        }
         return mc_raw_moment(gc, g, 1, "Expectation of a latent gate_rv");
+      }
       auto spec = parse_distribution_spec(gc.getExtra(g));
       if (!spec)
         throw CircuitException(

@@ -91,6 +91,7 @@ public:
   using BaseDistribution::BaseDistribution;
   const DistributionFamily &family() const override;
   double mean() const override { return p1_; }
+  bool meanIsAffine() const override { return true; }   // mean = μ
   double variance() const override { return p2_ * p2_; }
   double rawMoment(unsigned k) const override {
     if (k == 0) return 1.0;

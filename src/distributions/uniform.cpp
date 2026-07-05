@@ -46,6 +46,7 @@ public:
   using BaseDistribution::BaseDistribution;
   const DistributionFamily &family() const override;
   double mean() const override { return 0.5 * (p1_ + p2_); }
+  bool meanIsAffine() const override { return true; }   // mean = (a+b)/2
   double variance() const override {
     const double w = p2_ - p1_;
     return (w * w) / 12.0;

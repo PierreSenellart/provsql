@@ -23,3 +23,16 @@ t
 literal_gamma_mean_exact
 t
 (1 row)
+affine_normal_of_uniform
+t
+(1 row)
+affine_normal_of_normal
+t
+(1 row)
+affine_uniform_of_normal
+t
+(1 row)
+affine_invgauss_mean
+t
+(1 row)
+NOTICE:  nonlinear_mean_declines_to_mc: t
