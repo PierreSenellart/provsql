@@ -121,7 +121,7 @@
   // positional and get the semantic labels defined in EDGE_POS_LABEL
   // below.
   const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned', 'mobius', 'case']);
+                                 'conditioned', 'mobius', 'case', 'rv']);
   // Per-(parent type, 1-based child_pos) edge-label overrides for
   // gates whose wires have well-known names.  Falls back to the bare
   // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
@@ -214,11 +214,31 @@
     const i = Math.ceil(child_pos / 2);
     return (child_pos % 2 === 1) ? `guard ${i}` : `value ${i}`;
   }
+  // gate_rv wires: a parametric (latent / compound) leaf wires one or more of
+  // its distribution parameters as tokens.  The extra "kind:p1[,p2]" marks a
+  // wired slot j as "$k" (the k-th wire), so the edge from wire (child_pos-1)
+  // fills parameter slot j -- label it with that family's parameter symbol
+  // (μ / σ / λ ...) from the scene's rv_families registry, matching the
+  // in-circle "·" placeholder.  A bare (non-parametric) rv has no wires, so
+  // this never fires for it.
+  function _rvEdgeLabel(parent, child_pos) {
+    if (!parent.extra) return null;
+    const m = String(parent.extra).match(/^\s*([a-zA-Z_]+)\s*:(.*)$/);
+    if (!m) return null;
+    const kind = m[1].toLowerCase();
+    const slots = m[2].split(',').map(x => x.trim());
+    const j = slots.indexOf('$' + (child_pos - 1));   // wire index = child_pos-1
+    if (j < 0) return null;
+    const reg = (state.scene?.rv_families || {})[kind];
+    const names = reg && reg.param_names;
+    return (names && names[j]) || null;
+  }
   const EDGE_POS_LABEL = {
     mixture: _mixtureEdgeLabel,
     conditioned: _conditionedEdgeLabel,
     mobius: _mobiusEdgeLabel,
     case: _caseEdgeLabel,
+    rv: _rvEdgeLabel,
   };
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   // = and <> are commutative; lhs/rhs digits add noise for those cmp
@@ -3713,11 +3733,21 @@
   // touching this file -- there is no client-side family table.
   function parseDistributionSpec(s) {
     if (!s) return null;
-    const m = String(s).match(/^\s*([a-zA-Z]+)\s*(?::(.*))?$/);
+    // Family tokens may contain underscores (inverse_gamma, inverse_gaussian,
+    // negative_binomial), so match [a-zA-Z_]+, not [a-zA-Z]+.
+    const m = String(s).match(/^\s*([a-zA-Z_]+)\s*(?::(.*))?$/);
     if (!m) return null;
     const kind = m[1].toLowerCase();
+    // Keep every slot: a numeric literal, or a wired "$k" latent parameter,
+    // rendered as "·" (the value is the child subtree at that edge, which the
+    // graph labels with this parameter's symbol).  A wired slot must NOT be
+    // dropped, or a latent leaf would fail the arity check below.
     const params = (m[2] || '')
-      .split(',').map(x => Number(x.trim())).filter(x => Number.isFinite(x));
+      .split(',')
+      .map(x => x.trim())
+      .filter(x => x.length)
+      .map(x => (x.startsWith('$') ? '·' : Number(x)))
+      .filter(x => x === '·' || Number.isFinite(x));
     const reg = (state.scene?.rv_families || {})[kind];
     if (!reg || !(reg.nparams >= 1) || params.length < reg.nparams) return null;
     return {

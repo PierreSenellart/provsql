@@ -675,6 +675,12 @@ def test_format_rv_label_uses_registry():
     # Unregistered kind (or no registry at all): raw text passthrough.
     assert _format_rv_label("weibull:1,2", fams) == "weibull:1,2"
     assert _format_rv_label("normal:0,1") == "normal:0,1"
+    # A latent (compound) leaf wires a parameter as a token ("$i"): the value
+    # is the child subtree, so the slot renders as "·" (a placeholder the graph
+    # edge labels with the parameter symbol) rather than the raw wire ref.
+    assert _format_rv_label("normal:$0,1", fams) == "N(·,1)"
+    assert _format_rv_label("normal:0,$1", fams) == "N(0,·)"
+    assert _format_rv_label("normal:$0,$1", fams) == "N(·,·)"
 
 
 def test_rv_family_registry_payload(client, test_dsn):

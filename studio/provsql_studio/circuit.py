@@ -226,6 +226,12 @@ def _format_rv_label(extra: str, rv_families: dict | None = None) -> str:
     "normal:23.333333333333336,1.6666666666666667" do not blow the
     circle wide; the full text is still surfaced by the inspector
     under the `distribution` row.
+
+    A latent (compound) leaf wires one or more parameters as tokens: the
+    on-disk text writes a wired slot "$i" (the i-th child).  The value is
+    the child subtree, not a literal, so the slot renders as "·" -- a
+    placeholder for "supplied by the incoming edge", which the front-end
+    labels with the parameter's symbol (μ / σ / λ ...).
     """
     s = str(extra).strip()
     kind, _, params = s.partition(":")
@@ -239,6 +245,9 @@ def _format_rv_label(extra: str, rv_families: dict | None = None) -> str:
     parts = []
     for raw in p.split(","):
         token = raw.strip()
+        if token.startswith("$"):
+            parts.append("·")
+            continue
         try:
             parts.append(f"{float(token):.4g}")
         except ValueError:
