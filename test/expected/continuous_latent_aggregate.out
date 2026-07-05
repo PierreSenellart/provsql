@@ -1,0 +1,6 @@
+\set ECHO none
+NOTICE:  prior_mean_is_true_average: t
+NOTICE:  prior_var_floored_by_shared_latent: t
+NOTICE:  independent_drift_averages_away: t
+NOTICE:  shared_variance_exceeds_independent: t
+NOTICE:  posterior_pulled_above_prior: t
