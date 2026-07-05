@@ -6868,6 +6868,15 @@ CREATE OR REPLACE FUNCTION agg_collapsed_moment(token uuid, k integer)
   RETURNS double precision
   AS 'provsql','agg_collapsed_moment' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Both collapsed raw moments {E[C], E[C^2]} of a correlated COUNT / SUM
+ *  from a single circuit load and plan build; NULL when the shared-latent
+ *  pattern does not match.  @c variance() uses this so a mean+variance readout
+ *  traverses the circuit once rather than calling @c agg_collapsed_moment twice
+ *  (the load and O(n) plan build dominate once the grid loop is arithmetic). */
+CREATE OR REPLACE FUNCTION agg_collapsed_moments(token uuid)
+  RETURNS double precision[]
+  AS 'provsql','agg_collapsed_moments' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /**
  * @brief Boolean event "this aggregate-carrying gate's value is defined
  *        (non-NULL) in the world".
@@ -7299,6 +7308,21 @@ BEGIN
   IF pg_typeof(input) = 'agg_token'::regtype THEN
     IF input IS NULL THEN
       RETURN NULL;
+    END IF;
+    -- Collapsed fast path: E[C] and E[C^2] from a single circuit load and plan
+    -- build, instead of two agg_raw_moment() calls that each reload.  Mirrors
+    -- the guard in agg_raw_moment (unconditional only, prov = one); on any
+    -- mismatch agg_collapsed_moments returns NULL and we fall through to the
+    -- generic per-order path (which handles conditioning, SUM enumeration, ...).
+    IF rv_conditioned_prov(input::uuid, prov) = gate_one() THEN
+      DECLARE ms float8[];
+      BEGIN
+        ms := agg_collapsed_moments(
+                (agg_conditioned_target(input::agg_token))::uuid);
+        IF ms IS NOT NULL THEN
+          RETURN ms[2] - ms[1] * ms[1];
+        END IF;
+      END;
     END IF;
     m1 := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
                          rv_conditioned_prov(input::uuid, prov), method, arguments);

@@ -48,6 +48,8 @@ extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
 #include "utils/uuid.h"
+#include "utils/array.h"
+#include "catalog/pg_type_d.h"
 #include "provsql_utils.h"
 #include "provsql_error.h"
 }
@@ -474,11 +476,9 @@ aggCollapsedPmf(const GenericCircuit &gc, gate_t agg)
 
 }  // namespace
 
-std::optional<double>
-aggCollapsedRawMoment(const GenericCircuit &gc, gate_t agg, unsigned k)
+std::optional<std::pair<double, double>>
+aggCollapsedRawMoments(const GenericCircuit &gc, gate_t agg)
 {
-  if (k == 0) return 1.0;
-  if (k > 2) return std::nullopt;
   auto plan = buildCollapsePlan(gc, agg);
   if (!plan) return std::nullopt;
 
@@ -499,7 +499,20 @@ aggCollapsedRawMoment(const GenericCircuit &gc, gate_t agg, unsigned k)
     m1 += w * mean_b;
     m2 += w * (var_b + mean_b * mean_b);
   }
-  return (k == 1) ? m1 : m2;
+  return std::make_pair(m1, m2);
+}
+
+std::optional<double>
+aggCollapsedRawMoment(const GenericCircuit &gc, gate_t agg, unsigned k)
+{
+  if (k == 0) return 1.0;
+  if (k > 2) return std::nullopt;
+  // Both moments share the whole load / plan / grid pass; variance() consumes
+  // them together through agg_collapsed_moments so a readout that needs E[C]
+  // and E[C^2] pays for one traversal, not two.
+  auto m = aggCollapsedRawMoments(gc, agg);
+  if (!m) return std::nullopt;
+  return (k == 1) ? m->first : m->second;
 }
 
 std::optional<double>
@@ -621,6 +634,37 @@ Datum agg_collapsed_moment(PG_FUNCTION_ARGS)
     provsql_error("agg_collapsed_moment: %s", e.what());
   } catch (...) {
     provsql_error("agg_collapsed_moment: unknown exception");
+  }
+  PG_RETURN_NULL();
+}
+
+PG_FUNCTION_INFO_V1(agg_collapsed_moments);
+
+/**
+ * @brief SQL: agg_collapsed_moments(token uuid) -> float8[] {E[C], E[C^2]}
+ *
+ * Both collapsed raw moments from a single circuit load and plan build, or
+ * @c NULL when the shared-latent pattern does not match.  @c variance() calls
+ * this so a mean+variance readout traverses the circuit once, not twice (the
+ * load and plan build dominate once the grid loop is arithmetic-only).
+ */
+Datum agg_collapsed_moments(PG_FUNCTION_ARGS)
+{
+  try {
+    pg_uuid_t *token = PG_GETARG_UUID_P(0);
+    auto gc = getGenericCircuit(*token);
+    gate_t root = gc.getGate(uuid2string(*token));
+    auto m = provsql::aggCollapsedRawMoments(gc, root);
+    if (!m.has_value())
+      PG_RETURN_NULL();
+    Datum elems[2] = { Float8GetDatum(m->first), Float8GetDatum(m->second) };
+    ArrayType *arr = construct_array(elems, 2, FLOAT8OID,
+                                     sizeof(float8), FLOAT8PASSBYVAL, 'd');
+    PG_RETURN_ARRAYTYPE_P(arr);
+  } catch (const std::exception &e) {
+    provsql_error("agg_collapsed_moments: %s", e.what());
+  } catch (...) {
+    provsql_error("agg_collapsed_moments: unknown exception");
   }
   PG_RETURN_NULL();
 }
