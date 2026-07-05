@@ -39,10 +39,14 @@ INT="$PWD/dist/include/postgresql/internal"
 cd provsql-wasm || exit 99
 INC="-I$SRV -I$INT -I/boostinc -I. -Isrc"  # -I. for the few <src/X.h> angle includes
 
-# Everything in src/, minus the tdkc-only and migration sources (see
-# Makefile.internal's OBJS filter).
+# Everything in src/ (including the per-family distributions/ and any
+# semiring/ .cpp), minus the tdkc-only and migration sources -- the same set
+# as Makefile.internal's OBJS.  The distributions/ files are the self-
+# registering Distribution families (makeDistribution and the whole
+# continuous-RV surface live there), so they must be compiled here too.
 CFILES=$(ls src/*.c)
-CPPFILES=$(ls src/*.cpp | grep -vE 'provsql_migrate_mmap|TreeDecompositionKnowledgeCompiler|kcmcp_server|dimacs_cnf')
+CPPFILES=$(ls src/*.cpp src/distributions/*.cpp src/semiring/*.cpp 2>/dev/null \
+            | grep -vE 'provsql_migrate_mmap|TreeDecompositionKnowledgeCompiler|kcmcp_server|dimacs_cnf')
 
 # Boost <= ~1.78 derives boost::hash_detail::hash_base from std::unary_function
 # unless BOOST_NO_CXX98_FUNCTION_BASE is set, but only auto-defines that macro
