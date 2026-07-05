@@ -1834,55 +1834,85 @@ const MethodCatalog &MethodCatalog::instance()
 double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
                                     const std::string &method,
                                     const std::string &args,
-                                    bool inv_free_cert, bool mc_fallback,
+                                    bool inv_free_cert, const Tolerance &tol,
+                                    bool mc_fallback,
                                     std::string *actual_method_out)
 {
   const pg_uuid_t token = string2uuid(gc.getUUID(root));
-  try {
-    // The one place the Boolean view is built and the method portfolio is
-    // run: HAVING semantics + BoolExpr translation via getBooleanCircuit,
-    // then the empty / "default" / "exact" method runs the cost-ordered
-    // auto-chooser (chooseAndRun) while a named method dispatches byName.
-    gate_t gate;
-    std::unordered_map<gate_t, gate_t> gc_to_bc;
-    BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
-    const bool is_path =
-      method.empty() || method == "default" || method == "exact";
-    EvalContext ctx{&gc, root, token, c, gate, &gc_to_bc,
-                    inv_free_cert, args, /*explicitly_named=*/!is_path,
-                    /*n_inputs=*/c.getInputs().size(),
-                    /*circuit_size=*/c.getNbGates()};
-    double result;
-    if (is_path) {
-      result = MethodCatalog::instance().chooseAndRun(ctx, Tolerance{});
-    } else {
-      const ProbabilityMethod *m = MethodCatalog::instance().byName(method);
-      if (m == nullptr)
-        provsql_error("Wrong method '%s' for probability evaluation",
-                      method.c_str());
-      // A Boolean-only method named explicitly gets multivalued / BID
-      // blocks rewritten first (same declarative point as chooseAndRun).
-      if (!m->handlesMultivalued())
-        ctx.ensureMultivaluedRewritten();
-      result = m->evaluate(ctx, Tolerance{});
+  const bool is_path =
+    method.empty() || method == "default" || method == "exact";
+
+  // Boolean-view portfolio.  Skip the build when the circuit carries random
+  // variables (the BoolExpr translation drops gate_rv and rejects an RV
+  // gate_cmp), or when a large sampleable HAVING aggregate under an
+  // approximate request would force provsql_having's non-terminating
+  // threshold-lineage expansion -- those go straight to the estimators below.
+  const bool sampleable_agg = circuitHasUnresolvedSampleableAgg(gc, root);
+  if (!circuitHasRV(gc, root) && !(sampleable_agg && tol.delta > 0.)) {
+    try {
+      gate_t gate;
+      std::unordered_map<gate_t, gate_t> gc_to_bc;
+      BooleanCircuit c = getBooleanCircuit(gc, token, gate, gc_to_bc);
+      EvalContext ctx{&gc, root, token, c, gate, &gc_to_bc,
+                      inv_free_cert, args, /*explicitly_named=*/!is_path,
+                      /*n_inputs=*/c.getInputs().size(),
+                      /*circuit_size=*/c.getNbGates()};
+      double result;
+      if (is_path) {
+        // The empty / "default" / "exact" method runs the cost-ordered
+        // auto-chooser under the requested tolerance.
+        result = MethodCatalog::instance().chooseAndRun(ctx, tol);
+      } else {
+        const ProbabilityMethod *m = MethodCatalog::instance().byName(method);
+        if (m == nullptr)
+          provsql_error("Wrong method '%s' for probability evaluation",
+                        method.c_str());
+        // A Boolean-only method named explicitly gets multivalued / BID
+        // blocks rewritten first (same declarative point as chooseAndRun).
+        if (!m->handlesMultivalued())
+          ctx.ensureMultivaluedRewritten();
+        result = m->evaluate(ctx, tol);
+      }
+      if (actual_method_out != nullptr)
+        *actual_method_out = ctx.actual_method;
+      return result;
+    } catch (const semiring::SemiringException &) {
+      // Boolean translation met a raw RV comparator: fall to the estimators.
+      if (tol.kind == ToleranceKind::Exact && !mc_fallback) throw;
+    } catch (const CircuitException &) {
+      // Portfolio exhausted / Boolean view unbuildable: estimators or raise.
+      if (tol.kind == ToleranceKind::Exact && !mc_fallback) throw;
     }
-    if (actual_method_out != nullptr)
-      *actual_method_out = ctx.actual_method;
-    return result;
-  } catch (const semiring::SemiringException &) {
-    // Boolean translation met a raw RV comparator.
-    if (!mc_fallback) throw;
-  } catch (const CircuitException &) {
-    // Exact portfolio exhausted, or the Boolean view could not be built.
-    if (!mc_fallback) throw;
   }
-  // mc_fallback path: estimate the Boolean probability by Monte Carlo over
-  // the base RVs (the moment path's residual raw comparators land here).
-  if (provsql_rv_mc_samples <= 0)
+
+  // No Boolean view: the tolerance-appropriate generic-circuit estimator.
+  if (tol.delta == 0. && tol.kind != ToleranceKind::Exact)
+    provsql_error(
+      "a deterministic (delta = 0) guarantee is not available for this "
+      "circuit: it carries random-variable or HAVING-aggregate gates, for "
+      "which only the (eps,delta) samplers apply -- use delta > 0");
+  if (tol.kind == ToleranceKind::Relative) {
+    double result;
+    std::string am;
+    run_stopping_rule(gc, root, parse_method_args(args), result, am);
+    if (actual_method_out != nullptr) *actual_method_out = am;
+    return result;
+  }
+  if (tol.kind == ToleranceKind::Additive) {
+    if (actual_method_out != nullptr) *actual_method_out = "monte-carlo";
+    return monteCarloRV(
+      gc, root, static_cast<int>(monte_carlo_samples(parse_method_args(args))));
+  }
+  // Exact request with no Boolean view: the moment path's fixed-sample MC
+  // over the base RVs (mc_fallback).  probability_evaluate's exact arm routes
+  // its RV circuits to monte-carlo upstream and passes mc_fallback = false,
+  // so it raises here rather than silently sampling.
+  if (!mc_fallback || provsql_rv_mc_samples <= 0)
     throw CircuitException(
       "booleanSubcircuitProbability: a random-variable comparator could not "
-      "be resolved to a Boolean and provsql.rv_mc_samples = 0 disables the "
-      "Monte Carlo fallback");
+      "be resolved to a Boolean and no Monte Carlo fallback is available "
+      "(provsql.rv_mc_samples = 0)");
+  if (actual_method_out != nullptr) *actual_method_out = "monte-carlo";
   return monteCarloRV(gc, root, static_cast<int>(provsql_rv_mc_samples));
 }
 
@@ -2172,65 +2202,15 @@ static Datum probability_evaluate_internal
       SampleSpec s = parse_sample_spec(parse_method_args(args), method.c_str());
       provsql::Tolerance tol{tk, s.eps, s.delta};
 
-      // The estimators (and the Boolean exact methods) need the Boolean view; it
-      // drops gate_rv and rejects RV gate_cmp, so it cannot build on an RV / HAVING
-      // circuit.  Build it when possible and run the unified portfolio; otherwise
-      // fall back to the generic GenericCircuit estimator (the only option there),
-      // exactly as before -- the stopping rule for 'relative', fixed-sample
-      // monteCarloRV for 'additive'.
-      //
-      // A surviving sample-faithful HAVING comparator (SUM / AVG / MIN / MAX /
-      // COUNT, that the exact closed-form / marginal-vector pre-passes bailed
-      // on) is the apx-safe corner of the trichotomy: in practice only the
-      // first four ever bail (COUNT's value-support is small, always resolved
-      // exactly).  Building the Boolean view would force provsql_having's
-      // threshold-lineage expansion, which does not terminate for a large-
-      // magnitude / large-support aggregate.  For an APPROXIMATE (delta > 0)
-      // request we skip the Boolean build and sample the comparator directly via
-      // the GenericCircuit estimator (the gate_agg arm of the sampler) -- a sound
-      // (eps,delta) FPRAS, magnitude-independent.  An exact (delta == 0)
-      // 'relative' request still attempts the Boolean view (the expansion is the
-      // only exact route).  See circuitHasUnresolvedSampleableAgg for why COUNT
-      // is excluded.
-      const bool sampleable_agg =
-        provsql::circuitHasUnresolvedSampleableAgg(gc, gc_root);
-      bool boolean_built = false;
-      gate_t gate{};
-      std::unordered_map<gate_t, gate_t> gc_to_bc;
-      BooleanCircuit c;
-      if(!provsql::circuitHasRV(gc, gc_root)
-         && !(sampleable_agg && tol.delta > 0.)) {
-        try {
-          c = getBooleanCircuit(gc, token, gate, gc_to_bc);
-          boolean_built = true;
-        } catch(CircuitException &) {
-          boolean_built = false;
-        }
-      }
-
-      if(boolean_built) {
-        provsql::EvalContext ctx{&gc, gc_root, token, c, gate, &gc_to_bc,
-                                 inv_free_cert, args,
-                                 /*explicitly_named=*/false,
-                                 /*n_inputs=*/c.getInputs().size(),
-                                 /*circuit_size=*/c.getNbGates()};
-        result = provsql::MethodCatalog::instance().chooseAndRun(ctx, tol);
-        actual_method = ctx.actual_method;
-      } else if(tol.delta == 0.) {
-        // No Boolean view (random-variable / HAVING-aggregate circuit): only the
-        // (eps,delta) samplers apply here, none of which can honour delta = 0.
-        provsql_error("a deterministic (delta = 0) '%s' guarantee is not "
-                      "available for this circuit: it carries random-variable "
-                      "or HAVING-aggregate gates, for which only the (eps,delta) "
-                      "samplers apply -- use delta > 0", method.c_str());
-      } else if(method == "relative") {
-        run_stopping_rule(gc, gc_root, parse_method_args(args), result,
-                          actual_method);
-      } else {
-        unsigned long samples = monte_carlo_samples(parse_method_args(args));
-        result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
-        actual_method = "monte-carlo";
-      }
+      // Delegate to the single Boolean-probability entry point under this
+      // tolerance: it runs the exact portfolio through the Boolean view when
+      // one can be built (a tuple-independent circuit resolves exactly via
+      // 'independent', a small DNF via 'sieve'), and the (eps,delta)
+      // generic-circuit estimator (stopping rule for 'relative', fixed-sample
+      // monteCarloRV for 'additive') on an RV / large-aggregate circuit.
+      result = provsql::booleanSubcircuitProbability(
+        gc, gc_root, /*method=*/"", args, inv_free_cert, tol,
+        /*mc_fallback=*/false, &actual_method);
     } else if(method == "stopping-rule") {
       run_stopping_rule(gc, gc_root, parse_method_args(args), result,
                         actual_method);
@@ -2252,7 +2232,7 @@ static Datum probability_evaluate_internal
       // unresolved RV comparator surfaces its diagnostic rather than
       // silently sampling (the moment path opts into the MC fallback).
       result = provsql::booleanSubcircuitProbability(
-        gc, gc_root, method, args, inv_free_cert,
+        gc, gc_root, method, args, inv_free_cert, provsql::Tolerance{},
         /*mc_fallback=*/false, &actual_method);
     }
   } catch(CircuitException &e) {

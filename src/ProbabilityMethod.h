@@ -226,15 +226,25 @@ dDNNF makeDDAuto(BooleanCircuit &c, gate_t g);
  * comparators should already be resolved (see @c resolveComparators in
  * @c ComparatorResolution.h) for an exact result.
  *
+ * When the Boolean view cannot be built (the circuit carries random
+ * variables, or a large sampleable HAVING aggregate under an approximate
+ * request), the probability is delegated to the tolerance-appropriate
+ * generic-circuit estimator: the Dagum-Karp-Luby-Ross stopping rule for a
+ * @c Relative request, fixed-sample @c monteCarloRV for @c Additive, and --
+ * for an @c Exact request with @p mc_fallback -- @c monteCarloRV at the
+ * @c provsql.rv_mc_samples budget (the moment path's residual comparators).
+ *
  * @param method  "" / "default" / "exact" runs the auto-chooser; any other
  *   name dispatches that method @c byName.
  * @param args    method arguments (tolerance strings, compiler names).
  * @param inv_free_cert  whether an inversion-free certificate is present
  *   (unlocks the inversion-free method in the portfolio).
- * @param mc_fallback  when true, a residual raw RV comparator the Boolean
- *   translation rejects is estimated by @c monteCarloRV instead of raising
- *   (the moment path opts in; @c probability_evaluate passes false so an
- *   unresolved RV comparator surfaces its diagnostic).
+ * @param tol     the guarantee requested of the portfolio and of the
+ *   no-Boolean-view estimator: @c Exact (default), @c Relative, @c Additive.
+ * @param mc_fallback  for an @c Exact request only: when true, a circuit with
+ *   no Boolean view is estimated by @c monteCarloRV instead of raising (the
+ *   moment path opts in; @c probability_evaluate's exact arm passes false so
+ *   an unresolved RV comparator surfaces its diagnostic).
  * @param actual_method_out  if non-null, receives the method actually run
  *   (for @c provsql.last_eval_method reporting).
  */
@@ -242,6 +252,7 @@ double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
                                     const std::string &method = "",
                                     const std::string &args = "",
                                     bool inv_free_cert = false,
+                                    const Tolerance &tol = Tolerance{},
                                     bool mc_fallback = true,
                                     std::string *actual_method_out = nullptr);
 
