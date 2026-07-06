@@ -5442,7 +5442,7 @@ $$ LANGUAGE sql PARALLEL SAFE;
  * be passed as the @c prov argument of the moment / quantile / sample
  * readouts.  An empty group yields @c NULL (no evidence).
  */
-CREATE OR REPLACE AGGREGATE and_agg(uuid) (
+CREATE AGGREGATE and_agg(uuid) (
   SFUNC = and_agg_sfunc,
   STYPE = uuid
 );
