@@ -49,7 +49,7 @@ extern "C" {
 #include "fmgr.h"
 #include "utils/uuid.h"
 #include "utils/array.h"
-#include "catalog/pg_type_d.h"
+#include "catalog/pg_type.h"
 #include "provsql_utils.h"
 #include "provsql_error.h"
 }
