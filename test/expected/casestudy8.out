@@ -59,6 +59,12 @@ r_mean|p_epidemic_grows|r_median
 mean_days|days_lo|days_hi
 11.25|5|25
 (1 row)
+latent_mean_20|latent_var_total
+t|t
+(1 row)
+prior_mean|posterior_mean_close|posterior_var_close|marginal_likelihood_close
+20.0|t|t|t
+(1 row)
 remove_provenance
 
 (1 row)

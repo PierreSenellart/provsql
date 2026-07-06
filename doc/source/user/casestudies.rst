@@ -104,10 +104,12 @@ What each case study covers
     skewed waiting time (log-normal + quantiles + transforms),
     discrete counts with a Beta rate posterior, the information gain
     of a Bayesian update (entropy / KL), a Gaussian-mixture cohort,
-    and empirically-loaded posteriors and forecast tables -- each
-    answered by a one-line query, the conditioning ones through the
-    ``|`` ("given") operator. A compact, notebook-first tour of the
-    probability surface.
+    empirically-loaded posteriors and forecast tables, and -- closing
+    into full Bayesian inference -- a latent (``random_variable``)
+    distribution parameter updated from data by likelihood weighting
+    (``observe`` / ``and_agg`` / ``evidence``) -- each answered by a
+    one-line query, the conditioning ones through the ``|`` ("given")
+    operator. A compact, notebook-first tour of the probability surface.
 
 .. _case-study-coverage:
 
@@ -331,8 +333,10 @@ Continuous random variables
    "``provsql.lognormal`` (exp/ln bridges, product closure)", "", "", "", "", "", "", "", "", "✓"
    "``provsql.weibull`` / ``provsql.pareto``", "", "", "", "", "", "", "✓", "", ""
    "``provsql.beta``", "", "", "", "", "", "", "", "", "✓"
+   "``provsql.logistic`` / ``inverse_gamma`` / ``inverse_gaussian``", "", "", "", "", "", "", "", "", ""
    "Discrete counts (``poisson`` / ``binomial`` / ``geometric`` / ``hypergeometric`` / ``negative_binomial``)", "", "", "", "", "", "", "", "", "✓"
    "``provsql.mixture`` (Bernoulli and ad-hoc overloads)", "", "", "", "", "", "", "✓", "", ""
+   "Latent (``random_variable``) distribution parameters, e.g. ``normal(mu, 2)``", "", "", "", "", "", "", "", "", "✓"
    "``provsql.as_random`` and implicit numeric→rv casts", "", "", "", "", "", "", "✓", "", ""
    "Arithmetic on ``random_variable`` (``+ - * /``, unary ``-``)", "", "", "", "", "", "", "✓", "", ""
    "Order statistics (``greatest`` / ``least``, ``max`` / ``min`` aggregate)", "", "", "", "", "", "", "✓", "", ""
@@ -347,7 +351,8 @@ Continuous random variables
    "``empirical_samples`` / ``empirical_cdf`` (data-driven loaders)", "", "", "", "", "", "", "", "", "✓"
    "``moment`` / ``central_moment`` / ``support`` over rv", "", "", "", "", "", "", "✓", "", "✓"
    "``quantile`` (inverse CDF / percentiles / VaR)", "", "", "", "", "", "", "✓", "", "✓"
-   "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "(✓)"
+   "Conditional inference via ``provenance()`` argument", "", "", "", "", "", "", "✓", "", "✓"
+   "Likelihood-weighting posterior (``observe`` / ``and_agg`` / ``evidence``)", "", "", "", "", "", "", "", "", "✓"
    "``probability((A) | (B))`` over two comparison events", "", "", "", "", "", "", "", "", "✓"
    "``rv_sample`` / ``rv_histogram``", "", "", "", "", "", "", "✓", "", ""
    "``rv_analytical_curves`` (PDF/CDF overlay)", "", "", "", "", "", "", "✓", "", ""
@@ -362,6 +367,7 @@ Shapley and Banzhaf values
 
    "``shapley``", "", "", "✓", "", "", "", "", "", ""
    "``shapley_all_vars``", "", "", "✓", "", "", "", "", "", ""
+   "``shapley_observe`` (attribution under likelihood-weighting evidence)", "", "", "", "", "", "", "", "", ""
    "``banzhaf``", "", "", "✓", "", "", "", "", "", ""
    "``banzhaf_all_vars``", "", "", "✓", "", "", "", "", "", ""
 

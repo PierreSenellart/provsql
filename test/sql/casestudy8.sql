@@ -170,6 +170,36 @@ SELECT round(expected(days)::numeric, 2) AS mean_days,
 FROM f;
 RESET provsql.rv_mc_samples;
 
+-- Problem 12: a latent (random_variable) distribution parameter.  A reading
+-- normal(mu, 2) whose mean mu ~ normal(20, 5) marginalises over the shared
+-- latent leaf: mean still 20, variance the law of total variance 2^2 + 5^2
+-- = 29.  A latent parameter breaks the closed-form recursion, so this is a
+-- Monte-Carlo estimate (seeded; tolerances absorb cross-platform RNG).
+SET provsql.monte_carlo_seed = 1;
+SET provsql.rv_mc_samples    = 200000;
+WITH m AS (SELECT normal(normal(20, 5), 2) AS reading)
+SELECT abs(expected(reading) - 20.0) < 0.2 AS latent_mean_20,
+       abs(variance(reading) - 29.0) < 1.0 AS latent_var_total
+FROM m;
+
+-- Problem 13: learn the latent mu from data by likelihood weighting.  Three
+-- readings {23,24,22} of the same mu via observe(normal(mu,2), d), folded
+-- with and_agg; the moment readouts take that evidence as their conditioning
+-- argument.  Conjugate Normal-Normal: posterior precision 1/25 + 3/4 = 0.79
+-- (variance 1.266), posterior mean (20/25 + 69/4)/0.79 = 22.848; evidence()
+-- is the marginal likelihood P(data) = 0.001173 (multivariate-Normal prior
+-- predictive at (23,24,22)).  Prior mean is the exact bare-Normal 20.
+WITH g  AS (SELECT normal(20, 5) AS mu),
+     ev AS (SELECT and_agg(observe(normal(g.mu, 2), d)) AS e
+            FROM g CROSS JOIN (VALUES (23.0), (24.0), (22.0)) AS t(d))
+SELECT round(expected(g.mu)::numeric, 1)            AS prior_mean,
+       abs(expected(g.mu, ev.e) - 22.848) < 0.2     AS posterior_mean_close,
+       abs(variance(g.mu, ev.e) - 1.266)  < 0.1     AS posterior_var_close,
+       abs(evidence(ev.e) / 0.001173 - 1.0) < 0.05  AS marginal_likelihood_close
+FROM g, ev;
+RESET provsql.rv_mc_samples;
+RESET provsql.monte_carlo_seed;
+
 SELECT remove_provenance('casesum');
 SELECT remove_provenance('risk');
 SELECT remove_provenance('cases');

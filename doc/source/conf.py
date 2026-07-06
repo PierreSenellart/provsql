@@ -244,6 +244,7 @@ _SQL_FUNC_MAP = {
     'rv_sample':                '/doxygen-sql/html/group__circuit__introspection.html#ga9db6bcdca7f5d52bc46a7c2e671a62fd',
     'and_agg':                  '/doxygen-sql/html/group__random__variable__type.html#ga58ddb30c7fe236720320eaf9e010c096',
     'evidence':                 '/doxygen-sql/html/group__random__variable__type.html#ga2e228aaa8005aa1b8b74353c9bf728a2',
+    'observe':                  '/doxygen-sql/html/group__random__variable__type.html#ga1f4bb5ed226ac51ed700db1b5871ee5c',
     'shapley_observe':          '/doxygen-sql/html/group__random__variable__type.html#ga94fda2bf09c63ace28e2b9a0d370005e',
     'rv_analytical_curves':     '/doxygen-sql/html/group__circuit__introspection.html#ga40abf964045d5aa19387546fc3480b2a',
     'simplified_circuit_subgraph': '/doxygen-sql/html/group__circuit__introspection.html#ga8ded8984d59f06ef5f529da410a3e6fe',

@@ -830,6 +830,79 @@ GMM. The mean is exact:
 :math:`0.1 \cdot 5 + 0.4 \cdot 7.5 + 0.3 \cdot 12.5 + 0.2 \cdot 20 =
 11.25` days, on the support ``[5, 25]``.
 
+Problem 12: A Parameter That Is Itself Uncertain
+------------------------------------------------
+
+Every distribution so far had *fixed* parameters. But the assay's
+baseline drifts batch to batch: the true zero-point of this batch is
+not ``20`` exactly, it is itself uncertain, say :math:`\mu \sim
+\mathrm{Normal}(20, 5)`. A single reading is then ``normal(mu, 2)`` --
+a Normal *whose mean is another random variable*. ProvSQL's
+distribution constructors accept a ``random_variable`` where a
+parameter is expected, so the model is written as one nested call:
+
+.. code-block:: postgresql
+
+    SET provsql.monte_carlo_seed = 1;
+    SET provsql.rv_mc_samples    = 200000;
+    WITH m AS (SELECT normal(normal(20, 5), 2) AS reading)
+    SELECT expected(reading) AS mean_reading,
+           variance(reading) AS var_reading
+    FROM m;
+
+The inner ``normal(20, 5)`` is a *latent* leaf shared by the outer
+Normal, so the reading marginalises over it. Its mean is still
+**20**, but the variance is the `law of total variance
+<https://en.wikipedia.org/wiki/Law_of_total_variance>`_ at work --
+the measurement noise *plus* the uncertainty in the baseline,
+:math:`2^2 + 5^2 = 29` -- and the query returns about **20** and
+**29**. A latent parameter breaks the closed-form moment recursion
+(the outer moment is an integral over the inner distribution), so
+this is the first problem that *needs* the sampler: the moments are
+Monte-Carlo estimates over draws of :math:`\mu`, which is why the
+sampler is switched back on here.
+
+Problem 13: Learning That Parameter From Data
+---------------------------------------------
+
+A latent parameter is a prior; the point of a prior is to update it.
+Three control readings come back for this batch -- ``23``, ``24``,
+``22`` -- each a noisy measurement ``normal(mu, 2)`` of the *same*
+unknown baseline ``mu``. :sqlfunc:`observe` binds a datum to a
+distribution leaf as likelihood-weighting evidence, :sqlfunc:`and_agg`
+conjoins one observation per row, and the moment readouts take that
+evidence as their conditioning argument -- the posterior of ``mu``
+given the data:
+
+.. code-block:: postgresql
+
+    WITH g  AS (SELECT normal(20, 5) AS mu),
+         ev AS (SELECT and_agg(observe(normal(g.mu, 2), d)) AS e
+                FROM g CROSS JOIN (VALUES (23.0), (24.0), (22.0)) AS t(d))
+    SELECT expected(g.mu)        AS prior_mean,
+           expected(g.mu, ev.e)  AS posterior_mean,
+           variance(g.mu, ev.e)  AS posterior_var,
+           evidence(ev.e)        AS marginal_likelihood
+    FROM g, ev;
+
+Every reading shares the one ``mu`` leaf (the materialised CTE ``g``
+is a single node), so the three ``observe`` factors weight the same
+latent draw. The prior mean is **20**; the posterior mean pulls
+toward the data at about **22.85**, and the posterior variance
+collapses to about **1.26**. That is exactly the conjugate
+`Normal-Normal <https://en.wikipedia.org/wiki/Conjugate_prior>`_
+update: with prior precision :math:`1/25` and three observations of
+precision :math:`1/4`, the posterior precision is :math:`1/25 + 3/4 =
+0.79` (variance :math:`1.266`) and the posterior mean is the
+precision-weighted average :math:`(20/25 + 69/4)/0.79 = 22.85`. The
+sampler recovers the textbook answer because :sqlfunc:`observe`
+reweights the prior draws of ``mu`` by each observation's density --
+importance sampling, no rejection. :sqlfunc:`evidence` returns the
+by-product of that weighting, the marginal likelihood :math:`P(\text{data})`
+(the mean prior-predictive weight), here about **0.00117** -- the same
+number the multivariate-Normal prior predictive gives in closed form,
+and the quantity you would compare across competing models.
+
 Recap
 -----
 
@@ -843,7 +916,13 @@ discrete counts, the Beta rate, quantiles throughout), and Problems 9-11
 layered onto the same surface the information-theoretic readouts
 (:sqlfunc:`entropy`, :sqlfunc:`kl`) and the data-driven constructors
 (:sqlfunc:`gmm`, :sqlfunc:`empirical_samples` /
-:sqlfunc:`empirical_cdf`). A few mechanics recurred:
+:sqlfunc:`empirical_cdf`). Problems 12 and 13 closed the loop into full
+Bayesian inference: a distribution parameter is itself a
+``random_variable`` (a latent prior), and :sqlfunc:`observe` /
+:sqlfunc:`and_agg` / :sqlfunc:`evidence` update it from data by
+likelihood weighting, the posterior read straight back with the same
+:sqlfunc:`expected` / :sqlfunc:`variance` readouts. A few mechanics
+recurred:
 
 * Each model was built and stored in the database. :sqlfunc:`add_provenance`
   registers a table for tuple-independent tracking and :sqlfunc:`set_prob`
