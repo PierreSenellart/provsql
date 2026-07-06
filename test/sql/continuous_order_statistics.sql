@@ -106,6 +106,24 @@ SELECT (greatest(x,x,y))::uuid = (greatest(x,y))::uuid AS dedup_same_gate,
        expected(greatest(x,x,y)) = expected(greatest(x,y)) AS dedup_same_value
   FROM d;
 
+-- A base RV shared between both arms of a min/max must stay coupled through
+-- the comparison-probability path, exactly as it does through expected /
+-- quantile.  cost = min(T0+T1, T0+T2) with T0 ~ N(10,2) SHARED, T1 ~ N(5,1),
+-- T2 ~ N(6,1.5): the correlated Pr(cost <= 15) ~ 0.558 (matching quantile
+-- inversion / MC); the independent-arms value 1-(1-F1)(1-F2) ~ 0.672 is the
+-- decoupling-bug signature.  The comparison probability must agree with the
+-- quantile on the SAME rv (one rv, one CDF).
+SET provsql.rv_mc_samples = 200000;
+WITH shared AS (
+  SELECT provsql.least(t0 + normal(5,1), t0 + normal(6,1.5)) AS cost
+    FROM (SELECT normal(10,2) AS t0) s
+)
+SELECT abs(probability_evaluate(rv_cmp_le(cost, as_random(15))) - 0.558) < 0.02
+         AS min_shared_leaf_correlated,
+       abs(quantile(cost, 0.558) - 15.0) < 0.2
+         AS quantile_consistent
+  FROM shared;
+
 RESET provsql.rv_mc_samples;
 
 -- Ordering / comparing a random_variable directly is meaningless (a

@@ -45,12 +45,13 @@ constexpr double NaN = std::numeric_limits<double>::quiet_NaN();
  * `1 + b`, two perfectly correlated events; folding each into an
  * independent Normal silently applies the independence approximation.
  *
- * The set holds every base RV reachable from two or more @c gate_cmp
- * wire-subtrees (counting both across-cmp sharing and a leaf feeding both
- * sides of one cmp).  A leaf private to a single comparator side -- or to
- * a non-comparator arith expression like `x + x`, which @c try_plus_aggregate
- * folds while preserving the shared identity -- is absent, so those folds
- * still fire.  When a candidate base RV is in this set the fold bails,
+ * The set holds every base RV reachable from two or more sibling subtrees
+ * combined non-additively: the two sides of a @c gate_cmp, or two arms of a
+ * non-additive @c gate_arith combinator (MIN / MAX / PERCENTILE / MINUS /
+ * TIMES / DIV / POW) -- e.g. the shared @c T0 in @c min(T0+T1, T0+T2).  A
+ * leaf private to a single such subtree -- or one repeated inside an additive
+ * @c PLUS like `x + x`, which @c try_plus_aggregate folds while preserving the
+ * shared identity -- is absent, so those folds still fire.  When a candidate base RV is in this set the fold bails,
  * leaving the @c gate_arith intact so the island decomposer descends to
  * the shared leaf and couples the comparators.  Set for the duration of
  * @c runHybridSimplifier; null (empty) elsewhere. */
@@ -1301,18 +1302,30 @@ unsigned runHybridSimplifier(GenericCircuit &gc)
 {
   unsigned counter = 0;
 
-  /* Base RVs that couple two or more comparator sides must not be folded
+  /* Base RVs that couple two or more sibling subtrees must not be folded
    * into a fresh (independent) identity.  Census once over the loaded
-   * circuit: for every gate_cmp wire, collect the base RVs reachable
-   * through arith / latent-parameter edges; a leaf that shows up in two
-   * or more such per-wire footprints is coupling-critical.  Folds only
-   * ever remove references to a leaf, so the load-time census is a sound
-   * conservative guard for the whole run.  The identity-minting folds
-   * consult @c g_shared_base_rvs via @c is_shared_base_rv. */
+   * circuit.  A leaf is coupling-critical when it is reachable (through
+   * arith / latent-parameter edges) from two or more sibling contexts that
+   * are combined NON-additively -- i.e. either
+   *   (A) two or more wires of a gate_cmp        [the two sides of a cmp], or
+   *   (B) two or more arms of a non-additive gate_arith combinator
+   *       (MIN / MAX / PERCENTILE order statistics, MINUS / TIMES / DIV /
+   *        POW), e.g. the shared T0 in min(T0+T1, T0+T2).
+   * Folding each such sibling arm into a fresh gate_rv would orphan the
+   * shared leaf and silently apply the independence approximation to a
+   * draw the order statistic / product / comparison must see jointly.
+   * PLUS is deliberately excluded from (B): a leaf repeated across addends
+   * (x + 2x) is consolidated by try_plus_aggregate while preserving its
+   * identity, and try_sum_closure already bails on a within-sum repeat, so
+   * an additive sum never decouples a shared leaf.  Folds only ever remove
+   * references to a leaf, so the load-time census is a sound conservative
+   * guard for the whole run.  The identity-minting folds consult
+   * @c g_shared_base_rvs via @c is_shared_base_rv. */
   std::unordered_set<gate_t> shared_base_rvs;
   {
-    std::unordered_map<gate_t, unsigned> cmp_footprint_count;
     const auto nb = gc.getNbGates();
+    /* (A) sharing across the sides of a comparator. */
+    std::unordered_map<gate_t, unsigned> cmp_footprint_count;
     for (std::size_t i = 0; i < nb; ++i) {
       auto g = static_cast<gate_t>(i);
       if (gc.getGateType(g) != gate_cmp) continue;
@@ -1324,6 +1337,23 @@ unsigned runHybridSimplifier(GenericCircuit &gc)
     }
     for (const auto &[rv, n] : cmp_footprint_count)
       if (n > 1) shared_base_rvs.insert(rv);
+    /* (B) sharing across the arms of a non-additive arith combinator. */
+    for (std::size_t i = 0; i < nb; ++i) {
+      auto g = static_cast<gate_t>(i);
+      if (gc.getGateType(g) != gate_arith) continue;
+      if (static_cast<provsql_arith_op>(gc.getInfos(g).first) == PROVSQL_ARITH_PLUS)
+        continue;
+      const auto &arms = gc.getWires(g);
+      if (arms.size() < 2) continue;
+      std::unordered_map<gate_t, unsigned> arm_count;
+      for (gate_t arm : arms) {
+        std::unordered_set<gate_t> fp;
+        collect_reachable_base_rvs(gc, arm, fp);
+        for (gate_t rv : fp) ++arm_count[rv];
+      }
+      for (const auto &[rv, n] : arm_count)
+        if (n > 1) shared_base_rvs.insert(rv);
+    }
   }
   g_shared_base_rvs = &shared_base_rvs;
   struct SharedGuard {

@@ -44,6 +44,9 @@ t|t
 dedup_same_gate|singleton_collapses|dedup_same_value
 t|t|t
 (1 row)
+min_shared_leaf_correlated|quantile_consistent
+t|t
+(1 row)
 NOTICE:  rv_order_by_rejected=t
 continuous_order_statistics_done
 ok
