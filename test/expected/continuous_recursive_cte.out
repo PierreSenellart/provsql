@@ -1,0 +1,7 @@
+\set ECHO none
+recursive_ontime_ok|recursive_mean_shared_ok
+t|t
+(1 row)
+continuous_recursive_cte_done
+ok
+(1 row)

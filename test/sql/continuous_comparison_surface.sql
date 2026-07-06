@@ -75,29 +75,6 @@ SELECT expected(x <= as_random(0.25))          = 0.25          AS e_event,
        expected(x <= as_random(0.25)) = probability(x <= 0.25) AS agrees_prob
   FROM d;
 
--- A comparison readout over a recursive CTE: the RV recursion is UNION ALL
--- (RVs cannot be set-UNIONed -- a distribution has no ordering) and carries no
--- token provenance, so it runs as native SQL while the outer expected(cost <=
--- c) is lifted.  cost = min(T0+T1, T0+T2) with T0 ~ N(10,2) SHARED: the
--- correlated on-time Pr(cost <= 15) ~ 0.558 and E[cost] ~ 14.67 (the shared-T0
--- truth, not the independent-leaf 14.10) both survive the recursion.
-CREATE TEMP TABLE edge_rv(frm int, tto int, t random_variable);
-INSERT INTO edge_rv VALUES (1,2,normal(10,2)),(2,4,normal(5,1)),(2,4,normal(6,1.5));
-SET provsql.rv_mc_samples = 200000;
-WITH RECURSIVE pc(node, cost, hops, vis) AS (
-    SELECT 1, 0::random_variable, 0, ARRAY[1]
-  UNION ALL
-    SELECT e.tto, pc.cost + e.t, pc.hops + 1, pc.vis || e.tto
-    FROM pc JOIN edge_rv e ON e.frm = pc.node
-    WHERE pc.hops < 5 AND NOT (e.tto = ANY(pc.vis))
-),
-m AS (SELECT min(cost) AS cost FROM pc WHERE node = 4)
-SELECT abs(expected(cost <= 15) - 0.558) < 0.02 AS recursive_ontime_ok,
-       abs(expected(cost)      - 14.67) < 0.1   AS recursive_mean_shared_ok
-  FROM m;
-RESET provsql.rv_mc_samples;
-DROP TABLE edge_rv;
-
 DROP TABLE d;
 
 SELECT 'ok'::text AS continuous_comparison_surface_done;

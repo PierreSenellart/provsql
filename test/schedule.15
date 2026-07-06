@@ -6,6 +6,11 @@
 # "Recursive CTEs not supported", so this test is gated to PG15+.
 test: recursive
 
+# A comparison readout (expected(cost <= c)) over a pure-RV recursive CTE:
+# the untracked UNION ALL recursion runs as native SQL while the outer
+# comparison is lifted.  PG15+ for the same recursive-CTE reason as above.
+test: continuous_recursive_cte
+
 # Bounded-treewidth reachability through the rewriter: the recursive
 # reachability shape compiled along a tree decomposition of the data
 # (provenance class 'absorptive' or 'boolean'), with fallback coverage
