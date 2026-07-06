@@ -2146,6 +2146,12 @@ static Datum probability_evaluate_internal
    * wasn't able to close the gap.  HAVING-style cmps over gate_agg
    * don't contain gate_rv, so this check leaves them for
    * provsql_having. */
+  /* The empty / "default" request lets the system choose the mechanism,
+   * so it may silently fall back to Monte Carlo for comparators the
+   * analytic pre-passes deliberately leave unresolved.  An explicit
+   * "exact" request is a contract for an exact value and must NOT be
+   * quietly downgraded to an MC estimate; it raises like a named method. */
+  const bool mc_default = method.empty() || method == "default";
   if (method != "monte-carlo" && method != "stopping-rule"
       && method != "relative" && method != "additive"
       && provsql::circuitHasRV(gc, gc_root)) {
@@ -2156,13 +2162,21 @@ static Datum probability_evaluate_internal
         "provsql.rv_mc_samples above 0 to enable the Monte Carlo "
         "fallback, or call probability_evaluate(..., 'monte-carlo', "
         "<n>) directly");
-    } else {
+    } else if (!mc_default) {
       provsql_error(
         "probability_evaluate: a comparison over random variables "
         "could not be resolved analytically and the hybrid evaluator "
         "left it unresolved; call probability_evaluate(..., "
         "'monte-carlo', <n>) directly for an MC estimate");
     }
+    /* Default request with the MC budget available: the comparators the
+     * analytic pre-passes deliberately left unresolved (a mixture cmp
+     * whose selector is shared / compound, or another intricate
+     * correlated shape) are handled by the RV-aware whole-circuit Monte
+     * Carlo sampler, which couples every shared leaf and selector per
+     * iteration.  Fall through; the dispatch below passes
+     * mc_fallback = mc_default so booleanSubcircuitProbability routes
+     * to monteCarloRV. */
   }
 
   double result;
@@ -2224,6 +2238,19 @@ static Datum probability_evaluate_internal
       // threshold-lineage expansion.
       unsigned long samples = monte_carlo_samples(parse_method_args(args));
       result = provsql::monteCarloRV(gc, gc_root, static_cast<int>(samples));
+    } else if(mc_default && provsql::circuitHasRV(gc, gc_root)) {
+      // Default request over a circuit that still carries random-variable
+      // comparators after the analytic pre-passes: those are the shapes
+      // the pre-passes deliberately declined to marginalise (a mixture cmp
+      // whose selector is shared with the rest of the circuit, or another
+      // intricate correlated form).  The RV-aware whole-circuit Monte Carlo
+      // sampler is the correct, general evaluator -- it couples every
+      // shared base RV and mixture selector per iteration.  Only the empty
+      // / "default" request falls back here; an explicit "exact" request
+      // was already refused above rather than silently downgraded to MC.
+      result = provsql::monteCarloRV(
+        gc, gc_root, static_cast<int>(provsql_rv_mc_samples));
+      actual_method = "monte-carlo";
     } else {
       // Boolean-circuit path: the single central entry point builds the
       // Boolean view (HAVING semantics + BoolExpr translation) and runs the

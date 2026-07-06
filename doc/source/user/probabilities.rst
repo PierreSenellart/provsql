@@ -933,6 +933,22 @@ Default strategy (no second argument)
     picks run under a budget and escalate automatically, so a pathological
     circuit never hangs on the wrong method.
 
+    The empty default is identical to an explicit ``'exact'`` request on
+    an ordinary Boolean circuit -- **with one deliberate exception**. On a
+    circuit carrying continuous random variables (see
+    :doc:`continuous-distributions`), some comparison events cannot be resolved to
+    a closed form and are correlation-dependent in a way the analytic
+    pre-passes decline to marginalise (for instance conditioning on a
+    mixture's own Bernoulli selector, or a comparison over a combination of
+    mixtures). For those the empty default **falls back to the Monte Carlo
+    sampler** (an approximate ``(ε, δ)`` estimate at the
+    ``provsql.rv_mc_samples`` budget, which couples every shared variable
+    and selector correctly), whereas an explicit ``'exact'`` request is a
+    contract for an exact value and instead **raises** rather than silently
+    returning an estimate -- name ``'monte-carlo'`` explicitly to opt in.
+    The fallback is disabled by ``provsql.rv_mc_samples = 0``, which makes
+    the default raise as well.
+
 To time every method on one circuit and compare results side by side,
 use ProvSQL Studio's benchmark panel; see :doc:`studio`.
 

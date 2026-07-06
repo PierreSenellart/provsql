@@ -93,6 +93,9 @@ t
 shared_p_token_correlation_guard
 t
 (1 row)
+mixture_selector_conditioning_guard
+t
+(1 row)
 continuous_rangecheck_done
 ok
 (1 row)

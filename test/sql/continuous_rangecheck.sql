@@ -361,4 +361,39 @@ BEGIN
 END $$;
 SELECT 't'::text AS shared_p_token_correlation_guard;
 
+-- (F8) Selector coupling across the cmp boundary.  X = z ? N(0,1)
+-- : N(10,1) with z ~ Bernoulli(0.5); the event E = {X < 5} coincides
+-- with {z = true} (N(0,1) < 5 a.s., N(10,1) > 5 a.s.), so P(E ∧ z) =
+-- P(E) = 0.5 -- NOT the decoupled product 0.5 · 0.5 = 0.25.  The hybrid
+-- decomposer must NOT marginalise the mixture cmp into an independent
+-- Bernoulli here: z is shared between the mixture selector and the outer
+-- conjunction, so the whole-circuit MC sampler must evaluate it (default
+-- request falls back to MC when a mixture cmp is left unresolved).
+DO $$
+DECLARE
+  z uuid := public.uuid_generate_v4();
+  x random_variable;
+  e uuid;
+  p_e double precision;
+  p_e_and_z double precision;
+BEGIN
+  PERFORM provsql.create_gate(z, 'input');
+  PERFORM provsql.set_prob(z, 0.5);
+  x := provsql.mixture(z, provsql.normal(0, 1), provsql.normal(10, 1));
+  SET LOCAL provsql.monte_carlo_seed = 42;
+  SET LOCAL provsql.rv_mc_samples = 40000;
+  e := provsql.rv_cmp_lt(x, provsql.as_random(5));
+  p_e := provsql.probability_evaluate(e);
+  p_e_and_z := provsql.probability_evaluate(provsql.provenance_times(e, z));
+  IF abs(p_e_and_z - p_e) > 0.03 THEN
+    RAISE EXCEPTION 'mixture selector decoupled under conditioning: P(E)=%, P(E and z)=% (want equal)',
+      p_e, p_e_and_z;
+  END IF;
+  IF p_e_and_z < 0.40 THEN
+    RAISE EXCEPTION 'mixture selector conditioning collapsed to a product: P(E and z)=% (want ~0.5)',
+      p_e_and_z;
+  END IF;
+END $$;
+SELECT 't'::text AS mixture_selector_conditioning_guard;
+
 SELECT 'ok'::text AS continuous_rangecheck_done;

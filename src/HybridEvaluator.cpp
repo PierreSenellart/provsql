@@ -1482,6 +1482,52 @@ void collect_cmp_rv_footprint(const GenericCircuit &gc, gate_t cmp_gate,
   }
 }
 
+/**
+ * @brief Collect the classic 3-wire @c gate_mixture selector wires
+ *        (the Bernoulli @c wires[0]) reachable from @p cmp_gate through
+ *        @c gate_arith / @c gate_mixture composition.
+ *
+ * Mirrors @c collect_cmp_rv_footprint's walk but records each mixture's
+ * Boolean SELECTOR rather than its continuous base RVs, descending into
+ * the value arms so nested mixtures contribute their selectors too.  A
+ * mixture's selector is a latent Boolean whose sampled value the mixture
+ * consumes; if it is shared with the rest of the circuit (another
+ * mixture, or an external Boolean use such as conditioning), the cmp's
+ * truth value is coupled to those sites.  Marginalising the cmp into an
+ * independent Bernoulli would then decorrelate the selector from its
+ * other uses &ndash; a semantics change &ndash; so the decomposer must
+ * leave such a cmp for the whole-circuit MC sampler (which couples the
+ * selector across all its uses via the per-iteration @c bool_cache_).
+ * Categorical-form mixtures carry no single Bernoulli selector and are
+ * skipped. */
+void collect_cmp_mixture_selectors(const GenericCircuit &gc, gate_t cmp_gate,
+                                   std::unordered_set<gate_t> &sels)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stk;
+  for (gate_t w : gc.getWires(cmp_gate)) stk.push(w);
+  while (!stk.empty()) {
+    gate_t g = stk.top(); stk.pop();
+    if (!seen.insert(g).second) continue;
+    auto t = gc.getGateType(g);
+    if (t == gate_arith) {
+      for (gate_t c : gc.getWires(g)) stk.push(c);
+      continue;
+    }
+    if (t == gate_mixture) {
+      if (gc.isCategoricalMixture(g)) continue;
+      const auto &mw = gc.getWires(g);
+      if (mw.size() == 3) {
+        sels.insert(mw[0]);
+        stk.push(mw[1]);
+        stk.push(mw[2]);
+      }
+      continue;
+    }
+    /* gate_rv / gate_value: no selector below. */
+  }
+}
+
 }  // namespace
 
 namespace {
@@ -2055,6 +2101,18 @@ unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
     collect_cmp_rv_footprint(gc, c, footprints[c]);
   }
 
+  /* Wire in-degree census over the whole circuit: indeg[g] is the number
+   * of parents that reference g anywhere.  Compared per group against the
+   * references seen WITHIN the group's own island, it tells whether a
+   * mixture selector's Boolean sub-DAG is observed outside the group (a
+   * coupling the island-local marginalisation cannot preserve). */
+  std::unordered_map<gate_t, unsigned> indeg;
+  {
+    for (std::size_t i = 0; i < nb; ++i)
+      for (gate_t c : gc.getWires(static_cast<gate_t>(i)))
+        ++indeg[c];
+  }
+
   /* Group cmps into connected components by base-RV footprint
    * overlap (union-find via parent[]).  Linear-probe path
    * compression keeps the asymptotics near-linear in the number of
@@ -2101,6 +2159,58 @@ unsigned runHybridDecomposer(GenericCircuit &gc, unsigned samples)
       if (gc.getGateType(c) != gate_cmp) { all_pristine = false; break; }
     }
     if (!all_pristine) continue;
+
+    /* Semantics guard: an island-local resolution (a singleton marginal
+     * Bernoulli, or a 2^k joint table over the group) replaces the cmps
+     * with leaves that are independent of everything OUTSIDE this group.
+     * That is sound only when the group's island is self-contained.  The
+     * channel the footprint grouping does not cover is a Bernoulli
+     * MIXTURE selector: if a selector's Boolean sub-DAG is also observed
+     * outside this island (another group's mixture, or an external
+     * Boolean such as conditioning on the selector), marginalising here
+     * would decorrelate it from those uses -- a semantics change.  A
+     * selector shared only WITHIN the group is fine: the same MC draw
+     * that marginalises the group couples it internally.  When a group
+     * is not self-contained, leave all its cmps as raw gate_cmp for the
+     * whole-circuit MC sampler, which couples every selector across all
+     * its uses via the per-iteration bool_cache_. */
+    {
+      /* Island of this group: every gate reachable from its cmps, with a
+       * count of how many references each gate receives from within it. */
+      std::unordered_set<gate_t> island;
+      std::unordered_map<gate_t, unsigned> island_ref;
+      {
+        std::stack<gate_t> stk;
+        for (gate_t c : group) stk.push(c);
+        while (!stk.empty()) {
+          gate_t g = stk.top(); stk.pop();
+          if (!island.insert(g).second) continue;
+          for (gate_t w : gc.getWires(g)) { ++island_ref[w]; stk.push(w); }
+        }
+      }
+      /* A selector couples the group to the outside iff some gate in its
+       * sub-DAG has a parent that is not part of this island (its global
+       * in-degree exceeds the references seen within the island). */
+      auto sub_dag_escapes_island = [&](gate_t s) {
+        std::unordered_set<gate_t> seen;
+        std::stack<gate_t> st; st.push(s);
+        while (!st.empty()) {
+          gate_t g = st.top(); st.pop();
+          if (!seen.insert(g).second) continue;
+          unsigned inside = island_ref.count(g) ? island_ref[g] : 0;
+          unsigned total  = indeg.count(g) ? indeg[g] : 0;
+          if (total > inside) return true;
+          for (gate_t w : gc.getWires(g)) st.push(w);
+        }
+        return false;
+      };
+      std::unordered_set<gate_t> sels;
+      for (gate_t c : group) collect_cmp_mixture_selectors(gc, c, sels);
+      bool group_couples_selector = false;
+      for (gate_t s : sels)
+        if (sub_dag_escapes_island(s)) { group_couples_selector = true; break; }
+      if (group_couples_selector) continue;
+    }
 
     if (group.size() == 1) {
       /* Singleton island.  If AnalyticEvaluator would resolve this
