@@ -297,7 +297,7 @@ buildCollapsePlan(const GenericCircuit &gc, gate_t agg)
     catch (const CircuitException &) { return std::nullopt; }
 
     double bern;
-    gate_t cmp;
+    gate_t cmp = static_cast<gate_t>(0);
     if (!reduceIndicator(gc, smw[0], bern, cmp)) return std::nullopt;
     const auto &cw = gc.getWires(cmp);
     if (cw.size() != 2) return std::nullopt;

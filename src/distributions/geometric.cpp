@@ -73,7 +73,9 @@ public:
     double lo = trunc_lo, hi = trunc_hi;
     if (!std::isfinite(lo)) lo = 1.0;
     if (!std::isfinite(hi)) {
-      double a, b;
+      // integrationRange leaves its outputs untouched and returns false on an
+      // invalid distribution; fall back to the (degenerate) lower bound then.
+      double a = lo, b = lo;
       integrationRange(a, b);
       hi = b;
     }
