@@ -49,6 +49,11 @@ SET search_path TO provsql;
 -- never materialised in this transaction (same pattern as 1.9.0 -> 1.10.0's
 -- 'conditioned').
 ALTER TYPE provenance_gate ADD VALUE IF NOT EXISTS 'case';
+-- 'observe' gate: the likelihood-weighting observation leaf built by
+-- observe(random_variable, datum).  Only referenced at runtime (as the
+-- create_gate type text), never in this script, so ADD VALUE is
+-- transaction-safe on the PG12+ upgrade path exactly like 'case' above.
+ALTER TYPE provenance_gate ADD VALUE IF NOT EXISTS 'observe';
 
 -- Registry backing maintained mappings.
 CREATE TABLE IF NOT EXISTS provsql.provenance_mapping_registry(
@@ -3295,4 +3300,1070 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE;
 
 -- A backend warmed under 1.10.0 caches InvalidOid for the new 'case' enum
 -- value; force a fresh lookup on the next get_constants() call.
+
+-- ----------------------------------------------------------------------
+-- Latent random variables + likelihood-weighting posterior inference.
+--
+-- This surface (distribution constructors taking random_variable
+-- parameters, rv_parametric1/2, the evidence / observe / given
+-- conditioning constructors and the and_agg fold, shapley_observe, the
+-- agg_token -> random_variable bridge, and the collapsed-moment / variance
+-- readouts) was added to the base SQL after 1.10.0 but had not been
+-- replicated here.  Functions use CREATE OR REPLACE (idempotent); the
+-- non-replaceable objects (the 'observe' enum value near the top, the
+-- agg_token -> random_variable cast, the and_agg aggregate, and the unary
+-- | given operators) are each guarded so the script stays idempotent and
+-- PostgreSQL 10/11-safe (no CREATE OR REPLACE AGGREGATE, no bare CREATE).
+-- ----------------------------------------------------------------------
+
+-- given_predicate(boolean) was folded into the given(boolean) overload;
+-- drop the stale prefix operator (it points at given_predicate) and the
+-- function so the upgraded catalog matches a fresh install.  The
+-- given(boolean) form and its | operator are (re)created further down.
+DROP OPERATOR IF EXISTS | (NONE, boolean);
+DROP FUNCTION IF EXISTS given_predicate(boolean);
+
+
+CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
+  RETURNS UUID AS
+$$
+DECLARE
+  times_token uuid;
+  filtered_tokens uuid[];
+  canonical uuid;
+BEGIN
+  -- A NULL element reads as the ⊗-neutral 1: it is the token slot of an
+  -- untracked source (a join against an untracked table), which is
+  -- certain.  Contrast provenance_plus / provenance_monus, where NULL
+  -- reads as the ⊕- / ⊖-right-neutral 0: each combinator maps NULL to
+  -- its own neutral element.  Nothing may therefore hand a NULL to ⊗
+  -- meaning "false"; a comparison with a NULL operand goes through
+  -- provenance_cmp, which returns gate_zero for it.
+  SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
+
+  -- Dispatch on the FILTERED count: a single survivor short-circuits
+  -- to that token directly (no useless single-child times gate); zero
+  -- survivors collapse to the identity. Using array_length(tokens, 1)
+  -- here would miss the [one, cmp] → [cmp] case, leaving the cmp wrapped
+  -- in a one-child times when its only sibling was gate_one().
+  CASE coalesce(array_length(filtered_tokens, 1), 0)
+    WHEN 0 THEN
+      times_token:=gate_one();
+    WHEN 1 THEN
+      times_token:=filtered_tokens[1];
+    ELSE
+      -- Computed separately from the filtering aggregate above: an
+      -- ORDER BY aggregate there would make the planner feed *both*
+      -- aggregates sorted input, scrambling the stored children order.
+      SELECT uuid_generate_v5(uuid_ns_provsql(),
+                              concat('times-canonical', array_agg(t ORDER BY t)))
+      FROM unnest(filtered_tokens) t
+      INTO canonical;
+      IF get_gate_type(canonical) = 'times' THEN
+        -- A deliberate pre-creation at the canonical address: same
+        -- children, same product.
+        times_token := canonical;
+      ELSE
+        times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',filtered_tokens));
+
+        PERFORM create_gate(times_token, 'times', ARRAY_AGG(t)) FROM UNNEST(filtered_tokens) AS t WHERE t IS NOT NULL;
+      END IF;
+  END CASE;
+
+  RETURN times_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_delta
+  (token UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  delta_token uuid;
+BEGIN
+  -- NULL token ≡ 1 (untracked source), and δ(1) = 1.  Tested first: the
+  -- equality comparisons below are not NULL-safe.
+  IF token IS NULL THEN
+    return gate_one();
+  END IF;
+
+  IF token = gate_zero() OR token = gate_one() THEN
+    return token;
+  END IF;
+
+  delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
+
+  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
+
+  RETURN delta_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_aggregate(
+    aggfnoid integer,
+    aggtype integer,
+    val anyelement,
+    tokens uuid[],
+    is_scalar boolean DEFAULT false)
+  RETURNS agg_token AS
+$$
+DECLARE
+  c INTEGER;
+  agg_tok uuid;
+  agg_val varchar;
+BEGIN
+  -- Drop the NULL placeholders array_agg keeps for rows that did not produce a
+  -- semimod gate (provenance_semimod returns NULL for a NULL aggregated value),
+  -- so a NULL input never participates in the aggregate.
+  tokens := array_remove(tokens, NULL);
+  c:=COALESCE(array_length(tokens, 1), 0);
+
+  agg_val = CAST(val as VARCHAR);
+
+  IF c = 0 THEN
+    agg_tok := gate_zero();
+  ELSE
+    -- aggfnoid must be part of the UUID: SUM(id) and AVG(id) over the
+    -- same children would otherwise collapse to a single gate, and
+    -- their concurrent set_infos calls would overwrite each other's
+    -- aggregation operator (resulting in the wrong agg_kind being
+    -- read by provsql_having under cross-backend contention).  The
+    -- scalar-aggregation flag must likewise be hashed: a scalar and a
+    -- grouped aggregate over identical children carry different info2 and
+    -- must stay distinct gates, else the concurrent set_infos calls would
+    -- clobber the flag.  The flag is stored in the high bit of info2 (the
+    -- low 31 bits keep the result-type OID); aggtype itself is passed clean
+    -- so the agg_token->scalar cast still finds a valid type.
+    agg_tok := uuid_generate_v5(
+      uuid_ns_provsql(),
+      concat('agg',aggfnoid,tokens,CASE WHEN is_scalar THEN 'S' ELSE '' END));
+    PERFORM create_gate(agg_tok, 'agg', tokens);
+    PERFORM set_infos(agg_tok, aggfnoid,
+                      CASE WHEN is_scalar THEN aggtype | (-2147483648) ELSE aggtype END);
+    PERFORM set_extra(agg_tok, agg_val);
+  END IF;
+
+  RETURN '( '||agg_tok||' , '||agg_val||' )';
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  semimod_token uuid;
+  value_token uuid;
+BEGIN
+  -- A NULL value means this row does not participate in the aggregate (SQL
+  -- aggregates ignore NULL inputs; only count(*) counts rows unconditionally,
+  -- and it passes a constant 1 here).  Produce no semimod gate so the row is
+  -- skipped when provenance_aggregate builds the agg gate.
+  IF val IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
+    INTO value_token;
+  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
+    INTO semimod_token;
+
+  --create value gates
+  PERFORM create_gate(value_token,'value');
+  PERFORM set_extra(value_token, CAST(val AS VARCHAR));
+
+  --create semimod gate
+  PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
+
+  RETURN semimod_token;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION agg_token_to_random_variable(a agg_token)
+  RETURNS random_variable AS
+$$ SELECT provsql.random_variable_make(provsql.agg_token_uuid($1)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_cast c
+      JOIN pg_type s ON s.oid = c.castsource
+      JOIN pg_type t ON t.oid = c.casttarget
+    WHERE s.typname = 'agg_token' AND t.typname = 'random_variable'
+  ) THEN
+    CREATE CAST (agg_token AS random_variable)
+      WITH FUNCTION agg_token_to_random_variable(agg_token) AS IMPLICIT;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION rv_parametric2(
+    family text,
+    p1_tok uuid, p1_lit double precision,
+    p2_tok uuid, p2_lit double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+  wires uuid[] := ARRAY[]::uuid[];
+  s1 text;
+  s2 text;
+BEGIN
+  IF p1_tok IS NOT NULL THEN
+    wires := wires || p1_tok;
+    s1 := '$' || (array_length(wires, 1) - 1);
+  ELSE
+    IF NOT provsql.is_finite_float8(p1_lit) THEN
+      RAISE EXCEPTION 'provsql.%: literal parameter must be finite (got %)',
+        family, p1_lit;
+    END IF;
+    s1 := p1_lit::text;
+  END IF;
+  IF p2_tok IS NOT NULL THEN
+    wires := wires || p2_tok;
+    s2 := '$' || (array_length(wires, 1) - 1);
+  ELSE
+    IF NOT provsql.is_finite_float8(p2_lit) THEN
+      RAISE EXCEPTION 'provsql.%: literal parameter must be finite (got %)',
+        family, p2_lit;
+    END IF;
+    s2 := p2_lit::text;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', wires);
+  PERFORM provsql.set_extra(token, family || ':' || s1 || ',' || s2);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION rv_parametric1(family text, p_tok uuid)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', ARRAY[p_tok]);
+  PERFORM provsql.set_extra(token, family || ':$0');
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION normal(mu random_variable, sigma double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION normal(mu double precision, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION normal(mu random_variable, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('normal', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION logistic(mu random_variable, s double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION logistic(mu double precision, s random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION logistic(mu random_variable, s random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('logistic', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION uniform(a random_variable, b double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION uniform(a double precision, b random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION uniform(a random_variable, b random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('uniform', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION exponential(lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric1('exponential', ($1)::uuid); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION gamma(k random_variable, lambda double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION gamma(k double precision, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION gamma(k random_variable, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('gamma', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION lognormal(mu random_variable, sigma double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION lognormal(mu double precision, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION lognormal(mu random_variable, sigma random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('lognormal', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION weibull(k random_variable, lambda double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION weibull(k double precision, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION weibull(k random_variable, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('weibull', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION pareto(xm random_variable, alpha double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION pareto(xm double precision, alpha random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION pareto(xm random_variable, alpha random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('pareto', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION beta(alpha random_variable, beta double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION beta(alpha double precision, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION beta(alpha random_variable, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('beta', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha random_variable, beta double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha double precision, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha random_variable, beta random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gamma', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu random_variable, lambda double precision)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu double precision, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu random_variable, lambda random_variable)
+  RETURNS random_variable AS $$ SELECT provsql.rv_parametric2('inverse_gaussian', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION logistic(mu double precision, s double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(s) THEN
+    RAISE EXCEPTION 'provsql.logistic: parameters must be finite (got mu=%, s=%)', mu, s;
+  END IF;
+  IF s < 0 THEN
+    RAISE EXCEPTION 'provsql.logistic: scale s must be non-negative (got %)', s;
+  END IF;
+  IF s = 0 THEN
+    RETURN provsql.as_random(mu);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv');
+  PERFORM provsql.set_extra(token, 'logistic:' || mu || ',' || s);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION poisson(lambda random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric1('poisson', ($1)::uuid); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION binomial(n integer, p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('binomial', NULL, $1::double precision,
+                                 ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION geometric(p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric1('geometric', ($1)::uuid); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION negative_binomial(r double precision, p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('negative_binomial', NULL, $1, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION negative_binomial(r random_variable, p double precision)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('negative_binomial', ($1)::uuid, NULL, NULL, $2); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION negative_binomial(r random_variable, p random_variable)
+  RETURNS random_variable AS
+$$ SELECT provsql.rv_parametric2('negative_binomial', ($1)::uuid, NULL, ($2)::uuid, NULL); $$
+  LANGUAGE sql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_cond(rv random_variable, cond uuid)
+  RETURNS random_variable AS
+$$
+DECLARE
+  tgt uuid;
+  ev  uuid;
+  result uuid;
+  ch uuid[];
+BEGIN
+  IF cond IS NULL OR cond = gate_one() THEN
+    RETURN rv;
+  END IF;
+
+  -- A point-equality "Y = c" on a bare random-variable leaf is an
+  -- OBSERVATION, not a truncation: rewrite it to the internal likelihood-
+  -- weighting evidence (its density / mass at c).  This is what lets
+  -- "X | (normal(mu,1) = 8)" (a continuous point event, measure-zero as a
+  -- Boolean selection) condition as the disintegration rather than fold to
+  -- an infeasible event.
+  cond := provsql.evidence_as_observation(cond);
+
+  tgt := (rv)::uuid;
+  IF get_gate_type(tgt) = 'conditioned'
+     AND array_length(get_children(tgt), 1) = 2 THEN
+    -- Fold (X|A)|B = X|(A∧B): the rv-carrier conditioned gate is the
+    -- two-child [target, condition] shape; accumulate the new event.
+    ch  := get_children(tgt);
+    tgt := ch[1];
+    ev  := provenance_times(ch[2], cond);
+  ELSE
+    ev := cond;
+  END IF;
+
+  result := public.uuid_generate_v5(uuid_ns_provsql(),
+                                    concat('conditioned', tgt, ev));
+  PERFORM create_gate(result, 'conditioned', ARRAY[tgt, ev]);
+  RETURN (result)::random_variable;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION given(evidence UUID) RETURNS UUID AS
+$$
+BEGIN
+  RETURN provsql.evidence_as_observation(evidence);
+END
+$$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_operator o
+      JOIN pg_namespace n ON n.oid = o.oprnamespace
+    WHERE n.nspname = 'provsql' AND o.oprname = '|'
+      AND o.oprleft = 0
+      AND o.oprright = 'pg_catalog.uuid'::regtype::oid
+      AND o.oprcode <> 0
+  ) THEN
+    CREATE OPERATOR | (RIGHTARG=UUID, PROCEDURE=given);
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION given(predicate boolean) RETURNS UUID AS
+$$
+BEGIN
+  RAISE EXCEPTION 'given(predicate) / prefix | (predicate) must be rewritten '
+    'by the ProvSQL planner hook: the operand must be a Boolean combination '
+    'of random_variable / aggregate comparisons (is provsql.active off?)';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_operator o
+      JOIN pg_namespace n ON n.oid = o.oprnamespace
+    WHERE n.nspname = 'provsql' AND o.oprname = '|'
+      AND o.oprleft = 0
+      AND o.oprright = 'pg_catalog.bool'::regtype::oid
+      AND o.oprcode <> 0
+  ) THEN
+    CREATE OPERATOR | (RIGHTARG=boolean, PROCEDURE=given);
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION evidence_as_observation(ev uuid) RETURNS uuid AS
+$$
+DECLARE
+  ch uuid[];
+  i1 integer;
+  leaf uuid;
+  datum_gate uuid;
+BEGIN
+  IF ev IS NULL OR provsql.get_gate_type(ev) <> 'cmp' THEN
+    RETURN ev;
+  END IF;
+  ch := provsql.get_children(ev);
+  IF array_length(ch, 1) <> 2 THEN
+    RETURN ev;
+  END IF;
+  -- The cmp stores the comparison OPERATOR's OID in info1; match on its name
+  -- '=' the same way the C-side cmpOpFromOid does (get_opname), rather than a
+  -- fixed operator OID (which varies per install / carrier type).
+  SELECT info1 INTO i1 FROM provsql.get_infos(ev);
+  IF (SELECT oprname FROM pg_catalog.pg_operator WHERE oid = i1) IS DISTINCT FROM '=' THEN
+    RETURN ev;   -- not an equality
+  END IF;
+  IF provsql.get_gate_type(ch[1]) = 'rv'
+     AND provsql.get_gate_type(ch[2]) = 'value' THEN
+    leaf := ch[1]; datum_gate := ch[2];
+  ELSIF provsql.get_gate_type(ch[2]) = 'rv'
+        AND provsql.get_gate_type(ch[1]) = 'value' THEN
+    leaf := ch[2]; datum_gate := ch[1];
+  ELSE
+    RETURN ev;   -- not a bare-leaf-vs-constant point event
+  END IF;
+  RETURN provsql.observe((leaf)::random_variable,
+                         provsql.get_extra(datum_gate)::double precision);
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION observe(x random_variable, datum double precision)
+  RETURNS uuid AS
+$$
+DECLARE
+  leaf uuid := (x)::uuid;
+  result uuid;
+BEGIN
+  IF provsql.get_gate_type(leaf) <> 'rv' THEN
+    RAISE EXCEPTION 'provsql.observe: the argument must be a bare '
+      'random-variable leaf (a gate_rv), got a % gate', provsql.get_gate_type(leaf)
+      USING HINT = 'observe binds a datum to a single distribution leaf; '
+        'observing a derived quantity (a sum, product, or comparison) needs '
+        'a change-of-variables density and is out of scope.';
+  END IF;
+  IF NOT provsql.is_finite_float8(datum) THEN
+    RAISE EXCEPTION 'provsql.observe: datum must be finite (got %)', datum;
+  END IF;
+  result := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(result, 'observe', ARRAY[leaf]);
+  PERFORM provsql.set_extra(result, datum::text);
+  RETURN result;
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION and_agg_sfunc(state uuid, ev uuid)
+  RETURNS uuid AS
+$$
+  SELECT provsql.provenance_times(state, ev);
+$$ LANGUAGE sql PARALLEL SAFE;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_aggregate a
+      JOIN pg_proc p ON p.oid = a.aggfnoid
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'provsql' AND p.proname = 'and_agg'
+      AND p.pronargs = 1
+      AND p.proargtypes[0] = 'pg_catalog.uuid'::regtype::oid
+  ) THEN
+    CREATE AGGREGATE and_agg(uuid) (
+      SFUNC = and_agg_sfunc,
+      STYPE = uuid
+    );
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION evidence(evidence uuid)
+  RETURNS double precision
+  AS 'provsql','rv_evidence' LANGUAGE C STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION observe_atoms(evidence uuid)
+  RETURNS uuid[] AS
+$$
+  WITH RECURSIVE walk(tok) AS (
+    SELECT evidence
+    UNION
+    SELECT c
+    FROM walk, LATERAL unnest(provsql.get_children(walk.tok)) AS c
+    WHERE provsql.get_gate_type(walk.tok) = 'times'
+  )
+  SELECT array_agg(tok ORDER BY tok)
+  FROM walk
+  WHERE provsql.get_gate_type(tok) = 'observe';
+$$ LANGUAGE sql STABLE PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION shapley_observe(
+    target uuid, evidence uuid, payoff text DEFAULT 'expected')
+  RETURNS TABLE(observation uuid, value double precision) AS
+$$
+DECLARE
+  atoms uuid[];
+  n int;
+  nmasks int;
+  pv double precision[];
+  popc int[];
+  fact double precision[];
+  mask int;
+  i int;
+  j int;
+  cnt int;
+  subset uuid[];
+  ev_s uuid;
+  sh double precision;
+  bit int;
+  s_size int;
+BEGIN
+  IF payoff NOT IN ('expected', 'variance') THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: payoff must be ''expected'' or '
+      '''variance'' (got %)', payoff;
+  END IF;
+  atoms := provsql.observe_atoms(evidence);
+  n := coalesce(array_length(atoms, 1), 0);
+  IF n = 0 THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: evidence contains no observe() '
+      'atoms (got a % gate)', provsql.get_gate_type(evidence);
+  END IF;
+  IF n > 12 THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: exact attribution over % '
+      'observations is exponential; capped at 12 (sampling-based '
+      'attribution is future work)', n;
+  END IF;
+
+  -- factorials 0!..n!  (fact[k+1] = k!)
+  fact := ARRAY[1::double precision];
+  FOR i IN 1..n LOOP fact := fact || (fact[i] * i); END LOOP;
+
+  nmasks := (1 << n);
+  pv   := array_fill(NULL::double precision, ARRAY[nmasks]);
+  popc := array_fill(0, ARRAY[nmasks]);
+
+  -- Payoff value function for every subset of observations.
+  FOR mask IN 0 .. nmasks - 1 LOOP
+    subset := ARRAY[]::uuid[];
+    cnt := 0;
+    FOR i IN 0 .. n - 1 LOOP
+      IF (mask >> i) & 1 = 1 THEN
+        subset := subset || atoms[i + 1];
+        cnt := cnt + 1;
+      END IF;
+    END LOOP;
+    popc[mask + 1] := cnt;
+    IF cnt = 0 THEN
+      ev_s := provsql.gate_one();              -- prior (no evidence)
+    ELSE
+      ev_s := provsql.provenance_times(VARIADIC subset);
+    END IF;
+    IF payoff = 'expected' THEN
+      pv[mask + 1] := provsql.rv_moment(target, 1, false, ev_s);
+    ELSE
+      pv[mask + 1] := provsql.rv_moment(target, 2, true, ev_s);
+    END IF;
+  END LOOP;
+
+  -- Shapley value of each observation atom.
+  FOR i IN 0 .. n - 1 LOOP
+    sh := 0;
+    bit := (1 << i);
+    FOR mask IN 0 .. nmasks - 1 LOOP
+      IF (mask >> i) & 1 = 0 THEN               -- subsets S not containing i
+        s_size := popc[mask + 1];
+        -- weight |S|! (n-|S|-1)! / n!
+        sh := sh + (fact[s_size + 1] * fact[n - s_size] / fact[n + 1])
+                 * (pv[(mask | bit) + 1] - pv[mask + 1]);
+      END IF;
+    END LOOP;
+    observation := atoms[i + 1];
+    value := sh;
+    RETURN NEXT;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION agg_collapsed_moment(token uuid, k integer)
+  RETURNS double precision
+  AS 'provsql','agg_collapsed_moment' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_collapsed_moments(token uuid)
+  RETURNS double precision[]
+  AS 'provsql','agg_collapsed_moments' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_raw_moment(
+  token agg_token,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  aggregation_function VARCHAR;
+  child_pairs uuid[];
+  pair_children uuid[];
+  n integer;
+  i integer;
+  j integer;
+  vals float8[];
+  toks uuid[];
+  total float8;
+  total_probability float8;
+  tup integer[];
+  d integer;
+  prod_v float8;
+  distinct_tok uuid[];
+  conj_token uuid;
+  prob float8;
+  sign_max float8;
+BEGIN
+  IF token IS NULL OR k IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF k < 0 THEN
+    RAISE EXCEPTION 'agg_raw_moment(): k must be non-negative (got %)', k;
+  END IF;
+
+  -- Aggregate-carrier CASE (a gate_case over aggregate branches): a first-match
+  -- guarded selection.  The moment is CONDITIONAL on the CASE's value being
+  -- defined (NULL only when it never is, mirroring the MIN/MAX convention):
+  --   E[pick^k | defined ∧ prov]
+  --     = Σ_i P(region_i ∧ def_i) · E[value_i^k | region_i ∧ def_i]
+  --       / Σ_i P(region_i ∧ def_i),
+  -- where region_i = (¬g_1 ∧ … ∧ ¬g_{i-1}) ∧ g_i ∧ prov is the world set that
+  -- selects branch i (the default's region is "all guards false") and def_i is
+  -- the branch's defined event (agg_defined_event: gate_one for sum / count /
+  -- constants, "some row present" for min / max / avg, recursive for a nested
+  -- CASE).  Both factors are exact: probability() over the region ∧ def event,
+  -- and the conditional aggregate moment (a recursive agg_raw_moment on the
+  -- branch aggregate, which conditions on its own definedness within the
+  -- region, so the two factors weigh the same worlds).  The regions are
+  -- mutually exclusive, so the terms sum with no inclusion-exclusion, and
+  -- correlation between a guard and its branch (shared input tuples) is
+  -- carried by the conditioning, exactly as HAVING carries it.  When every
+  -- branch is defined everywhere, the defined mass equals P(prov) and the
+  -- formula reduces to the plain region-weighted sum.
+  IF get_gate_type(token) = 'case' THEN
+    IF k = 0 THEN
+      RETURN 1;
+    END IF;
+    DECLARE
+      wires uuid[] := get_children(token);
+      nw integer := array_length(get_children(token), 1);
+      m integer := (array_length(get_children(token), 1) - 1) / 2;
+      running_neg uuid := gate_one();
+      region_full uuid;
+      prov_p float8;
+      p float8;
+      total float8 := 0;
+      def_mass float8 := 0;
+      ci integer;
+      vuid uuid;
+      bm float8;
+    BEGIN
+      prov_p := probability(prov);
+      IF prov_p IS NULL OR prov_p <= 0 THEN
+        RETURN NULL;   -- impossible conditioning event
+      END IF;
+      -- Branches 1..m are the guarded WHENs; branch m+1 is the ELSE default,
+      -- whose region is "all guards false".
+      FOR ci IN 1 .. m + 1 LOOP
+        IF ci <= m THEN
+          region_full := provenance_times(running_neg, wires[2 * ci - 1], prov);
+          vuid := wires[2 * ci];
+          running_neg :=
+            provenance_times(running_neg, provenance_not(wires[2 * ci - 1]));
+        ELSE
+          region_full := provenance_times(running_neg, prov);
+          vuid := wires[nw];
+        END IF;
+        p := probability(provenance_times(region_full,
+                                          agg_defined_event(vuid)));
+        IF p > 0 THEN
+          -- E[value_i^k | region_i ∧ def_i]: a constant branch is a Dirac
+          -- (c^k, exact); a single aggregate or nested CASE is exact via
+          -- agg_raw_moment (whose MIN/MAX/CASE arms condition on their own
+          -- definedness within the region); an arithmetic / composite branch
+          -- takes the Monte-Carlo scalar path (which composes with the
+          -- aggregate leaves).
+          IF get_gate_type(vuid) = 'value' THEN
+            bm := power(CAST(get_extra(vuid) AS float8), k);
+          ELSIF get_gate_type(vuid) IN ('agg', 'case') THEN
+            bm := agg_raw_moment(agg_token_make(vuid, 0), k, region_full,
+                                 method, arguments);
+          ELSE
+            bm := rv_moment(vuid, k, false, region_full);
+          END IF;
+          total := total + p * bm;
+          def_mass := def_mass + p;
+        END IF;
+      END LOOP;
+      IF def_mass <= epsilon() THEN
+        RETURN NULL;   -- the CASE's value is never defined under prov
+      END IF;
+      RETURN total / def_mass;
+    END;
+  END IF;
+
+  IF get_gate_type(token) <> 'agg' THEN
+    IF get_gate_type(token) IN ('arith', 'conditioned') THEN
+      RAISE EXCEPTION 'expected / variance / moment over an arithmetic '
+        'combination of aggregates (e.g. SUM(x) + SUM(y) or SUM(x) + 5), or a '
+        'conditioning of one, is not yet supported: a moment can be taken only '
+        'over a single aggregate (SUM / COUNT / MIN / MAX), optionally '
+        'conditioned (SUM(x) | C)'
+        USING HINT = 'Take the moment of each aggregate separately, or condition '
+          'the bare aggregate.';
+    ELSE
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
+    END IF;
+  END IF;
+  IF k = 0 THEN
+    RETURN 1;
+  END IF;
+
+  SELECT pp.proname::varchar FROM pg_proc pp
+    WHERE oid=(get_infos(token)).info1
+    INTO aggregation_function;
+
+  child_pairs := get_children(token);
+  n := COALESCE(array_length(child_pairs, 1), 0);
+
+  IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+    -- count(col) keeps the COUNT identity at the gate level but its value is a
+    -- SUM of per-row 0/1 indicators, so its moments are computed exactly like
+    -- SUM (and its empty group is the real value 0, like SUM).  count(*)
+    -- arrives here as 'sum' (it normalises to F_SUM_INT4); count(col) as 'count'.
+    -- Trivial empty aggregation: SUM = 0, so SUM^k = 0 for k >= 1.
+    -- Note: agg_token semantics treat the "no row included" world as
+    -- SUM = 0, so this stays consistent with k = 1 (= expected()).
+    IF n = 0 THEN
+      RETURN 0;
+    END IF;
+
+    -- Collapsed fast path: a correlated COUNT / SUM whose per-row selection
+    -- events share a single continuous latent has an O(G·n) 1-D quadrature,
+    -- vastly cheaper than the O(n^k) tuple enumeration below (which is the
+    -- O(n^2) pair-probability bottleneck for the variance).  Only fires
+    -- unconditionally (prov = one) and for k in {1, 2}; agg_collapsed_moment
+    -- returns NULL when the shared-latent pattern does not match, and we
+    -- fall through to the exact enumeration.
+    IF prov = gate_one() AND k <= 2 THEN
+      total := agg_collapsed_moment((token)::uuid, k);
+      IF total IS NOT NULL THEN
+        RETURN total;
+      END IF;
+    END IF;
+
+    -- Extract per-child token + value arrays.
+    vals := ARRAY[]::float8[];
+    toks := ARRAY[]::uuid[];
+    FOR i IN 1..n LOOP
+      pair_children := get_children(child_pairs[i]);
+      toks := toks || pair_children[1];
+      vals := vals || CAST(get_extra(pair_children[2]) AS float8);
+    END LOOP;
+
+    -- Enumerate all k-tuples (i_1, ..., i_k) in {1..n}^k.  tup is the
+    -- current tuple; we step through them in lexicographic order.
+    total := 0;
+    tup := array_fill(1, ARRAY[k]);
+    LOOP
+      prod_v := 1;
+      FOR j IN 1..k LOOP
+        prod_v := prod_v * vals[tup[j]];
+      END LOOP;
+
+      SELECT array_agg(DISTINCT toks[idx]) INTO distinct_tok
+        FROM unnest(tup) AS idx;
+
+      IF prov <> gate_one() THEN
+        distinct_tok := distinct_tok || prov;
+      END IF;
+      conj_token := provenance_times(VARIADIC distinct_tok);
+      prob := probability_evaluate(conj_token, method, arguments);
+
+      total := total + prod_v * prob;
+
+      d := k;
+      WHILE d >= 1 AND tup[d] = n LOOP
+        tup[d] := 1;
+        d := d - 1;
+      END LOOP;
+      EXIT WHEN d = 0;
+      tup[d] := tup[d] + 1;
+    END LOOP;
+  ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+    -- Rank enumeration: per distinct value v, P(MIN = v) is the
+    -- probability that some t_i with v_i=v is true and all t_j with
+    -- smaller v are false.  For MAX we negate values so the same
+    -- "smaller-than" rank logic computes MIN-of-negated, then flip.
+    -- The outer multiplier picks up the right sign for the k-th moment
+    -- of MAX: E[MAX^k] = (-1)^k * E[MIN(-v)^k], so sign_max = (-1)^k.
+    sign_max := CASE
+                  WHEN aggregation_function = 'max'
+                  THEN power(-1::float8, k)
+                  ELSE 1
+                END;
+
+    -- MIN/MAX over the empty input world are NULL (no elements), not ±Infinity:
+    -- SQL returns one row with a NULL value.  The moment is therefore CONDITIONAL
+    -- on the aggregate being defined (non-empty) -- the empty world is excluded
+    -- and the result renormalised by P(prov AND non-empty).  (count, whose empty
+    -- value 0 is a real value, keeps the empty world; sum keeps it too, as 0.)
+    IF n = 0 THEN
+      RETURN NULL;  -- structurally empty: MIN/MAX undefined
+    END IF;
+
+    -- Numerator E[MIN^k . 1{prov AND non-empty}] (the rank sum naturally omits
+    -- the empty world, since every term requires a present token).
+    WITH tok_value AS (
+      SELECT (get_children(c))[1] AS tok,
+             (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
+               * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+      FROM UNNEST(child_pairs) AS c
+    ) SELECT sign_max * COALESCE(SUM(p * power(v, k)), 0) FROM (
+        SELECT t1.v AS v,
+          probability_evaluate(
+            CASE WHEN prov = gate_one()
+                 THEN provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                       provenance_plus(ARRAY_AGG(t2.tok)))
+                 ELSE provenance_times(prov,
+                        provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                         provenance_plus(ARRAY_AGG(t2.tok)))) END,
+            method, arguments) AS p
+        FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
+        GROUP BY t1.v) tmp
+      INTO total;
+
+    -- Denominator P(prov AND non-empty) = P(prov (x) (+) tokens).
+    SELECT probability_evaluate(
+             CASE WHEN prov = gate_one()
+                  THEN provenance_plus(ARRAY_AGG(tok))
+                  ELSE provenance_times(prov, provenance_plus(ARRAY_AGG(tok))) END,
+             method, arguments)
+      FROM (SELECT (get_children(c))[1] AS tok FROM UNNEST(child_pairs) AS c) s
+      INTO total_probability;
+
+    IF total_probability <= epsilon() THEN
+      RETURN NULL;  -- never defined under prov: MIN/MAX undefined
+    END IF;
+    RETURN total / total_probability;  -- already conditional; skip generic norm
+  ELSIF aggregation_function = 'avg' THEN
+    -- AVG = SUM/COUNT is a ratio of two correlated world-dependent
+    -- quantities, so the k-tuple expansion above does not apply.  Like
+    -- MIN/MAX, AVG over the empty world is NULL, so its moment conditions
+    -- on the aggregate being defined (COUNT >= 1), NULL when it never is.
+    -- Two routes:
+    --  * EXACT (independent rows, unconditional): the joint (sum, count)
+    --    PMF folded in C by agg_avg_moment_exact --
+    --    E[AVG^k | COUNT>=1] = Σ_{(s,c), c>=1} (s/c)^k pmf(s,c) / P(c>=1).
+    --  * Monte-Carlo scalar fallback otherwise (an outer conditioning
+    --    event, shared leaves, compound contributors): rv_moment samples
+    --    the agg gate per world; its NaN-skip on empty draws implements
+    --    the same conditional-on-defined convention, at the
+    --    provsql.rv_mc_samples budget (0 raises, per convention).
+    IF n = 0 THEN
+      RETURN NULL;  -- structurally empty: AVG undefined
+    END IF;
+    IF prov = gate_one() THEN
+      total := agg_avg_moment_exact((token)::uuid, k);
+      IF total IS NOT NULL THEN
+        RETURN total;
+      END IF;
+    END IF;
+    RETURN rv_moment((token)::uuid, k, false, prov);
+  ELSE
+    RAISE EXCEPTION USING MESSAGE=
+      'Cannot compute moment for aggregation function ' || aggregation_function;
+  END IF;
+
+  -- Conditional normalisation: E[X^k · 1_A] / P(A) = E[X^k | A].
+  IF prov <> gate_one()
+     AND total <> 0
+     AND total <> 'Infinity'::float8
+     AND total <> '-Infinity'::float8 THEN
+    total := total / probability_evaluate(prov, method, arguments);
+  END IF;
+
+  RETURN total;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION variance(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  m1 float8;
+  m2 float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- Conditioning on prov is handled inside rv_moment: when prov
+    -- resolves to gate_one() (the default, or load-time
+    -- simplification of any always-true sub-circuit) the
+    -- unconditional analytical path runs unchanged; otherwise the
+    -- joint-circuit loader unifies shared gate_rv leaves between
+    -- input and prov, and the conditional path runs either
+    -- truncated-distribution closed form or MC rejection.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), 2, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- Collapsed fast path: E[C] and E[C^2] from a single circuit load and plan
+    -- build, instead of two agg_raw_moment() calls that each reload.  Mirrors
+    -- the guard in agg_raw_moment (unconditional only, prov = one); on any
+    -- mismatch agg_collapsed_moments returns NULL and we fall through to the
+    -- generic per-order path (which handles conditioning, SUM enumeration, ...).
+    IF rv_conditioned_prov(input::uuid, prov) = gate_one() THEN
+      DECLARE ms float8[];
+      BEGIN
+        ms := agg_collapsed_moments(
+                (agg_conditioned_target(input::agg_token))::uuid);
+        IF ms IS NOT NULL THEN
+          RETURN ms[2] - ms[1] * ms[1];
+        END IF;
+      END;
+    END IF;
+    m1 := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    m2 := agg_raw_moment(agg_conditioned_target(input::agg_token), 2,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    IF m1 IS NULL OR m2 IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN m2 - m1 * m1;
+  END IF;
+
+  RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+
 SELECT reset_constants_cache();
