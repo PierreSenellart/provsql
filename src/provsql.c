@@ -148,6 +148,7 @@ static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
                             bool in_boolean_rewrite,
                             const InvFreeMarkerCtx *inv_ctx);
+static bool has_provenance(const constants_t *constants, Query *q);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
                               const char *cert);
@@ -1934,14 +1935,43 @@ static void plant_reach_conjunctions(List *candidates, List *lowered) {
 /**
  * @brief Inline all CTE references in @p q as subqueries.
  */
-static void inline_ctes(Query *q) {
+static void inline_ctes(const constants_t *constants, Query *q) {
   List *lowered = NIL;
+  ListCell *lc;
 #if PG_VERSION_NUM >= 150000
   List *reach_aggs = NIL;
   List *reach_conjs = NIL;
 #endif
   if (q->cteList == NIL)
     return;
+
+  /* A recursive CTE that carries no token provenance is a pure-RV (or
+   * otherwise untracked) recursion -- e.g. a random_variable path-cost
+   * fixpoint.  There is nothing to lower (no token semiring to compute a
+   * fixpoint over), and RVs cannot be set-UNIONed (their btree comparator
+   * raises: a distribution has no ordering), so its UNION ALL must execute
+   * as native SQL.  When every CTE in the WITH clause is untracked and at
+   * least one is such a recursion, leave the whole WITH intact for
+   * PostgreSQL to run: any RV comparison in the outer query was already
+   * lifted by rewrite_probability_events, and collect_provenance skips the
+   * untracked RTE_CTE entries.  If any CTE does carry token provenance we
+   * fall through to the normal path (which lowers the tracked recursion or
+   * raises on an unsupported shape) rather than silently dropping its
+   * tracking. */
+  {
+    bool passthrough_recursion = false;
+    bool any_tracked = false;
+    foreach (lc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *) lfirst(lc);
+      if (has_provenance(constants, (Query *) cte->ctequery))
+        any_tracked = true;
+      else if (cte->cterecursive)
+        passthrough_recursion = true;
+    }
+    if (passthrough_recursion && !any_tracked)
+      return;
+  }
+
 #if PG_VERSION_NUM >= 150000
   /* Grouped-reachability aggregations and self-join conjunctions are
    * detected before lowering (the CTE reference is still
@@ -2165,6 +2195,13 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
     } else if (r->rtekind == RTE_GROUP) {
       // Introduced in PostgreSQL 18, we already handle group by from
       // groupClause
+#endif
+    } else if (r->rtekind == RTE_CTE) {
+      // A CTE left intact by inline_ctes: an untracked pure-RV recursion
+      // (and its dependents) that runs as native SQL.  No provenance column
+      // to collect -- inline_ctes only preserves CTEs that carry none.
+#if PG_VERSION_NUM < 150000
+      provsql_error("Recursive CTEs not supported");
 #endif
     } else {
       provsql_error("FROM clause not supported");
@@ -4586,6 +4623,31 @@ rewrite_probability_event_mutator(Node *node, void *data)
 }
 
 /**
+ * @brief Mutator: lift any random_variable comparison event to its token.
+ *
+ * Run as a second pass over the target list, after
+ * @c rewrite_probability_event_mutator has lowered the RV surface
+ * (GREATEST / LEAST, RV @c CASE -> @c rv_case, @c probability(...)).  By then
+ * a comparison's operands are already lowered and every RV @c CASE guard has
+ * been consumed into an @c rv_case token, so lifting a remaining bare RV
+ * comparison -- @c "x <= c" wherever it appears, including nested inside a
+ * scalar/aggregate consumer such as @c expected(x <= c) -- is safe.  Without
+ * this the inner @c OpExpr survives to execution and raises in
+ * @c random_variable_cmp_placeholder (the placeholder exists precisely to
+ * catch a comparison the hook failed to lift).
+ */
+static Node *
+lift_rv_event_mutator(Node *node, void *data)
+{
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return NULL;
+  if (is_projected_rv_event(node, constants))
+    return (Node *) predicate_to_condition_gate((Expr *) node, constants, false);
+  return expression_tree_mutator(node, lift_rv_event_mutator, data);
+}
+
+/**
  * @brief Lift RV-comparison events in @p q's target list into their tokens.
  *
  * Two related rewrites over the SELECT list (only), run early in
@@ -4610,12 +4672,16 @@ rewrite_probability_events(const constants_t *constants, Query *q)
     return;
   q->targetList = (List *)expression_tree_mutator(
     (Node *)q->targetList, rewrite_probability_event_mutator, (void *)constants);
+  /* Second pass: lift every remaining RV comparison event to its token,
+   * wherever it appears in a projected (non-resjunk) column -- both the bare
+   * top-level "SELECT x > y" and a comparison nested inside a scalar/aggregate
+   * consumer such as expected(x <= c).  Runs after the surface-lowering pass
+   * so operands are lowered and RV CASE guards are already consumed. */
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     if (te->resjunk)
       continue;
-    if (is_projected_rv_event((Node *)te->expr, constants))
-      te->expr = (Expr *)predicate_to_condition_gate(te->expr, constants, false);
+    te->expr = (Expr *)lift_rv_event_mutator((Node *)te->expr, (void *)constants);
   }
 }
 
@@ -13644,7 +13710,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * particular, drive the recursive-CTE fixpoint (eval_recursive), which
    * runs SPI and creates temp tables at plan time. */
   if (provsql_active)
-    inline_ctes(q);
+    inline_ctes(constants, q);
 
   /* Decorrelate a top-level scalar subquery into a LEFT JOIN + choose() +
    * GROUP BY + count<=1 HAVING.  Runs before lower_outer_joins so the LEFT JOIN

@@ -20,6 +20,12 @@ t
 p_true|p_false|p_t|p_f|p_null
 1|0|1|0|t
 (1 row)
+e_event|v_event|m3_event|cm2_event|agrees_prob
+t|t|t|t|t
+(1 row)
+recursive_ontime_ok|recursive_mean_shared_ok
+t|t
+(1 row)
 continuous_comparison_surface_done
 ok
 (1 row)
