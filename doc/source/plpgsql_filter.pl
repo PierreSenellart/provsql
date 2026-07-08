@@ -122,8 +122,13 @@ s{
 }{
 }sigxg;
 
+# ENUM body: consume "--" comments and quoted labels atomically so that a
+# ");" inside a comment (or label) cannot terminate the enum early, which
+# would dump the remaining values as bare tokens at file scope and derail
+# Doxygen's C parser (scrambling, among others, the @defgroup topic tree).
 s{
-  CREATE\s+TYPE\s+([^\s]+)\s+AS\s+ENUM\s*\((.*?)\);
+  CREATE\s+TYPE\s+([^\s]+)\s+AS\s+ENUM\s*
+  \(((?:--[^\n]*|'[^']*'|[^)'])*)\);
 }{
   enum $1 { $2 };
 }sigx;
