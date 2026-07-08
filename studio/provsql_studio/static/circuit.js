@@ -3174,16 +3174,26 @@
       const isScalarPinned =
         node != null && _SCALAR_GATE_TYPES.has(node.type) && pinned !== root;
       if (isScalarPinned) {
-        target = root;
-        // When the root is itself a conditioned gate (X | C), conditioning
-        // on the root is nonsensical (it is already conditioned).  Offer its
-        // evidence child instead -- the second wire (child_pos 2), C.
+        // Conditioning must be on a Boolean provenance event.  A
+        // scalar/value root -- an rv value like normal(normal(...), ...)
+        // whose child is the latent leaf, or an arith / mixture / value /
+        // case / aggregate value -- is not an event, so offering it as the
+        // conditioning target is nonsensical; leave the input empty.
         const rootNode = state.scene.nodes.find(n => n.id === root);
-        if (rootNode && rootNode.type === 'conditioned') {
-          const wires = (state.scene.edges || [])
-            .filter(e => e.from === root)
-            .sort((a, b) => (a.child_pos ?? 0) - (b.child_pos ?? 0));
-          if (wires.length >= 2) target = wires[1].to;
+        const rootIsEvent = rootNode != null
+          && !_SCALAR_GATE_TYPES.has(rootNode.type)
+          && !_AGG_SCALAR_GATE_TYPES.has(rootNode.type);
+        if (rootIsEvent) {
+          target = root;
+          // When the root is itself a conditioned gate (X | C), conditioning
+          // on the root is nonsensical (it is already conditioned).  Offer its
+          // evidence child instead -- the second wire (child_pos 2), C.
+          if (rootNode.type === 'conditioned') {
+            const wires = (state.scene.edges || [])
+              .filter(e => e.from === root)
+              .sort((a, b) => (a.child_pos ?? 0) - (b.child_pos ?? 0));
+            if (wires.length >= 2) target = wires[1].to;
+          }
         }
       }
     }
