@@ -1013,58 +1013,12 @@
      a depth selector and a refresh deliberately stays in Circuit mode
      (one click away via the jump link). */
 
-  // Child-position labelling rules, mirrored from circuit.js: only
-  // gates whose argument order matters get the digits.
-  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned', 'case', 'rv']);
-  const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
-  const COMMUTATIVE_CMP = new Set(['=', '<>', '!=']);
-  const NON_COMMUTATIVE_ARITH = new Set([2, 3]);   // MINUS, DIV
-  function shouldLabelChildren(parent) {
-    if (!ORDERED_GATES.has(parent.type)) return false;
-    if (parent.type === 'agg') {
-      return !COMMUTATIVE_AGG.has((parent.info1_name || '').toLowerCase());
-    }
-    if (parent.type === 'cmp') {
-      return !COMMUTATIVE_CMP.has(parent.info1_name || '');
-    }
-    if (parent.type === 'arith') {
-      const tag = parent.info1 == null ? null : Number(parent.info1);
-      return Number.isFinite(tag) && NON_COMMUTATIVE_ARITH.has(tag);
-    }
-    return true;
-  }
-  // A parametric (latent / compound) rv wires one or more of its
-  // distribution parameters as tokens; the extra "kind:$0[,$1]" maps wire
-  // (pos-1) to a parameter slot, labelled with that family's parameter
-  // symbol (μ / σ / λ …) from the scene's rv_families registry.  Mirrors
-  // circuit.js's _rvEdgeLabel so a notebook snapshot reads like the Circuit
-  // canvas; falls back to the bare position when the registry is absent.
-  function rvEdgePosLabel(parent, pos, scene) {
-    if (!parent.extra || !scene) return null;
-    const m = String(parent.extra).match(/^\s*([a-zA-Z_]+)\s*:(.*)$/);
-    if (!m) return null;
-    const kind = m[1].toLowerCase();
-    const slots = m[2].split(',').map((x) => x.trim());
-    const j = slots.indexOf('$' + (pos - 1));   // wire index = pos - 1
-    if (j < 0) return null;
-    const reg = (scene.rv_families || {})[kind];
-    const names = reg && reg.param_names;
-    return (names && names[j]) || null;
-  }
-  function edgePosLabel(parent, pos, scene) {
-    if (parent.type === 'mixture') {
-      return ({ 1: 'p', 2: 'x', 3: 'y' })[pos] || String(pos);
-    }
-    if (parent.type === 'conditioned') {
-      // A | B, with the joint A∧B for the discrete (uuid|uuid) carrier.
-      return ({ 1: 'A', 2: 'B', 3: 'A∧B' })[pos] || String(pos);
-    }
-    if (parent.type === 'rv') {
-      return rvEdgePosLabel(parent, pos, scene) || String(pos);
-    }
-    return String(pos);
-  }
+  // The circuit "vocabulary" (which wires get positional labels, what they
+  // say, and how an oversized label is fitted) is shared with Circuit mode
+  // via circuit-vocab.js -- a plain <script> loaded before app.js -- so the
+  // interactive canvas and this snapshot painter cannot drift.
+  const { shouldLabelChildren, edgePosLabel, fitLabelFontSize } =
+    window.ProvsqlCircuitVocab;
 
   function svgEl(tag, attrs) {
     const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -1205,7 +1159,12 @@
          +   `${to.x + bow} ${to.y - 50}, `
          +   `${to.x} ${to.y - 22}`,
       }));
-      if (shouldLabelChildren(from) && e.child_pos != null) {
+      // The shared vocabulary may return null/empty to suppress a wire's
+      // label (categorical-mixture mulinput outcomes, an unmatched wire);
+      // skip rendering it then, exactly as Circuit mode does.
+      const posLabel = shouldLabelChildren(from) && e.child_pos != null
+        ? edgePosLabel(from, e.child_pos, scene) : null;
+      if (posLabel != null && posLabel !== '') {
         const dx = from.x - to.x, dy = from.y - to.y;
         const len = Math.hypot(dx, dy) || 1;
         const t = svgEl('text', {
@@ -1215,7 +1174,7 @@
           x: (from.x + to.x) / 2 + bow + (-dy / len) * 9,
           y: (from.y + to.y) / 2 + (dx / len) * 9,
         });
-        t.textContent = edgePosLabel(from, e.child_pos, scene);
+        t.textContent = posLabel;
         svg.appendChild(t);
       }
     }
@@ -1265,7 +1224,7 @@
       if (bb.width > maxW) {
         const cur = parseFloat(el.getAttribute('font-size')) || 11;
         el.setAttribute('font-size',
-          Math.max(5.5, cur * maxW / bb.width).toFixed(2));
+          fitLabelFontSize(cur, bb.width, maxW).toFixed(2));
       }
     }
   }

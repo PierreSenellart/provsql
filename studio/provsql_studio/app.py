@@ -202,6 +202,7 @@ def create_app(
             "fonts-face.css",
             "colors_and_type.css",
             "app.css",
+            "circuit-vocab.js",
             "app.js",
             "img/favicon.ico",
             "img/logo.png",

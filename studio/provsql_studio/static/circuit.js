@@ -111,161 +111,13 @@
   // and consumed by the window-level mousemove/mouseup handlers.
   let _drag = null;
 
-  // Gate types whose children carry a meaningful order: cmp's lhs/rhs,
-  // monus's minuend/subtrahend, and agg : but agg only when the function
-  // is order-sensitive (array_agg, string_agg, json_agg…). For
-  // sum/count/min/max/avg the result is independent of input order, so
-  // the digits would be noise. semimod is omitted: its value/scalar
-  // split is implied by gate type. eq has a single child so positional
-  // labels would be redundant.  mixture's three wires (p / x / y) are
-  // positional and get the semantic labels defined in EDGE_POS_LABEL
-  // below.
-  const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned', 'mobius', 'case', 'rv']);
-  // Per-(parent type, 1-based child_pos) edge-label overrides for
-  // gates whose wires have well-known names.  Falls back to the bare
-  // digit (1, 2, 3, …) for any entry not in the map.  mixture(p, x, y)
-  // mirrors the SQL constructor's parameter names so the rendered edge
-  // labels match the user-facing API.  Entries may also be functions
-  // (parent_node, child_pos) → string for shape-dependent labels: the
-  // categorical-form gate_mixture has wires [key, mul_1, ..., mul_n]
-  // and labels them accordingly when more than three wires are present.
-  function _mixtureEdgeLabel(parent, child_pos) {
-    // Distinguish the categorical form structurally rather than by
-    // wire count: a bimodal categorical (provsql.categorical with
-    // two outcomes) has only three wires ([key, mul_1, mul_2]) yet
-    // is still categorical, while a classic 3-wire mixture is
-    // [p_input, x_scalar, y_scalar].  The discriminator is the
-    // types of the non-first wires -- all gate_mulinput in the
-    // categorical form, gate_rv / gate_value / gate_arith /
-    // gate_mixture in the classic form.
-    if (state.scene && state.scene.edges && state.scene.nodes) {
-      const nodes_by_id = {};
-      for (const n of state.scene.nodes) nodes_by_id[n.id] = n;
-      const children = state.scene.edges
-        .filter(e => e.from === parent.id)
-        .sort((a, b) => a.child_pos - b.child_pos);
-      if (children.length >= 2) {
-        const wire0 = nodes_by_id[children[0].to];
-        const isCategorical = wire0 && wire0.type === 'input'
-          && children.slice(1).every(c => {
-               const t = nodes_by_id[c.to];
-               return t && t.type === 'mulinput';
-             });
-        if (isCategorical) {
-          // Only the key wire has a distinguished role; the
-          // mulinputs are unordered outcomes of the same block, so
-          // positional digits would be misleading.  Return null on
-          // the mulinput wires to suppress the edge label entirely.
-          return child_pos === 1 ? 'key' : null;
-        }
-      }
-    }
-    // Classic 3-wire mixture: [p, x, y].
-    return ({ 1: 'p', 2: 'x', 3: 'y' })[child_pos] ?? String(child_pos);
-  }
-  // gate_conditioned wires: the target A and the evidence B, plus -- for
-  // discrete (uuid|uuid) conditioning -- their joint A∧B (so the circuit
-  // shows P(A|B) = P(A∧B)/P(B)). The rv|uuid / agg|uuid forms have just the
-  // two; the function tolerates either by labelling positionally.
-  function _conditionedEdgeLabel(parent, child_pos) {
-    return ({ 1: 'A', 2: 'B', 3: 'A∧B' })[child_pos] ?? null;
-  }
-  // gate_mobius wires: each child is one element of the inclusion-exclusion
-  // expansion, carrying an integer coefficient.  The coefficients live in the
-  // gate's extra, keyed by child UUID ("uuid:coeff uuid:coeff ..."), so we
-  // resolve the child at this position to its UUID and render its signed
-  // coefficient (+1, −1, …) on the edge -- the value is Σ_i c_i·P(child_i).
-  function _mobiusEdgeLabel(parent, child_pos) {
-    if (!parent.extra) return null;
-    // extra: "uuid:coeff ..." plus an optional "L:<uuid>" naming the literal
-    // lineage child (carried so the token still answers Shapley / semiring on
-    // the normal provenance; the Möbius combination is a probability shortcut).
-    const coeffs = {};
-    let lineage = null;
-    for (const tok of parent.extra.split(/\s+/)) {
-      if (!tok) continue;
-      if (tok.startsWith('L:')) { lineage = tok.slice(2); continue; }
-      const i = tok.lastIndexOf(':');
-      if (i > 0) coeffs[tok.slice(0, i)] = tok.slice(i + 1);
-    }
-    if (!(state.scene && state.scene.edges)) return null;
-    const edge = state.scene.edges.find(
-      e => e.from === parent.id && e.child_pos === child_pos);
-    if (!edge) return null;
-    if (lineage && edge.to === lineage) return 'lineage';
-    const c = coeffs[edge.to];
-    if (c == null) return null;
-    const n = Number(c);
-    if (Number.isFinite(n))
-      return (n < 0 ? '−' : '+') + Math.abs(n);   // U+2212 minus sign
-    return String(c);
-  }
-  function _caseEdgeLabel(parent, child_pos) {
-    // gate_case wires (child_pos is 1-based, like every other gate):
-    // [guard_1, value_1, ..., guard_k, value_k, default].  The final wire
-    // (highest child_pos) is the ELSE default; the rest alternate
-    // odd = guard, even = value.
-    let maxPos = child_pos;
-    if (state.scene && state.scene.edges)
-      for (const e of state.scene.edges)
-        if (e.from === parent.id && e.child_pos > maxPos) maxPos = e.child_pos;
-    if (child_pos === maxPos) return 'default';
-    const i = Math.ceil(child_pos / 2);
-    return (child_pos % 2 === 1) ? `guard ${i}` : `value ${i}`;
-  }
-  // gate_rv wires: a parametric (latent / compound) leaf wires one or more of
-  // its distribution parameters as tokens.  The extra "kind:p1[,p2]" marks a
-  // wired slot j as "$k" (the k-th wire), so the edge from wire (child_pos-1)
-  // fills parameter slot j -- label it with that family's parameter symbol
-  // (μ / σ / λ ...) from the scene's rv_families registry, matching the
-  // in-circle "·" placeholder.  A bare (non-parametric) rv has no wires, so
-  // this never fires for it.
-  function _rvEdgeLabel(parent, child_pos) {
-    if (!parent.extra) return null;
-    const m = String(parent.extra).match(/^\s*([a-zA-Z_]+)\s*:(.*)$/);
-    if (!m) return null;
-    const kind = m[1].toLowerCase();
-    const slots = m[2].split(',').map(x => x.trim());
-    const j = slots.indexOf('$' + (child_pos - 1));   // wire index = child_pos-1
-    if (j < 0) return null;
-    const reg = (state.scene?.rv_families || {})[kind];
-    const names = reg && reg.param_names;
-    return (names && names[j]) || null;
-  }
-  const EDGE_POS_LABEL = {
-    mixture: _mixtureEdgeLabel,
-    conditioned: _conditionedEdgeLabel,
-    mobius: _mobiusEdgeLabel,
-    case: _caseEdgeLabel,
-    rv: _rvEdgeLabel,
-  };
-  const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
-  // = and <> are commutative; lhs/rhs digits add noise for those cmp
-  // gates the same way they would for SUM/COUNT/etc.  The strict
-  // comparators (<, <=, >, >=) keep the positional digits since
-  // flipping them changes semantics.
-  const COMMUTATIVE_CMP = new Set(['=', '<>', '!=']);
-  // PROVSQL_ARITH_* tags whose result depends on argument order:
-  // 2 = MINUS, 3 = DIV.  PLUS / TIMES are commutative (no labels);
-  // NEG has a single child (label would be a lone "1", redundant).
-  const NON_COMMUTATIVE_ARITH = new Set([2, 3]);
-  function shouldLabelChildren(parent) {
-    if (!ORDERED_GATES.has(parent.type)) return false;
-    if (parent.type === 'agg') {
-      const fn = (parent.info1_name || '').toLowerCase();
-      return !COMMUTATIVE_AGG.has(fn);
-    }
-    if (parent.type === 'cmp') {
-      const op = parent.info1_name || '';
-      return !COMMUTATIVE_CMP.has(op);
-    }
-    if (parent.type === 'arith') {
-      const tag = parent.info1 == null ? null : Number(parent.info1);
-      return Number.isFinite(tag) && NON_COMMUTATIVE_ARITH.has(tag);
-    }
-    return true;
-  }
+  // The circuit "vocabulary" -- which wires get positional labels, what
+  // those labels say, and how an oversized node label is fitted -- lives in
+  // the shared circuit-vocab.js so the notebook snapshot painter
+  // (notebook.js) renders identically.  It is a plain <script> loaded
+  // before app.js, so window.ProvsqlCircuitVocab is defined by now.
+  const { shouldLabelChildren, edgePosLabel, fitLabelFontSize } =
+    window.ProvsqlCircuitVocab;
 
   // ─── public API ───────────────────────────────────────────────────────
 
@@ -840,7 +692,7 @@
       const bb = el.getBBox();
       if (bb.width > maxW) {
         const cur = parseFloat(getComputedStyle(el).fontSize) || 11;
-        const scaled = Math.max(5.5, cur * maxW / bb.width);
+        const scaled = fitLabelFontSize(cur, bb.width, maxW);
         el.style.fontSize = scaled.toFixed(2) + 'px';
       }
     });
@@ -979,19 +831,10 @@
       // every edge.  Bow already shifts both the curve and the
       // midpoint, so labels track parallel curves automatically.
       if (shouldLabelChildren(from) && e.child_pos != null) {
-        // Compute the label first; a labelMap function that returns
-        // null/empty suppresses the edge label entirely (used by
-        // the categorical-form mixture for its unordered mulinput
+        // The shared vocabulary returns the wire's label, or null/empty to
+        // suppress it (the categorical-form mixture's unordered mulinput
         // outcomes -- only the key wire gets a label there).
-        const labelMap = EDGE_POS_LABEL[from.type];
-        let label;
-        if (typeof labelMap === 'function') {
-          label = labelMap(from, e.child_pos);
-        } else if (labelMap && labelMap[e.child_pos] != null) {
-          label = labelMap[e.child_pos];
-        } else {
-          label = String(e.child_pos);
-        }
+        const label = edgePosLabel(from, e.child_pos, state.scene);
         if (label != null && label !== '') {
           const dx = fp.x - tp.x;
           const dy = fp.y - tp.y;
