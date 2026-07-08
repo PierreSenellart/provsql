@@ -1252,6 +1252,22 @@
       svg.appendChild(g);
     }
     container.appendChild(svg);
+    // Match Circuit mode: some labels carry payload wider than the circle
+    // (rv distribution params like "LogN(1.6, 0.42)", value scalars, agg
+    // names).  Measure each after attach and shrink its font until it fits
+    // the usable diameter (~40px for r=22), with a 5.5px floor for
+    // legibility, so the text no longer overflows the node.  getBBox needs
+    // a laid-out SVG; skip silently if it is not measurable yet.
+    for (const el of svg.querySelectorAll('.node-label')) {
+      let bb;
+      try { bb = el.getBBox(); } catch (e) { continue; }
+      const maxW = 40;
+      if (bb.width > maxW) {
+        const cur = parseFloat(el.getAttribute('font-size')) || 11;
+        el.setAttribute('font-size',
+          Math.max(5.5, cur * maxW / bb.width).toFixed(2));
+      }
+    }
   }
 
   async function refreshCircuitCell(cell) {
