@@ -4361,7 +4361,142 @@ BEGIN
     RETURN m2 - m1 * m1;
   END IF;
 
+  -- Bernoulli event token (see moment()): Var[X] = p(1 - p).
+  IF pg_typeof(input) = 'uuid'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    m1 := provsql.probability_evaluate(provsql.cond(input::uuid, prov),
+                                       method, arguments);
+    RETURN m1 * (1 - m1);
+  END IF;
+
   RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), k, false,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    RETURN agg_raw_moment(agg_conditioned_target(input::agg_token), k,
+                          rv_conditioned_prov(input::uuid, prov), method, arguments);
+  END IF;
+
+  -- A bare provenance event token (a gate_cmp lifted from an RV comparison,
+  -- e.g. expected(x <= c)) is a Bernoulli indicator: X in {0,1}, so every raw
+  -- moment E[X^k] with k >= 1 equals P(event), and E[X^0] = 1.  cond() applies
+  -- the optional conditioning prov (a no-op for the default gate_one()).
+  IF pg_typeof(input) = 'uuid'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k = 0 THEN
+      RETURN 1;
+    END IF;
+    RETURN provsql.probability_evaluate(provsql.cond(input::uuid, prov),
+                                        method, arguments);
+  END IF;
+
+  RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input);
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION central_moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  mu float8;
+  total float8;
+  i integer;
+  raw_i float8;
+  binom float8;
+  -- iterative binomial coefficient C(k, i)
+  k_double float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), k, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k < 0 THEN
+      RAISE EXCEPTION 'central_moment(): k must be non-negative (got %)', k;
+    END IF;
+    IF k = 0 THEN RETURN 1; END IF;
+    IF k = 1 THEN RETURN 0; END IF;
+
+    mu := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    IF mu IS NULL THEN RETURN NULL; END IF;
+    -- mu may be ±Infinity for empty MIN / MAX with positive empty
+    -- probability; central_moment is undefined in that case.
+    IF mu = 'Infinity'::float8 OR mu = '-Infinity'::float8 THEN
+      RETURN mu;
+    END IF;
+
+    total := 0;
+    binom := 1;  -- C(k, 0)
+    k_double := k;
+    FOR i IN 0..k LOOP
+      raw_i := agg_raw_moment(agg_conditioned_target(input::agg_token), i,
+                              rv_conditioned_prov(input::uuid, prov), method, arguments);
+      IF raw_i IS NULL THEN RETURN NULL; END IF;
+      total := total + binom * power(-mu, k - i) * raw_i;
+      -- C(k, i+1) = C(k, i) * (k - i) / (i + 1)
+      IF i < k THEN
+        binom := binom * (k_double - i) / (i + 1);
+      END IF;
+    END LOOP;
+    RETURN total;
+  END IF;
+
+  -- Bernoulli event token (see moment()): with p = P(event),
+  -- E[(X-p)^k] = (1-p)(-p)^k + p(1-p)^k; k = 0 -> 1, k = 1 -> 0.
+  IF pg_typeof(input) = 'uuid'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k < 0 THEN
+      RAISE EXCEPTION 'central_moment(): k must be non-negative (got %)', k;
+    END IF;
+    IF k = 0 THEN RETURN 1; END IF;
+    IF k = 1 THEN RETURN 0; END IF;
+    mu := provsql.probability_evaluate(provsql.cond(input::uuid, prov),
+                                       method, arguments);
+    RETURN (1 - mu) * power(-mu, k) + mu * power(1 - mu, k);
+  END IF;
+
+  RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input);
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
