@@ -76,67 +76,82 @@ Distribution Constructors
 The constructors below each return a ``random_variable``; every call mints a
 fresh, independent variable (use :sqlfunc:`mixture` when two draws must share
 underlying randomness). The tables give each family's support, what is
-computed in closed form, and any closure (sum / product / min stability).
+computed in closed form, and any closure (sum / product / min stability); the
+Reference column links the mathematics.
 
 **Continuous parametric**
 
 .. list-table::
    :header-rows: 1
-   :widths: 32 12 26 30
+   :widths: 24 12 10 24 30
 
    * - Distribution
+     - Reference
      - Support
      - Closed form
      - Notes
    * - :sqlfunc:`normal` ``(mu, sigma)``
+     - `Normal <https://en.wikipedia.org/wiki/Normal_distribution>`__
      - ``R``
      - moments, CDF, quantiles
      - ``sigma = 0`` -> Dirac via :sqlfunc:`as_random`
    * - :sqlfunc:`uniform` ``(a, b)``
+     - `Uniform <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>`__
      - ``[a, b]``
      - all exact
      - ``a = b`` -> Dirac
    * - :sqlfunc:`exponential` ``(lambda)``
+     - `Exponential <https://en.wikipedia.org/wiki/Exponential_distribution>`__
      - ``[0, inf)``
      - all exact
      - mean ``1/lambda``; ``lambda = 0`` raises
    * - :sqlfunc:`erlang` ``(k, lambda)``
+     - `Erlang <https://en.wikipedia.org/wiki/Erlang_distribution>`__
      - ``[0, inf)``
      - all exact
      - sum of ``k`` ``Exp(lambda)``; ``k = 1`` -> :sqlfunc:`exponential`
    * - :sqlfunc:`gamma` ``(k, lambda)``
+     - `Gamma <https://en.wikipedia.org/wiki/Gamma_distribution>`__
      - ``(0, inf)``
      - CDF (lower incomplete gamma); same-rate **sum-closed**
      - mean ``k/lambda``; integer ``k`` -> :sqlfunc:`erlang`
    * - :sqlfunc:`chi_squared` ``(k)``
+     - `Chi-squared <https://en.wikipedia.org/wiki/Chi-squared_distribution>`__
      - ``(0, inf)``
      - via gamma
      - sugar for ``gamma(k/2, 0.5)``
    * - :sqlfunc:`lognormal` ``(mu, sigma)``
+     - `Log-normal <https://en.wikipedia.org/wiki/Log-normal_distribution>`__
      - ``(0, inf)``
      - moments, CDF, quantiles; **product-closed**
      - ``exp``/``ln`` bridges to :sqlfunc:`normal`; ``sigma = 0`` -> Dirac
    * - :sqlfunc:`logistic` ``(mu, s)``
+     - `Logistic <https://en.wikipedia.org/wiki/Logistic_distribution>`__
      - ``R``
      - CDF (sigmoid), quantiles
      - the logit link; mean ``mu``
    * - :sqlfunc:`weibull` ``(k, lambda)``
+     - `Weibull <https://en.wikipedia.org/wiki/Weibull_distribution>`__
      - ``[0, inf)``
      - quantiles, truncated moments; **min-stable**
      - scale ``lambda``; ``k = 1`` -> :sqlfunc:`exponential`
    * - :sqlfunc:`pareto` ``(xm, alpha)``
+     - `Pareto <https://en.wikipedia.org/wiki/Pareto_distribution>`__
      - ``[xm, inf)``
      - CDF, quantiles, truncated moments (any params)
      - heavy tail; divergent moments reported as ``Infinity``
    * - :sqlfunc:`beta` ``(alpha, beta)``
+     - `Beta <https://en.wikipedia.org/wiki/Beta_distribution>`__
      - ``[0, 1]``
      - moments, CDF (incomplete beta), truncated moments
      - ``Beta(1,1)`` -> :sqlfunc:`uniform`
    * - :sqlfunc:`inverse_gamma` ``(alpha, beta)``
+     - `Inverse-gamma <https://en.wikipedia.org/wiki/Inverse-gamma_distribution>`__
      - ``(0, inf)``
      - CDF (upper incomplete gamma)
      - ``1/Gamma``; divergent moments reported as ``Infinity``
    * - :sqlfunc:`inverse_gaussian` / :sqlfunc:`wald` ``(mu, lambda)``
+     - `Inverse Gaussian <https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution>`__
      - ``(0, inf)``
      - CDF (via ``Phi``), quantiles; all moments finite
      - Brownian first-passage; ratio-``lambda/mu^2`` **sum-closed**
@@ -153,24 +168,30 @@ through :sqlfunc:`as_random`.
 
 .. list-table::
    :header-rows: 1
-   :widths: 34 16 40
+   :widths: 30 14 12 36
 
    * - Distribution
+     - Reference
      - Support
      - Notes
    * - :sqlfunc:`poisson` ``(lambda)``
+     - `Poisson <https://en.wikipedia.org/wiki/Poisson_distribution>`__
      - ``0, 1, ...``
      - rate ``lambda``
    * - :sqlfunc:`binomial` ``(n, p)``
+     - `Binomial <https://en.wikipedia.org/wiki/Binomial_distribution>`__
      - ``0..n``
      - ``n`` trials, success ``p``
    * - :sqlfunc:`geometric` ``(p)``
+     - `Geometric <https://en.wikipedia.org/wiki/Geometric_distribution>`__
      - ``1, 2, ...``
      - number of trials (support starts at 1)
    * - :sqlfunc:`negative_binomial` ``(r, p)``
+     - `Negative binomial <https://en.wikipedia.org/wiki/Negative_binomial_distribution>`__
      - ``0, 1, ...``
      - failures before the ``r``-th success; real ``r > 0``
    * - :sqlfunc:`hypergeometric` ``(pop_n, k_marked, n)``
+     - `Hypergeometric <https://en.wikipedia.org/wiki/Hypergeometric_distribution>`__
      - ``0..n``
      - draws without replacement
 
@@ -178,27 +199,34 @@ through :sqlfunc:`as_random`.
 
 .. list-table::
    :header-rows: 1
-   :widths: 40 16 38
+   :widths: 34 14 12 34
 
    * - Distribution
+     - Reference
      - Support
      - Notes
    * - :sqlfunc:`as_random` ``(c)``
+     - `Degenerate <https://en.wikipedia.org/wiki/Degenerate_distribution>`__
      - ``{c}``
      - Dirac point mass; also the implicit numeric -> ``random_variable`` casts
    * - :sqlfunc:`categorical` ``(probs, outcomes)``
+     - `Categorical <https://en.wikipedia.org/wiki/Categorical_distribution>`__
      - finite
      - all exact; ``probs`` sum to 1 within ``1e-9``
    * - :sqlfunc:`mixture` ``(p, x, y)``
+     - `Mixture <https://en.wikipedia.org/wiki/Mixture_distribution>`__
      - union of arms
      - ``p`` as a gate UUID (coupled coin) or a ``[0,1]`` scalar (fresh coin)
    * - :sqlfunc:`gmm` ``(weights, means, stddevs)``
+     - `Mixture model <https://en.wikipedia.org/wiki/Mixture_model>`__
      - ``R``
      - Gaussian mixture; exact moments and sampling; comparisons ride Monte Carlo
    * - :sqlfunc:`empirical_samples` ``(samples)``
+     - `Empirical <https://en.wikipedia.org/wiki/Empirical_distribution_function>`__
      - sample values
      - ecdf via categorical; exact moments/quantiles; <= 10000 distinct
    * - :sqlfunc:`empirical_cdf` ``(grid, cdf)``
+     - `Empirical <https://en.wikipedia.org/wiki/Empirical_distribution_function>`__
      - ``[grid_1, grid_n]``
      - piecewise-linear CDF; exact moments/sampling; comparisons ride Monte Carlo
 
