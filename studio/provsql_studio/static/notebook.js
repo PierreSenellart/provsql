@@ -1016,7 +1016,7 @@
   // Child-position labelling rules, mirrored from circuit.js: only
   // gates whose argument order matters get the digits.
   const ORDERED_GATES = new Set(['cmp', 'monus', 'agg', 'arith', 'mixture',
-                                 'conditioned', 'case']);
+                                 'conditioned', 'case', 'rv']);
   const COMMUTATIVE_AGG = new Set(['sum', 'count', 'min', 'max', 'avg']);
   const COMMUTATIVE_CMP = new Set(['=', '<>', '!=']);
   const NON_COMMUTATIVE_ARITH = new Set([2, 3]);   // MINUS, DIV
@@ -1034,13 +1034,34 @@
     }
     return true;
   }
-  function edgePosLabel(parent, pos) {
+  // A parametric (latent / compound) rv wires one or more of its
+  // distribution parameters as tokens; the extra "kind:$0[,$1]" maps wire
+  // (pos-1) to a parameter slot, labelled with that family's parameter
+  // symbol (μ / σ / λ …) from the scene's rv_families registry.  Mirrors
+  // circuit.js's _rvEdgeLabel so a notebook snapshot reads like the Circuit
+  // canvas; falls back to the bare position when the registry is absent.
+  function rvEdgePosLabel(parent, pos, scene) {
+    if (!parent.extra || !scene) return null;
+    const m = String(parent.extra).match(/^\s*([a-zA-Z_]+)\s*:(.*)$/);
+    if (!m) return null;
+    const kind = m[1].toLowerCase();
+    const slots = m[2].split(',').map((x) => x.trim());
+    const j = slots.indexOf('$' + (pos - 1));   // wire index = pos - 1
+    if (j < 0) return null;
+    const reg = (scene.rv_families || {})[kind];
+    const names = reg && reg.param_names;
+    return (names && names[j]) || null;
+  }
+  function edgePosLabel(parent, pos, scene) {
     if (parent.type === 'mixture') {
       return ({ 1: 'p', 2: 'x', 3: 'y' })[pos] || String(pos);
     }
     if (parent.type === 'conditioned') {
       // A | B, with the joint A∧B for the discrete (uuid|uuid) carrier.
       return ({ 1: 'A', 2: 'B', 3: 'A∧B' })[pos] || String(pos);
+    }
+    if (parent.type === 'rv') {
+      return rvEdgePosLabel(parent, pos, scene) || String(pos);
     }
     return String(pos);
   }
@@ -1194,7 +1215,7 @@
           x: (from.x + to.x) / 2 + bow + (-dy / len) * 9,
           y: (from.y + to.y) / 2 + (dx / len) * 9,
         });
-        t.textContent = edgePosLabel(from, e.child_pos);
+        t.textContent = edgePosLabel(from, e.child_pos, scene);
         svg.appendChild(t);
       }
     }
