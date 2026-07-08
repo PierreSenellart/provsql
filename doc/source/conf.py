@@ -105,6 +105,8 @@ html_show_sourcelink = False
 # ---------------------------------------------------------------------------
 
 _SQL_FUNC_MAP = {
+    'agg_collapsed_moment':     '/doxygen-sql/html/group__probability.html#gaf54e20891bc7e1efc97758722a5343f8',
+    'agg_collapsed_moments':    '/doxygen-sql/html/group__probability.html#ga5e64ea2201909d97dd89ce83babcd493',
     'add_provenance':           '/doxygen-sql/html/group__table__management.html#ga33ff696dabb05d813f2c1f914cb97d9a',
     'remove_provenance':        '/doxygen-sql/html/group__table__management.html#gaef50d1a0c3d614e4373737bd07ed3879',
     'provenance':               '/doxygen-sql/html/group__provenance__output.html#gacb0ee8a16e9a316f163f4508a0e7c15d',
@@ -273,6 +275,13 @@ _SQL_FUNC_MAP = {
 # ---------------------------------------------------------------------------
 
 _C_FUNC_MAP = {
+    # InformationTheory.h / .cpp – entropy / KL / mutual information
+    'computeEntropy':            '/doxygen-c/html/namespaceprovsql.html#a8d3113d6bfa7899db5c86e8b543bdcdf',
+    'computeKL':                 '/doxygen-c/html/namespaceprovsql.html#a04b05a6694ff75c61665f3b6fc3c6a60',
+    'computeMutualInformation':  '/doxygen-c/html/namespaceprovsql.html#a99e27749d5ba6c395fb62152fb024c4d',
+    # CollapsedAggMoment.h / .cpp – Rao-Blackwellised aggregate moments
+    'aggCollapsedRawMoment':     '/doxygen-c/html/namespaceprovsql.html#a5018112ae0f2df74e7c42cc3b93e6702',
+    'collapsedConditionalMoment':'/doxygen-c/html/namespaceprovsql.html#ab95fd12f72331ec04164fe8a9c5869a6',
     # provsql.c – planner hook and query rewriting
     '_PG_init':                  '/doxygen-c/html/provsql_8c.html#a29e1a0b0688ac19dbde93824e4ae1a59',
     '_PG_fini':                  '/doxygen-c/html/provsql_8c.html#a7192e52d759211f57ad66638304ea072',

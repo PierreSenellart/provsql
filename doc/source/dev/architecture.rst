@@ -421,12 +421,23 @@ defined in :cfile:`provsql_utils.h`:
        real arms in the Monte-Carlo sampler, ``RangeCheck``, and the
        ``Expectation`` footprint, refused by every general ``sr_*``
        semiring.
+   * - ``gate_observe``
+     - Latent-variable observation (likelihood-weighting evidence): one
+       wire → an observed bare ``gate_rv`` leaf, the observed datum in
+       ``extra``. Contributes a continuous density factor (the leaf's
+       pdf at the datum) instead of a Boolean truth value, composing
+       into an evidence circuit by ``gate_times`` exactly like a
+       conditioning event. Evaluated only by the importance-sampling
+       weight walk (``Sampler::evalWeight``); refused by every Boolean /
+       semiring evaluator (a density factor is not a semiring
+       operation). See :doc:`continuous-distributions`.
 
 The random-variable gate types (``gate_rv``, ``gate_arith``,
 ``gate_mixture``, ``gate_case``), the marker gates (``gate_assumed``,
-``gate_annotation``) and the measure-only gates (``gate_conditioned``,
-``gate_mobius``) are appended to the enum
-before ``gate_invalid``, with no renumbering of older values. See
+``gate_annotation``), the measure-only gates (``gate_conditioned``,
+``gate_mobius``) and the evidence gate (``gate_observe``) are appended
+to the enum before ``gate_invalid``, with no renumbering of older
+values. See
 :doc:`continuous-distributions` for the full architecture of the
 continuous-distribution surface.  ``gate_plus`` / ``gate_times`` gates
 may additionally carry a persisted d-DNNF certificate in ``info1``

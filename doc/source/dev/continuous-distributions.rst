@@ -26,15 +26,15 @@ its interaction with the moment evaluators is covered in
 
 ``gate_rv``
     Random-variable leaf. The gate's ``extra`` blob carries the
-    distribution as text, ``<family>:<p1>[,<p2>]`` — e.g.
+    distribution as text, ``<family>:<p1>[,<p2>]`` – e.g.
     ``"normal:2.5,0.5"`` for ``Normal(2.5, 0.5)`` or
     ``"exponential:2"`` for ``Exponential(2)``. The family token
     is *not* an enum: it is resolved at parse time against the
     distribution registry (see *The Distribution Class Hierarchy*
     below), so the set of valid blobs grows with the registered
-    families — currently ``normal``, ``uniform``, ``exponential``,
+    families – currently ``normal``, ``uniform``, ``exponential``,
     ``erlang``, ``gamma``, ``lognormal``, ``weibull``, ``pareto``,
-    ``beta``, ``inverse_gamma``, ``inverse_gaussian``.
+    ``beta``, ``logistic``, ``inverse_gamma``, ``inverse_gaussian``.
 
     Categorical random variables share no ``gate_rv`` encoding;
     they are encoded as a block of ``gate_mulinput`` gates
@@ -72,7 +72,7 @@ its interaction with the moment evaluators is covered in
     length ``2k + 1``), and the gate's value is the ``value_i`` of
     the first guard (a Boolean event, typically a ``gate_cmp``)
     that holds, else the ``default``. It carries data only in its
-    wires — no ``info`` / ``extra``, following the
+    wires – no ``info`` / ``extra``, following the
     ``gate_conditioned`` precedent. Minted by
     ``provenance_case`` (and its ``random_variable``
     wrapper ``rv_case``), the target of the planner hook's
@@ -102,9 +102,14 @@ the registries live in ``distributions/Distribution.cpp``;
 each family is one self-contained implementation file
 (``normal.cpp``, ``uniform.cpp``, ``exponential.cpp``,
 ``erlang.cpp``, ``gamma.cpp``, ``lognormal.cpp``,
-``weibull.cpp``, ``pareto.cpp``, ``beta.cpp``,
+``weibull.cpp``, ``pareto.cpp``, ``beta.cpp``, ``logistic.cpp``,
 ``inverse_gamma.cpp``, ``inverse_gaussian.cpp``) sharing only the
-internal header ``DistributionCommon.h``.
+internal header ``DistributionCommon.h``. The ``logistic`` family
+is the location-scale ``Logistic(μ, s)`` whose CDF is the logistic
+sigmoid :math:`F(x) = \sigma((x - \mu)/s)` and whose quantile is
+the logit :math:`\mu + s\,\ln(p/(1-p))`, so it realises the
+logit-link selection noise exactly; its mean is affine in ``μ``
+(``meanIsAffine``).
 
 A ``Distribution`` is a transient per-family view constructed
 from a parsed spec by ``makeDistribution``. Its interface
@@ -112,12 +117,12 @@ groups into:
 
 - **identity**: ``family()`` returns the interned
   ``DistributionFamily`` descriptor (name token, parameter count,
-  display label, parameter symbols, factory) — descriptor-pointer
+  display label, parameter symbols, factory) – descriptor-pointer
   equality *is* family identity; there is no family enum anywhere;
 - **closed-form moments**: ``mean()``, ``variance()``,
   ``rawMoment(k)``, plus the optional ``truncatedRawMoment(lo,
   hi, k)`` and ``iidOrderStatMean(n, isMax)``;
-- **density / distribution**: ``pdf(x)``, ``cdf(x)`` — a family
+- **density / distribution**: ``pdf(x)``, ``cdf(x)`` – a family
   that has no closed form returns NaN (the *NaN-as-undecided*
   contract: callers treat NaN as "fall back", never as a value);
   the optional ``quantile(p)`` returns ``nullopt`` when there is
@@ -152,8 +157,8 @@ populated at static initialisation:
   via ``closeProductFactors`` (independent lognormals multiply in
   log space);
 - the **transform registry** maps a ``(transform, family)`` pair
-  — transform names are the opcode-free strings ``"ln"`` /
-  ``"exp"`` — to the image distribution, consulted by
+  – transform names are the opcode-free strings ``"ln"`` /
+  ``"exp"`` – to the image distribution, consulted by
   ``closeTransform`` (``exp(Normal) → Lognormal``,
   ``ln(Lognormal) → Normal``).
 
@@ -168,7 +173,7 @@ A family file self-registers: it defines one static
 comparator/closure/product/transform registrar objects), all of
 which run at static initialisation. **Adding a family is one new
 self-registering** ``src/distributions/<name>.cpp`` **plus its
-SQL constructor** in ``sql/provsql.common.sql`` — no shared
+SQL constructor** in ``sql/provsql.common.sql`` – no shared
 header, enum, parser, or evaluator is touched, and every readout
 (moments, quantiles, sampling, comparisons, Studio rendering)
 picks the family up through the registries.
@@ -189,9 +194,9 @@ evaluators degrade per capability, not per family: exact
 truncated moments need ``truncatedRawMoment`` (Normal, Uniform,
 Exponential, Lognormal, Weibull, Pareto, Beta); rejection-free
 conditioned sampling needs ``sampleTruncated`` (the same list
-minus Beta); elementary quantiles need ``quantile()`` (Normal —
+minus Beta); elementary quantiles need ``quantile()`` (Normal –
 a Beasley-Springer-Moro start polished to machine precision by
-two Newton steps — Uniform, Exponential, Lognormal, Weibull,
+two Newton steps – Uniform, Exponential, Lognormal, Weibull,
 Pareto; the rest bisect); closed-form i.i.d. order-statistic
 means need ``iidOrderStatMean`` (Uniform, Exponential, Weibull,
 Pareto). A missing capability falls through to quadrature,
@@ -277,14 +282,46 @@ log-space recurrence (numerically stable at large parameters, no
 :sqlfunc:`categorical_from_log_pmf`, which subtracts the maximum
 log-mass, drops outcomes below a ``1e-15`` relative tail,
 renormalises, and calls :sqlfunc:`categorical`.
-``categorical_from_log_pmf`` is itself public — the "arbitrary
+``categorical_from_log_pmf`` is itself public – the "arbitrary
 user-defined discrete density" surface. Infinite supports are
 truncated at the same relative tail; a 10000-outcome cap raises
 with the suggested continuous approximation; degenerate
 parameters route through :sqlfunc:`as_random`.
 
+Three further constructors package common fitted-density shapes,
+each minting **no new gate** – they decompose into the existing
+mixture / categorical machinery so every evaluator handles them
+for free:
+
+- :sqlfunc:`gmm` ``(weights, means, stddevs)`` is a Gaussian
+  mixture: a stick-breaking cascade of Bernoulli ``gate_mixture``
+  nodes over ``gate_rv`` Normal leaves (component ``i`` selected
+  with conditional probability ``w_i / (w_i + … + w_n)`` so the
+  joint selection probabilities are exactly ``weights``). Moments
+  are closed-form through the mixture recursion, sampling is
+  exact; zero-weight components are skipped and a single
+  positive-weight component returns its Normal directly.
+  Validation mirrors :sqlfunc:`categorical` (same-length non-empty
+  arrays, weights in ``[0, 1]`` summing to ``1`` within ``1e-9``).
+- :sqlfunc:`empirical_samples` ``(samples)`` loads a sample bundle
+  (Monte Carlo / MCMC / bootstrap draws) as its ecdf: the discrete
+  distribution putting mass ``1/n`` on each draw (duplicates
+  merge). It reduces entirely to :sqlfunc:`categorical`, so the
+  exact discrete surface applies – sample moments, analytic
+  "fraction below ``c``" comparisons, and exact empirical
+  quantiles – subject to the same 10000-distinct-value cap.
+- :sqlfunc:`empirical_cdf` ``(grid, cdf)`` loads a tabulated
+  piecewise-linear CDF (percentile tables, risk models,
+  elicited forecasts) as a stick-breaking cascade of Bernoulli
+  :sqlfunc:`mixture` nodes over :sqlfunc:`uniform` components –
+  mass ``cdf[i+1] − cdf[i]`` spread uniformly over
+  ``(grid[i], grid[i+1])`` – plus an optional :sqlfunc:`as_random`
+  atom of mass ``cdf[1]`` at ``grid[1]`` when ``cdf[1] > 0``.
+  Moments and sampling are exact through the mixture machinery;
+  comparisons ride Monte Carlo.
+
 :sqlfunc:`rv_families` (:cfile:`rv_families.cpp`) exposes the
-family registry as a SRF — one row per registered family with
+family registry as a SRF – one row per registered family with
 its on-disk name token, parameter count, parameter-symbol array,
 and display label. UI clients (Studio) read it so newly added
 families render without a client release.
@@ -307,7 +344,7 @@ pattern: the ``^`` operator and :sqlfunc:`pow` / ``power``
 resolve to ``random_variable_pow`` (opcode ``POW``),
 :sqlfunc:`ln` and :sqlfunc:`exp` to their opcodes, and
 :sqlfunc:`sqrt` is pure ``x ^ 0.5`` sugar with no opcode of its
-own. ``greatest`` / ``least`` (quoted — they shadow
+own. ``greatest`` / ``least`` (quoted – they shadow
 keywords) build ``MAX`` / ``MIN`` gates over their variadic
 arguments, de-duplicating identical child gates first and
 collapsing a single survivor to itself. Comparison operators
@@ -320,7 +357,7 @@ Implicit casts ``integer → random_variable``,
 ``numeric → random_variable``, ``double precision →
 random_variable`` are declared explicitly so that
 ``WHERE rv > 2`` and ``WHERE 2.5 > rv`` resolve uniformly via the
-``(rv, rv)`` operator declarations — and so a scalar exponent in
+``(rv, rv)`` operator declarations – and so a scalar exponent in
 ``x ^ 0.5`` lifts to the ``(rv, rv)`` operator.
 
 Planner-Hook Rewriting
@@ -428,7 +465,7 @@ how to sample ``gate_rv`` (via ``Distribution::sample``),
 ``gate_value`` (float8 mode parsed via
 ``extract_constant_double``), ``gate_arith`` (recursing on
 children and combining per ``info1``, including ``MAX`` /
-``MIN`` folds — shared base RVs stay coupled through the caches,
+``MIN`` folds – shared base RVs stay coupled through the caches,
 so ``max(x, y)`` with correlated ``x``, ``y`` is sampled
 jointly), ``gate_mixture`` (sampling the Boolean selector once
 via ``evalBool``, then recursing into the chosen branch), and
@@ -441,7 +478,7 @@ is what unlocks HAVING+RV under Monte Carlo.
 The transform opcodes carry *evaluation-time domain guards*: a
 negative draw flowing into ``LN``, or a negative base drawn
 together with a non-integer exponent under ``POW``, raises an
-actionable error naming the ``greatest(x, 0)`` clamp — never a
+actionable error naming the ``greatest(x, 0)`` clamp – never a
 silently dropped NaN, which would bias the estimate. Integer
 exponents are total; ``ln(0)`` legitimately yields ``-∞``; NaN
 operands (from an upstream guard-free source) propagate.
@@ -502,7 +539,7 @@ Bernoulli ``gate_input`` with that probability.
 ``tryAnalyticDecide`` recognises three shapes:
 
 - **RV vs constant** (either order): ``cdfDecide`` evaluates the
-  family CDF at the constant — ``F(c)`` for ``<`` / ``<=``,
+  family CDF at the constant – ``F(c)`` for ``<`` / ``<=``,
   ``1 − F(c)`` for the mirrored operators. Equality on a
   continuous distribution is RangeCheck's job (below).
 - **categorical vs constant**: ``categoricalDecide`` sums
@@ -513,9 +550,9 @@ Bernoulli ``gate_input`` with that probability.
   comparator registry through ``comparatorPairLess``. Same-family
   closed forms are registered for Normal (via the difference
   normal), Uniform, Exponential, Lognormal, Weibull (same
-  shape), and Pareto (any parameter pair — the comparison the
+  shape), and Pareto (any parameter pair – the comparison the
   heavy-tailed quadrature grid handles worst). On a registry
-  miss — including every *mixed-family* pair — the generic
+  miss – including every *mixed-family* pair – the generic
   fallback ``quadraturePairLess`` computes
   :math:`P(X < Y) = \int (1 - F_Y(t))\, f_X(t)\, dt` by
   composite Simpson quadrature (4000 panels) over X's
@@ -602,7 +639,7 @@ it); otherwise ``mixedOrderStatMean`` integrates the layer-cake
 identities :math:`E[\max] = lo + \int (1 - \prod_i F_i)` /
 :math:`E[\min] = lo + \int \prod_i (1 - F_i)` by composite
 Simpson quadrature over a window covering every child's support
-— still exact-grade for independent bare-RV children of *any*
+– still exact-grade for independent bare-RV children of *any*
 family mix. Shared leaves, non-leaf children, or an undefined
 CDF fall through to MC, as do order-statistic variances and
 higher moments.
@@ -641,8 +678,8 @@ the root shape: a ``gate_value`` returns its constant; a bare
 mixture takes the generalised inverse
 :math:`F^{-1}(p) = \min\{v : F(v) \ge p\}` over its enumerated
 outcomes; an ``LN`` / ``EXP`` / foldable ``TIMES`` root reads
-its registry image (see above); anything else — and any
-conditioned shape outside the truncated closed form — draws
+its registry image (see above); anything else – and any
+conditioned shape outside the truncated closed form – draws
 ``provsql.rv_mc_samples`` samples and interpolates the empirical
 quantile with the same type-7 linear interpolation PostgreSQL's
 ``percentile_cont`` uses.
@@ -672,6 +709,54 @@ otherwise). The optional ``prov`` conditioning argument is
 threaded to every ``expected`` / ``variance`` call, so all
 moments are computed under the same event.
 
+Collapsed aggregate moments
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:cfile:`CollapsedAggMoment.cpp` is the Rao-Blackwellised fast
+path for the recurring latent-variable relational shape: an
+aggregate over probabilistically-selected rows whose per-row
+selection events are coupled through **one** shared continuous
+latent. Conditional on that latent the row indicators are
+independent, so the aggregate's moments collapse to a **1-D
+quadrature over the shared latent** instead of an :math:`n^k`
+tuple enumeration or a degenerating importance sampler. It is
+**exact** up to the quadrature grid and works at
+``provsql.rv_mc_samples = 0``; complexity :math:`O(n^2 + G\,K)`
+(``G`` grid points, ``K`` per-point cost). This is distinct from
+the ``foldDegenerateMixtures`` Bernoulli-arm collapse (see
+*HybridEvaluator*): that pass folds a certain (:math:`\pi \in
+\{0, 1\}`) Bernoulli selector to its surviving arm, whereas this
+one marginalises a *fractional*, shared continuous latent
+analytically.
+
+Two entry points, both consulted by :cfile:`Expectation.cpp`
+before the generic MC fallback and exposed as SQL:
+
+- :cfunc:`aggCollapsedRawMoment` (SQL
+  :sqlfunc:`agg_collapsed_moment` ``(token, k)`` and the paired
+  :sqlfunc:`agg_collapsed_moments` ``(token)`` that returns both
+  ``{E[C], E[C²]}`` from a single circuit load) computes the
+  raw moment :math:`E[C^k]` (``k`` in ``{1, 2}``) of a correlated
+  COUNT / SUM by a Poisson-binomial 1-D quadrature over the shared
+  latent, with the closed-form per-row CDF given it. It returns
+  ``std::nullopt`` / SQL ``NULL`` when the circuit does not match
+  the shared-latent shape, so the caller falls back to the exact
+  :math:`n^k` enumeration. :sqlfunc:`variance` uses the paired
+  form so a mean-plus-variance readout traverses the circuit once.
+- :cfunc:`collapsedConditionalMoment` computes the **exact
+  posterior** raw moment :math:`E[R^k \mid Y = C]` of a latent
+  ``R`` conditioned (through an equality ``event``) on a discrete
+  rv ``Y`` – parametrised by ``R`` – equalling a correlated COUNT
+  ``C``. The ``event`` must be a ``gate_cmp`` with ``=`` whose
+  operands are a parametric discrete ``gate_rv`` over ``R`` and a
+  ``gate_agg`` count; the count's pmf :math:`P(C = j)` comes from
+  the collapse, and the posterior is the second 1-D quadrature
+  :math:`E[R^k \mid C] = \int r^k f_R(r)\,L(r)\,dr /
+  \int f_R(r)\,L(r)\,dr` with likelihood
+  :math:`L(r) = \sum_j P(C = j)\,\mathrm{pmf}_Y(j; \theta(r))`.
+  A shape mismatch returns ``nullopt`` and the caller falls back
+  to importance sampling.
+
 HybridEvaluator
 ---------------
 
@@ -689,7 +774,7 @@ circuit, it runs:
    consults the product registry (independent lognormals fold in
    log space); ``try_transform_closure`` consults the transform
    registry (``exp(Normal) → Lognormal``, ``ln(Lognormal) →
-   Normal`` — so a chain like ``exp(N_1 + N_2)`` collapses to
+   Normal`` – so a chain like ``exp(N_1 + N_2)`` collapses to
    one lognormal leaf). Scalar shifts, scalings, and negations
    of a single RV fold through ``Distribution::affine``; a
    family whose affine image leaves the family declines the fold
@@ -701,13 +786,13 @@ circuit, it runs:
    a constant, shift-and-scale pushed through mixtures and
    categoricals, single-child arith roots, semiring-identity
    drops (``gate_one`` in TIMES, ``gate_zero`` in PLUS…), and
-   constant folding of deterministic subtrees — including
+   constant folding of deterministic subtrees – including
    ``POW`` / ``LN`` / ``EXP`` / ``MAX`` / ``MIN`` over
    constants, with domain-violating constants deliberately left
    unfolded so the sampler's guard fires. The pass is
    invariant-preserving: every transformation produces a
    semantically equivalent circuit. Out of scope: combinations
-   with no registered rule — the sum of two *distinct* uniforms
+   with no registered rule – the sum of two *distinct* uniforms
    (triangular, not uniform), differing-rate exponential sums,
    min / max of RVs (only their means have closed forms, see
    above); these shapes stay as ``gate_arith`` and the MC
@@ -795,13 +880,13 @@ family implementing ``Distribution::truncatedRawMoment`` gets
 exact conditional moments (Normal via the Mills-ratio formula
 and integration by parts, Uniform trivially on the intersected
 interval, Exponential by memorylessness plus the lower
-incomplete gamma, Lognormal, Weibull, Pareto — the latter via
-tail self-similarity — and Beta via the incomplete-beta ratio).
+incomplete gamma, Lognormal, Weibull, Pareto – the latter via
+tail self-similarity – and Beta via the incomplete-beta ratio).
 Families that decline (Erlang, Gamma) fall through to the MC
 path below. Extending the truncated surface to a new family
 means implementing ``truncatedRawMoment`` (and, for exact
 conditioned sampling, ``sampleTruncated``) in that family's
-file — no detection or dispatch site changes.
+file – no detection or dispatch site changes.
 
 For shapes outside the closed-form table, the conditional moment
 is estimated by rejection sampling at ``provsql.rv_mc_samples``;
@@ -897,10 +982,10 @@ fields:
 
 The supported shape set is the union of
 ``matchClosedFormDistribution`` 's variant arms (see above):
-a bare ``gate_rv`` of *any* registered family — the plot window,
+a bare ``gate_rv`` of *any* registered family – the plot window,
 density, and distribution come from ``Distribution::plotRange``
 / ``pdf`` / ``cdf``, so a new family gets curves for free; a
-family that declines pdf/cdf on the grid (NaN) returns NULL —
+family that declines pdf/cdf on the grid (NaN) returns NULL –
 plus ``as_random(c)`` Diracs, categorical mixtures, and
 Bernoulli mixtures over any recursively-matched shape, all four
 arms accepting a non-trivial conditioning event. ``gate_arith``
@@ -954,7 +1039,7 @@ sequence, ``foldDegenerateMixtures`` collapses a classic Bernoulli
 ``mixture(p, X, Y)`` whose selector ``p`` is *certainly* true or
 false to the surviving arm: ``X`` when :math:`\Pr(p) = 1`, ``Y``
 when :math:`\Pr(p) = 0`. The weight is read only where it is known
-without a probability computation — a resolved ``gate_one`` /
+without a probability computation – a resolved ``gate_one`` /
 ``gate_zero`` selector, or a bare ``gate_input`` whose pinned
 probability is exactly ``1`` or ``0`` (the default ``1`` of a
 non-probabilistic tuple included). The collapse rewrites the
@@ -971,9 +1056,51 @@ deterministic selector shared across several mixtures couples
 none of them, whereas a fractional selector genuinely does, so
 the pass admits only the two endpoints and leaves every
 fractional Bernoulli for the Monte-Carlo sampler. A compound
-Boolean selector — whose :math:`\Pr(p)` would need a (possibly
-#P-hard) evaluation and depends on mutable input probabilities —
+Boolean selector – whose :math:`\Pr(p)` would need a (possibly
+#P-hard) evaluation and depends on mutable input probabilities –
 is left intact for the probability-aware evaluators.
+
+Information Theory
+------------------
+
+:cfile:`InformationTheory.cpp` implements the entropy /
+Kullback-Leibler / mutual-information readouts, all in **nats**,
+over scalar RV sub-circuits. The exact paths resolve a gate to a
+closed **density view** – a bare ``gate_rv`` (its family ``pdf``
+over the integration range), a ``gate_value`` / categorical
+mixture (a finite pmf), or a Bernoulli mixture tree over
+independent such arms (e.g. the :sqlfunc:`gmm` cascade) – and
+evaluate the defining integral or sum directly. Entropy of a
+discrete view is Shannon entropy (a point mass has entropy ``0``);
+of a continuous view, differential entropy (quadrature of
+:math:`-f \ln f` over the family's integration range). The three
+C entry points are :cfunc:`computeEntropy`, :cfunc:`computeKL`,
+:cfunc:`computeMutualInformation`, bound to the SQL
+:sqlfunc:`entropy` ``(x [, prov])``, :sqlfunc:`kl` ``(p, q)``, and
+:sqlfunc:`mutual_information` ``(x, y)``.
+
+- **Entropy.** Shapes with no closed density (arithmetic
+  composites) and the conditional form (``prov`` other than
+  ``gate_one()``) fall back to a Monte Carlo histogram plug-in
+  estimate at the ``provsql.rv_mc_samples`` budget.
+- **KL divergence.** Exact only: the defining sum for two discrete
+  views (outcomes matched by value) and the defining integral
+  (quadrature over ``P``'s integration window) for two continuous
+  ones, including independent-arm mixture trees. Returns
+  ``Infinity`` when ``P`` is not absolutely continuous with
+  respect to ``Q`` (mismatched kinds, an atom or region of ``P``
+  outside ``Q``'s support). KL has no density-free estimator, so
+  an arithmetic composite or conditioned argument **raises**
+  rather than falling back to Monte Carlo.
+- **Mutual information.** Exactly ``0`` for structurally
+  independent roots (disjoint stochastic-leaf footprints, the same
+  ``FootprintCache`` test the moment evaluators use); ``H(X)`` for
+  a discrete variable paired with itself and ``Infinity`` for a
+  continuous one (``I(X; X)`` diverges); a genuinely correlated
+  pair (shared leaves) is the 2-D histogram plug-in over coupled
+  joint draws – both roots evaluated against the same
+  per-iteration cache so shared leaves keep their joint law – at
+  the ``provsql.rv_mc_samples`` budget.
 
 Aggregate Dispatch
 ------------------
@@ -986,13 +1113,13 @@ state-transition function (a ``uuid[]`` accumulator) and an
 
 The row-absence identity is baked into each per-row contribution
 *upstream*, by the planner hook: ``make_rv_aggregate_expression``
-wraps the per-row argument in ``rv_aggregate_semimod`` — a
-:sqlfunc:`mixture` ``(prov_i, X_i, as_random(identity))`` — with
+wraps the per-row argument in ``rv_aggregate_semimod`` – a
+:sqlfunc:`mixture` ``(prov_i, X_i, as_random(identity))`` – with
 the identity dispatched per aggregate: ``0`` for :sqlfunc:`sum`
 (the two-argument form), and, through the three-argument
 identity-parameterised form, ``1`` for :sqlfunc:`product`,
 ``-Infinity`` for :sqlfunc:`max`, ``+Infinity`` for
-:sqlfunc:`min` — a row absent in a world must not perturb the
+:sqlfunc:`min` – a row absent in a world must not perturb the
 fold, so it contributes the fold's identity. :sqlfunc:`avg` is
 rewritten at the same site into the "AVG = SUM / COUNT"
 identity, ``rv_sum_or_null(rv_aggregate_semimod(prov, x)) /
@@ -1000,14 +1127,14 @@ sum(rv_aggregate_indicator(prov))``: the numerator is the usual
 provenance-weighted sum (``rv_sum_or_null`` differs from
 :sqlfunc:`sum` only in returning ``NULL`` on an empty group so
 the division propagates standard ``AVG`` semantics), and the
-denominator sums per-row ``mixture(prov_i, 1, 0)`` indicators —
+denominator sums per-row ``mixture(prov_i, 1, 0)`` indicators –
 the count of *included* rows as a random variable.
 
 That denominator is a genuine random variable only when some row
 is *uncertainly* present. When every contributing tuple is
-certain — the default for a provenance-tracked but
+certain – the default for a provenance-tracked but
 non-probabilistic table, where each input gate carries the
-default probability 1 — the count is deterministic, and
+default probability 1 – the count is deterministic, and
 ``expected(avg(x))`` is simply ``E[SUM] / n``. The load-time
 ``foldDegenerateMixtures`` pass (see *HybridEvaluator*) turns
 this into an analytic result: a Bernoulli
@@ -1020,7 +1147,7 @@ divides by (each numerator ``mixture(prov_i, X_i, 0)`` likewise
 unwraps to ``X_i``, leaving a plain sum of the row RVs). A
 fractional presence probability genuinely couples the numerator's
 random sum to the random count, so its mixtures are left intact
-and the ratio is estimated by Monte Carlo — the fold admits only
+and the ratio is estimated by Monte Carlo – the fold admits only
 the exact :math:`\pi \in \{0, 1\}` cases, where a deterministic
 selector carries no coupling to lose.
 
@@ -1066,7 +1193,7 @@ indicator ``avg`` already uses), so absent rows drop out of
 every sum, the count, and the percentile member set.
 
 The moment statistics are then pure circuit *arithmetic* over
-indicator-weighted power sums — ``rv_stat_sum_tokens`` mints
+indicator-weighted power sums – ``rv_stat_sum_tokens`` mints
 :math:`N = \sum \mathbf{1}_i`, :math:`S_X`, :math:`S_{XX}` (and
 :math:`S_Y, S_{XY}, S_{YY}` for the two-argument forms) as
 ``gate_arith`` ``PLUS``-of-``TIMES`` trees, sharing each row's
@@ -1094,8 +1221,8 @@ propagates the hull of the value wires' supports; the moment
 evaluators route it straight to the sampler (no closed form).
 Because the planner rewrite replaces the ordered-set ``Aggref``
 with the *normal* three-argument ``rv_percentile_impl`` before
-planning, the executor never sorts ``random_variable`` rows —
-the sort order is irrelevant to the gate — which is also why
+planning, the executor never sorts ``random_variable`` rows –
+the sort order is irrelevant to the gate – which is also why
 the untracked public form is unusable: its input sort funnels
 into ``random_variable_btree_cmp`` and raises. The fraction
 travels as the leading impl argument into a composite
@@ -1134,7 +1261,7 @@ The continuous gate types map to:
 The RV-family rendering is registry-driven end to end: Studio
 reads :sqlfunc:`rv_families` for each family's display label and
 parameter symbols, and fetches its density preview as a
-server-computed grid from :sqlfunc:`rv_analytical_curves` — so a
+server-computed grid from :sqlfunc:`rv_analytical_curves` – so a
 newly registered family renders correctly with no Studio change.
 
 The eval-strip *Distribution profile*, *Sample*, *Moment*, and
@@ -1199,19 +1326,25 @@ computing weighted posterior statistics (``rv_sample`` resamples the
 particles, SIR). The whole readout goes through ``getJointCircuit`` so a
 latent shared between the root and the evidence is a single ``gate_t``.
 
-The **discrete** families (``poisson``, ``binomial``) are ordinary
-self-registering ``Distribution`` subclasses that happen to be integer-
-valued: ``sample()`` draws from ``std::poisson_distribution`` /
-``std::binomial_distribution``, ``pdf()`` is the pmf (the ``observe``
-likelihood weight), and ``integrationRange()`` doubles as the parameter-
-domain gate (``λ > 0``; ``0 ≤ p ≤ 1``).  They are only ever instantiated
-for a *latent* leaf -- ``poisson(random_variable)`` /
-``binomial(integer, random_variable)`` -- because the literal
+The **discrete** families (``poisson``, ``binomial``, ``geometric``,
+``negative_binomial``) are ordinary self-registering ``Distribution``
+subclasses (``isDiscrete() == true``) that happen to be integer-valued:
+``sample()`` draws from the matching ``std::…_distribution``, ``pdf()``
+is the pmf (the ``observe`` likelihood weight), and
+``integrationRange()`` doubles as the parameter-domain gate (``λ > 0``;
+``0 ≤ p ≤ 1``; ``0 < p ≤ 1``).  They are only ever instantiated for a
+*latent* leaf -- ``poisson(random_variable)``,
+``binomial(integer, random_variable)``,
+``geometric(random_variable)``,
+``negative_binomial(r, random_variable)`` -- because the literal
 constructors still enumerate an exact categorical; and a parametric leaf
 is declined by ``parse_distribution_spec``, so no continuous-analytic
 path ever integrates their pmf as a density.  They reuse the parametric-
 leaf mechanism wholesale, which is why the discrete conjugate posteriors
 (Gamma-Poisson, Beta-Binomial) fall out with no evaluator change.
+``hypergeometric`` stays literal-only: its three parameters do not fit
+the two-parameter ``Distribution`` ABI, so there is no parametric-leaf
+form -- the constructor always enumerates its exact categorical.
 
 **The equality-form surface.** The user writes the natural
 conditional-equality ``X | (Y = c)`` (single) or ``given(Y = c)`` folded
