@@ -14,9 +14,11 @@
 Capabilities have grown substantially since the 2018 VLDB demo paper:
 current ProvSQL supports inner and outer joins, subqueries, aggregation
 with HAVING, set operations, CTEs including WITH RECURSIVE, data
-modifications (INSERT/UPDATE/DELETE), window-function pass-through, and
-continuous probability distributions. The authoritative, current
-reference is the documentation below.
+modifications (INSERT/UPDATE/DELETE), window-function pass-through,
+continuous probability distributions, and latent-variable Bayesian
+inference (observing evidence conditions latent distribution parameters
+into their posterior by likelihood weighting). The authoritative,
+current reference is the documentation below.
 
 ## Documentation
 

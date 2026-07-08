@@ -75,17 +75,24 @@ and evaluates them in linear time. Any query answer can also be
 [conditioned](/docs/user/conditioning.html) on an event with the `|`
 operator, turning ProvSQL into a probability calculator. Inputs may
 themselves be [continuous random
-variables](/docs/user/continuous-distributions.html): eleven continuous
-families (Normal, Uniform, Exponential, Erlang, Gamma / chi-squared,
-log-normal, Weibull, Pareto, Beta, inverse-gamma, inverse-Gaussian), the
-common discrete count
+variables](/docs/user/continuous-distributions.html): twelve continuous
+families (Normal, Logistic, Uniform, Exponential, Erlang, Gamma /
+chi-squared, log-normal, Weibull, Pareto, Beta, inverse-gamma,
+inverse-Gaussian), the common discrete count
 distributions (Poisson, binomial, geometric, hypergeometric, negative
 binomial), and categorical, Gaussian-mixture, and empirical
-distributions built from samples or a CDF table. Expectations,
+distributions built from samples or a CDF table. Random variables can
+be compared, joined, and aggregated (`percentile_cont`, `corr`,
+`stddev`, covariance, min/max order statistics). Expectations,
 variances, higher moments, quantiles, and information-theoretic
 readouts (entropy, KL divergence, mutual information) are computed
-analytically where a closed form exists and by Monte Carlo otherwise.
-See the [probability documentation](/docs/user/probabilities.html).
+analytically where a closed form exists and by Monte Carlo otherwise. A
+distribution's own parameters may themselves be random variables
+(compound, hierarchical models); observing data with `observe()` then
+conditions those latent parameters into their Bayesian posterior by
+likelihood weighting, with `evidence()` for the marginal likelihood and
+`shapley_observe()` for which observation moved the posterior most. See
+the [probability documentation](/docs/user/probabilities.html).
 
 ## Aggregation, Updates, and Time {#aggregation}
 

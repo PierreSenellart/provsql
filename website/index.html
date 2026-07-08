@@ -104,12 +104,13 @@ feature_row:
     image_path: /assets/images/continuous.png
     alt: "ProvSQL Studio screenshot: a Normal random_variable gate N(40, 4) above its Distribution-profile panel, conditioned on the threshold event x &ge; 35 (truncated PDF with the analytical curve overlaid)."
     excerpt: >
-      First-class random-variable columns. Build queries with nine
-      continuous families (Normal, Gamma, Beta, log-normal, Weibull…),
-      discrete counts, categorical, Gaussian-mixture, and empirical
-      distributions; evaluate expectations, moments, quantiles, and
-      entropy analytically or by Monte Carlo; condition on filter
-      predicates inline.
+      First-class random-variable columns. Build queries with twelve
+      continuous families (Normal, Logistic, Gamma, Beta, log-normal,
+      Weibull…), discrete counts, categorical, Gaussian-mixture, and
+      empirical distributions; compare, join, and aggregate them
+      (`percentile_cont`, `corr`, `stddev`, order statistics); evaluate
+      expectations, moments, quantiles, and entropy analytically or by
+      Monte Carlo; condition on filter predicates inline.
     url: "/docs/user/continuous-distributions.html"
     btn_label: "Continuous-distribution docs"
     btn_class: "btn--primary"
@@ -122,6 +123,19 @@ feature_row:
       truncated distributions – computed exactly and correlation-aware
       over the shared provenance circuit, uniformly across discrete
       events, continuous random variables, and probabilistic aggregates.
+    url: "/docs/user/conditioning.html"
+    btn_label: "Conditioning docs"
+    btn_class: "btn--primary"
+  - title: "Latent Variables &amp; Bayesian Inference"
+    image_path: /assets/images/conditioning.png
+    alt: "ProvSQL Studio notebook cell: a normal(M, 1) observation whose mean M is itself a latent normal(0, 10) random variable, with observe() shifting M into its posterior and evidence() reporting the marginal likelihood."
+    excerpt: >
+      A distribution's own parameters can themselves be random variables,
+      giving compound and hierarchical models. `observe(x, datum)` then
+      conditions those latent parameters into their Bayesian posterior by
+      likelihood weighting; `evidence()` reports the marginal likelihood
+      `P(data)`, and `shapley_observe()` ranks which observation moved the
+      posterior most – all in SQL.
     url: "/docs/user/conditioning.html"
     btn_label: "Conditioning docs"
     btn_class: "btn--primary"
