@@ -6569,6 +6569,8 @@ CREATE AGGREGATE rv_percentile_impl(
 
 /** @} */
 
+/** @} */
+
 /** @defgroup aggregate_provenance Aggregate provenance
  *  Functions for building and evaluating aggregate (GROUP BY) provenance,
  *  including the δ-semiring operator and semimodule multiplication.
