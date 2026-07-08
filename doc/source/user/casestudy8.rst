@@ -766,16 +766,19 @@ means, and standard deviations straight from the fit):
     WITH c AS (SELECT gmm(weights => ARRAY[0.7, 0.3],
                           means   => ARRAY[15.0, 40.0],
                           stddevs => ARRAY[4.0, 6.0]) AS titre)
-    SELECT expected(titre) AS mean_titre,
+    SELECT titre,
+           expected(titre) AS mean_titre,
            variance(titre) AS var_titre
     FROM c;
 
 The mixture decomposes into ProvSQL's existing Bernoulli-mixture
 gates, so the moments are **exact** (``rv_mc_samples = 0``): the mean
 is :math:`0.7 \cdot 15 + 0.3 \cdot 40 = 22.5` and the variance
-:math:`0.7(16 + 225) + 0.3(36 + 1600) - 22.5^2 = 153.25`. A tail
-probability -- how many cases exceed the reporting threshold of 30 --
-rides Monte Carlo over the same gates:
+:math:`0.7(16 + 225) + 0.3(36 + 1600) - 22.5^2 = 153.25`. The query also
+returns ``titre`` itself: **click its token** and open Circuit mode to
+see those gates -- a Bernoulli selector choosing between the two Normal
+components. A tail probability -- how many cases exceed the reporting
+threshold of 30 -- is estimated by Monte Carlo over the same gates:
 
 .. code-block:: postgresql
 
