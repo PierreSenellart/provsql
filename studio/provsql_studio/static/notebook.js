@@ -22,6 +22,7 @@
   let tabs = [];           // [{id, name, db, doc, kernel, resume}]
   let activeTabId = null;
   let connDb = null;       // current connection's database (from /api/conn)
+  let connExtVersion = null;  // provsql extversion, null when not installed (from /api/conn)
   let nextTabId = 1;
   let selected = null;     // command-mode selected cell (Jupyter-style)
   let lastDeleted = null;  // {cell, index} for the `z` undo
@@ -110,6 +111,7 @@
     }
     renderTabBar();
     updateBindingBanner();
+    updateProvsqlBanner();
   }
 
   function activateTab(id) {
@@ -340,6 +342,55 @@
       persistTabs();
       renderTabBar();
       updateBindingBanner();
+    });
+  }
+
+  /* ProvSQL-missing banner: the live connection's database has no provsql
+     extension, so every provenance query would fail one by one. Offer to
+     install it (CREATE EXTENSION IF NOT EXISTS provsql CASCADE) in one
+     click, rather than making the user hand-type it or leave the notebook.
+     Orthogonal to the binding banner above (that is about which database
+     the tab targets; this is about the connected database's readiness). */
+  async function updateProvsqlBanner() {
+    const banner = byId('nb-provsql-banner');
+    if (!banner) return;
+    // A set connDb with a falsy version means /api/conn resolved and
+    // provsql is absent; a failed conn fetch leaves connDb null, so a
+    // connectivity blip does not flash the banner.
+    const missing = !!connDb && !connExtVersion;
+    banner.hidden = !missing;
+    if (!missing) { banner.innerHTML = ''; return; }
+    const esc = env.escapeHtml;
+    banner.innerHTML =
+      `<span class="nb__banner-msg"><i class="fas fa-exclamation-triangle"></i> `
+      + `ProvSQL is not installed on <strong>${esc(connDb)}</strong>; `
+      + `provenance queries will not work here.</span>`
+      + `<button type="button" class="wp-btn wp-btn--mini" id="nb-provsql-install">`
+      + `Install ProvSQL</button>`;
+    const btn = byId('nb-provsql-install');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Installing…';
+      try {
+        const resp = await fetch('/api/install-provsql', { method: 'POST' });
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          window.alert(payload.error || `HTTP ${resp.status}`);
+          btn.disabled = false;
+          btn.textContent = 'Install ProvSQL';
+          return;
+        }
+        // Committed DDL is visible to every kernel session immediately, so
+        // no reload is needed; just drop the banner and let the chrome's
+        // /api/conn poll pick the version up for its chip.
+        connExtVersion = payload.version || 'installed';
+        updateProvsqlBanner();
+      } catch (e) {
+        window.alert(String((e && e.message) || e));
+        btn.disabled = false;
+        btn.textContent = 'Install ProvSQL';
+      }
     });
   }
 
@@ -2406,7 +2457,11 @@
     // it before restoring tabs (one round-trip, also warms /api/conn).
     try {
       const resp = await fetch('/api/conn');
-      if (resp.ok) connDb = (await resp.json()).database || null;
+      if (resp.ok) {
+        const info = await resp.json();
+        connDb = info.database || null;
+        connExtVersion = info.extension_version || null;
+      }
     } catch (e) { /* banner logic degrades to no-op without connDb */ }
 
     if (!restoreTabs()) {

@@ -368,6 +368,26 @@ def create_app(
             return jsonify({"error": str(e).strip()}), 400
         return jsonify({"ok": True, "database": name, "warning": warning})
 
+    @app.post("/api/install-provsql")
+    def api_install_provsql():
+        """Install provsql into the connected database (CREATE EXTENSION
+        IF NOT EXISTS provsql CASCADE) and report the resulting version.
+        Backs the Notebook-mode "ProvSQL is not installed" banner: a
+        notebook opened against a database without the extension can
+        install it in one click, rather than failing cell by cell."""
+        try:
+            version = db.install_provsql(get_pool())
+        except psycopg.OperationalError as e:
+            return jsonify({
+                "error": "database unreachable",
+                "reason": str(e).strip() or "cannot connect to PostgreSQL",
+            }), 503
+        except psycopg.errors.InsufficientPrivilege as e:
+            return jsonify({"error": str(e).strip()}), 403
+        except psycopg.Error as e:
+            return jsonify({"error": str(e).strip()}), 400
+        return jsonify({"ok": True, "version": version})
+
     @app.get("/api/databases")
     def api_databases():
         return jsonify(db.list_databases(get_pool()))

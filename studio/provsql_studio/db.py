@@ -730,6 +730,26 @@ def create_database(dsn: str | None, name: str) -> str | None:
     return None
 
 
+def install_provsql(pool: ConnectionPool) -> str | None:
+    """Install the provsql extension into the connected database and
+    return its resulting extversion.
+
+    Runs `CREATE EXTENSION IF NOT EXISTS provsql CASCADE` (idempotent: a
+    no-op when already installed, so it doubles as a repair for a
+    partially-dropped install), then reads the version back. The
+    surrounding `with pool.connection()` commits on clean exit. Raises
+    `psycopg.Error` when the install fails (not superuser, no install
+    package, the shared library is not preloaded, provsql not available
+    on this server, ...); the caller surfaces the message. Backs the
+    Notebook-mode "ProvSQL is not installed" banner's install action."""
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS provsql CASCADE")
+        cur.execute(
+            "SELECT extversion FROM pg_extension WHERE extname = 'provsql'")
+        row = cur.fetchone()
+    return (row[0] if row else None) or None
+
+
 def _has_provsql_in_search_path(s: str) -> bool:
     """Return True iff `provsql` appears as a schema in a SHOW search_path
     string. The format is comma-separated; each part may be wrapped in
