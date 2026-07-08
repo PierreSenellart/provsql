@@ -32,8 +32,8 @@ The Scenario
 
 An epidemiology desk at a public-health agency keeps a small probabilistic
 model of a screening programme and reaches for ProvSQL whenever a question
-needs probabilistic evaluation. Eleven such questions follow; each is a
-recognisable textbook problem, and we work through each one step by step,
+needs probabilistic evaluation. A series of such questions follows; each is
+a recognisable textbook problem, and we work through each one step by step,
 building its model and then asking the calculator.
 
 .. nb:omit-begin
@@ -846,7 +846,8 @@ parameter is expected, so the model is written as one nested call:
     SET provsql.monte_carlo_seed = 1;
     SET provsql.rv_mc_samples    = 200000;
     WITH m AS (SELECT normal(normal(20, 5), 2) AS reading)
-    SELECT expected(reading) AS mean_reading,
+    SELECT reading,
+           expected(reading) AS mean_reading,
            variance(reading) AS var_reading
     FROM m;
 
@@ -861,6 +862,13 @@ the measurement noise *plus* the uncertainty in the baseline,
 this is the first problem that *needs* the sampler: the moments are
 Monte-Carlo estimates over draws of :math:`\mu`, which is why the
 sampler is switched back on here.
+
+The query also returns the ``reading`` itself. **Click its token** to
+open the circuit: the outer ``normal`` gate draws its mean from the
+shared inner ``normal(20, 5)`` *latent* leaf and its standard deviation
+from the fixed ``2``, so the compound (hierarchical) structure is visible
+at a glance -- one random leaf feeding the mean wire, a constant feeding
+the spread.
 
 Problem 13: Learning That Parameter From Data
 ---------------------------------------------
