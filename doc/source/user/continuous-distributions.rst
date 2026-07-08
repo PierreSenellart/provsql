@@ -73,233 +73,134 @@ ordinary SQL.
 Distribution Constructors
 -------------------------
 
-The constructors below all return a ``random_variable``. Each call
-mints a fresh, independent random variable: two calls to
-``normal(0, 1)`` produce two uncorrelated draws, not the
-same draw. Use :sqlfunc:`mixture` (below) when you need
-shared underlying randomness.
+The constructors below each return a ``random_variable``; every call mints a
+fresh, independent variable (use :sqlfunc:`mixture` when two draws must share
+underlying randomness). The tables give each family's support, what is
+computed in closed form, and any closure (sum / product / min stability).
 
-:sqlfunc:`normal` ``(mu, sigma)``
-    ``Normal(μ, σ)`` with mean ``μ`` and standard deviation ``σ``.
-    Both arguments must be finite; ``σ`` must be non-negative. The
-    degenerate ``σ = 0`` case is silently routed through
-    :sqlfunc:`as_random` to share the constant-token gate. See
-    `Wikipedia <https://en.wikipedia.org/wiki/Normal_distribution>`__.
+**Continuous parametric**
 
-:sqlfunc:`uniform` ``(a, b)``
-    ``Uniform[a, b]`` with bounds ``a ≤ b``. Both bounds must be
-    finite. The degenerate ``a = b`` case is routed through
-    :sqlfunc:`as_random`. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>`__.
+.. list-table::
+   :header-rows: 1
+   :widths: 32 12 26 30
 
-:sqlfunc:`exponential` ``(lambda)``
-    ``Exponential(λ)`` with rate ``λ > 0`` and mean ``1/λ``. There
-    is no degenerate form: ``λ = 0`` raises. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Exponential_distribution>`__.
+   * - Distribution
+     - Support
+     - Closed form
+     - Notes
+   * - :sqlfunc:`normal` ``(mu, sigma)``
+     - ``R``
+     - moments, CDF, quantiles
+     - ``sigma = 0`` -> Dirac via :sqlfunc:`as_random`
+   * - :sqlfunc:`uniform` ``(a, b)``
+     - ``[a, b]``
+     - all exact
+     - ``a = b`` -> Dirac
+   * - :sqlfunc:`exponential` ``(lambda)``
+     - ``[0, inf)``
+     - all exact
+     - mean ``1/lambda``; ``lambda = 0`` raises
+   * - :sqlfunc:`erlang` ``(k, lambda)``
+     - ``[0, inf)``
+     - all exact
+     - sum of ``k`` ``Exp(lambda)``; ``k = 1`` -> :sqlfunc:`exponential`
+   * - :sqlfunc:`gamma` ``(k, lambda)``
+     - ``(0, inf)``
+     - CDF (lower incomplete gamma); same-rate **sum-closed**
+     - mean ``k/lambda``; integer ``k`` -> :sqlfunc:`erlang`
+   * - :sqlfunc:`chi_squared` ``(k)``
+     - ``(0, inf)``
+     - via gamma
+     - sugar for ``gamma(k/2, 0.5)``
+   * - :sqlfunc:`lognormal` ``(mu, sigma)``
+     - ``(0, inf)``
+     - moments, CDF, quantiles; **product-closed**
+     - ``exp``/``ln`` bridges to :sqlfunc:`normal`; ``sigma = 0`` -> Dirac
+   * - :sqlfunc:`logistic` ``(mu, s)``
+     - ``R``
+     - CDF (sigmoid), quantiles
+     - the logit link; mean ``mu``
+   * - :sqlfunc:`weibull` ``(k, lambda)``
+     - ``[0, inf)``
+     - quantiles, truncated moments; **min-stable**
+     - scale ``lambda``; ``k = 1`` -> :sqlfunc:`exponential`
+   * - :sqlfunc:`pareto` ``(xm, alpha)``
+     - ``[xm, inf)``
+     - CDF, quantiles, truncated moments (any params)
+     - heavy tail; divergent moments reported as ``Infinity``
+   * - :sqlfunc:`beta` ``(alpha, beta)``
+     - ``[0, 1]``
+     - moments, CDF (incomplete beta), truncated moments
+     - ``Beta(1,1)`` -> :sqlfunc:`uniform`
+   * - :sqlfunc:`inverse_gamma` ``(alpha, beta)``
+     - ``(0, inf)``
+     - CDF (upper incomplete gamma)
+     - ``1/Gamma``; divergent moments reported as ``Infinity``
+   * - :sqlfunc:`inverse_gaussian` / :sqlfunc:`wald` ``(mu, lambda)``
+     - ``(0, inf)``
+     - CDF (via ``Phi``), quantiles; all moments finite
+     - Brownian first-passage; ratio-``lambda/mu^2`` **sum-closed**
 
-:sqlfunc:`erlang` ``(k, lambda)``
-    ``Erlang(k, λ)`` is the sum of ``k`` independent
-    ``Exponential(λ)`` draws (equivalently, the Gamma with integer
-    shape). It is materialised as a single ``gate_rv`` so the
-    closed-form CDF and moments fire directly, rather than the
-    sampler having to draw ``k`` exponentials per iteration. The
-    degenerate ``k = 1`` case is routed through
-    :sqlfunc:`exponential` to share its gate. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Erlang_distribution>`__.
+**Discrete parametric**
 
-:sqlfunc:`gamma` ``(k, lambda)``
-    ``Gamma(k, λ)`` with shape ``k > 0`` (any positive real, not
-    just an integer) and rate ``λ > 0``; mean ``k/λ``. Its CDF is
-    the regularised lower incomplete gamma, evaluated in closed
-    form, and independent gammas with the same rate sum to a gamma.
-    An integer ``k`` is silently routed through :sqlfunc:`erlang`
-    (the gamma with integer shape *is* Erlang) so the two spellings
-    share their gate encoding. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Gamma_distribution>`__.
-
-:sqlfunc:`chi_squared` ``(k)``
-    Chi-squared with ``k > 0`` degrees of freedom: syntactic sugar
-    for ``gamma(k/2, 0.5)``. Fractional degrees of freedom are
-    accepted; even ones route through :sqlfunc:`erlang` via the
-    integer-shape rule above. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Chi-squared_distribution>`__.
-
-:sqlfunc:`lognormal` ``(mu, sigma)``
-    ``LogNormal(μ, σ)``: ``exp`` of a ``Normal(μ, σ)``, parameterised
-    by the underlying normal (median ``exp(μ)``, mean
-    ``exp(μ + σ²/2)``). The multiplicative counterpart of
-    :sqlfunc:`normal`: products of independent lognormals fold to a
-    lognormal, positive scalings shift ``μ`` by ``ln c``, and the
-    ``exp(normal(...))`` / ``ln(lognormal(...))`` bridges fold in both
-    directions, so log-scale models stay closed-form -- moments,
-    CDF, quantiles, and interval conditioning are all exact.
-    Validation mirrors :sqlfunc:`normal` (``σ = 0`` routes through
-    :sqlfunc:`as_random` as a Dirac at ``exp(μ)``). See `Wikipedia
-    <https://en.wikipedia.org/wiki/Log-normal_distribution>`__.
-
-:sqlfunc:`weibull` ``(k, lambda)``
-    ``Weibull(k, λ)`` with shape ``k > 0`` and *scale* ``λ > 0`` (the
-    63.2% quantile -- not a rate; ``k = 1`` is the exponential with
-    rate ``1/λ`` and routes through :sqlfunc:`exponential`). The
-    reliability/survival family: ``k`` tunes the hazard (``k < 1``
-    infant mortality, ``k > 1`` wear-out). Quantiles are exact,
-    truncated moments are closed-form, same-shape comparisons have a
-    closed form, and the min of i.i.d. Weibulls is again Weibull
-    (min-stability). See `Wikipedia
-    <https://en.wikipedia.org/wiki/Weibull_distribution>`__.
-
-:sqlfunc:`pareto` ``(xm, alpha)``
-    ``Pareto(xₘ, α)`` with scale (minimum) ``xₘ > 0`` and shape
-    ``α > 0``: the canonical heavy-tailed power law. Divergent moments
-    are reported honestly as ``Infinity`` (the mean for ``α ≤ 1``, the
-    variance for ``α ≤ 2``) rather than estimated; quantiles, truncated
-    moments (self-similarity: ``X | X > a`` is ``Pareto(a, α)``), and
-    Pareto-vs-Pareto comparisons are exact for any parameters --
-    important because the tail is exactly where sampling and quadrature
-    struggle. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Pareto_distribution>`__.
-
-:sqlfunc:`inverse_gamma` ``(alpha, beta)``
-    ``InvGamma(α, β)`` with shape ``α > 0`` and scale ``β > 0``: the
-    distribution of ``1/Y`` for ``Y ~ gamma(α, β)`` (the conjugate
-    prior for a Gaussian variance). Its CDF is the regularised upper
-    incomplete gamma, so comparisons against a constant are exact;
-    divergent moments are reported honestly as ``Infinity`` (the mean
-    for ``α ≤ 1``, the variance for ``α ≤ 2``) rather than estimated,
-    and positive scalings rescale ``β``. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Inverse-gamma_distribution>`__.
-
-:sqlfunc:`inverse_gaussian` ``(mu, lambda)`` *(alias* :sqlfunc:`wald` *)*
-    ``IG(μ, λ)`` with mean ``μ > 0`` and shape ``λ > 0``: the
-    first-passage time of Brownian motion with drift. Its CDF has a
-    closed form in the standard normal ``Φ``, so comparisons and
-    quantiles are analytic and all raw moments are finite. Positive
-    scalings map ``c·IG(μ, λ)`` to ``IG(cμ, cλ)``, and a sum of
-    independent inverse Gaussians sharing the ratio ``λ/μ²`` folds to
-    a single inverse Gaussian. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution>`__.
-
-:sqlfunc:`categorical` ``(probs, outcomes)``
-    Discrete distribution over the values in ``outcomes`` with the
-    corresponding probabilities in ``probs``. Both arrays must have
-    the same length, every probability must be in ``[0, 1]``, and
-    the probabilities must sum to ``1`` within ``1e-9``. A
-    single-outcome categorical reduces to
-    :sqlfunc:`as_random` at construction. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Categorical_distribution>`__.
-
-:sqlfunc:`mixture` ``(p, x, y)`` *(two overloads)*
-    Bernoulli-weighted choice between two random variables: with
-    probability ``p`` the result samples ``x``, otherwise ``y``.
-
-    - The first overload takes ``p`` as the UUID of an existing
-      Boolean gate (``input`` / ``mulinput`` / ``plus`` / ``times``
-      / ``cmp`` / ``…``). Two mixtures that share the same ``p``
-      token are *coupled*: they sample the same underlying coin per
-      Monte-Carlo iteration. Use this overload when you want a
-      family of mixtures that all switch together.
-    - The second overload takes ``p`` as a plain ``double
-      precision`` probability in ``[0, 1]`` and mints a fresh
-      anonymous ``gate_input`` with that probability under the
-      hood. Each call mints a new coin, so two
-      ``mixture(0.5, X, Y)`` calls draw independently.
-
-    See `Wikipedia
-    <https://en.wikipedia.org/wiki/Mixture_distribution>`__.
-
-:sqlfunc:`gmm` ``(weights, means, stddevs)``
-    Gaussian mixture model: a categorical choice among ``Normal``
-    components, the ubiquitous fitted-density shape (EM output,
-    density estimation). Packaged as a stick-breaking cascade of
-    Bernoulli :sqlfunc:`mixture` nodes over :sqlfunc:`normal`
-    leaves, so no new machinery is involved: moments
-    (:sqlfunc:`expected`, :sqlfunc:`variance`…) are exact through
-    the mixture recursion and sampling is exact; comparisons
-    (``gmm(...) < c``) ride Monte Carlo. Arrays must have the same
-    length and the weights must sum to ``1`` within ``1e-9``;
-    zero-weight components are skipped and a single-component call
-    returns its Normal directly.
-
-    .. code-block:: postgresql
-
-        SELECT expected(provsql.gmm(
-          weights => ARRAY[0.3, 0.5, 0.2],
-          means   => ARRAY[120.0, 380.0, 1200.0],
-          stddevs => ARRAY[40.0, 90.0, 250.0]));   -- 466
-
-    See `Wikipedia
-    <https://en.wikipedia.org/wiki/Mixture_model>`__.
-
-:sqlfunc:`empirical_samples` ``(samples)``
-    The empirical distribution (ecdf) of a sample bundle -- an MCMC
-    posterior chain, variational or bootstrap draws, simulation
-    output: mass ``1/n`` on each draw, duplicates merging. Reduces
-    to :sqlfunc:`categorical`, so the exact discrete surface
-    applies: moments are the sample moments, comparisons against
-    constants are decided analytically ("fraction of samples below
-    ``c``"), and quantiles are exact empirical quantiles. At most
-    ``10000`` distinct values; thin or bin (``width_bucket``) larger
-    bundles.
-
-    .. code-block:: postgresql
-
-        INSERT INTO model_posteriors
-        SELECT param, provsql.empirical_samples(array_agg(value))
-        FROM mcmc_chain GROUP BY param;
-
-    See `Wikipedia
-    <https://en.wikipedia.org/wiki/Empirical_distribution_function>`__.
-
-:sqlfunc:`empirical_cdf` ``(grid, cdf)``
-    A tabulated, piecewise-linear CDF -- simulation percentile
-    tables, risk-model outputs, expert-elicited forecasts: the
-    distribution whose CDF is ``cdf[i]`` at ``grid[i]`` and linear
-    in between, with an atom of mass ``cdf[1]`` at the grid start
-    when positive. Packaged like :sqlfunc:`gmm` as a mixture of
-    :sqlfunc:`uniform` pieces, so moments and sampling are exact;
-    comparisons ride Monte Carlo. The grid must be strictly
-    increasing and the cdf non-decreasing, ending at ``1``.
-
-    .. code-block:: postgresql
-
-        SELECT expected(provsql.empirical_cdf(
-          grid => ARRAY[0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0],
-          cdf  => ARRAY[0.32, 0.51, 0.67, 0.82, 0.94, 0.99, 1.0]));
-
-:sqlfunc:`as_random` ``(c)``
-    Lift a numeric constant into a deterministic ``random_variable``
-    (a Dirac point mass at ``c``). Three overloads exist
-    (``double precision``, ``integer``, ``numeric``) and the same
-    constants share a UUID. ``c = -0.0`` is canonicalised to
-    ``+0.0`` so the two zeros refer to the same gate. See `Wikipedia
-    <https://en.wikipedia.org/wiki/Degenerate_distribution>`__.
-
-:sqlfunc:`beta` ``(alpha, beta)``
-    ``Beta(α, β)`` on the unit interval, the conjugate prior of
-    Bernoulli/binomial success probabilities: closed-form moments, CDF
-    through the regularised incomplete beta, quantiles by CDF bisection
-    over the finite ``[0, 1]`` support, and closed-form truncated
-    moments under interval conditioning. ``Beta(1, 1)`` *is*
-    ``Uniform(0, 1)`` and routes through :sqlfunc:`uniform`. See
-    `Wikipedia <https://en.wikipedia.org/wiki/Beta_distribution>`__.
-
-**Discrete count constructors.** :sqlfunc:`poisson` ``(lambda)``,
-:sqlfunc:`binomial` ``(n, p)``, :sqlfunc:`geometric` ``(p)`` (number of
-*trials*, support starting at 1), :sqlfunc:`hypergeometric`
-``(pop_n, k_marked, n)`` (draws without replacement), and
-:sqlfunc:`negative_binomial` ``(r, p)`` (failures before the ``r``-th
-success, real ``r > 0`` allowed for overdispersed counts) are
-convenience constructors over :sqlfunc:`categorical`: each enumerates
-its pmf -- in log space, so large parameters stay stable -- into a
-categorical gate via the shared :sqlfunc:`categorical_from_log_pmf`
-(itself directly usable for custom discrete pmfs from unnormalised
-log-masses). Moments, quantiles, and comparisons -- including exact
-``=`` / ``<>`` point masses, which continuous distributions decide as
-0/1 -- are exact over the enumerated support; infinite supports are
-truncated at a 1e-15 relative-mass tail and renormalised, and a
-10000-outcome cap raises with the suggested continuous approximation.
-Degenerate parameters (``poisson(0)``, ``binomial(n, 1)``, ...) route
+Enumerated into a categorical gate via :sqlfunc:`categorical_from_log_pmf`
+(log-space, stable at large parameters; itself usable for a custom pmf).
+Moments, quantiles, and comparisons -- including exact ``=`` / ``<>`` point
+masses -- are exact over the enumerated support; an infinite support is
+truncated at a ``1e-15`` relative-mass tail, and a ``10000``-outcome cap
+raises. Degenerate parameters (``poisson(0)``, ``binomial(n, 1)``, ...) route
 through :sqlfunc:`as_random`.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 16 40
+
+   * - Distribution
+     - Support
+     - Notes
+   * - :sqlfunc:`poisson` ``(lambda)``
+     - ``0, 1, ...``
+     - rate ``lambda``
+   * - :sqlfunc:`binomial` ``(n, p)``
+     - ``0..n``
+     - ``n`` trials, success ``p``
+   * - :sqlfunc:`geometric` ``(p)``
+     - ``1, 2, ...``
+     - number of trials (support starts at 1)
+   * - :sqlfunc:`negative_binomial` ``(r, p)``
+     - ``0, 1, ...``
+     - failures before the ``r``-th success; real ``r > 0``
+   * - :sqlfunc:`hypergeometric` ``(pop_n, k_marked, n)``
+     - ``0..n``
+     - draws without replacement
+
+**Nonparametric and structured**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 16 38
+
+   * - Distribution
+     - Support
+     - Notes
+   * - :sqlfunc:`as_random` ``(c)``
+     - ``{c}``
+     - Dirac point mass; also the implicit numeric -> ``random_variable`` casts
+   * - :sqlfunc:`categorical` ``(probs, outcomes)``
+     - finite
+     - all exact; ``probs`` sum to 1 within ``1e-9``
+   * - :sqlfunc:`mixture` ``(p, x, y)``
+     - union of arms
+     - ``p`` as a gate UUID (coupled coin) or a ``[0,1]`` scalar (fresh coin)
+   * - :sqlfunc:`gmm` ``(weights, means, stddevs)``
+     - ``R``
+     - Gaussian mixture; exact moments and sampling; comparisons ride Monte Carlo
+   * - :sqlfunc:`empirical_samples` ``(samples)``
+     - sample values
+     - ecdf via categorical; exact moments/quantiles; <= 10000 distinct
+   * - :sqlfunc:`empirical_cdf` ``(grid, cdf)``
+     - ``[grid_1, grid_n]``
+     - piecewise-linear CDF; exact moments/sampling; comparisons ride Monte Carlo
 
 Implicit casts ``integer → random_variable``, ``numeric →
 random_variable`` and ``double precision → random_variable``
