@@ -386,7 +386,7 @@ Its `mean <https://en.wikipedia.org/wiki/Expected_value>`_ is no surprise:
 
     SELECT expected(normal(20, 5));
 
-20. Now suppose a patient is *referred* -- their biomarker came back above a
+Now suppose a patient is *referred* -- their biomarker came back above a
 threshold of 25. Conditioning the variable on that event, ``x | (x > 25)``,
 chops off everything below 25 and renormalises; the result is itself a
 ``random_variable``. Its mean is no longer 20:
