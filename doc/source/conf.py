@@ -203,7 +203,6 @@ _SQL_FUNC_MAP = {
     'wald':                     '/doxygen-sql/html/group__random__variable__type.html#gaea782446f0f1f1db5bc7cafdc3ac60ae',
     'chi_squared':              '/doxygen-sql/html/group__random__variable__type.html#ga9e196f226fe68c89dcf5b891c9a9f4ed',
     'rv_families':              '/doxygen-sql/html/group__random__variable__type.html#ga04621b4cf216b7f5ed0bc3ceb8af9700',
-    'random_variable_pow':      '/doxygen-sql/html/group__random__variable__type.html#ga0138759fe601a8d8477229fb4c989900',
     'pow':                      '/doxygen-sql/html/group__random__variable__type.html#gad745e684fb181d804dc9848b988dbe08',
     'power':                    '/doxygen-sql/html/group__random__variable__type.html#gac7a8f335817b3dfdb9e0880774fe5906',
     'ln':                       '/doxygen-sql/html/group__random__variable__type.html#gaeb3c1b8442a6050ee1bc636415d5c0bb',

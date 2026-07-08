@@ -14,15 +14,6 @@ random variable -- ``x | (x > k)``, which truncates and renormalises its
 distribution -- uses the same ``|`` operator that conditions discrete events
 and aggregates; see :doc:`conditioning`.
 
-.. note::
-
-   Continuous-distribution support requires
-   ``shared_preload_libraries = 'provsql'`` in ``postgresql.conf``;
-   the planner hook performs all of the rewrites described below
-   transparently. Discrete probabilities (:doc:`probabilities`) and
-   continuous random variables coexist in the same circuit and the
-   same query.
-
 Introduction
 ------------
 
@@ -43,6 +34,16 @@ gate, that fits in any ``CREATE TABLE``:
       (3, exponential(0.4));
 
     SELECT add_provenance('sensor_readings');
+
+The :sqlfunc:`add_provenance` call is *optional*. A ``random_variable``
+column is already a provenance token, so every query in this chapter --
+the comparisons, the moments, the conditioning -- works without it.
+What ``add_provenance`` adds is a Boolean provenance token for each
+*row*, so ordinary tuple-level uncertainty (a row that may or may not be
+present) composes with the random-variable events in the same circuit:
+it is the bridge between discrete ProvSQL provenance
+(:doc:`probabilities`) and random variables, and lets the two coexist in
+a single query. The call is kept here to show that interface.
 
 The remainder of this chapter uses this sensors example as a running
 motivator. Each row carries a different kind of noise:
@@ -66,7 +67,7 @@ Filtering against a numeric threshold, the planner rewrites the
     --   exp(-0.4 · 2)           ≈ 0.45   (Exponential survival)
 
 The numeric value of these probabilities is recovered through the
-provenance circuit (see :sqlfunc:`probability_evaluate` and
+provenance circuit (see :sqlfunc:`probability` and
 :sqlfunc:`provenance`); the query itself is written and read as
 ordinary SQL.
 
@@ -77,7 +78,7 @@ The constructors below each return a ``random_variable``; every call mints a
 fresh, independent variable (use :sqlfunc:`mixture` when two draws must share
 underlying randomness). The tables give each family's support, what is
 computed in closed form, and any closure (sum / product / min stability); the
-Reference column links the mathematics.
+Reference column links to Wikipedia.
 
 **Continuous parametric**
 
@@ -93,7 +94,7 @@ Reference column links the mathematics.
    * - :sqlfunc:`normal` ``(mu, sigma)``
      - `Normal <https://en.wikipedia.org/wiki/Normal_distribution>`__
      - ``R``
-     - moments, CDF, quantiles
+     - moments, CDF, quantiles, truncated moments; **sum-closed**
      - ``sigma = 0`` -> Dirac via :sqlfunc:`as_random`
    * - :sqlfunc:`uniform` ``(a, b)``
      - `Uniform <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>`__
@@ -103,17 +104,17 @@ Reference column links the mathematics.
    * - :sqlfunc:`exponential` ``(lambda)``
      - `Exponential <https://en.wikipedia.org/wiki/Exponential_distribution>`__
      - ``[0, inf)``
-     - all exact
+     - all exact; **sum-closed** (Erlang)
      - mean ``1/lambda``; ``lambda = 0`` raises
    * - :sqlfunc:`erlang` ``(k, lambda)``
      - `Erlang <https://en.wikipedia.org/wiki/Erlang_distribution>`__
      - ``[0, inf)``
-     - all exact
+     - moments, CDF; same-rate **sum-closed**
      - sum of ``k`` ``Exp(lambda)``; ``k = 1`` -> :sqlfunc:`exponential`
    * - :sqlfunc:`gamma` ``(k, lambda)``
      - `Gamma <https://en.wikipedia.org/wiki/Gamma_distribution>`__
      - ``(0, inf)``
-     - CDF (lower incomplete gamma); same-rate **sum-closed**
+     - moments, CDF (lower incomplete gamma); same-rate **sum-closed**
      - mean ``k/lambda``; integer ``k`` -> :sqlfunc:`erlang`
    * - :sqlfunc:`chi_squared` ``(k)``
      - `Chi-squared <https://en.wikipedia.org/wiki/Chi-squared_distribution>`__
@@ -123,22 +124,22 @@ Reference column links the mathematics.
    * - :sqlfunc:`lognormal` ``(mu, sigma)``
      - `Log-normal <https://en.wikipedia.org/wiki/Log-normal_distribution>`__
      - ``(0, inf)``
-     - moments, CDF, quantiles; **product-closed**
+     - moments, CDF, quantiles, truncated moments; **product-closed**
      - ``exp``/``ln`` bridges to :sqlfunc:`normal`; ``sigma = 0`` -> Dirac
    * - :sqlfunc:`logistic` ``(mu, s)``
      - `Logistic <https://en.wikipedia.org/wiki/Logistic_distribution>`__
      - ``R``
-     - CDF (sigmoid), quantiles
+     - mean, variance, CDF (sigmoid), quantiles
      - the logit link; mean ``mu``
    * - :sqlfunc:`weibull` ``(k, lambda)``
      - `Weibull <https://en.wikipedia.org/wiki/Weibull_distribution>`__
      - ``[0, inf)``
-     - quantiles, truncated moments; **min-stable**
+     - moments, CDF, quantiles, truncated moments; **min-stable**
      - scale ``lambda``; ``k = 1`` -> :sqlfunc:`exponential`
    * - :sqlfunc:`pareto` ``(xm, alpha)``
      - `Pareto <https://en.wikipedia.org/wiki/Pareto_distribution>`__
      - ``[xm, inf)``
-     - CDF, quantiles, truncated moments (any params)
+     - moments, CDF, quantiles, truncated moments (any params); **min-stable**
      - heavy tail; divergent moments reported as ``Infinity``
    * - :sqlfunc:`beta` ``(alpha, beta)``
      - `Beta <https://en.wikipedia.org/wiki/Beta_distribution>`__
@@ -148,12 +149,12 @@ Reference column links the mathematics.
    * - :sqlfunc:`inverse_gamma` ``(alpha, beta)``
      - `Inverse-gamma <https://en.wikipedia.org/wiki/Inverse-gamma_distribution>`__
      - ``(0, inf)``
-     - CDF (upper incomplete gamma)
+     - moments, CDF (upper incomplete gamma)
      - ``1/Gamma``; divergent moments reported as ``Infinity``
    * - :sqlfunc:`inverse_gaussian` / :sqlfunc:`wald` ``(mu, lambda)``
      - `Inverse Gaussian <https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution>`__
      - ``(0, inf)``
-     - CDF (via ``Phi``), quantiles; all moments finite
+     - moments (all finite), CDF (via ``Phi``)
      - Brownian first-passage; ratio-``lambda/mu^2`` **sum-closed**
 
 **Discrete parametric**
@@ -235,12 +236,12 @@ random_variable`` and ``double precision → random_variable``
 are installed. Writing ``WHERE reading > 2`` works without an
 explicit ``as_random(2)`` wrapper.
 
-The full list of registered families is introspectable with
-:sqlfunc:`rv_families`, which returns one row per family with its
+The full list of registered parameterized families is introspectable
+with :sqlfunc:`rv_families`, which returns one row per family with its
 name token, parameter count, conventional parameter symbols, and a
 short display label. UI clients (such as :doc:`ProvSQL Studio
-<studio>`'s circuit inspector) read it so that families added to the
-extension render without a client upgrade.
+<studio>`'s circuit inspector) read it so that parameterized families
+added to the extension render without a client upgrade.
 
 Arithmetic on Random Variables
 ------------------------------
@@ -263,9 +264,9 @@ variables resolves through the implicit casts above:
      WHERE r1.id < r2.id;
 
 Beyond the operators, the nonlinear transforms :sqlfunc:`pow` /
-:sqlfunc:`power` (spellings of ``^``, gate
-:sqlfunc:`random_variable_pow`), :sqlfunc:`ln`, :sqlfunc:`exp`, and
-:sqlfunc:`sqrt` (pure sugar for ``^ 0.5``) apply per draw. They unlock
+:sqlfunc:`power` (function spellings of the ``^`` operator),
+:sqlfunc:`ln`, :sqlfunc:`exp`, and :sqlfunc:`sqrt` (pure sugar for
+``^ 0.5``) apply per draw. They unlock
 generative constructions of dependent joints -- ``2 * u ^ 0.25`` is the
 inverse-CDF recipe for a marginal of a triangular joint density -- and
 the log/exp bridges used by log-normal-style models. Two domain rules
@@ -287,30 +288,13 @@ normal, so those moments and quantiles are exact. Constant subtrees
 fold exactly, and :sqlfunc:`support` propagates sound intervals through
 ``^`` / ``ln`` / ``exp``, so support-decidable comparisons stay exact.
 
-The arithmetic operators are *structural*: they record the
-operation in the circuit without evaluating it. Evaluation happens
-later, when the value is queried via
+The arithmetic operators are *structural*: they build the circuit
+without evaluating it. The value is computed only when queried, via
 :sqlfunc:`expected`, :sqlfunc:`variance`, :sqlfunc:`moment`,
-:sqlfunc:`probability_evaluate`, :sqlfunc:`rv_sample`, or
-:sqlfunc:`rv_histogram`. Two paths exist:
-
-- **Closed-form**, when ProvSQL's hybrid evaluator recognises a
-  family-preserving combination: a sum of independent normals is
-  another normal; a scalar shift, scale, or negation of a normal
-  preserves the family; the sum of ``k`` i.i.d. exponentials with
-  the same rate is an Erlang; independent same-rate gammas sum to
-  a gamma; independent inverse Gaussians sharing the ratio
-  ``λ/μ²`` sum to an inverse Gaussian; products of independent
-  lognormals are lognormal; ``exp`` of a normal is a lognormal and
-  ``ln`` of a lognormal is a normal; a linear combination of
-  disjoint random variables has closed-form mean and variance. The
-  result is exact.
-- **Monte Carlo fallback**, when no closed form applies, e.g. a
-  product of two non-trivial random variables. The sampler draws
-  independent values from each leaf, evaluates the arithmetic
-  expression per iteration, and aggregates the results. See
-  *Configuration of the Monte Carlo sampler* below for the
-  controlling GUCs.
+:sqlfunc:`probability`, :sqlfunc:`rv_sample`, or
+:sqlfunc:`rv_histogram` -- exactly where the shape allows (a
+family-preserving combination such as a sum of independent normals),
+otherwise by Monte Carlo. See *Exact vs. Sampled Answers* below.
 
 Comparison operators ``<``, ``<=``, ``=``, ``<>``, ``>=``, ``>``
 on ``(random_variable, random_variable)`` return ``boolean``
@@ -449,7 +433,7 @@ through:
 
 .. code-block:: postgresql
 
-    SELECT id, probability_evaluate(provenance()) AS p
+    SELECT id, probability(provenance()) AS p
     FROM sensor_readings
     WHERE reading > 2;
     --  id |    p
@@ -479,7 +463,8 @@ grammar:
     SELECT probability(x > y AND x < z) FROM d; -- 0.1667  (ordering y<x<z)
 
 ``probability`` is also a short alias of
-:sqlfunc:`probability_evaluate` on a ``uuid``. Over a purely
+:sqlfunc:`probability_evaluate` on a ``uuid``, and the spelling
+preferred throughout this chapter. Over a purely
 deterministic Boolean it is total -- ``probability(1 > 0)`` is ``1``,
 ``probability(region = 'north')`` is a per-row ``0`` / ``1`` -- so it
 works on definite events too, even with ``provsql.active`` off. (The
@@ -532,88 +517,37 @@ Two GUCs control the Monte Carlo fallback path. See
     must fall back to Monte Carlo. Set to ``0`` to disable the
     fallback entirely: callers will raise rather than sample.
 
-The sample count for ``probability_evaluate(..., 'monte-carlo',
+The sample count for ``probability(..., 'monte-carlo',
 'n')`` is independent and explicit in the third argument (the
 sample count is passed as a string, like every other
-:sqlfunc:`probability_evaluate` parameter).
+:sqlfunc:`probability` parameter).
 
-Closed-Form Evaluation
-----------------------
+Exact vs. Sampled Answers
+-------------------------
 
-Three pieces work together to keep evaluation analytical where
-possible. They run in this order, so each later pass benefits from
-the rewrites produced by the earlier ones:
+Wherever the shape of a query allows, ProvSQL answers it in closed
+form -- exactly, with no sampling. This covers the family-preserving
+combinations above (sums of normals, i.i.d. exponentials to Erlang,
+affine transforms…), comparisons resolved from a distribution's CDF
+(``normal > 2``, ``uniform <= 1.5``) or decided from the support alone
+(``reading > 1 AND reading < 3`` on a single normal), same-family
+comparisons between two variables (``probability(x > y)`` for two
+i.i.d. uniforms is exactly ``0.5``; ``probability(a < b)`` for
+``a ~ Exp(2), b ~ Exp(3)`` is exactly ``0.4``), i.i.d. order-statistic
+means (``expected(greatest(x, y, z))`` of three uniforms is exactly
+``0.75``), and conditioning on a comparison (``E[X | X > Y] = 2/3`` for
+uniforms). Everything else falls back to Monte Carlo (see
+*Configuration of the Monte Carlo Sampler* above).
 
-- **HybridEvaluator** (simplifier pass) rewrites the in-memory
-  circuit first: linear closure on normals (``a·X + b·Y + c`` is a
-  single normal when ``X``, ``Y`` are independent normals), i.i.d.
-  exponentials sum to Erlang, affine shift on a single uniform
-  (``a·U(p, q) + c`` is a single uniform), closed-form negation of
-  a bare Normal or Uniform (``-N(μ, σ) = N(-μ, σ)``,
-  ``-U(a, b) = U(-b, -a)``), subtraction shapes (``A − B``)
-  canonicalise to addition (``A + (−B)``) so the same pipeline
-  handles ``N − c``, ``c − N``, ``U − c``, ``c − U``,
-  ``c·X``-style shifts and scales thread through mixtures and
-  categoricals, single-child arith roots and semiring identities
-  collapse. Running first means the later passes see bare
-  ``gate_rv`` leaves wherever a closed-form fold applied, instead
-  of multi-gate ``gate_arith`` subtrees.
-- **RangeCheck** propagates support intervals through ``gate_arith``
-  and tests every ``gate_cmp`` against the propagated interval. A
-  comparator that is decidable from the support alone collapses
-  to a Bernoulli ``gate_input`` with probability ``0`` or ``1``;
-  the rest of the circuit sees a plain Boolean leaf. Joint
-  ``WHERE`` clauses are intersected per random variable: ``reading
-  > 1 AND reading < 3`` constrains a single normal once and runs
-  the conjunction as one analytic CDF call. Equality and
-  inequality on continuous distributions collapse here (``X = X``
-  is identically true, ``X <> X`` identically false; ``X = Y`` is
-  identically false whenever at least one side has a continuous
-  distribution, even when neither is a bare leaf, including
-  composites like ``Exp(λ_1) + Exp(λ_2)`` with distinct rates, or
-  a Bernoulli mixture over two continuous arms). When both sides
-  have statically-known discrete masses (categoricals, mixtures of
-  ``as_random`` branches…) and are independent, ``P(X = Y)`` is
-  computed exactly by summing the per-outcome mass products; the
-  disjoint-outcome case is the boundary where the sum is 0.
-- **AnalyticEvaluator** computes the exact CDF of a single
-  distribution's ``gate_cmp`` (e.g. ``normal > 2``,
-  ``uniform <= 1.5``, ``exponential >= λ⁻¹``) via the standard
-  CDFs of the supported families, for any ``gate_cmp`` that
-  RangeCheck could not decide from the support alone. It also
-  decides a comparison between **two independent random variables**
-  of the same family in closed form: Normal-Normal (the difference
-  is Normal), Exponential-Exponential
-  (``P(X < Y) = λ_X / (λ_X + λ_Y)``), and Uniform-Uniform (the
-  geometric area). So ``probability(x > y)`` for two i.i.d. uniforms
-  is exactly ``0.5``, and ``probability(a < b)`` for
-  ``a ~ Exp(2), b ~ Exp(3)`` is exactly ``0.4``, with no sampling.
+Setting ``provsql.rv_mc_samples = 0`` forces the analytic path and
+raises rather than sampling when no closed form applies -- the way to
+assert that a query is answered exactly.
 
-Two further analytic surfaces build on the same closed forms:
-**order-statistic means** are exact for i.i.d. families
-(``expected(greatest(x, y, z))`` of three i.i.d. uniforms is exactly
-``0.75``), and **conditioning on an RV-vs-RV comparison**
-(``expected(x | (x > y))``, or the two-argument
-``expected(x, rv_cmp_gt(x, y))``) is evaluated by a one-dimensional
-quadrature -- exact for uniforms (``E[X | X > Y] = 2/3``),
-high-accuracy for the other families. Setting
-``provsql.rv_mc_samples = 0`` forces every one of these onto its
-analytic path and raises rather than sampling if no closed form
-applies -- the way to assert that a query is answered exactly.
-
-A residual ``HybridEvaluator`` decomposer pass runs between
-RangeCheck and AnalyticEvaluator for continuous-island ``gate_cmp``
-gates that no closed form has resolved; it marginalises them by
-Monte Carlo into Bernoulli leaves so the downstream Boolean
-machinery (``independent`` / tree-decomposition / external
-compilers) becomes available.
-
-``provsql.simplify_on_load`` (default: ``on``) folds the universal
-peephole pass at the moment a circuit is read into memory, so
-every downstream consumer (semiring evaluators, Monte Carlo,
-``view_circuit``, PROV export, ProvSQL Studio) sees the
-simplified form. Toggle it off only to inspect raw gate-creation
-structure for debugging.
+``provsql.simplify_on_load`` (default: ``on``) applies a peephole
+simplification when a circuit is read into memory, so every consumer
+(semiring evaluators, Monte Carlo, ``view_circuit``, PROV export,
+ProvSQL Studio) sees the simplified form. Toggle it off only to
+inspect the raw circuit for debugging.
 
 Moments, Quantiles, and Support
 -------------------------------
@@ -758,14 +692,10 @@ The expectation, variance, and support of ``normal(2.5,
 ``(1, 3)``; the exponential's as ``2.5``, ``6.25``, and
 ``(0, +Infinity)``.
 
-**Structural-independence shortcuts.** Sums of independent random
-variables have exact expectation and variance; products of
-random variables with disjoint *footprints* (the set of base
-``gate_rv`` leaves reachable from each operand) have exact
-expectation (``E[XY] = E[X]·E[Y]``). The hybrid evaluator detects
-both shapes through a per-evaluation ``FootprintCache``; otherwise
-it falls back to Monte Carlo with budget
-``provsql.rv_mc_samples``.
+**Independence shortcuts.** Sums of independent random variables
+have exact expectation and variance, and products of independent
+random variables have exact expectation (``E[XY] = E[X]·E[Y]``);
+other shapes fall back to Monte Carlo.
 
 Conditional Inference
 ---------------------
@@ -794,24 +724,13 @@ distribution is ``uniform[2, 3]`` with mean ``2.5``; for sensor
 ``3`` (``exponential(0.4)`` truncated to ``> 2``), the
 memoryless property gives conditional mean ``2 + 1/0.4 = 4.5``.
 
-Three closed-form paths are wired:
-
-- **Normal**, truncated to any one-sided or two-sided interval,
-  via the Mills-ratio formula and integration by parts.
-- **Uniform**, on the intersection of the support and the
-  conditioning interval (mean and variance trivial in closed
-  form).
-- **Exponential**, by memorylessness when the conditioning event
-  is a lower bound, and by truncation to a finite interval.
-
-When no closed form applies, the joint circuit between ``input``
-and ``prov`` is loaded with shared ``gate_rv`` leaves correctly
-coupled, and the conditional moment is estimated by rejection
-sampling. The sample count is ``provsql.rv_mc_samples``; if
-fewer than ``n`` accepted samples land within the budget
-(because the conditioning event is rare), a ``NOTICE`` is
-emitted suggesting the user widen the budget. Setting
-``provsql.rv_mc_samples = 0`` turns the notice into an error.
+Conditioning on a one- or two-sided interval is exact in closed form
+for Normal (Mills-ratio truncation), Uniform (truncated support), and
+Exponential (memorylessness); other shapes are estimated by Monte
+Carlo. If the conditioning event is rare, fewer than ``n`` samples may
+be accepted within the ``provsql.rv_mc_samples`` budget, and a
+``NOTICE`` suggests widening it (or an error under
+``provsql.rv_mc_samples = 0``).
 
 Passing ``gate_one()`` (the default) as ``prov`` is equivalent to
 the unconditional moment, so an unconditional call has no extra
@@ -882,12 +801,10 @@ the row's provenance as a ``gate_cmp``):
 Mixtures and Categorical Random Variables
 ------------------------------------------
 
-Probabilistic *mixtures* and *categorical* random variables are the
-discrete-by-mixture side of the surface.
-
-A **Bernoulli mixture** selects between two random variables based
-on a Boolean coin. The two overloads of :sqlfunc:`mixture`
-differ in whether the coin is shared:
+The two overloads of :sqlfunc:`mixture` differ in whether the Boolean
+coin is shared -- a coupled coin (a gate UUID) makes several mixtures
+pick the same side per draw, while a scalar mints a fresh coin per
+call:
 
 .. code-block:: postgresql
 
@@ -910,8 +827,8 @@ differ in whether the coin is shared:
       mixture(0.3, uniform(-1, 1),
                    uniform(9, 11)) AS independent_b;
 
-A **categorical** random variable assigns explicit probabilities
-to a list of outcomes:
+A :sqlfunc:`categorical` assigns explicit probabilities to its
+outcomes:
 
 .. code-block:: postgresql
 
@@ -975,7 +892,7 @@ deterministic scalars to ``random_variable`` columns:
    (zero divided by zero). The numerator and denominator are
    structurally correct; the result is the natural floating-point
    ``0/0`` rather than an error. If you need ``NULL`` on empty
-   effective groups, filter by ``probability_evaluate(provenance())
+   effective groups, filter by ``probability(provenance())
    > 0`` before averaging.
 
 ``COUNT`` over a tracked ``random_variable`` column goes through
@@ -1033,10 +950,12 @@ A distribution parameter may itself be a **random variable** (or an
 ``agg_token`` cast to ``uuid``) rather than a concrete number. The
 parameter is then a *latent* variable and the leaf a **compound
 (hierarchical) distribution** -- for instance a Normal whose mean is
-drawn from a broad prior::
+drawn from a broad prior:
+
+.. code-block:: postgresql
 
     -- M ~ Normal(0, 10);  X ~ Normal(M, 1):  a hierarchical model.
-    SELECT provsql.expected(provsql.normal(provsql.normal(0, 10), 1));
+    SELECT expected(normal(normal(0, 10), 1));
 
 Every constructor gains token-accepting overloads for each parameter
 position (``normal(random_variable, float8)``,
@@ -1053,9 +972,9 @@ probability, e.g. ``poisson(120 * R)`` or ``binomial(50, 40.0 / N)``).
 A latent parameter cannot be enumerated into a categorical at
 construction, so these build a sampled leaf like the continuous ones;
 the literal ``poisson(λ)`` / ``binomial(n, p)`` still return the exact
-categorical. Their pmf is the ``observe`` likelihood weight, which makes
-the classic discrete conjugate updates (Gamma-Poisson, Beta-Binomial)
-available to the inference engine below.
+categorical. Their pmf supplies the likelihood weight when such a leaf
+is observed, which makes the classic discrete conjugate updates
+(Gamma-Poisson, Beta-Binomial) available to the inference engine below.
 
 The **mean** of a compound leaf is exact (no Monte Carlo, and it works
 even with ``provsql.rv_mc_samples = 0``) whenever the family's mean is
@@ -1088,20 +1007,21 @@ an observed value is *posterior inference*, written with the natural
 **conditional-equality** form: ``X | (Y = c)`` observes that the leaf
 ``Y`` took the value ``c``. For a single observation it reads exactly like
 truncation conditioning (:doc:`conditioning`), and for a table of
-observations :sqlfunc:`given` produces the per-row evidence that
-:sqlfunc:`and_agg` folds into one evidence token, passed as the
-conditioning argument of any readout::
+observations the prefix ``|`` operator (:sqlfunc:`given`) produces the
+per-row evidence that :sqlfunc:`and_agg` folds into one evidence token,
+passed as the conditioning argument of any readout:
+
+.. code-block:: postgresql
 
     -- Single observation: posterior of mu given normal(mu, 1) = 8.
-    WITH model AS (SELECT provsql.normal(0, 10) AS mu)
-    SELECT provsql.expected(mu | (provsql.normal(mu, 1) = 8)) FROM model;
+    WITH model AS (SELECT normal(0, 10) AS mu)
+    SELECT expected(mu | (normal(mu, 1) = 8)) FROM model;
 
     -- A table of observations x_i ~ Normal(mu, 1); posterior mean/variance:
-    WITH model AS (SELECT provsql.normal(0, 10) AS mu)
-    SELECT provsql.expected(mu, ev), provsql.variance(mu, ev)
+    WITH model AS (SELECT normal(0, 10) AS mu)
+    SELECT expected(mu, ev), variance(mu, ev)
     FROM   model,
-    LATERAL (SELECT provsql.and_agg(
-                      provsql.given(provsql.normal(mu, 1) = x)) AS ev
+    LATERAL (SELECT and_agg(| (normal(mu, 1) = x)) AS ev
              FROM (VALUES (8.0), (10.0), (12.0)) AS obs(x)) e;
 
 The engine is **self-normalised importance sampling**: latents are drawn
@@ -1142,7 +1062,7 @@ relational regime of one latent and many rows).
 **Explaining the posterior (Shapley over observations).** Because the
 importance weight is a product of per-observation density factors,
 dropping an observation is dropping one factor: the Shapley value of each
-``observe`` atom over a posterior moment answers *"which observation most
+observation over a posterior moment answers *"which observation most
 shifted my posterior"* directly. :sqlfunc:`shapley_observe` returns each
 observation's attribution (the values sum to the prior→posterior shift);
 a dominant outlier gets the largest-magnitude value. It is exact over the

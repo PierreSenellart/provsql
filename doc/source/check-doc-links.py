@@ -186,12 +186,13 @@ INTERNAL_FUNCTIONS = {
     # ('simplified_circuit_subgraph' and 'rv_histogram' are now in
     # _SQL_FUNC_MAP, referenced from the user manual.)
     # random_variable arithmetic and comparison operator implementations
-    # (invoked through the SQL operators + - * / < <= = <> >= >, not
-    # called by name; promote alongside the constructors when the
-    # user-manual chapter is written).
+    # (invoked through the SQL operators + - * / ^ < <= = <> >= >, not
+    # called by name; 'pow' / 'power' are their documented function
+    # spellings and are in _SQL_FUNC_MAP, but 'random_variable_pow' -- the
+    # '^' operator procedure they and the operator share -- is internal).
     'random_variable_plus', 'random_variable_minus',
     'random_variable_times', 'random_variable_div',
-    'random_variable_neg',
+    'random_variable_neg', 'random_variable_pow',
     'random_variable_lt', 'random_variable_le', 'random_variable_eq',
     'random_variable_ne', 'random_variable_ge', 'random_variable_gt',
     'random_variable_cmp_placeholder',
