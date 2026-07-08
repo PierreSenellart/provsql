@@ -2261,6 +2261,11 @@
     // If a query was carried over (mode switch / preload), run it so the
     // user has clickable cells immediately; otherwise wait for them to type.
     const carry = preloadCircuitUuid;
+    // A circuit shown before a plain reload (no carry, no query to replay) is
+    // restored from sessionStorage, so a direct token load (jumped in from a
+    // notebook circuit cell) survives a page reload instead of vanishing.
+    const persistedCircuit = carry ? null : sessionStorage.getItem('ps.circuitToken');
+    const persistedCircuitRowProv = sessionStorage.getItem('ps.circuitRowProv') || '';
     // Coming from where mode's per-row "→ Circuit" jump: the carried UUID
     // was minted by a where-provenance wrap, so the same query must run
     // with where_provenance on here for the resulting circuit to contain
@@ -2308,6 +2313,11 @@
       // circuit-cell jump carries only the UUID and does.
       queueMicrotask(() => loadCircuit(carry,
         { rowProv: preloadCircuitRowProv || '' }));
+    } else if (persistedCircuit) {
+      // Plain reload with a previously-shown circuit and no query to re-run:
+      // restore it (silently dropped if the token is now stale).
+      queueMicrotask(() => loadCircuit(persistedCircuit,
+        { rowProv: persistedCircuitRowProv, restore: true }));
     }
   }
 
@@ -3338,10 +3348,14 @@
     try {
       resp = await fetch(url);
     } catch (e) {
+      if (opts && opts.restore) { clearPersistedCircuit(); return; }
       window.ProvsqlCircuit.showError(`Network error: ${e.message}`);
       return;
     }
     if (!resp.ok) {
+      // A reload-restore of a stale token (e.g. the database changed since):
+      // drop it silently rather than flashing an error banner on load.
+      if (opts && opts.restore) { clearPersistedCircuit(); return; }
       const err = await resp.json().catch(() => ({}));
       // 413: structured "circuit too large" payload. Render the
       // actionable banner with a "Render at depth N-1" retry button
@@ -3364,6 +3378,21 @@
     window.ProvsqlCircuit.renderCircuit(scene, {
       rowProv: (opts && opts.rowProv) || '',
     });
+    // Remember the shown circuit so a page reload with no query to re-run
+    // (e.g. a direct token load jumped in from a notebook circuit cell) can
+    // restore it instead of coming up blank.  Cleared when a query wipes the
+    // canvas (runQuery) or when a restore finds the token stale.
+    try {
+      sessionStorage.setItem('ps.circuitToken', uuid);
+      sessionStorage.setItem('ps.circuitRowProv', (opts && opts.rowProv) || '');
+    } catch (e) { /* sessionStorage unavailable (private mode) */ }
+  }
+
+  function clearPersistedCircuit() {
+    try {
+      sessionStorage.removeItem('ps.circuitToken');
+      sessionStorage.removeItem('ps.circuitRowProv');
+    } catch (e) { /* ignore */ }
   }
 
   let _circuitLibPromise = null;
@@ -4347,6 +4376,12 @@ async function runQuery(ev, opts) {
   // fresh DAG; until then the canvas should be empty.
   if (env.mode === 'circuit') {
     window.ProvsqlCircuit?.clearScene?.();
+    // A new query supersedes any shown circuit, so it must not be restored
+    // on a later reload (see loadCircuit's ps.circuitToken persistence).
+    try {
+      sessionStorage.removeItem('ps.circuitToken');
+      sessionStorage.removeItem('ps.circuitRowProv');
+    } catch (e) { /* ignore */ }
   }
 
   // Cancel-button wiring: tag the in-flight request so /api/cancel/<id>
