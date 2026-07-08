@@ -734,7 +734,7 @@ uncertainty of a distribution, and the `Kullback-Leibler divergence
     FROM m;
 
 The uniform prior has differential entropy **0** (it *is*
-``Uniform(0, 1)``, whose entropy is ``ln 1``); the posterior comes out
+``uniform(0, 1)``, whose entropy is ``ln 1``); the posterior comes out
 at about **−0.598** -- negative, as differential entropies of
 concentrated densities are -- so the update removed about **0.6 nats**
 of uncertainty. And ``kl(posterior, prior)`` returns exactly the same
