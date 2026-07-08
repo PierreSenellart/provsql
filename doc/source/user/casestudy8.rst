@@ -718,7 +718,8 @@ Problem 9: How Much Did the Data Teach Us?
 Problem 8 turned eight observations into a ``beta(3, 7)`` posterior.
 A natural follow-up question is *how much information* those
 observations carried. Information theory has standard answers, and
-ProvSQL exposes them as readouts (all in nats, still with
+ProvSQL exposes them as readouts (all in `nats
+<https://en.wikipedia.org/wiki/Nat_(unit)>`_, still with
 ``rv_mc_samples = 0``): :sqlfunc:`entropy` for the residual
 uncertainty of a distribution, and the `Kullback-Leibler divergence
 <https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence>`_
