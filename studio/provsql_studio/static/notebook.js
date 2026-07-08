@@ -16,6 +16,7 @@
   let execCounter = 0;
   let running = null;      // {cellId, requestId} | null
   let mdLibs = null;       // promise for marked + DOMPurify
+  let katexReady = null;   // always-resolving promise for the best-effort KaTeX chain
   let mdRenders = [];      // in-flight markdown renders of the current paint
   let lastFocused = null;  // last cell whose editor had focus
   let schemaCache = null;  // /api/schema payload for the sidebar
@@ -511,7 +512,11 @@
       // $…$ source shows through) rather than degrading the whole cell to raw
       // text.
       loadStyle('/static/vendor/katex.min.css').catch(() => {});
-      loadScript('/static/vendor/katex.min.js')
+      // Tracked in katexReady (which always resolves, even on load failure)
+      // so renderMarkdownInto can await it: math then renders on the first
+      // paint instead of racing the 275 KB katex.min.js, while a missing
+      // asset still only leaves math un-rendered rather than dropping the cell.
+      katexReady = loadScript('/static/vendor/katex.min.js')
         .then(() => loadScript('/static/vendor/auto-render.min.js'))
         .catch(() => {});
     }
@@ -547,6 +552,7 @@
       // on the live DOM after sanitize, so KaTeX's spans are not stripped;
       // its default ignoredTags skip <pre>/<code>, so SQL fences (and any
       // ``DO $$ … $$`` dollar-quoting in them) are left untouched.
+      if (katexReady) await katexReady;
       if (window.renderMathInElement) {
         window.renderMathInElement(el, {
           delimiters: [
@@ -636,7 +642,9 @@
     div.dataset.cellId = cell.id;
     div.innerHTML = `
       <div class="nb-cell__gutter">
-        <span class="nb-cell__count">[ ]</span>
+        ${cell.type === 'markdown'
+          ? ''  /* markdown cells have no execution count, like Jupyter */
+          : `<span class="nb-cell__count">[ ]</span>`}
         ${cell.type === 'sql'
           ? `<button type="button" class="nb-cell__run" title="Run this cell (Ctrl+Enter)"><i class="fas fa-play"></i></button>`
           : ''}

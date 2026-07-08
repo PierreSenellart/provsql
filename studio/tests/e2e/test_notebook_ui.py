@@ -124,6 +124,29 @@ def test_markdown_cell_edit_and_render(page: Page, studio_url: str) -> None:
     expect(md.locator(".nb-cell__mdta")).to_be_visible()
 
 
+def test_markdown_cell_renders_math(page: Page, studio_url: str) -> None:
+    """KaTeX math ($…$) in a markdown cell renders on the first paint.
+
+    Regression guard: the KaTeX auto-render chain is loaded best-effort so a
+    missing math asset does not drop the whole cell to raw text, but
+    renderMarkdownInto awaits that chain, so math is not left un-rendered by
+    racing the 275 KB katex.min.js. KaTeX wraps rendered math in a `.katex`
+    span; its absence means the raw `$…$` source showed through."""
+    _goto_notebook(page, studio_url)
+    _add_markdown_cell(page, r"Euler's identity: $e^{i\pi} + 1 = 0$")
+    md = page.locator(".nb-cell--markdown").first
+    expect(md.locator(".nb-cell__md .katex").first).to_be_visible(timeout=8000)
+
+
+def test_markdown_cell_has_no_execution_count(page: Page, studio_url: str) -> None:
+    """Markdown cells carry no `[ ]` execution-count gutter (unlike code
+    cells, and matching Jupyter, where the count is a code-cell affordance)."""
+    _goto_notebook(page, studio_url)
+    _add_markdown_cell(page, "plain prose")
+    md = page.locator(".nb-cell--markdown").first
+    expect(md.locator(".nb-cell__count")).to_have_count(0)
+
+
 def test_markdown_links_open_in_new_tab(page: Page, studio_url: str) -> None:
     # A same-tab navigation fires pagehide, which closes the kernel; doc /
     # external links must therefore open in a new tab so returning does not
