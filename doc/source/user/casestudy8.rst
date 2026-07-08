@@ -698,8 +698,8 @@ what is uncertain -- an attack rate we have only estimated from a handful
 of cases. A `Beta <https://en.wikipedia.org/wiki/Beta_distribution>`_
 distribution is the natural model for an unknown probability, bounded to
 ``[0, 1]``. Suppose 2 of 8 exposed contacts fell ill; a
-``beta(3, 7)`` posterior (a uniform prior updated by 2 successes and 6
-failures) summarises the attack rate:
+``beta(3, 7)`` posterior (a uniform prior, ``beta(1, 1)``, updated by 2
+successes and 6 failures) summarises the attack rate:
 
 .. code-block:: postgresql
 
