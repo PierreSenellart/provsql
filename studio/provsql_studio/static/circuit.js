@@ -2110,7 +2110,8 @@
     syncCompiledSemiringAvailability();
 
     // Includes the per-probability-method controls, the bins input for
-    // distribution-profile, and the (k, central) pair for moment.
+    // distribution-profile, the (k, central) pair for moment, the p for
+    // quantile, and the n for sample.
     // syncControls hides every unrelated input in one sweep, then
     // unhides whichever the current semiring needs.
     const argControls = [
@@ -2120,6 +2121,7 @@
       'eval-args-bins',
       'eval-args-moment-k',
       'eval-args-moment-central',
+      'eval-args-quantile-p',
       'eval-args-sample-n',
       // The "Condition on" control is the badge + input wrapped in a
       // <span>; toggle the wrapper so the badge hides too when no
