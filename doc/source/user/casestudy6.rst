@@ -27,11 +27,11 @@ airborne particles with aerodynamic diameter at most 2.5 μm,
 expressed in micrograms per cubic metre) on a fixed schedule. The sensors differ in calibration and noise
 characteristics:
 
-* high-end units report ``Normal(μ, σ)`` with small σ;
-* low-cost units report ``Uniform[μ−δ, μ+δ]`` over a small window;
-* a drift-prone unit reports ``Exponential(λ)`` while its
+* high-end units report ``normal(μ, σ)`` with small σ;
+* low-cost units report ``uniform[μ−δ, μ+δ]`` over a small window;
+* a drift-prone unit reports ``exponential(λ)`` while its
   internal hardware self-tests cycle;
-* a multi-pass aggregating unit reports ``Erlang(k, λ)`` over the
+* a multi-pass aggregating unit reports ``erlang(k, λ)`` over the
   pass count.
 
 A reference station with a calibrated lab-grade instrument
@@ -559,7 +559,7 @@ over a ``random_variable`` column builds exactly that:
 The *centre* district's worst reading averages ≈ 40.0 -- its
 ``N(40, 4)`` reading dominates the maximum -- and *east* comes out
 at ≈ 39.2, driven by the heavy right tails of ``Exp(0.04)`` and
-``Erlang(3, 0.1)`` even though both means sit near 25–30. Note how
+``erlang(3, 0.1)`` even though both means sit near 25–30. Note how
 the extremum tells a different story from Step 5's averages
 (≈ 25.5 and ≈ 21.6): the east district looks fine on average and
 just as alarming at the extreme. Clicking a ``worst_mean``
@@ -699,7 +699,7 @@ chi-squared test statistic:
            variance(provsql.gamma(2.5, 0.5))       AS drift_var,
            quantile(provsql.chi_squared(4), 0.95)  AS chi2_crit
 
-``Gamma(k = 2.5, λ = 0.5)`` has mean ``k/λ = 5`` and variance
+``gamma(k = 2.5, λ = 0.5)`` has mean ``k/λ = 5`` and variance
 ``k/λ² = 10``, both exact; the χ²₄ critical value comes out
 ≈ 9.4877, bisected on the regularised-incomplete-gamma CDF.
 
@@ -713,7 +713,7 @@ units fails over to the second when the first dies; the time to
                                   provsql.weibull(1.5, 4.0))) AS first_failure,
            expected(provsql.weibull(1.5, 4.0))                AS single_lifetime
 
-A single ``Weibull(k = 1.5, λ = 4)`` unit lasts
+A single ``weibull(k = 1.5, λ = 4)`` unit lasts
 ``λ·Γ(1 + 1/k) ≈ 3.61`` years on average; the minimum of two
 i.i.d. Weibulls is again Weibull (min-stability), so the first
 failure at ``≈ 2.27`` years is computed in closed form.
@@ -729,7 +729,7 @@ over a 30 μg/m³ floor:
 
 The ``α = 2.5`` spike averages ``α·xₘ/(α−1) = 50`` with a 95th
 percentile near 99.4 -- the heavy tail at work. The last column
-shows moment honesty: ``Pareto(30, 1)`` has *no* finite mean, and
+shows moment honesty: ``pareto(30, 1)`` has *no* finite mean, and
 ProvSQL reports ``Infinity`` rather than estimating a divergent
 integral.
 

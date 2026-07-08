@@ -4,7 +4,7 @@ Continuous Distributions
 ProvSQL extends the probabilistic-database setting from discrete
 Bernoulli inputs (see :doc:`probabilities`) to **first-class
 continuous random variables**. Columns can carry distributions such
-as ``Normal(μ, σ)``, ``Uniform(a, b)``, or ``Exponential(λ)``;
+as ``normal(μ, σ)``, ``uniform(a, b)``, or ``exponential(λ)``;
 arithmetic and comparison work natively; the planner rewrites
 ``WHERE``, ``JOIN`` and ``UNION`` on random-variable columns
 transparently; and ``expected``, ``variance``, ``moment``,
@@ -144,7 +144,7 @@ Reference column links the mathematics.
      - `Beta <https://en.wikipedia.org/wiki/Beta_distribution>`__
      - ``[0, 1]``
      - moments, CDF (incomplete beta), truncated moments
-     - ``Beta(1,1)`` -> :sqlfunc:`uniform`
+     - ``beta(1,1)`` -> :sqlfunc:`uniform`
    * - :sqlfunc:`inverse_gamma` ``(alpha, beta)``
      - `Inverse-gamma <https://en.wikipedia.org/wiki/Inverse-gamma_distribution>`__
      - ``(0, inf)``
@@ -577,8 +577,8 @@ the rewrites produced by the earlier ones:
   computed exactly by summing the per-outcome mass products; the
   disjoint-outcome case is the boundary where the sum is 0.
 - **AnalyticEvaluator** computes the exact CDF of a single
-  distribution's ``gate_cmp`` (e.g. ``Normal > 2``,
-  ``Uniform <= 1.5``, ``Exponential >= λ⁻¹``) via the standard
+  distribution's ``gate_cmp`` (e.g. ``normal > 2``,
+  ``uniform <= 1.5``, ``exponential >= λ⁻¹``) via the standard
   CDFs of the supported families, for any ``gate_cmp`` that
   RangeCheck could not decide from the support alone. It also
   decides a comparison between **two independent random variables**
@@ -786,12 +786,12 @@ filter:
     FROM sensor_readings
     WHERE reading > 2;
 
-For sensor ``1`` (``Normal(2.5, 0.5)`` truncated to ``> 2``),
+For sensor ``1`` (``normal(2.5, 0.5)`` truncated to ``> 2``),
 the conditional mean is the textbook Mills-ratio formula
 ``μ + σ · φ(α) / (1 − Φ(α))`` with ``α = (2 − μ)/σ``; for sensor
-``2`` (``Uniform[1, 3]`` truncated to ``> 2``), the conditional
-distribution is ``Uniform[2, 3]`` with mean ``2.5``; for sensor
-``3`` (``Exponential(0.4)`` truncated to ``> 2``), the
+``2`` (``uniform[1, 3]`` truncated to ``> 2``), the conditional
+distribution is ``uniform[2, 3]`` with mean ``2.5``; for sensor
+``3`` (``exponential(0.4)`` truncated to ``> 2``), the
 memoryless property gives conditional mean ``2 + 1/0.4 = 4.5``.
 
 Three closed-form paths are wired:

@@ -125,7 +125,7 @@ are exact (no Monte Carlo):
     FROM r;
 
 The event ``x > y AND x > z`` says ``x`` is the largest of the three, so
-``x`` conditioned on it is ``Beta(3,1)`` (mean ``3/4``, variance
+``x`` conditioned on it is ``beta(3,1)`` (mean ``3/4``, variance
 ``3/80``). ProvSQL evaluates these by marginalising each independent
 partner variable analytically, leaving a one-dimensional integral over
 the shared variable -- exact for the uniform case and high-accuracy

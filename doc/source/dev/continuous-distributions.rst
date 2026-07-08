@@ -27,8 +27,8 @@ its interaction with the moment evaluators is covered in
 ``gate_rv``
     Random-variable leaf. The gate's ``extra`` blob carries the
     distribution as text, ``<family>:<p1>[,<p2>]`` – e.g.
-    ``"normal:2.5,0.5"`` for ``Normal(2.5, 0.5)`` or
-    ``"exponential:2"`` for ``Exponential(2)``. The family token
+    ``"normal:2.5,0.5"`` for ``normal(2.5, 0.5)`` or
+    ``"exponential:2"`` for ``exponential(2)``. The family token
     is *not* an enum: it is resolved at parse time against the
     distribution registry (see *The Distribution Class Hierarchy*
     below), so the set of valid blobs grows with the registered
@@ -105,7 +105,7 @@ each family is one self-contained implementation file
 ``weibull.cpp``, ``pareto.cpp``, ``beta.cpp``, ``logistic.cpp``,
 ``inverse_gamma.cpp``, ``inverse_gaussian.cpp``) sharing only the
 internal header ``DistributionCommon.h``. The ``logistic`` family
-is the location-scale ``Logistic(μ, s)`` whose CDF is the logistic
+is the location-scale ``logistic(μ, s)`` whose CDF is the logistic
 sigmoid :math:`F(x) = \sigma((x - \mu)/s)` and whose quantile is
 the logit :math:`\mu + s\,\ln(p/(1-p))`, so it realises the
 logit-link selection noise exactly; its mean is affine in ``μ``
@@ -266,7 +266,7 @@ Constructors are PL/pgSQL functions in
 shape routes through :sqlfunc:`erlang`), :sqlfunc:`lognormal`,
 :sqlfunc:`weibull` (``k = 1`` routes through
 :sqlfunc:`exponential`), :sqlfunc:`pareto`, :sqlfunc:`beta`
-(``Beta(1,1)`` routes through :sqlfunc:`uniform`),
+(``beta(1,1)`` routes through :sqlfunc:`uniform`),
 :sqlfunc:`logistic`,
 :sqlfunc:`categorical`, :sqlfunc:`mixture` (two overloads), and
 :sqlfunc:`as_random` (three numeric overloads via the
@@ -770,7 +770,7 @@ circuit, it runs:
    collects a PLUS gate's wires as ``a·Z + b`` terms and consults
    the sum-closure registry (any linear combination of
    independent normals and constants into a single normal; a
-   same-rate Exponential / Erlang chain into ``Erlang(Σk, λ)``;
+   same-rate Exponential / Erlang chain into ``erlang(Σk, λ)``;
    same-rate Gammas into a Gamma); ``try_product_closure``
    consults the product registry (independent lognormals fold in
    log space); ``try_transform_closure`` consults the transform
