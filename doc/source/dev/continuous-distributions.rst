@@ -267,6 +267,7 @@ shape routes through :sqlfunc:`erlang`), :sqlfunc:`lognormal`,
 :sqlfunc:`weibull` (``k = 1`` routes through
 :sqlfunc:`exponential`), :sqlfunc:`pareto`, :sqlfunc:`beta`
 (``Beta(1,1)`` routes through :sqlfunc:`uniform`),
+:sqlfunc:`logistic`,
 :sqlfunc:`categorical`, :sqlfunc:`mixture` (two overloads), and
 :sqlfunc:`as_random` (three numeric overloads via the
 ``double precision`` form). They validate parameters and mint

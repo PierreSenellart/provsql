@@ -250,6 +250,28 @@ INTERNAL_FUNCTIONS = {
     'removed', 'dependencies', 'available', 'endpoint',
     # GUC referenced by name in the registry doc comments.
     'fallback_compiler',
+    # Internal 1.11.0 machinery surfaced once the SQL Doxygen filter stopped
+    # truncating provenance_gate: aggregate sfunc/ffunc, RV statistic /
+    # percentile impls, operator implementations, conditioning / observation
+    # internals, UCQ joint / Mobius helpers.  Not callable user API.
+    'agg_avg_moment_exact', 'agg_case', 'agg_conditioned_target', 'agg_defined_event',
+    'agg_gate_value', 'agg_guard_holds', 'agg_token_cond', 'agg_token_cond_predicate',
+    'agg_token_op_boolean', 'agg_token_op_uuid', 'agg_token_to_random_variable', 'and_agg_sfunc',
+    'boolean_op_boolean', 'cond_predicate', 'corr_rv_ffunc', 'covar_pop_rv_ffunc',
+    'covar_samp_rv_ffunc', 'evidence_as_observation', 'mobius_compile_stats', 'mobius_or_null',
+    'observe_atoms', 'percentile_cont_rv_ffunc', 'percentile_cont_rv_sfunc', 'predicate_cond_predicate',
+    'provenance_mapping_registry', 'random_variable_cond', 'random_variable_cond_predicate', 'random_variable_op_boolean',
+    'random_variable_op_uuid', 'reachability_compile_stats', 'reachability_evaluate', 'regular_indicator',
+    'rv_aggregate_indicator', 'rv_conditioned_prov', 'rv_conditioned_target', 'rv_corr_impl',
+    'rv_covar_pop_impl', 'rv_covar_samp_impl', 'rv_entropy', 'rv_kl',
+    'rv_mutual_information', 'rv_parametric1', 'rv_parametric2', 'rv_percentile_impl',
+    'rv_percentile_impl_ffunc', 'rv_percentile_impl_sfunc', 'rv_percentile_make', 'rv_percentile_state',
+    'rv_stat1_impl_sfunc', 'rv_stat1_sfunc', 'rv_stat2_impl_sfunc', 'rv_stat2_sfunc',
+    'rv_stat_covar_pop_token', 'rv_stat_sqrt_token', 'rv_stat_sum_tokens', 'rv_stat_var_pop_token',
+    'rv_stat_var_samp_token', 'rv_stddev_pop_impl', 'rv_stddev_samp_impl', 'rv_sum_or_null',
+    'rv_sum_or_null_ffunc', 'stddev_pop_rv_ffunc', 'stddev_samp_rv_ffunc', 'ucq_joint_compile_stats',
+    'ucq_joint_compile_stats_tracked', 'ucq_joint_gather', 'ucq_joint_materialize_tracked', 'ucq_joint_provenance_answer',
+    'ucq_mobius_compile_stats', 'ucq_mobius_materialize_tracked', 'ucq_mobius_provenance_answer',
 }
 
 if DOXYGEN_SQL_HTML.exists():
