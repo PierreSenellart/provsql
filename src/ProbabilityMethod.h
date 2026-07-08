@@ -234,6 +234,8 @@ dDNNF makeDDAuto(BooleanCircuit &c, gate_t g);
  * for an @c Exact request with @p mc_fallback -- @c monteCarloRV at the
  * @c provsql.rv_mc_samples budget (the moment path's residual comparators).
  *
+ * @param gc      the circuit holding the sub-circuit to evaluate.
+ * @param root    the gate whose probability is computed.
  * @param method  "" / "default" / "exact" runs the auto-chooser; any other
  *   name dispatches that method @c byName.
  * @param args    method arguments (tolerance strings, compiler names).

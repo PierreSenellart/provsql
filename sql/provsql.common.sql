@@ -5758,7 +5758,7 @@ $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 /**
  * @brief Identity-parameterised per-row wrap for an RV-returning aggregate.
  *
- * Generalises the two-argument @ref rv_aggregate_semimod: the else-branch
+ * Generalises the two-argument @ref rv_aggregate_semimod.  The else-branch
  * (a row's contribution when its provenance is false) is
  * @c as_random(@p identity) instead of the additive @c as_random(0).  The
  * planner-hook rewrite bakes each aggregate's own identity element into the
@@ -7733,6 +7733,8 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
  * @p x and @p y share leaves, with the whole-circuit Monte-Carlo net
  * inherited for free.
  *
+ * @param x    the first random variable.
+ * @param y    the second random variable.
  * @param prov optional conditioning event (a provenance @c uuid); the
  *   default @c gate_one() is the unconditional covariance.  Conditioning is
  *   applied consistently to the product and to each factor, giving
@@ -7748,12 +7750,13 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
 /**
  * @brief Standard deviation σ(X) = √Var(X) of a random variable.
  *
- * A thin numeric readout over @ref variance: the square root is taken on
+ * A thin numeric readout over @ref variance.  The square root is taken on
  * the scalar @c double result, so no RV-level @c sqrt is involved and this
  * carries no dependency on RV function application (@c pow / @c sqrt).
  * @c NULL propagates from a @c NULL input; the order-2 central moment is
  * non-negative by construction, so the root is always real.
  *
+ * @param x    the random variable.
  * @param prov optional conditioning event; default @c gate_one()
  *   (unconditional).
  */
@@ -7771,6 +7774,8 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
  * constant variable, for which correlation is undefined) rather than
  * raising a division-by-zero.
  *
+ * @param x    the first random variable.
+ * @param y    the second random variable.
  * @param prov optional conditioning event; default @c gate_one()
  *   (unconditional).
  */
@@ -7798,6 +7803,7 @@ CREATE OR REPLACE FUNCTION rv_entropy(token uuid, prov uuid)
  * back to a Monte Carlo histogram plug-in estimate at the
  * @c provsql.rv_mc_samples budget.
  *
+ * @param x    the random variable.
  * @param prov optional conditioning event; default @c gate_one()
  *   (unconditional).
  */

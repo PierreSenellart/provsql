@@ -25,6 +25,8 @@ namespace provsql {
  * The single source of truth for the resolution pipeline.  Two flags carry
  * the (principled) differences between the two callers:
  *
+ * @param gc        the circuit whose comparators are resolved in place.
+ * @param root      the gate below which comparators are rewritten.
  * @param simplify  run @c runHybridSimplifier, which folds
  *   @c gate_arith-over-@c gate_rv into closed-form distributions.  Sound for
  *   the probability path (the circuit collapses to Boolean, so a folded

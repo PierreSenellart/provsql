@@ -8,7 +8,7 @@
  * @c DistributionFamily descriptor each implementation file registers --
  * there is no family enum anywhere.  A @c Distribution is a transient
  * view constructed from a parsed @c DistributionSpec via
- * @ref makeDistribution; the on-disk @c extra text encoding stores the
+ * @ref provsql::makeDistribution; the on-disk @c extra text encoding stores the
  * family's name token.
  *
  * Adding a family is one new self-registering implementation file under
@@ -249,7 +249,7 @@ public:
 std::unique_ptr<Distribution> makeDistribution(const DistributionSpec &spec);
 
 /**
- * @name DistributionRegistry — family descriptor table
+ * @name DistributionRegistry – family descriptor table
  *
  * Family implementations self-register their descriptor at static
  * initialisation: the on-disk name token (the part before the colon in a
@@ -335,7 +335,7 @@ std::vector<const DistributionFamily *> listDistributionFamilies();
 double numericQuantile(const Distribution &d, double p);
 
 /**
- * @name ComparatorRuleRegistry — pairwise §B.2 closed forms
+ * @name ComparatorRuleRegistry – pairwise §B.2 closed forms
  *
  * Closed-form @f$P(X < Y)@f$ for an ordered pair of independent RV
  * families.  On continuous distributions every ordered comparator reduces
@@ -343,7 +343,7 @@ double numericQuantile(const Distribution &d, double p);
  * pair alone (no operator in the key).  Pairwise behaviour deliberately
  * stays out of the @c Distribution interface: family files self-register
  * their rules at static initialisation through
- * @ref ComparatorRuleRegistrar, so adding a family touches no existing
+ * @ref provsql::ComparatorRuleRegistrar, so adding a family touches no existing
  * file, and a missing rule is not an error -- the driver falls back to a
  * family-agnostic quadrature.
  */
@@ -391,13 +391,13 @@ double comparatorPairLess(const Distribution &X, const Distribution &Y);
 ///@}
 
 /**
- * @name ClosureRuleRegistry — pairwise family-closure folds on PLUS
+ * @name ClosureRuleRegistry – pairwise family-closure folds on PLUS
  *
  * Closed-form folds of a sum of independent scalar terms into a single
  * distribution (Normal + Normal, same-rate Exponential / Erlang chains).
  * Like the comparator rules, pairwise behaviour stays out of the
  * @c Distribution interface: family files self-register at static
- * initialisation via @ref ClosureRuleRegistrar, keyed on the (ordered)
+ * initialisation via @ref provsql::ClosureRuleRegistrar, keyed on the (ordered)
  * pair of families that may meet in the sum, and a registry miss simply
  * means the sum stays unfolded (Monte Carlo handles it).
  *
