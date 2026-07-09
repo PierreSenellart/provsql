@@ -128,11 +128,12 @@ BEGIN
   -- Binomial(10, p) = 7: Beta(2+7, 3+3) = Beta(9, 6), mean 9/15 = 0.6.
   ev := observe(binomial(10, p), 7);
   RAISE NOTICE 'beta_binomial_mean: %', expected(p, ev);
-  -- Beta-binomial predictive C(10,7)·B(9,6)/B(2,3), exact via lgamma.
+  -- Beta-binomial predictive C(10,7)·B(9,6)/B(2,3), exact via factorials:
+  -- B(9,6) = 8!·5!/14!, B(2,3) = 1!·2!/4!.
   RAISE NOTICE 'beta_binomial_evidence_exact: %',
     (abs(evidence(ev)
-         - 120.0 * exp(lgamma(9.0) + lgamma(6.0) - lgamma(15.0)
-                       - (lgamma(2.0) + lgamma(3.0) - lgamma(5.0)))) < 1e-15);
+         - 120.0 * (40320.0 * 120.0 / 87178291200.0)
+                 / (1.0 * 2.0 / 24.0)) < 1e-15);
 
   -- Geometric (trials on {1, 2, ...}), d = 4: Beta(2+1, 3+3) = Beta(3, 6).
   ev := observe(geometric(p), 4);
