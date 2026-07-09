@@ -46,12 +46,9 @@ implicitly conditioned on the FD holding). A general denial constraint –
 conditioning on an arbitrary no-violation event, the full MarkoViews
 `¬W`.
 
-**The expressivity is shipped.** The violation event `W` is an ordinary
-query (`SELECT provenance() FROM <violation join> GROUP BY ()`, building
-`⋁ (a ∧ b)` with no manual gates), and the prefix `!` operator
-(`provenance_not`) negates it, so `Q | !W` conditions a query on the
-constraint holding – the MarkoViews `P(Q | ¬W)` reduction, demonstrated
-end to end in case study 8.
+The expressivity itself is covered: `Q | !W` over an ordinary violation
+query conditions a query on the constraint holding – the MarkoViews
+`P(Q | ¬W)` reduction, demonstrated end to end in case study 8.
 
 The one residual is an *optimisation*, not an expressivity gap: for the
 `boolean_provenance` linear path to apply to a conditioned-on-constraint
@@ -77,23 +74,24 @@ Deferred until a persisted posterior must actually be composed onward.
 
 `shapley` / `banzhaf` on a conditioned token are currently *refused*
 with a clear error (`src/shapley.cpp`: Shapley / Banzhaf are linear over
-the semiring, conditioning is not). "Which observation most shifted my
-posterior moment?" is connecting code over a `gate_conditioned` root
-plus the existing Shapley machinery and is unique to a provenance-aware
-system, but the conditional value *definition* is the research question
-to settle first. (Borders `continuous_distributions.md` §E.1.)
+the semiring, conditioning is not). The `observe`-evidence counterpart
+(`provsql.shapley_observe`, attribution of observation atoms to a
+posterior moment) exists; the open item is the analogue over a
+`gate_conditioned` root with *Boolean* evidence, where the conditional
+value *definition* is the research question to settle first.
 
 ### Soft / weighted conditioning (explicitly not a priority)
 
-Hard conditioning only, by decision. A finite-weight MarkoView /
-likelihood-weighted gate `gate_conditioned(X, event, weight)` reweights
-worlds rather than restricting them (the move from rejection sampling to
-importance / likelihood weighting: makes rare-evidence conditioning
-tractable instead of fragile, and gives soft evidence – "this
-observation is 90% reliable" – a first-class form). Hard conditioning is
-the `weight → ∞` (indicator-likelihood) limit. It shares the gate type
-and the evaluator hooks, so it would land as a parameter on the same
-gate, not a new mechanism. When it lands, weights leaving `[0, 1]` make
+Hard conditioning only for discrete evidence, by decision. A
+finite-weight MarkoView gate `gate_conditioned(X, event, weight)`
+reweights worlds rather than restricting them, giving soft evidence –
+"this observation is 90% reliable" – a first-class form. Hard
+conditioning is the `weight → ∞` (indicator-likelihood) limit. The
+continuous side already has the weighted-evidence machinery (the
+`observe` / importance-weighting engine, see
+[`latent-variables.md`](latent-variables.md)); the open item is the
+finite-weight surface for *Boolean* evidence, landing as a parameter on
+the same gate, not a new mechanism. When it lands, weights leaving `[0, 1]` make
 the synthetic intermediate probabilities negative, so the
 `probability_evaluate` dispatcher must route such inputs **exact-only**
 and refuse `monte_carlo` / `independent` (the discrete twin of the
@@ -101,10 +99,9 @@ continuous rare-evidence rejection-sampling fragility).
 
 ## Priorities
 
-1. **Arbitrary denial constraints beyond keys.** The one open item with
-   a concrete surface (a `condition(token, no_violation_event)` helper
-   building `¬W`, with the safety analysis re-run on the augmented
-   circuit). Workload-gated.
+1. **Arbitrary denial constraints beyond keys.** Re-run the safety /
+   inversion-freedom analysis on the constraint-augmented circuit so the
+   linear Boolean-provenance path applies. Workload-gated.
 2. **Materialised re-based discrete posterior (MayBMS-style).** Deferred
    until a stored posterior must re-enter join / union.
 3. **Shapley over evidence.** Research track; connecting code over the
@@ -115,20 +112,17 @@ continuous rare-evidence rejection-sampling fragility).
 
 ## Implementation observations
 
-- The discrete *evaluation* needed no new machinery: `P(Q | C) =
-  P(Q ∧ C) / P(C)` is two existing evaluations and a division. The
-  `gate_conditioned` gate exists for the `uuid` carrier not to evaluate a
-  one-shot `P(Q|C)` but so the operator's result is a storable,
-  re-conditionable token; it is the **terminal** kind, non-composable
-  with the semiring gates. The thing to resist is a *composable* discrete
-  conditioning gate that would bury the global `P(C)` normalization under
-  `plus` / `times`.
+- `gate_conditioned` on the `uuid` carrier is the **terminal** kind,
+  non-composable with the semiring gates. The thing to resist is a
+  *composable* discrete conditioning gate that would bury the global
+  `P(C)` normalization under `plus` / `times`; the re-based posterior
+  above is the sound route to composability.
 - Conditioning is the canonical circuit operation that *defeats*
   independence shortcuts: any optimisation keyed on `FootprintCache`
   disjointness must treat `cond(X, A)` as widening the footprint to
   `footprint(X) ∪ footprint(A)`. The regression test belongs with the
-  feature (and shipped with it), not after it. This is the same coupling
-  MarkoViews exploits deliberately.
+  feature, not after it. This is the same coupling MarkoViews exploits
+  deliberately.
 - Negative / out-of-`[0,1]` input probabilities (soft conditioning, or a
   MarkoViews-style augmented circuit) are sound for the exact methods and
   only for them; the dispatcher must refuse sampling-based methods on

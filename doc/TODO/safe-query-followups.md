@@ -1,28 +1,20 @@
 # Safe-Query Follow-Ups
 
-Open items surfaced during the safe-query / `provsql.boolean_provenance`
-discussion that are deferred but worth coming back to. The work that has
-already landed is described in the *Safe-Query Rewriter* section of
+Open items bordering the safe-query / `provsql.boolean_provenance`
+machinery, deferred but worth coming back to. The shipped machinery is
+described in the *Safe-Query Rewriter* section of
 `doc/source/dev/query-rewriting.rst`.
 
 This file is organised by **priority**: Tier 2 (reusable prerequisites
-and certificates) and Tier 3 (workload-gated). The HAVING-clause
-optimisation layers (Tier 1) and the base FD-aware rewriter extensions
-have all landed.
+and certificates) and Tier 3 (workload-gated).
 
 ## Tier 2 – reusable prerequisites and certificates
 
-- **Inversion-free `UCQ(OBDD)` extensions.**  The inversion-free path is
-  implemented (the `UCQ(OBDD)` rung of Jha & Suciu, ICDT 2011: a detector
-  plus an in-process structured-d-DNNF builder over the Prop. 4.5
-  query-derived order, with non-integer key columns, deterministic-relation
-  filters, SPJ / nested view flattening, and `UNION` / `UNION ALL` of
-  inversion-free branches -- including overlapping arms, certified jointly
-  per Thm 4.2 via the synthetic merged SPJ query that
-  `build_inversion_free_union_ctx` in `src/provsql.c` hands to the
-  detector); see the *Inversion-Free UCQ(OBDD) Path* section of
-  :cfile:`doc/source/dev/probability-evaluation.rst`.  Two extensions to
-  that class remain open, in increasing difficulty:
+- **Inversion-free `UCQ(OBDD)` extensions.**  The implemented
+  inversion-free path (the `UCQ(OBDD)` rung of Jha & Suciu, ICDT 2011;
+  see the *Inversion-Free UCQ(OBDD) Path* section of
+  `doc/source/dev/probability-evaluation.rst`) admits two extensions,
+  in increasing difficulty:
   - **Functional dependencies do not fit this builder.**  The canonical
     FD-tractable queries (the H-query `R(x),S(x,y),T(y)` under a PK on `S`,
     the two-PK triangle) have no single root class, which the detector and
@@ -43,90 +35,49 @@ have all landed.
 These widen coverage or reach harder query classes, but each is
 explicitly deferred until a real workload motivates it.
 
-- **Discrete `random_variable` extensions.**  `random_variable` today
-  carries continuous distributions (Normal, Uniform, Exponential, Erlang)
-  plus Categorical and Mixture, and the HAVING evaluators assume the `m_i`
-  extracted from `gate_semimod` is a deterministic integer.  Extending
-  `gate_rv` (and the surrounding analytic evaluators) to discrete
-  distributions (Poisson, Binomial, Geometric, Multinomial) opens a
-  parallel optimisation track for HAVING when the *aggregated value* itself
-  is uncertain:
-  - Sum of independent Poissons is Poisson with summed rate; closed-form
-    CDF on the surrounding `gate_cmp`.  Same shape as the existing
-    Normal-sum closed form in `Expectation.cpp`.
-  - COUNT(*) over Bernoulli presence-tokens is Poisson-binomial; same
-    machinery as the landed `CountCmpEvaluator`, now generic to "the count
-    of present rows is itself a random variable" rather than
-    Boolean-specific.  (The count-PMF machinery itself has since landed in
-    `src/AggMarginalEvaluator.cpp` (`countPMF`); the remaining gap here is
-    discrete distributions in `gate_rv`, not the count convolution.)
-  - General convolution of independent discrete RVs: O(C × N) DP for the
-    surrounding cmp.
+- **Discrete `random_variable` sum machinery.**  The discrete families
+  (Poisson, Binomial, Geometric, Negative binomial) exist as
+  self-registering `Distribution` subclasses under `src/distributions/`,
+  and the family-agnostic analytic evaluator consumes their CDFs; what
+  is missing is the *sum* structure that would give HAVING over an
+  uncertain aggregated value closed forms:
+  - **Sum-closure rules for discrete families** (sum of independent
+    Poissons is Poisson with summed rate; fixed-`p` Binomial sums
+    close), landing in the existing sum-closure registry -- no discrete
+    family registers a `ClosureRule` today.  (The same registry item as
+    [`continuous_distributions.md`](continuous_distributions.md) §A.1.)
+  - **General convolution of independent discrete RVs**: an O(C × N) DP
+    for the surrounding cmp; the sum closure currently bails on
+    categorical / mixture children (`src/HybridEvaluator.cpp`).
 
-  **Integration point.**  An analogue of `runAnalyticEvaluator`
-  (`src/AnalyticEvaluator.{h,cpp}`) that walks `gate_cmp(gate_agg(
-  gate_arith over gate_rv children), gate_value)`, computes the analytical
-  CDF, and replaces the cmp with a Bernoulli `gate_input` leaf.
-  Probability-specific (the `gate_input` carries a numeric probability,
-  semiringly meaningless to symbolic semirings); lives in
-  `probability_evaluate.cpp` before `getBooleanCircuit`, the same slot as
-  the existing analytic / hybrid passes.
-
-  **Architectural fit.**  The extension stays inside the existing
-  intensional pipeline: new distribution variants in the `gate_rv` `extra`
-  blob, new closed-form CDF entries in the analytic evaluator, new
-  structural reductions in the HAVING pre-pass.  No new gate type; no change
-  to the circuit framework itself.  The MC fallback in `MonteCarloSampler`
-  already handles cases where the closed form does not apply.
-
-- **Möbius / inclusion-exclusion via Monet 2019's construction.**
-  Beyond hierarchical CQs, the Dalvi-Suciu dichotomy puts many
-  non-hierarchical UCQs in PTIME, with the canonical algorithm
-  being lattice-walking inclusion-exclusion which is naturally
-  extensional.  Monet (arXiv:1912.11864) closes the architectural
-  gap by giving a PTIME construction of a deterministic-decomposable
-  circuit, using negation in place of IE; the output drops
-  straight into our intensional pipeline (`gate_monus` already
-  means `AND(a, NOT(b))` under Boolean, so no new gate type
-  required).
-  *Deferred; the architectural mismatch is no longer the blocker
-  but practicality is open.  The construction is PTIME but the
-  polynomial degree depends on query structure, not linear in
-  database size; the emitted circuit may be much larger than the
-  natural lineage; the safety detector is meaningfully more
-  expensive than the hierarchical one; the paper covers a strict
-  subset of safe non-hierarchical UCQs (the inversion-free
-  fragment); and no implementation has appeared in the six years
-  since the paper, so there is no empirical evidence for the
-  practical regime.  The honest cost-benefit is that for any safe
-  non-hierarchical workload we encounter today, handing the
-  natural lineage to d4 is likely as fast or faster than
-  constructing-then-evaluating Monet's circuit.  Revisit only if
-  a benchmark surfaces where d4 visibly chokes on a safe
-  non-hierarchical UCQ and Monet's construction plausibly helps.*
-  Superseded as the route to safe non-hierarchical UCQs by the
-  **extensional** Möbius-inversion route, which shipped in 1.10.0
-  (`src/mobius_evaluate.cpp`, the `gate_mobius` signed top
-  combination, the `mobius` method, `provsql.mobius` GUC): a Möbius
-  certificate at plan time and a compile-at-execution circuit of
-  certified-independent islands.  The intensional Monet construction
-  above stays deferred on the same grounds.
-  *One Möbius item remains open (research-flavoured, may never be
-  needed): "Increment 3", ranking / shattering for queries whose
-  reduced form still carries a within-disjunct self-join.  The
-  compiler currently declines those cases soundly rather than
-  ranking them.*
+- **Möbius "Increment 3": ranking / shattering** (research-flavoured,
+  may never be needed).  The extensional Möbius-inversion route to safe
+  non-hierarchical UCQs (`src/mobius_evaluate.cpp`, the `gate_mobius`
+  signed top combination, the `mobius` method, `provsql.mobius` GUC)
+  soundly declines queries whose reduced form still carries a
+  within-disjunct self-join; handling them needs ranking / shattering
+  in the compiler.
+  *Rejected alternative, recorded so it is not re-attempted:* the
+  **intensional** Monet 2019 construction (arXiv:1912.11864, a PTIME
+  deterministic-decomposable circuit using negation in place of
+  inclusion-exclusion, which would drop into the existing pipeline
+  since `gate_monus` already means `AND(a, NOT(b))` under Boolean)
+  stays deferred on cost-benefit grounds: the polynomial degree depends
+  on query structure, the emitted circuit may be much larger than the
+  natural lineage, the safety detector is meaningfully more expensive
+  than the hierarchical one, the paper covers only the inversion-free
+  fragment, and no implementation has appeared since the paper -- for
+  any safe non-hierarchical workload encountered today, handing the
+  natural lineage to d4 is likely as fast or faster.  Revisit only if a
+  benchmark surfaces where d4 visibly chokes on a safe non-hierarchical
+  UCQ and Monet's construction plausibly helps.
 
 ### Hierarchical-detector follow-ups (rewriter coverage)
 
-The FD-aware safe-query rewriter currently lands six extensions on top
-of the base hierarchical-CQ detector: constant-selection elimination,
-PK / NOT-NULL UNIQUE FDs from the catalog, deterministic-relation
-transparency, PK-unifiable self-joins, FD closure on the union-find
-(detector-only), and disjoint-constant self-joins.  See
-:cfile:`src/safe_query.c` and the dev-doc *Safe-Query Rewriter* section
-for the implementation.  The items below were surfaced during that work
-and deliberately deferred for a future slice.
+The FD-aware safe-query rewriter's implemented extensions are described
+in `src/safe_query.c` and the dev-doc *Safe-Query Rewriter* section.
+The items below were surfaced during that work and deliberately
+deferred for a future slice.
 
 - **FD-induced nested rewrite (function/free split).**  The current
   FD closure accepts every query whose FD-reduced atom-sets are
@@ -165,7 +116,8 @@ and deliberately deferred for a future slice.
   the implemented inversion-free path, see *Inversion-free `UCQ(OBDD)`
   extensions* in Tier 2.)  Resolving the read-once
   question for these shapes requires either Monet-style intensional
-  dDNNF construction (see the *Möbius / Monet* entry above) or proper
+  dDNNF construction (see the rejected-alternative record in the
+  *Möbius* entry above) or proper
   handling of the full Dalvi & Suciu 2012 JACM dichotomy for UCQs
   (which subsumes self-joins implicitly via the lattice-of-valuations
   criterion).  *Deferred: both directions are larger projects than
@@ -180,20 +132,17 @@ and deliberately deferred for a future slice.
   every world.  *Deferred; revisit if a real workload makes the case.*
 
 - **FD chases through views and CTAS-derived relations.**  The PK-FD
-  pass is currently restricted to FROM lists of base relations.
-  Extending it through views and `CREATE TABLE AS` -derived tables
-  was blocked on the TID/BID-propagation work that landed in the
-  `safe_queries` branch (view descent in the safe-query rewriter,
-  CTAS lineage hook, ancestry-based disjointness gate,
+  pass is restricted to FROM lists of base relations.  The
+  TID/BID-propagation prerequisites (view descent in the safe-query
+  rewriter, CTAS lineage hook, ancestry-based disjointness gate,
   independent-TID join inference, BID block-key preservation under
-  projection / GROUP BY).  The propagation prerequisites are now in
-  place; the remaining work is to teach the PK-FD pass itself to
-  follow the lineage rather than stopping at view / CTAS-derived
-  RTEs.  *Still deferred; the CTAS-correlation trap on
-  deterministic atoms (`CREATE TABLE foo AS SELECT * FROM
-  <tracked>` without `add_provenance`) is the most visible
-  symptom, but in practice it's covered by the CTAS hook seeding
-  ancestry on lineage-bearing CTAS now.*
+  projection / GROUP BY) are in place; the remaining work is to teach
+  the PK-FD pass itself to follow the lineage rather than stopping at
+  view / CTAS-derived RTEs.  *Deferred; the CTAS-correlation trap on
+  deterministic atoms (`CREATE TABLE foo AS SELECT * FROM <tracked>`
+  without `add_provenance`) is the most visible symptom, but in
+  practice it is covered by the CTAS hook seeding ancestry on
+  lineage-bearing CTAS.*
 
 - **Data-safe plans.**  FDs that hold on the *instance* but not in the
   schema, per Jha, Olteanu & Suciu (EDBT 2010).  Larger project; the
@@ -204,11 +153,10 @@ and deliberately deferred for a future slice.
 
 ### TID / BID propagation follow-ups
 
-The TID / BID propagation roadmap shipped in full on the
-`safe_queries` branch with one exception, deliberately deferred for
-the tradeoff described below.
+One item from the TID / BID propagation roadmap remains, deliberately
+deferred for the tradeoff described below.
 
-- **`UNION ALL` of compatible BID legs (was "Slice E").**  The
+- **`UNION ALL` of compatible BID legs.**  The
   classifier reports OPAQUE on a `UNION ALL` whose legs are BID
   under the same block-key column at the same target-list position,
   and the CTAS lineage hook propagates that as no metadata recorded
@@ -236,7 +184,7 @@ the tradeoff described below.
      synthesis is needed.  The CTAS hook could be taught to
      recognise such patterns, possibly via the same
      `safe_is_var_const_equality`-style detector the
-     disjoint-constant self-join pass in :cfile:`src/safe_query.c`
+     disjoint-constant self-join pass in `src/safe_query.c`
      uses.  ~100-150 LOC, no schema impact.
   2. **Opt-in synthesis via a GUC**:
      `provsql.synthesize_union_leg_id = off` by default; `on`
@@ -248,9 +196,8 @@ the tradeoff described below.
 
 ### Joint-width hardening (deferred)
 
-The joint-width UCQ compiler shipped end to end (M1-M4); two hardening
-items were deliberately left out of the first version and survive here
-as the only open notes from the retired joint-width specs:
+Two hardening items deliberately left out of the joint-width UCQ
+compiler's first version:
 
 - **Binary-wire accumulation instead of ternary gate cliques.** The
   current encoding emits ternary gate cliques along the elimination

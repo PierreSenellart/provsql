@@ -27,13 +27,12 @@ here would re-use the rewriter's hierarchical analysis
 (`find_hierarchical_root_atoms`, `src/safe_query.c`); an unsafe skeleton is
 hazardous (no FPTRAS, warn and fall back to additive MC).
 
-**ProvSQL is now well-positioned for this.** The marginal-vector engine
-(`AggMarginalEvaluator.cpp`) *is* the forward pass of Alg 5.2.1, and the world
-generator is literally that recursion run in reverse (piece 2 below); the
+**The prerequisites are in place.** The marginal-vector engine
+(`AggMarginalEvaluator.cpp`) *is* the forward pass of Alg 5.2.1, the world
+generator is literally that recursion run in reverse (piece 2 below), and the
 hardest descent node – the Cartesian-product `⊗` split of a value-carrying
-branch-spanning SUM – needs the per-factor **joint `(sum, count)` distribution**,
-which is exactly the `sumCountPMF` built for the branch-spanning work.
-So the one prerequisite that used to be missing is now in place.
+branch-spanning SUM – draws against the per-factor **joint `(sum, count)`
+distribution** that `sumCountPMF` provides.
 
 **But the gap it closes is narrow.** The rounding FPTRAS only beats the existing
 DKLR sampler on *safe-skeleton SUM with large-magnitude incommensurate values*
@@ -85,17 +84,18 @@ Approximate coverage of these exists (item 1's sampling); the open work is the
 remaining **exact** (PTIME) coverage.  The laminar / cross-product engine covers
 COUNT / SUM / MIN / MAX / AVG at arbitrary hierarchical depth; the residuals:
 
-- **Branch-spanning SUM** – the separable shapes (additively separable
-  `sum(b+c)` / `sum(2b-c+1)`, multiplicatively separable `sum(b*c)`) are now
-  exact in `src/AggMarginalEvaluator.cpp`. Remaining: genuinely coupled values
+- **Branch-spanning SUM** – with the separable shapes (additively separable
+  `sum(b+c)` / `sum(2b-c+1)`, multiplicatively separable `sum(b*c)`) exact in
+  `src/AggMarginalEvaluator.cpp`, the residue is genuinely coupled values
   that are neither (`sum(b*c+b+c)`, a rank-≥2 weight tensor; may be `#P`-hard,
   self-gates back to enumeration today).
 - **UNION/EXCEPT over a join that re-uses a base tuple** – `(R⋈S) UNION (R⋈T)` →
-  `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. The *independent* case (each
-  contributor's footprint private) is now exact (`contributorExactMarginal`,
-  pinned by `test/sql/having_union.sql`). Remaining: a base tuple shared *across*
-  a group's contributors, which couples them – the safe-query / read-once-rewriter
-  problem, `#P`-hard in general.
+  `(r∧s)⊕(r∧t)`, non-read-once on the shared `r`. With the *independent* case
+  (each contributor's footprint private) exact (`contributorExactMarginal`),
+  the residue is a base tuple shared *across* a group's contributors, which
+  couples them – the safe-query / read-once-rewriter problem (the same
+  shared-tuple hardness as the self-join entry in
+  [`safe-query-followups.md`](safe-query-followups.md)), `#P`-hard in general.
 
 ## 3. Method-catalog follow-ups
 

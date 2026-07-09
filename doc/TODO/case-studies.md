@@ -3,12 +3,7 @@
 The feature-coverage matrix in the rendered user guide
 (`doc/source/user/casestudies.rst`, section *Feature coverage matrix*)
 lists user-guide features that are not exercised by the tutorial or any
-of the eight existing case studies. This file tracks the remaining
-gaps. CS6 (City Air-Quality Sensor Network) covers the
-continuous-distribution surface end-to-end, CS7 (Peer-Review Assignment
-and Knowledge Compilation) the knowledge-compilation and safe-query
-surface, and CS8 (ProvSQL as a Probability Calculator) the conditioning
-surface.
+of the eight existing case studies. This file tracks the remaining gaps.
 
 ## Out of scope
 
@@ -34,8 +29,7 @@ case-study real estate:
 
 ### Future case study (UDFs / aggregate joins / `choose`)
 
-A new case study to be written. (The CS8 slot is now taken by *ProvSQL
-as a Probability Calculator*, so this would be CS9.) Targets:
+A new case study (CS9) to be written. Targets:
 
 - **UDFs**: provenance propagation through user-defined functions
   (blocked: not yet supported).
@@ -46,7 +40,7 @@ as a Probability Calculator*, so this would be CS9.) Targets:
   candidate outputs, `choose` models the alternatives as mutually
   exclusive in the provenance circuit (analogous to `repair_key`'s role
   in CS5, but for derived rather than ingested data). The `choose`
-  aggregate itself has shipped; the case study is still unwritten.
+  aggregate exists; only the case study is missing.
 
 ## Priorities
 

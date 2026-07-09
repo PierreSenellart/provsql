@@ -14,9 +14,8 @@ version streams, and CLI flags.
 ### New inspection modes
 
 - **"Undo last DML" button** (CS4 §7) that calls `SELECT undo(...)`
-  server-side, a leftover from the Temporal mode design. Kept out of
-  the main modes for now since `update_provenance` is not yet mature
-  enough to expose prominently.
+  server-side. Kept out of the main modes for now since
+  `update_provenance` is not yet mature enough to expose prominently.
 
 ### Larger features
 
@@ -27,7 +26,11 @@ version streams, and CLI flags.
   column.
 - **Multi-user demo deployment**: per-browser-session isolation in
   a single Docker container so a conference audience can each hit
-  `localhost:8000` against a hosted instance.
+  `localhost:8000` against a hosted instance. The Playground already
+  gives an audience zero-install isolated instances; this item is
+  only worth doing for a demo that needs the *native* extension
+  (external knowledge compilers, multi-backend features the WASM
+  build lacks).
 
 ### Notebook-mode polish
 

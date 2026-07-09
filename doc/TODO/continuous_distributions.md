@@ -6,19 +6,13 @@ a focus on **applicability** (does it solve a real user problem?) and
 **user interface** (does it fit the existing `provsql.<name>(...)` /
 infix-operator grammar?).
 
-Features already shipped are not listed here; the shipped surface
-(parametric families Normal / Uniform / Exponential / Erlang / Gamma /
-Log-normal / Weibull / Pareto / Beta plus the categorical-backed discrete
-constructors; arithmetic, `pow` / `ln` / `exp` / `sqrt` transforms with
-domain guards; RV-vs-RV analytical comparisons; comparison events and the
-`probability(<predicate>)` grammar; order-statistic and SQL-standard
-statistic aggregates including `percentile_cont`; the quantile / moment /
-support / entropy / KL / mutual-information readouts; the GMM constructor
-and empirical loaders; the conditioning gate; the per-family
-`src/distributions/` class hierarchy with its pairwise / closure /
-transform registries) is documented in the user manual and in
-`CLAUDE.md`. Conditioning follow-ups are tracked separately in
-[`conditioning.md`](conditioning.md).
+Features already shipped are not listed here; the shipped surface is
+documented in the user manual
+(`doc/source/user/continuous-distributions.rst`) and in `CLAUDE.md`.
+Conditioning follow-ups are tracked in
+[`conditioning.md`](conditioning.md), latent-variable inference
+follow-ups in [`latent-variables.md`](latent-variables.md) and
+[`conjugate-posteriors.md`](conjugate-posteriors.md).
 
 The prioritisation uses four labels:
 
@@ -42,10 +36,9 @@ The prioritisation uses four labels:
 | 5 | Correlation / copulas | Structural extensions | Architectural |
 | 6 | Stochastic processes | Structural extensions | Architectural |
 | 7 | Causal interventions (`do`) | Structural extensions | Research |
-| 8 | Shapley over RV-valued payoffs | Provenance × probability | Research |
-| 9 | Provenance of sampled values | Provenance × probability | Research |
-| 10 | Sampling under constraints with witness extraction | Provenance × probability | Research |
-| 11 | Probabilistic-circuit subsystem (distribution-valued gates) | Structural extensions | Research (low priority) |
+| 8 | Provenance of sampled values | Provenance × probability | Research |
+| 9 | Sampling under constraints with witness extraction | Provenance × probability | Research |
+| 10 | Probabilistic-circuit subsystem (distribution-valued gates) | Structural extensions | Research (low priority) |
 
 ---
 
@@ -158,23 +151,27 @@ simplifier-engineering cost the continuous setting demands.
 
 ### A.1 Native analytic discrete families – **[Mid-term]**
 
-Poisson, Binomial, Geometric, Hypergeometric, and Negative binomial ship
-as convenience constructors that enumerate a log-space pmf into a
-truncated `categorical` (`categorical_from_log_pmf`). That covers the
-textbook workload exactly over the enumerated support, but three things
-only a native `gate_rv` family (one self-registering file under
-`src/distributions/`) can provide remain open:
+Native self-registering `Distribution` families now exist for Poisson,
+Binomial, Geometric, and Negative binomial (`src/distributions/`), but
+only for *latent* (RV-parameterised) leaves; the literal-parameter
+constructors still enumerate a log-space pmf into a truncated
+`categorical` (`categorical_from_log_pmf`), which covers the textbook
+workload exactly over the enumerated support. Open:
 
-- **Unbounded / huge-parameter support.** The categorical constructors
-  cap the outcome count (e.g. `poisson` raises above λ ≈ 170 000 and
-  suggests the Normal approximation); a native family carries the exact
-  law at any parameter.
+- **Literal parameters through the native families.** The categorical
+  constructors cap the outcome count (e.g. `poisson` raises above
+  λ ≈ 170 000 and suggests the Normal approximation); routing literal
+  parameters through the native family carries the exact law at any
+  parameter.
 - **Sum-closure folds at simplifier time.** Poisson sums close,
   fixed-`p` Binomial sums close; as categoricals these are convolutions
   that grow the support instead of folding to one gate. The closure
-  rules land in the existing sum-closure registry.
-- **Memorylessness for Geometric**, the discrete cousin of the
-  Exponential truncation path.
+  rules land in the existing sum-closure registry (no discrete family
+  registers one today).
+- **Memorylessness for Geometric** (truncated sampling), the discrete
+  cousin of the Exponential truncation path.
+- **A Hypergeometric family**: blocked on widening the two-parameter
+  `Distribution` ABI (see [`latent-variables.md`](latent-variables.md)).
 
 **Applicability.** Counts (arrivals, events per interval), success
 counts in fixed trials, waiting-times-in-trials – at the scales where
@@ -476,28 +473,7 @@ node buys nothing. Hence: low priority, and most naturally a by-product of
 Capabilities that exploit the provenance circuit specifically. Almost
 no other system can offer them.
 
-### E.1 Shapley over RV-valued payoffs – **[Research]**
-
-The existing Shapley/Banzhaf machinery over Boolean provenance
-generalises directly to "contribution of evidence atom *e* to posterior
-moment *m*". With the conditioning gate (shipped; see
-[`conditioning.md`](conditioning.md)) plus the existing Shapley
-infrastructure, this is mostly *connecting code*, not new theory.
-
-**Applicability.** Explainable Bayesian inference in a relational
-setting – "which observations most shifted my posterior?" This is a
-publishable angle that builds on existing ProvSQL infrastructure rather
-than competing with PPL systems.
-
-**UI.**
-```sql
-SELECT evidence_id,
-       provsql.shapley(posterior_risk, evidence_id, payoff => 'expected')
-FROM posteriors, evidence_atoms
-WHERE patient_id = 1;
-```
-
-### E.2 Provenance of sampled values – **[Research]**
+### E.1 Provenance of sampled values – **[Research]**
 
 When MC sampling fires, can a user ask "which gates' draws produced this
 sample"? Currently opaque. A per-sample provenance trace exposed via
@@ -515,9 +491,9 @@ FROM provsql.rv_sample_with_witness(loss_distribution, n => 1000)
 WHERE value > 1e6;     -- inspect the gates that drove the tail samples
 ```
 
-### E.3 Sampling under constraints with witness extraction – **[Research]**
+### E.2 Sampling under constraints with witness extraction – **[Research]**
 
-A close relative of E.2. Rejection sampling already happens for
+A close relative of E.1. Rejection sampling already happens for
 conditioning. The bool gate that *accepted* a sample is itself a
 provenance object – returning it alongside the sample lets users inspect
 the rejection witness, which is sometimes more informative than the
@@ -577,9 +553,9 @@ architectural risk:
    simultaneously. Largest expressivity gain in the entire roadmap.
 4. **Second architectural step: stochastic processes (§D.2).** Builds
    on §D.1.
-5. **Research track in parallel.** Causal interventions (§D.3), Shapley
-   over RV-valued payoffs (§E.1), and provenance of sampled values
-   (§E.2, with §E.3 alongside) can be explored independently of (2)–(4),
-   and would each plausibly anchor a paper. The probabilistic-circuit
-   subsystem (§D.4) is lowest priority and most naturally falls out of
-   §§A.2/D.1 rather than being pursued on its own.
+5. **Research track in parallel.** Causal interventions (§D.3) and
+   provenance of sampled values (§E.1, with §E.2 alongside) can be
+   explored independently of (2)–(4), and would each plausibly anchor a
+   paper. The probabilistic-circuit subsystem (§D.4) is lowest priority
+   and most naturally falls out of §§A.2/D.1 rather than being pursued
+   on its own.

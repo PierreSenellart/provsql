@@ -9,18 +9,10 @@ what is **still open**.
 
 A scalar (`EXPR_SUBLINK`) subquery **nested inside a larger expression** is not
 a direct target-list entry nor a direct operand of a WHERE comparison, so the
-base decorrelation does not reach it.
-
-**Target-list arithmetic: done.** A sublink nested in target-list arithmetic
-(`SELECT R.a, (SELECT Q.x WHERE Q.k=R.k) + 1 FROM R`) is now decorrelated like a
-direct entry: `decorrelate_scalar_sublinks` detects the sublink under a chain of
-agg_token-tracked arithmetic (`+ - * /`, unary `-`) and casts
-(`oj_tl_sublink_in_arith`, peeling exactly what `peel_agg_casts` does), runs the
-same `R ⟕ Q` / `choose()` / `count(Q.key)≤1` decorrelation, and replaces the
-`SubLink` *in place* with `choose(Q.x)` (`oj_replace_sublink_mut`).  The shipped
-native `agg_token` arithmetic then carries Q's provenance through the surrounding
-operators as a `gate_arith` token, so the value is tracked rather than the old
-outer-only passthrough.  Covered by Part 22 of `test/sql/scalar_subquery.sql`.
+base decorrelation does not reach it.  The target-list-arithmetic case
+(`SELECT R.a, (SELECT Q.x WHERE Q.k=R.k) + 1 FROM R`) is handled
+(`oj_tl_sublink_in_arith` / `oj_replace_sublink_mut` in `src/provsql.c`,
+Part 22 of `test/sql/scalar_subquery.sql`).
 
 **Still open:**
 

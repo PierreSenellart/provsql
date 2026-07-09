@@ -117,23 +117,22 @@ project, plausibly publishable.
 **Gap.** ProvSQL attaches uncertainty at **tuple granularity** (one UUID token
 per tuple) plus per-value `random_variable` columns whose correlation arises
 only through *shared circuit structure*. It has no schema-level way to declare a
-**joint distribution over several uncertain columns** of one tuple. Orion 2.0
-declares this directly (`DEPENDENT (xloc, yloc)` → a single stored joint pdf),
-and unifies tuple-existence with value uncertainty via "partial pdfs"
-(a distribution integrating to x<1 encodes existence probability 1−x). MCDB
-handles arbitrary joint distributions over discrete/continuous attributes.
+**joint distribution over several uncertain columns** of one tuple. The
+circuit-side machinery (multivariate Normal, copulas, stochastic processes) is
+already the [`continuous_distributions.md`](continuous_distributions.md)
+§A.2 / §D.1 / §D.2 roadmap; the *systems-side* pieces unique to this candidate
+are:
+
+- a schema-level declaration in the Orion 2.0 style (`DEPENDENT (xloc, yloc)` →
+  a single stored joint pdf over the columns, feeding a shared RV root);
+- Orion's "partial pdfs" unifying tuple-existence with value uncertainty (a
+  distribution integrating to x<1 encodes existence probability 1−x);
+- Orion's *physical-design* apparatus (uncertain indexes, uncertainty-aware
+  selectivity/costing) — a separate, large, and lower-priority sub-gap.
 
 **Use cases.** Sensor fusion (a 2-D Gaussian over (x,y) location), correlated
 measurement errors, any model where two uncertain fields of one record are not
 independent — currently only expressible by hand-building shared gates.
-
-**Complexity — High, but partly planned.** `continuous_distributions.md` already
-lists **multivariate Normal, copulas, and stochastic processes** as roadmap
-items; this is the same territory viewed from the systems side. The clean design
-is a `gate_mvnormal` / `gate_copula` leaf plus a schema-level "these columns
-share one RV root" declaration, feeding the existing analytic + MC evaluators.
-Orion's *physical-design* apparatus (uncertain indexes, uncertainty-aware
-selectivity/costing) is a separate, large, and lower-priority sub-gap.
 
 #### 4. FPRAS for bounded-hypertree-width self-join-free CQ
 

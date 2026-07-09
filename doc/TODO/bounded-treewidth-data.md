@@ -36,10 +36,10 @@ the **recursive fragment** is the one place the gap is intrinsic and `|I|`-drive
 (reachability on a bounded-treewidth grid grows circuit treewidth with `|I|`
 even at constant `tw(I)`).
 
-This is a different axis from the deferred item in
-[`safe-query-followups.md`](safe-query-followups.md) ("other tractable CQ
-subclasses"), which is treewidth of the *query hypergraph*. Here it is *data*
-treewidth, which changes *what circuit we construct*.
+This is a different axis from the query-side tractability classes of
+[`safe-query-followups.md`](safe-query-followups.md), which concern the *query*
+(hypergraph) structure. Here it is *data* treewidth, which changes *what
+circuit we construct*.
 
 ## Out of scope
 
@@ -127,7 +127,7 @@ builder lacks are **restrict the state to the active bag** (forget = drop) and
 **cap the summary** -- e.g. the in-star "at least two" becomes a counter capped
 at 2.
 
-Integration cost has dropped now that Route C exists: the automaton run only has
+With Route C in place, the integration cost is modest: the automaton run only has
 to *mark its gates* (deterministic state ORs, decomposable transition ANDs) and
 materialise through the same content-addressed channel; the whole evaluation and
 artefact surface (chooser, `independent`, `interpret-as-dd`, Shapley) then picks
@@ -148,9 +148,9 @@ MSO-to-automaton step was done by hand (no implemented compiler) and "treewidth
 quickly becomes a limiting factor".
 
 **Reuse map** (for Route A). As-is or with a thin adapter: min-fill elimination
-and the `Graph` mutating ops -- but `Graph`'s only constructor takes a
-`BooleanCircuit` (`src/Graph.h:48`), so a builder over a relational instance's
-Gaifman graph is needed (Route C added one for node/edge sets); the
+and the `Graph` mutating ops -- Route C added a node/edge-set builder
+(`src/Graph.h`), but a builder over a relational instance's
+Gaifman graph is still needed; the
 `TreeDecomposition` bag-tree representation and PACE reader;
 `dDNNFTreeDecompositionBuilder` and the probability path (consume a
 bounded-treewidth `BooleanCircuit` unchanged). Genuinely new: a finite-alphabet
