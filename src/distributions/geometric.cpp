@@ -114,6 +114,34 @@ const DistributionFamily &GeometricDistribution::family() const
   return geometric_family;
 }
 
+/* Beta-Geometric conjugacy, in the family's TRIALS convention (support
+ * {1, 2, ...}, pmf p(1−p)^{d−1}): one observation of d trials updates a
+ * Beta(α, β) prior to Beta(α+1, β+d−1).  The predictive is
+ * m(d) = B(α+1, β+d−1) / B(α, β). */
+bool geometricPConjugateUpdate(double &alpha, double &beta,
+                               const DistributionTemplate &, double d)
+{
+  if (!(alpha > 0.0) || !(beta > 0.0)) return false;
+  const double r = std::nearbyint(d);
+  if (std::fabs(d - r) > 1e-9 || r < 1.0) return false;
+  alpha += 1.0;
+  beta += r - 1.0;
+  return true;
+}
+
+double geometricPLogPredictive(double alpha, double beta,
+                               const DistributionTemplate &, double d)
+{
+  if (!(alpha > 0.0) || !(beta > 0.0)) return kNaN;
+  const double r = std::nearbyint(d);
+  if (std::fabs(d - r) > 1e-9 || r < 1.0) return kNaN;
+  return lbeta(alpha + 1.0, beta + r - 1.0) - lbeta(alpha, beta);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar geometric_p_conjugate(
+  "geometric", 0, "beta",
+  {&geometricPConjugateUpdate, &geometricPLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar geometric_family_registrar(
   geometric_family);
 

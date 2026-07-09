@@ -32,6 +32,12 @@ inline double binomial_coeff(unsigned n, unsigned k)
   return r;
 }
 
+/// ln B(a, b) = lnΓ(a) + lnΓ(b) − lnΓ(a+b), for a, b > 0.
+inline double lbeta(double a, double b)
+{
+  return std::lgamma(a) + std::lgamma(b) - std::lgamma(a + b);
+}
+
 /// Standard normal pdf φ(z) = exp(-z²/2)/√(2π).
 inline double phi(double z)
 {

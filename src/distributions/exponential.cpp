@@ -202,6 +202,31 @@ double exponentialPairLess(const Distribution &X, const Distribution &Y)
 [[maybe_unused]] const ComparatorRuleRegistrar exponential_less_rule(
   "exponential", "exponential", &exponentialPairLess);
 
+/* Gamma-Exponential conjugacy: an Exponential(θ) observation of a
+ * Gamma(k, λ) prior on the rate updates to Gamma(k+1, λ+d).  The
+ * predictive is the Lomax (Pareto type II) density
+ * m(d) = k λ^k / (λ + d)^{k+1}. */
+bool exponentialRateConjugateUpdate(double &k, double &lambda,
+                                    const DistributionTemplate &, double d)
+{
+  if (!(k > 0.0) || !(lambda > 0.0) || !(d >= 0.0)) return false;
+  k += 1.0;
+  lambda += d;
+  return true;
+}
+
+double exponentialRateLogPredictive(double k, double lambda,
+                                    const DistributionTemplate &, double d)
+{
+  if (!(k > 0.0) || !(lambda > 0.0) || !(d >= 0.0)) return kNaN;
+  return std::log(k) + k * std::log(lambda)
+       - (k + 1.0) * std::log(lambda + d);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar exponential_rate_conjugate(
+  "exponential", 0, "gamma",
+  {&exponentialRateConjugateUpdate, &exponentialRateLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar exponential_family_registrar(
   exponential_family);
 

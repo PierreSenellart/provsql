@@ -143,6 +143,37 @@ gammaSumRule(const std::vector<ClosureTerm> &terms)
 [[maybe_unused]] const ClosureRuleRegistrar gamma_sum_rule(
   "gamma", "gamma", &gammaSumRule);
 
+/* Gamma-Gamma conjugacy: a Gamma(k₀, θ) observation with the latent in
+ * the RATE slot (k₀ a known literal shape) updates a Gamma(k, λ) prior
+ * to Gamma(k+k₀, λ+d).  The predictive is the compound-gamma
+ * (scaled beta-prime) density
+ * m(d) = Γ(k+k₀)/(Γ(k)Γ(k₀)) · λ^k d^{k₀−1} / (λ+d)^{k+k₀}. */
+bool gammaRateConjugateUpdate(double &k, double &lambda,
+                              const DistributionTemplate &lik, double d)
+{
+  const double k0 = lik.p1.literal;
+  if (!(k > 0.0) || !(lambda > 0.0) || !(k0 > 0.0) || !(d > 0.0))
+    return false;
+  k += k0;
+  lambda += d;
+  return true;
+}
+
+double gammaRateLogPredictive(double k, double lambda,
+                              const DistributionTemplate &lik, double d)
+{
+  const double k0 = lik.p1.literal;
+  if (!(k > 0.0) || !(lambda > 0.0) || !(k0 > 0.0) || !(d > 0.0))
+    return kNaN;
+  return std::lgamma(k + k0) - std::lgamma(k) - std::lgamma(k0)
+       + k * std::log(lambda) + (k0 - 1.0) * std::log(d)
+       - (k + k0) * std::log(lambda + d);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar gamma_rate_conjugate(
+  "gamma", 1, "gamma",
+  {&gammaRateConjugateUpdate, &gammaRateLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar gamma_family_registrar(
   gamma_family);
 

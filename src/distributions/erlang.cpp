@@ -150,6 +150,38 @@ erlangSumRule(const std::vector<ClosureTerm> &terms)
   {"erlang",      "erlang",      &erlangSumRule},
 };
 
+/* Gamma-Erlang conjugacy: the integer-shape case of the Gamma-Gamma
+ * rate rule (gamma.cpp) -- an Erlang(k₀, θ) observation with the latent
+ * in the rate slot updates a Gamma(k, λ) prior to Gamma(k+k₀, λ+d),
+ * with the same compound-gamma predictive.  Guards the integer shape
+ * the family's own pdf requires (a non-integer k₀ makes the Erlang
+ * likelihood undefined, so declining matches the sampler's NaN). */
+bool erlangRateConjugateUpdate(double &k, double &lambda,
+                               const DistributionTemplate &lik, double d)
+{
+  const double k0 = lik.p1.literal;
+  if (k0 < 1.0 || k0 != std::floor(k0)) return false;
+  if (!(k > 0.0) || !(lambda > 0.0) || !(d > 0.0)) return false;
+  k += k0;
+  lambda += d;
+  return true;
+}
+
+double erlangRateLogPredictive(double k, double lambda,
+                               const DistributionTemplate &lik, double d)
+{
+  const double k0 = lik.p1.literal;
+  if (k0 < 1.0 || k0 != std::floor(k0)) return kNaN;
+  if (!(k > 0.0) || !(lambda > 0.0) || !(d > 0.0)) return kNaN;
+  return std::lgamma(k + k0) - std::lgamma(k) - std::lgamma(k0)
+       + k * std::log(lambda) + (k0 - 1.0) * std::log(d)
+       - (k + k0) * std::log(lambda + d);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar erlang_rate_conjugate(
+  "erlang", 1, "gamma",
+  {&erlangRateConjugateUpdate, &erlangRateLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar erlang_family_registrar(
   erlang_family);
 

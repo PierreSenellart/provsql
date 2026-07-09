@@ -520,6 +520,82 @@ std::unique_ptr<Distribution> closePlusTerms(
 
 ///@}
 
+/**
+ * @name ConjugateRuleRegistry – exact conjugate-prior posterior updates
+ *
+ * One-observation Bayesian updates for conjugate prior/likelihood pairs:
+ * the exact posterior of a latent, wired into one parameter slot of an
+ * observed leaf, stays in the prior's family with updated parameters.
+ * The conjugate-posterior recogniser (@c ConjugatePosterior.cpp) folds
+ * these rules over an @c and_agg evidence conjunction of @c gate_observe
+ * atoms, replacing likelihood-weighting importance sampling with the
+ * closed form where a rule chain covers every observation.
+ *
+ * Like the comparator / closure registries, the rules stay out of the
+ * @c Distribution interface: the likelihood family's implementation file
+ * self-registers its rule(s) at static initialisation, keyed by name
+ * tokens (no cross-file static-init order dependence), and a registry
+ * miss is a silent decline -- the caller falls back to importance
+ * sampling unchanged.
+ */
+///@{
+
+/**
+ * @brief The conjugate update for one observation of a given likelihood
+ *        family against the running posterior (= prior) family.
+ *
+ * Both callbacks receive the observed leaf's parsed template @c lik (its
+ * non-wired slots carry the resolved literal parameters, e.g. the known
+ * @c σ of a @c normal(θ,σ) likelihood) and the observed datum.
+ */
+struct ConjugateRule {
+  /**
+   * @brief Update the running posterior parameters @p q1 / @p q2 (a
+   *        distribution of the prior's family) by one observation.
+   *        Returns @c false to decline (guard failure: an invalid
+   *        literal slot, a datum outside the likelihood's support...),
+   *        which declines the whole recognition.
+   */
+  bool (*update)(double &q1, double &q2,
+                 const DistributionTemplate &lik, double datum);
+  /**
+   * @brief Log predictive density @f$\ln m(d \mid q_1, q_2)@f$ of the
+   *        datum under the running posterior BEFORE the update; summed
+   *        over the fold it is the exact log marginal likelihood behind
+   *        @c provsql.evidence.  NaN (or a null pointer) = unavailable,
+   *        so @c evidence() keeps its Monte Carlo path.
+   */
+  double (*log_predictive)(double q1, double q2,
+                           const DistributionTemplate &lik, double datum);
+};
+
+/**
+ * @brief Register the conjugate update for observations of
+ *        @p likelihood_family whose parameter @p wired_param (0 = p1,
+ *        1 = p2) is the latent, against a prior of @p prior_family.
+ */
+void registerConjugateRule(const char *likelihood_family, int wired_param,
+                           const char *prior_family,
+                           const ConjugateRule &rule);
+
+/**
+ * @brief Look up the conjugate rule for (likelihood family, wired
+ *        parameter position, prior family); @c nullptr on a miss.
+ */
+const ConjugateRule *lookupConjugateRule(const std::string &likelihood_family,
+                                         int wired_param,
+                                         const std::string &prior_family);
+
+/** @brief Static-initialisation helper: one per registered pair. */
+struct ConjugateRuleRegistrar {
+  ConjugateRuleRegistrar(const char *likelihood_family, int wired_param,
+                         const char *prior_family, const ConjugateRule &rule) {
+    registerConjugateRule(likelihood_family, wired_param, prior_family, rule);
+  }
+};
+
+///@}
+
 }  // namespace provsql
 
 #endif  // PROVSQL_DISTRIBUTION_H

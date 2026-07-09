@@ -194,6 +194,37 @@ double uniformPairLess(const Distribution &X, const Distribution &Y)
 [[maybe_unused]] const ComparatorRuleRegistrar uniform_less_rule(
   "uniform", "uniform", &uniformPairLess);
 
+/* Pareto-Uniform conjugacy: a Uniform(0, θ) observation with the latent
+ * in the UPPER-bound slot updates a Pareto(xₘ, α) prior on θ to
+ * Pareto(max(xₘ, d), α+1).  Exact only for a zero lower bound: the
+ * likelihood kernel 1/(θ − a₀)·1{θ ≥ d} is Pareto-shaped in θ itself
+ * only when a₀ = 0, so a nonzero literal lower bound declines to
+ * importance sampling.  The predictive is
+ * m(d) = α xₘ^α / ((α+1) max(xₘ, d)^{α+1}). */
+bool uniformUpperConjugateUpdate(double &xm, double &alpha,
+                                 const DistributionTemplate &lik, double d)
+{
+  if (lik.p1.literal != 0.0) return false;
+  if (!(xm > 0.0) || !(alpha > 0.0) || !(d >= 0.0)) return false;
+  if (d > xm) xm = d;
+  alpha += 1.0;
+  return true;
+}
+
+double uniformUpperLogPredictive(double xm, double alpha,
+                                 const DistributionTemplate &lik, double d)
+{
+  if (lik.p1.literal != 0.0) return kNaN;
+  if (!(xm > 0.0) || !(alpha > 0.0) || !(d >= 0.0)) return kNaN;
+  const double m = std::max(xm, d);
+  return std::log(alpha) + alpha * std::log(xm)
+       - std::log(alpha + 1.0) - (alpha + 1.0) * std::log(m);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar uniform_upper_conjugate(
+  "uniform", 1, "pareto",
+  {&uniformUpperConjugateUpdate, &uniformUpperLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar uniform_family_registrar(
   uniform_family);
 

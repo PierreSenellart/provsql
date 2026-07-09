@@ -251,6 +251,36 @@ double normalPairLess(const Distribution &X, const Distribution &Y)
 [[maybe_unused]] const ComparatorRuleRegistrar normal_less_rule(
   "normal", "normal", &normalPairLess);
 
+/* Normal-Normal conjugacy: a Normal(θ, σ) observation with the latent in
+ * the mean slot updates a Normal(μ, σ₀) prior by precision weighting:
+ * τ ← 1/σ₀² + 1/σ², μ ← (μ/σ₀² + d/σ²)/τ.  The predictive of the datum
+ * before the update is Normal(μ, √(σ₀² + σ²)) -- the marginal of
+ * d = θ + noise. */
+bool normalMeanConjugateUpdate(double &mu, double &sigma,
+                               const DistributionTemplate &lik, double d)
+{
+  const double s = lik.p2.literal;
+  if (!(s > 0.0) || !(sigma > 0.0)) return false;
+  const double tau0 = 1.0 / (sigma * sigma);
+  const double taul = 1.0 / (s * s);
+  mu = (tau0 * mu + taul * d) / (tau0 + taul);
+  sigma = std::sqrt(1.0 / (tau0 + taul));
+  return true;
+}
+
+double normalMeanLogPredictive(double mu, double sigma,
+                               const DistributionTemplate &lik, double d)
+{
+  const double s = lik.p2.literal;
+  if (!(s > 0.0) || !(sigma > 0.0)) return kNaN;
+  const double v = sigma * sigma + s * s;
+  return -0.5 * ((d - mu) * (d - mu) / v + std::log(2.0 * M_PI * v));
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar normal_mean_conjugate(
+  "normal", 0, "normal",
+  {&normalMeanConjugateUpdate, &normalMeanLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar normal_family_registrar(
   normal_family);
 

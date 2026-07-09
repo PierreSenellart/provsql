@@ -132,6 +132,42 @@ const DistributionFamily &BinomialDistribution::family() const
   return binomial_family;
 }
 
+/* Beta-Binomial conjugacy: a Binomial(n, θ) observation with the latent
+ * in the success-probability slot (n a known literal) updates a
+ * Beta(α, β) prior to Beta(α+d, β+n−d).  The predictive is the
+ * beta-binomial pmf m(d) = C(n,d) B(α+d, β+n−d) / B(α, β).  The count
+ * must be an integer in [0, n] under the same 1e-9 rounding tolerance
+ * as the family pmf. */
+bool binomialPConjugateUpdate(double &alpha, double &beta,
+                              const DistributionTemplate &lik, double d)
+{
+  const double n = lik.p1.literal;
+  if (!(alpha > 0.0) || !(beta > 0.0)) return false;
+  if (n < 1.0 || n != std::floor(n)) return false;
+  const double r = std::nearbyint(d);
+  if (std::fabs(d - r) > 1e-9 || r < 0.0 || r > n) return false;
+  alpha += r;
+  beta += n - r;
+  return true;
+}
+
+double binomialPLogPredictive(double alpha, double beta,
+                              const DistributionTemplate &lik, double d)
+{
+  const double n = lik.p1.literal;
+  if (!(alpha > 0.0) || !(beta > 0.0)) return kNaN;
+  if (n < 1.0 || n != std::floor(n)) return kNaN;
+  const double r = std::nearbyint(d);
+  if (std::fabs(d - r) > 1e-9 || r < 0.0 || r > n) return kNaN;
+  return std::lgamma(n + 1.0) - std::lgamma(r + 1.0)
+       - std::lgamma(n - r + 1.0)
+       + lbeta(alpha + r, beta + n - r) - lbeta(alpha, beta);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar binomial_p_conjugate(
+  "binomial", 1, "beta",
+  {&binomialPConjugateUpdate, &binomialPLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar binomial_family_registrar(
   binomial_family);
 

@@ -1034,9 +1034,63 @@ through the same evidence conjunction. All of :sqlfunc:`expected`,
 :sqlfunc:`variance`, :sqlfunc:`moment`, :sqlfunc:`quantile` and
 :sqlfunc:`rv_sample` gain posteriors with no surface change; the posterior
 predictive is ``rv_sample`` on a fresh leaf that reuses the latent.
-Conjugate models are recovered numerically to MC tolerance -- Normal-Normal,
-Gamma-Poisson (a ``poisson(R)`` leaf), Beta-Binomial (a ``binomial(n, p)``
-leaf).
+
+**Exact conjugate posteriors.** When the model matches a classic
+conjugate prior/likelihood pair -- the latent is a bare distribution
+leaf, and every observation binds a datum to a leaf with the latent in
+one parameter slot (the other slots literal) -- the posterior is
+computed in **closed form**: exact, deterministic, and available with
+Monte Carlo disabled (``provsql.rv_mc_samples = 0``). The queries are
+unchanged; the recognised shapes simply stop being MC estimates. The
+recognised pairs:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Observed leaf (latent slot)
+     - Prior
+     - Posterior
+   * - ``normal(θ, σ)`` (mean)
+     - ``normal``
+     - Normal (precision-weighted)
+   * - ``lognormal(θ, σ)`` (log-scale location)
+     - ``normal``
+     - Normal (update at ``ln d``)
+   * - ``exponential(θ)`` (rate)
+     - ``gamma``
+     - Gamma
+   * - ``poisson(θ)`` (rate)
+     - ``gamma``
+     - Gamma
+   * - ``gamma(k₀, θ)`` / ``erlang(k₀, θ)`` (rate)
+     - ``gamma``
+     - Gamma
+   * - ``binomial(n, θ)`` (success probability)
+     - ``beta``
+     - Beta
+   * - ``geometric(θ)`` (success probability)
+     - ``beta``
+     - Beta
+   * - ``negative_binomial(r, θ)`` (success probability)
+     - ``beta``
+     - Beta
+   * - ``uniform(0, θ)`` (upper bound)
+     - ``pareto``
+     - Pareto
+   * - ``pareto(xₘ, θ)`` (tail shape)
+     - ``gamma``
+     - Gamma
+
+Because each observation updates the *running* posterior, mixed
+likelihoods sharing one conjugate prior compose: a Gamma-prior rate
+observed through interleaved Poisson counts and Exponential gaps stays
+Gamma. The closed form computes exactly what importance sampling
+estimates (the same posterior measure), so recognition changes the
+method, never the answer. Any other shape -- a latent reaching the leaf
+through arithmetic, a prior on a Normal's ``σ`` slot, a Boolean event
+conjoined with the observations, several latents coupled by one evidence
+set -- keeps the importance-sampling path and its diagnostics below.
 
 .. note::
 

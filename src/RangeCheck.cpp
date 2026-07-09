@@ -16,6 +16,7 @@
 #include "Aggregation.h"        // ComparisonOperator + cmpOpFromOid
 #include "AnalyticEvaluator.h"  // cdfAt for shape_mass under truncation
 #include "CircuitFromMMap.h"    // getGenericCircuit
+#include "ConjugatePosterior.h" // conjugatePosterior (observe-evidence shapes)
 #include "Expectation.h"        // lift_conditioning
 #include "RandomVariable.h"     // parse_distribution_spec
 #include "distributions/Distribution.h"       // makeDistribution -> per-family support()
@@ -1687,6 +1688,18 @@ matchClosedFormDistribution(const GenericCircuit &gc, gate_t root,
    * so the truncation logic (collectRvConstraints) is the single
    * source of truth across the closed-form-shape surface. */
   if (gc.getGateType(root) == gate_rv) {
+    /* Conjugate observe-evidence: the posterior is itself a bare
+     * distribution of the prior's family, so the shape is the
+     * (untruncated) posterior -- exact pdf/CDF for the histogram and
+     * curve renderers.  Declines to the truncation matcher on any
+     * mismatch (whose AND-conjunct walker treats a gate_observe as an
+     * uninterpretable factor and declines in turn). */
+    if (!event_trivial)
+      if (auto post = conjugatePosterior(gc, root, *event_root)) {
+        const DistSupport sup = makeDistribution(*post)->support();
+        return ClosedFormShape{
+          TruncatedSingleRv{*post, sup.lo, sup.hi, /*truncated=*/false}};
+      }
     auto m = matchTruncatedSingleRv(gc, root, event_root);
     if (!m) return std::nullopt;
     return ClosedFormShape{*m};

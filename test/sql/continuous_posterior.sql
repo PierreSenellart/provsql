@@ -35,8 +35,8 @@ BEGIN
   -- Posterior median ~ posterior mean for a (symmetric) Gaussian posterior.
   RAISE NOTICE 'normal_normal_median: %', (abs(quantile(mu, 0.5, ev) - 9.9668) < 0.15);
   -- Marginal likelihood P(data): closed form is the N(0, I + 100*11^T)
-  -- density at (8,10,12) = exp(-10.11203) = 4.058e-5.
-  RAISE NOTICE 'normal_normal_evidence: %', (abs(evidence(ev) / 4.058e-5 - 1.0) < 0.05);
+  -- density at (8,10,12) = 4.0723e-5.
+  RAISE NOTICE 'normal_normal_evidence: %', (abs(evidence(ev) / 4.0723e-5 - 1.0) < 0.05);
 END $$;
 
 -- ---------------------------------------------------------------------
@@ -114,7 +114,10 @@ END $$;
 -- weights; with the default warn fraction a WARNING is emitted (its counts
 -- depend on the RNG stream, so it is suppressed here to keep the expected
 -- output platform-independent -- the low-ESS path is still exercised, and
--- the posterior stays correct).
+-- the posterior stays correct).  The latent reaches the observed leaves
+-- through an arithmetic doubling so the conjugate recogniser declines and
+-- the evidence stays on the importance-sampling path this block tests:
+-- observations of 2·mu around 20 put mu's posterior at ~10.
 -- ---------------------------------------------------------------------
 
 SET provsql.ess_warn_fraction = 0.5;
@@ -125,12 +128,12 @@ DECLARE
   ev uuid;
   m double precision;
 BEGIN
-  SELECT and_agg(observe(normal(mu, 1), x)) INTO ev
+  SELECT and_agg(observe(normal(mu + mu, 1), x)) INTO ev
     FROM (VALUES (20.0::float8), (20.1), (19.9), (20.05), (19.95), (20.0)) AS t(x);
   PERFORM set_config('client_min_messages', 'error', true);   -- hide the WARNING
   m := expected(mu, ev);   -- degenerate ESS: emits (suppressed) low-ESS WARNING
   PERFORM set_config('client_min_messages', 'notice', true);
-  RAISE NOTICE 'ess_posterior_mean_ok: %', (abs(m - 20.0) < 0.5);
+  RAISE NOTICE 'ess_posterior_mean_ok: %', (abs(m - 10.0) < 0.25);
 END $$;
 
 -- ---------------------------------------------------------------------

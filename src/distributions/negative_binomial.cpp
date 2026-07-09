@@ -123,6 +123,40 @@ const DistributionFamily &NegativeBinomialDistribution::family() const
   return negative_binomial_family;
 }
 
+/* Beta-NegativeBinomial conjugacy, in the family's FAILURES convention
+ * (support {0, 1, ...}, pmf Γ(d+r)/(Γ(r) d!) p^r (1−p)^d): one
+ * observation of d failures before the r-th success (r a known literal)
+ * updates a Beta(α, β) prior to Beta(α+r, β+d).  The predictive is
+ * m(d) = Γ(d+r)/(Γ(r) d!) · B(α+r, β+d) / B(α, β). */
+bool negativeBinomialPConjugateUpdate(double &alpha, double &beta,
+                                      const DistributionTemplate &lik,
+                                      double d)
+{
+  const double r = lik.p1.literal;
+  if (!(alpha > 0.0) || !(beta > 0.0) || !(r > 0.0)) return false;
+  const double f = std::nearbyint(d);
+  if (std::fabs(d - f) > 1e-9 || f < 0.0) return false;
+  alpha += r;
+  beta += f;
+  return true;
+}
+
+double negativeBinomialPLogPredictive(double alpha, double beta,
+                                      const DistributionTemplate &lik,
+                                      double d)
+{
+  const double r = lik.p1.literal;
+  if (!(alpha > 0.0) || !(beta > 0.0) || !(r > 0.0)) return kNaN;
+  const double f = std::nearbyint(d);
+  if (std::fabs(d - f) > 1e-9 || f < 0.0) return kNaN;
+  return std::lgamma(f + r) - std::lgamma(r) - std::lgamma(f + 1.0)
+       + lbeta(alpha + r, beta + f) - lbeta(alpha, beta);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar negative_binomial_p_conjugate(
+  "negative_binomial", 1, "beta",
+  {&negativeBinomialPConjugateUpdate, &negativeBinomialPLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar
   negative_binomial_family_registrar(negative_binomial_family);
 

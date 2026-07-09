@@ -26,9 +26,6 @@
 
 namespace provsql {
 
-namespace {
-
-/// Seed an mt19937_64 from the provsql.monte_carlo_seed GUC.
 std::mt19937_64 seedRng()
 {
   std::mt19937_64 rng;
@@ -40,6 +37,8 @@ std::mt19937_64 seedRng()
   }
   return rng;
 }
+
+namespace {
 
 bool applyCmp(double l, ComparisonOperator op, double r)
 {

@@ -32,9 +32,11 @@ PG_FUNCTION_INFO_V1(rv_sample);
 }
 
 #include "CircuitFromMMap.h"
+#include "ConjugatePosterior.h"
 #include "Expectation.h"
 #include "GenericCircuit.h"
 #include "MonteCarloSampler.h"
+#include "distributions/Distribution.h"
 #include "provsql_utils_cpp.h"
 
 #include <algorithm>
@@ -79,6 +81,17 @@ rv_sample(PG_FUNCTION_ARGS)
     std::vector<double> samples;
     if (conditional) {
       const gate_t event = *event_opt;
+      /* Conjugate shape: the posterior is a first-class distribution, so
+       * draw n i.i.d. samples from it directly -- exact (no weighted-
+       * particle resampling), reproducible under a pinned seed, and
+       * available at rv_mc_samples = 0. */
+      if (auto post = provsql::conjugatePosterior(gc, root_gate, event)) {
+        auto dist = provsql::makeDistribution(*post);
+        auto rng = provsql::seedRng();
+        samples.reserve(n);
+        for (unsigned i = 0; i < n; ++i)
+          samples.push_back(dist->sample(rng));
+      } else
       /* Continuous-density evidence (latent-variable posterior): draw
        * latents from the prior, weight by the observations' densities,
        * and resample n posterior draws (SIR).  Posterior predictive is

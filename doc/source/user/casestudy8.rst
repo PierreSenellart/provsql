@@ -883,7 +883,7 @@ Three control readings come back for this batch -- ``23``, ``24``,
 unknown baseline ``mu``. Conditioning on an observed value uses the
 same ``|`` operator, now with an equality event: ``| (normal(mu, 2) =
 d)`` reads "given that this reading equalled ``d``" and contributes that
-observation's likelihood weight (equivalently, :sqlfunc:`observe`).
+observation's likelihood (equivalently, :sqlfunc:`observe`).
 :sqlfunc:`and_agg` folds the per-row events into one evidence token --
 surfaced here as ``ev.e`` -- which the moment readouts take as their
 conditioning argument, giving the posterior of ``mu`` given the data:
@@ -901,31 +901,40 @@ conditioning argument, giving the posterior of ``mu`` given the data:
     FROM g, ev;
 
 Every reading shares the one ``mu`` leaf -- the materialised CTE ``g``
-is a single node -- so the three evidence factors weight the same
-latent draw. Click the ``evidence_token`` UUID in :doc:`studio` to open
+is a single node -- so the three evidence factors condition the same
+latent. Click the ``evidence_token`` UUID in :doc:`studio` to open
 its circuit: the evidence is a conjunction of the three observations,
 each an ``=`` event reading the *same* ``mu`` leaf; that one shared node
 is what couples the readings into a single posterior rather than three
 independent updates. The prior mean is **20**; the posterior mean pulls
-toward the data at about **22.85**, and the posterior variance
-collapses to about **1.26**. That is exactly the conjugate
+toward the data at **22.8481**, and the posterior variance collapses to
+**1.2658** -- and these numbers are *exact*, not sampling estimates.
+This model is the conjugate
 `Normal-Normal <https://en.wikipedia.org/wiki/Conjugate_prior>`_
-update. Precision is the reciprocal of variance,
+shape, which ProvSQL recognises and computes in closed form:
+deterministic, to full float precision, and independent of any sample
+budget (it still answers under ``provsql.rv_mc_samples = 0``).
+Precision is the reciprocal of variance,
 :math:`\tau = 1/\sigma^2`, and precisions add. The prior variance
 :math:`\sigma_0^2 = 5^2 = 25` gives prior precision
 :math:`\tau_0 = 1/25`; each reading has variance :math:`2^2 = 4`,
 precision :math:`1/4`, so the three together add :math:`3/4`. The
 posterior precision is therefore :math:`\tau_0 + 3/4 = 1/25 + 3/4 =
 0.79`, and inverting it back gives the posterior variance
-:math:`1/0.79 = 1.266`. The posterior mean is the precision-weighted
-average :math:`(20/25 + 69/4)/0.79 = 22.85`. The
-sampler recovers the textbook answer because each ``| (normal(mu, 2) =
-d)`` reweights the prior draws of ``mu`` by the observation's density --
-importance sampling, no rejection. :sqlfunc:`evidence` returns the
-by-product of that weighting, the marginal likelihood :math:`P(\text{data})`
-(the mean prior-predictive weight), here about **0.00117** -- the same
-number the multivariate-Normal prior predictive gives in closed form,
-and the quantity you would compare across competing models.
+:math:`1/0.79 = 1.2658`. The posterior mean is the precision-weighted
+average :math:`(20/25 + 69/4)/0.79 = 22.8481`.
+:sqlfunc:`evidence` returns the marginal likelihood
+:math:`P(\text{data})`, here **0.001172** -- exactly the
+multivariate-Normal prior predictive, computed as the product of the
+sequential one-step predictives, and the quantity you would compare
+across competing models. The same closed-form recognition covers the
+other textbook pairs (a Gamma prior observed through Poisson counts or
+Exponential gaps, a Beta prior through Binomial counts…); a model
+*outside* the recognised table -- say the latent reaching the reading
+through arithmetic -- answers through the general engine instead: each
+``| (normal(mu, 2) = d)`` reweights the prior draws of ``mu`` by the
+observation's density (importance sampling, no rejection), recovering
+the same posterior to MC tolerance under the sample budget.
 
 Recap
 -----
@@ -944,9 +953,10 @@ layered onto the same surface the information-theoretic readouts
 Bayesian inference: a distribution parameter is itself a
 ``random_variable`` (a latent prior), and conditioning on the data with
 ``|`` -- the per-row events folded by :sqlfunc:`and_agg`, their marginal
-likelihood read by :sqlfunc:`evidence` -- updates it into the posterior
-by likelihood weighting, read straight back with the same
-:sqlfunc:`expected` / :sqlfunc:`variance` readouts. A few mechanics
+likelihood read by :sqlfunc:`evidence` -- updates it into the posterior,
+read straight back with the same :sqlfunc:`expected` /
+:sqlfunc:`variance` readouts: in closed form (exact) for the recognised
+conjugate shapes, by likelihood weighting otherwise. A few mechanics
 recurred:
 
 * Each model was built in the database. :sqlfunc:`add_provenance`

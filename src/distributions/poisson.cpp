@@ -113,6 +113,38 @@ const DistributionFamily &PoissonDistribution::family() const
   return poisson_family;
 }
 
+/* Gamma-Poisson conjugacy: a Poisson(θ) count observation of a
+ * Gamma(k, λ) prior on the rate updates to Gamma(k+d, λ+1).  The
+ * predictive is the negative-binomial pmf
+ * m(d) = Γ(k+d)/(Γ(k) d!) · λ^k / (λ+1)^{k+d}.  The datum must be a
+ * non-negative integer under the same 1e-9 rounding tolerance the
+ * family pmf applies, so the closed form fires exactly where the
+ * importance weight is positive. */
+bool poissonRateConjugateUpdate(double &k, double &lambda,
+                                const DistributionTemplate &, double d)
+{
+  if (!(k > 0.0) || !(lambda > 0.0)) return false;
+  const double r = std::nearbyint(d);
+  if (std::fabs(d - r) > 1e-9 || r < 0.0) return false;
+  k += r;
+  lambda += 1.0;
+  return true;
+}
+
+double poissonRateLogPredictive(double k, double lambda,
+                                const DistributionTemplate &, double d)
+{
+  if (!(k > 0.0) || !(lambda > 0.0)) return kNaN;
+  const double r = std::nearbyint(d);
+  if (std::fabs(d - r) > 1e-9 || r < 0.0) return kNaN;
+  return std::lgamma(k + r) - std::lgamma(k) - std::lgamma(r + 1.0)
+       + k * std::log(lambda) - (k + r) * std::log(lambda + 1.0);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar poisson_rate_conjugate(
+  "poisson", 0, "gamma",
+  {&poissonRateConjugateUpdate, &poissonRateLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar poisson_family_registrar(
   poisson_family);
 

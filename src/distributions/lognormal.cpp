@@ -220,6 +220,38 @@ std::unique_ptr<Distribution> lnOfLogNormal(const Distribution &x)
 [[maybe_unused]] const TransformRuleRegistrar ln_lognormal_rule(
   "ln", "lognormal", &lnOfLogNormal);
 
+/* LogNormal-Normal conjugacy: a LogNormal(θ, σ) observation with the
+ * latent in the log-scale location slot is a Normal(θ, σ) observation of
+ * ln d, so a Normal(μ, σ₀) prior updates by the same precision weighting.
+ * The predictive is LogNormal(μ, √(σ₀² + σ²)): the Normal predictive at
+ * ln d times the 1/d change-of-variables Jacobian. */
+bool lognormalMuConjugateUpdate(double &mu, double &sigma,
+                                const DistributionTemplate &lik, double d)
+{
+  const double s = lik.p2.literal;
+  if (!(s > 0.0) || !(sigma > 0.0) || !(d > 0.0)) return false;
+  const double ld = std::log(d);
+  const double tau0 = 1.0 / (sigma * sigma);
+  const double taul = 1.0 / (s * s);
+  mu = (tau0 * mu + taul * ld) / (tau0 + taul);
+  sigma = std::sqrt(1.0 / (tau0 + taul));
+  return true;
+}
+
+double lognormalMuLogPredictive(double mu, double sigma,
+                                const DistributionTemplate &lik, double d)
+{
+  const double s = lik.p2.literal;
+  if (!(s > 0.0) || !(sigma > 0.0) || !(d > 0.0)) return kNaN;
+  const double v = sigma * sigma + s * s;
+  const double ld = std::log(d);
+  return -0.5 * ((ld - mu) * (ld - mu) / v + std::log(2.0 * M_PI * v)) - ld;
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar lognormal_mu_conjugate(
+  "lognormal", 0, "normal",
+  {&lognormalMuConjugateUpdate, &lognormalMuLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar lognormal_family_registrar(
   lognormal_family);
 

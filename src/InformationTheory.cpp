@@ -5,6 +5,7 @@
 #include "InformationTheory.h"
 
 #include "CircuitFromMMap.h"
+#include "ConjugatePosterior.h" // conjugatePosterior (observe-evidence entropy)
 #include "Expectation.h"        // lift_conditioning, evaluateBooleanProbability
 #include "MonteCarloSampler.h"
 #include "PivotIntegration.h"   // simpsonIntegrate, kSimpsonPanels
@@ -243,6 +244,19 @@ double computeEntropy(const GenericCircuit &gc, gate_t root,
     return entropyFromSamples(
       monteCarloScalarSamples(gc, root, mc_budget_or_throw("entropy")),
       "entropy");
+  }
+  /* Conjugate observe-evidence: the posterior is a bare distribution of
+   * the prior's family, so its (differential) entropy is the exact
+   * quadrature over the family pdf -- no sampling. */
+  if (auto post = conjugatePosterior(gc, root, *event)) {
+    std::shared_ptr<Distribution> dist = makeDistribution(*post);
+    DensityView view;
+    view.discrete = false;
+    if (dist->integrationRange(view.lo, view.hi)) {
+      view.pdf = [dist](double x) { return dist->pdf(x); };
+      const double h = entropyOfView(view);
+      if (!std::isnan(h)) return h;
+    }
   }
   /* Conditional entropy of X | A: plug-in estimate over the rejection
    * sampler's conditional draws (the coupled joint circuit keeps a leaf

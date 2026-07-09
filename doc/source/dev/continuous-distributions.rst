@@ -916,7 +916,12 @@ BernoulliMixtureShape>`` consumed by
 to the bare-RV case, ``as_random(c)`` Diracs (``gate_value``
 roots), categorical-form ``gate_mixture`` roots, and classic
 Bernoulli ``gate_mixture`` roots over any recursively-matched
-shape. Conditioning is honoured uniformly across all four arms:
+shape. A bare-RV root under conjugate observe-evidence resolves
+first through ``conjugatePosterior`` (the posterior is itself a
+bare distribution, returned as an untruncated single-RV shape --
+this is what makes :sqlfunc:`rv_histogram` and the curve
+renderers exact for recognised posteriors).
+Conditioning is honoured uniformly across all four arms:
 non-trivial events are routed through ``collectRvConstraints``
 to extract a ``[lo, hi]`` interval on the root variable, then
 ``truncateShape`` is applied recursively -- bare RVs intersect
@@ -1322,10 +1327,77 @@ from the prior, weights each by ``evalWeight(evidence)``, and returns a
 ``WeightedPosterior`` of ``(value, weight)`` particles plus the marginal
 likelihood ``P(data)`` (mean weight) and the effective sample size
 ``(Σw)² / Σw²``. The moment / quantile / sample dispatchers route to it
-whenever ``circuitHasObserve`` finds a ``gate_observe`` in the evidence,
-computing weighted posterior statistics (``rv_sample`` resamples the
-particles, SIR). The whole readout goes through ``getJointCircuit`` so a
-latent shared between the root and the evidence is a single ``gate_t``.
+whenever ``circuitHasObserve`` finds a ``gate_observe`` in the evidence
+and the exact conjugate recogniser below has declined, computing
+weighted posterior statistics (``rv_sample`` resamples the particles,
+SIR). The whole readout goes through ``getJointCircuit`` so a latent
+shared between the root and the evidence is a single ``gate_t``.
+
+**Exact conjugate posteriors.** :cfile:`ConjugatePosterior.cpp` is the
+closed-form fast path over the same evidence surface: when the target is
+a bare **all-literal** ``gate_rv`` (the prior), the evidence flattens
+through the ``gate_times`` spine into ``gate_observe`` atoms only
+(``gate_one`` factors are skipped; any other factor declines), and every
+observed leaf's ``DistributionTemplate`` has exactly **one** wired slot
+whose wire is the target gate itself, the posterior is folded one
+observation at a time through the **conjugate-update registry**
+(``registerConjugateRule`` in ``distributions/Distribution.h``,
+keyed on *(likelihood family, wired parameter position, running
+posterior family)* -- the same self-registering name-token pattern as
+the comparator / closure / transform registries, one rule per likelihood
+family file).  The result is a first-class ``DistributionSpec`` of the
+prior's family, so ONE recognition upgrades every readout at once:
+
+- ``conditional_raw_moment`` / ``conditional_central_moment``
+  (:cfile:`Expectation.cpp`) return the family's closed-form moments --
+  the attempt slots between ``collapsedConditionalMoment`` and the
+  ``circuitHasObserve`` importance-sampling fallback, preserving the
+  invisible-fallback guarantee (any ``nullopt`` leaves the ladder
+  unchanged);
+- ``compute_quantile`` inverts the posterior CDF exactly;
+- :sqlfunc:`rv_sample` draws i.i.d. from the posterior distribution
+  (no weighted-particle resampling), seeded through the shared
+  ``seedRng``;
+- ``matchClosedFormDistribution`` (:cfile:`RangeCheck.cpp`) returns the
+  posterior as an untruncated ``TruncatedSingleRv`` shape, making
+  :sqlfunc:`rv_histogram` and :sqlfunc:`rv_analytical_curves` exact;
+- ``computeEntropy`` (:cfile:`InformationTheory.cpp`) integrates the
+  posterior pdf exactly;
+- :sqlfunc:`evidence` returns ``exp(Σ log m(dᵢ | ...))``, the exact
+  marginal likelihood from each rule's ``log_predictive`` (the
+  sequential chain-rule factorisation, accumulated in log space); a rule
+  without a predictive declines the whole evidence recognition.
+
+Everything works at ``provsql.rv_mc_samples = 0``.  Each rule's
+``update`` guards its own domain (an out-of-support datum, an invalid
+literal slot, a non-integer count outside the family pmf's 1e-9
+rounding tolerance) and declines rather than raises -- the
+zero-weight / ESS diagnostics of importance sampling remain the UX for
+contradictory evidence.  The fold canonicalises an ``erlang`` or
+``exponential`` prior into the ``gamma`` carrier (identical
+distributions; the SQL ``gamma`` constructor stores an integer-shape
+prior as an erlang leaf).  Because conjugacy is checked per observation
+against the *running* posterior family, mixed likelihoods sharing one
+conjugate prior compose (Poisson counts and Exponential gaps over one
+Gamma-prior rate).  Correctness is by construction the importance-
+sampling estimand: the IS weight is exactly ``∏ f(dᵢ | θ)``
+(``evalWeight``) and the conjugate posterior is the prior times that
+product renormalised, so recognition changes the method, never the
+semantics.  The MVP rule table covers Normal-Normal (mean slot),
+Normal-LogNormal (log-location), Gamma-Exponential / -Poisson /
+-Gamma / -Erlang / -Pareto (rate and tail-shape slots),
+Beta-Binomial / -Geometric / -NegativeBinomial (success-probability
+slots, in each family's own support convention), and Pareto-Uniform
+(upper bound, zero lower bound only -- ``1/(θ−a₀)`` is Pareto-shaped in
+``θ`` only for ``a₀ = 0``).  Deliberately absent, because the exact
+posterior leaves the registered families (so it cannot ride the
+``DistributionSpec`` carrier): a prior on a Normal's ``σ`` slot
+(conjugacy is on the precision, not σ), a Beta *likelihood* with a
+latent shape (the ``1/B(α, β)`` normaliser puts Gamma-function factors
+in the posterior kernel), Weibull's scale slot, and multi-latent /
+hierarchical posteriors.  All decline to importance sampling.
+The regression file is ``continuous_conjugate.sql`` (exact pairs at
+``rv_mc_samples = 0``, plus decline coverage validated against IS).
 
 The **discrete** families (``poisson``, ``binomial``, ``geometric``,
 ``negative_binomial``) are ordinary self-registering ``Distribution``

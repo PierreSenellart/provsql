@@ -39,6 +39,7 @@
 #define PROVSQL_MONTE_CARLO_SAMPLER_H
 
 #include <optional>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -49,6 +50,17 @@ extern "C" {
 }
 
 namespace provsql {
+
+/**
+ * @brief The shared Monte Carlo generator, seeded from the
+ *        @c provsql.monte_carlo_seed GUC (@c -1 = non-deterministic from
+ *        @c std::random_device).
+ *
+ * Every sampling entry point in this file seeds through here; exposed so
+ * closed-form paths that still need draws (the conjugate-posterior exact
+ * sampler behind @c rv_sample) share the same pinned-seed reproducibility.
+ */
+std::mt19937_64 seedRng();
 
 /**
  * @brief Run Monte Carlo on a circuit that may contain @c gate_rv leaves.

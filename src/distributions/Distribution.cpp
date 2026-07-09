@@ -15,6 +15,7 @@
 #include <cmath>
 #include <map>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace provsql {
@@ -54,6 +55,15 @@ std::map<std::string, const DistributionFamily *> &familiesByName()
 {
   static std::map<std::string, const DistributionFamily *> families;
   return families;
+}
+
+/* (likelihood family, wired parameter position, prior family) */
+using ConjugateKey = std::tuple<std::string, int, std::string>;
+
+std::map<ConjugateKey, ConjugateRule> &conjugateRules()
+{
+  static std::map<ConjugateKey, ConjugateRule> rules;
+  return rules;
 }
 
 /* Registry-miss default: P(X < Y) by a 1-D composite-Simpson quadrature.
@@ -115,6 +125,22 @@ void registerTransformRule(const char *transform, const char *family,
                            TransformRule rule)
 {
   transformRules()[{transform, family}] = rule;
+}
+
+void registerConjugateRule(const char *likelihood_family, int wired_param,
+                           const char *prior_family,
+                           const ConjugateRule &rule)
+{
+  conjugateRules()[{likelihood_family, wired_param, prior_family}] = rule;
+}
+
+const ConjugateRule *lookupConjugateRule(const std::string &likelihood_family,
+                                         int wired_param,
+                                         const std::string &prior_family)
+{
+  const auto &rules = conjugateRules();
+  const auto it = rules.find({likelihood_family, wired_param, prior_family});
+  return it == rules.end() ? nullptr : &it->second;
 }
 
 std::unique_ptr<Distribution> closeProductFactors(

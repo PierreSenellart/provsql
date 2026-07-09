@@ -188,6 +188,37 @@ double paretoPairLess(const Distribution &X, const Distribution &Y)
 [[maybe_unused]] const ComparatorRuleRegistrar pareto_less_rule(
   "pareto", "pareto", &paretoPairLess);
 
+/* Gamma-Pareto conjugacy: a Pareto(xₘ₀, θ) observation with the latent
+ * in the SHAPE slot (xₘ₀ a known literal scale) updates a Gamma(k, λ)
+ * prior to Gamma(k+1, λ + ln(d/xₘ₀)) -- the likelihood
+ * f(d|α) = (α/d)·e^{−α ln(d/xₘ₀)} is a gamma kernel in α.  The
+ * predictive is m(d) = (k/d) · λ^k / (λ + ln(d/xₘ₀))^{k+1}. */
+bool paretoShapeConjugateUpdate(double &k, double &lambda,
+                                const DistributionTemplate &lik, double d)
+{
+  const double xm0 = lik.p1.literal;
+  if (!(k > 0.0) || !(lambda > 0.0) || !(xm0 > 0.0) || !(d >= xm0))
+    return false;
+  k += 1.0;
+  lambda += std::log(d / xm0);
+  return true;
+}
+
+double paretoShapeLogPredictive(double k, double lambda,
+                                const DistributionTemplate &lik, double d)
+{
+  const double xm0 = lik.p1.literal;
+  if (!(k > 0.0) || !(lambda > 0.0) || !(xm0 > 0.0) || !(d >= xm0))
+    return kNaN;
+  const double t = std::log(d / xm0);
+  return std::log(k) - std::log(d) + k * std::log(lambda)
+       - (k + 1.0) * std::log(lambda + t);
+}
+
+[[maybe_unused]] const ConjugateRuleRegistrar pareto_shape_conjugate(
+  "pareto", 1, "gamma",
+  {&paretoShapeConjugateUpdate, &paretoShapeLogPredictive});
+
 [[maybe_unused]] const DistributionFamilyRegistrar pareto_family_registrar(
   pareto_family);
 

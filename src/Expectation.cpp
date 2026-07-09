@@ -13,6 +13,7 @@
 #include "CircuitFromMMap.h"
 #include "CollapsedAggMoment.h"    // collapsedConditionalMoment
 #include "ComparatorResolution.h"  // resolveComparators
+#include "ConjugatePosterior.h"    // conjugatePosterior / conjugateLogEvidence
 #include "ProbabilityMethod.h"     // booleanSubcircuitProbability
 #include "MonteCarloSampler.h"
 #include "RandomVariable.h"
@@ -1829,6 +1830,12 @@ double conditional_raw_moment(const GenericCircuit &gc, gate_t root,
    * with an exact quadrature.  Declines (nullopt) on any shape mismatch. */
   if (auto cf = collapsedConditionalMoment(gc, root, event_root, k))
     return *cf;
+  /* Conjugate prior/likelihood shape: the posterior is a first-class
+   * distribution of the prior's family, so the raw moment is its family
+   * closed form -- exact, deterministic, works at rv_mc_samples = 0.
+   * Declines (nullopt) on any shape mismatch. */
+  if (auto post = conjugatePosterior(gc, root, event_root))
+    return makeDistribution(*post)->rawMoment(k);
   /* Continuous-density evidence (latent-variable posterior): likelihood
    * weighting.  The closed-form / rejection paths below assume a bare-rv
    * truncation event, so they do not apply. */
@@ -1865,6 +1872,20 @@ double conditional_central_moment(const GenericCircuit &gc, gate_t root,
     auto m1 = collapsedConditionalMoment(gc, root, event_root, 1);
     auto m2 = collapsedConditionalMoment(gc, root, event_root, 2);
     if (m1 && m2) return *m2 - (*m1) * (*m1);
+  }
+  /* Conjugate shape: exact central moment of the posterior distribution
+   * (family variance for k = 2, binomial expansion over the family raw
+   * moments above that). */
+  if (auto post = conjugatePosterior(gc, root, event_root)) {
+    auto dist = makeDistribution(*post);
+    if (k == 2) return dist->variance();
+    const double mu = dist->mean();
+    double total = 0.0;
+    for (unsigned i = 0; i <= k; ++i) {
+      const double mu_pow = std::pow(-mu, static_cast<double>(k - i));
+      total += binomial(k, i) * mu_pow * dist->rawMoment(i);
+    }
+    return total;
   }
   /* Continuous-density evidence: one importance-sampling pass yields both
    * the posterior mean and the central moment (no resampling). */
@@ -2032,6 +2053,11 @@ double compute_quantile(const GenericCircuit &gc, gate_t root, double p,
   const double inf = std::numeric_limits<double>::infinity();
 
   if (event_root.has_value()) {
+    /* Conjugate shape: exact quantile of the posterior distribution
+     * (elementary inverse CDF or the monotone CDF bisection). */
+    if (auto post = conjugatePosterior(gc, root, *event_root))
+      if (auto q = analytic_rv_quantile(*post, p, -inf, inf))
+        return *q;
     /* Continuous-density evidence: weighted empirical posterior quantile. */
     if (circuitHasObserve(gc, *event_root)) {
       const std::string what = "Posterior quantile";
@@ -2325,6 +2351,12 @@ Datum rv_evidence(PG_FUNCTION_ARGS)
     pg_uuid_t *token = PG_GETARG_UUID_P(0);
     auto gc = getGenericCircuit(*token);
     gate_t root = gc.getGate(uuid2string(*token));
+    /* Conjugate shape with predictive densities registered for every
+     * observation in the fold: the marginal likelihood is the exact
+     * product of the sequential predictives (chain rule), accumulated
+     * in log space. */
+    if (auto le = provsql::conjugateLogEvidence(gc, root))
+      return Float8GetDatum(std::exp(*le));
     if (provsql_rv_mc_samples == 0)
       provsql_error(
         "rv_evidence: provsql.rv_mc_samples is 0 (the marginal likelihood is "
