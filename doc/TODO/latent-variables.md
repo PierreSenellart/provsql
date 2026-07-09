@@ -55,7 +55,10 @@ shared latent, one comparison per row, a discrete rv over the conditioned
 latent equalling the count); the remaining open items are **recognising the
 collapse / conjugacy structure more broadly** (several shared latents, a SUM
 rather than a COUNT in the posterior, hierarchies of latents) and, for the
-truly intractable residue, Part C. The release-time obligations in the final
+truly intractable residue, Part C. The conjugacy branch of that
+recognition work now has its own feasibility study,
+[`conjugate-posteriors.md`](conjugate-posteriors.md). The release-time
+obligations in the final
 section (upgrade script for `gate_observe` + the new functions, constructors and
 families, the `extension_upgrade` canary) are still outstanding and belong to
 the next release, not to this feature's development.
@@ -115,7 +118,8 @@ Anchored on:
   for one important shape: the collapsed posterior of a latent conditioned
   on a correlated count -- `collapsedConditionalMoment` -- is exact by
   quadrature and subsumes the Gamma-Poisson / Beta-Binomial update against
-  a count; general conjugacy detection remains the follow-up.)*
+  a count; general conjugacy detection remains the follow-up, now
+  planned in [`conjugate-posteriors.md`](conjugate-posteriors.md).)*
 
 ---
 

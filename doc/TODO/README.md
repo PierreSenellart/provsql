@@ -53,6 +53,12 @@ Each plan document follows a consistent layout:
   deferred), with the marginal likelihood and Shapley-over-evidence
   ([`continuous_distributions.md`](continuous_distributions.md) §E.1) as
   byproducts; Part C defers SMC then MCMC.
+- [`conjugate-posteriors.md`](conjugate-posteriors.md) : feasibility
+  study for recognising conjugate prior/likelihood structure in an
+  `observe`-evidence circuit and computing the latent's posterior in
+  closed form (a `DistributionSpec` of a registered family, upgrading
+  every readout at once) instead of importance sampling -- the exact
+  follow-up [`latent-variables.md`](latent-variables.md) §A.4 defers.
 - [`probability-evaluation.md`](probability-evaluation.md) : the
   **remaining** probability-method-selection work, atop the now-landed
   method catalog + three-path (exact / relative / additive) chooser:
