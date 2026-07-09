@@ -269,8 +269,8 @@ static bool collect_union_all_legs(Node *node, Query *parent,
  * require either certifying disjoint block-key values between
  * legs (not knowable from the query text) or emitting a synthetic
  * composite block key @c (leg_id, k) in the output and recording
- * it in @c provsql_table_info ; both paths are documented as
- * conservative-by-design in the safe-query follow-ups.
+ * it in @c provsql_table_info ; neither is implemented, so the
+ * classifier stays conservative here by design.
  */
 static bool try_classify_union_all(Query *q,
                                    ProvSQLClassification *out) {
