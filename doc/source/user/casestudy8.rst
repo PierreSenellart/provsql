@@ -880,35 +880,47 @@ Problem 13: Learning That Parameter From Data
 A latent parameter is a prior; the point of a prior is to update it.
 Three control readings come back for this batch -- ``23``, ``24``,
 ``22`` -- each a noisy measurement ``normal(mu, 2)`` of the *same*
-unknown baseline ``mu``. :sqlfunc:`observe` binds a datum to a
-distribution leaf as likelihood-weighting evidence, :sqlfunc:`and_agg`
-conjoins one observation per row, and the moment readouts take that
-evidence as their conditioning argument -- the posterior of ``mu``
-given the data:
+unknown baseline ``mu``. Conditioning on an observed value uses the
+same ``|`` operator, now with an equality event: ``| (normal(mu, 2) =
+d)`` reads "given that this reading equalled ``d``" and contributes that
+observation's likelihood weight (equivalently, :sqlfunc:`observe`).
+:sqlfunc:`and_agg` folds the per-row events into one evidence token --
+surfaced here as ``ev.e`` -- which the moment readouts take as their
+conditioning argument, giving the posterior of ``mu`` given the data:
 
 .. code-block:: postgresql
 
     WITH g  AS (SELECT normal(20, 5) AS mu),
-         ev AS (SELECT and_agg(observe(normal(g.mu, 2), d)) AS e
+         ev AS (SELECT and_agg(| (normal(g.mu, 2) = d)) AS e
                 FROM g CROSS JOIN (VALUES (23.0), (24.0), (22.0)) AS t(d))
     SELECT expected(g.mu)        AS prior_mean,
            expected(g.mu, ev.e)  AS posterior_mean,
            variance(g.mu, ev.e)  AS posterior_var,
-           evidence(ev.e)        AS marginal_likelihood
+           evidence(ev.e)        AS marginal_likelihood,
+           ev.e                  AS evidence_token
     FROM g, ev;
 
-Every reading shares the one ``mu`` leaf (the materialised CTE ``g``
-is a single node), so the three ``observe`` factors weight the same
-latent draw. The prior mean is **20**; the posterior mean pulls
+Every reading shares the one ``mu`` leaf -- the materialised CTE ``g``
+is a single node -- so the three evidence factors weight the same
+latent draw. Click the ``evidence_token`` UUID in :doc:`studio` to open
+its circuit: the evidence is a conjunction of the three observations,
+each an ``=`` event reading the *same* ``mu`` leaf; that one shared node
+is what couples the readings into a single posterior rather than three
+independent updates. The prior mean is **20**; the posterior mean pulls
 toward the data at about **22.85**, and the posterior variance
 collapses to about **1.26**. That is exactly the conjugate
 `Normal-Normal <https://en.wikipedia.org/wiki/Conjugate_prior>`_
-update: with prior precision :math:`1/25` and three observations of
-precision :math:`1/4`, the posterior precision is :math:`1/25 + 3/4 =
-0.79` (variance :math:`1.266`) and the posterior mean is the
-precision-weighted average :math:`(20/25 + 69/4)/0.79 = 22.85`. The
-sampler recovers the textbook answer because :sqlfunc:`observe`
-reweights the prior draws of ``mu`` by each observation's density --
+update. Precision is the reciprocal of variance,
+:math:`\tau = 1/\sigma^2`, and precisions add. The prior variance
+:math:`\sigma_0^2 = 5^2 = 25` gives prior precision
+:math:`\tau_0 = 1/25`; each reading has variance :math:`2^2 = 4`,
+precision :math:`1/4`, so the three together add :math:`3/4`. The
+posterior precision is therefore :math:`\tau_0 + 3/4 = 1/25 + 3/4 =
+0.79`, and inverting it back gives the posterior variance
+:math:`1/0.79 = 1.266`. The posterior mean is the precision-weighted
+average :math:`(20/25 + 69/4)/0.79 = 22.85`. The
+sampler recovers the textbook answer because each ``| (normal(mu, 2) =
+d)`` reweights the prior draws of ``mu`` by the observation's density --
 importance sampling, no rejection. :sqlfunc:`evidence` returns the
 by-product of that weighting, the marginal likelihood :math:`P(\text{data})`
 (the mean prior-predictive weight), here about **0.00117** -- the same
@@ -930,13 +942,14 @@ layered onto the same surface the information-theoretic readouts
 (:sqlfunc:`gmm`, :sqlfunc:`empirical_samples` /
 :sqlfunc:`empirical_cdf`). Problems 12 and 13 closed the loop into full
 Bayesian inference: a distribution parameter is itself a
-``random_variable`` (a latent prior), and :sqlfunc:`observe` /
-:sqlfunc:`and_agg` / :sqlfunc:`evidence` update it from data by
-likelihood weighting, the posterior read straight back with the same
+``random_variable`` (a latent prior), and conditioning on the data with
+``|`` -- the per-row events folded by :sqlfunc:`and_agg`, their marginal
+likelihood read by :sqlfunc:`evidence` -- updates it into the posterior
+by likelihood weighting, read straight back with the same
 :sqlfunc:`expected` / :sqlfunc:`variance` readouts. A few mechanics
 recurred:
 
-* Each model was built and stored in the database. :sqlfunc:`add_provenance`
+* Each model was built in the database. :sqlfunc:`add_provenance`
   registers a table for tuple-independent tracking and :sqlfunc:`set_prob`
   attaches a probability to each row; :sqlfunc:`repair_key` is the alternative
   registration, making the rows of a key group mutually exclusive outcomes,
