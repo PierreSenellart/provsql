@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import psycopg
 
+from provsql_studio import circuit as _circuit
+
 
 def _personnel_uuid(test_dsn: str, name: str) -> str:
     """Read the provsql UUID for a personnel row by name.
@@ -764,8 +766,6 @@ def test_arith_transform_labels(client, test_dsn):
 # is displayed as a binary `= (leaf, datum)` by giving the `=` glyph and a
 # synthetic value child for the datum -- the same shape as the equivalent
 # `leaf = datum` comparison.
-
-from provsql_studio import circuit as _circuit
 
 
 def _observe_subgraph_rows():
