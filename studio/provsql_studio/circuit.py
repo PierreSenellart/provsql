@@ -50,6 +50,13 @@ _GATE_LABEL = {
     # lies beyond the scene frontier.
     "assumed":  "∴",
     "annotation": "@",
+    # Display-only: a gate_observe (structurally unary -- one leaf child, the
+    # datum in `extra`) is the same evidence as `leaf = datum`, so we render it
+    # as a binary `=` with a synthetic value child for the datum (see
+    # _expand_observe_data).  The real gate_type "observe" still reaches the
+    # inspector.  A real gate_cmp `=` falls through to the bare "=" too, so the
+    # two spellings of the same event look alike.
+    "observe":  "=",
 }
 
 # PROVSQL_ARITH_* enum tags (src/provsql_utils.h) → in-circle glyph. The
@@ -348,6 +355,7 @@ def get_circuit(
     has_deeper: set[str] = {
         r["parent"] for r in overshot if r["depth"] == depth + 1 and r["parent"] is not None
     }
+    raw = _expand_observe_data(raw)
     payload = _layout(raw, root=root, depth=depth, frontier_uuids=has_deeper,
                       rv_families=rv_families)
     payload["rv_families"] = rv_families
@@ -811,6 +819,45 @@ def _elide_markers(
     return out, new_root, markers
 
 
+def _expand_observe_data(rows: list[dict]) -> list[dict]:
+    """Give every gate_observe a synthetic constant child so it renders as a
+    binary ``= (leaf, datum)``.
+
+    A gate_observe is structurally unary -- one child (the observed leaf) with
+    the datum text in ``extra``.  ``observe(Y, c)`` is the same evidence as
+    ``Y = c`` (which compiles to a gate_cmp over the leaf and ``as_random(c)``),
+    so we display it the same way: the ``=`` glyph (from ``_GATE_LABEL``) plus a
+    value node carrying the datum in the second child slot.  The synthetic node
+    is flagged so the front-end knows it is not a real gate (no inspector fetch).
+
+    Injected before layout so ``dot`` positions the datum node; ``rows`` are
+    denormalised on incoming edges, so synthesise one datum child per *distinct*
+    observe node.
+    """
+    seen: set[str] = set()
+    additions: list[dict] = []
+    for r in rows:
+        if r["gate_type"] != "observe" or r["node"] in seen:
+            continue
+        seen.add(r["node"])
+        additions.append({
+            "node": f"observe-datum:{r['node']}",
+            "parent": r["node"],
+            "child_pos": 2,          # leaf is child 1, datum reads to its right
+            "gate_type": "value",    # renders via _format_value_label(extra)
+            "info1": None, "info2": None,
+            "extra": r["extra"],     # the observed datum text
+            "info1_name": None, "info2_name": None,
+            "prob": None,
+            "boolean_assumed": False,
+            "absorptive_folded": False,
+            "depth": (r["depth"] or 0) + 1,
+            "is_tracked_input": False,
+            "synthetic": True,
+        })
+    return rows + additions if additions else rows
+
+
 def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str],
             rv_families: dict | None = None) -> dict:
     """Run dot to assign x/y per node, then translate into the JSON shape
@@ -868,6 +915,10 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
             "x":         pos.get(r["node"], (0, 0))[0],
             "y":         pos.get(r["node"], (0, 0))[1],
             "frontier":  r["node"] in frontier_uuids,
+            # Display-only node with no backing gate (the datum child minted for
+            # a gate_observe by _expand_observe_data): the front-end skips the
+            # inspector fetch for these.
+            "synthetic": bool(r.get("synthetic")),
             # Mirror server-side label dispatch onto the front-end so
             # the post-set_prob refresh in circuit.js can re-derive the
             # label without re-querying the bulk catalog scan.

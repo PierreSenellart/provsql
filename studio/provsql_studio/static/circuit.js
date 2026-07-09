@@ -46,6 +46,9 @@
             + 'guard/value pairs followed by a default; the value taken is that '
             + 'of the first guard (a comparison event) that holds, else the '
             + 'default.',
+    observe:  'Observe gate (=): point-observation evidence that a '
+            + 'random-variable leaf took the datum value (leaf = datum), '
+            + 'weighted by its density (likelihood weighting).',
     'kc-and':   'AND gate',
     'kc-or':    'OR gate',
     'kc-not':   'NOT gate',
@@ -2942,8 +2945,12 @@
     const pinnedNode = state.pinnedNode
       ? state.scene?.nodes?.find(n => n.id === state.pinnedNode)
       : null;
+    //  (c) the pinned target is a display-only synthetic node (the datum
+    //      child minted for a gate_observe): its id is not a real gate,
+    //      so evaluation would fail at the server.
     const pinnedNonEval =
-      pinnedNode && _NON_EVAL_NODE_TYPES.has(pinnedNode.type);
+      pinnedNode
+      && (_NON_EVAL_NODE_TYPES.has(pinnedNode.type) || pinnedNode.synthetic);
     if (strip) strip.hidden = !state.scene || pinnedNonEval;
     // Re-run the semiring dropdown filter whenever the target changes
     // (pin / clear pin / scene reload): the new target may have a

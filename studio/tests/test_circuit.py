@@ -757,3 +757,52 @@ def test_arith_transform_labels(client, test_dsn):
     rootn = {n["id"]: n for n in scene["nodes"]}[bridge_root]
     assert rootn["type"] == "rv", rootn
     assert rootn["label"] == "LogN(0,1)", rootn
+
+
+# --- Observe-gate display transform (pure, no DB) --------------------------
+# A gate_observe is structurally unary (one leaf child, datum in `extra`); it
+# is displayed as a binary `= (leaf, datum)` by giving the `=` glyph and a
+# synthetic value child for the datum -- the same shape as the equivalent
+# `leaf = datum` comparison.
+
+from provsql_studio import circuit as _circuit
+
+
+def _observe_subgraph_rows():
+    root = "11111111-1111-1111-1111-111111111111"
+    leaf = "22222222-2222-2222-2222-222222222222"
+    base = dict(info1=None, info2=None, info1_name=None, info2_name=None,
+                prob=None, boolean_assumed=False, absorptive_folded=False,
+                is_tracked_input=False)
+    rows = [
+        {**base, "node": root, "parent": None, "child_pos": None,
+         "gate_type": "observe", "extra": "23", "depth": 0},
+        {**base, "node": leaf, "parent": root, "child_pos": 1,
+         "gate_type": "rv", "extra": "normal:20,5", "depth": 1},
+    ]
+    return root, rows
+
+
+def test_observe_gate_label_is_equals():
+    assert _circuit._gate_label({"gate_type": "observe"}) == "="
+
+
+def test_expand_observe_data_adds_synthetic_datum_child():
+    root, rows = _observe_subgraph_rows()
+    out = _circuit._expand_observe_data(rows)
+    synth = [r for r in out if r.get("synthetic")]
+    assert len(synth) == 1, out
+    d = synth[0]
+    assert d["parent"] == root                    # child of the observe gate
+    assert d["child_pos"] == 2                     # reads right of the leaf
+    assert d["gate_type"] == "value"               # renders as a scalar
+    assert d["extra"] == "23"                      # the observed datum
+    assert d["node"] == f"observe-datum:{root}"
+    # the real rows are left untouched
+    assert all(not r.get("synthetic") for r in rows)
+
+
+def test_expand_observe_data_is_noop_without_observe():
+    rows = [{"node": "x", "parent": None, "child_pos": None,
+             "gate_type": "plus", "extra": None, "depth": 0}]
+    assert _circuit._expand_observe_data(rows) is rows
