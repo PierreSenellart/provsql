@@ -925,7 +925,7 @@ Three things follow, each matching plain SQL:
   the circuit's zero -- :sqlfunc:`probability_evaluate` returns exactly
   0, with no sampling. (A NULL reading is not "certainly exceeding",
   and not "possibly exceeding" either: it is no evidence at all.)
-- **``IS NULL`` is ordinary and deterministic.** ``WHERE pm25 IS NULL``
+- **Null tests are ordinary and deterministic.** ``WHERE pm25 IS NULL``
   finds the offline row like any other predicate; PostgreSQL evaluates
   it and provenance simply carries the row's token through.
 - **Aggregates skip the offline row.** ``expected(avg(pm25))`` over

@@ -1168,7 +1168,7 @@ The dispatch is keyed on ``aggtype`` (the aggregate's result
 type OID) rather than ``aggfnoid`` so the same routing works for
 any future RV-returning aggregate.
 
-An earlier design considered an *M-polymorphic ``gate_agg``*
+An earlier design considered an *M-polymorphic* ``gate_agg``
 that would carry the full semimodule lift directly. We rejected
 it because the mixture-of-mixtures shape composes through every
 existing gate_arith / gate_mixture rule, while a new

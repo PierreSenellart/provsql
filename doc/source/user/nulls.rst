@@ -49,7 +49,7 @@ own top-level rule, and the annotation is zero either way.
 ``EXISTS`` / ``NOT EXISTS`` only ever ask whether a *true* match exists,
 so they compose correctly with NULLs as-is.
 
-**NOT IN and quantified comparisons (``op ALL``).** Negation is where
+**NOT IN and quantified comparisons** (``op ALL``). Negation is where
 NULLs bite: ``x NOT IN Q`` is *unknown* -- hence not an answer -- as
 soon as ``Q`` contains a NULL (or ``x`` is NULL and ``Q`` is non-empty).
 ProvSQL's rewriting accounts for this: the removal condition it builds
