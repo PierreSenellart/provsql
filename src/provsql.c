@@ -2321,10 +2321,9 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       // recursion, or a non-recursive body needing no rewriting, e.g. a
       // volatile RV-constructor latent whose single evaluation must be
       // shared) that runs as native SQL.  No provenance column to collect
-      // -- inline_ctes only preserves CTEs that carry none.
-#if PG_VERSION_NUM < 150000
-      provsql_error("Recursive CTEs not supported");
-#endif
+      // -- inline_ctes only preserves CTEs that carry none.  (A recursive
+      // CTE that cannot be preserved is refused inside inline_ctes
+      // itself, on every PostgreSQL version.)
     } else {
       provsql_error("FROM clause not supported");
     }
