@@ -39,6 +39,7 @@
 #include "optimizer/optimizer.h"
 #else
 #include "optimizer/var.h"              /* contain_vars_of_level */
+#include "optimizer/clauses.h"          /* contain_volatile_functions */
 #endif
 #include "optimizer/planner.h"
 #include "parser/parse_coerce.h"
@@ -434,6 +435,8 @@ typedef struct LoweredCte {
 #endif
 } LoweredCte;
 
+#if PG_VERSION_NUM >= 150000
+/* Only the >= 15 recursive-CTE lowering memoises into the list. */
 static Query *lookup_lowered_cte(List *lowered, const char *name) {
   ListCell *lc;
   foreach (lc, lowered) {
@@ -443,6 +446,7 @@ static Query *lookup_lowered_cte(List *lowered, const char *name) {
   }
   return NULL;
 }
+#endif
 
 #if PG_VERSION_NUM >= 150000
 /** @brief Output of @c detect_reachability_cte(): the recognised shape's pieces. */
