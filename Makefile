@@ -119,7 +119,15 @@ notebooks:
 
 ## docs                 Build the Sphinx HTML documentation
 .PHONY: docs
-docs: sql/provsql.sql notebooks
+docs: notebooks
+	# Regenerate the concatenated sql/provsql.sql (the Doxygen SQL input, built
+	# from sql/provsql.common.sql + sql/provsql.14.sql) via Makefile.internal,
+	# whose rule tracks those sources. Delegating is required: listing
+	# sql/provsql.sql as a bare prerequisite here resolves it through the
+	# catch-all `%:' rule, which carries no prerequisites, so an existing but
+	# stale file is treated as up-to-date and SQL docstring edits never reach
+	# the generated API reference.
+	$(MAKE) -f $(INTERNAL) sql/provsql.sql $(ARGS)
 	cd doc/source && make html
 
 ## website              Build docs + assemble the Jekyll site

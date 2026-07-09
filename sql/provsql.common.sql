@@ -6726,6 +6726,11 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURIT
  * Compiles the provenance circuit to d-DNNF and evaluates the
  * probability. The compilation method can be selected explicitly.
  *
+ * @ref probability() "probability" is a shorter alias bound to the same C symbol, so
+ * @c probability(token) is exactly @c probability_evaluate(token); it is
+ * usually preferable, and additionally carries a @c (boolean) predicate
+ * overload (e.g. @c probability(x @c > @c y)).
+ *
  * @param token provenance token to evaluate
  * @param method knowledge compilation method (NULL for default)
  * @param arguments additional arguments for the method
@@ -6738,13 +6743,13 @@ CREATE OR REPLACE FUNCTION probability_evaluate(
   'provsql','probability_evaluate' LANGUAGE C STABLE;
 
 /**
- * @brief Short alias of @c probability_evaluate.
+ * @brief Short alias of @ref probability_evaluate.
  *
- * Bound to the same C symbol as @c probability_evaluate, so
+ * Bound to the same C symbol as @ref probability_evaluate, so
  * @c probability(token) is exactly @c probability_evaluate(token).
- * Provided to match the concise polymorphic surface of @c expected,
- * @c variance, and @c support: callers are not forced to spell out
- * @c probability_evaluate.
+ * Provided to match the concise polymorphic surface of @ref expected,
+ * @ref variance, and @ref support "support": callers are not forced to
+ * spell out @c probability_evaluate.
  *
  * @param token provenance token to evaluate
  * @param method knowledge compilation method (NULL for default)
