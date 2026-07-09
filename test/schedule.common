@@ -197,6 +197,7 @@ test: continuous_posterior
 test: continuous_latent_aggregate
 test: continuous_latent_discrete
 test: continuous_latent_usecases
+test: continuous_cte_latent
 test: continuous_collapsed_posterior
 test: continuous_support
 test: continuous_hybrid

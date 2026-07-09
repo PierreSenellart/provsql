@@ -1334,6 +1334,46 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
 }
 #endif
 
+/** @brief Context for @c cte_reference_walker. */
+typedef struct {
+  const char *name;   /**< CTE name searched for. */
+} CteRefCtx;
+
+/**
+ * @brief Walker: does the tree contain an @c RTE_CTE reference to a CTE
+ *        of the given name?
+ *
+ * Descends into subquery RTEs, SubLink subselects and nested WITH bodies,
+ * so a reference anywhere inside a CTE body is found.  Matching is by name
+ * only: a nested WITH shadowing the name yields a false positive, which
+ * errs on the side of inlining the referenced CTE (the uniform behaviour
+ * before untracked CTEs were preserved).
+ */
+static bool cte_reference_walker(Node *node, void *context) {
+  CteRefCtx *ctx = (CteRefCtx *)context;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *sub = (Query *)node;
+    ListCell *lc;
+    foreach (lc, sub->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_CTE && r->ctename != NULL &&
+          strcmp(r->ctename, ctx->name) == 0)
+        return true;
+    }
+    return query_tree_walker(sub, cte_reference_walker, context, 0);
+  }
+  return expression_tree_walker(node, cte_reference_walker, context);
+}
+
+/** @brief Does @p q (at any depth) reference a CTE named @p name? */
+static bool query_references_cte(Query *q, const char *name) {
+  CteRefCtx ctx;
+  ctx.name = name;
+  return cte_reference_walker((Node *)q, &ctx);
+}
+
 /**
  * @brief Inline CTE references as subqueries within a query.
  *
@@ -1348,8 +1388,11 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
  *                 scan subquery), so a recursive CTE referenced more than
  *                 once is lowered exactly once and later references reuse
  *                 the first lowering instead of recreating its temp table.
+ * @param kept     CTEs (by pointer) the caller preserves as real CTEs;
+ *                 references to them are left in place.
  */
-static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
+static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
+                                  List *kept) {
   ListCell *lc;
   foreach (lc, rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
@@ -1358,7 +1401,11 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
       foreach (lc2, cteList) {
         CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
         if (strcmp(cte->ctename, r->ctename) == 0) {
-          if (cte->cterecursive) {
+          if (list_member_ptr(kept, cte)) {
+            /* Preserved CTE: the reference stays an RTE_CTE and the body
+             * runs as native SQL, with PostgreSQL's single-evaluation
+             * WITH semantics. */
+          } else if (cte->cterecursive) {
 #if PG_VERSION_NUM >= 150000
             /* A recursive CTE referenced more than once (e.g. once per
              * UNION arm) must be lowered exactly once: re-running
@@ -1393,7 +1440,7 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
             r->ctelevelsup = 0;
             /* Recurse: the inlined subquery may reference other CTEs
              * from the same cteList */
-            inline_ctes_in_rtable(r->subquery->rtable, cteList, lowered);
+            inline_ctes_in_rtable(r->subquery->rtable, cteList, lowered, kept);
           }
           break;
         }
@@ -1401,7 +1448,7 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered) {
     } else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
       /* Recurse into existing subqueries (e.g., UNION branches) to
        * inline CTE references they may contain */
-      inline_ctes_in_rtable(r->subquery->rtable, cteList, lowered);
+      inline_ctes_in_rtable(r->subquery->rtable, cteList, lowered, kept);
     }
   }
 }
@@ -1933,10 +1980,12 @@ static void plant_reach_conjunctions(List *candidates, List *lowered) {
 #endif
 
 /**
- * @brief Inline all CTE references in @p q as subqueries.
+ * @brief Inline CTE references in @p q as subqueries where the rewrite
+ *        needs them, preserving CTEs whose bodies need no rewriting.
  */
 static void inline_ctes(const constants_t *constants, Query *q) {
   List *lowered = NIL;
+  List *kept = NIL;
   ListCell *lc;
 #if PG_VERSION_NUM >= 150000
   List *reach_aggs = NIL;
@@ -1972,6 +2021,73 @@ static void inline_ctes(const constants_t *constants, Query *q) {
       return;
   }
 
+  /* Decide, per CTE, whether the rewrite needs to inline it.  Inlining
+   * copies the body into every referencing RTE, so a volatile expression
+   * inside -- an RV constructor minting a fresh leaf gate per call -- is
+   * re-evaluated per reference, breaking SQL's single-evaluation WITH
+   * semantics: a latent random variable built in a CTE and referenced from
+   * two scopes would silently split into independent leaves.  A body that
+   * needs no rewriting (no tracked relation, no RV comparison, no
+   * provenance() call: the same has_provenance gate that decides whether a
+   * top-level query engages the hook) is therefore preserved as a real CTE;
+   * it runs as native SQL and PostgreSQL evaluates it exactly once.
+   * "Must inline" propagates through CTE-to-CTE references: a body
+   * referencing an inlined CTE must itself be inlined, or its reference
+   * would dangle once that CTE is removed from cteList. */
+  {
+    int n = list_length(q->cteList);
+    bool *must_inline = (bool *)palloc(n * sizeof(bool));
+    bool changed;
+    int i = 0;
+    foreach (lc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+      must_inline[i++] = cte->cterecursive ||
+        has_provenance(constants, (Query *)cte->ctequery);
+    }
+    do {
+      changed = false;
+      i = 0;
+      foreach (lc, q->cteList) {
+        CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+        if (!must_inline[i]) {
+          ListCell *lc2;
+          int j = 0;
+          foreach (lc2, q->cteList) {
+            CommonTableExpr *other = (CommonTableExpr *)lfirst(lc2);
+            if (must_inline[j] &&
+                query_references_cte((Query *)cte->ctequery, other->ctename)) {
+              must_inline[i] = true;
+              changed = true;
+              break;
+            }
+            ++j;
+          }
+        }
+        ++i;
+      }
+    } while (changed);
+    i = 0;
+    foreach (lc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+      if (!must_inline[i])
+        kept = lappend(kept, cte);
+      else if (!cte->cterecursive && cte->cterefcount > 1 &&
+               contain_volatile_functions((Node *)cte->ctequery))
+        /* The residual multi-evaluation case: this body must be inlined
+         * (it needs the rewrite) yet contains volatile calls and is
+         * referenced more than once.  Surface it rather than silently
+         * returning probabilities over decoupled leaves. */
+        provsql_warning("CTE \"%s\" requires provenance rewriting and is "
+                        "inlined at each of its %d references; its volatile "
+                        "expressions (e.g. random-variable constructors) are "
+                        "re-evaluated per reference and not shared between "
+                        "them",
+                        cte->ctename, cte->cterefcount);
+      ++i;
+    }
+    pfree(must_inline);
+  }
+
 #if PG_VERSION_NUM >= 150000
   /* Grouped-reachability aggregations and self-join conjunctions are
    * detected before lowering (the CTE reference is still
@@ -1980,12 +2096,12 @@ static void inline_ctes(const constants_t *constants, Query *q) {
   reach_aggs = detect_reach_aggregations(q);
   reach_conjs = detect_reach_conjunctions(q);
 #endif
-  inline_ctes_in_rtable(q->rtable, q->cteList, &lowered);
+  inline_ctes_in_rtable(q->rtable, q->cteList, &lowered, kept);
 #if PG_VERSION_NUM >= 150000
   plant_reach_aggregations(reach_aggs, lowered);
   plant_reach_conjunctions(reach_conjs, lowered);
 #endif
-  q->cteList = NIL;
+  q->cteList = kept;
 }
 
 /**
@@ -2197,9 +2313,11 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       // groupClause
 #endif
     } else if (r->rtekind == RTE_CTE) {
-      // A CTE left intact by inline_ctes: an untracked pure-RV recursion
-      // (and its dependents) that runs as native SQL.  No provenance column
-      // to collect -- inline_ctes only preserves CTEs that carry none.
+      // A CTE left intact by inline_ctes: an untracked body (pure-RV
+      // recursion, or a non-recursive body needing no rewriting, e.g. a
+      // volatile RV-constructor latent whose single evaluation must be
+      // shared) that runs as native SQL.  No provenance column to collect
+      // -- inline_ctes only preserves CTEs that carry none.
 #if PG_VERSION_NUM < 150000
       provsql_error("Recursive CTEs not supported");
 #endif
