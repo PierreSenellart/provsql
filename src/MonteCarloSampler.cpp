@@ -840,6 +840,36 @@ ConditionalScalarSamples monteCarloConditionalScalarSamples(
   return out;
 }
 
+ConditionalScalarPairSamples monteCarloConditionalScalarPairSamples(
+  const GenericCircuit &gc, gate_t root_a, gate_t root_b,
+  gate_t event_root, unsigned samples)
+{
+  std::mt19937_64 rng = seedRng();
+  Sampler sampler(gc, rng);
+
+  ConditionalScalarPairSamples out;
+  out.attempted = 0;
+  out.xs.reserve(samples);
+  out.ys.reserve(samples);
+
+  for(unsigned i = 0; i < samples; ++i) {
+    sampler.resetIteration();
+    /* Indicator first (populating the per-iteration caches), then both
+     * values against the same caches: shared leaves couple across the
+     * event and the two roots, per monteCarloConditionalScalarSamples. */
+    if(sampler.evalBool(event_root)) {
+      out.xs.push_back(sampler.evalScalar(root_a));
+      out.ys.push_back(sampler.evalScalar(root_b));
+    }
+    ++out.attempted;
+
+    if(provsql_interrupted)
+      throw CircuitException(
+              "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+  return out;
+}
+
 std::optional<std::vector<double>>
 try_truncated_closed_form_sample(const GenericCircuit &gc, gate_t root,
                                  gate_t event_root, unsigned n)

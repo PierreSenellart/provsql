@@ -711,19 +711,33 @@ inversion itself tries ``Distribution::quantile`` first and
 Covariance, correlation, standard deviation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The same-row second-moment readouts are pure SQL over the moment
-evaluator: :sqlfunc:`covariance` ``(x, y [, prov])`` is
-``expected(x·y) − expected(x)·expected(y)``, :sqlfunc:`stddev`
-is ``sqrt(variance(x))``, and :sqlfunc:`correlation` divides the
-covariance by the product of standard deviations (``NULL`` on a
-degenerate denominator via ``NULLIF``). Exactness rides on the
-``FootprintCache`` path: structurally independent arguments give
-an exact ``0`` covariance because ``E[XY]`` factors; shared
-leaves make ``x·y`` a shared-leaf product whose mean is
-correlation-aware (closed-form where the product rules apply, MC
-otherwise). The optional ``prov`` conditioning argument is
-threaded to every ``expected`` / ``variance`` call, so all
-moments are computed under the same event.
+:sqlfunc:`covariance` ``(x, y [, prov])`` and
+:sqlfunc:`correlation` are C readouts
+(:cfile:`RvCovariance.cpp`) over a joint circuit loaded through
+the multi-root ``getJointCircuit`` (the three roots ``x``, ``y``,
+``prov`` share one ``gate_t`` per common leaf).
+:sqlfunc:`stddev` stays pure SQL, ``sqrt(variance(x))``.
+Exact tiers first: two identical roots route to the variance
+evaluator; structurally independent arguments (disjoint
+stochastic-leaf footprints, given the event) give an exact ``0``;
+and when ``E[XY]``, ``E[X]``, ``E[Y]`` (plus both variances, for
+``correlation``) all decompose analytically -- probed with the MC
+fallback temporarily disabled -- the closed-form
+``E[XY] − E[X]·E[Y]`` subtraction is returned. Otherwise a
+**single coupled Monte-Carlo pass** draws ``(x, y)`` pairs (a
+leaf shared between the roots and/or the event produces one draw
+per iteration that all observe; conditioning is
+rejection-sampled through ``monteCarloConditionalScalarPairSamples``)
+and the sample covariance :math:`\tfrac1n \sum (x_i - \bar
+x)(y_i - \bar y)` is returned, with ``correlation`` reading
+:math:`\sigma_X, \sigma_Y` off the same pass. The naive
+three-run ``expected(x·y) − expected(x)·expected(y)``
+subtraction is deliberately avoided on the MC path: its noise
+scales with :math:`E[X]\,E[Y]` (a catastrophic cancellation when
+the means dominate the coupling), whereas the paired estimator's
+scales with :math:`\sqrt{(\sigma_X^2\sigma_Y^2 + \mathrm{Cov}^2)/n}`.
+``correlation`` returns ``NULL`` on a degenerate (zero-variance)
+argument in every tier.
 
 Collapsed aggregate moments
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

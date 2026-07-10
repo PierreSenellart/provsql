@@ -215,10 +215,10 @@ GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token)
   return getCircuit(MyDatabaseId)->createGenericCircuit(token);
 }
 
-GenericCircuit provsql_inproc_joint_circuit(pg_uuid_t root, pg_uuid_t event)
+GenericCircuit provsql_inproc_joint_circuit(
+  const std::vector<pg_uuid_t> &roots)
 {
-  return getCircuit(MyDatabaseId)->createGenericCircuit(
-    std::vector<pg_uuid_t>{root, event});
+  return getCircuit(MyDatabaseId)->createGenericCircuit(roots);
 }
 #endif
 

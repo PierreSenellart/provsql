@@ -212,19 +212,19 @@ GenericCircuit getGenericCircuit(pg_uuid_t token)
  * size prefix followed by a Boost-serialised @c GenericCircuit.
  */
 static GenericCircuit getJointCircuitFromMMap(
-    pg_uuid_t root_token, pg_uuid_t event_token)
+    const std::vector<pg_uuid_t> &tokens)
 {
 #ifdef PROVSQL_INPROCESS_STORE
-  return provsql_inproc_joint_circuit(root_token, event_token);
+  return provsql_inproc_joint_circuit(tokens);
 #else
   char message_char = 'j';
-  unsigned nb_roots = 2;
+  unsigned nb_roots = static_cast<unsigned>(tokens.size());
   STARTWRITEM();
   ADDWRITEM(&message_char, char);
   ADDWRITEM(&MyDatabaseId, Oid);
   ADDWRITEM(&nb_roots, unsigned);
-  ADDWRITEM(&root_token, pg_uuid_t);
-  ADDWRITEM(&event_token, pg_uuid_t);
+  for(const pg_uuid_t &t : tokens)
+    ADDWRITEM(&t, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
   if(!SENDWRITEM())
@@ -254,20 +254,33 @@ static GenericCircuit getJointCircuitFromMMap(
 }
 
 GenericCircuit getJointCircuit(
+  const std::vector<pg_uuid_t> &tokens,
+  std::vector<gate_t> &gates)
+{
+  GenericCircuit gc = getJointCircuitFromMMap(tokens);
+
+  applyLoadTimeSimplification(gc);
+
+  /* Resolve the gate_t for the roots AFTER simplification.  The
+   * passes mutate gate types in place but never delete gates, so the
+   * UUID-to-gate_t map (and therefore @c getGate) stays valid. */
+  gates.resize(tokens.size());
+  for(std::size_t i = 0; i < tokens.size(); ++i)
+    gates[i] = gc.getGate(uuid2string(tokens[i]));
+
+  return gc;
+}
+
+GenericCircuit getJointCircuit(
   pg_uuid_t root_token,
   pg_uuid_t event_token,
   gate_t &root_gate,
   gate_t &event_gate)
 {
-  GenericCircuit gc = getJointCircuitFromMMap(root_token, event_token);
-
-  applyLoadTimeSimplification(gc);
-
-  /* Resolve the gate_t for the two roots AFTER simplification.  The
-   * passes mutate gate types in place but never delete gates, so the
-   * UUID-to-gate_t map (and therefore @c getGate) stays valid. */
-  root_gate  = gc.getGate(uuid2string(root_token));
-  event_gate = gc.getGate(uuid2string(event_token));
-
+  std::vector<gate_t> gates;
+  GenericCircuit gc =
+    getJointCircuit(std::vector<pg_uuid_t>{root_token, event_token}, gates);
+  root_gate  = gates[0];
+  event_gate = gates[1];
   return gc;
 }

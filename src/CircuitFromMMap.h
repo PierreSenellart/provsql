@@ -141,4 +141,21 @@ GenericCircuit getJointCircuit(
   gate_t &root_gate,
   gate_t &event_gate);
 
+/**
+ * @brief Multi-root variant of @c getJointCircuit.
+ *
+ * Loads the union of the closures of @p tokens in a single in-memory
+ * @c GenericCircuit, with the same shared-subgraph unification and
+ * load-time simplification guarantees as the two-root form.  On return
+ * @p gates holds the resolved @c gate_t of each input UUID, in the
+ * order of @p tokens.
+ *
+ * @param tokens  Root UUIDs (at least one).
+ * @param gates   Output: resolved @c gate_t per token.
+ * @return        An in-memory @c GenericCircuit.
+ */
+GenericCircuit getJointCircuit(
+  const std::vector<pg_uuid_t> &tokens,
+  std::vector<gate_t> &gates);
+
 #endif /* BOOLEAN_CIRCUIT_FROM_MMAP_H */

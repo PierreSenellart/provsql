@@ -7729,31 +7729,38 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
+/** @brief C entry point behind @ref covariance (uuid-level binding). */
+CREATE OR REPLACE FUNCTION rv_covariance(x uuid, y uuid, prov uuid)
+  RETURNS double precision
+  AS 'provsql','rv_covariance' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /**
  * @brief Covariance Cov(X, Y) = E[XY] − E[X]·E[Y] of two random variables.
  *
  * The bivariate readout complementing the univariate moment surface
- * (@ref expected / @ref variance / @ref moment / @ref central_moment).  It
- * reduces entirely to the existing scalar machinery: @ref expected on the
- * @c gate_arith @c TIMES product @c X*Y and on each factor.  The
- * @c Expectation evaluator's @c FootprintCache structural-independence path
- * makes it exact where it can -- disjoint @c gate_rv footprints give
- * @c E[XY] = E[X]·E[Y] and hence an exact @c 0 -- and correlation-aware when
- * @p x and @p y share leaves, with the whole-circuit Monte-Carlo net
- * inherited for free.
+ * (@ref expected / @ref variance / @ref moment / @ref central_moment).
+ * Exact tiers: an exact @c 0 when the two arguments' stochastic-leaf
+ * footprints are structurally independent (given @p prov), a variance
+ * readout when the two arguments coincide, and the closed-form
+ * @c E[XY] − E[X]·E[Y] whenever every factor decomposes analytically.
+ * When some factor has no closed form, a SINGLE coupled Monte-Carlo pass
+ * over the joint circuit draws @c (x, y) pairs (shared leaves produce one
+ * draw both observe) and returns the sample covariance -- the estimator's
+ * noise then scales with the covariance signal itself, not with the
+ * product of the means as the naive three-run E[XY] − E[X]·E[Y]
+ * subtraction would.
  *
  * @param x    the first random variable.
  * @param y    the second random variable.
  * @param prov optional conditioning event (a provenance @c uuid); the
- *   default @c gate_one() is the unconditional covariance.  Conditioning is
- *   applied consistently to the product and to each factor, giving
- *   @c Cov(X, Y | prov) = E[XY|prov] − E[X|prov]·E[Y|prov].
+ *   default @c gate_one() is the unconditional covariance.  Conditioning
+ *   is applied jointly: the Monte-Carlo pass rejection-samples the pair on
+ *   @p prov, giving @c Cov(X, Y | prov).
  */
 CREATE OR REPLACE FUNCTION covariance(
   x random_variable, y random_variable, prov uuid DEFAULT gate_one())
   RETURNS double precision AS $$
-  SELECT provsql.expected(x * y, prov)
-       - provsql.expected(x, prov) * provsql.expected(y, prov);
+  SELECT provsql.rv_covariance((x)::uuid, (y)::uuid, prov);
 $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
 
 /**
@@ -7775,13 +7782,20 @@ CREATE OR REPLACE FUNCTION stddev(
   SELECT sqrt(provsql.variance(x, prov));
 $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
 
+/** @brief C entry point behind @ref correlation (uuid-level binding). */
+CREATE OR REPLACE FUNCTION rv_correlation(x uuid, y uuid, prov uuid)
+  RETURNS double precision
+  AS 'provsql','rv_correlation' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /**
  * @brief Pearson correlation ρ(X, Y) = Cov(X, Y) / (σ(X)·σ(Y)).
  *
- * A scalar division of @ref covariance by the two @ref stddev readouts.
- * Returns @c NULL when either standard deviation is @c 0 (a degenerate /
- * constant variable, for which correlation is undefined) rather than
- * raising a division-by-zero.
+ * Same exact tiers as @ref covariance; on the Monte-Carlo path the
+ * covariance and BOTH standard deviations are read off the same coupled
+ * pass, instead of stacking five independent estimates (three for the
+ * covariance, one per standard deviation).  Returns @c NULL when either
+ * standard deviation is @c 0 (a degenerate / constant variable, for which
+ * correlation is undefined) rather than raising a division-by-zero.
  *
  * @param x    the first random variable.
  * @param y    the second random variable.
@@ -7791,8 +7805,7 @@ $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION correlation(
   x random_variable, y random_variable, prov uuid DEFAULT gate_one())
   RETURNS double precision AS $$
-  SELECT provsql.covariance(x, y, prov)
-       / NULLIF(provsql.stddev(x, prov) * provsql.stddev(y, prov), 0);
+  SELECT provsql.rv_correlation((x)::uuid, (y)::uuid, prov);
 $$ LANGUAGE sql PARALLEL SAFE STABLE SET search_path=provsql SECURITY DEFINER;
 
 /** @brief C entry point behind @ref entropy (uuid-level binding). */

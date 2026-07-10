@@ -2,10 +2,11 @@
 \pset format unaligned
 
 -- Covariance / correlation / stddev: the bivariate readouts complementing
--- the univariate moment surface.  covariance(X,Y)=E[XY]-E[X]E[Y] reduces to
--- expected() on the gate_arith TIMES product and on each factor, so the
--- Expectation FootprintCache structural-independence path makes an
--- independent pair exact 0.  stddev=sqrt(variance); correlation=cov/(sd*sd).
+-- the univariate moment surface.  covariance(X,Y)=E[XY]-E[X]E[Y] with exact
+-- tiers (identical roots -> variance; disjoint stochastic-leaf footprints ->
+-- exact 0; every factor analytic -> closed-form subtraction) and a single
+-- coupled MC pass over (x, y) pairs otherwise; correlation reads cov and
+-- both variances off the same pass.  stddev=sqrt(variance).
 
 SET provsql.monte_carlo_seed = 1;
 SET provsql.rv_mc_samples = 200000;
@@ -22,7 +23,8 @@ SELECT abs(stddev(normal(2,3))      - 3.0)            < 1e-9 AS sd_normal,   -- 
        abs(stddev(uniform(0,1))     - sqrt(1.0/12.0)) < 1e-9 AS sd_uniform,  -- (b-a)/sqrt(12)
        abs(stddev(exponential(2.0)) - 0.5)            < 1e-9 AS sd_exp;      -- 1/lambda
 
--- 3. Shared leaf: Cov(X,X)=Var(X)=1 and Corr(X,X)=1 (MC via X^2; tolerance).
+-- 3. Shared leaf: Cov(X,X)=Var(X)=1 and Corr(X,X)=1 (identical roots route
+--    to the variance evaluator, closed-form for a bare normal leaf).
 --    Reusing the same gate_rv UUID couples the two arguments perfectly.
 WITH a AS (SELECT (normal(0,1))::uuid u)
 SELECT abs(covariance(random_variable_make(u), random_variable_make(u)) - 1.0) < 0.05

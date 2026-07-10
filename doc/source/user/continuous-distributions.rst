@@ -626,15 +626,20 @@ row* -- they are not aggregates over a group of rows):
     Covariance ``E[xy | prov] − E[x | prov]·E[y | prov]``.
     Structurally independent arguments (disjoint base-RV
     footprints) give an exact ``0``; arguments sharing leaves are
-    correlation-aware, analytically where the product has a
-    closed form and by Monte Carlo otherwise.
+    correlation-aware, analytically where every factor has a
+    closed form and otherwise by a single coupled Monte-Carlo
+    pass that draws ``(x, y)`` pairs from the joint circuit and
+    returns their sample covariance (so the estimator's noise
+    scales with the covariance itself, not with the product of
+    the means).
 
 :sqlfunc:`correlation` ``(x, y [, prov])``
     Pearson correlation, the covariance normalised by the two
-    standard deviations. Returns ``NULL`` when either standard
-    deviation is zero (a degenerate, constant argument). All
-    moments are evaluated under the same conditioning event
-    ``prov``.
+    standard deviations -- on the Monte-Carlo path all three
+    statistics are read off the same coupled pass. Returns
+    ``NULL`` when either standard deviation is zero (a
+    degenerate, constant argument). All moments are evaluated
+    under the same conditioning event ``prov``.
 
 .. code-block:: postgresql
 

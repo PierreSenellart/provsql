@@ -340,7 +340,8 @@ GenericCircuit createGenericCircuit(
  */
 GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token);
 /** @brief Multi-root variant (single-process replacement for @c 'j'). */
-GenericCircuit provsql_inproc_joint_circuit(pg_uuid_t root, pg_uuid_t event);
+GenericCircuit provsql_inproc_joint_circuit(
+  const std::vector<pg_uuid_t> &roots);
 #endif
 
 

@@ -260,6 +260,34 @@ ConditionalScalarSamples monteCarloConditionalScalarSamples(
   const GenericCircuit &gc, gate_t root, gate_t event_root, unsigned samples);
 
 /**
+ * @brief Outcome of a conditional coupled-pair Monte Carlo pass:
+ *        @c xs[i] / @c ys[i] are the two roots' values from the same
+ *        accepted iteration.  @c attempted as in
+ *        @c ConditionalScalarSamples.
+ */
+struct ConditionalScalarPairSamples {
+  std::vector<double> xs;
+  std::vector<double> ys;
+  unsigned attempted;
+};
+
+/**
+ * @brief Rejection-sample the PAIR (@p root_a, @p root_b) conditioned on
+ *        @p event_root.
+ *
+ * The pair analogue of @c monteCarloConditionalScalarSamples: per
+ * iteration the indicator is evaluated first, and on acceptance both
+ * scalar roots are evaluated against the SAME per-iteration caches, so
+ * any stochastic leaf shared between the two values and/or the event
+ * produces one draw all three observe.  The accepted pairs are samples
+ * from the joint conditional distribution @f$(A, B) \mid E@f$ -- the
+ * input the single-pass covariance / correlation estimators need.
+ */
+ConditionalScalarPairSamples monteCarloConditionalScalarPairSamples(
+  const GenericCircuit &gc, gate_t root_a, gate_t root_b,
+  gate_t event_root, unsigned samples);
+
+/**
  * @brief Try to draw @p n exact samples from the conditional
  *        distribution of @p root @b given @p event_root via closed-form
  *        truncation, bypassing MC rejection.
