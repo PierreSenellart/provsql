@@ -1486,27 +1486,31 @@ def evaluate_circuit(
             if condition_uuid
             else sql.SQL("provsql.gate_one()")
         )
-        # Aggregate roots (and conditioned aggregates) have an *exact*
-        # moment, computed by the agg_token dispatcher (moment /
-        # central_moment -> agg_raw_moment, which enumerates the
-        # aggregate's per-row contributions and calls the exact
-        # probability_evaluate).  rv_moment, by contrast, has no
-        # analytical arm for an `agg` gate and falls back to Monte Carlo
-        # (so it depends on provsql.rv_mc_samples and errors when that is
-        # 0).  Route aggregate roots to the exact path so Circuit-mode
-        # moments match the notebook's expected()/variance() and stay
-        # correct at any sample budget; everything else stays on
+        # Aggregate and guarded-selection roots (and conditioned forms of
+        # either) have an *exact* moment, computed by the agg_token
+        # dispatcher (moment / central_moment -> agg_raw_moment, which
+        # enumerates the aggregate's per-row contributions -- or, for a
+        # `case` gate, decomposes over the first-match regions -- and
+        # calls the exact probability_evaluate).  rv_moment, by contrast,
+        # has no analytical arm for `agg` or `case` gates and falls back
+        # to Monte Carlo (so it depends on provsql.rv_mc_samples and
+        # errors when that is 0).  Route these roots to the exact path so
+        # Circuit-mode moments match the notebook's expected()/variance()
+        # and stay correct at any sample budget; everything else stays on
         # rv_moment (continuous RVs: analytical when closed-form, else MC).
+        # A `case` root minted by rv_case (RV-carrier CASE) takes the same
+        # path: agg_raw_moment's case arm is carrier-agnostic, handing
+        # non-aggregate branches to a region-conditioned rv_moment.
         agg_fn = (
             sql.SQL("provsql.central_moment") if central
             else sql.SQL("provsql.moment")
         )
         sql_stmt = sql.SQL(
             "SELECT CASE"
-            "  WHEN provsql.get_gate_type(t) = 'agg'"
+            "  WHEN provsql.get_gate_type(t) IN ('agg', 'case')"
             "       OR (provsql.get_gate_type(t) = 'conditioned'"
             "           AND provsql.get_gate_type((provsql.get_children(t))[1])"
-            "               IN ('agg', 'semimod'))"
+            "               IN ('agg', 'semimod', 'case'))"
             "  THEN {agg_fn}(provsql.agg_token_make(t, 0), {k}, {cond})"
             "  ELSE provsql.rv_moment(t, {k}, {central}, {cond})"
             " END"

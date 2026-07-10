@@ -1098,6 +1098,80 @@ def test_evaluate_moment_aggregate_exact(client):
         })
 
 
+def test_evaluate_moment_agg_case_exact(client):
+    """An aggregate-carrier CASE (a `case` gate over aggregate guards and
+    branches, minted by the planner's agg_case lowering) also has an
+    *exact* moment: agg_raw_moment's case arm decomposes over the
+    first-match regions with exact probabilities.  The moment evaluator
+    must route `case` roots to that path alongside `agg` roots -- a bare
+    rv_moment(case) has no analytical arm and needs the MC fallback,
+    which rv_mc_samples = 0 disables.
+
+    Model (the CS6 Step 17 centre district): two rows, confidences 0.95
+    (certain) and 0.70 (present with probability 0.8), and the headline
+    CASE WHEN min(v) > 0.8 THEN sum(v) ELSE min(v) END.  Two worlds:
+      both present (0.8):  min = 0.70 misses the bar -> headline 0.70
+      one present  (0.2):  min = 0.95 clears it      -> headline 0.95
+    So E = 0.8*0.70 + 0.2*0.95 = 0.75 and
+    Var = 0.8*0.70^2 + 0.2*0.95^2 - 0.75^2 = 0.01, both exact.
+    """
+    setup = (
+        "DROP TABLE IF EXISTS _ev_case CASCADE;"
+        " DROP TABLE IF EXISTS _ev_headline CASCADE;"
+        " CREATE TABLE _ev_case(v float, p float);"
+        " INSERT INTO _ev_case VALUES (0.95, 1.0), (0.70, 0.8);"
+        " SELECT add_provenance('_ev_case');"
+        " SELECT set_prob(provenance(), p) FROM _ev_case;"
+        " CREATE TABLE _ev_headline AS"
+        "   SELECT CASE WHEN min(v) > 0.8 THEN sum(v)"
+        "               ELSE min(v) END AS headline FROM _ev_case;"
+    )
+    resp = client.post("/api/exec", json={"sql": setup, "mode": "circuit"})
+    assert resp.status_code == 200, resp.data
+    try:
+        resp = client.post("/api/exec", json={
+            "sql": "SELECT headline::uuid AS u,"
+                   "       provsql.get_gate_type(headline::uuid) AS gt"
+                   " FROM _ev_headline",
+            "mode": "circuit",
+        })
+        assert resp.status_code == 200, resp.data
+        rows_block = next(
+            b for b in resp.get_json()["blocks"] if "columns" in b
+        )
+        cols = [c["name"] for c in rows_block["columns"]]
+        tok = rows_block["rows"][0][cols.index("u")]
+        # Guard the model: the CASE must have lowered to a case gate.
+        assert rows_block["rows"][0][cols.index("gt")] == "case"
+
+        # Disable the MC fallback: only the exact case arm can answer.
+        r = client.post("/api/config",
+                        json={"key": "provsql.rv_mc_samples", "value": "0"})
+        assert r.status_code == 200, r.data
+        try:
+            # E[headline] = 0.75, exact at any budget.
+            resp = client.post("/api/evaluate", json={
+                "token": tok, "semiring": "moment", "arguments": "1;raw",
+            })
+            assert resp.status_code == 200, resp.data
+            assert abs(float(resp.get_json()["result"]) - 0.75) < 1e-9
+            # Var(headline) = 0.01, exact at any budget.
+            resp = client.post("/api/evaluate", json={
+                "token": tok, "semiring": "moment", "arguments": "2;central",
+            })
+            assert resp.status_code == 200, resp.data
+            assert abs(float(resp.get_json()["result"]) - 0.01) < 1e-9
+        finally:
+            client.post("/api/config",
+                        json={"key": "provsql.rv_mc_samples", "value": "10000"})
+    finally:
+        client.post("/api/exec", json={
+            "sql": "DROP TABLE IF EXISTS _ev_headline CASCADE;"
+                   " DROP TABLE IF EXISTS _ev_case CASCADE;",
+            "mode": "circuit",
+        })
+
+
 def test_evaluate_moment_rejects_bad_arguments(client):
     """Validation: k must be a non-negative integer, central must be
     raw / central."""
