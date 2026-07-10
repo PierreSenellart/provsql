@@ -22,7 +22,7 @@ The Scenario
 
 A municipal observatory operates a small air-quality sensor
 network. Sensors of three different vendors report a
-:math:`PM_{2.5}` concentration (*fine particulate matter*, i.e.
+:math:`\mathit{PM}_{2.5}` concentration (*fine particulate matter*, i.e.
 airborne particles with aerodynamic diameter at most 2.5 μm,
 expressed in micrograms per cubic metre) on a fixed schedule. The sensors differ in calibration and noise
 characteristics:
@@ -186,11 +186,12 @@ The result table renders ``pm25`` as a clickable ``random_variable``
 cell carrying the underlying gate UUID. Click into a row's
 ``pm25``: Studio switches to Circuit mode and renders the
 ``gate_rv`` leaf with the distribution-kind initial in the circle
-(*N* for a Normal, *U* for Uniform, *Exp* for Exponential, *Erl*
+(N for a Normal, U for Uniform, Exp for Exponential, Erl
 for Erlang).
 Pick *Distribution profile* from the *Distribution* group of the
 eval strip and click :guilabel:`Run`: the panel returns
-:math:`\mu` and :math:`\sigma^2` headline stats and an inline
+headline stats: support, mean :math:`\mu`, standard deviation :math:`\sigma`, and entropy :math:`H`,
+as well as an inline
 histogram with a PDF/CDF toggle.
 
 The histogram is backed server-side by :sqlfunc:`rv_histogram`;
@@ -206,17 +207,14 @@ pinning ``provsql.monte_carlo_seed`` in the Config panel (under
 
    The ``gate_rv`` leaf for ``pm25`` on row 1 is a ``N(28, 2)``
    circle; the eval-strip *Distribution profile* panel shows the
-   :math:`\mu`, :math:`\sigma`, support, and an inline histogram.
+   :math:`\mu`, :math:`\sigma`, :math:`H`, support, and an inline histogram.
    When the gate has a closed-form family (here a bare Normal),
-   Studio overlays the analytical PDF on top of the bars; the
-   curve rides the histogram envelope so any mismatch between the
-   sampled histogram and the closed-form shape is immediately
-   visible.
+   Studio overlays the analytical PDF on top of the bars.
 
 Step 2: A First Probabilistic Threshold
 ----------------------------------------
 
-The :math:`PM_{2.5}` *Unhealthy* category begins at 35.1. Find
+The :math:`\mathit{PM}_{2.5}` *Unhealthy* category begins above 35.1. Find
 the rows whose reading might cross it:
 
 .. code-block:: postgresql
@@ -234,7 +232,7 @@ Boolean wrapper (a ``gate_times`` over the row's input token and
 the ``gate_cmp``); the cmp's child link reaches into the
 ``gate_rv`` from Step 1.
 
-The eval strip's :sqlfunc:`probability_evaluate` entry exposes the
+The eval strip's *Marginal probability* entry exposes the
 full method catalogue (see :doc:`the chapter on probabilities
 <probabilities>`). Pick
 ``monte-carlo`` and set ``n = 10000``; the panel returns the
@@ -349,7 +347,7 @@ weighting.
 Step 5: Aggregation Over Random Variables
 ------------------------------------------
 
-Compute average :math:`PM_{2.5}` per district:
+Compute average :math:`\mathit{PM}_{2.5}` per district:
 
 .. code-block:: postgresql
 
@@ -551,7 +549,8 @@ over a ``random_variable`` column builds exactly that:
 
 .. code-block:: postgresql
 
-    SELECT s.district, expected(max(r.pm25)) AS worst_mean
+    SELECT s.district, max(r.pm25) AS worst,
+           expected(max(r.pm25)) AS worst_mean
     FROM readings r JOIN stations s ON s.id = r.station_id
     GROUP BY s.district
     ORDER BY s.district
@@ -562,8 +561,11 @@ at ≈ 39.2, driven by the heavy right tails of ``Exp(0.04)`` and
 ``erlang(3, 0.1)`` even though both means sit near 25–30. Note how
 the extremum tells a different story from Step 5's averages
 (≈ 25.5 and ≈ 21.6): the east district looks fine on average and
-just as alarming at the extreme. Clicking a ``worst_mean``
-input cell's circuit shows a ``gate_arith`` ``MAX`` root over the
+just as alarming at the extreme. ``worst_mean`` itself is a plain
+number -- ``expected`` has already collapsed the distribution to
+its mean -- which is why the query also projects the unreduced
+aggregate: the ``worst`` cell is a clickable ``random_variable``
+token whose circuit is a ``gate_arith`` ``MAX`` root over the
 per-row mixtures; a row absent in a world contributes ``-∞``, the
 order-statistic identity, so it never perturbs the maximum.
 Because the children here are mixtures (not bare leaves), the
@@ -577,14 +579,16 @@ through the schema-qualified ``provsql.greatest(…)`` /
 
 .. code-block:: postgresql
 
-    SELECT expected(greatest(a.pm25, b.pm25)) AS worse_of_two
+    SELECT greatest(a.pm25, b.pm25) AS worse,
+           expected(greatest(a.pm25, b.pm25)) AS worse_of_two
     FROM readings a, readings b
     WHERE a.id = 1 AND b.id = 2
 
-Here the children *are* independent bare leaves (``N(28, 2)`` and
-``U(10, 22)``), so the mean is computed analytically by the
-layer-cake integral -- ≈ 28.00003, barely above the normal's mean,
-since the uniform almost never wins.
+Clicking the ``worse`` cell shows the same ``gate_arith`` ``MAX``
+root, but here the children *are* independent bare leaves
+(``N(28, 2)`` and ``U(10, 22)``), so the mean is computed
+analytically by the layer-cake integral -- ≈ 28.00003, barely above
+the normal's mean, since the uniform almost never wins.
 
 Step 12: Percentiles and Exceedance Margins
 --------------------------------------------
@@ -605,7 +609,9 @@ Each family answers through its own inverse CDF: the normals give
 ``N(40, 4)``), the exponential gives ``−ln(0.05)/λ ≈ 74.89``, and
 the Erlang -- which has no elementary inverse -- is bisected on its
 closed-form CDF to ≈ 62.96. No sampling is involved in any of
-these.
+these. The same readout is available interactively: with a
+``pm25`` cell pinned, pick *Quantile* from the *Distribution*
+group of the eval strip, set the fraction ``p``, and run.
 
 Quantiles compose with conditioning: the median of a reading
 *given* that it crossed the Unhealthy line is the ``p = 0.5``
@@ -620,7 +626,9 @@ quantile of the truncated distribution, again in closed form:
 
 Row 1 (``N(28, 2)``, for which the event is a far tail) gives
 ≈ 35.36, just above the threshold; row 5 (``N(40, 4)``) gives
-≈ 40.53.
+≈ 40.53. In the eval strip, the same conditioning rides on the
+*Conditioned by* badge from Step 6: with it active, *Quantile*
+returns the truncated-distribution quantile.
 
 Step 13: Expected Excess via CASE
 ----------------------------------
@@ -679,10 +687,13 @@ footprints are disjoint -- so ``cov_indep`` is *exactly* ``0``
 (no sampling), and ``sd_a`` is exactly ``2``. The plume-shifted
 pair shares the ``dust`` leaf: in theory
 ``Cov = Var(dust) = 9`` and
-``ρ = 9 / √((4+9)·(12+9)) ≈ 0.545``; the readouts land near
-those values (≈ 10.2 and ≈ 0.62 at seed 42), estimated by Monte
-Carlo since the cross-moment ``E[xy]`` over a shared leaf has no
-closed form.
+``ρ = 9 / √((4+9)·(12+9)) ≈ 0.545``; the readouts land close
+(≈ 9.06 and ≈ 0.544 at seed 42). A shared-leaf cross-moment has
+no closed form, so both statistics come from a single coupled
+Monte-Carlo pass: each iteration draws the plume once, evaluates
+both shifted readings against it, and the sample covariance /
+correlation over those pairs is reported -- which is what keeps
+the estimates tight around the theory values.
 
 Step 15: Drift, Lifetime, and Spikes: More Families
 ----------------------------------------------------
