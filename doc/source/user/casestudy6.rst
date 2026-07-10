@@ -769,10 +769,19 @@ probability to its station's calibration probability, so a row is
 
 .. code-block:: postgresql
 
-    DO $$ BEGIN
-      PERFORM set_prob(r.provsql, cs.p)
-        FROM readings r JOIN calibration_status cs USING (station_id);
-    END $$
+    SELECT set_prob(provenance(),
+                    (SELECT p FROM calibration_status cs
+                      WHERE cs.station_id = r.station_id))
+    FROM readings r
+
+The calibration probability is fetched through a scalar subquery
+so that ``provenance()`` stays the ``readings`` row's own input
+token: joining the two tracked tables instead would make it the
+*joint* row provenance (a ``times`` gate), which ``set_prob``
+cannot pin. ProvSQL warns that the subquery's data is read
+outside provenance tracking ("treated as certain") -- exactly the
+intent here: ``p`` parameterises the presence model, it is not
+uncertain data itself.
 
 The SQL-standard statistic aggregates (:sqlfunc:`stddev_pop` /
 :sqlfunc:`stddev_samp`, :sqlfunc:`covar_pop` / :sqlfunc:`covar_samp` /
