@@ -954,10 +954,15 @@ Three things follow, each matching plain SQL:
   uses a per-row presence indicator that is NULL exactly when the value
   is, so the offline row drops out of the denominator too.)
 
-Delete the placeholder row (``DELETE FROM readings WHERE id = 9``) to
-return to the running dataset. The general rules -- which predicates
-treat NULLs as unknown and what that means for the circuits -- are in
-:doc:`the NULL semantics chapter <nulls>`.
+Delete the placeholder row to return to the running dataset:
+
+.. code-block:: postgresql
+
+    DELETE FROM readings WHERE id = 9;
+
+The general rules -- which predicates treat NULLs as unknown and what
+that means for the circuits -- are in :doc:`the NULL semantics chapter
+<nulls>`.
 
 See :doc:`the chapter on continuous distributions
 <continuous-distributions>` for the full surface and
