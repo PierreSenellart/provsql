@@ -54,6 +54,13 @@ Module Layout
        ``/api/circuit/<token>`` and its ``/expand`` companion. Uses
        :sqlfunc:`circuit_subgraph` server-side, then shells out to
        GraphViz ``dot -Tjson`` for the layout coordinates.
+   * - ``provsql_studio/kc.py``
+     - Knowledge-compilation panel backend: the ``/api/kc/*``
+       endpoints (CNF / d-DNNF / tree-decomposition views, tool
+       availability, registry management, benchmark).
+   * - ``provsql_studio/notebooks/``
+     - The bundled example notebooks (``.ipynb``), generated from
+       the user-guide chapters and served by ``/api/nb/examples``.
    * - ``provsql_studio/static/index.html``
      - The single page; ``app.js`` wires it up at load time.
    * - ``provsql_studio/static/app.js``
@@ -62,6 +69,15 @@ Module Layout
    * - ``provsql_studio/static/circuit.js``
      - Circuit-mode logic: DAG layout, frontier expansion, node
        inspector, eval-strip dispatching.
+   * - ``provsql_studio/static/notebook.js``
+     - Notebook-mode logic: cell model, kernel session handling,
+       ``.ipynb`` import/export.
+   * - ``provsql_studio/static/circuit-vocab.js``
+     - Shared gate-vocabulary table (labels, colors, tooltips)
+       used by the circuit renderer and the inspector.
+   * - ``provsql_studio/static/vendor/``
+     - Vendored third-party front-end libraries (marked, DOMPurify,
+       KaTeX), self-hosted so no CDN is needed at runtime.
    * - ``provsql_studio/static/app.css``
      - BEM-style stylesheet split into two disjoint prefix
        namespaces. ``wp-`` (originally "where_panel", inherited
@@ -82,7 +98,9 @@ Module Layout
    * - ``tests/``
      - Pytest unit suite (one file per Flask blueprint area:
        ``test_circuit.py``, ``test_evaluate.py``, ``test_exec.py``,
-       …) plus ``tests/e2e/`` Playwright smoke scenarios.
+       …) plus ``tests/e2e/`` Playwright smoke scenarios and
+       ``tests/web/`` (the Playground browser/PGlite e2e, excluded
+       from ``make test-studio``).
    * - ``scripts/``
      - Developer-facing demo loaders (``load_demo_temporal.sql``,
        ``big_demo_queries.sql``…). Not shipped in the wheel.
@@ -106,11 +124,12 @@ runtime, fonts are bundled).
    * - Path
      - Method
      - Purpose
-   * - ``/``, ``/where``, ``/circuit``
+   * - ``/``, ``/where``, ``/circuit``, ``/contributions``,
+       ``/temporal``, ``/notebook``
      - GET
      - Static shell. Mode is URL-driven; the body class is set
-       server-side (``mode-where`` / ``mode-circuit``) so the
-       initial render does not flicker.
+       server-side (``mode-<mode>``) so the initial render does
+       not flicker.
    * - ``/static/<path>``
      - GET
      - Static asset passthrough.
@@ -128,9 +147,9 @@ runtime, fonts are bundled).
    * - ``/api/relations``
      - GET
      - Per-relation row dumps for the Where-mode sidebar
-       (capped at ``--max-sidebar-rows``). Skips relations whose
-       first ``provsql`` token is not an ``input`` gate when the
-       “Input gates only” toggle is on.
+       (capped at ``--max-sidebar-rows``). Each relation carries a
+       ``first_gate_type`` field that the front-end's
+       “Input gates only” toggle filters on client-side.
    * - ``/api/schema``
      - GET
      - Schema-panel data: every selectable relation with its
@@ -218,10 +237,33 @@ runtime, fonts are bundled).
      - Drop every user schema in the connected database,
        reinstall provsql, and bounce the pool -- the nav-bar
        “empty database” broom.
+   * - ``/api/install-provsql``
+     - POST
+     - Install the provsql extension in the connected database;
+       backs the binding banner's *Install* action.
+   * - ``/api/contributions``
+     - POST
+     - Contributions-mode evaluation: per-input contribution
+       scores (Shapley / Banzhaf) for a query's result rows.
+   * - ``/api/temporal_relations``, ``/api/temporal_mappings``,
+       ``/api/temporal``
+     - GET / POST
+     - Temporal-mode surface: list temporally-tracked relations
+       and mappings, and run a query under ``sr_temporal``
+       wrapping.
+   * - ``/api/kc/*``
+     - GET / POST
+     - Knowledge-compilation panel (backend in ``kc.py``):
+       ``cnf`` / ``ddnnf`` / ``nnf`` / ``td`` views,
+       ``tools`` availability, ``benchmark``, and the
+       ``registry`` management POSTs (``enable``, ``preference``,
+       ``register``, ``unregister``) that alter the
+       ``provsql.tools`` catalog.
 
 The write endpoints that mutate the database (``/api/set_prob``,
 ``/api/exec``, ``/api/nb/exec``, ``/api/databases``,
-``/api/database/empty``) trust the connecting role for
+``/api/database/empty``, ``/api/install-provsql``, and the
+``/api/kc/registry/*`` POSTs) trust the connecting role for
 authorization: Studio does not enforce a read-only PostgreSQL
 role itself. Connect with the privileges your workflow expects.
 
@@ -273,20 +315,31 @@ GUC the panel and per-query toggles imply:
 - ``provsql.hybrid_evaluation`` (panel, debug-only; gates the
   in-evaluator hybrid path. Same cache-invalidation rule as
   ``simplify_on_load``)
-- ``provsql.provenance = 'where'`` (per-query toggle; locked on in
-  Where mode)
+- ``provsql.provenance`` -- the provenance-class enum, always set
+  to one of ``'semiring'`` / ``'where'`` / ``'absorptive'`` /
+  ``'boolean'``, driven by the Where-mode lock, the per-query
+  toggle, and the session-sticky Boolean-mode selector
 - ``provsql.update_provenance`` (per-query toggle, free in both
   modes)
-- ``provsql.aggtoken_text_as_uuid`` (always ``on``: clickable
-  ``agg_token`` cells need the underlying UUID exposed in text
-  representation)
+- ``provsql.classify_top_level = on`` (always attempted, inside a
+  savepoint so pre-1.6.0 servers that lack the GUC keep working:
+  the classifier NOTICE feeds the result-pane TID / BID / OPAQUE
+  badge)
 - ``statement_timeout`` (panel, in milliseconds)
 - ``search_path``, with ``provsql`` always pinned at the end (see
   :func:`provsql_studio.db.compose_search_path`)
 
-The four continuous-distribution panel GUCs
-(``monte_carlo_seed``, ``rv_mc_samples``, ``simplify_on_load``,
-``hybrid_evaluation``) are enumerated in ``_PANEL_GUCS`` in
+``provsql.aggtoken_text_as_uuid = on`` (clickable ``agg_token``
+cells need the underlying UUID exposed in text representation) is
+*not* part of this per-batch prelude: it is applied once per
+connection as a session default in ``configure_connection``
+(savepoint-guarded for older extensions).
+
+The panel GUCs routed through the ``extra_gucs`` whitelist
+(``provsql.active``, ``verbose_level``, ``monte_carlo_seed``,
+``rv_mc_samples``, ``simplify_on_load``, ``hybrid_evaluation``,
+and ``fallback_compiler``, the latter validated against the live
+``provsql.tools`` registry) are enumerated in ``_PANEL_GUCS`` in
 ``studio/provsql_studio/db.py``; ``simplify_on_load`` and
 ``hybrid_evaluation`` additionally clear ``layout_cache`` in
 ``POST /api/config`` so the next ``/api/circuit`` re-renders a

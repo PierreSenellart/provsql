@@ -491,8 +491,9 @@ the ``x`` leaf, so ``Pr(x >= 2000 ∧ x >= 1000) = Pr(x >= 2000)``. For a
 group of comparisons against constants on a single distribution the
 joint is resolved analytically (through the CDF), so the answer is exact
 regardless of ``provsql.rv_mc_samples`` -- including ``0``. A genuinely
-correlated joint with no closed form (comparisons between two random
-variables that share a leaf) needs Monte Carlo; with
+correlated joint with no closed form (events whose shared leaves admit
+no single pivot, such as comparisons over composite expressions like
+``x + y > z``) needs Monte Carlo; with
 ``provsql.rv_mc_samples = 0`` such a query raises rather than silently
 returning the independent-product approximation.
 
@@ -554,7 +555,9 @@ Moments, Quantiles, and Support
 
 Six polymorphic dispatchers cover the moment / quantile surface; they
 accept ``random_variable``, plain ``uuid``, ``numeric``, and
-``agg_token`` inputs and dispatch internally.
+``agg_token`` inputs and dispatch internally (:sqlfunc:`quantile` is
+the exception: it accepts only ``random_variable`` and plain numeric
+input).
 
 :sqlfunc:`expected` ``(input [, prov [, method [, arguments]]])``
     Expectation ``E[input | prov]``. For a ``random_variable``,
@@ -594,8 +597,8 @@ accept ``random_variable``, plain ``uuid``, ``numeric``, and
     Compound expressions fall back to the empirical Monte Carlo
     quantile with ``percentile_cont``-style interpolation (backed by
     the :sqlfunc:`rv_quantile` C entry point). Plain numeric input is
-    its own quantile (a Dirac). ``agg_token`` input is not yet
-    supported.
+    its own quantile (a Dirac). Plain ``uuid`` and ``agg_token``
+    inputs are not yet supported.
 
     .. code-block:: postgresql
 
@@ -725,9 +728,10 @@ distribution is ``uniform[2, 3]`` with mean ``2.5``; for sensor
 memoryless property gives conditional mean ``2 + 1/0.4 = 4.5``.
 
 Conditioning on a one- or two-sided interval is exact in closed form
-for Normal (Mills-ratio truncation), Uniform (truncated support), and
-Exponential (memorylessness); other shapes are estimated by Monte
-Carlo. If the conditioning event is rare, fewer than ``n`` samples may
+for the families with closed-form truncated moments: Normal
+(Mills-ratio truncation), Uniform (truncated support), Exponential
+(memorylessness), Log-normal, Weibull, Pareto, and Beta; other shapes
+are estimated by Monte Carlo. If the conditioning event is rare, fewer than ``n`` samples may
 be accepted within the ``provsql.rv_mc_samples`` budget, and a
 ``NOTICE`` suggests widening it (or an error under
 ``provsql.rv_mc_samples = 0``).
@@ -751,12 +755,13 @@ downstream analytics.
     so the conditioning event's draw and the value's draw share
     their per-iteration state.
 
-    When the root is a bare ``gate_rv`` of a supported family
-    (Uniform / Normal / Exponential) and the event reduces to an
-    interval constraint on it, the conditional distribution is
-    sampled directly in closed form (uniform on the truncated
-    interval; memoryless shift for exponential one-sided tails;
-    inverse-CDF transform for two-sided exponential and normal).
+    When the root is a bare ``gate_rv`` of a family with a
+    rejection-free truncated sampler (Uniform, Normal,
+    Exponential, Log-normal, Weibull, Pareto, Logistic) and the
+    event reduces to an interval constraint on it, the conditional
+    distribution is sampled directly in closed form (uniform on
+    the truncated interval; memoryless shift for exponential
+    one-sided tails; inverse-CDF transform for the others).
     100% acceptance: exactly ``n`` samples are returned even when
     the event is a tight tail like ``X > 9.5`` over ``U(0, 10)``
     that would degrade the rejection budget.
@@ -777,8 +782,10 @@ downstream analytics.
     for reproducibility.
 
     Accepted root gates are the scalar ones: ``gate_value``
-    (single bin), ``gate_rv``, and ``gate_arith``. Any other gate
-    kind raises.
+    (single bin), ``gate_rv``, ``gate_arith``, ``gate_mixture``,
+    ``gate_agg``, and ``gate_semimod``; a stored ``X | C`` root is
+    first unwrapped to its conditional distribution. Any other
+    gate kind raises.
 
     The same closed-form truncated sampler as :sqlfunc:`rv_sample`
     applies when the shape qualifies, so a tight ``provsql.rv_mc_samples``
@@ -808,10 +815,15 @@ call:
 
 .. code-block:: postgresql
 
-    -- Two mixtures coupled through a shared coin: they always
+    -- Mint a shared coin: a fresh gate_input token pinned to
+    -- probability 0.3.
+    CREATE TEMP TABLE coin(p uuid);
+    INSERT INTO coin VALUES (public.uuid_generate_v4());
+    SELECT create_gate((SELECT p FROM coin), 'input');
+    SELECT set_prob((SELECT p FROM coin), 0.3);
+
+    -- Two mixtures coupled through the shared coin: they always
     -- pick the same side per Monte-Carlo iteration.
-    WITH coin AS (
-      SELECT create_input_gate(0.3) AS p)
     SELECT
       mixture((SELECT p FROM coin),
               normal(0, 1),
@@ -957,17 +969,19 @@ drawn from a broad prior:
     -- M ~ Normal(0, 10);  X ~ Normal(M, 1):  a hierarchical model.
     SELECT expected(normal(normal(0, 10), 1));
 
-Every constructor gains token-accepting overloads for each parameter
+Most constructors gain token-accepting overloads for each parameter
 position (``normal(random_variable, float8)``,
 ``normal(float8, random_variable)``,
 ``normal(random_variable, random_variable)``, and likewise for
-``uniform``, ``exponential``, ``gamma``, ``lognormal``, ``weibull``,
-``pareto``, ``beta``, ``inverse_gamma`` and ``inverse_gaussian``). A
-literal call still resolves to the plain numeric constructor, so the
-common case is unchanged.
+``logistic``, ``uniform``, ``exponential``, ``gamma``, ``lognormal``,
+``weibull``, ``pareto``, ``beta``, ``inverse_gamma`` and
+``inverse_gaussian``; ``erlang``, ``chi_squared`` and ``wald`` keep
+literal-only forms). A literal call still resolves to the plain
+numeric constructor, so the common case is unchanged.
 
-The **discrete** families join in through ``poisson(random_variable)``
-and ``binomial(integer, random_variable)`` (a latent rate / success
+The **discrete** families join in through ``poisson(random_variable)``,
+``geometric(random_variable)``, ``binomial(integer, random_variable)``
+and the ``negative_binomial`` overloads (a latent rate / success
 probability, e.g. ``poisson(120 * R)`` or ``binomial(50, 40.0 / N)``).
 A latent parameter cannot be enumerated into a categorical at
 construction, so these build a sampled leaf like the continuous ones;

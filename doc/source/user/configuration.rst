@@ -137,18 +137,33 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 .. _provsql-verbose-level:
 
 ``provsql.verbose_level`` (default: ``0``)
-    Controls the verbosity of ProvSQL diagnostic messages. ``0`` is silent.
-    The meaningful thresholds are:
+    Controls the verbosity of ProvSQL diagnostic messages. ``0`` is
+    silent; ``1``–``9`` enable informational messages, ``10``–``100``
+    debug information. Thresholds include:
 
+    * **≥ 1** – report the safe-query / inversion-free certificate
+      attached to a rewritten query.
+    * **≥ 5** – evaluator informational messages: approximation
+      guarantees of sampling-based probability methods,
+      comparator-resolution summaries, reasons for declining the
+      safe-query rewrite.
+    * **≥ 10** – route notices from the SQL-level evaluators (e.g. a
+      notice when the reachability route falls back to the generic
+      path).
     * **≥ 20** – print the rewritten SQL query before and after provenance
       rewriting (requires PostgreSQL ≥ 15); print the Tseytin circuit and
       compiled d-DNNF filenames during knowledge compilation; report which
       d-DNNF method was chosen (direct interpretation, tree decomposition,
       or external compilation) and its gate count; keep all intermediate
       temporary files (Tseytin, d-DNNF, DOT) instead of deleting them.
+    * **≥ 25** – report the gate count of a d-DNNF obtained by tree
+      decomposition.
+    * **≥ 30** – internal debug traces of the probability evaluators
+      and the safe-query detector.
     * **≥ 40** – also print the time spent by the planner on rewriting.
     * **≥ 50** – also print the full internal parse-tree representation of
-      the query before and after rewriting.
+      the query before and after rewriting, and the probability
+      method-chooser's cost-calibration notices.
 
 ``provsql.aggtoken_text_as_uuid`` (default: ``off``)
     Controls how an ``agg_token`` cell renders as text. By default the
@@ -186,12 +201,24 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``probability_evaluate(..., 'monte-carlo', 'n')`` where the sample
     count is an explicit argument.
 
+.. _provsql-ess-warn-fraction:
+
+``provsql.ess_warn_fraction`` (default: ``0.1``)
+    Effective-sample-size warning threshold for likelihood weighting.
+    Latent-variable posterior inference draws latents from the prior
+    and weights them by the observed leaves' densities; when the
+    posterior effective sample size falls below this fraction of the
+    accepted draws, a warning is emitted: the weights are degenerating
+    (raise ``provsql.rv_mc_samples``, or the model has many
+    observations per latent). Set to ``0`` to silence the warning.
+
 .. _provsql-simplify-on-load:
 
 ``provsql.simplify_on_load`` (default: ``on``)
-    Apply the universal peephole simplifier (currently the
-    ``RangeCheck`` cmp-resolution pass; future passes plug into the
-    same pipeline) when loading a provenance circuit from the
+    Apply the universal peephole simplifier (the ``RangeCheck``
+    cmp-resolution pass, degenerate-mixture collapse, constant folding
+    of deterministic arithmetic, and semiring-identity folding) when
+    loading a provenance circuit from the
     mmap store into memory. Every comparator decidable from the
     propagated support intervals collapses to a Bernoulli
     ``gate_input`` with probability ``0`` or ``1``, transparent to
@@ -205,9 +232,12 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
 
 ``provsql.tool_search_path`` (default: empty)
     Colon-separated list of directories prepended to ``PATH`` when ProvSQL
-    spawns external command-line tools: the d-DNNF compilers (``d4``,
-    ``c2d``, ``minic2d``, ``dsharp``), the WeightMC weighted model counter
-    (``weightmc``), and the GraphViz ASCII renderer (``graph-easy``). The
+    spawns external command-line tools: every tool resolved through the
+    ``provsql.tools`` registry (the d-DNNF compilers ``d4``, ``d4v2``,
+    ``c2d``, ``minic2d``, ``dsharp``, the model counters, the GraphViz
+    ASCII renderer ``graph-easy``, admin-registered tools…; see
+    :doc:`tool-registry`). Tools of ``kind = 'kcmcp'`` are reached over
+    a socket and do not involve ``PATH``. The
     server's ``PATH`` is searched as a fallback, so an entry here only needs
     to be set when a tool lives outside the server's default ``PATH`` (e.g.
     in ``$HOME/local/bin``, a Conda environment, ``/opt/...``). Example:
@@ -242,6 +272,42 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     .. code-block:: postgresql
 
         SET provsql.fallback_compiler = 'c2d';
+
+.. _provsql-last-eval-method:
+
+``provsql.last_eval_method`` (default: empty)
+    Read-only report of the probability evaluation method(s) used by
+    the most recent :sqlfunc:`probability_evaluate` call: set
+    automatically after each call to the method that produced the
+    result (comma-separated and deduplicated across calls in the
+    session). Useful to see which strategy the default auto-selection
+    settled on.
+
+.. _provsql-joint-max-treewidth:
+
+``provsql.joint_max_treewidth`` (default: ``10``)
+    Maximum joint treewidth the joint-width UCQ probability compiler
+    attempts. Above this bound the route declines and the evaluation
+    falls back to the standard probability ladder.
+
+.. _provsql-joint-max-states:
+
+``provsql.joint_max_states`` (default: ``65536``)
+    Per-bag dynamic-programming state-count cap of the joint-width UCQ
+    probability compiler; exceeding it makes the route decline and the
+    evaluation fall back to the ladder. This cap, rather than the
+    treewidth bound above, is the true safety net: the realised state
+    count is governed by data sparsity and is typically far below the
+    a-priori bound.
+
+.. _provsql-mobius-max-gates:
+
+``provsql.mobius_max_gates`` (default: ``4000000``)
+    Data-cost cap of the safe-UCQ Möbius-inversion probability route:
+    the route declines (falling through to the joint-width compiler or
+    the ladder) once its compile has built more than this many gates,
+    so a high-level safe query on large data never out-costs the
+    general pipeline.
 
 .. _provsql-kcmcp-server:
 

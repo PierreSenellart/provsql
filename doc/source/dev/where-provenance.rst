@@ -186,7 +186,7 @@ describes:
    * - Gate types used
      - ``input``, ``plus``, ``times``, ``monus``, ``delta``,
        ``agg``, ``semimod``, ``value``, ``cmp``, ``rv``, ``arith``,
-       ``mixture``
+       ``mixture``, ...
      - ``input``, ``plus``, ``times``, ``project``, ``eq``
    * - Extra gates emitted
      - Always (when ProvSQL is active)

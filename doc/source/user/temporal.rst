@@ -22,9 +22,15 @@ type to represent validity periods.
 Temporal Tables
 ---------------
 
-A temporal table is a provenance-enabled table augmented with a validity
-interval column. Helper functions are provided to create and manage such
-tables.
+A temporal table is simply a provenance-enabled table
+(:sqlfunc:`add_provenance`) queried with data-modification tracking on
+(``provsql.update_provenance = on``, see :doc:`data-modification`): no
+validity column is added to the user table. Validity ranges live in the
+``provsql.update_provenance`` table (its ``valid_time`` column, a
+``tstzmultirange``), maintained automatically by the data-modification
+machinery; the
+functions below (:sqlfunc:`get_valid_time`, :sqlfunc:`timetravel`,
+:sqlfunc:`timeslice`, :sqlfunc:`history`) query them.
 
 Valid-Time Queries
 ------------------

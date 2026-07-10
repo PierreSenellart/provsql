@@ -31,20 +31,29 @@ token of the input tuple whose contribution to measure:
 .. code-block:: postgresql
 
     SELECT person,
-           shapley(provenance(), m.token) AS sv
+           shapley(provenance(), m.provenance) AS sv
     FROM suspects, witness_mapping m;
 
 To compute Shapley values for all input variables at once (more efficient
 than calling :sqlfunc:`shapley` once per variable), use
-:sqlfunc:`shapley_all_vars`:
+:sqlfunc:`shapley_all_vars`.  Because a set-returning function cannot
+appear in the ``FROM`` clause of a query that ProvSQL rewrites,
+materialise the result token first and call it from an untracked
+query:
 
 .. code-block:: postgresql
 
-    SELECT person, value AS witness, sv
-    FROM suspects,
-         shapley_all_vars(provenance()) AS (variable uuid, sv double precision),
+    CREATE TEMP TABLE result_token AS
+      SELECT person, provenance() AS token FROM suspects;
+    -- the materialised table inherits provenance tracking; drop it
+    -- so the query below is not itself rewritten
+    SELECT remove_provenance('result_token');
+
+    SELECT person, m.value AS witness, s.value AS sv
+    FROM result_token,
+         shapley_all_vars(token) s,
          witness_mapping m
-    WHERE m.token = variable;
+    WHERE m.provenance = s.variable;
 
 Computing Banzhaf Values
 -------------------------
@@ -55,7 +64,7 @@ conventions as their Shapley counterparts:
 .. code-block:: postgresql
 
     SELECT person,
-           banzhaf(provenance(), m.token) AS bv
+           banzhaf(provenance(), m.provenance) AS bv
     FROM suspects, witness_mapping m;
 
 Computation Notes
@@ -63,9 +72,12 @@ Computation Notes
 
 Shapley-value computation is generally :math:`\#P`-hard. ProvSQL compiles the
 provenance circuit to a d-DNNF and evaluates it efficiently. The optional
-third argument selects the compilation method (``'tree-decomposition'``,
-``'d4'``, ``'c2d'``, etc.), with the same semantics as for
-:sqlfunc:`probability_evaluate`.
+third argument selects the d-DNNF construction
+(``'tree-decomposition'``, ``'interpret-as-dd'``, ``'compilation'``);
+with ``'compilation'``, the fourth argument names the external
+compiler, e.g. ``shapley(token, var, 'compilation', 'd4')``. When the
+third argument is empty, ``'default'``, or ``'auto'``, the cheapest
+route is selected automatically.
 
 Choosing Between Shapley and Banzhaf
 --------------------------------------

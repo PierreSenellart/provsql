@@ -211,10 +211,11 @@ become alternatives under a single ``mulinput`` (multivalued input) gate
 variable whose values are the candidate species the classifier
 considered for that box.
 
-:sqlfunc:`repair_key` takes a single key attribute, so add a synthetic
-key combining photo and bounding-box index first. ``repair_key``
-reinstalls the ``provsql`` column itself, so also drop the old mapping
-(whose tokens are about to become stale):
+For illustration, add a synthetic key combining photo and bounding-box
+index first (:sqlfunc:`repair_key` also accepts a comma-separated
+column list, so ``'photo_id,bbox_id'`` would work directly).
+``repair_key`` reinstalls the ``provsql`` column itself, so also drop
+the old mapping (whose tokens are about to become stale):
 
 .. code-block:: postgresql
 

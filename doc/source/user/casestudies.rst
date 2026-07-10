@@ -150,7 +150,7 @@ Setup and basics
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
    "``add_provenance``", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
-   "``remove_provenance``", "", "", "", "", "", "✓", "", "", ""
+   "``remove_provenance``", "", "", "✓", "✓", "", "✓", "", "", ""
    "``provenance()`` (SELECT-list)", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓", "✓"
    "``create_provenance_mapping`` (table)", "✓", "✓", "✓", "✓", "", "", "", "✓", ""
    "``create_provenance_mapping`` (``maintained``)", "", "", "", "", "✓", "", "", "", ""
@@ -175,12 +175,12 @@ Supported SQL constructs
    "EXCEPT (monus)", "✓", "✓", "", "", "", "✓", "", "", ""
    "UNION / UNION ALL", "", "", "✓", "", "", "", "✓", "✓", ""
    "HAVING", "", "", "✓", "", "", "", "✓", "✓", ""
-   "VALUES", "", "✓", "", "", "", "✓", "", "", ""
+   "VALUES", "", "", "", "", "", "✓", "", "", ""
    "CTE (WITH)", "", "", "", "", "", "✓", "", "✓", "✓"
    "WITH RECURSIVE", "", "", "", "", "", "", "", "✓", ""
    "LATERAL", "", "", "", "✓", "", "", "✓", "", ""
    "FILTER clause on aggregates", "", "", "✓", "", "", "", "", "", ""
-   "CREATE TABLE AS SELECT", "✓", "", "", "✓", "✓", "✓", "", "", "✓"
+   "CREATE TABLE AS SELECT", "✓", "✓", "", "✓", "✓", "✓", "", "", "✓"
    "Provenance-bearing VIEW", "", "", "✓", "", "✓", "", "", "", ""
    "INSERT … SELECT (provenance propagation)", "", "", "", "", "", "✓", "", "", ""
 
@@ -403,7 +403,7 @@ Temporal features
    :header: "Feature", "T", "1", "2", "3", "4", "5", "6", "7", "8"
    :widths: 40, 4, 4, 4, 4, 4, 4, 4, 4, 4
 
-   "``union_tstzintervals``", "", "", "", "", "✓", "", "", "", ""
+   "``union_tstzintervals``", "", "", "", "", "", "", "", "", ""
    "``timeslice``", "", "", "", "", "✓", "", "", "", ""
    "``timetravel``", "", "", "", "", "✓", "", "", "", ""
    "``history``", "", "", "", "", "✓", "", "", "", ""

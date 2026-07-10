@@ -97,8 +97,10 @@ Databases
 ---------
 
 One IndexedDB-persisted PGlite cluster holds a database per tutorial and
-case study (``tutorial``, ``cs1``, ``cs2``, ``cs4``-``cs7``; ``cs3`` is
-omitted as it needs a large external GTFS download), switchable from the
+case study (``tutorial``, ``cs1``, ``cs2``, ``cs4``-``cs8``; ``cs3`` is
+omitted as it needs a large external GTFS download, and ``cs8`` is
+seeded empty -- provsql-enabled but with no ``setup.sql``, since its
+notebook's own cells create the data), switchable from the
 connection chip. ``build-casestudies.py`` derives them from the canonical
 ``doc/{tutorial,casestudyN}/setup.sql`` scripts, rewriting the psql-only
 ``COPY ... FROM stdin`` / ``\copy`` constructs into ``INSERT`` s and
@@ -156,8 +158,9 @@ against their own module URL and the shell mounts ``ui.html`` by a relative
 URL, so the result is a pure static bundle that runs unchanged at a server
 root or under a sub-path (``/playground/``), needs no rewrite rules, and
 works over ``file://``. A small ``index.html`` landing page gates on JSPI
-(browser support, the Firefox flag) and links to the shell (``app.html``),
-with a second CTA straight to the tutorial notebook
+(browser support, the Firefox flag); its primary CTA opens the CS8
+notebook (``app.html?nb=cs8``), with a second CTA straight to the
+tutorial notebook
 (``app.html?nb=tutorial``) and per-case-study notebook links; shared deep
 links (``?mode=`` / ``?db=`` / ``?q=`` / ``?nb=``) forward straight to the
 shell. A first visit on a bare ``app.html`` URL (no deep-link parameter,

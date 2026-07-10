@@ -118,10 +118,11 @@ that need a one-row-per-node view should deduplicate on ``node``):
       (SELECT provenance() FROM personnel WHERE name = 'John'),
       4);
 
-``depth`` is the node's shortest-path distance from the root, so an edge
-``(parent, child)`` always satisfies ``parent.depth + 1 >= child.depth``;
-equality holds on shortest-path edges, strict inequality on
-"shortcut" edges into a multi-parent child. For a node at
+``depth`` is the node's longest-path distance from the root within the
+depth bound (the standard circuit-depth notion), so an edge
+``(parent, child)`` satisfies ``child.depth >= parent.depth + 1``,
+except at the ``max_depth`` truncation frontier where the longer paths
+are cut off. For a node at
 ``depth = max_depth``, the caller can compare :sqlfunc:`get_children`
 against the edges reported to detect a frontier node and request
 another layer.
@@ -160,10 +161,27 @@ types that appear:
   lift of WHERE comparators on ``random_variable`` columns; see
   :doc:`continuous-distributions`)
 * ``delta`` – δ-semiring operator :cite:`DBLP:conf/pods/AmsterdamerDT11`
-* ``update`` – update operation gate
-* ``rv`` – continuous random-variable leaf (Normal / Uniform /
-  Exponential / Erlang); see :doc:`continuous-distributions`
-* ``arith`` – N-ary arithmetic over scalar children
-  (``+ - * /``, unary ``-``)
+* ``update`` – update operation gate (data-modification tracking; see
+  :doc:`data-modification`)
+* ``rv`` – continuous random-variable leaf carrying one of the
+  registered distribution families (Normal, Uniform, Exponential,
+  Gamma, Beta…); see :doc:`continuous-distributions`
+* ``arith`` – N-ary arithmetic over scalar children (``+ - * /``,
+  unary ``-``, min/max, power, ``ln``/``exp``, and the
+  ``percentile_cont`` order statistic)
 * ``mixture`` – Bernoulli or categorical mixture of scalar
   random-variable roots
+* ``assumed`` – structural assumption marker over a single child; its
+  ``extra`` label names the assumption (``'boolean'`` or
+  ``'absorptive'``) the wrapped sub-circuit was computed under
+* ``annotation`` – transparent single-child wrapper carrying a
+  query-level annotation string (e.g. the inversion-free tractability
+  certificate)
+* ``conditioned`` – conditioning marker with children
+  ``[target, evidence]``; see :doc:`conditioning`
+* ``mobius`` – signed Möbius combination over child islands, one
+  integer coefficient per child (safe-UCQ probability evaluation)
+* ``case`` – guarded selection over random-variable children,
+  first-match semantics
+* ``observe`` – likelihood-weighting evidence on an observed
+  random-variable leaf

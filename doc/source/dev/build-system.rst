@@ -26,8 +26,11 @@ Key variables in ``Makefile.internal``:
 - ``MODULE_big = provsql`` -- the shared library name.
 - ``OBJS`` -- the list of object files to compile (both C and |cpp|).
 - ``DATA`` -- SQL files installed to the extension directory.
-- ``REGRESS`` -- test names for ``pg_regress``.
-- ``PG_CPPFLAGS`` -- extra compiler flags (|cpp17|, Boost headers).
+- ``REGRESS`` -- deliberately defined but empty: the tests are driven
+  by ``REGRESS_OPTS``, which points ``pg_regress`` at the generated
+  ``test/schedule``.
+- ``PRECXXFLAGS`` -- extra |cpp| compiler flags (|cpp17|, the Boost
+  include path); ``PG_CPPFLAGS`` only carries debug/coverage flags.
 - ``LINKER_FLAGS`` -- ``-lstdc++ -lboost_serialization``.
 
 LLVM JIT is explicitly disabled (``with_llvm = no``) due to known
@@ -103,7 +106,12 @@ installed alongside the main ``provsql--<version>.sql`` file by the
 .. code-block:: makefile
 
    UPGRADE_SCRIPTS = $(wildcard sql/upgrades/$(EXTENSION)--*--*.sql)
-   DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(UPGRADE_SCRIPTS)
+   DATA = sql/$(EXTENSION)--$(EXTVERSION).sql $(BASE_INSTALL) \
+          $(UPGRADE_SCRIPTS) $(DEV_UPGRADE)
+
+(``BASE_INSTALL`` is the frozen 1.0.0 install-script fixture and
+``DEV_UPGRADE`` the auto-generated dev-cycle upgrade script, both
+described below.)
 
 Upgrade support starts with **1.2.1**: back-upgrade scripts were
 created for ``1.0.0 → 1.1.0 → 1.2.0 → 1.2.1``, and every release
@@ -115,12 +123,12 @@ Writing an Upgrade Script
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Each upgrade script is a hand-written delta file that re-runs the
-SQL changes made during one release cycle.  Since every release so
-far has consisted of in-place ``CREATE OR REPLACE FUNCTION`` rewrites
-or purely additive ``CREATE FUNCTION`` / ``CREATE CAST`` statements,
-writing an upgrade script is usually a matter of copy-pasting the
-modified function bodies from ``sql/provsql.common.sql`` (or
-``sql/provsql.14.sql``) into a new file under ``sql/upgrades/``:
+SQL changes made during one release cycle.  For plain function
+changes -- in-place ``CREATE OR REPLACE FUNCTION`` rewrites or purely
+additive ``CREATE FUNCTION`` statements -- writing it is a matter of
+copy-pasting the modified function bodies from
+``sql/provsql.common.sql`` (or ``sql/provsql.14.sql``) into a new
+file under ``sql/upgrades/``:
 
 .. code-block:: sql
 
@@ -141,12 +149,18 @@ The script runs inside an implicit transaction (the whole
 everything back.  The script is executed **once** when transitioning
 from A.B.C to X.Y.Z; it does not have to be idempotent on its own.
 
-Non-idempotent statements such as ``CREATE SCHEMA``, ``CREATE TYPE``
-(without ``IF NOT EXISTS``), ``CREATE TABLE``, ``CREATE OPERATOR``,
-``CREATE CAST``, and ``CREATE AGGREGATE`` are allowed **only** if the
-upgrade is the first to introduce the corresponding object --
-PostgreSQL will not re-run the script against an already-upgraded
-installation.
+Statements without an ``OR REPLACE`` form, such as ``CREATE TYPE``,
+``CREATE OPERATOR``, ``CREATE CAST``, and ``CREATE AGGREGATE``, are
+wrapped in ``DO`` blocks that check the corresponding
+``pg_catalog`` table and skip on duplicate, so the script stays
+idempotent (for operators, the guard must additionally require
+``oprcode <> 0``: a ``COMMUTATOR``/``NEGATOR`` forward reference
+auto-creates a *shell* operator under the same key, and treating the
+shell as "exists" would skip the real definition).  A release that
+appends values to the ``provenance_gate`` enum must end its upgrade
+script with ``SELECT reset_constants_cache();`` so that backends
+warmed under the previous version refresh their cached enum-value
+OIDs.
 
 If a release genuinely introduces no SQL-surface change, the upgrade
 script still has to exist so that PostgreSQL can offer the update
@@ -243,12 +257,13 @@ The upgrade chain is exercised end-to-end by a pg_regress test,
 destructive (it ``DROP``\ s the extension ``CASCADE`` to replay
 the upgrade from a clean 1.0.0 state), it must run strictly
 **after** every other test in the suite, including the
-``schedule.14``-only tests that follow ``schedule.common`` on
-PostgreSQL 14+.  To guarantee that ordering regardless of which
+version-gated tests that follow ``schedule.common`` on
+PostgreSQL 14+ / 15+.  To guarantee that ordering regardless of which
 source schedule files are active, the `Makefile.internal`
 rule that assembles ``test/schedule`` appends a single
 ``test: extension_upgrade`` line **after** concatenating
-``schedule.common`` and (where applicable) ``schedule.14``:
+``schedule.common`` and (where applicable) ``schedule.14`` and
+``schedule.15``:
 
 .. code-block:: makefile
 
@@ -257,11 +272,19 @@ rule that assembles ``test/schedule`` appends a single
        if [ $(PGVER_MAJOR) -ge 14 ]; then \
            cat test/schedule.14 >> test/schedule; \
        fi
+       if [ $(PGVER_MAJOR) -ge 15 ]; then \
+           cat test/schedule.15 >> test/schedule; \
+       fi
+   ifneq ($(SKIP_UPGRADE_TEST),yes)
        echo "test: extension_upgrade" >> test/schedule
+   endif
 
-so the final schedule always ends with ``extension_upgrade``.
-The test is therefore **not** listed in either ``schedule.common``
-or ``schedule.14`` source files.
+so the final schedule ends with ``extension_upgrade``; the test is
+therefore **not** listed in any of the source schedule files.  The
+one exception is ``SKIP_UPGRADE_TEST``, set when a ``-dev`` build
+cannot resolve the previous release at all (no committed upgrade
+script and no reachable git tag): with no traversable upgrade path,
+the line is omitted.
 
 The test itself:
 
@@ -291,9 +314,14 @@ The test itself:
    :sqlfunc:`create_provenance_mapping`, and a compiled semiring
    evaluator still work.
 
-The test runs on **every PostgreSQL version in the CI matrix**
-(10 through 18), because it lives inside the standard pg_regress
-suite.  It catches regressions in: committed upgrade scripts,
+The test is scheduled on **every PostgreSQL version in the CI
+matrix** (10 through 18), because it lives inside the standard
+pg_regress suite -- but the upgrade replay itself is only exercised
+on PostgreSQL 12+: older versions disallow multiple
+``ALTER TYPE ... ADD VALUE`` statements inside a single
+multi-statement script, so the test takes an early-exit skip path
+there (matched by ``extension_upgrade_1.out``).  It catches
+regressions in: committed upgrade scripts,
 the ``DATA`` wildcard in ``Makefile.internal`` that ships them,
 and the binary stability of the mmap format across versions.
 
@@ -309,12 +337,29 @@ generates an **empty** upgrade script at build time:
 .. code-block:: makefile
 
    ifneq ($(findstring -dev,$(EXTVERSION)),)
+   BARE_EXTVERSION = $(subst -dev,,$(EXTVERSION))
+   LATEST_RELEASE = $(patsubst sql/upgrades/$(EXTENSION)--%--$(BARE_EXTVERSION).sql,%,\
+                      $(wildcard sql/upgrades/$(EXTENSION)--*--$(BARE_EXTVERSION).sql))
+   ifeq ($(LATEST_RELEASE),)
    LATEST_RELEASE = $(shell git describe --tags --abbrev=0 --match 'v[0-9]*' \
                              2>/dev/null | sed 's/^v//')
+   endif
    ifneq ($(LATEST_RELEASE),)
    DEV_UPGRADE = sql/$(EXTENSION)--$(LATEST_RELEASE)--$(EXTVERSION).sql
+   else
+   SKIP_UPGRADE_TEST = yes
    endif
    endif
+
+``LATEST_RELEASE`` is derived primarily from the file name of the
+committed release upgrade script
+(``sql/upgrades/provsql--<prev>--<bare version>.sql``): unlike
+``git describe``, that works in a source tarball, a Docker ``COPY``
+without ``.git``, and under ``sudo make install`` (where git's
+dubious-ownership protection makes ``describe`` fail silently).
+``git describe`` remains the fallback for the early dev cycle,
+before ``release.sh`` has created that script; ``LATEST_RELEASE``
+can also be overridden on the ``make`` command line.
 
 If a committed upgrade script already exists for the same
 ``LATEST_RELEASE → BARE_VERSION`` pair (i.e.
@@ -336,10 +381,12 @@ SQL deltas introduced during the dev cycle -- master users who
 need a functionally-complete upgrade should wait for the release
 tag and use the committed upgrade script.
 
-On release builds (where ``EXTVERSION`` does not end in ``-dev``)
-or on dev tarballs without a reachable git tag, ``DEV_UPGRADE``
-expands to the empty string and the Makefile falls back to the
-committed upgrade scripts only.
+On release builds (where ``EXTVERSION`` does not end in ``-dev``),
+``DEV_UPGRADE`` expands to the empty string and the Makefile ships
+the committed upgrade scripts only.  On a dev build where *neither*
+the committed release upgrade script *nor* a reachable git tag can
+identify the previous release, ``SKIP_UPGRADE_TEST`` is set and the
+``extension_upgrade`` test is dropped from the schedule.
 
 Manual Testing
 ^^^^^^^^^^^^^^
@@ -405,13 +452,20 @@ creating a new release.  It:
 1. Checks that ``gh``, ``gpg``, and a configured GPG signing key are
    available, and that the version string is newer than any existing
    ``vX.Y.Z`` tag.
-2. Opens ``$EDITOR`` to collect release notes (a pre-filled template;
-   leaving it unchanged aborts).
+2. Checks that the working tree is clean and that ``HEAD`` is on
+   ``origin/master`` (unpushed commits have no CI runs), then
+   verifies that the three platform CI workflows (Linux, macOS, WSL)
+   are green on ``HEAD``'s exact SHA, offering to wait on
+   still-running workflows.
 3. Checks that
    ``sql/upgrades/provsql--<prev>--<new>.sql`` exists (auto-generating
    a no-op script if the SQL sources have not changed since the
-   previous tag, aborting otherwise).
-4. Updates ``default_version`` in ``provsql.common.control``,
+   previous tag, aborting otherwise), then runs the upgrade-chain
+   parity check (``test/upgrade_parity.sh``), dying on any catalog
+   difference between an upgraded and a freshly-created extension.
+4. Opens ``$EDITOR`` to collect release notes (a pre-filled template;
+   leaving it unchanged aborts).
+5. Updates ``default_version`` in ``provsql.common.control``,
    ``version:`` and ``date-released:`` in ``CITATION.cff``, the
    top-level ``version`` and the ``provides.provsql.version`` in
    ``META.json`` (the PGXN Meta Spec file), and prepends a new
@@ -420,11 +474,11 @@ creating a new release.  It:
    release-notes block, with the first
    ``## What's new in <version>`` heading stripped to avoid
    duplicating the release heading).
-5. Commits the bumped files, creates a **GPG-signed** annotated tag
+6. Commits the bumped files, creates a **GPG-signed** annotated tag
    ``vX.Y.Z``, and offers to push the commit and tag.
-6. Offers to create a GitHub Release via ``gh release create`` using
+7. Offers to create a GitHub Release via ``gh release create`` using
    the collected notes.
-7. Offers a post-release bump of ``default_version`` on ``master`` to
+8. Offers a post-release bump of ``default_version`` on ``master`` to
    the next ``X.(Y+1).0-dev`` (or a user-provided ``NEXT_VERSION``).
 
 The signed tag push is what the Linux CI workflow keys on to build
@@ -472,8 +526,10 @@ To cut a Studio release:
 5. Tag ``studio-vX.Y.Z`` and push the tag. ``studio-release.yml``
    takes over from there.
 
-The release workflow runs four jobs:
+The release workflow runs five jobs:
 
+0. **version**: parses the ``studio-vX.Y.Z`` tag once and exposes the
+   version and tag strings as outputs consumed by the other jobs.
 1. **gate**: a single-cell sanity test (Py 3.12 × PG 16) that mirrors
    ``studio.yml``'s lint + pytest steps, run against a checkout of
    the tagged commit. Cheaper than re-running the 24-cell matrix at
@@ -524,7 +580,7 @@ change are not retransferred.
 CI Workflows
 ------------
 
-Eight GitHub Actions workflows are defined:
+Nine GitHub Actions workflows are defined:
 
 .. list-table::
    :header-rows: 1
@@ -553,12 +609,21 @@ Eight GitHub Actions workflows are defined:
    * - ``pgxn.yml``
      - Publishes the release to PGXN.
        Runs only on version tags (``v*.*.*``).
+   * - ``wasm.yml``
+     - In-process-store smoke: builds the extension with
+       ``-DPROVSQL_INPROCESS_STORE`` and runs a single-session
+       functional smoke (the model the PGlite/browser build uses).
+       Runs on every push/PR touching ``src/**``, ``sql/**``,
+       ``wasm/**``, or the workflow file.
    * - ``studio.yml``
-     - Lint, package smoke, and pytest+Playwright e2e on a Py 3.10/
+     - Lint, package smoke, notebook-drift check, and
+       pytest+Playwright e2e on a Py 3.10/
        3.11/3.12/3.13 × PG 14/15/16 matrix for ProvSQL Studio.
        Runs on every push that touches ``studio/**``,
-       ``sql/provsql.common.sql``, ``sql/provsql.14.sql``, or the
-       workflow file.
+       ``sql/provsql.common.sql``, ``sql/provsql.14.sql``, the
+       workflow file, or the sources of the generated example
+       notebooks (``doc/source/user/*.rst``, ``doc/tutorial/setup.sql``,
+       ``doc/casestudy*/setup.sql``).
    * - ``studio-release.yml``
      - Tag-driven PyPI publish for ProvSQL Studio. Builds sdist +
        wheel, publishes via Trusted Publisher (no API token), and
@@ -566,7 +631,7 @@ Eight GitHub Actions workflows are defined:
        notes assembled from ``studio/CHANGELOG.md``.
        Runs only on Studio tags (``studio-v*``).
 
-The five non-release workflows that run on every applicable push
+The non-release workflows that run on every applicable push
 (``build_and_test``, ``macos``, ``wsl``, ``docs``, ``codeql``, plus
-``studio`` for Studio-touching pushes) must pass before merging to
-``master``.
+``wasm`` and ``studio`` for pushes touching their paths) must pass
+before merging to ``master``.

@@ -41,11 +41,12 @@ value using the :sqlfunc:`where_provenance` function:
 
 .. code-block:: sql
 
-    SELECT name, where_provenance(name)
+    SELECT name, where_provenance(provenance())
     FROM employees;
 
-The function returns a ``where_provenance`` value describing the
-origin of the column value.
+The function takes the row's provenance token and returns a text
+annotation describing, for each output column of the row, the source
+cell(s) it originated from.
 
 For interactive exploration, see Studio's
 :ref:`Where mode <studio-where-mode>`. It runs your query, displays
@@ -71,8 +72,8 @@ Example
 
     SELECT add_provenance('person');
 
-    -- Track where each name came from
-    SELECT p.name, where_provenance(p.name) AS name_source
+    -- Track where each output value came from
+    SELECT p.name, where_provenance(provenance()) AS source
     FROM person p
     JOIN sightings s ON p.id = s.person;
 

@@ -1463,9 +1463,9 @@ collectRvConstraints(const GenericCircuit &gc, gate_t event_root,
 /**
  * @brief Parse a @c gate_value's @c extra as a finite @c float8.
  *
- * Sibling of @c extract_constant_double in @c having_semantics.cpp but
- * with a const @c GenericCircuit ref (used in the closed-form shape
- * detector path).  Bails on @c NaN / @c ±Infinity so a downstream
+ * Sibling of @c extract_constant_string in @c having_semantics.cpp but
+ * parsing a double, with a const @c GenericCircuit ref (used in the
+ * closed-form shape detector path).  Bails on @c NaN / @c ±Infinity so a downstream
  * stem renderer never sees a non-finite x coordinate.
  */
 static bool extract_finite_double(const GenericCircuit &gc, gate_t x,

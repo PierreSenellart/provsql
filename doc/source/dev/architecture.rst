@@ -78,7 +78,7 @@ and algorithms are in |cpp|.
 
 - :cfile:`provsql.c` -- planner hook, ProcessUtility hook
   (CTAS / ``SELECT INTO`` / matview lineage), executor hooks,
-  and the bulk of the query rewriting logic (~3700 lines).
+  and the bulk of the query rewriting logic (~15,000 lines).
 - :cfile:`safe_query.c` / :cfile:`safe_query.h` -- safe-query
   rewriter for hierarchical CQs (Dalvi & Suciu 2012), gated on
   the ``'boolean'`` provenance class ; includes the FD-aware
@@ -165,8 +165,8 @@ and algorithms are in |cpp|.
 *Semiring evaluation*
 
 - ``semiring/*.h`` -- header-only semiring implementations (Boolean,
-  BoolExpr, Counting, Formula, IntervalUnion, Lukasiewicz, Tropical,
-  Viterbi, Which, Why).
+  BoolExpr, Counting, Formula, How, IntervalUnion, Lukasiewicz,
+  MinMax, Tropical, Viterbi, Which, Why).
 - :cfile:`provenance_evaluate_compiled.cpp` /
   :cfile:`provenance_evaluate_compiled.hpp` -- dispatcher for
   compiled semirings.
@@ -179,6 +179,52 @@ and algorithms are in |cpp|.
 - :cfile:`Aggregation.h` / :cfile:`Aggregation.cpp` -- aggregate
   operator enum, accumulator interface, and built-in accumulators
   (see :doc:`aggregation`).
+- :cfile:`aggregation_evaluate.c` -- SQL entry points for
+  aggregate-provenance evaluation.
+
+*Continuous random variables* (see :doc:`continuous-distributions`)
+
+- :cfile:`RandomVariable.h` / :cfile:`RandomVariable.cpp` /
+  :cfile:`random_variable_type.c` -- the ``random_variable`` type,
+  the ``DistributionSpec`` POD, and the ``gate_rv`` blob parser.
+- ``distributions/`` -- the registry-driven per-family
+  ``Distribution`` class hierarchy (one self-registering file per
+  family).
+- :cfile:`MonteCarloSampler.h` / :cfile:`MonteCarloSampler.cpp` --
+  the Monte Carlo sampler.
+- :cfile:`RangeCheck.h` / :cfile:`RangeCheck.cpp` -- support-interval
+  propagation and comparator resolution.
+- :cfile:`AnalyticEvaluator.h` / :cfile:`AnalyticEvaluator.cpp` --
+  closed-form CDF resolution for ``gate_cmp``.
+- :cfile:`Expectation.h` / :cfile:`Expectation.cpp` -- analytical
+  moment evaluator (with :cfile:`PivotIntegration.h`, the shared
+  quadrature core).
+- :cfile:`HybridEvaluator.h` / :cfile:`HybridEvaluator.cpp` --
+  peephole simplifier and island decomposition.
+- :cfile:`InformationTheory.h` / :cfile:`InformationTheory.cpp` --
+  entropy / KL / mutual-information readouts.
+
+*External tools and KCMCP* (see :doc:`kc-server-protocol`)
+
+- :cfile:`external_tool.cpp` -- external-tool resolution and
+  invocation (``provsql.tool_search_path``, process groups).
+- :cfile:`ToolRegistry.cpp` -- the compiled-in seed of the
+  ``provsql.tools`` registry.
+- :cfile:`kcmcp_protocol.h` / :cfile:`kcmcp_protocol.cpp` -- shared
+  KCMCP wire codec.
+- :cfile:`kcmcp_client.cpp` -- in-extension KCMCP client.
+- :cfile:`kcmcp_supervisor.c` -- background worker supervising the
+  managed KCMCP server.
+- :cfile:`kcmcp_server.cpp` / :cfile:`dimacs_cnf.cpp` -- the
+  ``tdkc --kcmcp`` reference server.
+
+*Build-configuration and storage abstraction*
+
+- :cfile:`provsql_config.h` -- the ``PROVSQL_INPROCESS_STORE`` /
+  ``PROVSQL_NO_SUBPROCESS`` switches for the WASM / in-process
+  build (see :doc:`playground`).
+- :cfile:`MappedRegion.h` -- backing abstraction for the mmap
+  regions (kernel-shared mmap vs. heap buffer).
 
 *Data-decomposition compilers (reachability, joint-width, Möbius)*
 
@@ -202,6 +248,8 @@ and algorithms are in |cpp|.
   (see :doc:`probability-evaluation`).
 - :cfile:`dDNNF.h` / :cfile:`dDNNF.cpp` -- d-DNNF data structure and
   linear-time probability evaluation.
+- :cfile:`StructuredDNNF.h` / :cfile:`StructuredDNNF.cpp` --
+  vtree-structured DNNF used by the inversion-free OBDD route.
 - :cfile:`dDNNFTreeDecompositionBuilder.h` /
   :cfile:`dDNNFTreeDecompositionBuilder.cpp` -- constructs a d-DNNF
   from a tree decomposition.
@@ -356,28 +404,35 @@ defined in :cfile:`provsql_utils.h`:
      - Delta operator (δ-semiring).
    * - ``gate_value``
      - Scalar constant value. The ``extra`` blob encodes the literal
-       in text form; the *integer* mode (parsed by
-       ``extract_constant_C``) is used in HAVING sub-circuits and
-       the *float8* mode (parsed by ``extract_constant_double``)
-       is used to lift numeric constants into the continuous
-       random-variable surface.
+       in text form; the mode used in HAVING sub-circuits is parsed
+       as a string by ``extract_constant_string``
+       (:cfile:`having_semantics.cpp`) and the *float8* mode,
+       used to lift numeric constants into the continuous
+       random-variable surface, is parsed as a double by the RV
+       evaluators.
    * - ``gate_mulinput``
      - Multivalued input (for Boolean probability).
    * - ``gate_cmp``
-     - Comparison gate used in HAVING sub-circuits (``<``, ``=``, etc.).
+     - Comparison gate (``<``, ``=``, etc.) used in HAVING
+       sub-circuits and by the planner lift of WHERE comparisons on
+       ``random_variable`` columns.
    * - ``gate_update``
      - Update-provenance gate.
    * - ``gate_rv``
      - Continuous random-variable leaf. The ``extra`` blob encodes
-       the distribution kind and parameters
-       (``normal:μ,σ``, ``uniform:a,b``, ``exponential:λ``,
-       ``erlang:k,λ``).
+       the distribution family and parameters
+       (e.g. ``normal:μ,σ``, ``uniform:a,b``, ``exponential:λ``);
+       the family token resolves through the distribution registry
+       (one self-registering file per family under
+       ``src/distributions/``, see :doc:`continuous-distributions`).
    * - ``gate_arith``
      - ``N``-ary arithmetic over scalar children. The operator tag
        (``provsql_arith_op``: PLUS / TIMES / MINUS / DIV / NEG /
-       MAX / MIN) is stored in ``info1``. MAX / MIN are the order
+       MAX / MIN / POW / LN / EXP / PERCENTILE) is stored in
+       ``info1``. MAX / MIN are the order
        statistics behind ``greatest`` / ``least`` and the
-       RV ``min`` / ``max`` aggregates.
+       RV ``min`` / ``max`` aggregates; PERCENTILE is the
+       ``percentile_cont`` order-statistic aggregate.
    * - ``gate_mixture``
      - Probabilistic mixture of scalar random-variable roots gated by
        a Bernoulli weight. The wire vector is ``[p, x, y]`` for a

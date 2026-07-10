@@ -9,9 +9,13 @@ provenance values.
 GROUP BY Queries
 -----------------
 
-When a query includes a ``GROUP BY`` clause, each output group receives an
-``agg`` gate in the provenance circuit. The children of this gate are the
-provenance tokens of all input tuples that contributed to the group:
+When a query includes a ``GROUP BY`` clause, each aggregate expression
+receives an ``agg`` gate in the provenance circuit (surfaced as the
+``agg_token`` value of that cell). The children of this gate are
+``semimod`` gates, each pairing a contributing row's value with that
+row's provenance token. The group row's own :sqlfunc:`provenance` token
+is a ``plus`` gate over the contributing tokens, wrapped in a ``delta``
+gate marking the aggregation boundary:
 
 .. code-block:: postgresql
 

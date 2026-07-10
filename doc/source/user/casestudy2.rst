@@ -569,8 +569,9 @@ Compute expected Shapley values for Exercise→CVD→beneficial, using
 Johnson2020 (meta-analysis, reliability 0.98) has the highest Shapley value
 (0.3531), reflecting its dominant contribution to the replication probability.
 Smith2018 (RCT, 0.92) scores 0.3267 and Williams2021 (RCT, 0.88) scores 0.3071.
-The three values sum to 0.9869, equal to the replication probability obtained
-in Step 12, as guaranteed by the efficiency axiom for expected Shapley values.
+The three values sum to 0.9869, matching (up to rounding) the replication
+probability 0.9868 obtained in Step 12, as guaranteed by the efficiency axiom
+for expected Shapley values.
 
 Step 14: Banzhaf Values
 ------------------------
@@ -763,12 +764,12 @@ not flatten the lineage:
 
 .. code-block:: text
 
-    exposure | outcome                | n_studies | studies                              | n_beneficial
-    ---------+------------------------+-----------+--------------------------------------+-------------
-    Coffee   | Cardiovascular Disease | 3 (*)     | Brown2022, Chen2019, Garcia2017 (*)  | 1 (*)
-    Coffee   | Cognitive Decline      | 2 (*)     | Brown2022, Park2021 (*)              | 2 (*)
-    Exercise | Cardiovascular Disease | 3 (*)     | Johnson2020, Smith2018, Williams2021 | 3 (*)
-    Exercise | Inflammation           | 1 (*)     | Smith2018 (*)                        | 1 (*)
+    exposure | outcome                | n_studies | studies                                  | n_beneficial
+    ---------+------------------------+-----------+------------------------------------------+-------------
+    Coffee   | Cardiovascular Disease | 3 (*)     | Brown2022, Chen2019, Garcia2017 (*)      | 1 (*)
+    Coffee   | Cognitive Decline      | 2 (*)     | Brown2022, Park2021 (*)                  | 2 (*)
+    Exercise | Cardiovascular Disease | 3 (*)     | Johnson2020, Smith2018, Williams2021 (*) | 3 (*)
+    Exercise | Inflammation           | 1 (*)     | Smith2018 (*)                            | 1 (*)
 
 
 Step 18: A Signed-Effect View with ``UNION ALL``
@@ -802,7 +803,7 @@ to ``Brown2022``, the harmful one to ``Garcia2017``:
 .. code-block:: text
 
     exposure | outcome                | sign       | evidence
-    ---------+------------------------+------------+------------
+    ---------+------------------------+------------+------------------------------------------
     Coffee   | Cardiovascular Disease | beneficial | Brown2022
     Coffee   | Cardiovascular Disease | harmful    | Garcia2017
 

@@ -50,8 +50,11 @@ It is purely informational: no side effect on the query tree, no
 behavioural change downstream.
 
 **Decision rules.**  A shape gate first rejects any query carrying
-any of ``hasSubLinks``, ``hasModifyingCTE``, a non-empty ``cteList``,
-a non-NULL ``setOperations``, or a fromlist entry that is neither
+any of ``hasSubLinks``, ``hasModifyingCTE``, ``hasAggs``,
+``hasWindowFuncs``, ``hasTargetSRFs``, a non-empty ``cteList`` /
+``distinctClause`` / ``groupClause`` / ``groupingSets``, a non-NULL
+``havingQual`` or ``setOperations`` (but see the ``UNION ALL``
+promotion below), or a fromlist entry that is neither
 a ``RangeTblRef`` nor an ``INNER`` / ``CROSS`` ``JoinExpr`` (recursed
 into via :cfunc:`classify_fromlist_shape_ok`, which descends
 through each ``JoinExpr``'s two arms to reach the underlying
@@ -61,14 +64,15 @@ sources; ``RTE_SUBQUERY`` entries (the form views take after PG
 rewriting, as well as inline ``FROM``-clause subqueries) are
 descended into recursively under the same shape gate, so a tracked
 base relation reached through any depth of subquery nesting still
-contributes to the accumulator; the PostgreSQL 18 synthetic
-``RTE_GROUP`` and the ``RTE_JOIN`` synthetic alias rows PG appends
-alongside every ``JoinExpr`` are skipped transparently; any other
-rtekind (``RTE_VALUES``, ``RTE_FUNCTION``, ``RTE_CTE`` …) trips
-the shape gate.  Outer joins (``LEFT`` / ``RIGHT`` / ``FULL``)
-stay OPAQUE because their NULL-padding rows break per-row
-independence; ``USING`` and aliased joins are also OPAQUE (they
-would require resolving columns through ``joinaliasvars``).
+contributes to the accumulator; the ``RTE_JOIN`` synthetic alias
+rows PG appends alongside every ``JoinExpr`` are skipped
+transparently; any other rtekind (``RTE_VALUES``, ``RTE_FUNCTION``,
+``RTE_CTE``, the PostgreSQL 18 synthetic ``RTE_GROUP`` -- moot here,
+since ``groupClause`` already trips the gate upstream; the GROUP BY
+block-key promotion below resolves it separately via
+:cfunc:`resolve_through_group_rte` …) trips the shape gate.  Outer
+joins (``LEFT`` / ``RIGHT`` / ``FULL``) stay OPAQUE because their
+NULL-padding rows break per-row independence.
 
 The kind is then decided from the cumulative tracked-source count:
 
@@ -106,6 +110,16 @@ sublinks / ``HAVING`` / ``DISTINCT`` / set operations, a single
 extra group columns, no missing keys).  PG 18's synthetic
 ``RTE_GROUP`` entry is resolved through inline by
 :cfunc:`resolve_through_group_rte`.
+
+**UNION ALL promotion.**  Set operations normally trip the shape
+gate, with one pre-dispatch exception:
+:cfunc:`try_classify_union_all` classifies a pure ``UNION ALL``
+whose every leg is itself TID and whose legs' source relations are
+pairwise disjoint as TID under the cumulative source list.  Non-TID
+legs (including BID legs: rows from different legs sharing a
+block-key value are independent, not mutually exclusive), legs over
+overlapping relations, and every other set-operation shape stay
+OPAQUE.
 
 **Multi-source TID promotion.**  The ``n_meta >= 2`` branch no
 longer collapses to OPAQUE.  :cfunc:`try_classify_multi_source_tid`
@@ -166,11 +180,26 @@ processed by re-entering :cfunc:`process_query`.
 
 The function proceeds in the following order:
 
-Step 0: Early Exit
-^^^^^^^^^^^^^^^^^^
+Step 0: Prologue and FROM-less Queries
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-If the query has no ``FROM`` clause (``q->rtable == NULL``), there is
-nothing to track -- return immediately.
+A short prologue runs before anything else: inert scope-local
+:sqlfunc:`provenance` fetches are resolved by
+:cfunc:`process_inert_fetches`, the conditioning surface is rewritten
+by :cfunc:`rewrite_cond_predicates` (see Step 11 below), projected
+RV comparison events and the ``probability(<predicate>)`` overloads
+are lifted from the target list by
+:cfunc:`rewrite_probability_events`, and a bare boolean aggregate in
+``HAVING`` is normalised to comparison form by
+:cfunc:`normalize_bool_agg_having`.
+
+If the query has no ``FROM`` clause (``q->rtable == NULL``), the rest
+of the rewriter (which indexes into the range table) is skipped, but
+the query is not necessarily returned untouched:
+:cfunc:`migrate_probabilistic_quals` still runs, so a shape like
+``SELECT 1 WHERE normal(0,1) > 2`` gets its comparison lifted into a
+synthesised ``provsql`` column, bound to a single evaluation site via
+a ``FROM (VALUES ...)`` wrapper, before returning.
 
 Step 1: CTE Inlining
 ^^^^^^^^^^^^^^^^^^^^
@@ -197,6 +226,15 @@ because the reachability-aggregation detectors inside it key on
 Inlining happens before set-operation handling because ``UNION`` /
 ``EXCEPT`` branches may reference CTEs.
 
+Between this step and the next, :cfunc:`lower_outer_joins`
+structurally lowers a supported outer join (``LEFT`` / ``RIGHT`` /
+``FULL``) into the ``UNION ALL`` of its matched arm and null-padded
+antijoin arm(s), so the non-monotone provenance of the 0-match world
+is captured.  It is a no-op on every other shape, and it runs before
+provenance discovery and set-operation handling so that the
+constructed ``UNION`` / ``EXCEPT`` subqueries are processed by the
+recursive passes.
+
 Step 2: Strip Existing Provenance Columns
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -218,9 +256,13 @@ If the query has ``setOperations`` (``UNION``, ``EXCEPT``):
   This implements duplicate elimination as provenance addition (⊕).
   The function then re-enters :cfunc:`process_query` on the wrapper.
 
-- ``UNION ALL``: each branch is processed independently.  The
-  provenance tokens from different branches are combined with ⊕
-  (``provenance_plus``) by :cfunc:`process_set_operation_union`.
+- ``UNION ALL``: each branch is processed independently.
+  :cfunc:`process_set_operation_union` validates the pure-``UNION``
+  shape, patches ``colTypes`` for columns that became ``agg_token``,
+  appends the UUID column to every node's column lists, and sets
+  ``all = true``; the branch tokens flow through unchanged -- no ⊕
+  gate is emitted at this level (multiset sum, see the R-rules
+  section below).
 
 - ``EXCEPT ALL``: :cfunc:`transform_except_into_join` rewrites
   ``A EXCEPT ALL B`` as a ``LEFT JOIN`` with a ``provenance_monus``
@@ -298,23 +340,27 @@ the original aggregate result and the provenance of the aggregated
 rows.  The provenance of grouped rows is combined with ⊕
 (``provenance_plus``) via ``array_agg`` + ``provenance_plus``.
 
-After aggregation rewriting:
+Passes surrounding the aggregation rewriting:
 
-- :cfunc:`migrate_probabilistic_quals` moves any ``WHERE``
-  comparisons on aggregate results to ``HAVING`` (and lifts
-  ``WHERE`` comparisons on ``random_variable`` columns into the
-  per-tuple provenance), because aggregate-typed and continuous-RV
-  values both need post-classification routing the executor cannot
-  do directly. See :ref:`probabilistic-qual-classifier` below for
-  the routing matrix.
+- :cfunc:`migrate_probabilistic_quals` runs just *before* the
+  aggregate replacement: it moves any ``WHERE`` comparisons on
+  aggregate results to ``HAVING`` (and lifts ``WHERE`` comparisons on
+  ``random_variable`` columns into the per-tuple provenance), because
+  aggregate-typed and continuous-RV values both need
+  post-classification routing the executor cannot do directly -- and
+  the lifted RV comparisons must factor into each row's contribution
+  to any surrounding aggregation token. See
+  :ref:`probabilistic-qual-classifier` below for the routing matrix.
 
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.
 
 - A bare boolean aggregate in ``HAVING`` (``bool_or(x)``,
-  ``NOT (every(x))``) is first normalised to the ``agg = true``
-  comparison form by :cfunc:`normalize_bool_agg_having`, so the
-  m-semiring routing sees a uniform aggregate-vs-constant shape.
+  ``NOT (every(x))``) is normalised to the ``agg = true``
+  comparison form by :cfunc:`normalize_bool_agg_having` in the
+  prologue of :cfunc:`process_query` (Step 0 above), while the
+  aggregate is still a raw ``Aggref``, so the m-semiring routing
+  sees a uniform aggregate-vs-constant shape.
 
 - An ordered aggregate's ``ORDER BY`` (``aggorder``) is carried onto
   the internal token-collecting ``array_agg`` built by
@@ -353,9 +399,12 @@ needed -- the token is used as-is.
 ``provenance_plus(array_agg(token))`` -- this sums the provenance of
 all tuples in each group.
 
-**Delta gate**:  For queries with aggregation but no ``HAVING``
-clause, a ``provenance_delta`` gate is added.  This implements the
-δ-semiring operator that normalizes aggregate provenance.
+**Delta gate**:  For queries with grouped aggregation but no
+``HAVING`` clause, a ``provenance_delta`` gate is added.  This
+implements the δ-semiring operator that normalizes aggregate
+provenance.  Scalar aggregation (no ``GROUP BY``) gets ``gate_one``
+instead: the single result row exists even over an empty input, so
+its existence provenance is certain rather than δ(⊕ tuples).
 
 **HAVING**:  When a ``HAVING`` clause is present, the lift is gated
 by the :cfunc:`needs_having_lift` walker, which returns true only
@@ -386,8 +435,8 @@ Step 10: Splicing -- ``add_to_select``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 :cfunc:`add_to_select` appends the provenance expression to the
-query's target list as a new column named ``provsql``.  If the query
-has ``GROUP BY``, the column is added to the ``groupClause`` as well.
+query's target list as a new column named ``provsql``, inserted
+before any ``resjunk`` entries.
 
 Step 11: Replace ``provenance()`` Calls
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -404,9 +453,12 @@ without coupling the outer query to it.  The conditioning surface
 (the binary ``|`` operator / :sqlfunc:`cond`, the prefix
 :sqlfunc:`given` whole-tuple rewriter, the prefix ``!`` /
 :sqlfunc:`provenance_not`, and the natural ``X | (predicate)`` form
-for the uuid, ``random_variable`` and ``agg_token`` carriers) is
-rewritten here too, building terminal ``gate_conditioned`` gates; see
-:doc:`/user/conditioning` for the semantics.
+for the uuid, ``random_variable`` and ``agg_token`` carriers) builds
+terminal ``gate_conditioned`` gates.  Both of these lifts actually
+run in the prologue of :cfunc:`process_query` (Step 0 above, via
+:cfunc:`process_inert_fetches` and :cfunc:`rewrite_cond_predicates`),
+before any of the numbered steps; see :doc:`/user/conditioning` for
+the semantics.
 
 
 Rewriting Rules and Formal Semantics
@@ -766,7 +818,7 @@ The extensions and their interaction with the base rewriter:
   ``Var = Const`` induces the FD ``∅ → Var.attno``; the equijoin
   closure propagates the literal to every variable in the same
   union-find class.  Implemented as ``apply_constant_selection_fd_pass``
-  (a pre-pass between ``safe_split_quals`` and the multi-component
+  (a pre-pass between ``qc_split_quals`` and the multi-component
   dispatcher), which propagates synthesised ``Var = const`` conjuncts
   to every atom touched by the class and drops the now-redundant
   equijoin conjuncts from the residual.  Atoms whose every Var is
@@ -873,7 +925,7 @@ The interaction between these extensions and the base rewriter is
 ordered as: PG-18 group-RTE strip → INNER / CROSS JoinExpr
 flattening → simple-subquery inlining → PK self-join unification
 → disjoint-constant certification → candidate gate (shape /
-metadata / ancestry disjointness) → ``safe_split_quals`` →
+metadata / ancestry disjointness) → ``qc_split_quals`` →
 constant-selection pre-pass → multi-component dispatch →
 ``find_hierarchical_root_atoms`` (PK FDs, deterministic
 transparency, ``fd_aware_mode``) → ``rewrite_hierarchical_cq``.

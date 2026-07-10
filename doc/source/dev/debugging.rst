@@ -27,8 +27,8 @@ Set it per-session:
 
    SET provsql.verbose_level = 50;
 
-The GUC is an integer 0--100.  Only three thresholds actually gate
-output:
+The GUC is an integer 0--100, tiered roughly as follows (each level
+includes everything below it):
 
 .. list-table::
    :header-rows: 1
@@ -37,11 +37,21 @@ output:
    * - Level
      - Output
    * - 0 (default)
-     - Quiet.  Values between 1 and 19 behave the same as 0.
+     - Quiet.
+   * - 5+
+     - Informational messages from individual evaluators (e.g.,
+       comparator resolution, probability-method dispatch).
+   * - 10+
+     - Route notices from the SQL-level evaluators (e.g., the
+       reachability route falling back to the generic path).
    * - 20+
      - Full query text before and after ProvSQL rewriting (PostgreSQL
        15+ only, via ``pg_get_querydef``), plus verbose output from
        the Boolean circuit and DOT export code.
+   * - 25+ / 30+
+     - Internals of specific evaluators (Boolean-circuit
+       transformations, probability evaluation, the safe-query
+       rewriter).
    * - 40+
      - Adds timing of the rewriting phase.
    * - 50+

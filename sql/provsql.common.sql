@@ -1945,10 +1945,12 @@ LANGUAGE sql;
  * as a separate row, so callers must deduplicate on <tt>node</tt> if they
  * need a one-row-per-node view.
  *
- * <tt>depth</tt> is the node's BFS depth (its shortest distance from
- * @p root), so for an edge (parent, child) it is always the case that
- * <tt>parent.depth + 1 &gt;= child.depth</tt>; equality holds only on
- * shortest-path edges.  A node at <tt>depth = max_depth</tt> is not
+ * <tt>depth</tt> is the node's longest-path distance from @p root
+ * within the depth bound (the standard circuit-depth notion), so for
+ * an edge (parent, child) it is the case that
+ * <tt>child.depth &gt;= parent.depth + 1</tt>, except at the
+ * <tt>max_depth</tt> truncation frontier.  A node at
+ * <tt>depth = max_depth</tt> is not
  * expanded; callers can detect a partial expansion by comparing
  * <tt>provsql.get_children</tt> length against the number of outgoing
  * edges reported.

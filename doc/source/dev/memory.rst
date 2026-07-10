@@ -35,10 +35,11 @@ starts, the postmaster forks the worker process, which calls
    circuits are opened lazily on the first IPC message for each
    database (see below).
 
-2. **Main loop**: :cfunc:`provsql_mmap_main_loop` reads gate-creation
-   messages from a pipe, writes them to the mmap store, and sends
-   acknowledgements back.  It handles ``SIGTERM`` for graceful
-   shutdown.
+2. **Main loop**: :cfunc:`provsql_mmap_main_loop` reads messages
+   from a pipe, writes gate creations to the mmap store, and sends
+   replies to lookup requests.  The loop exits when reading from
+   the pipe fails (end-of-file or error), e.g. at server shutdown,
+   which triggers the cleanup step below.
 
 3. **Shutdown**: :cfunc:`destroy_provsql_mmap` syncs and closes all
    open per-database circuits.
@@ -51,10 +52,12 @@ Normal backends (the processes that execute SQL queries) cannot write
 directly to the mmap files -- only the background worker does.  Two
 anonymous pipes provide bidirectional IPC:
 
-- **Main-to-background** (``pipembr`` / ``pipembw``): backends send
-  gate-creation requests.
-- **Background-to-main** (``pipebmr`` / ``pipebmw``): the worker sends
-  acknowledgements (e.g., the UUID of a newly created gate).
+- **Backend-to-worker** (``pipebmr`` / ``pipebmw``, ``bm`` for
+  backend-to-mmap-worker): backends send gate-creation and lookup
+  requests.
+- **Worker-to-backend** (``pipembr`` / ``pipembw``): the worker sends
+  replies to lookup requests (e.g., the gate type or children
+  answering a query; gate creation gets no reply).
 
 Pipe writes use buffered macros (:cfunc:`STARTWRITEM` /
 :cfunc:`ADDWRITEM` / :cfunc:`SENDWRITEM`) that respect ``PIPE_BUF``
@@ -76,12 +79,14 @@ shared-memory segment managed by :cfile:`provsql_shmem.c`.
 
 The :cfunc:`provsqlSharedState` structure contains:
 
-- **lock** -- a PostgreSQL ``LWLock`` that serializes pipe writes from
-  multiple backends.  Backends acquire it in exclusive mode before
-  writing to the main-to-background pipe, ensuring message atomicity.
-- **pipebmr / pipebmw** -- file descriptors for the background-to-main
+- **lock** -- a PostgreSQL ``LWLock`` coordinating pipe access from
+  multiple backends.  Messages that fit in a single ``PIPE_BUF``
+  write are sent under a *shared* lock, relying on the kernel's
+  ``PIPE_BUF`` atomicity guarantee; the exclusive mode is reserved
+  for oversized multi-part writes and for request-reply round trips.
+- **pipebmr / pipebmw** -- file descriptors for the backend-to-worker
   pipe.
-- **pipembr / pipembw** -- file descriptors for the main-to-background
+- **pipembr / pipembw** -- file descriptors for the worker-to-backend
   pipe.
 
 Lifecycle:
@@ -147,17 +152,18 @@ recompiled extension.
 
 The companion ``provsql_arith_op`` enum (used in ``info1`` of
 every ``gate_arith`` gate to identify the operator) follows
-the same rule: ``PLUS = 0``, ``TIMES = 1``, ``MINUS = 2``,
-``DIV = 3``, ``NEG = 4`` are persisted on disk and must not be
-reordered.
+the same rule: ``PLUS = 0`` through ``PERCENTILE = 10`` are
+persisted on disk and must not be reordered.
 
 The float8 mode of ``gate_value`` introduced for the
 continuous-distribution surface does not require a format
-version bump: the ``extra`` blob is text, the integer-mode and
-float8-mode parsers (``extract_constant_C`` and
-``extract_constant_double``) both consume that same text
-representation, and the choice of parser is made by the consumer
-at evaluation time based on the gate's surrounding context.
+version bump: the ``extra`` blob is text, both kinds of consumer
+parse that same text representation (the ``HAVING``-side
+``extract_constant_string`` in :cfile:`having_semantics.cpp`, and
+the ``std::stod``-based float8 readers such as
+``extract_finite_double`` in :cfile:`RangeCheck.cpp`), and the
+choice of parser is made by the consumer at evaluation time based
+on the gate's surrounding context.
 
 Beyond ``gate_value`` literals, the ``extra`` blob carries the
 ``gate_assumed`` assumption label, ``gate_annotation`` certificates,
@@ -172,8 +178,9 @@ reachability and joint-width compilers and loaded back by
 
 :cfunc:`MMappedVector` (:cfile:`MMappedVector.h` /
 :cfile:`MMappedVector.hpp`) provides a ``std::vector``-like interface
-over an mmap region, supporting ``push_back``, random access, and
-iteration.
+over an mmap region: appending with ``add``, random access (and
+in-place update) with ``operator[]``, and size queries with
+``nbElements``.
 
 :cfunc:`MMappedUUIDHashTable` (:cfile:`MMappedUUIDHashTable.h`) is an
 open-addressing hash table keyed by 16-byte UUIDs, stored in an mmap
@@ -251,13 +258,15 @@ the metadata when a tracked relation is dropped outside of
 
 .. warning::
 
-   The :cfunc:`ProvenanceTableInfo` layout grew from ~36 to ~300 bytes
-   in 1.6.0 (the ancestor half was appended).  Stale
-   ``provsql_table_info.mmap`` files from 1.5.0 fail the
-   ``elem_size`` validation at :cfunc:`MMappedVector` open and
-   must be deleted before restart ; the 1.5.0 -> 1.6.0 upgrade
-   script re-seeds the metadata for every tracked relation it
-   detects from the catalog.
+   ``provsql_table_info.mmap`` was introduced in 1.6.0, and the
+   :cfunc:`ProvenanceTableInfo` layout grew from ~36 to ~300 bytes
+   during that release's development (the ancestor half was
+   appended), so only mid-1.6.0-dev builds could have written the
+   short layout.  Such a stale file fails the ``elem_size``
+   validation at :cfunc:`MMappedVector` open and must be deleted
+   before restart ; the 1.5.0 -> 1.6.0 upgrade script seeds a TID
+   entry for every tracked relation it detects from the catalog,
+   as part of introducing the store.
 
 
 Per-Backend Circuit Cache
@@ -289,12 +298,15 @@ The C functions in :cfile:`circuit_cache.h` that
 :cfile:`provsql_mmap.c` actually calls are:
 
 - :cfunc:`circuit_cache_create_gate` -- insert a gate into the
-  cache.  Returns ``true`` if the gate was *already* cached, in
-  which case the caller can skip the IPC write.  This is the
-  fast path for :sqlfunc:`create_gate`: if a query allocates the same
-  gate twice in the same backend (easy to trigger with shared
-  sub-circuits), the second call is a hash-table lookup, not a
-  pipe write.
+  cache.  Returns ``true`` if the gate was newly inserted,
+  ``false`` if it was already present.  The return value does
+  *not* gate the IPC write: :cfunc:`provsql_internal_create_gate`
+  always falls through to the worker, because a cache hit only
+  proves the token was seen by this backend, not that the worker
+  has the gate (skipping the write on a hit silently dropped gates
+  under concurrent backends).  :cfunc:`MMappedCircuit::createGate`
+  is idempotent on already-mapped tokens, so the unconditional
+  write is safe.
 
 - :cfunc:`circuit_cache_get_type` -- look up a gate's type.
   Returns ``gate_invalid`` on a miss; the SQL wrapper then
@@ -304,12 +316,11 @@ The C functions in :cfile:`circuit_cache.h` that
 - :cfunc:`circuit_cache_get_children` -- same pattern for the
   children list, used by :sqlfunc:`get_children`.
 
-The cache is write-through, not write-back: every gate-creating
-call still reaches the mmap worker in the end (either directly,
-for a cache miss, or because an earlier call in the same
-backend wrote it through), so the persistent store always
-reflects the complete circuit even though each individual
-lookup may resolve locally.
+The cache thus only accelerates *reads*
+(:sqlfunc:`get_gate_type` / :sqlfunc:`get_children`): every
+gate-creating call reaches the mmap worker, so the persistent
+store always reflects the complete circuit even though
+individual lookups may resolve locally.
 
 The data-decomposition compilers add a second, coarser per-backend
 cache on top: a set of already-materialised root tokens, so

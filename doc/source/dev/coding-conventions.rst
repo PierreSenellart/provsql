@@ -69,7 +69,7 @@ concatenated at compile time).  If you need to format a runtime
 string, build it first and pass it as ``"%s"``.
 
 Inside C++ code, prefer raising a :cfunc:`CircuitException` (or a
-purpose-built subclass like :cfunc:`SemiringException` or
+purpose-built exception like :cfunc:`SemiringException` or
 ``TreeDecompositionException``) and let the SQL-callable wrapper
 catch it and call :cfunc:`provsql_error`.  Throwing across the
 C/C++ boundary is undefined behaviour, so the catch must happen
@@ -204,5 +204,5 @@ caused real bugs in the past:
   ``sql/provsql.common.sql`` and ``sql/provsql.14.sql``; edit
   those instead and rebuild.
 - **Editing** ``test/schedule`` **directly.**  Same story: it is
-  generated from ``test/schedule.common`` (and optionally
-  ``test/schedule.14``).
+  generated from ``test/schedule.common`` (and, per PostgreSQL
+  major, ``test/schedule.14`` / ``test/schedule.15``).

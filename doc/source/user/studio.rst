@@ -1004,7 +1004,7 @@ Provenance scheme
 ^^^^^^^^^^^^^^^^^
 
 The toolbar's :guilabel:`Provenance scheme` selector is the notebook's
-default (the same three-way switch as the query box, see
+default (the same four-way switch as the query box, see
 `Per-query toggles`_); each SQL cell can override it with the small
 :fa:`sliders-h` scheme chip in its actions, cycled per cell and
 honoured at run time.
@@ -1207,8 +1207,12 @@ the platform's user-config directory, and survive a Studio restart:
 
 Each option is also exposed on the CLI as a flag
 (``--statement-timeout``, ``--max-sidebar-rows``, ``--max-result-rows``,
-``--max-circuit-nodes``, ``--search-path``, ``--tool-search-path``);
-the CLI wins on startup, the panel writes back to the JSON.
+``--max-circuit-nodes``, ``--max-circuit-depth``, ``--search-path``,
+``--tool-search-path``);
+the CLI wins on startup, the panel writes back to the JSON.  The one
+exception is :guilabel:`Probability decimals`, which is stored
+per-browser (in ``localStorage``) rather than in ``config.json``, and
+has no CLI flag.
 
 .. _studio-tools-panel:
 
@@ -1254,8 +1258,9 @@ the panel read-only.
 Mode-switching
 --------------
 
-The mode tabs in the top nav switch between :fa:`search-location`
-Where, :fa:`project-diagram` Circuit, and :fa:`book-open` Notebook. A switch carries the current SQL forward via
+The mode tabs in the top nav switch between :fa:`project-diagram`
+Circuit, :fa:`chart-bar` Contributions, :fa:`clock` Temporal,
+:fa:`search-location` Where, and :fa:`book-open` Notebook. A switch carries the current SQL forward via
 ``sessionStorage`` (in Notebook mode, the selected cell's SQL); it
 auto-replays only when the user just ran the query, so unrun drafts
 and plain reloads never auto-execute (important for side-effecting

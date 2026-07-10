@@ -70,8 +70,8 @@ void provsql_shmem_request(void);
  * @c lock serialises gate-creation messages so that only one backend
  * writes to the pipe at a time.  The four @c long fields hold OS file
  * descriptors for the two anonymous pipes:
- * - @c pipembr / @c pipembw: main-backend → background (write end in main)
- * - @c pipebmr / @c pipebmw: background → main-backend (write end in worker)
+ * - @c pipebmr / @c pipebmw: requests, backend → worker (backends write)
+ * - @c pipembr / @c pipembw: replies, worker → backend (worker writes)
  */
 #ifdef PROVSQL_INPROCESS_STORE
 
@@ -112,10 +112,10 @@ void provsql_inproc_init(void);
 typedef struct provsqlSharedState
 {
   LWLock *lock;           ///< Mutual-exclusion lock for pipe writes
-  long pipebmr;           ///< Background-to-main pipe: read end (worker reads)
-  long pipebmw;           ///< Background-to-main pipe: write end (worker writes)
-  long pipembr;           ///< Main-to-background pipe: read end (worker reads)
-  long pipembw;           ///< Main-to-background pipe: write end (backend writes)
+  long pipebmr;           ///< Backend-to-worker pipe: read end (worker reads)
+  long pipebmw;           ///< Backend-to-worker pipe: write end (backends write)
+  long pipembr;           ///< Worker-to-backend pipe: read end (backends read)
+  long pipembw;           ///< Worker-to-backend pipe: write end (worker writes)
   char kcmcp_endpoint[256]; ///< Live endpoint of the managed KCMCP server
                             ///< ("" when none): written by the supervisor
                             ///< worker, read by the in-extension client.

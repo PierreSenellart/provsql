@@ -111,6 +111,10 @@ from three gate types in :cfunc:`gate_type`:
   :sqlfunc:`get_infos`) record the PostgreSQL OID of the
   aggregate function and the OID of its result type, so the
   evaluator can later instantiate the right |cpp| accumulator.
+  The high bit of ``info2`` flags a *scalar* (no ``GROUP BY``)
+  aggregation (``PROVSQL_AGG_TYPE_MASK`` in
+  :cfile:`provsql_utils.h`); consumers mask it off before using
+  the result-type OID.
 
 Row-level provenance and the δ operator
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -134,13 +138,18 @@ satisfying :math:`\delta(\mathbb{0}) = \mathbb{0}` and
 :math:`\delta(\mathbb{1} \oplus \cdots \oplus \mathbb{1}) = \mathbb{1}`
 regardless of the number of :math:`\mathbb{1}` s.  Intuitively, δ collapses "any positive number of
 witnesses" to a single "exists".  The rewriter emits a ``delta``
-gate wrapping the row-level ⊕ whenever the query has aggregation
-and no ``HAVING`` clause (see
-:cfunc:`make_provenance_expression`).  ``HAVING`` queries do not
-add a δ: a ``HAVING`` predicate constrains existence in a way
-that depends on the aggregate value, so the row-level token has
-to carry more information than a flat "exists", and the rewriter
-instead routes the result through ``cmp`` gates that
+gate wrapping the row-level ⊕ for grouped aggregation whose
+``HAVING`` clause (if any) is *not* lifted into the provenance
+circuit (see :cfunc:`make_provenance_expression`).  Scalar
+aggregation (no ``GROUP BY``) gets ``gate_one`` instead: the
+single result row always exists, even over an empty input.  A
+``HAVING`` predicate left for native PostgreSQL evaluation still
+gets the δ; only a *lifted* ``HAVING`` -- one referencing
+aggregate provenance -- replaces the row-level token altogether
+with ``provenance_cmp``: such a predicate constrains existence in
+a way that depends on the aggregate value, so the row-level token
+has to carry more information than a flat "exists", and the
+rewriter routes the result through ``cmp`` gates that
 :cfile:`having_semantics.hpp` evaluates ahead of the main
 traversal (see :ref:`semiring-optional-methods`).
 
@@ -168,18 +177,21 @@ both pieces of information flow downstream:
   :cfile:`agg_token.c`) extract the scalar value when the user
   treats the result as a number, e.g. for further arithmetic.
 
-A consequence of this design is that arithmetic on aggregate
-results *loses provenance*: once you write
-``SUM(x) * 2``, the multiplication operates on the scalar side of
-the :cfunc:`agg_token` and the result is a plain ``FLOAT``
-without any associated gate.  ProvSQL emits a warning in this
-case (controlled by :cfunc:`insert_agg_token_casts` in the
-rewriter) but the loss is unavoidable: the result is no longer a
-direct combination of base tuples and we cannot honestly attach
-a circuit to it.  Comparisons of aggregate results, on the other
-hand, are routed through ``cmp`` gates so that ``HAVING``
-predicates *do* preserve provenance -- see :doc:`semiring-evaluation`
-for the gory details of how that pre-evaluation works.
+Arithmetic on aggregate results *preserves provenance*: once you
+write ``SUM(x) * 2``, the rewriter
+(:cfunc:`cast_agg_token_mutator` / :cfunc:`try_swap_agg_arith` in
+:cfile:`provsql.c`) swaps the scalar operator for the ``+ - * /``
+operators defined on :cfunc:`agg_token` (in
+``sql/provsql.common.sql``), so the result is again an
+:cfunc:`agg_token` whose UUID points at an ``arith`` gate over the
+operand circuits.  Provenance is lost only on a genuine cast *out*
+of :cfunc:`agg_token` -- e.g. storing the result into a numeric
+column -- and the cast functions in :cfile:`agg_token.c` emit an
+execution-time warning when that happens.  Comparisons of
+aggregate results are routed through ``cmp`` gates so that
+``HAVING`` predicates preserve provenance too -- see
+:doc:`semiring-evaluation` for the gory details of how that
+pre-evaluation works.
 
 
 What the Rewriter Builds
@@ -189,8 +201,9 @@ The generic rewriting pipeline in :doc:`query-rewriting` covers
 aggregation at the *pipeline* level: Step 4 calls
 :cfunc:`rewrite_agg_distinct` to lift ``COUNT(DISTINCT ...)``
 into an inner ``GROUP BY``, Step 8 calls
-:cfunc:`replace_aggregations_by_provenance_aggregate` followed
-by :cfunc:`migrate_probabilistic_quals` and
+:cfunc:`migrate_probabilistic_quals`, then
+:cfunc:`replace_aggregations_by_provenance_aggregate` (and
+:cfunc:`rewrite_agg_cases`), then
 :cfunc:`insert_agg_token_casts`, and Step 9 fuses the row-level
 tokens with ``provenance_plus(array_agg(...))`` and wraps the
 result in ``provenance_delta``.  This section only documents the
@@ -210,7 +223,10 @@ replace an ``Aggref`` is a ``FuncExpr`` for
 - an ``ARRAY[...]`` of per-tuple ``provenance_semimod(arg, t)``
   calls -- one ``semimod`` gate per row of the input, glueing
   the row's provenance ``t`` to the row's contributed value
-  ``arg``.
+  ``arg``;
+- a boolean ``is_scalar`` (``DEFAULT false``), set for scalar
+  (no ``GROUP BY``) aggregation; it flows into the high bit of
+  the ``agg`` gate's ``info2``.
 
 That fourth argument is where the semimodule construction of
 :ref:`the-semimodule-picture` is actually assembled: every
@@ -221,8 +237,10 @@ their formal sum :math:`\sum_i (k_i \star m_i)`.
 The row-level side of the rewrite is much simpler.  It reuses the
 ordinary :cfunc:`get_provenance_attributes` collection, combines the
 per-row tokens with ``provenance_plus(array_agg(...))``, and -- for
-queries with aggregation and no ``HAVING`` -- wraps the result in
-``provenance_delta``.  The row-level token therefore has *no*
+grouped aggregation whose ``HAVING`` (if any) is not lifted --
+wraps the result in ``provenance_delta`` (scalar aggregation gets
+``gate_one``; a lifted ``HAVING`` replaces the token with
+``provenance_cmp``).  The row-level token therefore has *no*
 semimodule content: it only records which input rows witness the
 output row's existence.
 

@@ -27,9 +27,11 @@ Or permanently in ``postgresql.conf``:
 INSERT
 -------
 
-When ``update_provenance`` is enabled, inserting a row into a
-provenance-enabled table creates a new ``input`` gate for that row, just
-as if the row had been present when provenance was enabled on the table:
+Inserting a row into a provenance-enabled table always creates a new
+``input`` gate for that row. When ``update_provenance`` is enabled, the
+statement additionally creates an ``update`` gate, logged in the
+``update_provenance`` table, that is multiplied into each inserted
+row's provenance -- so the insertion as a whole can later be undone:
 
 .. code-block:: sql
 
@@ -44,7 +46,7 @@ DELETE
 
 Deleting a row does not remove it from the table, but the provenance is changed to mark the deletion, allowing hypothetical reasoning.
 The
-``update_undo`` mechanism (see below) relies on this.
+:sqlfunc:`undo` mechanism (see below) relies on this.
 
 .. code-block:: sql
 
@@ -77,7 +79,7 @@ table; pass its ``provsql`` token to :sqlfunc:`undo` to reverse its effect:
     INSERT INTO t VALUES (1), (2), (3);
     DELETE FROM t WHERE id = 3;
 
-    -- Row 3 is gone; undo the DELETE to restore it
+    -- Row 3's provenance is now zeroed; undo the DELETE to restore it
     SELECT undo(provsql)
     FROM update_provenance
     WHERE query = 'DELETE FROM t WHERE id = 3;';

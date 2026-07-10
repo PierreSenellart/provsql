@@ -22,11 +22,14 @@ Architecture
 ------------
 
 The entry point is the SQL function :sqlfunc:`probability_evaluate`,
-which calls :cfunc:`provenance_evaluate_compiled` on the |cpp| side.
-That function builds a :cfunc:`BooleanCircuit` object from the
-persistent circuit store and then calls
-:cfunc:`probability_evaluate_internal` (in
-:cfile:`probability_evaluate.cpp`).
+bound directly to the C function :cfunc:`probability_evaluate` (in
+:cfile:`probability_evaluate.cpp`), which calls
+:cfunc:`probability_evaluate_internal`.  That function loads a
+:cfunc:`GenericCircuit` from the persistent circuit store via
+:cfunc:`getGenericCircuit`; the Boolean view is only built later, at
+the dispatch point.  (:cfunc:`provenance_evaluate_compiled` is the
+*semiring* dispatcher, described in :doc:`semiring-evaluation`; it is
+not on the probability path.)
 
 :cfunc:`probability_evaluate_internal` receives the method name (or
 the requested guarantee) and dispatches through the
@@ -111,10 +114,11 @@ one big clause
 clause forcing the root variable true is added at the end.
 
 For weighted model counting (and the d4 compiler when built with
-weight support), Tseytin also emits one ``w`` line per leaf
-variable giving the probability of the corresponding ProvSQL
-input gate -- so the SAT-side of the pipeline knows the weights to
-multiply through.
+weight support), Tseytin also emits two ``w`` lines per leaf
+variable: ``w <v> <p>`` giving the probability of the corresponding
+ProvSQL input gate, and ``w -<v> <1-p>`` for the negative literal --
+so the SAT-side of the pipeline knows the weights to multiply
+through.
 
 The output is dumped to a temporary file under ``/tmp``;
 :cfunc:`BooleanCircuit::compilation` then invokes the chosen
@@ -147,7 +151,9 @@ node:
 - ``L lit`` -- a leaf literal (positive or negative).
 - ``A k c1 c2 ...`` -- an AND of :math:`k` children, given by
   their node indices.
-- ``O k c1 c2 ...`` -- an OR of :math:`k` children.
+- ``O j c i1 ... ic`` -- an OR of :math:`c` children; the first
+  field :math:`j` is the conflict variable (``0`` when none), so the
+  parser reads two integers before the child indices.
 
 Modern d4 also emits a few extra node kinds (``a`` / ``o`` / ``f``
 / ``t`` for constants, and a decision-tree variant); the parser
@@ -287,6 +293,15 @@ Currently Supported Methods
    * - ``"possible-worlds"``
      - :cfunc:`BooleanCircuit::possibleWorlds` -- exact enumeration
        of all :math:`2^n` worlds; capped at 64 inputs.
+   * - ``"sieve"``
+     - :cfunc:`BooleanCircuit::sieve` -- exact inclusion-exclusion
+       over a monotone DNF (:cfunc:`BooleanCircuit::dnfShape` checks
+       the shape and extracts the clause supports; any other shape is
+       an error).  Work grows as :math:`2^m` in the clause count
+       :math:`m`, so the chooser picks it over ``possible-worlds``
+       when there are fewer clauses than inputs and over the compilers
+       when :math:`m` is small.  In the default chain and selectable
+       by name.
    * - ``"monte-carlo"``
      - :cfunc:`BooleanCircuit::monteCarlo` -- approximate via random
        sampling.  The argument is a fixed count (``samples=N`` or a bare
@@ -315,6 +330,14 @@ Currently Supported Methods
        (:math:`\lceil\Upsilon_1 m\rceil`); reaching it before the target
        downgrades the guarantee to the relative ``eps`` achieved at the spent
        budget.
+   * - ``"stopping-rule"``
+     - Whole-circuit ``(eps,delta)``-*relative* estimate via the same
+       Dagum-Karp-Luby-Ross stopping rule (``run_stopping_rule``):
+       unlike ``karp-luby`` it needs no DNF shape -- it operates on the
+       :cfunc:`GenericCircuit`, so it applies to every circuit (plain
+       Boolean, RV, HAVING aggregates alike) and is the universal
+       relative fallback.  In the default chain on the tolerance paths
+       and selectable by name.
    * - ``"wmc"``
      - :cfunc:`BooleanCircuit::wmcCount` -- weighted model counting
        via the registered counter named in the argument
@@ -352,8 +375,11 @@ Currently Supported Methods
        (disjoint input cones) compose exactly, an entangled ``AND`` uses a
        Bonferroni lower / ``min`` upper, an ``OR`` a ``max`` lower / union
        upper, and ``NOT`` the exact flip ``[1-U, 1-L]``.  Exact mode adds
-       component memoisation over the canonical subproblem; a multivalued
-       (``MULIN`` / BID) gate makes it throw, so the chooser falls back.  In the
+       component memoisation over the canonical subproblem.  Multivalued
+       (BID) circuits are handled too: ``handlesMultivalued()`` is false,
+       so the dispatcher rewrites the blocks to independent Booleans
+       centrally before ``evaluate()``, and the ``mulinput`` throw in
+       ``footprintOf`` is only a defensive net.  In the
        default chain it competes for exact only on the monotone-DNF path (and
        where tree-decomposition bails); the general recursion serves the
        approximate / ``delta = 0`` paths and explicit by-name calls.
@@ -362,7 +388,9 @@ Currently Supported Methods
        ``S`` / ``N`` do not track it, and the approximate cost is nearly
        ``eps``-independent), the chooser runs it under a *subproblem budget* set
        to the next-best admissible method's estimated cost
-       (``EvalContext::cost_budget`` → a count via ``kCostDTreeMsPerStep``); a
+       (``EvalContext::cost_budget`` → a count via ``kCostDTreeMsPerStepDnf``
+       on the clause path, ``kCostDTreeMsPerStepGeneral`` on the general
+       recursion); a
        counter in the recursion throws ``"cost budget exceeded"`` on overrun and
        the chooser's ``catch`` escalates -- bounding wasted work at ~the safe
        fallback's cost (deterministic, so selection is reproducible).  The debug
@@ -385,20 +413,31 @@ Currently Supported Methods
        *other* method on a Möbius root evaluates the transparent
        lineage child instead (same value, no shortcut).
    * - ``""`` (default)
-     - Fallback chain: try ``independent``; then, when the root carries an
-       inversion-free certificate and ``provsql.inversion_free`` is on, the
-       ``inversion-free`` structured-d-DNNF builder (see
-       :ref:`inversion-free-path`); then
-       :cfunc:`BooleanCircuit::interpretAsDD` (interpret the circuit
-       structure directly as a d-D circuit), then
-       ``tree-decomposition``, then ``compilation`` with the
-       preference-ranked fallback compiler
-       (``provsql.fallback_compiler`` when available, otherwise the
-       highest-preference compiler whose binary resolves on PATH).
+     - Cost-based chooser over the portfolio: the ``MethodCatalog``
+       ranks the admissible ``inDefaultChain()`` methods by
+       ``estimatedCost`` and runs the cheapest, escalating on failure.
+       The exact portfolio is ``independent``, ``inversion-free``
+       (when the root carries an inversion-free certificate and
+       ``provsql.inversion_free`` is on; see
+       :ref:`inversion-free-path`), ``possible-worlds``, ``sieve``,
+       ``tree-decomposition``, ``compilation`` (with the
+       preference-ranked fallback compiler:
+       ``provsql.fallback_compiler`` when available, otherwise the
+       highest-preference compiler whose binary resolves on PATH), and
+       ``d-tree``; ``monte-carlo``, ``karp-luby``, and
+       ``stopping-rule`` join on the relative / additive tolerance
+       paths.  ``interpret-as-dd`` is deliberately *not* in the chain
+       (by-name only): for a probability number it is redundant with
+       ``independent``, which always wins.
 
-The branches for ``"compilation"``, ``"tree-decomposition"``, and
-the default all funnel through :cfunc:`BooleanCircuit::makeDD`,
-which dispatches further on the d-DNNF construction strategy.
+The probability methods do not funnel through
+:cfunc:`BooleanCircuit::makeDD`: ``TreeDecompositionMethod`` and
+``CompilationMethod`` build their d-DNNF directly in ``buildDD()``,
+calling :cfunc:`TreeDecomposition` /
+:cfunc:`dDNNFTreeDecompositionBuilder` and
+:cfunc:`BooleanCircuit::compilation` respectively.  ``makeDD`` remains
+for the callers that need the d-DNNF *artifact* -- ``shapley``,
+``compile_to_ddnnf``, ``ddnnf_stats`` (see below).
 
 The external-compiler choice inside ``compilation`` resolves the
 named tool against the external-tool registry, which supplies its
@@ -432,7 +471,8 @@ circuit, exactly as the ladder did.
 
 This is the **default** route for the d-D-artifact callers (the empty method,
 ``default`` and ``auto`` all map to it); the old fixed ladder stays reachable
-as ``ladder``.  It is **not** wired into the KC-inspection surfaces
+through :cfunc:`BooleanCircuit::makeDD`'s fallback branch, which runs it for
+any method name it does not recognise.  It is **not** wired into the KC-inspection surfaces
 (``compile_to_ddnnf`` / ``ddnnf_stats`` / ``compile_to_ddnnf_dot``): those
 serialise via ``toNNF`` / report compiler stats and require a compiler-style
 d-DNNF in negation normal form, which ``interpret-as-dd``'s internal NOTs
@@ -495,12 +535,16 @@ construction entirely.
 
 The chain (in order) :
 
-- :cfunc:`runRangeCheck` (also runs at load time when
-  ``provsql.simplify_on_load`` is on) : support-interval propagation
-  through ``gate_arith`` and decision of every ``gate_cmp``
-  decidable from the support alone.  Universal across semirings,
-  so it lives both at load time and inside
-  ``probability_evaluate``.
+- :cfunc:`runHybridSimplifier` followed by a :cfunc:`runRangeCheck`
+  re-pass, both gated by ``provsql.hybrid_evaluation`` and by the
+  caller's ``simplify`` flag (the moment path passes ``false``) : the
+  family-closure simplifier constant-folds ``gate_arith``, drops
+  identity wires and collapses closed-form sums first, so that the
+  re-pass -- support-interval propagation through ``gate_arith`` and
+  decision of every ``gate_cmp`` decidable from the support alone --
+  benefits from the folding.  :cfunc:`runRangeCheck` itself is
+  universal across semirings and also runs at circuit-load time when
+  ``provsql.simplify_on_load`` is on.
 - :cfunc:`runHybridDecomposer` (gated by ``provsql.hybrid_evaluation``) :
   base-RV-footprint partitioning + per-island marginalisation for
   continuous-RV cmps (see the hybrid section below).
@@ -575,6 +619,14 @@ The chain (in order) :
   the general path.  Same shape match and independence certification as
   the COUNT / MIN-MAX evaluators (shared ``CmpEvaluatorCommon``).  See
   ``src/SumCmpEvaluator.{h,cpp}``.
+- :cfunc:`runAggMarginalEvaluator` (same gate
+  ``provsql.cmp_probability_evaluation``) : the hierarchical
+  marginal-vector engine for the safe join shapes the flat COUNT /
+  MIN-MAX / SUM pre-passes cannot certify independent (detailed in
+  the trichotomy section below).
+- :cfunc:`runHavingAlwaysTrueRewriter` (unconditional) : the sound
+  always-TRUE rewrite (``COUNT <= K`` with ``K >= N`` and duals)
+  that :cfunc:`runRangeCheck` deliberately leaves undone.
 
 Adding another closed-form cmp resolver (future discrete-RV
 distributions…) follows the same shape : a ``runXxxEvaluator`` function
@@ -966,10 +1018,12 @@ sequence:
 
 1. Build a :cfunc:`BooleanCircuit` from the persistent store via
    :cfunc:`getBooleanCircuit`.
-2. Build a :cfunc:`dDNNF` by calling
-   :cfunc:`BooleanCircuit::makeDD`.  This is the same d-DNNF
-   construction used for ordinary probability evaluation, and
-   obeys the same ``method`` / ``args`` conventions.
+2. Build a :cfunc:`dDNNF`: the default (empty method, ``default``
+   or ``auto``) cost-selects the construction route via
+   :cfunc:`provsql::makeDDAuto` (see the makeDD ``auto`` section
+   above); a named method goes through
+   :cfunc:`BooleanCircuit::makeDD` with the usual ``method`` /
+   ``args`` conventions.
 3. :cfunc:`dDNNF::makeSmooth` -- ensure that every OR gate's
    children mention the same variable set.  The paper's
    algorithm assumes a *smooth* d-DNNF.
@@ -1135,11 +1189,12 @@ which performs a multi-rooted BFS over the union of the reachable
 gates from both ``input`` and ``prov`` so shared ``gate_rv``
 leaves between the two are loaded into a single
 :cfunc:`GenericCircuit` and consequently couple correctly in the
-Monte Carlo sampler's ``rv_cache_``. The closed-form
-truncated-distribution table is exhaustive for Normal (Mills
-ratio), Uniform (intersected support), and Exponential
-(memorylessness); other shapes fall back to MC rejection sampling
-at ``provsql.rv_mc_samples`` budget. See
+Monte Carlo sampler's ``rv_cache_``. Closed-form truncated moments
+(``Distribution::truncatedRawMoment``) are implemented by the
+Normal (Mills ratio), Uniform (intersected support), Exponential
+(memorylessness), Log-normal, Weibull, Pareto, and Beta families;
+Erlang / Gamma and composite shapes fall back to MC rejection
+sampling at ``provsql.rv_mc_samples`` budget. See
 :doc:`continuous-distributions` for depth.
 
 .. _inversion-free-path:

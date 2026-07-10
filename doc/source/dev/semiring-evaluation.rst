@@ -62,8 +62,10 @@ Every semiring must override the following pure-virtual methods:
 ``zero``, ``one``, ``plus``, and ``times`` are load-bearing: every
 evaluator traverses the circuit applying them.  ``monus`` and
 ``delta`` are only exercised by specific SQL features --
-``EXCEPT`` / ``EXCEPT ALL`` for ``monus``, and ``GROUP BY`` with
-aggregates (without ``HAVING``) for ``delta``.  A semiring that
+``EXCEPT`` / ``EXCEPT ALL``, the null-padded antijoin branch of
+outer-join lowering, and ``IS NULL`` tests for ``monus``;
+``GROUP BY`` with aggregates (without ``HAVING``) and
+``IS NOT NULL`` tests for ``delta``.  A semiring that
 does not sensibly implement one of them can throw
 :cfunc:`SemiringException` from its override; evaluation will then
 fail *only* for queries that actually use the corresponding gate,
@@ -194,15 +196,16 @@ compatibility by overriding virtual predicates inherited from
    virtual bool compatibleWithBooleanRewrite() const override { return true; }
    virtual bool absorptive() const override { return true; }
 
-The predicates are read by
-:cfunc:`provenance_evaluate_compiled_internal`
-(``src/provenance_evaluate_compiled.cpp``) immediately before the
-``evaluate<S>`` template call.  When the root carries an assumption
-marker the chosen semiring's predicate does not license
+The predicates are read inside the ``GenericCircuit::evaluate<S>``
+template itself (``src/GenericCircuit.hpp``) : the ``gate_assumed``
+case checks the label during traversal, and the in-memory side-band
+markers (``boolean_assumed_gates`` / ``absorptive_assumed_gates``)
+are checked per gate before the memo lookup.  When a gate carries an
+assumption marker the chosen semiring's predicate does not license
 (``compatibleWithBooleanRewrite()`` for ``'boolean'``,
-``absorptive()`` for ``'absorptive'``), the dispatcher raises a
-structured error rather than silently producing an incorrect
-value.
+``absorptive()`` for ``'absorptive'``), the evaluator throws a
+structured :cfunc:`CircuitException` rather than silently producing
+an incorrect value.
 
 Per-semiring decisions (see each override under
 ``src/semiring/*.h``) :
@@ -232,8 +235,9 @@ rewriter via :sqlfunc:`provenance_assume` (the historical
 :sqlfunc:`assume_boolean` is a thin ``'boolean'``-label wrapper),
 which creates a single-input ``gate_assumed`` over the original
 root.  The evaluator template treats the wrapper transparently for
-compatible semirings ; only the dispatcher's pre-evaluation check
-distinguishes them.
+compatible semirings ; for an incompatible semiring the same
+``gate_assumed`` case throws :cfunc:`CircuitException` during
+traversal.
 
 Boolean-Identity Folding
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -368,22 +372,35 @@ Step-by-Step: Adding a New Semiring
 
       // In the appropriate type branch (VARCHAR, INT, BOOL, etc.):
       if (semiring == "mysemiring")
-        return pec_...(constants, c, g, inputs, "mysemiring", drop_table);
+        return pec(constants, c, g, semiring::MySemiring{}, drop_table);
 
-   The ``pec_*`` helper functions instantiate the |cpp| semiring class,
-   call ``GenericCircuit::evaluate<MySemiring>(...)``, and convert the
-   result to a PostgreSQL ``Datum``.
+   The generic ``pec`` helper takes a semiring instance, calls
+   ``GenericCircuit::evaluate<MySemiring>(...)``, and converts the
+   result to a PostgreSQL ``Datum``.  (Only ``pec_boolexpr`` is a
+   named variant with a different signature.)
 
 3. **Create the SQL wrapper function** in ``sql/provsql.common.sql``.
    Follow the pattern of existing compiled semirings:
 
    .. code-block:: plpgsql
 
-      CREATE OR REPLACE FUNCTION sr_mysemiring(token UUID, token2anot REGCLASS)
+      CREATE OR REPLACE FUNCTION sr_mysemiring(token ANYELEMENT, token2value regclass)
         RETURNS <return_type> AS
       $$
-        SELECT provsql.provenance_evaluate_compiled(token, token2anot, 'mysemiring', NULL::<return_type>);
-      $$ LANGUAGE SQL;
+      BEGIN
+        RETURN provsql.provenance_evaluate_compiled(
+          token,
+          token2value,
+          'mysemiring',
+          <one_element>
+        );
+      END
+      $$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+
+   The fourth argument (``element_one anyelement``) is the semiring's
+   *one* element, which also fixes the return type: ``sr_boolean``
+   passes ``TRUE``, ``sr_counting`` ``1``, ``sr_boolexpr``
+   ``'⊤'::VARCHAR``.
 
 4. **Add a regression test** in ``test/sql/`` with expected output in
    ``test/expected/``.  Follow the pattern of ``test/sql/sr_boolean.sql``.
@@ -399,7 +416,9 @@ When a user calls :sqlfunc:`sr_boolean` (or any compiled semiring
 function), the call chain is:
 
 1. SQL function ``sr_boolean(token, mapping_table)`` calls
-   ``provenance_evaluate_compiled(token, table, 'boolean', NULL::BOOLEAN)``.
+   ``provenance_evaluate_compiled(token, table, 'boolean', TRUE)``
+   (the last argument is the semiring's one element and fixes the
+   return type).
 
 2. The |cpp| function :cfunc:`provenance_evaluate_compiled` extracts the
    semiring name string and return-type OID, then calls

@@ -135,8 +135,12 @@ The result of ``value | evidence`` is **terminal**: a conditioned value may
 only be conditioned further, never combined into a larger ``plus`` /
 ``times`` / ``monus`` / aggregate gate.
 
-The function spelling of the binary operator is :sqlfunc:`cond`
-``(target, evidence)``, interchangeable with ``target | evidence``.
+On the token carrier (plain ``uuid`` values), the function spelling of
+the binary operator is :sqlfunc:`cond` ``(target, evidence)``,
+interchangeable with ``target | evidence``; the ``random_variable`` and
+``agg_token`` carriers back their ``|`` with
+:sqlfunc:`random_variable_cond` and :sqlfunc:`agg_token_cond`
+respectively.
 
 Unary ``| evidence`` -- conditioning a whole tuple
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

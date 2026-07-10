@@ -14,7 +14,9 @@ rendering hooks. The user-facing description lives in
 Gate Types
 ----------
 
-Four gate types back the continuous surface, appended to the
+Four gate types described below back the continuous surface, plus
+the ``gate_observe`` evidence gate covered in *Latent variables*
+further down; all are appended to the
 :cfunc:`gate_type` enum in :cfile:`provsql_utils.h` before the
 ``gate_invalid`` sentinel, with no renumbering of the existing
 values. The companion ``provenance_gate`` SQL enum in
@@ -34,20 +36,26 @@ its interaction with the moment evaluators is covered in
     below), so the set of valid blobs grows with the registered
     families – currently ``normal``, ``uniform``, ``exponential``,
     ``erlang``, ``gamma``, ``lognormal``, ``weibull``, ``pareto``,
-    ``beta``, ``logistic``, ``inverse_gamma``, ``inverse_gaussian``.
+    ``beta``, ``logistic``, ``inverse_gamma``, ``inverse_gaussian``,
+    plus the discrete count families ``poisson``, ``binomial``,
+    ``geometric``, ``negative_binomial`` (whose blobs appear as
+    ``gate_rv`` leaves only in the parametric/latent form – see
+    *Latent variables* below).
 
     Categorical random variables share no ``gate_rv`` encoding;
     they are encoded as a block of ``gate_mulinput`` gates
-    under a ``gate_mixture`` (see below). The discrete count
-    families (Poisson, Binomial, …) are SQL-level constructors
-    over that categorical encoding, not gate types.
+    under a ``gate_mixture`` (see below). The *literal* discrete
+    count constructors (Poisson, Binomial, …) are SQL-level
+    constructors over that categorical encoding, not gate types.
 
 ``gate_arith``
     ``N``-ary arithmetic over scalar children. The operator tag
     lives in ``info1`` of the gate's ``GateInformation``:
     ``provsql_arith_op`` is ``PLUS = 0``, ``TIMES = 1``,
     ``MINUS = 2``, ``DIV = 3``, ``NEG = 4``, ``MAX = 5``,
-    ``MIN = 6``, ``POW = 7``, ``LN = 8``, ``EXP = 9``.
+    ``MIN = 6``, ``POW = 7``, ``LN = 8``, ``EXP = 9``,
+    ``PERCENTILE = 10`` (the ``percentile_cont`` order statistic,
+    see *Statistic aggregates* below).
     ``MAX`` / ``MIN`` are the n-ary order statistics behind
     ``greatest`` / ``least`` and the ``max`` /
     ``min`` aggregates. ``POW`` (binary, real branch only) and
@@ -85,11 +93,12 @@ its interaction with the moment evaluators is covered in
     is not a semiring operation).
 
 In addition, ``gate_value`` gains a *float8 mode*: the
-``extra`` blob is parsed via ``extract_constant_double``
-(:cfile:`having_semantics.cpp`) rather than the existing
-``extract_constant_C`` integer-only path. Both paths coexist
-so ``gate_value`` covers both the deterministic-numeric
-mode used in HAVING sub-circuits and the
+``extra`` blob is parsed as a double by the RV evaluators
+(``parseDoubleStrict`` in the MC sampler,
+``extract_finite_double`` in RangeCheck), coexisting with
+:cfile:`having_semantics.cpp`'s string-based
+``extract_constant_string`` path, so ``gate_value`` covers both
+the deterministic mode used in HAVING sub-circuits and the
 random-variable-constant mode used by :sqlfunc:`as_random`.
 
 The Distribution Class Hierarchy
@@ -103,7 +112,9 @@ each family is one self-contained implementation file
 (``normal.cpp``, ``uniform.cpp``, ``exponential.cpp``,
 ``erlang.cpp``, ``gamma.cpp``, ``lognormal.cpp``,
 ``weibull.cpp``, ``pareto.cpp``, ``beta.cpp``, ``logistic.cpp``,
-``inverse_gamma.cpp``, ``inverse_gaussian.cpp``) sharing only the
+``inverse_gamma.cpp``, ``inverse_gaussian.cpp``, and the discrete
+``poisson.cpp``, ``binomial.cpp``, ``geometric.cpp``,
+``negative_binomial.cpp``) sharing only the
 internal header ``DistributionCommon.h``. The ``logistic`` family
 is the location-scale ``logistic(μ, s)`` whose CDF is the logistic
 sigmoid :math:`F(x) = \sigma((x - \mu)/s)` and whose quantile is
@@ -165,7 +176,7 @@ populated at static initialisation:
 ``numericQuantile`` (same file) is the family-agnostic fallback
 inverse CDF: a monotone bisection of ``cdf()`` over the family's
 ``integrationRange``, used whenever ``quantile()`` declines
-(Erlang, Gamma, Beta).
+(Erlang, Gamma, Beta, Inverse-Gamma, Inverse-Gaussian).
 
 A family file self-registers: it defines one static
 ``DistributionFamily`` descriptor plus a
@@ -194,10 +205,12 @@ evaluators degrade per capability, not per family: exact
 truncated moments need ``truncatedRawMoment`` (Normal, Uniform,
 Exponential, Lognormal, Weibull, Pareto, Beta); rejection-free
 conditioned sampling needs ``sampleTruncated`` (the same list
-minus Beta); elementary quantiles need ``quantile()`` (Normal –
+minus Beta, plus Logistic); elementary quantiles need
+``quantile()`` (Normal –
 a Beasley-Springer-Moro start polished to machine precision by
 two Newton steps – Uniform, Exponential, Lognormal, Weibull,
-Pareto; the rest bisect); closed-form i.i.d. order-statistic
+Pareto, Logistic, and the discrete families; the rest bisect);
+closed-form i.i.d. order-statistic
 means need ``iidOrderStatMean`` (Uniform, Exponential, Weibull,
 Pareto). A missing capability falls through to quadrature,
 bisection, or Monte Carlo as appropriate.
@@ -267,7 +280,8 @@ shape routes through :sqlfunc:`erlang`), :sqlfunc:`lognormal`,
 :sqlfunc:`weibull` (``k = 1`` routes through
 :sqlfunc:`exponential`), :sqlfunc:`pareto`, :sqlfunc:`beta`
 (``beta(1,1)`` routes through :sqlfunc:`uniform`),
-:sqlfunc:`logistic`,
+:sqlfunc:`logistic`, :sqlfunc:`inverse_gamma`,
+:sqlfunc:`inverse_gaussian`,
 :sqlfunc:`categorical`, :sqlfunc:`mixture` (two overloads), and
 :sqlfunc:`as_random` (three numeric overloads via the
 ``double precision`` form). They validate parameters and mint
@@ -430,9 +444,10 @@ position -- a :sqlfunc:`probability` argument, a projected
 column, or the left operand of a further ``|``.
 
 A short-cut handles the corner case of ``WHERE rv > 2`` on a
-query that touches no provenance-tracked relation: there is
-nothing to conjoin into, so the rewriter synthesises a
-single-row FROM-less SELECT to host the gate_cmp, and the
+FROM-less query (which touches no provenance-tracked relation):
+there is nothing to conjoin into, so the rewriter runs only the
+qual migration and splices a synthesised provenance column onto
+the single result row, and the
 result is a circuit that :sqlfunc:`probability_evaluate` reads
 directly.
 
@@ -464,7 +479,7 @@ components of a circuit's randomness.
 ``Sampler::evalScalar`` is the scalar dispatcher: it knows
 how to sample ``gate_rv`` (via ``Distribution::sample``),
 ``gate_value`` (float8 mode parsed via
-``extract_constant_double``), ``gate_arith`` (recursing on
+``parseDoubleStrict``), ``gate_arith`` (recursing on
 children and combining per ``info1``, including ``MAX`` /
 ``MIN`` folds – shared base RVs stay coupled through the caches,
 so ``max(x, y)`` with correlated ``x``, ``y`` is sampled
@@ -507,7 +522,7 @@ false) collapses to a Bernoulli ``gate_input`` with
 probability ``0`` or ``1``, transparent to every downstream
 consumer.
 
-Interval propagation covers all ten arith opcodes: ``MAX`` /
+Interval propagation covers all eleven arith opcodes: ``MAX`` /
 ``MIN`` take the corner max / min of the child intervals;
 ``EXP`` and ``LN`` map interval endpoints through the monotone
 function (``LN`` clamping the interval at zero from below);
@@ -946,7 +961,7 @@ the conditional-moment dispatcher's pre-MC short-circuit:
 (:cfile:`Expectation.cpp`) calls it after
 ``try_truncated_closed_form`` returns ``nullopt`` and raises a
 "conditioning event is infeasible" error directly when the
-predicate fires, avoiding a 100 000-sample MC round whose
+predicate fires, avoiding a full ``rv_mc_samples`` MC round whose
 acceptance probability is exactly zero.
 
 :sqlfunc:`rv_sample` and :sqlfunc:`rv_histogram` share
@@ -962,7 +977,8 @@ the inverse-CDF transform; Lognormal, Weibull, and Pareto invert
 their exact quantiles). The fast path delivers exactly ``n``
 samples with 100% acceptance even for tight tail events that
 would otherwise starve the rejection budget. Families without
-``sampleTruncated`` (Erlang, Gamma, Beta) and ``gate_arith``
+``sampleTruncated`` (Erlang, Gamma, Beta, Inverse-Gamma,
+Inverse-Gaussian) and ``gate_arith``
 composite roots fall through to MC rejection unchanged.
 
 :sqlfunc:`rv_analytical_curves` (in :cfile:`RvAnalyticalCurves.cpp`)
@@ -1257,10 +1273,10 @@ The continuous gate types map to:
   guard / value / default for ``gate_case``, whose node glyph is
   ``⇢``);
 - a Circuit-mode fetch that consumes the
-  :sqlfunc:`simplified_circuit_subgraph` SRF (a thin
-  ``compute_simplified_circuit_subgraph`` wrapper that runs
+  :sqlfunc:`simplified_circuit_subgraph` function
+  (:cfile:`SimplifiedSubgraph.cpp`), which runs
   the universal peephole pass on a sub-BFS and returns the
-  result as ``jsonb``), with the ``provsql.simplify_on_load``
+  result as a single ``jsonb`` value, with the ``provsql.simplify_on_load``
   Config-panel toggle switching between the raw and folded
   views.
 

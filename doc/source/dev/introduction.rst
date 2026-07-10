@@ -71,6 +71,19 @@ Chapters
    compilers, weighted model counting, the tree-decomposition
    path, and a step-by-step guide for plugging in a new method.
 
+:doc:`kc-server-protocol`
+   The KCMCP wire protocol for warm knowledge-compiler servers:
+   framing, the ``compile`` request / ``ddnnf-nnf`` result
+   exchange, the in-extension client, the managed-server
+   supervisor, and the ``tdkc --kcmcp`` reference server.
+
+:doc:`continuous-distributions`
+   The continuous random-variable subsystem: the ``rv`` /
+   ``arith`` / ``mixture`` / ``case`` gate types, the
+   registry-driven ``Distribution`` class hierarchy, the Monte
+   Carlo sampler, RangeCheck, the analytic and moment evaluators,
+   conditioning, and the statistic aggregates.
+
 :doc:`coding-conventions`
    Naming, error reporting, memory management, the C/|cpp|
    boundary, and the small set of project-specific conventions
@@ -96,5 +109,11 @@ Chapters
    split, per-batch GUC application, on-disk Config persistence,
    the circuit-fetch + frontier-expansion pipeline, and the unit +
    Playwright test harness.
+
+:doc:`playground`
+   The WASM / browser build: compiling the extension for PGlite,
+   the in-process circuit store, the ``wasm/`` build scripts, and
+   the in-browser ProvSQL Playground (Pyodide + PGlite) that runs
+   the unmodified Studio Python client-side.
 
 

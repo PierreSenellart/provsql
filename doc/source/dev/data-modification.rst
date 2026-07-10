@@ -27,9 +27,11 @@ intervals (``plus`` = union, ``times`` = intersection, ``monus``
 that punches a hole in the middle of an interval, and so on --
 so the carrier cannot be a plain ``tstzrange``.
 ``tstzmultirange`` is exactly the right type for this semiring,
-and without it the whole construction does not close.  All the
-SQL pieces live in ``sql/provsql.14.sql`` and are not loaded on
-older PostgreSQL versions (see :doc:`build-system`).
+and without it the whole construction does not close.  The SQL
+pieces live in ``sql/provsql.14.sql`` and are not loaded on
+older PostgreSQL versions (see :doc:`build-system`), with one
+exception: the ``query_type_enum`` type is created in
+``sql/provsql.common.sql`` and thus exists on every version.
 
 
 The GUC and the Big Picture
@@ -112,8 +114,10 @@ Each trigger:
    ``update`` gate via :sqlfunc:`create_gate`.
 3. Reads the current statement text from ``pg_stat_activity`` and
    inserts a row into ``update_provenance``.
-4. Sets ``provsql.update_provenance = off`` on a *local* basis to
-   suppress the recursive triggering caused by the next steps.
+4. Sets ``provsql.update_provenance = off`` at the *session* level
+   (``set_config(..., false)``), restoring it immediately after
+   each protected statement, to suppress the recursive triggering
+   caused by the next steps.
 5. Walks the affected rows (``OLD_TABLE`` / ``NEW_TABLE``) and
    rewrites each row's ``provsql`` token: ``insert`` multiplies
    the row token by the new operation gate, ``delete`` applies
@@ -146,7 +150,7 @@ The ``update_provenance`` Table
      provsql    uuid,                            -- the update gate's UUID
      query      text,                            -- the SQL text
      query_type query_type_enum,                 -- INSERT/UPDATE/DELETE/UNDO
-     username   text,                            -- session_user
+     username   text,                            -- current_user
      ts         timestamp DEFAULT CURRENT_TIMESTAMP,
      valid_time tstzmultirange DEFAULT
        tstzmultirange(tstzrange(CURRENT_TIMESTAMP, NULL))
@@ -193,9 +197,11 @@ circuit that references it.  :sqlfunc:`undo`:
 :sqlfunc:`replace_the_circuit` (also in ``sql/provsql.14.sql``) is a
 recursive PL/pgSQL function that walks a circuit and rebuilds it
 with one substitution: every reference to ``op_token`` is
-replaced by ``provenance_monus(op_token, u)``.  Because the
-circuit is a DAG, the rewrite is structural -- it preserves
-sharing within a single rewrite call.
+replaced by ``provenance_monus(op_token, u)``.  The walk is a
+*tree unfolding*: there is no memoization, so every visited
+non-leaf gate gets a fresh UUID on each path and shared internal
+sub-DAGs are duplicated in the rewritten circuit; only ``input``
+and ``update`` leaves (returned as-is) stay shared.
 
 The undo is *itself* an operation: the new ``update`` gate ``u``
 becomes a leaf of every rewritten row, and undoing the undo
@@ -250,7 +256,8 @@ operation was in effect.  No record in ``update_provenance`` is
 ever modified.
 
 The remaining user-facing temporal functions are thin wrappers
-on top of :sqlfunc:`get_valid_time` and ordinary
+around the same ``sr_temporal(provenance(),
+'provsql.time_validity_view')`` call, combined with ordinary
 ``tstzmultirange`` operators:
 
 - :sqlfunc:`timetravel` -- rows of a table valid at a given
@@ -259,7 +266,8 @@ on top of :sqlfunc:`get_valid_time` and ordinary
   interval (tests ``&&`` overlap);
 - :sqlfunc:`history` -- full history of rows matching a key.
 
-All four functions live entirely in PL/pgSQL.  They contain no
-C code: every operation reduces to a query against the
-target table plus a call to :sqlfunc:`provenance_evaluate` with
-the union-of-intervals semiring.
+All four functions have PL/pgSQL bodies: every operation reduces
+to a query against the target table plus a call to
+:sqlfunc:`sr_temporal`, which delegates to
+:sqlfunc:`provenance_evaluate_compiled`, the compiled |cpp|
+union-of-intervals evaluator.

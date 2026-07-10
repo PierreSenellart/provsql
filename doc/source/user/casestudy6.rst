@@ -235,7 +235,7 @@ the ``gate_cmp``); the cmp's child link reaches into the
 ``gate_rv`` from Step 1.
 
 The eval strip's :sqlfunc:`probability_evaluate` entry exposes the
-five compiled methods (see :doc:`the chapter on probabilities
+full method catalogue (see :doc:`the chapter on probabilities
 <probabilities>`). Pick
 ``monte-carlo`` and set ``n = 10000``; the panel returns the
 probability with a Hoeffding confidence band. Pin
@@ -451,8 +451,8 @@ falls back to rejection sampling at the
 ``provsql.rv_mc_samples`` budget; if the conditioning event is
 so unlikely that fewer than ``n`` samples land inside that
 budget, the panel surfaces a hint pointing at the GUC, e.g.
-*Only 47 samples accepted within budget 10000; widen*
-``provsql.rv_mc_samples`` *or loosen the conditioning*.
+*MC accepted 47/200. Raise* ``provsql.rv_mc_samples`` *in the
+Config panel to widen the rejection-sampling budget.*
 Re-running with a larger budget (set ``rv_mc_samples = 50000``
 in the Config panel) recovers the full batch.
 
@@ -524,7 +524,7 @@ For threshold queries whose contributing rows have structurally
 independent provenance, the ``'independent'`` probability method
 (see :doc:`the chapter on probabilities <probabilities>`) is *exact*
 and far cheaper than Monte
-Carlo. Compare the three available exact methods against
+Carlo. Compare two exact methods against
 ``monte-carlo`` on the Step 2 query:
 
 .. code-block:: postgresql

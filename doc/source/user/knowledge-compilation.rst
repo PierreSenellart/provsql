@@ -60,10 +60,15 @@ circuit into a `CNF
 `Tseytin transformation
 <https://en.wikipedia.org/wiki/Tseytin_transformation>`_: one fresh
 variable per gate, plus clauses asserting that each gate variable is
-equivalent to the Boolean combination of its inputs. This is the exact
-encoding the extension streams to ``d4`` / ``c2d`` / ``minic2d`` /
-``dsharp`` on a temporary file; :sqlfunc:`tseytin_cnf` returns it as
-text instead:
+equivalent to the Boolean combination of its inputs.
+:sqlfunc:`tseytin_cnf` returns this encoding as text. The clauses and
+the variable numbering are exactly what the extension streams to
+``d4`` / ``c2d`` / ``minic2d`` / ``dsharp`` on a temporary file; the
+compilers receive the bare, unweighted CNF (only the ``weightmc``
+model counter gets an inline-weighted dialect, and MCC-style counters
+a separate weight-comment form), while :sqlfunc:`tseytin_cnf`'s
+default text output adds the mapping comments and weight lines
+described below on top:
 
 .. code-block:: postgresql
 

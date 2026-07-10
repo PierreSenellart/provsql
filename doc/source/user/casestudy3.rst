@@ -164,10 +164,20 @@ result first and then aggregate per destination:
       JOIN routes     r2 ON r2.route_id = u2.route_id
       WHERE s0.stop_name = 'Bagneux';
 
+    SELECT remove_provenance('bagneux_b');
+
     SELECT stop_name, route_long_name, bool_or(accessible) AS accessible
     FROM bagneux_b
     GROUP BY stop_name, route_long_name
     ORDER BY route_long_name, stop_name;
+
+The materialized table still carries the ``provsql`` provenance column,
+so :sqlfunc:`remove_provenance` drops tracking first and the
+``bool_or`` aggregation runs outside ProvSQL.
+
+The materialized table still carries the ``provsql`` provenance column,
+so :sqlfunc:`remove_provenance` drops tracking first and the
+``bool_or`` aggregation runs outside ProvSQL.
 
 :sqlfunc:`sr_boolean` evaluates the provenance token under the Boolean
 semiring, looking up each leaf token in the ``wheelchair`` table.

@@ -43,11 +43,17 @@ overwrites the pointer in :cfunc:`_PG_init`, *chains* to the previous
 value (if any), and runs its own logic before delegating to the
 default implementation.
 
-ProvSQL uses one hook:
+ProvSQL's central hook is the planner hook:
 
 - ``planner_hook`` -- called for every query just before planning.
   ProvSQL installs :cfunc:`provsql_planner`, which inspects the
   ``Query`` tree and rewrites it to track provenance.
+
+It also installs several supporting hooks: ``ExecutorStart_hook`` /
+``ExecutorEnd_hook`` (query-nesting-depth tracking),
+``ProcessUtility_hook`` (utility statements), and
+``shmem_request_hook`` / ``shmem_startup_hook`` (shared-memory
+segment setup).
 
 The pattern is always the same:
 
@@ -166,7 +172,7 @@ execution of the current query and do not return to the caller;
 at ``WARNING``, ``NOTICE``, or ``LOG`` they emit a message and
 return normally.
 
-ProvSQL wraps both forms in convenience macros declared in
+ProvSQL wraps ``elog`` in convenience macros declared in
 :cfile:`provsql_error.h`:
 
 - :cfunc:`provsql_error` -- aborts with ``"ProvSQL: ..."`` prefix.
@@ -229,11 +235,14 @@ GUCs (Configuration Parameters)
 PostgreSQL exposes server- and session-scoped settings as *Grand
 Unified Configuration* (GUC) variables, registered via
 ``DefineCustom*Variable`` from :cfunc:`_PG_init`.  ProvSQL exposes
-six:
+over twenty (see the :doc:`configuration chapter
+</user/configuration>` for the full list); the most commonly
+encountered are:
 
 - ``provsql.active`` -- master switch.
-- ``provsql.provenance = 'where'`` -- enable where-provenance tracking
-  (see :doc:`where-provenance`).
+- ``provsql.provenance`` -- enum selecting the tracked provenance
+  class: ``semiring`` (default), ``where`` (see
+  :doc:`where-provenance`), ``absorptive``, or ``boolean``.
 - ``provsql.update_provenance`` -- enable data-modification tracking
   (see :doc:`data-modification`).
 - ``provsql.verbose_level`` -- diagnostic verbosity (see
@@ -244,8 +253,11 @@ six:
   Studio) to expose aggregate-cell circuit roots for click-through.
 - ``provsql.tool_search_path`` -- colon-separated directories
   prepended to ``PATH`` when ProvSQL spawns external tools (the
-  d-DNNF compilers d4, c2d, minic2d, dsharp; the ``weightmc``
-  weighted model counter; the ``graph-easy`` DOT renderer). The
+  knowledge compilers and model counters registered in the
+  ``provsql.tools`` registry -- d4, c2d, minic2d, dsharp, ganak,
+  sharpsat-td, dpmc, weightmc, the panini compilers, ... -- and the
+  ``graph-easy`` DOT renderer; ``kcmcp``-kind registry entries reach
+  a socket server instead and bypass ``PATH`` resolution). The
   helper :cfunc:`run_external_tool` in :cfile:`external_tool.cpp`
   reads this GUC, ``setenv``\ s ``PATH`` for the duration of the
   call, and restores it afterwards; it runs the tool in its own

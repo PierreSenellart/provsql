@@ -105,10 +105,13 @@ implementation MUST support at least one of the following:
   are the access-control boundary, with no port to allocate or leak), or
   a loopback TCP endpoint.  When a supervisor launches the server it MAY
   let the OS assign an ephemeral port (``bind`` to port ``0``) and learn
-  the chosen port from the child (for ProvSQL: a supervisor background
-  worker writes it into shared memory, mirroring how
-  :cfile:`provsql_mmap.c` registers its worker and how
-  :cfile:`provsql_shmem.h` carries shared state).
+  the chosen port from the child.  ProvSQL's supervisor background
+  worker instead picks a fixed Unix-socket endpoint itself
+  (``unix:/tmp/.provsql-kcmcp-<port>.sock``), substitutes it into the
+  launch command's ``{endpoint}`` placeholder, and publishes that string
+  in shared memory (mirroring how :cfile:`provsql_mmap.c` registers its
+  worker and how :cfile:`provsql_shmem.h` carries shared state); nothing
+  is learned from the child.
 - **Remote host.**  A TCP connection to a host and port the client is
   configured with.  A single warm server can then serve several client
   machines.
@@ -130,11 +133,11 @@ Endpoint identification
 
 The protocol defines no discovery mechanism: the endpoint -- a
 Unix-socket path or a ``host:port`` -- is communicated to the client out
-of band.  For ProvSQL the supervisor background worker publishes the live
-loopback port in shared memory, and republishes it after a respawn, so a
-backend always reaches the current server; a remote deployment is
-configured with a fixed ``host:port``; a Unix socket lives at a known
-path.
+of band.  For ProvSQL the supervisor background worker publishes the
+managed server's Unix-socket endpoint in shared memory (clearing it while
+no server is up), so a backend always reaches the current server; a
+remote deployment is configured with a fixed ``host:port``; a Unix
+socket lives at a known path.
 
 Because KCMCP v1 has no authentication, a client trusts whatever answers
 at the endpoint.  The :msg:`HELLO` handshake is the sanity check: before

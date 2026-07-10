@@ -186,23 +186,45 @@ Two constant gates represent the semiring identity elements:
 :sqlfunc:`gate_zero` (additive identity, ``𝟘``) and
 :sqlfunc:`gate_one` (multiplicative identity, ``𝟙``).
 
-Three additional gate types support continuous random variables
-(see :doc:`continuous-distributions`):
+Additional gate types support scalar values and continuous random
+variables (see :doc:`continuous-distributions`):
 
-- ``rv``: random-variable leaf (Normal / Uniform / Exponential /
-  Erlang)
+- ``value``: scalar constant (``HAVING`` provenance and the
+  random-variable surface)
+- ``rv``: random-variable leaf carrying one of the registered
+  distribution families (Normal, Uniform, Exponential, Gamma, Beta…;
+  :sqlfunc:`rv_families` lists them all)
 - ``arith``: ``N``-ary arithmetic over scalar children
-  (``+ - * /``, unary ``-``)
+  (``+ - * /``, unary ``-``, min/max, ``pow``/``ln``/``exp``, and the
+  ``percentile_cont`` order statistic)
 - ``mixture``: Bernoulli or categorical mixture of scalar
   random-variable roots
+- ``case``: guarded selection over random variables (``CASE``
+  expressions, first-match semantics)
+- ``observe``: likelihood-weighting evidence on an observed
+  random-variable leaf
+
+Further gate types serve specific features:
+
+- ``update``: data-modification tracking (see
+  :doc:`data-modification`)
+- ``conditioned``: conditioning marker with children
+  ``[target, evidence]`` (see :doc:`conditioning`)
+- ``mobius``: signed Möbius combination over child islands, with one
+  integer coefficient per child (safe-UCQ probability evaluation)
 
 Two *transparent marker* gates wrap a single child without changing its
 value, recording metadata for a later stage (a circuit carrying them
 evaluates identically to one without):
 
-- ``assumed_boolean``: added by the safe-query rewriter (and load-time
-  Boolean-identity folding) when the provenance class is ``'boolean'``, to
-  record that only Boolean semantics are preserved.
+- ``assumed``: structural assumption marker whose ``extra`` label names
+  the assumption the wrapped sub-circuit was computed under:
+  ``'boolean'`` (the default when the label is absent; added by the
+  safe-query rewriter and load-time Boolean-identity folding, recording
+  that only Boolean semantics are preserved) or ``'absorptive'``
+  (cyclic recursion truncated at the absorptive value fixpoint).
+  Evaluation under a semiring outside the recorded class refuses with
+  an explicit error.
 - ``annotation``: carries the inversion-free certificate on a result root,
   or a per-input order key, for the ``'inversion-free'`` probability
   method (see :doc:`probabilities`).

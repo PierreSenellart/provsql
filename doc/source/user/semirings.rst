@@ -78,7 +78,8 @@ Counting Semiring (m-semiring)
 -------------------------------
 
 :sqlfunc:`sr_counting` evaluates the provenance in the *counting* m-semiring,
-counting the number of distinct supporting inputs:
+counting the number of derivations of the result (its multiplicity
+under bag semantics):
 
 .. code-block:: postgresql
 
@@ -91,7 +92,7 @@ Why-Provenance
 ---------------
 
 :sqlfunc:`sr_why` returns the *why-provenance* of a result – the set of
-minimal witnesses (sets of input tuples) that support the result:
+witnesses (sets of input tuples) that support the result:
 
 .. code-block:: postgresql
 
@@ -268,10 +269,9 @@ identity is ``'{(,)}'`` (the universal range):
     SELECT entity_id, sr_temporal(provenance(), 'validity_mapping')
     FROM mytable;
 
-This is the compiled counterpart of :sqlfunc:`union_tstzintervals`. The
-two compute the same quantity for plain SELECT-FROM-WHERE-GROUP BY
-queries, but :sqlfunc:`sr_temporal` additionally supports HAVING clauses,
-aggregation, and where-provenance, which the PL/pgSQL evaluator skips.
+:sqlfunc:`union_tstzintervals` is a thin SQL alias for
+:sqlfunc:`sr_temporal`, retained for backward compatibility; both
+compute the same union of validity intervals.
 
 Requires PostgreSQL ≥ 14 (for ``tstzmultirange``).
 
@@ -415,8 +415,9 @@ suite: :download:`test/sql/capability.sql <../../../test/sql/capability.sql>`
     introduced by ``HAVING`` clauses; queries with ``HAVING`` will produce
     an error.
     The built-in compiled semirings (:sqlfunc:`sr_formula`,
-    :sqlfunc:`sr_counting`, etc.) are implemented in C, support all
-    gate types including ``HAVING``, and are significantly faster.
+    :sqlfunc:`sr_counting`, etc.) are implemented in C, support the
+    aggregation and ``HAVING`` gate types (``agg``, ``semimod``,
+    ``cmp``, ``value``), and are significantly faster.
     Prefer compiled semirings when available; use
     :sqlfunc:`provenance_evaluate` for semirings not covered by the
     built-in set.
@@ -431,12 +432,12 @@ A mapping is created with :sqlfunc:`create_provenance_mapping`:
 
     SELECT create_provenance_mapping('mapping_name', 'table_name', 'column_name');
 
-The mapping table has columns ``token`` (uuid) and ``value``. You can
-also populate it manually for custom scenarios:
+The mapping table has columns ``value`` and ``provenance`` (uuid). You
+can also populate it manually for custom scenarios:
 
 .. code-block:: sql
 
-    INSERT INTO mapping_name(token, value)
+    INSERT INTO mapping_name(provenance, value)
     SELECT provenance(), my_label FROM mytable;
 
 .. _semiring-boolean-compat:
@@ -454,9 +455,14 @@ value:
 
 .. code-block:: text
 
-    ERROR: ProvSQL: semiring 'sr_counting' is not compatible with
-           boolean-provenance rewriting; re-run with
-           provsql.provenance = 'semiring'
+    ERROR:  ProvSQL: provenance_evaluate_compiled: The requested
+            semiring does not admit a homomorphism from Boolean
+            functions; the wrapped sub-circuit was computed under a
+            Boolean-provenance assumption (typically by the safe-query
+            rewrite, provenance class 'boolean') and the evaluation is
+            unsound under this semiring.  Re-run the query under a more
+            general provenance class, or pick a Boolean-compatible
+            semiring (boolean, boolexpr, formula, ...).
 
 The following compiled semirings are Boolean-faithful and run on
 any circuit, including rewritten ones: :sqlfunc:`sr_boolean`,
