@@ -43,6 +43,16 @@ Each plan document follows a consistent layout:
   (finishing the native discrete families, multivariate Normal, CDF /
   monotone transforms, frozen snapshots, copulas, stochastic processes,
   do-calculus, and the provenance × probability research directions).
+- [`multivalued-distributions.md`](multivalued-distributions.md) :
+  plan for vector-valued random variables (`random_vector` type, `vec`
+  packing gate, MVN/Dirichlet via compile-to-scalar-circuit, distance
+  events, `float8[]` readouts), Studio / Playground integration, and
+  the provenance-first use cases (similarity-search lineage, sensor
+  fusion, vector data valuation). pgvector was assessed and skipped
+  (its ANN indexing is recorded as a demand-gated bridge). Supplies
+  the vector-typing architecture that
+  [`continuous_distributions.md`](continuous_distributions.md)
+  §A.2/§D.1/§D.4 defer to.
 - [`latent-variables.md`](latent-variables.md) : remaining
   latent-variable inference scale-up -- broader recognition of
   exact-inference structure (several shared latents, SUM-conditioned

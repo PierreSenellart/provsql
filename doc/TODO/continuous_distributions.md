@@ -198,6 +198,9 @@ the user, not a fundamentally new primitive.
 vectors and covariance matrices threaded through `gate_arith`, and the
 simplifier needs the Cholesky-recognition rule. The gate ABI should be
 designed knowing this is coming, even if the implementation lands later.
+The vector-typing architecture (a `random_vector` type, a `vec` packing
+gate, the compile-to-scalar Cholesky route) is planned in
+[`multivalued-distributions.md`](multivalued-distributions.md).
 
 **Applicability.** Portfolio risk, sensor fusion, any physical process
 where variables correlate. The bridge to formal joint modelling.
