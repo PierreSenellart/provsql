@@ -161,8 +161,13 @@ portfolio combination) come out closed-form for free.
 **Later route: native vector leaves (`rv_vec` gate).** For families
 with no useful scalar decomposition – above all **empirical point
 clouds** (bags of embeddings: a categorical over points in R^d, where
-per-component encoding would explode into selector/case chains) and
-directional families (von Mises–Fisher) – a second appended gate type
+per-component encoding would explode into selector/case chains),
+directional families (von Mises–Fisher), and **multinomial count
+vectors** (negatively correlated components with no independent-leaf
+decomposition; the MC sampler draws them natively, and their Gaussian
+limit N(nq, n(diag(q) − qqᵀ)) is already covered by the compiled MVN,
+which is the right surrogate for large n anyway) – a second appended
+gate type
 `rv_vec` with `extra = "family:d:params…"` and a parallel
 `VectorDistribution` interface (see §5). Deliberately phased after the
 compile-to-scalar route ships.
@@ -225,9 +230,33 @@ schemas that lack the type:
   native leaf becomes a marginal-projection gate evaluated through the
   vector cache.
 - **Analytic extensions**, ordered by value: MVN differential entropy
-  (closed form) in `InformationTheory`; Mahalanobis / squared-norm
-  events on Gaussians (generalised chi-square CDF) in
-  `AnalyticEvaluator`; everything else falls back to MC as usual.
+  (closed form) in `InformationTheory`; a **Gaussian orthant-CDF arm**
+  (see below); Mahalanobis / squared-norm events on Gaussians
+  (generalised chi-square CDF) in `AnalyticEvaluator`; everything else
+  falls back to MC as usual.
+- **Gaussian orthant CDF for correlated comparison conjunctions.** An
+  AND-conjunction of comparison events whose operands are all affine
+  combinations of shared Normal leaves (exactly what a compiled MVN
+  produces) is a multivariate-normal orthant probability
+  Φ_d(τ; μ, Σ). Today such a conjunction falls through to MC, which
+  (a) converges at the O(N^-1/2) sampling rate when a
+  quasi-deterministic quadrature (Genz–Bretz) evaluates the same
+  quantity to near machine precision at O(d³)-ish cost, and (b) simply
+  returns 0 on rare orthants (Pr ≲ 10⁻⁶ is already unresolvable at
+  realistic sample budgets, whereas applications legitimately need
+  10⁻¹² – rare-event workloads pair the orthant CDF with a tilted
+  importance-sampling fallback). Shape of the fix: after the peephole
+  has folded the affine arithmetic through the Normal sum-closure
+  registry, detect in `AnalyticEvaluator` that every conjunct of a
+  `walkAndConjunctIntervals`-style joint pass is a linear comparison
+  over jointly-Gaussian scalars, assemble (μ, Σ) from the shared-leaf
+  decomposition, and call a Genz–Bretz routine; decline to MC on any
+  non-Gaussian leaf. This subsumes the pairwise Normal-vs-Normal
+  closed form (d = 1) and gives "min/max/rank of correlated Gaussians"
+  events – first-elimination / argmin probabilities, order statistics
+  of correlated portfolio components – an exact path. Depends on the
+  same P0 census fix; a correlated conjunction of shared-leaf
+  comparisons is precisely the shape the sibling-arm bug corrupts.
 - **Prerequisite**: the HybridEvaluator sibling-arm census bug (shared
   leaves across sibling arms de-duplicated as if independent) must be
   fixed first – compiled MVNs are *made of* shared leaves, and the
@@ -323,6 +352,26 @@ is the combination with the *rest* of the provenance machinery:
    document; dominant-topic events via pairwise component comparisons;
    formula/counting semirings give the lineage and multiplicity of
    topic-share aggregates.
+6. **Election forecasting with partially observed ballots** (e.g.
+   probabilistic ranked-choice voting: unobserved ballots as
+   multinomial draws from a polling prior, "candidate a currently
+   last" as the conjunction of pairwise tally comparisons). One
+   round's elimination probabilities map cleanly onto this plan: the
+   Gaussian surrogate of the multinomial tally vector is a compiled
+   MVN, the pairwise differences are componentwise `gate_arith`, and
+   the argmin event is exactly the correlated-Gaussian-conjunction
+   shape the §5 orthant-CDF arm evaluates analytically – without that
+   arm, MC reduces the whole exercise to naive sampling and cannot
+   resolve the rare orthants such workloads care about. **Scope
+   limit**, recorded so it is not rediscovered: the *multi-round*
+   recursion (chaining stage probabilities over the 2^k survivor-set
+   DAG, per-round re-randomisation, uniform tie-breaking among argmin
+   candidates) is an iterative algorithm, not a query; it stays in
+   application code that calls one-stage ProvSQL evaluations, and is
+   not a target for the rewriter (recursive-CTE positions are anyway
+   outside the comparison lift's supported positions). A small-k
+   single-stage version makes a good correlated-uncertainty case
+   study once the orthant arm exists.
 
 ## Priorities
 
@@ -336,10 +385,14 @@ is the combination with the *rest* of the provenance machinery:
    `sum`/`avg` aggregates, pg_regress coverage.
 3. **P2 – UX**: Studio (§7) rendering + eval strip + capability
    probes; user-manual chapter; case study (Playground-seeded).
-4. **P3 – native vector leaves**: `rv_vec` gate + `VectorDistribution`
-   + sampler vector cache, `empirical_vectors` for embedding bags,
-   chunked `set_extra`, MVN entropy + Mahalanobis analytic arms,
-   `vector_families()`.
+4. **P3 – native vector leaves and analytic depth**: `rv_vec` gate +
+   `VectorDistribution` + sampler vector cache, `empirical_vectors`
+   for embedding bags, multinomial family, chunked `set_extra`, MVN
+   entropy + Gaussian orthant-CDF (Genz–Bretz) + Mahalanobis analytic
+   arms, `vector_families()`. The orthant arm is independent of the
+   native-leaf machinery (it works on phase-1 compiled MVNs) and can
+   be pulled forward on its own if a rare-event or argmin workload
+   (§8.6) materialises first.
 5. **Demand-gated**: the `provsql_vector` ANN-indexing bridge (§2) –
    only if a large-corpus similarity workload shows up.
 6. **Research follow-ups**: copula sugar over this machinery
