@@ -25,9 +25,11 @@ Two rules pin the semantics down:
 
 * **Selection rule.** Every condition is evaluated under SQL's 3VL on
   the actual data; a tuple whose condition evaluates to *unknown* or
-  *false* is annotated with the semiring **zero**, exactly like an
-  absent tuple. Unknown never becomes "maybe" in the annotation, and
-  never silently becomes "true".
+  *false* is not an answer: depending on the construct it is either
+  removed from the result or kept with the semiring **zero** as its
+  annotation, which is equivalent to absence (see `Zero-Annotated Rows
+  May Stay Visible`_ below). Unknown never becomes "maybe" in the
+  annotation, and never silently becomes "true".
 * **Possible-worlds criterion.** For Boolean provenance (and everything
   built on it: probabilities, Shapley values, knowledge compilation), a
   tuple's annotation must satisfy: the tuple is in the query answer over
