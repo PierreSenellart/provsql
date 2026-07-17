@@ -14,6 +14,131 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.7.0] - 2026-07-17
+
+Companion release for ProvSQL extension 1.11.0. The headline feature is
+**Temporal mode**, a validity-timeline view of a relation or query with
+as-of / during / full-history time operations. The second axis is keeping
+the circuit inspector in step with the extension's grown random-variable
+and Bayesian surface: RV rendering is now **registry-driven** (a family
+added to the extension renders without a Studio upgrade), latent
+parameters render their sub-circuit inline, the new `observe` / `CASE`
+gates and arithmetic opcodes all display, and the distribution profile
+gains entropy and quantile readouts. The release also pins the two
+homomorphism-only modes to the Boolean scheme, moves the bundled fixtures
+onto maintained provenance mappings, polishes Notebook mode (one-click
+extension install, math-rendering fix), and refreshes the Playground
+landing experience. Requires extension **>= 1.11.0** (enforced at
+startup); Temporal mode additionally needs PostgreSQL **14+**.
+
+### Highlights
+
+- **Temporal mode.** A new mode that places the rows of a relation or a
+  query on a validity timeline, backed by the extension's
+  `sr_temporal` interval-union kernel. A source × time-operation model
+  drives it: pick a **Relation** or an arbitrary **Query** source, then an
+  **as-of** (snapshot at an instant), **during** (rows valid across a
+  window) or **full-history** operation. `datetime-local` pickers select
+  the instant or window to the second; the **Send query** path activates
+  the Query source and a carried run query flows straight into it.
+- **A timeline that reads at any scale.** The axis adapts from seconds to
+  years, captioning date / year rollovers inline at the ticks; the
+  **During** window is framed (out-of-window time dimmed, bounds marked);
+  `±infinity` validity renders as edge bars; degenerate and empty-union
+  intervals get explicit markers and formatted-interval tooltips; the
+  timezone is labelled UTC on both pickers and axis. An **Order** control
+  sorts lanes chronologically, and lanes are labelled positionally so a
+  query projecting duplicate column names still lays out correctly.
+- **Boolean lock in the homomorphism modes.** Contributions and Temporal
+  modes pin the provenance scheme to `Boolean`: both read the circuit
+  purely as a Boolean function (Shapley/Banzhaf weights; the
+  Boolean-to-temporal homomorphism), so the scheme cannot change their
+  result. The scheme remains freely user-controllable in Circuit and
+  Notebook modes.
+- **Maintained mappings in the fixtures.** The bundled temporal fixtures
+  and case studies now build their validity mappings with
+  `create_provenance_mapping(..., maintained => true)`, so a deleted row
+  keeps its original interval bounded at the deletion time – demonstrating
+  the extension 1.11.0 feature end to end.
+- **New arith-operator labels.** The circuit inspector labels the
+  extension's new `gate_arith` opcodes: `^` (power), `ln`, `exp` – and a
+  power gate whose exponent is the constant `0.5` displays as the square
+  root it is (`√`, with `sqrt (^ 0.5)` in the operator row), matching
+  the `sqrt()` SQL sugar. The `PERCENTILE` opcode backing the
+  extension's `percentile_cont` aggregate over `random_variable` rows
+  renders its fraction in the standard percentile notation (`p50` for
+  the median, `p99`…), falling back to `pct` when the fraction is
+  missing.
+- **Entropy headline stat.** The distribution profile adds an `H` tile
+  (entropy in nats – Shannon for a discrete root, differential for a
+  continuous one, via the extension's new `entropy` readout) next to
+  μ and σ. Shapes the entropy evaluator declines (composites without a
+  Monte Carlo budget, aggregate roots) simply omit the tile – the rest
+  of the profile is unaffected.
+- **Quantile eval-strip entry.** A *Quantile* option under the
+  Distribution group computes the inverse CDF at a chosen fraction
+  (default `0.5`, the median) via `rv_quantile`, with the same
+  conditioning support as Moment / Sample – exact for closed-form and
+  categorical shapes, empirical Monte Carlo otherwise.
+- **`gate_case` rendering.** The circuit inspector renders the
+  `gate_case` guarded-selection gate (the `CASE`-over-`random_variable`
+  lowering: abs / ReLU / clamp) with its own `⇢` glyph, a descriptive
+  tooltip, and guard / value / default edge labels tracking the
+  first-match wire layout.
+- **`gate_observe` rendering.** The circuit inspector renders the
+  `gate_observe` likelihood-weighting evidence gate (from
+  `observe(leaf, datum)`, equivalently the `leaf = datum` conditioning
+  form) as a binary `=` node – the observed random-variable leaf and a
+  synthetic value node for the datum. This matches the equivalent
+  `gate_cmp` equality, so the two spellings of the same evidence read
+  alike; the true `observe` gate type still shows in the inspector.
+- **Registry-driven RV rendering.** The circuit inspector now reads the
+  extension's continuous-distribution family registry
+  (`provsql.rv_families()`): gate glyphs and parameter symbols come from
+  the registry, and the inline density preview is drawn from a
+  server-computed pdf grid (`rv_analytical_curves`) attached per rv leaf
+  to the circuit payload. Studio keeps no client-side family table or
+  pdf math, so a family added to the extension – Gamma / Chi-squared in
+  1.11.0 – renders correctly without a Studio upgrade. This makes
+  extension 1.11.0 a hard floor; the startup version check now enforces
+  it. A parametric (latent) leaf, whose distribution parameter is itself a
+  random variable, renders that parameter's sub-circuit inline.
+
+### Improvements
+
+- **Notebook mode offers to install ProvSQL.** A notebook opened against a
+  database without the extension shows a banner offering a one-click
+  `CREATE EXTENSION provsql CASCADE`, instead of failing cell by cell, so
+  a notebook is runnable on an arbitrary database.
+- Markdown cells no longer carry a `[ ]` execution-count gutter (matching
+  Jupyter, where the count is a code-cell affordance), and the **+ SQL**
+  button documents the `y` convert-to-SQL command-mode shortcut.
+- **Fix: the eval-strip condition is preset only from an event root.**
+  Pinning a circuit whose root is a scalar distribution no longer
+  pre-fills the conditioning field; only an event-typed root (a
+  comparison) does.
+- **Fix: math renders reliably in Markdown cells.** The vendored KaTeX
+  auto-render chain is now awaited before math is rendered, so `$…$` /
+  `$$…$$` no longer intermittently shows as raw source when the browser had
+  not finished loading `katex.min.js` (a race present since math support
+  was added).
+- **Fix: a directly-loaded circuit survives a page reload.** A circuit
+  opened by a token jump (from a notebook circuit cell or a where-mode
+  result row) with no query to re-run is now restored after a reload,
+  instead of the canvas coming up blank.
+- **Fix: oversized circuit-node labels no longer overflow in notebook
+  cells.** A node whose label carries wide payload (a distribution's
+  parameters, a value scalar, an aggregate name) shrinks its font to fit
+  the node, matching Circuit mode.
+- The timeline clears when a query fails and surfaces the SQL error;
+  a no-provenance result explains why instead of rendering blank.
+- Source, query and time-operation selections are restored on page reload.
+- Validity mapping is selectable in both the Relation and Query sources.
+
+### Playground
+
+- The default landing page is refreshed.
+
 ## [1.6.0] - 2026-06-18
 
 Companion release for ProvSQL extension 1.10.0. The headline feature
