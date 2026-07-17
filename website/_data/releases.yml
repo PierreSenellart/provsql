@@ -1,3 +1,417 @@
+- version: "1.11.0"
+  date: 2026-07-17
+  tag: "v1.11.0"
+  notes: |
+    ## What's new in 1.11.0
+    
+    ProvSQL 1.11.0 grows the random-variable surface into a small **Bayesian
+    inference engine**: a distribution's parameters can themselves be random
+    variables (compound / hierarchical models), and observing data conditions
+    those latent parameters into their posterior – in exact closed form for
+    the classic conjugate prior/likelihood pairs, by likelihood weighting
+    otherwise – all in SQL. It also extends the inversion-free exact-probability route to
+    set-semantics `UNION`, adds **maintained provenance mappings** that stay
+    correct under data modification (and therefore under temporal validity),
+    grows the distribution surface into a **suite of twelve continuous
+    families** (gamma / chi-squared, log-normal, beta, Weibull, Pareto,
+    inverse-gamma, inverse-Gaussian, logistic, alongside the discrete counts)
+    on a new per-family architecture, with quantile, information-theoretic
+    (entropy / KL / mutual information), covariance / correlation / stddev,
+    order-statistic, and nonlinear-transform readouts, brings **SQL-conformant
+    NULL semantics** to provenance over data with NULLs (`NOT IN`, `EXCEPT`,
+    NULL random variables), and decorrelates scalar sub-selects nested inside
+    target-list arithmetic.
+    
+    ### Continuous distributions
+    
+    - **Gamma family, general shape.** `provsql.gamma(k, lambda)` constructs a
+      gamma-distributed `random_variable` for any real shape `k > 0`; its CDF
+      (the regularised lower incomplete gamma) is evaluated in closed form by
+      the analytic passes, moments are exact, and independent same-rate gammas
+      sum to a gamma in the simplifier. `provsql.chi_squared(k)` is sugar for
+      `gamma(k/2, 0.5)`. Integer shapes route through `erlang` (the gamma with
+      integer shape), mirroring the `erlang(1, λ) → exponential` rule.
+    - **Log-normal family.** `provsql.lognormal(mu, sigma)` (exp of a
+      `Normal(mu, sigma)`): closed-form moments, CDF, quantiles, and interval
+      conditioning; products of independent lognormals fold to a lognormal;
+      and the `exp(normal(...))` / `ln(lognormal(...))` bridges are exact in
+      both the simplifier and the moment/quantile evaluators – log-scale
+      models stay closed-form end to end.
+    - **Beta family.** `provsql.beta(alpha, beta)` on the unit interval
+      (`Beta(1,1)` routes through `uniform`): closed-form moments, an
+      incomplete-beta CDF, bisection quantiles, and closed-form truncated
+      moments under interval conditioning.
+    - **Weibull and Pareto families.** `provsql.weibull(k, lambda)` (scale
+      convention; `k = 1` routes through `exponential`) with exact
+      quantiles, closed-form truncated moments, a same-shape comparator and
+      min-stability; and `provsql.pareto(xm, alpha)` with divergent moments
+      reported honestly as `Infinity`, exact truncated moments and
+      conditional sampling by tail self-similarity, and an exact
+      Pareto-vs-Pareto comparator for any parameters.
+    - **Inverse-gamma and inverse-Gaussian (Wald) families.**
+      `provsql.inverse_gamma(alpha, beta)` (the reciprocal of a gamma, the
+      conjugate prior for a Gaussian variance): a closed-form CDF via the
+      regularised upper incomplete gamma, exact moments with divergent ones
+      reported honestly as `Infinity`, and `β`-rescaling under positive
+      scalings. `provsql.inverse_gaussian(mu, lambda)` (alias
+      `provsql.wald`), the Brownian first-passage time: a closed-form CDF in
+      the standard normal, finite moments of every order, `IG(cμ, cλ)`
+      scaling, and a sum closure that folds independent inverse Gaussians
+      sharing the ratio `λ/μ²` into one.
+    - **Logistic family.** `provsql.logistic(mu, s)`, the location-scale
+      family whose CDF is the sigmoid: a threshold event over `Logistic(0, 1)`
+      noise realises the **logit link** exactly (`P(eps < score) =
+      sigma(score)`), the natural link for a log-odds / latent-utility
+      selection model, where a Normal `eps` gives the probit (off by a ~1.6
+      scale factor).
+    - **Discrete count distributions.** `provsql.poisson`, `binomial`,
+      `geometric`, `hypergeometric` and `negative_binomial` constructors
+      enumerate their pmf (in log space, stable at large parameters) into
+      the existing categorical machinery – exact moments, quantiles, and
+      point-mass `=`/`<>` probabilities, with "sampling without
+      replacement" questions answered directly. The shared back end
+      `categorical_from_log_pmf(outcomes, log_pmf)` is public, so any
+      custom discrete pmf can be loaded from unnormalised log-masses.
+    - **Nonlinear transforms `^` / `pow` / `ln` / `exp` / `sqrt`.** The
+      arithmetic surface on `random_variable` gains the power operator and
+      the log/exp transforms (`sqrt` is sugar for `^ 0.5`), evaluated per
+      Monte-Carlo draw with support intervals propagated soundly through
+      them. Out-of-domain draws (`ln` of a negative, a negative base under a
+      fractional exponent) raise actionable errors instead of being silently
+      dropped; integer exponents are total. Enables generative constructions
+      like `2 * u ^ 0.25` and log-scale modelling.
+    - **Quantile readout `provsql.quantile(x, p)`.** The inverse-CDF
+      companion to `expected` / `variance` / `moment`: medians, percentiles,
+      Value-at-Risk and credible intervals, with the same optional
+      conditioning argument (`quantile(x | (x > 0), 0.5)` is the median of
+      the truncated distribution, in closed form). Exact for bare random
+      variables – each family's elementary inverse CDF, machine-precision
+      Newton-polished for Normal, generic CDF bisection for Erlang / Gamma –
+      and for categorical distributions; compound expressions fall back to
+      the empirical Monte Carlo quantile.
+    - **Covariance / correlation / stddev readouts.** `provsql.covariance(x, y)`,
+      `provsql.correlation(x, y)` and `provsql.stddev(x)` over
+      `random_variable`, exact `0` covariance for structurally independent
+      operands and correlation-aware when they share leaves, with the same
+      optional `prov` conditioning argument as the moment dispatchers. When a
+      shared-leaf pair has no closed form, both statistics come from a
+      **single coupled Monte-Carlo pass** over the joint circuit – the sample
+      covariance of paired `(x, y)` draws – so the estimator's noise scales
+      with the covariance signal itself rather than with the product of the
+      means (the naive `E[XY] − E[X]·E[Y]` subtraction across independent
+      sampling runs), an order-of-magnitude tighter at the same
+      `rv_mc_samples` budget.
+    - **`avg` over certain random variables is now exact.** On a
+      provenance-tracked table with no `set_prob` (every tuple certainly
+      present), `expected(avg(x))` and `variance(avg(x))` are computed
+      analytically as `E[SUM] / n` rather than by Monte Carlo: a load-time
+      peephole collapses a Bernoulli mixture whose selector is certainly
+      true or false to its surviving arm, so `avg`'s provenance-weighted
+      count reduces to the constant row count that the closed-form
+      divide-by-constant evaluator consumes. A genuinely uncertain count (a
+      tuple with a fractional probability) still couples numerator and
+      denominator and is estimated by Monte Carlo, unchanged.
+    - **Family registry catalog `provsql.rv_families()`.** One row per
+      registered continuous-distribution family: name token, parameter count,
+      conventional parameter symbols, and a short display label. UI clients
+      (ProvSQL Studio's circuit inspector) read it so families added to the
+      extension render without a client upgrade.
+    - **Per-family distribution architecture.** The continuous families now
+      live in `src/distributions/`, one self-registering implementation file
+      per family behind an abstract `Distribution` interface with registries
+      for the pairwise comparator and sum-closure rules. Adding a family no
+      longer touches the evaluators; Gamma landed as the first family under
+      the new layout without modifying any of them. Purely internal – no SQL
+      or on-disk change from the refactor itself.
+    - **Comparisons, order statistics, and `CASE` over random variables.**
+      The comparison operators `< <= = <> >= >` on `random_variable` columns
+      are lifted by the planner hook into per-row `gate_cmp` provenance in
+      `WHERE` / `JOIN` / target-list positions; `min` / `max` / `greatest` /
+      `least` compute order statistics; and `CASE` over a random variable
+      (abs / ReLU / clamp) – or over an aggregate carrier (`agg_token`
+      branches) – lowers to a `gate_case` gate evaluated exactly. Two
+      comparison events condition with `(A) | (B)`, lowered to
+      `cond(A, B) = Pr(A ∧ B) / Pr(B)`, so correlated events reading the same
+      leaf come out right.
+    - **RV comparisons in scalar and aggregate readouts.** A lifted
+      comparison also surfaces as a Bernoulli event token in `expected(x <=
+      c)`, inside aggregate readouts, and over pure-RV recursive CTEs, not
+      only in `WHERE` / `HAVING`.
+    - **`probability` alias with a predicate overload.** `provsql.probability`
+      is a short alias of `probability_evaluate` (same arguments, same C
+      function), matching the concise `expected` / `variance` / `support`
+      surface. Its `(boolean)` overload asks for the probability of an event
+      in natural infix grammar – `probability(x > y)`,
+      `probability((x >= 2000) | (x >= 1000))` – rewritten by the planner
+      into the evaluation of the event's token; on a purely deterministic
+      Boolean it is total (`1` when the event holds, `0` otherwise, NULL
+      propagates), even with `provsql.active` off. The predicate overload
+      deliberately lives only on the short name, so string-literal calls to
+      `probability_evaluate` stay unambiguous.
+    - **Information-theoretic readouts.** `entropy(x [, prov])` (Shannon for a
+      discrete root, differential for a continuous one, in nats), `kl(p, q)`
+      (Kullback-Leibler divergence; `Infinity` when `p` is not absolutely
+      continuous with respect to `q`), and `mutual_information(x, y)` (exact
+      `0` for structurally independent pairs). Exact by quadrature / summation
+      where the shape has a closed density, Monte Carlo histogram plug-in
+      otherwise.
+    - **`percentile_cont` and the SQL-standard statistic aggregates.**
+      `percentile_cont(f) WITHIN GROUP (ORDER BY rv)` and the ordered-set
+      `covar_pop` / `covar_samp` / `corr` / `stddev_pop` / `stddev_samp` over
+      `random_variable` (aggregate counterparts to the scalar `covariance` /
+      `correlation` / `stddev` readouts), built from indicator-weighted power
+      sums; only `percentile_cont` needed its own `gate_arith` opcode and MC
+      sampler arm.
+    - **`gmm` and empirical loaders.** `provsql.gmm(weights, means, stddevs)`
+      constructs a Gaussian mixture; `empirical_samples(samples)` loads an
+      empirical distribution (the ecdf as a categorical: exact sample moments,
+      analytic comparisons, exact quantiles) and `empirical_cdf(grid, cdf)` a
+      piecewise-linear CDF table (a mixture of uniforms plus an optional
+      atom). The shared back end `categorical_from_log_pmf(outcomes, log_pmf)`
+      is public, so any custom discrete pmf loads from unnormalised
+      log-masses.
+    - **Faster correlated-count readouts.** `expected` and `variance` over a
+      correlated count sharing a latent now compute both moments in a single
+      circuit load and hoist the latent-invariant work out of the quadrature
+      grid.
+    
+    ### Latent variables and Bayesian posterior inference
+    
+    - **RV-valued distribution parameters (compound / hierarchical models).**
+      A distribution constructor now accepts a `random_variable` (or an
+      `agg_token`, or a `gate_arith` composition of them) where it used to
+      require a concrete `double`: `provsql.normal(M, 1)` with
+      `M ~ normal(0, 10)` is a Normal whose mean is itself random, i.e. a
+      compound distribution. Every family gained the token-accepting
+      constructor overloads, and the moment evaluator recurses into the
+      parameter wires; for a family whose mean is affine in its parameters
+      (Normal, Uniform, inverse-Gaussian, Logistic, Poisson)
+      `E[X] = mean(E[θ])` stays **exact** with no Monte Carlo.
+    - **Observing data conditions a latent into its posterior.**
+      `provsql.observe(x, datum)` binds an observed value to a
+      random-variable leaf – equivalently `given(Y = d)` (or the prefix
+      `| (Y = d)`), the predicate spelling the planner turns into the same
+      observation evidence; `and_agg(...)` conjoins one observation per row
+      into a single evidence circuit (the idiomatic
+      `and_agg(| (Y = d))`); passing that circuit as the `prov`
+      argument of `expected` / `variance` / `quantile` / `rv_sample` reports
+      the **posterior** quantity, computed by likelihood weighting (each
+      observation's density is its importance weight). `evidence(e)` returns
+      the marginal likelihood `P(data)`. The one new gate type is
+      `gate_observe`, and the `provsql.ess_warn_fraction` GUC warns when the
+      effective sample size of the weighting collapses.
+    - **Conditioning operator `|` with an equality event.** `X | (Y = c)`
+      conditions a random variable on an observed equality; and, since an
+      aggregate is itself a random variable (a new implicit
+      `random_variable = agg_token` cast), a latent can be conditioned on a
+      **count**: `R | (poisson(scale * R) = count(*))`. Both route through the
+      comparison operators the planner hook already rewrites.
+    - **Discrete rv-parametrised (latent) families.**
+      `poisson(random_variable)`, `binomial(integer, random_variable)`,
+      `geometric(random_variable)` and `negative_binomial(r, random_variable)`
+      ship as parametric `gate_rv` leaves (the literal-argument constructors
+      keep enumerating an exact categorical), unlocking the discrete conjugate
+      posteriors (Gamma-Poisson, Beta-Binomial, Beta-Geometric,
+      Beta-NegativeBinomial) through the same `observe` machinery.
+    - **Collapsed (Rao-Blackwellised) exact posterior.** For the recognised
+      shape – one shared latent, one comparison per row, a discrete rv over
+      the conditioned latent equalling a correlated count – the latent's
+      posterior is computed **exactly** by two 1-D quadratures over the shared
+      latent (the per-tuple noise marginalises to the count pmf), replacing
+      the degenerating point-equality importance sampler: exact (works at
+      `rv_mc_samples = 0`), `O(n² + G·K)`, about 40 ms for 100 tuples where
+      the sampler was hopeless.
+    - **Exact conjugate posteriors.** When an evidence conjunction of
+      observations matches a classic conjugate prior/likelihood pair – the
+      latent a bare distribution leaf wired into one parameter slot of every
+      observed leaf – the posterior is recognised and computed in **closed
+      form**: exact, deterministic, and available with Monte Carlo disabled
+      (`rv_mc_samples = 0`). One recognition upgrades every readout at once
+      (moments, quantile, `rv_sample` draws i.i.d. from the posterior,
+      `rv_histogram` and the Studio distribution curves render the exact
+      density, `entropy`), and `evidence(e)` returns the **exact** marginal
+      likelihood as the product of the sequential one-step predictives. The
+      recognised pairs: Normal-Normal (mean), Normal-LogNormal
+      (log-location), Gamma-Exponential / -Poisson / -Gamma / -Erlang
+      (rate), Gamma-Pareto (tail shape), Beta-Binomial / -Geometric /
+      -NegativeBinomial (success probability), and Pareto-Uniform (upper
+      bound of `uniform(0, θ)`). Mixed likelihoods sharing one conjugate
+      prior compose (a Gamma-prior rate observed through interleaved Poisson
+      counts and Exponential gaps stays Gamma), and the update rules are a
+      self-registering per-family registry like the comparator / closure
+      rules. Any other shape keeps the importance-sampling path and its ESS
+      diagnostics; the closed form computes exactly the estimand the sampler
+      estimates, so recognition changes the method, never the answer.
+    - **`shapley_observe(target, evidence, payoff)`.** Attributes the shift
+      from prior to posterior to each observation ("which datum moved my
+      posterior most?"): the Shapley value of each `gate_observe` atom over
+      the coalitional value `payoff(target | observations in S)`, a by-product
+      of the same machinery (exact enumeration, capped at 12 observations).
+    
+    ### Inversion-free `UCQ(OBDD)`, now over `UNION`
+    
+    - **Set-semantics unions are certified jointly.** The inversion-free
+      linear-time route (`provsql.inversion_free`, exact `O(|D|)` on
+      hierarchical tuple-independent UCQs with self-joins) now recognises
+      set-semantics `UNION`. Inversion-freeness of a union is a *joint*
+      property of the whole UCQ – a relation shared between two branches can
+      introduce a cross-branch inversion – so per-arm analysis does not
+      suffice. A deduplicating `UNION` (lowered to an outer `GROUP BY` over an
+      inner `UNION ALL` whose per-group root is the `provenance_plus` OR of the
+      branch tokens) is certified by building one *synthetic merged SPJ query*
+      of every arm's base atoms – arm variables offset into a single range
+      table, head columns equated, each arm's `WHERE` pulled up – and running
+      the inversion-free analysis on it. A relation shared between arms becomes
+      a single relation symbol, so positional consistency and the precedence
+      graph span the whole union (Jha–Suciu Theorem 4.2's joint condition).
+    - **Overlapping UCQs become tractable.** Queries such as
+      `q(x) :- R(x),S(x) ∪ R(x),T(x)` (lineage `R(x) ∧ (S(x) ∨ T(x))`) now
+      evaluate exactly in linear time, where a per-arm analysis – blind to the
+      shared `R` – could not. Branch-disjoint unions and top-level `UNION ALL`
+      arms are likewise certified. Non-inversion-free unions, `HAVING` /
+      aggregate unions, nested not-yet-lowered non-`ALL` unions and non-`Var`
+      head columns decline cleanly to the generic / joint-width / Möbius routes.
+    
+    ### Maintained provenance mappings
+    
+    - **`create_provenance_mapping(..., maintained => true)`.** A maintained
+      mapping is extended automatically as rows are inserted and, crucially,
+      stays correct under data modification: a delete or update rewrites a
+      row's `provsql` token into a compound gate, but the mapped value remains
+      keyed to the *original* input token, so evaluation still resolves it.
+    - **Correct temporal validity after deletes.** This is what lets a row
+      deleted at time *T* keep its original validity interval bounded at *T*
+      rather than losing it. Supersedes the old `create_provenance_mapping_view`
+      helper, which is removed.
+    
+    ### NULL semantics: SQL-conformant provenance on data with NULLs
+    
+    - **`NOT IN` / `op ALL` over subqueries containing NULLs.** These were
+      rewritten as if NULLs never matched, silently conflating `NOT IN` with
+      `NOT EXISTS`: on `R = {1, NULL}`, `S = {NULL}`, the query
+      `SELECT a FROM R WHERE a NOT IN (SELECT a FROM S)` returned both rows
+      with probability 0.5 each where SQL returns none (correct Boolean
+      provenance `r ∧ ¬s`, probability 0.25). The lifted removal condition
+      now treats an unknown comparison as a match, per SQL's three-valued
+      logic, with the NULL-free path unchanged.
+    - **`EXCEPT` / `EXCEPT ALL` match NULLs syntactically.** SQL set
+      difference treats two NULLs as the same value; the antijoin now
+      matches with `IS NOT DISTINCT FROM`, so NULL rows on the left are
+      removed by NULL rows on the right (previously they survived
+      unconditionally – also a wrong-result bug).
+    - **Comparisons over NULL random variables are unknown, not certain.**
+      `WHERE v > NULL::random_variable` (or a NULL `random_variable` cell
+      flowing into a lifted comparison) used to make the predicate silently
+      *certain* (probability 1); it now annotates the row zero
+      (probability 0), as three-valued logic prescribes.
+    - **`HAVING` over a NULL aggregate never passes.** The all-NULL group of
+      `HAVING sum(b) > 5` used to leak a NULL provenance token (reading as
+      “certainly passes” downstream); it is now the explicit zero.
+    - **`avg` over `random_variable` skips NULL cells.** The presence
+      indicator in `avg`'s denominator counted NULL-valued rows, deflating
+      the average; the new value-aware indicator drops them, matching SQL
+      (the other RV aggregates were already correct).
+    - **Outer joins that cannot be tracked are refused.** An outer join with
+      a provenance-tracked relation on a null-padded side, beyond the
+      supported lowered shape, was silently treated as an inner join; it now
+      raises an explicit error. Outer joins whose null-padded side is
+      untracked remain supported as-is.
+    - **Robustness.** The deprecated `aggregation_evaluate` (a crash vector
+      on NULL tokens) is removed from the SQL surface; NULL-argument guards
+      were added to `provenance_evaluate_compiled`, `provenance_evaluate`,
+      and `where_provenance`; `create_gate` rejects NULL children elements
+      with a clear error; `agg_token` numeric casts return NULL on a
+      degenerate value string.
+    - **Explicit zero-filtering: `provsql.nonzero` and `provsql.present`.**
+      Rewritten queries may keep rows whose annotation is the circuit zero
+      (antijoin arms, failed `HAVING` groups, unknown comparisons).
+      `WHERE provsql.present(provenance())` restores the vanilla result set
+      (the circuit evaluated in the Boolean semiring, every leaf true); the
+      general `provsql.nonzero(token, semiring, mapping)` tests against a
+      named semiring's zero (`'boolean'`, `'counting'`; an absent mapping
+      reads every leaf as 1) or, with no semiring, against *universal*
+      zero-ness – false only when the annotation is provably zero in every
+      (m-)semiring under every leaf valuation, with `HAVING` comparison
+      gates resolved through their possible-worlds expansion – so filtering
+      on it can never contradict any downstream evaluation. Deliberately a
+      per-call function, no GUC: the per-row evaluation cost stays visible.
+    
+    ### Other improvements
+    
+    - **Scalar sub-selects in target-list arithmetic are decorrelated.** A
+      correlated scalar sublink nested inside an arithmetic expression in the
+      SELECT list (e.g. `x + (SELECT ... WHERE ... = outer)`) is now lifted and
+      decorrelated, so its provenance is tracked instead of falling back.
+    - **`JOIN` syntax is now everywhere equivalent to comma-join syntax.**
+      Explicit inner joins (`a JOIN b ON ...`, including `USING` / `NATURAL`
+      forms) are canonicalised to the comma-join form once, at the start of
+      the rewrite, for every tracked query level and recursively for every
+      nested subquery – subquery-`FROM` bodies, `EXISTS` / `IN` / `NOT IN` /
+      quantified / scalar / `ARRAY` subquery bodies, CTE bodies – so every
+      rewrite pass, present and future, sees one canonical shape instead of
+      each pass having to handle both. A subquery body may also mix tracked
+      and untracked relations (e.g. filtering the subquery through an
+      untracked dimension table:
+      `x NOT IN (SELECT s.x FROM tracked s JOIN dim d ON ... WHERE d.k = ...)`);
+      the untracked side contributes neutral provenance, exactly as it
+      would in a top-level join. Outer joins are unaffected (they keep
+      their dedicated lowering), and remain unsupported inside a subquery
+      body. A new `join_syntax_equivalence` regression test pins the
+      guarantee: one query per feature area, run in both syntaxes, must
+      produce identical results.
+    - **`provenance_evaluate_compiled` accepts an absent mapping.** A NULL
+      provenance mapping now evaluates the circuit with every leaf read
+      as 1 (the same all-leaves-1 mode `nonzero` uses), instead of
+      erroring.
+    - **`possible_worlds` enumerates only relevant inputs.** The
+      possible-worlds expansion is restricted to the input gates reachable
+      from the queried root, rather than every input in the circuit store.
+    - **`last_eval_method` reports Möbius correctly.** The Möbius-inversion
+      route is now named accurately in `last_eval_method` instead of being
+      mislabelled.
+    
+    ### Fixes
+    
+    - **Identity-sensitive consumers see through the inversion-free
+      certificate.** When the inversion-free analysis certifies a query, it
+      attaches a transparent annotation wrapper to each row's provenance
+      token. Consumers keyed to gate *identity* did not peel it:
+      `set_prob(provenance(), p)` over a certified multi-relation query
+      raised "called on non-input gate", `create_provenance_mapping` stored
+      the wrapper's UUID (so `sr_*` readouts silently resolved no leaf),
+      and the reachability route classifier rejected certified edge
+      queries. All three now strip the wrapper (a new internal
+      `provsql.strip_annotations` peels annotation chains; the
+      conjunctive-leaves walker treats annotation gates as transparent).
+    - **A latent random variable built in a CTE stays a single leaf.** The
+      provenance rewrite used to inline every CTE body at each reference, so
+      a volatile RV constructor in a CTE referenced from two scopes (the
+      latent-in-a-`WITH` posterior-inference pattern, `| (leaf = datum)`)
+      minted independent leaves: the evidence conditioned a decoupled copy
+      and the query silently returned the prior. CTE bodies that need no
+      rewriting are now preserved as real CTEs, keeping SQL's
+      single-evaluation `WITH` semantics (one evaluation, shared leaf). A CTE
+      that must be inlined (its body itself needs rewriting) and contains
+      volatile expressions referenced more than once now raises a warning
+      instead of silently decoupling.
+    - **`avg` / `product` over categorical and mixture values.** The RV
+      aggregate finalisers treated *every* mixture child as the per-row
+      provenance wrap and read its first child as provenance, so
+      aggregating a `categorical(...)` or a user `mixture(p, X, Y)` value
+      gave wrong results. A genuine wrap is now recognised by its shape
+      (three children with an `as_random(0)` else-branch); a categorical or
+      user mixture counts as an ordinary scalar row. **This was a
+      wrong-result bug in 1.10.0** for `avg` and `product`; the
+      order-statistic aggregates (`min` / `max`), new in this release, got
+      the same treatment before shipping.
+    
+    ### Upgrading
+    
+    `ALTER EXTENSION provsql UPDATE;` from any prior release. The
+    `provsql--1.10.0--1.11.0.sql` upgrade script carries the whole new SQL
+    surface (catalog-parity-verified against a fresh install) and ends with
+    the constants-cache reset the new gate types require.
+
 - version: "1.10.0"
   date: 2026-06-18
   tag: "v1.10.0"
