@@ -131,6 +131,7 @@ _SQL_FUNC_MAP = {
     'provenance_not':           '/doxygen-sql/html/group__gate__manipulation.html#ga96b4b52dc83f9cfd8d1bcb9da463b2c1',
     'assume_boolean':           '/doxygen-sql/html/group__gate__manipulation.html#ga354715d39214e595eaaf83e945f76b5d',
     'annotate':                 '/doxygen-sql/html/group__gate__manipulation.html#ga0222676920c50227c6cb304d9fec6057',
+    'strip_annotations':        '/doxygen-sql/html/group__gate__manipulation.html#ga095154e790200f09ae6662ec67a68ba1',
     'inversion_free_key':       '/doxygen-sql/html/group__gate__manipulation.html#gabc9bef4d7d0f4147d0f962534b2bedb1',
     'provenance_guard':         '/doxygen-sql/html/group__table__management.html#ga82b3a444b6bd09a949375e1bb6210333',
     'provenance_aggregate':     '/doxygen-sql/html/group__aggregate__provenance.html#ga84525ef02ef6429eda7664e050b83d69',
@@ -308,6 +309,7 @@ _C_FUNC_MAP = {
     'replace_aggregations_by_provenance_aggregate': '/doxygen-c/html/provsql_8c.html#a64dcbec21c99e399191a997b19da111c',
     'migrate_probabilistic_quals': '/doxygen-c/html/provsql_8c.html#a807c78bed512a1e85cfd8da28a75078e',
     'normalize_bool_agg_having':   '/doxygen-c/html/provsql_8c.html#a2052985298a365c613a97000258920df',
+    'normalize_inner_joins':       '/doxygen-c/html/provsql_8c.html#a10df1e54af32bc885820a2c4fb41d3f1',
     'lower_outer_joins':           '/doxygen-c/html/provsql_8c.html#abc3dba035da6be115630d6d785ff5312',
     'process_inert_fetches':       '/doxygen-c/html/provsql_8c.html#ae65ccb57ae31650530372f9529ecb579',
     'rewrite_cond_predicates':     '/doxygen-c/html/provsql_8c.html#a89f14c4a67b4aeb8c1f5361065f7d895',
@@ -338,7 +340,6 @@ _C_FUNC_MAP = {
     # safe_query.c -- safe-query rewriter + propagation pre-passes
     'is_safe_query_candidate':      '/doxygen-c/html/safe__query_8c.html#a91df2747fa3cd9564c35997e464375c1',
     'find_hierarchical_root_atoms': '/doxygen-c/html/safe__query_8c.html#a5bcf3bf32fe73c5efe394d3905863dd9',
-    'compact_orphan_rtes':          '/doxygen-c/html/safe__query_8c.html#ac4aca5fe259074c262b928cd700f9bb8',
     # safe_query.c / provsql.c / probability_evaluate.cpp -- inversion-free path
     'detect_inversion_free':        '/doxygen-c/html/safe__query_8c.html#aca9d89ad57555f7370ff4ed6b2da3156',
     'inversion_free_analyze':       '/doxygen-c/html/safe__query_8c.html#a342698a5b46904bde9771c113dc7721e',

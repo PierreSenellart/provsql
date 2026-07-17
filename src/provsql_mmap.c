@@ -138,20 +138,25 @@ PG_FUNCTION_INFO_V1(get_gate_type);
  * (it calls get_gate_type first, then unnest(get_children(...))) and
  * silently folds plus/times gates over an empty set.
  */
-Datum get_gate_type(PG_FUNCTION_ARGS)
+/** @brief Fetch a gate's type and children, cache-first with a worker
+ *  round-trip (and cache fill) on a miss.  Factored out of the
+ *  get_gate_type() wrapper for in-extension callers that walk the circuit
+ *  from C (e.g. the annotation-transparent set_prob()).  On return
+ *  @p *children_out is a @c calloc'd array to be freed by the caller, or
+ *  @c NULL when the gate has no children. */
+static gate_type provsql_fetch_gate(const pg_uuid_t *token,
+                                    unsigned *nb_children_out,
+                                    pg_uuid_t **children_out)
 {
-  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   gate_type type;
-  constants_t constants=get_constants(true);
   unsigned nb_children = 0;
   pg_uuid_t *children = NULL;
 
-  if(PG_ARGISNULL(0))
-    PG_RETURN_NULL();
-
   type = circuit_cache_get_type(*token);
-  if(type!=gate_invalid)
-    PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]); ;
+  if(type!=gate_invalid) {
+    *nb_children_out = circuit_cache_get_children(*token, children_out);
+    return type;
+  }
 
   /* Type fetch (message 't'). */
   STARTWRITEM();
@@ -199,6 +204,23 @@ Datum get_gate_type(PG_FUNCTION_ARGS)
    * lookup of a real input gate -- acceptable. */
   if(!(type == gate_input && nb_children == 0))
     circuit_cache_create_gate(*token, type, nb_children, children);
+  *nb_children_out = nb_children;
+  *children_out = children;
+  return type;
+}
+
+Datum get_gate_type(PG_FUNCTION_ARGS)
+{
+  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
+  gate_type type;
+  constants_t constants=get_constants(true);
+  unsigned nb_children = 0;
+  pg_uuid_t *children = NULL;
+
+  if(PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+
+  type = provsql_fetch_gate(token, &nb_children, &children);
   if(children) free(children);
   PG_RETURN_INT32(constants.GATE_TYPE_TO_OID[type]);
 }
@@ -371,14 +393,35 @@ Datum create_gate(PG_FUNCTION_ARGS)
 }
 
 PG_FUNCTION_INFO_V1(set_prob);
-/** @brief PostgreSQL-callable wrapper for set_prob(). */
+/** @brief PostgreSQL-callable wrapper for set_prob().
+ *
+ * Transparent @c gate_annotation wrappers (an inversion-free certificate /
+ * order marker attached by the planner to a certified query's row roots)
+ * are peeled first: a probability set on a wrapped token belongs to the
+ * input gate underneath, so the documented
+ * @c "set_prob(provenance(), p) FROM t" pattern keeps working when the
+ * query happens to be certified. */
 Datum set_prob(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
   double prob = PG_GETARG_FLOAT8(1);
+  pg_uuid_t peeled;
 
   if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
     provsql_error("Invalid NULL value passed to set_prob");
+
+  for(;;) {
+    unsigned nb_children = 0;
+    pg_uuid_t *children = NULL;
+    gate_type type = provsql_fetch_gate(token, &nb_children, &children);
+    if(type != gate_annotation || nb_children != 1) {
+      if(children) free(children);
+      break;
+    }
+    peeled = children[0];
+    token = &peeled;
+    free(children);
+  }
 
   if(!provsql_internal_set_prob(token, prob))
     provsql_error("set_prob called on non-input gate");

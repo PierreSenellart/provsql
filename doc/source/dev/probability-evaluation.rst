@@ -1295,7 +1295,12 @@ Set-semantics ``UNION`` -- joint UCQ analysis (``src/provsql.c``)
 
 Certificate and per-input markers (``src/safe_query_cert.{h,c}``)
    The recipe and the order are carried into the circuit on transparent
-   ``gate_annotation`` gates (see :doc:`architecture`):
+   ``gate_annotation`` gates (see :doc:`architecture`).  Transparent means
+   every consumer sees through them: evaluators treat them as identity,
+   and consumers keyed to gate *identity* -- :sqlfunc:`set_prob`,
+   :sqlfunc:`create_provenance_mapping`, the reachability edge
+   classifier -- peel them first (:sqlfunc:`strip_annotations` is the
+   peeling helper, the dual of :sqlfunc:`annotate`):
 
    - the serialised :cfunc:`SafeCert` is stamped on the per-row root as a
      ``C``-prefixed ``extra`` payload;

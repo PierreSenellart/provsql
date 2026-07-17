@@ -258,6 +258,28 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
    SECURITY DEFINER PARALLEL SAFE;
 
 /**
+ * @brief Peel every transparent @c gate_annotation wrapper off @p token,
+ *        returning the first non-annotation gate underneath.
+ *
+ * The dual of @c annotate, for consumers keyed to gate *identity* rather
+ * than gate value: a provenance mapping matches input-gate UUIDs, and the
+ * reachability edge classifier matches token shapes, so both must see the
+ * wrapped gate, not the wrapper (e.g. the inversion-free certificate /
+ * order marker the planner attaches to a certified query's row roots).
+ * Identity on a token with no annotation wrapper; NULL on NULL.
+ */
+CREATE OR REPLACE FUNCTION strip_annotations(token UUID) RETURNS UUID AS
+$$
+WITH RECURSIVE peel(g) AS (
+  SELECT token
+  UNION ALL
+  SELECT (provsql.get_children(p.g))[1] FROM peel p
+  WHERE provsql.get_gate_type(p.g) = 'annotation'
+)
+SELECT g FROM peel WHERE provsql.get_gate_type(g) <> 'annotation' LIMIT 1;
+$$ LANGUAGE sql STABLE PARALLEL SAFE;
+
+/**
  * @brief Condition a provenance token (a Boolean event) on another.
  *
  * Builds the terminal @c gate_conditioned that the measure evaluators read
@@ -1056,6 +1078,11 @@ BEGIN
   END IF;
   EXECUTE format('CREATE TEMP TABLE tmp_provsql ON COMMIT DROP AS TABLE %s', oldtbl);
   ALTER TABLE tmp_provsql RENAME provsql TO provenance;
+  -- The mapping is keyed by gate identity (input-token UUIDs), so peel any
+  -- transparent annotation wrapper (e.g. the inversion-free certificate a
+  -- certified query attaches to its row roots) off the captured tokens.
+  UPDATE tmp_provsql SET provenance = provsql.strip_annotations(provenance)
+    WHERE provsql.get_gate_type(provenance) = 'annotation';
   IF preserve_case THEN
     EXECUTE format('CREATE TABLE %I AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
     EXECUTE format('CREATE INDEX ON %I(provenance)', newtbl);
@@ -9236,10 +9263,10 @@ WITH RECURSIVE walk(g) AS (
   SELECT token
   UNION
   SELECT c FROM walk w, unnest(provsql.get_children(w.g)) AS c
-  WHERE provsql.get_gate_type(w.g) IN ('times', 'project', 'eq')
+  WHERE provsql.get_gate_type(w.g) IN ('times', 'project', 'eq', 'annotation')
 )
 SELECT CASE WHEN bool_and(provsql.get_gate_type(g)
-                          IN ('times', 'project', 'eq', 'input'))
+                          IN ('times', 'project', 'eq', 'annotation', 'input'))
             THEN array_agg(DISTINCT g)
                    FILTER (WHERE provsql.get_gate_type(g) = 'input')
             ELSE NULL END
@@ -9351,7 +9378,8 @@ BEGIN
   DROP TABLE IF EXISTS provsql_reachability_edges_tmp;
   EXECUTE format(
     'CREATE TEMP TABLE provsql_reachability_edges_tmp AS '
-    || 'SELECT %1$I::text AS u, %2$I::text AS v, provsql.provenance() AS token%5$s '
+    || 'SELECT %1$I::text AS u, %2$I::text AS v, '
+    || 'provsql.strip_annotations(provsql.provenance()) AS token%5$s '
     || 'FROM %3$s WHERE %1$I IS NOT NULL AND %2$I IS NOT NULL%4$s',
     source_attribute, destination_attribute,
     CASE WHEN rel_sql IS NULL THEN rel::text
