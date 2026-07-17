@@ -1,0 +1,235 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|b|f|p
+1|10|r1 ⊗ s10|0.4500
+2|20|r2 ⊗ s20|0.4500
+2|21|r2 ⊗ s21|0.4500
+(3 rows)
+remove_provenance
+
+(1 row)
+a|b|f|p
+1|10|r1 ⊗ s10|0.4500
+2|20|r2 ⊗ s20|0.4500
+2|21|r2 ⊗ s21|0.4500
+(3 rows)
+remove_provenance
+
+(1 row)
+a|b|tag|f|p
+1|10|x|r1 ⊗ s10|0.4500
+2|20|y|r2 ⊗ s20|0.4500
+2|21|y|r2 ⊗ s21|0.4500
+(3 rows)
+remove_provenance
+
+(1 row)
+a|b|tag|f|p
+1|10|x|r1 ⊗ s10|0.4500
+2|20|y|r2 ⊗ s20|0.4500
+2|21|y|r2 ⊗ s21|0.4500
+(3 rows)
+remove_provenance
+
+(1 row)
+a|s|p
+1|10 (*)|0.4500
+2|41 (*)|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+a|s|p
+1|10 (*)|0.4500
+2|41 (*)|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.0000
+2|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.0000
+2|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+k|f|p
+1|r1 ⊗ s10|0.4500
+2|(r2 ⊗ s20) ⊕ (r2 ⊗ s21)|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+k|f|p
+1|r1 ⊗ s10|0.4500
+2|(r2 ⊗ s20) ⊕ (r2 ⊗ s21)|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.4500
+2|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.4500
+2|0.0000
+(2 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.9000
+2|0.6750
+3|0.9000
+(3 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.9000
+2|0.6750
+3|0.9000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|f|p
+1|r1|0.9000
+2|(r2 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21))) ⊗ (𝟙 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21)))|0.2250
+3|r3|0.9000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|f|p
+1|r1|0.9000
+2|(r2 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21))) ⊗ (𝟙 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21)))|0.2250
+3|r3|0.9000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|f|p
+1|r1|0.9000
+2|(r2 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21))) ⊗ (𝟙 ⊖ ((r2 ⊗ s20) ⊕ (r2 ⊗ s21)))|0.2250
+3|r3|0.9000
+(3 rows)
+remove_provenance
+
+(1 row)
+a|m
+1|10 (*)
+2|21 (*)
+3|
+(3 rows)
+remove_provenance
+
+(1 row)
+a|m
+1|10 (*)
+2|21 (*)
+3|
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.4500
+2|0.4500
+2|0.4500
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.4500
+2|0.4500
+2|0.4500
+(3 rows)
+remove_provenance
+
+(1 row)
+a|b|w
+1|10|{[jr::1],[js::2],[]}
+2|20|{[jr::1],[js::2],[]}
+2|21|{[jr::1],[js::2],[]}
+(3 rows)
+remove_provenance
+
+(1 row)
+a|b|w
+1|10|{[jr::1],[js::2],[]}
+2|20|{[jr::1],[js::2],[]}
+2|21|{[jr::1],[js::2],[]}
+(3 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.4500
+2|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+a|p
+1|0.4500
+2|0.6750
+(2 rows)
+remove_provenance
+
+(1 row)
+k|e|p
+1|1.0000|0.1428
+2|2.0000|0.4500
+3|3.0000|0.7572
+(3 rows)
+remove_provenance
+
+(1 row)
+k|e|p
+1|1.0000|0.1428
+2|2.0000|0.4500
+3|3.0000|0.7572
+(3 rows)
+remove_provenance
+
+(1 row)
+k|b|f|p
+1|10|r1 ⊗ s10|0.4500
+2|20|r2 ⊗ s20|0.4500
+2|21|r2 ⊗ s21|0.4500
+(3 rows)
+remove_provenance
+
+(1 row)
+k|b|f|p
+1|10|r1 ⊗ s10|0.4500
+2|20|r2 ⊗ s20|0.4500
+2|21|r2 ⊗ s21|0.4500
+(3 rows)

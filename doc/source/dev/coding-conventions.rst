@@ -52,6 +52,22 @@ Naming
   :cfunc:`gate_type`).
 
 
+Rewrite Passes and Join Shapes
+------------------------------
+
+A new rewrite pass in the planner hook must **not** pattern-match the
+FROM clause for the ``JoinExpr`` / comma-join distinction (e.g. by
+requiring every fromlist item to be a ``RangeTblRef``): the prologue of
+:cfunc:`process_query` (:cfunc:`normalize_inner_joins`) canonicalises
+every tracked query level -- recursively, including sublink bodies,
+subquery RTEs, and CTE bodies -- to the flat comma-join form, with the
+dissolved ``RTE_JOIN`` entries compacted away, so a pass may simply
+assume it.  Only outer joins still appear as ``JoinExpr``\ s.  When
+adding a feature that inspects FROM shapes, extend the
+``join_syntax_equivalence`` regression test with a case pair -- it
+exists precisely because features have repeatedly worked for one join
+syntax and not the other.
+
 Error Reporting
 ---------------
 

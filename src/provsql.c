@@ -9339,122 +9339,6 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
   return true;
 }
 
-/** @brief Context for @c oj_join_alias_var_walker. */
-typedef struct oj_join_alias_ctx {
-  List *rtable;
-  bool found;
-} oj_join_alias_ctx;
-
-/** @brief Walker: set @c found if a level-0 @c Var references an @c RTE_JOIN
- *  entry of @p rtable (a USING / NATURAL merged column, or a whole-row
- *  @c j.* reference).  Such a Var would dangle once the join tree is
- *  flattened to a comma-join, so the flattening declines. */
-static bool oj_join_alias_var_walker(Node *node, void *cx) {
-  oj_join_alias_ctx *c = (oj_join_alias_ctx *)cx;
-  if (node == NULL)
-    return false;
-  if (IsA(node, Var)) {
-    Var *v = (Var *)node;
-    if (v->varlevelsup == 0 && (int)v->varno >= 1 &&
-        (int)v->varno <= list_length(c->rtable) &&
-        rt_fetch(v->varno, c->rtable)->rtekind == RTE_JOIN)
-      c->found = true;
-    return false;
-  }
-  return expression_tree_walker(node, oj_join_alias_var_walker, cx);
-}
-
-/** @brief Collect the base @c RangeTblRef leaves and every ON qual of an
- *  inner-join-only join tree into @p refs / @p quals.  Returns @c false on
- *  any outer join or unexpected node. */
-static bool oj_flatten_collect(Node *jt, List **refs, List **quals) {
-  if (jt == NULL)
-    return false;
-  if (IsA(jt, RangeTblRef)) {
-    *refs = lappend(*refs, jt);
-    return true;
-  }
-  if (IsA(jt, FromExpr)) {
-    FromExpr *f = (FromExpr *)jt;
-    ListCell *lc;
-    foreach (lc, f->fromlist)
-      if (!oj_flatten_collect((Node *)lfirst(lc), refs, quals))
-        return false;
-    if (f->quals)
-      *quals = lappend(*quals, f->quals);
-    return true;
-  }
-  if (IsA(jt, JoinExpr)) {
-    JoinExpr *j = (JoinExpr *)jt;
-    if (j->jointype != JOIN_INNER)
-      return false;
-    if (!oj_flatten_collect(j->larg, refs, quals) ||
-        !oj_flatten_collect(j->rarg, refs, quals))
-      return false;
-    if (j->quals)
-      *quals = lappend(*quals, j->quals);
-    return true;
-  }
-  return false;
-}
-
-/**
- * @brief Normalize a sublink body's explicit inner joins to the comma-join
- *        form: @c "A JOIN B ON c" becomes fromlist @c (A, B) with the ON
- *        condition ANDed into the body WHERE.
- *
- * The predicate-sublink and scalar-subquery decorrelations handle a flat
- * comma-join body (collapsed into one derived subquery by
- * @c oj_wrap_body_from), so a body written with JOIN syntax is normalized
- * here first -- inner ON quals and WHERE commute.  The joins' @c RTE_JOIN
- * entries stay in the range table, unreferenced (removing them would
- * renumber every Var).  Declines, returning @c false with the body
- * untouched, on outer joins and on bodies that reference a join alias
- * (USING / NATURAL merged columns, a whole-row @c j.*), whose Vars would
- * dangle without the join RTE; a nested-sublink body is declined too (it is
- * refused downstream anyway).  A body already in comma form returns @c true
- * unchanged.
- */
-static bool oj_flatten_body_inner_joins(Query *sub) {
-  List *refs = NIL, *quals = NIL;
-  ListCell *lc;
-  bool has_join = false;
-  oj_join_alias_ctx jc;
-
-  if (!sub->jointree)
-    return false;
-  foreach (lc, sub->jointree->fromlist)
-    if (!IsA(lfirst(lc), RangeTblRef))
-      has_join = true;
-  if (!has_join)
-    return true;
-  if (sub->hasSubLinks)
-    return false;
-
-  jc.rtable = sub->rtable;
-  jc.found = false;
-  oj_join_alias_var_walker((Node *)sub->targetList, &jc);
-  oj_join_alias_var_walker((Node *)sub->jointree, &jc);
-  oj_join_alias_var_walker(sub->havingQual, &jc);
-  if (jc.found)
-    return false;
-
-  foreach (lc, sub->jointree->fromlist)
-    if (!oj_flatten_collect((Node *)lfirst(lc), &refs, &quals))
-      return false;
-  if (sub->jointree->quals)
-    quals = lappend(quals, sub->jointree->quals);
-
-  sub->jointree->fromlist = refs;
-  sub->jointree->quals =
-    (quals == NIL)
-      ? NULL
-      : (list_length(quals) == 1)
-          ? (Node *)linitial(quals)
-          : (Node *)makeBoolExpr(AND_EXPR, quals, -1);
-  return true;
-}
-
 /**
  * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
  *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
@@ -9465,12 +9349,13 @@ static bool oj_flatten_body_inner_joins(Query *sub) {
  * ride along in the derived subquery, contributing the neutral provenance
  * they would in any join) -- and a (correlated) WHERE, with none of the
  * shapes @c decorrelate_scalar_sublinks rejects downstream (aggregates,
- * grouping, set ops, LIMIT, nested sublinks, CTEs).  Dead @c RTE_JOIN
- * entries left by @c oj_flatten_body_inner_joins are ignored.  The
- * targetList is replaced wholesale by @c count(*), so its width is
- * irrelevant here.  @p corr_supplied is set for @c IN / @c NOT @c IN, whose
- * correlation comes from the testexpr and is ANDed into the (possibly
- * empty) subselect WHERE by the caller.
+ * grouping, set ops, LIMIT, nested sublinks, CTEs).  The targetList is
+ * replaced wholesale by @c count(*), so its width is irrelevant here.
+ * @p corr_supplied is set for @c IN / @c NOT @c IN, whose correlation comes
+ * from the testexpr and is ANDed into the (possibly empty) subselect WHERE
+ * by the caller.  Bodies arrive here already canonicalised to the
+ * comma-join form by @c normalize_inner_joins (a body it declined -- an
+ * outer join, a whole-row join reference -- fails the fromlist check).
  */
 static bool predicate_subselect_decorrelatable(const constants_t *constants,
                                                Query *sub,
@@ -9492,8 +9377,6 @@ static bool predicate_subselect_decorrelatable(const constants_t *constants,
     bool any_tracked = false;
     foreach (lc, sub->rtable) {
       RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-      if (r->rtekind == RTE_JOIN)
-        continue; /* unreferenced leftover of the inner-join flattening */
       if (r->rtekind != RTE_RELATION)
         return false;
       if (oj_rte_has_provsql(constants, r))
@@ -9885,13 +9768,12 @@ static Node *extract_quantified_corr(SubLink *sl, bool *antijoin, bool neg,
  * bare @c EXISTS / @c IN sublink, or one wrapped in a single @c NOT -- i.e.
  * @c NOT @c EXISTS / @c NOT @c IN) is replaced by the @c build_count_predicate
  * form, after which the scalar-subquery decorrelation lowers the count()
- * comparison to the @c "R ⟕ Q" semijoin / antijoin.  A tracked body written
- * with explicit inner JOIN syntax (possibly mixing tracked and untracked
- * relations, e.g. a station lookup joined into the subquery) is first
- * normalized to the comma-join form by @c oj_flatten_body_inner_joins.
- * Conjuncts whose subselect is not decorrelatable (untracked / uncorrelated /
- * outer-joined) are left untouched, so they hit the usual
- * unsupported-subquery error.
+ * comparison to the @c "R ⟕ Q" semijoin / antijoin.  A body may mix tracked
+ * and untracked relations (e.g. a station lookup joined into the subquery);
+ * JOIN-syntax bodies arrive already canonicalised to the comma-join form by
+ * @c normalize_inner_joins.  Conjuncts whose subselect is not
+ * decorrelatable (untracked / uncorrelated / outer-joined) are left
+ * untouched, so they hit the usual unsupported-subquery error.
  */
 static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
   Node *quals;
@@ -9921,14 +9803,6 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
     }
     if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
       sl = (SubLink *)inner;
-      /* Normalize a tracked JOIN-syntax body to the comma-join form the
-       * decorrelatable check below expects (semantics-preserving, so a body
-       * the rewrite then declines is still executed identically). */
-      if ((sl->subLinkType == EXISTS_SUBLINK ||
-           sl->subLinkType == ANY_SUBLINK ||
-           sl->subLinkType == ALL_SUBLINK) &&
-          oj_body_has_tracked_relation(constants, (Query *)sl->subselect))
-        (void)oj_flatten_body_inner_joins((Query *)sl->subselect);
       if (sl->subLinkType == EXISTS_SUBLINK &&
           predicate_subselect_decorrelatable(constants,
                                              (Query *)sl->subselect, false)) {
@@ -10010,8 +9884,6 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     if (sl->subLinkType != ARRAY_SUBLINK || !IsA(sl->subselect, Query))
       continue;
     sub = (Query *)sl->subselect;
-    if (oj_body_has_tracked_relation(constants, sub))
-      (void)oj_flatten_body_inner_joins(sub);
     if (!predicate_subselect_decorrelatable(constants, sub, false))
       continue;
     /* Exactly one non-junk output column (the element value).  A body ORDER BY
@@ -10107,9 +9979,8 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
  *
  * Mirror of @c oj_wrap_outer_from, but for the SubLink body: every body relation
  * must be a base relation, at least one of them tracked, and the FROM a
- * comma-join (explicit inner JoinExprs are first flattened to that form by
- * @c oj_flatten_body_inner_joins; their dead @c RTE_JOIN entries are skipped).
- * @c D exposes every base user column (@c oj_collect_cols); the body's own
+ * comma-join (JOIN-syntax bodies arrive already canonicalised to that form
+ * by @c normalize_inner_joins).  @c D exposes every base user column (@c oj_collect_cols); the body's own
  * (level-0) references are retargeted to @c D, while the correlated level-1
  * references to the outer query are left untouched.  The body WHERE @c W
  * (correlation + inter-table join) stays in place: it becomes the
@@ -10128,16 +9999,12 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
   ListCell *lc;
   int idx, posn = 0;
 
-  if (!oj_flatten_body_inner_joins(sub))
-    return false;
   if (!sub->jointree || sub->jointree->fromlist == NIL)
     return false;
   {
     bool any_tracked = false;
     foreach (lc, sub->rtable) {
       RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-      if (r->rtekind == RTE_JOIN)
-        continue; /* unreferenced leftover of the inner-join flattening */
       if (r->rtekind != RTE_RELATION)
         return false;
       if (oj_rte_has_provsql(constants, r))
@@ -10151,8 +10018,7 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
       return false; /* only a plain comma-join, no explicit JoinExprs */
   }
 
-  /* D exposes every base user column; record (rtindex,attno) -> D column.
-   * A dead RTE_JOIN slot keeps a NULL pos row: no Var references it. */
+  /* D exposes every base user column; record (rtindex,attno) -> D column. */
   pos = (int **)palloc0((rtlen + 1) * sizeof(int *));
   idx = 0;
   foreach (lc, sub->rtable) {
@@ -10160,8 +10026,6 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
     oj_cols rc;
     int j;
     ++idx;
-    if (r->rtekind == RTE_JOIN)
-      continue;
     oj_collect_cols(constants, r, &rc);
     pos[idx] =
       (int *)palloc0((list_length(r->eref->colnames) + 1) * sizeof(int));
@@ -13832,6 +13696,295 @@ static void process_inert_fetches(const constants_t *constants, Query *q) {
  * @return  The (possibly restructured) rewritten query, or @c NULL if the
  *          query has no FROM clause and can be skipped.
  */
+/* ----------------------------------------------------------------------------
+ * Inner-join canonicalisation.
+ *
+ * PostgreSQL hands the planner hook two different Query shapes for the same
+ * inner-join semantics: "FROM a, b WHERE c" is a flat fromlist of
+ * RangeTblRefs with the condition in the WHERE quals, while
+ * "FROM a JOIN b ON c" is a JoinExpr tree plus a synthetic RTE_JOIN entry.
+ * Rewrite passes that pattern-match the flat shape have repeatedly missed
+ * the JOIN one, so normalize_inner_joins canonicalises every tracked query
+ * level to the flat form before any shape-sensitive pass runs.  Rewrite
+ * passes downstream (and new ones) may therefore assume the comma-join form;
+ * only outer joins still appear as JoinExprs, for lower_outer_joins.
+ * ------------------------------------------------------------------------- */
+
+/** @brief Context for the join-alias walker/mutator of
+ *  @c normalize_inner_joins. */
+typedef struct join_alias_ctx {
+  List *rtable;         ///< range table owning the joinaliasvars
+  Bitmapset *flattened; ///< rtindexes of the RTE_JOIN entries being dissolved
+  int sublevels_up;     ///< current query nesting depth
+  bool wholerow;        ///< a whole-row Var references a dissolved join
+} join_alias_ctx;
+
+/** @brief Walker: does any Var reference a dissolved join RTE as a whole row
+ *  (@c varattno @c <= @c 0)?  Such a reference cannot be resolved through
+ *  @c joinaliasvars, so the normalization declines. */
+static bool join_wholerow_walker(Node *node, void *cx) {
+  join_alias_ctx *c = (join_alias_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if ((int)v->varlevelsup == c->sublevels_up && v->varattno <= 0 &&
+        bms_is_member(v->varno, c->flattened))
+      c->wholerow = true;
+    return false;
+  }
+  if (IsA(node, Query)) {
+    bool res;
+    c->sublevels_up++;
+    res = query_tree_walker((Query *)node, join_wholerow_walker, cx, 0);
+    c->sublevels_up--;
+    return res;
+  }
+  return expression_tree_walker(node, join_wholerow_walker, cx);
+}
+
+/** @brief Mutator: replace every Var referencing a dissolved join RTE by its
+ *  @c joinaliasvars expression -- resolved recursively, since chained joins
+ *  alias through each other -- adjusted to the Var's level.  This covers
+ *  USING / NATURAL merged columns and aliased ON-join columns alike. */
+static Node *join_alias_resolve_mut(Node *node, void *cx) {
+  join_alias_ctx *c = (join_alias_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if ((int)v->varlevelsup == c->sublevels_up && v->varattno > 0 &&
+        bms_is_member(v->varno, c->flattened)) {
+      RangeTblEntry *rte = rt_fetch(v->varno, c->rtable);
+      Node *expr =
+        (Node *)copyObject(list_nth(rte->joinaliasvars, v->varattno - 1));
+      if (c->sublevels_up > 0)
+        IncrementVarSublevelsUp(expr, c->sublevels_up, 0);
+      return join_alias_resolve_mut(expr, cx);
+    }
+    return (Node *)copyObject(v);
+  }
+  if (IsA(node, Query)) {
+    Query *res;
+    c->sublevels_up++;
+    res = query_tree_mutator((Query *)node, join_alias_resolve_mut, cx, 0);
+    c->sublevels_up--;
+    return (Node *)res;
+  }
+  return expression_tree_mutator(node, join_alias_resolve_mut, cx);
+}
+
+/** @brief Recursively collect an all-inner join tree's leaf RangeTblRefs,
+ *  ON quals, and dissolved RTE_JOIN rtindexes.  Returns @c false -- leaving
+ *  the outputs unusable -- on any outer join, aliased join
+ *  (@c JOIN @c ... @c AS, whose column renaming the flat form cannot carry),
+ *  or unexpected node. */
+static bool inner_join_collect(Node *jt, List **refs, List **quals,
+                               Bitmapset **joins) {
+  if (jt == NULL)
+    return false;
+  if (IsA(jt, RangeTblRef)) {
+    *refs = lappend(*refs, jt);
+    return true;
+  }
+  if (IsA(jt, JoinExpr)) {
+    JoinExpr *j = (JoinExpr *)jt;
+    if (j->jointype != JOIN_INNER || j->alias != NULL)
+      return false;
+    if (!inner_join_collect(j->larg, refs, quals, joins) ||
+        !inner_join_collect(j->rarg, refs, quals, joins))
+      return false;
+    if (j->quals)
+      *quals = lappend(*quals, j->quals);
+    *joins = bms_add_member(*joins, j->rtindex);
+    return true;
+  }
+  return false;
+}
+
+/** @brief Context for the rtindex-renumbering mutator of
+ *  @c normalize_inner_joins. */
+typedef struct renumber_rte_ctx {
+  int old_size;     ///< range-table length before compaction
+  int *old_to_new;  ///< 1-based rtindex map; dissolved slots map to 0
+  int sublevels_up; ///< current query nesting depth
+} renumber_rte_ctx;
+
+/** @brief Mutator: renumber every Var / RangeTblRef / JoinExpr rtindex of
+ *  the compacted level through @c old_to_new, at any nesting depth (a
+ *  nested subquery reaches the level via @c varlevelsup).  A @c varnosyn
+ *  pointing at a dropped slot is cleared (the deparse hint has no
+ *  surviving target). */
+static Node *renumber_rte_mut(Node *node, void *cx) {
+  renumber_rte_ctx *c = (renumber_rte_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)copyObject(node);
+    if ((int)v->varlevelsup == c->sublevels_up) {
+      if ((int)v->varno >= 1 && (int)v->varno <= c->old_size &&
+          c->old_to_new[v->varno] > 0)
+        v->varno = (Index)c->old_to_new[v->varno];
+#if PG_VERSION_NUM >= 130000
+      if ((int)v->varnosyn >= 1 && (int)v->varnosyn <= c->old_size) {
+        if (c->old_to_new[v->varnosyn] > 0) {
+          v->varnosyn = (Index)c->old_to_new[v->varnosyn];
+        } else {
+          v->varnosyn = 0;
+          v->varattnosyn = 0;
+        }
+      }
+#endif
+    }
+    return (Node *)v;
+  }
+  if (IsA(node, RangeTblRef)) {
+    RangeTblRef *r = (RangeTblRef *)copyObject(node);
+    if (c->sublevels_up == 0 && r->rtindex >= 1 &&
+        r->rtindex <= c->old_size && c->old_to_new[r->rtindex] > 0)
+      r->rtindex = c->old_to_new[r->rtindex];
+    return (Node *)r;
+  }
+  if (IsA(node, JoinExpr)) {
+    JoinExpr *j = (JoinExpr *)expression_tree_mutator(node, renumber_rte_mut, cx);
+    if (c->sublevels_up == 0 && j->rtindex >= 1 &&
+        j->rtindex <= c->old_size && c->old_to_new[j->rtindex] > 0)
+      j->rtindex = c->old_to_new[j->rtindex];
+    return (Node *)j;
+  }
+  if (IsA(node, Query)) {
+    Query *res;
+    c->sublevels_up++;
+    res = query_tree_mutator((Query *)node, renumber_rte_mut, cx, 0);
+    c->sublevels_up--;
+    return (Node *)res;
+  }
+  return expression_tree_mutator(node, renumber_rte_mut, cx);
+}
+
+/**
+ * @brief Canonicalise explicit inner joins in @p q's FROM to the comma-join
+ *        form: each all-inner JoinExpr fromlist item becomes its leaf
+ *        RangeTblRefs, the ON conditions are splayed into one flat WHERE
+ *        conjunction, every reference to the dissolved joins' alias columns
+ *        (USING / NATURAL merged columns included) is resolved to base
+ *        expressions, and the dissolved RTE_JOIN entries are dropped from
+ *        the range table with every surviving rtindex renumbered.
+ *
+ * A fromlist item containing an outer join is kept intact for
+ * @c lower_outer_joins, as is the whole query when a whole-row Var
+ * references a dissolved join (unresolvable through @c joinaliasvars).
+ * Runs on every tracked query level and -- via
+ * @c normalize_inner_joins_walker -- on every nested Query (sublink
+ * bodies, subquery RTEs, CTE bodies), before any shape-sensitive pass.
+ */
+static void normalize_inner_joins(Query *q) {
+  Bitmapset *flattened = NULL;
+  bool changed = false;
+  ListCell *lc;
+  join_alias_ctx actx;
+
+  if (q->commandType != CMD_SELECT || q->jointree == NULL)
+    return;
+
+  /* Probe: which fromlist items are all-inner join trees?  (The actual
+   * collection re-runs below, on the alias-resolved tree.) */
+  foreach (lc, q->jointree->fromlist) {
+    Node *item = (Node *)lfirst(lc);
+    List *refs = NIL, *jquals = NIL;
+    Bitmapset *joins = NULL;
+    if (IsA(item, JoinExpr) &&
+        inner_join_collect(item, &refs, &jquals, &joins)) {
+      flattened = bms_union(flattened, joins);
+      changed = true;
+    }
+  }
+  if (!changed)
+    return;
+
+  actx.rtable = q->rtable;
+  actx.flattened = flattened;
+  actx.sublevels_up = 0;
+  actx.wholerow = false;
+  query_tree_walker(q, join_wholerow_walker, &actx, 0);
+  if (actx.wholerow)
+    return;
+
+  /* 1) Resolve every reference to a dissolved join's alias columns, over
+   * the whole level: target list, quals, HAVING, window clauses,
+   * RTE-embedded expressions (LATERAL subqueries / functions, kept joins'
+   * joinaliasvars), and nested queries reaching this level through
+   * varlevelsup. */
+  actx.sublevels_up = 0;
+  query_tree_mutator(q, join_alias_resolve_mut, &actx, QTW_DONT_COPY_QUERY);
+
+  /* 2) Flatten the fromlist; splay nested ANDs with make_ands_implicit so
+   * downstream passes that split only a top-level AND (e.g.
+   * rewrite_predicate_sublinks) see every conjunct. */
+  {
+    List *newfrom = NIL, *conjs = NIL;
+    foreach (lc, q->jointree->fromlist) {
+      Node *item = (Node *)lfirst(lc);
+      List *refs = NIL, *jquals = NIL;
+      Bitmapset *joins = NULL;
+      ListCell *qc;
+      if (IsA(item, JoinExpr) &&
+          inner_join_collect(item, &refs, &jquals, &joins)) {
+        newfrom = list_concat(newfrom, refs);
+        foreach (qc, jquals)
+          conjs =
+            list_concat(conjs, make_ands_implicit((Expr *)lfirst(qc)));
+      } else {
+        newfrom = lappend(newfrom, item);
+      }
+    }
+    if (q->jointree->quals)
+      conjs =
+        list_concat(conjs, make_ands_implicit((Expr *)q->jointree->quals));
+    q->jointree->fromlist = newfrom;
+    q->jointree->quals =
+      (conjs == NIL) ? NULL : (Node *)make_ands_explicit(conjs);
+  }
+
+  /* 3) Compact: drop the dissolved RTE_JOIN entries (now unreferenced)
+   * and renumber every surviving rtindex, so downstream passes -- e.g.
+   * the safe-query candidate gate -- see a clean range table. */
+  {
+    renumber_rte_ctx rctx;
+    int old_size = list_length(q->rtable);
+    int next = 1, i = 1;
+    List *new_rtable = NIL;
+
+    rctx.old_to_new = (int *)palloc0((old_size + 1) * sizeof(int));
+    foreach (lc, q->rtable) {
+      if (!bms_is_member(i, flattened)) {
+        rctx.old_to_new[i] = next++;
+        new_rtable = lappend(new_rtable, lfirst(lc));
+      }
+      i++;
+    }
+    q->rtable = new_rtable;
+    rctx.old_size = old_size;
+    rctx.sublevels_up = 0;
+    query_tree_mutator(q, renumber_rte_mut, &rctx, QTW_DONT_COPY_QUERY);
+    pfree(rctx.old_to_new);
+  }
+}
+
+/** @brief Walker: apply @c normalize_inner_joins to every nested Query --
+ *  sublink subselects, subquery RTEs, CTE bodies -- so that e.g. a sublink
+ *  body is already canonical when the sublink pre-passes inspect it. */
+static bool normalize_inner_joins_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *sub = (Query *)node;
+    normalize_inner_joins(sub);
+    return query_tree_walker(sub, normalize_inner_joins_walker, cx, 0);
+  }
+  return expression_tree_walker(node, normalize_inner_joins_walker, cx);
+}
+
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
                             bool in_boolean_rewrite,
@@ -13850,6 +14003,16 @@ static Query *process_query(const constants_t *constants, Query *q,
   List *given_evidence = NIL;       /* captured given(...) whole-tuple evidence */
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: Before query rewriting", q, true);
+
+  /* Canonicalise explicit inner joins to the comma-join form -- for this
+   * level and, via the walker, for every nested Query (sublink bodies,
+   * subquery RTEs, CTE bodies) -- before any shape-sensitive pass runs;
+   * downstream passes may assume the flat fromlist, and only outer joins
+   * still appear as JoinExprs (for lower_outer_joins). */
+  if (provsql_active) {
+    normalize_inner_joins(q);
+    query_tree_walker(q, normalize_inner_joins_walker, NULL, 0);
+  }
 
   /* Inert provenance() fetches: resolve a scalar `(SELECT provenance()
    * FROM R ...)` to that subquery's token in place and record it as

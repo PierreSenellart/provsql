@@ -183,7 +183,33 @@ The function proceeds in the following order:
 Step 0: Prologue and FROM-less Queries
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-A short prologue runs before anything else: inert scope-local
+A short prologue runs before anything else.  First,
+:cfunc:`normalize_inner_joins` canonicalises the FROM clause: every
+all-inner ``JoinExpr`` fromlist item (``a JOIN b ON c``, including
+``USING`` / ``NATURAL`` forms) is dissolved into its leaf
+``RangeTblRef``\ s, with the ON conditions splayed into a flat WHERE
+conjunction and every reference to a dissolved join's alias columns
+resolved to base expressions through ``joinaliasvars``.  PostgreSQL
+hands the hook two different Query shapes for the same inner-join
+semantics -- the flat comma-join form and the ``JoinExpr`` tree -- and
+rewrite passes that pattern-matched one shape have historically missed
+the other; after this pass, **every downstream pass (and any new one)
+may assume the flat comma-join form**.  Only outer joins still appear
+as ``JoinExpr``\ s, for the outer-join lowering.  The dissolved
+``RTE_JOIN`` entries are dropped from the range table, with every
+surviving rtindex renumbered, so shape gates that require an
+all-``RTE_RELATION`` range table (the safe-query candidate gate, the
+sublink decorrelation) match both syntaxes identically.  The pass
+recurses -- via ``normalize_inner_joins_walker`` -- into every nested
+Query: sublink bodies, subquery RTEs, and CTE bodies, so e.g. a
+``NOT IN`` body written with ``JOIN`` syntax is already canonical when
+the sublink pre-passes inspect it; a whole-row reference to a
+dissolved join (``j.*``) declines the pass for that level.  The
+``join_syntax_equivalence`` regression test pins the resulting
+guarantee: one query per feature area, run in both syntaxes, must
+produce identical results.
+
+The rest of the prologue: inert scope-local
 :sqlfunc:`provenance` fetches are resolved by
 :cfunc:`process_inert_fetches`, the conditioning surface is rewritten
 by :cfunc:`rewrite_cond_predicates` (see Step 11 below), projected
@@ -313,17 +339,16 @@ Before proceeding, the function checks for:
 
 - **Sublinks** (``EXISTS``, ``IN``, scalar subqueries) over a tracked
   relation that the decorrelation pre-passes could not rewrite: not
-  supported.  A body written with explicit inner ``JOIN`` syntax is
-  first normalized to the comma-join form by
-  ``oj_flatten_body_inner_joins`` (ON quals move into the body WHERE;
-  the dead ``RTE_JOIN`` entries stay in the range table), and the body
-  may mix tracked and untracked relations -- the untracked ones ride
-  along inside the derived cross-product subquery built by
-  ``oj_wrap_body_from``, contributing neutral provenance.  What still
-  trips the error: an outer join in the body, a reference to a join
-  alias (``USING`` / ``NATURAL`` merged columns, ``j.*``), a nested
-  sublink, ``LIMIT``/``OFFSET``, or a bare uncorrelated value /
-  ``count(*)`` body compared against an outer column.
+  supported.  Bodies arrive here already canonicalised to the
+  comma-join form by :cfunc:`normalize_inner_joins` (Step 0 recurses
+  into sublink subselects), and may mix tracked and untracked
+  relations -- the untracked ones ride along inside the derived
+  cross-product subquery built by ``oj_wrap_body_from``, contributing
+  neutral provenance.  What still trips the error: an outer join or a
+  whole-row join reference in the body (both decline the
+  canonicalisation), a nested sublink, ``LIMIT``/``OFFSET``, or a bare
+  uncorrelated value / ``count(*)`` body compared against an outer
+  column.
 - ``DISTINCT ON``: not supported.
 - ``DISTINCT`` (plain): converted to ``GROUP BY`` via
   :cfunc:`transform_distinct_into_group_by`.
@@ -683,22 +708,14 @@ linear time by :cfunc:`BooleanCircuit::independentEvaluation`,
 which replaces the fallback to tree decomposition or external
 knowledge compilation that the unrewritten circuit would require.
 
-Two normalisation pre-passes run at the head of
+One normalisation pre-pass runs at the head of
 ``try_safe_query_rewrite`` so the detector and rewriter see a flat
 fromlist of base ``RTE_RELATION`` entries regardless of how the
-user wrote the query:
+user wrote the query (explicit inner joins need no handling here:
+:cfunc:`normalize_inner_joins` in the ``process_query`` prologue
+has already dissolved them at every nesting level):
 
-- ``try_flatten_inner_joins(q)`` dissolves every ``INNER`` /
-  ``CROSS`` ``JoinExpr`` in any fromlist into flat
-  ``RangeTblRef``\ s plus AND-merged ``ON``-clauses, recursing
-  through ``RTE_SUBQUERY`` bodies so a wrapped INNER JOIN gets
-  flattened in the inner body before the inlining pre-pass picks
-  it up.  Refuses outer joins (NULL-padding rows break per-row
-  independence), aliased joins (``JOIN ... AS j`` would require
-  resolving columns through ``joinaliasvars``), and ``USING``
-  clauses.  Orphaned synthetic ``RTE_JOIN`` entries are dropped
-  via the shared :cfunc:`compact_orphan_rtes` helper.
-- ``try_inline_simple_subqueries(q)`` then inlines every simple
+- ``try_inline_simple_subqueries(q)`` inlines every simple
   ``RTE_SUBQUERY`` fromlist entry (PG-rewritten view bodies,
   inline ``FROM (SELECT …)`` subqueries) into the outer rtable.
   A subquery is "simple" when it is a flat conjunctive ``SELECT``
@@ -930,8 +947,8 @@ The extensions and their interaction with the base rewriter:
   read-once.
 
 The interaction between these extensions and the base rewriter is
-ordered as: PG-18 group-RTE strip → INNER / CROSS JoinExpr
-flattening → simple-subquery inlining → PK self-join unification
+ordered as: PG-18 group-RTE strip → simple-subquery inlining →
+PK self-join unification
 → disjoint-constant certification → candidate gate (shape /
 metadata / ancestry disjointness) → ``qc_split_quals`` →
 constant-selection pre-pass → multi-component dispatch →
@@ -952,7 +969,8 @@ regression tests live in ``test/sql/safe_query_const_sel.sql``,
 (cumulative regression checks for the FD closure),
 ``safe_query_self_join_disjoint.sql``,
 ``safe_query_view_descent.sql`` (subquery-inlining pre-pass),
-``safe_query_inner_join.sql`` (JoinExpr flattening), and
+``safe_query_inner_join.sql`` (JOIN-syntax queries reaching the
+gate through the prologue's inner-join canonicalisation), and
 ``safe_query_ancestry_disjoint.sql`` (ancestry-based disjointness
 gate).
 
