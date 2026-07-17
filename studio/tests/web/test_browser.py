@@ -73,7 +73,9 @@ def test_landing_gates_on_jspi(browser, web_server) -> None:
     try:
         page.goto(web_server + "/", wait_until="domcontentloaded")
         assert page.locator("#studio-boot-status").count() == 0   # not the app
-        assert page.locator("#launch").get_attribute("href") == "app.html"
+        # The launch CTA showcases the cs8 notebook (deliberate landing
+        # funnel); a bare app visit still opens the tutorial.
+        assert page.locator("#launch").get_attribute("href") == "app.html?nb=cs8"
         # The newcomer funnel: a tutorial CTA next to the launch button.
         assert page.locator("#launch-tutorial").get_attribute("href") \
             == "app.html?nb=tutorial"

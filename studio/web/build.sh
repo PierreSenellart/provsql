@@ -61,7 +61,8 @@ fi
 # 1. Frontend assets, copied unmodified. -L dereferences the fonts /
 #    fonts-face.css symlinks (they point into ../../branding) so the doc-root
 #    is self-contained and servable by a dumb static host.
-for f in app.js circuit.js app.css colors_and_type.css fonts-face.css; do
+for f in app.js circuit.js circuit-vocab.js app.css colors_and_type.css \
+         fonts-face.css; do
   cp -L "$STATIC/$f" "./$f"
 done
 rm -rf fonts img
