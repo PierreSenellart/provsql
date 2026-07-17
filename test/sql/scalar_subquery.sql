@@ -1132,3 +1132,120 @@ DROP TABLE ao7;
 
 DROP TABLE ao_q;
 DROP TABLE ao_r;
+
+-- Part 28: predicate-sublink bodies written with explicit inner JOIN syntax,
+-- mixing tracked and untracked relations.  oj_flatten_body_inner_joins
+-- normalizes "Q JOIN U ON c" to the comma-join form of Part 26 (the ON quals
+-- move into the body WHERE), and the body may mix tracked and untracked
+-- relations: the untracked side rides along inside the derived subquery D,
+-- contributing the neutral 1 it would in any join.  The archetype is a fact
+-- table filtered through an untracked dimension lookup on both sides of an
+-- antijoin.
+CREATE TABLE pj_det(pid int, sid int);
+CREATE TABLE pj_photo(id int, station text);  -- untracked dimension
+INSERT INTO pj_det VALUES (1,10),(1,NULL),(2,20),(3,10),(3,NULL),(4,30);
+INSERT INTO pj_photo VALUES (1,'A'),(2,'A'),(3,'B'),(4,'B');
+SELECT add_provenance('pj_det');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, pr)
+  FROM pj_det, (VALUES (1,10,0.8),(1,NULL,0.6),(2,20,0.5),
+                       (3,10,0.4),(3,NULL,0.5),(4,30,0.3)) v(vp,vs,pr)
+  WHERE pid = vp AND sid IS NOT DISTINCT FROM vs;
+END $$;
+
+-- NOT IN through the dimension on both sides.  3VL: the body's NULL sid
+-- removes every outer row, and an outer NULL sid is removed by every body
+-- row.  (1,10): removed by (3,10) and (3,NULL) -> 0.8*0.6*0.5 = 0.24;
+-- (1,NULL): removed by every 'B' row -> 0.6*0.6*0.5*0.7 = 0.126;
+-- (2,20): removed by (3,NULL) -> 0.5*0.5 = 0.25.
+CREATE TABLE pj1 AS
+  SELECT d.pid AS pid, d.sid AS sid,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM pj_det d JOIN pj_photo p ON d.pid = p.id
+  WHERE p.station = 'A'
+    AND d.sid NOT IN (SELECT d2.sid FROM pj_det d2
+                      JOIN pj_photo p2 ON d2.pid = p2.id
+                      WHERE p2.station = 'B');
+SELECT remove_provenance('pj1');
+SELECT pid, sid, p FROM pj1 ORDER BY pid, sid NULLS LAST;
+DROP TABLE pj1;
+
+-- The comma-join form computes the same probabilities.
+CREATE TABLE pj2 AS
+  SELECT d.pid AS pid, d.sid AS sid,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM pj_det d, pj_photo p
+  WHERE d.pid = p.id AND p.station = 'A'
+    AND d.sid NOT IN (SELECT d2.sid FROM pj_det d2, pj_photo p2
+                      WHERE d2.pid = p2.id AND p2.station = 'B');
+SELECT remove_provenance('pj2');
+SELECT pid, sid, p FROM pj2 ORDER BY pid, sid NULLS LAST;
+DROP TABLE pj2;
+
+-- NOT EXISTS with an explicit equality ignores the NULL sids (never equal):
+-- (1,10): removed by (3,10) alone -> 0.8*0.6 = 0.48; (1,NULL): 0.6; (2,20): 0.5.
+CREATE TABLE pj3 AS
+  SELECT d.pid AS pid, d.sid AS sid,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM pj_det d JOIN pj_photo p ON d.pid = p.id
+  WHERE p.station = 'A'
+    AND NOT EXISTS (SELECT 1 FROM pj_det d2
+                    JOIN pj_photo p2 ON d2.pid = p2.id
+                    WHERE p2.station = 'B' AND d2.sid = d.sid);
+SELECT remove_provenance('pj3');
+SELECT pid, sid, p FROM pj3 ORDER BY pid, sid NULLS LAST;
+DROP TABLE pj3;
+
+-- IN (semijoin): only (1,10) has a matching 'B' row -> 0.8*0.4 = 0.32.
+CREATE TABLE pj4 AS
+  SELECT d.pid AS pid, d.sid AS sid,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM pj_det d JOIN pj_photo p ON d.pid = p.id
+  WHERE p.station = 'A'
+    AND d.sid IN (SELECT d2.sid FROM pj_det d2
+                  JOIN pj_photo p2 ON d2.pid = p2.id
+                  WHERE p2.station = 'B');
+SELECT remove_provenance('pj4');
+SELECT pid, sid, p FROM pj4 ORDER BY pid, sid NULLS LAST;
+DROP TABLE pj4;
+
+-- The flatten also feeds the scalar-subquery decorrelation (through
+-- oj_wrap_body_from): a correlated aggregate body with a JOIN.
+-- (1,10) -> max(pid) over 'B' rows with sid 10 = 3; the NULL sid and 20
+-- match nothing (empty group -> NULL).
+CREATE TABLE pj5 AS
+  SELECT d.pid AS pid, d.sid AS sid,
+         (SELECT max(d2.pid) FROM pj_det d2
+          JOIN pj_photo p2 ON d2.pid = p2.id
+          WHERE p2.station = 'B' AND d2.sid = d.sid) AS m
+  FROM pj_det d JOIN pj_photo p ON d.pid = p.id
+  WHERE p.station = 'A';
+SELECT remove_provenance('pj5');
+SELECT pid, sid, m FROM pj5 ORDER BY pid, sid NULLS LAST;
+DROP TABLE pj5;
+
+-- ...and the ARRAY(...) collection over a JOIN body.
+CREATE TABLE pj6 AS
+  SELECT d.pid AS pid, d.sid AS sid,
+         ARRAY(SELECT d2.pid FROM pj_det d2
+               JOIN pj_photo p2 ON d2.pid = p2.id
+               WHERE p2.station = 'B' AND d2.sid = d.sid) AS arr,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM pj_det d JOIN pj_photo p ON d.pid = p.id
+  WHERE p.station = 'A';
+SELECT remove_provenance('pj6');
+SELECT pid, sid,
+       (SELECT array_agg(u ORDER BY u NULLS LAST)
+          FROM unnest(split_part(agg_token_value_text(arr::uuid), ' ', 1)::int[]) u)
+         AS sorted,
+       p
+FROM pj6 ORDER BY pid, sid NULLS LAST;
+DROP TABLE pj6;
+
+-- An outer join inside the body stays refused.
+SELECT d.pid FROM pj_det d
+WHERE d.sid NOT IN (SELECT d2.sid FROM pj_det d2
+                    LEFT JOIN pj_photo p2 ON d2.pid = p2.id);
+
+DROP TABLE pj_photo;
+DROP TABLE pj_det;

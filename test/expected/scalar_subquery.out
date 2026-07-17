@@ -649,3 +649,55 @@ a|p
 2|0.5000
 3|0.5000
 (3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+pid|sid|p
+1|10|0.2400
+1||0.1260
+2|20|0.2500
+(3 rows)
+remove_provenance
+
+(1 row)
+pid|sid|p
+1|10|0.2400
+1||0.1260
+2|20|0.2500
+(3 rows)
+remove_provenance
+
+(1 row)
+pid|sid|p
+1|10|0.4800
+1||0.6000
+2|20|0.5000
+(3 rows)
+remove_provenance
+
+(1 row)
+pid|sid|p
+1|10|0.3200
+1||0.0000
+2|20|0.0000
+(3 rows)
+remove_provenance
+
+(1 row)
+pid|sid|m
+1|10|3 (*)
+1||
+2|20|
+(3 rows)
+remove_provenance
+
+(1 row)
+pid|sid|sorted|p
+1|10|{3}|0.8000
+1|||0.6000
+2|20||0.5000
+(3 rows)
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported

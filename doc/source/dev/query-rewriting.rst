@@ -312,10 +312,18 @@ Step 6: Unsupported Feature Checks
 Before proceeding, the function checks for:
 
 - **Sublinks** (``EXISTS``, ``IN``, scalar subqueries) over a tracked
-  relation that the decorrelation pre-passes could not rewrite (in
-  practice, a body using explicit ``JOIN`` syntax or
-  ``LIMIT``/``OFFSET``, or a bare uncorrelated value / ``count(*)``
-  body compared against an outer column): not supported.
+  relation that the decorrelation pre-passes could not rewrite: not
+  supported.  A body written with explicit inner ``JOIN`` syntax is
+  first normalized to the comma-join form by
+  ``oj_flatten_body_inner_joins`` (ON quals move into the body WHERE;
+  the dead ``RTE_JOIN`` entries stay in the range table), and the body
+  may mix tracked and untracked relations -- the untracked ones ride
+  along inside the derived cross-product subquery built by
+  ``oj_wrap_body_from``, contributing neutral provenance.  What still
+  trips the error: an outer join in the body, a reference to a join
+  alias (``USING`` / ``NATURAL`` merged columns, ``j.*``), a nested
+  sublink, ``LIMIT``/``OFFSET``, or a bare uncorrelated value /
+  ``count(*)`` body compared against an outer column.
 - ``DISTINCT ON``: not supported.
 - ``DISTINCT`` (plain): converted to ``GROUP BY`` via
   :cfunc:`transform_distinct_into_group_by`.

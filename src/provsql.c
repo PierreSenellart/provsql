@@ -9339,18 +9339,138 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
   return true;
 }
 
+/** @brief Context for @c oj_join_alias_var_walker. */
+typedef struct oj_join_alias_ctx {
+  List *rtable;
+  bool found;
+} oj_join_alias_ctx;
+
+/** @brief Walker: set @c found if a level-0 @c Var references an @c RTE_JOIN
+ *  entry of @p rtable (a USING / NATURAL merged column, or a whole-row
+ *  @c j.* reference).  Such a Var would dangle once the join tree is
+ *  flattened to a comma-join, so the flattening declines. */
+static bool oj_join_alias_var_walker(Node *node, void *cx) {
+  oj_join_alias_ctx *c = (oj_join_alias_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 && (int)v->varno >= 1 &&
+        (int)v->varno <= list_length(c->rtable) &&
+        rt_fetch(v->varno, c->rtable)->rtekind == RTE_JOIN)
+      c->found = true;
+    return false;
+  }
+  return expression_tree_walker(node, oj_join_alias_var_walker, cx);
+}
+
+/** @brief Collect the base @c RangeTblRef leaves and every ON qual of an
+ *  inner-join-only join tree into @p refs / @p quals.  Returns @c false on
+ *  any outer join or unexpected node. */
+static bool oj_flatten_collect(Node *jt, List **refs, List **quals) {
+  if (jt == NULL)
+    return false;
+  if (IsA(jt, RangeTblRef)) {
+    *refs = lappend(*refs, jt);
+    return true;
+  }
+  if (IsA(jt, FromExpr)) {
+    FromExpr *f = (FromExpr *)jt;
+    ListCell *lc;
+    foreach (lc, f->fromlist)
+      if (!oj_flatten_collect((Node *)lfirst(lc), refs, quals))
+        return false;
+    if (f->quals)
+      *quals = lappend(*quals, f->quals);
+    return true;
+  }
+  if (IsA(jt, JoinExpr)) {
+    JoinExpr *j = (JoinExpr *)jt;
+    if (j->jointype != JOIN_INNER)
+      return false;
+    if (!oj_flatten_collect(j->larg, refs, quals) ||
+        !oj_flatten_collect(j->rarg, refs, quals))
+      return false;
+    if (j->quals)
+      *quals = lappend(*quals, j->quals);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Normalize a sublink body's explicit inner joins to the comma-join
+ *        form: @c "A JOIN B ON c" becomes fromlist @c (A, B) with the ON
+ *        condition ANDed into the body WHERE.
+ *
+ * The predicate-sublink and scalar-subquery decorrelations handle a flat
+ * comma-join body (collapsed into one derived subquery by
+ * @c oj_wrap_body_from), so a body written with JOIN syntax is normalized
+ * here first -- inner ON quals and WHERE commute.  The joins' @c RTE_JOIN
+ * entries stay in the range table, unreferenced (removing them would
+ * renumber every Var).  Declines, returning @c false with the body
+ * untouched, on outer joins and on bodies that reference a join alias
+ * (USING / NATURAL merged columns, a whole-row @c j.*), whose Vars would
+ * dangle without the join RTE; a nested-sublink body is declined too (it is
+ * refused downstream anyway).  A body already in comma form returns @c true
+ * unchanged.
+ */
+static bool oj_flatten_body_inner_joins(Query *sub) {
+  List *refs = NIL, *quals = NIL;
+  ListCell *lc;
+  bool has_join = false;
+  oj_join_alias_ctx jc;
+
+  if (!sub->jointree)
+    return false;
+  foreach (lc, sub->jointree->fromlist)
+    if (!IsA(lfirst(lc), RangeTblRef))
+      has_join = true;
+  if (!has_join)
+    return true;
+  if (sub->hasSubLinks)
+    return false;
+
+  jc.rtable = sub->rtable;
+  jc.found = false;
+  oj_join_alias_var_walker((Node *)sub->targetList, &jc);
+  oj_join_alias_var_walker((Node *)sub->jointree, &jc);
+  oj_join_alias_var_walker(sub->havingQual, &jc);
+  if (jc.found)
+    return false;
+
+  foreach (lc, sub->jointree->fromlist)
+    if (!oj_flatten_collect((Node *)lfirst(lc), &refs, &quals))
+      return false;
+  if (sub->jointree->quals)
+    quals = lappend(quals, sub->jointree->quals);
+
+  sub->jointree->fromlist = refs;
+  sub->jointree->quals =
+    (quals == NIL)
+      ? NULL
+      : (list_length(quals) == 1)
+          ? (Node *)linitial(quals)
+          : (Node *)makeBoolExpr(AND_EXPR, quals, -1);
+  return true;
+}
+
 /**
  * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
  *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
  *
- * Requires a body FROM over tracked base relations -- a single relation Q, or
- * an all-tracked comma-join that @c oj_wrap_body_from collapses downstream into
- * one derived cross-product subquery -- and a (correlated) WHERE, with none
- * of the shapes @c decorrelate_scalar_sublinks rejects downstream (aggregates,
- * grouping, set ops, LIMIT, nested sublinks, CTEs).  The targetList is replaced
- * wholesale by @c count(*), so its width is irrelevant here.  @p corr_supplied
- * is set for @c IN / @c NOT @c IN, whose correlation comes from the testexpr and
- * is ANDed into the (possibly empty) subselect WHERE by the caller.
+ * Requires a body FROM over base relations, at least one of them tracked --
+ * a single relation Q, or a comma-join that @c oj_wrap_body_from collapses
+ * downstream into one derived cross-product subquery (untracked relations
+ * ride along in the derived subquery, contributing the neutral provenance
+ * they would in any join) -- and a (correlated) WHERE, with none of the
+ * shapes @c decorrelate_scalar_sublinks rejects downstream (aggregates,
+ * grouping, set ops, LIMIT, nested sublinks, CTEs).  Dead @c RTE_JOIN
+ * entries left by @c oj_flatten_body_inner_joins are ignored.  The
+ * targetList is replaced wholesale by @c count(*), so its width is
+ * irrelevant here.  @p corr_supplied is set for @c IN / @c NOT @c IN, whose
+ * correlation comes from the testexpr and is ANDed into the (possibly
+ * empty) subselect WHERE by the caller.
  */
 static bool predicate_subselect_decorrelatable(const constants_t *constants,
                                                Query *sub,
@@ -9365,13 +9485,22 @@ static bool predicate_subselect_decorrelatable(const constants_t *constants,
     return false;
   if (!sub->jointree || (!corr_supplied && !sub->jointree->quals))
     return false; /* an uncorrelated predicate has no Q key for count() */
-  /* Single tracked base relation, or an all-tracked comma-join (the
-   * multi-relation body is collapsed downstream by oj_wrap_body_from into one
-   * derived cross-product subquery D -- same preconditions checked here). */
-  foreach (lc, sub->rtable) {
-    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
-      return false;
+  /* Base relations only, at least one tracked (the multi-relation body is
+   * collapsed downstream by oj_wrap_body_from into one derived cross-product
+   * subquery D -- same preconditions checked here). */
+  {
+    bool any_tracked = false;
+    foreach (lc, sub->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_JOIN)
+        continue; /* unreferenced leftover of the inner-join flattening */
+      if (r->rtekind != RTE_RELATION)
+        return false;
+      if (oj_rte_has_provsql(constants, r))
+        any_tracked = true;
+    }
+    if (!any_tracked)
+      return false; /* untracked body: PostgreSQL's native sublink machinery */
   }
   foreach (lc, sub->jointree->fromlist) {
     if (!IsA(lfirst(lc), RangeTblRef))
@@ -9750,15 +9879,19 @@ static Node *extract_quantified_corr(SubLink *sl, bool *antijoin, bool neg,
 
 /**
  * @brief Rewrite top-level @c EXISTS / @c IN WHERE conjuncts (optionally negated)
- *        over a single tracked relation into correlated @c count(*) comparisons.
+ *        over tracked relations into correlated @c count(*) comparisons.
  *
  * A pre-pass for @c decorrelate_scalar_sublinks: each qualifying conjunct (a
  * bare @c EXISTS / @c IN sublink, or one wrapped in a single @c NOT -- i.e.
  * @c NOT @c EXISTS / @c NOT @c IN) is replaced by the @c build_count_predicate
  * form, after which the scalar-subquery decorrelation lowers the count()
- * comparison to the @c "R ⟕ Q" semijoin / antijoin.  Conjuncts whose subselect is
- * not decorrelatable (untracked / uncorrelated / non-comma-join) are left
- * untouched, so they hit the usual unsupported-subquery error.
+ * comparison to the @c "R ⟕ Q" semijoin / antijoin.  A tracked body written
+ * with explicit inner JOIN syntax (possibly mixing tracked and untracked
+ * relations, e.g. a station lookup joined into the subquery) is first
+ * normalized to the comma-join form by @c oj_flatten_body_inner_joins.
+ * Conjuncts whose subselect is not decorrelatable (untracked / uncorrelated /
+ * outer-joined) are left untouched, so they hit the usual
+ * unsupported-subquery error.
  */
 static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
   Node *quals;
@@ -9788,6 +9921,14 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
     }
     if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
       sl = (SubLink *)inner;
+      /* Normalize a tracked JOIN-syntax body to the comma-join form the
+       * decorrelatable check below expects (semantics-preserving, so a body
+       * the rewrite then declines is still executed identically). */
+      if ((sl->subLinkType == EXISTS_SUBLINK ||
+           sl->subLinkType == ANY_SUBLINK ||
+           sl->subLinkType == ALL_SUBLINK) &&
+          oj_body_has_tracked_relation(constants, (Query *)sl->subselect))
+        (void)oj_flatten_body_inner_joins((Query *)sl->subselect);
       if (sl->subLinkType == EXISTS_SUBLINK &&
           predicate_subselect_decorrelatable(constants,
                                              (Query *)sl->subselect, false)) {
@@ -9869,6 +10010,8 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     if (sl->subLinkType != ARRAY_SUBLINK || !IsA(sl->subselect, Query))
       continue;
     sub = (Query *)sl->subselect;
+    if (oj_body_has_tracked_relation(constants, sub))
+      (void)oj_flatten_body_inner_joins(sub);
     if (!predicate_subselect_decorrelatable(constants, sub, false))
       continue;
     /* Exactly one non-junk output column (the element value).  A body ORDER BY
@@ -9963,12 +10106,16 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
  *        @c "SELECT val FROM D WHERE W" with @c D a single tracked subquery.
  *
  * Mirror of @c oj_wrap_outer_from, but for the SubLink body: every body relation
- * must be a tracked base relation and the FROM a comma-join.  @c D exposes every
- * base user column (@c oj_collect_cols); the body's own (level-0) references are
- * retargeted to @c D, while the correlated level-1 references to the outer query
- * are left untouched.  The body WHERE @c W (correlation + inter-table join) stays
- * in place: it becomes the @c "R LEFT JOIN D" ON clause, and @c get_provenance_attributes
- * later processes @c D recursively, giving it the @c Q1 ⊗ … ⊗ Qn provenance.
+ * must be a base relation, at least one of them tracked, and the FROM a
+ * comma-join (explicit inner JoinExprs are first flattened to that form by
+ * @c oj_flatten_body_inner_joins; their dead @c RTE_JOIN entries are skipped).
+ * @c D exposes every base user column (@c oj_collect_cols); the body's own
+ * (level-0) references are retargeted to @c D, while the correlated level-1
+ * references to the outer query are left untouched.  The body WHERE @c W
+ * (correlation + inter-table join) stays in place: it becomes the
+ * @c "R LEFT JOIN D" ON clause, and @c get_provenance_attributes later
+ * processes @c D recursively, giving it the @c Q1 ⊗ … ⊗ Qn provenance of its
+ * tracked relations (an untracked relation contributes the neutral 1).
  */
 static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
   int rtlen = list_length(sub->rtable);
@@ -9981,11 +10128,22 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
   ListCell *lc;
   int idx, posn = 0;
 
+  if (!oj_flatten_body_inner_joins(sub))
+    return false;
   if (!sub->jointree || sub->jointree->fromlist == NIL)
     return false;
-  foreach (lc, sub->rtable) {
-    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-    if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
+  {
+    bool any_tracked = false;
+    foreach (lc, sub->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_JOIN)
+        continue; /* unreferenced leftover of the inner-join flattening */
+      if (r->rtekind != RTE_RELATION)
+        return false;
+      if (oj_rte_has_provsql(constants, r))
+        any_tracked = true;
+    }
+    if (!any_tracked)
       return false;
   }
   foreach (lc, sub->jointree->fromlist) {
@@ -9993,7 +10151,8 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
       return false; /* only a plain comma-join, no explicit JoinExprs */
   }
 
-  /* D exposes every base user column; record (rtindex,attno) -> D column. */
+  /* D exposes every base user column; record (rtindex,attno) -> D column.
+   * A dead RTE_JOIN slot keeps a NULL pos row: no Var references it. */
   pos = (int **)palloc0((rtlen + 1) * sizeof(int *));
   idx = 0;
   foreach (lc, sub->rtable) {
@@ -10001,6 +10160,8 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
     oj_cols rc;
     int j;
     ++idx;
+    if (r->rtekind == RTE_JOIN)
+      continue;
     oj_collect_cols(constants, r, &rc);
     pos[idx] =
       (int *)palloc0((list_length(r->eref->colnames) + 1) * sizeof(int));

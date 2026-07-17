@@ -492,9 +492,10 @@ is NULL (photo 5 at Loch Torridon, confidence 0.60, and photo 9 at Glen
 Affric, confidence 0.50). NULLs make the three natural ways of asking
 "species detected at Loch Torridon but *not* at Glen Affric" genuinely
 different questions – in SQL itself, and therefore in the provenance
-and probabilities ProvSQL computes. Loch Torridon is photos 1–8 and
-Glen Affric photos 9–15, so the station restriction can be written on
-``photo_id`` directly.
+and probabilities ProvSQL computes. Station names live in the
+*untracked* ``photo`` table; joining it in restricts to a station
+without touching the provenance (an untracked join partner contributes
+the neutral 1, as in Step 3).
 
 First, ``EXCEPT``. SQL set difference matches tuples *syntactically*:
 two NULLs count as the same value, so Loch Torridon's unidentified
@@ -505,9 +506,13 @@ sighting is discounted by Glen Affric's:
     SELECT species_id,
            ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
     FROM (
-      SELECT species_id FROM detection WHERE photo_id BETWEEN 1 AND 8
+      SELECT species_id FROM detection d
+        JOIN photo p ON d.photo_id = p.id
+      WHERE p.station = 'Loch Torridon'
       EXCEPT
-      SELECT species_id FROM detection WHERE photo_id BETWEEN 9 AND 15
+      SELECT species_id FROM detection d
+        JOIN photo p ON d.photo_id = p.id
+      WHERE p.station = 'Glen Affric'
     ) t
     ORDER BY species_id NULLS LAST;
 
@@ -526,10 +531,12 @@ poisons the certification of **every** species:
            ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
     FROM (
       SELECT DISTINCT species_id
-      FROM (SELECT species_id FROM detection
-            WHERE photo_id BETWEEN 1 AND 8
-              AND species_id NOT IN (SELECT species_id FROM detection
-                                     WHERE photo_id BETWEEN 9 AND 15)) lt
+      FROM (SELECT d.species_id FROM detection d
+              JOIN photo p ON d.photo_id = p.id
+            WHERE p.station = 'Loch Torridon'
+              AND d.species_id NOT IN (SELECT d2.species_id FROM detection d2
+                                         JOIN photo p2 ON d2.photo_id = p2.id
+                                       WHERE p2.station = 'Glen Affric')) lt
     ) t
     ORDER BY species_id NULLS LAST;
 
@@ -552,10 +559,12 @@ detection probability (0.60):
            ROUND(probability_evaluate(provenance())::numeric, 4) AS prob
     FROM (
       SELECT DISTINCT species_id
-      FROM (SELECT species_id FROM detection d
-            WHERE photo_id BETWEEN 1 AND 8
+      FROM (SELECT d.species_id FROM detection d
+              JOIN photo p ON d.photo_id = p.id
+            WHERE p.station = 'Loch Torridon'
               AND NOT EXISTS (SELECT 1 FROM detection d2
-                              WHERE d2.photo_id BETWEEN 9 AND 15
+                                JOIN photo p2 ON d2.photo_id = p2.id
+                              WHERE p2.station = 'Glen Affric'
                                 AND d2.species_id = d.species_id)) lt
     ) t
     ORDER BY species_id NULLS LAST;
