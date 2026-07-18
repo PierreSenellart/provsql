@@ -18,6 +18,7 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/tuplestore.h"
 
 #include "compatibility.h"   /* TYPALIGN_INT fallback for PG < 11 */
 

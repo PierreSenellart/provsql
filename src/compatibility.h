@@ -19,12 +19,18 @@
  * - **list_make5() (13)**: existed pre-13, dropped by the PG13 list
  *   rewrite, re-added in PG14; backported for the PG13 gap as a macro
  *   over @c list_make4() + @c lappend().
+ * - **FuncnameGetCandidates() / OpernameGetCandidates() (14, 19)**:
+ *   PostgreSQL 14 added an @p include_out_arguments parameter to the
+ *   former; PostgreSQL 19 added a mandatory @p fgc_flags out-parameter
+ *   to both.  The @c *Compat wrappers take the PG 14-style argument
+ *   list and drop / dummy-fill the extra arguments as needed.
  */
 #ifndef COMPATIBILITY_H
 #define COMPATIBILITY_H
 
 #include "postgres.h"
 #include "nodes/pg_list.h"
+#include "catalog/namespace.h"
 
 /**
  * @brief Version-agnostic wrapper around @c list_delete_cell().
@@ -63,6 +69,53 @@ static inline ListCell *my_lnext(const List *l, const ListCell *c)
   return lnext(l, c);
 #else
   return lnext(c);
+#endif
+}
+
+/**
+ * @brief Version-agnostic wrapper around @c FuncnameGetCandidates().
+ *
+ * Takes the PostgreSQL 14+ argument list.  On PG < 14 the
+ * @p include_out_arguments parameter (added in 14) is dropped; on
+ * PG >= 19 the @p fgc_flags out-parameter (added in 19, must not be
+ * @c NULL) receives a discarded local, as no caller inspects the
+ * lookup-failure flags.
+ */
+static inline FuncCandidateList
+FuncnameGetCandidatesCompat(List *names, int nargs, List *argnames,
+                            bool expand_variadic, bool expand_defaults,
+                            bool include_out_arguments, bool missing_ok)
+{
+#if PG_VERSION_NUM >= 190000
+  int fgc_flags;
+  return FuncnameGetCandidates(names, nargs, argnames, expand_variadic,
+                               expand_defaults, include_out_arguments,
+                               missing_ok, &fgc_flags);
+#elif PG_VERSION_NUM >= 140000
+  return FuncnameGetCandidates(names, nargs, argnames, expand_variadic,
+                               expand_defaults, include_out_arguments,
+                               missing_ok);
+#else
+  return FuncnameGetCandidates(names, nargs, argnames, expand_variadic,
+                               expand_defaults, missing_ok);
+#endif
+}
+
+/**
+ * @brief Version-agnostic wrapper around @c OpernameGetCandidates().
+ *
+ * PostgreSQL 19 added an @p fgc_flags out-parameter (must not be
+ * @c NULL); it receives a discarded local, as no caller inspects the
+ * lookup-failure flags.
+ */
+static inline FuncCandidateList
+OpernameGetCandidatesCompat(List *names, char oprkind, bool missing_schema_ok)
+{
+#if PG_VERSION_NUM >= 190000
+  int fgc_flags;
+  return OpernameGetCandidates(names, oprkind, missing_schema_ok, &fgc_flags);
+#else
+  return OpernameGetCandidates(names, oprkind, missing_schema_ok);
 #endif
 }
 

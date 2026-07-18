@@ -25,6 +25,7 @@ extern "C" {
 #include "postgres.h"
 #include "fmgr.h"
 #include "catalog/pg_type.h"
+#include "utils/tuplestore.h"
 #include "utils/uuid.h"
 #include "executor/spi.h"
 #include "provsql_shmem.h"

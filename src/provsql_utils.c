@@ -39,6 +39,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
+#include "compatibility.h"
 #include "fmgr.h"
 #include "nodes/value.h"
 #include "parser/parse_func.h"
@@ -144,7 +145,7 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
   if(result!=InvalidOid)
     return result;
 
-  clist = OpernameGetCandidates(equals, 'b', false);
+  clist = OpernameGetCandidatesCompat(equals, 'b', false);
 
   ncandidates = func_match_argtypes(2, inputOids,
                                     clist, &clist);
@@ -173,15 +174,13 @@ Oid find_equality_operator(Oid ltypeId, Oid rtypeId)
  */
 static Oid get_func_oid(char *s)
 {
-  FuncCandidateList fcl=FuncnameGetCandidates(
+  FuncCandidateList fcl=FuncnameGetCandidatesCompat(
     list_make1(makeString(s)),
     -1,
     NIL,
     false,
     false,
-#if PG_VERSION_NUM >= 140000
     false,
-#endif
     false);
   if(fcl)
     return fcl->oid;
@@ -199,15 +198,13 @@ static Oid get_func_oid(char *s)
  */
 static Oid get_provsql_func_oid(char *s)
 {
-  FuncCandidateList fcl=FuncnameGetCandidates(
+  FuncCandidateList fcl=FuncnameGetCandidatesCompat(
     list_make2(makeString("provsql"),makeString(s)),
     -1,
     NIL,
     false,
     false,
-#if PG_VERSION_NUM >= 140000
     false,
-#endif
     false);
   if(fcl)
     return fcl->oid;

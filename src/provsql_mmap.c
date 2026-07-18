@@ -86,8 +86,29 @@ bool provsql_read_all(int fd, void *dst, size_t n)
   return true;
 }
 
+#if PG_VERSION_NUM >= 190000
+/* PostgreSQL 19 changed the default background-worker SIGTERM handler
+ * from bgworker_die() (immediate FATAL from the signal handler) to the
+ * flag-based die(), which only acts at the next CHECK_FOR_INTERRUPTS().
+ * This worker blocks in read() on the IPC pipe (restarted by
+ * SA_RESTART), so it would never observe the flag and a fast shutdown
+ * would hang on it.  Restore the pre-19 semantics: the worker holds no
+ * transaction state and the mmap store is crash-safe, so exiting
+ * mid-read is fine. */
+static void provsql_worker_die(SIGNAL_ARGS)
+{
+  ereport(FATAL,
+          (errcode(ERRCODE_ADMIN_SHUTDOWN),
+           errmsg("terminating background worker \"%s\" due to administrator command",
+                  MyBgworkerEntry->bgw_type)));
+}
+#endif
+
 PGDLLEXPORT void provsql_mmap_worker(Datum ignored)
 {
+#if PG_VERSION_NUM >= 190000
+  pqsignal(SIGTERM, provsql_worker_die);
+#endif
   BackgroundWorkerUnblockSignals();
   initialize_provsql_mmap();
   close(provsql_shared_state->pipebmw);

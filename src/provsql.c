@@ -4820,13 +4820,10 @@ rewrite_probability_events(const constants_t *constants, Query *q)
 static Expr *build_joint_width_provenance_expr(const constants_t *constants,
                                                const char *desc, Expr *fallback)
 {
-  FuncCandidateList fcl = FuncnameGetCandidates(
+  FuncCandidateList fcl = FuncnameGetCandidatesCompat(
     list_make2(makeString("provsql"), makeString("ucq_joint_provenance")),
     2, NIL, false, false,
-#if PG_VERSION_NUM >= 140000
-    false,
-#endif
-    false);
+    false, false);
   FuncExpr *fe;
   Const *c;
   Datum jb;
@@ -4866,13 +4863,10 @@ static Expr *build_joint_width_provenance_expr(const constants_t *constants,
 static Expr *build_mobius_provenance_expr(const constants_t *constants,
                                           const char *desc, Expr *fallback)
 {
-  FuncCandidateList fcl = FuncnameGetCandidates(
+  FuncCandidateList fcl = FuncnameGetCandidatesCompat(
     list_make2(makeString("provsql"), makeString("ucq_mobius_provenance")),
     2, NIL, false, false,
-#if PG_VERSION_NUM >= 140000
-    false,
-#endif
-    false);
+    false, false);
   FuncExpr *fe;
   Const *c;
   Datum jb;
@@ -4909,13 +4903,10 @@ static Expr *build_joint_width_answer_expr(const constants_t *constants,
                                            const char *desc, List *head_var_idx,
                                            List *head_exprs, Expr *fallback)
 {
-  FuncCandidateList fcl = FuncnameGetCandidates(
+  FuncCandidateList fcl = FuncnameGetCandidatesCompat(
     list_make2(makeString("provsql"), makeString("ucq_joint_provenance_answer")),
     4, NIL, false, false,
-#if PG_VERSION_NUM >= 140000
-    false,
-#endif
-    false);
+    false, false);
   FuncExpr *fe;
   Const *desc_c, *hv_c;
   ArrayExpr *vals;
@@ -4982,13 +4973,10 @@ static Expr *build_mobius_answer_expr(const constants_t *constants,
                                       const char *desc, List *head_var_idx,
                                       List *head_exprs, Expr *fallback)
 {
-  FuncCandidateList fcl = FuncnameGetCandidates(
+  FuncCandidateList fcl = FuncnameGetCandidatesCompat(
     list_make2(makeString("provsql"), makeString("ucq_mobius_provenance_answer")),
     4, NIL, false, false,
-#if PG_VERSION_NUM >= 140000
-    false,
-#endif
-    false);
+    false, false);
   FuncExpr *fe;
   Const *desc_c, *hv_c;
   ArrayExpr *vals;
@@ -5046,13 +5034,10 @@ static Expr *build_mobius_answer_expr(const constants_t *constants,
  */
 static Expr *wrap_mobius_or_null(const constants_t *constants, Expr *mobius_call)
 {
-  FuncCandidateList fcl = FuncnameGetCandidates(
+  FuncCandidateList fcl = FuncnameGetCandidatesCompat(
     list_make2(makeString("provsql"), makeString("mobius_or_null")),
     1, NIL, false, false,
-#if PG_VERSION_NUM >= 140000
-    false,
-#endif
-    false);
+    false, false);
   FuncExpr *fe;
 
   if (fcl == NULL)
@@ -14788,7 +14773,11 @@ static PlannedStmt *provsql_planner(Query *q,
                                     const char *query_string,
 #endif
                                     int cursorOptions,
-                                    ParamListInfo boundParams) {
+                                    ParamListInfo boundParams
+#if PG_VERSION_NUM >= 190000
+                                    , ExplainState *es
+#endif
+                                    ) {
   /* Scope the inert-fetch record to this rewrite (re-entrant: nested
    * planner invocations save and restore their own). */
   List *saved_inert_subselects = provsql_inert_subselects;
@@ -14890,13 +14879,21 @@ static PlannedStmt *provsql_planner(Query *q,
 #if PG_VERSION_NUM >= 130000
                         query_string,
 #endif
-                        cursorOptions, boundParams);
+                        cursorOptions, boundParams
+#if PG_VERSION_NUM >= 190000
+                        , es
+#endif
+                        );
   else
     return standard_planner(q,
 #if PG_VERSION_NUM >= 130000
                             query_string,
 #endif
-                            cursorOptions, boundParams);
+                            cursorOptions, boundParams
+#if PG_VERSION_NUM >= 190000
+                            , es
+#endif
+                            );
 }
 
 /* -------------------------------------------------------------------------

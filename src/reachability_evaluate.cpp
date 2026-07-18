@@ -30,6 +30,7 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/tuplestore.h"
 #include "utils/uuid.h"
 
 #include "provsql_utils.h"

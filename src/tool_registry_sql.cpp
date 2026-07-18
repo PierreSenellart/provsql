@@ -36,6 +36,7 @@ extern "C" {
 #include "catalog/pg_type.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/tuplestore.h"
 #if PG_VERSION_NUM >= 160000
 #include "varatt.h"
 #endif

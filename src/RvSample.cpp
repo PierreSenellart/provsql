@@ -24,6 +24,7 @@ extern "C" {
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/tuplestore.h"
 #include "utils/uuid.h"
 #include "provsql_utils.h"
 #include "provsql_error.h"
