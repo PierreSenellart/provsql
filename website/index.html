@@ -127,17 +127,18 @@ feature_row:
     btn_label: "Conditioning docs"
     btn_class: "btn--primary"
   - title: "Latent Variables &amp; Bayesian Inference"
-    image_path: /assets/images/conditioning.png
-    alt: "ProvSQL Studio notebook cell: a normal(M, 1) observation whose mean M is itself a latent normal(0, 10) random variable, with observe() shifting M into its posterior and evidence() reporting the marginal likelihood."
+    image_path: /assets/images/latent.png
+    alt: "ProvSQL Studio notebook cell: a latent M ~ Normal(0, 10) is observed through three noisy Normal(M, 1) readings with the conditional-equality operator, and the query returns the posterior mean, posterior variance, and marginal likelihood P(data)."
     excerpt: >
       A distribution's own parameters can themselves be random variables,
-      giving compound and hierarchical models. `observe(x, datum)` then
-      conditions those latent parameters into their Bayesian posterior by
-      likelihood weighting; `evidence()` reports the marginal likelihood
-      `P(data)`, and `shapley_observe()` ranks which observation moved the
-      posterior most – all in SQL.
-    url: "/docs/user/conditioning.html"
-    btn_label: "Conditioning docs"
+      giving compound and hierarchical models. Observing a leaf's value
+      (`X | (Y = c)`) then conditions those latent parameters into their
+      Bayesian posterior – in closed form on conjugate pairs, by
+      likelihood weighting otherwise; `evidence()` reports the marginal
+      likelihood `P(data)`, and `shapley_observe()` ranks which
+      observation moved the posterior most – all in SQL.
+    url: "/docs/user/continuous-distributions.html#latent-variables-and-posterior-inference"
+    btn_label: "Latent-variable docs"
     btn_class: "btn--primary"
   - title: "Shapley &amp; Banzhaf Values"
     image_path: /assets/images/studio/contributions-mode.png
@@ -167,7 +168,8 @@ feature_row:
     alt: "ProvSQL Studio Temporal mode: French prime ministers drawn on a UTC timeline by the validity interval during which each held office, beside the query that produced them, every row provenance-tracked (PROV-TID)."
     excerpt: >
       Provenance of data modifications: `INSERT` / `UPDATE` / `DELETE` are
-      tracked as update gates, enabling audit and undo. Combined with the
+      [tracked as update gates](/docs/user/data-modification.html),
+      enabling audit and undo. Combined with the
       interval-union semiring, validity timestamps turn a
       provenance-tracked database into a temporal one – time-travel
       queries included, and explore them visually in Studio's *Temporal*
@@ -175,17 +177,6 @@ feature_row:
       timeline.
     url: "/docs/user/temporal.html"
     btn_label: "Temporal docs"
-    btn_class: "btn--primary"
-  - title: "Lean Formalization"
-    image_path: /assets/images/lean.png
-    alt: "Rendered Lean 4 documentation of the theorem rewriting_valid_full – the machine-checked correctness of ProvSQL's query rewriting – with its full type signature, docstring, and proof outline."
-    excerpt: >
-      The algebraic core – m-semirings, annotated databases,
-      relational-algebra and aggregation semantics, query rewriting,
-      circuits and probability – is formally verified in Lean 4, with
-      machine-checked theorems backing ProvSQL's architecture.
-    url: "/lean/"
-    btn_label: "Lean formalization"
     btn_class: "btn--primary"
   - title: "ProvSQL Studio"
     image_path: /assets/images/studio/circuit-mode.png
@@ -220,8 +211,46 @@ feature_row:
       to WebAssembly, Studio running on top – no install, no server,
       nothing leaves the page. Pre-loaded databases and runnable
       notebooks for the tutorial and the case studies.
-    url: "/playground/?nb=cs8"
+    url: "/playground/"
     btn_label: "Open the Playground"
+    btn_class: "btn--primary"
+  - title: "Case Studies"
+    image_path: /assets/images/case-studies.png
+    alt: "The case-studies overview chapter of the ProvSQL documentation, its sidebar listing all eight case studies, from Intelligence Agency to ProvSQL as a Probability Calculator."
+    excerpt: >
+      Eight self-contained worked examples over realistic datasets – from
+      an intelligence agency and an open-science corpus to GTFS-scale
+      transit data, ministers over time, ML wildlife detections, an
+      air-quality sensor network, peer-review assignment, and a pure
+      probability calculator – each pushing a different facet of the
+      system, cross-referenced by a feature coverage matrix. Most run
+      directly in the Playground.
+    url: "/docs/user/casestudies.html"
+    btn_label: "Case studies"
+    btn_class: "btn--primary"
+  - title: "Provenance Export"
+    image_path: /assets/images/provenance-export.png
+    alt: "ProvSQL Studio Circuit-mode evaluation strip: input gates of the pinned circuit above its W3C PROV-XML export, with source tuples labelled Dave, Nancy, and Magdalen through a provenance mapping."
+    excerpt: >
+      Get circuits out, in standard formats: human-readable symbolic
+      formulas (`sr_formula`), W3C-standard **PROV-XML** interchange
+      (`to_provxml`), GraphViz-based rendering (`view_circuit`), and
+      row-per-edge subcircuit introspection (`circuit_subgraph`) – with
+      leaves labelled from your data through provenance mappings, and
+      every export one click away in Studio's evaluation strip.
+    url: "/docs/user/export.html"
+    btn_label: "Export docs"
+    btn_class: "btn--primary"
+  - title: "Lean Formalization"
+    image_path: /assets/images/lean.png
+    alt: "Rendered Lean 4 documentation of the theorem rewriting_valid_full – the machine-checked correctness of ProvSQL's query rewriting – with its full type signature, docstring, and proof outline."
+    excerpt: >
+      The algebraic core – m-semirings, annotated databases,
+      relational-algebra and aggregation semantics, query rewriting,
+      circuits and probability – is formally verified in Lean 4, with
+      machine-checked theorems backing ProvSQL's architecture.
+    url: "/lean/"
+    btn_label: "Lean formalization"
     btn_class: "btn--primary"
 feature_row2:
   - title: "SQL API"
