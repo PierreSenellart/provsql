@@ -32,3 +32,4 @@ studio/tests/**    linguist-vendored
 sql/upgrades/**    linguist-vendored
 sql/fixtures/**    linguist-vendored
 doc/**             linguist-documentation
+website/**         linguist-documentation
