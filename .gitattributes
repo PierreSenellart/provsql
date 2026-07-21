@@ -17,3 +17,18 @@ website/        export-ignore
 wasm/           export-ignore
 release.sh      export-ignore
 .dockerignore   export-ignore
+
+# --- GitHub language statistics ------------------------------------------
+# Keep the repository "Languages" bar representative of the project's own
+# source. The paths below still build, ship and diff normally; Linguist just
+# omits them from the language counts:
+#   - regression / test suites are not library code;
+#   - upgrade scripts and fixtures are migration boilerplate / test data;
+#   - doc/ is documentation.
+# (studio/ app code -- Python, JS, SQL -- is counted; only its tests are not,
+#  and vendored/minified assets under vendor/ are auto-excluded by Linguist.)
+test/**            linguist-vendored
+studio/tests/**    linguist-vendored
+sql/upgrades/**    linguist-vendored
+sql/fixtures/**    linguist-vendored
+doc/**             linguist-documentation
