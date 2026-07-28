@@ -57,6 +57,15 @@ Changelog     = "https://github.com/PierreSenellart/provsql/releases?q=tag%3Astu
 [project.scripts]
 provsql-studio = "provsql_studio.cli:main"
 
+[tool.ruff.lint]
+# Pin the rule set explicitly instead of inheriting ruff's default, which
+# widens across releases (0.16 turned on the full BLE/S/SIM/UP/FURB tiers)
+# and would otherwise turn an unpinned `pip install ruff` in CI into a
+# lint contract that changes under us. These four selectors are the
+# genuine-bug tier: pyflakes plus the non-cosmetic pycodestyle errors.
+# Whitespace, blank lines, and line length are left to the formatter.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.setuptools.dynamic]
 version = { attr = "provsql_studio.__version__" }
 
