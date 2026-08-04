@@ -348,10 +348,22 @@ aggregation_type_mutator(Node *node, void *ctx) {
  * the outer query and updates the type of every @c Var referencing that
  * result column so that subsequent type-checking passes correctly.
  *
+ * An aggregate result reaches an enclosing query either directly, as the
+ * subquery's own @c provenance_aggregate call, or forwarded by an
+ * intermediate subquery that merely selects it -- in which case the deeper
+ * level's own pass (@c process_query recurses before this runs) has already
+ * retyped that intermediate @c Var.  Both shapes are recognised by the
+ * column's *type* being @c agg_token, which is what carries the retyping
+ * through arbitrarily many levels of nesting: keying on the producing
+ * @c FuncExpr instead stops at the first level, leaving the column declared
+ * as its pre-rewrite scalar type, and a comparison against it is then
+ * executed natively on the raw composite datum.
+ *
  * @param constants   Extension OID cache.
  * @param q           Outer query to patch.
  * @param rteid       Range-table index of the subquery in @p q.
- * @param targetList  Target list of the subquery (to locate provenance_aggregate columns).
+ * @param targetList  Target list of the subquery (to locate the aggregate
+ *                    result columns).
  */
 static void fix_type_of_aggregation_result(const constants_t *constants,
                                            Query *q, Index rteid,
@@ -362,37 +374,34 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
 
   foreach (lc, targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
-    if (IsA(te->expr, FuncExpr)) {
-      FuncExpr *f = (FuncExpr *)te->expr;
 
-      if (f->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-        context.varno = rteid;
-        context.varattno = attno;
-        query_tree_mutator(q, aggregation_type_mutator, &context,
-                           QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+    if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN) {
+      context.varno = rteid;
+      context.varattno = attno;
+      query_tree_mutator(q, aggregation_type_mutator, &context,
+                         QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
 
-        /* Check if the retyped column is used in ORDER BY or GROUP BY */
-        {
-          ListCell *lc2;
-          foreach (lc2, q->targetList) {
-            TargetEntry *outer_te = (TargetEntry *)lfirst(lc2);
-            if (IsA(outer_te->expr, Var)) {
-              Var *v = (Var *)outer_te->expr;
-              if (v->varno == rteid && v->varattno == attno &&
-                  outer_te->ressortgroupref > 0) {
-                ListCell *lc3;
-                foreach (lc3, q->sortClause) {
-                  SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
-                  if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
-                    provsql_error("ORDER BY on aggregate results from "
-                                  "a subquery not supported");
-                }
-                foreach (lc3, q->groupClause) {
-                  SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
-                  if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
-                    provsql_error("GROUP BY on aggregate results from "
-                                  "a subquery not supported");
-                }
+      /* Check if the retyped column is used in ORDER BY or GROUP BY */
+      {
+        ListCell *lc2;
+        foreach (lc2, q->targetList) {
+          TargetEntry *outer_te = (TargetEntry *)lfirst(lc2);
+          if (IsA(outer_te->expr, Var)) {
+            Var *v = (Var *)outer_te->expr;
+            if (v->varno == rteid && v->varattno == attno &&
+                outer_te->ressortgroupref > 0) {
+              ListCell *lc3;
+              foreach (lc3, q->sortClause) {
+                SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
+                if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
+                  provsql_error("ORDER BY on aggregate results from "
+                                "a subquery not supported");
+              }
+              foreach (lc3, q->groupClause) {
+                SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
+                if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
+                  provsql_error("GROUP BY on aggregate results from "
+                                "a subquery not supported");
               }
             }
           }

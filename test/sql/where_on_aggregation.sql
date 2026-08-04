@@ -95,3 +95,58 @@ DROP TABLE woa_two;
 
 DROP TABLE woa_r;
 DROP TABLE woa_s;
+
+-- The aggregate result must keep its agg_token type however many subquery
+-- levels separate the aggregation from the comparison.  Retyping only one
+-- level up leaves the column declared as its pre-rewrite scalar type, and
+-- the comparison is then executed natively on the raw composite datum --
+-- silently, with neither the right rows nor the right annotation.
+CREATE TABLE woa2_r(g int, v int);
+INSERT INTO woa2_r VALUES (1,10),(1,20),(1,30),(2,5),(2,7);
+SELECT add_provenance('woa2_r');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM woa2_r; END $$;
+
+-- One, two and three levels of nesting all give the same annotation:
+-- g=1 -> 0.5 (at least two of three), g=2 -> 0.25 (both).
+CREATE TABLE woa2_n1 AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT g, count(*) AS c FROM woa2_r GROUP BY g) a
+  WHERE c >= 2;
+SELECT remove_provenance('woa2_n1');
+SELECT 'one level' AS nesting, g, p FROM woa2_n1 ORDER BY g;
+DROP TABLE woa2_n1;
+
+CREATE TABLE woa2_n2 AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT * FROM (SELECT g, count(*) AS c FROM woa2_r GROUP BY g) a) b
+  WHERE c >= 2;
+SELECT remove_provenance('woa2_n2');
+SELECT 'two levels' AS nesting, g, p FROM woa2_n2 ORDER BY g;
+DROP TABLE woa2_n2;
+
+CREATE TABLE woa2_n3 AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT * FROM
+         (SELECT * FROM (SELECT g, count(*) AS c FROM woa2_r GROUP BY g) a) b) c2
+  WHERE c >= 2;
+SELECT remove_provenance('woa2_n3');
+SELECT 'three levels' AS nesting, g, p FROM woa2_n3 ORDER BY g;
+DROP TABLE woa2_n3;
+
+-- A nested view is the same shape through the rewriter, and an equality
+-- pins the value rather than just its existence: count(*) = 3 holds only in
+-- the single world where all three of group 1's rows are present (0.125),
+-- and never for group 2.
+CREATE VIEW woa2_v1 AS SELECT g, count(*) AS c FROM woa2_r GROUP BY g;
+CREATE VIEW woa2_v2 AS SELECT * FROM woa2_v1;
+
+CREATE TABLE woa2_eq AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM woa2_v2 WHERE c = 3;
+SELECT remove_provenance('woa2_eq');
+SELECT 'nested view, c = 3' AS nesting, g, p FROM woa2_eq ORDER BY g;
+DROP TABLE woa2_eq;
+
+DROP VIEW woa2_v2;
+DROP VIEW woa2_v1;
+DROP TABLE woa2_r;

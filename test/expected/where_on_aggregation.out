@@ -47,3 +47,34 @@ remove_provenance
 shape|p
 two groups above join|0.0375
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+nesting|g|p
+one level|1|0.5000
+one level|2|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+nesting|g|p
+two levels|1|0.5000
+two levels|2|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+nesting|g|p
+three levels|1|0.5000
+three levels|2|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+nesting|g|p
+nested view, c = 3|1|0.1250
+nested view, c = 3|2|0.0000
+(2 rows)
