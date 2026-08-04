@@ -135,3 +135,11 @@ scalar count existence|1.0000
 shape|e
 expected(min) conditional|14.8101
 (1 row)
+NOTICE:  count(*) + count(*) <= 0: t
+NOTICE:  count(*) + count(*) >= 2: t
+NOTICE:  sum(x) + count(*) <= 0: t
+add_provenance
+
+(1 row)
+NOTICE:  sum(v) + sum(v) <= 0: t
+NOTICE:  count(*) + count(*) <= 0: t

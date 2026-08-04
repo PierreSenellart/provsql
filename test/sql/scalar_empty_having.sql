@@ -301,4 +301,57 @@ FROM seh_ex;
 DROP TABLE seh_ex;
 DROP TABLE seh_e CASCADE;
 
+-- The same scalar reading has to survive the aggregate being wrapped in
+-- arithmetic, which routes the comparison through the joint possible-world
+-- enumeration instead of the single-aggregate fast path.  That enumeration
+-- skips the world where no contributor is present, which is right for a
+-- grouped aggregate (an empty group is no row) but wrong for a scalar one,
+-- whose row exists over empty input with count 0.  seh_t is four tuples at
+-- p = 0.5, so P(empty) = 1/16 = 0.0625.
+DO $$
+DECLARE r record; p numeric;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      -- true only on the empty input: P = 0.0625, as for the fast-path
+      -- `count(*) = 0` pinned above.
+      ('count(*) + count(*) <= 0', 0.0625),
+      -- its complement: every world but the empty one.
+      ('count(*) + count(*) >= 2', 0.9375),
+      -- sum is NULL over empty input, not 0, so the empty world does not
+      -- satisfy this one and it stays 0.
+      ('sum(x) + count(*) <= 0',   0.0000)
+    ) AS v(pred, want) LOOP
+    EXECUTE format(
+      'SELECT round(provsql.probability_evaluate(provsql.provenance())::numeric, 4)'
+      ' FROM seh_t HAVING %s', r.pred) INTO p;
+    RAISE NOTICE '%: %', r.pred, (p = r.want);
+  END LOOP;
+END $$;
+
+-- count and sum are only distinguishable by the operator the gate records,
+-- never by the values: count(*) contributes a constant 1 per row, so over a
+-- column that is all ones the two aggregates have identical value gates.
+-- They still differ over the empty input, where a count is 0 and a sum is
+-- NULL, and that difference has to survive to the evaluator.
+CREATE TABLE seh_ones(v int);
+INSERT INTO seh_ones VALUES (1),(1),(1),(1);
+SELECT add_provenance('seh_ones');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM seh_ones; END $$;
+DO $$
+DECLARE r record; p numeric;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      -- sum is NULL over empty input, so the empty world never satisfies this
+      ('sum(v) + sum(v) <= 0',     0.0000),
+      -- count is 0 there, so the empty world does satisfy it: 1/16
+      ('count(*) + count(*) <= 0', 0.0625)
+    ) AS v(pred, want) LOOP
+    EXECUTE format(
+      'SELECT round(provsql.probability_evaluate(provsql.provenance())::numeric, 4)'
+      ' FROM seh_ones HAVING %s', r.pred) INTO p;
+    RAISE NOTICE '%: %', r.pred, (p = r.want);
+  END LOOP;
+END $$;
+DROP TABLE seh_ones CASCADE;
+
 DROP TABLE seh_t CASCADE;

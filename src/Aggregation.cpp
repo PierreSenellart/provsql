@@ -230,8 +230,11 @@ public:
 std::unique_ptr<Aggregator> makeAggregator(AggregationOperator op, ValueType t) {
   switch (op) {
   case AggregationOperator::COUNT:
+    // Each row contributes 1 (count(*)) or 0/1 (count(expr)), so the count is
+    // the sum of the contributions; the operator stays COUNT so the empty set
+    // reads as 0 rather than a sum's NULL.
     if (t == ValueType::INT) return std::make_unique<SumAgg<long> >();
-    throw std::runtime_error("COUNT is normalized to SUM(INT)");
+    throw std::runtime_error("COUNT expects an integer-valued contribution");
   case AggregationOperator::SUM:
     switch (t) {
     case ValueType::INT:  return std::make_unique<SumAgg<long> >();

@@ -80,17 +80,11 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
     m_scale.push_back(sc);
   }
 
-  /* Effective aggregate kind.  COUNT(*) reaches the circuit as SUM of
-   * unit-weighted semimods (detected on the unscaled mantissas); mirror
-   * pw_from_cmp_gate's remap so callers see COUNT in that case. */
+  /* The gate records the aggregate the query wrote: count(*) and count(expr)
+   * both keep COUNT even though their contributions are 1 and 0/1, so there is
+   * nothing to infer from the values here. */
   AggregationOperator agg_kind =
     getAggregationOperator(gc.getInfos(agg_side).first);
-  if (agg_kind == AggregationOperator::SUM) {
-    bool all_one = true;
-    for (std::size_t i = 0; i < m_mant.size(); ++i)
-      if (!(m_mant[i] == 1 && m_scale[i] == 0)) { all_one = false; break; }
-    if (all_one) agg_kind = AggregationOperator::COUNT;
-  }
 
   /* Rescale every value and the threshold to a common integer grid. */
   int target = c_scale;

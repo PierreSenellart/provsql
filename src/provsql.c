@@ -2942,8 +2942,10 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
  *                        original_aggref,
  *                        array_agg(provenance_semimod(arg, times_or_monus_token)))
  * @endcode
- * COUNT(*) and COUNT(expr) are remapped to SUM so that the semimodule
- * semantics (scalar × token → token) work correctly.
+ * COUNT(*) and COUNT(expr) feed the semimodule a per-row 1 / 0-or-1 value so
+ * the semimodule semantics (scalar × token → token) work, while the gate keeps
+ * the COUNT identity: only that distinguishes a count from a sum over the same
+ * values once the group is empty.
  *
  * @param constants  Extension OID cache.
  * @param agg_ref    The original @c Aggref node from the query.
@@ -3012,10 +3014,16 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     // check the particular case of count
     if (aggregation_function == F_COUNT_) // count(*): counts every row
     {
+      /* Every row contributes the constant 1, so the VALUE is the sum of
+       * those -- but the gate keeps the COUNT identity (as count(expr) below
+       * does).  Recording SUM instead would throw away the one thing that
+       * distinguishes the two over an empty set: a count is 0 there, a sum is
+       * NULL.  Evaluators would then have to guess it back from the values
+       * being all-unit, which cannot tell count(*) from a sum over a column
+       * of ones. */
       Const *one = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
                              sizeof(int32), Int32GetDatum(1), false, true);
       expr_s->args = list_make2(one, expr);
-      aggregation_function = F_SUM_INT4;
     } else if (aggregation_function == F_COUNT_ANY) // count(expr)
     {
       /* count(expr) counts only rows where expr IS NOT NULL, but -- unlike the
@@ -3052,8 +3060,8 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       ce->location = -1;
 
       expr_s->args = list_make2(ce, expr);
-      /* Keep the gate's aggfnoid as count (NOT normalised to F_SUM_INT4 like
-       * count(*) is): the per-row CASE already makes the value 0/1 so the
+      /* Keep the gate's aggfnoid as count, as count(*) above does: the per-row
+       * CASE already makes the value 0/1 so the
        * VALUE is the SUM of those, but preserving the COUNT identity tells the
        * HAVING evaluators that the empty-group result is 0 (a real, comparable
        * value) rather than NULL as a genuine sum would be.  This is what lets a

@@ -489,14 +489,6 @@ void provsql_having(
         kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
       }
 
-      // COUNT(*) is SUM of unit 1s; detect on the unscaled values.
-      if (agg_kind == AggregationOperator::SUM) {
-        bool all_one = true;
-        for (size_t i = 0; i < m_mant.size(); ++i)
-          if (!(m_mant[i] == 1 && m_scale[i] == 0)) { all_one = false; break; }
-        if (all_one) agg_kind = AggregationOperator::COUNT;
-      }
-
       // Common scale: rescale every value and the threshold to integers.
       int target_scale = C_scale;
       for (int ms : m_scale) target_scale = std::max(target_scale, ms);
@@ -537,6 +529,7 @@ void provsql_having(
       struct AggInfo {
         AggregationOperator kind;
         bool is_int;                                    // integer-typed result?
+        bool is_scalar;                                 // aggregation without GROUP BY?
         std::vector<std::pair<int, double> > contribs;  // (distinct-K index, value)
       };
       // A decimal text denotes an integer iff it has no fractional/exponent part.
@@ -559,6 +552,8 @@ void provsql_having(
           AggInfo ai;
           ai.kind = getAggregationOperator(c.getInfos(gx).first);
           ai.is_int = aggtype_is_integer(c.getInfos(gx).second & PROVSQL_AGG_TYPE_MASK);
+          ai.is_scalar =
+            (c.getInfos(gx).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
           for (gate_t ch : c.getWires(gx)) {
             if (c.getGateType(ch) != gate_semimod)
               return false;
@@ -648,17 +643,17 @@ void provsql_having(
           // contribs -- the aggregation rewriting drops it -- which is why the
           // two are indistinguishable here, and why they need not be.)
           //
-          // Note this covers count as well: the rewriting remaps COUNT(*) and
-          // COUNT(expr) to SUM over per-row 1-valued semimods (see
-          // replace_aggregations_by_provenance_aggregate), so a grouped count
-          // arrives as SUM and an empty group declines -- the right answer for
-          // a grouped aggregate, whose empty group is no row rather than a
-          // count of 0.  The COUNT arm below is consequently not reached from
-          // the classical path; it is kept for a gate that carries the
-          // operator directly, where 0 over an empty set is the count itself.
+          // COUNT is the exception: an empty set genuinely counts 0, so the
+          // world has a value whenever a row exists to carry it -- which is
+          // the case for a scalar aggregation, and not for a grouped one whose
+          // empty group is no row at all.  The gate records COUNT for both
+          // count(*) and count(expr) (see make_aggregation_expression), so no
+          // guessing from the values is needed here.
           switch (ai.kind) {
           case AggregationOperator::SUM:   if (cnt == 0) return false; out = acc; return true;
-          case AggregationOperator::COUNT: out = acc; return true;  // values 1 or 0/1
+          case AggregationOperator::COUNT:                       // values 1 or 0/1
+            if (cnt == 0 && !ai.is_scalar) return false;
+            out = acc; return true;
           case AggregationOperator::AVG:   if (cnt == 0) return false; out = acc / cnt; return true;
           case AggregationOperator::MIN:   if (cnt == 0) return false; out = mn; return true;
           case AggregationOperator::MAX:   if (cnt == 0) return false; out = mx; return true;
@@ -731,9 +726,24 @@ void provsql_having(
       // certify the disjuncts when the semiring and contributors allow.
       const bool certify = certifiable_contributors(kval);
 
+      // Whether the world in which no contributor is present is itself a
+      // valid world.  For a grouped aggregation it is not: an empty group is
+      // no row, so there is nothing for the comparison to hold of.  A scalar
+      // aggregation always yields its single row, empty input included, so
+      // that world is real and a predicate true on it (count(*) = 0, and
+      // anything the empty-input values satisfy) must pick it up.  Mixed
+      // shapes follow the grouped reading: whichever side is grouped has no
+      // row there, so the joined row does not exist either.
+      const bool empty_world_valid =
+        !aggs.empty() &&
+        std::all_of(aggs.begin(), aggs.end(),
+                    [](const std::pair<const gate_t, AggInfo> &e) {
+        return e.second.is_scalar;
+      });
+
       std::vector<typename SemiringT::value_type> disjuncts;
       const uint64_t total = uint64_t(1) << n;
-      for (uint64_t world = 1; world < total; ++world) {  // skip the empty world
+      for (uint64_t world = empty_world_valid ? 0 : 1; world < total; ++world) {
         double lv, rv;
         bool lint, rint;
         if (!eval(Lx, world, lv, lint) || !eval(Rx, world, rv, rint))
