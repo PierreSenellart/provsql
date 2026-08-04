@@ -1,3 +1,107 @@
+- version: "1.11.1"
+  date: 2026-08-04
+  tag: "v1.11.1"
+  notes: |
+    ## What's new in 1.11.1
+    
+    ProvSQL 1.11.1 is a bug-fix release for **aggregate provenance**. It
+    corrects the annotation an aggregate comparison produces once the
+    comparison and the aggregation are not in the same query block – where a
+    join partner's annotation could be dropped, a second comparison could
+    erase the first, and, past one level of subquery nesting, the comparison
+    could be silently ignored altogether – and brings the empty-aggregate-group
+    convention in line with SQL. Two changes are visible to queries that ran
+    without error before; both are listed under *Behaviour changes* below.
+    
+    #### Behaviour changes
+    
+    - **An empty aggregate group is SQL `NULL`.** `provsql.sum`, `min`, `max`
+      and `product` over a `random_variable` column returned an identity
+      element for a group with no row – `as_random(0)`, `-inf` / `+inf`,
+      `as_random(1)` – while standard SQL and ProvSQL's own `agg_token` path
+      both report `NULL` there. They now agree; `avg` already did. The
+      identity elements keep their real job, which is the value an absent row
+      contributes *inside* the fold, and are unchanged in that role.
+    - **`count(*)` records `COUNT` on its aggregate gate.** It was rewritten
+      to `SUM` over per-row 1s, leaving evaluators to guess the aggregate back
+      from the values being all-one – which cannot tell `count(*)` from a sum
+      over a column of ones, and loses the one thing that separates them over
+      an empty set (a count is 0, a sum is `NULL`). The gate now carries the
+      aggregate the query wrote. See *Upgrading* for the one consequence.
+    
+    #### Aggregate comparisons
+    
+    A comparison on an aggregate is lifted into the circuit as a `cmp` gate
+    whose possible-world enumeration already entails that the compared group
+    exists. It therefore supersedes that group's `δ` rather than multiplying
+    with it. What it supersedes is now determined structurally – the `δ` over
+    the compared group, and nothing else – rather than by dropping the whole
+    annotation the comparison arrived through.
+    
+    - **A join partner's annotation survives.** `WHERE c >= 2` over a grouped
+      subquery joined to another tracked relation kept only the comparison,
+      dropping the partner's annotation from the circuit entirely. It is now
+      retained, whether the join sits beside the aggregation or is bundled
+      with it inside a view or CTE.
+    - **A comparison over a comparison keeps both.** A second aggregate
+      comparison on the same group discarded the first, reporting
+      `P(c <= 2)` where `P(c >= 2 ∧ c <= 2)` was meant.
+    - **Nesting depth no longer matters.** More than one subquery level
+      between the aggregation and the comparison left the column at its
+      pre-rewrite scalar type, so the comparison was executed on the raw
+      composite datum: wrong rows, wrong annotation, no error. Every depth
+      now produces the annotation the fused `HAVING` produces.
+    - **An aggregate-free disjunct keeps group existence.**
+      `HAVING count(*) >= 4 OR g = 1` reported certainty for a group that is
+      present only sometimes, because the ordinary condition's deterministic
+      indicator says nothing about whether any row exists. The `δ` is now
+      kept whenever some disjunct is aggregate-free.
+    - **`IS [NOT] NULL` on a subquery's aggregate.** Previously rejected one
+      level down with *Unknown structure within Boolean expression*; it is
+      evaluated in the block that owns the aggregate and matches the fused
+      `HAVING agg IS NULL` exactly.
+    
+    #### Empty groups in probability evaluation
+    
+    - **An aggregate with no surviving contributor declines its world.** In
+      the joint possible-world enumeration, `SUM` over a world where every
+      contributed value was `NULL` – or where the group is absent – counted as
+      0, so `HAVING sum(CASE WHEN … END) + count(*) >= 1` over-reported. The
+      same reading fixes comparisons spanning two groups, where a world with
+      one group empty was still counted.
+    - **A scalar aggregation's empty input is a real world.** With the
+      aggregate under arithmetic, the enumeration skipped it unconditionally,
+      so `HAVING count(*) + count(*) <= 0` reported 0 rather than the
+      probability that the table is empty. The single row of a scalar
+      aggregation exists over empty input, and is now enumerated.
+    - **Monte Carlo agrees with the exact evaluators** on an empty-group
+      `SUM`, which it reported as 0 rather than `NULL`; an `(ε, δ)` request on
+      a large-support aggregate could be off by the probability that the group
+      is empty.
+    
+    #### Semiring evaluation
+    
+    - **One unresolvable comparison no longer costs the others.** The HAVING
+      pre-pass abandoned every remaining comparison gate after the first it
+      could not expand, so a gate it had handled perfectly well was demoted to
+      an opaque `cmp` – visible in `sr_formula`, fatal in the semirings that
+      reject one. Each gate is now resolved on its own.
+    
+    #### Upgrading
+    
+    `ALTER EXTENSION provsql UPDATE;` is enough. Sessions open across the
+    upgrade should reconnect: the extension caches function OIDs per session,
+    and the upgrade script resets that cache for the session that runs it
+    only.
+    
+    Because `count(*)`'s gate now records `COUNT`, the same query mints a
+    different – content-addressed – token than it did in 1.11.0. Circuits are
+    unaffected and queries simply build the new gate. A token **already
+    materialised in a user table** still points at the old gate, which reads
+    as a plain `SUM`; for a *scalar* `count(*)` that means it keeps the
+    previous empty-input behaviour until the query is re-run. Grouped
+    aggregates are unaffected either way.
+
 - version: "1.11.0"
   date: 2026-07-17
   tag: "v1.11.0"
