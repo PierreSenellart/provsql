@@ -9,7 +9,19 @@ remove_provenance
 
 (1 row)
 or_region_true|or_region_false
-1.0000|0.2500
+0.7500|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+shape|pr
+unsatisfiable aggregate OR regular|0.7500
+(1 row)
+remove_provenance
+
+(1 row)
+shape|pr
+aggregate OR aggregate|0.2500
 (1 row)
 remove_provenance
 

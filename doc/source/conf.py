@@ -105,6 +105,8 @@ html_show_sourcelink = False
 # ---------------------------------------------------------------------------
 
 _SQL_FUNC_MAP = {
+    'provenance_cmp_times':     '/doxygen-sql/html/group__semiring__operations.html#ga88e56ed8fbdd4e7e506e388ba8906924',
+    'cmp_surviving_factors':    '/doxygen-sql/html/group__semiring__operations.html#ga14e2ecafb7ca244ed577a2df01b3b6be',
     'agg_collapsed_moment':     '/doxygen-sql/html/group__probability.html#ga6ef6a60b91000efb00b326c7f11cd750',
     'agg_collapsed_moments':    '/doxygen-sql/html/group__probability.html#ga504c8402babaae2096dcf17b90b64fbf',
     'add_provenance':           '/doxygen-sql/html/group__table__management.html#ga00f0d0b04b2b693c974e72aaf095cb3b',
@@ -287,6 +289,8 @@ _C_FUNC_MAP = {
     'aggCollapsedRawMoment':     '/doxygen-c/html/namespaceprovsql.html#a5018112ae0f2df74e7c42cc3b93e6702',
     'collapsedConditionalMoment':'/doxygen-c/html/namespaceprovsql.html#ab95fd12f72331ec04164fe8a9c5869a6',
     # provsql.c – planner hook and query rewriting
+    'having_entails_group_existence':
+                                 '/doxygen-c/html/provsql_8c.html#a57440d8b9adc042575734ad9b506eaa2',
     '_PG_init':                  '/doxygen-c/html/provsql_8c.html#a29e1a0b0688ac19dbde93824e4ae1a59',
     '_PG_fini':                  '/doxygen-c/html/provsql_8c.html#a7192e52d759211f57ad66638304ea072',
     'provsql_planner':           '/doxygen-c/html/provsql_8c.html#aa8f430f67b70c269c4ba8cc5225b8a84',

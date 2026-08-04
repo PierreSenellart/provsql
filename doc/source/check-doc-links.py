@@ -231,10 +231,6 @@ INTERNAL_FUNCTIONS = {
     'avg_rv_ffunc', 'sum_rv_sfunc', 'sum_rv_ffunc', 'product_rv_ffunc',
     # Internal C entry point behind the random_variable aggregates above.
     'rv_aggregate_semimod',
-    # Internal machinery of the aggregate-comparison supersede: the planner
-    # emits provenance_cmp_times, which calls the read-only analyser
-    # cmp_surviving_factors.  Neither is user API.
-    'provenance_cmp_times', 'cmp_surviving_factors',
     # Doxygen artefacts (not actual functions): 'org'/'sql'/'html' from
     # URLs, 'c' from `@c provsql.c` / `@c src/provsql.c` filename references
     # in the recursive-CTE lowering doc comments.

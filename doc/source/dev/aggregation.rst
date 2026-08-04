@@ -165,8 +165,8 @@ to that outer level's ``havingQual``, where the row token is the
 product of every input at that level, and only the δ inside it is
 superseded.  Those tokens are opaque UUIDs at planning time, so
 :cfunc:`make_provenance_expression` defers the decision to
-``provenance_cmp_times``, which walks them at evaluation
-time through ``cmp_surviving_factors``:
+:sqlfunc:`provenance_cmp_times`, which walks them at evaluation
+time through :sqlfunc:`cmp_surviving_factors`:
 
 * a bare δ over the compared group disappears -- the plain
   γ-then-σ shape, whose annotation is then the ``cmp`` alone, the
@@ -183,6 +183,18 @@ A δ counts as the compared group's when its ⊕ child's operands are
 exactly the provenance children of that aggregate's ``semimod``
 wires, i.e. when it collapses the multiplicity of the very group
 the comparison ranges over.
+
+The supersede is licensed only when the predicate really does
+entail that the group exists.  An aggregate-free leaf does not: it
+lowers to a deterministic ``regular_indicator``, ``𝟙`` or ``𝟘`` by
+the value of a grouping column, which says nothing about whether
+any row is present.  ``HAVING count(*) >= 4 OR g = 1`` would
+otherwise report certainty for a group that is empty half the
+time, since ``𝟘 ⊕ 𝟙 = 𝟙``.  :cfunc:`having_entails_group_existence`
+decides this the way the semiring composes: under ⊗ one entailing
+factor suffices, under ⊕ every disjunct must entail.  Where it
+does not hold the δ stays -- wrapped around the group's ⊕ in the
+fused shape, left in place in the row tokens otherwise.
 
 
 The ``agg_token`` Type

@@ -3151,6 +3151,9 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
 /* Forward declaration: defined alongside the other tree walkers
  * further down in the file. */
 static bool needs_having_lift(Node *havingQual, const constants_t *constants);
+static bool having_entails_group_existence(Expr *expr,
+                                          const constants_t *constants,
+                                          bool negated);
 static Node *normalize_bool_agg_having(Node *n);
 static Node *peel_agg_casts(Node *n);
 static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants);
@@ -5300,38 +5303,83 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
          * entails the group existence that delta stands for, and conjoining
          * both would count that factor twice in a non-idempotent semiring.
          *
-         * What it supersedes is precisely that delta.  When this level owns
-         * the aggregation, @c result *is* the group's plus (built just above,
-         * with no delta wrapped around it), so the comparison stands alone.
-         * When the comparison instead arrived from a WHERE on a subquery's
-         * aggregate -- migrate_probabilistic_quals routes such a qual to this
-         * level's havingQual -- @c result is the product of the input tokens
-         * here, and only the delta inside it is superseded.  Those tokens are
-         * opaque UUIDs until the query runs, so the decision is deferred to
-         * provenance_cmp_times, which walks them: a bare delta over the
-         * compared group disappears, a product keeps its other factors (a join
-         * partner's annotation among them), and anything else -- an earlier
-         * comparison on the same group, an input -- is kept and multiplied. */
+         * That is only licensed when the predicate really does entail
+         * existence.  A disjunct with no aggregate in it does not -- it lowers
+         * to a deterministic regular_indicator, whose 1 would otherwise claim
+         * the group exists in every world -- so there the delta stays.
+         *
+         * What the supersede removes is precisely that delta.  When this level
+         * owns the aggregation, @c result *is* the group's plus (built just
+         * above, with no delta wrapped around it), so the comparison stands
+         * alone.  When the comparison instead arrived from a WHERE on a
+         * subquery's aggregate -- migrate_probabilistic_quals routes such a
+         * qual to this level's havingQual -- @c result is the product of the
+         * input tokens here, and only the delta inside it is superseded.
+         * Those tokens are opaque UUIDs until the query runs, so the decision
+         * is deferred to provenance_cmp_times, which walks them: a bare delta
+         * over the compared group disappears, a product keeps its other
+         * factors (a join partner's annotation among them), and anything else
+         * -- an earlier comparison on the same group, an input -- is kept and
+         * multiplied. */
+        bool entails =
+          having_entails_group_existence((Expr *) q->havingQual, constants,
+                                         false);
+        Expr *group_plus = result;      /* the group's plus, still delta-free */
         Expr *cmp = (Expr *) having_Expr_to_provenance_cmp(
           (Expr *) q->havingQual, constants, false);
 
         if (!aggregation && !group_by_rewrite && op == SR_TIMES &&
-            prov_atts != NIL &&
-            OidIsValid(constants->OID_FUNCTION_PROVENANCE_CMP_TIMES)) {
+            prov_atts != NIL) {
+          /* The row tokens carry the delta; supersede it only when licensed,
+           * otherwise multiply everything as it stands. */
           FuncExpr *combine = makeNode(FuncExpr);
           ArrayExpr *array = makeNode(ArrayExpr);
+          bool supersede =
+            entails && OidIsValid(constants->OID_FUNCTION_PROVENANCE_CMP_TIMES);
 
           array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
           array->element_typeid = constants->OID_TYPE_UUID;
           array->elements = list_copy(prov_atts);
           array->location = -1;
 
-          combine->funcid = constants->OID_FUNCTION_PROVENANCE_CMP_TIMES;
           combine->funcresulttype = constants->OID_TYPE_UUID;
-          combine->args = list_make2(cmp, array);
           combine->location = -1;
+          if (supersede) {
+            combine->funcid = constants->OID_FUNCTION_PROVENANCE_CMP_TIMES;
+            combine->args = list_make2(cmp, array);
+          } else {
+            array->elements = lappend(array->elements, cmp);
+            combine->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+            combine->funcvariadic = true;
+            combine->args = list_make1(array);
+          }
 
           result = (Expr *) combine;
+        } else if (!entails && aggregation) {
+          /* Fused, and the predicate does not entail existence: wrap the
+           * group's plus in the delta the supersede would have dropped, and
+           * multiply the predicate into it. */
+          FuncExpr *deltaExpr = makeNode(FuncExpr);
+          FuncExpr *times = makeNode(FuncExpr);
+          ArrayExpr *array = makeNode(ArrayExpr);
+
+          deltaExpr->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+          deltaExpr->args = list_make1(group_plus);
+          deltaExpr->funcresulttype = constants->OID_TYPE_UUID;
+          deltaExpr->location = -1;
+
+          array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+          array->element_typeid = constants->OID_TYPE_UUID;
+          array->elements = list_make2(deltaExpr, cmp);
+          array->location = -1;
+
+          times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+          times->funcresulttype = constants->OID_TYPE_UUID;
+          times->funcvariadic = true;
+          times->args = list_make1(array);
+          times->location = -1;
+
+          result = (Expr *) times;
         } else {
           result = cmp;
         }
@@ -7837,6 +7885,68 @@ static bool having_lift_walker(Node *node, void *data) {
 static bool needs_having_lift(Node *havingQual, const constants_t *constants) {
   return expression_tree_walker(havingQual, having_lift_walker,
                                 (void *) constants);
+}
+
+/**
+ * @brief Whether a lifted HAVING predicate already entails that the group
+ *        exists.
+ *
+ * A comparison on an aggregate does: the possible-world enumeration behind its
+ * @c gate_cmp ranges over the non-empty worlds of the group's own tokens, so
+ * the gate is @c 0 wherever the group is empty.  That is what lets the lift
+ * supersede the group's δ instead of multiplying with it.
+ *
+ * An aggregate-free atom does not.  Its predicate-provenance is the
+ * deterministic indicator @c regular_indicator, which is @c 1 or @c 0 by the
+ * value of a grouping column and says nothing about whether any row is
+ * present.  Superseding the δ in front of one would claim the group exists in
+ * every world -- so @c HAVING @c count(*) @c >= @c 4 @c OR @c g @c = @c 1
+ * would report certainty for a group that is empty half the time.
+ *
+ * The two combine as the semiring does: under ⊗ one entailing factor makes the
+ * product entail (the other factor cannot resurrect an empty group), while
+ * under ⊕ every disjunct must entail, since any one of them alone can make the
+ * sum non-zero.  @p negated tracks De Morgan, matching
+ * @c having_BoolExpr_to_provenance: the complement of an aggregate comparison
+ * is another comparison over the same non-empty worlds, so negation preserves
+ * entailment at the atoms.
+ */
+static bool having_entails_group_existence(Expr *expr,
+                                           const constants_t *constants,
+                                           bool negated)
+{
+  if (expr == NULL)
+    return false;
+
+  /* An aggregate-free atom becomes a regular_indicator: no existence. */
+  if (!expr_contains_agg((Node *) expr, constants))
+    return false;
+
+  if (IsA(expr, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *) expr;
+    ListCell *lc;
+    bool conjunction;
+
+    if (be->boolop == NOT_EXPR)
+      return having_entails_group_existence((Expr *) linitial(be->args),
+                                            constants, !negated);
+
+    conjunction = (be->boolop == AND_EXPR) ? !negated : negated;
+
+    foreach (lc, be->args) {
+      bool child = having_entails_group_existence((Expr *) lfirst(lc),
+                                                  constants, negated);
+      if (conjunction && child)
+        return true;            /* ⊗: one entailing factor is enough */
+      if (!conjunction && !child)
+        return false;           /* ⊕: every disjunct must entail */
+    }
+    return !conjunction;
+  }
+
+  /* An atom that survived the aggregate test above is a comparison or an
+   * IS [NOT] NULL on an aggregate; both are 0 on the empty group. */
+  return true;
 }
 
 /* bool_or / bool_and / its every() alias -- the boolean aggregates that the
