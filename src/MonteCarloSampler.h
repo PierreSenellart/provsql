@@ -139,13 +139,19 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root);
  * matching @c Aggregator, reproducing SQL semantics exactly: the value gate is
  * the row's contribution (the summed term for @c SUM; the 0/1 indicator for
  * @c COUNT, 0 for a NULL row so @c count(x) does not count NULLs; the compared
- * value for @c AVG / @c MIN / @c MAX), so NULL rows are handled and an empty
- * group finalises to the value the exact evaluator uses (0 for @c COUNT, and
- * NaN -> comparison false for the others, SQL's NULL), and @c gate_arith over
- * them is covered too.  In practice only @c SUM / @c AVG / @c MIN / @c MAX ever reach here:
- * @c COUNT's value-support is small (0/1 per row) so it is always resolved
- * exactly and never bails -- but it is sample-faithful as well, so it is not
- * excluded.
+ * value for @c AVG / @c MIN / @c MAX), so NULL rows are handled and a
+ * contributor-free iteration finalises to the value the exact evaluator uses
+ * (0 for a @e scalar @c COUNT, whose single row exists over empty input;
+ * NaN -> comparison false for every other case, SQL's NULL or a grouped
+ * aggregation's absent row), and @c gate_arith over them is covered too.
+ *
+ * @c COUNT reaches this arm only as a scalar aggregation.  Its value-support
+ * is small (0/1 per row), so a grouped @c COUNT comparison is resolved before
+ * any sampler runs -- by @c RangeCheck when the bounds decide it, otherwise by
+ * @c provsql_having's world enumeration -- and both of those already exclude
+ * the empty world.  The grouped arm below is nonetheless written to decline
+ * such a world rather than report 0, so the aggregate stays correct if the
+ * routing ever sends one here.
  */
 bool circuitHasUnresolvedSampleableAgg(const GenericCircuit &gc, gate_t root);
 

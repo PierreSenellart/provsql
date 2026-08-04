@@ -414,11 +414,9 @@ double Sampler::evalScalar(gate_t g)
       // for a NULL one (count(x) does not count NULLs), so the sum of the
       // kept values is exactly count(*) / count(x) -- faithful with no
       // nullability check.  SUM / AVG / MIN / MAX consume the value via
-      // evalScalar directly.  Empty groups finalise to NONE; SUM / COUNT
-      // surface 0 (the additive identity, the ProvSQL empty-group
-      // convention) and AVG / MIN / MAX surface NaN, which compares false
-      // under IEEE on any subsequent gate_cmp -- the SQL convention for
-      // HAVING on an empty group.
+      // evalScalar directly.  Empty groups finalise to NONE; what that
+      // means depends on the aggregate and on whether the aggregation is
+      // scalar or grouped -- see the NONE arm below.
       AggregationOperator op =
         getAggregationOperator(gc_.getInfos(g).first);
       std::unique_ptr<Aggregator> agg =
@@ -449,19 +447,34 @@ double Sampler::evalScalar(gate_t g)
           result = std::get<double>(r.v);
           break;
         case ValueType::NONE:
-          // No contributor survived this iteration -- either the group is
-          // empty in this world, or every contributed value was NULL.  SQL
-          // returns 0 for COUNT and NULL for every other aggregate, so only
-          // COUNT surfaces a value here; SUM / AVG / MIN / MAX surface NaN,
-          // which compares false under IEEE on any enclosing gate_cmp (the
-          // SQL truth value of a comparison against NULL) and is skipped as
+          // No contributor survived this iteration -- either no row of the
+          // group is present in this world, or every contributed value was
+          // NULL.  SUM / AVG / MIN / MAX are then SQL NULL, so they surface
+          // NaN, which compares false under IEEE on any enclosing gate_cmp
+          // (the truth value of a comparison against NULL) and is skipped as
           // a missing observation by the moment averagers in
           // Expectation::mc_raw_moment / mc_central_moment, making those
           // estimators conditional on the worlds where the aggregate is
           // defined.
-          result = (op == AggregationOperator::COUNT)
-                   ? 0.0
-                   : std::numeric_limits<double>::quiet_NaN();
+          //
+          // COUNT has no NULL to report -- an empty set genuinely counts 0 --
+          // but 0 is the right answer only where a row exists to carry it.
+          // A scalar aggregation always yields its single row, empty input
+          // included, so 0 it is.  For a grouped aggregation an empty group
+          // is no row at all: the possible-world semantics excludes that
+          // world (having_semantics.hpp enumerates from world 1, and
+          // RangeCheck rewrites a trivially-true count comparison to the
+          // group-existence gate rather than to gate_one).  Reporting 0
+          // there would let a true-on-zero predicate such as
+          // `count(*) <= k` hold in a world that contributes no row,
+          // inflating the estimate by the probability that the group is
+          // empty; NaN keeps the enclosing comparison false, which is how
+          // this sampler declines a world.
+          result =
+            (op == AggregationOperator::COUNT &&
+             (gc_.getInfos(g).second & PROVSQL_AGG_SCALAR_FLAG) != 0)
+            ? 0.0
+            : std::numeric_limits<double>::quiet_NaN();
           break;
         default:
           throw CircuitException(
