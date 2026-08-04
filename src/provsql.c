@@ -5111,54 +5111,6 @@ static Expr *combine_safe_routes(const constants_t *constants,
   return (Expr *) ce;
 }
 
-/** @brief Context for @c collect_agg_token_varnos_walker. */
-typedef struct {
-  const constants_t *constants;
-  Bitmapset *varnos;
-} agg_token_varno_context;
-
-/**
- * @brief Walker collecting the @c varno of every @c agg_token @c Var in an
- *        expression, i.e. the RTEs whose aggregate result is being compared.
- *
- * Sub-@c Query nodes are not descended into: they address a different
- * @c rtable, so their varnos are meaningless to the caller.
- */
-static bool collect_agg_token_varnos_walker(Node *node, void *data) {
-  agg_token_varno_context *ctx = (agg_token_varno_context *) data;
-
-  if (node == NULL)
-    return false;
-
-  if (IsA(node, Var)) {
-    Var *v = (Var *) node;
-    if (v->varlevelsup == 0 &&
-        v->vartype == ctx->constants->OID_TYPE_AGG_TOKEN)
-      ctx->varnos = bms_add_member(ctx->varnos, v->varno);
-    return false;
-  }
-
-  if (IsA(node, Query))
-    return false;
-
-  return expression_tree_walker(node, collect_agg_token_varnos_walker, data);
-}
-
-/**
- * @brief The RTEs of @p q whose @c agg_token result @p qual compares.
- *
- * @return A @c Bitmapset of varnos, @c NULL when the qual compares no
- *         @c agg_token @c Var of this query level.
- */
-static Bitmapset *compared_agg_token_varnos(const constants_t *constants,
-                                            Node *qual) {
-  agg_token_varno_context ctx;
-  ctx.constants = constants;
-  ctx.varnos = NULL;
-  collect_agg_token_varnos_walker(qual, &ctx);
-  return ctx.varnos;
-}
-
 /**
  * @brief Build the combined provenance expression to be added to the SELECT list.
  *
@@ -5342,66 +5294,46 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
       }
 
       if (lift_having) {
-        /* The comparison's provenance REPLACES the compared group's
-         * annotation rather than multiplying into it: the cmp gate's
-         * possible-world enumeration ranges over the non-empty worlds of the
-         * very same per-row tokens, so it already entails "the group exists"
-         * that delta(+ tokens) stands for.  Multiplying both in would count
-         * the group-existence factor twice in a non-idempotent semiring.
+        /* A lifted comparison supersedes the compared group's delta rather
+         * than multiplying with it: the cmp gate's enumeration ranges over the
+         * non-empty worlds of the very same per-row tokens, so it already
+         * entails the group existence that delta stands for, and conjoining
+         * both would count that factor twice in a non-idempotent semiring.
          *
-         * Which annotation it replaces is the delicate part.  When this query
-         * level owns the aggregation, that annotation is the whole of
-         * @c result (the group's plus, built just above), so the replacement
-         * is total.  When the comparison instead arrived here from a WHERE on
-         * a subquery's aggregate -- migrate_probabilistic_quals routes such a
-         * qual to this level's havingQual -- @c result is the product of every
-         * input token at this level, of which only the compared subquery's own
-         * token is the group annotation being superseded.  Overwriting the
-         * product would silently drop the other inputs: a join partner's
-         * annotation would vanish from the circuit entirely.  So drop just the
-         * compared subqueries' tokens and multiply the survivors with the cmp
-         * gate. */
-        Bitmapset *compared = NULL;
+         * What it supersedes is precisely that delta.  When this level owns
+         * the aggregation, @c result *is* the group's plus (built just above,
+         * with no delta wrapped around it), so the comparison stands alone.
+         * When the comparison instead arrived from a WHERE on a subquery's
+         * aggregate -- migrate_probabilistic_quals routes such a qual to this
+         * level's havingQual -- @c result is the product of the input tokens
+         * here, and only the delta inside it is superseded.  Those tokens are
+         * opaque UUIDs until the query runs, so the decision is deferred to
+         * provenance_cmp_times, which walks them: a bare delta over the
+         * compared group disappears, a product keeps its other factors (a join
+         * partner's annotation among them), and anything else -- an earlier
+         * comparison on the same group, an input -- is kept and multiplied. */
+        Expr *cmp = (Expr *) having_Expr_to_provenance_cmp(
+          (Expr *) q->havingQual, constants, false);
 
-        if (!aggregation && !group_by_rewrite && op == SR_TIMES)
-          compared = compared_agg_token_varnos(constants,
-                                               (Node *) q->havingQual);
+        if (!aggregation && !group_by_rewrite && op == SR_TIMES &&
+            prov_atts != NIL &&
+            OidIsValid(constants->OID_FUNCTION_PROVENANCE_CMP_TIMES)) {
+          FuncExpr *combine = makeNode(FuncExpr);
+          ArrayExpr *array = makeNode(ArrayExpr);
 
-        if (compared != NULL) {
-          List *kept = NIL;
-          ListCell *lc_p;
+          array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+          array->element_typeid = constants->OID_TYPE_UUID;
+          array->elements = list_copy(prov_atts);
+          array->location = -1;
 
-          foreach (lc_p, prov_atts) {
-            Node *att = (Node *) lfirst(lc_p);
-            if (!IsA(att, Var) ||
-                !bms_is_member(((Var *) att)->varno, compared))
-              kept = lappend(kept, att);
-          }
+          combine->funcid = constants->OID_FUNCTION_PROVENANCE_CMP_TIMES;
+          combine->funcresulttype = constants->OID_TYPE_UUID;
+          combine->args = list_make2(cmp, array);
+          combine->location = -1;
 
-          result = (Expr *) having_Expr_to_provenance_cmp(
-            (Expr *) q->havingQual, constants, false);
-
-          if (kept != NIL) {
-            FuncExpr *times = makeNode(FuncExpr);
-            ArrayExpr *array = makeNode(ArrayExpr);
-
-            array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-            array->element_typeid = constants->OID_TYPE_UUID;
-            array->elements = lappend(kept, result);
-            array->location = -1;
-
-            times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-            times->funcresulttype = constants->OID_TYPE_UUID;
-            times->funcvariadic = true;
-            times->args = list_make1(array);
-            times->location = -1;
-
-            result = (Expr *) times;
-          }
-
-          bms_free(compared);
+          result = (Expr *) combine;
         } else {
-          result = (Expr*) having_Expr_to_provenance_cmp((Expr*)q->havingQual, constants, false);
+          result = cmp;
         }
 
         q->havingQual = NULL;

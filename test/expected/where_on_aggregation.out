@@ -93,3 +93,32 @@ remove_provenance
 shape|p
 sum(g1) > sum(g2)|0.62500
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p
+delta mixed with a join partner|1|0.1500
+delta mixed with a join partner|2|0.0750
+(2 rows)
+remove_provenance
+
+(1 row)
+shape|g|p
+comparison over a comparison|1|0.3750
+comparison over a comparison|2|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|identical
+fused token = subquery token|t
+(1 row)

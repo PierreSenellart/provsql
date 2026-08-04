@@ -189,3 +189,64 @@ SELECT 'sum(g1) > sum(g2)' AS shape, p FROM woa3_sum;
 DROP TABLE woa3_sum;
 
 DROP TABLE woa3_r;
+
+-- What a lifted comparison supersedes is the compared group's delta, not the
+-- whole row annotation it happens to sit in.  Two shapes make the difference
+-- visible: the annotation may mix that delta with other factors, and it may
+-- not contain a delta at all.
+CREATE TABLE woa4_r(g int, v int);
+INSERT INTO woa4_r VALUES (1,10),(1,20),(1,30),(2,5),(2,7);
+CREATE TABLE woa4_s(g int, w int);
+INSERT INTO woa4_s VALUES (1,100),(2,200),(3,300);
+SELECT add_provenance('woa4_r');
+SELECT add_provenance('woa4_s');
+DO $$ BEGIN
+  PERFORM set_prob(provsql, 0.5) FROM woa4_r;
+  PERFORM set_prob(provsql, 0.3) FROM woa4_s;
+END $$;
+
+-- The aggregated relation reaches the comparison's level through a CTE whose
+-- row token already combines the group's delta with the join partner.  Only
+-- the delta is superseded, so the partner survives: 0.5*0.3 and 0.25*0.3.
+CREATE TABLE woa4_mixed AS
+  WITH j AS MATERIALIZED (
+    SELECT sub.g AS g, c, w
+    FROM (SELECT g, count(*) AS c FROM woa4_r GROUP BY g) sub
+    JOIN woa4_s ON sub.g = woa4_s.g)
+  SELECT g, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM j WHERE c >= 2;
+SELECT remove_provenance('woa4_mixed');
+SELECT 'delta mixed with a join partner' AS shape, g, p FROM woa4_mixed ORDER BY g;
+DROP TABLE woa4_mixed;
+
+-- A second comparison on the same group: the row token it sees is the first
+-- comparison's cmp gate, which the new one does not subsume at all.  Both are
+-- kept, so g=1 is P(c = 2) = 3/8 rather than P(c <= 2) = 7/8, and g=2 is
+-- P(c = 2) = 1/4.
+CREATE TABLE woa4_seq AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT g, c FROM (SELECT g, count(*) AS c FROM woa4_r GROUP BY g) s1
+        WHERE c >= 2) s2
+  WHERE c <= 2;
+SELECT remove_provenance('woa4_seq');
+SELECT 'comparison over a comparison' AS shape, g, p FROM woa4_seq ORDER BY g;
+DROP TABLE woa4_seq;
+
+-- The supersede is exact where it applies: with nothing but the delta to
+-- shed, the annotation is the comparison alone, whichever way the query is
+-- written.  Identical tokens, not merely identical probabilities.
+CREATE TABLE woa4_fused AS
+  SELECT g, provenance() AS tok FROM woa4_r GROUP BY g HAVING count(*) >= 2;
+SELECT remove_provenance('woa4_fused');
+CREATE TABLE woa4_sub AS
+  SELECT g, provenance() AS tok
+  FROM (SELECT g, count(*) AS c FROM woa4_r GROUP BY g) x WHERE c >= 2;
+SELECT remove_provenance('woa4_sub');
+SELECT 'fused token = subquery token' AS shape,
+       bool_and(f.tok = u.tok) AS identical
+  FROM woa4_fused f JOIN woa4_sub u ON f.g = u.g;
+DROP TABLE woa4_fused;
+DROP TABLE woa4_sub;
+
+DROP TABLE woa4_r;
+DROP TABLE woa4_s;

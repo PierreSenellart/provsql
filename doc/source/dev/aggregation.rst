@@ -157,16 +157,32 @@ ranges over the non-empty worlds of the same per-row tokens, so it
 already entails the group's existence, and conjoining both would
 count that factor twice in a non-idempotent semiring.
 
-What the ``cmp`` supersedes is the *compared group's* annotation,
-not the whole row token.  The distinction matters when the
+What the ``cmp`` supersedes is the compared group's δ, not the
+whole row token it sits in.  The distinction matters when the
 comparison was written in an outer ``WHERE`` over a subquery's
 aggregate: :cfunc:`migrate_probabilistic_quals` routes such a qual
 to that outer level's ``havingQual``, where the row token is the
-product of every input at that level.  Only the compared
-subquery's own token is the group annotation being superseded, so
-:cfunc:`make_provenance_expression` drops just that one and
-multiplies the survivors -- a join partner's annotation among them
--- with the ``cmp`` gate.
+product of every input at that level, and only the δ inside it is
+superseded.  Those tokens are opaque UUIDs at planning time, so
+:cfunc:`make_provenance_expression` defers the decision to
+``provenance_cmp_times``, which walks them at evaluation
+time through ``cmp_surviving_factors``:
+
+* a bare δ over the compared group disappears -- the plain
+  γ-then-σ shape, whose annotation is then the ``cmp`` alone, the
+  same gate the fused ``HAVING`` builds;
+* a ``times`` keeps its other factors, so a join partner's
+  annotation survives even when the aggregation and the join reach
+  this level bundled inside one view or CTE token;
+* anything else is kept whole and multiplied -- in particular an
+  earlier comparison's ``cmp`` on the same group, which a second
+  comparison does not subsume, so σ∘σ yields the product of both
+  comparisons rather than the later one alone.
+
+A δ counts as the compared group's when its ⊕ child's operands are
+exactly the provenance children of that aggregate's ``semimod``
+wires, i.e. when it collapses the multiplicity of the very group
+the comparison ranges over.
 
 
 The ``agg_token`` Type

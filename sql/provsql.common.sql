@@ -1568,6 +1568,42 @@ $$ LANGUAGE plpgsql
   PARALLEL SAFE;
 
 /**
+ * @brief The factors of a row annotation an aggregate comparison does not
+ *        subsume.
+ *
+ * A lifted comparison entails the existence of the group it ranges over, so it
+ * supersedes that group's @c gate_delta instead of multiplying with it.  This
+ * reports which factors of @p tokens survive that supersede: a bare δ over the
+ * compared group disappears, a @c times keeps its other factors, and anything
+ * else -- an earlier comparison on the same group, an input -- is kept whole.
+ */
+CREATE FUNCTION cmp_surviving_factors(tokens uuid[], cmp uuid)
+  RETURNS uuid[] AS
+  'provsql', 'cmp_surviving_factors' LANGUAGE C PARALLEL SAFE STABLE;
+
+/**
+ * @brief Combine a lifted aggregate comparison with the row annotation it
+ *        supersedes only part of.
+ *
+ * @param cmp     Gate of the lifted comparison.
+ * @param tokens  Row-annotation factors at the level owning the comparison.
+ * @return  @c cmp multiplied with whatever of @p tokens it does not subsume.
+ */
+CREATE OR REPLACE FUNCTION provenance_cmp_times(cmp uuid, tokens uuid[])
+  RETURNS UUID AS
+$$
+DECLARE
+  kept uuid[];
+BEGIN
+  kept := provsql.cmp_surviving_factors(tokens, cmp);
+  IF kept IS NULL OR array_length(kept, 1) IS NULL THEN
+    RETURN cmp;
+  END IF;
+  RETURN provsql.provenance_times(VARIADIC kept || cmp);
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+
+/**
  * @brief Create an arithmetic gate over scalar-valued provenance children
  *
  * Builds a deterministic @c gate_arith from an operator tag and an

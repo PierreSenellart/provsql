@@ -631,6 +631,10 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   /* cond(uuid,uuid) / given(uuid) -- the conditioning operator and its
    * whole-tuple output marker.  Optional: InvalidOid on a schema predating
    * the conditioning feature disables the given() rewrite. */
+  /* Optional: absent from extension versions predating the structural
+   * supersede, whose constants must still initialise. */
+  constants.OID_FUNCTION_PROVENANCE_CMP_TIMES =
+    get_provsql_func_oid("provenance_cmp_times");
   constants.OID_FUNCTION_COND  = get_provsql_func_oid("cond");
   /* given is overloaded: given(uuid) is the evidence carrier / whole-tuple
    * output marker; given(boolean) is the predicate placeholder the planner

@@ -177,6 +177,7 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE; ///< OID of the provenance FUNCTION
   Oid GATE_TYPE_TO_OID[nb_gate_types]; ///< Array of the OID of each provenance_gate ENUM value
   Oid OID_FUNCTION_PROVENANCE_DELTA; ///< OID of the provenance_delta FUNCTION
+  Oid OID_FUNCTION_PROVENANCE_CMP_TIMES; ///< OID of the provenance_cmp_times FUNCTION
   Oid OID_FUNCTION_PROVENANCE_AGGREGATE; ///< OID of the provenance_aggregate FUNCTION
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD; ///< OID of the provenance_semimod FUNCTION
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
