@@ -14,3 +14,36 @@ city|formula|counting
 New York|John ⊗ Paul|1
 Paris|(Dave ⊗ (𝟙 ⊖ (Magdalen ⊕ Nancy))) ⊕ (Magdalen ⊗ (𝟙 ⊖ (Dave ⊕ Nancy))) ⊕ (Nancy ⊗ (𝟙 ⊖ (Dave ⊕ Magdalen))) ⊕ (Dave ⊗ Magdalen ⊗ (𝟙 ⊖ Nancy)) ⊕ (Dave ⊗ Nancy ⊗ (𝟙 ⊖ Magdalen)) ⊕ (Magdalen ⊗ Nancy ⊗ (𝟙 ⊖ Dave)) ⊕ (Dave ⊗ Magdalen ⊗ Nancy)|1
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|p
+no comparison|1|0.2625
+no comparison|2|0.2250
+(2 rows)
+remove_provenance
+
+(1 row)
+shape|g|p
+comparison, no join|1|0.5000
+comparison, no join|2|0.2500
+(2 rows)
+remove_provenance
+
+(1 row)
+shape|g|p
+comparison above join|1|0.1500
+comparison above join|2|0.0750
+(2 rows)
+remove_provenance
+
+(1 row)
+shape|p
+two groups above join|0.0375
+(1 row)

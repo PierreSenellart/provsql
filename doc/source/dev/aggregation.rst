@@ -144,14 +144,29 @@ circuit (see :cfunc:`make_provenance_expression`).  Scalar
 aggregation (no ``GROUP BY``) gets ``gate_one`` instead: the
 single result row always exists, even over an empty input.  A
 ``HAVING`` predicate left for native PostgreSQL evaluation still
-gets the δ; only a *lifted* ``HAVING`` -- one referencing
-aggregate provenance -- replaces the row-level token altogether
-with ``provenance_cmp``: such a predicate constrains existence in
-a way that depends on the aggregate value, so the row-level token
-has to carry more information than a flat "exists", and the
-rewriter routes the result through ``cmp`` gates that
-:cfile:`having_semantics.hpp` evaluates ahead of the main
-traversal (see :ref:`semiring-optional-methods`).
+gets the δ; a *lifted* ``HAVING`` -- one referencing aggregate
+provenance -- instead supersedes it with ``provenance_cmp``: such
+a predicate constrains existence in a way that depends on the
+aggregate value, so the row-level token has to carry more
+information than a flat "exists", and the rewriter routes the
+result through ``cmp`` gates that :cfile:`having_semantics.hpp`
+evaluates ahead of the main traversal (see
+:ref:`semiring-optional-methods`).  The ``cmp`` gate subsumes the
+δ rather than multiplying with it: its possible-world enumeration
+ranges over the non-empty worlds of the same per-row tokens, so it
+already entails the group's existence, and conjoining both would
+count that factor twice in a non-idempotent semiring.
+
+What the ``cmp`` supersedes is the *compared group's* annotation,
+not the whole row token.  The distinction matters when the
+comparison was written in an outer ``WHERE`` over a subquery's
+aggregate: :cfunc:`migrate_probabilistic_quals` routes such a qual
+to that outer level's ``havingQual``, where the row token is the
+product of every input at that level.  Only the compared
+subquery's own token is the group annotation being superseded, so
+:cfunc:`make_provenance_expression` drops just that one and
+multiplies the survivors -- a join partner's annotation among them
+-- with the ``cmp`` gate.
 
 
 The ``agg_token`` Type
