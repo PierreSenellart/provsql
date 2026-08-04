@@ -150,3 +150,42 @@ DROP TABLE woa2_eq;
 DROP VIEW woa2_v2;
 DROP VIEW woa2_v1;
 DROP TABLE woa2_r;
+
+-- A comparison spanning two different groups enumerates the union of both
+-- groups' contributors jointly.  A world in which one group has no row
+-- present is a world in which that group's row does not exist, so it must
+-- not satisfy the comparison -- even though the other group is non-empty
+-- and the world is therefore not the empty one the enumeration already
+-- skips.  Getting this wrong inflates the answer by the probability that
+-- one side is empty.
+CREATE TABLE woa3_r(g int, v int);
+INSERT INTO woa3_r VALUES (1,10),(1,20),(1,30),(2,5),(2,7);
+SELECT add_provenance('woa3_r');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM woa3_r; END $$;
+
+-- count(g=1) > count(g=2), both groups non-empty.  With A ~ Bin(3,0.5) and
+-- B ~ Bin(2,0.5): P(B=1)*P(A>=2) + P(B=2)*P(A=3)
+--   = 0.5*0.5 + 0.25*0.125 = 0.28125.
+-- Counting the worlds where group 2 is empty would add 7/32 = 0.21875.
+CREATE TABLE woa3_cnt AS
+  SELECT round(probability_evaluate(provenance())::numeric, 5) AS p
+  FROM (SELECT g, count(*) AS c FROM woa3_r GROUP BY g) a,
+       (SELECT g, count(*) AS c FROM woa3_r GROUP BY g) b
+  WHERE a.g = 1 AND b.g = 2 AND a.c > b.c;
+SELECT remove_provenance('woa3_cnt');
+SELECT 'count(g1) > count(g2)' AS shape, p FROM woa3_cnt;
+DROP TABLE woa3_cnt;
+
+-- sum(g=1) > sum(g=2) over {10,20,30} and {5,7}: both non-empty is
+-- (7/8)*(3/4) = 0.65625, and the only non-empty pair that fails is
+-- {10} vs {5,7} (10 > 12 false), probability (1/8)*(1/4) = 0.03125.
+CREATE TABLE woa3_sum AS
+  SELECT round(probability_evaluate(provenance())::numeric, 5) AS p
+  FROM (SELECT g, sum(v) AS c FROM woa3_r GROUP BY g) a,
+       (SELECT g, sum(v) AS c FROM woa3_r GROUP BY g) b
+  WHERE a.g = 1 AND b.g = 2 AND a.c > b.c;
+SELECT remove_provenance('woa3_sum');
+SELECT 'sum(g1) > sum(g2)' AS shape, p FROM woa3_sum;
+DROP TABLE woa3_sum;
+
+DROP TABLE woa3_r;

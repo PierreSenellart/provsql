@@ -638,14 +638,24 @@ void provsql_having(
               else { mn = std::min(mn, m); mx = std::max(mx, m); }
             }
           is_int = ai.is_int;
-          // SQL semantics for an aggregate with no surviving contributor in
-          // this world: every aggregate but COUNT returns NULL, which makes
-          // the enclosing comparison NULL and hence false -- signalled by
-          // returning false here.  A row whose value is NULL never reaches
-          // contribs (the aggregation rewriting drops it), so cnt == 0 covers
-          // both "the group is empty in this world" and "the group is
-          // non-empty but every contributed value was NULL".  COUNT alone
-          // yields 0 over an empty set.
+          // An aggregate with no surviving contributor in this world declines
+          // the world (returning false), which the caller reads as "the
+          // comparison does not hold here".  Two situations produce cnt == 0
+          // and both want that answer: the group has no row present, so the
+          // group's row does not exist; or the group is non-empty but every
+          // contributed value was NULL, so the aggregate is SQL NULL and the
+          // comparison is NULL, hence false.  (A NULL-valued row never reaches
+          // contribs -- the aggregation rewriting drops it -- which is why the
+          // two are indistinguishable here, and why they need not be.)
+          //
+          // Note this covers count as well: the rewriting remaps COUNT(*) and
+          // COUNT(expr) to SUM over per-row 1-valued semimods (see
+          // replace_aggregations_by_provenance_aggregate), so a grouped count
+          // arrives as SUM and an empty group declines -- the right answer for
+          // a grouped aggregate, whose empty group is no row rather than a
+          // count of 0.  The COUNT arm below is consequently not reached from
+          // the classical path; it is kept for a gate that carries the
+          // operator directly, where 0 over an empty set is the count itself.
           switch (ai.kind) {
           case AggregationOperator::SUM:   if (cnt == 0) return false; out = acc; return true;
           case AggregationOperator::COUNT: out = acc; return true;  // values 1 or 0/1

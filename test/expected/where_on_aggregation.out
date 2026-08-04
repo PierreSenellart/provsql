@@ -78,3 +78,18 @@ nesting|g|p
 nested view, c = 3|1|0.1250
 nested view, c = 3|2|0.0000
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|p
+count(g1) > count(g2)|0.28125
+(1 row)
+remove_provenance
+
+(1 row)
+shape|p
+sum(g1) > sum(g2)|0.62500
+(1 row)
