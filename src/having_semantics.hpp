@@ -779,10 +779,19 @@ void provsql_having(
     return build_general(L, R, op);
   };
 
+  // Each comparison gate is resolved on its own: its possible-world
+  // enumeration reads the circuit and writes only its own mapping entry, so
+  // one gate the enumeration cannot handle -- an agg-vs-agg shape past the
+  // contributor cap, an unsupported aggregate -- says nothing about the
+  // others.  Skip it and carry on rather than abandoning the gates that
+  // follow: those are left for the semiring's own cmp() to deal with, which
+  // renders them (Formula) or raises, and a gate this loop could have
+  // resolved should not be demoted to that just because of its position in
+  // collect_sp_cmp_gates' traversal.
   for (gate_t cmp_gate : cmp_gates) {
     typename SemiringT::value_type pw;
     if (!pw_from_cmp_gate(cmp_gate, pw))
-      return;
+      continue;
 
     mapping[cmp_gate] = std::move(pw);
   }
