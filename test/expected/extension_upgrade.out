@@ -93,3 +93,22 @@ add_provenance
 case_display|case_expected
 110 (*)|73.3333
 (1 row)
+add_provenance
+
+(1 row)
+empty_sum_null|empty_product_null
+t|t
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|join_partner_kept
+1|0.1000
+2|0.0000
+(2 rows)

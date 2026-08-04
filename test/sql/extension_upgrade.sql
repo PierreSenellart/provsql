@@ -232,8 +232,39 @@ SET provsql.active = on;
 RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;
 
+-- 1.11.1: an empty aggregate group reports SQL NULL rather than an identity
+-- element, and a lifted comparison keeps the join partner's annotation
+-- instead of superseding the whole row token.  Both are deterministic.
+CREATE TABLE upgrade_empty(v int, keep boolean);
+INSERT INTO upgrade_empty VALUES (1, false), (2, false);
+SELECT add_provenance('upgrade_empty');
+SET provsql.active = off;   -- the empty group exercises the FFUNC alone
+SELECT sum(as_random(v)) IS NULL     AS empty_sum_null,
+       provsql.product(as_random(v)) IS NULL AS empty_product_null
+  FROM upgrade_empty WHERE keep;
+SET provsql.active = on;
+
+CREATE TABLE upgrade_sup_r(g int, v int);
+INSERT INTO upgrade_sup_r VALUES (1,10),(1,20),(2,5);
+CREATE TABLE upgrade_sup_s(g int, w int);
+INSERT INTO upgrade_sup_s VALUES (1,100),(2,200);
+SELECT add_provenance('upgrade_sup_r');
+SELECT add_provenance('upgrade_sup_s');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM upgrade_sup_r;
+  PERFORM set_prob(provenance(), 0.4) FROM upgrade_sup_s;
+END $$;
+CREATE TABLE upgrade_sup AS
+  SELECT x.g AS g, round(probability_evaluate(provenance())::numeric, 4) AS p
+    FROM (SELECT g, count(*) AS c FROM upgrade_sup_r GROUP BY g) x, upgrade_sup_s
+   WHERE x.g = upgrade_sup_s.g AND x.c >= 2;
+SELECT remove_provenance('upgrade_sup');
+-- g=1: P(both rows) * 0.4 = 0.25 * 0.4 = 0.1; g=2 cannot reach 2 rows.
+SELECT g, p AS join_partner_kept FROM upgrade_sup ORDER BY g;
+
 SET client_min_messages = WARNING;
-DROP TABLE upgrade_result, upgrade_smoke_map, upgrade_smoke,
+DROP TABLE upgrade_empty, upgrade_sup_r, upgrade_sup_s, upgrade_sup,
+           upgrade_result, upgrade_smoke_map, upgrade_smoke,
            upgrade_smoke_right, upgrade_safe_q, upgrade_kc,
            upgrade_cnt, upgrade_cnt_r, upgrade_cond,
            upgrade_maint, upgrade_maint_map,
