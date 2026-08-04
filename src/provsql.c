@@ -11785,6 +11785,13 @@ static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
     return check_boolexpr_on_aggregate((BoolExpr*) expr, constants);
   case T_OpExpr:
     return check_selection_on_aggregate((OpExpr*) expr, constants);
+  case T_NullTest:
+    /* A pushable IS [NOT] NULL never reaches here: it was moved into the
+     * subquery that owns the aggregate before provenance discovery (see
+     * push_agg_nulltest_into_subquery).  One that arrives is a shape the
+     * pushdown declined -- under an OR or a NOT, say -- so it is reported as
+     * unsupported rather than as an unrecognised node. */
+    return false;
   default:
     provsql_error("Unknown structure within Boolean expression");
   }
@@ -12439,6 +12446,207 @@ static bool retype_agg_var_walker(Node *node, retype_agg_var_ctx *ctx)
   }
 
   return expression_tree_walker(node, retype_agg_var_walker, (void *)ctx);
+}
+
+/** @brief Context for @c push_agg_nulltest_walker. */
+typedef struct {
+  Query *q;                     /* query whose WHERE is being scanned      */
+  const constants_t *constants;
+  bool pushed;                  /* at least one qual was moved down        */
+} agg_nulltest_ctx;
+
+/** @brief Walker for @c expr_contains_aggref. */
+static bool contains_aggref_walker(Node *node, void *found)
+{
+  if (node == NULL)
+    return false;
+  if (IsA(node, Aggref)) {
+    *(bool *) found = true;
+    return true;
+  }
+  if (IsA(node, Query))
+    return false;
+  return expression_tree_walker(node, contains_aggref_walker, found);
+}
+
+/**
+ * @brief Whether an expression contains a plain @c Aggref.
+ *
+ * @c expr_contains_agg recognises the shapes the rewriting has already
+ * produced (an @c agg_token @c Var, a @c provenance_aggregate call); this one
+ * runs before that, when the aggregate is still the parser's own node.
+ */
+static bool expr_contains_aggref(Node *node)
+{
+  bool found = false;
+  contains_aggref_walker(node, &found);
+  return found;
+}
+
+/**
+ * @brief The subquery target entry an @c IS @c [NOT] @c NULL is testing, if it
+ *        is an aggregate of a subquery in @p q.
+ *
+ * @return The subquery's @c TargetEntry for the tested column, or @c NULL when
+ *         @p nt is not of that shape.  Writes the owning subquery to
+ *         @p *sub_out on success.
+ */
+static TargetEntry *agg_nulltest_target(Query *q, NullTest *nt,
+                                        const constants_t *constants,
+                                        Query **sub_out)
+{
+  Node *arg = (Node *) nt->arg;
+  Var *v;
+  RangeTblEntry *rte;
+  TargetEntry *te;
+
+  /* Unwrap a single-argument cast, as the HAVING converter does. */
+  if (IsA(arg, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *) arg;
+    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+         fe->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(fe->args) == 1)
+      arg = (Node *) linitial(fe->args);
+  }
+
+  if (!IsA(arg, Var))
+    return NULL;
+  v = (Var *) arg;
+  if (v->varlevelsup != 0 || v->varno < 1 ||
+      v->varno > (Index) list_length(q->rtable))
+    return NULL;
+
+  /* Follow the column through however many subqueries merely forward it,
+   * down to the level that actually computes the aggregate. */
+  for (;;) {
+    Query *sub;
+
+    if (v->varlevelsup != 0 || v->varno < 1 ||
+        v->varno > (Index) list_length(q->rtable))
+      return NULL;
+    rte = (RangeTblEntry *) list_nth(q->rtable, v->varno - 1);
+    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+      return NULL;
+    sub = rte->subquery;
+    if (v->varattno < 1 || v->varattno > list_length(sub->targetList))
+      return NULL;
+
+    te = (TargetEntry *) list_nth(sub->targetList, v->varattno - 1);
+    if (te->resjunk)
+      return NULL;
+
+    if (IsA(te->expr, Var)) {          /* a pass-through level: descend */
+      q = sub;
+      v = (Var *) te->expr;
+      continue;
+    }
+
+    if (!sub->hasAggs || !expr_contains_aggref((Node *) te->expr))
+      return NULL;
+
+    *sub_out = sub;
+    return te;
+  }
+}
+
+/**
+ * @brief Move one @c IS @c [NOT] @c NULL conjunct into its subquery's HAVING.
+ *
+ * @return True when @p nt tested a subquery's aggregate and was moved.
+ */
+static bool push_one_agg_nulltest(NullTest *nt, agg_nulltest_ctx *ctx)
+{
+  Query *sub = NULL;
+  TargetEntry *te = agg_nulltest_target(ctx->q, nt, ctx->constants, &sub);
+  NullTest *down;
+
+  if (te == NULL)
+    return false;
+
+  down = (NullTest *) copyObject(nt);
+  down->arg = (Expr *) copyObject(te->expr);
+  sub->havingQual = add_to_havingQual(sub->havingQual, (Expr *) down);
+  ctx->pushed = true;
+  return true;
+}
+
+/**
+ * @brief Push @c IS @c [NOT] @c NULL on a subquery's aggregate down into that
+ *        subquery's HAVING.
+ *
+ * The HAVING lowering of @c IS @c [NOT] @c NULL is built from the aggregate's
+ * per-row (value, token) pairs, which live in the @c provenance_aggregate call
+ * itself -- so, unlike a comparison (lowered to a @c gate_cmp over the finished
+ * @c gate_agg, and therefore computable from the token alone), it can only be
+ * built in the query level that owns the aggregate.  Moving the predicate to
+ * that level is what lets @c WHERE @c c @c IS @c NULL over a grouped subquery
+ * mean what the fused @c HAVING @c sum(v) @c IS @c NULL means.  Filtering the
+ * subquery's rows is also the predicate's ordinary SQL reading, so the data
+ * part is unchanged.
+ *
+ * Runs before provenance discovery, so the subquery is rewritten with the
+ * HAVING already in place.
+ *
+ * @param q          Query to rewrite (modified in place).
+ * @param constants  Extension OID cache.
+ * @return           @p q when something moved, @c NULL when nothing matched.
+ */
+static Query *push_agg_nulltest_into_subquery(Query *q,
+                                              const constants_t *constants)
+{
+  agg_nulltest_ctx ctx;
+  Node *quals;
+
+  if (q->jointree == NULL || q->jointree->quals == NULL)
+    return NULL;
+
+  ctx.q = q;
+  ctx.constants = constants;
+  ctx.pushed = false;
+
+  quals = q->jointree->quals;
+
+  /* The whole WHERE is the predicate. */
+  if (IsA(quals, NullTest)) {
+    if (!push_one_agg_nulltest((NullTest *) quals, &ctx))
+      return NULL;
+    q->jointree->quals = NULL;
+    return q;
+  }
+
+  /* Top-level AND: move out the conjuncts that match, leave the rest.  Only a
+   * conjunction may be split -- under an OR or a NOT the predicate does not
+   * hold of the subquery's rows on its own. */
+  if (IsA(quals, BoolExpr) && ((BoolExpr *) quals)->boolop == AND_EXPR) {
+    BoolExpr *be = (BoolExpr *) quals;
+    ListCell *cell, *prev;
+
+    for (cell = list_head(be->args), prev = NULL; cell != NULL;) {
+      Node *conj = (Node *) lfirst(cell);
+
+      if (IsA(conj, NullTest) &&
+          push_one_agg_nulltest((NullTest *) conj, &ctx)) {
+        be->args = my_list_delete_cell(be->args, cell, prev);
+        cell = prev ? my_lnext(be->args, prev) : list_head(be->args);
+      } else {
+        prev = cell;
+        cell = my_lnext(be->args, cell);
+      }
+    }
+
+    if (!ctx.pushed)
+      return NULL;
+
+    /* Do not leave a degenerate AND behind. */
+    if (be->args == NIL)
+      q->jointree->quals = NULL;
+    else if (list_length(be->args) == 1)
+      q->jointree->quals = (Node *) linitial(be->args);
+
+    return q;
+  }
+
+  return NULL;
 }
 
 /**
@@ -14353,6 +14561,16 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (rewritten)
         return process_query(constants, rewritten, removed, wrap_root, top_level,
                              in_boolean_rewrite, inv_ctx);
+    }
+
+    /* An IS [NOT] NULL on a subquery's aggregate has to be evaluated in the
+     * level that owns the aggregate; move it there before that subquery is
+     * rewritten. */
+    {
+      Query *rewritten = push_agg_nulltest_into_subquery(q, constants);
+      if (rewritten)
+        return process_query(constants, rewritten, removed, wrap_root,
+                             top_level, in_boolean_rewrite, inv_ctx);
     }
 
     /* Rewrite any JOIN on an agg_token column before provenance

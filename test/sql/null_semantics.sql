@@ -224,6 +224,44 @@ SELECT remove_provenance('ns_hnn');
 SELECT * FROM ns_hnn ORDER BY a NULLS LAST;
 DROP TABLE ns_hnn;
 
+-- The same predicate written one level out, as a WHERE on the subquery's
+-- aggregate column, must mean the same thing.  Unlike a comparison -- lowered
+-- to a cmp gate over the finished aggregate, and so computable wherever the
+-- token reaches -- IS [NOT] NULL is built from the aggregate's per-row
+-- (value, token) pairs, which only exist in the level that owns the
+-- aggregate; the predicate is therefore moved down to that level.  The
+-- annotations have to come out identical to the fused form above.
+CREATE TABLE ns_hn_sub AS
+  SELECT a, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM (SELECT a, sum(b) AS s FROM ns_r GROUP BY a) x WHERE s IS NULL;
+SELECT remove_provenance('ns_hn_sub');
+SELECT 'subquery IS NULL' AS shape, * FROM ns_hn_sub ORDER BY a NULLS LAST;
+DROP TABLE ns_hn_sub;
+
+CREATE TABLE ns_hnn_sub AS
+  SELECT a, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM (SELECT a, sum(b) AS s FROM ns_r GROUP BY a) x WHERE s IS NOT NULL;
+SELECT remove_provenance('ns_hnn_sub');
+SELECT 'subquery IS NOT NULL' AS shape, * FROM ns_hnn_sub ORDER BY a NULLS LAST;
+DROP TABLE ns_hnn_sub;
+
+-- Conjoined with an ordinary qual, and through a level that only forwards the
+-- column: both still reach the aggregate's own level.
+CREATE TABLE ns_hn_and AS
+  SELECT a, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM (SELECT a, sum(b) AS s FROM ns_r GROUP BY a) x WHERE s IS NULL AND a IS NULL;
+SELECT remove_provenance('ns_hn_and');
+SELECT 'conjoined with a plain qual' AS shape, * FROM ns_hn_and ORDER BY a NULLS LAST;
+DROP TABLE ns_hn_and;
+
+CREATE TABLE ns_hn_nest AS
+  SELECT a, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM (SELECT * FROM (SELECT a, sum(b) AS s FROM ns_r GROUP BY a) i) o
+  WHERE s IS NULL;
+SELECT remove_provenance('ns_hn_nest');
+SELECT 'through a forwarding level' AS shape, * FROM ns_hn_nest ORDER BY a NULLS LAST;
+DROP TABLE ns_hn_nest;
+
 -- -------------------------------------------------------------------------
 -- 8. HAVING <agg> <op> <const> on groups whose aggregate can be NULL.
 --    A NULL aggregate (all-NULL group, or a world with no contributing
