@@ -205,16 +205,19 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.3) FROM woa4_s;
 END $$;
 
--- The aggregated relation reaches the comparison's level through a CTE whose
--- row token already combines the group's delta with the join partner.  Only
--- the delta is superseded, so the partner survives: 0.5*0.3 and 0.25*0.3.
+-- The aggregated relation reaches the comparison's level through a subquery
+-- whose row token already combines the group's delta with the join partner:
+-- the join sits one level below the comparison, so the outer level sees a
+-- single attribute carrying times(delta, s).  Only the delta is superseded,
+-- so the partner survives: 0.5*0.3 and 0.25*0.3.  (Written as a nested
+-- subquery rather than a materialised CTE, whose syntax postdates the oldest
+-- PostgreSQL this suite runs on.)
 CREATE TABLE woa4_mixed AS
-  WITH j AS MATERIALIZED (
-    SELECT sub.g AS g, c, w
-    FROM (SELECT g, count(*) AS c FROM woa4_r GROUP BY g) sub
-    JOIN woa4_s ON sub.g = woa4_s.g)
   SELECT g, round(probability_evaluate(provenance())::numeric, 4) AS p
-  FROM j WHERE c >= 2;
+  FROM (SELECT sub.g AS g, c, w
+        FROM (SELECT g, count(*) AS c FROM woa4_r GROUP BY g) sub
+        JOIN woa4_s ON sub.g = woa4_s.g) j
+  WHERE c >= 2;
 SELECT remove_provenance('woa4_mixed');
 SELECT 'delta mixed with a join partner' AS shape, g, p FROM woa4_mixed ORDER BY g;
 DROP TABLE woa4_mixed;
