@@ -16,7 +16,7 @@
  * - @c plus()   → union of input sets
  * - @c times()  → pairwise concatenation (Cartesian product of witnesses)
  * - @c monus()  → remove elements of @f$y@f$ from @f$x@f$
- * - @c delta()  → identity (returns @f$x@f$ unchanged if non-empty)
+ * - @c delta()  → support indicator (@f$\mathbb{0}@f$ if empty, @f$\mathbb{1}@f$ otherwise)
  *
  * This semiring is idempotent (set union is idempotent: @f$a \oplus a = a@f$),
  * but **not** absorptive in the @f$\mathbb{1} \oplus a = \mathbb{1}@f$ sense
@@ -102,7 +102,7 @@ virtual value_type monus(value_type x, value_type y) const override {
 }
 
 value_type delta(value_type x) const override {
-  return x.empty() ? zero() : x;
+  return x.empty() ? zero() : one();
 }
 
 /**

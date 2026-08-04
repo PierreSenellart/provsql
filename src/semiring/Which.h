@@ -19,7 +19,7 @@
  * - @c plus()   → union of witness sets; @f$\bot@f$ acts as identity
  * - @c times()  → union of witness sets; @f$\bot@f$ is absorbing
  * - @c monus()  → set difference, @f$\bot@f$ when @f$x \subseteq y@f$
- * - @c delta()  → identity (@f$\bot \mapsto \bot@f$, @f$x \mapsto x@f$)
+ * - @c delta()  → support indicator (@f$\bot \mapsto \bot@f$, @f$x \mapsto \emptyset = \mathbb{1}@f$)
  *
  * The semiring is idempotent (set union is idempotent: @f$a \oplus a = a@f$)
  * but **not** absorptive in the @f$\mathbb{1} \oplus a = \mathbb{1}@f$ sense
@@ -107,7 +107,7 @@ value_type monus(value_type x, value_type y) const override {
 }
 
 value_type delta(value_type x) const override {
-  return x;
+  return x.has_value() ? one() : zero();
 }
 
 /**
