@@ -449,20 +449,17 @@ double Sampler::evalScalar(gate_t g)
           result = std::get<double>(r.v);
           break;
         case ValueType::NONE:
-          // ProvSQL convention diverges from standard SQL here: COUNT
-          // and SUM over an empty group both yield the additive
-          // identity 0 (see test/sql/continuous_aggregation.sql §5 --
-          // empty-group SUM returns as_random(0) as a deterministic
-          // Dirac).  MC sampling mirrors that so an iteration where
-          // every semimod's Boolean filter was false produces 0.0
-          // rather than poisoning the moment estimator with NaN.
-          // MIN / MAX / AVG over empty groups stay NaN: there is no
-          // natural identity for those, and the moment averagers in
-          // Expectation::mc_raw_moment / mc_central_moment skip NaN
-          // samples so the estimator is conditional on non-empty
-          // worlds.
-          result = (op == AggregationOperator::COUNT
-                    || op == AggregationOperator::SUM)
+          // No contributor survived this iteration -- either the group is
+          // empty in this world, or every contributed value was NULL.  SQL
+          // returns 0 for COUNT and NULL for every other aggregate, so only
+          // COUNT surfaces a value here; SUM / AVG / MIN / MAX surface NaN,
+          // which compares false under IEEE on any enclosing gate_cmp (the
+          // SQL truth value of a comparison against NULL) and is skipped as
+          // a missing observation by the moment averagers in
+          // Expectation::mc_raw_moment / mc_central_moment, making those
+          // estimators conditional on the worlds where the aggregate is
+          // defined.
+          result = (op == AggregationOperator::COUNT)
                    ? 0.0
                    : std::numeric_limits<double>::quiet_NaN();
           break;

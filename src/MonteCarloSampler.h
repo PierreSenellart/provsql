@@ -140,9 +140,9 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root);
  * the row's contribution (the summed term for @c SUM; the 0/1 indicator for
  * @c COUNT, 0 for a NULL row so @c count(x) does not count NULLs; the compared
  * value for @c AVG / @c MIN / @c MAX), so NULL rows are handled and an empty
- * group finalises to the value the exact evaluator uses (0 for @c SUM / @c COUNT,
- * NaN -> comparison false for the others), and @c gate_arith over them is covered
- * too.  In practice only @c SUM / @c AVG / @c MIN / @c MAX ever reach here:
+ * group finalises to the value the exact evaluator uses (0 for @c COUNT, and
+ * NaN -> comparison false for the others, SQL's NULL), and @c gate_arith over
+ * them is covered too.  In practice only @c SUM / @c AVG / @c MIN / @c MAX ever reach here:
  * @c COUNT's value-support is small (0/1 per row) so it is always resolved
  * exactly and never bails -- but it is sample-faithful as well, so it is not
  * excluded.

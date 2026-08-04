@@ -76,3 +76,46 @@ DROP TABLE an_cs;
 
 DROP TABLE an_r1;
 DROP TABLE an_q;
+
+-- Part 4: an aggregate under arithmetic in HAVING, where every contributed
+-- value is NULL in some possible world.  Such a world leaves the aggregate
+-- with no contributor, and SQL then reports NULL for every aggregate but
+-- count -- so the comparison is NULL, i.e. false, and the world must not
+-- be counted.  The arithmetic forces the joint possible-world enumeration
+-- rather than the single-aggregate fast path.
+CREATE TABLE an_n(g int, tag text, v int);
+INSERT INTO an_n VALUES (1,'a',10),(1,'b',20);
+SELECT add_provenance('an_n');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM an_n; END $$;
+
+-- sum(CASE ...) contributes only for tag='b'.  World {a}: sum is NULL, so
+-- NULL + 1 >= 1 is NULL -> false.  Worlds {b} and {a,b} hold: 0.25+0.25.
+CREATE TABLE an_ns AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM an_n GROUP BY g
+  HAVING sum(CASE WHEN tag='b' THEN v END) + count(*) >= 1;
+SELECT remove_provenance('an_ns');
+SELECT 'sum(CASE)+count(*)>=1' AS having, p FROM an_ns;
+DROP TABLE an_ns;
+
+-- min agrees with sum: the same 0.5, not the 0.75 an empty-sum-is-0 reading
+-- would give.
+CREATE TABLE an_nm AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM an_n GROUP BY g
+  HAVING min(CASE WHEN tag='b' THEN v END) + count(*) >= 1;
+SELECT remove_provenance('an_nm');
+SELECT 'min(CASE)+count(*)>=1' AS having, p FROM an_nm;
+DROP TABLE an_nm;
+
+-- count(*) alone still sees every row, NULL-valued or not: all three
+-- non-empty worlds have count(*) >= 1 -> 0.75.
+CREATE TABLE an_nc AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM an_n GROUP BY g
+  HAVING count(*) + count(*) >= 2;
+SELECT remove_provenance('an_nc');
+SELECT 'count(*)+count(*)>=2' AS having, p FROM an_nc;
+DROP TABLE an_nc;
+
+DROP TABLE an_n;

@@ -211,10 +211,9 @@ DROP TABLE rv_distinct;
 -- 5.  Empty group: WHERE filters out every row.
 -- ---------------------------------------------------------------------
 -- The aggregate's INITCOND='{}' fires the FINALFUNC even on an empty
--- group; the FINALFUNC returns as_random(0), the additive identity.
--- The result is a deterministic gate_value Dirac at 0 (mean 0, variance 0,
--- support {0}), the natural extension of the agg_token convention that
--- "no row included" => SUM = 0.
+-- group; the FINALFUNC returns NULL, as SQL's sum does over zero rows,
+-- and as the agg_token path does for sum over an empty aggregation.
+-- avg agrees, so the two aggregates report an empty group the same way.
 
 CREATE TABLE rv_empty(label text, x random_variable, keep boolean);
 INSERT INTO rv_empty VALUES
@@ -223,13 +222,11 @@ INSERT INTO rv_empty VALUES
 SELECT add_provenance('rv_empty');
 
 CREATE TABLE empty_sum AS
-  SELECT provsql.sum(x) AS s FROM rv_empty WHERE keep;
+  SELECT provsql.sum(x) AS s, provsql.avg(x) AS a FROM rv_empty WHERE keep;
 SELECT remove_provenance('empty_sum');
 
-SELECT get_gate_type(s::uuid)                AS empty_root_kind,
-       get_extra(s::uuid)                    AS empty_root_extra,
-       abs(provsql.expected(s) - 0.0) < 1e-9 AS empty_mean,
-       abs(provsql.variance(s) - 0.0) < 1e-9 AS empty_variance
+SELECT s IS NULL AS empty_sum_is_null,
+       a IS NULL AS empty_avg_is_null
   FROM empty_sum;
 
 DROP TABLE empty_sum;
@@ -437,8 +434,8 @@ DROP TABLE rv_avg_direct;
 -- not 0), and the FFUNC builds a gate_arith TIMES root.  Implementation
 -- detail: the C-side wrap always emits mixture(prov, x, as_random(0));
 -- product_rv_ffunc patches each mixture's else-branch to as_random(1)
--- by reconstructing it.  Empty group returns the multiplicative
--- identity as_random(1), the natural counterpart to sum's as_random(0).
+-- by reconstructing it.  An empty group returns NULL, as the other
+-- RV aggregates do.
 
 -- 8a.  Deterministic provenance (prob=1.0 default).
 --   PRODUCT of independent N(1,1), N(2,1), N(3,1):
@@ -506,9 +503,10 @@ SELECT abs(provsql.expected(p) - 2.24) < 1e-9 AS prod_uncert_mean
 DROP TABLE rv_prod_uncert_res;
 DROP TABLE rv_prod_uncert;
 
--- 8c.  Empty group: PRODUCT over zero rows is the multiplicative
---   identity 1 (a gate_value Dirac), counterpart to sum's empty-group
---   as_random(0).
+-- 8c.  Empty group: PRODUCT over zero rows is NULL, as sum / avg /
+--   min / max report an empty group.  as_random(1) stays the
+--   absent-row contribution inside the fold, not the empty-group
+--   answer.
 
 CREATE TABLE rv_prod_empty(label text, x random_variable, keep boolean);
 INSERT INTO rv_prod_empty VALUES
@@ -520,10 +518,7 @@ CREATE TABLE empty_prod AS
   SELECT provsql.product(x) AS p FROM rv_prod_empty WHERE keep;
 SELECT remove_provenance('empty_prod');
 
-SELECT get_gate_type(p::uuid)                AS empty_prod_kind,
-       get_extra(p::uuid)                    AS empty_prod_extra,
-       abs(provsql.expected(p) - 1.0) < 1e-9 AS empty_prod_mean,
-       abs(provsql.variance(p) - 0.0) < 1e-9 AS empty_prod_variance
+SELECT p IS NULL AS empty_prod_is_null
   FROM empty_prod;
 
 DROP TABLE empty_prod;

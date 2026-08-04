@@ -313,8 +313,9 @@ root (``PLUS`` / ``TIMES`` / ``MAX`` / ``MIN``). The
 RV-returning aggregates currently shipped – :sqlfunc:`sum`,
 :sqlfunc:`avg`, :sqlfunc:`product`, :sqlfunc:`max`,
 :sqlfunc:`min` – share an ``INITCOND = '{}'`` so the FFUNC runs
-even on an empty group, with per-aggregate empty-group
-identities.
+even on an empty group, and can therefore tell an empty group
+apart from a group whose every input was ``NULL``. Both report
+SQL ``NULL``.
 
 This is the *semimodule-of-mixtures* shape: rather than minting a
 new M-polymorphic ``gate_agg`` that would require parallel

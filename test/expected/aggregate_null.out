@@ -38,3 +38,24 @@ remove_provenance
 having|p
 count(*)<=1|0.7500
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+having|p
+sum(CASE)+count(*)>=1|0.5000
+(1 row)
+remove_provenance
+
+(1 row)
+having|p
+min(CASE)+count(*)>=1|0.5000
+(1 row)
+remove_provenance
+
+(1 row)
+having|p
+count(*)+count(*)>=2|0.7500
+(1 row)

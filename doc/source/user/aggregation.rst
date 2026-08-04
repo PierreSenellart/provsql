@@ -87,9 +87,9 @@ When the aggregated column has type ``random_variable``
 aggregates lift to the distribution algebra:
 :sqlfunc:`sum`, :sqlfunc:`avg`, and
 :sqlfunc:`product`, plus the order statistics ``min`` and ``max``.
-Each returns a ``random_variable`` rather than a scalar; ``min`` /
-``max`` carry the empty-group identity ``+inf`` / ``-inf`` (the
-extremum counterparts to ``sum``'s ``0`` and ``product``'s ``1``).
+Each returns a ``random_variable`` rather than a scalar, and each
+reports an empty group as SQL ``NULL``, as the standard-SQL
+aggregates do.
 See :ref:`continuous-aggregation` for the semantics, empty-group
 identities, and worked examples.
 

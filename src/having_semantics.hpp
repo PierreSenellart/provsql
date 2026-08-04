@@ -638,8 +638,16 @@ void provsql_having(
               else { mn = std::min(mn, m); mx = std::max(mx, m); }
             }
           is_int = ai.is_int;
+          // SQL semantics for an aggregate with no surviving contributor in
+          // this world: every aggregate but COUNT returns NULL, which makes
+          // the enclosing comparison NULL and hence false -- signalled by
+          // returning false here.  A row whose value is NULL never reaches
+          // contribs (the aggregation rewriting drops it), so cnt == 0 covers
+          // both "the group is empty in this world" and "the group is
+          // non-empty but every contributed value was NULL".  COUNT alone
+          // yields 0 over an empty set.
           switch (ai.kind) {
-          case AggregationOperator::SUM:   out = acc; return true;
+          case AggregationOperator::SUM:   if (cnt == 0) return false; out = acc; return true;
           case AggregationOperator::COUNT: out = acc; return true;  // values 1 or 0/1
           case AggregationOperator::AVG:   if (cnt == 0) return false; out = acc / cnt; return true;
           case AggregationOperator::MIN:   if (cnt == 0) return false; out = mn; return true;

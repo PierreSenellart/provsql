@@ -14,7 +14,7 @@ t|t
 agg_max_ok|agg_min_ok
 t|t
 (1 row)
-empty_max_neg_inf|empty_min_pos_inf
+empty_max_is_null|empty_min_is_null
 t|t
 (1 row)
 add_provenance

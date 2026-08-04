@@ -342,9 +342,9 @@ exactly like the ``sum`` / ``avg`` / ``product`` aggregates:
     WITH s(r) AS (VALUES (uniform(0,1)), (uniform(0,1)), (uniform(0,1)))
     SELECT expected(max(r)), expected(min(r)) FROM s;   -- 0.75, 0.25
 
-The empty-group identity is ``-inf`` for ``max`` and ``+inf`` for
-``min`` (the extremum counterparts to ``sum``'s ``0`` and
-``product``'s ``1``).
+A row absent in a world contributes ``-inf`` to ``max`` and ``+inf``
+to ``min``, so it cannot perturb the extremum; an empty group itself
+is SQL ``NULL``, as standard SQL ``MIN`` / ``MAX`` report.
 
 Evaluation is Monte-Carlo-correct out of the box (the sampler takes
 ``std::max`` / ``std::min`` over the jointly-drawn children, so shared
@@ -883,8 +883,8 @@ deterministic scalars to ``random_variable`` columns:
     Provenance-weighted sum
     :math:`\sum_i \mathbf{1}\{\varphi_i\} \cdot X_i`, materialised
     as a single ``gate_arith PLUS`` over the per-row mixture
-    gates. The empty-group identity is :sqlfunc:`as_random`
-    ``(0)`` (the additive identity).
+    gates. An empty group is SQL ``NULL`` (matching standard SQL
+    ``SUM``).
 
 :sqlfunc:`avg` ``(random_variable)`` ``RETURNS random_variable``
     Provenance-weighted average
@@ -900,8 +900,7 @@ deterministic scalars to ``random_variable`` columns:
     ``gate_arith TIMES`` over per-row mixtures whose else-branch
     is :sqlfunc:`as_random` ``(1)`` (the multiplicative
     identity, so rows with false provenance contribute ``1``).
-    The empty-group identity is :sqlfunc:`as_random`
-    ``(1)``.
+    An empty group is SQL ``NULL``, as for the other aggregates.
 
 .. note::
 

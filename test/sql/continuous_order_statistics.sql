@@ -46,11 +46,12 @@ SELECT abs(expected(max(r)) - 0.75) < 0.02 AS agg_max_ok,
        abs(expected(min(r)) - 0.25) < 0.02 AS agg_min_ok
   FROM s;
 
--- Empty-group identity: max over zero rows is -inf, min over zero rows is +inf
--- (the extremum identities, the counterpart to sum's 0 / product's 1).
+-- Empty group: max and min over zero rows are NULL, as standard SQL MIN /
+-- MAX report.  The -inf / +inf extremum identities are the per-row absent
+-- contribution inside the fold, not a value an empty group takes.
 WITH s(r) AS (SELECT uniform(0,1) WHERE false)
-SELECT expected(max(r)) = '-Infinity'::float8 AS empty_max_neg_inf,
-       expected(min(r)) = 'Infinity'::float8  AS empty_min_pos_inf
+SELECT max(r) IS NULL AS empty_max_is_null,
+       min(r) IS NULL AS empty_min_is_null
   FROM s;
 
 -- End-to-end through the provenance-tracked aggregate path: each row's argument

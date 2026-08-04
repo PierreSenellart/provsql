@@ -5844,9 +5844,9 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
  *
  * Appends the input RV's UUID to the running array.  NULL inputs are
  * skipped (matching standard SUM semantics).  The aggregate's INITCOND
- * is @c '{}' so the FINALFUNC always runs even on an empty group, which
- * is what lets us return @c as_random(0) (the additive identity) for
- * an empty SUM rather than NULL.
+ * is @c '{}' so the FINALFUNC always runs and can tell an empty group
+ * (state @c '{}') apart from a group whose every input was NULL -- both
+ * of which SQL reports as @c NULL.
  */
 CREATE OR REPLACE FUNCTION sum_rv_sfunc(
   state uuid[], rv random_variable)
@@ -5862,9 +5862,9 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
  * @brief Final function for @c sum(random_variable): build a
  *        @c gate_arith PLUS root.
  *
- * Empty group (@c state = @c '{}'): return @c as_random(0), the
- * additive identity, so SUM over zero rows is the deterministic
- * scalar 0 -- matches the agg_token convention in @c agg_raw_moment.
+ * Empty group (@c state = @c '{}'): return @c NULL, as SQL's @c sum
+ * does over zero rows -- the same answer the @c agg_token path gives
+ * for @c sum over an empty aggregation.
  *
  * Singleton group: return the single child directly without minting a
  * useless single-child @c gate_arith.
@@ -5878,7 +5878,7 @@ DECLARE
   arith_token uuid;
 BEGIN
   IF state IS NULL OR array_length(state, 1) IS NULL THEN
-    RETURN provsql.as_random(0::double precision);
+    RETURN NULL;
   END IF;
   IF array_length(state, 1) = 1 THEN
     RETURN provsql.random_variable_make(state[1]);
@@ -5896,11 +5896,11 @@ CREATE AGGREGATE sum(random_variable) (
 );
 
 /**
- * @brief Numerator final function for the @c avg rewrite: @c sum, but
+ * @brief Numerator final function for the @c avg rewrite: @c sum,
  *        @c NULL on an empty group.
  *
- * Identical to @ref sum_rv_ffunc except that an empty group returns
- * @c NULL rather than the additive identity @c as_random(0).  The
+ * Behaviourally identical to @ref sum_rv_ffunc; kept as a separate
+ * catalog entry because the @c avg rewrite names it explicitly.  The
  * planner-hook @c avg rewrite emits
  * @c rv_sum_or_null(rv_aggregate_semimod(prov, x)) @c /
  * @c sum(rv_aggregate_indicator(prov)); @c random_variable_div is
@@ -6018,16 +6018,19 @@ CREATE AGGREGATE avg(random_variable) (
  * inspection: @c gate_arith(TIMES, state).
  *
  * Reuses @c sum_rv_sfunc as the state-transition function.  Empty group:
- * the multiplicative identity @c as_random(1) -- the counterpart to
- * @c sum's empty-group @c as_random(0).  Singleton group: the single
- * child directly, without a one-child TIMES root.
+ * @c NULL, by symmetry with @c sum / @c avg / @c min / @c max, which take
+ * it from their standard-SQL counterparts.  The multiplicative identity
+ * @c as_random(1) stays the absent-row value inside the fold, where it
+ * belongs; a group containing no row has no product to report.
+ * Singleton group: the single child directly, without a one-child TIMES
+ * root.
  */
 CREATE OR REPLACE FUNCTION product_rv_ffunc(state uuid[])
   RETURNS random_variable AS
 $$
 BEGIN
   IF state IS NULL OR array_length(state, 1) IS NULL THEN
-    RETURN provsql.as_random(1::double precision);
+    RETURN NULL;
   END IF;
   IF array_length(state, 1) = 1 THEN
     RETURN provsql.random_variable_make(state[1]);
@@ -6062,8 +6065,11 @@ CREATE AGGREGATE product(random_variable) (
  * through.  So the FFUNC is a plain fold with no gate inspection:
  * @c gate_arith(@p op, state).
  *
- * Empty group: the identity @c as_random(@p identity) (@f$-\infty@f$ /
- * @f$+\infty@f$), the extremum counterpart to @c sum's @c as_random(0).
+ * Empty group: @c NULL, as SQL's @c min / @c max report over zero rows.
+ * @p identity belongs to the catalog signature and describes the per-row
+ * absent contribution baked in upstream; the empty group does not consult
+ * it, since @f$\mp\infty@f$ is an artefact of the fold rather than a value
+ * the group actually contains.
  * Singleton group: the single child directly.
  */
 CREATE OR REPLACE FUNCTION extremum_rv_ffunc(
@@ -6072,7 +6078,7 @@ CREATE OR REPLACE FUNCTION extremum_rv_ffunc(
 $$
 BEGIN
   IF state IS NULL OR array_length(state, 1) IS NULL THEN
-    RETURN provsql.as_random(identity);
+    RETURN NULL;
   END IF;
   IF array_length(state, 1) = 1 THEN
     RETURN provsql.random_variable_make(state[1]);
