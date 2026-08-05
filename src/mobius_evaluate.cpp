@@ -31,11 +31,26 @@
  * independent-project, inner Möbius step) into certified-independent Boolean
  * islands, combined at the root @c gate_mobius by the signed coefficients.
  *
- * Restrictions: reduced-form UCQs (no relation
- * repeated within a disjunct, no repeated variable inside an atom, no
- * constants), tuple-independent (TID) inputs.  Anything outside that declines
- * (a C++ exception caught at the SQL boundary), so the query falls back to the
- * normal provenance and never fails.
+ * Self-joins and constants are handled by the two normalizations the JACM
+ * dichotomy runs before its lifted recursion -- **ranking** (Def. 4.1) and
+ * **shattering** (Prop. 2.10) -- implemented here as one shard split
+ * (@c normalizeShards): each relation whose atoms do not all carry the trivial
+ * all-distinct-variables pattern is partitioned into shard symbols, one per
+ * (equality pattern, pinned query constants) signature of its tuples, and every
+ * atom is expanded into the disjunction of its compatible shards.  Because the
+ * shards partition the relation, disjoint shard symbols certify disjoint
+ * tuples, which is what the independence steps of the recursion rest on.  A
+ * within-disjunct self-join that survives normalization (two components over
+ * one shard symbol, the JACM's @f$q_J@f$) is not independent and is not
+ * declined either: it falls through to the Möbius step, whose
+ * @f$P(c_1\land c_2) = P(c_1)+P(c_2)-P(c_1\lor c_2)@f$ is exactly the
+ * disjunctive detour the self-join forces (JACM Example 3.1).
+ *
+ * Restrictions: tuple-independent (TID) inputs, one probabilistic tuple per
+ * (relation, element tuple), and no two fact slots sharing a base tuple.  A
+ * query shape the recursion cannot certify (an inversion, a \#P-hard CQ, a cap
+ * exceeded) declines (a C++ exception caught at the SQL boundary), so the query
+ * falls back to the normal provenance and never fails.
  */
 extern "C" {
 #include "postgres.h"
@@ -78,6 +93,7 @@ PG_FUNCTION_INFO_V1(ucq_mobius_provenance_answer);
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -172,8 +188,10 @@ bool hom(const Disjunct &p, const Disjunct &q)
   return homExists(p, q, 0, asg);
 }
 
-/// Logical equivalence of two single-component conjunctions (self-join-free
-/// components are cores, so this is isomorphism).
+/// Logical equivalence of two single-component conjunctions: mutual
+/// homomorphism, which is logical equivalence for conjunctive queries whether
+/// or not the conjunction is a core (on a self-join-free component, where the
+/// conjunction is its own core, it degenerates to isomorphism).
 bool equiv(const Disjunct &p, const Disjunct &q)
 {
   return hom(p,q) && hom(q,p);
@@ -190,9 +208,11 @@ struct UF {
   void uni(int a,int b){ p[find(a)]=find(b); }
 };
 
-/// Split a conjunction into its variable-connected components.  (Reduced
-/// form: distinct components use disjoint relation symbols, so they are
-/// probabilistically independent.)
+/// Split a conjunction into its variable-connected components.  Distinct
+/// components are probabilistically independent exactly when their fact
+/// footprints are disjoint (@c disjointFootprints); a shared relation symbol
+/// with no separating constant is a self-join, and goes to the Möbius step
+/// instead.
 std::vector<Disjunct> componentsOf(const Disjunct &d)
 {
   const int n = static_cast<int>(d.size());
@@ -242,6 +262,500 @@ struct FactIndex {
 };
 
 // ===========================================================================
+// Canonical structural keys (memoisation, and duplicate elimination).
+// ===========================================================================
+
+std::string canonDisjunct(const Disjunct &d)
+{
+  // Canonically rename variables by first occurrence in a sorted atom order.
+  // Build per-atom signatures with placeholder variable slots, then pick the
+  // lexicographically smallest atom ordering greedily (sufficient: keys only
+  // need same-structure -> same-key, not minimality).
+  std::vector<std::string> atomsigRaw;
+  for(const auto &a : d) {
+    std::string sg = "r" + std::to_string(a.rel) + "(";
+    for(const auto &t : a.args) {
+      if(t.isVar) sg += "v"; else sg += "c"+std::to_string(t.v);
+      sg += ",";
+    }
+    sg += ")";
+    atomsigRaw.push_back(sg);
+  }
+  // Sort atoms by raw signature, then assign canonical var ids in first
+  // occurrence order over that sorted sequence.
+  std::vector<int> order(d.size());
+  for(std::size_t i=0;i<d.size();++i) order[i]=static_cast<int>(i);
+  std::sort(order.begin(), order.end(),
+            [&](int a,int b){ return atomsigRaw[a]<atomsigRaw[b]; });
+  std::map<long,int> ren;
+  std::string out;
+  for(int idx : order) {
+    const MAtom &a = d[idx];
+    out += "r"+std::to_string(a.rel)+"(";
+    for(const auto &t : a.args) {
+      if(t.isVar) {
+        auto it = ren.find(t.v);
+        int id = (it==ren.end()) ? (ren[t.v]=static_cast<int>(ren.size())) : it->second;
+        out += "v"+std::to_string(id);
+      } else out += "c"+std::to_string(t.v);
+      out += ",";
+    }
+    out += ")";
+  }
+  return out;
+}
+
+std::string canonSentence(const Sentence &s)
+{
+  std::vector<std::string> parts;
+  for(const auto &d : s) parts.push_back(canonDisjunct(d));
+  std::sort(parts.begin(), parts.end());
+  parts.erase(std::unique(parts.begin(), parts.end()), parts.end());
+  std::string out;
+  for(const auto &p : parts){ out += p; out += "|"; }
+  return out;
+}
+
+// ===========================================================================
+// Independence certificates: fact footprints.
+//
+// Every independent gate the compiler builds (the disjoint-symbol product, the
+// independent union, the separator's independent project) is licensed by ONE
+// property: the sub-sentences it combines read disjoint sets of base tuples.
+// A footprint records that symbolically -- per atom, its relation and the
+// positions it pins to a constant -- and two footprints are certified disjoint
+// when every pair of atom patterns over one relation pins a common position to
+// two different constants (no tuple can satisfy both).  Sound, and deliberately
+// not complete: an undetected disjointness costs a decline, never a wrong
+// answer.
+// ===========================================================================
+
+/// One atom's reach: its relation and its position -> constant pins.
+using FactPattern = std::pair<unsigned, std::map<int,long>>;
+using Footprint   = std::set<FactPattern>;
+
+void addToFootprint(const Disjunct &d, Footprint &fp)
+{
+  for(const auto &a : d) {
+    std::map<int,long> c;
+    for(std::size_t i=0;i<a.args.size();++i)
+      if(!a.args[i].isVar) c[static_cast<int>(i)] = a.args[i].v;
+    fp.insert({a.rel, std::move(c)});
+  }
+}
+
+Footprint footprintOf(const Disjunct &d)
+{
+  Footprint fp; addToFootprint(d, fp); return fp;
+}
+
+/// Can no tuple satisfy both atom patterns?
+bool patternsDisjoint(const FactPattern &x, const FactPattern &y)
+{
+  if(x.first != y.first)
+    return true;                       // distinct relations: disjoint tuples
+  for(const auto &kv : x.second) {
+    auto it = y.second.find(kv.first);
+    if(it != y.second.end() && it->second != kv.second)
+      return true;                     // a position pinned to two constants
+  }
+  return false;
+}
+
+bool disjointFootprints(const Footprint &a, const Footprint &b)
+{
+  for(const auto &x : a)
+    for(const auto &y : b)
+      if(!patternsDisjoint(x,y)) return false;
+  return true;
+}
+
+// ===========================================================================
+// Shard normalization: ranking (Dalvi-Suciu Def. 4.1) and shattering
+// (Prop. 2.10).
+//
+// The lifted recursion certifies independence by relation symbol, which holds
+// only when every atom over a symbol reads the same, full relation.  Two
+// rewrites restore that:
+//
+//  - *shattering* separates an atom that pins a query constant (S(a,y), left
+//    behind by a head pin or by a separator substitution) from one that does
+//    not (S(x,z)): they overlap, and the shards S_{0=a} / S_{0≠a} do not;
+//  - *ranking* separates an atom with a repeated variable (S(x,x)) from one
+//    with distinct variables: the shards are the equality patterns of the
+//    tuples (at most Bell(k) of them for arity k).
+//
+// Both are the same construction: partition each relation's tuples by their
+// signature -- the equality pattern of their positions, plus the query constant
+// each block is pinned to -- allocate one shard symbol per signature, and
+// expand every atom into the disjunction of the shards it can match, unifying
+// the variables and substituting the constants each shard forces.  Since every
+// tuple lands in exactly one shard, the shards are disjoint (which is what the
+// independence certificates need) and each shard atom is back in reduced form:
+// distinct variables, no constants (pinned and duplicated positions are
+// projected away, so a shard has the arity of its free blocks).
+//
+// The pass is a no-op -- symbols, facts and cost untouched -- on a sentence
+// whose atoms all carry the trivial all-distinct-variables pattern, which is
+// every query the array decoder builds; it fires on head-pinned per-answer
+// queries and on manually written descriptors with repeated variables.
+// ===========================================================================
+
+/// Sentinel in @c ShardSig::cst for a block pinned to no query constant.
+const long SHARD_FREE = std::numeric_limits<long>::min();
+
+/// Signature of a tuple: for each position the representative position of its
+/// equality block, and per representative the query constant the block is
+/// pinned to (@c SHARD_FREE if its value is not a query constant).
+struct ShardSig {
+  std::vector<int>  rep;
+  std::vector<long> cst;
+  bool operator<(const ShardSig &o) const {
+    if(rep != o.rep) return rep < o.rep;
+    return cst < o.cst;
+  }
+};
+
+/// One shard of a relation: its allocated symbol, its signature, and the
+/// representative positions that survive the projection (its arity).
+struct Shard {
+  unsigned sym = 0;
+  ShardSig sig;
+  std::vector<int> freepos;
+};
+
+/// Does this atom carry a non-trivial pattern (a constant or a repeated term),
+/// i.e. does its relation need to be split into shards?
+bool atomNeedsShards(const MAtom &a)
+{
+  for(std::size_t i=0;i<a.args.size();++i) {
+    if(!a.args[i].isVar) return true;
+    for(std::size_t j=0;j<i;++j)
+      if(a.args[j] == a.args[i]) return true;
+  }
+  return false;
+}
+
+ShardSig shardSigOf(const std::vector<long> &el, const std::set<long> &consts)
+{
+  const int k = static_cast<int>(el.size());
+  ShardSig sg;
+  sg.rep.assign(k, 0);
+  sg.cst.assign(k, SHARD_FREE);
+  for(int i=0;i<k;++i) {
+    int r = i;
+    for(int j=0;j<i;++j) if(el[j]==el[i]) { r = sg.rep[j]; break; }
+    sg.rep[i] = r;
+  }
+  for(int i=0;i<k;++i)
+    if(sg.rep[i]==i && consts.count(el[i])) sg.cst[i] = el[i];
+  return sg;
+}
+
+/// Can @p a match a tuple of shard @p sh?  (A pre-filter: the equalities the
+/// shard forces are applied afterwards, and re-checked on the result.)
+bool shardCompatible(const MAtom &a, const Shard &sh)
+{
+  const int k = static_cast<int>(a.args.size());
+  if(static_cast<int>(sh.sig.rep.size()) != k)
+    return false;                       // arity mismatch with the data
+  for(int p=0;p<k;++p) {
+    const int r = sh.sig.rep[p];
+    const Term &tp = a.args[p], &tr = a.args[r];
+    if(!tp.isVar && !tr.isVar && tp.v != tr.v)
+      return false;                     // one block, two different constants
+    if(sh.sig.cst[r] != SHARD_FREE) {
+      if(!tp.isVar && tp.v != sh.sig.cst[r]) return false;
+    } else if(!tp.isVar) {
+      return false;                     // a free block holds no query constant
+    }
+  }
+  for(int p=0;p<k;++p)
+    for(int q=p+1;q<k;++q)
+      if(sh.sig.rep[p]!=sh.sig.rep[q] && a.args[p]==a.args[q])
+        return false;                   // distinct blocks, one term
+  return true;
+}
+
+/// Union-find over a disjunct's variables with per-class constant bindings:
+/// the substitution a choice of shards forces.
+class ShardSubst {
+public:
+  /// Unify two terms; false if that is inconsistent.
+  bool unify(const Term &x, const Term &y) {
+    if(!x.isVar && !y.isVar) return x.v == y.v;
+    if(!x.isVar) return bind(y.v, x.v);
+    if(!y.isVar) return bind(x.v, y.v);
+    const long rx = find(x.v), ry = find(y.v);
+    if(rx == ry) return true;
+    auto cx = bound.find(rx), cy = bound.find(ry);
+    if(cx!=bound.end() && cy!=bound.end() && cx->second != cy->second)
+      return false;
+    parent[ry] = rx;
+    if(cy != bound.end()) {
+      const long v = cy->second;
+      bound.erase(ry);
+      bound[rx] = v;
+    }
+    return true;
+  }
+  /// The term a variable / constant becomes under the substitution.
+  Term apply(const Term &t) {
+    if(!t.isVar) return t;
+    const long r = find(t.v);
+    auto it = bound.find(r);
+    Term o;
+    if(it != bound.end()) { o.isVar=false; o.v=it->second; }
+    else                  { o.isVar=true;  o.v=r; }
+    return o;
+  }
+private:
+  std::map<long,long> parent;   // variable -> parent (union-find)
+  std::map<long,long> bound;    // class root -> the constant it is pinned to
+  long find(long v) {
+    auto it = parent.find(v);
+    if(it == parent.end()) { parent[v]=v; return v; }
+    if(it->second == v) return v;
+    const long r = find(it->second);
+    parent[v] = r;
+    return r;
+  }
+  bool bind(long var, long c) {
+    const long r = find(var);
+    auto it = bound.find(r);
+    if(it != bound.end()) return it->second == c;
+    bound[r] = c;
+    return true;
+  }
+};
+
+/// Cap on the disjuncts the shard expansion may produce (it is a product over
+/// the atoms of a disjunct); past it the route declines to joint-width.  Well
+/// above what the rest of the compiler can consume anyway: the CNF conjunct cap
+/// and the transversal bound both bite long before a union this wide compiles.
+const std::size_t SHARD_MAX_DISJUNCTS = 256;
+
+/**
+ * @brief One rank + shatter pass of @p s over @p fi, splitting the relations
+ *        in @p need.
+ *
+ * The expansion substitutes constants and unifies variables, so it can leave a
+ * non-trivial pattern on an atom of a relation that was NOT in @p need (an
+ * unshattered @c R(u) becomes @c R(a) in the branch where @c u is pinned).
+ * Such relations are reported through @p missing, and @c normalizeShards
+ * iterates to a fixpoint.
+ */
+bool normalizeShardsPass(const Sentence &s, const FactIndex &fi,
+                         const std::set<unsigned> &need,
+                         const std::set<long> &consts, unsigned maxRel,
+                         Sentence &sOut, FactIndex &fiOut,
+                         std::set<unsigned> &missing)
+{
+  missing.clear();
+  if(need.empty())
+    return false;
+
+  // Shard the facts: one shard per (relation, tuple signature), the tuple
+  // projected onto the shard's free blocks.  A relation that needs no splitting
+  // is copied through unchanged.
+  std::map<unsigned, std::map<ShardSig, Shard>> shards;
+  unsigned next = maxRel + 1;
+  fiOut = FactIndex();
+  for(const auto &kv : fi.tok) {
+    const unsigned rel = kv.first.first;
+    const std::vector<long> &el = kv.first.second;
+    unsigned sym = rel;
+    std::vector<long> proj = el;
+    if(need.count(rel)) {
+      const ShardSig sg = shardSigOf(el, consts);
+      auto &byrel = shards[rel];
+      auto sit = byrel.find(sg);
+      if(sit == byrel.end()) {
+        Shard sh;
+        sh.sym = next++;
+        sh.sig = sg;
+        for(std::size_t i=0;i<el.size();++i)
+          if(sg.rep[i]==static_cast<int>(i) && sg.cst[i]==SHARD_FREE)
+            sh.freepos.push_back(static_cast<int>(i));
+        sit = byrel.emplace(sg, sh).first;
+      }
+      sym = sit->second.sym;
+      proj.clear();
+      for(int p : sit->second.freepos) proj.push_back(el[p]);
+    }
+    fiOut.tok[{sym, proj}] = kv.second;
+    fiOut.present.insert({sym, proj});
+    for(std::size_t i=0;i<proj.size();++i)
+      fiOut.domain[{sym, static_cast<int>(i)}].insert(proj[i]);
+  }
+
+  // Expand the sentence: per disjunct, every combination of one compatible
+  // shard per atom, under the substitution that combination forces.
+  sOut.clear();
+  std::set<std::string> emitted;
+  for(const Disjunct &d : s) {
+    std::vector<std::vector<const Shard *>> opts;
+    unsigned long prod = 1;
+    bool dead = false;
+    for(const MAtom &a : d) {
+      std::vector<const Shard *> o;
+      if(!need.count(a.rel)) {
+        o.push_back(nullptr);                    // kept as is
+      } else {
+        auto rit = shards.find(a.rel);
+        if(rit != shards.end())
+          for(const auto &kv : rit->second)
+            if(shardCompatible(a, kv.second)) o.push_back(&kv.second);
+      }
+      if(o.empty()) { dead = true; break; }       // no tuple matches this atom
+      prod *= o.size();
+      if(prod > SHARD_MAX_DISJUNCTS)
+        throw MobiusDecline("Möbius: ranking/shattering expansion cap exceeded");
+      opts.push_back(std::move(o));
+    }
+    if(dead)
+      continue;                                   // the conjunction is FALSE
+
+    std::vector<const Shard *> choice(opts.size(), nullptr);
+    std::function<void(std::size_t)> expand = [&](std::size_t ai) {
+      if(ai < opts.size()) {
+        for(const Shard *sh : opts[ai]) { choice[ai]=sh; expand(ai+1); }
+        return;
+      }
+      // The equalities and constants this combination forces.
+      ShardSubst sub;
+      for(std::size_t i=0;i<d.size();++i) {
+        const Shard *sh = choice[i];
+        if(sh == nullptr) continue;
+        for(std::size_t p=0;p<d[i].args.size();++p) {
+          const int r = sh->sig.rep[p];
+          if(r != static_cast<int>(p) && !sub.unify(d[i].args[p], d[i].args[r]))
+            return;
+          if(sh->sig.cst[r] != SHARD_FREE) {
+            Term c; c.isVar=false; c.v=sh->sig.cst[r];
+            if(!sub.unify(d[i].args[p], c)) return;
+          }
+        }
+      }
+      // Apply it, and re-check every atom against its shard: distinct blocks
+      // must not have collapsed onto one term, and a free block must not have
+      // been pinned to a query constant (its tuples carry none).
+      Disjunct nd;
+      for(std::size_t i=0;i<d.size();++i) {
+        const Shard *sh = choice[i];
+        std::vector<Term> ap;
+        ap.reserve(d[i].args.size());
+        for(const Term &t : d[i].args) ap.push_back(sub.apply(t));
+        MAtom na;
+        if(sh == nullptr) {
+          na.rel = d[i].rel;
+          na.args = std::move(ap);
+          if(atomNeedsShards(na))
+            missing.insert(na.rel);   // the substitution left a pattern on it
+        } else {
+          for(std::size_t p=0;p<ap.size();++p)
+            for(std::size_t q=p+1;q<ap.size();++q)
+              if(sh->sig.rep[p]!=sh->sig.rep[q] && ap[p]==ap[q]) return;
+          for(int p : sh->freepos)
+            if(!ap[p].isVar) return;
+          na.rel = sh->sym;
+          for(int p : sh->freepos) na.args.push_back(ap[p]);
+        }
+        bool dup = false;
+        for(const MAtom &prev : nd)
+          if(prev.rel==na.rel && prev.args==na.args) { dup=true; break; }
+        if(!dup) nd.push_back(std::move(na));
+      }
+      if(nd.empty()) return;
+      if(sOut.size() >= SHARD_MAX_DISJUNCTS)
+        throw MobiusDecline("Möbius: ranking/shattering expansion cap exceeded");
+      sOut.push_back(std::move(nd));
+    };
+    expand(0);
+  }
+
+  // Drop duplicate disjuncts (idempotent in the union, and a smaller sentence
+  // keeps the CNF lattice small).
+  {
+    Sentence uniq;
+    for(const Disjunct &d : sOut)
+      if(emitted.insert(canonDisjunct(d)).second) uniq.push_back(d);
+    sOut = std::move(uniq);
+  }
+
+  // Re-globalise the variables: several expanded disjuncts descend from one
+  // original disjunct and would otherwise share its variable ids, while their
+  // existential quantifiers are separate.  The recursion unifies variables
+  // ACROSS disjuncts by (relation, position), so a shared id would conflate
+  // two independent variables (and cost a separator).
+  {
+    long nextvar = 1;
+    for(const auto &d : s)
+      for(const auto &a : d)
+        for(const auto &t : a.args)
+          if(t.isVar) nextvar = std::max(nextvar, t.v + 1);
+    for(Disjunct &d : sOut) {
+      std::map<long,long> ren;
+      for(MAtom &a : d)
+        for(Term &t : a.args)
+          if(t.isVar) {
+            auto it = ren.find(t.v);
+            if(it == ren.end()) it = ren.emplace(t.v, nextvar++).first;
+            t.v = it->second;
+          }
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief Rank + shatter @p s over @p fi into an equivalent reduced-form
+ *        sentence over shard symbols.
+ *
+ * @return @c false when no relation needs splitting (then @p sOut / @p fiOut
+ *         are untouched and the caller keeps the originals); @c true when the
+ *         normalized pair has been written to @p sOut / @p fiOut.
+ */
+bool normalizeShards(const Sentence &s, const FactIndex &fi,
+                     Sentence &sOut, FactIndex &fiOut)
+{
+  // Which relations need splitting, and the constants to shatter on (all
+  // constants of the sentence: a variable can be substituted into any of them
+  // by another atom's shard, so the closure is the whole set).
+  std::set<unsigned> need;
+  std::set<long> consts;
+  std::set<unsigned> rels;
+  unsigned maxRel = 0;
+  for(const auto &d : s)
+    for(const auto &a : d) {
+      maxRel = std::max(maxRel, a.rel);
+      rels.insert(a.rel);
+      if(atomNeedsShards(a)) need.insert(a.rel);
+      for(const auto &t : a.args) if(!t.isVar) consts.insert(t.v);
+    }
+  if(need.empty())
+    return false;
+  // Shard symbols are allocated above every EXISTING symbol -- including the
+  // relations the gather brought in but this sentence does not mention (a
+  // per-answer head pin compiles one disjunct of a wider descriptor), whose
+  // facts are copied through under their own symbol.
+  for(const auto &kv : fi.tok)
+    maxRel = std::max(maxRel, kv.first.first);
+
+  // Re-run until no unsharded relation is left carrying a pattern; each round
+  // adds at least one relation, so there are at most |relations| of them.
+  for(std::size_t round=0; round<=rels.size(); ++round) {
+    std::set<unsigned> missing;
+    const bool done = normalizeShardsPass(s, fi, need, consts, maxRel,
+                                          sOut, fiOut, missing);
+    if(missing.empty())
+      return done;
+    need.insert(missing.begin(), missing.end());
+  }
+  throw MobiusDecline("Möbius: ranking/shattering did not converge");
+}
+
+// ===========================================================================
 // The compiler.
 // ===========================================================================
 
@@ -266,10 +780,14 @@ public:
     pending_lineage = lineage;
     lineage_consumed = false;
     pg_uuid_t root = compile(s, /*top=*/true);
-    if(!lineage.empty() && !lineage_consumed)
-      // The top did not go through a Möbius step (e.g. a safe query that
-      // reached this route): wrap it in a thin gate_mobius selector carrying
-      // the lineage and the value with coefficient 1.
+    if(!lineage_consumed)
+      // The top did not go through a Möbius step (a safe query that reached
+      // this route, or one whose top rule was an independent union): wrap it in
+      // a thin gate_mobius selector carrying the lineage, if any, and the value
+      // with coefficient 1.  The root must be a gate_mobius even so: it is what
+      // routes the token to the Möbius evaluator (the only one that reads the
+      // signed combinations of any nested gate_mobius) and what
+      // @c mobius_or_null tests to tell a success from a decline.
       root = mkMobius({root}, {1}, lineage);
     return root;
   }
@@ -377,57 +895,6 @@ private:
     return u;
   }
 
-  // -- canonical key (structural, for memoisation) -------------------------
-
-  std::string canonDisjunct(const Disjunct &d) const {
-    // Canonically rename variables by first occurrence in a sorted atom order.
-    // Build per-atom signatures with placeholder variable slots, then pick the
-    // lexicographically smallest atom ordering greedily (sufficient: keys only
-    // need same-structure -> same-key, not minimality).
-    std::vector<std::string> atomsigRaw;
-    for(const auto &a : d) {
-      std::string sg = "r" + std::to_string(a.rel) + "(";
-      for(const auto &t : a.args) {
-        if(t.isVar) sg += "v"; else sg += "c"+std::to_string(t.v);
-        sg += ",";
-      }
-      sg += ")";
-      atomsigRaw.push_back(sg);
-    }
-    // Sort atoms by raw signature, then assign canonical var ids in first
-    // occurrence order over that sorted sequence.
-    std::vector<int> order(d.size());
-    for(std::size_t i=0;i<d.size();++i) order[i]=static_cast<int>(i);
-    std::sort(order.begin(), order.end(),
-              [&](int a,int b){ return atomsigRaw[a]<atomsigRaw[b]; });
-    std::map<long,int> ren;
-    std::string out;
-    for(int idx : order) {
-      const MAtom &a = d[idx];
-      out += "r"+std::to_string(a.rel)+"(";
-      for(const auto &t : a.args) {
-        if(t.isVar) {
-          auto it = ren.find(t.v);
-          int id = (it==ren.end()) ? (ren[t.v]=static_cast<int>(ren.size())) : it->second;
-          out += "v"+std::to_string(id);
-        } else out += "c"+std::to_string(t.v);
-        out += ",";
-      }
-      out += ")";
-    }
-    return out;
-  }
-
-  std::string canonSentence(const Sentence &s) const {
-    std::vector<std::string> parts;
-    for(const auto &d : s) parts.push_back(canonDisjunct(d));
-    std::sort(parts.begin(), parts.end());
-    parts.erase(std::unique(parts.begin(), parts.end()), parts.end());
-    std::string out;
-    for(const auto &p : parts){ out += p; out += "|"; }
-    return out;
-  }
-
   // -- recursion -----------------------------------------------------------
 
   pg_uuid_t compile(const Sentence &sentence, bool top=false);
@@ -492,12 +959,37 @@ bool MobiusCompiler::findSeparator(const Sentence &s,
       }
     }
     if(!covers) continue;
-    // Found.  Record the (rel,pos) occurrences of this class for the domain.
-    occOut.clear();
+    // A separator binds exactly ONE variable per disjunct: the disjunct's whole
+    // conjunction then sits under that single existential and Q ≡ ⋁_a Q[x:=a].
+    // With two class variables in one disjunct, substituting the same constant
+    // for both is a strictly stronger query (∃x φ ∧ ∃y ψ is not ⋁_a φ(a)∧ψ(a)),
+    // so this class is not a separator -- try the next one.
+    {
+      bool single = true;
+      for(const auto &cv : cvars) if(cv.size() != 1) { single = false; break; }
+      if(!single) continue;
+    }
+    // Record the (rel,pos) occurrences of this class (the substitution sites,
+    // and the active domain to project over).
+    std::set<std::pair<unsigned,int>> occ;
     for(const auto &d : s) for(const auto &a : d)
       for(std::size_t k=0;k<a.args.size();++k)
         if(a.args[k].isVar && uf.find(vid(a.args[k].v))==root)
-          occOut.insert({a.rel, static_cast<int>(k)});
+          occ.insert({a.rel, static_cast<int>(k)});
+    // Each relation must carry the class at a single position: the piece for
+    // constant a then reads only tuples with a at that position, so pieces for
+    // distinct constants are over disjoint tuples -- the certificate the
+    // independent project rests on.  (Two class positions of one relation would
+    // let a tuple be read by one piece through one and by another through the
+    // other.)
+    {
+      std::set<unsigned> rels;
+      bool onePos = true;
+      for(const auto &rp : occ)
+        if(!rels.insert(rp.first).second) { onePos = false; break; }
+      if(!onePos) continue;
+    }
+    occOut = std::move(occ);
     classVarsPerDisj = std::move(cvars);
     return true;
   }
@@ -589,11 +1081,24 @@ pg_uuid_t MobiusCompiler::mobiusStep(const Sentence &s, bool top)
 
   const int m = static_cast<int>(M.size());
   if(top) { st.n_cnf_conjuncts = m; st.lattice_size = (m<=30)?(1<<m):0; }
+  if(m == 1) {
+    // The CNF collapsed to a single clause: the sentence is logically that
+    // clause, a pure disjunction of components (its conjunctive structure was
+    // redundant -- the shape a self-join with an implication between its
+    // components leaves behind).  There is no inclusion-exclusion to run, but
+    // the simpler sentence may well compile; recurse on it unless it is the
+    // sentence we already have (no progress -> decline).
+    Sentence el;
+    for(int lid : M[0]) el.push_back(literals[lid]);
+    if(canonSentence(el) != canonSentence(s))
+      return compile(el, top);
+  }
   if(m < 2)
     throw MobiusDecline("Möbius: no inclusion-exclusion structure (M<2); "
                         "sentence has no separator and does not decompose");
-  if(m > 8)
-    throw MobiusDecline("Möbius: CNF conjunct count exceeds the cap (M>8)");
+  if(provsql_mobius_max_cnf > 0 && m > provsql_mobius_max_cnf)
+    throw MobiusDecline("Möbius: CNF conjunct count exceeds the cap "
+                        "(provsql.mobius_max_cnf)");
 
   // 3. Enumerate non-empty subsets s of [m]; ψ_s = ⋁ of literals across the
   //    clauses in s, minimised.  Accumulate coefficient (-1)^{|s|+1} per
@@ -695,6 +1200,12 @@ pg_uuid_t MobiusCompiler::compile(const Sentence &sentence0, bool top)
     for(const auto &a : d) if(!ground(a)) return false;
     return true;
   };
+  // A self-join can send two atoms onto the SAME tuple, so the token list is
+  // deduplicated (by mkBool) before the AND is built: x ∧ x = x is what the
+  // repetition means, whereas an *independent* AND over two copies of one
+  // token would square its probability.  Two DISTINCT tuples are independent
+  // by the TID restriction (one token per (relation, element tuple), no token
+  // shared between two fact slots -- both enforced at gather time).
   auto tokenAnd = [&](const Disjunct &d)->pg_uuid_t {
     std::vector<pg_uuid_t> toks;
     for(const auto &a : d) {
@@ -716,18 +1227,19 @@ pg_uuid_t MobiusCompiler::compile(const Sentence &sentence0, bool top)
 
   pg_uuid_t result;
 
-  // 2. Independent union: split disjuncts into relation-symbol-connected
-  //    groups (disjoint vocabulary => independent).
+  // 2. Independent union: group the disjuncts by overlapping fact footprints
+  //    (disjoint footprints => disjoint tuples => independent).  On a
+  //    reduced-form sentence this is the disjoint-vocabulary split; with
+  //    constants around it also separates, say, S(a,y) from S(b,z).
   {
     const int n = static_cast<int>(s.size());
     UF uf(n);
-    std::map<unsigned,int> firstDisjWithRel;
+    std::vector<Footprint> fps;
+    fps.reserve(n);
+    for(const auto &d : s) fps.push_back(footprintOf(d));
     for(int i=0;i<n;++i)
-      for(const auto &a : s[i]) {
-        auto it=firstDisjWithRel.find(a.rel);
-        if(it==firstDisjWithRel.end()) firstDisjWithRel[a.rel]=i;
-        else uf.uni(it->second, i);
-      }
+      for(int j=i+1;j<n;++j)
+        if(!disjointFootprints(fps[i], fps[j])) uf.uni(i, j);
     std::map<int, Sentence> groups;
     for(int i=0;i<n;++i) groups[uf.find(i)].push_back(s[i]);
     if(groups.size() > 1) {
@@ -739,7 +1251,7 @@ pg_uuid_t MobiusCompiler::compile(const Sentence &sentence0, bool top)
     }
   }
 
-  // 3. Single symbol-connected group.
+  // 3. A single group: every disjunct overlaps some other one.
   if(s.size()==1) {
     // Fully ground -> AND of tuple tokens (base case).
     if(isGround(s[0])) {
@@ -748,30 +1260,31 @@ pg_uuid_t MobiusCompiler::compile(const Sentence &sentence0, bool top)
       return result;
     }
     // One disjunct (a CQ): split into variable-connected components and AND
-    // them.  Independence of the product needs the components to use disjoint
-    // relation symbols (reduced form); a shared symbol is a within-disjunct
-    // self-join (or a ground/var correlation on one relation) -- decline
-    // (handling it would need ranking/shattering).
+    // them.  Independence of the product needs the components to read disjoint
+    // tuples, certified by their fact footprints (disjoint relation symbols, or
+    // a position pinned to different constants).  Components sharing a symbol
+    // with no separating constant are a within-disjunct self-join: they are NOT
+    // independent, so fall through -- the Möbius step below turns the
+    // conjunction into the disjunctive detour P(c1)+P(c2)-P(c1∨c2).
     std::vector<Disjunct> comps = componentsOf(s[0]);
     if(comps.size() > 1) {
-      for(std::size_t i=0;i<comps.size();++i)
-        for(std::size_t j=i+1;j<comps.size();++j) {
-          std::set<unsigned> ri;
-          for(const auto &a : comps[i]) ri.insert(a.rel);
-          for(const auto &a : comps[j])
-            if(ri.count(a.rel))
-              throw MobiusDecline("Möbius: within-disjunct self-join (a "
-                "relation shared by two components) -- needs "
-                "ranking/shattering");
-        }
-      std::vector<pg_uuid_t> ch;
-      for(auto &c : comps) { Sentence one{c}; ch.push_back(compile(one,false)); }
-      result = mkBool(true, ch);
-      memo[key] = uuid2string(result);
-      return result;
+      std::vector<Footprint> fps;
+      fps.reserve(comps.size());
+      for(const auto &c : comps) fps.push_back(footprintOf(c));
+      bool indep = true;
+      for(std::size_t i=0;i<comps.size() && indep;++i)
+        for(std::size_t j=i+1;j<comps.size();++j)
+          if(!disjointFootprints(fps[i], fps[j])) { indep=false; break; }
+      if(indep) {
+        std::vector<pg_uuid_t> ch;
+        for(auto &c : comps) { Sentence one{c}; ch.push_back(compile(one,false)); }
+        result = mkBool(true, ch);
+        memo[key] = uuid2string(result);
+        return result;
+      }
     }
-    // Single connected CQ: must have a separator (a var in all atoms) or it is
-    // #P-hard.  Handled by the separator branch below.
+    // A single connected CQ, or components that are not independent: the
+    // separator branch below, then the Möbius step.
   }
 
   // 4. Separator (independent project) if one exists.
@@ -808,14 +1321,37 @@ pg_uuid_t MobiusCompiler::compile(const Sentence &sentence0, bool top)
     }
   }
 
-  // 5. No separator: a single connected CQ here is genuinely #P-hard; a
-  //    multi-disjunct sentence goes to the Möbius (inclusion-exclusion) step.
-  if(s.size()==1)
+  // 5. No separator.  A single CONNECTED CQ here is genuinely #P-hard (no
+  //    separator, nothing to decompose).  A single disjunct that did decompose
+  //    but whose components are not independent (a within-disjunct self-join)
+  //    goes to the Möbius step like a multi-disjunct sentence: its CNF is the
+  //    unit clauses of its components, and the signed enumeration computes
+  //    P(c1) + P(c2) - P(c1 ∨ c2) -- the disjunctive detour a self-join forces
+  //    (Dalvi & Suciu, Example 3.1).
+  if(s.size()==1 && componentsOf(s[0]).size() < 2)
     throw MobiusDecline("Möbius: non-hierarchical single CQ (no separator); "
                         "the query is #P-hard");
   result = mobiusStep(s, top);
   memo[key] = uuid2string(result);
   return result;
+}
+
+/// Compile @p s over @p fi through the shard normalization, returning the root
+/// token.  Every entry point goes through here: ranking / shattering is a
+/// no-op on an already reduced-form sentence (which is every query the array
+/// decoder builds), so the common path pays only the scan that decides so.
+pg_uuid_t compileNormalized(const Sentence &s, const FactIndex &fi,
+                            MobiusStats &st, const std::string &lineage = "")
+{
+  Sentence  sn;
+  FactIndex fin;
+  const bool norm = normalizeShards(s, fi, sn, fin);
+  if(norm && provsql_verbose >= 20)
+    provsql_notice("ucq_mobius: ranking/shattering: %d disjuncts -> %d: %s",
+                   static_cast<int>(s.size()), static_cast<int>(sn.size()),
+                   canonSentence(sn).c_str());
+  MobiusCompiler mc(norm ? fin : fi, st);
+  return mc.compileTop(norm ? sn : s, lineage);
 }
 
 // ===========================================================================
@@ -930,8 +1466,12 @@ FactIndex buildFactIndexArrays(const int32 *f_rel, int n_fr,
     // The same token under a DIFFERENT (rel, element) key means one base tuple
     // feeds two fact slots -- an overlapping (non-disjoint) self-join, a
     // correlation the lifted recursion would wrongly treat as independent.
-    // Decline (joint-width tracks the shared token correctly).  A disjoint
-    // self-join shares no token, so it passes.
+    // Decline (joint-width tracks the shared token correctly).  A self-join
+    // WITHIN the query is not this case and passes: its atoms share one slot,
+    // and ranking / shattering plus the Möbius step handle them.  What this
+    // catches is two relation legs of the descriptor (one table scanned twice
+    // under overlapping prefilters), which no shard split can separate -- the
+    // shards partition a leg, not the legs themselves.
     if(!newtok.empty()) {
       auto own = token_owner.find(newtok);
       if(own != token_owner.end() && own->second != std::make_pair(rel, el))
@@ -1095,8 +1635,7 @@ Datum ucq_mobius_materialize_tracked(PG_FUNCTION_ARGS)
     if(!PG_ARGISNULL(9))
       lineage = uuid2string(*PG_GETARG_UUID_P(9));
     MobiusStats st;
-    MobiusCompiler mc(fi, st);
-    pg_uuid_t root = mc.compileTop(s, lineage);
+    pg_uuid_t root = compileNormalized(s, fi, st, lineage);
     pg_uuid_t *u = (pg_uuid_t*) palloc(sizeof(pg_uuid_t));
     *u = root;
     PG_RETURN_UUID_P(u);
@@ -1121,8 +1660,7 @@ Datum ucq_mobius_compile_stats(PG_FUNCTION_ARGS)
     Sentence s = decodeQuery(fcinfo);
     FactIndex fi = decodeFacts(fcinfo);
     MobiusStats st;
-    MobiusCompiler mc(fi, st);
-    pg_uuid_t root = mc.compileTop(s);
+    pg_uuid_t root = compileNormalized(s, fi, st);
     st.probability = mobius_probability_of(root);
 
     TupleDesc tupdesc;
@@ -1252,13 +1790,17 @@ Datum ucq_mobius_provenance_answer(PG_FUNCTION_ARGS)
           if(!PG_ARGISNULL(3))
             lineage = uuid2string(*PG_GETARG_UUID_P(3));
           MobiusStats st;
-          MobiusCompiler mc(cache->fi, st);
-          pg_uuid_t root = mc.compileTop(s, lineage);
+          pg_uuid_t root = compileNormalized(s, cache->fi, st, lineage);
           cache->tokcache[key] = uuid2string(root);
           pg_uuid_t *u = (pg_uuid_t*) palloc(sizeof(pg_uuid_t));
           *u = root;
           PG_RETURN_UUID_P(u);
         }
+      } catch(const std::exception &e) {
+        // decline this group -> fallback (reported at verbose_level >= 5, the
+        // only place a decline is otherwise invisible)
+        if(provsql_verbose >= 5)
+          provsql_notice("ucq_mobius: per-answer decline: %s", e.what());
       } catch(...) {
         // decline this group -> fallback
       }

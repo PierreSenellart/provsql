@@ -272,3 +272,7 @@ test: ucq_joint_answers
 # Dalvi-Suciu dichotomy (UCQs safe only because the #P-hard terms cancel on
 # the CNF lattice; canonical witness q9 / QW)
 test: mobius_safe
+
+# Self-joins on the Möbius route: ranking / shattering (the shard split) and
+# the disjunctive detour a within-disjunct self-join forces
+test: mobius_selfjoin

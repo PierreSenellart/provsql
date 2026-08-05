@@ -1,0 +1,44 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+q|probability|n_components|n_cnf_conjuncts|n_nonzero|n_cancelled
+q_J|0.384103|2|2|3|0
+(1 row)
+q|matches_brute_force
+q_J_token|t
+(1 row)
+q|root_gate|matches_brute_force
+q_J_planner|mobius|t
+(1 row)
+q|pw_matches_lineage
+q_J_lineage_kept|t
+(1 row)
+q|g|matches_brute_force
+shattered_answer|1|t
+shattered_answer|2|t
+(2 rows)
+q|matches_brute_force
+ranked|t
+(1 row)
+q|matches_brute_force
+two_class_vars|t
+(1 row)
+q|symmetric|two_hop
+inversion_declines|t|t
+(1 row)
+q|declined
+cnf_cap|t
+(1 row)
+q|compiles
+cnf_cap_reset|t
+(1 row)

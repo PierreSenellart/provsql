@@ -309,6 +309,18 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     so a high-level safe query on large data never out-costs the
     general pipeline.
 
+.. _provsql-mobius-max-cnf:
+
+``provsql.mobius_max_cnf`` (default: ``8``)
+    Query-cost cap of the safe-UCQ Möbius-inversion probability route:
+    it walks the inclusion-exclusion lattice of the CNF of each
+    sentence it meets, which has :math:`2^M` elements for :math:`M`
+    conjuncts, and declines above this cap. The bound is on the
+    *query*, not the data: only a very large union, or the
+    ranking / shattering normalisation of a self-joining query, pushes
+    :math:`M` up, which is what raising this buys. ``0`` disables the
+    cap.
+
 .. _provsql-kcmcp-server:
 
 ``provsql.kcmcp_server`` (default: empty)

@@ -105,6 +105,7 @@ int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joi
 bool provsql_joint_width = true; ///< Recognise unsafe UCQs at planner time and route their existence provenance through the joint-width compiler (on by default); the @c provsql.joint_width GUC is a debug-only switch to disable it
 bool provsql_mobius = true; ///< Try the safe-UCQ Möbius-inversion route (a guaranteed-PTIME exact route for its class) BEFORE the joint-width compiler, which it short-circuits on success (on by default); the @c provsql.mobius GUC is a debug-only switch to disable it
 int provsql_mobius_max_gates = 4000000; ///< Data-cost cap of the Möbius route: it declines (falling through to joint-width / the ladder) once its compile has built more than this many gates, bounding the \f$O(|D|^k)\f$ blow-up of a high-level safe query on large data; @c provsql.mobius_max_gates GUC
+int provsql_mobius_max_cnf = 8; ///< Query-cost cap of the Möbius route: it declines when a sentence's CNF has more than this many conjuncts, since the inclusion-exclusion lattice it walks has \f$2^M\f$ elements; ranking / shattering can inflate the conjunct count, which is what raising it buys; @c provsql.mobius_max_cnf GUC
 bool provsql_simplify_on_load = true; ///< Run universal cmp-resolution passes when @c getGenericCircuit returns; controlled by the @c provsql.simplify_on_load GUC
 bool provsql_hybrid_evaluation = true; ///< Run the hybrid-evaluator simplifier inside @c probability_evaluate; controlled by the @c provsql.hybrid_evaluation GUC
 bool provsql_cmp_probability_evaluation = true; ///< Run closed-form / analytic probability evaluators for @c gate_cmps inside @c probability_evaluate (currently the Poisson-binomial pre-pass for HAVING-COUNT; future MIN / MAX / SUM evaluators will gate on the same GUC); controlled by the @c provsql.cmp_probability_evaluation GUC
@@ -16253,6 +16254,26 @@ void _PG_init(void) {
                           4000000,
                           0,
                           INT_MAX,
+                          PGC_USERSET,
+                          0,
+                          NULL,
+                          NULL,
+                          NULL);
+
+  DefineCustomIntVariable("provsql.mobius_max_cnf",
+                          "Query-cost cap of the safe-UCQ Möbius-inversion "
+                          "route.",
+                          "The route walks the inclusion-exclusion lattice of "
+                          "the CNF of each sentence it meets, which has 2^M "
+                          "elements for M conjuncts, and declines above this "
+                          "cap.  The bound is on the QUERY, not the data: only "
+                          "a very large union, or the ranking / shattering "
+                          "normalisation of a self-join, pushes M up. "
+                          "Default 8; 0 disables the cap.",
+                          &provsql_mobius_max_cnf,
+                          8,
+                          0,
+                          24,
                           PGC_USERSET,
                           0,
                           NULL,

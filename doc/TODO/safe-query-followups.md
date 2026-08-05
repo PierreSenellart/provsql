@@ -50,14 +50,11 @@ explicitly deferred until a real workload motivates it.
     for the surrounding cmp; the sum closure currently bails on
     categorical / mixture children (`src/HybridEvaluator.cpp`).
 
-- **Möbius "Increment 3": ranking / shattering** (research-flavoured,
-  may never be needed).  The extensional Möbius-inversion route to safe
-  non-hierarchical UCQs (`src/mobius_evaluate.cpp`, the `gate_mobius`
+- **Intensional route to safe non-hierarchical UCQs** -- *rejected,
+  recorded so it is not re-attempted.*  The extensional
+  Möbius-inversion route (`src/mobius_evaluate.cpp`, the `gate_mobius`
   signed top combination, the `mobius` method, `provsql.mobius` GUC)
-  soundly declines queries whose reduced form still carries a
-  within-disjunct self-join; handling them needs ranking / shattering
-  in the compiler.
-  *Rejected alternative, recorded so it is not re-attempted:* the
+  is what ProvSQL ships for this class.  The
   **intensional** Monet 2019 construction (arXiv:1912.11864, a PTIME
   deterministic-decomposable circuit using negation in place of
   inclusion-exclusion, which would drop into the existing pipeline

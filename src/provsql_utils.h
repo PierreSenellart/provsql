@@ -485,6 +485,11 @@ extern bool provsql_mobius;
  * more than this many gates; provsql.mobius_max_gates GUC. */
 extern int provsql_mobius_max_gates;
 
+/* Query-cost cap of the Möbius route: it declines when the CNF of a sentence
+ * has more than this many conjuncts (the inclusion-exclusion lattice it walks
+ * has 2^M elements); provsql.mobius_max_cnf GUC. */
+extern int provsql_mobius_max_cnf;
+
 /** @brief When @c true (default), every @c GenericCircuit returned by
  * @c getGenericCircuit is run through the universal cmp-resolution
  * passes (RangeCheck for now, plus any future passes that decide

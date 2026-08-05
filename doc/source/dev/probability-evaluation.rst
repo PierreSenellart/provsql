@@ -1368,6 +1368,102 @@ filters, single- and multi-relation SPJ views, views-over-views, and
 set-semantics ``UNION``\ s including overlapping ones) -- are covered by
 ``test/sql/safe_query_inversion_free.sql``.
 
+.. _mobius-compiler:
+
+The Safe-UCQ Möbius Compiler
+----------------------------
+
+:cfile:`mobius_evaluate.cpp` compiles a UCQ plus its gathered TID facts
+into a circuit whose root is a ``gate_mobius`` -- a signed linear
+combination over certified-independent Boolean islands -- which the
+``mobius`` method above evaluates in one linear sweep. The compiler is
+the extensional lattice walk of Dalvi, Schnaitter & Suciu (PODS 2010);
+this section describes its pipeline, and in particular what licenses
+each independence claim, since a wrong accept would silently return a
+wrong probability.
+
+Normalization (ranking and shattering)
+   ``normalizeShards`` runs the two rewrites the dichotomy proof puts
+   before its lifted recursion, as a single shard split. A relation is
+   split when any of its atoms carries a non-trivial pattern -- a
+   constant (left by a per-answer head pin) or a repeated variable --
+   into one shard symbol per *signature* of its tuples: the equality
+   pattern of the positions (ranking, Def. 4.1, at most ``Bell(k)``
+   classes for arity ``k``) plus the query constant each block is
+   pinned to (shattering, Prop. 2.10). Every atom is expanded into the
+   disjunction of the shards it can match, applying the variable
+   unifications and constant bindings each shard forces; a disjunct
+   therefore becomes the product of its atoms' compatible shards, and
+   dead combinations (a shard's free block bound to a constant, two
+   distinct blocks collapsed onto one term) are dropped. Because the
+   expansion can leave a constant on an atom of a relation that was not
+   split, the pass iterates to a fixpoint. What comes out is in reduced
+   form -- pinned and duplicated positions are projected away, so every
+   shard atom has distinct variables and no constants -- and the shards
+   of a relation partition its tuples, which is what makes disjoint
+   *symbols* mean disjoint *tuples* again. The pass is an identity on a
+   sentence whose atoms are all distinct-variable (every query the
+   array decoder builds), so the common path pays only the scan that
+   decides so.
+
+Independence certificates
+   Three rules build independent gates, each with its own certificate:
+
+   - *independent union* and *independent product*: the sub-sentences
+     are combined only when their **fact footprints** are disjoint. A
+     footprint records, per atom, its relation and its position →
+     constant pins; two are disjoint when every pair of patterns over
+     one relation pins a common position to two different constants
+     (or the relations differ). Sound, deliberately not complete.
+   - *independent project* (the separator step): a covering unification
+     class is accepted only when it holds **exactly one variable per
+     disjunct** -- the disjunct then sits under a single existential
+     and ``Q ≡ ⋁_a Q[x:=a]``; two class variables in one disjunct would
+     substitute the same constant for both, a strictly stronger query
+     -- and occupies **exactly one position per relation**, so the
+     piece for constant ``a`` reads only tuples carrying ``a`` there
+     and the pieces are pairwise disjoint.
+
+   At the leaves, a ground disjunct is the AND of its tuple tokens,
+   deduplicated first: a self-join can send two atoms onto one tuple,
+   where ``x ∧ x = x`` is meant rather than an independent product.
+   Distinct tuples are independent by the TID restrictions enforced at
+   gather time (one token per element tuple, no token shared by two
+   fact slots).
+
+Self-joins that survive
+   Two components over one shard symbol are genuinely correlated. The
+   compiler neither multiplies them nor declines: it falls through to
+   the Möbius step, whose CNF for a single conjunction is the unit
+   clauses of its components, so the signed enumeration computes
+   ``P(c1) + P(c2) − P(c1 ∨ c2)`` -- the disjunctive detour of Example
+   3.1, and the reason UCQ rather than CQ is the natural class here. A
+   sentence whose CNF collapses to one clause is recompiled as that
+   clause when it is strictly simpler, and declines otherwise. Shapes
+   carrying an inversion (``S(x,y),S(y,x)``, ``R(x,y),R(y,z)``) fail
+   every rule and decline.
+
+Caps
+   ``provsql.mobius_max_gates`` bounds the data cost (gates built),
+   ``provsql.mobius_max_cnf`` the query cost (CNF conjuncts, hence the
+   ``2^M`` lattice); the transversal enumeration and the shard
+   expansion have their own internal bounds. Every cap raises
+   ``MobiusDecline``, caught at the SQL boundary, so the query falls
+   back to the ordinary provenance.
+
+Whatever the top rule was, ``compileTop`` roots the result in a
+``gate_mobius`` -- a thin coefficient-1 selector when the top did not
+end in a Möbius step -- carrying the literal lineage as a transparent
+child. That root is both what routes the token to the Möbius evaluator
+(the only one that reads nested signed combinations) and what
+``mobius_or_null`` tests to tell a success from a decline.
+
+``test/sql/mobius_safe.sql`` covers the reduced-form class (``q9`` and
+the lattice statistics); ``test/sql/mobius_selfjoin.sql`` covers the
+self-join class (``q_J``, shattering, ranking, the must-declines),
+cross-checking every probability against ``possible-worlds`` on the
+literal lineage of the same query rather than pinning constants.
+
 .. _adding-new-probability-method:
 
 Step-by-Step: Adding a New Probability Evaluation Method

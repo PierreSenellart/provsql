@@ -1080,11 +1080,27 @@ The route runs in :math:`O(|D|^e)` (:math:`e` the essential-variable
 count), so the linear hierarchical and inversion-free routes are
 tried first; where it applies, it takes precedence over the
 :ref:`joint-width compiler <bounded-joint-width>`, whose success on
-these queries is not guaranteed.  Inputs must be tuple-independent
-and the UCQ in reduced form (no constants, no bag multiplicity, no
-overlapping self-join slots); anything else falls back to joint
-width, then the general chooser.  ``provsql.mobius`` (on by default)
-and the ``provsql.mobius_max_gates`` data-cost cap control the route.
+these queries is not guaranteed.  Inputs must be tuple-independent,
+with one probabilistic tuple per element tuple and no two query slots
+sharing a base tuple; anything else falls back to joint width, then
+the general chooser.  ``provsql.mobius`` (on by default), the
+``provsql.mobius_max_gates`` data-cost cap and the
+``provsql.mobius_max_cnf`` query-cost cap control the route.
+
+**Self-joins.**  A query that repeats a relation is handled, not
+refused.  Two normalisations run before the recursion, exactly as in
+the dichotomy proof: *shattering* separates an atom that pins a
+constant (``S(a,y)``, left by a per-answer head) from one that does
+not (``S(x,z)``), and *ranking* separates an atom with a repeated
+variable (``S(x,x)``) from one with distinct variables, by splitting
+the relation into disjoint shards -- one per equality pattern and
+pinned constant of its tuples.  What remains, two components over one
+relation (Dalvi & Suciu's :math:`q_J = R(x_1),S(x_1,y_1),T(x_2),S(x_2,y_2)`),
+is genuinely correlated, and the route computes it as
+:math:`P(c_1) + P(c_2) - P(c_1 \lor c_2)`, the disjunctive detour that
+makes UCQ, rather than CQ, the natural class.  A self-join carrying an
+inversion (``S(x,y),S(y,x)``) is outside every tractable class and
+declines.
 
 .. _having-shortcuts:
 
