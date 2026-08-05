@@ -8,7 +8,7 @@
 -- (src/BooleanCircuit.cpp), which first attempts `interpretAsDD()`
 -- (structural d-DNNF check), then falls back to a tree decomposition,
 -- and finally to external d-DNNF compilation (`d4` by default). The
--- safe-query rewrite (`provsql.boolean_provenance = ON`) produces a
+-- safe-query rewrite (provsql.provenance = 'boolean') produces a
 -- read-once / structurally-d-DNNF circuit for hierarchical CQs, so
 -- `interpretAsDD()` succeeds directly and `makeDD` returns without
 -- ever invoking tree decomposition or an external compiler. That is
@@ -16,10 +16,10 @@
 --
 -- For each query shape it runs the same hierarchical CQ twice:
 --
---   * provsql.boolean_provenance = OFF, shapley_all_vars(prov)
+--   * provsql.provenance = 'semiring', shapley_all_vars(prov)
 --     (the unrewritten circuit forces makeDD into tree decomposition
 --     or external d-DNNF compilation)
---   * provsql.boolean_provenance = ON, shapley_all_vars(prov)
+--   * provsql.provenance = 'boolean', shapley_all_vars(prov)
 --     (the rewritten read-once circuit is interpreted as d-DNNF
 --     directly, with no compiler call)
 --
@@ -170,7 +170,7 @@ DECLARE
   on_ok        bool         := false;
 BEGIN
   -- OFF
-  SET LOCAL provsql.boolean_provenance = off;
+  SET LOCAL provsql.provenance = 'semiring';
   EXECUTE format('CREATE TEMP TABLE bench_off  AS %s', qry);
   PERFORM remove_provenance('bench_off');
   BEGIN
@@ -188,7 +188,7 @@ BEGIN
   END;
 
   -- ON
-  SET LOCAL provsql.boolean_provenance = on;
+  SET LOCAL provsql.provenance = 'boolean';
   EXECUTE format('CREATE TEMP TABLE bench_on  AS %s', qry);
   PERFORM remove_provenance('bench_on');
   BEGIN

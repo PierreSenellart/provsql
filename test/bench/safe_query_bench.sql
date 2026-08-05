@@ -5,11 +5,14 @@
 -- Builds a moderate-sized synthetic database, then runs a battery
 -- of hierarchical CQ shapes twice each:
 --
---   * provsql.boolean_provenance = OFF, probability_evaluate(prov)
+--   * provsql.provenance = 'semiring', probability_evaluate(prov)
 --     (default method: independent first, tree-decomposition fallback)
---   * provsql.boolean_provenance = ON, probability_evaluate(prov,
---     'independent') (the rewriter must produce a read-once circuit,
---     so 'independent' should succeed directly)
+--   * provsql.provenance = 'boolean', probability_evaluate(prov,
+--     'sq-rewrite') -- the linear sweep, named after the rewrite that
+--     produced the circuit, so it also asserts the rewrite fired: the
+--     method errors on a root the rewriter did not build (naming
+--     'independent' would run the same sweep but pass silently on an
+--     unrewritten circuit that happened to be read-once)
 --
 -- For each query it prints:
 --   * output cardinality under each setting (must match)
@@ -248,7 +251,7 @@ DECLARE
   on_ok        bool         := false;
 BEGIN
   -- OFF
-  SET LOCAL provsql.boolean_provenance = off;
+  SET LOCAL provsql.provenance = 'semiring';
   EXECUTE format('CREATE TEMP TABLE bench_off  AS %s', qry);
   PERFORM remove_provenance('bench_off');
   BEGIN
@@ -264,13 +267,13 @@ BEGIN
   END;
 
   -- ON
-  SET LOCAL provsql.boolean_provenance = on;
+  SET LOCAL provsql.provenance = 'boolean';
   EXECUTE format('CREATE TEMP TABLE bench_on  AS %s', qry);
   PERFORM remove_provenance('bench_on');
   BEGIN
     t0 := clock_timestamp();
     EXECUTE 'CREATE TEMP TABLE bench_on_p  AS
-             SELECT probability_evaluate(prov, ''independent'') AS p
+             SELECT probability_evaluate(prov, ''sq-rewrite'') AS p
                FROM bench_on';
     t1 := clock_timestamp();
     on_secs := EXTRACT(EPOCH FROM (t1 - t0));
@@ -592,7 +595,7 @@ SELECT bench_one(
 
 \echo
 \echo '======================================================================='
-\echo 'Safe-query rewrite benchmark (independent vs default probability)'
+\echo 'Safe-query rewrite benchmark (safe-query vs default probability)'
 \echo '======================================================================='
 SELECT
   shape,

@@ -15,8 +15,10 @@
 -- the linear reachability shape and compiles, along a tree decomposition
 -- of the *data* graph, one certified d-D per reachable vertex; the
 -- chooser then reads the persisted certificate and the linear
--- 'independent' pass serves every guarantee ("exact when cheap": the
--- exact value trivially meets any tolerance).
+-- certified-island pass serves every guarantee ("exact when cheap": the
+-- exact value trivially meets any tolerance).  That pass is what
+-- 'independent' performs, but the root carries the compiler's route tag,
+-- so it is reported under the route's own name, 'reachability'.
 --
 -- Deliberately small data -- the point is the route taken and its
 -- stability across guarantees, not scale; ucq_joint_bench.sql is the
@@ -28,10 +30,10 @@
 -- Reference picks (this machine, PostgreSQL 18, provsql 1.12.0-dev;
 -- n = 24, edge probability 0.9, target vertex 48):
 --
---   route         exact        rel eps=.1   rel eps=.3   additive     det d=0      route_off
---   reachability  independent  independent  independent  independent  independent  tree-decomposition
+--   route         exact         rel eps=.1    rel eps=.3    additive      det d=0       route_off
+--   reachability  reachability  reachability  reachability  reachability  reachability  tree-decomposition
 --
--- One method for every guarantee, ~32 ms, P = 0.748201.  No GUC disables
+-- One method for every guarantee, ~11 ms each, P = 0.748201.  No GUC disables
 -- the route -- it fires for every absorptive-or-lower class, 'boolean'
 -- and 'absorptive' alike -- so the route_off leg raises the class to
 -- 'semiring' instead, where the generic eval_recursive fixpoint builds
@@ -42,10 +44,11 @@
 -- ----------------------------------------------------------------------
 \set ECHO none
 \timing off
-SET search_path TO provsql_test, provsql, public;
-
 CREATE EXTENSION IF NOT EXISTS provsql CASCADE;
 CREATE SCHEMA IF NOT EXISTS provsql_test;
+-- After CREATE EXTENSION: installing the required uuid-ossp through
+-- CASCADE resets search_path to public, so setting it earlier is lost.
+SET search_path TO provsql_test, provsql, public;
 
 DROP TABLE IF EXISTS reach_edge CASCADE;
 CREATE TABLE reach_edge(src int, dst int);

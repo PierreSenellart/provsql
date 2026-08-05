@@ -18,10 +18,10 @@
 -- the branch-1 leaves.
 --
 -- For each (n_rows, n_cities) shape we compare :
---   * default chain with boolean_provenance = off
+--   * default chain with provsql.provenance = 'semiring'
 --     (independent throws, falls through to tree-decomposition /
 --     external compiler on the full circuit)
---   * default chain with boolean_provenance = on
+--   * default chain with provsql.provenance = 'boolean'
 --     (foldBooleanIdentities absorbs the times-pairs, the circuit
 --     becomes read-once, independent succeeds in linear time)
 --
@@ -90,7 +90,7 @@ BEGIN
   shape := format('rows=%s, cities=%s (~%s pairs/city)',
                   _n_rows, _n_cities, pairs_per_city);
 
-  SET LOCAL provsql.boolean_provenance = off;
+  SET LOCAL provsql.provenance = 'semiring';
   PERFORM count(*) FROM (
     SELECT city FROM ab_employees
     UNION
@@ -143,7 +143,7 @@ DECLARE
 BEGIN
   pairs_per_city := (_n_rows / _n_cities) * (_n_rows / _n_cities - 1) / 2;
 
-  SET LOCAL provsql.boolean_provenance = on;
+  SET LOCAL provsql.provenance = 'boolean';
   PERFORM count(*) FROM (
     SELECT city FROM ab_employees
     UNION
@@ -221,7 +221,7 @@ SELECT ab_setup(1280, 8); SELECT bench_on(1280, 8);
 
 \echo
 \echo '----------------------------------------------------------------------'
-\echo 'Absorption-driven UNION : boolean_provenance off vs on'
+\echo 'Absorption-driven UNION : provenance class semiring vs boolean'
 \echo 'off-path capped at 10s ; TIMEOUT = full circuit too slow'
 \echo '[on only] rows : the off path was skipped as it is intractable'
 \echo '----------------------------------------------------------------------'

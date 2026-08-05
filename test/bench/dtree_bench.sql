@@ -17,9 +17,10 @@
 -- execution: the chooser budgets the d-tree (and tree-decomposition) at the
 -- next-best method's cost and escalates on overrun -- and (c) the sieve cost
 -- recalibration, after which kl_fav's 12-clause DNF undercuts the d-tree on
--- the exact / additive / deterministic cells (m=12 -> 2^12 sieve beats the
--- d-tree's S*m there), so kl_fav now picks sieve outside the loose-relative
--- cell where karp-luby still wins.
+-- the additive / deterministic cells (m=12 -> 2^12 sieve beats the d-tree's
+-- S*m there), so kl_fav picks sieve everywhere except the loose-relative cell
+-- (karp-luby) and the exact cell, where the d-tree's memoised exact recursion
+-- still comes in under the sieve's 2^m.
 --
 --  circuit       exact           rel eps=.1      rel eps=.3      additive      det delta=0
 --  readonce      independent     independent     independent     independent   independent
@@ -36,7 +37,7 @@
 --  cliqueCNF14   possible-worlds d-tree          stopping-rule   monte-carlo   d-tree
 --  cliqueCNF18   compilation:d4  d-tree          stopping-rule   monte-carlo   d-tree
 --  sieve_fav     sieve           sieve           karp-luby       sieve         sieve
---  kl_fav        sieve           sieve           karp-luby       sieve         sieve
+--  kl_fav        d-tree          sieve           karp-luby       sieve         sieve
 --  invfree       inversion-free  inversion-free  inversion-free  inversion-free inversion-free
 --
 -- [*] big_rare rel eps=.1 escalates d-tree -> compilation because the d-tree's
@@ -290,30 +291,34 @@ FROM bench_res GROUP BY seq, circuit ORDER BY seq;
 
 -- ---------------------------------------------------------------------
 -- Route reachability: the query-driven compilers a hand-built circuit cannot
--- exercise.  joint-width and the safe-query read-once rewrite are NOT distinct
--- chooser methods -- each fires at provenance-BUILD time and substitutes a
--- certified deterministic-decomposable (d-D) circuit that 'independent' reads
--- in linear time; Möbius IS a distinct method (a gate_mobius root).  Reported
--- as a pivot uniform with the auto-chooser table above: the resolved method
--- per guarantee (exact / relative / additive / deterministic).  Each route
--- yields ONE method across every guarantee ("exact when cheap": the d-D /
--- Möbius value trivially meets any tolerance).  The route_off column is what
--- the SAME query lands on with the build-time compiler disabled -- a heavier
--- method (tree-decomposition / d-tree for joint-width; the inversion-free
--- structured d-DNNF for safe-query, a hierarchical query being inversion-free
--- too, so the rewrite's gain is letting the cheapest method apply), or
--- intractable for Möbius (q9 has no polynomial circuit).  Tiny data on purpose
--- -- the point is the route taken, not scale.
+-- exercise.  The joint-width compiler (bounded-jw) and the safe-query
+-- read-once rewrite (sq-rewrite) fire at provenance-BUILD time, substituting a
+-- certified deterministic-decomposable (d-D) circuit / a read-once one that
+-- the linear sweep reads; each stamps its route on the root it builds, so the
+-- chooser reports it under the route's own
+-- name rather than the generic 'independent'.  Möbius is a route too, on a
+-- gate_mobius root.  Reported as a pivot uniform with the auto-chooser table
+-- above: the resolved method per guarantee (exact / relative / additive /
+-- deterministic).  Each route yields ONE method across every guarantee ("exact
+-- when cheap": the d-D / read-once / Möbius value trivially meets any
+-- tolerance).  The route_off column is what the SAME query lands on with the
+-- build-time compiler disabled -- a heavier method (tree-decomposition /
+-- d-tree for bounded-jw; the inversion-free structured d-DNNF for sq-rewrite,
+-- a hierarchical query being inversion-free too, so the rewrite's gain is
+-- letting the cheapest method apply), or intractable for Möbius (q9 has no
+-- polynomial circuit).  Tiny data on purpose -- the point is the route taken,
+-- not scale.
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS route_long CASCADE;
 CREATE TABLE route_long(route text, query text, request text, method text, prob numeric);
 
--- joint-width: the #P-hard H0 = R(x), S(x,y), T(y) over a complete bipartite
+-- bounded-jw: the #P-hard H0 = R(x), S(x,y), T(y) over a complete bipartite
 -- [3]x[3] instance (both x and y shared across answers -> not read-once;
 -- joint treewidth 3, bounded -- [4]x[4] already exceeds joint_max_states and
 -- the route declines).  ON: the joint-width compiler emits a d-D and
--- 'independent' reads it.  OFF: the literal circuit is not a d-D, so the
--- chooser uses a heavier eval-time method (tree-decomposition / d-tree).
+-- the linear certified-island sweep reads it, reported as 'bounded-jw'.
+-- OFF: the literal circuit is not a d-D, so the chooser uses a heavier
+-- eval-time method (tree-decomposition / d-tree).
 DROP TABLE IF EXISTS jw_r, jw_s, jw_t CASCADE;
 CREATE TABLE jw_r(x int); CREATE TABLE jw_s(x int, y int); CREATE TABLE jw_t(y int);
 INSERT INTO jw_r SELECT i FROM generate_series(1,3) i;
@@ -322,16 +327,21 @@ INSERT INTO jw_s SELECT i,j FROM generate_series(1,3) i, generate_series(1,3) j;
 SELECT add_provenance('jw_r'); SELECT add_provenance('jw_s'); SELECT add_provenance('jw_t');
 DO $$ BEGIN PERFORM set_prob(provsql,0.4) FROM jw_r; PERFORM set_prob(provsql,0.4) FROM jw_s; PERFORM set_prob(provsql,0.4) FROM jw_t; END $$;
 
--- safe-query rewrite: the hierarchical self-join R(x,y1), R(x,y2) grouped by
--- x.  ON ('boolean' class): the read-once rewrite makes the lineage read-once
--- so 'independent' is exact.  OFF ('semiring'): the literal lineage shares
--- tuples across (y1,y2) pairs -> not read-once, so the chooser pays for the
--- inversion-free structured d-DNNF instead.
-DROP TABLE IF EXISTS sq_r CASCADE;
-CREATE TABLE sq_r(x int, y int);
-INSERT INTO sq_r SELECT 1, g FROM generate_series(1,8) g;
-SELECT add_provenance('sq_r');
-DO $$ BEGIN PERFORM set_prob(provsql,0.3) FROM sq_r; END $$;
+-- sq-rewrite: the hierarchical CQ A(x,y1), B(x,y2) grouped by x.  ON
+-- ('boolean' class): the read-once rewrite makes the lineage read-once, and
+-- its root carries the route tag, so the linear sweep is reported as
+-- 'sq-rewrite'.  OFF ('semiring'): the literal lineage shares tuples across
+-- (y1,y2) pairs -> not read-once, so the chooser pays for the inversion-free
+-- structured d-DNNF instead.  Two relations rather than a self-join: the
+-- rewriter declines a self-join here and the inversion-free certifier picks
+-- the query up instead, which would measure that route, not this one.
+DROP TABLE IF EXISTS sq_a, sq_b CASCADE;
+CREATE TABLE sq_a(x int, y int); CREATE TABLE sq_b(x int, y int);
+INSERT INTO sq_a SELECT 1, g FROM generate_series(1,8) g;
+INSERT INTO sq_b SELECT 1, g FROM generate_series(1,8) g;
+SELECT add_provenance('sq_a'); SELECT add_provenance('sq_b');
+DO $$ BEGIN PERFORM set_prob(provsql,0.3) FROM sq_a;
+            PERFORM set_prob(provsql,0.3) FROM sq_b; END $$;
 
 -- Möbius: q9/QW (Dalvi--Suciu), a SAFE UCQ that is PTIME only because the
 -- #P-hard term of its inclusion-exclusion expansion carries a zero Möbius
@@ -362,7 +372,7 @@ DECLARE v double precision; i int;
                          ['additive','epsilon=0.1,delta=0.05','additive'],
                          ['additive','epsilon=0.1,delta=0','det_d0']];
 BEGIN
-  -- ===== joint-width: build the d-D (joint_width on), eval each guarantee =====
+  -- ===== bounded-jw: build the d-D (joint_width on), eval each guarantee =====
   PERFORM set_config('provsql.provenance','boolean',false);
   PERFORM set_config('provsql.mobius','off',false);
   PERFORM set_config('provsql.joint_width','on',false);
@@ -372,7 +382,7 @@ BEGIN
   FOR i IN 1..array_length(reqs,1) LOOP
     PERFORM set_config('provsql.last_eval_method','',false);
     SELECT round(probability_evaluate(p, reqs[i][1], reqs[i][2])::numeric,6) INTO v FROM _jw1;
-    INSERT INTO route_long VALUES ('joint-width','H0 R(x),S(x,y),T(y) complete [3]x[3]',
+    INSERT INTO route_long VALUES ('bounded-jw','H0 R(x),S(x,y),T(y) complete [3]x[3]',
       reqs[i][3], current_setting('provsql.last_eval_method'), v);
   END LOOP;
   -- route_off: literal circuit (joint_width off), default chooser
@@ -382,29 +392,29 @@ BEGIN
   PERFORM remove_provenance('_jw0');
   PERFORM set_config('provsql.last_eval_method','',false);
   SELECT round(probability_evaluate(p)::numeric,6) INTO v FROM _jw0;
-  INSERT INTO route_long VALUES ('joint-width',NULL,'route_off',
+  INSERT INTO route_long VALUES ('bounded-jw',NULL,'route_off',
     current_setting('provsql.last_eval_method'), v);
 
-  -- ===== safe-query: read-once rewrite ('boolean'), eval each guarantee =====
+  -- ===== sq-rewrite: read-once rewrite ('boolean'), eval each guarantee =====
   PERFORM set_config('provsql.provenance','boolean',false);
   PERFORM set_config('provsql.joint_width','off',false);
   CREATE TEMP TABLE _sq1 AS
-    SELECT a.x, provenance() AS p FROM sq_r a, sq_r b WHERE a.x=b.x GROUP BY a.x;
+    SELECT a.x, provenance() AS p FROM sq_a a, sq_b b WHERE a.x=b.x GROUP BY a.x;
   PERFORM remove_provenance('_sq1');
   FOR i IN 1..array_length(reqs,1) LOOP
     PERFORM set_config('provsql.last_eval_method','',false);
     SELECT round(probability_evaluate(p, reqs[i][1], reqs[i][2])::numeric,6) INTO v FROM _sq1;
-    INSERT INTO route_long VALUES ('safe-query','hierarchical self-join R(x,y1),R(x,y2)',
+    INSERT INTO route_long VALUES ('sq-rewrite','hierarchical CQ A(x,y1),B(x,y2)',
       reqs[i][3], current_setting('provsql.last_eval_method'), v);
   END LOOP;
   -- route_off: literal lineage ('semiring')
   PERFORM set_config('provsql.provenance','semiring',false);
   CREATE TEMP TABLE _sq0 AS
-    SELECT a.x, provenance() AS p FROM sq_r a, sq_r b WHERE a.x=b.x GROUP BY a.x;
+    SELECT a.x, provenance() AS p FROM sq_a a, sq_b b WHERE a.x=b.x GROUP BY a.x;
   PERFORM remove_provenance('_sq0');
   PERFORM set_config('provsql.last_eval_method','',false);
   SELECT round(probability_evaluate(p)::numeric,6) INTO v FROM _sq0;
-  INSERT INTO route_long VALUES ('safe-query',NULL,'route_off',
+  INSERT INTO route_long VALUES ('sq-rewrite',NULL,'route_off',
     current_setting('provsql.last_eval_method'), v);
 
   -- ===== Möbius: gate_mobius root, eval each guarantee (literal intractable,
@@ -432,7 +442,7 @@ END $$;
 RESET provsql.provenance; RESET provsql.mobius; RESET provsql.joint_width;
 
 -- Uniform with the auto-chooser table above, for the query-driven routes.  Each
--- route's BUILD-time compiler yields a d-D (joint-width, safe-query) or a
+-- route's BUILD-time compiler yields a d-D (bounded-jw, sq-rewrite) or a
 -- gate_mobius root (Möbius), and the SAME method then serves every guarantee
 -- ("exact when cheap": the exact value trivially meets any tolerance).
 -- route_off is what the same query lands on with the build-time compiler
@@ -447,10 +457,10 @@ SELECT route,
 FROM route_long GROUP BY route ORDER BY route;
 DROP TABLE route_long;
 SELECT remove_provenance('jw_r'); SELECT remove_provenance('jw_s'); SELECT remove_provenance('jw_t');
-SELECT remove_provenance('sq_r');
+SELECT remove_provenance('sq_a'); SELECT remove_provenance('sq_b');
 SELECT remove_provenance('mob_r'); SELECT remove_provenance('mob_t');
 SELECT remove_provenance('mob_s1'); SELECT remove_provenance('mob_s2'); SELECT remove_provenance('mob_s3');
-DROP TABLE jw_r, jw_s, jw_t, sq_r, mob_r, mob_s1, mob_s2, mob_s3, mob_t;
+DROP TABLE jw_r, jw_s, jw_t, sq_a, sq_b, mob_r, mob_s1, mob_s2, mob_s3, mob_t;
 
 DROP TABLE bench_res; DROP TABLE bench_tok;
 SELECT remove_provenance('bench_v'); DROP TABLE bench_v;
