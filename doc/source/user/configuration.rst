@@ -281,7 +281,11 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     automatically after each call to the method that produced the
     result (comma-separated and deduplicated across calls in the
     session). Useful to see which strategy the default auto-selection
-    settled on.
+    settled on. The three planner-time routes -- the safe-query
+    rewriter, the joint-width UCQ compiler and the reachability
+    compiler -- report under their own names (``sq-rewrite``,
+    ``bounded-jw``, ``reachability``) rather than under the
+    ``independent`` sweep they share; see :ref:`route-methods`.
 
 .. _provsql-joint-max-treewidth:
 

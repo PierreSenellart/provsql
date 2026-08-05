@@ -8,16 +8,17 @@
 -- certified provenance circuit per reachable vertex (deterministic /
 -- decomposable by construction, linear total size for fixed data
 -- treewidth, cyclic graphs native).  The resulting tokens are ordinary
--- provenance: probability_evaluate picks the linear 'independent'
--- method through the persisted d-DNNF certificate, and the whole
--- artefact surface (interpret-as-dd, Shapley) works on them.  On any
+-- provenance: probability_evaluate reads the persisted d-DNNF certificate
+-- and resolves them by the linear certified-island sweep, reported under
+-- this route's own name 'reachability' (see last_eval_method), and the
+-- whole artefact surface (interpret-as-dd, Shapley) works on them.  On any
 -- failure the route falls back to the generic eval_recursive fixpoint.
 
 SET provsql.provenance = 'boolean';
 
 -- Diamond DAG: same data and values as the recursive test (node 4:
 -- 0.8018), but compiled along the data; the chooser must settle on
--- 'independent'.
+-- 'reachability'.
 CREATE TABLE btwr_edge(src int, dst int, p float8);
 INSERT INTO btwr_edge VALUES
   (1,2,0.9), (1,3,0.5), (2,3,0.8), (2,4,0.6), (3,4,0.7);

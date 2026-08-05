@@ -25,6 +25,8 @@
 extern "C" {
 #include "postgres.h"
 #include "utils/uuid.h"
+
+#include "provsql_utils.h"
 }
 
 #include "dDNNF.h"
@@ -54,10 +56,17 @@ pg_uuid_t provsqlUuidV5(const std::string &name);
  *
  * @param dd     The certified circuit.
  * @param roots  Gates whose closure to materialise.
+ * @param route  Producing route, stamped in @c info2 of each materialised
+ *               root (its @c info1 being the d-D certificate); read back by
+ *               the probability dispatcher to name the evaluation method.
+ *               @c PROVSQL_ROUTE_NONE leaves the roots untagged.  A route
+ *               that wraps its roots (see @c wrapAssumedAbsorptive) tags the
+ *               wrapper instead and passes @c PROVSQL_ROUTE_NONE here.
  * @return       Map from @p dd gates to their store UUIDs.
  */
 std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
-  const dDNNF &dd, const std::vector<gate_t> &roots);
+  const dDNNF &dd, const std::vector<gate_t> &roots,
+  provsql_route route = PROVSQL_ROUTE_NONE);
 
 /**
  * @brief Wrap a materialised root in the @c 'absorptive' assumption
@@ -68,6 +77,12 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
  * joint-width UCQ compiler does NOT use this: its d-D is the exact
  * Boolean provenance of the (non-recursive) UCQ, sound for every
  * absorptive-or-not probability evaluation.
+ *
+ * The wrapper carries @c PROVSQL_ROUTE_REACHABILITY in @c info1: the
+ * assumption kind alone does not identify the route (the truncated-fixpoint
+ * path in @c sql/provsql.common.sql also mints @c 'absorptive' wrappers), and
+ * the probability dispatcher reads the tag back to report @c reachability
+ * rather than the generic @c independent.
  *
  * @param child  UUID of the materialised root to wrap.
  * @return       UUID of the @c gate_assumed wrapper.

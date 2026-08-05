@@ -12,7 +12,7 @@ node|prob
 4|0.801800
 (4 rows)
 provsql.last_eval_method
-independent
+reachability
 (1 row)
 add_provenance
 
@@ -48,7 +48,7 @@ node|reliability
 4|0.741600
 (4 rows)
 provsql.last_eval_method
-independent
+reachability
 (1 row)
 add_provenance
 
@@ -99,7 +99,7 @@ node|prob
 4|0.750000
 (4 rows)
 provsql.last_eval_method
-independent
+reachability
 (1 row)
 remove_provenance
 

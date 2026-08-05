@@ -113,3 +113,44 @@ def test_gate_label_percentile_arith_opcode():
     assert circuit._gate_label({"gate_type": "arith", "info1": "10"}) == "pct"
     assert circuit._gate_label(
         {"gate_type": "arith", "info1": "10", "extra": "bogus"}) == "pct"
+
+
+def test_elide_markers_reads_route_tag_off_assumed_wrapper():
+    # The reachability compiler wraps its root in an 'absorptive' gate_assumed
+    # carrying PROVSQL_ROUTE_REACHABILITY (3) in info1.  The assumption kind
+    # alone does not identify the route -- the truncated-fixpoint path mints
+    # 'absorptive' wrappers too -- so the route comes off info1.
+    rows = [
+        {"node": "w", "parent": None, "child_pos": None,
+         "gate_type": "assumed", "extra": "absorptive", "info1": "3"},
+        {"node": "p", "parent": "w", "child_pos": 0, "gate_type": "plus"},
+    ]
+    _, new_root, markers = circuit._elide_markers(rows, "w")
+    assert new_root == "p"
+    assert markers["p"]["absorptive_assumed"] is True
+    assert markers["p"]["route"] == "reachability"
+
+
+def test_elide_markers_route_tag_on_safe_query_wrapper():
+    # The safe-query rewriter's wrapper is 'boolean' + tag 1.
+    rows = [
+        {"node": "w", "parent": None, "child_pos": None,
+         "gate_type": "assumed", "extra": "boolean", "info1": "1"},
+        {"node": "t", "parent": "w", "child_pos": 0, "gate_type": "times"},
+    ]
+    _, _, markers = circuit._elide_markers(rows, "w")
+    assert markers["t"]["boolean_assumed"] is True
+    assert markers["t"]["route"] == "sq-rewrite"
+
+
+def test_elide_markers_untagged_assumed_wrapper_has_no_route():
+    # A wrapper minted by the public provenance_assume carries no route tag,
+    # so it badges the assumption without claiming a producing route.
+    rows = [
+        {"node": "w", "parent": None, "child_pos": None,
+         "gate_type": "assumed", "extra": "boolean"},
+        {"node": "t", "parent": "w", "child_pos": 0, "gate_type": "times"},
+    ]
+    _, _, markers = circuit._elide_markers(rows, "w")
+    assert markers["t"]["boolean_assumed"] is True
+    assert "route" not in markers["t"]

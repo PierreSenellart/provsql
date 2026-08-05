@@ -10,6 +10,13 @@
 -- through the decomposition DP), and plants it at the canonical
 -- address the aggregation will compute -- so the natural query stays
 -- on the linear certified route.
+--
+-- root_info1 below reads info1 off the per-group root, which encodes one
+-- of two things depending on what that root is: DNNF_CERT_INFO (1) on a
+-- planted certified plus/times gate, or the producing route's tag
+-- (provsql_route; 3 = reachability) on the 'absorptive' assumption
+-- wrapper a bare per-vertex reach token carries.  Either value witnesses
+-- the linear certified route; 0 would mean neither.
 
 SET provsql.provenance = 'boolean';
 
@@ -37,7 +44,7 @@ CREATE TABLE btwa_p AS
            AS p_independent,
          round(probability_evaluate(provenance(), 'possible-worlds')::numeric, 6)
            AS p_worlds,
-         (get_infos(provenance())).info1 AS certified
+         (get_infos(provenance())).info1 AS root_info1
   FROM btwa_r GROUP BY region, provenance();
 SELECT remove_provenance('btwa_p');
 SELECT * FROM btwa_p ORDER BY region;
@@ -62,7 +69,7 @@ CREATE TABLE btwa_pd AS
            AS p_independent,
          round(probability_evaluate(provenance(), 'possible-worlds')::numeric, 6)
            AS p_worlds,
-         (get_infos(provenance())).info1 AS certified
+         (get_infos(provenance())).info1 AS root_info1
   FROM btwa_rd GROUP BY region, provenance();
 SELECT remove_provenance('btwa_pd');
 SELECT * FROM btwa_pd ORDER BY region;
@@ -92,7 +99,7 @@ CREATE TABLE btwa_pf AS
            AS p_independent,
          round(probability_evaluate(provenance(), 'possible-worlds')::numeric, 6)
            AS p_worlds,
-         (get_infos(provenance())).info1 AS certified
+         (get_infos(provenance())).info1 AS root_info1
   FROM btwa_rf GROUP BY region, provenance();
 SELECT remove_provenance('btwa_pf');
 -- Region A loses the depot (node 3): just {2}, P = .5 (a single-member

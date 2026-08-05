@@ -3510,6 +3510,12 @@
               <!-- shown only when the eval target is a Möbius (μ) gate;
                    toggled in syncDropdownVisibility -->
               <option value="mobius" hidden title="Exact linear-time path for safe-by-cancellation UCQs: evaluates the signed Möbius combination Σ_i c_i·P(child_i) directly over its certified-independent islands. Offered only because the planner built a Möbius (μ) root for this token.">mobius</option>
+              <!-- the three planner-time routes; each shown only when the eval
+                   target carries that route's tag, toggled in
+                   syncDropdownVisibility -->
+              <option value="sq-rewrite" hidden title="Exact linear-time evaluation of the read-once circuit the safe-query rewriter built for a hierarchical conjunctive query. The same sweep as independent, reported under the rewrite's name. Offered only because this token's root came from that rewrite.">sq-rewrite</option>
+              <option value="bounded-jw" hidden title="Exact linear-time evaluation of the certified d-D the joint-width compiler built for an unsafe (#P-hard) UCQ, tractable because the joint treewidth of the data and its correlation structure is bounded. Offered only because this token's root came from that compiler.">bounded-jw</option>
+              <option value="reachability" hidden title="Exact linear-time evaluation of the certified d-D the bounded-treewidth reachability compiler built along a tree decomposition of the data graph. Offered only because this token's root came from that compiler.">reachability</option>
               <option value="tree-decomposition" title="Exact evaluation via a tree decomposition of the Boolean circuit, compiled in-process to a d-DNNF (no external tool). Fails if the treewidth exceeds the supported maximum.">tree-decomposition</option>
               <option value="compilation" title="Exact evaluation by compiling the circuit to a d-DNNF with an external knowledge compiler (picked in the next dropdown), then evaluating the d-DNNF in linear time.">compilation</option>
             </optgroup>

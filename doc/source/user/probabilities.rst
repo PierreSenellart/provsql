@@ -649,8 +649,13 @@ table summarises where each shines:
    * - ``independent``
      - exact
      - Read-once provenance (self-join-free / hierarchical CQs, each input tuple used
-       at most once) and certified d-D circuits (from the safe-query, reachability
-       and joint-width compilers).  Linear time.
+       at most once).  Linear time.
+   * - ``sq-rewrite``, ``bounded-jw``, ``reachability``
+     - exact
+     - The same linear sweep, on the circuit one of the three :ref:`planner-time
+       routes <route-methods>` produced (read-once rewrite; certified d-D from the
+       joint-width or reachability compiler).  Reported under the producing
+       route's name so ``provsql.last_eval_method`` tells them apart.
    * - ``inversion-free``
      - exact
      - Safe (inversion-free) UCQs the planner certifies -- linear-time via a
@@ -713,6 +718,40 @@ Each method in detail:
     .. code-block:: postgresql
 
         SELECT probability_evaluate(provenance(), 'independent') FROM suspects;
+
+    When the circuit came from one of those three compilers, the default
+    strategy reports it under that compiler's own name instead -- see
+    ``'sq-rewrite'`` / ``'bounded-jw'`` / ``'reachability'`` below.  Naming
+    ``'independent'`` explicitly stays available on any circuit: it names the
+    computation rather than its producer.
+
+.. _route-methods:
+
+``'sq-rewrite'``, ``'bounded-jw'``, ``'reachability'``
+    The three **planner-time routes**.  Each replaces a query's ordinary
+    lineage with a circuit of its own -- the :ref:`safe-query (read-once)
+    rewriter <safe-query-rewriting>`, the joint-width UCQ compiler and the
+    bounded-treewidth reachability compiler -- and then hands that circuit to
+    the ordinary dispatcher, which resolves all three by the same linear sweep
+    ``'independent'`` performs.  What the three method names add is *which
+    rewrite produced the circuit*, so ``provsql.last_eval_method`` distinguishes
+    them instead of reporting ``independent`` for all four cases:
+
+    .. code-block:: postgresql
+
+        SET provsql.last_eval_method = '';
+        SELECT probability_evaluate(provenance()) FROM reachable;
+        SHOW provsql.last_eval_method;   -- reachability
+
+    Each route stamps a tag on the root it produces, which is what the method
+    reads back; naming one on a root the route did not produce is an error
+    rather than a silent evaluation under the wrong label.  The default
+    strategy already picks the right one, so naming them explicitly is mainly
+    useful for testing:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'reachability') FROM reachable;
 
 ``'possible-worlds'``
     Exact computation by exhaustive enumeration of all possible worlds.

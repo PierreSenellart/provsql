@@ -728,10 +728,13 @@ GenericCircuit MMappedCircuit::createGenericCircuit(
        || type==gate_cmp  || type==gate_arith) {
       auto [info1, info2] = getInfos(uuid);
       result.setInfos(id, info1, info2);
-    } else if(type==gate_plus || type==gate_times) {
+    } else if(type==gate_plus || type==gate_times || type==gate_assumed) {
       /* The d-DNNF certificate (DNNF_CERT_INFO in info1: deterministic
-       * plus / decomposable times).  Copied only when set, so unmarked
-       * gates do not bloat the in-memory infos map with zeros. */
+       * plus / decomposable times) and, alongside it in info2, the tag of
+       * the planner-time route that produced the root (@c provsql_route);
+       * on a gate_assumed the route tag is in info1.  Copied only when
+       * set, so unmarked gates do not bloat the in-memory infos map with
+       * zeros. */
       auto [info1, info2] = getInfos(uuid);
       if(info1 != 0 || info2 != 0)
         result.setInfos(id, info1, info2);

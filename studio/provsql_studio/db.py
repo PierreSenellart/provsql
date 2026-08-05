@@ -1106,6 +1106,12 @@ _PROBABILITY_METHODS = {
     "independent",
     "inversion-free",     # exact, requires an inversion-free certificate on the root
     "mobius",             # exact, requires a Möbius (gate_mobius) root
+    # The three planner-time routes: the same linear sweep as `independent`,
+    # reported (and invocable) under the name of the rewrite that produced the
+    # circuit.  Each requires a root its own route tagged (extension >= 1.12).
+    "sq-rewrite",         # exact, requires a safe-query (read-once) rewritten root
+    "bounded-jw",        # exact, requires a joint-width UCQ compiler root
+    "reachability",       # exact, requires a reachability compiler root
     "tree-decomposition",
     "possible-worlds",
     "sieve",              # exact inclusion-exclusion over a monotone DNF

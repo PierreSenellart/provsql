@@ -5,7 +5,7 @@ add_provenance
 remove_provenance
 
 (1 row)
-region|p_independent|p_worlds|certified
+region|p_independent|p_worlds|root_info1
 A|0.750000|0.750000|1
 B|0.437500|0.437500|1
 (2 rows)
@@ -15,7 +15,7 @@ remove_provenance
 remove_provenance
 
 (1 row)
-region|p_independent|p_worlds|certified
+region|p_independent|p_worlds|root_info1
 A|0.750000|0.750000|1
 B|0.437500|0.437500|1
 (2 rows)
@@ -25,8 +25,8 @@ remove_provenance
 remove_provenance
 
 (1 row)
-region|p_independent|p_worlds|certified
-A|0.500000|0.500000|0
+region|p_independent|p_worlds|root_info1
+A|0.500000|0.500000|3
 B|0.437500|0.437500|1
 (2 rows)
 remove_provenance

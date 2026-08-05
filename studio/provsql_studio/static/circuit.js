@@ -1696,6 +1696,11 @@
   // gate_semimod arms, while formula and prov-xml stay reachable for
   // lineage inspection.
   const _AGG_SCALAR_GATE_TYPES = new Set(['agg', 'semimod']);
+  // Probability methods named after the planner-time route that produced the
+  // circuit, rather than after the computation.  Each is offered only on a
+  // target carrying its own route tag (see currentTargetRoute); the values
+  // are the method names probability_evaluate accepts.
+  const _ROUTE_METHODS = ['sq-rewrite', 'bounded-jw', 'reachability'];
   // Options visible when the eval target is scalar.  Everything else in
   // the <select> gets hidden + disabled for the duration of the scalar
   // focus.  PROV-XML stays because it accepts any provenance gate.
@@ -1756,6 +1761,13 @@
   // absorptive semirings and Boolean-rewrite-compatible ones are sound.
   function currentTargetAbsorptiveFolded() {
     return !!(_currentTargetNode()?.absorptive_folded);
+  }
+  // The planner-time route that produced the current eval target's circuit
+  // ('sq-rewrite' / 'bounded-jw' / 'reachability'), or null.  The C++
+  // RouteMethod::applicable() keys on the same tag, so this is what decides
+  // whether the matching probability method is offered.
+  function currentTargetRoute() {
+    return _currentTargetNode()?.route ?? null;
   }
   function _currentTargetNode() {
     if (!state.scene || !state.scene.nodes) return null;
@@ -2134,6 +2146,20 @@
         mobOpt.hidden = !targetIsMobius;
         mobOpt.disabled = mobOpt.hidden;
         if (mobOpt.hidden && meth.value === 'mobius') meth.value = 'exact';
+      }
+      // The three planner-time routes ('sq-rewrite' / 'bounded-jw' /
+      // 'reachability') are the same linear sweep as 'independent', reported
+      // and invocable under the name of the rewrite that produced the
+      // circuit.  RouteMethod::applicable() requires the target to carry that
+      // route's tag and errors by name on any other root, so offer each one
+      // exactly on its own circuits.
+      const targetRoute = currentTargetRoute();
+      for (const route of _ROUTE_METHODS) {
+        const opt = meth.querySelector(`option[value="${route}"]`);
+        if (!opt) continue;
+        opt.hidden = route !== targetRoute;
+        opt.disabled = opt.hidden;
+        if (opt.hidden && meth.value === route) meth.value = 'exact';
       }
       const comp = document.getElementById('eval-args-compiler');
       const ifComp = comp && comp.querySelector('option[value="inversion-free"]');

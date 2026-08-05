@@ -458,7 +458,11 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
         const pg_uuid_t within =
           wrapAssumedAbsorptive(uuid_of.at(vr.root));
         provsql_internal_create_gate(&dedup, gate_plus, 1, &within);
-        provsql_internal_set_infos(&dedup, DNNF_CERT_INFO, 0);
+        /* Route tag in info2, like every materialised root: this alias is a
+         * user-visible root too, and must report 'reachability' rather than
+         * the generic 'independent'. */
+        provsql_internal_set_infos(&dedup, DNNF_CERT_INFO,
+                                   PROVSQL_ROUTE_REACHABILITY);
       }
     }
 

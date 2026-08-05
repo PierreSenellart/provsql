@@ -113,7 +113,7 @@ pg_uuid_t provsqlUuidV5(const std::string &name)
 }
 
 std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
-  const dDNNF &dd, const std::vector<gate_t> &roots)
+  const dDNNF &dd, const std::vector<gate_t> &roots, provsql_route route)
 {
   std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> uuid_of;
   /* Tokens this backend has already materialised, across calls: the
@@ -254,6 +254,25 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
     stack.pop_back();
   }
 
+  /* Stamp the producing route on each materialised root, in info2 (info1
+   * being the d-D certificate the root already carries), so the probability
+   * dispatcher can report the route as its own evaluation method instead of
+   * the generic 'independent'.  Only a certified multi-wire AND/OR root is
+   * stamped: a root that collapsed to a bare leaf token, to a shared
+   * constant or to a single child is not a gate this materialisation owns,
+   * and its info fields are not ours to write. */
+  if (route != PROVSQL_ROUTE_NONE)
+    for (const auto &r : roots) {
+      const auto t = dd.getGateType(r);
+      if ((t != BooleanGate::AND && t != BooleanGate::OR)
+          || dd.getWires(r).size() < 2 || !dd.isDNNFCertified(r))
+        continue;
+      const auto it = uuid_of.find(r);
+      if (it != uuid_of.end())
+        provsql_internal_set_infos(&it->second, DNNF_CERT_INFO,
+                                   static_cast<unsigned>(route));
+    }
+
   return uuid_of;
 }
 
@@ -269,6 +288,9 @@ pg_uuid_t wrapAssumedAbsorptive(const pg_uuid_t &child)
   if (created.insert(uuid2string(token)).second) {
     provsql_internal_create_gate(&token, gate_assumed, 1, &child);
     provsql_internal_set_extra(&token, "absorptive");
+    /* The route tag, not the assumption kind, is what identifies this as the
+     * reachability compiler's output (see provsql_route). */
+    provsql_internal_set_infos(&token, PROVSQL_ROUTE_REACHABILITY, 0);
   }
   return token;
 }

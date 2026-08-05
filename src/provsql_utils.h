@@ -137,6 +137,39 @@ typedef enum provsql_arith_op {
                                 ///< empty draw is NaN (undefined world).
 } provsql_arith_op;
 
+/**
+ * @brief Tags identifying the planner-time route that produced a circuit.
+ *
+ * Three rewrites replace a query's ordinary lineage with a circuit of their
+ * own -- the safe-query (read-once) rewriter, the joint-width UCQ compiler and
+ * the recursive-reachability compiler -- and all three then hand that circuit
+ * to the ordinary probability dispatcher, which evaluates it by an independent
+ * / certified-island sweep.  Without a tag the three are indistinguishable at
+ * evaluation time and all report @c independent.  Each route therefore stamps
+ * its tag on the root gate it produces, and @c probability_evaluate.cpp turns
+ * that into a first-class method name (@c sq-rewrite / @c bounded-jw /
+ * @c reachability) for @c provsql.last_eval_method and for @c byName dispatch.
+ *
+ * Where the tag lives depends on what the route's root already carries:
+ * @c PROVSQL_ROUTE_SQ_REWRITE and @c PROVSQL_ROUTE_REACHABILITY go in @c info1
+ * of the @c gate_assumed wrapper the route puts on its root (the assumption
+ * kind in @c extra -- 'boolean' / 'absorptive' -- does not identify the route:
+ * both are also reachable through the public @c provenance_assume), while
+ * @c PROVSQL_ROUTE_BOUNDED_JW goes in @c info2 of the materialised d-D root,
+ * whose @c info1 is already @c DNNF_CERT_INFO.
+ *
+ * @warning ON-DISK ABI: like @c gate_type and @c provsql_arith_op, these
+ * integer values are persisted (in @c info1 / @c info2).  Reordering or
+ * renumbering existing tags will silently mislabel every existing
+ * installation's persistent circuit.  New tags must be appended at the end.
+ */
+typedef enum provsql_route {
+  PROVSQL_ROUTE_NONE         = 0, ///< No route rewrite: ordinary lineage
+  PROVSQL_ROUTE_SQ_REWRITE   = 1, ///< Hierarchical-CQ read-once rewrite (@c src/safe_query.c)
+  PROVSQL_ROUTE_BOUNDED_JW   = 2, ///< Joint-width UCQ compiler (@c src/UCQJointCompiler.h)
+  PROVSQL_ROUTE_REACHABILITY = 3  ///< Recursive-reachability compiler (@c src/reachability_evaluate.cpp)
+} provsql_route;
+
 /** Names of gate types */
 extern const char *gate_type_name[];
 

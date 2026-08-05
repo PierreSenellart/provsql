@@ -126,5 +126,119 @@ SELECT remove_provenance('q9s1'); SELECT remove_provenance('q9s2'); SELECT remov
 DROP TABLE q9r, q9t, q9s1, q9s2, q9s3;
 RESET provsql.provenance; RESET provsql.mobius; RESET provsql.joint_width;
 
+-- The three planner-time routes -- the safe-query (read-once) rewriter, the
+-- joint-width UCQ compiler and the reachability compiler -- each replace a
+-- query's ordinary lineage with a circuit of their own and then hand it to
+-- this same dispatcher, which evaluates all three by the independent /
+-- certified-island sweep.  Each stamps a route tag on the root it produces
+-- (provsql_route), so they report under their own names instead of all
+-- collapsing into 'independent'.
+
+-- (a) sq-rewrite: a hierarchical CQ q(x) :- A(x), B(x) with multiple matches
+--     per side.  Only the rewrite makes the per-id circuit read-once; the tag
+--     is what separates it from a circuit that was read-once to begin with.
+--     Twelve duplicates per side per id put the per-group circuit above the
+--     small-N crossover where the cheap-constant possible-worlds would
+--     otherwise underbid every linear method.
+SET provsql.provenance = 'boolean';
+SET provsql.joint_width = off;
+CREATE TABLE lem_l(id int); CREATE TABLE lem_r(id int);
+INSERT INTO lem_l SELECT 1 FROM generate_series(1,12);
+INSERT INTO lem_l SELECT 2 FROM generate_series(1,12);
+INSERT INTO lem_r SELECT 1 FROM generate_series(1,12);
+INSERT INTO lem_r SELECT 2 FROM generate_series(1,12);
+SELECT add_provenance('lem_l'); SELECT add_provenance('lem_r');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM lem_l;
+            PERFORM set_prob(provsql, 0.4) FROM lem_r; END $$;
+CREATE TEMP TABLE lem_sq AS
+  SELECT provenance() AS p FROM lem_l l, lem_r r WHERE l.id = r.id GROUP BY l.id;
+SELECT remove_provenance('lem_sq');
+
+SET provsql.last_eval_method = '';
+SELECT count(*) AS ran FROM lem_sq WHERE probability_evaluate(p) IS NOT NULL;
+SHOW provsql.last_eval_method;
+
+-- explicit 'sq-rewrite' likewise records
+SET provsql.last_eval_method = '';
+SELECT count(*) AS ran FROM lem_sq WHERE probability_evaluate(p, 'sq-rewrite') IS NOT NULL;
+SHOW provsql.last_eval_method;
+
+-- 'independent' stays available by name on a tagged root: the escape hatch
+-- names the computation rather than its producer (applicable() is only
+-- consulted by the auto-chooser).
+SET provsql.last_eval_method = '';
+SELECT count(*) AS ran FROM lem_sq WHERE probability_evaluate(p, 'independent') IS NOT NULL;
+SHOW provsql.last_eval_method;
+
+DROP TABLE lem_sq;
+SELECT remove_provenance('lem_l'); SELECT remove_provenance('lem_r');
+DROP TABLE lem_l, lem_r;
+
+-- (b) bounded-jw: H0 = R(x), S(x,y), T(y) is the canonical unsafe (#P-hard)
+--     query the Dalvi-Suciu dichotomy rules out from lifted inference; its
+--     existence provenance is replaced by the joint-width compiler's certified
+--     d-D, whose root carries the route tag in info2 next to DNNF_CERT_INFO.
+SET provsql.mobius = off;
+SET provsql.joint_width = on;
+CREATE TABLE lem_h0r(x int); CREATE TABLE lem_h0s(x int, y int); CREATE TABLE lem_h0t(y int);
+INSERT INTO lem_h0r VALUES (1),(2);
+INSERT INTO lem_h0s VALUES (1,1),(1,2),(2,2);
+INSERT INTO lem_h0t VALUES (1),(2);
+SELECT add_provenance('lem_h0r'); SELECT add_provenance('lem_h0s'); SELECT add_provenance('lem_h0t');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM lem_h0r;
+            PERFORM set_prob(provsql, 0.5) FROM lem_h0s;
+            PERFORM set_prob(provsql, 0.5) FROM lem_h0t; END $$;
+CREATE TEMP TABLE lem_jw AS
+  SELECT provenance() AS p FROM (
+    SELECT DISTINCT 1 AS one FROM lem_h0r, lem_h0s, lem_h0t
+     WHERE lem_h0r.x = lem_h0s.x AND lem_h0s.y = lem_h0t.y) q;
+SELECT remove_provenance('lem_jw');
+
+SET provsql.last_eval_method = '';
+SELECT count(*) AS ran FROM lem_jw WHERE probability_evaluate(p) IS NOT NULL;
+SHOW provsql.last_eval_method;
+
+-- explicit 'bounded-jw' likewise records
+SET provsql.last_eval_method = '';
+SELECT count(*) AS ran FROM lem_jw WHERE probability_evaluate(p, 'bounded-jw') IS NOT NULL;
+SHOW provsql.last_eval_method;
+
+DROP TABLE lem_jw;
+SELECT remove_provenance('lem_h0r'); SELECT remove_provenance('lem_h0s');
+SELECT remove_provenance('lem_h0t');
+DROP TABLE lem_h0r, lem_h0s, lem_h0t;
+RESET provsql.provenance; RESET provsql.mobius; RESET provsql.joint_width;
+
+-- (c) reachability: the columnar entry point, so this stays version-independent
+--     (the user-facing WITH RECURSIVE form is covered by btw_recursive).  Its
+--     root is the 'absorptive' assumption wrapper the compiler mints, tagged in
+--     info1 -- the assumption kind alone would not identify the route, since
+--     the truncated-fixpoint path mints 'absorptive' wrappers too.
+CREATE TEMP TABLE lem_reach AS
+  SELECT token AS p FROM reachability_materialize(
+    ARRAY[1,1,2,2,3], ARRAY[2,3,3,4,4],
+    (SELECT array_agg(public.uuid_generate_v5(uuid_ns_provsql(), 'lemreach'||i))
+       FROM generate_series(1,5) i),
+    ARRAY[0.9,0.5,0.8,0.6,0.7], NULL, NULL,
+    ARRAY[1], ARRAY['00000000-0000-0000-0000-000000000000']::uuid[],
+    ARRAY[1.0], true);
+
+SET provsql.last_eval_method = '';
+SELECT count(*) AS ran FROM lem_reach WHERE probability_evaluate(p) IS NOT NULL;
+SHOW provsql.last_eval_method;
+
+-- explicit 'reachability' likewise records
+SET provsql.last_eval_method = '';
+SELECT count(*) AS ran FROM lem_reach WHERE probability_evaluate(p, 'reachability') IS NOT NULL;
+SHOW provsql.last_eval_method;
+
+-- A route method named on a root that route did not produce is an error, not a
+-- silent evaluation under the wrong label.
+SET provsql.last_eval_method = '';
+DO $$ BEGIN PERFORM probability_evaluate(provenance(), 'bounded-jw') FROM lem; END $$;
+SHOW provsql.last_eval_method;
+
+DROP TABLE lem_reach;
+
 SELECT remove_provenance('lem');
 DROP TABLE lem;

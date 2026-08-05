@@ -372,3 +372,38 @@ def test_circuit_marks_absorptive_wrapper_and_certificates(client, test_dsn):
     for n in scene["nodes"]:
         if n["id"] != plus:
             assert not n.get("dnnf_certified"), n
+
+
+def test_circuit_surfaces_the_safe_query_route_tag(client, test_dsn):
+    """The safe-query rewriter's wrapper carries its route tag in info1, and
+    the scene must surface it as `route = "sq-rewrite"` on the surviving root.
+
+    That is what gates the matching probability method in the eval strip: the
+    C++ RouteMethod errors when named on a root its route did not produce, so
+    the option is offered exactly on the circuits it applies to."""
+    cleanup = _setup_two_tracked_tables(client)
+    try:
+        sql = ("SELECT a.x, provenance() FROM sq_t_a a, sq_t_b b "
+               "WHERE a.x = b.x GROUP BY a.x")
+        resp = client.post("/api/exec", json={
+            "sql": sql,
+            "mode": "circuit",
+            "prov_scheme": "boolean",
+        })
+        assert resp.status_code == 200, resp.data
+        wrapper_uuid = _provenance_uuid(resp.get_json())
+        assert _gate_type(test_dsn, wrapper_uuid) == "assumed"
+
+        scene = client.get(f"/api/circuit/{wrapper_uuid}").get_json()
+        ids = {n["id"]: n for n in scene["nodes"]}
+        assert ids[scene["root"]]["route"] == "sq-rewrite", ids[scene["root"]]
+
+        # And the same circuit evaluates under that name.
+        ev = client.post("/api/evaluate", json={
+            "token": wrapper_uuid,
+            "semiring": "probability",
+            "method": "sq-rewrite",
+        })
+        assert ev.status_code == 200, ev.data
+    finally:
+        client.post("/api/exec", json={"sql": cleanup, "mode": "circuit"})

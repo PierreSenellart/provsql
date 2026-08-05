@@ -74,6 +74,90 @@ remove_provenance
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+ran
+2
+(1 row)
+provsql.last_eval_method
+sq-rewrite
+(1 row)
+ran
+2
+(1 row)
+provsql.last_eval_method
+sq-rewrite
+(1 row)
+ran
+2
+(1 row)
+provsql.last_eval_method
+independent
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+ran
+1
+(1 row)
+provsql.last_eval_method
+bounded-jw
+(1 row)
+ran
+1
+(1 row)
+provsql.last_eval_method
+bounded-jw
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+ran
+4
+(1 row)
+provsql.last_eval_method
+reachability
+(1 row)
+ran
+4
+(1 row)
+provsql.last_eval_method
+reachability
+(1 row)
+ERROR:  ProvSQL: method 'bounded-jw' requires a provenance root produced by the joint-width UCQ compiler
+CONTEXT:  SQL statement "SELECT probability_evaluate(provenance(), 'bounded-jw') FROM lem"
+PL/pgSQL function inline_code_block line 1 at PERFORM
+provsql.last_eval_method
+
+(1 row)
 remove_provenance
 
 (1 row)

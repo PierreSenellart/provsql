@@ -621,7 +621,8 @@ std::map<std::vector<unsigned long>, pg_uuid_t> materializeAnswersSingleDP(
   roots.reserve(circ.answers.size());
   for (const auto &a : circ.answers)
     roots.push_back(a.root);
-  const auto uuid_of = materializeCertifiedDD(circ.dd, roots);
+  const auto uuid_of =
+    materializeCertifiedDD(circ.dd, roots, PROVSQL_ROUTE_BOUNDED_JW);
 
   std::map<std::vector<unsigned long>, pg_uuid_t> out;
   for (const auto &a : circ.answers)
@@ -758,7 +759,8 @@ Datum ucq_joint_materialize_tracked(PG_FUNCTION_ARGS)
   try {
     auto result = runTrackedFromArgs(fcinfo);
     const auto uuid_of =
-      materializeCertifiedDD(result.dd, {result.dd.getRoot()});
+      materializeCertifiedDD(result.dd, {result.dd.getRoot()},
+                             PROVSQL_ROUTE_BOUNDED_JW);
     pg_uuid_t *u = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
     *u = uuid_of.at(result.dd.getRoot());
     PG_RETURN_UUID_P(u);

@@ -705,6 +705,18 @@ def _parse_if_key(extra: str | None) -> dict | None:
     }
 
 
+# provsql_route tags (src/provsql_utils.h), as the info fields carry them:
+# in info1 of a route's gate_assumed wrapper, and in info2 of a materialised
+# certified d-D root (whose info1 is DNNF_CERT_INFO).  The value is the name
+# probability_evaluate reports and accepts as a method.  Append-only on the
+# extension side, so unknown tags simply yield no marker here.
+_ROUTE_BY_TAG = {
+    "1": "sq-rewrite",
+    "2": "bounded-jw",
+    "3": "reachability",
+}
+
+
 def _elide_markers(
     rows: list[dict], root: str
 ) -> tuple[list[dict], str, dict[str, dict]]:
@@ -771,6 +783,13 @@ def _elide_markers(
                 m["absorptive_assumed"] = True
             else:
                 m["boolean_assumed"] = True
+            # info1 of the wrapper additionally carries the planner-time
+            # route that produced this circuit (provsql_route), which the
+            # assumption kind alone does not identify: both kinds are also
+            # reachable through the public provenance_assume.
+            route = _ROUTE_BY_TAG.get(str(by_id[w].get("info1")))
+            if route is not None:
+                m["route"] = route
         else:
             m["inversion_free"] = True
             extra = by_id[w].get("extra")
@@ -962,6 +981,19 @@ def _layout(rows: list[dict], *, root: str, depth: int, frontier_uuids: set[str]
                 r["gate_type"] in ("plus", "times")
                 and str(r.get("info1")) == "1"
             ),
+            # The planner-time route that produced this circuit, if any
+            # (provsql_route): on a certified d-D root it rides in info2
+            # next to DNNF_CERT_INFO; on a route that wraps its root in a
+            # gate_assumed it comes off that (elided) wrapper's info1, via
+            # node_markers.  probability_evaluate reports the route under
+            # this name and accepts it as an explicit method, so the eval
+            # strip offers it exactly on the circuits it applies to.
+            "route": (
+                _ROUTE_BY_TAG.get(str(r.get("info2")))
+                if (r["gate_type"] in ("plus", "times")
+                    and str(r.get("info1")) == "1")
+                else None
+            ) or node_markers.get(r["node"], {}).get("route"),
             # Inversion-free marker: an elided gate_annotation wrapper above this
             # gate (IF badge).  if_cert is the certificate recipe summary on a
             # result root; if_key is the per-input order key + scene rank on a

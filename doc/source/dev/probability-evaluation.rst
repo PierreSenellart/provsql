@@ -290,6 +290,10 @@ Currently Supported Methods
    * - ``"independent"``
      - :cfunc:`BooleanCircuit::independentEvaluation` -- exact,
        linear time when every input gate appears at most once.
+   * - ``"sq-rewrite"``, ``"bounded-jw"``, ``"reachability"``
+     - ``RouteMethod`` -- the three planner-time routes, each the same
+       :cfunc:`BooleanCircuit::independentEvaluation` sweep on the circuit
+       its rewrite produced (see :ref:`route-reporting` below).
    * - ``"possible-worlds"``
      - :cfunc:`BooleanCircuit::possibleWorlds` -- exact enumeration
        of all :math:`2^n` worlds; capped at 64 inputs.
@@ -426,9 +430,72 @@ Currently Supported Methods
        highest-preference compiler whose binary resolves on PATH), and
        ``d-tree``; ``monte-carlo``, ``karp-luby``, and
        ``stopping-rule`` join on the relative / additive tolerance
-       paths.  ``interpret-as-dd`` is deliberately *not* in the chain
+       paths.  ``sq-rewrite`` / ``bounded-jw`` / ``reachability`` are in
+       the chain too, mutually exclusive with ``independent`` and with
+       each other (see :ref:`route-reporting`).
+       ``interpret-as-dd`` is deliberately *not* in the chain
        (by-name only): for a probability number it is redundant with
        ``independent``, which always wins.
+
+.. _route-reporting:
+
+Reporting the planner-time routes
+---------------------------------
+
+Three rewrites replace a query's ordinary lineage with a circuit of their
+own -- the safe-query (read-once) rewriter in :cfile:`safe_query.c`, the
+joint-width UCQ compiler (:cfile:`ucq_joint_evaluate.cpp`) and the
+reachability compiler (:cfile:`reachability_evaluate.cpp`) -- and then hand
+that circuit to this dispatcher like any other.  All three are resolved by
+:cfunc:`BooleanCircuit::independentEvaluation`, which is really two
+algorithms behind one entry point: a plain read-once sweep, and the
+certified-island sweep (``BooleanCircuit::evaluateCertifiedIsland``)
+taken at gates carrying ``DNNF_CERT_INFO``.  So without further information
+all three, plus a genuinely read-once circuit, report ``independent``.
+
+Circuit production (planner) and evaluation (here) are separate steps, so
+the *circuit* is the channel between them -- the same one ``mobius`` uses
+(a dedicated gate type) and ``inversion-free`` uses (a certificate in the
+root's ``extra``).  Each route stamps a ``provsql_route`` tag on the root it
+produces:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Route
+     - Where the tag lives
+   * - ``sq-rewrite``
+     - ``info1`` of the ``gate_assumed`` wrapper minted by
+       :sqlfunc:`assume_boolean` (the entry point the rewriter calls; the
+       ``'boolean'`` assumption kind alone does not identify the route,
+       since :sqlfunc:`provenance_assume` is public).
+   * - ``bounded-jw``
+     - ``info2`` of the materialised d-D root, alongside ``DNNF_CERT_INFO``
+       in ``info1`` (``materializeCertifiedDD`` in :cfile:`CertifiedDDMaterialize.cpp`).
+   * - ``reachability``
+     - ``info1`` of the ``'absorptive'`` ``gate_assumed`` wrapper
+       (``wrapAssumedAbsorptive``), and ``info2`` of the
+       ``plus-canonical`` dedup alias.  Again the assumption kind is not
+       enough: the truncated-fixpoint path mints ``'absorptive'`` wrappers
+       too.
+
+``rootRoute()`` in :cfile:`probability_evaluate.cpp` reads the tag back
+(skipping transparent ``gate_annotation`` wrappers, which sit *above* a
+route's root), and ``RouteMethod`` turns it into three catalog members.
+Their ``applicable()`` tests the tag, so exactly one of the four
+independent-sweep methods is admissible on any circuit and their identical
+``estimatedCost`` never has to be tie-broken; ``IndependentMethod`` declines
+whenever a tag is present.  ``byName`` ignores ``applicable()``, so naming
+``independent`` explicitly still works on a tagged root (it names the
+computation, not its producer), while naming a route method on a root that
+route did not produce is an error rather than a silent evaluation under the
+wrong label.
+
+The tag is only read off the route's own root gate: a circuit that combines
+route output with further provenance is no longer that route's circuit and
+reports as the ordinary evaluation it is.  Because the tags are persisted in
+``info1`` / ``info2``, ``provsql_route`` is append-only like ``gate_type``.
 
 The probability methods do not funnel through
 :cfunc:`BooleanCircuit::makeDD`: ``TreeDecompositionMethod`` and

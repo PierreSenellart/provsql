@@ -221,11 +221,29 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
 /**
  * @brief Wrap @p token in a Boolean-assumption marker (compatibility
  *        name; see @c provenance_assume).
+ *
+ * This is the entry point the safe-query (read-once) rewriter calls on
+ * every per-row root it produces, so the wrapper additionally carries
+ * @c PROVSQL_ROUTE_SQ_REWRITE in @c info1: the assumption kind alone does
+ * not identify the route (@c provenance_assume(t, 'boolean') is public),
+ * and the probability dispatcher reads the tag back to report
+ * @c sq-rewrite rather than the generic @c independent.  Build an untagged
+ * Boolean-assumption wrapper with @c provenance_assume directly.
  */
 CREATE OR REPLACE FUNCTION assume_boolean(token UUID) RETURNS UUID AS
 $$
-SELECT provsql.provenance_assume(token, 'boolean');
-$$ LANGUAGE sql SECURITY DEFINER PARALLEL SAFE;
+DECLARE
+  wrapped uuid;
+BEGIN
+  wrapped := provenance_assume(token, 'boolean');
+  IF wrapped IS NOT NULL THEN
+    -- 1 = PROVSQL_ROUTE_SQ_REWRITE (see provsql_route in src/provsql_utils.h)
+    PERFORM set_infos(wrapped, 1, 0);
+  END IF;
+  RETURN wrapped;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
 
 /**
  * @brief Wrap @p token in a fresh transparent @c gate_annotation carrying

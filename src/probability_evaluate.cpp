@@ -985,6 +985,46 @@ struct EvalContext {
 
 namespace {
 
+/// The planner-time route that produced @p root's circuit, read back from the
+/// route tag the route stamped there (see @c provsql_route).  Three rewrites --
+/// the safe-query read-once rewriter, the joint-width UCQ compiler and the
+/// reachability compiler -- replace a query's ordinary lineage with a circuit
+/// of their own, which they then hand to this dispatcher; the tag is what tells
+/// them apart here, since all three are evaluated by the same
+/// @c independentEvaluation sweep and would otherwise all report 'independent'.
+///
+/// Transparent @c gate_annotation wrappers (inversion-free certificate / order
+/// keys) are skipped: they sit *above* the route's root.  A tag is only read
+/// off the route's own root gate -- a circuit that combines route output with
+/// further provenance is no longer that route's circuit and reports as the
+/// ordinary evaluation it is.
+provsql_route rootRoute(const GenericCircuit *gc, gate_t root)
+{
+  if(gc == nullptr)
+    return PROVSQL_ROUTE_NONE;
+
+  gate_t g = root;
+  // Bounded walk: transparent annotation wrappers never nest deeply, and the
+  // bound keeps a malformed circuit from looping here.
+  for(unsigned i = 0; i < 8; ++i) {
+    if(gc->getGateType(g) != gate_annotation || gc->getWires(g).size() != 1)
+      break;
+    g = gc->getWires(g)[0];
+  }
+
+  const auto [info1, info2] = gc->getInfos(g);
+  const unsigned tag =
+    gc->getGateType(g) == gate_assumed ? info1
+    : (info1 == DNNF_CERT_INFO ? info2 : 0u);
+
+  switch(tag) {
+  case PROVSQL_ROUTE_SQ_REWRITE:   return PROVSQL_ROUTE_SQ_REWRITE;
+  case PROVSQL_ROUTE_BOUNDED_JW:  return PROVSQL_ROUTE_BOUNDED_JW;
+  case PROVSQL_ROUTE_REACHABILITY: return PROVSQL_ROUTE_REACHABILITY;
+  default:                         return PROVSQL_ROUTE_NONE;
+  }
+}
+
 /// Exact, decomposition of disconnected circuits.  Throws when the circuit is
 /// not independent, which the default ladder catches to fall through.
 class IndependentMethod : public ProbabilityMethod {
@@ -999,11 +1039,72 @@ public:
   double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
     return kCostIndependent * static_cast<double>(ctx.circuit_size);
   }
+  // A route-tagged root is served by that route's own method (same sweep,
+  // reported under the route's name), so the four stay mutually exclusive in
+  // the chooser instead of racing on an identical cost.  byName ignores this,
+  // keeping explicit 'independent' available on any circuit as the escape
+  // hatch that names the computation rather than its producer.
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    return rootRoute(ctx.gc, ctx.gc_root) == PROVSQL_ROUTE_NONE;
+  }
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     double r = ctx.c.independentEvaluation(ctx.gate);
     ctx.actual_method = "independent";
     return r;
   }
+};
+
+/**
+ * @brief Shared base of the three planner-time route methods.
+ *
+ * Circuit production and evaluation are separate steps -- the route runs in the
+ * planner, the evaluation here -- so the circuit itself is the channel between
+ * them: the route stamps its tag on the root it produces (@c provsql_route) and
+ * @c applicable() reads it back.  This is the @c mobius / @c inversion-free
+ * pattern: a first-class, by-name-invocable catalog method gated on a feature
+ * of the provenance root.
+ *
+ * All three evaluate by @c independentEvaluation, which is not one algorithm
+ * but two: a plain read-once sweep for the safe-query rewriter's circuit, and
+ * the certified-island sweep (@c BooleanCircuit::evaluateCertifiedIsland, over
+ * gates carrying @c DNNF_CERT_INFO) for the two compiled d-Ds.  What the method
+ * name adds over @c independent is which of the three produced the circuit.
+ */
+class RouteMethod : public ProbabilityMethod {
+public:
+  RouteMethod(provsql_route route, std::string name, std::string requirement)
+    : route_(route), name_(std::move(name)),
+      requirement_(std::move(requirement)) {}
+
+  std::string name() const override { return name_; }
+  ToleranceKind guaranteeKind() const override { return ToleranceKind::Exact; }
+  bool inDefaultChain() const override { return true; }
+  // Same raw-circuit requirement as 'independent': a route's d-D can carry a
+  // mulinput (BID) block the rewrite would dissolve.
+  bool handlesMultivalued() const override { return true; }
+  // O(S), exactly 'independent' -- it IS that sweep.
+  double estimatedCost(const EvalContext &ctx, const Tolerance &) const override {
+    return kCostIndependent * static_cast<double>(ctx.circuit_size);
+  }
+  bool applicable(const EvalContext &ctx, const Tolerance &) const override {
+    return rootRoute(ctx.gc, ctx.gc_root) == route_;
+  }
+  double evaluate(EvalContext &ctx, const Tolerance &) const override {
+    // Named explicitly on an untagged root: report the missing precondition
+    // rather than silently evaluating as something else (as 'mobius' and
+    // 'inversion-free' do).
+    if(ctx.explicitly_named && rootRoute(ctx.gc, ctx.gc_root) != route_)
+      provsql_error("method '%s' requires %s", name_.c_str(),
+                    requirement_.c_str());
+    double r = ctx.c.independentEvaluation(ctx.gate);
+    ctx.actual_method = name_;
+    return r;
+  }
+
+private:
+  const provsql_route route_;
+  const std::string name_;
+  const std::string requirement_;
 };
 
 /// Exact, structured d-DNNF over an inversion-free certificate.
@@ -1807,6 +1908,22 @@ const MethodCatalog &MethodCatalog::instance()
     // tree-decomposition, compilation.  interpret-as-dd is NOT in the portfolio
     // -- it is redundant with independent (see InterpretAsDd).
     c.registerMethod(std::make_unique<IndependentMethod>());
+    // The three planner-time routes: same sweep as 'independent', reported (and
+    // invocable) under the name of the rewrite that produced the circuit.
+    // Mutually exclusive with 'independent' and with each other via the root's
+    // route tag, so the identical cost never has to be tie-broken.
+    c.registerMethod(std::make_unique<RouteMethod>(
+                       PROVSQL_ROUTE_SQ_REWRITE, "sq-rewrite",
+                       "a provenance root produced by the safe-query "
+                       "(read-once) rewriter"));
+    c.registerMethod(std::make_unique<RouteMethod>(
+                       PROVSQL_ROUTE_BOUNDED_JW, "bounded-jw",
+                       "a provenance root produced by the joint-width UCQ "
+                       "compiler"));
+    c.registerMethod(std::make_unique<RouteMethod>(
+                       PROVSQL_ROUTE_REACHABILITY, "reachability",
+                       "a provenance root produced by the reachability "
+                       "compiler"));
     c.registerMethod(std::make_unique<InversionFreeMethod>());
     c.registerMethod(std::make_unique<MobiusMethod>());
     c.registerMethod(std::make_unique<TreeDecompositionMethod>());
