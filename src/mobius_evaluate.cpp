@@ -780,7 +780,7 @@ public:
     pending_lineage = lineage;
     lineage_consumed = false;
     pg_uuid_t root = compile(s, /*top=*/true);
-    if(!lineage_consumed)
+    if(!lineage_consumed && !(lineage.empty() && isMobiusGate(root)))
       // The top did not go through a Möbius step (a safe query that reached
       // this route, or one whose top rule was an independent union): wrap it in
       // a thin gate_mobius selector carrying the lineage, if any, and the value
@@ -788,6 +788,17 @@ public:
       // routes the token to the Möbius evaluator (the only one that reads the
       // signed combinations of any nested gate_mobius) and what
       // @c mobius_or_null tests to tell a success from a decline.
+      //
+      // Skipped when there is no lineage to attach AND the compiled root is
+      // already a gate_mobius: the wrapper would then be a pure identity (a
+      // one-element combination with coefficient 1) over a gate that already
+      // satisfies both requirements.  That is the measure-only entry points'
+      // case (@c ucq_mobius_provenance and friends pass no lineage, so
+      // @c lineage_consumed never becomes true), where the top-level Möbius
+      // step's own combination is the root the caller should see.  A root that
+      // is NOT a gate_mobius -- a gate_zero / gate_one from a combination that
+      // collapsed to a constant -- still gets wrapped, since only the wrapper
+      // makes such a token recognisable as a Möbius success.
       root = mkMobius({root}, {1}, lineage);
     return root;
   }
@@ -834,6 +845,14 @@ private:
 
   /// gate_one (empty times) / gate_zero (empty plus).
   pg_uuid_t mkConst(bool one) { return callProvenance(one, {}); }
+
+  /// True iff @p u is a @c gate_mobius this compilation minted.  @c created
+  /// holds exactly the combination gates @c mkMobius produced (including one it
+  /// found already content-addressed in the store), so this needs no store
+  /// round-trip.  Used by @c compileTop to skip an identity wrapper.
+  bool isMobiusGate(const pg_uuid_t &u) const {
+    return created.count(uuid2string(u)) != 0;
+  }
 
   /// Independent OR / AND over child tokens.  Children are deduplicated first:
   /// the certified-independent evaluation is read-once, so a child must not be

@@ -628,7 +628,11 @@ def test_circuit_mobius_root_renders_as_mobius_with_coefficients(client, test_ds
     and carry the per-child coefficients in `extra`, keyed by child UUID, so the
     front-end can label each edge with its signed coefficient.  For q9 the
     lattice has exactly one #P-hard element with coefficient 0 (it cancels), so
-    7 children survive."""
+    7 children survive.
+
+    The scene root IS that combination: compileTop only wraps its result in a
+    thin one-element μ when it has a literal lineage to attach or the result is
+    a constant, so a measure-only token like this one is not wrapped."""
     root = _mobius_q9_root(test_dsn)
     # depth 2: one element's circuit is a shared sub-DAG of another's, so its
     # root edge sits at BFS depth 2; depth >= 2 renders every coefficient edge.
