@@ -81,22 +81,33 @@ and all other queries remain evaluable.
    the key monus identities -- ``monus_smallest``
    (:math:`a \ominus b` is the least :math:`c` such that
    :math:`a \le b + c`), ``monus_self``, ``zero_monus``,
-   ``monus_add``, ``add_monus`` -- plus the characterisation of
+   ``monus_add``, ``add_monus`` -- plus the uniqueness of the
+   monus given the semiring (``monus_unique``) and the
+   characterisation of
    idempotent m-semirings (``idempotent_iff_add_monus``,
    ``plus_is_join``).  The typeclass also carries the
-   :math:`\delta` operator as a field, with three axioms --
+   :math:`\delta` operator as a field, with four axioms --
    `delta_zero
    <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_zero>`_
    (:math:`\delta(0) = 0`),
    `delta_natCast_pos
    <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_natCast_pos>`_
-   (:math:`\delta(n) = 1` for positive :math:`n`), and
+   (:math:`\delta(n) = 1` for positive :math:`n`),
    `delta_regrouping
    <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_regrouping>`_
    (:math:`\delta\bigl(\sum_i \delta(a_i)\bigr) = \delta\bigl(\sum_i a_i\bigr)`
-   for any multiset of annotations).  The third axiom makes
+   for any multiset of annotations), and
+   `delta_absorb
+   <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#SemiringWithMonus.delta_absorb>`_
+   (:math:`a \otimes \delta(a \oplus b) = a`).  The third axiom makes
    grouped aggregation invariant under partition coarsening
-   and strengthens idempotence; the derived
+   and strengthens idempotence; the fourth is absorption
+   (:math:`a \sqcap (a \sqcup b) = a` in lattice-like semirings,
+   and immediate for the indicator :math:`\delta` of a
+   canonically ordered semiring), and it is what makes the
+   homomorphism-commutation theorem for aggregation and
+   ``HAVING`` hold over *every* m-semiring rather than under side
+   conditions.  The derived
    `delta_one
    <https://provsql.org/lean-docs/Provenance/SemiringWithMonus.html#delta_one>`_
    (:math:`\delta(1) = 1`) and
@@ -118,13 +129,23 @@ and all other queries remain evaluable.
    ``Bool``, ``Nat`` (counting), ``BoolFunc`` (Boolean
    formulas), ``How`` (the how-provenance universal semiring),
    ``Why``, ``Which`` (lineage), ``MinMax`` (and ``MaxMin`` via
-   ``OrderDual``), ``Tropical``, ``Lukasiewicz``, ``Viterbi``,
-   and ``IntervalUnion`` (finite unions of intervals over a
+   ``OrderDual``), ``Tropical`` (min-plus over the naturals,
+   integers, rationals or reals with :math:`\infty`),
+   ``Lukasiewicz``, ``Viterbi``,
+   and ``Interval`` / ``IntervalUnion`` (intervals and finite
+   unions of intervals over a
    dense linear order, used for temporal databases), each with
    a proof of the m-semiring axioms, a concrete :math:`\delta`,
    and any extra properties (absorptivity, idempotence,
    left-distributivity of multiplication over monus) that
-   matter for optimisation.
+   matter for optimisation.  One instance is there as a
+   counterexample rather than as a semiring ProvSQL evaluates:
+   `ChainFive
+   <https://provsql.org/lean-docs/Provenance/Semirings/ChainFive.html>`_,
+   a five-element chain that is absorptive but not
+   :math:`\otimes`-over-:math:`\ominus` distributive, and
+   witnesses that the hypotheses of the ``HAVING`` identities
+   cannot be dropped.
 
 .. _semiring-optional-methods:
 

@@ -140,6 +140,35 @@ exit 127. After the call, the wait status is decoded by
 is used by :cfunc:`BooleanCircuit::wmcCount` for the weighted model
 counters and by :cfunc:`DotCircuit::render` for ``graph-easy``.
 
+.. note::
+
+   The two steps this pipeline rests on are machine-checked in the
+   ProvSQL Lean 4 library.  The Tseytin transformation is proved
+   **equisatisfiable** with the circuit it encodes
+   (`Circuit.tseitin_equisat
+   <https://provsql.org/lean-docs/Provenance/Tseitin.html#Circuit.tseitin_equisat>`_),
+   and both bottom-up probability evaluators are proved correct
+   against the sum-over-valuations semantics: the read-once one
+   with its inclusion-exclusion correction at ⊕ gates
+   (`Circuit.prob
+   <https://provsql.org/lean-docs/Provenance/Circuit.html#Circuit.prob>`_)
+   and the direct-summation one licensed by decomposability and
+   determinism
+   (`Circuit.probDD
+   <https://provsql.org/lean-docs/Provenance/Circuit.html#Circuit.probDD>`_).
+   That the tuple-level probabilities these compute are the ones
+   the possible-worlds semantics asks for is
+   `randomWorld_evaluateAnnotated
+   <https://provsql.org/lean-docs/Provenance/Probability.html#randomWorld_evaluateAnnotated>`_;
+   for queries with aggregate comparisons anywhere, the same
+   statement is
+   `AggQuery.boolean_pqe
+   <https://provsql.org/lean-docs/Provenance/AggQueryProbability.html#AggQuery.boolean_pqe>`_
+   (non-empty answer) and
+   `AggQuery.tuple_pqe
+   <https://provsql.org/lean-docs/Provenance/AggQueryProbability.html#AggQuery.tuple_pqe>`_
+   (marginal of an answer tuple).
+
 Knowledge Compilers and the NNF Format
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -947,6 +976,53 @@ branch-spanning / shared-tuple residuals too); the rounding-based rejection
 FPTRAS (Thm 9) would add only rare-event sample efficiency.  Pinned by
 ``test/sql/having_agg_fptras.sql``.
 
+.. note::
+
+   A second, complementary body of ``HAVING`` results is
+   machine-checked in the ProvSQL Lean 4 library, on the *symbolic*
+   side of the same problem -- the provenance of an aggregate
+   comparison rather than only its probability:
+
+   - The possible-world semantics of a grouping followed by an
+     aggregate comparison is
+     `Having.havingProv
+     <https://provsql.org/lean-docs/Provenance/HavingSemantics.html#Having.havingProv>`_,
+     with the algebraic identities behind the counting aggregates
+     and the collapse of the world sum onto its minimal worlds in
+     an absorptive m-semiring.
+   - For ``MIN``, ``MAX`` and ``PICKFIRST`` and all six
+     comparison operators, that world sum has a closed form
+     computable by a **single scan** over the group's
+     occurrences, hence in polynomial time in data complexity
+     (`Having.minScan_correct
+     <https://provsql.org/lean-docs/Provenance/HavingMinMax.html#Having.minScan_correct>`_,
+     `Having.maxScan_correct
+     <https://provsql.org/lean-docs/Provenance/HavingMinMax.html#Having.maxScan_correct>`_)
+     -- the formal counterpart of what
+     :cfunc:`runMinMaxCmpEvaluator` does.
+   - The probability identities the closed-form evaluators use --
+     the MIN/MAX factorisations and the Poisson-binomial-style
+     recurrences and CDF assembly for ``COUNT`` and ``SUM`` --
+     are proved under contributor independence in
+     `Provenance.HavingProbability
+     <https://provsql.org/lean-docs/Provenance/HavingProbability.html>`_,
+     with the enumeration algorithms and their correctness in
+     `CountEnum.countEnum_correct
+     <https://provsql.org/lean-docs/Provenance/Algorithms/CountEnum.html#CountEnum.countEnum_correct>`_
+     and
+     `SumDP.sumDP_correct
+     <https://provsql.org/lean-docs/Provenance/Algorithms/SumDP.html#SumDP.sumDP_correct>`_.
+   - On the hardness side, and independently of the #P-hardness
+     results tabulated above, merely deciding whether a
+     ``HAVING SUM`` provenance is non-:math:`\mathbb{0}` -- whether
+     *any* possible world satisfies the predicate -- is
+     **NP-complete already in data complexity**
+     (`havingSumNonzero_NP_complete
+     <https://provsql.org/lean-docs/Provenance/HavingComplexity.html#Provenance.Complexity.havingSumNonzero_NP_complete>`_),
+     by a first-order reduction from Knapsack.  That is the
+     formal reason the threshold-lineage expansion has no
+     tractable exact route in general, and why the pseudo-polynomial
+     caps and the sampler fallback above exist.
 
 .. _bids-and-multivalued-inputs:
 
@@ -1045,6 +1121,28 @@ method.  The dispatcher in
 runs on the raw circuit; every other method falls through to the
 rewrite first.  This is the pivot point referenced in
 :ref:`adding-new-probability-method` below.
+
+.. note::
+
+   The routes that do *not* go through the rewrite -- the ones
+   that evaluate a block natively -- are underwritten by
+   `Provenance.CategoricalBlock
+   <https://provsql.org/lean-docs/Provenance/CategoricalBlock.html>`_
+   in the ProvSQL Lean 4 library, an independent re-proof of
+   weighted model counting over **categorical block variables**
+   (free Boolean variables being the two-outcome instance).
+   `CatCircuit.dD_eventProb_eq_probDD
+   <https://provsql.org/lean-docs/Provenance/CategoricalBlock.html#CatCircuit.dD_eventProb_eq_probDD>`_
+   proves the direct-summation evaluator correct on decomposable +
+   deterministic categorical circuits, and
+   `CatAssignment.singleBlock_detOR_sound
+   <https://provsql.org/lean-docs/Provenance/CategoricalBlock.html#CatAssignment.singleBlock_detOR_sound>`_
+   is what licenses treating a ``plus`` over the ``mulinput`` gates
+   of one block as a *deterministic* OR -- the certificate mark the
+   certified-island sweep
+   (:cfunc:`BooleanCircuit::evaluateCertifiedIsland`) consumes --
+   together with the :math:`1 - \sum_i p_i` none-branch of a block
+   whose probabilities do not sum to 1.
 
 
 .. _shapley-banzhaf:

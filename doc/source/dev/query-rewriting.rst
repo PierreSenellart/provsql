@@ -568,43 +568,95 @@ the paper:
   :cfunc:`process_set_operation_union`; the tokens from each branch
   flow through independently.
 
+.. _query-rewriting-formal-verification:
+
 Formal Verification
 ^^^^^^^^^^^^^^^^^^^
 
 The correctness of rules (R1)--(R5) is fully machine-checked
-in the ProvSQL Lean 4 library.  The unified
-statement covering all five rules is
-`Query.rewriting_valid_full
-<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.rewriting_valid_full>`_
-in the ``Provenance.QueryEvaluateInVK`` module, stated against
-the V_K-lifted evaluator
-`Query.evaluateAnnotatedFull
-<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVK.html#Query.evaluateAnnotatedFull>`_:
-for every supported query ``q`` and every annotated database
-``d``, evaluating ``q`` against the annotated semantics and
-then projecting to the composite (tuple + annotation)
-representation yields the same result as evaluating the
-rewritten query against the composite database.  The V_K
-interpretation (values lifted with their K-semimodule
-annotation, Definition 7 of the ICDE 2026 paper) is what makes
-the aggregation rule (R5) statable alongside (R1)--(R4) in a
-single theorem.
+in the ProvSQL Lean 4 library, in a ``sorry``-free development.
+
+The library's primary query syntax is **kind-indexed**:
+`AggQuery
+<https://provsql.org/lean-docs/Provenance/AggQuery.html#AggQuery>`_
+(module ``Provenance.AggQuery``) indexes every column by one of
+three kinds -- regular values, aggregate tokens, provenance
+values -- mirroring the three data types through which ProvSQL
+enforces its own discipline (regular SQL values, ``agg_token``,
+``uuid``).  The scope restrictions on aggregate results -- no
+duplicate elimination, no difference, no re-grouping over them --
+are therefore static typing there, exactly as they are typing
+here, rather than side conditions carried by the theorems.  An
+aggregate result is a *symbolic token*,
+`AggValue
+<https://provsql.org/lean-docs/Provenance/AggValue.html#AggValue>`_,
+the formal counterpart of the ``agg_token`` type
+(:doc:`aggregation`).
+
+The rewriting is proved in four pieces:
+
+- **(R1)--(R4) on the classical syntax** --
+  `Query.rewriting_valid
+  <https://provsql.org/lean-docs/Provenance/QueryRewriting.html#Query.rewriting_valid>`_
+  in ``Provenance.QueryRewriting``: for every well-formed query
+  ``q`` and annotated database ``d``, evaluating ``q`` against
+  the annotated semantics and then projecting to the composite
+  (tuple + annotation) representation yields the same result as
+  evaluating the rewritten query against the composite database.
+  The same statement natively on the kind-indexed syntax is
+  `AggQuery.rewriting_valid
+  <https://provsql.org/lean-docs/Provenance/AggQueryRewriting.html#AggQuery.rewriting_valid>`_.
+- **(R5), the aggregation rule** --
+  `AggQuery.gammaRew_valid
+  <https://provsql.org/lean-docs/Provenance/AggQueryGroupRewriting.html#AggQuery.gammaRew_valid>`_
+  in ``Provenance.AggQueryGroupRewriting``, for a ``GROUP BY``
+  whose aggregate columns flow onward as output values.
+- **The** ``HAVING`` **site** --
+  `AggQuery.havingPredRew
+  <https://provsql.org/lean-docs/Provenance/AggQueryClosure.html#AggQuery.havingPredRew>`_,
+  a grouping with its aggregates exposed as output columns and
+  the gates in the provenance column (the shape ProvSQL emits),
+  for an arbitrary predicate with an aggregate atom, regular
+  atoms mixed in included.
+- **Compositional closure** --
+  `AggQuery.rewritesTo_valid
+  <https://provsql.org/lean-docs/Provenance/AggQueryClosure.html#AggQuery.rewritesTo_valid>`_
+  in ``Provenance.AggQueryClosure``: selection, projection,
+  union, duplicate elimination
+  (`AggQuery.dedupRew_valid
+  <https://provsql.org/lean-docs/Provenance/AggQueryClosure.html#AggQuery.dedupRew_valid>`_,
+  the :math:`\varepsilon` rule) and product
+  (`AggQuery.prodRew_valid
+  <https://provsql.org/lean-docs/Provenance/AggQueryClosure.html#AggQuery.prodRew_valid>`_)
+  all close over token-bearing subqueries, so the
+  ``SELECT … FROM (GROUP BY …)`` shape is covered.  Only
+  difference above a grouping is left out.
+
+The rewritten world has its own evaluator,
+`AggQuery.evaluateRew
+<https://provsql.org/lean-docs/Provenance/AggQueryHavingRewriting.html#AggQuery.evaluateRew>`_,
+in which the two token-building primitives are interpreted
+directly: the annotated grouping is
+:sqlfunc:`provenance_aggregate` (explicit annotation term, group
+guard :math:`\delta(\bigoplus \mathit{occs})` in the provenance
+output column), and the aggregate comparison gate is
+:sqlfunc:`provenance_cmp` (a ``cmp`` gate), read by the
+predicate provenance of the token.  Off those operators the
+evaluator is the plain semantics, which is what connects it back
+to the classical rewriting correctness.
 
 A companion theorem,
-`Query.evaluateAnnotatedFull_hom
-<https://provsql.org/lean-docs/Provenance/QueryEvaluateInVKHom.html#Query.evaluateAnnotatedFull_hom>`_
-in the ``Provenance.QueryEvaluateInVKHom`` module, proves
+`AggQuery.evaluateAnnotated_hom
+<https://provsql.org/lean-docs/Provenance/AggQueryHom.html#AggQuery.evaluateAnnotated_hom>`_
+in the ``Provenance.AggQueryHom`` module, proves
 that query evaluation commutes with m-semiring homomorphisms
-on the full algebra including aggregation (the formal analogue
+on the full language including aggregation and ``HAVING`` (the
+formal analogue
 of :cite:`DBLP:conf/pods/GreenKT07`, Proposition 3.5, and
 :cite:`DBLP:journals/japll/GeertsP10`, Proposition 1, lifted to
-m-semirings via ``SemiringWithMonusHom`` and extended to
-aggregation via the K-semimodule structure formalised in
-`Provenance.KSemiModule
-<https://provsql.org/lean-docs/Provenance/KSemiModule.html>`_
-and
-`Provenance.LiftedTK
-<https://provsql.org/lean-docs/Provenance/LiftedTK.html>`_).
+m-semirings via ``SemiringWithMonusHom``), with no hypothesis
+beyond being an m-semiring -- the :math:`\delta` absorption
+axiom is what buys that generality.
 The restriction of this theorem to the non-aggregation
 fragment is
 `Query.evaluateAnnotated_hom

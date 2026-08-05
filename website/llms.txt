@@ -47,6 +47,8 @@ current reference is the documentation below.
 
 - [ProvSQL system paper (ICDE 2026)](https://arxiv.org/abs/2504.12058): current description of the system
 - [Publications](https://provsql.org/publications/): full list of related research
+- [Lean formalization](https://provsql.org/lean/): machine-checked theory behind the system (m-semirings, annotated-database semantics, query rewriting, HAVING provenance, circuits, probability, complexity)
+- [Lean API documentation](https://provsql.org/lean-docs/Provenance.html): the formalization itself, from the companion [provenance-lean](https://github.com/PierreSenellart/provenance-lean) library
 
 ## Optional
 

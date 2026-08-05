@@ -57,6 +57,18 @@ provsql-studio --dsn postgresql://localhost/mydb
 See the [Studio chapter](https://provsql.org/docs/user/studio.html) of the
 documentation.
 
+## Formal foundations
+
+The theory ProvSQL implements – m-semirings and their δ operator, the
+semantics of annotated databases, the query rewriting and its compositional
+closure, `HAVING` provenance, provenance circuits and probabilistic
+evaluation – has a machine-checked counterpart in the companion Lean 4
+library [provenance-lean](https://github.com/PierreSenellart/provenance-lean),
+a `sorry`-free development whose API documentation is browsable at
+<https://provsql.org/lean-docs/Provenance.html>. See the
+[Lean formalization](https://provsql.org/lean/) page for an overview of what
+is proved.
+
 ## License
 
 ProvSQL is provided as open-source software under the MIT License. See [LICENSE](LICENSE).

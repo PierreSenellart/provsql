@@ -9,6 +9,16 @@ are not apparent from the code alone.
 The primary reference for the system design is the ICDE 2026 paper
 :cite:`sen2026provsql`.
 
+The theory the system implements -- m-semirings and their :math:`\delta`
+operator, annotated-database semantics, the query rewriting and its
+compositional closure, ``HAVING`` provenance, provenance circuits and
+probabilistic evaluation -- has a machine-checked counterpart in the
+companion `Lean 4 library <https://provsql.org/lean-docs/Provenance.html>`_
+(`source <https://github.com/PierreSenellart/provenance-lean>`_), a
+``sorry``-free development.  Chapters below point at the relevant theorems
+where they exist; they are the authority on what the algebra *requires*,
+which is what a new evaluator or rewriting rule has to respect.
+
 Chapters
 --------
 

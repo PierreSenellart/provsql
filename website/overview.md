@@ -139,8 +139,10 @@ databases and runnable notebooks for the tutorial and the case studies.
 ## Lean Formalization {#lean}
 
 Key parts of the algebraic framework underlying ProvSQL – m-semirings,
-annotated databases, relational algebra semantics, and aggregation – have
-been formally verified in Lean 4.
+annotated databases, relational algebra semantics, aggregation and
+`HAVING`, the query rewriting and its compositional closure, provenance
+circuits and probabilistic evaluation – have been formally verified in
+Lean 4, in a `sorry`-free development.
 See the [Lean formalization](/lean/) page for details.
 
 ## License {#license}

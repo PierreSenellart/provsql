@@ -196,6 +196,38 @@ factor suffices, under ⊕ every disjunct must entail.  Where it
 does not hold the δ stays -- wrapped around the group's ⊕ in the
 fused shape, left in place in the row tokens otherwise.
 
+.. note::
+
+   This supersede discipline is machine-checked in the ProvSQL
+   Lean 4 library, on a query syntax whose columns are indexed by
+   the three kinds ProvSQL distinguishes by type -- regular
+   values, aggregate tokens, provenance values (see
+   :ref:`the formal-verification section of the rewriting chapter
+   <query-rewriting-formal-verification>`).  Row annotations there
+   are *factored*
+   (`GenAnn <https://provsql.org/lean-docs/Provenance/AggQuery.html#GenAnn>`_):
+   a grouping leaves its group-existence factor pending, an
+   aggregate comparison supersedes exactly the compared groups'
+   factors with the predicate provenance of the token, and a
+   projection cashes the factors of the token columns it drops.
+   Whether the guard is superseded or kept is decided by
+   `GenPred.entailsExistence
+   <https://provsql.org/lean-docs/Provenance/AggQuery.html#GenPred.entailsExistence>`_,
+   the counterpart of :cfunc:`having_entails_group_existence`: an
+   aggregate-only predicate always supersedes it
+   (`GenPred.aggOnly_entailsExistence
+   <https://provsql.org/lean-docs/Provenance/AggQueryClosure.html#GenPred.aggOnly_entailsExistence>`_),
+   one with a regular atom reachable in an empty group does not --
+   that atom being an indicator gate
+   (`TermG.chiGate
+   <https://provsql.org/lean-docs/Provenance/AggQuery.html#TermG.chiGate>`_),
+   the counterpart of ``regular_indicator``.  For the fused shape,
+   one aggregate comparison directly above a grouping, the
+   annotation is proved to be exactly the possible-world predicate
+   provenance of the group, one row per group key
+   (`AggQuery.havingSite_evaluateAnnotated
+   <https://provsql.org/lean-docs/Provenance/AggQueryBridges.html#AggQuery.havingSite_evaluateAnnotated>`_).
+
 
 The ``agg_token`` Type
 ----------------------

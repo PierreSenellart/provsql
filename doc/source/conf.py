@@ -105,6 +105,7 @@ html_show_sourcelink = False
 # ---------------------------------------------------------------------------
 
 _SQL_FUNC_MAP = {
+    'provenance_cmp':           '/doxygen-sql/html/group__semiring__operations.html#ga61cd60009594ebe81df8bb8f44739b44',
     'provenance_cmp_times':     '/doxygen-sql/html/group__semiring__operations.html#ga88e56ed8fbdd4e7e506e388ba8906924',
     'cmp_surviving_factors':    '/doxygen-sql/html/group__semiring__operations.html#ga14e2ecafb7ca244ed577a2df01b3b6be',
     'agg_collapsed_moment':     '/doxygen-sql/html/group__probability.html#ga6ef6a60b91000efb00b326c7f11cd750',
@@ -478,6 +479,7 @@ _C_FUNC_MAP = {
     # probability_evaluate.cpp
     'probability_evaluate':          '/doxygen-c/html/probability__evaluate_8cpp.html#a1246fa7f0dbe0f320cfa7b67dfebaa5f',
     'probability_evaluate_internal': '/doxygen-c/html/probability__evaluate_8cpp.html#a3c8a974fa0c6ddff614930936d2d791e',
+    'BooleanCircuit::evaluateCertifiedIsland': '/doxygen-c/html/classBooleanCircuit.html#a536eb5b2102a8b41213547ed74871116',
     'BooleanCircuit::rewriteMultivaluedGates': '/doxygen-c/html/classBooleanCircuit.html#a90ff865c9963480f00000d62c6c37c2f',
     'BooleanCircuit::rewriteMultivaluedGatesRec': '/doxygen-c/html/classBooleanCircuit.html#a3f6c1d03227119c7f4886cbf34090022',
     'BooleanCircuit::TseytinCNF':   '/doxygen-c/html/classBooleanCircuit.html#a5fb5536b66742bb6d68aa1820ee8cba2',
