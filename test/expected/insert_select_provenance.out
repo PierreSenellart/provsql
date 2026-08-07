@@ -22,3 +22,28 @@ Dave|Nancy|Dave ⊗ Nancy
 Magdalen|Nancy|Magdalen ⊗ Nancy
 (3 rows)
 WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
+WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+c|s
+7|28
+(1 row)
+WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+city|n
+Berlin|2
+New York|2
+Paris|3
+(3 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+n|token_kind
+3|one
+(1 row)

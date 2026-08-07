@@ -47,3 +47,9 @@ SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
 SELECT add_provenance('personnel');
 SELECT create_provenance_mapping('personnel_name', 'personnel', 'name');
 SELECT count(*) FROM personnel_name;
+
+-- Symmetrically, remove_provenance on an untracked table is a NOTICE-and-no-op
+-- rather than an error.
+CREATE TABLE untracked (x int);
+SELECT remove_provenance('untracked');
+DROP TABLE untracked;

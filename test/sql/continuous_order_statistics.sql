@@ -100,6 +100,26 @@ SELECT expected(greatest(x,y,z)) = 0.75 AS bare_greatest_exact,
        expected(least(x,y,z))    = 0.25 AS bare_least_exact
   FROM d;
 
+-- The lift reaches the values a data-modifying statement supplies directly:
+-- the single-row INSERT ... VALUES form (which parse analysis folds into the
+-- INSERT's own target list), the multi-row one (an RTE_VALUES), and an
+-- UPDATE ... SET.  GREATEST / LEAST is SQL grammar and cannot be reached
+-- through the schema-qualified constructor, so those positions have to behave
+-- exactly as a SELECT list does.
+CREATE TABLE order_stat_values (u uuid);
+INSERT INTO order_stat_values VALUES (greatest(uniform(0,1), uniform(2,3))::uuid);
+INSERT INTO order_stat_values
+  VALUES (greatest(uniform(0,1), uniform(2,3))::uuid),
+         (least(uniform(4,5), uniform(6,7))::uuid);
+SELECT get_gate_type(u) AS gate,
+       round(expected(u::random_variable)::numeric, 6) AS e
+  FROM order_stat_values ORDER BY e;
+UPDATE order_stat_values SET u = greatest(uniform(5,6), uniform(7,8))::uuid;
+SELECT DISTINCT get_gate_type(u) AS gate,
+       round(expected(u::random_variable)::numeric, 6) AS e
+  FROM order_stat_values;
+DROP TABLE order_stat_values;
+
 -- Idempotence: greatest(x,x,y) de-duplicates to greatest(x,y) -- the same
 -- gate -- and greatest(x) collapses to x.
 SELECT (greatest(x,x,y))::uuid = (greatest(x,y))::uuid AS dedup_same_gate,

@@ -303,6 +303,8 @@ _C_FUNC_MAP = {
     'add_to_select':             '/doxygen-c/html/provsql_8c.html#a6fe52ea4c7f2cc8eb924135ebf239d85',
     'replace_provenance_function_by_expression': '/doxygen-c/html/provsql_8c.html#a3d5fee9c96595db519504978edba8683',
     'process_insert_select':     '/doxygen-c/html/provsql_8c.html#ac3ee0aa66fe553ba28a2bb2959a440ad',
+    'rewrite_dml_rv_surface':    '/doxygen-c/html/provsql_8c.html#a6cb9e0a80453bee2265b6651b85f14f3',
+    'restore_insert_source_types': '/doxygen-c/html/provsql_8c.html#a78c7e4d776bb5800e907f4f8fe0e46bf',
     'inline_ctes':               '/doxygen-c/html/provsql_8c.html#ad7757d9d226dfe9f92af6a032d286241',
     'remove_provenance_attributes_select': '/doxygen-c/html/provsql_8c.html#ab49a6e80331db4c440e34e0b2ec77f14',
     'rewrite_non_all_into_external_group_by': '/doxygen-c/html/provsql_8c.html#aa6aa776cd1d015ffcc6aa21c8b2d2198',

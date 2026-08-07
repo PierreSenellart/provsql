@@ -859,6 +859,17 @@ $$
 DECLARE
 BEGIN
   PERFORM provsql.remove_table_info(_tbl::oid);
+  -- Idempotence, mirroring add_provenance: removing provenance from a
+  -- table that does not have it is a NOTICE-and-no-op, so setup scripts
+  -- and notebook cells can be re-run freely.  The metadata strip above
+  -- still runs, so a table left half-tracked is cleaned up.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % does not have provenance tracking', _tbl;
+    RETURN;
+  END IF;
   -- Drop the BEFORE INSERT/UPDATE guard first: it has a column
   -- dependency on provsql (via the OF provsql clause), so the
   -- subsequent DROP COLUMN would otherwise raise.

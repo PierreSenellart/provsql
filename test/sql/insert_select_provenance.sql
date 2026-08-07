@@ -35,3 +35,34 @@ DROP TABLE insert_prov_join;
 CREATE TABLE insert_no_prov (name varchar, city varchar);
 INSERT INTO insert_no_prov SELECT name, city FROM personnel WHERE city='Paris';
 DROP TABLE insert_no_prov;
+
+-- An aggregate over a tracked relation is retyped to agg_token by the planner
+-- hook, long after parse analysis fixed the INSERT's target row type.  The
+-- retyped columns are cast back to the declared types (the agg_token
+-- assignment casts, which yield the running value), so the ordinary
+-- "INSERT INTO summary SELECT count(*) ..." shape works whatever the target
+-- column type is -- with a warning that the aggregate's provenance is dropped.
+CREATE TABLE insert_agg_plain (c bigint, s numeric);
+INSERT INTO insert_agg_plain SELECT count(*), sum(id) FROM personnel;
+SELECT * FROM insert_agg_plain;
+DROP TABLE insert_agg_plain;
+
+-- Same with a GROUP BY, and with an explicit cast the hook rewrites underneath.
+CREATE TABLE insert_agg_group (city varchar, n bigint);
+INSERT INTO insert_agg_group
+  SELECT city, count(*)::bigint FROM personnel GROUP BY city;
+SELECT * FROM insert_agg_group ORDER BY city;
+DROP TABLE insert_agg_group;
+
+-- With a provenance-tracked target the row still gets its existence
+-- provenance; only the aggregate value's own provenance is what the bigint
+-- column cannot hold.
+CREATE TABLE insert_agg_tracked (n bigint);
+SELECT add_provenance('insert_agg_tracked');
+INSERT INTO insert_agg_tracked SELECT count(*) FROM personnel WHERE city='Paris';
+CREATE TABLE insert_agg_tracked_eval AS
+  SELECT n, get_gate_type(provenance()) AS token_kind FROM insert_agg_tracked;
+SELECT remove_provenance('insert_agg_tracked_eval');
+SELECT * FROM insert_agg_tracked_eval;
+DROP TABLE insert_agg_tracked_eval;
+DROP TABLE insert_agg_tracked;

@@ -16,15 +16,33 @@ PostgreSQL's planner hook allows extensions to intercept every query
 before planning.  :cfunc:`provsql_planner` is installed by
 :cfunc:`_PG_init` and is called for every query:
 
-1. ``INSERT ... SELECT`` (``CMD_INSERT``): delegates to
-   :cfunc:`process_insert_select` to propagate provenance from the
-   source ``SELECT`` into the target table's ``provsql`` column.
+1. ``INSERT`` (``CMD_INSERT``): two passes.
+   :cfunc:`rewrite_dml_rv_surface` lowers the random-variable
+   surface (``GREATEST`` / ``LEAST``, an RV ``CASE``,
+   ``probability(<predicate>)``) in the values the ``INSERT`` supplies
+   directly -- its own target list for a single-row ``VALUES``, the
+   ``RTE_VALUES`` for a multi-row one -- neither of which
+   :cfunc:`process_query` ever sees.  :cfunc:`process_insert_select`
+   then propagates provenance from a source ``SELECT`` into the target
+   table's ``provsql`` column.
 
-2. ``SELECT`` (``CMD_SELECT``): checks whether any relation in the
+   Because the target row type was resolved by parse analysis, a
+   rewrite that retypes a source column -- an aggregate over a tracked
+   relation becomes an ``agg_token`` -- would desync the two stages;
+   :cfunc:`restore_insert_source_types` casts each such column back to
+   the type the ``INSERT``'s ``Var`` records, through the ``agg_token``
+   assignment casts that yield the running value.
+
+2. ``UPDATE`` (``CMD_UPDATE``): no provenance rewriting (the statement
+   triggers handle data-modification tracking), but the
+   ``SET`` expressions are a value position like an ``INSERT``'s, so
+   :cfunc:`rewrite_dml_rv_surface` runs there too.
+
+3. ``SELECT`` (``CMD_SELECT``): checks whether any relation in the
    range table carries a ``provsql`` column (:cfunc:`has_provenance`).
    If so, calls :cfunc:`process_query` to rewrite the query tree.
 
-3. After rewriting, the (possibly modified) query is passed to the
+4. After rewriting, the (possibly modified) query is passed to the
    previous planner hook or ``standard_planner``.
 
 When ``provsql.verbose_level >= 20`` (PostgreSQL 15+), the full query

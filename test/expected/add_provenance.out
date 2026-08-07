@@ -29,3 +29,7 @@ create_provenance_mapping
 count
 7
 (1 row)
+NOTICE:  table untracked does not have provenance tracking
+remove_provenance
+
+(1 row)

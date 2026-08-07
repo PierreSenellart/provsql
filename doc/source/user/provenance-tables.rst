@@ -105,6 +105,33 @@ use :sqlfunc:`remove_provenance`:
 
     SELECT provsql.remove_provenance('mytable');
 
+Both :sqlfunc:`add_provenance` and :sqlfunc:`remove_provenance` are
+**idempotent**: enabling tracking on a table that already has it, or
+removing it from a table that never had it, reports what it found with a
+``NOTICE`` and does nothing.  Setup scripts and notebook cells can be
+re-run freely.
+
+Aggregates and ``INSERT ... SELECT``
+-------------------------------------
+
+An aggregate over a provenance-tracked relation evaluates to an
+``agg_token`` (see :doc:`aggregation`), which pairs the aggregate's
+value with the provenance of the aggregation.  ``INSERT ... SELECT``
+resolves its target column types before ProvSQL sees the query, so
+inserting such an aggregate into an ordinary column:
+
+.. code-block:: postgresql
+
+    INSERT INTO headcount SELECT count(*) FROM personnel;
+
+stores the aggregate's *value* in the target column and warns that the
+aggregate's own provenance is dropped.  If the target table is itself
+provenance-tracked, the inserted row still gets its tuple provenance in
+the ``provsql`` column; it is only the value-level aggregate provenance
+that an ordinary ``bigint`` / ``numeric`` column cannot hold.  To keep
+it, materialise the aggregate with ``CREATE TABLE ... AS SELECT``
+instead, which lets the column take the ``agg_token`` type.
+
 Provenance Mappings
 --------------------
 

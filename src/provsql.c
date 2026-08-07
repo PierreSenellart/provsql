@@ -151,6 +151,7 @@ static Query *process_query(const constants_t *constants, Query *q,
                             bool in_boolean_rewrite,
                             const InvFreeMarkerCtx *inv_ctx);
 static bool has_provenance(const constants_t *constants, Query *q);
+static bool has_rv_or_provenance_call(Node *node, void *data);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
                               const char *cert);
@@ -4824,6 +4825,54 @@ rewrite_probability_events(const constants_t *constants, Query *q)
     if (te->resjunk)
       continue;
     te->expr = (Expr *)lift_rv_event_mutator((Node *)te->expr, (void *)constants);
+  }
+}
+
+/**
+ * @brief Lower the RV surface in the values a data-modifying statement
+ *        supplies directly.
+ *
+ * A single-row @c "INSERT ... VALUES (expr)" puts @p expr straight into the
+ * INSERT's own target list, a multi-row one into an @c RTE_VALUES, and an
+ * @c "UPDATE ... SET c = expr" into the UPDATE's target list; none of those
+ * positions is a SELECT, so @c process_query -- and with it
+ * @c rewrite_probability_events -- never sees them.  A @c GREATEST / @c LEAST
+ * or a @c CASE over @c random_variable operands would then survive to
+ * execution and raise in the btree comparator, even though the identical
+ * expression one position over (in a @c SELECT list, or in the source of an
+ * @c "INSERT ... SELECT") is lifted into its order-statistic @c gate_arith.
+ * @c GREATEST / @c LEAST is SQL grammar rather than an overloadable function,
+ * so there is no way to reach the lifted form by writing the call
+ * differently.  Apply the surface-lowering pass at all three positions.
+ *
+ * The event-lifting second pass that @c rewrite_probability_events runs on a
+ * SELECT list is deliberately not applied here: it retypes a projected
+ * comparison from @c boolean to its @c uuid token, and a data-modifying
+ * statement's column types are already fixed by parse analysis.  The
+ * lowerings applied are all type-preserving, so they cannot desync it the
+ * same way.
+ */
+static void
+rewrite_dml_rv_surface(const constants_t *constants, Query *q)
+{
+  ListCell *lc;
+  if (!OidIsValid(constants->OID_FUNCTION_PROBABILITY_EVALUATE))
+    return;
+  /* Every lowering the mutator performs needs an RV comparator or an RV
+   * GREATEST / LEAST somewhere in the expression, so this cheap walk keeps
+   * an ordinary INSERT / UPDATE -- the overwhelmingly common case -- from
+   * paying for a full copy of its target list. */
+  if (has_rv_or_provenance_call((Node *)q->targetList, (void *)constants))
+    q->targetList = (List *)expression_tree_mutator(
+      (Node *)q->targetList, rewrite_probability_event_mutator,
+      (void *)constants);
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind == RTE_VALUES &&
+        has_rv_or_provenance_call((Node *)r->values_lists, (void *)constants))
+      r->values_lists = (List *)expression_tree_mutator(
+        (Node *)r->values_lists, rewrite_probability_event_mutator,
+        (void *)constants);
   }
 }
 
@@ -14954,6 +15003,100 @@ static Query *process_query(const constants_t *constants, Query *q,
  * INSERT ... SELECT provenance propagation
  * ------------------------------------------------------------------------- */
 
+/** @brief Walker context for @c collect_source_var_types. */
+typedef struct {
+  Index src_rteid;      /**< Range-table index of the source subquery. */
+  int natts;            /**< Length of the @c types / @c typmods arrays. */
+  Oid *types;           /**< Expected column type, indexed by varattno - 1. */
+  int32 *typmods;       /**< Matching typmod, indexed by varattno - 1. */
+} src_var_type_ctx;
+
+/**
+ * @brief Walker: record the column types the INSERT expects from its source.
+ *
+ * Every @c Var of the INSERT's target list that references the source
+ * subquery carries the type parse analysis resolved for that output column,
+ * i.e. the type the target column was matched against.  Collecting them by
+ * attribute number gives @c restore_insert_source_types the contract the
+ * rewritten subquery has to keep.
+ */
+static bool collect_source_var_types(Node *node, void *cx) {
+  src_var_type_ctx *ctx = (src_var_type_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varno == ctx->src_rteid && v->varlevelsup == 0 &&
+        v->varattno >= 1 && v->varattno <= ctx->natts) {
+      ctx->types[v->varattno - 1] = v->vartype;
+      ctx->typmods[v->varattno - 1] = v->vartypmod;
+    }
+    return false;
+  }
+  return expression_tree_walker(node, collect_source_var_types, cx);
+}
+
+/**
+ * @brief Coerce the rewritten source SELECT back to the types the INSERT expects.
+ *
+ * The aggregate-provenance rewrite retypes an aggregate over a tracked
+ * relation to @c agg_token, but an INSERT's target row type was fixed by parse
+ * analysis long before the planner hook ran, so the two stages disagree and the
+ * executor rejects the row ("table row type and query-specified row type do not
+ * match").  The rewrite is still what we want -- for a provenance-tracked
+ * target it is what fills the @c provsql column -- so rather than suppressing
+ * it we cast each retyped output column back to its declared type through the
+ * assignment casts @c agg_token exposes (@c bigint, @c integer, @c numeric,
+ * @c double @c precision, @c text), which extract the aggregate's running
+ * value.  The provenance the cast drops is exactly the provenance the target
+ * column cannot store.
+ *
+ * A no-op whenever the rewrite left the column types alone, which is the
+ * common (non-aggregate) case.  A column with no reachable cast is left as it
+ * is, so the executor's own error still surfaces.
+ */
+static void restore_insert_source_types(Query *q, Index src_rteid,
+                                        Query *subquery) {
+  src_var_type_ctx ctx;
+  ListCell *lc;
+  int i;
+
+  ctx.src_rteid = src_rteid;
+  ctx.natts = list_length(subquery->targetList);
+  if (ctx.natts == 0)
+    return;
+  ctx.types = (Oid *)palloc0(sizeof(Oid) * ctx.natts);
+  ctx.typmods = (int32 *)palloc(sizeof(int32) * ctx.natts);
+  for (i = 0; i < ctx.natts; ++i)
+    ctx.typmods[i] = -1;
+
+  collect_source_var_types((Node *)q->targetList, &ctx);
+
+  foreach (lc, subquery->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Oid want, have;
+    Node *coerced;
+
+    if (te->resjunk || te->resno < 1 || te->resno > ctx.natts)
+      continue;
+    want = ctx.types[te->resno - 1];
+    if (!OidIsValid(want))
+      continue;             /* no Var refers to it (e.g. the added provsql) */
+    have = exprType((Node *)te->expr);
+    if (have == want)
+      continue;
+    coerced = coerce_to_target_type(NULL, (Node *)te->expr, have, want,
+                                    ctx.typmods[te->resno - 1],
+                                    COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST,
+                                    -1);
+    if (coerced != NULL)
+      te->expr = (Expr *)coerced;
+  }
+
+  pfree(ctx.types);
+  pfree(ctx.typmods);
+}
+
 /**
  * @brief Propagate provenance through INSERT ... SELECT.
  *
@@ -15002,6 +15145,10 @@ static void process_insert_select(const constants_t *constants, Query *q) {
       return;
     src_rte->subquery = new_subquery;
   }
+
+  /* The rewrite may have retyped an output column (an aggregate becomes an
+   * agg_token); the INSERT's target row type is already fixed, so cast back. */
+  restore_insert_source_types(q, src_rteid, src_rte->subquery);
 
   /* Check if the target table has a provsql column */
   tgt_rte = list_nth_node(RangeTblEntry, q->rtable, q->resultRelation - 1);
@@ -15177,8 +15324,17 @@ static PlannedStmt *provsql_planner(Query *q,
         provsql_error("a subquery over a provenance-tracked relation cannot be "
                       "used as a scalar subquery / IN / EXISTS expression; put "
                       "it in the FROM clause instead");
+      rewrite_dml_rv_surface(&constants, q);
       process_insert_select(&constants, q);
     }
+  } else if (q->commandType == CMD_UPDATE && q->rtable && provsql_active) {
+    /* An UPDATE gets no provenance rewriting (data-modification tracking is
+     * done by the statement triggers), but its SET expressions are a value
+     * position like an INSERT's, so the RV surface there needs the same
+     * lowering. */
+    const constants_t constants = get_constants(false);
+    if (constants.ok)
+      rewrite_dml_rv_surface(&constants, q);
   } else if (q->commandType == CMD_SELECT) {
     /* No rtable check here: a FROM-less SELECT (e.g.
      *   SELECT 1 WHERE normal(0,1) > 2)

@@ -41,6 +41,14 @@ t|t
 bare_greatest_exact|bare_least_exact
 t|t
 (1 row)
+gate|e
+arith|2.500000
+arith|2.500000
+arith|4.500000
+(3 rows)
+gate|e
+arith|7.500000
+(1 row)
 dedup_same_gate|singleton_collapses|dedup_same_value
 t|t|t
 (1 row)
