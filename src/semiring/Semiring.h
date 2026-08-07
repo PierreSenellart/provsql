@@ -16,10 +16,14 @@
  * - A monus operation @f$\ominus@f$ used for set-difference queries.
  * - A @f$\delta@f$ operator.
  *
- * Optional operations (comparison, semimodule scalar multiplication,
- * aggregation, and value literals) are provided by subclasses that
- * support them; the base class throws @c SemiringException for all of
- * these.
+ * Optional operations -- comparison, semimodule scalar multiplication,
+ * aggregation, value literals, and the measure-carrier gates
+ * (random-variable leaves, scalar arithmetic, mixtures, guarded
+ * selection, observations, conditioning) -- are provided by subclasses
+ * that support them; the base class throws @c SemiringException for all
+ * of these.  Most carry no algebraic meaning in a general semiring and
+ * are overridden only by @c Formula, whose carrier is a symbolic
+ * rendering of the circuit rather than a semantic value.
  *
  * Concrete implementations live in the same @c semiring/ directory:
  * @c Boolean.h, @c Counting.h, @c Formula.h, @c Why.h, @c BoolExpr.h.
@@ -188,6 +192,156 @@ virtual value_type agg(AggregationOperator op, const std::vector<value_type> &s)
  */
 virtual value_type value(const std::string &s) const {
   throw SemiringException("This semiring does not support value gates.");
+}
+
+/**
+ * @brief Value of a variable leaf (@c gate_input / @c gate_mulinput)
+ *        that the provenance mapping does not name.
+ *
+ * The absent-mapping convention: such a leaf contributes no provenance,
+ * i.e. the multiplicative identity, which is what every proper semiring
+ * wants and what this default returns.  A semiring that *renders* the
+ * circuit rather than evaluating it overrides this to identify the leaf
+ * instead -- @f$\mathbb{1}@f$ would not merely be anonymous there, it
+ * would be absorbed by the enclosing @c times and take the structure
+ * with it.  @c BooleanCircuit::toString does the same for the
+ * Boolean-expression rendering (its @c x@<id@> fallback).
+ *
+ * @param uuid  The leaf gate's UUID, in canonical text form.
+ */
+virtual value_type unmapped_input(const std::string &uuid) const {
+  return one();
+}
+
+/**
+ * @brief Evaluate a continuous random-variable leaf (@c gate_rv).
+ *
+ * @param spec    The gate's distribution encoding (@c "normal:2.5,0.5"),
+ *                where a parameter written @c "$i" is wired rather than
+ *                literal (a latent / compound leaf).
+ * @param params  The values of the gate's wires, indexed as the @c "$i"
+ *                references; empty for an all-literal leaf.
+ * @return        The leaf's value in this semiring.
+ * @throws SemiringException if not overridden.
+ */
+virtual value_type rv(const std::string &spec,
+                      const std::vector<value_type> &params) const {
+  throw SemiringException(
+          "This semiring does not support rv gates: a continuous "
+          "distribution is not a semiring value.  Query a "
+          "random-variable token through the measure surface "
+          "(expected / variance / quantile / support / sample), or use "
+          "the formula pseudo-semiring for a symbolic rendering.");
+}
+
+/**
+ * @brief Evaluate an arithmetic gate over scalar children (@c gate_arith).
+ *
+ * @param op        The arithmetic operation.
+ * @param children  The values of the gate's wires (for @c PERCENTILE,
+ *                  interleaved @c [indicator, value] pairs).
+ * @param extra     The gate's payload (the fraction for @c PERCENTILE,
+ *                  empty otherwise).
+ * @return          The result of the operation in this semiring.
+ * @throws SemiringException if not overridden.
+ */
+virtual value_type arith(ArithmeticOperator op,
+                         const std::vector<value_type> &children,
+                         const std::string &extra) const {
+  throw SemiringException(
+          "This semiring does not support arith gates: arithmetic over "
+          "scalar (random-variable) children is not a semiring "
+          "operation.  Query such a token through the measure surface "
+          "(expected / variance / quantile / support / sample), or use "
+          "the formula pseudo-semiring for a symbolic rendering.");
+}
+
+/**
+ * @brief Evaluate a Bernoulli mixture (@c gate_mixture, three wires).
+ *
+ * @param p  The Bernoulli event's value.
+ * @param x  The value taken when the event holds.
+ * @param y  The value taken otherwise.
+ * @throws SemiringException if not overridden.
+ */
+virtual value_type mixture(value_type p, value_type x, value_type y) const {
+  throw SemiringException(
+          "This semiring does not support mixture gates: a probabilistic "
+          "mixture is not a semiring operation.  Query such a token "
+          "through the measure surface (expected / variance / quantile / "
+          "support / sample), or use the formula pseudo-semiring for a "
+          "symbolic rendering.");
+}
+
+/**
+ * @brief Evaluate a categorical mixture (@c gate_mixture over
+ *        @c gate_mulinput outcomes).
+ *
+ * @param key       The value of the mixture's key (its @c gate_input wire).
+ * @param probs     Probability of each outcome.
+ * @param outcomes  Textual payload of each outcome, parallel to @p probs.
+ * @throws SemiringException if not overridden.
+ */
+virtual value_type categorical(value_type key,
+                               const std::vector<double> &probs,
+                               const std::vector<std::string> &outcomes) const {
+  throw SemiringException(
+          "This semiring does not support categorical mixture gates: a "
+          "distribution over outcomes is not a semiring value.  Query "
+          "such a token through the measure surface (expected / "
+          "variance / quantile / support / sample), or use the formula "
+          "pseudo-semiring for a symbolic rendering.");
+}
+
+/**
+ * @brief Evaluate a guarded selection (@c gate_case).
+ *
+ * @param children  The gate's wires, @c [guard_1, value_1, …,
+ *                  guard_k, value_k, default] (odd length), with
+ *                  first-match semantics.
+ * @throws SemiringException if not overridden.
+ */
+virtual value_type guarded_case(const std::vector<value_type> &children) const {
+  throw SemiringException(
+          "The requested semiring does not support a CASE / guarded "
+          "selection over random variables (gate_case): it is evaluable "
+          "only through the random-variable / measure surface "
+          "(expected / variance / support / probability / sample).");
+}
+
+/**
+ * @brief Evaluate a latent-variable observation (@c gate_observe).
+ *
+ * @param child  The observed leaf's value.
+ * @param datum  The observed value, as text.
+ * @throws SemiringException if not overridden.
+ */
+virtual value_type observe(value_type child, const std::string &datum) const {
+  throw SemiringException(
+          "This semiring does not support observe gates: the density "
+          "factor of a likelihood-weighting observation is not a "
+          "semiring value.  Such a token is evaluated by the "
+          "importance-sampling surface, or rendered symbolically by the "
+          "formula pseudo-semiring.");
+}
+
+/**
+ * @brief Evaluate a conditioning marker (@c gate_conditioned).
+ *
+ * @param children  The gate's wires: @c [target, evidence] for the
+ *                  value-level (random-variable) form, @c [target,
+ *                  evidence, joint] for the Boolean-event one, where
+ *                  @c joint is the materialised @c times(target, evidence).
+ * @throws SemiringException if not overridden.
+ */
+virtual value_type conditioned(const std::vector<value_type> &children) const {
+  throw SemiringException(
+          "The requested semiring does not support conditioning: "
+          "P(·|C) = P(·∧C)/P(C) needs a normalising division "
+          "no general semiring provides.  A conditioned token is "
+          "evaluable only in the measure interpretation "
+          "(probability_evaluate, or the random-variable / agg_token "
+          "distribution evaluators).");
 }
 
 virtual ~Semiring() = default;

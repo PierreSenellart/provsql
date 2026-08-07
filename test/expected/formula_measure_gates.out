@@ -1,0 +1,44 @@
+\set ECHO none
+rv_normal|rv_exponential|rv_latent
+normal(2.5, 0.5)|exponential(0.7)|normal(normal(0, 1), 1)
+(1 row)
+a_plus|a_times|a_minus|a_div|a_neg
+normal(0, 1) + uniform(0, 1)|normal(0, 1) * uniform(0, 1)|normal(0, 1) - uniform(0, 1)|normal(0, 1) / 2|-normal(0, 1)
+(1 row)
+a_pow|a_ln|a_exp
+uniform(1, 2) ^ 2|ln(uniform(1, 2))|exp(normal(0, 1))
+(1 row)
+a_max|a_min
+max(uniform(0, 1), uniform(2, 3))|min(uniform(0, 1), uniform(2, 3))
+(1 row)
+m_bernoulli|m_categorical
+<leaf> ? normal(0, 1) : normal(5, 1)|categorical(<leaf>; 0.25: 1, 0.75: 2)
+(1 row)
+observation
+observe(normal(normal(0, 1), 1) = 2.5)
+(1 row)
+conditioned
+uniform(0, 1) | [uniform(0, 1) ≤ uniform(0, 1)]
+(1 row)
+guarded
+case([uniform(0, 1) ≥ uniform(0, 1)] → uniform(0, 1); else uniform(0, 1))
+(1 row)
+agg_sum|agg_avg|agg_percentile
+normal(1, 1) + normal(2, 1) + normal(3, 1)|(normal(1, 1) + normal(2, 1) + normal(3, 1)) / 3|percentile(0.5; [1] normal(1, 1), [1] normal(2, 1), [1] normal(3, 1))
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+unmapped|partially_mapped|shape_ok|distinct_leaves
+<leaf> ⊗ <leaf>|1 ⊗ <leaf>|t|t
+(1 row)
+ERROR:  ProvSQL: provenance_evaluate_compiled: This semiring does not support rv gates: a continuous distribution is not a semiring value.  Query a random-variable token through the measure surface (expected / variance / quantile / support / sample), or use the formula pseudo-semiring for a symbolic rendering.
+remove_provenance
+
+(1 row)

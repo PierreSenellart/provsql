@@ -27,6 +27,7 @@
 extern "C" {
 #include "utils/lsyscache.h"
 #include "utils/elog.h"
+#include "provsql_utils.h"
 }
 
 #include "provsql_error.h"
@@ -88,6 +89,27 @@ ComparisonOperator cmpOpFromOid(Oid op_oid, bool &ok)
 
   ok = false;
   return ComparisonOperator::EQ;
+}
+
+ArithmeticOperator arithOpFromTag(unsigned tag, bool &ok)
+{
+  ok = true;
+  switch(static_cast<provsql_arith_op>(tag)) {
+  case PROVSQL_ARITH_PLUS:       return ArithmeticOperator::PLUS;
+  case PROVSQL_ARITH_TIMES:      return ArithmeticOperator::TIMES;
+  case PROVSQL_ARITH_MINUS:      return ArithmeticOperator::MINUS;
+  case PROVSQL_ARITH_DIV:        return ArithmeticOperator::DIV;
+  case PROVSQL_ARITH_NEG:        return ArithmeticOperator::NEG;
+  case PROVSQL_ARITH_MAX:        return ArithmeticOperator::MAX;
+  case PROVSQL_ARITH_MIN:        return ArithmeticOperator::MIN;
+  case PROVSQL_ARITH_POW:        return ArithmeticOperator::POW;
+  case PROVSQL_ARITH_LN:         return ArithmeticOperator::LN;
+  case PROVSQL_ARITH_EXP:        return ArithmeticOperator::EXP;
+  case PROVSQL_ARITH_PERCENTILE: return ArithmeticOperator::PERCENTILE;
+  }
+
+  ok = false;
+  return ArithmeticOperator::PLUS;
 }
 
 template <class ...>

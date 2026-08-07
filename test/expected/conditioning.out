@@ -20,7 +20,7 @@ conditioned|3|0.153846|1.000000
 impossible_evidence_is_null
 t
 (1 row)
-ERROR:  ProvSQL: The requested semiring does not support conditioning: P(·|C) = P(·∧C)/P(C) needs a normalising division no general semiring provides.  A conditioned token is evaluable only in the measure interpretation (probability_evaluate, or the random-variable / agg_token distribution evaluators).
+ERROR:  ProvSQL: probability_evaluate: The requested semiring does not support conditioning: P(·|C) = P(·∧C)/P(C) needs a normalising division no general semiring provides.  A conditioned token is evaluable only in the measure interpretation (probability_evaluate, or the random-variable / agg_token distribution evaluators).
 remove_provenance
 
 (1 row)

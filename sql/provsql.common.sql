@@ -10129,10 +10129,17 @@ CREATE TYPE query_type_enum AS ENUM (
  */
 
 /** @brief Evaluate provenance as a symbolic formula (e.g., "a ⊗ b ⊕ c") */
-CREATE FUNCTION sr_formula(token ANYELEMENT, token2value regclass)
+-- The mapping is optional (as for sr_boolexpr): formula renders whatever
+-- circuit it is given, and the measure-carrier circuits it is most useful
+-- on (random variables, arithmetic, mixtures) have no leaf mapping at all.
+-- Without one, input leaves render as the semiring's 𝟙.
+CREATE FUNCTION sr_formula(token ANYELEMENT, token2value regclass = NULL)
   RETURNS VARCHAR AS
 $$
 BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
   RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
@@ -10140,7 +10147,7 @@ BEGIN
     '𝟙'::VARCHAR
   );
 END
-$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
 /** @brief Evaluate provenance over the counting semiring (ℕ) */
 CREATE FUNCTION sr_counting(token ANYELEMENT, token2value regclass)

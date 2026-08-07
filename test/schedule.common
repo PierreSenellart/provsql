@@ -220,6 +220,10 @@ test: continuous_having
 test: continuous_sample_truncated
 test: continuous_analytical_curves
 
+# Symbolic rendering of the measure-carrier gates by the formula
+# pseudo-semiring (which refuses no gate type)
+test: formula_measure_gates
+
 # Case Study 6: City Air-Quality Sensor Network (continuous RVs)
 test: casestudy6
 test: casestudy8

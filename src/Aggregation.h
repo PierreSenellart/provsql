@@ -62,6 +62,30 @@ enum class AggregationOperator {
 };
 
 /**
+ * @brief Arithmetic operations carried by @c gate_arith circuit gates.
+ *
+ * The C++ mirror of the @c provsql_arith_op on-disk tag stored in the
+ * gate's @c info1 (see @c provsql_utils.h), decoupled from it so that
+ * the semiring interface -- which is where these reach a circuit
+ * evaluator -- stays free of the PostgreSQL headers, exactly as
+ * @c ComparisonOperator is decoupled from the comparison-operator OID.
+ * @c arithOpFromTag() performs the translation.
+ */
+enum class ArithmeticOperator {
+  PLUS,       ///< n-ary sum
+  TIMES,      ///< n-ary product
+  MINUS,      ///< binary difference
+  DIV,        ///< binary quotient
+  NEG,        ///< unary negation
+  MAX,        ///< n-ary maximum (order statistic)
+  MIN,        ///< n-ary minimum (order statistic)
+  POW,        ///< binary power
+  LN,         ///< unary natural logarithm
+  EXP,        ///< unary exponential
+  PERCENTILE  ///< continuous percentile over interleaved [indicator, value] wires
+};
+
+/**
  * @brief Runtime type tag for aggregate values.
  */
 enum class ValueType {
@@ -196,6 +220,21 @@ AggregationOperator getAggregationOperator(Oid oid);
  *             unspecified value (currently @c EQ) when @p ok is @c false.
  */
 ComparisonOperator cmpOpFromOid(Oid op_oid, bool &ok);
+
+/**
+ * @brief Map a @c gate_arith operator tag to an @c ArithmeticOperator.
+ *
+ * The tag is the @c provsql_arith_op value stored in @c gate_arith's
+ * @c info1 field.
+ *
+ * @param[in]  tag  The persisted operator tag.
+ * @param[out] ok   Set to @c true on a recognised tag, @c false when
+ *                  @p tag is outside the enumeration (a circuit written
+ *                  by a newer version of the extension).
+ * @return     The matching @c ArithmeticOperator on success; an
+ *             unspecified value (currently @c PLUS) when @p ok is @c false.
+ */
+ArithmeticOperator arithOpFromTag(unsigned tag, bool &ok);
 
 /**
  * @brief Create a concrete @c Aggregator for the given operator and value type.

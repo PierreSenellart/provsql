@@ -74,6 +74,41 @@ For example, a result supported by tuples labelled ``a`` and ``b`` through
 a join would show as ``a⊗b``; one that could come from either ``a`` or
 ``b`` would show as ``a⊕b``.
 
+Unlike the other ``sr_*`` functions, :sqlfunc:`sr_formula` serialises the
+circuit instead of evaluating it, so it renders **every** kind of gate and
+refuses none – including the ones that carry no algebraic meaning and that
+the proper semirings reject: random-variable leaves, arithmetic over them,
+mixtures, ``CASE`` selections, observations and conditioning (see
+:doc:`continuous-distributions`).  Ordinary arithmetic notation is used
+for those, kept visually distinct from the semiring's ``⊕`` / ``⊗``:
+
+.. code-block:: postgresql
+
+    SELECT sr_formula((normal(0,1) + uniform(0,1))::uuid);
+    -- normal(0, 1) + uniform(0, 1)
+
+    SELECT sr_formula(mixture(0.4, normal(0,1), normal(5,1))::uuid);
+    -- Bernoulli(0.4) ? normal(0, 1) : normal(5, 1)
+
+The mapping argument is optional (such circuits have no leaf mapping at
+all).  A variable leaf the mapping does not name – every leaf when no
+mapping is given, and the uncovered ones when a partial mapping is –
+renders as an abbreviated UUID, the same abbreviation ProvSQL Studio
+prints on the circuit's nodes:
+
+.. code-block:: postgresql
+
+    SELECT sr_formula(provenance(), 'witness_mapping') FROM suspects;
+    -- Dave ⊗ 139dd2d7…          (Dave is in the mapping, the other tuple is not)
+
+    SELECT sr_formula(provenance()) FROM suspects;
+    -- 81ee17e5… ⊗ 139dd2d7…
+
+This mirrors :sqlfunc:`sr_boolexpr`'s ``x<id>`` fallback, and it matters
+for more than readability: ``𝟙`` is the multiplicative identity, so an
+unnamed leaf rendered that way would be *absorbed* by the enclosing
+``⊗`` and take the structure of the formula with it.
+
 Counting Semiring (m-semiring)
 -------------------------------
 

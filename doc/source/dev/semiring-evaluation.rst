@@ -153,7 +153,8 @@ Optional Methods
 ^^^^^^^^^^^^^^^^
 
 The following methods have default implementations that throw
-:cfunc:`SemiringException`:
+:cfunc:`SemiringException` (the one exception, ``unmapped_input``, has a
+working default and is flagged as such):
 
 .. list-table::
    :header-rows: 1
@@ -169,11 +170,44 @@ The following methods have default implementations that throw
      - ``gate_agg`` -- aggregation operator.
    * - ``value(string)``
      - ``gate_value`` -- interpret a literal string as a semiring value.
+   * - ``unmapped_input(uuid)``
+     - ``gate_input`` / ``gate_mulinput`` -- a variable leaf the
+       provenance mapping does not name.  The one method here with a
+       *working* default rather than a throwing one: it returns
+       ``one()``, the absent-mapping convention.  Override it only to
+       identify the leaf rather than neutralise it (``Formula`` renders
+       an abbreviated UUID, since ``one()`` would be absorbed by the
+       enclosing ``times`` and destroy the structure it is trying to
+       show).
+   * - ``rv(spec, params)``
+     - ``gate_rv`` -- continuous random-variable leaf.
+   * - ``arith(op, children, extra)``
+     - ``gate_arith`` -- arithmetic over scalar children.
+   * - ``mixture(p, prob, x, y)``
+     - ``gate_mixture`` -- Bernoulli mixture.
+   * - ``categorical(key, probs, outcomes)``
+     - ``gate_mixture`` -- categorical mixture over ``gate_mulinput``
+       outcomes.
+   * - ``guarded_case(children)``
+     - ``gate_case`` -- first-match guarded selection.
+   * - ``observe(child, datum)``
+     - ``gate_observe`` -- likelihood-weighting observation.
+   * - ``conditioned(children)``
+     - ``gate_conditioned`` -- conditioning marker.
+
+The last six are the *measure-carrier* gates of the continuous
+random-variable surface: they have no algebraic reading at all (a
+distribution is not a semiring value, and conditioning needs a
+normalising division no semiring provides), so a proper semiring leaves
+them at the default and the exception is the intended answer.
 
 Overriding these methods is only useful for *pseudo-semirings* that
-produce a symbolic representation of the provenance (e.g. the
-formula semiring renders a ``cmp`` gate as a literal string like
-``"x > 5"``).  A proper semiring does not evaluate ``cmp`` gates
+produce a symbolic representation of the provenance -- in practice
+:sqlfunc:`sr_formula`, which serialises the circuit rather than
+evaluating it, overrides all of them (rendering a ``cmp`` gate as a
+literal string like ``"x > 5"``, a ``gate_arith`` sum as ``"a + b"``,
+and so on) and therefore refuses no gate type.
+A proper semiring does not evaluate ``cmp`` gates
 through these overrides: instead, before the main circuit traversal
 starts, :cfile:`having_semantics.hpp` walks the circuit, finds every
 ``cmp`` gate that compares an aggregate against a constant, and

@@ -33,7 +33,7 @@ A|0.625000
 B|0.000000
 (2 rows)
 ERROR:  ProvSQL: provenance_evaluate_compiled: comparing an aggregate with a text constant in HAVING is only implemented for choose()
-CONTEXT:  PL/pgSQL function sr_formula(anyelement,regclass) line 3 at RETURN
+CONTEXT:  PL/pgSQL function sr_formula(anyelement,regclass) line 6 at RETURN
 explode_table
 
 (1 row)

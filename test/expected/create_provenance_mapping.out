@@ -55,5 +55,5 @@ remove_provenance
 (1 row)
 id|formula
 1|a
-2|𝟙
+2|<leaf>
 (2 rows)

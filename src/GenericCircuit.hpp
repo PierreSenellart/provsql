@@ -13,7 +13,7 @@
  *
  * | Gate type   | Semiring operation             |
  * |-------------|-------------------------------|
- * | gate_input  | lookup in @p provenance_mapping|
+ * | gate_input  | lookup in @p provenance_mapping (else @c unmapped_input) |
  * | gate_plus   | @c semiring.plus(children)     |
  * | gate_times  | @c semiring.times(children)    |
  * | gate_monus  | @c semiring.monus(left, right) |
@@ -24,6 +24,17 @@
  * | gate_value  | @c semiring.value(string)      |
  * | gate_one    | @c semiring.one()              |
  * | gate_zero   | @c semiring.zero()             |
+ * | gate_rv     | @c semiring.rv(spec, params)   |
+ * | gate_arith  | @c semiring.arith(op, children, extra) |
+ * | gate_mixture| @c semiring.mixture(p, x, y) / @c semiring.categorical(…) |
+ * | gate_case   | @c semiring.guarded_case(children) |
+ * | gate_observe| @c semiring.observe(child, datum) |
+ * | gate_conditioned | @c semiring.conditioned(children) |
+ *
+ * The last six are measure-carrier gates with no algebraic reading: the
+ * @c Semiring base class refuses them, and only the symbolic @c Formula
+ * pseudo-semiring overrides the hooks (to render them rather than
+ * interpret them).
  */
 #include "GenericCircuit.h"
 
@@ -102,11 +113,16 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
     /* Leaves. */
     switch(t) {
     case gate_one:
-    case gate_input:
     case gate_update:
-    case gate_mulinput:
-      // If not in provenance mapping, return no provenance (one of the semiring)
       provenance_mapping.emplace(u, semiring.one());
+      stack.pop_back();
+      continue;
+    case gate_input:
+    case gate_mulinput:
+      // A variable leaf the provenance mapping did not name.  By default
+      // it contributes no provenance (the semiring's one); a rendering
+      // semiring overrides unmapped_input to identify it instead.
+      provenance_mapping.emplace(u, semiring.unmapped_input(getUUID(u)));
       stack.pop_back();
       continue;
     case gate_zero:
@@ -302,20 +318,21 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       break;
     }
 
-    case gate_conditioned:
+    case gate_conditioned: {
       /* Conditioning marker: P(·|C) requires a normalising division that
        * no general semiring provides (m-semirings have monus, not a
        * multiplicative inverse).  A conditioned token is evaluable only
        * in the measure interpretation (probability_evaluate, special-
        * cased at the root, or the random-variable / agg_token
-       * distribution evaluators), never under a generic sr_* semiring. */
-      throw CircuitException(
-              "The requested semiring does not support conditioning: "
-              "P(·|C) = P(·∧C)/P(C) needs a normalising division "
-              "no general semiring provides.  A conditioned token is "
-              "evaluable only in the measure interpretation "
-              "(probability_evaluate, or the random-variable / agg_token "
-              "distribution evaluators).");
+       * distribution evaluators); the base-class hook refuses it for
+       * every semiring but the symbolic Formula, which renders the
+       * marker instead of interpreting it. */
+      std::vector<typename S::value_type> vec;
+      for(const auto &c : getWires(u))
+        vec.push_back(provenance_mapping.at(c));
+      provenance_mapping.emplace(u, semiring.conditioned(vec));
+      break;
+    }
 
     case gate_mobius: {
       /* The signed Möbius combination is a probability-only shortcut layered
@@ -346,19 +363,83 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
       break;
     }
 
-    case gate_case:
+    case gate_case: {
       /* Guarded selection over scalar (RV) children: a value chosen by the
        * first satisfied guard event.  This is a measure/RV-carrier operation
        * (the guards are probabilistic events, the values random variables), not
        * a semiring one -- evaluable only through the random-variable / measure
        * evaluators (expected / variance / support / probability / sample),
-       * exactly like gate_rv and gate_arith over RVs.  Refuse it here as the
-       * gate_conditioned arm above refuses conditioning. */
-      throw CircuitException(
-              "The requested semiring does not support a CASE / guarded "
-              "selection over random variables (gate_case): it is evaluable "
-              "only through the random-variable / measure surface "
-              "(expected / variance / support / probability / sample).");
+       * exactly like gate_rv and gate_arith over RVs. */
+      std::vector<typename S::value_type> vec;
+      for(const auto &c : getWires(u))
+        vec.push_back(provenance_mapping.at(c));
+      provenance_mapping.emplace(u, semiring.guarded_case(vec));
+      break;
+    }
+
+    /* The measure-carrier gates below have no algebraic reading either:
+     * their base-class hooks refuse them for every proper semiring, and
+     * Formula overrides them to render the sub-circuit symbolically. */
+    case gate_rv: {
+      /* A gate_rv is a leaf unless one of its distribution parameters is
+       * wired ("$i" in the extra encoding), which makes it a compound
+       * (latent-variable) leaf over the values of its wires. */
+      std::vector<typename S::value_type> params;
+      for(const auto &c : getWires(u))
+        params.push_back(provenance_mapping.at(c));
+      provenance_mapping.emplace(u, semiring.rv(getExtra(u), params));
+      break;
+    }
+
+    case gate_arith: {
+      bool ok;
+      ArithmeticOperator op = arithOpFromTag(getInfos(u).first, ok);
+      if(!ok)
+        throw CircuitException(
+                "Arithmetic operator tag " +
+                std::to_string(getInfos(u).first) +
+                " not supported");
+      std::vector<typename S::value_type> vec;
+      for(const auto &c : getWires(u))
+        vec.push_back(provenance_mapping.at(c));
+      provenance_mapping.emplace(u, semiring.arith(op, vec, getExtra(u)));
+      break;
+    }
+
+    case gate_mixture: {
+      const auto &w = getWires(u);
+      if(isCategoricalMixture(u)) {
+        /* [key, mul_1, …, mul_n]: each outcome's probability lives in the
+         * mulinput's prob and its value in the mulinput's extra (those
+         * leaves evaluate to one() on their own, so the payload has to be
+         * read off the gate here). */
+        std::vector<double> probs;
+        std::vector<std::string> outcomes;
+        for(std::size_t i = 1; i < w.size(); ++i) {
+          probs.push_back(getProb(w[i]));
+          outcomes.push_back(getExtra(w[i]));
+        }
+        provenance_mapping.emplace(
+          u, semiring.categorical(childValue(0), probs, outcomes));
+      } else {
+        if(w.size() != 3)
+          throw CircuitException(
+                  "gate_mixture must have exactly three children "
+                  "[p_token, x_token, y_token]");
+        provenance_mapping.emplace(
+          u, semiring.mixture(childValue(0), childValue(1), childValue(2)));
+      }
+      break;
+    }
+
+    case gate_observe: {
+      const auto &w = getWires(u);
+      if(w.size() != 1)
+        throw CircuitException(
+                "gate_observe must have exactly one child (the observed leaf)");
+      provenance_mapping.emplace(u, semiring.observe(childValue(0), getExtra(u)));
+      break;
+    }
 
     default:
       throw CircuitException("Invalid gate type for semiring evaluation");
