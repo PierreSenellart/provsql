@@ -5,6 +5,89 @@ in this file.  It mirrors the release-notes section of the website
 ([provsql.org/releases](https://provsql.org/releases/)) and is kept in
 sync by the `release.sh` release-automation script.
 
+## [1.12.0] - 2026-08-07
+
+ProvSQL 1.12.0 widens three surfaces that used to refuse work they were
+within reach of, and makes the probability evaluator say which route
+answered a query. The Möbius route now handles UCQs with **self-joins**;
+the **formula** pseudo-semiring renders the whole circuit vocabulary,
+including the measure carriers that have no leaf mapping at all; and the
+random-variable and aggregate rewrites reach the value positions of
+`INSERT` and `UPDATE`, where an expression that succeeded one
+position over used to raise. The three planner-time routes – the
+safe-query rewriter, the joint-width UCQ compiler and the
+bounded-treewidth reachability compiler – stop collapsing into a generic
+`independent` and report under their own names, which ProvSQL Studio
+1.8.0 surfaces in its eval strip.
+
+#### Möbius: self-joins
+
+The Möbius route – exact linear-time probability for safe-by-cancellation
+UCQs – now handles queries with **self-joins**, through variable ranking
+and shattering of the repeated atom. Previously such a query fell back to
+a general-purpose method. New regression coverage in `mobius_selfjoin`.
+
+A Möbius root that is already a signed combination no longer gets a
+redundant identity wrapper.
+
+#### Evaluation routes report under their own names
+
+The three planner-time routes – the safe-query (read-once) rewriter, the
+joint-width UCQ compiler and the bounded-treewidth reachability compiler
+– each replace a query's ordinary lineage with a circuit of their own and
+hand it to the same dispatcher, which evaluated all three by the
+independent sweep and reported them all as `independent`. Each route now
+stamps a tag on the root it produces, so `provsql.last_eval_method`
+reports `sq-rewrite`, `bounded-jw` or `reachability`, and each is
+accepted as an explicit `probability_evaluate` method. ProvSQL Studio
+1.8.0 surfaces them in the eval strip on exactly the circuits that carry
+the tag.
+
+#### The formula pseudo-semiring renders every gate type
+
+`sr_formula` renders the whole circuit vocabulary – the measure carriers
+(`gate_rv`, `gate_arith`, `gate_mixture`, `gate_case`), conditioned gates,
+aggregates – instead of refusing the gates the evaluating semirings
+cannot interpret. Its provenance mapping becomes **optional**
+accordingly: a measure-carrier circuit has no input leaves to name, and an
+unnamed leaf renders as an abbreviated UUID rather than collapsing to the
+semiring's `𝟙`.
+
+#### Fixes
+
+- **`GREATEST` / `LEAST` over `random_variable` in `INSERT` / `UPDATE`.**
+  The order-statistic lift now reaches the values a data-modifying
+  statement supplies directly – single-row `INSERT ... VALUES`, multi-row
+  `VALUES`, and `UPDATE ... SET` – so the expression behaves there as it
+  does in a `SELECT` list instead of falling through to the
+  meaningless-comparison error. `GREATEST` is SQL grammar rather than an
+  overloadable function, so there was no way to reach the lifted form from
+  those positions.
+- **An aggregate over a tracked relation can be `INSERT`ed.**
+  `INSERT INTO summary SELECT count(*) FROM tracked` used to fail with
+  "table row type and query-specified row type do not match": the
+  aggregate rewrite retypes the column to `agg_token` after parse analysis
+  has already fixed the target row type. The retyped columns are now cast
+  back to the declared type, storing the aggregate's value (with a warning
+  that the aggregate's own provenance is dropped) and, on a tracked
+  target, still filling the row's `provsql` column.
+- **`remove_provenance` is idempotent**, matching `add_provenance` and
+  `create_provenance_mapping` since 1.9.0: removing provenance from a
+  table that never had it is a `NOTICE`-and-no-op rather than an error.
+- `delta` is the support indicator in the why- and which-provenance
+  semirings.
+- The benchmark scripts are repaired and their reference route tables
+  updated; a route benchmark is added for the bounded-treewidth
+  reachability compiler.
+- The Lean references in the documentation and website are resynced with
+  the current formalization.
+
+#### Upgrading
+
+`sql/upgrades/provsql--1.11.1--1.12.0.sql` replaces three function bodies
+(`assume_boolean`, `sr_formula`, `remove_provenance`); no gate type, type,
+operator, cast or aggregate changes.
+
 ## [1.11.1] - 2026-08-04
 
 ProvSQL 1.11.1 is a bug-fix release for **aggregate provenance**. It
