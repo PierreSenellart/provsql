@@ -14,6 +14,51 @@ release workflow (`.github/workflows/studio-release.yml`) extracts the
 section matching the tag's version and embeds it under "What's
 changed" in the GitHub release notes.
 
+## [1.8.0] - 2026-08-07
+
+Companion release for ProvSQL extension 1.12.0. A focused release on the
+circuit inspector's eval strip: the three **planner-time evaluation
+routes** the extension now reports under their own names are surfaced as
+methods on exactly the circuits they apply to, and **Formula** becomes
+available on every gate kind rather than only on the ones with a leaf
+mapping. Requires extension **>= 1.12.0**.
+
+### Highlights
+
+- **The planner-time routes are named methods.** The safe-query
+  (read-once) rewriter, the joint-width UCQ compiler and the
+  bounded-treewidth reachability compiler each hand the probability
+  dispatcher a circuit of their own making; all three used to report as
+  the generic `independent`. Studio now reads the route tag off the
+  circuit -- `info1` of the elided `gate_assumed` wrapper, or `info2` of
+  a materialised certified d-D root -- and offers `sq-rewrite`,
+  `bounded-jw` or `reachability` in the method dropdown, each shown only
+  on a token whose root actually carries that tag, with a tooltip
+  explaining what makes it exact and linear-time.
+- **Formula on every gate kind.** Formula serialises a circuit rather
+  than evaluating it, so it is the one entry that renders the
+  measure-carrier gates (`gate_rv`, `gate_arith`, `gate_mixture`,
+  `gate_case`) instead of refusing them, and renders a conditioning
+  marker as `(target | evidence)`. It accordingly joins PROV-XML as an
+  option on scalar and conditioned targets, and its provenance mapping
+  becomes optional -- a measure-carrier circuit has no input leaves to
+  name, and an unnamed leaf renders as an abbreviated UUID rather than
+  collapsing to the semiring's one. Backed by the optional-mapping
+  `sr_formula` and the all-gate formula pseudo-semiring in extension
+  1.12.0.
+
+### Housekeeping
+
+- The ruff rule set is pinned explicitly (`E4`, `E7`, `E9`, `F`) instead
+  of inheriting ruff's default, which widened in 0.16 and turned an
+  unpinned `pip install ruff` in CI into a lint contract that changed
+  under us.
+
+### Playground
+
+- `circuit-vocab.js` is shipped in the assembled doc-root, so the
+  circuit-vocabulary panel works in the browser build.
+
 ## [1.7.0] - 2026-07-17
 
 Companion release for ProvSQL extension 1.11.0. The headline feature is

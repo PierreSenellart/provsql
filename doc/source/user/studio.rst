@@ -1418,6 +1418,18 @@ extension version.
        requires 1.11.0 for its fixes to **maintained** provenance mappings
        -- the self-maintaining ``time_validity_view`` the timeline reads --
        and the server to be PostgreSQL 14+. See :doc:`temporal`.
+   * - ``1.8.x``
+     - ``≥ 1.12.0``
+     - Offers the three planner-time routes -- ``sq-rewrite``,
+       ``bounded-jw``, ``reachability`` -- as named probability methods in
+       the eval strip, each shown only on a token whose root carries that
+       route's tag, and makes :guilabel:`Formula` available on every gate
+       kind (the measure carriers and conditioned gates included) with an
+       optional provenance mapping. Backed by the route tags the extension
+       stamps on the roots those rewrites produce, the all-gate formula
+       pseudo-semiring, and the optional-mapping :sqlfunc:`sr_formula`
+       introduced in 1.12.0. See :doc:`probabilities` and
+       :doc:`semirings`.
 
        Also moves all RV-family rendering onto the extension's family
        registry: circuit-inspector glyphs and parameter symbols come
