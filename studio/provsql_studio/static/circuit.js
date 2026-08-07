@@ -1592,6 +1592,7 @@
     // syntactically different circuits.
     'formula':     { label: 'Formula',                    group: 'lin',
                      needsMapping: true,  types: null,                hint: null,
+                     optionalMapping: true,
                      booleanCompatible: true, absorptive: false, aggCompatible: true },
     'how':         { label: 'How-provenance',             group: 'lin',
                      needsMapping: true,  types: null,
@@ -1653,11 +1654,13 @@
   ];
 
   // Custom-semiring options (encoded as `custom:<schema>.<name>`) also need a
-  // mapping; see `needsMapping`. `prov-xml` and `boolexpr` accept an
-  // optional mapping (used to label leaves) so the dropdown shows for
-  // them too, but emptying the selection is allowed : see
-  // `_OPTIONAL_MAPPING`.
-  const _OPTIONAL_MAPPING = new Set(['prov-xml', 'boolexpr']);
+  // mapping; see `needsMapping`. `prov-xml`, `boolexpr` and `formula`
+  // accept an optional mapping (used to label leaves) so the dropdown
+  // shows for them too, but emptying the selection is allowed : see
+  // `_OPTIONAL_MAPPING`. Each renders an unnamed leaf in its own way --
+  // a bare UUID, an `x<id>` placeholder, an abbreviated UUID -- rather
+  // than collapsing it to the semiring's one.
+  const _OPTIONAL_MAPPING = new Set(['prov-xml', 'boolexpr', 'formula']);
   function needsMapping(v) {
     if (v.startsWith('custom:')) return true;
     if (_OPTIONAL_MAPPING.has(v)) return true;
@@ -1703,9 +1706,14 @@
   const _ROUTE_METHODS = ['sq-rewrite', 'bounded-jw', 'reachability'];
   // Options visible when the eval target is scalar.  Everything else in
   // the <select> gets hidden + disabled for the duration of the scalar
-  // focus.  PROV-XML stays because it accepts any provenance gate.
+  // focus.  PROV-XML stays because it accepts any provenance gate, and
+  // Formula because it serialises rather than evaluates: it is the one
+  // semiring that renders the measure-carrier gates (gate_rv,
+  // gate_arith, gate_mixture, gate_case) instead of refusing them, and
+  // such a circuit has no input leaves, so it needs no mapping.
   const _SCALAR_TARGET_OPTIONS = new Set([
-    'distribution-profile', 'moment', 'quantile', 'sample', 'prov-xml'
+    'distribution-profile', 'moment', 'quantile', 'sample', 'prov-xml',
+    'formula'
   ]);
   // Options visible only on scalar targets.  Hidden + disabled when the
   // eval target is Boolean / aggregate / etc., so the user can't pick a
@@ -2075,7 +2083,11 @@
           // existing PG-version gate on compiled options.
           hide = false;
         } else if (condKind === 'discrete') {
-          hide = !(opt.value === 'probability' || opt.value === 'prov-xml');
+          // Formula joins probability / prov-xml here: it renders the
+          // conditioning marker as `(target | evidence)` rather than
+          // refusing it as the evaluating semirings do.
+          hide = !(opt.value === 'probability' || opt.value === 'prov-xml'
+                   || opt.value === 'formula');
         } else if (condKind === 'moment') {
           hide = !_SCALAR_TARGET_OPTIONS.has(opt.value);
         } else if (isScalar) {

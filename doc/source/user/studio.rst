@@ -428,10 +428,13 @@ group, only multirange-typed mappings under ``interval-union``, and
 only mappings whose ``value`` column is a user-defined enum
 (``pg_type.typtype = 'e'``) under ``minmax`` / ``maxmin``.
 Polymorphic entries (``boolexpr``, ``formula``, ``how``, ``why``,
-``which``) accept any mapping. ``boolexpr`` and ``PROV-XML export`` accept the
-mapping as *optional*: with one, leaves are labelled by the mapping's
-``value`` column; without one, leaves carry their gate UUID
-(``PROV-XML``) or a bare ``x<id>`` placeholder (``boolexpr``). Custom-
+``which``) accept any mapping. ``boolexpr``, ``formula`` and ``PROV-XML
+export`` accept the mapping as *optional*: with one, leaves are
+labelled by the mapping's ``value`` column; without one, leaves carry
+their gate UUID (``PROV-XML``), a bare ``x<id>`` placeholder
+(``boolexpr``) or the same abbreviated UUID the circuit's nodes show
+(``formula``). A partial mapping is fine for those three: what it
+covers is labelled, the rest identified. Custom-
 semiring entries filter to mappings whose value type matches the
 wrapper's return type. Mismatches are surfaced before the round-trip
 as ``(no compatible mappings : expected …)`` in the picker.

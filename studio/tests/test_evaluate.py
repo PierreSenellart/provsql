@@ -10,6 +10,7 @@ fixture as test_relations.py and don't depend on cs5-style data.
 from __future__ import annotations
 
 import json
+import re
 
 import psycopg
 import pytest
@@ -539,13 +540,31 @@ def test_evaluate_boolean_returns_bool(client, boolean_mapping):
 
 
 def test_evaluate_missing_mapping_is_400(client):
+    """A semiring that *evaluates* has no way to render an unnamed leaf:
+    it would read as the semiring's one and silently distort the result,
+    so the mapping stays mandatory."""
+    root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
+    resp = client.post("/api/evaluate", json={
+        "token": root,
+        "semiring": "counting",
+    })
+    assert resp.status_code == 400
+    assert "mapping" in resp.get_json()["error"].lower()
+
+
+def test_evaluate_formula_without_mapping(client):
+    """sr_formula serialises the circuit rather than evaluating it, so the
+    mapping is optional (as for boolexpr): an unnamed leaf renders as its
+    abbreviated UUID, not as 𝟙 -- which the enclosing ⊗ would absorb."""
     root = _root_uuid(client, "SELECT * FROM personnel WHERE name = 'John'")
     resp = client.post("/api/evaluate", json={
         "token": root,
         "semiring": "formula",
     })
-    assert resp.status_code == 400
-    assert "mapping" in resp.get_json()["error"].lower()
+    assert resp.status_code == 200, resp.data
+    data = resp.get_json()
+    assert data["kind"] == "text"
+    assert re.search(r"[0-9a-f]{8}…", data["result"]), data["result"]
 
 
 def test_evaluate_unknown_semiring_is_400(client):
@@ -925,6 +944,27 @@ def test_evaluate_distribution_profile_analytical_curves_arith(client):
     assert resp.status_code == 200, resp.data
     r = resp.get_json()["result"]
     assert r.get("analytical_curves") is None
+
+
+def test_evaluate_formula_on_measure_carrier_gates(client):
+    """Formula serialises the circuit instead of evaluating it, so it is
+    the one semiring the measure-carrier gates do not refuse: the eval
+    strip offers it on a scalar target, and it needs no mapping there
+    (such a circuit has no input leaves to name)."""
+    # The rendering round-trips: each expression comes back as itself
+    # (the test search_path resolves the constructors unqualified, so
+    # input and expected output are the same string).
+    for expr in ("normal(2.5, 0.5)",
+                 "normal(0, 1) + uniform(0, 1)",
+                 "exp(normal(0, 1))"):
+        tok = _rv_uuid(client, expr)
+        resp = client.post("/api/evaluate", json={
+            "token": tok, "semiring": "formula",
+        })
+        assert resp.status_code == 200, (expr, resp.data)
+        data = resp.get_json()
+        assert data["kind"] == "text"
+        assert data["result"] == expr, (expr, data["result"])
 
 
 def test_evaluate_moment_categorical(client):

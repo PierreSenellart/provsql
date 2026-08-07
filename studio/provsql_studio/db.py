@@ -997,10 +997,13 @@ def _to_jsonable(v):
 # The kernel dispatches on the mapping's value type at evaluation time;
 # see `_resolve_compiled_semiring`.
 #
-# `boolexpr` accepts an *optional* mapping: with one, leaves are labelled
-# by the mapping's `value` column; without one, leaves render as bare
-# `x<id>` placeholders. Probability and prov-xml are handled separately,
-# outside this registry.
+# `needs_mapping` marks the entries that accept an *optional* mapping,
+# because they render the circuit rather than evaluating it and so have a
+# way to show a leaf the mapping does not name: `boolexpr` falls back to
+# an `x<id>` placeholder, `formula` to an abbreviated UUID. Everything
+# else evaluates unnamed leaves to the semiring's one, which is a value,
+# not a rendering -- a mapping is mandatory there. Probability and
+# prov-xml are handled separately, outside this registry.
 #
 # Numeric base types accepted by the scoring semirings (counting, tropical,
 # viterbi, lukasiewicz). `format_type(_, NULL)` produces these exact
@@ -1040,7 +1043,7 @@ _COMPILED_SEMIRINGS: dict[str, dict] = {
                  "boolean_rewrite_compatible": True, "absorptive": True},
     "boolean":  {"func": "sr_boolean",  "types": ("boolean",),
                  "boolean_rewrite_compatible": True, "absorptive": True},
-    "formula":  {"func": "sr_formula",  "types": None,
+    "formula":  {"func": "sr_formula",  "needs_mapping": False, "types": None,
                  "boolean_rewrite_compatible": True, "absorptive": False},
     # Lineage.
     "why":      {"func": "sr_why",      "types": None,
@@ -1637,7 +1640,7 @@ def evaluate_circuit(
         params = ()
     elif semiring in _COMPILED_SEMIRINGS:
         spec = _COMPILED_SEMIRINGS[semiring]
-        if not mapping:
+        if not mapping and spec.get("needs_mapping", True):
             raise ValueError(
                 f"semiring {semiring!r} requires a provenance mapping"
             )
@@ -1681,6 +1684,14 @@ def evaluate_circuit(
             sql_stmt = sql.SQL(
                 "SELECT {}({}::uuid, {}::regclass, true)"
             ).format(fn, sql.Literal(token), sql.Literal(mapping))
+        elif not mapping:
+            # Optional-mapping kernel run without one (`formula`): the
+            # one-argument overload, where every variable leaf renders as
+            # its abbreviated UUID.  Reaching here means `needs_mapping`
+            # is False, so the guard above let it through.
+            sql_stmt = sql.SQL("SELECT {}({}::uuid)").format(
+                fn, sql.Literal(token)
+            )
         else:
             sql_stmt = sql.SQL("SELECT {}({}::uuid, {}::regclass)").format(
                 fn, sql.Literal(token), sql.Literal(mapping)
