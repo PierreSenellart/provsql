@@ -262,8 +262,26 @@ SELECT remove_provenance('upgrade_sup');
 -- g=1: P(both rows) * 0.4 = 0.25 * 0.4 = 0.1; g=2 cannot reach 2 rows.
 SELECT g, p AS join_partner_kept FROM upgrade_sup ORDER BY g;
 
+-- 1.12.0 surface check: the three function bodies this upgrade replaces.
+--   * assume_boolean stamps PROVSQL_ROUTE_SQ_REWRITE (1) on the wrapper it
+--     mints, which is what lets the probability dispatcher report the
+--     safe-query rewrite as 'sq-rewrite' rather than the generic
+--     'independent'.  The 1.11.1 body left the tag at 0.
+--   * sr_formula's mapping argument is optional, so the measure carriers
+--     that have no leaf mapping at all (here a random-variable leaf) can be
+--     rendered; and it is no longer STRICT, so a NULL token is NULL rather
+--     than a short-circuit before the default can apply.
+--   * remove_provenance on a table that never had provenance is a
+--     NOTICE-and-no-op, matching add_provenance since 1.9.0.
+SELECT (get_infos(assume_boolean(gate_one()))).info1 AS assume_boolean_route_tag;
+SELECT sr_formula(provsql.normal(2, 1)::uuid) AS formula_no_mapping,
+       sr_formula(NULL::uuid) IS NULL          AS formula_null_token;
+CREATE TABLE upgrade_untracked (x int);
+SELECT remove_provenance('upgrade_untracked');
+
 SET client_min_messages = WARNING;
-DROP TABLE upgrade_empty, upgrade_sup_r, upgrade_sup_s, upgrade_sup,
+DROP TABLE upgrade_untracked,
+           upgrade_empty, upgrade_sup_r, upgrade_sup_s, upgrade_sup,
            upgrade_result, upgrade_smoke_map, upgrade_smoke,
            upgrade_smoke_right, upgrade_safe_q, upgrade_kc,
            upgrade_cnt, upgrade_cnt_r, upgrade_cond,

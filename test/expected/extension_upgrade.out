@@ -112,3 +112,13 @@ g|join_partner_kept
 1|0.1000
 2|0.0000
 (2 rows)
+assume_boolean_route_tag
+1
+(1 row)
+formula_no_mapping|formula_null_token
+normal(2, 1)|t
+(1 row)
+NOTICE:  table upgrade_untracked does not have provenance tracking
+remove_provenance
+
+(1 row)
