@@ -903,3 +903,26 @@
     Implements and experimentally validates this algorithm within the ProvSQL system,
     enabling Shapley value computation directly from provenance circuits.},
 }
+
+@inproceedings{saadeh2026preserving,
+  author       = {Angelo Saadeh and
+                  Pierre Senellart},
+  title        = {Preserving {LLM} Output Distributions for Probabilistic Query
+                  Evaluation},
+  booktitle    = {Proc. 35th {ACM} International Conference on Information and Knowledge
+                  Management ({CIKM}), Rome, Italy, November 2026},
+  year         = {2026},
+  note         = {Demonstration},
+  doi          = {10.1145/3799682.3840264},
+  pdf          = {https://pierre.senellart.com/publications/saadeh2026preserving.pdf},
+  video        = {https://www.youtube.com/watch?v=VWvf6BEABKM},
+  keyword      = {provsql-paper},
+  annote       = {Keeps the whole output distribution of a language model instead of its
+    top prediction. Candidate values and their probabilities are stored as a JSONB
+    mapping and compiled into a provenance circuit of monus and plus gates that makes
+    the candidates mutually exclusive, aggregated by <a href="/docs/user/aggregation.html#the-choose-aggregate">the choose aggregate</a>, so that
+    ordinary SQL over language model predictions is <a href="/docs/user/probabilities.html">evaluated probabilistically</a>,
+    through <a href="/docs/user/aggregation.html#comparing-an-aggregate-with-a-text-constant">comparison of aggregation tokens with text constants</a> and
+    <a href="/docs/user/aggregation.html#joining-and-exploding-aggregated-provenance">joins that explode an aggregation token</a>. Demonstrated on 10,612 Amazon musical
+    products and 230,156 user reviews augmented locally with Llama 3.1.},
+}

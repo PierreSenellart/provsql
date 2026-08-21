@@ -2,6 +2,14 @@
 # paper_doi: DOI of the accompanying demonstration paper (optional)
 # paper_pdf: PDF link for the accompanying paper (optional)
 
+- title: "Preserving LLM Output Distributions for Probabilistic Query Evaluation"
+  url: "https://www.youtube.com/watch?v=VWvf6BEABKM"
+  description: "Demonstration of a framework that keeps the whole output distribution of a language model instead of collapsing it to a single top prediction. Candidate values and their probabilities, obtained locally with Llama 3.1 over 10,612 Amazon musical products and 230,156 user reviews, are stored as JSONB mappings and turned by ProvSQL into mutually exclusive gates of a provenance circuit. Plain SQL queries are then evaluated probabilistically, with the uncertainty propagated through joins, group-by, and filters."
+  date: 2026-06-02
+  thumbnail: "https://i.ytimg.com/vi/VWvf6BEABKM/maxresdefault.jpg"
+  paper_doi: "10.1145/3799682.3840264"
+  paper_pdf: "https://pierre.senellart.com/publications/saadeh2026preserving.pdf"
+
 - title: "Using a Probabilistic Database in an Image Retrieval Application"
   url: "https://www.youtube.com/watch?v=n_aFl0olTG4"
   description: "Demonstration of a system that uses ProvSQL as the probabilistic database backend for content-based image retrieval. Uncertain feature vectors from a deep learning object detector are stored and queried, with result probabilities computed via ProvSQL's knowledge compilation pipeline."
