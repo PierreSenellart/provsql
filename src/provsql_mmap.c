@@ -22,9 +22,9 @@
  * message to the background worker, and wait for an acknowledgment.
  */
 #include "provsql_mmap.h"
+#include "provsql_rmgr.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
-#include "MMappedTableInfo.h"
 
 #include <errno.h>
 #include <unistd.h>
@@ -33,16 +33,13 @@
 #include <assert.h>
 
 #include "postgres.h"
+#include "access/xact.h"
 #include "postmaster/bgworker.h"
-#include "catalog/pg_type.h"          /* INT2OID etc. -- the _d.h variant
-                                         only exists from PG 11 onwards */
 #include "fmgr.h"
 #include "funcapi.h"
 #include "utils/array.h"
 #include "access/htup_details.h"
 #include "utils/builtins.h"
-#include "utils/inval.h"
-#include "utils/syscache.h"
 
 #include "circuit_cache.h"
 
@@ -93,8 +90,11 @@ bool provsql_read_all(int fd, void *dst, size_t n)
  * This worker blocks in read() on the IPC pipe (restarted by
  * SA_RESTART), so it would never observe the flag and a fast shutdown
  * would hang on it.  Restore the pre-19 semantics: the worker holds no
- * transaction state and the mmap store is crash-safe, so exiting
- * mid-read is fine. */
+ * transaction state, and being interrupted between messages leaves the
+ * store consistent, so exiting mid-read is fine.  (Being interrupted
+ * *during* a write is what the write ordering in MMappedCircuit.cpp is
+ * there for; provsql.check_store() reports what an interruption left
+ * behind.) */
 static void provsql_worker_die(SIGNAL_ARGS)
 {
   ereport(FATAL,
@@ -147,6 +147,261 @@ void RegisterProvSQLMMapWorker(void)
 
 #endif /* PROVSQL_INPROCESS_STORE */
 
+/* -------------------------------------------------------------------------
+ * Durability of the store across a machine crash
+ *
+ * A backend's writes reach the worker over a FIFO pipe and the worker
+ * applies them to the mmap files, but nothing forces those files to disk
+ * at the moment the writing transaction commits: the heap's WAL record is
+ * fsynced, the circuit's bytes are not.  After a crash of the machine
+ * (PostgreSQL crashing is harmless -- the page cache outlives it) a
+ * committed row can reference a gate that never reached the disk, and an
+ * unknown token reads back as an input gate, so the loss is silent.
+ *
+ * Two things narrow that window.  The worker forces the files out shortly
+ * after the last write (PROVSQL_STORE_FLUSH_INTERVAL_MS), which bounds the
+ * loss.  And, when provsql.synchronous_commit is on, a transaction that
+ * wrote to the store sends a sync request before it commits and waits for
+ * the reply, which closes the window entirely: the reply comes after every
+ * earlier message of this backend has been applied and forced.
+ * ------------------------------------------------------------------------- */
+
+bool provsql_synchronous_commit = false;
+
+/** Whether the current transaction has written anything to the store. */
+static bool store_written = false;
+static bool store_callbacks_registered = false;
+
+/** @brief Send the sync barrier and wait for the worker's acknowledgement. */
+static void provsql_store_sync_barrier(void)
+{
+  char ack;
+
+  STARTWRITEM();
+  ADDWRITEM("S", char);
+  ADDWRITEDB();
+
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM() || !READB(ack, char)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type S)");
+  }
+  provsql_shmem_unlock();
+}
+
+static void provsql_store_xact_callback(XactEvent event, void *arg)
+{
+  (void) arg;
+  switch(event) {
+  case XACT_EVENT_PRE_COMMIT:
+  case XACT_EVENT_PRE_PREPARE:
+    /* Still inside the transaction, so raising here aborts the commit
+       rather than leaving it half-durable. */
+    if(store_written && provsql_synchronous_commit)
+      provsql_store_sync_barrier();
+    break;
+  case XACT_EVENT_COMMIT:
+  case XACT_EVENT_ABORT:
+  case XACT_EVENT_PREPARE:
+  case XACT_EVENT_PARALLEL_COMMIT:
+  case XACT_EVENT_PARALLEL_ABORT:
+    store_written = false;
+    break;
+  default:
+    break;
+  }
+}
+
+/** @brief What every store mutation does before it reaches the pipe:
+ *  refuse it on a standby, and write it to the WAL.  @p data is the
+ *  complete message, opcode first. */
+static void provsql_log_store_write(const char *data, size_t len)
+{
+  if(!provsql_store_write_allowed())
+    ereport(ERROR,
+            (errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
+             errmsg("cannot write to the ProvSQL circuit store during recovery"),
+             errdetail("The store is maintained on a standby by replaying the "
+                       "primary's records; a backend writing to it would make "
+                       "the two diverge."),
+             errhint("Provenance queries create gates as they run, reads "
+                     "included, so they only work on the primary.")));
+  provsql_wal_log_store_message(data, len);
+}
+
+/** @brief The same, for a mutation made by a live transaction: it also
+ *  arms the at-commit sync barrier. */
+static void provsql_before_store_write(const char *data, size_t len)
+{
+  provsql_log_store_write(data, len);
+  provsql_store_note_write();
+}
+
+void provsql_store_note_write(void)
+{
+  if(!store_callbacks_registered) {
+    RegisterXactCallback(provsql_store_xact_callback, NULL);
+    store_callbacks_registered = true;
+  }
+  store_written = true;
+}
+
+bool provsql_store_written(void)
+{
+  return store_written;
+}
+
+void provsql_circuit_cleanup_request(bool dry_run, const pg_uuid_t *roots,
+                                     int64 nb_roots,
+                                     provsql_cleanup_result *out)
+{
+  char flag = dry_run ? 1 : 0;
+  unsigned long n = (unsigned long) nb_roots;
+
+  /* The root set is as large as the number of distinct tokens stored in
+     the database, so it does not fit one atomic pipe write.  The lock is
+     held across the whole exchange, which is what makes the sequence of
+     writes one message; nothing else can be talking to the worker anyway,
+     since the caller holds the database exclusively. */
+  provsql_shmem_lock_exclusive();
+
+  STARTWRITEM();
+  ADDWRITEM("X", char);
+  ADDWRITEDB();
+  ADDWRITEM(&flag, char);
+  ADDWRITEM(&n, unsigned long);
+  if(!SENDWRITEM()) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type X)");
+  }
+
+#ifdef PROVSQL_INPROCESS_STORE
+  /* The in-memory FIFO has no atomicity limit and the dispatch runs
+     inside SENDWRITEM, so the roots must accompany the header. */
+  provsql_shmem_unlock();
+  provsql_error("circuit_cleanup is not available in the single-process build");
+#else
+  {
+    unsigned long per_batch = PIPE_BUF / sizeof(pg_uuid_t);
+    for(unsigned long i = 0; i < n; ) {
+      unsigned long j;
+      STARTWRITEM();
+      for(j = 0; j < per_batch && i < n; ++j, ++i)
+        ADDWRITEM(&roots[i], pg_uuid_t);
+      if(!SENDWRITEM()) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot write to pipe (message type X)");
+      }
+    }
+  }
+
+  if(!READB(out->gates_before, uint64) || !READB(out->gates_after, uint64)
+     || !READB(out->wires_before, uint64) || !READB(out->wires_after, uint64)
+     || !READB(out->extra_before, uint64) || !READB(out->extra_after, uint64)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot read response from pipe (message type X)");
+  }
+  provsql_shmem_unlock();
+#endif
+}
+
+void provsql_replay_store_message(const char *data, size_t len)
+{
+#ifdef PROVSQL_INPROCESS_STORE
+  (void) data; (void) len;
+#else
+  const char *p = data;
+  size_t left = len;
+
+  if(len == 0)
+    return;
+
+  /* The worker is the single writer, in recovery as in normal running:
+     the message goes back down the same pipe a backend would use.  The
+     lock is held across the whole write so the (possibly chunked)
+     message stays one message. */
+  provsql_shmem_lock_exclusive();
+
+  while(left > 0) {
+    size_t chunk = left > PIPE_BUF ? PIPE_BUF : left;
+    if(write(provsql_shared_state->pipebmw, p, chunk) == -1) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot replay a store message to the pipe");
+    }
+    p += chunk;
+    left -= chunk;
+  }
+
+  /* Opcodes that answer must be drained, or the reply would be read as
+     the answer to somebody else's later question. */
+  if(data[0] == 'P') {
+    char result;
+    double stored;
+    if(!READB(result, char) || !READB(stored, double)) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot read the reply to a replayed store message");
+    }
+  }
+
+  provsql_shmem_unlock();
+#endif
+}
+
+PG_FUNCTION_INFO_V1(check_store);
+/**
+ * @brief Report what does not add up in this database's circuit store.
+ *
+ * A store nothing has damaged answers zero to every count.  A non-zero
+ * one means a write was interrupted at a point the ordering rules do not
+ * cover, or that a set of files was copied at different instants -- a
+ * file-level backup of a running server, or a base backup.
+ * @c provsql.circuit_cleanup() rebuilds the store from what is still
+ * reachable.
+ */
+Datum check_store(PG_FUNCTION_ARGS)
+{
+  char unclean;
+  unsigned long nb_gates, nb_mapping, next_value,
+                dangling, unreferenced, bad_wires, bad_extra;
+  TupleDesc tupdesc;
+  Datum values[8];
+  bool nulls[8] = {false, false, false, false, false, false, false, false};
+
+  STARTWRITEM();
+  ADDWRITEM("k", char);
+  ADDWRITEDB();
+
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM()
+     || !READB(unclean, char)
+     || !READB(nb_gates, unsigned long)
+     || !READB(nb_mapping, unsigned long)
+     || !READB(next_value, unsigned long)
+     || !READB(dangling, unsigned long)
+     || !READB(unreferenced, unsigned long)
+     || !READB(bad_wires, unsigned long)
+     || !READB(bad_extra, unsigned long)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type k)");
+  }
+  provsql_shmem_unlock();
+
+  if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+    provsql_error("check_store: expected composite return type");
+  tupdesc = BlessTupleDesc(tupdesc);
+
+  values[0] = BoolGetDatum(unclean != 0);
+  values[1] = Int64GetDatum((int64) nb_gates);
+  values[2] = Int64GetDatum((int64) nb_mapping);
+  values[3] = Int64GetDatum((int64) next_value);
+  values[4] = Int64GetDatum((int64) dangling);
+  values[5] = Int64GetDatum((int64) unreferenced);
+  values[6] = Int64GetDatum((int64) bad_wires);
+  values[7] = Int64GetDatum((int64) bad_extra);
+
+  PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
 PG_FUNCTION_INFO_V1(get_gate_type);
 /** @brief PostgreSQL-callable wrapper for get_gate_type().
  *
@@ -165,9 +420,9 @@ PG_FUNCTION_INFO_V1(get_gate_type);
  *  from C (e.g. the annotation-transparent set_prob()).  On return
  *  @p *children_out is a @c calloc'd array to be freed by the caller, or
  *  @c NULL when the gate has no children. */
-static gate_type provsql_fetch_gate(const pg_uuid_t *token,
-                                    unsigned *nb_children_out,
-                                    pg_uuid_t **children_out)
+gate_type provsql_fetch_gate(const pg_uuid_t *token,
+                             unsigned *nb_children_out,
+                             pg_uuid_t **children_out)
 {
   gate_type type;
   unsigned nb_children = 0;
@@ -182,7 +437,7 @@ static gate_type provsql_fetch_gate(const pg_uuid_t *token,
   /* Type fetch (message 't'). */
   STARTWRITEM();
   ADDWRITEM("t", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
@@ -198,7 +453,7 @@ static gate_type provsql_fetch_gate(const pg_uuid_t *token,
   if(type != gate_invalid) {
     STARTWRITEM();
     ADDWRITEM("c", char);
-    ADDWRITEM(&MyDatabaseId, Oid);
+    ADDWRITEDB();
     ADDWRITEM(token, pg_uuid_t);
 
     if(!SENDWRITEM() || !READB(nb_children, unsigned)) {
@@ -267,9 +522,31 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
    * MMappedCircuit::createGate is idempotent on already-mapped tokens. */
   circuit_cache_create_gate(*token, type, nb_children, children_data);
 
+  /* The WAL record is the whole logical message, children included, even
+     though the pipe may need several writes for it. */
+  {
+    size_t header = sizeof(char) + 2 * sizeof(Oid) + sizeof(pg_uuid_t)
+                    + sizeof(gate_type) + sizeof(unsigned);
+    size_t len = header + nb_children * sizeof(pg_uuid_t);
+    char *msg = palloc(len);
+    char *p = msg;
+    *p++ = 'C';
+    memcpy(p, &MyDatabaseId, sizeof(Oid)); p += sizeof(Oid);
+    memcpy(p, &MyDatabaseTableSpace, sizeof(Oid)); p += sizeof(Oid);
+    memcpy(p, token, sizeof(pg_uuid_t)); p += sizeof(pg_uuid_t);
+    memcpy(p, &type, sizeof(gate_type)); p += sizeof(gate_type);
+    memcpy(p, &nb_children, sizeof(unsigned)); p += sizeof(unsigned);
+    for(unsigned i=0; i<nb_children; ++i) {
+      memcpy(p, &children_data[i], sizeof(pg_uuid_t));
+      p += sizeof(pg_uuid_t);
+    }
+    provsql_before_store_write(msg, len);
+    pfree(msg);
+  }
+
   STARTWRITEM();
   ADDWRITEM("C", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&type, gate_type);
   ADDWRITEM(&nb_children, unsigned);
@@ -325,45 +602,107 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
 #endif
 }
 
-/** @brief Internal entry point behind set_prob(): worker IPC only.  Returns
- *  whether the worker accepted the probability (false on a non-input gate). */
-bool provsql_internal_set_prob(const pg_uuid_t *token, double prob)
+/** @brief Send a probability write and read back what the store made of
+ *  it.  @p tracked arms the at-commit sync barrier; the one caller that
+ *  passes false is the rollback path, which runs when the transaction
+ *  that would have committed is already gone. */
+static provsql_set_prob_result provsql_send_set_prob(const pg_uuid_t *token,
+                                                     double prob,
+                                                     double *existing,
+                                                     bool tracked)
 {
   char result;
+  double stored;
 
   STARTWRITEM();
   ADDWRITEM("P", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&prob, double);
+  if(tracked)
+    provsql_before_store_write(buffer, bufferpos);
+  else
+    provsql_log_store_write(buffer, bufferpos);
 
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM() || !READB(result, char)) {
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM() || !READB(result, char) || !READB(stored, double)) {
     provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe");
+    provsql_error("Cannot communicate with pipe (message type P)");
   }
   provsql_shmem_unlock();
 
-  return result;
+  if(existing)
+    *existing = stored;
+  return (provsql_set_prob_result) result;
+}
+
+provsql_set_prob_result provsql_internal_set_prob(const pg_uuid_t *token,
+                                                  double prob,
+                                                  double *existing)
+{
+  return provsql_send_set_prob(token, prob, existing, true);
+}
+
+void provsql_internal_clear_prob(const pg_uuid_t *token)
+{
+  provsql_send_set_prob(token, NAN, NULL, false);
+}
+
+bool provsql_internal_get_prob_written(const pg_uuid_t *token, double *prob)
+{
+  char has;
+  double stored;
+
+  STARTWRITEM();
+  ADDWRITEM("q", char);
+  ADDWRITEDB();
+  ADDWRITEM(token, pg_uuid_t);
+
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM() || !READB(has, char) || !READB(stored, double)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot communicate with pipe (message type q)");
+  }
+  provsql_shmem_unlock();
+
+  if(prob)
+    *prob = stored;
+  return has != 0;
 }
 
 /** @brief Internal entry point behind set_infos(): worker IPC only. */
 void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
                                 unsigned info2)
 {
+  char result;
+  unsigned had1, had2;
+
   STARTWRITEM();
   ADDWRITEM("I", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&info1, unsigned);
   ADDWRITEM(&info2, unsigned);
+  provsql_before_store_write(buffer, bufferpos);
 
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM() || !READB(result, char) || !READB(had1, unsigned)
+     || !READB(had2, unsigned)) {
     provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe (message type I)");
+    provsql_error("Cannot communicate with pipe (message type I)");
   }
   provsql_shmem_unlock();
+
+  if((provsql_set_annotation_result) result == PROVSQL_SET_ANNOTATION_ALREADY_SET)
+    ereport(ERROR,
+            (errmsg("gate %s already records the annotation (%u, %u), "
+                    "not (%u, %u)",
+                    DatumGetCString(DirectFunctionCall1(
+                                      uuid_out, UUIDPGetDatum((pg_uuid_t *) token))),
+                    had1, had2, info1, info2),
+             errdetail("A gate's annotation is written once, like the gate "
+                       "itself and its probability, so that a transaction "
+                       "that rolls back leaves the circuit as it found it.")));
 }
 
 PG_FUNCTION_INFO_V1(create_gate);
@@ -413,43 +752,6 @@ Datum create_gate(PG_FUNCTION_ARGS)
   PG_RETURN_VOID();
 }
 
-PG_FUNCTION_INFO_V1(set_prob);
-/** @brief PostgreSQL-callable wrapper for set_prob().
- *
- * Transparent @c gate_annotation wrappers (an inversion-free certificate /
- * order marker attached by the planner to a certified query's row roots)
- * are peeled first: a probability set on a wrapped token belongs to the
- * input gate underneath, so the documented
- * @c "set_prob(provenance(), p) FROM t" pattern keeps working when the
- * query happens to be certified. */
-Datum set_prob(PG_FUNCTION_ARGS)
-{
-  pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  double prob = PG_GETARG_FLOAT8(1);
-  pg_uuid_t peeled;
-
-  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    provsql_error("Invalid NULL value passed to set_prob");
-
-  for(;;) {
-    unsigned nb_children = 0;
-    pg_uuid_t *children = NULL;
-    gate_type type = provsql_fetch_gate(token, &nb_children, &children);
-    if(type != gate_annotation || nb_children != 1) {
-      if(children) free(children);
-      break;
-    }
-    peeled = children[0];
-    token = &peeled;
-    free(children);
-  }
-
-  if(!provsql_internal_set_prob(token, prob))
-    provsql_error("set_prob called on non-input gate");
-
-  PG_RETURN_VOID();
-}
-
 PG_FUNCTION_INFO_V1(set_infos);
 /** @brief PostgreSQL-callable wrapper for set_infos(). */
 Datum set_infos(PG_FUNCTION_ARGS)
@@ -473,10 +775,13 @@ Datum set_infos(PG_FUNCTION_ARGS)
 void provsql_internal_set_extra(const pg_uuid_t *token, const char *str)
 {
   unsigned len=strlen(str);
+  char result;
+  unsigned had_len = 0;
+  char *had = NULL;
 
   STARTWRITEM();
   ADDWRITEM("E", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
   ADDWRITEM(&len, unsigned);
 
@@ -486,13 +791,32 @@ void provsql_internal_set_extra(const pg_uuid_t *token, const char *str)
   assert(PIPE_BUF-bufferpos>len);
 #endif
   memcpy(buffer+bufferpos, str, len), bufferpos+=len;
+  provsql_before_store_write(buffer, bufferpos);
 
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
+  provsql_shmem_lock_exclusive();
+  if(!SENDWRITEM() || !READB(result, char) || !READB(had_len, unsigned)) {
     provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe (message type E)");
+    provsql_error("Cannot communicate with pipe (message type E)");
+  }
+  if(had_len > 0) {
+    had = palloc(had_len + 1);
+    if(!READB_BYTES(had, had_len)) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot communicate with pipe (message type E)");
+    }
+    had[had_len] = '\0';
   }
   provsql_shmem_unlock();
+
+  if((provsql_set_annotation_result) result == PROVSQL_SET_ANNOTATION_ALREADY_SET)
+    ereport(ERROR,
+            (errmsg("gate %s already records the annotation \"%s\", not \"%s\"",
+                    DatumGetCString(DirectFunctionCall1(
+                                      uuid_out, UUIDPGetDatum((pg_uuid_t *) token))),
+                    had ? had : "", str),
+             errdetail("A gate's annotation is written once, like the gate "
+                       "itself and its probability, so that a transaction "
+                       "that rolls back leaves the circuit as it found it.")));
 }
 
 PG_FUNCTION_INFO_V1(set_extra);
@@ -522,7 +846,7 @@ Datum get_extra(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("e", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
@@ -553,7 +877,7 @@ Datum get_nb_gates(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("n", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
 
   provsql_shmem_lock_exclusive();
 
@@ -586,7 +910,7 @@ Datum get_children(PG_FUNCTION_ARGS)
   if(!children) {
     STARTWRITEM();
     ADDWRITEM("c", char);
-    ADDWRITEM(&MyDatabaseId, Oid);
+    ADDWRITEDB();
     ADDWRITEM(token, pg_uuid_t);
 
     provsql_shmem_lock_exclusive();
@@ -647,7 +971,7 @@ Datum get_prob(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("p", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
@@ -665,435 +989,6 @@ Datum get_prob(PG_FUNCTION_ARGS)
     PG_RETURN_FLOAT8(result);
 }
 
-/** @brief Translate a SQL-side kind label into the persisted enum value. */
-static uint8_t parse_table_kind(const char *label)
-{
-  if(strcmp(label, "tid") == 0) return PROVSQL_TABLE_TID;
-  if(strcmp(label, "bid") == 0) return PROVSQL_TABLE_BID;
-  if(strcmp(label, "opaque") == 0) return PROVSQL_TABLE_OPAQUE;
-  provsql_error("set_table_info: unknown table kind '%s' (expected "
-                "'tid', 'bid', or 'opaque')", label);
-  return PROVSQL_TABLE_TID;  /* unreachable */
-}
-
-/** @brief Inverse of @c parse_table_kind for use by @c get_table_info. */
-static const char *table_kind_label(uint8_t kind)
-{
-  switch(kind) {
-  case PROVSQL_TABLE_TID:    return "tid";
-  case PROVSQL_TABLE_BID:    return "bid";
-  case PROVSQL_TABLE_OPAQUE: return "opaque";
-  }
-  provsql_error("get_table_info: unknown table kind value %u", kind);
-  return NULL;  /* unreachable */
-}
-
-PG_FUNCTION_INFO_V1(set_table_info);
-/**
- * @brief PostgreSQL-callable wrapper for setTableInfo() over the IPC pipe.
- *
- * Stores per-relation provenance metadata used by the safe-query
- * optimisation.  @p relid is the @c pg_class OID of the relation;
- * @p kind is one of the textual labels @c 'tid' / @c 'bid' /
- * @c 'opaque' (see @c provsql_table_kind in @c MMappedTableInfo.h);
- * @p block_key is an @c int2 array (possibly empty) listing the
- * block-key column numbers when @p kind is @c 'bid'.
- */
-Datum set_table_info(PG_FUNCTION_ARGS)
-{
-  Oid relid;
-  text *kind_text;
-  char *kind_str;
-  uint8_t kind;
-  ArrayType *block_key;
-  uint16 block_key_n = 0;
-  int16 *block_key_data = NULL;
-  Size payload_size;
-
-  if(PG_ARGISNULL(0) || PG_ARGISNULL(1))
-    provsql_error("Invalid NULL value passed to set_table_info");
-
-  relid     = PG_GETARG_OID(0);
-  kind_text = PG_GETARG_TEXT_PP(1);
-  kind_str  = text_to_cstring(kind_text);
-  kind      = parse_table_kind(kind_str);
-  pfree(kind_str);
-  block_key = PG_ARGISNULL(2) ? NULL : PG_GETARG_ARRAYTYPE_P(2);
-
-  if(block_key) {
-    if(ARR_NDIM(block_key) > 1)
-      provsql_error("Invalid multi-dimensional array passed to set_table_info");
-    else if(ARR_NDIM(block_key) == 1)
-      block_key_n = *ARR_DIMS(block_key);
-    if(block_key_n > 0)
-      block_key_data = (int16 *) ARR_DATA_PTR(block_key);
-  }
-
-  if(block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY)
-    provsql_error("set_table_info: block key wider than %d columns "
-                  "(%u given) is not supported",
-                  PROVSQL_TABLE_INFO_MAX_BLOCK_KEY, block_key_n);
-
-  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid) + sizeof(uint8)
-                 + sizeof(uint16) + block_key_n * sizeof(int16);
-  if(payload_size > PIPE_BUF)
-    provsql_error("set_table_info: IPC payload exceeds PIPE_BUF");
-
-  STARTWRITEM();
-  ADDWRITEM("T", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(&relid, Oid);
-  ADDWRITEM(&kind, uint8);
-  ADDWRITEM(&block_key_n, uint16);
-  for(uint16 i = 0; i < block_key_n; ++i)
-    ADDWRITEM(&block_key_data[i], int16);
-
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe (message type T)");
-  }
-  provsql_shmem_unlock();
-
-  /* Broadcast a relcache invalidation so every backend re-fetches on
-   * next access.  Standard DDL (the ALTER TABLE in add_provenance and
-   * repair_key) already does this, but set_table_info is also called
-   * from DML paths that do not (INSERT INTO T SELECT, UPDATE under
-   * provsql.update_provenance, ...) and the upgrade-script backfill
-   * runs outside any DDL on the target relation.  Guarded by a
-   * pg_class existence check so the sql_drop event-trigger path,
-   * which calls remove_table_info on a relid that has just been
-   * deleted from pg_class, does not raise "cache lookup failed". */
-  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
-    CacheInvalidateRelcacheByRelid(relid);
-
-  PG_RETURN_VOID();
-}
-
-PG_FUNCTION_INFO_V1(remove_table_info);
-/** @brief PostgreSQL-callable wrapper for removeTableInfo() over the IPC pipe. */
-Datum remove_table_info(PG_FUNCTION_ARGS)
-{
-  Oid relid;
-
-  if(PG_ARGISNULL(0))
-    provsql_error("Invalid NULL value passed to remove_table_info");
-
-  relid = PG_GETARG_OID(0);
-
-  STARTWRITEM();
-  ADDWRITEM("D", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(&relid, Oid);
-
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe (message type D)");
-  }
-  provsql_shmem_unlock();
-
-  /* Same guard as set_table_info: skip the broadcast when the relation
-   * is already gone (typical for the sql_drop event-trigger path,
-   * where pg_class no longer has a row for this OID). */
-  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
-    CacheInvalidateRelcacheByRelid(relid);
-
-  PG_RETURN_VOID();
-}
-
-/**
- * @brief C-callable IPC fetch for per-table provenance metadata.
- *
- * Sends an @c 's' message to the background worker and reads back the
- * response.  No caching: every call hits the worker.  Use
- * @c provsql_lookup_table_info() for the cached, planner-hot-path
- * variant.
- *
- * @param relid  pg_class OID of the relation to look up.
- * @param out    On success, filled with the stored record.
- * @return @c true if the worker returned a record, @c false otherwise.
- */
-bool provsql_fetch_table_info(Oid relid, ProvenanceTableInfo *out)
-{
-  char found;
-
-  STARTWRITEM();
-  ADDWRITEM("s", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(&relid, Oid);
-
-  provsql_shmem_lock_exclusive();
-
-  if(!SENDWRITEM() || !READB(found, char)) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot communicate with pipe (message type s)");
-  }
-  if(found) {
-    if(!READB(out->kind, uint8_t) || !READB(out->block_key_n, uint16)) {
-      provsql_shmem_unlock();
-      provsql_error("Cannot communicate with pipe (message type s)");
-    }
-    if(out->block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY) {
-      provsql_shmem_unlock();
-      provsql_error("provsql_fetch_table_info: server returned an unexpectedly wide block key");
-    }
-    for(uint16 i = 0; i < out->block_key_n; ++i)
-      if(!READB(out->block_key[i], AttrNumber)) {
-        provsql_shmem_unlock();
-        provsql_error("Cannot communicate with pipe (message type s)");
-      }
-    out->relid = relid;
-  }
-
-  provsql_shmem_unlock();
-  return found != 0;
-}
-
-PG_FUNCTION_INFO_V1(get_table_info);
-/**
- * @brief PostgreSQL-callable wrapper around the cached table-info lookup.
- *
- * Returns @c NULL when no record exists for @p relid; otherwise a
- * record @c (kind text, block_key int2[]) where @c kind is one of
- * @c 'tid' / @c 'bid' / @c 'opaque'.  Goes through
- * @c provsql_lookup_table_info so repeated calls in the same session
- * do not pay for IPC.
- */
-Datum get_table_info(PG_FUNCTION_ARGS)
-{
-  Oid relid;
-  ProvenanceTableInfo info;
-  TupleDesc tupdesc;
-  Datum values[2];
-  bool nulls[2] = {false, false};
-  Datum *elems;
-  ArrayType *arr;
-
-  if(PG_ARGISNULL(0))
-    PG_RETURN_NULL();
-
-  relid = PG_GETARG_OID(0);
-
-  if(!provsql_lookup_table_info(relid, &info))
-    PG_RETURN_NULL();
-
-  if(get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-    provsql_error("get_table_info: expected composite return type");
-  tupdesc = BlessTupleDesc(tupdesc);
-
-  values[0] = CStringGetTextDatum(table_kind_label(info.kind));
-
-  elems = palloc(info.block_key_n * sizeof(Datum));
-  for(uint16 i = 0; i < info.block_key_n; ++i)
-    elems[i] = Int16GetDatum(info.block_key[i]);
-  arr = construct_array(elems, info.block_key_n, INT2OID, 2, true, 's');
-  pfree(elems);
-  values[1] = PointerGetDatum(arr);
-
-  PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
-}
-
-PG_FUNCTION_INFO_V1(set_ancestors);
-/**
- * @brief PostgreSQL-callable wrapper for setTableAncestry() over the
- *        IPC pipe.
- *
- * Records the base-relation ancestor set of a tracked relation.
- * @p relid is the @c pg_class OID of the relation; @p ancestors is
- * an @c oid[] (possibly empty) listing the base @c add_provenance /
- * @c repair_key relations this one's atoms ultimately come from.
- * The worker preserves the relation's existing @c kind / @c
- * block_key half on update.
- *
- * Silently no-op on the worker side when @p relid has no kind
- * record yet -- the safe-query rewriter only consults ancestry
- * for tracked relations, so callers should run
- * @c add_provenance / @c repair_key / @c set_table_info first.
- */
-Datum set_ancestors(PG_FUNCTION_ARGS)
-{
-  Oid relid;
-  ArrayType *ancestors;
-  uint16 ancestor_n = 0;
-  Oid *ancestor_data = NULL;
-  Size payload_size;
-
-  if(PG_ARGISNULL(0))
-    provsql_error("Invalid NULL value passed to set_ancestors");
-
-  relid     = PG_GETARG_OID(0);
-  ancestors = PG_ARGISNULL(1) ? NULL : PG_GETARG_ARRAYTYPE_P(1);
-
-  if(ancestors) {
-    if(ARR_NDIM(ancestors) > 1)
-      provsql_error("Invalid multi-dimensional array passed to set_ancestors");
-    else if(ARR_NDIM(ancestors) == 1)
-      ancestor_n = *ARR_DIMS(ancestors);
-    if(ancestor_n > 0)
-      ancestor_data = (Oid *) ARR_DATA_PTR(ancestors);
-  }
-
-  if(ancestor_n > PROVSQL_TABLE_INFO_MAX_ANCESTORS)
-    provsql_error("set_ancestors: ancestor set wider than %d entries "
-                  "(%u given) is not supported",
-                  PROVSQL_TABLE_INFO_MAX_ANCESTORS, ancestor_n);
-
-  payload_size = sizeof(char) + sizeof(Oid) + sizeof(Oid)
-                 + sizeof(uint16) + ancestor_n * sizeof(Oid);
-  if(payload_size > PIPE_BUF)
-    provsql_error("set_ancestors: IPC payload exceeds PIPE_BUF");
-
-  STARTWRITEM();
-  ADDWRITEM("A", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(&relid, Oid);
-  ADDWRITEM(&ancestor_n, uint16);
-  for(uint16 i = 0; i < ancestor_n; ++i)
-    ADDWRITEM(&ancestor_data[i], Oid);
-
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe (message type A)");
-  }
-  provsql_shmem_unlock();
-
-  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
-    CacheInvalidateRelcacheByRelid(relid);
-
-  PG_RETURN_VOID();
-}
-
-PG_FUNCTION_INFO_V1(remove_ancestors);
-/**
- * @brief PostgreSQL-callable wrapper for removeTableAncestry() over
- *        the IPC pipe.
- *
- * Clears just the ancestor half of a per-table metadata record,
- * leaving @c kind / @c block_key intact.  Use @c remove_table_info
- * to delete the whole record instead.
- */
-Datum remove_ancestors(PG_FUNCTION_ARGS)
-{
-  Oid relid;
-
-  if(PG_ARGISNULL(0))
-    provsql_error("Invalid NULL value passed to remove_ancestors");
-
-  relid = PG_GETARG_OID(0);
-
-  STARTWRITEM();
-  ADDWRITEM("R", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(&relid, Oid);
-
-  provsql_shmem_lock_shared();
-  if(!SENDWRITEM()) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot write to pipe (message type R)");
-  }
-  provsql_shmem_unlock();
-
-  if(SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
-    CacheInvalidateRelcacheByRelid(relid);
-
-  PG_RETURN_VOID();
-}
-
-/**
- * @brief C-callable IPC fetch for the ancestor half of a per-table
- *        metadata record.
- *
- * Sends an @c 'a' message to the background worker and reads back
- * the response.  No caching: every call hits the worker.  Use
- * @c provsql_lookup_ancestry for the cached, planner-hot-path
- * variant.
- *
- * @param relid           pg_class OID of the relation to look up.
- * @param ancestor_n_out  On @c true return, count of valid entries.
- * @param ancestors_out   On @c true return, the ancestor OIDs
- *                        (caller buffer of
- *                        @c PROVSQL_TABLE_INFO_MAX_ANCESTORS).
- * @return @c true if the worker returned a non-zero ancestor count;
- *         @c false otherwise (no record, or empty ancestor set).
- */
-bool provsql_fetch_ancestry(Oid relid, uint16 *ancestor_n_out,
-                            Oid *ancestors_out)
-{
-  char found;
-  uint16 n = 0;
-
-  STARTWRITEM();
-  ADDWRITEM("a", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
-  ADDWRITEM(&relid, Oid);
-
-  provsql_shmem_lock_exclusive();
-
-  if(!SENDWRITEM() || !READB(found, char)) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot communicate with pipe (message type a)");
-  }
-  if(found) {
-    if(!READB(n, uint16)) {
-      provsql_shmem_unlock();
-      provsql_error("Cannot communicate with pipe (message type a)");
-    }
-    if(n > PROVSQL_TABLE_INFO_MAX_ANCESTORS) {
-      provsql_shmem_unlock();
-      provsql_error("provsql_fetch_ancestry: server returned an "
-                    "unexpectedly wide ancestor set");
-    }
-    for(uint16 i = 0; i < n; ++i)
-      if(!READB(ancestors_out[i], Oid)) {
-        provsql_shmem_unlock();
-        provsql_error("Cannot communicate with pipe (message type a)");
-      }
-  }
-
-  provsql_shmem_unlock();
-  *ancestor_n_out = n;
-  /* "Found but empty" collapses to the same return as "not found":
-   * both make the safe-query rewriter take the conservative path. */
-  return found != 0 && n > 0;
-}
-
-PG_FUNCTION_INFO_V1(get_ancestors);
-/**
- * @brief PostgreSQL-callable wrapper around the cached ancestry lookup.
- *
- * Returns @c NULL when no ancestor record exists (or the record is
- * empty); otherwise an @c oid[] listing the base-relation OIDs.
- * Goes through @c provsql_lookup_ancestry so repeated calls in the
- * same session do not pay for IPC.
- */
-Datum get_ancestors(PG_FUNCTION_ARGS)
-{
-  Oid relid;
-  uint16 ancestor_n;
-  Oid ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
-  Datum *elems;
-  ArrayType *arr;
-
-  if(PG_ARGISNULL(0))
-    PG_RETURN_NULL();
-
-  relid = PG_GETARG_OID(0);
-
-  if(!provsql_lookup_ancestry(relid, &ancestor_n, ancestors))
-    PG_RETURN_NULL();
-
-  elems = palloc(ancestor_n * sizeof(Datum));
-  for(uint16 i = 0; i < ancestor_n; ++i)
-    elems[i] = ObjectIdGetDatum(ancestors[i]);
-  arr = construct_array(elems, ancestor_n, OIDOID,
-                        sizeof(Oid), true, 'i');
-  pfree(elems);
-
-  PG_RETURN_ARRAYTYPE_P(arr);
-}
-
 PG_FUNCTION_INFO_V1(get_infos);
 /** @brief PostgreSQL-callable wrapper for get_infos(). */
 Datum get_infos(PG_FUNCTION_ARGS)
@@ -1106,7 +1001,7 @@ Datum get_infos(PG_FUNCTION_ARGS)
 
   STARTWRITEM();
   ADDWRITEM("i", char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();

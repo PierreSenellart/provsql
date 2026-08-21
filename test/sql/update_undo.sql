@@ -71,7 +71,8 @@ SELECT probability_evaluate(provenance) FROM undo_test_id WHERE value = 5;
 
 -- Test 5: update queries and undo token tracking/ logging into update_provenance table
 CREATE TABLE update_provenance_result AS
-SELECT query FROM update_provenance ORDER BY ts;
+SELECT query FROM update_provenance
+  WHERE query_type <> 'TRANSACTION' ORDER BY ts;
 SELECT remove_provenance('update_provenance_result');
 SELECT * FROM update_provenance_result;
 DROP TABLE update_provenance_result;

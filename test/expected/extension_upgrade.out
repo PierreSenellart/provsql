@@ -122,3 +122,18 @@ NOTICE:  table upgrade_untracked does not have provenance tracking
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+upgraded_table_info_kind
+tid
+(1 row)
+rolled_back_write_cleared
+t
+(1 row)
+replaced_after_upgrade
+t
+(1 row)
+dangling_indices|unreferenced|bad_wires|bad_extra
+0|0|0|0
+(1 row)

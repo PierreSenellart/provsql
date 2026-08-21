@@ -1,26 +1,25 @@
 /**
  * @file MMappedTableInfo.h
- * @brief Per-table provenance metadata persisted alongside the circuit store.
+ * @brief Per-relation provenance metadata: the in-memory record.
  *
- * @c ProvenanceTableInfo records, one per relation tracked by ProvSQL,
- * are stored in a fifth mmap-backed file (@c provsql_table_info.mmap)
- * inside each database's @c $PGDATA/base/&lt;db_oid&gt;/ directory.
- * They feed the safe-query optimisation: the planner-time hierarchy
- * detector needs to know whether each base relation is TID
- * (independent leaves; default after @c add_provenance) or BID
- * (block-correlated leaves; produced by @c repair_key) before it can
- * decide whether a query is safe to rewrite into read-once form.
+ * A @c ProvenanceTableInfo describes one relation ProvSQL tracks, and
+ * feeds the safe-query optimisation: the planner-time hierarchy detector
+ * needs to know whether each base relation is TID (independent leaves;
+ * the default after @c add_provenance) or BID (block-correlated leaves;
+ * produced by @c repair_key) before it can decide whether a query is safe
+ * to rewrite into read-once form.
  *
- * The file uses the same 16-byte header convention as every other
- * ProvSQL mmap file (magic / version / elem_size / _reserved); records
- * are fixed-stride so we can back it with @c MMappedVector directly,
- * without introducing a second variable-length region.
+ * The records live in the @c provsql.table_info heap table
+ * (@c table_info.c), where metadata about relations belongs: every change
+ * follows the transaction that made it, and @c pg_dump carries them.
+ * This struct is what the C side reads them into.
  *
- * @warning ON-DISK ABI: the layout of @c ProvenanceTableInfo is
- * serialised verbatim into @c provsql_table_info.mmap.  Adding,
- * removing, or resizing a field requires bumping the mmap file format
- * version and providing a migration path, exactly as for
- * @c GateInformation in @c MMappedCircuit.h.
+ * Before ProvSQL 1.13.0 they lived in a fifth mmap-backed file,
+ * @c provsql_table_info.mmap, laid out as a fixed-stride vector of this
+ * struct behind the usual 16-byte ProvSQL header.
+ * @c provsql.migrate_table_info() (@c TableInfoMigrate.cpp) still reads
+ * that layout, which is why the field order below must not change while
+ * any installation may still have such a file to import.
  */
 #ifndef MMAPPED_TABLE_INFO_H
 #define MMAPPED_TABLE_INFO_H
@@ -31,8 +30,14 @@
 #include <stdint.h>
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "postgres.h"
 #include "access/attnum.h"
+#ifdef __cplusplus
+}
+#endif
 
 /**
  * @brief Cap on the number of block-key columns recorded per relation.

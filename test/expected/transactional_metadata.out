@@ -1,0 +1,43 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+base_kind
+tid
+(1 row)
+base_ancestry
+t
+(1 row)
+add_provenance
+
+(1 row)
+rolled_kind_in_txn
+tid
+(1 row)
+rolled_rows_left
+0
+(1 row)
+rows_inside_drop
+0
+(1 row)
+kind_after_drop_rollback
+tid
+(1 row)
+kind_in_guard_txn
+opaque
+(1 row)
+kind_after_guard_rollback
+tid
+(1 row)
+kind_after_guard_commit
+opaque
+(1 row)
+rows_after_drop
+0
+(1 row)
+legacy_rows_imported
+0
+(1 row)
+legacy_rows_imported_again
+0
+(1 row)

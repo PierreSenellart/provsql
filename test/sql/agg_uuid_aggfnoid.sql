@@ -14,6 +14,12 @@
 -- The rewriter is disabled here so that array_agg(provenance_semimod
 -- (...)) is evaluated as a plain SQL aggregate (returning uuid[]) and
 -- not lifted into a provenance_aggregate(...) call.
+--
+-- The aggregate values are read from the table rather than written as
+-- literals: an agg gate's UUID hashes its function and children but not
+-- its value, so a made-up value would collide with the real one the
+-- rewriter records for the same aggregation -- and a gate's annotation
+-- is written once.
 SET provsql.active = false;
 
 CREATE TEMP TABLE _agg_uuid_tmp AS
@@ -27,11 +33,13 @@ SELECT
   provsql.agg_token_uuid(provsql.provenance_aggregate(
     'sum(int)'::regprocedure::oid::integer,
     'bigint'::regtype::oid::integer,
-    14::bigint, sm)) AS sum_uuid,
+    (SELECT sum(id) FROM provsql_test.personnel WHERE city='Paris'),
+    sm)) AS sum_uuid,
   provsql.agg_token_uuid(provsql.provenance_aggregate(
     'avg(int)'::regprocedure::oid::integer,
     'numeric'::regtype::oid::integer,
-    4.6666::numeric, sm)) AS avg_uuid
+    (SELECT avg(id) FROM provsql_test.personnel WHERE city='Paris'),
+    sm)) AS avg_uuid
 FROM _agg_uuid_tmp;
 
 SELECT (sum_uuid <> avg_uuid)                            AS sum_avg_distinct,

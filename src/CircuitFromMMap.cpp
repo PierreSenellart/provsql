@@ -47,7 +47,7 @@ static C getCircuitFromMMap(pg_uuid_t token, char message_char)
 {
   STARTWRITEM();
   ADDWRITEM(&message_char, char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(&token, pg_uuid_t);
 
   provsql_shmem_lock_exclusive();
@@ -221,7 +221,7 @@ static GenericCircuit getJointCircuitFromMMap(
   unsigned nb_roots = static_cast<unsigned>(tokens.size());
   STARTWRITEM();
   ADDWRITEM(&message_char, char);
-  ADDWRITEM(&MyDatabaseId, Oid);
+  ADDWRITEDB();
   ADDWRITEM(&nb_roots, unsigned);
   for(const pg_uuid_t &t : tokens)
     ADDWRITEM(&t, pg_uuid_t);

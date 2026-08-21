@@ -39,7 +39,8 @@ SELECT value, probability_evaluate(provenance) FROM delete_test_id ORDER BY valu
 
 -- Test 4: delete token tracking/ logging into update_provenance table
 CREATE TABLE update_provenance_result AS
-SELECT query FROM update_provenance ORDER BY ts;
+SELECT query FROM update_provenance
+  WHERE query_type <> 'TRANSACTION' ORDER BY ts;
 SELECT remove_provenance('update_provenance_result');
 SELECT * FROM update_provenance_result;
 DROP TABLE update_provenance_result;

@@ -111,6 +111,16 @@ _SQL_FUNC_MAP = {
     'agg_collapsed_moment':     '/doxygen-sql/html/group__probability.html#ga6ef6a60b91000efb00b326c7f11cd750',
     'agg_collapsed_moments':    '/doxygen-sql/html/group__probability.html#ga504c8402babaae2096dcf17b90b64fbf',
     'add_provenance':           '/doxygen-sql/html/group__table__management.html#ga00f0d0b04b2b693c974e72aaf095cb3b',
+    'migrate_table_info':       '/doxygen-sql/html/group__table__management.html#gad13065fdc8c0b28b7e2c4ae0ba5a4a93',
+    'check_store':              '/doxygen-sql/html/group__gate__manipulation.html#ga2a0791e0da60c65cc1427535bd4c0b7e',
+    'circuit_cleanup':          '/doxygen-sql/html/group__gate__manipulation.html#ga5cec6e0941e696969ceacc13578bcd6f',
+    'replace_input':            '/doxygen-sql/html/group__gate__manipulation.html#ga416b70eb6e5156b435a90a695f3cc564',
+    'replace_block':            '/doxygen-sql/html/group__gate__manipulation.html#ga6d35a777166582be4dc651fa43b3520e',
+    'probability_is_set':       '/doxygen-sql/html/group__gate__manipulation.html#ga69e8c794196910a756a1415d3cecaa37',
+    'replace_update':           '/doxygen-sql/html/group__temporal__db.html#gae7e9ea788102c51a7b7649bfcaa59ec7',
+    'transaction_token':        '/doxygen-sql/html/group__update__provenance.html#ga265c74c0b791ad2c1efcc94dc98b0739',
+    'stamp_commit_time':        '/doxygen-sql/html/group__update__provenance.html#ga21f7da4c6986a6f43e74ce93368d1df4',
+    'substitute_gate':          '/doxygen-sql/html/group__temporal__db.html#gafe08f60a626e80dd1517793a681fcd1c',
     'remove_provenance':        '/doxygen-sql/html/group__table__management.html#ga91ced31ffd25c227390042e5089cb200',
     'provenance':               '/doxygen-sql/html/group__provenance__output.html#ga93c314c9412aff767f5f5f994da091c9',
     'create_provenance_mapping':'/doxygen-sql/html/group__table__management.html#ga3a351113a8b4687b0acc678f7715cf1b',
@@ -367,8 +377,6 @@ _C_FUNC_MAP = {
     'provsql_lookup_ancestry':      '/doxygen-c/html/provsql__utils_8c.html#a38251c2fff675bfffeef4317ae3e4a84',
     # MMappedCircuit class members
     'MMappedCircuit::createGate':       '/doxygen-c/html/classMMappedCircuit.html#a2f5cad49671227a1893e5a99b1987e7f',
-    'MMappedCircuit::setTableInfo':     '/doxygen-c/html/classMMappedCircuit.html#a222e276b0139533d807ae9f70b7a7ee9',
-    'MMappedCircuit::setTableAncestry': '/doxygen-c/html/classMMappedCircuit.html#a05f2d145c3f6919954a8c83cb8e17e24',
     # Per-relation metadata struct
     'ProvenanceTableInfo':          '/doxygen-c/html/structProvenanceTableInfo.html',
     # provsql_utils.h – OID cache

@@ -7,8 +7,8 @@
  * entry points declared in @c provsql_mmap.h:
  *
  * - @c initialize_provsql_mmap(): called by the background worker at
- *   startup; opens all four mmap files and creates the singleton
- *   @c MMappedCircuit instance.
+ *   startup; the per-database @c MMappedCircuit instances themselves are
+ *   opened lazily, on the first message for their database.
  * - @c destroy_provsql_mmap(): called on shutdown; syncs and deletes the
  *   singleton.
  * - @c provsql_mmap_main_loop(): the worker's main loop; receives gate-
@@ -29,8 +29,15 @@
 #include "Circuit.hpp"
 #include "provsql_utils_cpp.h"
 
+#include <poll.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>
+
 extern "C" {
 #include "miscadmin.h"
+#include "common/relpath.h"
+#include "utils/palloc.h"
 #include "provsql_mmap.h"
 #include "provsql_shmem.h"
 }
@@ -38,18 +45,37 @@ extern "C" {
 /** @brief Per-database mmap-backed provenance circuits, keyed by database OID. */
 static std::map<Oid, MMappedCircuit*> circuits;
 
-std::string MMappedCircuit::makePath(Oid db_oid, const char *filename)
+/** @brief Whether any circuit has been written to since the last flush.
+ *
+ *  The store's bytes reach the kernel as soon as a message is applied, but
+ *  they reach the disk only when someone forces them; a machine that loses
+ *  power in between loses whatever the kernel had not written back.  The
+ *  worker forces them a short while after the last write (see the main
+ *  loop below), which bounds that loss the way
+ *  @c synchronous_commit @c = @c off bounds the heap's. */
+static bool store_dirty = false;
+
+std::string MMappedCircuit::storePath(Oid db_oid, Oid db_tablespace,
+                                      const char *filename)
 {
-  return std::string(DataDir) + "/base/" + std::to_string(db_oid) + "/" + filename;
+  /* GetDatabasePath yields the directory relative to the data directory:
+     "base/<oid>" for the default tablespace, and
+     "pg_tblspc/<ts>/PG_<ver>_<cat>/<oid>" for a database created in (or
+     moved to) another one.  Resolving it here, rather than hardcoding
+     base/, is what makes the store follow CREATE DATABASE ... TABLESPACE
+     and ALTER DATABASE ... SET TABLESPACE. */
+  char *rel = GetDatabasePath(db_oid, db_tablespace);
+  std::string path = std::string(DataDir) + "/" + rel + "/" + filename;
+  pfree(rel);
+  return path;
 }
 
-MMappedCircuit::MMappedCircuit(Oid db_oid, bool read_only) :
+MMappedCircuit::MMappedCircuit(Oid db_oid, Oid db_tablespace, bool read_only) :
   MMappedCircuit(
-    makePath(db_oid, MAPPING_FILENAME),
-    makePath(db_oid, GATES_FILENAME),
-    makePath(db_oid, WIRES_FILENAME),
-    makePath(db_oid, EXTRA_FILENAME),
-    makePath(db_oid, TABLE_INFO_FILENAME),
+    storePath(db_oid, db_tablespace, MAPPING_FILENAME),
+    storePath(db_oid, db_tablespace, GATES_FILENAME),
+    storePath(db_oid, db_tablespace, WIRES_FILENAME),
+    storePath(db_oid, db_tablespace, EXTRA_FILENAME),
     read_only) {}
 
 void initialize_provsql_mmap()
@@ -64,11 +90,30 @@ void destroy_provsql_mmap()
   circuits.clear();
 }
 
+/** @brief Add a gate record and only then make it reachable under @p token.
+ *
+ *  The record has to be complete before the mapping entry that points at
+ *  it exists: killed between the two, the store keeps an unreferenced
+ *  record, which costs nothing, whereas the other order leaves a mapping
+ *  entry indexing past the end of the record vector and every gate
+ *  created afterwards resolves one slot off, for the rest of the store's
+ *  life. */
+void MMappedCircuit::appendGate(pg_uuid_t token, gate_type type,
+                                const std::vector<pg_uuid_t> &children)
+{
+  const unsigned long idx = gates.nbElements();
+  const unsigned long wires_idx = wires.nbElements();
+  for(const auto &c: children)
+    wires.add(c);
+  gates.add({type, static_cast<unsigned>(children.size()), wires_idx});
+  mapping.publish(token, idx);
+}
+
 void MMappedCircuit::createGate(
   pg_uuid_t token, gate_type type, const std::vector<pg_uuid_t> &children)
 {
-  auto [idx, created] = mapping.add(token);
-  if(!created) {
+  auto idx = mapping[token];
+  if(idx != MMappedUUIDHashTable::NOTHING) {
     // The gate may have been lazy-added as a default gate_input below
     // (when an earlier-arriving parent createGate referenced it as a
     // child whose own createGate had not yet been received). Under
@@ -81,29 +126,26 @@ void MMappedCircuit::createGate(
                        && gates[idx].nb_children == 0;
     bool real_create = type != gate_input || !children.empty();
     if(placeholder && real_create) {
-      gates[idx].type = type;
-      gates[idx].nb_children = static_cast<unsigned>(children.size());
-      gates[idx].children_idx = wires.nbElements();
+      const unsigned long wires_idx = wires.nbElements();
       for(const auto &c: children)
         wires.add(c);
-      for(const auto &c: children) {
-        auto [child_idx, child_created] = mapping.add(c);
-        if(child_created)
-          gates.add({gate_input, 0, wires.nbElements()});
-      }
+      // Wires first, then the record's own fields: an upgrade seen
+      // half-done would otherwise claim children that are not there yet.
+      gates[idx].children_idx = wires_idx;
+      gates[idx].nb_children = static_cast<unsigned>(children.size());
+      gates[idx].type = type;
+      for(const auto &c: children)
+        if(mapping[c] == MMappedUUIDHashTable::NOTHING)
+          appendGate(c, gate_input, {});
     }
     return;
   }
 
-  gates.add({type, static_cast<unsigned>(children.size()), wires.nbElements()});
-  for(const auto &c: children)
-    wires.add(c);
+  appendGate(token, type, children);
 
-  for(const auto &c: children) {
-    auto [child_idx, child_created] = mapping.add(c);
-    if(child_created)
-      gates.add({gate_input, 0, wires.nbElements()});
-  }
+  for(const auto &c: children)
+    if(mapping[c] == MMappedUUIDHashTable::NOTHING)
+      appendGate(c, gate_input, {});
 }
 
 gate_type MMappedCircuit::getGateType(pg_uuid_t token) const
@@ -127,46 +169,154 @@ std::vector<pg_uuid_t> MMappedCircuit::getChildren(pg_uuid_t token) const
   return result;
 }
 
-bool MMappedCircuit::setProb(pg_uuid_t token, double prob)
+/** @brief Whether @p type is one of the gate kinds that carry a probability. */
+static bool carriesProb(gate_type type)
 {
-  auto [idx, created] = mapping.add(token);
-  if(created)
-    gates.add({gate_input, 0, wires.nbElements()});
-  if(gates[idx].type == gate_input || gates[idx].type == gate_update || gates[idx].type == gate_mulinput) {
-    gates[idx].prob = prob;
-    return true;
+  return type == gate_input || type == gate_update || type == gate_mulinput;
+}
+
+MMappedCircuit::SetProbResult MMappedCircuit::setProb(
+  pg_uuid_t token, double prob, double *existing)
+{
+  auto idx = mapping[token];
+  if(idx == MMappedUUIDHashTable::NOTHING) {
+    idx = gates.nbElements();
+    appendGate(token, gate_input, {});
   }
-  return false;
+
+  if(!carriesProb(gates[idx].type))
+    return SetProbResult::NotProbGate;
+
+  /* Clearing (the rollback path) always succeeds: it restores the gate
+     to the state it was in before the aborted transaction wrote to it. */
+  if(std::isnan(prob)) {
+    gates[idx].prob = NAN;
+    return SetProbResult::Written;
+  }
+
+  if(!hasProbAt(idx)) {
+    gates[idx].prob = prob;
+    return SetProbResult::Written;
+  }
+  if(gates[idx].prob == prob)
+    return SetProbResult::Unchanged;
+  if(existing)
+    *existing = gates[idx].prob;
+  return SetProbResult::AlreadySet;
+}
+
+/** @brief Whether the record at @p idx holds a probability someone wrote.
+ *
+ *  A version-1 @c gates file cannot distinguish "written as 1.0" from
+ *  "never written" -- both are stored as @c 1.0 -- so on such a file a
+ *  @c 1.0 counts as unset and stays writable.  See @c GATES_VERSION. */
+bool MMappedCircuit::hasProbAt(unsigned long idx) const
+{
+  double p = gates[idx].prob;
+  if(std::isnan(p))
+    return false;
+  if(gates.version() < 2 && p == 1.)
+    return false;
+  return true;
 }
 
 double MMappedCircuit::getProb(pg_uuid_t token) const
 {
   auto idx = mapping[token];
-  if(idx == MMappedUUIDHashTable::NOTHING ||
-     (gates[idx].type != gate_input && gates[idx].type != gate_update && gates[idx].type != gate_mulinput))
+  if(idx == MMappedUUIDHashTable::NOTHING || !carriesProb(gates[idx].type))
     return NAN;
-  else
+  if(!std::isnan(gates[idx].prob))
     return gates[idx].prob;
+  /* A repaired row nobody gave a probability evaluates at the uniform
+     weight of its block, whose size repair_key recorded in info2. */
+  if(gates[idx].type == gate_mulinput && gates[idx].info2 > 0)
+    return 1. / gates[idx].info2;
+  /* Otherwise an unwritten probability evaluates as 1: a tuple nobody
+     gave a probability is certainly there. */
+  return 1.;
 }
 
-void MMappedCircuit::setInfos(pg_uuid_t token, unsigned info1, unsigned info2)
+bool MMappedCircuit::hasProb(pg_uuid_t token, double *prob) const
 {
   auto idx = mapping[token];
-  if(idx != MMappedUUIDHashTable::NOTHING) {
-    gates[idx].info1=info1;
-    gates[idx].info2=info2;
-  }
+  if(idx == MMappedUUIDHashTable::NOTHING || !carriesProb(gates[idx].type))
+    return false;
+  if(!hasProbAt(idx))
+    return false;
+  if(prob)
+    *prob = gates[idx].prob;
+  return true;
 }
 
-void MMappedCircuit::setExtra(pg_uuid_t token, const std::string &s)
+/* The two info fields are written once each, not once as a pair,
+   because they are written by different parties at different moments:
+   CertifiedDDMaterialize marks a gate certified (info1) as it builds it,
+   and tags it afterwards with the route that made it a query's root
+   (info2), which it only knows once the whole d-D is built.  Zero is
+   "nothing recorded" for each field, so a field can go 0 -> v once and
+   a write of 0 over a v records nothing rather than clearing it. */
+MMappedCircuit::SetAnnotationResult MMappedCircuit::setInfos(
+  pg_uuid_t token, unsigned info1, unsigned info2,
+  std::pair<unsigned, unsigned> *existing)
 {
   auto idx = mapping[token];
-  if(idx != MMappedUUIDHashTable::NOTHING) {
-    gates[idx].extra_idx=extra.nbElements();
-    for(auto c: s)
-      extra.add(c);
-    gates[idx].extra_len=s.size();
+  if(idx == MMappedUUIDHashTable::NOTHING)
+    return SetAnnotationResult::NoSuchGate;
+
+  GateInformation &gi = gates[idx];
+
+  if((info1 != 0 && gi.info1 != 0 && gi.info1 != info1)
+     || (info2 != 0 && gi.info2 != 0 && gi.info2 != info2)) {
+    if(existing)
+      *existing = std::make_pair(gi.info1, gi.info2);
+    return SetAnnotationResult::AlreadySet;
   }
+
+  const unsigned w1 = info1 != 0 ? info1 : gi.info1;
+  const unsigned w2 = info2 != 0 ? info2 : gi.info2;
+  if(w1 == gi.info1 && w2 == gi.info2)
+    return SetAnnotationResult::Unchanged;
+
+  gi.info1 = w1;
+  gi.info2 = w2;
+  return SetAnnotationResult::Written;
+}
+
+MMappedCircuit::SetAnnotationResult MMappedCircuit::setExtra(
+  pg_uuid_t token, const std::string &s, std::string *existing)
+{
+  auto idx = mapping[token];
+  if(idx == MMappedUUIDHashTable::NOTHING)
+    return SetAnnotationResult::NoSuchGate;
+
+  /* Already carries exactly these bytes: nothing to do.  Every caller
+     writes the extra string right after creating a content-addressed
+     gate, so recomputing the same expression offers the same bytes back;
+     appending them a second time would abandon the first copy in the
+     extra file for good, which is the store's main source of dead
+     space. */
+  if(gates[idx].extra_len == s.size()) {
+    bool same = true;
+    for(unsigned long k=0; k<s.size(); ++k)
+      if(extra[gates[idx].extra_idx + k] != s[k]) {
+        same = false;
+        break;
+      }
+    if(same)
+      return SetAnnotationResult::Unchanged;
+  }
+
+  if(gates[idx].extra_len > 0) {
+    if(existing)
+      *existing = getExtra(token);
+    return SetAnnotationResult::AlreadySet;
+  }
+
+  gates[idx].extra_idx=extra.nbElements();
+  for(auto c: s)
+    extra.add(c);
+  gates[idx].extra_len=s.size();
+  return SetAnnotationResult::Written;
 }
 
 std::pair<unsigned, unsigned> MMappedCircuit::getInfos(pg_uuid_t token) const
@@ -193,15 +343,132 @@ std::string MMappedCircuit::getExtra(pg_uuid_t token) const
   return result;
 }
 
+/** @brief Suffix of the files a clean-up builds beside the live ones. */
+static constexpr const char *CLEANUP_SUFFIX = ".new";
+/** @brief Marker file present only while a clean-up's rename sequence is
+ *  in flight; see @c finishInterruptedCleanup. */
+static constexpr const char *CLEANUP_MARKER = "provsql_cleanup.commit";
+
+/**
+ * @brief Bring a database's store to a definite state before opening it.
+ *
+ * A clean-up writes four new files, then renames them over the live ones
+ * one at a time.  A crash inside that sequence would leave a mixture, so
+ * the sequence is bracketed by a marker file: present, it says the new
+ * files are complete and the renames must be finished; absent, it says
+ * any @c ".new" files are the debris of a clean-up that never got that
+ * far and are to be discarded.
+ */
+static void finishInterruptedCleanup(Oid db_oid, Oid db_tablespace)
+{
+  const char *names[4] = { "provsql_mapping.mmap", "provsql_gates.mmap",
+                           "provsql_wires.mmap", "provsql_extra.mmap" };
+  std::string marker = MMappedCircuit::storePath(db_oid, db_tablespace,
+                                                 CLEANUP_MARKER);
+  const bool committed = (access(marker.c_str(), F_OK) == 0);
+
+  for(const char *name: names) {
+    std::string target = MMappedCircuit::storePath(db_oid, db_tablespace, name);
+    std::string fresh = target + CLEANUP_SUFFIX;
+    if(access(fresh.c_str(), F_OK) != 0)
+      continue;
+    if(committed)
+      rename(fresh.c_str(), target.c_str());
+    else
+      unlink(fresh.c_str());
+  }
+
+  if(committed)
+    unlink(marker.c_str());
+}
+
 /** @brief Return (creating lazily if needed) the circuit for @p db_oid. */
-static MMappedCircuit *getCircuit(Oid db_oid)
+static MMappedCircuit *getCircuit(Oid db_oid, Oid db_tablespace)
 {
   auto it = circuits.find(db_oid);
   if(it == circuits.end()) {
-    circuits[db_oid] = new MMappedCircuit(db_oid);
+    finishInterruptedCleanup(db_oid, db_tablespace);
+    circuits[db_oid] = new MMappedCircuit(db_oid, db_tablespace);
     return circuits[db_oid];
   }
   return it->second;
+}
+
+/**
+ * @brief Rebuild a database's store, keeping only what @p roots reach.
+ *
+ * The store only ever grows: a gate is never removed, because removing
+ * one is unsafe while anything might still reference it, and because a
+ * content-addressed gate can be re-adopted by a query at any moment.
+ * This is the one operation allowed to remove gates, and it is safe only
+ * because the caller holds the database exclusively -- no other session
+ * is connected, so nothing can adopt an orphan while the sweep runs.
+ *
+ * On @p dry_run the mark phase runs and the counts are reported, but
+ * nothing is written.
+ */
+static void cleanupStore(Oid db_oid, Oid db_tablespace,
+                         const std::vector<pg_uuid_t> &roots, bool dry_run,
+                         provsql_cleanup_result *out)
+{
+  MMappedCircuit *circuit = getCircuit(db_oid, db_tablespace);
+
+  auto before = circuit->counts();
+  out->gates_before = before.gates;
+  out->wires_before = before.wires;
+  out->extra_before = before.extra_bytes;
+
+  std::vector<bool> live;
+  unsigned long nb_live = circuit->mark(roots, live);
+
+  if(dry_run) {
+    /* Report what a real run would keep, without the wire and extra
+       counts of the rewrite -- those need the sweep to be exact.  The
+       live gate count is what the operator is deciding on. */
+    out->gates_after = nb_live;
+    out->wires_after = 0;
+    out->extra_after = 0;
+    return;
+  }
+
+  const char *names[4] = { "provsql_mapping.mmap", "provsql_gates.mmap",
+                           "provsql_wires.mmap", "provsql_extra.mmap" };
+  std::string target[4], fresh[4];
+  for(int i=0; i<4; ++i) {
+    target[i] = MMappedCircuit::storePath(db_oid, db_tablespace, names[i]);
+    fresh[i] = target[i] + CLEANUP_SUFFIX;
+    unlink(fresh[i].c_str());
+  }
+
+  auto after = circuit->sweepInto(live, fresh[0], fresh[1], fresh[2], fresh[3]);
+  out->gates_after = after.gates;
+  out->wires_after = after.wires;
+  out->extra_after = after.extra_bytes;
+
+  /* Close the live store before the swap, so its dirty bits are cleared
+     and the next message reopens the rebuilt files. */
+  delete circuit;
+  circuits.erase(db_oid);
+
+  std::string marker = MMappedCircuit::storePath(db_oid, db_tablespace,
+                                                 CLEANUP_MARKER);
+  int mfd = open(marker.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0600); // flawfinder: ignore
+  if(mfd == -1) {
+    const char *reason = strerror(errno);
+    provsql_error("circuit_cleanup: cannot create %s: %s",
+                  marker.c_str(), reason);
+  }
+  fsync(mfd);
+  close(mfd);
+
+  for(int i=0; i<4; ++i)
+    if(rename(fresh[i].c_str(), target[i].c_str())) {
+      const char *reason = strerror(errno);
+      provsql_error("circuit_cleanup: cannot replace %s: %s",
+                    target[i].c_str(), reason);
+    }
+
+  unlink(marker.c_str());
 }
 
 #ifdef PROVSQL_INPROCESS_STORE
@@ -212,19 +479,29 @@ static MMappedCircuit *getCircuit(Oid db_oid)
    compiled libboost_serialization dependency. */
 GenericCircuit provsql_inproc_generic_circuit(pg_uuid_t token)
 {
-  return getCircuit(MyDatabaseId)->createGenericCircuit(token);
+  return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->createGenericCircuit(token);
 }
 
 GenericCircuit provsql_inproc_joint_circuit(
   const std::vector<pg_uuid_t> &roots)
 {
-  return getCircuit(MyDatabaseId)->createGenericCircuit(roots);
+  return getCircuit(MyDatabaseId, MyDatabaseTableSpace)->createGenericCircuit(roots);
 }
 #endif
 
-extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
+extern "C" void provsql_store_flush(void)
 {
-    MMappedCircuit *circuit = getCircuit(db_oid);
+  for(auto &kv: circuits)
+    kv.second->flush();
+  store_dirty = false;
+}
+
+extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
+{
+    MMappedCircuit *circuit = getCircuit(db_oid, db_tablespace);
+
+    if(c=='C' || c=='P' || c=='I' || c=='E')
+      store_dirty = true;
 
     switch(c) {
     case 'C':
@@ -248,16 +525,34 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
     case 'P':
     {
       pg_uuid_t token;
-      double prob;
+      double prob, existing = 0.;
 
       if(!READM(token, pg_uuid_t) || !READM(prob, double))
         provsql_error("Cannot read from pipe (message type P)");
 
-      bool ok = circuit->setProb(token, prob);
-      char return_value = ok?static_cast<char>(1):0;
+      auto result = circuit->setProb(token, prob, &existing);
+      char return_value = static_cast<char>(result);
 
-      if(!WRITEB(&return_value, char))
+      if(!WRITEB(&return_value, char) || !WRITEB(&existing, double))
         provsql_error("Cannot write response to pipe (message type P)");
+      break;
+    }
+
+    case 'q':
+    {
+      /* Is a probability written on this gate, and which one?  Distinct
+         from 'p', which reports the value an evaluation would use and so
+         cannot tell an unwritten probability from one written as 1. */
+      pg_uuid_t token;
+      double prob = 0.;
+
+      if(!READM(token, pg_uuid_t))
+        provsql_error("Cannot read from pipe (message type q)");
+
+      char has = circuit->hasProb(token, &prob) ? 1 : 0;
+
+      if(!WRITEB(&has, char) || !WRITEB(&prob, double))
+        provsql_error("Cannot write response to pipe (message type q)");
       break;
     }
 
@@ -265,11 +560,17 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
     {
       pg_uuid_t token;
       unsigned info1, info2;
+      std::pair<unsigned, unsigned> existing{0, 0};
 
       if(!READM(token, pg_uuid_t) || !READM(info1, unsigned) || !READM(info2, unsigned))
         provsql_error("Cannot read from pipe (message type I)");
 
-      circuit->setInfos(token, info1, info2);
+      auto result = circuit->setInfos(token, info1, info2, &existing);
+      char return_value = static_cast<char>(result);
+
+      if(!WRITEB(&return_value, char) || !WRITEB(&existing.first, unsigned)
+         || !WRITEB(&existing.second, unsigned))
+        provsql_error("Cannot write response to pipe (message type I)");
       break;
     }
 
@@ -277,18 +578,28 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
     {
       pg_uuid_t token;
       unsigned len;
+      auto result = MMappedCircuit::SetAnnotationResult::Unchanged;
+      std::string existing;
 
       if(!READM(token, pg_uuid_t) || !READM(len, unsigned))
         provsql_error("Cannot read from pipe (message type E)");
 
       if(len>0) {
-        char *data = new char[len];
-        if(!READM_BYTES(data, len))
+        std::vector<char> data(len);
+        if(!READM_BYTES(data.data(), len))
           provsql_error("Cannot read from pipe (message type E)");
 
-        circuit->setExtra(token, std::string(data, len));
+        result = circuit->setExtra(token, std::string(data.data(), len),
+                                   &existing);
       }
 
+      {
+        char return_value = static_cast<char>(result);
+        unsigned existing_len = existing.size();
+        if(!WRITEB(&return_value, char) || !WRITEB(&existing_len, unsigned)
+           || !WRITEB_BYTES(existing.data(), existing_len))
+          provsql_error("Cannot write response to pipe (message type E)");
+      }
       break;
     }
 
@@ -401,100 +712,67 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid)
       break;
     }
 
-    case 'T':
+
+
+
+
+
+
+    case 'X':
     {
-      /* Insert / upsert per-table provenance metadata. */
-      ProvenanceTableInfo info{};
-      if(!READM(info.relid, Oid) || !READM(info.kind, uint8_t)
-         || !READM(info.block_key_n, uint16_t))
-        provsql_error("Cannot read from pipe (message type T)");
-      if(info.block_key_n > PROVSQL_TABLE_INFO_MAX_BLOCK_KEY)
-        provsql_error("ProvSQL: block key wider than %d columns "
-                      "(message type T)", PROVSQL_TABLE_INFO_MAX_BLOCK_KEY);
-      for(uint16_t i=0; i<info.block_key_n; ++i)
-        if(!READM(info.block_key[i], AttrNumber))
-          provsql_error("Cannot read from pipe (message type T)");
-      circuit->setTableInfo(info);
+      /* Clean-up: rebuild the store keeping only what the roots reach.
+         The caller holds the database exclusively (see
+         provsql.circuit_cleanup), so nothing can adopt an orphan while
+         this runs. */
+      char dry_run;
+      unsigned long nb_roots;
+
+      if(!READM(dry_run, char) || !READM(nb_roots, unsigned long))
+        provsql_error("Cannot read from pipe (message type X)");
+
+      std::vector<pg_uuid_t> roots(nb_roots);
+      for(unsigned long i=0; i<nb_roots; ++i)
+        if(!READM(roots[i], pg_uuid_t))
+          provsql_error("Cannot read from pipe (message type X)");
+
+      provsql_cleanup_result res{};
+      cleanupStore(db_oid, db_tablespace, roots, dry_run != 0, &res);
+
+      if(!WRITEB(&res.gates_before, uint64) || !WRITEB(&res.gates_after, uint64)
+         || !WRITEB(&res.wires_before, uint64) || !WRITEB(&res.wires_after, uint64)
+         || !WRITEB(&res.extra_before, uint64) || !WRITEB(&res.extra_after, uint64))
+        provsql_error("Cannot write response to pipe (message type X)");
       break;
     }
 
-    case 'D':
+    case 'S':
     {
-      /* Delete per-table provenance metadata. */
-      Oid relid;
-      if(!READM(relid, Oid))
-        provsql_error("Cannot read from pipe (message type D)");
-      circuit->removeTableInfo(relid);
+      /* Sync barrier: force everything written so far to stable storage
+         and say so.  Because the pipe is FIFO and the worker single
+         threaded, the reply also proves every earlier message from this
+         backend has been *applied*, not merely queued. */
+      provsql_store_flush();
+
+      char ack = 1;
+      if(!WRITEB(&ack, char))
+        provsql_error("Cannot write response to pipe (message type S)");
       break;
     }
 
-    case 's':
+    case 'k':
     {
-      /* Look up per-table provenance metadata. */
-      Oid relid;
-      if(!READM(relid, Oid))
-        provsql_error("Cannot read from pipe (message type s)");
-      ProvenanceTableInfo info{};
-      char found = circuit->getTableInfo(relid, info) ? 1 : 0;
-      if(!WRITEB(&found, char))
-        provsql_error("Cannot write response to pipe (message type s)");
-      if(found) {
-        if(!WRITEB(&info.kind, uint8_t) || !WRITEB(&info.block_key_n, uint16_t))
-          provsql_error("Cannot write response to pipe (message type s)");
-        for(uint16_t i=0; i<info.block_key_n; ++i)
-          if(!WRITEB(&info.block_key[i], AttrNumber))
-            provsql_error("Cannot write response to pipe (message type s)");
-      }
-      break;
-    }
-
-    case 'A':
-    {
-      /* Insert / upsert the ancestor half of a per-table metadata
-       * record (the kind / block_key half is preserved). */
-      Oid relid;
-      uint16_t ancestor_n;
-      if(!READM(relid, Oid) || !READM(ancestor_n, uint16_t))
-        provsql_error("Cannot read from pipe (message type A)");
-      if(ancestor_n > PROVSQL_TABLE_INFO_MAX_ANCESTORS)
-        provsql_error("ProvSQL: ancestor set wider than %d entries "
-                      "(message type A)",
-                      PROVSQL_TABLE_INFO_MAX_ANCESTORS);
-      Oid ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
-      for(uint16_t i=0; i<ancestor_n; ++i)
-        if(!READM(ancestors[i], Oid))
-          provsql_error("Cannot read from pipe (message type A)");
-      circuit->setTableAncestry(relid, ancestor_n, ancestors);
-      break;
-    }
-
-    case 'R':
-    {
-      /* Clear just the ancestor half of a per-table metadata record. */
-      Oid relid;
-      if(!READM(relid, Oid))
-        provsql_error("Cannot read from pipe (message type R)");
-      circuit->removeTableAncestry(relid);
-      break;
-    }
-
-    case 'a':
-    {
-      /* Look up just the ancestor half of a per-table metadata record. */
-      Oid relid;
-      if(!READM(relid, Oid))
-        provsql_error("Cannot read from pipe (message type a)");
-      ProvenanceTableInfo info{};
-      char found = circuit->getTableInfo(relid, info) ? 1 : 0;
-      if(!WRITEB(&found, char))
-        provsql_error("Cannot write response to pipe (message type a)");
-      if(found) {
-        if(!WRITEB(&info.ancestor_n, uint16_t))
-          provsql_error("Cannot write response to pipe (message type a)");
-        for(uint16_t i=0; i<info.ancestor_n; ++i)
-          if(!WRITEB(&info.ancestors[i], Oid))
-            provsql_error("Cannot write response to pipe (message type a)");
-      }
+      /* Consistency report; see MMappedCircuit::Check. */
+      MMappedCircuit::Check chk = circuit->check();
+      char unclean = chk.unclean ? 1 : 0;
+      if(!WRITEB(&unclean, char)
+         || !WRITEB(&chk.nb_gates, unsigned long)
+         || !WRITEB(&chk.nb_mapping, unsigned long)
+         || !WRITEB(&chk.next_value, unsigned long)
+         || !WRITEB(&chk.dangling_indices, unsigned long)
+         || !WRITEB(&chk.unreferenced, unsigned long)
+         || !WRITEB(&chk.bad_wires, unsigned long)
+         || !WRITEB(&chk.bad_extra, unsigned long))
+        provsql_error("Cannot write response to pipe (message type k)");
       break;
     }
 
@@ -543,11 +821,33 @@ void provsql_mmap_main_loop()
 {
   char c;
 
-  while(READM(c, char)) {
-    Oid db_oid;
-    if(!READM(db_oid, Oid))
-      provsql_error("Cannot read database OID from pipe");
-    provsql_mmap_dispatch(c, db_oid);
+  for(;;) {
+    struct pollfd pfd;
+    pfd.fd = provsql_shared_state->pipebmr;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    /* Wait indefinitely while there is nothing to force out; once a write
+       has landed, wake up after the flush interval and force it, so an
+       idle store is never more than that far behind the disk. */
+    int r = poll(&pfd, 1,
+                 store_dirty ? PROVSQL_STORE_FLUSH_INTERVAL_MS : -1);
+    if(r < 0) {
+      if(errno == EINTR)
+        continue;
+      break;
+    }
+    if(r == 0) {
+      provsql_store_flush();
+      continue;
+    }
+
+    if(!READM(c, char))
+      break;
+    Oid db_oid, db_tablespace;
+    if(!READM(db_oid, Oid) || !READM(db_tablespace, Oid))
+      provsql_error("Cannot read message header from pipe");
+    provsql_mmap_dispatch(c, db_oid, db_tablespace);
   }
 
   int e = errno;
@@ -561,115 +861,178 @@ void MMappedCircuit::sync()
   wires.sync();
   mapping.sync();
   extra.sync();
-  tableInfo.sync();
 }
 
-/* The tableInfo vector uses a tombstone scheme: removed entries have
- * their relid set to InvalidOid and remain in place.  setTableInfo()
- * reuses tombstone slots before appending.  All readers skip
- * InvalidOid entries.  This avoids reaching into MMappedVector's
- * append-only public API, and keeps the file format trivial: a
- * crash-recovered file is internally consistent without any extra
- * recovery step.  In practice, churn on this vector is low (one
- * entry per add_provenance / repair_key / remove_provenance call).
- *
- * Each record carries two logically independent halves: the kind /
- * block_key fields (TID / BID classification, set by add_provenance /
- * repair_key / set_table_info) and the ancestor_n / ancestors fields
- * (base-relation provenance lineage, set by add_provenance for base
- * tables and by the CTAS hook for derived tables).  setTableInfo()
- * updates the kind half and preserves the ancestor half on update;
- * setTableAncestry() does the converse.  This lets the two halves
- * evolve independently without the SQL layer having to fetch-and-
- * round-trip every time. */
-
-void MMappedCircuit::setTableInfo(const ProvenanceTableInfo &info)
+void MMappedCircuit::flush()
 {
-  long tombstone = -1;
-  unsigned long n = tableInfo.nbElements();
-  for(unsigned long i=0; i<n; ++i) {
-    if(tableInfo[i].relid == info.relid) {
-      /* Preserve the existing ancestor half on update. */
-      ProvenanceTableInfo merged = info;
-      merged.ancestor_n = tableInfo[i].ancestor_n;
-      memcpy(merged.ancestors, tableInfo[i].ancestors,
-             merged.ancestor_n * sizeof(Oid));
-      tableInfo[i] = merged;
-      return;
-    }
-    if(tombstone < 0 && tableInfo[i].relid == InvalidOid)
-      tombstone = static_cast<long>(i);
-  }
-  /* Fresh record: kind half from caller, ancestor half empty. */
-  ProvenanceTableInfo fresh = info;
-  fresh.ancestor_n = 0;
-  if(tombstone >= 0)
-    tableInfo[tombstone] = fresh;
-  else
-    tableInfo.add(fresh);
+  /* Order matters as much here as it does on the write path: the records
+     a mapping entry points at must be on disk before the entry is, so
+     that a machine crash between the two flushes leaves an unreferenced
+     record rather than a dangling index. */
+  wires.flush();
+  extra.flush();
+  gates.flush();
+  mapping.flush();
 }
 
-void MMappedCircuit::setTableAncestry(Oid relid, uint16_t ancestor_n,
-                                      const Oid *ancestors)
+bool MMappedCircuit::uncleanShutdown() const
 {
-  if(relid == InvalidOid)
-    return;
-  if(ancestor_n > PROVSQL_TABLE_INFO_MAX_ANCESTORS)
-    return;  /* defensive: caller-side check already rejects this */
-  unsigned long n = tableInfo.nbElements();
-  for(unsigned long i=0; i<n; ++i) {
-    if(tableInfo[i].relid == relid) {
-      ProvenanceTableInfo updated = tableInfo[i];
-      updated.ancestor_n = ancestor_n;
-      memcpy(updated.ancestors, ancestors, ancestor_n * sizeof(Oid));
-      tableInfo[i] = updated;
-      return;
-    }
-  }
-  /* No-op when relid has no kind record: callers should set kind
-   * first (add_provenance / repair_key do this).  Silently
-   * dropping the ancestry payload here matches the existing
-   * removeTableInfo / setTableInfo "missing relid is harmless"
-   * pattern and avoids creating an OPAQUE-by-default record. */
+  return mapping.uncleanShutdown() || gates.uncleanShutdown()
+         || wires.uncleanShutdown() || extra.uncleanShutdown();
 }
 
-void MMappedCircuit::removeTableInfo(Oid relid)
+MMappedCircuit::Check MMappedCircuit::check() const
 {
-  if(relid == InvalidOid)
-    return;
-  unsigned long n = tableInfo.nbElements();
-  for(unsigned long i=0; i<n; ++i) {
-    if(tableInfo[i].relid == relid) {
-      tableInfo[i].relid = InvalidOid;
-      return;
-    }
+  Check c{};
+  c.unclean    = uncleanShutdown();
+  c.nb_gates   = gates.nbElements();
+  c.nb_mapping = mapping.nbElements();
+  c.next_value = mapping.nextValue();
+
+  std::vector<bool> referenced(c.nb_gates, false);
+  for(unsigned long k=0; k<mapping.capacity(); ++k) {
+    unsigned long v = mapping.slotValue(k);
+    if(v == MMappedUUIDHashTable::NOTHING)
+      continue;
+    if(v >= c.nb_gates)
+      ++c.dangling_indices;
+    else
+      referenced[v] = true;
   }
+  for(unsigned long i=0; i<c.nb_gates; ++i) {
+    if(!referenced[i])
+      ++c.unreferenced;
+    const GateInformation &gi = gates[i];
+    if(gi.children_idx + gi.nb_children > wires.nbElements())
+      ++c.bad_wires;
+    if(gi.extra_idx + gi.extra_len > extra.nbElements())
+      ++c.bad_extra;
+  }
+  return c;
 }
 
-void MMappedCircuit::removeTableAncestry(Oid relid)
+
+unsigned long MMappedCircuit::mark(const std::vector<pg_uuid_t> &roots,
+                                   std::vector<bool> &live) const
 {
-  if(relid == InvalidOid)
-    return;
-  unsigned long n = tableInfo.nbElements();
-  for(unsigned long i=0; i<n; ++i) {
-    if(tableInfo[i].relid == relid) {
-      tableInfo[i].ancestor_n = 0;
-      return;
+  const unsigned long n = gates.nbElements();
+  live.assign(n, false);
+  unsigned long nb_live = 0;
+
+  std::vector<unsigned long> stack;
+  for(const auto &r: roots) {
+    auto idx = mapping[r];
+    if(idx != MMappedUUIDHashTable::NOTHING && idx < n && !live[idx]) {
+      live[idx] = true;
+      ++nb_live;
+      stack.push_back(idx);
     }
   }
+
+  while(!stack.empty()) {
+    unsigned long idx = stack.back();
+    stack.pop_back();
+    const GateInformation &gi = gates[idx];
+    if(gi.children_idx + gi.nb_children > wires.nbElements())
+      continue;   /* a torn record; check() reports it, do not follow it */
+    for(unsigned long k=gi.children_idx; k<gi.children_idx+gi.nb_children; ++k) {
+      auto child = mapping[wires[k]];
+      if(child != MMappedUUIDHashTable::NOTHING && child < n && !live[child]) {
+        live[child] = true;
+        ++nb_live;
+        stack.push_back(child);
+      }
+    }
+  }
+
+  return nb_live;
 }
 
-bool MMappedCircuit::getTableInfo(Oid relid, ProvenanceTableInfo &out) const
+MMappedCircuit::Counts MMappedCircuit::sweepInto(
+  const std::vector<bool> &live,
+  const std::string &mp, const std::string &gp,
+  const std::string &wp, const std::string &ep) const
 {
-  if(relid == InvalidOid)
-    return false;
-  for(unsigned long i=0; i<tableInfo.nbElements(); ++i) {
-    if(tableInfo[i].relid == relid) {
-      out = tableInfo[i];
-      return true;
-    }
+  Counts out{};
+  const unsigned long n = gates.nbElements();
+
+  /* Old index -> new index, assigned in old order so the rewritten store
+     keeps the creation order of what it keeps. */
+  std::vector<unsigned long> newidx(n, MMappedUUIDHashTable::NOTHING);
+  {
+    unsigned long next = 0;
+    for(unsigned long i=0; i<n; ++i)
+      if(live[i])
+        newidx[i] = next++;
   }
-  return false;
+
+  const bool legacy = legacyProbabilities();
+
+  {
+    MMappedUUIDHashTable nmapping(mp.c_str(), false, MAGIC_MAPPING);
+    MMappedVector<GateInformation> ngates(gp.c_str(), false, MAGIC_GATES,
+                                          GATES_VERSION);
+    MMappedVector<pg_uuid_t> nwires(wp.c_str(), false, MAGIC_WIRES);
+    MMappedVector<char> nextra(ep.c_str(), false, MAGIC_EXTRA);
+
+    for(unsigned long i=0; i<n; ++i) {
+      if(!live[i])
+        continue;
+      GateInformation gi = gates[i];
+
+      /* A record whose ranges run past the vectors they index is torn --
+         check() counts them -- so copying by those ranges would read off
+         the end.  Keep the gate, drop what cannot be read: the rebuilt
+         store is then at least internally consistent, which is the point
+         of running the clean-up on a damaged store. */
+      const unsigned long old_children = gi.children_idx;
+      gi.children_idx = nwires.nbElements();
+      if(old_children + gi.nb_children > wires.nbElements())
+        gi.nb_children = 0;
+      for(unsigned c=0; c<gi.nb_children; ++c)
+        nwires.add(wires[old_children + c]);
+
+      const unsigned long old_extra = gi.extra_idx;
+      if(old_extra + gi.extra_len > extra.nbElements())
+        gi.extra_len = 0;
+      if(gi.extra_len > 0) {
+        gi.extra_idx = nextra.nbElements();
+        for(unsigned k=0; k<gi.extra_len; ++k)
+          nextra.add(extra[old_extra + k]);
+      } else {
+        gi.extra_idx = 0;
+      }
+
+      /* A version-1 file stored 1.0 both for "written as certain" and for
+         "never written"; the rewrite is where that ambiguity is settled,
+         conservatively, in favour of unwritten -- the reading the store
+         has been giving those gates all along. */
+      if(legacy && gi.prob == 1.
+         && (gi.type == gate_input || gi.type == gate_update
+             || gi.type == gate_mulinput))
+        gi.prob = NAN;
+
+      ngates.add(gi);
+    }
+
+    for(unsigned long k=0; k<mapping.capacity(); ++k) {
+      unsigned long v = mapping.slotValue(k);
+      if(v == MMappedUUIDHashTable::NOTHING || v >= n || !live[v])
+        continue;
+      nmapping.publish(mapping.slotKey(k), newidx[v]);
+    }
+
+    out.gates = ngates.nbElements();
+    out.wires = nwires.nbElements();
+    out.extra_bytes = nextra.nbElements();
+
+    ngates.flush();
+    nwires.flush();
+    nextra.flush();
+    nmapping.flush();
+  }
+
+  return out;
 }
 
 /**

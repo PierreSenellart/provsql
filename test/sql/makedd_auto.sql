@@ -8,7 +8,9 @@
 -- Banzhaf values are identical across routes. This locks that equivalence
 -- (a route returning wrong values would surface as mismatches).
 
-DO $$ BEGIN PERFORM set_prob(provenance(), 0.4) FROM personnel; END $$;
+-- Probabilities are written once, so a fresh assignment replaces each
+-- row's input gate (the earlier tests left personnel at id/10).
+UPDATE personnel SET provsql = provsql.replace_input(provsql, 0.4);
 
 -- A single target token: the provenance of "is there any personnel row", a
 -- plus-gate over all input tuples (so several input variables, one token).

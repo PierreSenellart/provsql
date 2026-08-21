@@ -23,10 +23,11 @@ ORDER BY city, name;
 
 DROP TABLE banzhaf_result;
 
--- banzhaf computation in the non-probabilistic case
-DO $$ BEGIN
-  PERFORM set_prob(provenance(), 1.) FROM personnel;
-END $$;
+-- banzhaf computation in the non-probabilistic case.  A probability is
+-- written once, so a different assignment means a different input gate
+-- per row: replace_input mints it and the row's provsql column carries
+-- it.  The table stays TID, and personnel_name follows the tokens.
+UPDATE personnel SET provsql = provsql.replace_input(provsql, 1.);
 
 CREATE TABLE banzhaf_result AS
   SELECT name, city, banzhaf(c.provenance,p.provenance) FROM (
@@ -50,10 +51,8 @@ ORDER BY city, name;
 
 DROP TABLE banzhaf_result;
 
--- Put back original probability values
-DO $$ BEGIN
-  PERFORM set_prob(provenance(), id*1./10) FROM personnel;
-END $$;
+-- Put back the original probability values, the same way.
+UPDATE personnel SET provsql = provsql.replace_input(provsql, id*1./10);
 
 CREATE TABLE banzhaf_result1 AS
     SELECT city, provenance() FROM (

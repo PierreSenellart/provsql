@@ -58,7 +58,9 @@ SELECT abs(provsql.rv_moment((SELECT u FROM m_mul), 1, false) - 2.8 ) < 1e-9 AS 
 --       E[M] = 0.4·4 + 0.6·4 = 4.0
 --       Var(M) = 0.4·(1/3 + 16) + 0.6·(1 + 16) - 16
 --              = 0.4·(16.333) + 0.6·17 - 16 = 6.533 + 10.2 - 16 = 0.733
-SELECT set_prob((SELECT t FROM p), 0.4);
+-- A probability is written once, so the coin used from here on is a
+-- fresh one: replace_input mints it and p carries it.
+UPDATE p SET t = provsql.replace_input(t, 0.4);
 CREATE TEMP TABLE m_het AS
   SELECT (
            provsql.as_random(3) +

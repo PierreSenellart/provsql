@@ -1,0 +1,34 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+derived_before
+0.8750
+(1 row)
+add_provenance
+
+(1 row)
+dry_run_finds_orphans|dry_run_skips_the_rewrite
+t|t
+(1 row)
+dry_run_wrote_nothing
+t
+(1 row)
+shrank
+t
+(1 row)
+derived_after
+0.8750
+(1 row)
+probabilities_kept
+t
+(1 row)
+unclean_shutdown|dangling_indices|unreferenced|bad_wires|bad_extra
+f|0|0|0|0
+(1 row)
+second_run_is_a_no_op
+t
+(1 row)

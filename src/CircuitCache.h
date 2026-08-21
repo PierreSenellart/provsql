@@ -121,6 +121,16 @@ bool insert(const CircuitCacheInfos& infos);
  */
 std::optional<CircuitCacheInfos> get(pg_uuid_t token) const;
 
+/** @brief Forget everything cached.
+ *
+ *  Needed before a rebuild of the store: an entry answers "this gate
+ *  exists" without contacting the worker, which would survive the
+ *  rebuild as a lie. */
+inline void clear(){
+  il.clear();
+  current_size = 0;
+}
+
 /**
  * @brief Iterator to the first cached entry (oldest).
  * @return Iterator pointing to the oldest cache entry.

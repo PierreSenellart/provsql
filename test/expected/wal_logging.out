@@ -1,0 +1,12 @@
+\set ECHO none
+resource_manager_registered
+t
+(1 row)
+is_builtin
+f
+(1 row)
+NOTICE:  refused: provsql.wal_logging requires provsql.synchronous_commit
+NOTICE:  logged write accepted, probability 0.5
+wal_grew
+t
+(1 row)

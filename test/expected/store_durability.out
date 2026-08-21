@@ -1,0 +1,16 @@
+\set ECHO none
+synchronous_commit_default|wal_logging_default
+off|off
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+survived_the_barrier
+0.7500
+(1 row)
+dangling_indices|unreferenced|bad_wires|bad_extra
+0|0|0|0
+(1 row)

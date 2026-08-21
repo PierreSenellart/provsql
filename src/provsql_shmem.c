@@ -95,7 +95,7 @@ bool provsql_inproc_send(const char *buf, size_t len)
 {
   static bool atexit_registered = false;
   char c;
-  Oid db_oid;
+  Oid db_oid, db_tablespace;
 
   /* Arm the write-back hook in this backend on its first store access
      (see provsql_inproc_init for why this cannot be done at _PG_init). */
@@ -106,9 +106,9 @@ bool provsql_inproc_send(const char *buf, size_t len)
 
   provsql_fifo_push(&provsql_shared_state->req, buf, len);
 
-  if(!READM(c, char) || !READM(db_oid, Oid))
+  if(!READM(c, char) || !READM(db_oid, Oid) || !READM(db_tablespace, Oid))
     return false;
-  provsql_mmap_dispatch(c, db_oid);
+  provsql_mmap_dispatch(c, db_oid, db_tablespace);
   return true;
 }
 

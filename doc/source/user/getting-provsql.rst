@@ -202,7 +202,16 @@ your checkout). To upgrade an existing installation:
    current version and the newly installed one and apply them in
    order, inside a single transaction. The persistent provenance
    circuit (stored in memory-mapped files) is preserved across the
-   upgrade.
+   upgrade: the files stay where they are and the new version reads
+   them.
+
+   This is true of an *extension* upgrade only. A **major-version
+   PostgreSQL upgrade** is a different matter: ``pg_upgrade`` transfers
+   relation files by their ``pg_class`` entry and ignores everything
+   else in the database directories, so the circuit does not come
+   along. See :doc:`persistence` for what has to be copied by hand,
+   and for what ``pg_dump``, replication and ``CREATE DATABASE ...
+   TEMPLATE`` do and do not carry.
 
 .. note::
 
@@ -224,9 +233,10 @@ your checkout). To upgrade an existing installation:
    (``CREATE EXTENSION provsql``) work on every supported PostgreSQL
    version; the restriction only affects the in-place upgrade path.
    To move an existing database forward under PostgreSQL 10 or 11,
-   upgrade to PostgreSQL 12+ first (the provenance store carries over
-   unchanged) and then run ``ALTER EXTENSION provsql UPDATE``, or
-   drop and recreate the extension (losing stored provenance).
+   upgrade to PostgreSQL 12+ first -- copying the store by hand, since
+   ``pg_upgrade`` leaves it behind (see :doc:`persistence`) -- and then
+   run ``ALTER EXTENSION provsql UPDATE``, or drop and recreate the
+   extension (losing stored provenance).
 
 Testing Your Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^

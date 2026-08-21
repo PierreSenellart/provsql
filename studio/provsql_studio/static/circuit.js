@@ -1379,6 +1379,13 @@
   // rendered value with a number input; Enter fires POST /api/set_prob,
   // Esc and blur cancel without saving (blur-as-cancel avoids surprise
   // commits when the user clicks elsewhere mid-thought).
+  //
+  // A probability is written once, so a gate that already has one is not
+  // rewritten: the server gives the row a fresh input gate instead and
+  // says so (payload.replaced).  The circuit on screen is deliberately
+  // left alone -- it was built over the old gate, which still exists
+  // with its old probability -- so the message is what tells the user
+  // the row moved on.
   function editProbability(dd) {
     const uuid = dd.dataset.probUuid;
     const current = dd.dataset.probValue;
@@ -1430,8 +1437,16 @@
           saved = false;
           return;
         }
+        const body = await resp.json().catch(() => ({}));
         restore(v);
-        updateNodeProbLabel(uuid, v);
+        if (body.replaced) {
+          // The gate on screen keeps its own probability; the row now
+          // carries a different one.
+          restore(current);
+          showMsg(body.message || 'row given a new input gate', false);
+        } else {
+          updateNodeProbLabel(uuid, v);
+        }
       } catch (e) {
         input.disabled = false;
         input.classList.add('is-error');

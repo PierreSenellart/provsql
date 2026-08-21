@@ -279,6 +279,32 @@ SELECT sr_formula(provsql.normal(2, 1)::uuid) AS formula_no_mapping,
 CREATE TABLE upgrade_untracked (x int);
 SELECT remove_provenance('upgrade_untracked');
 
+-- 1.13.0 surface check: the transactional store.
+--   * provsql.table_info is a heap table now, so the upgrade must have
+--     created it and add_provenance must have written the relation's kind
+--     into it -- the whole point of the move.
+--   * a probability is written once, and a rolled-back write is cleared;
+--     replace_input is how one changes.
+--   * check_store() reports a store that adds up.
+CREATE TABLE upgrade_tx (name text);
+INSERT INTO upgrade_tx VALUES ('alice'), ('bob');
+SELECT add_provenance('upgrade_tx');
+SELECT (get_table_info('upgrade_tx'::regclass::oid)).kind AS upgraded_table_info_kind;
+BEGIN;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.25) FROM upgrade_tx; END $$;
+ROLLBACK;
+SET provsql.active = off;
+SELECT bool_and(NOT probability_is_set(provsql)) AS rolled_back_write_cleared
+  FROM upgrade_tx;
+SET provsql.active = on;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.25) FROM upgrade_tx; END $$;
+UPDATE upgrade_tx SET provsql = provsql.replace_input(provsql, 0.75);
+SET provsql.active = off;
+SELECT bool_and(get_prob(provsql) = 0.75) AS replaced_after_upgrade FROM upgrade_tx;
+SET provsql.active = on;
+SELECT dangling_indices, unreferenced, bad_wires, bad_extra FROM check_store();
+DROP TABLE upgrade_tx;
+
 SET client_min_messages = WARNING;
 DROP TABLE upgrade_untracked,
            upgrade_empty, upgrade_sup_r, upgrade_sup_s, upgrade_sup,

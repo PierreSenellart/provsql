@@ -47,17 +47,47 @@ provenance-tracked table:
 
 1. Allocates a new ``update`` gate representing the operation
    itself, with a fresh UUID.
-2. Records the operation in the ``update_provenance`` housekeeping
-   table (statement text, user, timestamp, validity range).
-3. Combines that gate with the ``provsql`` token of every affected
-   row using either ``provenance_times`` (for inserts) or
-   ``provenance_monus`` (for deletes).  An update is modelled as a
-   delete followed by an insert.
+2. Asks :sqlfunc:`transaction_token` for the transaction's own
+   ``update`` gate, minting it if this is the transaction's first
+   tracked modification.
+3. Records the operation in the ``update_provenance`` housekeeping
+   table (statement text, user, timestamp, validity range, the
+   transaction's id and token).
+4. Combines ``times(transaction, statement)`` with the ``provsql``
+   token of every affected row using either ``provenance_times``
+   (for inserts) or ``provenance_monus`` (for deletes).  An update
+   is modelled as a delete followed by an insert.
 
 The end result is that each row's ``provsql`` token is a circuit
 whose leaves include not only the original ``input`` gates from
-:sqlfunc:`add_provenance` but also one ``update`` leaf per DML statement
-that ever touched the row.
+:sqlfunc:`add_provenance` but also, per DML statement that ever
+touched the row, that statement's ``update`` leaf and the leaf of
+the transaction it belonged to.
+
+The Transaction's Gate
+----------------------
+
+Where the transaction's gate lives is a ``SET LOCAL`` on the
+``provsql.transaction_token`` GUC, so it vanishes when the
+transaction ends whichever way it ends, and a rolled-back
+transaction leaves no ``update_provenance`` row for it either --
+that row is an ordinary heap insert.  This is what lets
+:sqlfunc:`undo` work at either granularity:
+:sqlfunc:`substitute_gate` walks a token's circuit replacing one gate
+by another and does not care whether that gate is the statement's
+or the transaction's, so undoing the transaction rewrites every
+``times(transaction, statement)`` at once.
+
+Its own validity is the universal range ``'{(,)}'``, the
+multiplicative identity of the temporal m-semiring: it is a factor
+of every effect of the transaction, so anything narrower would
+intersect itself into all of them.  The statements' validity is
+what carries the temporal meaning, and a deferred constraint
+trigger (:sqlfunc:`stamp_commit_time`) moves its lower bound to
+``clock_timestamp()`` at commit -- ``CURRENT_TIMESTAMP`` is the
+transaction's *start*, so two overlapping transactions could
+otherwise commit in the opposite order of the validity they
+recorded.
 
 
 The ``gate_update`` Gate Type

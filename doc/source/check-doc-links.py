@@ -139,6 +139,17 @@ INTERNAL_FUNCTIONS = {
     # provsql_cleanup_table_info event trigger.
     'set_table_info', 'remove_table_info', 'get_table_info',
     'cleanup_table_info', 'provsql_cleanup_table_info',
+    # The provsql.table_info configuration table and the row trigger that
+    # keeps each backend's metadata cache honest; users read the table,
+    # nobody calls the trigger.
+    'table_info', 'table_info_invalidate',
+    # Replacement-leaf bookkeeping: replace_input / replace_block declare
+    # the gate they just minted so provenance_guard can tell it from an
+    # arbitrary UUID.  Not a user-facing pair.
+    'note_fresh_leaf', 'is_fresh_leaf',
+    # Doxygen picks the DEFAULT of circuit_cleanup(dry_run BOOLEAN
+    # DEFAULT false) up as if it were a function.
+    'false',
     # Transition functions for aggregates
     'choose_function',
     'union_tstzintervals_plus', 'union_tstzintervals_plus_state',

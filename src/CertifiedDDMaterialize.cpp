@@ -165,17 +165,26 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
       const std::string tok = dd.getUUID(g);
       if (!tok.empty() && tok[0] == '\x01') {
         // A synthetic stick-breaking coin: the joint-width compiler
-        // introduces these (token "\x01mulsb:N") when it expands a
-        // repair_key / BID exclusion block into shared independent
-        // events; they carry a probability but no store UUID.  Materialise
-        // each as a fresh independent gate_input with that probability.
-        // The UUID is content-addressed on the synthetic token, so coins
-        // shared across a block's values (the same "\x01mulsb:N") collapse
-        // to one store gate, preserving the mutual exclusion.
+        // introduces these when it expands a repair_key / BID exclusion
+        // block into shared independent events; they carry a probability
+        // but no store UUID.  Materialise each as an independent
+        // gate_input with that probability.  The UUID is content-addressed
+        // on the synthetic token, which names the block and the split
+        // inside it (see UCQJointCompiler::emitInput), so the coins shared
+        // by a block's values collapse to one store gate -- that sharing
+        // is the mutual exclusion -- while coins of different blocks, or
+        // of the same block with different masses, stay apart.
         const pg_uuid_t token = provsqlUuidV5(tok);
         if (created.insert(uuid2string(token)).second) {
           provsql_internal_create_gate(&token, gate_input, 0, NULL);
-          provsql_internal_set_prob(&token, dd.getProb(g));
+          double existing = 0.;
+          if (provsql_internal_set_prob(&token, dd.getProb(g), &existing)
+              == PROVSQL_SET_PROB_ALREADY_SET)
+            provsql_error("stick-breaking coin %s already carries "
+                          "probability %g, not the %g this compilation "
+                          "needs: two distinct coins hashed to one gate",
+                          uuid2string(token).c_str(), existing,
+                          dd.getProb(g));
         }
         uuid_of[g] = token;
       } else {

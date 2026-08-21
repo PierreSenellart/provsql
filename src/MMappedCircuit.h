@@ -14,8 +14,9 @@
  * | @c wires            | Flattened child-UUID lists for all gates      |
  * | @c extra            | Variable-length string data (e.g. provenance labels) |
  *
- * All four backing files live in the PostgreSQL data directory and are
- * opened/created by the ProvSQL background worker at startup.
+ * All four backing files live in the database's directory inside the
+ * PostgreSQL data directory, and are opened/created by the ProvSQL
+ * background worker on the first message for that database.
  *
  * The free-function @c createGenericCircuit() traverses the mmap data
  * starting from a given root UUID to construct an in-memory
@@ -36,12 +37,12 @@
 #ifndef MMAPPED_CIRCUIT_H
 #define MMAPPED_CIRCUIT_H
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 #include "GenericCircuit.h"
-#include "MMappedTableInfo.h"
 #include "MMappedUUIDHashTable.h"
 #include "MMappedVector.hpp"
 
@@ -63,7 +64,7 @@ typedef struct GateInformation
   gate_type type;            ///< Kind of gate (input, plus, times…)
   unsigned nb_children;      ///< Number of children
   unsigned long children_idx;///< Start index of this gate's children in @c wires
-  double prob;               ///< Associated probability (default 1.0)
+  double prob;               ///< Associated probability, @c NaN when unset
   unsigned info1;            ///< General-purpose integer annotation 1
   unsigned info2;            ///< General-purpose integer annotation 2
   unsigned long extra_idx;   ///< Start index in @c extra for string data
@@ -76,7 +77,7 @@ typedef struct GateInformation
    * @param i  Start index of children in the @c wires vector.
    */
   GateInformation(gate_type t, unsigned n, unsigned long i) :
-    type(t), nb_children(n), children_idx(i), prob(1.), info1(0), info2(0), extra_idx(0), extra_len(0) {
+    type(t), nb_children(n), children_idx(i), prob(NAN), info1(0), info2(0), extra_idx(0), extra_len(0) {
   }
 } GateInformation;
 
@@ -93,29 +94,80 @@ MMappedUUIDHashTable mapping;         ///< UUID → gate-index hash table
 MMappedVector<GateInformation> gates; ///< Gate metadata array
 MMappedVector<pg_uuid_t> wires;       ///< Flattened child UUID array
 MMappedVector<char> extra;            ///< Variable-length string data
-MMappedVector<ProvenanceTableInfo> tableInfo; ///< Per-relation TID/BID metadata (safe-query optimisation)
 
 static constexpr const char *GATES_FILENAME="provsql_gates.mmap";     ///< Backing file for @c gates
 static constexpr const char *WIRES_FILENAME="provsql_wires.mmap";     ///< Backing file for @c wires
 static constexpr const char *MAPPING_FILENAME="provsql_mapping.mmap"; ///< Backing file for @c mapping
 static constexpr const char *EXTRA_FILENAME="provsql_extra.mmap";     ///< Backing file for @c extra
-static constexpr const char *TABLE_INFO_FILENAME="provsql_table_info.mmap"; ///< Backing file for @c tableInfo
 
-/** @brief Build the full path for a mmap file under @c $PGDATA/base/\<db_oid\>/. */
-static std::string makePath(Oid db_oid, const char *filename);
+/** @brief Append a complete gate record, then publish @p token for it. */
+void appendGate(pg_uuid_t token, gate_type type,
+                const std::vector<pg_uuid_t> &children);
+
+/** @brief Whether the gate record at index @p idx holds a written
+ *  probability (see @c GATES_VERSION for the version-1 leniency). */
+bool hasProbAt(unsigned long idx) const;
+
+
 
 /** @brief Delegating constructor that accepts pre-built paths. */
 MMappedCircuit(const std::string &mp, const std::string &gp,
                const std::string &wp, const std::string &ep,
-               const std::string &tp,
                bool read_only) :
-  mapping  (mp.c_str(), read_only, MAGIC_MAPPING),
-  gates    (gp.c_str(), read_only, MAGIC_GATES),
-  wires    (wp.c_str(), read_only, MAGIC_WIRES),
-  extra    (ep.c_str(), read_only, MAGIC_EXTRA),
-  tableInfo(tp.c_str(), read_only, MAGIC_TABLE_INFO) {}
+  mapping(mp.c_str(), read_only, MAGIC_MAPPING),
+  gates  (gp.c_str(), read_only, MAGIC_GATES, GATES_VERSION),
+  wires  (wp.c_str(), read_only, MAGIC_WIRES),
+  extra  (ep.c_str(), read_only, MAGIC_EXTRA) {}
 
 public:
+/**
+ * @brief Format version of the @c gates file this build writes.
+ *
+ * Version 1 stored @c 1.0 in @c GateInformation::prob both for a gate
+ * whose probability had been set to 1 and for one that had never been
+ * given a probability at all.  Version 2 writes @c NaN for the latter,
+ * which is what lets a probability be written once and refused
+ * afterwards.  A version-1 file is still read: @c 1.0 on a
+ * probability-bearing gate is then treated as unset, so a store
+ * carried across an upgrade keeps accepting the probabilities its
+ * owner has always been allowed to write.  The ambiguity lasts until
+ * @c circuit_cleanup rewrites the file, which normalises those
+ * @c 1.0 values and stamps the file version 2.
+ */
+static constexpr uint16_t GATES_VERSION = 2;
+
+/**
+ * @brief Outcome of @c setProb.
+ *
+ * @c Written and @c Unchanged are both successes; only @c Written
+ * needs undoing if the writing transaction rolls back.
+ */
+enum class SetProbResult {
+  NotProbGate,  ///< The token names a gate that carries no probability
+  Written,      ///< The gate had no probability and now holds the given one
+  Unchanged,    ///< The gate already held exactly this probability
+  AlreadySet    ///< The gate holds a different probability; refused
+};
+
+
+/** @brief Build the full path of a file in a database's store directory,
+ *  the one @c GetDatabasePath resolves for @p db_oid in @p db_tablespace. */
+static std::string storePath(Oid db_oid, Oid db_tablespace,
+                             const char *filename);
+
+/**
+ * @brief Outcome of @c setInfos or @c setExtra.
+ *
+ * Same discipline as @c setProb: an annotation is a fact appended to the
+ * gate, written once and idempotent on the same value.
+ */
+enum class SetAnnotationResult {
+  NoSuchGate,   ///< The token names no gate
+  Written,      ///< The gate had none and now holds the given annotation
+  Unchanged,    ///< The gate already held exactly this annotation
+  AlreadySet    ///< The gate holds a different annotation; refused
+};
+
 /** @brief 8-byte magic constants identifying each mmap file type. */
 static constexpr uint64_t MAGIC_GATES =
   uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('G') << 24 |
@@ -129,16 +181,16 @@ static constexpr uint64_t MAGIC_MAPPING =
 static constexpr uint64_t MAGIC_EXTRA =
   uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('E') << 24 |
   uint64_t('x') << 32 | uint64_t('t') << 40 | uint64_t('r') << 48 | uint64_t('a') << 56;
-static constexpr uint64_t MAGIC_TABLE_INFO =
-  uint64_t('P')       | uint64_t('v') <<  8 | uint64_t('S') << 16 | uint64_t('T') << 24 |
-  uint64_t('b') << 32 | uint64_t('l') << 40 | uint64_t('I') << 48 | uint64_t('n') << 56;
 
 /**
  * @brief Open all four mmap backing files for the given database.
- * @param db_oid    OID of the target database; files go under $PGDATA/base/\<db_oid\>/.
- * @param read_only If @c true, all files are mapped read-only.
+ * @param db_oid        OID of the target database.
+ * @param db_tablespace OID of that database's default tablespace; the
+ *                      files go in the directory @c GetDatabasePath
+ *                      resolves for the pair.
+ * @param read_only     If @c true, all files are mapped read-only.
  */
-explicit MMappedCircuit(Oid db_oid, bool read_only = false);
+MMappedCircuit(Oid db_oid, Oid db_tablespace, bool read_only = false);
 
 /** @brief Sync all backing files before destruction. */
 ~MMappedCircuit() {
@@ -159,33 +211,163 @@ explicit MMappedCircuit(Oid db_oid, bool read_only = false);
 void createGate(pg_uuid_t token, gate_type type, const std::vector<pg_uuid_t> &children);
 
 /**
- * @brief Update the @c info1 / @c info2 annotations of a gate.
- * @param token  UUID of the gate to update.
- * @param info1  New value for @c info1.
- * @param info2  New value for @c info2.
+ * @brief Write the @c info1 / @c info2 annotations of a gate, once.
+ *
+ * The two fields are written once **each**, with @c 0 meaning "nothing
+ * recorded": a field goes from @c 0 to a value once, accepts that value
+ * again, and refuses a different one; writing @c 0 over a value records
+ * nothing and leaves it alone.  Per field rather than per pair because
+ * the two are written by different parties -- a certified @c plus gate
+ * is marked as certified when it is built and tagged with the route that
+ * made it a query's root afterwards.
+ *
+ * @param token     UUID of the gate to annotate.
+ * @param info1     Value for @c info1, or @c 0 to leave it alone.
+ * @param info2     Value for @c info2, or @c 0 to leave it alone.
+ * @param existing  On @c AlreadySet, the pair the gate holds.
  */
-void setInfos(pg_uuid_t token, unsigned info1, unsigned info2);
+SetAnnotationResult setInfos(pg_uuid_t token, unsigned info1, unsigned info2,
+                             std::pair<unsigned, unsigned> *existing = nullptr);
 
 /**
- * @brief Attach a variable-length string annotation to a gate.
- * @param token  UUID of the gate.
- * @param s      String to store.
+ * @brief Attach a variable-length string annotation to a gate, once.
+ *
+ * A gate with no annotation has an empty one, and an empty string is not
+ * an annotation, so "nothing recorded" and "recorded as nothing"
+ * coincide and the question of an unset marker does not arise.  Offering
+ * the bytes the gate already holds is a no-op rather than a fresh
+ * append, which is what keeps the @c extra file from accumulating
+ * abandoned copies of the same string.
+ *
+ * @param token     UUID of the gate.
+ * @param s         String to store.
+ * @param existing  On @c AlreadySet, the string the gate holds.
  */
-void setExtra(pg_uuid_t token, const std::string &s);
+SetAnnotationResult setExtra(pg_uuid_t token, const std::string &s,
+                             std::string *existing = nullptr);
 
 /**
- * @brief Set the probability associated with a gate.
- * @param token  UUID of the gate.
- * @param prob   Probability value in [0, 1].
- * @return @c true if the gate was updated; @c false if the token is a non-input gate.
- *         If the token is not yet in the circuit, an input gate is created lazily.
+ * @brief Write a gate's probability, once.
+ *
+ * A probability is a fact appended to the circuit, like the gate
+ * itself: it can be written when the gate has none, re-written with
+ * the identical value (so setup scripts and notebook cells stay
+ * re-runnable), and otherwise refused.  Changing one means minting a
+ * fresh input gate and rewriting the rows that carry the old token --
+ * see @c provsql.replace_input.
+ *
+ * Passing @c NaN clears the probability unconditionally; that is how a
+ * transaction that rolls back drops the probabilities it wrote, and it
+ * is not reachable from SQL.
+ *
+ * If the token is not yet in the circuit, an input gate is created
+ * lazily.
+ *
+ * @param token     UUID of the gate.
+ * @param prob      Probability value in [0, 1], or @c NaN to clear.
+ * @param existing  On @c AlreadySet, the probability the gate holds.
+ * @return          Which of the four cases applied.
  */
-bool setProb(pg_uuid_t token, double prob);
+SetProbResult setProb(pg_uuid_t token, double prob, double *existing = nullptr);
+
+/**
+ * @brief Report whether @p token names a gate that holds a probability.
+ * @param token  UUID of the gate.
+ * @param prob   On @c true return, the stored probability.
+ * @return @c true when the gate exists, carries probabilities, and one
+ *         has been written to it.
+ */
+bool hasProb(pg_uuid_t token, double *prob) const;
 
 /**
  * @brief Flush all backing files to disk with @c msync().
  */
 void sync();
+
+/**
+ * @brief Force every backing file to stable storage.
+ *
+ * @c sync() pushes the regions' bytes into the files; this pushes the
+ * files out of the kernel's page cache, which is what a crash of the
+ * machine can otherwise lose.
+ */
+void flush();
+
+/**
+ * @brief Whether any backing file was found still marked open-for-writing
+ *        when it was opened -- the previous writer died mid-write.
+ */
+bool uncleanShutdown() const;
+
+/**
+ * @brief What @c provsql.check_store() reports about a store.
+ *
+ * Every count but @c unclean is zero for a store nothing has damaged.
+ * A non-zero one means a write was interrupted at a point the ordering
+ * rules do not cover, or a set of files was copied at different instants
+ * (a file-level backup of a running server); @c provsql.circuit_cleanup()
+ * rebuilds the store from what is still reachable.
+ */
+struct Check {
+  bool unclean;                   ///< A file was left marked open-for-writing
+  unsigned long nb_gates;         ///< Gate records
+  unsigned long nb_mapping;       ///< Mapping entries
+  unsigned long next_value;       ///< Next index the mapping would assign
+  unsigned long dangling_indices; ///< Mapping entries indexing past the records
+  unsigned long unreferenced;     ///< Records no mapping entry points at
+  unsigned long bad_wires;        ///< Records whose children run past the wires
+  unsigned long bad_extra;        ///< Records whose extra runs past the extra file
+};
+
+/** @brief Walk the store and report what does not add up. */
+Check check() const;
+
+/**
+ * @brief Mark every gate reachable from @p roots.
+ *
+ * @param roots  Token UUIDs to start from; unknown ones are ignored.
+ * @param live   Filled with one flag per gate record.
+ * @return       The number of live gates.
+ */
+unsigned long mark(const std::vector<pg_uuid_t> &roots,
+                   std::vector<bool> &live) const;
+
+/** @brief The size of a store, in the three units that matter. */
+struct Counts {
+  unsigned long gates;       ///< Gate records
+  unsigned long wires;       ///< Child wires
+  unsigned long extra_bytes; ///< Bytes of variable-length annotation
+};
+
+/** @brief This store's current size. */
+inline Counts counts() const {
+  return { gates.nbElements(), wires.nbElements(), extra.nbElements() };
+}
+
+/**
+ * @brief Copy the gates flagged in @p live into a fresh set of files
+ *        beside the current ones (suffix @c ".new").
+ *
+ * Child indices, extra offsets and the token table are all rebuilt, so
+ * the result is a compact, freshly hashed store.  A version-1 @c gates
+ * file also gets its probabilities normalised on the way through: the
+ * @c 1.0 that used to mean both "written as certain" and "never written"
+ * becomes @c NaN on gates the file cannot prove were written, and the new
+ * file is stamped version 2, after which the ambiguity is gone.
+ *
+ * @return The gate, wire and extra-byte counts of the new files.
+ */
+Counts sweepInto(const std::vector<bool> &live,
+                 const std::string &mp, const std::string &gp,
+                 const std::string &wp, const std::string &ep) const;
+
+/** @brief Whether this store's @c gates file predates the @c NaN
+ *  unset-probability convention (see @c GATES_VERSION). */
+inline bool legacyProbabilities() const {
+  return gates.version() < GATES_VERSION;
+}
+
+
 
 /**
  * @brief Return the type of the gate identified by @p token.
@@ -202,9 +384,16 @@ gate_type getGateType(pg_uuid_t token) const;
 std::vector<pg_uuid_t> getChildren(pg_uuid_t token) const;
 
 /**
- * @brief Return the probability stored for the gate identified by @p token.
+ * @brief Return the probability an evaluation would use for @p token.
+ *
+ * A gate nobody has given a probability evaluates as certain, and a
+ * repaired row nobody has given one evaluates at the uniform weight of
+ * its @c repair_key block; either way this answers a number, not "unset".
+ * Use @c hasProb to tell the two apart.
+ *
  * @param token  UUID of the gate.
- * @return       The probability, or 1.0 if the gate is not found.
+ * @return       The probability; @c NaN when @p token names no gate, or
+ *               one that carries no probability at all.
  */
 double getProb(pg_uuid_t token) const;
 
@@ -229,71 +418,6 @@ std::string getExtra(pg_uuid_t token) const;
 inline unsigned long getNbGates() const {
   return gates.nbElements();
 }
-
-/**
- * @brief Insert or update the @c kind / @c block_key half of a
- *        per-table metadata record, preserving any existing ancestor
- *        fields.
- *
- * If an entry for @p info.relid already exists, its @c kind and
- * @c block_key fields are overwritten in place and its @c ancestors
- * fields are preserved.  Otherwise a fresh record is appended with
- * @c ancestor_n @c == @c 0.
- *
- * @param info  The record to store; only @c kind / @c block_key are
- *              consumed (@c ancestor fields are sourced from the
- *              existing entry or zeroed for fresh ones).
- */
-void setTableInfo(const ProvenanceTableInfo &info);
-
-/**
- * @brief Insert or update the ancestor set of a per-table metadata
- *        record, preserving any existing @c kind / @c block_key
- *        fields.
- *
- * No-op when @p relid has no existing record: the safe-query
- * rewriter only consults ancestry for tracked relations, so a
- * caller setting ancestry on an unknown relation has missed a
- * @c setTableInfo step.  Callers in this codebase always set
- * @c kind first.
- *
- * @param relid       pg_class OID of the relation to update.
- * @param ancestor_n  Number of valid entries in @p ancestors
- *                    (must be @c <= @c PROVSQL_TABLE_INFO_MAX_ANCESTORS).
- * @param ancestors   Sorted, deduplicated base-relation OIDs.
- */
-void setTableAncestry(Oid relid, uint16_t ancestor_n,
-                      const Oid *ancestors);
-
-/**
- * @brief Remove a per-table metadata entry (both halves).
- *
- * No-op when @p relid is not present.  Removal is done by
- * tombstoning the matching entry with @c relid @c == @c InvalidOid;
- * the next @c setTableInfo over the same @p relid reuses the slot.
- *
- * @param relid  pg_class OID of the relation whose entry to remove.
- */
-void removeTableInfo(Oid relid);
-
-/**
- * @brief Clear just the ancestor set of a per-table metadata record,
- *        preserving @c kind / @c block_key.
- *
- * No-op when @p relid has no existing record.  Useful when a
- * derived relation's source list changes (e.g. a CTAS is re-run)
- * without disturbing its kind classification.
- */
-void removeTableAncestry(Oid relid);
-
-/**
- * @brief Look up the full per-table metadata record (both halves).
- *
- * @param relid  pg_class OID of the relation to look up.
- * @param out    On success, filled with the stored record.
- * @return @c true if a record was found, @c false otherwise.
- */
-bool getTableInfo(Oid relid, ProvenanceTableInfo &out) const;
 
 /**
  * @brief Build an in-memory @c GenericCircuit rooted at @p token.

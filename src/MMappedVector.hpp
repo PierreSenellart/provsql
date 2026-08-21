@@ -38,8 +38,10 @@
 #include <sys/mman.h>
 
 template <typename T>
-MMappedVector<T>::MMappedVector(const char *filename, bool read_only, uint64_t magic_value)
+MMappedVector<T>::MMappedVector(const char *filename, bool read_only,
+                                uint64_t magic_value, uint16_t version)
 {
+  read_only_ = read_only;
   auto length = region.openFile(filename, read_only);
   bool empty = (length == 0);
 
@@ -53,20 +55,27 @@ MMappedVector<T>::MMappedVector(const char *filename, bool read_only, uint64_t m
 
   if(empty) {
     data->magic     = magic_value;
-    data->version   = 1;
+    data->version   = version;
     data->elem_size = static_cast<uint16_t>(sizeof(T));
-    data->_reserved = 0;
+    data->flags     = 0;
     data->capacity    = STARTING_CAPACITY;
     data->nb_elements = 0;
   } else {
     if(data->magic != magic_value)
       throw std::runtime_error("ProvSQL mmap: wrong file type (magic mismatch)");
-    if(data->version != 1)
+    if(data->version == 0 || data->version > version)
       throw std::runtime_error("ProvSQL mmap: unsupported format version "
                                + std::to_string(data->version));
     if(data->elem_size != sizeof(T))
       throw std::runtime_error("ProvSQL mmap: element size mismatch (recompile required)");
+    unclean_ = (data->flags & FLAG_DIRTY) != 0;
   }
+
+  /* Mark the file open for writing; the destructor clears it.  A file
+     found dirty was left behind by a process that died mid-write, which
+     provsql.check_store() reports. */
+  if(!read_only)
+    data->flags |= FLAG_DIRTY;
 }
 
 template <typename T>
@@ -81,6 +90,8 @@ void MMappedVector<T>::grow()
 template <typename T>
 MMappedVector<T>::~MMappedVector()
 {
+  if(data && !read_only_)
+    data->flags &= ~FLAG_DIRTY;
   region.close();
 }
 
@@ -109,6 +120,12 @@ template <typename T>
 void MMappedVector<T>::sync()
 {
   region.sync();
+}
+
+template <typename T>
+void MMappedVector<T>::flush()
+{
+  region.flush();
 }
 
 #endif /* MMAPPED_VECTOR_HPP */

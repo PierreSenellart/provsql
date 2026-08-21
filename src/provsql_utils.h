@@ -418,6 +418,17 @@ extern bool provsql_where_provenance;
  * provsql.verbose_level run-time configuration parameter was set */
 extern int provsql_verbose;
 
+/** Global variable backing the provsql.transaction_token run-time
+ * configuration parameter: the textual UUID of the update gate standing
+ * for the current transaction, or empty when it has none yet. */
+extern char *provsql_transaction_token;
+
+/** Global variable set by the provsql.synchronous_commit run-time
+ * configuration parameter: when true, a transaction that has written to
+ * the circuit store forces the store to stable storage before it
+ * commits. */
+extern bool provsql_synchronous_commit;
+
 /** Global variable holding the probability evaluation method(s) used by the
  * most recent probability_evaluate call, exposed via the
  * provsql.last_eval_method run-time configuration parameter. */

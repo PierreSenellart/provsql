@@ -184,16 +184,34 @@ def test_circuit_expand_returns_next_layer(client, test_dsn):
     assert any(n["id"] == target["id"] for n in sub["nodes"])
 
 
+def _set_personnel_prob(test_dsn: str, name: str, p: float) -> str:
+    """Give a personnel row probability `p` and return the token it now
+    carries.
+
+    Probabilities are written once (provsql 1.13.0), so this goes through
+    `provsql.replace_input`: the row gets a fresh input gate carrying `p`,
+    which works whether or not it had one before.  The returned token is
+    the new one -- the old gate is still in the circuit with its old
+    probability, which is the whole point of writing once."""
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE personnel SET provsql ="
+            " provsql.replace_input(provsql, %s::double precision)"
+            " WHERE name = %s RETURNING provsql",
+            (p, name),
+        )
+        return str(cur.fetchone()[0])
+
+
 # ──────── /api/leaf/<uuid> ────────
 
 
 def test_leaf_resolves_personnel_row(client, test_dsn):
-    """A direct provsql UUID from the personnel table maps back to that row.
-
-    ProvSQL returns 1.0 as the default probability for any input gate
-    that doesn't have an explicit set_prob entry, so /api/leaf surfaces
-    `probability: 1.0` on personnel rows untouched by the conftest setup."""
-    uuid = _personnel_uuid(test_dsn, "Magdalen")
+    """A direct provsql UUID from the personnel table maps back to that row,
+    with the row's probability alongside it."""
+    uuid = _set_personnel_prob(test_dsn, "Magdalen", 1.0)
     resp = client.get(f"/api/leaf/{uuid}")
     assert resp.status_code == 200
     body = resp.get_json()
@@ -205,26 +223,18 @@ def test_leaf_resolves_personnel_row(client, test_dsn):
 
 
 def test_leaf_includes_probability_when_set(client, test_dsn):
-    """When `set_prob` has assigned a non-default probability to an
-    input gate, /api/leaf surfaces it next to the resolved row so the
-    inspector can show it without a second round-trip."""
-    uuid = _personnel_uuid(test_dsn, "Magdalen")
-    with psycopg.connect(
-        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
-    ) as conn, conn.cursor() as cur:
-        cur.execute("SELECT provsql.set_prob(%s::uuid, 0.42)", (uuid,))
+    """A non-default probability on an input gate reaches /api/leaf next
+    to the resolved row, so the inspector can show it without a second
+    round-trip."""
+    uuid = _set_personnel_prob(test_dsn, "Magdalen", 0.42)
     try:
         resp = client.get(f"/api/leaf/{uuid}")
         assert resp.status_code == 200
         body = resp.get_json()
         assert body["probability"] == 0.42
     finally:
-        # ProvSQL rejects NULL on set_prob; reset to 1.0 (the implicit
-        # default) so other tests see Magdalen as unset.
-        with psycopg.connect(
-            f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
-        ) as conn, conn.cursor() as cur:
-            cur.execute("SELECT provsql.set_prob(%s::uuid, 1.0)", (uuid,))
+        # Leave Magdalen at 1 so other tests see the usual value.
+        _set_personnel_prob(test_dsn, "Magdalen", 1.0)
 
 
 def test_leaf_unknown_uuid_returns_404(client):
@@ -241,10 +251,9 @@ def test_circuit_tracked_input_keeps_iota_label(client, test_dsn):
     user-pinned probability used to render as e.g. "42%" instead of ι.
     The bulk catalog scan in `_fetch_tracked_input_uuids` is the
     source of truth now; the test pins the contract."""
-    uuid = _personnel_uuid(test_dsn, "John")
     # Pin a non-default probability so the bug condition (prob != 1.0)
     # would have fired the percentage-label branch.
-    client.post("/api/set_prob", json={"uuid": uuid, "probability": 0.42})
+    uuid = _set_personnel_prob(test_dsn, "John", 0.42)
     try:
         resp = client.get(f"/api/circuit/{uuid}")
         assert resp.status_code == 200, resp.data
@@ -255,8 +264,8 @@ def test_circuit_tracked_input_keeps_iota_label(client, test_dsn):
         assert node["label"] == "ι", node
         assert node["tracked_input"] is True
     finally:
-        # Reset to the implicit default so other tests on John see 1.0.
-        client.post("/api/set_prob", json={"uuid": uuid, "probability": 1.0})
+        # Leave John at 1 so other tests see the usual value.
+        _set_personnel_prob(test_dsn, "John", 1.0)
 
 
 def test_circuit_anonymous_input_renders_probability(client, test_dsn):
@@ -308,18 +317,59 @@ def test_leaf_anonymous_input_surfaces_probability(client, test_dsn):
 
 
 def test_set_prob_writes_value(client, test_dsn):
-    """POST /api/set_prob writes to provsql.set_prob; the value is then
-    visible via GET /api/leaf as `probability` on the same UUID."""
-    uuid = _personnel_uuid(test_dsn, "John")
+    """POST /api/set_prob on a gate with no probability writes it in
+    place, and GET /api/leaf then reports it on the same UUID."""
+    import uuid as _uuid
+    anon_uuid = str(_uuid.uuid4())
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.create_gate(%s::uuid, 'input')", (anon_uuid,))
+    resp = client.post("/api/set_prob",
+                       json={"uuid": anon_uuid, "probability": 0.7})
+    assert resp.status_code == 200, resp.data
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert not body.get("replaced")
+    leaf = client.get(f"/api/leaf/{anon_uuid}").get_json()
+    assert leaf["probability"] == 0.7
+
+
+def test_set_prob_replaces_when_already_written(client, test_dsn):
+    """A probability is written once, so POST /api/set_prob on a gate
+    that has one gives the row it resolves to a fresh input gate and says
+    so.  The old gate keeps its own probability: a circuit already built
+    over it is not rewritten behind the user's back."""
+    old_uuid = _set_personnel_prob(test_dsn, "Nancy", 0.3)
     try:
-        resp = client.post("/api/set_prob", json={"uuid": uuid, "probability": 0.7})
+        resp = client.post("/api/set_prob",
+                           json={"uuid": old_uuid, "probability": 0.8})
         assert resp.status_code == 200, resp.data
-        assert resp.get_json()["ok"] is True
-        leaf = client.get(f"/api/leaf/{uuid}").get_json()
-        assert leaf["probability"] == 0.7
+        body = resp.get_json()
+        assert body["replaced"] is True
+        assert body["token"] != old_uuid
+        assert client.get(f"/api/leaf/{old_uuid}").get_json()["probability"] == 0.3
+        assert client.get(
+            f"/api/leaf/{body['token']}").get_json()["probability"] == 0.8
     finally:
-        # Reset to the implicit default so other tests on John don't see 0.7.
-        client.post("/api/set_prob", json={"uuid": uuid, "probability": 1.0})
+        _set_personnel_prob(test_dsn, "Nancy", 1.0)
+
+
+def test_set_prob_refuses_replacement_without_a_row(client, test_dsn):
+    """An anonymous Bernoulli that already carries a probability has no
+    tracked row to rewrite, so the replacement is refused with the
+    reason rather than the raw write-once error."""
+    import uuid as _uuid
+    anon_uuid = str(_uuid.uuid4())
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT provsql.create_gate(%s::uuid, 'input')", (anon_uuid,))
+        cur.execute("SELECT provsql.set_prob(%s::uuid, 0.25)", (anon_uuid,))
+    resp = client.post("/api/set_prob",
+                       json={"uuid": anon_uuid, "probability": 0.75})
+    assert resp.status_code == 400
+    assert "written once" in resp.get_json()["detail"]
 
 
 def test_set_prob_rejects_out_of_range(client, test_dsn):

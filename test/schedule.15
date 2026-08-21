@@ -42,3 +42,8 @@ test: btw_tropical
 # certified all-members circuit planted at the times-canonical address
 # (k-terminal reliability, Steiner cost via min-plus)
 test: btw_cover
+
+# WAL-logging the circuit store through a custom resource manager
+# (RegisterCustomRmgr, PG15+), and its requirement on the at-commit
+# barrier.
+test: wal_logging

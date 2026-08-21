@@ -42,9 +42,7 @@ DROP TABLE rch_count_ge0_full;
 -- Soundness check: with prob=0.5 inputs, group existence
 -- = 1 - 0.5^n (alpha n=3 -> 0.875; beta n=2 -> 0.75).
 -- A wrongly-resolved gate_one would always give 1.0 instead.
-DO $$ BEGIN
-  PERFORM set_prob(provenance(), 0.5) FROM rch;
-END $$;
+UPDATE rch SET provsql = provsql.replace_input(provsql, 0.5);
 SET provsql.monte_carlo_seed = 42;
 CREATE TABLE rch_count_ge0_sound AS
   SELECT category,
@@ -58,9 +56,7 @@ SELECT category,
        AS within_tolerance
   FROM rch_count_ge0_sound ORDER BY category;
 DROP TABLE rch_count_ge0_sound;
-DO $$ BEGIN
-  PERFORM set_prob(provenance(), 1.0) FROM rch;
-END $$;
+UPDATE rch SET provsql = provsql.replace_input(provsql, 1.0);
 
 -- (2) HAVING count(*) > 100 -- always false (alpha has 3 rows,
 -- beta has 2; both well below 100).  Resolves to gate_zero and
@@ -152,9 +148,7 @@ DROP TABLE rch_min_gt_big;
 -- output row becomes "at least one of n rows present" = 1 - 0.5^n.
 -- For alpha (n=3) that is 0.875; for beta (n=2) it is 0.75.  A
 -- wrongly-resolved gate_one would always give exactly 1.0.
-DO $$ BEGIN
-  PERFORM set_prob(provenance(), 0.5) FROM rch;
-END $$;
+UPDATE rch SET provsql = provsql.replace_input(provsql, 0.5);
 SET provsql.monte_carlo_seed = 42;
 CREATE TABLE rch_sum_ge_neg AS
   SELECT category,
@@ -170,9 +164,7 @@ SELECT category,
   FROM rch_sum_ge_neg ORDER BY category;
 DROP TABLE rch_sum_ge_neg;
 -- Restore probs (defensive, table is dropped next anyway)
-DO $$ BEGIN
-  PERFORM set_prob(provenance(), 1.0) FROM rch;
-END $$;
+UPDATE rch SET provsql = provsql.replace_input(provsql, 1.0);
 
 DROP TABLE rch;
 

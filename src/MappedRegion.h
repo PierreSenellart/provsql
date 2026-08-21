@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -124,6 +125,95 @@ void remap(std::size_t new_length) {
   length_ = new_length;
 }
 
+/**
+ * @brief Force the backing file's contents to stable storage.
+ *
+ * @c sync() pushes the region's bytes into the file; this pushes the
+ * file's dirty pages out of the kernel's cache, which is what a crash of
+ * the machine (as opposed to a crash of PostgreSQL) can otherwise lose.
+ * @c fdatasync on the descriptor rather than @c msync on the mapping:
+ * it flushes the file's dirty pages whoever dirtied them, and does not
+ * walk the mapping.
+ */
+void flush() {
+  if(read_only_ || fd_ == -1)
+    return;
+#ifdef PROVSQL_INPROCESS_STORE
+  sync();
+#endif
+  if(fdatasync(fd_) && errno != EINVAL)
+    throw std::runtime_error(strerror(errno));
+}
+
+/**
+ * @brief Replace the backing file, atomically, with @p length bytes of
+ *        @p data, and remap onto the result.
+ *
+ * Used to rewrite a region whose new contents cannot be derived from the
+ * old ones in place -- rehashing the UUID table.  The bytes go to a
+ * sibling file, are forced to disk, and then @c rename(2) puts them in
+ * place in one step, so a crash at any point leaves either the complete
+ * old file or the complete new one.
+ *
+ * @param path  Path of the backing file (the same one @c openFile opened).
+ */
+void replaceContents(const char *path, const void *data, std::size_t length) {
+  if(read_only_)
+    throw std::runtime_error("ProvSQL mmap: cannot replace a read-only region");
+#ifdef PROVSQL_INPROCESS_STORE
+  /* Single process, no shared mapping: swap the heap buffer and let the
+     next sync() write it back.  Emscripten has no directory fsync and no
+     crash window to protect against here. */
+  void *p = realloc(base_, length);
+  if(!p)
+    throw std::runtime_error("ProvSQL: out of memory replacing region");
+  base_ = p;
+  memcpy(base_, data, length);
+  length_ = length;
+  sync();
+  (void) path;
+#else
+  std::string tmp = std::string(path) + ".new";
+  int tfd = open(tmp.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600); // flawfinder: ignore
+  if(tfd == -1)
+    throw std::runtime_error(strerror(errno));
+  const char *p = static_cast<const char *>(data);
+  std::size_t left = length;
+  while(left > 0) {
+    ssize_t w = write(tfd, p, left);
+    if(w <= 0) {
+      int e = errno;
+      ::close(tfd);
+      unlink(tmp.c_str());
+      throw std::runtime_error(strerror(e));
+    }
+    left -= static_cast<std::size_t>(w);
+    p += w;
+  }
+  if(fdatasync(tfd) || rename(tmp.c_str(), path)) {
+    int e = errno;
+    ::close(tfd);
+    unlink(tmp.c_str());
+    throw std::runtime_error(strerror(e));
+  }
+  ::close(tfd);
+  syncDirectoryOf(path);
+
+  if(base_ && ::munmap(base_, length_))
+    throw std::runtime_error(strerror(errno));
+  base_ = nullptr;
+  if(fd_ != -1)
+    ::close(fd_);
+  fd_ = open(path, O_RDWR); // flawfinder: ignore
+  if(fd_ == -1)
+    throw std::runtime_error(strerror(errno));
+  base_ = ::mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+  if(base_ == MAP_FAILED)
+    throw std::runtime_error(strerror(errno));
+  length_ = length;
+#endif
+}
+
 /** @brief Flush the region to the backing file (no-op when read-only). */
 void sync() {
   if(read_only_ || !base_)
@@ -155,6 +245,22 @@ void close() {
 
 void *base() const { return base_; }
 std::size_t length() const { return length_; }
+
+private:
+#ifndef PROVSQL_INPROCESS_STORE
+/** @brief Force the directory entry of @p path to disk, so the rename
+ *  that created it survives a crash of the machine. */
+static void syncDirectoryOf(const char *path) {
+  std::string dir(path);
+  auto slash = dir.rfind('/');
+  dir = (slash == std::string::npos) ? "." : dir.substr(0, slash);
+  int dfd = open(dir.c_str(), O_RDONLY); // flawfinder: ignore
+  if(dfd == -1)
+    return;
+  fsync(dfd);
+  ::close(dfd);
+}
+#endif
 };
 
 #endif /* MAPPED_REGION_H */

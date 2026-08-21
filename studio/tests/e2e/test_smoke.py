@@ -60,7 +60,8 @@ def test_contributions_mode_renders_bars(
     try:
         _run_query_and_wait(
             page,
-            "DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM personnel; END $$;"
+            "UPDATE personnel SET provsql ="
+            "   provsql.replace_input(provsql, 0.5);"
             " SELECT DISTINCT city FROM personnel WHERE city = 'Paris';",
             1,
         )
@@ -80,13 +81,14 @@ def test_contributions_mode_renders_bars(
         page.locator("#contrib-measure").select_option("banzhaf")
         expect(bars).to_have_count(3, timeout=8000)
     finally:
-        # The set_prob above mutates the session-shared DB; restore the
-        # implicit default (1.0) so later tests see untouched probabilities.
+        # The replacement above mutates the session-shared DB; put the
+        # rows back at probability 1 so later tests see the usual value.
         import psycopg
         with psycopg.connect(
             f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
         ) as conn, conn.cursor() as cur:
-            cur.execute("DO $$ BEGIN PERFORM set_prob(provsql, 1.0) FROM personnel; END $$;")
+            cur.execute("UPDATE personnel SET provsql ="
+                        " provsql.replace_input(provsql, 1.0)")
 
 
 def test_query_history_records_runs(page: Page, studio_url: str) -> None:

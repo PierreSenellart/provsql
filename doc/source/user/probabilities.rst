@@ -34,11 +34,31 @@ Or in bulk, from a column of the table itself:
 
 Probabilities must be in the range ``[0, 1]``.
 
+A probability is **written once**: :sqlfunc:`set_prob` writes one on a
+token that has none, accepts the identical value again, and refuses a
+different one.  To give a tuple a different probability, give it a
+different input gate:
+
+.. code-block:: postgresql
+
+    UPDATE sightings SET provsql = provsql.replace_input(provsql, 0.3)
+      WHERE id = 42;
+
+That is an ordinary row update, so it rolls back with its transaction and
+travels with a dump; the old gate stays in the circuit, and so does
+anything already derived from it.  :doc:`persistence` explains why, and
+covers the block form :sqlfunc:`replace_block` for
+:sqlfunc:`repair_key` tables.
+
 To read back a stored probability with :sqlfunc:`get_prob`:
 
 .. code-block:: postgresql
 
     SELECT get_prob(provenance()) FROM mytable;
+
+:sqlfunc:`get_prob` answers the value an evaluation would use, so it says
+``1`` both for a token written as certain and for one nobody has given a
+probability; :sqlfunc:`probability_is_set` distinguishes the two.
 
 Correlated and block-independent inputs
 ---------------------------------------
@@ -71,7 +91,9 @@ example below; it adds the ``provsql`` column itself and is used
     -- Make tuples with the same context mutually exclusive
     SELECT repair_key('weather', 'context');
 
-    -- Assign probabilities and evaluate
+    -- Assign probabilities and evaluate.  repair_key leaves the rows
+    -- at the uniform weight of their block rather than writing a
+    -- probability on them, so this is a first write.
     SELECT set_prob(provenance(), p) FROM weather;
 
     SELECT ground,

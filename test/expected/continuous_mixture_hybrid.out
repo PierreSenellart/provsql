@@ -8,9 +8,6 @@ t|t
 mul_lift_mean|mul_lift_variance
 t|t
 (1 row)
-set_prob
-
-(1 row)
 het_lift_mean
 t
 (1 row)

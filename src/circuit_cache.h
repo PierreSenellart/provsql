@@ -79,4 +79,13 @@ unsigned circuit_cache_get_children(pg_uuid_t token, pg_uuid_t **children);
  */
 gate_type circuit_cache_get_type(pg_uuid_t token);
 
+/**
+ * @brief Forget every cached gate.
+ *
+ * A cache entry answers "this gate exists" without contacting the worker,
+ * so it must be dropped before anything rebuilds the store under this
+ * backend (see @c provsql.circuit_cleanup).
+ */
+void circuit_cache_reset(void);
+
 #endif /* CIRCUIT_CACHE_H */

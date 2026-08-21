@@ -44,9 +44,9 @@ class MMappedVector {
  */
 struct data_t {
   uint64_t magic;      ///< File-type identifier
-  uint16_t version;    ///< Format version (currently 1)
+  uint16_t version;    ///< Format version of this file
   uint16_t elem_size;  ///< sizeof(T) at write time
-  uint32_t _reserved;  ///< Padding to 16-byte boundary, must be 0
+  uint32_t flags;      ///< Bit 0: opened for writing and not closed since
   unsigned long nb_elements;  ///< Number of elements currently stored
   unsigned long capacity;     ///< Maximum elements before the next grow
   T d[];                      ///< Flexible array of elements
@@ -54,6 +54,8 @@ struct data_t {
 
 MappedRegion region;  ///< Backing storage (shared mmap, or heap buffer)
 data_t *data;         ///< Typed view of @c region.base()
+bool read_only_ = false;///< Mapped read-only: the header must not be written
+bool unclean_ = false;///< The previous run left the dirty bit set
 
 /** @brief Initial number of element slots allocated. */
 static constexpr unsigned STARTING_CAPACITY=(1u << 16);
@@ -71,12 +73,20 @@ public:
 /**
  * @brief Open (or create) the mmap-backed vector.
  *
+ * A file created here is stamped with @p version; an existing file is
+ * accepted when its stamp is at most @p version, so a build that
+ * understands version @em n keeps reading the files an older one wrote.
+ * The caller reads the stamp back with @c version() to decide how to
+ * interpret fields whose meaning changed.
+ *
  * @param filename   Path to the backing file (created with
  *                   @c STARTING_CAPACITY slots if absent).
  * @param read_only  If @c true, map the file read-only.
  * @param magic      Expected magic value for format validation.
+ * @param version    Highest format version this build writes and reads.
  */
-MMappedVector(const char *filename, bool read_only, uint64_t magic);
+MMappedVector(const char *filename, bool read_only, uint64_t magic,
+              uint16_t version = 1);
 /** @brief Sync and unmap the file. */
 ~MMappedVector();
 
@@ -111,8 +121,41 @@ inline unsigned long nbElements() const {
   return data->nb_elements;
 }
 
+/** @brief Return the format version stamped in the file's header. */
+inline uint16_t version() const {
+  return data->version;
+}
+
+/** @brief Stamp @p v into the header, declaring the file upgraded.
+ *
+ *  Only a pass that has rewritten every record to the new version's
+ *  conventions may call this. */
+inline void setVersion(uint16_t v) {
+  data->version = v;
+}
+
 /** @brief Flush the backing region to its file (@c MappedRegion::sync()). */
 void sync();
+
+/** @brief Force the backing file to stable storage
+ *  (@c MappedRegion::flush()). */
+void flush();
+
+/**
+ * @brief Bit of @c data_t::flags set while the file is open for writing.
+ *
+ * Cleared on a clean close, so a file found with it still set was left
+ * behind by a process that died (or by an immediate shutdown).  The
+ * header layout is unchanged: the bit lives in what used to be reserved
+ * padding, which older builds neither read nor write.
+ */
+static constexpr uint32_t FLAG_DIRTY = 1u;
+
+/** @brief Whether this file still had @c FLAG_DIRTY set when it was
+ *  opened, i.e. whoever wrote it last did not close it. */
+inline bool uncleanShutdown() const {
+  return unclean_;
+}
 };
 
  #endif /* MMAPPED_VECTOR_H */

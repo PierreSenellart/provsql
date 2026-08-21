@@ -912,7 +912,11 @@ commands, and prepared statements made by one cell are visible to the
 next -- the Jupyter state model, with the database session playing the
 part of the Python interpreter. Each cell executes in its own
 transaction: a failed cell rolls back cleanly (the error lands in the
-cell's output) while previously committed cells persist. Execution
+cell's output) while previously committed cells persist. What the cell
+appended to the *provenance circuit* survives the rollback, but as
+orphans that nothing references: gates are immutable and re-created
+idempotently, and a probability the cell wrote is cleared with it. See
+:doc:`persistence` for what that leaves behind and how to reclaim it. Execution
 counters (``[1]``, ``[2]``, …) track what ran on the current kernel,
 and results render through the same table renderer as the query box --
 provenance pills, clickable UUID cells and all.

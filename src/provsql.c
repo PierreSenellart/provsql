@@ -70,6 +70,7 @@
 #include "classify_query.h"
 #include "joint_width_query.h"
 #include "provsql_mmap.h"
+#include "provsql_rmgr.h"
 #include "provsql_shmem.h"
 #include "provsql_utils.h"
 #include "safe_query.h"
@@ -92,6 +93,7 @@ bool provsql_where_provenance = false;
 static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
 char *provsql_last_eval_method = NULL; ///< Last probability evaluation method(s) used; exposed via @c provsql.last_eval_method
+char *provsql_transaction_token = NULL; ///< Textual UUID of the update gate standing for the current transaction, or empty; set with @c SET @c LOCAL by @c provsql.transaction_token()
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
 char *provsql_tool_search_path = NULL; ///< Colon-separated directory list prepended to @c PATH when invoking external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy); controlled by the @c provsql.tool_search_path GUC. Superuser-only (@c PGC_SUSET): it dictates which directories the postgres OS user searches for executables, so a non-privileged role must not be able to point it at an attacker-controlled binary.
 char *provsql_fallback_compiler = NULL; ///< Compiler used by @c BooleanCircuit::makeDD as the final fallback after @c interpretAsDD and tree-decomposition both fail; controlled by the @c provsql.fallback_compiler GUC (default @c "d4")
@@ -15987,6 +15989,65 @@ void _PG_init(void) {
                            NULL,
                            provsql_provenance_assign_hook,
                            NULL);
+  DefineCustomStringVariable("provsql.transaction_token",
+                             "The update gate standing for the current "
+                             "transaction (internal).",
+                             "Set with SET LOCAL by "
+                             "provsql.transaction_token(), which mints the "
+                             "gate on the transaction's first tracked data "
+                             "modification and reuses it for the rest; the "
+                             "setting vanishes with the transaction, whether "
+                             "it commits or rolls back. Not meant to be set "
+                             "by hand.",
+                             &provsql_transaction_token,
+                             "",
+                             PGC_USERSET,
+                             GUC_NO_SHOW_ALL,
+                             NULL,
+                             NULL,
+                             NULL);
+  DefineCustomBoolVariable("provsql.wal_logging",
+                           "Write every mutation of the circuit store to the "
+                           "WAL, so a replica can carry provenance.",
+                           "PostgreSQL 15 and later. The circuit store is not "
+                           "a set of relations, so nothing carries it to a "
+                           "standby or through a point-in-time restore; with "
+                           "this on, each store message is written to the WAL "
+                           "first and the standby's startup process applies it. "
+                           "Requires provsql.synchronous_commit, which is what "
+                           "keeps the store on disk from falling behind the "
+                           "WAL. A hot-standby backend then refuses to write to "
+                           "the store, so provenance queries -- which create "
+                           "gates as they run, reads included -- only work on "
+                           "the primary. Off by default: it changes what the "
+                           "cluster writes to its WAL.",
+                           &provsql_wal_logging,
+                           false,
+                           PGC_SUSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
+  DefineCustomBoolVariable("provsql.synchronous_commit",
+                           "Force the circuit store to stable storage before "
+                           "a transaction that wrote to it commits.",
+                           "The provenance circuit lives outside PostgreSQL's "
+                           "WAL, so a committed transaction's gates can still "
+                           "be in the kernel's page cache when the machine "
+                           "loses power; a gate lost that way reads back as an "
+                           "independent input, silently. Off (the default) "
+                           "bounds that loss to the worker's flush interval, "
+                           "the way synchronous_commit = off bounds the heap's. "
+                           "On removes it, at the price of one flush per "
+                           "store-writing transaction -- including read-only "
+                           "queries, which create gates too.",
+                           &provsql_synchronous_commit,
+                           false,
+                           PGC_USERSET,
+                           0,
+                           NULL,
+                           NULL,
+                           NULL);
   DefineCustomBoolVariable("provsql.update_provenance",
                            "Should ProvSQL track update provenance?",
                            "1 turns update provenance on, 0 off.",
@@ -16468,6 +16529,11 @@ void _PG_init(void) {
   RegisterProvSQLMMapWorker();
   RegisterProvSQLKCMCPWorker();
 #endif
+
+  /* Registered whether or not this cluster writes the records: what makes
+     a WAL stream that already contains them replayable is having the
+     resource manager present. */
+  provsql_register_rmgr();
 }
 
 /**

@@ -131,7 +131,20 @@ CREATE OR REPLACE FUNCTION get_children(
   RETURNS uuid[] AS
   'provsql','get_children' LANGUAGE C IMMUTABLE PARALLEL SAFE;
 /**
- * @brief Set the probability of an input gate
+ * @brief Write the probability of an input gate, once
+ *
+ * A probability is a fact appended to the circuit, like the gate it
+ * belongs to: it can be written on a gate that has none, written again
+ * with the identical value (so setup scripts and notebook cells stay
+ * re-runnable), and is otherwise refused.  A write made by a
+ * transaction that rolls back is cleared, leaving the circuit as the
+ * transaction found it.
+ *
+ * To give a tuple a *different* probability, mint a fresh input gate
+ * with @c provsql.replace_input and store it in the row's @c provsql
+ * column.  The base table's token column is the place of truth, the
+ * same rule the data-modification triggers already follow, and the
+ * circuit keeps the old gate and everything derived from it.
  *
  * @param token UUID of the input gate
  * @param p probability value in [0,1]
@@ -139,7 +152,211 @@ CREATE OR REPLACE FUNCTION get_children(
 CREATE OR REPLACE FUNCTION set_prob(
   token UUID, p DOUBLE PRECISION)
   RETURNS void AS
-  'provsql','set_prob' LANGUAGE C PARALLEL SAFE;
+  'provsql','set_prob' LANGUAGE C PARALLEL RESTRICTED;
+
+/**
+ * @brief Report whether a probability has been written on a gate
+ *
+ * @c get_prob returns the value an evaluation would use, so it answers
+ * 1 both for a gate written as certain and for one nobody has given a
+ * probability.  This distinguishes them, which is what a client needs
+ * in order to offer "set" on the one and "replace" on the other.
+ */
+CREATE OR REPLACE FUNCTION probability_is_set(token UUID)
+  RETURNS BOOLEAN AS
+  'provsql','probability_is_set' LANGUAGE C STABLE PARALLEL SAFE;
+
+/**
+ * @brief Declare a just-minted leaf gate a replacement for a tracked row
+ *
+ * Internal.  @c provsql.replace_input and @c provsql.replace_block call
+ * this so the @c UPDATE that stores the new token does not look, to
+ * @c provenance_guard, like a user pasting in an arbitrary UUID -- which
+ * would flip the table to @c OPAQUE.  The declaration lasts for the
+ * transaction.
+ */
+CREATE OR REPLACE FUNCTION note_fresh_leaf(token UUID)
+  RETURNS void AS
+  'provsql','note_fresh_leaf' LANGUAGE C;
+
+/** @brief Whether @c token was minted as a replacement leaf by this
+ *  transaction (see @c note_fresh_leaf).  Internal. */
+CREATE OR REPLACE FUNCTION is_fresh_leaf(token UUID)
+  RETURNS BOOLEAN AS
+  'provsql','is_fresh_leaf' LANGUAGE C VOLATILE;
+
+/**
+ * @brief Mint a replacement input gate carrying a different probability
+ *
+ * Probabilities are written once, so a tuple's probability is changed
+ * the way its data is: by rewriting the row.  This mints a fresh input
+ * gate with probability @c p and returns it, for the row's @c provsql
+ * column to carry:
+ *
+ * @code
+ * UPDATE s SET provsql = provsql.replace_input(provsql, 0.3) WHERE id = 42;
+ * @endcode
+ *
+ * The update is an ordinary heap write, so it has MVCC isolation, WAL,
+ * replication and @c pg_dump behind it, and the new gate and its
+ * probability roll back with it.  The old gate and everything derived
+ * from it stay as they were: re-running a query over the base table
+ * builds new derived gates over the new token and so sees the new
+ * probability, while a table materialised earlier keeps the old tokens
+ * and the old probability -- a derived table reflects the base tables
+ * as they were when it was built, the same rule a @c DELETE under
+ * @c provsql.update_provenance already follows.
+ *
+ * @param old the token being replaced; must name an input gate
+ * @param p   the new probability, in [0,1]
+ */
+CREATE OR REPLACE FUNCTION replace_input(old UUID, p DOUBLE PRECISION)
+  RETURNS UUID AS
+$$
+DECLARE
+  t UUID;
+  tp provsql.provenance_gate;
+BEGIN
+  IF old IS NULL OR p IS NULL THEN
+    RAISE EXCEPTION 'replace_input: neither argument may be NULL';
+  END IF;
+  tp := provsql.get_gate_type(old);
+  IF tp = 'mulinput' THEN
+    RAISE EXCEPTION 'replace_input: % belongs to a repair_key block', old
+      USING HINT = 'A block''s values share one key gate and their masses '
+                   'are meaningful together, so they are replaced together: '
+                   'use provsql.replace_block().';
+  ELSIF tp = 'update' THEN
+    RAISE EXCEPTION 'replace_input: % is an update gate', old
+      USING HINT = 'Use provsql.replace_update() to give a recorded data '
+                   'modification a different probability.';
+  ELSIF tp <> 'input' THEN
+    RAISE EXCEPTION 'replace_input: % is a gate of type %, not an input', old, tp
+      USING HINT = 'Only a leaf carries a probability of its own; a derived '
+                   'gate''s is computed from its leaves.';
+  END IF;
+  t := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(t, 'input');
+  PERFORM provsql.set_prob(t, p);
+  PERFORM provsql.note_fresh_leaf(t);
+  RETURN t;
+END
+$$ LANGUAGE plpgsql;
+
+/**
+ * @brief Replace a tracked row's input gate, rewriting the row
+ *
+ * The procedural form of @c replace_input: it mints the new gate and
+ * issues the @c UPDATE itself, which is what a client with only the
+ * token in hand (the Studio inspector, say) needs.
+ *
+ * @param _tbl the tracked table holding the row
+ * @param old  the token the row carries
+ * @param p    the new probability, in [0,1]
+ * @return     the token the row now carries
+ */
+CREATE OR REPLACE FUNCTION replace_input(
+  _tbl regclass, old UUID, p DOUBLE PRECISION)
+  RETURNS UUID AS
+$$
+DECLARE
+  t UUID;
+  n INT;
+BEGIN
+  t := provsql.replace_input(old, p);
+  EXECUTE format('UPDATE %s SET provsql = $1 WHERE provsql = $2', _tbl)
+    USING t, old;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n = 0 THEN
+    RAISE EXCEPTION 'replace_input: no row of % carries the token %', _tbl, old;
+  END IF;
+  RETURN t;
+END
+$$ LANGUAGE plpgsql;
+
+/**
+ * @brief Give a @c repair_key block a new set of probabilities
+ *
+ * The block-level counterpart of @c replace_input.  A block's values
+ * share one key gate and their masses are meaningful together, so they
+ * are replaced together: this mints a new key gate and one new
+ * @c mulinput per row of the block, writes @c probs to them in the
+ * block's own order (the @c within_group index @c repair_key recorded),
+ * and rewrites the block's rows in @p _tbl to carry the new tokens.
+ *
+ * @param _tbl    the tracked table holding the block's rows
+ * @param old_key the block's key gate -- the shared child of its rows'
+ *                @c mulinput tokens, as reported by
+ *                @c "get_children(provsql)[1]"
+ * @param probs   one probability per row of the block, in block order;
+ *                @c NULL leaves them unwritten, so the block evaluates
+ *                at the uniform weight again
+ */
+CREATE OR REPLACE FUNCTION replace_block(
+  _tbl regclass, old_key UUID, probs DOUBLE PRECISION[] DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  r RECORD;
+  n INT;
+  i INT := 0;
+  new_key UUID;
+  new_tok UUID;
+  was_active TEXT;
+BEGIN
+  IF provsql.get_gate_type(old_key) <> 'input' THEN
+    RAISE EXCEPTION 'replace_block: % is not a block key gate', old_key;
+  END IF;
+
+  -- The rewriter has no business in the bookkeeping below: the tokens of
+  -- _tbl are what this function is here to rewrite, not provenance to
+  -- carry into a temporary table.  Restored before returning; a failure
+  -- aborts the transaction, which restores it too.
+  was_active := coalesce(current_setting('provsql.active', true), 'on');
+  PERFORM set_config('provsql.active', 'off', true);
+
+  EXECUTE format(
+    'CREATE TEMP TABLE provsql_replace_block_tmp ON COMMIT DROP AS
+       SELECT t.provsql AS old_token,
+              NULL::uuid AS new_token,
+              (provsql.get_infos(t.provsql)).info1 AS ord
+         FROM %s t
+        WHERE provsql.get_gate_type(t.provsql) = ''mulinput''
+          AND (provsql.get_children(t.provsql))[1] = %L', _tbl, old_key);
+
+  SELECT count(*) INTO n FROM provsql_replace_block_tmp;
+  IF n = 0 THEN
+    RAISE EXCEPTION 'replace_block: no row of % belongs to block %', _tbl, old_key;
+  END IF;
+  IF probs IS NOT NULL AND array_length(probs, 1) <> n THEN
+    RAISE EXCEPTION 'replace_block: block % has % rows but % probabilities were given',
+      old_key, n, array_length(probs, 1);
+  END IF;
+
+  new_key := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(new_key, 'input');
+
+  FOR r IN SELECT old_token, ord FROM provsql_replace_block_tmp ORDER BY ord LOOP
+    i := i + 1;
+    new_tok := public.uuid_generate_v4();
+    PERFORM provsql.create_gate(new_tok, 'mulinput', ARRAY[new_key]);
+    PERFORM provsql.set_infos(new_tok, r.ord, n);
+    IF probs IS NOT NULL THEN
+      PERFORM provsql.set_prob(new_tok, probs[i]);
+    END IF;
+    PERFORM provsql.note_fresh_leaf(new_tok);
+    UPDATE provsql_replace_block_tmp SET new_token = new_tok
+      WHERE old_token = r.old_token;
+  END LOOP;
+
+  EXECUTE format(
+    'UPDATE %s t SET provsql = b.new_token
+       FROM provsql_replace_block_tmp b WHERE t.provsql = b.old_token', _tbl);
+
+  DROP TABLE provsql_replace_block_tmp;
+  PERFORM set_config('provsql.active', was_active, true);
+END
+$$ LANGUAGE plpgsql;
 /** @brief Get the probability associated with an input gate */
 CREATE OR REPLACE FUNCTION get_prob(
   token UUID)
@@ -604,6 +821,84 @@ CREATE OR REPLACE FUNCTION get_extra(token UUID)
 CREATE OR REPLACE FUNCTION get_nb_gates() RETURNS BIGINT AS
   'provsql', 'get_nb_gates' LANGUAGE C PARALLEL SAFE;
 
+/**
+ * @brief Report what does not add up in this database's circuit store
+ *
+ * The store lives in four files under the database's directory, outside
+ * PostgreSQL's WAL and buffer manager, so PostgreSQL's own crash recovery
+ * says nothing about it.  Writes are ordered so that an interrupted one
+ * leaves a record nothing points at rather than a pointer to a record
+ * that is not there, and the rehash of the token table is done by
+ * renaming a complete new file over the old one; this function checks
+ * that those invariants hold.
+ *
+ * Every count is 0 for a healthy store.  @c unclean_shutdown is true when
+ * a file was still marked open-for-writing when it was opened, which an
+ * immediate shutdown or a crash of the server leaves behind and is not by
+ * itself a problem.  A non-zero @c dangling_indices, @c bad_wires or
+ * @c bad_extra means the files do not agree with each other -- typically
+ * a file-level backup taken while the server was running, or a base
+ * backup; @c provsql.circuit_cleanup() rebuilds the store from what is
+ * still reachable.  @c unreferenced counts gate records the token table
+ * does not point at: a handful is normal (an interrupted write), a large
+ * number means the token table is missing entries.
+ */
+CREATE OR REPLACE FUNCTION check_store(
+  OUT unclean_shutdown BOOLEAN,
+  OUT nb_gates BIGINT,
+  OUT nb_tokens BIGINT,
+  OUT next_index BIGINT,
+  OUT dangling_indices BIGINT,
+  OUT unreferenced BIGINT,
+  OUT bad_wires BIGINT,
+  OUT bad_extra BIGINT)
+  RETURNS record AS
+  'provsql', 'check_store' LANGUAGE C;
+
+/**
+ * @brief Rebuild this database's circuit store, keeping only what the
+ *        tokens stored in the database reach
+ *
+ * The store only grows: a gate is never removed, because a rolled-back
+ * transaction leaves an orphan rather than an inconsistency, and because
+ * the same expression recomputed lands on the same content-addressed
+ * gate.  This is the complement of that -- the one operation allowed to
+ * remove gates, run explicitly, the way @c VACUUM @c FULL is the
+ * complement of MVCC.  It is also the repair tool for a store an
+ * interrupted write left inconsistent (see @c provsql.check_store).
+ *
+ * It takes the database exclusively: it holds the lock @c DROP
+ * @c DATABASE holds, so sessions connecting from then on wait, and it
+ * refuses to run while another session is already connected.  That is
+ * unavoidable -- a query running alongside can adopt an orphan gate a
+ * moment before the sweep removes it, since gates are re-created
+ * idempotently and a backend's own cache answers "it exists" without
+ * asking the store at all.
+ *
+ * A root is every value of a @c uuid, @c agg_token or @c random_variable
+ * column, and of arrays of those, in every table and materialised view of
+ * the database -- not only columns named @c provsql -- plus the semiring
+ * constants @c gate_zero and @c gate_one.  A token that lives only
+ * outside the database is **not** a root: one kept in a notebook cell, a
+ * deep link, a file, or a @c text / @c jsonb column.  Content-addressed
+ * gates come back by re-running the query that built them; freshly minted
+ * ones do not.
+ *
+ * @param dry_run report what would be kept without writing anything; the
+ *                wire and byte totals are then NULL, since the size of
+ *                the rewrite is not known without doing it
+ */
+CREATE OR REPLACE FUNCTION circuit_cleanup(
+  dry_run BOOLEAN DEFAULT false,
+  OUT gates_before BIGINT,
+  OUT gates_after BIGINT,
+  OUT wires_before BIGINT,
+  OUT wires_after BIGINT,
+  OUT extra_bytes_before BIGINT,
+  OUT extra_bytes_after BIGINT)
+  RETURNS record AS
+  'provsql', 'circuit_cleanup' LANGUAGE C;
+
 /** @} */
 
 /** @defgroup table_management Provenance table management
@@ -657,11 +952,58 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 
 
 /**
+ * @brief Per-relation provenance metadata used by the safe-query
+ *        optimisation.
+ *
+ * One row per relation ProvSQL tracks.  @c relid is stored as
+ * @c regclass so a dump carries the relation's *name*: OIDs are not
+ * stable across databases, and @c pg_dump / @c pg_restore resolve a
+ * @c regclass value back to whatever OID the relation has in the
+ * target database.  @c kind is one of @c 'tid' / @c 'bid' /
+ * @c 'opaque' (see @c set_table_info); @c block_key lists the
+ * block-key column numbers of a BID relation; @c ancestors lists the
+ * base relations this one's atoms ultimately come from.
+ *
+ * Being a heap table, every change follows the transaction that made
+ * it: a rolled-back @c add_provenance leaves no record, a rolled-back
+ * @c DROP @c TABLE keeps one, and a concurrent session sees a change
+ * only once it commits.  Marked as a configuration table so
+ * @c pg_dump carries it.
+ */
+CREATE TABLE IF NOT EXISTS table_info(
+  relid     regclass PRIMARY KEY,
+  kind      text     NOT NULL,
+  block_key int2[]   NOT NULL DEFAULT ARRAY[]::int2[],
+  ancestors oid[]    NOT NULL DEFAULT ARRAY[]::oid[]
+);
+SELECT pg_catalog.pg_extension_config_dump('table_info', '');
+
+/**
+ * @brief Row trigger keeping every backend's metadata cache honest.
+ *
+ * Each backend caches the metadata of the relations its queries touch
+ * and drops an entry when PostgreSQL invalidates that relation's
+ * relcache entry.  This trigger issues that invalidation for the
+ * relation named by every inserted, updated, or deleted row, so a
+ * hand-written @c UPDATE on the table and the @c COPY a @c pg_restore
+ * performs are as visible to the caches as the setter functions are.
+ */
+CREATE OR REPLACE FUNCTION table_info_invalidate()
+  RETURNS trigger AS
+  'provsql','provsql_table_info_invalidate' LANGUAGE C;
+
+DROP TRIGGER IF EXISTS table_info_invalidate ON table_info;
+CREATE TRIGGER table_info_invalidate
+  AFTER INSERT OR UPDATE OR DELETE ON table_info
+  FOR EACH ROW EXECUTE PROCEDURE provsql.table_info_invalidate();
+
+/**
  * @brief Record per-relation provenance metadata used by the
  *        safe-query optimisation.
  *
- * Stores a @c (relid, kind, block_key) record in the persistent
- * mmap-backed table-info store.  @p kind is one of:
+ * Upserts the @c (relid, kind, block_key) half of the relation's row
+ * in @c provsql.table_info, preserving its @c ancestors.  @p kind is
+ * one of:
  *   - @c 'tid' -- independent input leaves (post-@c add_provenance default)
  *   - @c 'bid' -- block-correlated leaves; rows sharing the same value
  *                 of @p block_key are mutually exclusive.  An empty
@@ -680,12 +1022,13 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION set_table_info(
   relid OID, kind TEXT, block_key INT2[] DEFAULT ARRAY[]::INT2[])
   RETURNS void AS
-  'provsql','set_table_info' LANGUAGE C PARALLEL SAFE;
+  'provsql','set_table_info' LANGUAGE C SECURITY DEFINER;
 
-/** @brief Remove per-relation provenance metadata.  No-op when missing. */
+/** @brief Remove a relation's row from @c provsql.table_info.
+ *  No-op when missing. */
 CREATE OR REPLACE FUNCTION remove_table_info(relid OID)
   RETURNS void AS
-  'provsql','remove_table_info' LANGUAGE C PARALLEL SAFE;
+  'provsql','remove_table_info' LANGUAGE C SECURITY DEFINER;
 
 /**
  * @brief Read per-relation provenance metadata.
@@ -710,11 +1053,10 @@ CREATE OR REPLACE FUNCTION get_table_info(
  * enforce that joined FROM entries have disjoint base ancestors
  * before firing the read-once factoring.
  *
- * The worker preserves the relation's existing @c kind / @c block_key
- * half on update; it silently no-ops when no kind record exists for
- * @p relid (callers should run @c add_provenance / @c repair_key
- * first).  The ancestor list is capped at 64 entries (clear error if
- * exceeded).
+ * Preserves the relation's existing @c kind / @c block_key half on
+ * update, and silently no-ops when no row exists for @p relid
+ * (callers should run @c add_provenance / @c repair_key first).  The
+ * ancestor list is capped at 64 entries (clear error if exceeded).
  *
  * @param relid      pg_class OID of the relation.
  * @param ancestors  Sorted, deduplicated base-relation OIDs.
@@ -722,13 +1064,29 @@ CREATE OR REPLACE FUNCTION get_table_info(
 CREATE OR REPLACE FUNCTION set_ancestors(
   relid OID, ancestors OID[] DEFAULT ARRAY[]::OID[])
   RETURNS void AS
-  'provsql','set_ancestors' LANGUAGE C PARALLEL SAFE;
+  'provsql','set_ancestors' LANGUAGE C SECURITY DEFINER;
 
 /** @brief Clear the ancestor half of a per-relation record (keeps kind/block_key).
  *  No-op when missing. */
 CREATE OR REPLACE FUNCTION remove_ancestors(relid OID)
   RETURNS void AS
-  'provsql','remove_ancestors' LANGUAGE C PARALLEL SAFE;
+  'provsql','remove_ancestors' LANGUAGE C SECURITY DEFINER;
+
+/**
+ * @brief Copy per-relation metadata out of the legacy
+ *        @c provsql_table_info.mmap file into @c provsql.table_info.
+ *
+ * ProvSQL 1.13.0 moved this metadata from a fifth mmap file to a heap
+ * table, so that it follows the transaction that writes it and is
+ * carried by @c pg_dump.  This function reads the legacy file, if the
+ * database still has one, and inserts every record it holds that the
+ * heap table does not already have; it returns the number of rows
+ * inserted, and 0 when there is no file to read.  Idempotent, and a
+ * no-op on a database that never had one.
+ */
+CREATE OR REPLACE FUNCTION migrate_table_info()
+  RETURNS BIGINT AS
+  'provsql','migrate_table_info' LANGUAGE C SECURITY DEFINER;
 
 /**
  * @brief Read the base-relation ancestor set of a tracked relation.
@@ -757,7 +1115,11 @@ CREATE OR REPLACE FUNCTION get_ancestors(relid OID)
  *     UUIDs they want (cross-table reuse, compound tokens minted
  *     via @c create_gate, ...); the cost is that the safe-query
  *     rewriter then refuses to fire on this table, because TID
- *     independence can no longer be assumed.
+ *     independence can no longer be assumed.  The exception is a
+ *     leaf @c provsql.replace_input / @c replace_block minted in
+ *     this transaction: that one *is* an independent fresh leaf, so
+ *     the kind survives and the maintained mappings follow the
+ *     token to its replacement.
  */
 CREATE OR REPLACE FUNCTION provenance_guard()
   RETURNS TRIGGER AS $$
@@ -775,7 +1137,8 @@ BEGIN
       -- which is exactly the child a later monus/update gate wraps.
       NEW.provsql := public.uuid_generate_v4();
       FOR _m IN SELECT mapping, attribute
-                  FROM provsql.provenance_mapping_registry WHERE source = TG_RELID
+                  FROM provsql.provenance_mapping_registry
+                 WHERE source = TG_RELID AND maintained
       LOOP
         EXECUTE format(
           'INSERT INTO %s(value, provenance) SELECT ($1).%I, $2',
@@ -787,7 +1150,24 @@ BEGIN
     END IF;
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW.provsql IS DISTINCT FROM OLD.provsql THEN
-      PERFORM provsql.set_table_info(TG_RELID, 'opaque');
+      IF provsql.is_fresh_leaf(NEW.provsql) THEN
+        -- A replacement leaf minted by provsql.replace_input /
+        -- replace_block in this transaction: an independent fresh leaf by
+        -- construction, so the table's kind survives.  Carry the
+        -- maintained mappings over from the token it replaces, the same
+        -- job the INSERT branch does for a new row.
+        FOR _m IN SELECT mapping, attribute
+                    FROM provsql.provenance_mapping_registry WHERE source = TG_RELID
+        LOOP
+          EXECUTE format(
+            'INSERT INTO %1$s(value, provenance) '
+            'SELECT value, $2 FROM %1$s WHERE provenance = $1',
+            _m.mapping::regclass)
+            USING OLD.provsql, NEW.provsql;
+        END LOOP;
+      ELSE
+        PERFORM provsql.set_table_info(TG_RELID, 'opaque');
+      END IF;
     END IF;
   END IF;
   RETURN NEW;
@@ -896,7 +1276,10 @@ $$ LANGUAGE plpgsql;
  *
  * When a table has duplicate rows for a given key, this function
  * replaces simple input gates with multivalued input (mulinput) gates
- * that model a uniform distribution over duplicates.
+ * that model a uniform distribution over duplicates.  The uniform
+ * weight is the default a row evaluates at, not a probability written
+ * on it, so the usual next step -- @c "SELECT set_prob(provenance(),
+ * p) FROM t" -- gives each row its real probability as a first write.
  *
  * @param _tbl the table to repair
  * @param key_att the key attribute(s) as a comma-separated string, or
@@ -986,10 +1369,16 @@ BEGIN
   END LOOP;
 
   -- Pass 2: per row, attach a mulinput gate to its group's key token.
+  -- The block size goes in info2 rather than the uniform 1/size going
+  -- in the probability: a repaired row's probability is the user's to
+  -- write (the documented "repair_key then set_prob(provenance(), p)"
+  -- pattern), and probabilities are written once.  A row nobody gives
+  -- a probability evaluates at 1/size all the same -- see
+  -- MMappedCircuit::getProb.
   FOR r IN EXECUTE rows_query LOOP
     PERFORM provsql.create_gate(r.provsql_temp, 'mulinput', ARRAY[r.key_token]);
-    PERFORM provsql.set_prob(r.provsql_temp, 1./r.group_size);
-    PERFORM provsql.set_infos(r.provsql_temp, r.within_group::int);
+    PERFORM provsql.set_infos(r.provsql_temp, r.within_group::int,
+                              r.group_size::int);
   END LOOP;
 
   DROP TABLE provsql_repair_key_tmp;
@@ -1013,11 +1402,13 @@ $$ LANGUAGE plpgsql;
  *        a tracked relation is dropped outside of remove_provenance().
  *
  * Plain DROP TABLE bypasses remove_provenance() and would otherwise
- * leave a stale entry in the table-info store keyed by a now-recycled
+ * leave a stale row in provsql.table_info keyed by a now-recycled
  * OID, with confusing consequences for the safe-query rewriter the
  * next time the OID is reused.  This trigger forwards every dropped
  * relation OID to provsql.remove_table_info(), which is a no-op for
- * relations that were not tracked.
+ * relations that were not tracked.  Both the deletion and the
+ * registry cleanup below roll back with the DROP that triggered
+ * them.
  */
 CREATE OR REPLACE FUNCTION cleanup_table_info()
   RETURNS event_trigger AS
@@ -1044,20 +1435,28 @@ CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
   EXECUTE PROCEDURE provsql.cleanup_table_info();
 
 /**
- * @brief Registry of maintained provenance mappings
+ * @brief Registry of provenance mappings
  *
- * Each row records that mapping table @c mapping is kept current for the
- * @c attribute column of the provenance-tracked @c source table: every
- * genuine insert into @c source appends @c (value, provenance) to it (see
- * @c provenance_guard).  Keyed on the mapping table, indexed on the source
- * so the guard can look up a table's mappings cheaply.  Entries are removed
- * when either table is dropped (see @c cleanup_table_info).
+ * Each row records that mapping table @c mapping was built from the
+ * @c attribute column of the provenance-tracked @c source table.  When
+ * @c maintained, every genuine insert into @c source also appends
+ * @c (value, provenance) to it, so the mapping stays current; otherwise
+ * the mapping is a snapshot and the row is here only so that a token
+ * *replacement* carries the mapping over (see @c provenance_guard: a leaf
+ * minted by @c replace_input names the same tuple, so its value is copied
+ * to the new token in every mapping of the table, maintained or not).
+ * Keyed on the mapping table, indexed on the source so the guard can look
+ * up a table's mappings cheaply.  Entries are removed when either table is
+ * dropped (see @c cleanup_table_info).
  */
 CREATE TABLE IF NOT EXISTS provsql.provenance_mapping_registry(
-  mapping   oid PRIMARY KEY,
-  source    oid NOT NULL,
-  attribute name NOT NULL
+  mapping    oid PRIMARY KEY,
+  source     oid NOT NULL,
+  attribute  name NOT NULL,
+  maintained boolean NOT NULL DEFAULT false
 );
+ALTER TABLE provsql.provenance_mapping_registry
+  ADD COLUMN IF NOT EXISTS maintained boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS provenance_mapping_registry_source_idx
   ON provsql.provenance_mapping_registry(source);
 
@@ -1073,12 +1472,14 @@ CREATE INDEX IF NOT EXISTS provenance_mapping_registry_source_idx
  * @param oldtbl source table with provenance tracking
  * @param att attribute whose values populate the mapping
  * @param preserve_case if true, quote the table name to preserve case
- * @param maintained if true, register the mapping so later inserts into
- *        @c oldtbl keep it current, and it stays correct after data
- *        modification (deletes/updates rewrite a row's provsql, but the
- *        validity stays keyed to the original input token).  @c att must
- *        then be a plain column name.  When false (the default) the table is
- *        a one-off snapshot.
+ * @param maintained if true, later inserts into @c oldtbl keep the mapping
+ *        current, and it stays correct after data modification
+ *        (deletes/updates rewrite a row's provsql, but the validity stays
+ *        keyed to the original input token).  @c att must then be a plain
+ *        column name.  When false (the default) the table is a one-off
+ *        snapshot; either way the mapping is recorded in
+ *        @c provenance_mapping_registry, so a row whose input gate is
+ *        replaced by @c provsql.replace_input keeps its value in it.
  */
 CREATE OR REPLACE FUNCTION create_provenance_mapping(
   newtbl text,
@@ -1119,18 +1520,20 @@ BEGIN
     EXECUTE format('CREATE TABLE %s AS SELECT %s AS value, provenance FROM tmp_provsql', newtbl, att);
     EXECUTE format('CREATE INDEX ON %s(provenance)', newtbl);
   END IF;
-  IF maintained THEN
-    -- Register so genuine inserts into oldtbl keep the mapping current
-    -- (see provenance_guard); keyed to the input token, so it survives the
-    -- provsql rewrites that data modification performs.
-    INSERT INTO provsql.provenance_mapping_registry(mapping, source, attribute)
-      VALUES (
-        (CASE WHEN preserve_case THEN to_regclass(format('%I', newtbl))
-              ELSE to_regclass(newtbl) END)::oid,
-        oldtbl::oid, att)
-      ON CONFLICT (mapping)
-        DO UPDATE SET source = EXCLUDED.source, attribute = EXCLUDED.attribute;
-  END IF;
+  -- Register the mapping.  When maintained, genuine inserts into oldtbl
+  -- keep it current (see provenance_guard); keyed to the input token, so
+  -- it survives the provsql rewrites that data modification performs.
+  -- A snapshot mapping is registered too, so that replacing a row's input
+  -- gate (provsql.replace_input) carries the row's value over to the new
+  -- token: the tuple is the same one, only its token moved.
+  INSERT INTO provsql.provenance_mapping_registry(mapping, source, attribute, maintained)
+    VALUES (
+      (CASE WHEN preserve_case THEN to_regclass(format('%I', newtbl))
+            ELSE to_regclass(newtbl) END)::oid,
+      oldtbl::oid, att, maintained)
+    ON CONFLICT (mapping)
+      DO UPDATE SET source = EXCLUDED.source, attribute = EXCLUDED.attribute,
+                    maintained = EXCLUDED.maintained;
 END
 $$ LANGUAGE plpgsql;
 
@@ -10128,10 +10531,12 @@ SELECT create_gate(gate_one(), 'one');
 
 /** @brief Types of update operations tracked for temporal provenance */
 CREATE TYPE query_type_enum AS ENUM (
-    'INSERT',  -- Row was inserted
-    'DELETE',  -- Row was deleted
-    'UPDATE',  -- Row was updated
-    'UNDO'     -- Previous operation was undone
+    'INSERT',      -- Row was inserted
+    'DELETE',      -- Row was deleted
+    'UPDATE',      -- Row was updated
+    'UNDO',        -- Previous operation was undone
+    'TRANSACTION', -- The transaction the statements below belong to
+    'REPLACE'      -- An update gate given a different probability
     );
 
 /** @defgroup compiled_semirings Compiled semirings

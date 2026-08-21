@@ -63,6 +63,7 @@ This documentation is organized into four parts:
    user/data-modification
    user/temporal
    user/export
+   user/persistence
    user/studio
    user/configuration
    user/tool-registry

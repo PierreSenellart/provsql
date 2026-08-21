@@ -5,9 +5,6 @@ set_prob
 mean_matches|variance_matches
 t|t
 (1 row)
-set_prob
-
-(1 row)
 shared_bernoulli_couples_branches
 t
 (1 row)

@@ -228,6 +228,32 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     gate-creation paths). See :doc:`continuous-distributions` for
     the broader hybrid-evaluation context.
 
+.. _provsql-synchronous-commit:
+
+``provsql.synchronous_commit`` (default: ``off``)
+    Force the provenance circuit to stable storage before a transaction
+    that wrote to it commits. The circuit lives outside PostgreSQL's WAL
+    (see :doc:`persistence`), so a committed transaction's gates can
+    still be in the kernel's page cache when the machine loses power, and
+    a gate lost that way reads back as an independent input with
+    probability 1 -- silently. Off bounds that loss to the worker's flush
+    interval, the way ``synchronous_commit = off`` bounds the heap's; on
+    removes it, at the price of one flush per store-writing transaction.
+    Note that provenance queries write to the store, reads included, so
+    "store-writing transaction" covers more than it sounds.
+
+.. _provsql-wal-logging:
+
+``provsql.wal_logging`` (default: ``off``, PostgreSQL 15+)
+    Write every mutation of the circuit to the WAL, through a resource
+    manager of ProvSQL's own, so that a physical standby's startup
+    process can replay it and the replica carries the provenance the
+    primary computed. Requires ``provsql.synchronous_commit``: what keeps
+    replay complete is that the store on disk is never behind the WAL.
+    With it on, a hot-standby backend refuses to write to the store, so
+    provenance queries do not run on the standby. **Superuser only**: it
+    changes what the cluster writes to its WAL. See :doc:`persistence`.
+
 .. _provsql-tool-search-path:
 
 ``provsql.tool_search_path`` (default: empty)

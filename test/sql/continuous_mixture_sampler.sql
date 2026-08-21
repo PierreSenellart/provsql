@@ -40,7 +40,9 @@ SELECT abs(provsql.rv_moment((SELECT u FROM mix_a), 1, false) - 7.0)  < 0.1  AS 
 --     prob 0.5 each), so the sum has Var ≈ 50.
 --     For shared Bernoulli: both pick the same side, so the sum is
 --     either -10 or +10, Var = 100.
-SELECT set_prob((SELECT t FROM p), 0.5);
+-- A probability is written once, so the coin used from here on is a
+-- fresh one: replace_input mints it and p carries it.
+UPDATE p SET t = provsql.replace_input(t, 0.5);
 
 CREATE TEMP TABLE mix_pair AS
   SELECT (

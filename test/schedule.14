@@ -7,6 +7,9 @@ test: update_insert
 test: update_update
 test: update_undo
 
+# One update gate per transaction, and undo() at that granularity
+test: transaction_token
+
 # Temporal DB
 test: sr_temporal
 test: union_tstzintervals

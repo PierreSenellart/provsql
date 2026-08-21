@@ -71,6 +71,11 @@ std::optional<CircuitCacheInfos> CircuitCache::get(pg_uuid_t token) const
 /** @brief Process-local singleton circuit gate cache. */
 static CircuitCache cache;
 
+extern "C" void circuit_cache_reset(void)
+{
+  cache.clear();
+}
+
 bool circuit_cache_create_gate(pg_uuid_t token, gate_type type, unsigned nb_children, const pg_uuid_t *children)
 {
   return cache.insert({token, type, std::vector<pg_uuid_t>(children, children+nb_children)});

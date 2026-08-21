@@ -20,23 +20,28 @@ def names_mapping(client):
     search_path it is also reachable unqualified."""
     setup = (
         "DROP TABLE IF EXISTS personnel_names;"
+        # Give every input gate a probability so expected Shapley / Banzhaf
+        # are well-defined and deterministic.  A probability is written
+        # once, so this is a replacement: each row gets a fresh input gate
+        # carrying 0.5, which works whether or not it had one already.
+        " UPDATE personnel SET provsql = provsql.replace_input(provsql, 0.5);"
+        # The mapping is built after the replacement, so it names the
+        # tokens the rows now carry.
         " CREATE TABLE personnel_names AS"
         "   SELECT name AS value, provsql AS provenance FROM personnel;"
         " SELECT remove_provenance('personnel_names');"
         " CREATE INDEX ON personnel_names(provenance);"
-        # Give every input gate a probability so expected Shapley / Banzhaf
-        # are well-defined and deterministic.
-        " DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM personnel; END $$;"
     )
     resp = client.post("/api/exec", json={"sql": setup, "mode": "contributions"})
     assert resp.status_code == 200, resp.data
     yield "provsql_test.personnel_names"
-    # Restore personnel to the implicit default probability (1.0) so this
-    # fixture does not leak 0.5 into the session-shared DB and break tests
-    # that assume untouched probabilities (e.g. test_circuit's leaf-resolve).
+    # Restore personnel to probability 1 so this fixture does not leak 0.5
+    # into the session-shared DB and break tests that assume the usual
+    # value (e.g. test_circuit's leaf-resolve).
     client.post("/api/exec", json={
         "sql": "DROP TABLE personnel_names;"
-               " DO $$ BEGIN PERFORM set_prob(provsql, 1.0) FROM personnel; END $$;",
+               " UPDATE personnel SET provsql ="
+               "   provsql.replace_input(provsql, 1.0);",
         "mode": "contributions",
     })
 

@@ -876,10 +876,29 @@ def create_app(
 
     @app.post("/api/set_prob")
     def api_set_prob():
-        """Write a probability for an input/update gate via
-        provsql.set_prob. Backs the inspector's click-to-edit affordance:
-        the user opens an input gate, clicks the displayed probability,
-        types a new value, hits Enter, and we fire this endpoint."""
+        """Give an input gate a probability, from the inspector's
+        click-to-edit affordance.
+
+        From provsql 1.13.0 a probability is written once: it can be
+        written on a gate that has none, and changing it means minting a
+        fresh input gate and rewriting the row that carries the old token
+        (`provsql.replace_input`).  So this endpoint does one of two
+        things:
+
+          * gate has no probability -> `set_prob`, and the circuit on
+            screen keeps its shape;
+          * gate has one -> `replace_input` on the row it resolves to,
+            which gives that row a new token.  The circuit on screen is
+            unchanged, and rightly so: it was built over the old gate,
+            which still exists with its old probability.  A query re-run
+            over the base table picks up the new one.
+
+        A replacement needs the gate to resolve to exactly one row of one
+        relation; an anonymous Bernoulli, or a token shared by several
+        rows, has no row to rewrite and is refused with the reason.
+
+        On an extension older than 1.13.0, probabilities are rewritable
+        in place and this is a plain `set_prob` as before."""
         import psycopg
         payload = request.get_json(silent=True) or {}
         try:
@@ -893,6 +912,52 @@ def create_app(
             return jsonify({"error": "probability must be a number"}), 400
         if not (0.0 <= p <= 1.0):
             return jsonify({"error": "probability must be between 0 and 1"}), 400
+
+        already_set = circuit_mod.probability_is_set(get_pool(), uuid_str)
+
+        if already_set:
+            rows = circuit_mod.resolve_input(get_pool(), uuid_str)
+            relations = {r["relation"] for r in rows}
+            if len(rows) != 1 or len(relations) != 1:
+                return jsonify({
+                    "error": "cannot replace this probability",
+                    "detail": (
+                        "Probabilities are written once. Changing one means "
+                        "giving the row a fresh input gate, and this token "
+                        + ("is shared by %d rows" % len(rows) if rows
+                           else "belongs to no tracked row")
+                        + ", so there is no single row to rewrite."
+                    ),
+                }), 400
+            relation = rows[0]["relation"]
+            try:
+                with get_pool().connection() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT provsql.replace_input(%s::regclass, %s::uuid,"
+                        " %s::double precision)",
+                        (relation, uuid_str, p),
+                    )
+                    new_token = cur.fetchone()[0]
+            except psycopg.Error as e:
+                diag = getattr(e, "diag", None)
+                return jsonify({
+                    "error": "replace_input failed",
+                    "detail": (diag.message_primary if diag else str(e)) or str(e),
+                    "sqlstate": diag.sqlstate if diag else None,
+                }), 400
+            return jsonify({
+                "ok": True,
+                "probability": p,
+                "replaced": True,
+                "token": str(new_token),
+                "relation": relation,
+                "message": (
+                    "%s now carries a new input gate; the circuit above still "
+                    "shows the old one, which keeps its probability."
+                    % relation
+                ),
+            })
+
         try:
             with get_pool().connection() as conn, conn.cursor() as cur:
                 cur.execute(

@@ -8,6 +8,15 @@ test: per_db_circuit
 test: add_provenance
 test: remove_add_provenance
 
+# Per-relation metadata follows the transaction that writes it
+test: transactional_metadata
+
+# Probabilities are written once, and a rolled-back write is cleared
+test: write_once_probability
+
+# Durability of the store: the at-commit barrier and the consistency report
+test: store_durability
+
 # Basic checks
 # identify_token scans every provenance-tracked relation in the database, so it
 # must not run concurrently with tests that create/drop such relations (e.g.
@@ -280,3 +289,8 @@ test: mobius_safe
 # Self-joins on the Möbius route: ranking / shattering (the shard split) and
 # the disjunctive detour a within-disjunct self-join forces
 test: mobius_selfjoin
+
+# Reclaiming what nothing references any more.  Takes the database
+# exclusively, so it must be the only test running -- and it runs late,
+# since it removes the orphan gates every earlier test left behind.
+test: circuit_cleanup

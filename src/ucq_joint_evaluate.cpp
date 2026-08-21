@@ -267,7 +267,7 @@ struct SliceBuilder {
   struct MulRef { std::string block; unsigned value_index; double prob; };
   std::vector<MulRef> mulrefs;            ///< Deferred mulinput leaves.
   std::vector<int> mul_resolved;          ///< MulRef index -> slice node.
-  unsigned mulsb_counter = 0;             ///< Fresh stick-breaking event ids.
+  std::string mulsb_sig;                  ///< Identity of the block being stick-broken.
 
   /// Node codes below this are deferred mulinput references; the actual
   /// MulRef index is @c MULREF_BASE - code (so distinct from the -1/-2
@@ -392,14 +392,23 @@ struct SliceBuilder {
     return res;
   }
 
-  /// Append a fresh independent IN (INPUT) slice node of mass @p p.  Its
-  /// token is synthetic and unique so JointEncoding treats it as a brand
-  /// new event (a stick-breaking coin), never colliding with a real input.
-  int emitInput(double p) {
+  /// Append an independent IN (INPUT) slice node of mass @p p: a
+  /// stick-breaking coin.  The leading @c \x01 keeps its token out of the
+  /// UUID space of real inputs, so JointEncoding treats it as an event of
+  /// its own; @p tag names *which* coin it is.
+  ///
+  /// The tag must determine the coin, because @c CertifiedDDMaterialize
+  /// turns it into a store gate whose UUID is the hash of the token: two
+  /// compilations that emit the same tag then land on the same gate, and
+  /// that gate carries one probability.  @c mulsb_sig pins the block --
+  /// its key gate plus every value's index and mass -- and the range that
+  /// follows pins the split within it, so identical coins collapse and
+  /// distinct ones never collide.
+  int emitInput(double p, const std::string &tag) {
     SliceGate s;
     s.type = SliceGateType::INPUT;
     s.prob = p;
-    s.token = "\x01mulsb:" + std::to_string(mulsb_counter++);
+    s.token = "\x01mulsb:" + tag;
     slice.push_back(std::move(s));
     return static_cast<int>(slice.size()) - 1;
   }
@@ -423,13 +432,15 @@ struct SliceBuilder {
                  unsigned start, unsigned end, std::vector<int> &prefix) {
     if (start == end) {
       mul_resolved[idxs[start]] =
-        prefix.empty() ? emitInput(1.0)               // sole value, mass 1
+        prefix.empty() ? emitInput(1.0, mulsb_sig + ":sole")  // sole value
                        : binarize(SliceGateType::AND, prefix);
       return;
     }
     const unsigned mid = (start + end) / 2;
     const double prev_start = (start == 0) ? 0. : cum[start - 1];
-    const int g = emitInput((cum[mid] - prev_start) / (cum[end] - prev_start));
+    const int g = emitInput((cum[mid] - prev_start) / (cum[end] - prev_start),
+                            mulsb_sig + ":" + std::to_string(start) + "-"
+                            + std::to_string(end));
     const int ng = emitNot(g);
     prefix.push_back(g);
     expandRec(idxs, cum, start, mid, prefix);
@@ -463,13 +474,21 @@ struct SliceBuilder {
         c += mulrefs[idxs[i]].prob;
         cum[i] = c;
       }
+      // Identity of this block: its key gate, plus every present value's
+      // index and mass.  Everything emitInput below stamps on a coin hangs
+      // off it (see emitInput).
+      mulsb_sig = kv.first;
+      for (unsigned i = 0; i < n; ++i)
+        mulsb_sig += ":" + std::to_string(mulrefs[idxs[i]].value_index) + "="
+                     + std::to_string(mulrefs[idxs[i]].prob);
+
       std::vector<int> prefix;
       // When the present values do not exhaust the block (their masses sum
       // to less than 1, the rest being "key absent"), gate the whole block
       // behind one block-active coin of that total mass.
       constexpr double eps = std::numeric_limits<double>::epsilon() * 10;
       if (cum[n - 1] < 1. - eps)
-        prefix.push_back(emitInput(cum[n - 1]));
+        prefix.push_back(emitInput(cum[n - 1], mulsb_sig + ":active"));
       expandRec(idxs, cum, 0, n - 1, prefix);
     }
 

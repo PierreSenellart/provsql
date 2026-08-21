@@ -20,6 +20,44 @@ paper :cite:`sen2026provsql` show that the mmap implementation
 scales linearly with dataset size, while an earlier shared-memory
 variant hit limits at moderate scale factors.
 
+What that buys in speed it gives up in the guarantees PostgreSQL gives
+its own relations.  The store is outside the WAL, the buffer manager and
+the catalog, so it is invisible to crash recovery, to streaming
+replication, to ``pg_dump`` and to ``CREATE DATABASE ... TEMPLATE`` under
+the PostgreSQL 15+ default strategy.  The circuit's shape is what makes
+that tractable rather than fatal -- gates are immutable, content-addressed
+and re-created idempotently, so a transaction that rolls back leaves
+orphans rather than inconsistencies -- and the pieces that close the rest
+of the gap are:
+
+* **write-once probabilities and annotations**
+  (:cfile:`probability_store.c`), the post-hoc mutations the circuit used
+  to allow, with an undo list that clears the probabilities an aborted
+  transaction wrote.  The two ``info`` fields are written once *each*,
+  with 0 meaning "nothing recorded", because they are written by
+  different parties: :cfile:`CertifiedDDMaterialize.cpp` marks a gate
+  certified as it builds it, and tags it with the route that made it a
+  query's root once the whole d-DNNF exists;
+* **per-relation metadata in the heap** (:cfile:`table_info.c`), where
+  catalog-shaped data belongs, so it follows the transaction and
+  ``pg_dump`` carries it;
+* **ordered writes and an atomic rehash** (:cfile:`MMappedCircuit.cpp`,
+  :cfile:`MMappedUUIDHashTable.cpp`), so an interrupted write leaves an
+  unreferenced record rather than a dangling index;
+* **a periodic flush and an at-commit barrier**
+  (``provsql.synchronous_commit``), which bound and then remove what a
+  machine crash can lose;
+* **a custom WAL resource manager** (:cfile:`provsql_rmgr.c`,
+  ``provsql.wal_logging``, PostgreSQL 15+), which lets a standby carry
+  the store;
+* **a mark-and-sweep rebuild** (:cfile:`circuit_cleanup.c`), the one
+  operation allowed to remove gates, and the repair tool for a store an
+  interrupted write left damaged.
+
+The user-facing contract of all this -- what a transaction does to the
+circuit, what a backup carries, what a replica sees -- is in
+:doc:`../user/persistence`.
+
 
 Background Worker: ``provsql_mmap``
 -----------------------------------
@@ -64,11 +102,14 @@ Pipe writes use buffered macros (:cfunc:`STARTWRITEM` /
 atomicity guarantees -- each message is delivered as an atomic unit
 even when multiple backends write concurrently.
 
-Every message begins with a one-byte opcode followed immediately by the
-sender's ``MyDatabaseId`` (a 4-byte ``Oid``).  The worker reads this
-OID before dispatching to the correct per-database
-:cfunc:`MMappedCircuit` instance, opening a new one lazily if this is
-the first message for that database.
+Every message begins with a one-byte opcode followed by a header of two
+4-byte ``Oid``\ s: the sender's ``MyDatabaseId`` and its
+``MyDatabaseTableSpace``.  The worker dispatches on the first to the
+correct per-database :cfunc:`MMappedCircuit` instance, opening a new one
+lazily if this is the first message for that database; the second is
+what lets it resolve the directory, through ``GetDatabasePath``, for a
+database that does not live in the default tablespace (it runs outside
+any transaction and so cannot read ``pg_database`` itself).
 
 
 Shared Memory: ``provsql_shmem``
@@ -107,8 +148,10 @@ Mmap-Backed Data Structures
 :cfunc:`MMappedCircuit` (in :cfile:`MMappedCircuit.cpp`) is the
 persistent circuit store.  The worker maintains one instance per
 database in a ``std::map<Oid, MMappedCircuit*>``, created lazily on
-first use.  Each instance holds five mmap-backed containers, stored in
-``$PGDATA/base/<db_oid>/``:
+first use.  Each instance holds four mmap-backed containers, in the
+database's own directory (``base/<db_oid>`` under the data directory, or
+the corresponding path under ``pg_tblspc`` when the database lives in
+another tablespace):
 
 - ``provsql_mapping.mmap`` -- a :cfunc:`MMappedUUIDHashTable` mapping
   UUID tokens to gate IDs, enabling O(1) lookup.
@@ -118,11 +161,11 @@ first use.  Each instance holds five mmap-backed containers, stored in
   ``pg_uuid_t``, the flattened child-UUID lists.
 - ``provsql_extra.mmap`` -- a :cfunc:`MMappedVector` of ``char`` for
   variable-length per-gate string annotations.
-- ``provsql_table_info.mmap`` -- a :cfunc:`MMappedVector` of
-  :cfunc:`ProvenanceTableInfo` records, one per provenance-tracked
-  relation; see :ref:`per-table-metadata` below.
 
-Placing the files under ``$PGDATA/base/<db_oid>/`` gives per-database
+Per-relation metadata used to be a fifth file here; it is now the
+``provsql.table_info`` heap table (see :ref:`per-table-metadata`).
+
+Placing the files in the database's own directory gives per-database
 isolation and automatic cleanup: PostgreSQL removes that directory when
 the database is dropped.
 
@@ -131,13 +174,22 @@ Every mmap file begins with a **16-byte format header**:
 .. code-block:: c
 
    uint64_t magic;      /* file-type identifier, e.g. 0x7365746147537650 for gates */
-   uint16_t version;    /* format version, currently 1 */
+   uint16_t version;    /* format version: 2 for gates, 1 for the rest */
    uint16_t elem_size;  /* sizeof(T) at write time */
-   uint32_t _reserved;  /* padding, must be 0 */
+   uint32_t flags;      /* bit 0: open for writing and not closed since */
 
-The constructor validates all three fields on open and throws if they
-do not match, catching type mismatches and incompatible recompilations
-early.
+The constructor validates the magic and the element size on open and
+throws if either does not match, catching type mismatches and
+incompatible recompilations early.  The version it accepts is anything up
+to the one this build writes, so an older file is read as it is: the
+``gates`` file's version 2 says that an unwritten probability is stored
+as ``NaN``, where version 1 stored ``1.0`` for both "written as certain"
+and "never written" and so is read leniently until a
+:sqlfunc:`circuit_cleanup` rewrites it.  ``flags`` is set on open for
+writing and cleared on a clean close, so a file found with it still set
+was left behind by a process that died mid-write --
+:sqlfunc:`check_store` reports that, along with the ranges that a torn
+write can leave inconsistent.
 
 Gate-Type ABI
 ^^^^^^^^^^^^^
@@ -195,78 +247,68 @@ concurrency issues within the mmap files themselves.
 Per-Table Provenance Metadata
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The fifth mmap file per database, ``provsql_table_info.mmap``, is
-the registry the safe-query rewriter consults to decide whether a
-given base relation contributes independent (TID), block-correlated
-(BID), or correlated-in-ways-we-cannot-rule-out (OPAQUE) tuples,
-and what the base-relation ancestry of the relation is.
+The safe-query rewriter needs to know, for each base relation,
+whether it contributes independent (TID), block-correlated (BID),
+or correlated-in-ways-we-cannot-rule-out (OPAQUE) tuples, and what
+its base-relation ancestry is.  That is metadata *about relations*,
+so it lives where catalog-shaped data belongs: the
+``provsql.table_info`` heap table (:cfile:`table_info.c`).
 
-Each record is a fixed-stride :cfunc:`ProvenanceTableInfo` struct
-(:cfile:`MMappedTableInfo.h`) with two logically independent
-halves:
+.. code-block:: postgresql
 
-- **Kind half** -- ``relid`` (primary key), ``kind`` (one of
-  ``PROVSQL_TABLE_TID`` / ``PROVSQL_TABLE_BID`` /
-  ``PROVSQL_TABLE_OPAQUE``), ``block_key_n`` and
-  ``block_key[PROVSQL_TABLE_INFO_MAX_BLOCK_KEY]`` (the BID
-  block-key column numbers ; multi-column keys supported, capped
-  at 16).  Written by ``add_provenance`` (TID), ``repair_key``
-  (BID), ``set_table_info`` (manual ; also reached by the
-  ``provenance_guard`` trigger flipping the relation to OPAQUE
-  when the user supplies their own ``provsql`` UUID).
-- **Ancestor half** -- ``ancestor_n`` and
-  ``ancestors[PROVSQL_TABLE_INFO_MAX_ANCESTORS]`` (the sorted,
-  deduplicated ``pg_class`` OIDs of the original
-  ``add_provenance`` / ``repair_key`` relations this one's atoms
-  ultimately come from ; capped at 64).  Base tables auto-seed
-  ``{self}`` ; CTAS-derived tables inherit the transitive union
-  of source ancestor sets via the lineage hook
-  (:ref:`tid-bid-propagation`).  Written by :sqlfunc:`set_ancestors`,
-  read by :sqlfunc:`get_ancestors`, cleared by :sqlfunc:`remove_ancestors`.
+    CREATE TABLE provsql.table_info(
+      relid     regclass PRIMARY KEY,
+      kind      text     NOT NULL,           -- 'tid' / 'bid' / 'opaque'
+      block_key int2[]   NOT NULL DEFAULT ARRAY[]::int2[],
+      ancestors oid[]    NOT NULL DEFAULT ARRAY[]::oid[]
+    );
 
-The two halves are updated independently via separate IPC opcodes
-(``T`` / ``D`` / ``s`` for the kind half ; ``A`` / ``R`` / ``a``
-for the ancestor half) so a CTAS hook can set ancestry without
-disturbing kind and vice versa.  The worker reads-modifies-writes
-each record on partial-update opcodes so the two halves stay
-consistent.
+``relid`` is a ``regclass`` rather than an ``oid`` so that a dump
+carries the relation's *name*: OIDs are not stable across
+databases, and ``pg_dump`` / ``pg_restore`` resolve a ``regclass``
+back to whatever OID the relation has in the target.  The table is
+registered with ``pg_extension_config_dump``, so a dump carries its
+contents.
 
-Removal uses a **tombstone scheme**: removed entries have their
-``relid`` overwritten with ``InvalidOid`` and remain in place.
-:cfunc:`MMappedCircuit::setTableInfo` and
-:cfunc:`MMappedCircuit::setTableAncestry` reuse tombstone slots
-before appending.  All readers skip ``InvalidOid`` entries.  This
-avoids reaching into :cfunc:`MMappedVector`'s append-only public
-API and keeps the file format trivial: a crash-recovered file is
-internally consistent without any extra recovery step.  In
-practice, churn on this vector is low (one entry per
-``add_provenance`` / ``repair_key`` / ``remove_provenance`` call,
-plus one per CTAS hook fire).
+Being a heap table is the point.  Every change follows the
+transaction that made it -- a rolled-back ``add_provenance`` leaves
+no row, a rolled-back ``DROP TABLE`` keeps one -- a concurrent
+session sees a change only once it commits, and the WAL, replication
+and ``pg_dump`` all apply.  Before 1.13.0 this lived in a fifth mmap
+file and none of that held.
 
-A backend-local cache (:cfunc:`provsql_lookup_table_info` and the
-parallel :cfunc:`provsql_lookup_ancestry`, both in
-:cfile:`provsql_utils.c`) amortises IPC across repeated lookups
-in the planner hot path.  Both caches are sorted arrays keyed on
-``relid``, binary-searched, and invalidated through
-``CacheRegisterRelcacheCallback`` so concurrent
-``add_provenance`` / ``repair_key`` / ``remove_provenance`` /
-``set_ancestors`` in other backends are reflected without
-polling.  The ``cleanup_table_info`` event trigger on
-``sql_drop`` (installed by the extension's SQL surface) removes
-the metadata when a tracked relation is dropped outside of
-``remove_provenance``.
+The two halves are still written independently: the kind half by
+``add_provenance`` (TID), ``repair_key`` (BID) and
+``set_table_info`` (also reached by the ``provenance_guard``
+trigger flipping a relation to OPAQUE when the user supplies their
+own ``provsql`` UUID); the ancestor half by :sqlfunc:`set_ancestors`,
+read by :sqlfunc:`get_ancestors`, cleared by
+:sqlfunc:`remove_ancestors`.  Base tables auto-seed ``{self}``;
+CTAS-derived tables inherit the transitive union of their sources'
+ancestor sets via the lineage hook (:ref:`tid-bid-propagation`).
 
-.. warning::
+Reads take the direct route, not SPI: the planner hook consults
+them for every provenance-tracked range-table entry, and running a
+full query through the planner from inside the planner hook is both
+slow and needlessly re-entrant.  ``provsql_fetch_table_info``
+scans the table's primary-key index with ``systable_beginscan``,
+behind the backend-local caches :cfunc:`provsql_lookup_table_info`
+and :cfunc:`provsql_lookup_ancestry` (:cfile:`provsql_utils.c`).
+Both caches are sorted arrays keyed on ``relid``, binary-searched,
+and dropped through ``CacheRegisterRelcacheCallback``; an
+``AFTER`` row trigger on ``provsql.table_info`` issues that
+invalidation for every changed relation, which covers the setter
+functions, a hand-written ``UPDATE`` on the table, and the ``COPY``
+a ``pg_restore`` performs.  The ``cleanup_table_info`` event trigger
+on ``sql_drop`` deletes the row when a tracked relation is dropped
+outside of ``remove_provenance``, and that deletion now rolls back
+with the ``DROP`` that triggered it.
 
-   ``provsql_table_info.mmap`` was introduced in 1.6.0, and the
-   :cfunc:`ProvenanceTableInfo` layout grew from ~36 to ~300 bytes
-   during that release's development (the ancestor half was
-   appended), so only mid-1.6.0-dev builds could have written the
-   short layout.  Such a stale file fails the ``elem_size``
-   validation at :cfunc:`MMappedVector` open and must be deleted
-   before restart ; the 1.5.0 -> 1.6.0 upgrade script seeds a TID
-   entry for every tracked relation it detects from the catalog,
-   as part of introducing the store.
+:sqlfunc:`migrate_table_info` imports the legacy
+``provsql_table_info.mmap`` file into the table, reading it
+read-only in the calling backend (:cfile:`TableInfoMigrate.cpp`);
+the upgrade script calls it, and it is a no-op on a database that
+has no such file.
 
 
 Per-Backend Circuit Cache
