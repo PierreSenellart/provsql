@@ -35,7 +35,7 @@ SELECT count(*) FILTER (WHERE query_type = 'TRANSACTION') AS transactions,
 SELECT query_type FROM update_provenance
  WHERE query LIKE 'DELETE FROM tt_e%';
 
-SELECT id, v, sr_formula(provsql, 'tt_map') AS formula FROM tt_e ORDER BY id, v;
+SELECT id, v, sr_formula(provsql, 'tt_map') AS formula FROM tt_e ORDER BY id, v COLLATE "C";
 
 SELECT provsql AS tx FROM update_provenance WHERE query_type = 'TRANSACTION' \gset
 SET provsql.active = on;
@@ -44,7 +44,7 @@ SET provsql.active = on;
 SELECT undo(:'tx'::uuid) IS NOT NULL AS undone;
 
 SET provsql.active = off;
-SELECT id, v, sr_formula(provsql, 'tt_map') AS formula FROM tt_e ORDER BY id, v;
+SELECT id, v, sr_formula(provsql, 'tt_map') AS formula FROM tt_e ORDER BY id, v COLLATE "C";
 
 -- The transaction's own validity is the universal range, the identity of
 -- the temporal m-semiring: it multiplies into every effect of the

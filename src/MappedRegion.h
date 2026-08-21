@@ -39,6 +39,25 @@
 #include <sys/mman.h>
 #endif
 
+/**
+ * @brief Push a file's dirty data pages to stable storage.
+ *
+ * @c fdatasync where the platform has it; macOS does not declare it,
+ * and its @c fsync only reaches the drive's cache, so there the
+ * @c F_FULLFSYNC fcntl (what PostgreSQL itself issues) is the durable
+ * barrier, with @c fsync as the fallback on file systems that reject it.
+ * @return 0 on success, -1 with @c errno set otherwise.
+ */
+static inline int provsql_fdatasync(int fd) {
+#if defined(__APPLE__)
+  if(fcntl(fd, F_FULLFSYNC) == 0)
+    return 0;
+  return fsync(fd);
+#else
+  return fdatasync(fd);
+#endif
+}
+
 class MappedRegion {
 int fd_ = -1;            ///< Backing file descriptor
 void *base_ = nullptr;   ///< Base of the mapped region / heap buffer
@@ -141,7 +160,7 @@ void flush() {
 #ifdef PROVSQL_INPROCESS_STORE
   sync();
 #endif
-  if(fdatasync(fd_) && errno != EINVAL)
+  if(provsql_fdatasync(fd_) && errno != EINVAL)
     throw std::runtime_error(strerror(errno));
 }
 
@@ -190,7 +209,7 @@ void replaceContents(const char *path, const void *data, std::size_t length) {
     left -= static_cast<std::size_t>(w);
     p += w;
   }
-  if(fdatasync(tfd) || rename(tmp.c_str(), path)) {
+  if(provsql_fdatasync(tfd) || rename(tmp.c_str(), path)) {
     int e = errno;
     ::close(tfd);
     unlink(tmp.c_str());

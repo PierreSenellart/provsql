@@ -14,8 +14,8 @@ UPDATE
 (2 rows)
 id|v|formula
 1|a|a ⊖ 𝟙
-2|b|b ⊖ 𝟙
 2|B|b
+2|b|b ⊖ 𝟙
 3|c|c
 (4 rows)
 undone
@@ -23,8 +23,8 @@ t
 (1 row)
 id|v|formula
 1|a|a ⊖ 𝟘
-2|b|b ⊖ 𝟘
 2|B|𝟘
+2|b|b ⊖ 𝟘
 3|c|c
 (4 rows)
 transaction_validity_is_neutral
