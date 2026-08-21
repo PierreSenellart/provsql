@@ -254,14 +254,13 @@ schemas that lack the type:
   non-Gaussian leaf. This subsumes the pairwise Normal-vs-Normal
   closed form (d = 1) and gives "min/max/rank of correlated Gaussians"
   events – first-elimination / argmin probabilities, order statistics
-  of correlated portfolio components – an exact path. Depends on the
-  same P0 census fix; a correlated conjunction of shared-leaf
-  comparisons is precisely the shape the sibling-arm bug corrupts.
-- **Prerequisite**: the HybridEvaluator sibling-arm census bug (shared
-  leaves across sibling arms de-duplicated as if independent) must be
-  fixed first – compiled MVNs are *made of* shared leaves, and the
-  current census would silently drop the very correlations this
-  feature exists to model.
+  of correlated portfolio components – an exact path. It relies on the
+  HybridEvaluator census keeping a base RV shared across sibling arms
+  of a comparison or of a non-additive `gate_arith` combinator out of
+  the identity-minting folds (`runHybridSimplifier`, rules A and B,
+  regression `continuous_order_statistics.sql`): compiled MVNs are
+  *made of* shared leaves, and a correlated conjunction of shared-leaf
+  comparisons is exactly the shape a decoupling census would corrupt.
 
 ### 6. SQL surface
 
@@ -375,8 +374,8 @@ is the combination with the *rest* of the provenance machinery:
 
 ## Priorities
 
-1. **P0 – prerequisites**: HybridEvaluator sibling-arm census fix;
-   decide chunked-IPC vs documented dimension cap (§3).
+1. **P0 – prerequisite**: decide chunked-IPC vs documented dimension
+   cap (§3).
 2. **P1 – core vector surface**: `random_vector` type + optional-OID
    plumbing, `vec` gate,
    `mvnormal` / `dirichlet` / `vec` / `as_random_vector` constructors,

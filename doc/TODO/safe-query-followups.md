@@ -101,26 +101,30 @@ deferred for a future slice.
   surfaces a triangle-with-two-PKs pattern that the existing rewrite
   cannot handle.*
 
-- **Self-joins without PK or constant rescue.**  Symmetric closure
-  `R(x, y), R(y, x)`, path-of-length-2 `R(x, y), R(y, z)`, and similar
-  shapes remain hard.  Neither the PK-unification pass nor the
-  disjoint-constant certification fires: there is no key whose
-  columns are equated pairwise, and the constant predicates either
-  don't exist or aren't pairwise disjoint.  (These shapes all carry an
-  inversion, hence are not even in `UCQ(OBDD)`; the inversion-free
-  self-joins (consistent unification, e.g.
-  `S(x,y),A(x,y),S(x,z),B(x,z)`) are the easier subset already handled by
-  the implemented inversion-free path, see *Inversion-free `UCQ(OBDD)`
-  extensions* in Tier 2.)  Resolving the read-once
-  question for these shapes requires either Monet-style intensional
-  dDNNF construction (see the rejected-alternative record in the
-  *Möbius* entry above) or proper
-  handling of the full Dalvi & Suciu 2012 JACM dichotomy for UCQs
-  (which subsumes self-joins implicitly via the lattice-of-valuations
-  criterion).  *Deferred: both directions are larger projects than
-  the FD-aware extensions combined, and the workloads where the
-  symmetric-closure / path shapes show up tend to be recursive-query
-  territory that ProvSQL's CQ-only rewriter already excludes.*
+- **Self-joins without PK or constant rescue: linear route only.**
+  The read-once rewriter handles a self-join only when the
+  PK-unification pass or the disjoint-constant certification fires;
+  the inversion-free path handles the consistently-unifying ones
+  (`S(x,y),A(x,y),S(x,z),B(x,z)`).  Every *other* safe self-join is
+  already computed exactly by the Möbius route
+  (`src/mobius_evaluate.cpp`), which runs the Dalvi & Suciu 2012 JACM
+  recursion with its ranking and shattering normalisations and takes
+  `q_J = R(x₁),S(x₁,y₁),T(x₂),S(x₂,y₂)` through the Möbius step
+  (`test/sql/mobius_selfjoin.sql`).  So for tuple-independent inputs
+  there is no safe self-join without an exact PTIME route; what the
+  linear rewriter lacks is a constant-factor matter (the Möbius route
+  is `O(|D|^e)`), and the shapes that decline everywhere, symmetric
+  closure `R(x,y),R(y,x)` and the two-hop `R(x,y),R(y,z)`, carry an
+  inversion and are `#P`-hard, so no exact route can take them.  The
+  route's TID restriction (bare `gate_input` fact tokens) is the
+  dichotomy's own setting, not a gap: the BID results (Dalvi & Suciu,
+  VLDB J. 2007) cover self-join-free CQs through safe plans, which is
+  what the read-once rewriter already does for BID inputs, and no
+  dichotomy for UCQs or self-joins over BID exists to implement.  The
+  one residual is that a safe self-join the rewriter could express
+  read-once with a per-atom decision order (the FD / per-branch
+  builder of Tier 2) would gain the linear path.  *Deferred; no
+  workload has asked.*
 
 - **Soft keys.**  Functional dependencies that hold probabilistically
   rather than absolutely, per Jha, Rastogi & Suciu (PODS 2008).  Separate

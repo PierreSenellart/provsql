@@ -257,7 +257,10 @@ only if a workload shows the d-tree's Shannon frontier is the bottleneck.
   per-statement INSERT/UPDATE/DELETE provenance but has no transaction-level
   model. GProM's reenactment (replaying a transaction under snapshot isolation via
   MV-semirings) needs no new syntax and could be exposed as a *function* over a
-  transaction/audit identifier. Separate, larger, function-based.
+  transaction/audit identifier. In ProvSQL's eager model the per-transaction
+  `update` gate is the transaction's provenance, so the gap closes with the
+  transaction token of [`transactions.md`](transactions.md) (§Transaction-level
+  provenance) rather than by importing reenactment.
 
 ---
 
@@ -276,6 +279,9 @@ To avoid double-counting, candidates already tracked elsewhere:
   HAVING** → `safe-query-followups.md`.
 - **Data-side treewidth / MSO / tree-automaton, plus the finite-semantics-for-
   divergent-semirings recursion nuance** → `bounded-treewidth-data.md`.
+- **Transaction-level provenance (candidate 11)** → `transactions.md` (the
+  transaction token; also the store's durability / rollback / replication
+  audit).
 
 ---
 
