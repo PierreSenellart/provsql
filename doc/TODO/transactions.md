@@ -101,12 +101,6 @@ replication and PITR.
 - **WAL replay is untested at run time.** Emission and decoding are
   exercised; `rm_redo` is only reachable from crash recovery or a
   standby, neither of which the regression suite can set up.
-- **The resource-manager id (151) is claimed in the code but not yet on
-  the PostgreSQL wiki.** It was free when
-  https://wiki.postgresql.org/wiki/CustomWALResourceManagers was last
-  read (128-150 and 241 were taken); the row has to be added there before
-  1.13.0 ships, or another extension can take it and a cluster loading
-  both will hand one's records to the other during replay.
 - **Transaction-level provenance stays eager and single-database.** No
   provenance across databases or foreign data wrappers, no reenactment of
   a transaction that ran before tracking was enabled, and `query` still
