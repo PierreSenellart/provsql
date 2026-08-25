@@ -168,7 +168,7 @@ its provenance DAG in the sidebar.
 
    Circuit mode: a ``DISTINCT`` query renders a ``⊕``-rooted DAG.
    Pinning an input gate opens the inspector with its metadata and
-   the stored probability, click-to-edit.
+   the stored probability.
 
 Hovering a node lights up its subtree; clicking pins it and opens
 the inspector panel. Drag a node to reposition it; the offset is
@@ -327,9 +327,13 @@ metadata block: function and result type for ``agg``, left and right
 attribute for ``eq``, value for ``mulinput``, relation id and
 column list for ``input`` and ``update``, and so on.
 ``input`` and ``update`` gates additionally show the stored
-probability: clicking the value swaps it for a number input, Enter
-sends a :sqlfunc:`set_prob` to the server, Esc or clicking elsewhere cancels.
-Out-of-range values and ProvSQL errors land inline.
+probability, read-only. A probability is
+:ref:`written once <persistence-transactions>`, so changing one means
+giving the row a fresh input gate with
+:sqlfunc:`replace_input` -- which leaves the old gate, and every
+circuit already built over it, carrying the old value. Studio shows
+the value and names the recipe in the cell's tooltip rather than
+doing that rewrite behind an inspector field.
 
 A ``gate_assumed`` wrapper labelled ``'boolean'`` (added by the
 safe-query rewriter when the provenance class is ``'boolean'``) is

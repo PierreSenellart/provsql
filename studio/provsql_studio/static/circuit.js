@@ -1153,7 +1153,7 @@
     inspectorBody.innerHTML = html;
 
     if (node.type === 'input' || node.type === 'mulinput' || node.type === 'kc-input') {
-      fetchLeafRow(node.id);
+      fetchLeafRow(node.id, node.type);
     }
     if (node.type === 'kc-bag') {
       // Async-resolve every input-leaf chip's source row.  Each chip
@@ -1171,7 +1171,7 @@
     if (inspectorEl) inspectorEl.classList.remove('is-open');
   }
 
-  async function fetchLeafRow(uuid) {
+  async function fetchLeafRow(uuid, nodeType) {
     let resp;
     try {
       resp = await fetch(`/api/leaf/${encodeURIComponent(uuid)}`);
@@ -1187,27 +1187,32 @@
     // Probability is per-input-gate (the UUID itself), not per-resolved-row.
     // Append it to the gate-metadata <dl> as another <dt>/<dd> row so it
     // sits in the same visual stream as uuid / depth / info1, rather
-    // than getting a separate paragraph that breaks the rhythm. The dd
-    // is click-to-edit: clicking it swaps the displayed value for a
-    // number input, Enter fires POST /api/set_prob, Esc / blur cancels.
+    // than getting a separate paragraph that breaks the rhythm.
+    //
+    // A probability is written once, and the cell follows that: a gate
+    // that has none offers click-to-set, which is a first write and
+    // nothing else; a gate that has one shows its value read-only.
+    // Changing a written probability means giving the row a fresh input
+    // gate, which leaves the old gate -- and every circuit built over
+    // it -- carrying the old value; that is a rewrite of the data, not
+    // the click of an editor, so the tooltip names replace_input and
+    // the user does it themselves.
     // We surface the probability BEFORE deciding on the source-row body
     // so anonymous Bernoullis -- gate_inputs created by
     // provsql.mixture(p_value, ...) or by hand via create_gate + set_prob
     // without a tracked source table -- still see their probability
     // even though no row in any tracked relation references the UUID.
-    if (payload.probability != null) {
+    const settable = nodeType === 'input' || nodeType === 'mulinput';
+    if (payload.probability != null || settable) {
       const dl = inspectorBody.querySelector('dl');
       if (dl) {
-        dl.insertAdjacentHTML(
-          'beforeend',
-          `<dt>probability</dt>`
-          + `<dd class="cv-prob__editable" title="Click to edit"`
-          + ` data-prob-uuid="${escapeHtml(uuid)}"`
-          + ` data-prob-value="${escapeHtml(String(payload.probability))}">`
-          + `${escapeHtml(formatProbabilityValue(payload.probability))}</dd>`,
-        );
+        dl.insertAdjacentHTML('beforeend', '<dt>probability</dt>'
+          + (payload.probability != null
+            ? renderWrittenProbability(payload.probability)
+            : `<dd class="cv-prob__settable" title="Click to set"`
+              + ` data-prob-uuid="${escapeHtml(uuid)}">not set</dd>`));
         const dd = dl.querySelector('dd[data-prob-uuid]');
-        if (dd) dd.addEventListener('click', () => editProbability(dd));
+        if (dd) dd.addEventListener('click', () => setProbability(dd));
       }
     }
     if (!matches.length) {
@@ -1329,7 +1334,7 @@
     else inspectorBody.insertAdjacentHTML('beforeend', html);
   }
 
-  // After a successful set_prob write, refresh the corresponding
+  // After a first set_prob write, refresh the corresponding
   // node's in-circle label so the user sees the new value without
   // having to reload the circuit.  Only applies to ANONYMOUS gate_input
   // gates (no source row in any tracked relation: hand-minted
@@ -1367,39 +1372,31 @@
     if (labelEl) labelEl.textContent = newLabel;
   }
 
-  function formatProbabilityValue(p) {
-    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
-      ? window.ProvsqlStudio.getProbDecimals()
-      : 4;
-    const n = Number(p);
-    return Number.isFinite(n) ? n.toFixed(dec) : String(p);
+  // A written probability, read-only. The tooltip carries the recipe
+  // for changing it, since the cell deliberately will not.
+  function renderWrittenProbability(p) {
+    return `<dd title="A probability is written once. To change it, give`
+      + ` the row a fresh input gate:`
+      + ` UPDATE t SET provsql = provsql.replace_input(provsql, p)">`
+      + `${escapeHtml(formatProbabilityValue(p))}</dd>`;
   }
 
-  // Click-to-edit on the inspector probability cell. Replaces the
-  // rendered value with a number input; Enter fires POST /api/set_prob,
-  // Esc and blur cancel without saving (blur-as-cancel avoids surprise
-  // commits when the user clicks elsewhere mid-thought).
-  //
-  // A probability is written once, so a gate that already has one is not
-  // rewritten: the server gives the row a fresh input gate instead and
-  // says so (payload.replaced).  The circuit on screen is deliberately
-  // left alone -- it was built over the old gate, which still exists
-  // with its old probability -- so the message is what tells the user
-  // the row moved on.
-  function editProbability(dd) {
+  // Click-to-set on a gate that has no probability: this is a first
+  // write, the one the store allows. Clicking swaps "not set" for a
+  // number input; Enter fires POST /api/set_prob, Esc and blur cancel
+  // (blur-as-cancel avoids surprise commits when the user clicks
+  // elsewhere mid-thought). On success the cell becomes the read-only
+  // value, because a second write is not on offer.
+  function setProbability(dd) {
     const uuid = dd.dataset.probUuid;
-    const current = dd.dataset.probValue;
     if (!uuid) return;
-    const cur = Number(current);
-    const initial = Number.isFinite(cur) ? cur : 1.0;
     dd.innerHTML =
       `<input class="cv-prob__input" type="number" min="0" max="1" `
-      + `step="0.0001" value="${escapeHtml(String(initial))}">`
+      + `step="0.0001" placeholder="0..1">`
       + `<span class="cv-prob__msg" hidden></span>`;
     const input = dd.querySelector('input');
     const msg = dd.querySelector('.cv-prob__msg');
     input.focus();
-    input.select();
     let saved = false;
 
     function showMsg(text, isError) {
@@ -1408,17 +1405,25 @@
       msg.hidden = false;
       msg.classList.toggle('is-error', !!isError);
     }
-    function restore(value) {
-      const v = value != null ? value : initial;
-      dd.dataset.probValue = String(v);
-      dd.innerHTML = escapeHtml(formatProbabilityValue(v));
+    function restore() {
+      dd.innerHTML = 'not set';
+    }
+    function settle(v) {
+      // Written: drop the affordance along with the click handler, so
+      // the cell cannot invite an edit the store would refuse.
+      dd.outerHTML = renderWrittenProbability(v);
+      updateNodeProbLabel(uuid, v);
     }
     async function save() {
       if (saved) return;
-      const v = Number(input.value);
-      if (!Number.isFinite(v) || v < 0 || v > 1) {
+      // An empty field is not zero. The cell starts empty, Number('')
+      // is 0, and the write is permanent -- so Enter on an untouched
+      // input would silently pin probability 0 on the gate for good.
+      const raw = input.value.trim();
+      const v = Number(raw);
+      if (!raw || !Number.isFinite(v) || v < 0 || v > 1) {
         input.classList.add('is-error');
-        showMsg('must be 0..1', true);
+        showMsg(raw ? 'must be 0..1' : 'enter a value in 0..1', true);
         return;
       }
       saved = true;
@@ -1433,20 +1438,14 @@
           const err = await resp.json().catch(() => ({}));
           input.disabled = false;
           input.classList.add('is-error');
-          showMsg(err.detail || err.error || `HTTP ${resp.status}`, true);
+          // The write-once refusal explains itself in `hint`; prefer it
+          // to the bare "already set" primary message.
+          showMsg(err.hint || err.detail || err.error || `HTTP ${resp.status}`,
+                  true);
           saved = false;
           return;
         }
-        const body = await resp.json().catch(() => ({}));
-        restore(v);
-        if (body.replaced) {
-          // The gate on screen keeps its own probability; the row now
-          // carries a different one.
-          restore(current);
-          showMsg(body.message || 'row given a new input gate', false);
-        } else {
-          updateNodeProbLabel(uuid, v);
-        }
+        settle(v);
       } catch (e) {
         input.disabled = false;
         input.classList.add('is-error');
@@ -1463,6 +1462,14 @@
       // briefly loses focus on some browsers when network mode swaps).
       if (!saved) restore();
     });
+  }
+
+  function formatProbabilityValue(p) {
+    const dec = (window.ProvsqlStudio && window.ProvsqlStudio.getProbDecimals)
+      ? window.ProvsqlStudio.getProbDecimals()
+      : 4;
+    const n = Number(p);
+    return Number.isFinite(n) ? n.toFixed(dec) : String(p);
   }
 
   // ─── expansion ────────────────────────────────────────────────────────

@@ -184,8 +184,10 @@ runtime, fonts are bundled).
        leaf metadata block.
    * - ``/api/set_prob``
      - POST
-     - Click-to-edit probability on ``input`` / ``update`` gates.
-       Calls :sqlfunc:`set_prob`; out-of-range values land as
+     - First write of a probability on a gate that has none, from
+       the inspector's click-to-set cell. Calls :sqlfunc:`set_prob`,
+       so a gate that already has a probability is refused (they are
+       written once); out-of-range values and the refusal land as
        inline errors.
    * - ``/api/provenance_mappings``
      - GET

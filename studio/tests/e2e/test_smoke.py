@@ -386,3 +386,62 @@ def test_boolean_only_modes_lock_prov_scheme_to_boolean(
     expect(boolean_radio).to_be_disabled()
     semiring_radio = page.locator('input[name="prov-scheme"][value="semiring"]')
     expect(semiring_radio).to_be_disabled()
+
+
+def test_probability_cell_is_write_once(page: Page, studio_url: str, test_dsn: str) -> None:
+    """The inspector's probability cell follows the write-once store: a
+    gate with no probability offers one first write, a gate that has one
+    shows it read-only, and an empty field writes nothing.
+
+    The last case is the one worth a browser: `Number('')` is 0 and the
+    write is permanent, so a coerced empty field would pin probability 0
+    on the gate for good.
+    """
+    import psycopg
+    with psycopg.connect(
+        f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+    ) as conn, conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS wo_cell CASCADE")
+        cur.execute("CREATE TABLE wo_cell(label TEXT)")
+        cur.execute("INSERT INTO wo_cell VALUES ('unset'), ('written')")
+        cur.execute("SELECT provsql.add_provenance('wo_cell')")
+        cur.execute("DO $$ BEGIN PERFORM provsql.set_prob(provenance(), 0.4)"
+                    "  FROM wo_cell WHERE label = 'written'; END $$")
+    try:
+        def pin(label: str) -> None:
+            page.goto(studio_url + "/circuit")
+            expect(page.locator("body")).to_have_class("mode-circuit", timeout=5000)
+            _run_query_and_wait(
+                page, f"SELECT label FROM wo_cell WHERE label = '{label}';", 1)
+            page.locator("#result-body tr").first.locator("td").last.click()
+            expect(page.locator("#sidebar-body svg").first).to_be_visible(timeout=8000)
+            page.locator("#sidebar-body svg .node-group").first.click()
+
+        # A written probability is shown, and clicking it opens nothing.
+        pin("written")
+        expect(page.locator("#inspector-body")).to_contain_text("0.4", timeout=8000)
+        assert page.locator(".cv-prob__settable").count() == 0
+        page.locator("#inspector-body dd").last.click()
+        page.wait_for_timeout(300)
+        assert page.locator(".cv-prob__input").count() == 0
+
+        # An unset one offers a first write; an empty field is refused.
+        pin("unset")
+        settable = page.locator(".cv-prob__settable")
+        expect(settable).to_be_visible(timeout=8000)
+        settable.click()
+        page.locator(".cv-prob__input").press("Enter")
+        page.wait_for_timeout(400)
+        assert page.locator(".cv-prob__input").count() == 1
+        assert "enter a value" in page.locator(".cv-prob__msg").inner_text()
+
+        # A real value is written once, and the cell settles read-only.
+        page.locator(".cv-prob__input").fill("0.25")
+        page.locator(".cv-prob__input").press("Enter")
+        expect(page.locator(".cv-prob__settable")).to_have_count(0, timeout=8000)
+        expect(page.locator("#inspector-body")).to_contain_text("0.25", timeout=8000)
+    finally:
+        with psycopg.connect(
+            f"{test_dsn} options='-c search_path=provsql_test,provsql,public'"
+        ) as conn, conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS wo_cell CASCADE")

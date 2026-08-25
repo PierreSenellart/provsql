@@ -2237,9 +2237,10 @@ body.mode-notebook .wp-card--query > .wp-card__hdr { display: none; }
 /* Editable probability cell: subtle hover affordance + a small pencil
    that appears on hover so the user knows the value is interactive
    without committing screen real estate to it permanently. */
-.cv-prob__editable { cursor: pointer; border-bottom: 1px dotted transparent; }
-.cv-prob__editable:hover { border-bottom-color: var(--purple-500); }
-.cv-prob__editable:hover::after { content: " ✎"; opacity: 0.55; font-size: 0.85em; }
+.cv-prob__settable { cursor: pointer; color: var(--fg-muted); font-style: italic;
+                     border-bottom: 1px dotted transparent; }
+.cv-prob__settable:hover { border-bottom-color: var(--purple-500); }
+.cv-prob__settable:hover::after { content: " ✎"; opacity: 0.55; font-size: 0.85em; }
 .cv-prob__input {
   font: inherit;
   font-family: var(--font-mono);

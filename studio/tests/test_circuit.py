@@ -330,35 +330,38 @@ def test_set_prob_writes_value(client, test_dsn):
     assert resp.status_code == 200, resp.data
     body = resp.get_json()
     assert body["ok"] is True
-    assert not body.get("replaced")
     leaf = client.get(f"/api/leaf/{anon_uuid}").get_json()
     assert leaf["probability"] == 0.7
 
 
-def test_set_prob_replaces_when_already_written(client, test_dsn):
+def test_set_prob_refuses_a_gate_that_already_has_one(client, test_dsn):
     """A probability is written once, so POST /api/set_prob on a gate
-    that has one gives the row it resolves to a fresh input gate and says
-    so.  The old gate keeps its own probability: a circuit already built
-    over it is not rewritten behind the user's back."""
+    that has one is refused, and the extension's reasoning and recipe
+    reach the client.
+
+    Studio does not replace the gate on the user's behalf: the old gate
+    stays in every circuit built over it, so re-pointing one row behind
+    an inspector field would show a value that most of the database does
+    not use.  `provsql.replace_input` is the user's to run."""
     old_uuid = _set_personnel_prob(test_dsn, "Nancy", 0.3)
     try:
         resp = client.post("/api/set_prob",
                            json={"uuid": old_uuid, "probability": 0.8})
-        assert resp.status_code == 200, resp.data
+        assert resp.status_code == 400, resp.data
         body = resp.get_json()
-        assert body["replaced"] is True
-        assert body["token"] != old_uuid
+        assert "already set" in body["detail"]
+        assert "written once" in body["explanation"]
+        assert "replace_input" in body["hint"]
+        # The refusal wrote nothing.
         assert client.get(f"/api/leaf/{old_uuid}").get_json()["probability"] == 0.3
-        assert client.get(
-            f"/api/leaf/{body['token']}").get_json()["probability"] == 0.8
     finally:
         _set_personnel_prob(test_dsn, "Nancy", 1.0)
 
 
-def test_set_prob_refuses_replacement_without_a_row(client, test_dsn):
-    """An anonymous Bernoulli that already carries a probability has no
-    tracked row to rewrite, so the replacement is refused with the
-    reason rather than the raw write-once error."""
+def test_set_prob_refuses_an_anonymous_bernoulli_too(client, test_dsn):
+    """The refusal does not depend on the gate resolving to a row: an
+    anonymous Bernoulli that already carries a probability is refused
+    the same way a tracked row's leaf is."""
     import uuid as _uuid
     anon_uuid = str(_uuid.uuid4())
     with psycopg.connect(
@@ -369,7 +372,8 @@ def test_set_prob_refuses_replacement_without_a_row(client, test_dsn):
     resp = client.post("/api/set_prob",
                        json={"uuid": anon_uuid, "probability": 0.75})
     assert resp.status_code == 400
-    assert "written once" in resp.get_json()["detail"]
+    assert "already set" in resp.get_json()["detail"]
+    assert "written once" in resp.get_json()["explanation"]
 
 
 def test_set_prob_rejects_out_of_range(client, test_dsn):

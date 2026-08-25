@@ -1136,26 +1136,6 @@ def get_prob(pool: ConnectionPool, uuid: str) -> float | None:
         return None
 
 
-def probability_is_set(pool: ConnectionPool, uuid: str) -> bool | None:
-    """Whether a probability has been *written* on the gate.
-
-    `get_prob` answers the value an evaluation would use, so it says 1
-    both for a gate written as certain and for one nobody has given a
-    probability; from provsql 1.13.0 `provsql.probability_is_set`
-    distinguishes them, which is what tells the inspector whether the
-    next write is a first one (`set_prob`) or a replacement
-    (`replace_input`).  Returns None on an older extension, where
-    probabilities were rewritable in place and the question does not
-    arise."""
-    try:
-        with pool.connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT provsql.probability_is_set(%s::uuid)", (uuid,))
-            row = cur.fetchone()
-            return bool(row[0]) if row and row[0] is not None else None
-    except Exception:
-        return None
-
-
 # ───── in-process layout cache ─────────────────────────────────────────
 
 class LayoutCache:
