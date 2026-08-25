@@ -287,6 +287,37 @@ void provsql_set_prob_tracked(const pg_uuid_t *token, double prob)
     provsql_error("set_prob called on non-input gate");
     break;
   case PROVSQL_SET_PROB_ALREADY_SET:
+  {
+    unsigned nb_children = 0;
+    pg_uuid_t *children = NULL;
+    gate_type type = provsql_fetch_gate(token, &nb_children, &children);
+    const char *hint;
+
+    if(children)
+      free(children);
+
+    /* Which replacement applies depends on what the gate is: sending a
+       block value or an update gate to replace_input() only earns the
+       user a second refusal, since replace_input() redirects them here
+       anyway. */
+    switch(type) {
+    case gate_mulinput:
+      hint = "Use provsql.replace_block() to give a repair_key block a "
+             "different set of probabilities: a block's values share one "
+             "key gate and their masses are meaningful together, so they "
+             "are replaced together.";
+      break;
+    case gate_update:
+      hint = "Use provsql.replace_update() to give a recorded data "
+             "modification a different probability.";
+      break;
+    default:
+      hint = "Use provsql.replace_input() to give a tuple a different "
+             "probability: it mints a fresh input gate and returns it, "
+             "for the row's provsql column to carry.";
+      break;
+    }
+
     ereport(ERROR,
             (errmsg("probability of gate %s is already set to %g",
                     DatumGetCString(DirectFunctionCall1(
@@ -295,11 +326,9 @@ void provsql_set_prob_tracked(const pg_uuid_t *token, double prob)
              errdetail("Probabilities are written once, so that a "
                        "transaction that rolls back leaves the circuit as "
                        "it found it."),
-             errhint("Use provsql.replace_input() to give a tuple a "
-                     "different probability: it mints a fresh input gate "
-                     "and returns it, for the row's provsql column to "
-                     "carry.")));
+             errhint("%s", hint)));
     break;
+  }
   }
 }
 
