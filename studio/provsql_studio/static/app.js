@@ -2409,6 +2409,15 @@
     const OPS = { relation: ['asof', 'during', 'full'], query: ['asof', 'during', 'full'] };
 
     let debounceTimer = null;
+    // Last request wins. /api/temporal responses can land out of order --
+    // the init chain's relation auto-fetch is still in flight while the
+    // user switches to Query source and types -- and the handler reads
+    // state at completion time, so a stale response could redraw the
+    // timeline, rewrite the query box and persist a state that does not
+    // match the screen (restored as such by the next reload). Each call
+    // claims a generation; a response whose generation has been
+    // superseded is dropped before it touches the DOM.
+    let temporalGen = 0;
     const debouncedFetch = () => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(fetchTemporal, 200);
@@ -2618,6 +2627,11 @@
       // Cancel any pending debounced fetch so one user action runs the query
       // exactly once (a blur + a click, say, must not both fire it).
       clearTimeout(debounceTimer);
+      // Claim this generation before any early return: an abandoned fetch
+      // (empty query, no mapping) is a newer intent too, and must retire
+      // whatever is still in flight.
+      const gen = ++temporalGen;
+      const stale = () => gen !== temporalGen;
       const body = { source: state.source, timeop: state.timeop };
       if (state.source === 'query') {
         body.query = reqEl ? reqEl.value : '';
@@ -2643,13 +2657,14 @@
           body: JSON.stringify(body),
         });
         data = await resp.json();
+        if (stale()) return;
         if (!resp.ok) {
           // A query source that cannot be placed on a timeline (no provenance
           // column, a DDL statement, multiple statements, ...) still has output
           // worth showing: run it once for the result table and clear the
           // timeline. (Relation sources are always wrappable, so a failure
           // there is a real error.)
-          if (state.source === 'query') {
+          if (body.source === 'query') {
             tl.innerHTML = '';
             setStatus('No timeline for this query.');
             await runQuery({ preventDefault() {} }, { force: true });
@@ -2658,7 +2673,10 @@
           }
           return;
         }
-      } catch (e) { setStatus('Request failed: ' + e, true); return; }
+      } catch (e) {
+        if (stale()) return;
+        setStatus('Request failed: ' + e, true); return;
+      }
       const dt = Math.round(performance.now() - t0);
       state.data = data;
       state.columns = data.columns || [];
@@ -2668,8 +2686,10 @@
       // (those are applied behind the scenes, just as a user's own query is in
       // the query source). For a query source the box is the user's input, so
       // leave it untouched.
-      if (state.source !== 'query' && reqEl && state.relation) {
-        reqEl.value = `SELECT * FROM ${state.relation}`;
+      // `body`, not `state`: the box must name the relation this response
+      // is about, which is not necessarily the one selected by now.
+      if (body.source !== 'query' && reqEl && body.relation) {
+        reqEl.value = `SELECT * FROM ${body.relation}`;
         reqEl.dispatchEvent(new Event('input'));  // refresh syntax highlight
       }
       setStatus(data.result.length ? '' : 'No rows match.');

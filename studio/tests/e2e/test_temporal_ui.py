@@ -184,3 +184,43 @@ def test_empty_union_renders_never_marker(
     page.locator("#request").fill("SELECT * FROM emptyval")
     page.locator("#temporal-mapping").select_option("public.emptyval_validity")
     expect(page.locator(".cv-temporal__never")).to_be_visible(timeout=8000)
+
+
+def test_stale_response_does_not_overwrite_a_newer_one(
+    page: Page, temporal_studio_url: str
+) -> None:
+    """A late /api/temporal response must not redraw the timeline over a
+    newer one.
+
+    On load the Temporal UI is in Relation source and auto-fetches; that
+    request can still be in flight while the user switches to Query source
+    and runs their own. The handler used to read `state` at completion
+    time, so whichever response landed last won the timeline, the query box
+    and the persisted state. Hold the relation request, let the query one
+    through, then release the stale response and check nothing moved.
+    """
+    held: list = []
+
+    def handler(route):
+        data = route.request.post_data or ""
+        if '"relation"' in data and not held:
+            held.append(route)          # hold, release later
+        else:
+            route.continue_()
+
+    page.route("**/api/temporal", handler)
+    _goto_temporal(page, temporal_studio_url)
+    page.locator('.cv-temporal__src[data-source="query"]').click()
+    page.locator('.cv-temporal__op[data-timeop="full"]').click()
+    page.locator("#request").fill("SELECT * FROM sensor")
+    page.locator("#temporal-mapping").select_option("public.sensor_validity")
+    expect(page.locator(".cv-temporal__lane")).to_have_count(3, timeout=8000)
+    lanes_before = page.locator(".cv-temporal__lanelbl").all_inner_texts()
+
+    # Release the superseded relation response.
+    assert held, "the init's relation auto-fetch was never issued"
+    held[0].continue_()
+    page.wait_for_timeout(1500)
+
+    expect(page.locator("#request")).to_have_value("SELECT * FROM sensor")
+    assert page.locator(".cv-temporal__lanelbl").all_inner_texts() == lanes_before
