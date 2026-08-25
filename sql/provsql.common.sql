@@ -887,6 +887,13 @@ CREATE OR REPLACE FUNCTION check_store(
  * @param dry_run report what would be kept without writing anything; the
  *                wire and byte totals are then NULL, since the size of
  *                the rewrite is not known without doing it
+ * @param[out] gates_before        gate records in the store beforehand
+ * @param[out] gates_after         gate records the roots reach, and so kept
+ * @param[out] wires_before        child wires beforehand
+ * @param[out] wires_after         child wires kept (NULL on a dry run)
+ * @param[out] extra_bytes_before  bytes of gate annotations beforehand
+ * @param[out] extra_bytes_after   bytes of gate annotations kept (NULL on a
+ *                                 dry run)
  */
 CREATE OR REPLACE FUNCTION circuit_cleanup(
   dry_run BOOLEAN DEFAULT false,

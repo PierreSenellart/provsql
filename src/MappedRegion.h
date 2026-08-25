@@ -174,7 +174,9 @@ void flush() {
  * place in one step, so a crash at any point leaves either the complete
  * old file or the complete new one.
  *
- * @param path  Path of the backing file (the same one @c openFile opened).
+ * @param path    Path of the backing file (the same one @c openFile opened).
+ * @param data    Bytes the region is to hold from now on.
+ * @param length  Number of bytes at @p data, and the new size of the region.
  */
 void replaceContents(const char *path, const void *data, std::size_t length) {
   if(read_only_)
