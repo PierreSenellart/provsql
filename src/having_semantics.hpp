@@ -244,6 +244,64 @@ void provsql_having(
       return S.zero();
     };
 
+  // Provenance of a predicate decided by the *first present* occurrence:
+  // the valid worlds partition into fibers, one per candidate first
+  // occurrence i, each fixing i present, a set A_i of occurrences absent
+  // (for choose(): every occurrence before i; for bool_or / bool_and: the
+  // earlier candidates and the class that must be wholly absent) and
+  // leaving the rest free.  In an absorptive m-semiring whose ⊗
+  // distributes over ⊖ the free suffix sums to 𝟙 and each fiber is
+  // (1 ⊖ ⊕_{A_i} k) ⊗ k_i (Lean Having.firstScan_correct; the same
+  // hypotheses as the MIN / MAX scan).  Elsewhere -- Why, Which, How,
+  // Formula, counting, the security semiring -- the free part does not
+  // collapse, so every world of every fiber is enumerated and annotated
+  // ∏present ⊗ (1 ⊖ ⊕missing), exponential in the number of free
+  // occurrences.
+  using fiber_t = std::pair<size_t, std::vector<size_t>>;   // (present, absent set)
+  auto first_present_provenance =
+    [&](const std::vector<fiber_t> &fibers,
+        const std::vector<typename SemiringT::value_type> &kvals,
+        ComparisonOperator op,
+        AggregationOperator agg_kind) -> typename SemiringT::value_type {
+      using V = typename SemiringT::value_type;
+      if (fibers.empty()) return S.zero();
+
+      if (S.absorptive() && S.mul_sub_left_distributive()) {
+        std::vector<V> terms;
+        for (const auto &fb : fibers) {
+          const V &k = kvals[fb.first];
+          if (k == S.zero()) continue;
+          std::vector<V> absent;
+          for (size_t j : fb.second)
+            if (kvals[j] != S.zero()) absent.push_back(kvals[j]);
+          if (absent.empty()) { terms.push_back(k); continue; }
+          V guard = S.monus(S.one(), S.plus(absent));
+          terms.push_back(k == S.one() ? guard : S.times(std::vector<V>{guard, k}));
+        }
+        return terms.empty() ? S.zero() : S.plus(terms);
+      }
+
+      const size_t n = kvals.size();
+      std::vector<mask_t> worlds;
+      for (const auto &fb : fibers) {
+        std::vector<bool> fixed(n, false);
+        fixed[fb.first] = true;
+        for (size_t j : fb.second) fixed[j] = true;
+        std::vector<size_t> free_idx;
+        for (size_t j = 0; j < n; ++j)
+          if (!fixed[j]) free_idx.push_back(j);
+        const size_t m = free_idx.size();
+        for (size_t sub = 0; sub < (size_t(1) << m); ++sub) {
+          mask_t mask(n, false);
+          mask[fb.first] = true;
+          for (size_t b = 0; b < m; ++b)
+            if (sub & (size_t(1) << b)) mask[free_idx[b]] = true;
+          worlds.push_back(std::move(mask));
+        }
+      }
+      return combine_exhaustive_worlds(worlds, kvals, /*upset=*/false, op, agg_kind);
+    };
+
   auto pw_from_cmp_gate = [&](gate_t cmp_gate, typename SemiringT::value_type &pw_out) -> bool {
     const auto &cw = c.getWires(cmp_gate);
     if (cw.size() != 2) return false;
@@ -306,14 +364,13 @@ void provsql_having(
 
         // choose() is PICKFIRST: in a world W its value is that of the
         // lowest-index present element.  So choose(W) op C holds iff the
-        // first present element matches; summing the annotations of all such
-        // worlds telescopes (free suffix sums to one):
-        //   pw = ⊕_{i : vᵢ matches} kᵢ ⊗ (⊗_{j<i} (1 ⊖ kⱼ))
+        // first present element matches: one fiber per matching index i,
+        // with every occurrence before i absent and the suffix free.
         //
-        // The disjuncts are mutually exclusive by construction (they
-        // differ on the first present index): when the semiring
-        // certifies enumerations, build them as certified world terms
-        // under a certified deterministic OR instead.
+        // The fibers are mutually exclusive by construction (they differ
+        // on the first present index): when the semiring certifies
+        // enumerations, build them as certified world terms under a
+        // certified deterministic OR instead.
         if (certifiable_contributors(kvals)) {
           std::vector<typename SemiringT::value_type> disjuncts;
           std::vector<typename SemiringT::value_type> before;
@@ -331,29 +388,16 @@ void provsql_having(
                    : S.certified_exclusive_plus(disjuncts);
           return true;
         }
-        const auto one  = S.one();
-        std::vector<typename SemiringT::value_type> disjuncts;
-        auto prefix = one;
+        std::vector<fiber_t> fibers;
+        std::vector<size_t> before;
         for (size_t i = 0; i < kvals.size(); ++i) {
           bool match = (effective_op == ComparisonOperator::EQ)
                          ? (mvals_str[i] == C_str)
                          : (mvals_str[i] != C_str);
-          if (match) {
-            if (prefix == one)
-              disjuncts.push_back(kvals[i]);
-            else if (kvals[i] == one)
-              disjuncts.push_back(prefix);
-            else
-              disjuncts.push_back(S.times(
-                std::vector<typename SemiringT::value_type>{kvals[i], prefix}));
-          }
-          auto absent = S.monus(one, kvals[i]);
-          prefix = (prefix == one)
-                     ? absent
-                     : S.times(std::vector<typename SemiringT::value_type>{
-                         prefix, absent});
+          if (match) fibers.emplace_back(i, before);
+          before.push_back(i);
         }
-        pw_out = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
+        pw_out = first_present_provenance(fibers, kvals, effective_op, agg_kind);
         return true;
       }
 
@@ -368,10 +412,11 @@ void provsql_having(
       //        bool_or  = false : someE = false-rows, noneF = true-rows
       //        bool_and = true  : someE = true-rows,  noneF = false-rows
       //        bool_and = false : someE = false-rows               (true free)
-      //      "at least one of someE present" telescopes by the first present
-      //      index (the choose pattern); "none of noneF present" is a product
-      //      of complements.  Non-empty groups are enforced by someE being
-      //      non-empty. ----
+      //      "at least one of someE present" splits by the first present
+      //      someE index (the choose pattern), each fiber also requiring
+      //      every noneF row absent; see first_present_provenance for when
+      //      that is a closed form and when it is enumerated.  Non-empty
+      //      groups are enforced by someE being non-empty. ----
       if (aggtype_is_boolean(aggtype)) {
         if (agg_kind != AggregationOperator::OR &&
             agg_kind != AggregationOperator::AND)
@@ -444,40 +489,13 @@ void provsql_having(
           return true;
         }
 
-        const auto one = S.one();
-        // "none of noneF present": product of complements.
-        auto none_factor = one;
-        for (size_t f : noneF) {
-          auto absent = S.monus(one, kvals[f]);
-          none_factor = (none_factor == one)
-            ? absent
-            : S.times(std::vector<typename SemiringT::value_type>{none_factor,
-                                                                  absent});
+        std::vector<fiber_t> fibers;
+        std::vector<size_t> absent = noneF;    // grows with the earlier someE rows
+        for (size_t e : someE) {
+          fibers.emplace_back(e, absent);
+          absent.push_back(e);
         }
-        // "at least one of someE present": telescope by first present index.
-        std::vector<typename SemiringT::value_type> disjuncts;
-        auto prefix = one;
-        for (size_t i : someE) {
-          if (prefix == one)
-            disjuncts.push_back(kvals[i]);
-          else if (kvals[i] == one)
-            disjuncts.push_back(prefix);
-          else
-            disjuncts.push_back(S.times(
-              std::vector<typename SemiringT::value_type>{kvals[i], prefix}));
-          auto absent = S.monus(one, kvals[i]);
-          prefix = (prefix == one)
-            ? absent
-            : S.times(std::vector<typename SemiringT::value_type>{prefix, absent});
-        }
-        auto some_value = disjuncts.empty() ? S.zero() : S.plus(disjuncts);
-        if (none_factor == one)
-          pw_out = some_value;
-        else if (some_value == one)
-          pw_out = none_factor;
-        else
-          pw_out = S.times(
-            std::vector<typename SemiringT::value_type>{none_factor, some_value});
+        pw_out = first_present_provenance(fibers, kvals, effective_op, agg_kind);
         return true;
       }
 

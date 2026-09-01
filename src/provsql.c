@@ -369,6 +369,37 @@ aggregation_type_mutator(Node *node, void *ctx) {
  * @param targetList  Target list of the subquery (to locate the aggregate
  *                    result columns).
  */
+/** @brief expression_tree_walker predicate: some @c Var below @p node has
+ *  type @c agg_token. */
+static bool agg_token_var_walker(Node *node, void *context) {
+  const constants_t *constants = (const constants_t *)context;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var))
+    return ((Var *)node)->vartype == constants->OID_TYPE_AGG_TOKEN;
+  return expression_tree_walker(node, agg_token_var_walker, context);
+}
+
+/** @brief expression_tree_walker raising an error on an @c Aggref whose
+ *  arguments read an @c agg_token column: aggregating an aggregate result
+ *  from a subquery (max of a count, sum of a sum...) is refused, like
+ *  grouping or sorting on it, because the outer aggregate would run on the
+ *  raw token composite rather than on a possible-world value. */
+static bool aggref_over_agg_token_walker(Node *node, void *context) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Aggref)) {
+    Aggref *agg = (Aggref *)node;
+    if (agg_token_var_walker((Node *)agg->args, context) ||
+        agg_token_var_walker((Node *)agg->aggdirectargs, context) ||
+        agg_token_var_walker((Node *)agg->aggorder, context) ||
+        agg_token_var_walker((Node *)agg->aggfilter, context))
+      provsql_error("aggregation over aggregate results from "
+                    "a subquery not supported");
+  }
+  return expression_tree_walker(node, aggref_over_agg_token_walker, context);
+}
+
 static void fix_type_of_aggregation_result(const constants_t *constants,
                                            Query *q, Index rteid,
                                            List *targetList) {
@@ -411,6 +442,11 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
           }
         }
       }
+
+      /* ... or aggregated again by the outer query */
+      aggref_over_agg_token_walker((Node *)q->targetList,
+                                   (void *)constants);
+      aggref_over_agg_token_walker(q->havingQual, (void *)constants);
     }
     ++attno;
   }

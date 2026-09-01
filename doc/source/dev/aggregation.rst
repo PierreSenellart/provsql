@@ -373,9 +373,11 @@ numeric ones -- ``SUM`` / ``COUNT`` / ``MIN`` / ``MAX`` / ``AVG``
 ``bool_or`` / ``every``) and ``array_agg`` exist only as enum
 values for routing, because their ``HAVING`` comparisons are
 resolved entirely by the m-semiring rewrite in
-:cfile:`having_semantics.cpp` (two-value characterisation and
-possible-worlds enumeration respectively) and never reach the
-deterministic sampler.  Adding to the accumulator list is the
+:cfile:`having_semantics.cpp` (a first-present-occurrence
+characterisation, a closed form in absorptive :math:`\otimes`-over-
+:math:`\ominus` distributive semirings and an exact enumeration
+elsewhere, and a possible-worlds enumeration respectively) and never
+reach the deterministic sampler.  Adding to the accumulator list is the
 topic of the next section.
 
 

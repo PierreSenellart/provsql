@@ -182,18 +182,25 @@ group. Because "first" depends on the order of the group's occurrences,
 make the result deterministic with an explicit in-aggregate ordering,
 ``choose(col ORDER BY key)``; otherwise the physical scan order decides
 which occurrence wins. ProvSQL tracks exactly the worlds whose first
-occurrence (in that order) matches the constant. The provenance is
-computed in a single linear scan of the group, as
+occurrence (in that order) matches the constant. In an absorptive
+m-semiring whose :math:`\otimes` distributes over :math:`\ominus`
+(Boolean, probabilities, tropical, Viterbi…) the provenance is computed
+in a single linear scan of the group, as
 
 .. math::
 
-    \bigoplus_{i\,:\,v_i \text{ matches}} k_i \otimes
-      \bigotimes_{j<i} (\mathbf{1} \ominus k_j),
+    \bigoplus_{i\,:\,v_i \text{ matches}}
+      \bigl(\mathbf{1} \ominus \bigoplus_{j<i} k_j\bigr) \otimes k_i,
 
 i.e. occurrence :math:`i` is present and every earlier occurrence is
-absent. This is exact even when the group's elements are **not** mutually
-exclusive, and runs in :math:`O(N)` time per group (:math:`N` the group
-size) for any m-semiring.
+absent; the worlds that differ only in the later occurrences collapse
+into that one term. This is exact even when the group's elements are
+**not** mutually exclusive, and runs in :math:`O(N)` time per group
+(:math:`N` the group size). In other semirings (why-provenance,
+``sr_formula``, counting, the security semiring…) the later occurrences
+do not collapse, and ProvSQL enumerates the possible worlds of each
+matching occurrence explicitly, which is exponential in the number of
+occurrences that follow it.
 
 Comparing any other aggregate (``min``, ``max``, ``sum``…) with a text
 constant is **not** implemented and raises an error, since its
