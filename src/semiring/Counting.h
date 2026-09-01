@@ -62,6 +62,17 @@ virtual value_type delta(value_type x) const override
   return x!=0 ? 1 : 0;
 }
 /**
+ * @brief @f$\otimes@f$ distributes over @f$\ominus@f$ (truncated
+ *        subtraction on the naturals).  Recorded for completeness: the
+ *        HAVING single-scan closed form also needs absorptivity, which
+ *        the counting semiring lacks.
+ *
+ * Lean: @c Provenance.Semirings.Nat.mul_sub_left_distributive.
+ */
+virtual bool mul_sub_left_distributive() const override {
+  return true;
+}
+/**
  * @brief No semiring homomorphism @c BoolFunc(X) →+* ℕ exists: any
  *        such map would force @c 1 + a = 1 in ℕ (from @c var + 1 = 1
  *        in @c BoolFunc), contradicting the non-absorptivity of ℕ.

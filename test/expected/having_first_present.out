@@ -1,0 +1,62 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|why|formula|counting|tropical
+choose = y|{{y},{y,z}}|(y ⊗ (𝟙 ⊖ (x ⊕ w ⊕ z))) ⊕ (y ⊗ z ⊗ (𝟙 ⊖ (x ⊕ w)))|0|3
+min = 30|{{y},{y,z}}|(y ⊗ (𝟙 ⊖ (x ⊕ w ⊕ z))) ⊕ (y ⊗ z ⊗ (𝟙 ⊖ (x ⊕ w)))|0|3
+(2 rows)
+why_agree|counting_agree|tropical_agree
+t|t|t
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|why|counting
+choose <> x|{{w},{w,y},{w,y,z},{w,z},{y},{y,z},{z}}|0
+min > 10|{{w},{w,y},{w,y,z},{w,z},{y},{y,z},{z}}|0
+(2 rows)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+shape|why|formula|counting|tropical
+bool_and(t) = true|{{p},{p,s},{s}}|(p ⊗ (𝟙 ⊖ (q ⊕ s))) ⊕ (p ⊗ s ⊗ (𝟙 ⊖ q)) ⊕ (s ⊗ (𝟙 ⊖ (p ⊕ q)))|0|1
+min(ti) = 1|{{p},{p,s},{s}}|(p ⊗ (𝟙 ⊖ (q ⊕ s))) ⊕ (s ⊗ (𝟙 ⊖ (p ⊕ q))) ⊕ (p ⊗ s ⊗ (𝟙 ⊖ q))|0|1
+(2 rows)
+shape|why|formula|counting|tropical
+bool_or(t) = false|{{q}}|q ⊗ (𝟙 ⊖ (p ⊕ s))|0|2
+max(ti) = 0|{{q}}|q ⊗ (𝟙 ⊖ (p ⊕ s))|0|2
+(2 rows)
+shape|why|formula|counting|tropical
+bool_or(t) = true|{{p},{p,q},{p,q,s},{p,s},{q,s},{s}}|(p ⊗ (𝟙 ⊖ (q ⊕ s))) ⊕ (p ⊗ q ⊗ (𝟙 ⊖ s)) ⊕ (p ⊗ s ⊗ (𝟙 ⊖ q)) ⊕ (p ⊗ q ⊗ s) ⊕ (s ⊗ (𝟙 ⊖ (p ⊕ q))) ⊕ (q ⊗ s ⊗ (𝟙 ⊖ p))|6|1
+max(ti) = 1|{{p},{p,q},{p,q,s},{p,s},{q,s},{s}}|(p ⊗ (𝟙 ⊖ (q ⊕ s))) ⊕ (p ⊗ q ⊗ (𝟙 ⊖ s)) ⊕ (s ⊗ (𝟙 ⊖ (p ⊕ q))) ⊕ (p ⊗ s ⊗ (𝟙 ⊖ q)) ⊕ (q ⊗ s ⊗ (𝟙 ⊖ p)) ⊕ (p ⊗ q ⊗ s)|6|1
+(2 rows)
+shape|why|formula|counting|tropical
+bool_and(t) = false|{{p,q},{p,q,s},{q},{q,s}}|(q ⊗ (𝟙 ⊖ (p ⊕ s))) ⊕ (p ⊗ q ⊗ (𝟙 ⊖ s)) ⊕ (q ⊗ s ⊗ (𝟙 ⊖ p)) ⊕ (p ⊗ q ⊗ s)|6|2
+min(ti) = 0|{{p,q},{p,q,s},{q},{q,s}}|(q ⊗ (𝟙 ⊖ (p ⊕ s))) ⊕ (p ⊗ q ⊗ (𝟙 ⊖ s)) ⊕ (q ⊗ s ⊗ (𝟙 ⊖ p)) ⊕ (p ⊗ q ⊗ s)|6|2
+(2 rows)
+shape|why|formula|counting|tropical
+every(t) <> true|{{p,q},{p,q,s},{q},{q,s}}|(q ⊗ (𝟙 ⊖ (p ⊕ s))) ⊕ (p ⊗ q ⊗ (𝟙 ⊖ s)) ⊕ (q ⊗ s ⊗ (𝟙 ⊖ p)) ⊕ (p ⊗ q ⊗ s)|6|2
+min(ti) <> 1|{{p,q},{p,q,s},{q},{q,s}}|(q ⊗ (𝟙 ⊖ (p ⊕ s))) ⊕ (p ⊗ q ⊗ (𝟙 ⊖ s)) ⊕ (q ⊗ s ⊗ (𝟙 ⊖ p)) ⊕ (p ⊗ q ⊗ s)|6|2
+(2 rows)

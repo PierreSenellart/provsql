@@ -71,6 +71,19 @@ SELECT remove_provenance('result_d');
 SELECT * FROM result_d ORDER BY id;
 DROP TABLE result_d;
 
+-- Case E: aggregating an aggregate result of the inner subquery (max of
+-- a count, sum of a count, a HAVING over it) is refused at planning time,
+-- like GROUP BY or ORDER BY on such a column: the outer aggregate would
+-- otherwise run on the raw agg_token composite.
+SELECT max(c) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+SELECT sum(c) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+SELECT count(c) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+SELECT count(*) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t
+  HAVING max(c) > 1;
+-- An outer aggregate that reads no aggregate column is still fine.
+SELECT count(*) AS groups
+  FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+
 SELECT remove_provenance('l_nested');
 SELECT remove_provenance('r_nested');
 DROP TABLE l_nested;

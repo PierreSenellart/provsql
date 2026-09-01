@@ -1,0 +1,133 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|g|formula
+min >= 3|1|(b ⊗ (𝟙 ⊖ (a ⊕ c))) ⊕ (c ⊗ (𝟙 ⊖ (a ⊕ b))) ⊕ (b ⊗ c ⊗ (𝟙 ⊖ a))
+min >= 3|2|d
+(2 rows)
+remove_provenance
+
+(1 row)
+shape|g|formula
+max <= 3|1|(a ⊗ (𝟙 ⊖ (b ⊕ c))) ⊕ (b ⊗ (𝟙 ⊖ (a ⊕ c))) ⊕ (a ⊗ b ⊗ (𝟙 ⊖ c))
+max <= 3|2|𝟘
+(2 rows)
+agg|op|const_left|mismatches
+max|<|f|0
+max|<|t|0
+max|<=|f|0
+max|<=|t|0
+max|<>|f|0
+max|<>|t|0
+max|=|f|0
+max|=|t|0
+max|>|f|0
+max|>|t|0
+max|>=|f|0
+max|>=|t|0
+min|<|f|0
+min|<|t|0
+min|<=|f|0
+min|<=|t|0
+min|<>|f|0
+min|<>|t|0
+min|=|f|0
+min|=|t|0
+min|>|f|0
+min|>|t|0
+min|>=|f|0
+min|>=|t|0
+(24 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|shape|b
+1|max = 3|t
+2|max = 3|f
+1|max > 3|f
+2|max > 3|t
+1|min >= 1|t
+2|min >= 1|t
+1|min >= 3|f
+2|min >= 3|t
+(8 rows)
+shape|grp|tropical|viterbi
+max < 3|1|1|0.5
+max < 3|2|Infinity|0
+max <= 3|1|1|0.5
+max <= 3|2|Infinity|0
+max <> 3|1|1|0.8
+max <> 3|2|4|0.6
+max = 3|1|2|0.4
+max = 3|2|Infinity|0
+max > 3|1|3|0.8
+max > 3|2|4|0.6
+max >= 3|1|2|0.8
+max >= 3|2|4|0.6
+min < 3|1|1|0.5
+min < 3|2|Infinity|0
+min <= 3|1|1|0.5
+min <= 3|2|Infinity|0
+min <> 3|1|1|0.8
+min <> 3|2|4|0.6
+min = 3|1|2|0.4
+min = 3|2|Infinity|0
+min > 3|1|3|0.8
+min > 3|2|4|0.6
+min >= 3|1|2|0.8
+min >= 3|2|4|0.6
+(24 rows)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+shape|grp|p_on|p_off|boolexpr
+max < 3|1|0.062500|0.062500|(¬((b ∧ y1) ∨ (c ∧ y1))) ∧ (a ∧ y1)
+max < 3|2|0.000000|0.000000|⊥
+max <= 3|1|0.187500|0.187500|(¬(c ∧ y1)) ∧ ((a ∧ y1) ∨ (b ∧ y1))
+max <= 3|2|0.000000|0.000000|⊥
+max <> 3|1|0.312500|0.312500|(c ∧ y1) ∨ ((¬((b ∧ y1) ∨ (c ∧ y1))) ∧ (a ∧ y1))
+max <> 3|2|0.250000|0.250000|(d ∧ y2)
+max = 3|1|0.125000|0.125000|(¬(c ∧ y1)) ∧ (b ∧ y1)
+max = 3|2|0.000000|0.000000|⊥
+max > 3|1|0.250000|0.250000|(c ∧ y1)
+max > 3|2|0.250000|0.250000|(d ∧ y2)
+max >= 3|1|0.375000|0.375000|(b ∧ y1) ∨ (c ∧ y1)
+max >= 3|2|0.250000|0.250000|(d ∧ y2)
+min < 3|1|0.250000|0.250000|(a ∧ y1)
+min < 3|2|0.000000|0.000000|⊥
+min <= 3|1|0.375000|0.375000|(a ∧ y1) ∨ (b ∧ y1)
+min <= 3|2|0.000000|0.000000|⊥
+min <> 3|1|0.312500|0.312500|(a ∧ y1) ∨ ((¬((a ∧ y1) ∨ (b ∧ y1))) ∧ (c ∧ y1))
+min <> 3|2|0.250000|0.250000|(d ∧ y2)
+min = 3|1|0.125000|0.125000|(¬(a ∧ y1)) ∧ (b ∧ y1)
+min = 3|2|0.000000|0.000000|⊥
+min > 3|1|0.062500|0.062500|(¬((a ∧ y1) ∨ (b ∧ y1))) ∧ (c ∧ y1)
+min > 3|2|0.250000|0.250000|(d ∧ y2)
+min >= 3|1|0.187500|0.187500|(¬(a ∧ y1)) ∧ ((b ∧ y1) ∨ (c ∧ y1))
+min >= 3|2|0.250000|0.250000|(d ∧ y2)
+(24 rows)

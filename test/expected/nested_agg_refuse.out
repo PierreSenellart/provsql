@@ -28,6 +28,13 @@ id|p
 0|0.816000
 1|0.816000
 (2 rows)
+ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+groups|provsql
+2 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
 remove_provenance
 
 (1 row)

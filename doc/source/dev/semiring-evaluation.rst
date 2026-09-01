@@ -212,7 +212,11 @@ through these overrides: instead, before the main circuit traversal
 starts, :cfile:`having_semantics.hpp` walks the circuit, finds every
 ``cmp`` gate that compares an aggregate against a constant, and
 computes its semiring value using the ordinary ``plus`` / ``times``
-/ ``monus`` operations of the semiring.  Each result is injected
+/ ``monus`` operations of the semiring: a possible-worlds enumeration
+in general, or, for a ``MIN`` / ``MAX`` comparison in a semiring that
+declares ``absorptive()`` and ``mul_sub_left_distributive()``, the
+single-scan closed form described in :doc:`aggregation`.  Each result
+is injected
 into the provenance mapping keyed by the ``cmp`` gate itself, so
 the main traversal reaches those gates with a pre-resolved value
 and treats them like ordinary leaves.  The semiring's ``cmp`` /
@@ -231,6 +235,21 @@ multiplicative identity, which can significantly improve performance.
 Idempotent-but-not-absorptive semirings (such as why-provenance and
 which-provenance, where :math:`\mathbb{1} \oplus a \neq \mathbb{1}` in
 general) should leave it at the default ``false``.
+
+Override ``mul_sub_left_distributive()`` to return ``true`` if
+:math:`\otimes` distributes over the monus on the left,
+:math:`a \otimes (b \ominus c) = (a \otimes b) \ominus (a \otimes c)`.
+Together with absorptivity this licenses the single-scan closed form
+for ``MIN`` / ``MAX`` comparisons in ``HAVING`` (see
+:doc:`aggregation`), in place of the :math:`2^N` possible-worlds
+enumeration.  It holds in the Boolean, counting, tropical, Viterbi,
+Łukasiewicz and interval-union semirings and fails in the security
+(min-max) semiring, which is absorptive but not distributive, and in
+why- / which- / how-provenance; each override cites the Lean lemma
+(``*.mul_sub_left_distributive``, or ``*.not_mul_sub_left_distributive``
+for the refusals) that settles it.  Like ``absorptive()``, the flag
+is fail-closed: a new semiring that leaves it at ``false`` merely
+keeps the enumeration.
 
 Boolean-Rewrite Compatibility
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -73,6 +73,18 @@ virtual value_type delta(value_type x) const override
   return x==zero() ? zero() : one();
 }
 /**
+ * @brief @f$\otimes@f$ distributes over @f$\ominus@f$, so the HAVING
+ *        @c MIN / @c MAX comparisons take the single-scan closed form
+ *        (inherited by @c TropicalNonneg, the absorptive case where the
+ *        scan applies).
+ *
+ * Lean: @c Provenance.Semirings.TropicalR.mul_sub_left_distributive (the
+ *       real-valued instance of @c Tropical.mul_sub_left_distributive).
+ */
+virtual bool mul_sub_left_distributive() const override {
+  return true;
+}
+/**
  * @brief No semiring homomorphism @c BoolFunc(Y) →+* Tropical exists
  *        (the min-plus structure cannot be made Boolean-functions
  *        compatible), so the safe-query Boolean rewrite is unsound

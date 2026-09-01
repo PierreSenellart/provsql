@@ -4,8 +4,8 @@
  *
  * Defines the small non-template helpers declared in
  * @c provsql_having_detail in @c having_semantics.hpp.  The actual
- * possible-worlds enumeration logic is the @c provsql_having() template
- * in the header.
+ * possible-worlds logic (enumeration and the MIN / MAX closed form) is
+ * the @c provsql_having() template in the header.
  */
 extern "C" {
 #include "postgres.h"
