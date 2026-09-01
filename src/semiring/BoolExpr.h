@@ -122,6 +122,17 @@ virtual bool absorptive() const override {
   return true;
 }
 /**
+ * @brief @f$\otimes@f$ distributes over @f$\ominus@f$ in the free
+ *        Boolean-function algebra the circuit denotes, so the HAVING
+ *        @c MIN / @c MAX comparisons take the single-scan closed form
+ *        whenever the enumeration is not being certified.
+ *
+ * Lean: @c Provenance.Semirings.BoolFunc.mul_sub_left_distributive.
+ */
+virtual bool mul_sub_left_distributive() const override {
+  return true;
+}
+/**
  * @brief @c BoolExpr is the free Boolean-circuit construction; the
  *        evaluation map to @c Bool at any valuation is an m-semiring
  *        homomorphism, so the safe-query Boolean rewrite preserves

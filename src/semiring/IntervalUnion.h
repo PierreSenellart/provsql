@@ -129,6 +129,15 @@ virtual bool absorptive() const override {
   return true;
 }
 /**
+ * @brief @f$\otimes@f$ distributes over @f$\ominus@f$, so the HAVING
+ *        @c MIN / @c MAX comparisons take the single-scan closed form.
+ *
+ * Lean: @c Provenance.Semirings.IntervalUnion.mul_sub_left_distributive.
+ */
+virtual bool mul_sub_left_distributive() const override {
+  return true;
+}
+/**
  * @brief A semiring homomorphism @c BoolFunc(Y) →+* IntervalUnion exists
  *        (map each variable to a fixed nonempty interval), so the
  *        safe-query Boolean rewrite preserves evaluation results.

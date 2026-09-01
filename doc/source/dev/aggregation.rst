@@ -157,6 +157,32 @@ ranges over the non-empty worlds of the same per-row tokens, so it
 already entails the group's existence, and conjoining both would
 count that factor twice in a non-idempotent semiring.
 
+For ``MIN`` / ``MAX`` against a constant, the enumeration is
+replaced by a single-scan closed form whenever the semiring is
+absorptive and its :math:`\otimes` distributes over :math:`\ominus`
+(``Semiring::absorptive()`` and
+``Semiring::mul_sub_left_distributive()`` both ``true``; see
+:ref:`semiring-optional-methods`).  With :math:`L, L', G, G', E`
+the :math:`\oplus`-sums of the contributors whose value is
+:math:`<, \le, \ge, >, =` the constant, ``MIN < C`` is :math:`L`,
+``MIN <= C`` is :math:`L'`, ``MIN >= C`` is
+:math:`(\mathbf{1} \ominus L) \otimes G`, ``MIN > C`` is
+:math:`(\mathbf{1} \ominus L') \otimes G'`, ``MIN = C`` is
+:math:`(\mathbf{1} \ominus L) \otimes E` and ``MIN <> C`` is
+:math:`L \oplus (\mathbf{1} \ominus L') \otimes G'`; ``MAX`` is the
+mirror image with :math:`<` and :math:`>` exchanged.  The empty world
+never satisfies the comparison (``MIN`` / ``MAX`` of an empty group
+is NULL), so scalar aggregation needs no special case.  The certifying
+Boolean-circuit construction (``BoolExpr`` over independent base
+tuples) keeps the complete enumeration, whose mutually exclusive world
+terms its d-DNNF certificate needs; the closed form is what it builds
+when the contributors are derived sub-circuits (a join, a subquery).
+Correctness is the Lean theorems ``Having.minScan_correct`` /
+``Having.maxScan_correct`` (``Provenance/HavingMinMax.lean``); the
+five-element chain of ``Provenance/Semirings/ChainFive.lean`` is
+absorptive but not distributive and shows the second hypothesis is
+needed.
+
 What the ``cmp`` supersedes is the compared group's δ, not the
 whole row token it sits in.  The distinction matters when the
 comparison was written in an outer ``WHERE`` over a subquery's

@@ -90,7 +90,10 @@ virtual char const * what() const noexcept {
  * @c absorptive() returns @c true.  Absorptivity implies idempotency
  * (@f$a \oplus a = a@f$), which lets the circuit evaluator and the
  * HAVING-semantics machinery deduplicate operands and short-circuit
- * over the multiplicative identity.
+ * over the multiplicative identity.  An absorptive semiring whose
+ * @f$\otimes@f$ also distributes over @f$\ominus@f$
+ * (@c mul_sub_left_distributive()) gets its @c MIN / @c MAX HAVING
+ * comparisons in a single scan instead of a world enumeration.
  */
 template<typename V>
 class Semiring
@@ -358,6 +361,28 @@ virtual ~Semiring() = default;
  * @return @c false by default; override to return @c true.
  */
 virtual bool absorptive() const {
+  return false;
+}
+
+/**
+ * @brief Return @c true if @f$\otimes@f$ distributes over the monus
+ *        on the left: @f$a \otimes (b \ominus c) = (a \otimes b) \ominus
+ *        (a \otimes c)@f$ for all @f$a, b, c@f$.
+ *
+ * Together with absorptivity, this is the hypothesis under which the
+ * HAVING machinery (@c provsql_having in @c having_semantics.hpp) may
+ * replace the possible-world enumeration of a @c MIN / @c MAX
+ * comparison by its single-scan closed form (Lean
+ * @c Having.minScan_correct / @c Having.maxScan_correct in
+ * provenance-lean/Provenance/HavingMinMax.lean).  Holds in the Boolean,
+ * counting, tropical, Viterbi, Łukasiewicz and interval-union
+ * semirings; fails in the security (min-max) semiring, which is
+ * absorptive but not distributive, and in Why / Which / How.
+ *
+ * @return @c false by default; override to return @c true only with a
+ *         proof (the Lean @c *.mul_sub_left_distributive lemmas).
+ */
+virtual bool mul_sub_left_distributive() const {
   return false;
 }
 

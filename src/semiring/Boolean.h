@@ -68,6 +68,15 @@ virtual bool absorptive() const override {
   return true;
 }
 /**
+ * @brief @f$\otimes@f$ distributes over @f$\ominus@f$, so the HAVING
+ *        @c MIN / @c MAX comparisons take the single-scan closed form.
+ *
+ * Lean: @c Provenance.Semirings.Bool.mul_sub_left_distributive.
+ */
+virtual bool mul_sub_left_distributive() const override {
+  return true;
+}
+/**
  * @brief The identity map @c BoolFunc(X) →+* Bool (evaluating a free
  *        Boolean function at a valuation) is an m-semiring
  *        homomorphism, so the safe-query Boolean rewrite preserves

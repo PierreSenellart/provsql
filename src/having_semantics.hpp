@@ -9,9 +9,11 @@
  * pass the filter.
  *
  * The single public entry point @c provsql_having() rewrites HAVING
- * comparison gates in the circuit by enumerating possible worlds, for
- * any compiled semiring.  If the HAVING gate type is incompatible with
- * the requested semiring, the function is a no-op.
+ * comparison gates in the circuit, for any compiled semiring, by
+ * enumerating possible worlds -- or, for @c MIN / @c MAX against a
+ * constant in an absorptive semiring whose ⊗ distributes over ⊖, by the
+ * equivalent single-scan closed form.  If the HAVING gate type is
+ * incompatible with the requested semiring, the function is a no-op.
  */
 #ifndef PROVSQL_HAVING_SEMANTICS_HPP
 #define PROVSQL_HAVING_SEMANTICS_HPP
@@ -51,7 +53,9 @@ ComparisonOperator flip_op(ComparisonOperator op);
 /** @endcond */
 
 /**
- * @brief Rewrite HAVING comparison gates in the circuit by enumerating possible worlds.
+ * @brief Rewrite HAVING comparison gates in the circuit into their
+ *        possible-world provenance (world enumeration, or the MIN / MAX
+ *        single-scan closed form where the semiring allows it).
  *
  * @tparam SemiringT  The semiring type used for evaluation.
  * @tparam MapT       The provenance mapping type (gate_t → semiring value).
@@ -171,6 +175,73 @@ void provsql_having(
       }
 
       return S.plus(disjuncts);
+    };
+
+  // Single-scan closed form for MIN / MAX against a constant in an
+  // absorptive m-semiring whose ⊗ distributes over ⊖ (Lean
+  // Having.minScan_correct / Having.maxScan_correct).  Writing L, L', G,
+  // G', E for the ⊕-sums of the contributors whose value is <, <=, >=, >,
+  // = C, the possible-world provenance of MIN(a) op C is
+  //   MIN <  C : L               MIN >= C : (1 ⊖ L)  ⊗ G
+  //   MIN <= C : L'              MIN >  C : (1 ⊖ L') ⊗ G'
+  //   MIN =  C : (1 ⊖ L) ⊗ E     MIN <> C : L ⊕ (1 ⊖ L') ⊗ G'
+  // and MAX is the mirror image (exchange < and >).  The 1 ⊖ factor
+  // excludes every world containing a spoiler; absorptivity makes the
+  // ⊕-sum over the witnesses stand for "some witness present", and
+  // distributivity lets the two combine by one ⊗.  The empty world never
+  // satisfies the comparison (MIN / MAX of an empty group is NULL), so
+  // scalar aggregation needs no special case.
+  auto min_max_scan =
+    [&](const std::vector<long> &mvals, long C,
+        const std::vector<typename SemiringT::value_type> &kvals,
+        ComparisonOperator op,
+        AggregationOperator agg_kind) -> typename SemiringT::value_type {
+      using V = typename SemiringT::value_type;
+      std::vector<V> lt, le, ge, gt, eq;
+      for (size_t i = 0; i < kvals.size(); ++i) {
+        if (kvals[i] == S.zero()) continue;
+        if (mvals[i] < C) lt.push_back(kvals[i]);
+        if (mvals[i] <= C) le.push_back(kvals[i]);
+        if (mvals[i] >= C) ge.push_back(kvals[i]);
+        if (mvals[i] > C) gt.push_back(kvals[i]);
+        if (mvals[i] == C) eq.push_back(kvals[i]);
+      }
+      auto sum = [&](const std::vector<V> &v) -> V {
+        return v.empty() ? S.zero() : S.plus(v);
+      };
+      // (1 ⊖ ⊕spoilers) ⊗ ⊕witnesses
+      auto guarded = [&](const std::vector<V> &spoilers,
+                         const std::vector<V> &witnesses) -> V {
+        if (witnesses.empty()) return S.zero();
+        V w = S.plus(witnesses);
+        if (spoilers.empty()) return w;
+        return S.times(std::vector<V>{S.monus(S.one(), S.plus(spoilers)), w});
+      };
+
+      // The MAX table is the MIN table with < and > exchanged: flip the
+      // operator and swap the roles of the below / above sets.
+      const bool is_max = (agg_kind == AggregationOperator::MAX);
+      const std::vector<V> &below = is_max ? gt : lt;       // strictly on the "losing" side
+      const std::vector<V> &below_eq = is_max ? ge : le;    // losing side or equal
+      const std::vector<V> &above = is_max ? lt : gt;       // strictly on the "winning" side
+      const std::vector<V> &above_eq = is_max ? le : ge;    // winning side or equal
+      if (is_max) op = flip_op(op);
+
+      switch (op) {
+      case ComparisonOperator::LT: return sum(below);
+      case ComparisonOperator::LE: return sum(below_eq);
+      case ComparisonOperator::GE: return guarded(below, above_eq);
+      case ComparisonOperator::GT: return guarded(below_eq, above);
+      case ComparisonOperator::EQ: return guarded(below, eq);
+      case ComparisonOperator::NE: {
+        V a = sum(below);
+        V b = guarded(below_eq, above);
+        if (a == S.zero()) return b;
+        if (b == S.zero()) return a;
+        return S.plus(std::vector<V>{a, b});
+      }
+      }
+      return S.zero();
     };
 
   auto pw_from_cmp_gate = [&](gate_t cmp_gate, typename SemiringT::value_type &pw_out) -> bool {
@@ -505,6 +576,17 @@ void provsql_having(
       // unmarkable.  When certifying, request the full enumeration --
       // the same one non-absorptive semirings already use.
       const bool certify = certifiable_contributors(kvals);
+
+      // MIN / MAX in an absorptive, ⊗-over-⊖ distributive semiring: the
+      // single-scan closed form replaces the 2^n world enumeration.  A
+      // certifying semiring keeps the enumeration, whose exclusive world
+      // terms its certificate needs.
+      if ((agg_kind == AggregationOperator::MIN ||
+           agg_kind == AggregationOperator::MAX) &&
+          S.absorptive() && S.mul_sub_left_distributive() && !certify) {
+        pw_out = min_max_scan(mvals, C, kvals, effective_op, agg_kind);
+        return true;
+      }
 
       bool upset = false;
       auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind,
