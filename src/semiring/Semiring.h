@@ -90,10 +90,12 @@ virtual char const * what() const noexcept {
  * @c absorptive() returns @c true.  Absorptivity implies idempotency
  * (@f$a \oplus a = a@f$), which lets the circuit evaluator and the
  * HAVING-semantics machinery deduplicate operands and short-circuit
- * over the multiplicative identity.  An absorptive semiring whose
- * @f$\otimes@f$ also distributes over @f$\ominus@f$
- * (@c mul_sub_left_distributive()) gets its @c MIN / @c MAX HAVING
- * comparisons in a single scan instead of a world enumeration.
+ * over the multiplicative identity.  An absorptive semiring gets its
+ * existential @c MIN / @c MAX HAVING comparisons (@c MIN below,
+ * @c MAX above a constant) in a single scan instead of a world
+ * enumeration; when its @f$\otimes@f$ also distributes over
+ * @f$\ominus@f$ (@c mul_sub_left_distributive()), so do the other
+ * @c MIN / @c MAX comparisons.
  */
 template<typename V>
 class Semiring
@@ -365,16 +367,47 @@ virtual bool absorptive() const {
 }
 
 /**
+ * @brief Return @c true if this semiring is idempotent
+ *        (@f$a \oplus a = a@f$ for all @f$a@f$).
+ *
+ * Absorptivity implies idempotence, so the default forwards to
+ * @c absorptive(); override to return @c true in a semiring that is
+ * idempotent without being absorptive (why- and which-provenance,
+ * where @f$\oplus@f$ is set union).
+ *
+ * The HAVING machinery (@c provsql_having in @c having_semantics.hpp)
+ * uses it for the *monotone* comparisons, those whose valid worlds are
+ * closed under supersets (@c MIN below, @c MAX above a constant,
+ * @c COUNT above a constant, @c SUM above a constant over non-negative
+ * values, @c bool_or @c = @c true, @c bool_and @c = @c false): over
+ * such a family the monus factors cancel from the possible-world sum,
+ * which is then the plain @f$\oplus@f$-sum of the products of the
+ * present annotations (Lean @c Having.witness_identity in
+ * provenance-lean/Provenance/Having.lean, which assumes idempotence
+ * only).  The enumeration stays exhaustive; absorptivity is what
+ * further collapses it to the minimal worlds.
+ *
+ * @return @c absorptive() by default; override to return @c true only
+ *         with a proof (the Lean @c *.idempotent lemmas).
+ */
+virtual bool idempotent() const {
+  return absorptive();
+}
+
+/**
  * @brief Return @c true if @f$\otimes@f$ distributes over the monus
  *        on the left: @f$a \otimes (b \ominus c) = (a \otimes b) \ominus
  *        (a \otimes c)@f$ for all @f$a, b, c@f$.
  *
  * Together with absorptivity, this is the hypothesis under which the
  * HAVING machinery (@c provsql_having in @c having_semantics.hpp) may
- * replace the possible-world enumeration of a @c MIN / @c MAX
- * comparison by its single-scan closed form (Lean
+ * replace the possible-world enumeration of a non-existential @c MIN /
+ * @c MAX comparison (@c MIN above, @c MAX below a constant, or either
+ * equal to one) by its single-scan closed form (Lean
  * @c Having.minScan_correct / @c Having.maxScan_correct in
- * provenance-lean/Provenance/HavingMinMax.lean).  Holds in the Boolean,
+ * provenance-lean/Provenance/HavingMinMax.lean); the existential
+ * comparisons need absorptivity alone (Lean @c Having.sum_ann_meet in
+ * provenance-lean/Provenance/Having.lean).  Holds in the Boolean,
  * counting, tropical, Viterbi, Łukasiewicz and interval-union
  * semirings; fails in the security (min-max) semiring, which is
  * absorptive but not distributive, and in Why / Which / How.

@@ -111,6 +111,15 @@ value_type delta(value_type x) const override {
 }
 
 /**
+ * @brief Which-provenance is idempotent: @f$\oplus@f$ is set union.
+ *
+ * Lean: @c Provenance.Semirings.Which.idempotent.
+ */
+bool idempotent() const override {
+  return true;
+}
+
+/**
  * @brief No semiring homomorphism @c BoolFunc(Y) →+* Which exists, so
  *        the safe-query Boolean rewrite is unsound under
  *        which-provenance.  (Lineage tracks the union of contributing

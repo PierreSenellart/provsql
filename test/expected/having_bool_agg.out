@@ -66,3 +66,49 @@ not bool_or|A|0.2500
 not bool_or|B|0.0000
 not bool_or|C|0.1250
 (3 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|level
+minmax or=true|A|secret
+minmax or=true|B|confidential
+minmax or=true|C|unclassified
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|level
+minmax and=false|A|unclassified
+minmax and=false|B|unavailable
+minmax and=false|C|secret
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|level
+minmax or=false|A|unclassified
+minmax or=false|B|unavailable
+minmax or=false|C|unavailable
+(3 rows)
+remove_provenance
+
+(1 row)
+q|g|level
+minmax and=true|A|unavailable
+minmax and=true|B|confidential
+minmax and=true|C|unclassified
+(3 rows)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|why
+why or=true|A|{{secret},{secret,unclassified}}
+why or=true|B|{{confidential}}
+why or=true|C|{{restricted},{restricted,secret},{restricted,secret,unclassified},{restricted,unclassified},{secret,unclassified},{unclassified}}
+(3 rows)

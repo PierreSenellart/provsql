@@ -13,8 +13,11 @@
 --   MIN <  C : L               MIN >= C : (𝟙 ⊖ L)  ⊗ G
 --   MIN <= C : L'              MIN >  C : (𝟙 ⊖ L') ⊗ G'
 --   MIN =  C : (𝟙 ⊖ L) ⊗ E     MIN <> C : L ⊕ (𝟙 ⊖ L') ⊗ G'
--- (MAX: exchange < and >).  Other semirings keep the exhaustive
--- possible-worlds enumeration.
+-- (MAX: exchange < and >).  The two monus-free forms, MIN < / <= C and
+-- MAX > / >= C, are existential ("some witness present") and need only
+-- absorptivity, so they are taken in every absorptive semiring; the
+-- other four need the distributivity as well.  Other semirings keep the
+-- exhaustive possible-worlds enumeration.
 --
 -- Group 1 holds a:1, b:3, c:5 and group 2 holds d:4; every comparison
 -- is against 3.
@@ -153,6 +156,78 @@ FROM (VALUES ('min'), ('max')) AS a(agg),
      LATERAL mms_costs(a.agg, o.op, 3) AS k
 ORDER BY a.agg, o.op, k.grp;
 
+-- (2b) The security (min-max) semiring is absorptive but ⊗ does not
+--      distribute over ⊖, so MIN < / <= C and MAX > / >= C take the
+--      witness sum (the ⊕ = enum-min of the witnesses' levels) while the
+--      four other comparisons keep the enumeration.  With 𝟙 =
+--      unclassified, 𝟘 = unavailable and c *unclassified*, every world
+--      leaving c out is annihilated by its 𝟙 ⊖ (… ⊕ c) = 𝟘 factor, which
+--      the monus-free forms never see.  Group 1 (a:1 secret, b:3
+--      restricted, c:5 unclassified): min < 3 is a = secret; min <= 3 is
+--      a ⊕ b = restricted; max >= 3 is b ⊕ c = unclassified; min >= 3
+--      enumerates {b} = 𝟘, {c} = unclassified, {b, c} = restricted, so
+--      unclassified; min = 3 enumerates {b} = 𝟘 and {b, c} = restricted;
+--      max <= 3 enumerates {a}, {b}, {a, b}, all 𝟘 = unavailable.
+--      Group 2 (d:4 confidential) is d on the comparisons it satisfies.
+CREATE TABLE mms_level(value classification_level, provenance uuid);
+INSERT INTO mms_level
+  SELECT CASE value WHEN 'a' THEN 'secret' WHEN 'b' THEN 'restricted'
+                    WHEN 'c' THEN 'unclassified' ELSE 'confidential'
+         END::classification_level, provenance
+  FROM mms_name;
+CREATE FUNCTION mms_levels(agg text, op text, c int)
+RETURNS TABLE(shape text, grp int, level classification_level) AS $$
+DECLARE
+  r record;
+BEGIN
+  shape := format('%s %s %s', agg, op, c);
+  FOR r IN EXECUTE format(
+    'SELECT g, provenance() AS tok FROM mms GROUP BY g HAVING %s(v) %s %s',
+    agg, op, c)
+  LOOP
+    grp := r.g;
+    level := sr_minmax(r.tok, 'mms_level', 'unclassified'::classification_level);
+    RETURN NEXT;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql;
+
+SELECT k.shape, k.grp, k.level
+FROM (VALUES ('min'), ('max')) AS a(agg),
+     (VALUES ('<'), ('<='), ('>='), ('>'), ('='), ('<>')) AS o(op),
+     LATERAL mms_levels(a.agg, o.op, 3) AS k
+ORDER BY a.agg, o.op, k.grp;
+
+-- (2c) Why- and which-provenance are idempotent but not absorptive: the
+--      existential comparisons enumerate every valid world, but as the
+--      family is closed under supersets the monus factors cancel and each
+--      world contributes the product of its present annotations only.
+--      Group 1, min <= 3: the worlds meeting {a, b}, i.e. every non-empty
+--      subset of {a, b, c} but {c}; the why-provenance lists the six
+--      witness sets, the which-provenance their union {a, b, c}.
+CREATE FUNCTION mms_sets(agg text, op text, c int)
+RETURNS TABLE(shape text, grp int, why text, which text) AS $$
+DECLARE
+  r record;
+BEGIN
+  shape := format('%s %s %s', agg, op, c);
+  FOR r IN EXECUTE format(
+    'SELECT g, provenance() AS tok FROM mms GROUP BY g HAVING %s(v) %s %s',
+    agg, op, c)
+  LOOP
+    grp := r.g;
+    why := sr_why(r.tok, 'mms_name')::text;
+    which := sr_which(r.tok, 'mms_name')::text;
+    RETURN NEXT;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql;
+
+SELECT k.shape, k.grp, k.why, k.which
+FROM (VALUES ('min', '<='), ('max', '>=')) AS a(agg, op),
+     LATERAL mms_sets(a.agg, a.op, 3) AS k
+ORDER BY a.agg, k.grp;
+
 -- (3) Probabilities over a JOIN with a second tracked table: every
 --     contributor is a product x_i ∧ y_g, not an independent literal, so
 --     the Boolean-circuit construction does not certify the enumeration
@@ -205,6 +280,8 @@ ORDER BY a.agg, o.op, k.grp;
 
 DROP FUNCTION mms_check(text, text, int, boolean);
 DROP FUNCTION mms_costs(text, text, int);
+DROP FUNCTION mms_levels(text, text, int);
+DROP FUNCTION mms_sets(text, text, int);
 DROP FUNCTION mms_join_prob(text, text, int);
-DROP TABLE mm_names, mmy_name, mms_bool, mms_w, mms_cost, mms_name;
+DROP TABLE mm_names, mmy_name, mms_bool, mms_level, mms_w, mms_cost, mms_name;
 DROP TABLE mmy, mms, mms_plain;

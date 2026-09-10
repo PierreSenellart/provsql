@@ -106,6 +106,15 @@ value_type delta(value_type x) const override {
 }
 
 /**
+ * @brief Why-provenance is idempotent: @f$\oplus@f$ is set union.
+ *
+ * Lean: @c Provenance.Semirings.Why.idempotent.
+ */
+virtual bool idempotent() const override {
+  return true;
+}
+
+/**
  * @brief No semiring homomorphism @c BoolFunc(Y) →+* Why exists, so
  *        the safe-query Boolean rewrite is unsound under
  *        why-provenance.  (Why tracks set-of-witness-sets per

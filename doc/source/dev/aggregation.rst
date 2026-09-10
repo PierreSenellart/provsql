@@ -157,12 +157,10 @@ ranges over the non-empty worlds of the same per-row tokens, so it
 already entails the group's existence, and conjoining both would
 count that factor twice in a non-idempotent semiring.
 
-For ``MIN`` / ``MAX`` against a constant, the enumeration is
-replaced by a single-scan closed form whenever the semiring is
-absorptive and its :math:`\otimes` distributes over :math:`\ominus`
-(``Semiring::absorptive()`` and
-``Semiring::mul_sub_left_distributive()`` both ``true``; see
-:ref:`semiring-optional-methods`).  With :math:`L, L', G, G', E`
+For ``MIN`` / ``MAX`` against a constant in an absorptive semiring
+(``Semiring::absorptive()`` ``true``; see
+:ref:`semiring-optional-methods`), the enumeration is replaced by a
+single-scan closed form.  With :math:`L, L', G, G', E`
 the :math:`\oplus`-sums of the contributors whose value is
 :math:`<, \le, \ge, >, =` the constant, ``MIN < C`` is :math:`L`,
 ``MIN <= C`` is :math:`L'`, ``MIN >= C`` is
@@ -170,18 +168,40 @@ the :math:`\oplus`-sums of the contributors whose value is
 :math:`(\mathbf{1} \ominus L') \otimes G'`, ``MIN = C`` is
 :math:`(\mathbf{1} \ominus L) \otimes E` and ``MIN <> C`` is
 :math:`L \oplus (\mathbf{1} \ominus L') \otimes G'`; ``MAX`` is the
-mirror image with :math:`<` and :math:`>` exchanged.  The empty world
+mirror image with :math:`<` and :math:`>` exchanged.  The two
+monus-free forms are the *existential* comparisons: ``MIN < C``
+holds in exactly the worlds containing some contributor below
+:math:`C`, a family closed under supersets whose minimal elements are
+the singletons, and on such a family the monus cancels from the
+possible-world sum, so absorptivity alone makes the sum of the
+witnesses exact (Lean ``Having.sum_ann_meet`` and the
+``*_site_rewrite`` theorems of ``Provenance/HavingMonotone.lean``).
+The four other forms are proved only when :math:`\otimes` also
+distributes over :math:`\ominus` (``Semiring::mul_sub_left_distributive()``
+``true``; Lean ``Having.minScan_correct`` / ``Having.maxScan_correct``
+in ``Provenance/HavingMinMax.lean``), so in the security (min-max)
+semiring, absorptive but not distributive, only the existential
+comparisons take the scan and the others keep the enumeration.
+Whether distributivity is necessary for them is not settled: the
+five-element chain of ``Provenance/Semirings/ChainFive.lean``
+refutes the ``COUNT = 1`` and ``COUNT <= 1`` identities without it,
+but is not a counterexample to the ``MIN`` / ``MAX`` forms.  The same existential collapse serves
+``bool_or = true`` and ``bool_and = false``, whose valid worlds are
+those meeting the trigger class.  Short of absorptivity, idempotence
+(``Semiring::idempotent()``, true of why- and which-provenance)
+already cancels the monus from the possible-world sum over any
+family closed under supersets (Lean ``Having.witness_identity``):
+for those two conditions, and for ``MIN`` below and ``MAX`` above a
+constant, ``COUNT`` above one and ``SUM`` above one over non-negative
+values, an idempotent semiring keeps the exhaustive enumeration but
+annotates each valid world by the product of its present
+annotations alone.  The empty world
 never satisfies the comparison (``MIN`` / ``MAX`` of an empty group
 is NULL), so scalar aggregation needs no special case.  The certifying
 Boolean-circuit construction (``BoolExpr`` over independent base
 tuples) keeps the complete enumeration, whose mutually exclusive world
 terms its d-DNNF certificate needs; the closed form is what it builds
 when the contributors are derived sub-circuits (a join, a subquery).
-Correctness is the Lean theorems ``Having.minScan_correct`` /
-``Having.maxScan_correct`` (``Provenance/HavingMinMax.lean``); the
-five-element chain of ``Provenance/Semirings/ChainFive.lean`` is
-absorptive but not distributive and shows the second hypothesis is
-needed.
 
 What the ``cmp`` supersedes is the compared group's δ, not the
 whole row token it sits in.  The distinction matters when the
@@ -375,7 +395,9 @@ values for routing, because their ``HAVING`` comparisons are
 resolved entirely by the m-semiring rewrite in
 :cfile:`having_semantics.cpp` (a first-present-occurrence
 characterisation, a closed form in absorptive :math:`\otimes`-over-
-:math:`\ominus` distributive semirings and an exact enumeration
+:math:`\ominus` distributive semirings, a sum of witnesses for the
+existential ``bool_or = true`` / ``bool_and = false`` in every
+absorptive semiring, and an exact enumeration
 elsewhere, and a possible-worlds enumeration respectively) and never
 reach the deterministic sampler.  Adding to the accumulator list is the
 topic of the next section.

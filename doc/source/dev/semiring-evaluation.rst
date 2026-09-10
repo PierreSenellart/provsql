@@ -144,8 +144,9 @@ and all other queries remain evaluable.
    <https://provsql.org/lean-docs/Provenance/Semirings/ChainFive.html>`_,
    a five-element chain that is absorptive but not
    :math:`\otimes`-over-:math:`\ominus` distributive, and
-   witnesses that the hypotheses of the ``HAVING`` identities
-   cannot be dropped.
+   witnesses that the distributivity hypothesis of the
+   ``HAVING count = 1`` and ``count <= 1`` identities cannot be
+   dropped.
 
 .. _semiring-optional-methods:
 
@@ -213,8 +214,10 @@ starts, :cfile:`having_semantics.hpp` walks the circuit, finds every
 ``cmp`` gate that compares an aggregate against a constant, and
 computes its semiring value using the ordinary ``plus`` / ``times``
 / ``monus`` operations of the semiring: a possible-worlds enumeration
-in general, or, for a ``MIN`` / ``MAX`` comparison in a semiring that
-declares ``absorptive()`` and ``mul_sub_left_distributive()``, the
+in general, one without monus factors for a monotone comparison in a
+semiring that declares ``idempotent()``, or, for a ``MIN`` / ``MAX``
+comparison in a semiring that declares ``absorptive()`` (and
+``mul_sub_left_distributive()`` for the non-existential ones), the
 single-scan closed form described in :doc:`aggregation`.  Each result
 is injected
 into the provenance mapping keyed by the ``cmp`` gate itself, so
@@ -234,15 +237,34 @@ deduplicate operands of ``plus`` gates and to short-circuit over the
 multiplicative identity, which can significantly improve performance.
 Idempotent-but-not-absorptive semirings (such as why-provenance and
 which-provenance, where :math:`\mathbb{1} \oplus a \neq \mathbb{1}` in
-general) should leave it at the default ``false``.
+general) should leave it at the default ``false`` and declare
+``idempotent()`` instead.
+
+Override ``idempotent()`` to return ``true`` if
+:math:`a \oplus a = a` for all :math:`a` in a semiring that is *not*
+absorptive; the default forwards to ``absorptive()``, so absorptive
+semirings need not override it.  Why- and which-provenance do, citing
+``Why.idempotent`` / ``Which.idempotent``.  The ``HAVING`` evaluator
+uses it for the monotone comparisons, those preserved as a group
+grows (``MIN`` below and ``MAX`` above a constant, ``COUNT`` above
+one, ``SUM`` above one over non-negative values, ``bool_or = true``,
+``bool_and = false``): their valid worlds form a family closed under
+supersets, over which the monus factors cancel from the
+possible-world sum (Lean ``Having.witness_identity``, which assumes
+idempotence only), so each world contributes the plain product of
+its present annotations.  The enumeration itself stays exhaustive;
+absorptivity is what further prunes it to the minimal worlds (see
+:doc:`aggregation`).
 
 Override ``mul_sub_left_distributive()`` to return ``true`` if
 :math:`\otimes` distributes over the monus on the left,
 :math:`a \otimes (b \ominus c) = (a \otimes b) \ominus (a \otimes c)`.
 Together with absorptivity this licenses the single-scan closed form
-for ``MIN`` / ``MAX`` comparisons in ``HAVING`` (see
+for every ``MIN`` / ``MAX`` comparison in ``HAVING`` (see
 :doc:`aggregation`), in place of the :math:`2^N` possible-worlds
-enumeration.  It holds in the Boolean, counting, tropical, Viterbi,
+enumeration; absorptivity alone already licenses it for the
+existential comparisons (``MIN`` below, ``MAX`` above a constant),
+whose closed form has no monus.  It holds in the Boolean, counting, tropical, Viterbi,
 Łukasiewicz and interval-union semirings and fails in the security
 (min-max) semiring, which is absorptive but not distributive, and in
 why- / which- / how-provenance; each override cites the Lean lemma

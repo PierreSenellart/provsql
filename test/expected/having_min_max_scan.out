@@ -99,6 +99,38 @@ min > 3|2|4|0.6
 min >= 3|1|2|0.8
 min >= 3|2|4|0.6
 (24 rows)
+shape|grp|level
+max < 3|1|unavailable
+max < 3|2|unavailable
+max <= 3|1|unavailable
+max <= 3|2|unavailable
+max <> 3|1|unclassified
+max <> 3|2|confidential
+max = 3|1|unavailable
+max = 3|2|unavailable
+max > 3|1|unclassified
+max > 3|2|confidential
+max >= 3|1|unclassified
+max >= 3|2|confidential
+min < 3|1|secret
+min < 3|2|unavailable
+min <= 3|1|restricted
+min <= 3|2|unavailable
+min <> 3|1|unclassified
+min <> 3|2|confidential
+min = 3|1|restricted
+min = 3|2|unavailable
+min > 3|1|unclassified
+min > 3|2|confidential
+min >= 3|1|unclassified
+min >= 3|2|confidential
+(24 rows)
+shape|grp|why|which
+max >= 3|1|{{a,b},{a,b,c},{a,c},{b},{b,c},{c}}|{a,b,c}
+max >= 3|2|{{d}}|{d}
+min <= 3|1|{{a},{a,b},{a,b,c},{a,c},{b},{b,c}}|{a,b,c}
+min <= 3|2|{}|⊥
+(4 rows)
 add_provenance
 
 (1 row)
