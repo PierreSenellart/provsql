@@ -7,3 +7,7 @@ Redirect permanent /temporal_demo /docs/user/casestudy4.html
 # RedirectMatch, not Redirect: the latter is prefix-matching and would
 # map /coco/<page> onto a nonexistent /demos/<page>.
 RedirectMatch permanent ^/coco(/.*)?$ /demos/
+
+# URLs printed in the EDBT 2025 demonstration paper (Yunus et al.)
+Redirect permanent /coco_demo https://gitlab.inria.fr/senellar/provsql_web_demo
+Redirect permanent /coco_demo_video https://www.youtube.com/watch?v=n_aFl0olTG4
