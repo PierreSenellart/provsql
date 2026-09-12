@@ -344,31 +344,6 @@ aggregation_type_mutator(Node *node, void *ctx) {
   return expression_tree_mutator(node, aggregation_type_mutator, ctx);
 }
 
-/**
- * @brief Retypes aggregation-result Vars in @p q from UUID to @c agg_token.
- *
- * After a subquery that contains @c provenance_aggregate is processed, its
- * result type is @c agg_token rather than plain UUID.  This mutator walks
- * the outer query and updates the type of every @c Var referencing that
- * result column so that subsequent type-checking passes correctly.
- *
- * An aggregate result reaches an enclosing query either directly, as the
- * subquery's own @c provenance_aggregate call, or forwarded by an
- * intermediate subquery that merely selects it -- in which case the deeper
- * level's own pass (@c process_query recurses before this runs) has already
- * retyped that intermediate @c Var.  Both shapes are recognised by the
- * column's *type* being @c agg_token, which is what carries the retyping
- * through arbitrarily many levels of nesting: keying on the producing
- * @c FuncExpr instead stops at the first level, leaving the column declared
- * as its pre-rewrite scalar type, and a comparison against it is then
- * executed natively on the raw composite datum.
- *
- * @param constants   Extension OID cache.
- * @param q           Outer query to patch.
- * @param rteid       Range-table index of the subquery in @p q.
- * @param targetList  Target list of the subquery (to locate the aggregate
- *                    result columns).
- */
 /** @brief expression_tree_walker predicate: some @c Var below @p node has
  *  type @c agg_token. */
 static bool agg_token_var_walker(Node *node, void *context) {
@@ -400,6 +375,31 @@ static bool aggref_over_agg_token_walker(Node *node, void *context) {
   return expression_tree_walker(node, aggref_over_agg_token_walker, context);
 }
 
+/**
+ * @brief Retypes aggregation-result Vars in @p q from UUID to @c agg_token.
+ *
+ * After a subquery that contains @c provenance_aggregate is processed, its
+ * result type is @c agg_token rather than plain UUID.  This mutator walks
+ * the outer query and updates the type of every @c Var referencing that
+ * result column so that subsequent type-checking passes correctly.
+ *
+ * An aggregate result reaches an enclosing query either directly, as the
+ * subquery's own @c provenance_aggregate call, or forwarded by an
+ * intermediate subquery that merely selects it -- in which case the deeper
+ * level's own pass (@c process_query recurses before this runs) has already
+ * retyped that intermediate @c Var.  Both shapes are recognised by the
+ * column's *type* being @c agg_token, which is what carries the retyping
+ * through arbitrarily many levels of nesting: keying on the producing
+ * @c FuncExpr instead stops at the first level, leaving the column declared
+ * as its pre-rewrite scalar type, and a comparison against it is then
+ * executed natively on the raw composite datum.
+ *
+ * @param constants   Extension OID cache.
+ * @param q           Outer query to patch.
+ * @param rteid       Range-table index of the subquery in @p q.
+ * @param targetList  Target list of the subquery (to locate the aggregate
+ *                    result columns).
+ */
 static void fix_type_of_aggregation_result(const constants_t *constants,
                                            Query *q, Index rteid,
                                            List *targetList) {
