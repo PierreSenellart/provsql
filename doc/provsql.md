@@ -69,6 +69,22 @@ a `sorry`-free development whose API documentation is browsable at
 [Lean formalization](https://provsql.org/lean/) page for an overview of what
 is proved.
 
+## Authorship
+
+ProvSQL was designed and is maintained by Pierre Senellart. Over the years it
+has received contributions from students and colleagues, listed on the
+[contributors](https://github.com/PierreSenellart/provsql/graphs/contributors)
+page of the repository.
+
+Since 2026, a large part of the code, tests, and documentation has been written
+with the assistance of generative models from Anthropic (*Claude*); ProvSQL
+Studio and the website, both of that period, were written and designed that
+way. The design, the SQL interface and the semantics of what ProvSQL computes
+were decided and reviewed by the maintainer, who is responsible for the whole.
+The test suite run in continuous integration on Linux, macOS and WSL is used to
+verify the behavior of the library; part of this behavior, the query rewriting
+in particular, is also verified by the Lean formalization described above.
+
 ## License
 
 ProvSQL is provided as open-source software under the MIT License. See [LICENSE](LICENSE).
