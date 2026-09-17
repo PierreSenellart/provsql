@@ -193,8 +193,39 @@ vector<set<WhereCircuit::Locator> > WhereCircuit::evaluate(gate_t g) const
       pair<int,int> positions=equality_info.find(g)->second;
       if(positions.first>=1 && positions.first<=(int)v.size() &&
          positions.second>=1 && positions.second<=(int)v.size()) {
-        v[positions.first-1].insert(v[positions.second-1].begin(), v[positions.second-1].end());
-        v[positions.second-1].insert(v[positions.first-1].begin(), v[positions.first-1].end());
+        // The two positions hold equal values: either may have been copied
+        // from the other.  So may any position already known to hold that
+        // same value, which is one sharing a locator with them (an earlier
+        // equality merged it, or it projects the same cell): the merge is
+        // closed over those, so that a = b and b = c leave a, b and c with
+        // the same locators whatever the order of the two gates.
+        set<Locator> merged=v[positions.first-1];
+        merged.insert(v[positions.second-1].begin(), v[positions.second-1].end());
+        vector<bool> in_class(v.size(), false);
+        in_class[positions.first-1]=in_class[positions.second-1]=true;
+
+        bool changed=true;
+        while(changed) {
+          changed=false;
+          for(size_t k=0; k<v.size(); ++k) {
+            if(in_class[k])
+              continue;
+            bool shares=false;
+            for(const auto &l : v[k])
+              if(merged.find(l)!=merged.end()) {
+                shares=true;
+                break;
+              }
+            if(shares) {
+              merged.insert(v[k].begin(), v[k].end());
+              in_class[k]=true;
+              changed=true;
+            }
+          }
+        }
+        for(size_t k=0; k<v.size(); ++k)
+          if(in_class[k])
+            v[k]=merged;
       }
     }
     break;

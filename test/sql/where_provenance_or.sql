@@ -57,4 +57,28 @@ CREATE TABLE wpo_5 AS SELECT l1, r1,
   FROM wpo_l, wpo_r WHERE NOT (l1 <> r1);
 SELECT remove_provenance('wpo_5'); SELECT 'NOT' AS q, * FROM wpo_5 ORDER BY l1;
 
-DROP TABLE wpo_l, wpo_r, wpo_1, wpo_2, wpo_3, wpo_4, wpo_5;
+-- Equalities sharing a column: the merge is transitive, in either order of the
+-- conjuncts.  (1,1)x(1,7) satisfies l1 = r1 and l2 = r1: l1, l2 and r1 end up
+-- with the same three locators.
+CREATE TABLE wpo_6 AS SELECT l1, l2, r1,
+    regexp_replace(where_provenance(provenance()),':[0-9a-f-]*:','::','g') AS wprov
+  FROM wpo_l, wpo_r WHERE l1 = r1 AND l2 = r1;
+SELECT remove_provenance('wpo_6'); SELECT 'transitive' AS q, * FROM wpo_6 ORDER BY l1;
+CREATE TABLE wpo_7 AS SELECT l1, l2, r1,
+    regexp_replace(where_provenance(provenance()),':[0-9a-f-]*:','::','g') AS wprov
+  FROM wpo_l, wpo_r WHERE l2 = r1 AND l1 = r1;
+SELECT remove_provenance('wpo_7'); SELECT 'transitive, other order' AS q, * FROM wpo_7 ORDER BY l1;
+-- A chain over three relations: l1 = r1 AND r1 = m1.
+CREATE TABLE wpo_m(m1 int); INSERT INTO wpo_m VALUES (1), (3);
+SELECT add_provenance('wpo_m');
+CREATE TABLE wpo_8 AS SELECT l1, r1, m1,
+    regexp_replace(where_provenance(provenance()),':[0-9a-f-]*:','::','g') AS wprov
+  FROM wpo_l, wpo_r, wpo_m WHERE l1 = r1 AND r1 = m1;
+SELECT remove_provenance('wpo_8'); SELECT 'chain' AS q, * FROM wpo_8 ORDER BY l1;
+-- Positions that share nothing stay apart: r2 is merged with no one.
+CREATE TABLE wpo_9 AS SELECT l1, r1, r2,
+    regexp_replace(where_provenance(provenance()),':[0-9a-f-]*:','::','g') AS wprov
+  FROM wpo_l, wpo_r WHERE l1 = r1;
+SELECT remove_provenance('wpo_9'); SELECT 'unrelated column' AS q, * FROM wpo_9 ORDER BY l1;
+
+DROP TABLE wpo_l, wpo_r, wpo_m, wpo_1, wpo_2, wpo_3, wpo_4, wpo_5, wpo_6, wpo_7, wpo_8, wpo_9;
