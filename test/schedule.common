@@ -90,6 +90,7 @@ test: having_array_agg
 test: agg_filter
 test: set_operation_nesting
 test: set_operation_with_ties
+test: except_untracked_arm
 test: limit_warning
 test: having_impossible
 test: having_choose

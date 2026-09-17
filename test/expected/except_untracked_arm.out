@@ -1,0 +1,78 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|a|p|here
+r EXCEPT u|1|0.0000|f
+r EXCEPT u|2|0.5000|t
+r EXCEPT u|9|0.0000|f
+r EXCEPT u||0.0000|f
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+r EXCEPT ALL u|1|0.0000
+r EXCEPT ALL u|1|0.0000
+r EXCEPT ALL u|2|0.5000
+r EXCEPT ALL u|9|0.0000
+r EXCEPT ALL u||0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|a|p|here
+u EXCEPT r|1|0.2500|f
+u EXCEPT r|7|1.0000|t
+u EXCEPT r|9|0.5000|f
+u EXCEPT r||0.5000|f
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+r EXCEPT SELECT 9|1|0.7500
+r EXCEPT SELECT 9|2|0.5000
+r EXCEPT SELECT 9|9|0.0000
+r EXCEPT SELECT 9||0.5000
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+SELECT 9 EXCEPT r|9|0.5000
+(1 row)
+remove_provenance
+
+(1 row)
+q|a|p
+nested|1|0.0000
+nested|1|1.0000
+nested|2|0.5000
+nested|7|1.0000
+nested|9|0.0000
+nested|9|1.0000
+nested||0.0000
+nested||1.0000
+(8 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|a|c
+counting|1|0
+counting|2|1
+counting|9|0
+counting||0
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+NOT IN untracked|2|0.5000
+(1 row)

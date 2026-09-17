@@ -2290,10 +2290,14 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
             break;
         }
 
-        /* In a UNION, every branch must expose a provsql column so the set
-         * operation's columns line up.  A branch with no provenance source
-         * (constant rows, or an untracked relation) is returned unchanged by
-         * process_query above and has no provsql column; such rows are present
+        /* In a set operation, every branch must expose a provsql column: in a
+         * UNION so that the columns line up, in an EXCEPT so that the
+         * difference is taken at all (with a single token the monus would
+         * never be built, and an untracked right arm would remove nothing
+         * while an untracked left arm would hand its rows the token of what
+         * removes them).  A branch with no provenance source (constant rows,
+         * or an untracked relation) is returned unchanged by process_query
+         * above and has no provsql column; such rows are present
          * unconditionally, so their provenance is the multiplicative identity.
          * Append a gate_one() provsql column.  Set-operation branches never
          * carry resjunk entries (those are rejected by the planner), so the
@@ -2301,7 +2305,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
          * the provenance-bearing branches get. */
         if (cell == NULL && q->setOperations != NULL &&
             IsA(q->setOperations, SetOperationStmt) &&
-            ((SetOperationStmt *)q->setOperations)->op == SETOP_UNION) {
+            (((SetOperationStmt *)q->setOperations)->op == SETOP_UNION ||
+             ((SetOperationStmt *)q->setOperations)->op == SETOP_EXCEPT)) {
           FuncExpr *one_expr = makeNode(FuncExpr);
           TargetEntry *one_te;
           one_expr->funcid = constants->OID_FUNCTION_GATE_ONE;
