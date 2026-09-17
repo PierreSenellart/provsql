@@ -157,6 +157,7 @@ static Query *process_query(const constants_t *constants, Query *q,
                             const InvFreeMarkerCtx *inv_ctx);
 static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
+static bool expr_contains_aggref(Node *node);
 static bool has_rv_or_provenance_call(Node *node, void *data);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
@@ -6534,10 +6535,10 @@ static Node *replace_having_distinct_mutator(Node *node, void *ctx) {
  * @return   Rewritten query, or @c NULL if no @c AGG(DISTINCT) was found.
  */
 static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
-  List *distinct_agg_tes = NIL;
   List *groupby_tes = NIL;
   ListCell *lc;
-  having_distinct_ctx hctx = { NIL };
+  having_distinct_ctx tctx = { NIL };  /* target list, in traversal order */
+  having_distinct_ctx hctx = { NIL };  /* HAVING clause */
 
 #if PG_VERSION_NUM >= 180000
   /* In PostgreSQL 18, parseCheckAggregates() injects a virtual RTE_GROUP
@@ -6561,34 +6562,34 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
    * are left untouched. */
   foreach (lc, q->targetList) {
     TargetEntry *te = lfirst(lc);
-    if (IsA(te->expr, Aggref)) {
-      Aggref *ar = (Aggref *)te->expr;
-      if (list_length(ar->aggdistinct) > 0)
-        distinct_agg_tes = lappend(distinct_agg_tes, te);
+    if (expr_contains_aggref((Node *)te->expr)) {
+      /* An aggregate, or an expression over aggregates (count(DISTINCT x) + 1,
+       * a cast, sum(w) * 2 beside a DISTINCT aggregate).  It stays at this
+       * level; the AGG(DISTINCT) it contains, wherever they sit in it, are
+       * collected to be computed in subqueries and replaced in place. */
+      collect_having_distinct_walker((Node *)te->expr, &tctx);
     } else if (provenance_function_walker((Node *)te->expr,
                                           (void *)constants)) {
       /* Expression contains provenance() – skip it, it will be
        * handled later by the provenance rewriter */
     } else {
-      /* Non-aggregate column – treat as GROUP BY key */
+      /* Aggregate-free column – treat as GROUP BY key */
       TargetEntry *te_copy = copyObject(te);
       te_copy->resjunk = false;
       groupby_tes = lappend(groupby_tes, te_copy);
     }
   }
 
-  /* Also collect AGG(DISTINCT) aggregates from the HAVING clause; they are
-   * not TargetEntries, so they get their own list and a Var-replacement
-   * mutator below. */
+  /* Likewise for the AGG(DISTINCT) aggregates of the HAVING clause. */
   if (q->havingQual != NULL)
     collect_having_distinct_walker(q->havingQual, &hctx);
 
-  if (distinct_agg_tes == NIL && hctx.aggs == NIL)
+  if (tctx.aggs == NIL && hctx.aggs == NIL)
     return NULL;
 
   {
     int n_having = list_length(hctx.aggs);
-    int n_aggs = list_length(distinct_agg_tes) + n_having;
+    int n_aggs = list_length(tctx.aggs) + n_having;
     int n_gb   = list_length(groupby_tes);
     List *outer_queries = NIL;
 
@@ -6606,24 +6607,11 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
      *   - DISTINCT agg i  → Var(n+i, 1)   (agg col of outer_i)
      * ----------------------------------------------------------------------- */
 
-    /* Build one inner + one outer query per DISTINCT aggregate */
-    foreach (lc, distinct_agg_tes) {
-      TargetEntry *agg_te = lfirst(lc);
-      Aggref *ar = (Aggref *)agg_te->expr;
-      if(list_length(ar->args) != 1)
-        provsql_error("AGG(DISTINCT) with more than one argument is not supported");
-      else {
-        Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
-        Query *inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
-        Query *outer = build_outer_for_distinct_key(agg_te, inner, n_gb, constants);
-        outer_queries = lappend(outer_queries, outer);
-      }
-    }
-
-    /* Build one inner + one outer query per HAVING-clause DISTINCT aggregate,
-     * appended after the target-list ones so their RT indices are the last
-     * n_having entries of the final from-list (matched by the mutator below). */
-    foreach (lc, hctx.aggs) {
+    /* Build one inner + one outer query per DISTINCT aggregate: those of the
+     * target list first, then those of the HAVING clause, so that their RT
+     * indices follow the order in which the two mutator passes below replace
+     * them. */
+    foreach (lc, list_concat(list_copy(tctx.aggs), hctx.aggs)) {
       Aggref *ar = lfirst(lc);
       if(list_length(ar->args) != 1)
         provsql_error("AGG(DISTINCT) with more than one argument is not supported");
@@ -6764,24 +6752,20 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         }
       }
 
-      /* Build final target list in original column order.
-       * DISTINCT agg i → Var(i+1, 1);  GROUP BY col j → Var(1, 2+j). */
+      /* Replace each AGG(DISTINCT) of the target list, in place, by a Var on
+       * the result column of its outer subquery (same traversal order as the
+       * collection above).  count(DISTINCT x) + 1 becomes d1.count + 1:
+       * arithmetic on an agg_token column of a subquery. */
       {
-        int agg_idx   = rtable_base + 1;
+        having_replace_ctx trc;
         ListCell *lc2;
 
+        trc.next_rtindex = rtable_base + 1;
         foreach (lc2, q->targetList) {
           TargetEntry *te = lfirst(lc2);
-
-          if (IsA(te->expr, Aggref) &&
-              ((Aggref *)te->expr)->aggdistinct != NIL) {
-            Var *v = makeNode(Var);
-            v->varno = agg_idx++; /* outer_{agg_idx} RTE */
-            v->varattno = 1;      /* agg result is col 1 of each outer */
-            v->vartypmod = -1;
-            v->location  = -1;
-            te->expr = (Expr*)v;
-          }
+          if (expr_contains_aggref((Node *)te->expr))
+            te->expr = (Expr *)replace_having_distinct_mutator((Node *)te->expr,
+                                                               &trc);
         }
       }
 
