@@ -54,7 +54,8 @@ SELECT 'aggregate OR aggregate' AS shape,
 DROP TABLE hr_or_agg;
 
 -- HAVING, aggregate AND regular: region='north' (𝟙) leaves P(SUM>25)=0.25;
--- 'south' (𝟘) makes the group impossible (probability 0).
+-- 'south' (𝟘) makes the group impossible: it holds in no world, and the
+-- group is dropped from the result.
 CREATE TABLE hr_and_t AS SELECT g, probability_evaluate(provenance()) AS pr
   FROM h GROUP BY g, region HAVING sum(x) > 25 AND region = 'north';
 SELECT remove_provenance('hr_and_t');
@@ -62,7 +63,7 @@ CREATE TABLE hr_and_f AS SELECT g, probability_evaluate(provenance()) AS pr
   FROM h GROUP BY g, region HAVING sum(x) > 25 AND region = 'south';
 SELECT remove_provenance('hr_and_f');
 SELECT (SELECT round(pr::numeric,4) FROM hr_and_t) AS and_region_true,
-       (SELECT round(pr::numeric,4) FROM hr_and_f) AS and_region_false;
+       (SELECT count(*) FROM hr_and_f) AS and_region_false_rows;
 DROP TABLE hr_and_t; DROP TABLE hr_and_f;
 
 SELECT remove_provenance('h');

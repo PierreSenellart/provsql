@@ -29,8 +29,8 @@ remove_provenance
 remove_provenance
 
 (1 row)
-and_region_true|and_region_false
-0.2500|0.0000
+and_region_true|and_region_false_rows
+0.2500|0
 (1 row)
 remove_provenance
 

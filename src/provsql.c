@@ -47,6 +47,8 @@
 #include "parser/parse_node.h"
 #include "parser/parse_oper.h"
 #include "rewrite/rewriteManip.h"
+#include "parser/parse_func.h"
+#include "parser/parse_collate.h"
 #include "parser/parse_relation.h"
 #include "utils/builtins.h"
 #if PG_VERSION_NUM >= 120000
@@ -3976,6 +3978,275 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
 }
 
 /* -------------------------------------------------------------------------
+ * Groups whose HAVING predicate holds in no world
+ *
+ * A lifted HAVING predicate becomes a gate whose value is only known once the
+ * circuit is evaluated, which enumerates worlds.  Some groups can be told to
+ * be zero without that: those where the predicate cannot hold whichever rows
+ * of the group are present.  What decides it is the range of values the
+ * aggregate takes over the sub-multisets of the group's rows, and PostgreSQL
+ * computes the ends of that range as ordinary aggregates in the same GROUP
+ * BY, at a cost that does not show next to that of building the gates.
+ *
+ * having_possible builds, from the predicate, an ordinary SQL condition that
+ * is true when the predicate may hold in some world, and false or NULL when it
+ * provably holds in none.  The condition is left as the HAVING clause of the
+ * query: PostgreSQL drops the groups failing it, which are absent from the
+ * result in every world, before their gates are even created.
+ *
+ * Soundness rests on the rows PostgreSQL aggregates over being a superset of
+ * the rows present in any world, which the rewriting maintains: a row that
+ * some world lacks is kept with a token that is zero in that world (monus for
+ * differences, antijoins and null-padded outer-join rows, comparison gates
+ * for lifted predicates), never filtered on the current instance.  The check
+ * is a sufficient one: a constant inside the range may still be unreachable
+ * (sum(x) = 5 over {2, 4}), and telling that is NP-hard.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief The original @c Aggref behind the aggregate side of a comparison, or
+ *        @c NULL if @p node is not a lowered aggregate of this query level.
+ */
+static Aggref *having_side_aggref(Node *node, const constants_t *constants) {
+  FuncExpr *fe;
+
+  node = peel_agg_casts(node);
+  if (node == NULL || !IsA(node, FuncExpr))
+    return NULL;
+  fe = (FuncExpr *)node;
+  if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE ||
+      list_length(fe->args) < 3 || !IsA(lthird(fe->args), Aggref))
+    return NULL;
+  return (Aggref *)lthird(fe->args);
+}
+
+/** @brief Copy of @p ar with @p cond ANDed to its FILTER clause. */
+static Aggref *aggref_with_filter(Aggref *ar, Expr *cond) {
+  Aggref *res = (Aggref *)copyObject(ar);
+  res->aggfilter = res->aggfilter == NULL
+                   ? cond
+                   : makeBoolExpr(AND_EXPR, list_make2(res->aggfilter, cond), -1);
+  return res;
+}
+
+/**
+ * @brief Copy of @p ar computing the built-in aggregate @p name (@c "min" or
+ *        @c "max") of the same argument, or @c NULL if there is none declared
+ *        on exactly that argument type.
+ */
+static Aggref *aggref_sibling(Aggref *ar, const char *name) {
+  Oid argtype = exprType((Node *)((TargetEntry *)linitial(ar->args))->expr);
+  Oid fn = LookupFuncName(list_make1(makeString(pstrdup(name))), 1, &argtype,
+                          true);
+  Aggref *res;
+
+  if (!OidIsValid(fn) || fn >= FirstNormalObjectId ||
+      get_func_prokind(fn) != PROKIND_AGGREGATE ||
+      get_func_rettype(fn) != argtype)
+    return NULL;
+  res = (Aggref *)copyObject(ar);
+  res->aggfnoid = fn;
+  res->aggtype = argtype;
+  res->aggcollid = exprCollation((Node *)((TargetEntry *)linitial(ar->args))->expr);
+  res->aggargtypes = list_make1_oid(argtype);
+  res->aggtranstype = InvalidOid;
+  res->aggdistinct = NIL;
+  res->aggorder = NIL;
+  return res;
+}
+
+/** @brief @c "a OR b", either of which may be @c NULL (absent). */
+static Expr *or_exprs(Expr *a, Expr *b) {
+  if (a == NULL) return b;
+  if (b == NULL) return a;
+  return makeBoolExpr(OR_EXPR, list_make2(a, b), -1);
+}
+
+/**
+ * @brief Whether the comparison @p op of an aggregate with an aggregate-free
+ *        term may hold in some world; @c NULL when nothing is known.
+ *
+ * With [lo, hi] the range of the aggregate over the non-empty selections of
+ * its group's rows, and c the other term: @c >= is possible iff hi >= c,
+ * @c <= iff lo <= c, @c = iff both, and strictly so for @c > and @c <.  The
+ * ends are
+ *  - @c count: hi is the count itself; lo is not used (0 is always sound);
+ *  - @c sum: hi is the sum of the positive values, or at most 0 without any,
+ *    and symmetrically for lo; the group must have a non-NULL value at all;
+ *  - @c max: hi is the max itself, lo the min of the values; @c min: the
+ *    reverse; @c avg: the min and the max.
+ * A NULL end or a NULL c makes the condition NULL, and the group is dropped:
+ * the comparison is then unknown in every world.
+ */
+static Expr *having_possible_atom(OpExpr *op, const constants_t *constants,
+                                  bool negated) {
+  OpExpr *norm = normalize_agg_comparison(op, constants);
+  Node *l, *r, *c;
+  Aggref *ar;
+  Oid opno;
+  char *opname, *aggname;
+  bool want_hi, want_lo, strict;
+  Expr *hi_ok = NULL, *lo_ok = NULL, *res;
+  Node *x;
+
+  if (norm != NULL)
+    op = norm;
+  if (list_length(op->args) != 2)
+    return NULL;
+  l = (Node *)linitial(op->args);
+  r = (Node *)lsecond(op->args);
+  opno = op->opno;
+  if ((ar = having_side_aggref(l, constants)) != NULL) {
+    c = r;
+  } else if ((ar = having_side_aggref(r, constants)) != NULL) {
+    c = l;
+    opno = get_commutator(opno);
+  } else
+    return NULL;
+  if (expr_contains_agg(c, constants))
+    return NULL;
+  if (negated && OidIsValid(opno))
+    opno = get_negator(opno);
+  if (!OidIsValid(opno))
+    return NULL;
+
+  opname = get_opname(opno);
+  if (opname == NULL)
+    return NULL;
+  want_hi = strcmp(opname, ">=") == 0 || strcmp(opname, ">") == 0 ||
+            strcmp(opname, "=") == 0;
+  want_lo = strcmp(opname, "<=") == 0 || strcmp(opname, "<") == 0 ||
+            strcmp(opname, "=") == 0;
+  strict = strcmp(opname, ">") == 0 || strcmp(opname, "<") == 0;
+  pfree(opname);
+  if (!want_hi && !want_lo)
+    return NULL; /* <> and anything else: nothing known */
+
+  if (ar->aggfnoid >= FirstNormalObjectId || ar->aggdirectargs != NIL ||
+      (!ar->aggstar && list_length(ar->args) != 1))
+    return NULL;
+  aggname = get_func_name(ar->aggfnoid);
+  if (aggname == NULL)
+    return NULL;
+  x = ar->aggstar ? NULL
+                  : (Node *)((TargetEntry *)linitial(ar->args))->expr;
+
+#define POSSIBLE_HI(bound) \
+  ((Expr *)build_binop(strict ? ">" : ">=", (Node *)(bound), copyObject(c)))
+#define POSSIBLE_LO(bound) \
+  ((Expr *)build_binop(strict ? "<" : "<=", (Node *)(bound), copyObject(c)))
+#define INT_ZERO() \
+  ((Node *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32), \
+                     Int32GetDatum(0), false, true))
+
+  if (strcmp(aggname, "count") == 0) {
+    if (want_hi)
+      hi_ok = POSSIBLE_HI(copyObject(ar));
+    /* lo = 0 proves nothing for the operators at hand unless c < 0, which is
+     * not worth a test. */
+    want_lo = false;
+  } else if (strcmp(aggname, "sum") == 0) {
+    Aggref *pos = aggref_with_filter(
+      ar, (Expr *)build_binop(">", copyObject(x), INT_ZERO()));
+    Aggref *neg = aggref_with_filter(
+      ar, (Expr *)build_binop("<", copyObject(x), INT_ZERO()));
+    if (want_hi)
+      hi_ok = or_exprs(POSSIBLE_HI(pos), POSSIBLE_HI(INT_ZERO()));
+    if (want_lo)
+      lo_ok = or_exprs(POSSIBLE_LO(neg), POSSIBLE_LO(INT_ZERO()));
+  } else if (strcmp(aggname, "max") == 0 || strcmp(aggname, "min") == 0 ||
+             strcmp(aggname, "avg") == 0) {
+    Aggref *mx = strcmp(aggname, "max") == 0 ? (Aggref *)copyObject(ar)
+                                              : aggref_sibling(ar, "max");
+    Aggref *mn = strcmp(aggname, "min") == 0 ? (Aggref *)copyObject(ar)
+                                              : aggref_sibling(ar, "min");
+    if (want_hi && mx != NULL)
+      hi_ok = POSSIBLE_HI(mx);
+    else
+      want_hi = false;
+    if (want_lo && mn != NULL)
+      lo_ok = POSSIBLE_LO(mn);
+    else
+      want_lo = false;
+  } else {
+    pfree(aggname);
+    return NULL;
+  }
+
+#undef POSSIBLE_HI
+#undef POSSIBLE_LO
+#undef INT_ZERO
+
+  if (!want_hi && !want_lo) {
+    pfree(aggname);
+    return NULL;
+  }
+  res = (want_hi && want_lo)
+        ? makeBoolExpr(AND_EXPR, list_make2(hi_ok, lo_ok), -1)
+        : (want_hi ? hi_ok : lo_ok);
+
+  /* sum / min / max / avg are NULL in every world when no row of the group
+   * has a (qualifying) non-NULL value: the comparison never holds. */
+  if (strcmp(aggname, "count") != 0) {
+    NullTest *nt = makeNode(NullTest);
+    nt->arg = (Expr *)copyObject(ar);
+    nt->nulltesttype = IS_NOT_NULL;
+    nt->argisrow = false;
+    nt->location = -1;
+    res = makeBoolExpr(AND_EXPR, list_make2(nt, res), -1);
+  }
+  pfree(aggname);
+  return res;
+}
+
+/**
+ * @brief Condition under which the HAVING predicate @p expr may hold in some
+ *        world, or @c NULL when nothing is known (it may always hold).
+ *
+ * Follows @c having_Expr_to_provenance_cmp: negation is pushed to the atoms,
+ * exchanging AND and OR.  A conjunction keeps what is known of its parts; a
+ * disjunction is known only if every part is.  A regular atom is its own
+ * condition.
+ */
+static Expr *having_possible(Expr *expr, const constants_t *constants,
+                             bool negated) {
+  if (!expr_contains_agg((Node *)expr, constants)) {
+    /* Left to PostgreSQL only if it can evaluate it. */
+    if (has_rv_or_provenance_call((Node *)expr, (void *)constants) ||
+        checkExprHasSubLink((Node *)expr))
+      return NULL;
+    return negated
+           ? makeBoolExpr(NOT_EXPR, list_make1(copyObject(expr)), -1)
+           : (Expr *)copyObject(expr);
+  }
+  if (IsA(expr, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)expr;
+    List *parts = NIL;
+    ListCell *lc;
+    bool conj;
+
+    if (be->boolop == NOT_EXPR)
+      return having_possible((Expr *)linitial(be->args), constants, !negated);
+    conj = (be->boolop == AND_EXPR) != negated;
+    foreach (lc, be->args) {
+      Expr *part = having_possible((Expr *)lfirst(lc), constants, negated);
+      if (part != NULL)
+        parts = lappend(parts, part);
+      else if (!conj)
+        return NULL;
+    }
+    if (parts == NIL)
+      return NULL;
+    if (list_length(parts) == 1)
+      return (Expr *)linitial(parts);
+    return makeBoolExpr(conj ? AND_EXPR : OR_EXPR, parts, -1);
+  }
+  if (IsA(expr, OpExpr))
+    return having_possible_atom((OpExpr *)expr, constants, negated);
+  return NULL;
+}
+
+/* -------------------------------------------------------------------------
  * Random-variable WHERE-clause rewriting
  *
  * Mirror of the HAVING trio above.  An OpExpr whose @c opfuncid matches
@@ -5549,8 +5820,22 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           having_entails_group_existence((Expr *) q->havingQual, constants,
                                          false);
         Expr *group_plus = result;      /* the group's plus, still delta-free */
+        /* What PostgreSQL can tell of the predicate without the circuit: the
+         * groups where it holds in no world are dropped (see having_possible).
+         * Only where this level owns the aggregation, a HAVING clause being
+         * meaningless otherwise. */
+        Expr *possible = aggregation
+          ? having_possible((Expr *) q->havingQual, constants, false)
+          : NULL;
         Expr *cmp = (Expr *) having_Expr_to_provenance_cmp(
           (Expr *) q->havingQual, constants, false);
+
+        if (possible != NULL) {
+          /* The comparisons built by name carry no collation yet. */
+          ParseState *pstate = make_parsestate(NULL);
+          assign_expr_collations(pstate, (Node *) possible);
+          free_parsestate(pstate);
+        }
 
         if (!aggregation && !group_by_rewrite && op == SR_TIMES &&
             prov_atts != NIL) {
@@ -5608,7 +5893,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           result = cmp;
         }
 
-        q->havingQual = NULL;
+        q->havingQual = (Node *) possible;
       }
     }
   }

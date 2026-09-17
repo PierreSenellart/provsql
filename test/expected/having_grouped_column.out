@@ -22,10 +22,7 @@ remove_provenance
 
 (1 row)
 shape|k|p
-max=k|1|0.0000
-max=k|2|0.0000
-max=k|3|0.0000
-(3 rows)
+(0 rows)
 remove_provenance
 
 (1 row)

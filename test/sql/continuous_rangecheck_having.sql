@@ -58,13 +58,19 @@ SELECT category,
 DROP TABLE rch_count_ge0_sound;
 UPDATE rch SET provsql = provsql.replace_input(provsql, 1.0);
 
+-- The always-false cases below are written as a selection on the aggregate
+-- column of a subquery: a HAVING clause that holds in no world makes the
+-- rewriter drop the group before any gate exists (test having_impossible),
+-- so that form would never reach the RangeCheck pass exercised here.
+
 -- (2) HAVING count(*) > 100 -- always false (alpha has 3 rows,
 -- beta has 2; both well below 100).  Resolves to gate_zero and
 -- yields p = 0.0 for every group.
 CREATE TABLE rch_count_gt100 AS
   SELECT category, probability_evaluate(provenance(),
                                          'monte-carlo', '1') AS p
-    FROM rch GROUP BY category HAVING count(*) > 100;
+    FROM (SELECT category, count(*) AS c FROM rch GROUP BY category) s
+    WHERE c > 100;
 SELECT remove_provenance('rch_count_gt100');
 SELECT category, p = 0.0 AS exact_zero
   FROM rch_count_gt100 ORDER BY category;
@@ -94,7 +100,8 @@ DROP TABLE rch_count_le0;
 CREATE TABLE rch_sum_gt100 AS
   SELECT category, probability_evaluate(provenance(),
                                          'monte-carlo', '1') AS p
-    FROM rch GROUP BY category HAVING sum(value) > 100;
+    FROM (SELECT category, sum(value) AS c FROM rch GROUP BY category) s
+    WHERE c > 100;
 SELECT remove_provenance('rch_sum_gt100');
 SELECT category, p = 0.0 AS exact_zero
   FROM rch_sum_gt100 ORDER BY category;
@@ -105,7 +112,8 @@ DROP TABLE rch_sum_gt100;
 CREATE TABLE rch_sum_lt_neg100 AS
   SELECT category, probability_evaluate(provenance(),
                                          'monte-carlo', '1') AS p
-    FROM rch GROUP BY category HAVING sum(value) < -100;
+    FROM (SELECT category, sum(value) AS c FROM rch GROUP BY category) s
+    WHERE c < -100;
 SELECT remove_provenance('rch_sum_lt_neg100');
 SELECT category, p = 0.0 AS exact_zero
   FROM rch_sum_lt_neg100 ORDER BY category;
@@ -118,7 +126,8 @@ DROP TABLE rch_sum_lt_neg100;
 CREATE TABLE rch_max_lt_neg AS
   SELECT category, probability_evaluate(provenance(),
                                          'monte-carlo', '1') AS p
-    FROM rch GROUP BY category HAVING max(value) < -100;
+    FROM (SELECT category, max(value) AS c FROM rch GROUP BY category) s
+    WHERE c < -100;
 SELECT remove_provenance('rch_max_lt_neg');
 SELECT category, p = 0.0 AS exact_zero
   FROM rch_max_lt_neg ORDER BY category;
@@ -130,7 +139,8 @@ DROP TABLE rch_max_lt_neg;
 CREATE TABLE rch_min_gt_big AS
   SELECT category, probability_evaluate(provenance(),
                                          'monte-carlo', '1') AS p
-    FROM rch GROUP BY category HAVING min(value) > 1000;
+    FROM (SELECT category, min(value) AS c FROM rch GROUP BY category) s
+    WHERE c > 1000;
 SELECT remove_provenance('rch_min_gt_big');
 SELECT category, p = 0.0 AS exact_zero
   FROM rch_min_gt_big ORDER BY category;

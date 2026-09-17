@@ -52,9 +52,8 @@ remove_provenance
 (1 row)
 city|c|s|round
 Berlin|2 (*)|11 (*)|0.28
-New York|2 (*)|3 (*)|0.00
 Paris|3 (*)|14 (*)|0.36
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)

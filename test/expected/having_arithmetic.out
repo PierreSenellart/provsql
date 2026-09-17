@@ -137,24 +137,18 @@ ha_probs
 
 (1 row)
 g|round
-A|0.000
-B|0.000
-(2 rows)
+(0 rows)
 # min/max arithmetic (different evaluator) folds the same way
 ha_probs
 
 (1 row)
 g|round
-A|0.000
-B|0.000
-(2 rows)
+(0 rows)
 ha_probs
 
 (1 row)
 g|round
-A|0.000
-B|0.000
-(2 rows)
+(0 rows)
 ha_probs
 
 (1 row)

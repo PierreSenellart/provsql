@@ -9,9 +9,8 @@ remove_provenance
 (1 row)
 shape|city|p_off|p_on|diff
 max >= 4|Berlin|0.8200|0.8200|0.000000
-max >= 4|New York|0.0000|0.0000|0.000000
 max >= 4|Paris|0.8000|0.8000|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -20,9 +19,8 @@ remove_provenance
 (1 row)
 shape|city|p_off|p_on|diff
 max > 4|Berlin|0.7000|0.7000|0.000000
-max > 4|New York|0.0000|0.0000|0.000000
 max > 4|Paris|0.8000|0.8000|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -41,10 +39,9 @@ remove_provenance
 
 (1 row)
 shape|city|p_off|p_on|diff
-max < 4|Berlin|0.0000|0.0000|0.000000
 max < 4|New York|0.2800|0.2800|0.000000
 max < 4|Paris|0.0600|0.0600|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -53,9 +50,8 @@ remove_provenance
 (1 row)
 shape|city|p_off|p_on|diff
 max = 4|Berlin|0.1200|0.1200|0.000000
-max = 4|New York|0.0000|0.0000|0.000000
 max = 4|Paris|0.0000|0.0000|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -85,10 +81,9 @@ remove_provenance
 
 (1 row)
 shape|city|p_off|p_on|diff
-min < 4|Berlin|0.0000|0.0000|0.000000
 min < 4|New York|0.2800|0.2800|0.000000
 min < 4|Paris|0.3000|0.3000|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -97,9 +92,8 @@ remove_provenance
 (1 row)
 shape|city|p_off|p_on|diff
 min >= 4|Berlin|0.8200|0.8200|0.000000
-min >= 4|New York|0.0000|0.0000|0.000000
 min >= 4|Paris|0.5600|0.5600|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -108,9 +102,8 @@ remove_provenance
 (1 row)
 shape|city|p_off|p_on|diff
 min > 4|Berlin|0.4200|0.4200|0.000000
-min > 4|New York|0.0000|0.0000|0.000000
 min > 4|Paris|0.5600|0.5600|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -119,9 +112,8 @@ remove_provenance
 (1 row)
 shape|city|p_off|p_on|diff
 min = 4|Berlin|0.4000|0.4000|0.000000
-min = 4|New York|0.0000|0.0000|0.000000
 min = 4|Paris|0.0000|0.0000|0.000000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -160,8 +152,7 @@ remove_provenance
 (1 row)
 shape|g|p_off|p_on|diff
 product contributors|1|0.5100|0.5100|0.000000
-product contributors|2|0.0000|0.0000|0.000000
-(2 rows)
+(1 row)
 NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 min/max): provenance circuit reduced from 19 to 1 gates
 remove_provenance
 
@@ -181,5 +172,4 @@ remove_provenance
 (1 row)
 shape|g|p_off|p_on|diff
 shared leaf (must match off-path)|1|0.5250|0.5250|0.000000
-shared leaf (must match off-path)|2|0.0000|0.0000|0.000000
-(2 rows)
+(1 row)

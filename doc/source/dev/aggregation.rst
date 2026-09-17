@@ -275,6 +275,61 @@ fused shape, left in place in the row tokens otherwise.
    <https://provsql.org/lean-docs/Provenance/AggQueryBridges.html#AggQuery.havingSite_evaluateAnnotated>`_).
 
 
+Groups that fail in every world
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A lifted ``HAVING`` predicate becomes a gate whose value is only known
+once the circuit is evaluated.  Some groups can be told to be zero
+without that: those where the predicate cannot hold whichever rows of
+the group are present.  What decides it is the range of values the
+aggregate takes over the non-empty selections of the group's rows, and
+PostgreSQL computes the ends of that range as ordinary aggregates of
+the same ``GROUP BY``.  :cfunc:`having_possible` builds, from the
+predicate, an ordinary SQL condition that is true when the predicate
+may hold in some world; :cfunc:`make_provenance_expression` leaves it
+as the ``HAVING`` clause of the rewritten query, so PostgreSQL drops
+the other groups before their gates are created.  A row whose
+provenance is zero being the same as an absent row, this changes no
+result; it restores SQL's row set on such groups and spares their
+gates and evaluation, at a cost that does not show (a few ordinary
+aggregates, next to one :sqlfunc:`provenance_semimod` call per row).
+
+The ends used, for a comparison of the aggregate with an
+aggregate-free term (a constant, an expression over grouping keys):
+
+- ``count``: at most the count itself;
+- ``sum``: at most the sum of the positive values (``sum(x) FILTER
+  (WHERE x > 0)``), or 0 without any, and symmetrically below; the
+  group must also have a non-``NULL`` value at all;
+- ``max``, ``min``, ``avg``: between the ``min`` and the ``max`` of the
+  values, the sibling aggregate being looked up on the exact argument
+  type.
+
+``>=`` needs the upper end to reach the term, ``<=`` the lower end,
+``=`` both; ``<>``, a comparison of two aggregates, any other
+aggregate, or an aggregate column coming from a subquery leave the
+group alone.  The Boolean structure follows the lift: ``NOT`` is
+pushed to the atoms, a conjunction keeps what is known of its parts, a
+disjunction is known only if every part is, and a regular atom is its
+own condition.  A ``NULL`` condition drops the group: the comparison is
+then unknown in every world.
+
+The check is a sufficient one -- ``sum(x) = 5`` over ``{2, 4}`` lies
+inside the range and is kept, to be evaluated to zero; telling such
+cases is NP-hard -- and it rests on an invariant of the rewriting: the
+rows PostgreSQL aggregates over are a superset of the rows present in
+any world.  A row that some world lacks is kept with a token that is
+zero in that world (monus for differences, antijoins and null-padded
+outer-join rows, comparison gates for lifted predicates), never
+filtered on the current instance.  The one construct that breaks it, a
+``LIMIT`` / ``OFFSET`` in a subquery, raises a warning of its own.  The
+same predicate written as a selection on the aggregate column of a
+subquery is not checked (no ``HAVING`` clause can carry the condition
+at that level); its zero rows stay visible, which is equivalent.  An
+evaluation-time counterpart exists in :cfile:`RangeCheck.cpp`, which
+resolves the comparisons that reach the evaluator.
+
+
 The ``agg_token`` Type
 ----------------------
 

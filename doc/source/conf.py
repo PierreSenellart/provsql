@@ -315,6 +315,7 @@ _C_FUNC_MAP = {
     'make_aggregation_expression': '/doxygen-c/html/provsql_8c.html#a03dfbabe195ae9be5b3c13f11b98ba42',
     'make_rv_aggregate_expression': '/doxygen-c/html/provsql_8c.html#af7a0a8db39aef1739545bfe674bba925',
     'nest_set_operations': '/doxygen-c/html/provsql_8c.html#ab773d38514b362f9f40f3bd8eb606b92',
+    'having_possible': '/doxygen-c/html/provsql_8c.html#a581f9dedf58964f64ee31a70d360ac99',
     'aggregate_keeps_nulls': '/doxygen-c/html/provsql_8c.html#aafc5b86c5150968b06f2b541a5697de0',
     'try_push_into_aggref': '/doxygen-c/html/provsql_8c.html#a9bbb05180c15e0233e8613d103e9141f',
     'add_to_select':             '/doxygen-c/html/provsql_8c.html#a6fe52ea4c7f2cc8eb924135ebf239d85',

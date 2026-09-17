@@ -120,10 +120,8 @@ remove_provenance
 
 (1 row)
 a|p
-10|0.0000
 20|0.2500
-30|0.0000
-(3 rows)
+(1 row)
 add_provenance
 
 (1 row)
@@ -136,8 +134,7 @@ remove_provenance
 a|p
 10|0.5000
 20|0.7500
-30|0.0000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -152,8 +149,7 @@ remove_provenance
 a|p
 10|0.5000
 20|0.7500
-30|0.0000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -166,10 +162,8 @@ remove_provenance
 
 (1 row)
 a|p
-10|0.0000
 20|0.7500
-30|0.0000
-(3 rows)
+(1 row)
 add_provenance
 
 (1 row)
@@ -182,8 +176,7 @@ remove_provenance
 a|p
 100|0.5000
 200|0.0000
-300|0.0000
-(3 rows)
+(2 rows)
 add_provenance
 
 (1 row)
@@ -213,8 +206,7 @@ remove_provenance
 a|p
 10|0.2500
 20|0.2500
-30|0.0000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -281,9 +273,7 @@ remove_provenance
 
 (1 row)
 a|p
-10|0.0000
-20|0.0000
-(2 rows)
+(0 rows)
 remove_provenance
 
 (1 row)
@@ -412,8 +402,7 @@ remove_provenance
 k|p
 1|0.5000
 2|0.5000
-3|0.0000
-(3 rows)
+(2 rows)
 add_provenance
 
 (1 row)
@@ -563,10 +552,8 @@ remove_provenance
 
 (1 row)
 a|p
-1|0.0000
 2|0.2500
-3|0.0000
-(3 rows)
+(1 row)
 remove_provenance
 
 (1 row)
@@ -617,18 +604,16 @@ remove_provenance
 
 (1 row)
 a|p
-1|0.0000
 2|0.2500
 3|0.0000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
 a|p
 1|0.7500
 2|0.2500
-3|0.0000
-(3 rows)
+(2 rows)
 remove_provenance
 
 (1 row)
@@ -681,9 +666,7 @@ remove_provenance
 (1 row)
 pid|sid|p
 1|10|0.3200
-1||0.0000
-2|20|0.0000
-(3 rows)
+(1 row)
 remove_provenance
 
 (1 row)

@@ -15,9 +15,7 @@ remove_provenance
 
 (1 row)
 a|dflt|prs
-1|f|f
-1|f|f
-(2 rows)
+(0 rows)
 add_provenance
 
 (1 row)

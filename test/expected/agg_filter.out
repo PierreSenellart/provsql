@@ -7,11 +7,7 @@ remove_provenance
 (1 row)
 q|g|p
 count(*) f >= 1|1|0.5200
-count(*) f >= 1|2|0.0000
-count(*) f >= 1|3|0.0000
-count(*) f >= 1|4|0.0000
-count(*) f >= 1|5|0.0000
-(5 rows)
+(1 row)
 remove_provenance
 
 (1 row)
@@ -28,10 +24,9 @@ remove_provenance
 q|g|p
 count(w) f = 1|1|0.5000
 count(w) f = 1|2|0.5000
-count(w) f = 1|3|0.0000
 count(w) f = 1|4|0.5000
 count(w) f = 1|5|0.5000
-(5 rows)
+(4 rows)
 remove_provenance
 
 (1 row)
@@ -59,31 +54,19 @@ remove_provenance
 (1 row)
 q|g|p
 sum f >= 7|1|0.2000
-sum f >= 7|2|0.0000
-sum f >= 7|3|0.0000
-sum f >= 7|4|0.0000
-sum f >= 7|5|0.0000
-(5 rows)
+(1 row)
 remove_provenance
 
 (1 row)
 q|g|p
 min f = 6|1|0.4000
-min f = 6|2|0.0000
-min f = 6|3|0.0000
-min f = 6|4|0.0000
-min f = 6|5|0.0000
-(5 rows)
+(1 row)
 remove_provenance
 
 (1 row)
 q|g|p
 avg f > 5|1|0.2000
-avg f > 5|2|0.0000
-avg f > 5|3|0.0000
-avg f > 5|4|0.0000
-avg f > 5|5|0.0000
-(5 rows)
+(1 row)
 remove_provenance
 
 (1 row)

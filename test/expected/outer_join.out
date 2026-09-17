@@ -24,8 +24,7 @@ remove_provenance
 (1 row)
 q|k|p
 LEFT count>=2|1|0.2500
-LEFT count>=2|2|0.0000
-(2 rows)
+(1 row)
 remove_provenance
 
 (1 row)

@@ -71,44 +71,28 @@ remove_provenance
 
 (1 row)
 exposure|outcome|effect|replicated
-Alcohol|Cardiovascular Disease|beneficial|0
-Alcohol|Cardiovascular Disease|harmful|0
 Alcohol|Type 2 Diabetes|harmful|1
 Aspirin|Cardiovascular Disease|beneficial|1
-Aspirin|Cognitive Decline|beneficial|0
-Coffee|Cardiovascular Disease|beneficial|0
-Coffee|Cardiovascular Disease|harmful|0
-Coffee|Cardiovascular Disease|neutral|0
 Coffee|Cognitive Decline|beneficial|1
 Exercise|Cardiovascular Disease|beneficial|1
-Exercise|Inflammation|beneficial|0
-Omega-3|Cardiovascular Disease|beneficial|0
 Omega-3|Inflammation|beneficial|1
 Processed Food|Type 2 Diabetes|harmful|1
 Red Meat|Colorectal Cancer|harmful|1
 Red Meat|Inflammation|harmful|1
-(16 rows)
+(8 rows)
 remove_provenance
 
 (1 row)
 exposure|outcome|effect|prob
-Alcohol|Cardiovascular Disease|beneficial|0.0000
-Alcohol|Cardiovascular Disease|harmful|0.0000
 Alcohol|Type 2 Diabetes|harmful|0.5720
 Aspirin|Cardiovascular Disease|beneficial|0.8096
-Aspirin|Cognitive Decline|beneficial|0.0000
-Coffee|Cardiovascular Disease|beneficial|0.0000
-Coffee|Cardiovascular Disease|harmful|0.0000
-Coffee|Cardiovascular Disease|neutral|0.0000
 Coffee|Cognitive Decline|beneficial|0.8075
 Exercise|Cardiovascular Disease|beneficial|0.9868
-Exercise|Inflammation|beneficial|0.0000
-Omega-3|Cardiovascular Disease|beneficial|0.0000
 Omega-3|Inflammation|beneficial|0.8075
 Processed Food|Type 2 Diabetes|harmful|0.7448
 Red Meat|Colorectal Cancer|harmful|0.7448
 Red Meat|Inflammation|harmful|0.3420
-(16 rows)
+(8 rows)
 remove_provenance
 
 (1 row)

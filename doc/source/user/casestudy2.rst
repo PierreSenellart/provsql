@@ -434,11 +434,16 @@ report it. Define the ``f_replicated`` view, which groups findings by
 
 .. note::
 
-   With ProvSQL, ``HAVING`` does not silently drop groups that fail the
-   threshold. Instead, those groups keep a provenance token that evaluates
-   to the semiring zero ``𝟘`` in any semiring evaluation, so they remain
-   in the output but are correctly handled by any subsequent semiring
-   evaluation or probability computation.
+   With ProvSQL, ``HAVING`` does not filter on the data at hand: whether a
+   group passes the threshold depends on which of its rows are present, and
+   that is what the group's provenance token records. A group that fails
+   the threshold may therefore still appear in the output, with a
+   provenance that evaluates to the semiring zero ``𝟘`` wherever the
+   threshold fails. A group that can pass in no world at all -- here, a
+   finding backed by a single study, which will never have two -- may
+   either be left out of the output or appear in it with a provenance
+   evaluating to ``𝟘``. The two are equivalent: a row whose provenance is
+   ``𝟘`` is the same as an absent row.
 
 Step 11: Inspect Replication with :sqlfunc:`sr_counting`
 ---------------------------------------------------------
@@ -454,8 +459,8 @@ integer column ``cnt`` to ``finding`` (all values ``1``) and create a
     SELECT create_provenance_mapping('count_mapping', 'finding', 'cnt');
 
 Now query ``f_replicated`` using :sqlfunc:`sr_counting` to display,
-for each (exposure, outcome, effect) triple, whether its provenance
-token is zero or non-zero.
+for each (exposure, outcome, effect) triple of the view, the number of
+ways it is derived.
 
 .. note::
 
@@ -483,9 +488,10 @@ token is zero or non-zero.
 
    </details>
 
-Observe that single-study findings (Aspirin→Cognitive Decline, etc.)
-receive a ``replicated`` value of ``0``, while findings supported by two
-or more studies receive ``1``.
+Observe that single-study findings (Aspirin→Cognitive Decline, etc.) are
+absent from the view, as explained in the note of Step 10, while findings
+supported by two or more studies receive ``1``: the threshold holds, in
+one way.
 
 Step 12: Probability of Replication
 -------------------------------------
@@ -510,9 +516,8 @@ at least two independent studies.
 
    </details>
 
-Single-study findings (Aspirin→Cognitive Decline, etc.) now return 0.0000:
-the ``HAVING COUNT(*) >= 2`` gate produces ``𝟘`` for groups with only one
-row, which :sqlfunc:`probability_evaluate` correctly maps to probability 0.
+Single-study findings (Aspirin→Cognitive Decline, etc.) are no longer
+listed: their probability of being replicated is 0.
 Exercise→CVD→beneficial drops from 0.9998 to 0.9868, reflecting that now
 *at least two* of the three studies must agree.
 

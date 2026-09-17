@@ -89,6 +89,7 @@ test: agg_filter
 test: set_operation_nesting
 test: set_operation_with_ties
 test: limit_warning
+test: having_impossible
 test: having_choose
 test: having_first_present
 test: having_correlated

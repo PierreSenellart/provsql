@@ -19,7 +19,5 @@ remove_provenance
 
 (1 row)
 city|prob
-Berlin|0.00
-New York|0.00
 Paris|0.09
-(3 rows)
+(1 row)

@@ -61,16 +61,14 @@ remove_provenance
 
 (1 row)
 a|p
-1|0.0000
 2|0.6750
-(2 rows)
+(1 row)
 remove_provenance
 
 (1 row)
 a|p
-1|0.0000
 2|0.6750
-(2 rows)
+(1 row)
 remove_provenance
 
 (1 row)

@@ -59,8 +59,10 @@ The following SQL constructs are supported with full provenance tracking:
 * ``VALUES`` tables (treated as having no provenance)
 * Aggregation (``SUM``, ``COUNT``, ``MIN``, ``MAX``, ``AVG``,
   ``COUNT(DISTINCT …)``, ``string_agg``, ``array_agg``)
-* ``HAVING`` (non-matching groups receive zero provenance ``𝟘``
-  rather than being filtered out)
+* ``HAVING`` (a group is not filtered on the current data: one that
+  fails the predicate may still appear in the result, with a provenance
+  that evaluates to zero where the predicate fails; a group that can
+  pass in no possible world may be left out)
 * ``FILTER`` clause on aggregates
 * ``INSERT … SELECT`` (provenance propagated when target table is
   provenance-tracked)

@@ -110,9 +110,14 @@ out: rewritten queries may return rows that vanilla SQL does not, whose
 annotation evaluates to zero. Typical examples are the antijoin arm of
 a difference (a row removed *on this instance* but present in worlds
 where its remover is absent -- exactly what makes its probability
-meaningful) and ``HAVING`` groups that fail the predicate. Deciding
-zero-ness in general requires evaluating the provenance and is
-semiring-relative, so visible-but-zero is the deliberate default.
+meaningful) and ``HAVING`` groups that fail the predicate on this
+instance but pass it in other worlds. Deciding zero-ness in general
+requires evaluating the provenance and is semiring-relative, so
+visible-but-zero is the deliberate default. ProvSQL does leave out
+some rows it can tell to be zero at no cost, such as a ``HAVING`` group
+asked for ``count(*) >= 3`` over two rows, or for ``sum(x) > 10`` over
+values that add up to 8; which zero rows are left out and which stay
+visible is not something to rely on.
 
 When the vanilla result set is wanted, filter explicitly with
 :sqlfunc:`present`:
