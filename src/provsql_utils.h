@@ -773,4 +773,16 @@ extern bool provsql_lookup_relation_keys(Oid relid,
 #include "c_cpp_compatibility.h"
 #endif
 
+/**
+ * @brief SHA-1 of @p len bytes of @p data (RFC 3174).
+ *
+ * Self-contained, so that gate addresses, which are version-5 UUIDs, are
+ * computed the same way on every supported PostgreSQL version.  Defined in
+ * @c CertifiedDDMaterialize.cpp.
+ */
+#ifdef __cplusplus
+extern "C"
+#endif
+void provsql_sha1(const unsigned char *data, size_t len, unsigned char out[20]);
+
 #endif /* PROVSQL_UTILS_H */

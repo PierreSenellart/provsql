@@ -1,0 +1,56 @@
+\set ECHO none
+f|label|result
+times|duplicate child|same times / 2 children
+times|fifty|same times / 50 children
+times|NULL and one survivor|same input / 0 children
+times|NULL first|same times / 2 children
+times|NULL last|same times / 2 children
+times|NULL only|same one / 0 children
+times|one gate alone|same one / 0 children
+times|one gate inside|same times / 2 children
+times|one gates and a survivor|same input / 0 children
+times|single|same input / 0 children
+times|three|same times / 3 children
+times|two|same times / 2 children
+times|two, other order|same times / 2 children
+times|zero and one|same zero / 0 children
+times|zero gate alone|same zero / 0 children
+times|zero gate inside|same times / 3 children
+times|zero gates and a survivor|same times / 3 children
+(17 rows)
+f|label|result
+plus|duplicate child|same plus / 2 children
+plus|fifty|same plus / 50 children
+plus|NULL and one survivor|same input / 0 children
+plus|NULL first|same plus / 2 children
+plus|NULL last|same plus / 2 children
+plus|one gate alone|same one / 0 children
+plus|one gate inside|same plus / 3 children
+plus|one gates and a survivor|same plus / 3 children
+plus|single|same input / 0 children
+plus|three|same plus / 3 children
+plus|two|same plus / 2 children
+plus|two, other order|same plus / 2 children
+plus|zero and one|same one / 0 children
+plus|zero gate inside|same plus / 2 children
+plus|zero gates and a survivor|same input / 0 children
+(15 rows)
+f|label|is_zero|former_type|former_children
+plus, no survivor|NULL only|t|plus|0
+plus, no survivor|zero gate alone|t|plus|0
+(2 rows)
+f|times_kept|plus_kept
+children order|t|t
+(1 row)
+f|times_is_one|ref_times_is_one|plus_is_null
+null array|t|t|t
+(1 row)
+f|times|plus_is_zero
+empty array|same one / 0 children|t
+(1 row)
+create_gate
+
+(1 row)
+f|c_finds_it|ref_finds_it|other_multiset_does_not
+planted|t|t|t
+(1 row)

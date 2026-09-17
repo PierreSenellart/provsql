@@ -1625,56 +1625,15 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
  * recipe, so a hit is always a deliberate plant; the ordinary
  * order-dependent recipe is used otherwise, so ordinary
  * times gates (and their formula rendering) are untouched.
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>). The cost is declared as that
+ * of a PL/pgSQL function, which this function was: the planner then keeps
+ * evaluating it after the cheaper conditions, and the plans of rewritten
+ * queries, on which the order of the children of a ⊕ depends, stay the same.
  */
 CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
   RETURNS UUID AS
-$$
-DECLARE
-  times_token uuid;
-  filtered_tokens uuid[];
-  canonical uuid;
-BEGIN
-  -- A NULL element reads as the ⊗-neutral 1: it is the token slot of an
-  -- untracked source (a join against an untracked table), which is
-  -- certain.  Contrast provenance_plus / provenance_monus, where NULL
-  -- reads as the ⊕- / ⊖-right-neutral 0: each combinator maps NULL to
-  -- its own neutral element.  Nothing may therefore hand a NULL to ⊗
-  -- meaning "false"; a comparison with a NULL operand goes through
-  -- provenance_cmp, which returns gate_zero for it.
-  SELECT array_agg(t) FROM unnest(tokens) t WHERE t IS NOT NULL AND t <> gate_one() INTO filtered_tokens;
-
-  -- Dispatch on the FILTERED count: a single survivor short-circuits
-  -- to that token directly (no useless single-child times gate); zero
-  -- survivors collapse to the identity. Using array_length(tokens, 1)
-  -- here would miss the [one, cmp] → [cmp] case, leaving the cmp wrapped
-  -- in a one-child times when its only sibling was gate_one().
-  CASE coalesce(array_length(filtered_tokens, 1), 0)
-    WHEN 0 THEN
-      times_token:=gate_one();
-    WHEN 1 THEN
-      times_token:=filtered_tokens[1];
-    ELSE
-      -- Computed separately from the filtering aggregate above: an
-      -- ORDER BY aggregate there would make the planner feed *both*
-      -- aggregates sorted input, scrambling the stored children order.
-      SELECT uuid_generate_v5(uuid_ns_provsql(),
-                              concat('times-canonical', array_agg(t ORDER BY t)))
-      FROM unnest(filtered_tokens) t
-      INTO canonical;
-      IF get_gate_type(canonical) = 'times' THEN
-        -- A deliberate pre-creation at the canonical address: same
-        -- children, same product.
-        times_token := canonical;
-      ELSE
-        times_token := uuid_generate_v5(uuid_ns_provsql(),concat('times',filtered_tokens));
-
-        PERFORM create_gate(times_token, 'times', ARRAY_AGG(t)) FROM UNNEST(filtered_tokens) AS t WHERE t IS NOT NULL;
-      END IF;
-  END CASE;
-
-  RETURN times_token;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+  'provsql','provenance_times' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Create a monus (difference) gate from two provenance tokens
@@ -1786,52 +1745,7 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
  */
 CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
   RETURNS UUID AS
-$$
-DECLARE
-  c INTEGER;
-  plus_token uuid;
-  filtered_tokens uuid[];
-  canonical uuid;
-BEGIN
-  -- A NULL element reads as the ⊕-neutral 0: it stands for a row absent
-  -- from the disjunction (a null-padded antijoin row whose token array
-  -- slot is NULL), not for an untracked source.  Contrast provenance_times,
-  -- where NULL reads as the ⊗-neutral 1 (untracked source): each
-  -- combinator maps NULL to its own neutral element.
-  SELECT array_agg(t) FROM unnest(tokens) t
-  WHERE t IS NOT NULL AND t <> gate_zero()
-  INTO filtered_tokens;
-
-  c:=array_length(filtered_tokens, 1);
-
-  IF c = 0 THEN
-    plus_token := gate_zero();
-  ELSIF c = 1 THEN
-    plus_token := filtered_tokens[1];
-  ELSE
-    -- Computed separately from the filtering aggregate above: an ORDER
-    -- BY aggregate there would make the planner feed *both* aggregates
-    -- sorted input, scrambling the stored (aggregation-order) children.
-    SELECT uuid_generate_v5(uuid_ns_provsql(),
-                            concat('plus-canonical', array_agg(t ORDER BY t)))
-    FROM unnest(filtered_tokens) t
-    INTO canonical;
-    IF get_gate_type(canonical) = 'plus' THEN
-      -- A deliberate pre-creation at the canonical address: same
-      -- children, same sum.
-      plus_token := canonical;
-    ELSE
-      plus_token := uuid_generate_v5(
-        uuid_ns_provsql(),
-        concat('plus', filtered_tokens));
-
-      PERFORM create_gate(plus_token, 'plus', filtered_tokens);
-    END IF;
-  END IF;
-
-  RETURN plus_token;
-END
-$$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+  'provsql','provenance_plus' LANGUAGE C COST 100 STRICT PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Driver for provenance over recursive queries (WITH RECURSIVE).

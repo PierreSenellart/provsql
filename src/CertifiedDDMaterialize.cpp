@@ -93,6 +93,12 @@ void sha1(const unsigned char *data, std::size_t len, unsigned char out[20])
 
 } // namespace
 
+extern "C" void provsql_sha1(const unsigned char *data, size_t len,
+                             unsigned char out[20])
+{
+  sha1(data, len, out);
+}
+
 pg_uuid_t provsqlUuidV5(const std::string &name)
 {
   // uuid_ns_provsql() = 920d4f02-8718-5319-9532-d4ab83a64489

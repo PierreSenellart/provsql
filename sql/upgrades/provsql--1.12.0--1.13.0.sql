@@ -1030,6 +1030,19 @@ END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
 
 -- ----------------------------------------------------------------------
+-- 6c. Gate-building functions in C: same gates at the same addresses,
+--     without the SPI statements of the PL/pgSQL versions.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
+  RETURNS UUID AS
+  'provsql','provenance_times' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
+  RETURNS UUID AS
+  'provsql','provenance_plus' LANGUAGE C COST 100 STRICT PARALLEL SAFE IMMUTABLE;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.
