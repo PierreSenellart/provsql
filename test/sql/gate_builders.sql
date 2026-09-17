@@ -172,17 +172,51 @@ SELECT 'empty array' AS f,
        gb_same(gb_ref.provenance_times(VARIADIC '{}'::uuid[]), provsql.provenance_times(VARIADIC '{}'::uuid[])) AS times,
        provsql.provenance_plus('{}'::uuid[]) = provsql.gate_zero() AS plus_is_zero;
 
--- A gate planted at the canonical address of a multiset is returned in place
--- of an ordinary gate, whatever the order of the children.
+-- A gate planted for a multiset of tokens of a working table is returned in
+-- place of an ordinary gate, whatever the order of the children, by the
+-- session that planted it and for as long as the working table exists.  The
+-- address is the one the former code probed in the store.
+CREATE TEMP TABLE gb_work(v int, provsql uuid);
+SELECT provsql.planted_scope('gb_work');
 CREATE TABLE gb_planted AS
-  SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),
-           concat('times-canonical', (SELECT array_agg(t ORDER BY t) FROM unnest(gb_tokens(7,8,9)) t))) AS c;
-SELECT provsql.create_gate(c, 'times', gb_tokens(7)) FROM gb_planted;
+  SELECT provsql.plant_canonical('gb_work', 'times', gb_tokens(7,8,9), (gb_tokens(7))[1], 1) AS c;
 SELECT 'planted' AS f,
-       provsql.provenance_times(VARIADIC gb_tokens(9,7,8)) = c AS c_finds_it,
-       gb_ref.provenance_times(VARIADIC gb_tokens(8,9,7)) = c AS ref_finds_it,
-       provsql.provenance_times(VARIADIC gb_tokens(7,8)) <> c AS other_multiset_does_not
+       c = public.uuid_generate_v5(provsql.uuid_ns_provsql(),
+             concat('times-canonical', (SELECT array_agg(t ORDER BY t) FROM unnest(gb_tokens(7,8,9)) t))) AS same_address,
+       provsql.get_gate_type(c) AS type, (provsql.get_infos(c)).info1 AS info1,
+       provsql.provenance_times(VARIADIC gb_tokens(9,7,8)) = c AS found_in_any_order,
+       provsql.provenance_times(VARIADIC gb_tokens(7,8)) <> c AS other_multiset_is_not,
+       provsql.provenance_plus(gb_tokens(7,8,9)) <> c AS nor_the_sum
   FROM gb_planted;
+
+-- A gate that merely sits in the store at a canonical address was planted by
+-- no one in this session: the store is not consulted.
+SELECT provsql.create_gate(
+         public.uuid_generate_v5(provsql.uuid_ns_provsql(),
+           concat('plus-canonical', (SELECT array_agg(t ORDER BY t) FROM unnest(gb_tokens(7,8)) t))),
+         'plus', gb_tokens(7));
+SELECT 'store only' AS f,
+       provsql.provenance_plus(gb_tokens(7,8)) =
+         public.uuid_generate_v5(provsql.uuid_ns_provsql(), concat('plus', gb_tokens(7,8))) AS ordinary_gate;
+
+-- Once the working table is gone, the next lowering forgets what was planted
+-- for it; the planted gate is still in the store, and no longer returned.
+DROP TABLE gb_work;
+CREATE TEMP TABLE gb_work2(v int, provsql uuid);
+SELECT provsql.planted_scope('gb_work2');
+SELECT 'forgotten' AS f,
+       provsql.get_gate_type(c) AS still_stored,
+       provsql.provenance_times(VARIADIC gb_tokens(7,8,9)) <> c AS no_longer_returned
+  FROM gb_planted;
+-- A working table recreated under the same name starts afresh too.
+SELECT provsql.plant_canonical('gb_work2', 'plus', gb_tokens(1,2), (gb_tokens(1))[1], 1) = provsql.provenance_plus(gb_tokens(2,1)) AS planted_again;
+DROP TABLE gb_work2;
+CREATE TEMP TABLE gb_work2(v int, provsql uuid);
+SELECT provsql.planted_scope('gb_work2');
+SELECT provsql.get_gate_type(provsql.provenance_plus(gb_tokens(2,1))) AS type,
+       provsql.provenance_plus(gb_tokens(2,1)) =
+         public.uuid_generate_v5(provsql.uuid_ns_provsql(), concat('plus', gb_tokens(2,1))) AS ordinary_gate;
+DROP TABLE gb_work2;
 
 DROP TABLE gb_tok, gb_cases, gb_planted;
 DROP FUNCTION gb_tokens(int[]); DROP FUNCTION gb_same(uuid, uuid); DROP FUNCTION gb_no_survivor(int[]);

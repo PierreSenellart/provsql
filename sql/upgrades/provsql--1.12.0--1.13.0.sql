@@ -1043,6 +1043,444 @@ CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
   'provsql','provenance_plus' LANGUAGE C COST 100 STRICT PARALLEL SAFE IMMUTABLE;
 
 -- ----------------------------------------------------------------------
+-- 6d. Planted gates are remembered by the session that plants them; the
+--     store is no longer probed at canonical addresses.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION planted_scope(work_name text)
+  RETURNS void AS
+  'provsql','planted_scope' LANGUAGE C STRICT;
+
+CREATE OR REPLACE FUNCTION plant_canonical(
+  work_name text, kind text, tokens uuid[], target uuid,
+  info1 int, info2 int DEFAULT 0)
+  RETURNS uuid AS
+  'provsql','plant_canonical' LANGUAGE C STRICT;
+
+CREATE OR REPLACE FUNCTION eval_recursive(
+  body_sql  text,
+  work_name text,
+  colnames  text,
+  coldef    text,
+  max_iter  int DEFAULT 1000)
+  RETURNS void AS
+$$
+DECLARE
+  changed   boolean;        -- circuit changed structurally this round
+  set_stable boolean;       -- user-column tuple set unchanged this round
+  iters     int := 0;
+  new_count int;            -- rows in _new this round (INSERT ROW_COUNT)
+  -- Under an absorptive semiring the provenance *value* converges on cyclic
+  -- data even though the circuit keeps growing structurally.  A minimal
+  -- derivation cannot repeat a tuple, so it has depth <= (number of derivable
+  -- tuples); after that many naive rounds the value equals the least fixpoint,
+  -- and the surplus (longer, cyclic) derivations are absorbed at evaluation
+  -- time.  We learn that bound from the tuple-set fixpoint, stop there, and
+  -- mark the resulting tokens with the 'absorptive' assumption so evaluation
+  -- under a non-absorptive semiring refuses rather than silently returning a
+  -- truncated value.
+  absorptive_mode boolean :=
+    coalesce(current_setting('provsql.provenance', true), 'semiring')
+      IN ('absorptive', 'boolean');
+  truncated boolean := false; -- exited at the value fixpoint (cyclic data)
+  ntuples   int := NULL;    -- the bound above, set once the tuple set stabilises
+BEGIN
+  EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
+  DROP TABLE IF EXISTS _new;
+
+  -- Tracked working table (carries provsql), initially empty, plus a scratch
+  -- table of the same shape; both reused across rounds.
+  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+  PERFORM provsql.planted_scope(work_name);
+  EXECUTE format('CREATE TEMP TABLE _new (LIKE %I)', work_name);
+
+  LOOP
+    iters := iters + 1;
+    -- Hard safety bound (also catches genuinely unbounded recursion, e.g. an
+    -- unbounded counter, where even the tuple set never stabilises).
+    IF iters > max_iter THEN
+      RAISE EXCEPTION 'eval_recursive: no fixpoint after % rounds (cyclic data?)', max_iter;
+    END IF;
+
+    -- One round of naive evaluation: re-run the CTE body over the current
+    -- working table.  INSERT targets a tracked table, so ProvSQL fills provsql.
+    -- Take the row count from the INSERT itself (counting _new directly would be
+    -- an aggregate over a provenance-tracked table -> an agg_token).
+    EXECUTE 'TRUNCATE _new';
+    EXECUTE format('INSERT INTO _new(%s) %s', colnames, body_sql);
+    GET DIAGNOSTICS new_count = ROW_COUNT;
+
+    -- Exact structural fixpoint test (content-addressed tokens => set equality).
+    EXECUTE format(
+      'SELECT EXISTS((TABLE _new EXCEPT TABLE %1$I) UNION ALL (TABLE %1$I EXCEPT TABLE _new))',
+      work_name) INTO changed;
+
+    -- In an absorptive class, learn the round bound from the tuple-set
+    -- fixpoint (the set always stabilises after finitely many rounds, even on
+    -- cyclic data).
+    IF absorptive_mode AND ntuples IS NULL THEN
+      EXECUTE format(
+        'SELECT NOT EXISTS('
+        || '(SELECT %2$s FROM _new EXCEPT SELECT %2$s FROM %1$I) UNION ALL '
+        || '(SELECT %2$s FROM %1$I EXCEPT SELECT %2$s FROM _new))',
+        work_name, colnames) INTO set_stable;
+      IF set_stable THEN
+        ntuples := new_count;
+      END IF;
+    END IF;
+
+    -- Copy _new into the working table (tracked -> tracked carries the tokens).
+    EXECUTE format('TRUNCATE %I', work_name);
+    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM _new', work_name, colnames);
+
+    -- Structural fixpoint: done (acyclic / fully converged) -- sound for any
+    -- semiring.
+    EXIT WHEN NOT changed;
+
+    -- Absorptive class on cyclic data: once the value-fixpoint bound is
+    -- reached (plus one confirming round, so that acyclic circuits whose
+    -- token depth lags the tuple-set saturation still exit through the
+    -- structural test above, untagged) we stop, even though the circuit
+    -- is not structurally stable.
+    IF absorptive_mode AND ntuples IS NOT NULL AND iters >= ntuples + 1 THEN
+      truncated := true;
+      EXIT;
+    END IF;
+  END LOOP;
+
+  -- Tokens of a truncated (cyclic) fixpoint are sound only under absorptive
+  -- evaluation: record that in the circuit itself.
+  IF truncated THEN
+    EXECUTE format(
+      'UPDATE %I SET provsql = provsql.provenance_assume(provsql, ''absorptive'')',
+      work_name);
+  END IF;
+END
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+CREATE OR REPLACE FUNCTION plant_reach_any_groups(
+  work_name text,
+  node_attribute text,
+  member_rel regclass,
+  member_attribute text,
+  group_attribute text,
+  edge_rel regclass,
+  source_attribute text,
+  destination_attribute text,
+  source_value text,
+  directed boolean,
+  edge_quals text DEFAULT NULL,
+  source_rel regclass DEFAULT NULL,
+  source_rel_attribute text DEFAULT NULL,
+  edge_sql text DEFAULT NULL,
+  member_quals text DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  e record;
+  grp record;
+  m record;
+  sv text[];
+  st uuid[];
+  sp double precision[];
+  gids int[] := ARRAY[]::int[];
+  mids int[] := ARRAY[]::int[];
+  vid int;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  BEGIN
+    -- A tracked member relation would make the aggregated tokens
+    -- per-row products, not the bare reach tokens: nothing to plant.
+    IF EXISTS (SELECT 1 FROM pg_attribute
+               WHERE attrelid = member_rel AND attname = 'provsql'
+                 AND atttypid = 'uuid'::regtype AND NOT attisdropped) THEN
+      RETURN;
+    END IF;
+
+    IF source_rel IS NOT NULL THEN
+      SELECT g.source_values, g.source_tokens, g.source_probabilities
+        INTO sv, st, sp
+        FROM provsql.gather_reachability_sources(source_rel,
+                                                 source_rel_attribute) g;
+      IF sv IS NULL THEN
+        sv := ARRAY[]::text[];
+        st := ARRAY[]::uuid[];
+        sp := ARRAY[]::float8[];
+      END IF;
+    ELSE
+      sv := ARRAY[source_value];
+      st := ARRAY['00000000-0000-0000-0000-000000000000'::uuid];
+      sp := ARRAY[1.0::float8];
+    END IF;
+
+    e := provsql.gather_reachability_edges(edge_rel, source_attribute,
+                                           destination_attribute,
+                                           sv, edge_quals, edge_sql);
+
+    -- The groups, replicating the user's join semantics: per group, the
+    -- member vertices and the multiset of their reach tokens (with the
+    -- multiplicity the join produces).  Single-member groups need no
+    -- planting (provenance_plus passes a single token through).
+    -- Two steps: materialise the joined rows with their per-row tokens
+    -- (tracked CTAS, then strip the automatic provsql column), and only
+    -- then aggregate the now-plain table -- aggregating provenance()
+    -- inside a grouped tracked query would be rewritten as a
+    -- provenance-aware aggregation, which is not what the planting
+    -- needs.
+    DROP TABLE IF EXISTS provsql_reach_any_flat_tmp;
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_reach_any_flat_tmp AS '
+      || 'SELECT w.%1$I::text AS node_val, provsql.provenance() AS tok, '
+      || '       t.%5$I AS grp_key '
+      || 'FROM %2$I w JOIN %3$s t ON w.%1$I = t.%4$I'
+      -- The member-relation filter restricts which members participate
+      -- (deparsed table-qualified as t.column); the working table side
+      -- carries no provenance distinction here.
+      || coalesce(' WHERE ' || member_quals, ''),
+      node_attribute, work_name, member_rel::text, member_attribute,
+      group_attribute);
+    PERFORM provsql.remove_provenance('provsql_reach_any_flat_tmp');
+    DROP TABLE IF EXISTS provsql_reach_any_groups_tmp;
+    CREATE TEMP TABLE provsql_reach_any_groups_tmp AS
+      SELECT (row_number() OVER ())::int AS gid, members, toks FROM (
+        SELECT array_agg(node_val) AS members, array_agg(tok) AS toks
+        FROM provsql_reach_any_flat_tmp
+        GROUP BY grp_key HAVING count(*) >= 2) g;
+    DROP TABLE provsql_reach_any_flat_tmp;
+
+    FOR grp IN SELECT gid, members FROM provsql_reach_any_groups_tmp LOOP
+      FOR m IN SELECT DISTINCT unnest(grp.members) AS val LOOP
+        vid := array_position(e.vertices, m.val);
+        IF vid IS NOT NULL THEN
+          gids := gids || grp.gid;
+          mids := mids || vid;
+        END IF;
+      END LOOP;
+    END LOOP;
+    IF cardinality(gids) = 0 THEN
+      DROP TABLE provsql_reach_any_groups_tmp;
+      RETURN;
+    END IF;
+
+    FOR grp IN
+      SELECT a.group_id, a.token AS any_token, t.toks
+      FROM provsql.reachability_materialize_any(
+             e.sources, e.destinations, e.tokens, e.probabilities,
+             e.block_keys, e.block_indices, e.extra_ids, st, sp,
+             directed, gids, mids) a
+      JOIN provsql_reach_any_groups_tmp t ON t.gid = a.group_id
+    LOOP
+      PERFORM provsql.plant_canonical(work_name, 'plus', grp.toks,
+                                      grp.any_token, 1);
+    END LOOP;
+    DROP TABLE provsql_reach_any_groups_tmp;
+    IF verbosity >= 20 THEN
+      -- Lift the function-level client_min_messages = warning for the
+      -- one RAISE; the function-level SET restores the caller's value.
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: certified any-member gates planted for the aggregation of "%" by %.%',
+        work_name, member_rel, group_attribute;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    IF verbosity >= 10 THEN
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: any-member planting for "%" skipped (%)',
+        work_name, SQLERRM;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  END;
+END
+-- No SET search_path: the deparsed edge subquery must resolve against
+-- the caller's path; ProvSQL internals are schema-qualified.
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+CREATE OR REPLACE FUNCTION plant_reach_cover(
+  work_name text,
+  node_attribute text,
+  edge_rel regclass,
+  source_attribute text,
+  destination_attribute text,
+  source_value text,
+  directed boolean,
+  node_values text[],
+  edge_quals text DEFAULT NULL,
+  source_rel regclass DEFAULT NULL,
+  source_rel_attribute text DEFAULT NULL,
+  edge_sql text DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  e record;
+  sv text[];
+  st uuid[];
+  sp double precision[];
+  val text;
+  vid int;
+  vids int[] := ARRAY[]::int[];
+  tok uuid;
+  toks uuid[] := ARRAY[]::uuid[];
+  cover_token uuid;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  BEGIN
+    IF source_rel IS NOT NULL THEN
+      SELECT g.source_values, g.source_tokens, g.source_probabilities
+        INTO sv, st, sp
+        FROM provsql.gather_reachability_sources(source_rel,
+                                                 source_rel_attribute) g;
+      IF sv IS NULL THEN
+        sv := ARRAY[]::text[];
+        st := ARRAY[]::uuid[];
+        sp := ARRAY[]::float8[];
+      END IF;
+    ELSE
+      sv := ARRAY[source_value];
+      st := ARRAY['00000000-0000-0000-0000-000000000000'::uuid];
+      sp := ARRAY[1.0::float8];
+    END IF;
+
+    e := provsql.gather_reachability_edges(edge_rel, source_attribute,
+                                           destination_attribute,
+                                           sv, edge_quals, edge_sql);
+
+    -- The bound vertices and their per-row reach tokens, with the
+    -- multiplicity the self-join produces.  A vertex absent from the
+    -- graph, or from the working table, means the join is empty: no
+    -- row will exist, nothing to plant.
+    FOREACH val IN ARRAY node_values LOOP
+      vid := array_position(e.vertices, val);
+      IF vid IS NULL THEN
+        RETURN;
+      END IF;
+      vids := vids || vid;
+      EXECUTE format('SELECT provsql FROM %I WHERE %I::text = $1',
+                     work_name, node_attribute)
+        INTO tok USING val;
+      IF tok IS NULL THEN
+        RETURN;
+      END IF;
+      toks := toks || tok;
+    END LOOP;
+
+    cover_token := provsql.reachability_materialize_cover(
+      e.sources, e.destinations, e.tokens, e.probabilities,
+      e.block_keys, e.block_indices, e.extra_ids, st, sp,
+      directed, vids);
+
+    PERFORM provsql.plant_canonical(work_name, 'times', toks, cover_token, 1);
+    IF verbosity >= 20 THEN
+      -- Lift the function-level client_min_messages = warning for the
+      -- one RAISE; the function-level SET restores the caller's value.
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: certified all-members gate planted for the self-join of "%"',
+        work_name;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    IF verbosity >= 10 THEN
+      PERFORM set_config('client_min_messages', 'notice', true);
+      RAISE NOTICE 'ProvSQL: all-members planting for "%" skipped (%)',
+        work_name, SQLERRM;
+      PERFORM set_config('client_min_messages', 'warning', true);
+    END IF;
+  END;
+END
+-- No SET search_path: the deparsed edge subquery must resolve against
+-- the caller's path; ProvSQL internals are schema-qualified.
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+CREATE OR REPLACE FUNCTION eval_reachability(
+  edge_rel regclass,
+  source_attribute text,
+  destination_attribute text,
+  source_value text,
+  directed boolean,
+  work_name text,
+  colnames text,
+  coldef text,
+  coltype text,
+  body_sql text,
+  edge_quals text DEFAULT NULL,
+  source_rel regclass DEFAULT NULL,
+  source_rel_attribute text DEFAULT NULL,
+  edge_sql text DEFAULT NULL,
+  hop_bound int DEFAULT NULL,
+  hop_seed int DEFAULT NULL,
+  hops_position int DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  e record;
+  sv text[];
+  st uuid[];
+  sp double precision[];
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  BEGIN
+    IF source_rel IS NOT NULL THEN
+      -- Multi-source: gather the source relation (probabilistic when
+      -- tracked, certain otherwise).
+      SELECT g.source_values, g.source_tokens, g.source_probabilities
+        INTO sv, st, sp
+        FROM provsql.gather_reachability_sources(source_rel,
+                                                 source_rel_attribute) g;
+      IF sv IS NULL THEN
+        sv := ARRAY[]::text[];
+        st := ARRAY[]::uuid[];
+        sp := ARRAY[]::float8[];
+      END IF;
+    ELSE
+      -- Constant base arm: one certain source.
+      sv := ARRAY[source_value];
+      st := ARRAY['00000000-0000-0000-0000-000000000000'::uuid];
+      sp := ARRAY[1.0::float8];
+    END IF;
+
+    e := provsql.gather_reachability_edges(edge_rel, source_attribute,
+                                           destination_attribute,
+                                           sv, edge_quals, edge_sql);
+    IF to_regclass(work_name) IS NOT NULL THEN
+      EXECUTE format('DROP TABLE %I', work_name);
+    END IF;
+    EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+    PERFORM provsql.planted_scope(work_name);
+    IF hop_bound IS NULL THEN
+      EXECUTE format(
+        'INSERT INTO %I SELECT ($1::text[])[m.vertex]::%s, m.token '
+        || 'FROM provsql.reachability_materialize($2, $3, $4, $5, $6, $7, $8, $9, $10, $11) m',
+        work_name, coltype)
+        USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
+              e.block_keys, e.block_indices, e.extra_ids, st, sp, directed;
+    ELSE
+      -- Hop-counting shape: one row per (vertex, walk length), the hop
+      -- column in its CTE position.
+      EXECUTE format(
+        'INSERT INTO %I SELECT %s, m.token '
+        || 'FROM provsql.reachability_materialize_hops($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) m',
+        work_name,
+        CASE WHEN hops_position = 1
+             THEN format('m.hops, ($1::text[])[m.vertex]::%s', coltype)
+             ELSE format('($1::text[])[m.vertex]::%s, m.hops', coltype) END)
+        USING e.vertices, e.sources, e.destinations, e.tokens, e.probabilities,
+              e.block_keys, e.block_indices, e.extra_ids, st, sp, directed,
+              hop_bound, hop_seed;
+    END IF;
+    IF verbosity >= 20 THEN
+      RAISE NOTICE 'ProvSQL: recursive CTE "%" compiled along a tree decomposition of %',
+        work_name, coalesce(edge_rel::text, 'the join-defined edge query');
+    END IF;
+  EXCEPTION WHEN OTHERS THEN
+    IF verbosity >= 10 THEN
+      RAISE NOTICE 'ProvSQL: reachability route for "%" fell back to the generic fixpoint (%)',
+        work_name, SQLERRM;
+    END IF;
+    PERFORM provsql.eval_recursive(body_sql, work_name, colnames, coldef);
+  END;
+END
+$$ LANGUAGE plpgsql;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

@@ -68,8 +68,10 @@ SELECT answer, get_gate_type(pv) AS root, (get_infos(pv)).info1 AS certified,
 FROM btwc_2;
 DROP TABLE btwc_2;
 
--- The deviating phrasing now computes the same token multiset and
--- lands on the planted gate: content addressing, not syntax.
+-- The deviating phrasing computes the same token multiset, but each query
+-- is served by what its own lowering planted, and this one plants nothing:
+-- it stays on the generic path, correct and uncertified, whatever ran
+-- before.
 CREATE TABLE btwc_fb2 AS
   WITH RECURSIVE reach(node) AS (
       SELECT 1
@@ -81,7 +83,7 @@ CREATE TABLE btwc_fb2 AS
   WHERE r1.node = 5 AND r2.node = r1.node + 1;
 SELECT remove_provenance('btwc_fb2');
 SELECT (get_infos(pv)).info1 AS certified,
-       round(probability_evaluate(pv, 'independent')::numeric, 6) AS rel
+       round(probability_evaluate(pv, 'possible-worlds')::numeric, 6) AS rel
 FROM btwc_fb2;
 DROP TABLE btwc_fb2;
 

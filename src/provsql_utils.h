@@ -785,4 +785,31 @@ extern "C"
 #endif
 void provsql_sha1(const unsigned char *data, size_t len, unsigned char out[20]);
 
+/**
+ * @brief Pre-create ("plant") a gate at the canonical address of a multiset
+ *        of tokens, for the working table of the recursive CTE being lowered.
+ *
+ * The gate, of type @p type (@c gate_plus or @c gate_times), has the single
+ * child @p target and the given infos; its address is remembered in this
+ * backend, where @c provenance_plus / @c provenance_times return it in place
+ * of an ordinary gate over @p children.  Defined in @c gate_builders.c.
+ *
+ * @param work_name  working table the tokens belong to; NULL for the one
+ *                   declared last by @c planted_scope()
+ * @param type       @c gate_plus or @c gate_times
+ * @param children   the multiset the planted gate stands for
+ * @param n          number of @p children
+ * @param target     root of the certified circuit, the gate's single child
+ * @param info1      first info of the planted gate
+ * @param info2      second info of the planted gate
+ * @return the address of the planted gate
+ */
+#ifdef __cplusplus
+extern "C"
+#endif
+pg_uuid_t provsql_plant_canonical(const char *work_name, gate_type type,
+                                  const pg_uuid_t *children, int n,
+                                  const pg_uuid_t *target,
+                                  unsigned info1, unsigned info2);
+
 #endif /* PROVSQL_UTILS_H */

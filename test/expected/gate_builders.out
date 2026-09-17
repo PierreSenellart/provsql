@@ -48,9 +48,30 @@ null array|t|t|t
 f|times|plus_is_zero
 empty array|same one / 0 children|t
 (1 row)
+planted_scope
+
+(1 row)
+f|same_address|type|info1|found_in_any_order|other_multiset_is_not|nor_the_sum
+planted|t|times|1|t|t|t
+(1 row)
 create_gate
 
 (1 row)
-f|c_finds_it|ref_finds_it|other_multiset_does_not
-planted|t|t|t
+f|ordinary_gate
+store only|t
+(1 row)
+planted_scope
+
+(1 row)
+f|still_stored|no_longer_returned
+forgotten|times|t
+(1 row)
+planted_again
+t
+(1 row)
+planted_scope
+
+(1 row)
+type|ordinary_gate
+plus|t
 (1 row)

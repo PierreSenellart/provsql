@@ -430,10 +430,9 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
 
     /* Dedup pre-creation: per vertex, the multiset of its length tokens
      * *as the work table carries them* (i.e. wrapped in the 'absorptive'
-     * assumption marker, like every materialised root), sorted as text,
-     * addressed in the dedicated "plus-canonical" recipe namespace that
-     * provenance_plus probes (and never creates under, so a hit there is
-     * always a deliberate pre-creation).  The aliased child is the DP's
+     * assumption marker, like every materialised root), planted at the
+     * "plus-canonical" address where provenance_plus, in this backend,
+     * returns it for that very multiset.  The aliased child is the DP's
      * native within-bound root, wrapped in the same marker so the
      * aggregated token refuses non-absorptive evaluation too. */
     {
@@ -445,24 +444,17 @@ Datum reachability_materialize_hops(PG_FUNCTION_ARGS)
         auto it = by_vertex.find(vr.vertex);
         if (it == by_vertex.end() || it->second.size() < 2)
           continue;
-        std::vector<std::string> texts = it->second;
-        std::sort(texts.begin(), texts.end());
-        std::string name = "plus-canonical{";
-        for (std::size_t i = 0; i < texts.size(); ++i) {
-          if (i)
-            name += ",";
-          name += texts[i];
-        }
-        name += "}";
-        const pg_uuid_t dedup = provsqlUuidV5(name);
+        std::vector<pg_uuid_t> tokens;
+        for (const auto &t : it->second)
+          tokens.push_back(string2uuid(t));
         const pg_uuid_t within =
           wrapAssumedAbsorptive(uuid_of.at(vr.root));
-        provsql_internal_create_gate(&dedup, gate_plus, 1, &within);
         /* Route tag in info2, like every materialised root: this alias is a
          * user-visible root too, and must report 'reachability' rather than
          * the generic 'independent'. */
-        provsql_internal_set_infos(&dedup, DNNF_CERT_INFO,
-                                   PROVSQL_ROUTE_REACHABILITY);
+        provsql_plant_canonical(NULL, gate_plus, tokens.data(),
+                                static_cast<int>(tokens.size()), &within,
+                                DNNF_CERT_INFO, PROVSQL_ROUTE_REACHABILITY);
       }
     }
 

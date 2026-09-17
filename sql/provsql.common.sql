@@ -1616,15 +1616,12 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
  * Filters out NULL and one-gates; returns gate_one() if all tokens
  * are trivial, or a single token if only one remains.
  *
- * Before creating an ordinary gate, the *times-canonical* address of
- * the surviving multiset -- @c uuid5('times-canonical{sorted tokens}')
- * -- is probed: the reachability rewriter pre-creates there, for
- * self-join conjunctions of reachability tokens, a certified
- * equivalent (the all-members-reachable circuit; see
- * @c plant_reach_cover).  Ordinary creation never writes under that
- * recipe, so a hit is always a deliberate plant; the ordinary
- * order-dependent recipe is used otherwise, so ordinary
- * times gates (and their formula rendering) are untouched.
+ * When the surviving multiset is one for which this session planted a
+ * certified equivalent (see @c plant_canonical; the reachability rewriter
+ * does so for self-join conjunctions of reachability tokens, see
+ * @c plant_reach_cover), the planted gate is returned.  The ordinary
+ * order-dependent recipe is used otherwise, so ordinary times gates (and
+ * their formula rendering) are untouched.
  *
  * Implemented in C (<tt>gate_builders.c</tt>). The cost is declared as that
  * of a PL/pgSQL function, which this function was: the planner then keeps
@@ -1731,21 +1728,61 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
  * @brief Create a plus (sum) gate from an array of provenance tokens
  *
  * Filters out NULL and zero-gates; returns gate_zero() if all tokens
- * are trivial, or a single token if only one remains.  Before creating
- * a gate, probes the *canonical* address of the multiset -- a dedicated
- * v5 recipe namespace over the sorted tokens (plus is commutative), in
- * which this function never creates anything, so a gate found there is
- * always a deliberate pre-creation computing the same sum.  That is the
- * bounded-hop reachability route's hook: it plants, at the canonical
- * address of a vertex's per-length tokens, a certified gate over its
- * native within-bound circuit, keeping the natural hop-discarding query
- * on the linear evaluation route.  Absent a canonical gate, the
- * ordinary order-dependent recipe is used, so ordinary plus
- * gates (and their formula rendering) are untouched.
+ * are trivial, or a single token if only one remains.  When the
+ * multiset is one for which this session planted a certified gate
+ * computing the same sum (see @c plant_canonical), that gate is returned.
+ * This is how the bounded-hop reachability route keeps the natural
+ * hop-discarding query on the linear evaluation route: it plants, for a
+ * vertex's per-length tokens, a certified gate over its native
+ * within-bound circuit.  Otherwise the ordinary order-dependent recipe
+ * is used, so ordinary plus gates (and their formula rendering) are
+ * untouched.
  */
 CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
   RETURNS UUID AS
   'provsql','provenance_plus' LANGUAGE C COST 100 STRICT PARALLEL SAFE IMMUTABLE;
+
+/**
+ * @brief Declare the working table of a recursive CTE, just (re)created
+ *        (internal)
+ *
+ * Gates planted from now on belong to it; those planted for the table of
+ * the same name it replaces, and for working tables that no longer exist,
+ * are forgotten.
+ *
+ * @param work_name name of the temporary working table
+ */
+CREATE OR REPLACE FUNCTION planted_scope(work_name text)
+  RETURNS void AS
+  'provsql','planted_scope' LANGUAGE C STRICT;
+
+/**
+ * @brief Plant a certified gate in place of a sum or a product (internal)
+ *
+ * Creates a @p kind gate with the single child @p target at the canonical
+ * address of the multiset @p tokens -- the v5 UUID of
+ * @c 'plus-canonical{sorted tokens}' or @c 'times-canonical{…}', a recipe under which nothing else
+ * creates gates -- and remembers the address in this session: while the
+ * working table @p work_name exists, @c provenance_plus /
+ * @c provenance_times given that very multiset return the planted gate.
+ * The tokens are row tokens of the working table, a temporary table, so
+ * the sum or product is computed by the session that planted, never by a
+ * parallel worker; the store is not consulted, and sessions that planted
+ * nothing pay nothing.
+ *
+ * @param work_name working table the tokens belong to
+ * @param kind 'plus' or 'times'
+ * @param tokens the multiset the planted gate stands for
+ * @param target root of the certified circuit
+ * @param info1 first info of the planted gate
+ * @param info2 second info of the planted gate
+ * @return the address of the planted gate
+ */
+CREATE OR REPLACE FUNCTION plant_canonical(
+  work_name text, kind text, tokens uuid[], target uuid,
+  info1 int, info2 int DEFAULT 0)
+  RETURNS uuid AS
+  'provsql','plant_canonical' LANGUAGE C STRICT;
 
 /**
  * @brief Driver for provenance over recursive queries (WITH RECURSIVE).
@@ -1826,6 +1863,7 @@ BEGIN
   -- Tracked working table (carries provsql), initially empty, plus a scratch
   -- table of the same shape; both reused across rounds.
   EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+  PERFORM provsql.planted_scope(work_name);
   EXECUTE format('CREATE TEMP TABLE _new (LIKE %I)', work_name);
 
   LOOP
@@ -9436,7 +9474,6 @@ DECLARE
   gids int[] := ARRAY[]::int[];
   mids int[] := ARRAY[]::int[];
   vid int;
-  canonical uuid;
   verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
 BEGIN
   BEGIN
@@ -9521,13 +9558,8 @@ BEGIN
              directed, gids, mids) a
       JOIN provsql_reach_any_groups_tmp t ON t.gid = a.group_id
     LOOP
-      canonical := public.uuid_generate_v5(
-        provsql.uuid_ns_provsql(),
-        concat('plus-canonical',
-               (SELECT array_agg(tok ORDER BY tok)
-                FROM unnest(grp.toks) tok)));
-      PERFORM provsql.create_gate(canonical, 'plus', ARRAY[grp.any_token]);
-      PERFORM provsql.set_infos(canonical, 1);
+      PERFORM provsql.plant_canonical(work_name, 'plus', grp.toks,
+                                      grp.any_token, 1);
     END LOOP;
     DROP TABLE provsql_reach_any_groups_tmp;
     IF verbosity >= 20 THEN
@@ -9611,7 +9643,6 @@ DECLARE
   tok uuid;
   toks uuid[] := ARRAY[]::uuid[];
   cover_token uuid;
-  canonical uuid;
   verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
 BEGIN
   BEGIN
@@ -9659,13 +9690,7 @@ BEGIN
       e.block_keys, e.block_indices, e.extra_ids, st, sp,
       directed, vids);
 
-    SELECT public.uuid_generate_v5(
-             provsql.uuid_ns_provsql(),
-             concat('times-canonical', array_agg(t ORDER BY t)))
-    FROM unnest(toks) t
-    INTO canonical;
-    PERFORM provsql.create_gate(canonical, 'times', ARRAY[cover_token]);
-    PERFORM provsql.set_infos(canonical, 1);
+    PERFORM provsql.plant_canonical(work_name, 'times', toks, cover_token, 1);
     IF verbosity >= 20 THEN
       -- Lift the function-level client_min_messages = warning for the
       -- one RAISE; the function-level SET restores the caller's value.
@@ -10114,6 +10139,7 @@ BEGIN
       EXECUTE format('DROP TABLE %I', work_name);
     END IF;
     EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+    PERFORM provsql.planted_scope(work_name);
     IF hop_bound IS NULL THEN
       EXECUTE format(
         'INSERT INTO %I SELECT ($1::text[])[m.vertex]::%s, m.token '

@@ -372,10 +372,15 @@ entirely.  It is sound for the same reason the gate cache is: the
 store is append-only and the worker pipe ordered, so a token seen
 created by this backend can never designate anything else.  The
 compilers also materialise at **content-addressed** UUIDs (v5 hashes
-of the construction recipe, including the *plus-canonical* and
-*times-canonical* namespaces probed by :sqlfunc:`provenance_plus` /
-:sqlfunc:`provenance_times`), so any query phrasing that combines the
-same token multiset lands on the already-planted gates.
+of the construction recipe).  Gates planted in place of a sum or a
+product of working-table tokens sit in the *plus-canonical* and
+*times-canonical* namespaces; their addresses are remembered by the
+backend that planted them (``gate_builders.c``), for as long as the
+working table exists, and that is where :sqlfunc:`provenance_plus` /
+:sqlfunc:`provenance_times` look for them.  The store is not probed:
+the sum or product is computed above a scan of a temporary table,
+hence by the planting backend, and sessions that planted nothing pay
+nothing.
 
 
 Reading Circuits Back

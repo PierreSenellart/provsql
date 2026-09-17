@@ -119,6 +119,7 @@ INTERNAL_FUNCTIONS = {
     'reachability_materialize_hops', 'reachability_materialize_any',
     'reachability_materialize_cover',
     'plant_reach_any_groups', 'plant_reach_cover',
+    'planted_scope', 'plant_canonical',
     # C backend of nonzero's default mode; users call nonzero()/present()
     'true_nonzero',
     # Internal circuit operations
