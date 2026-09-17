@@ -167,7 +167,17 @@ Each inserted row receives the provenance token computed by the source
 ``SELECT``, rather than a fresh independent token.
 
 If the target table does not have a ``provsql`` column, a warning is
-emitted indicating that source provenance is lost.
+emitted indicating that source provenance is lost. To keep it, store the
+token explicitly with :sqlfunc:`provenance` (no warning is then emitted):
+
+.. code-block:: sql
+
+    CREATE TABLE archive_tokens (name VARCHAR, token UUID);
+    INSERT INTO archive_tokens SELECT name, provenance() FROM employees;
+
+Selecting the ``provsql`` column of a tracked table for that purpose is
+refused: it is the token of that input table, which is the provenance of
+the query's rows only in the simplest queries.
 
 The ``provenance()`` Function
 ------------------------------

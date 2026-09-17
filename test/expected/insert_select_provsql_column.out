@@ -1,0 +1,33 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+-- refused: the provsql column as a value, in any position, alone or in a join
+ERROR:  ProvSQL: INSERT ... SELECT into a table without provenance tracking cannot select the provsql column of a provenance-tracked relation; use provenance() to store the provenance of each row
+ERROR:  ProvSQL: INSERT ... SELECT into a table without provenance tracking cannot select the provsql column of a provenance-tracked relation; use provenance() to store the provenance of each row
+ERROR:  ProvSQL: INSERT ... SELECT into a table without provenance tracking cannot select the provsql column of a provenance-tracked relation; use provenance() to store the provenance of each row
+q|n
+nothing inserted|0
+(1 row)
+-- provenance(): stored, without a warning
+q|value|is_row_token
+single table|1|t
+single table|2|t
+(2 rows)
+q|value|label|is_row_token
+three columns|1|x|t
+three columns|2|y|t
+(2 rows)
+q|value|gate|children_are_the_rows
+join|12|times|t
+(1 row)
+-- no provenance stored: the warning stays
+WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
+-- tracked target: provenance propagates, with or without the column named
+q|a|copies|same_token
+tracked target|1|2|t
+tracked target|2|1|t
+(2 rows)

@@ -15854,6 +15854,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   AttrNumber provsql_attno = 0;
   TargetEntry *provsql_te = NULL;
   bool provsql_te_is_new = false;
+  bool stores_provenance = false, projects_provsql = false;
 
   /* Find the source SELECT subquery with provenance */
   foreach (lc, q->rtable) {
@@ -15877,12 +15878,28 @@ static void process_insert_select(const constants_t *constants, Query *q) {
    * INSERT saw zero rows. */
   {
     bool *removed = NULL;
-    Query *new_subquery =
+    int n_source_columns = list_length(src_rte->subquery->targetList);
+    int i;
+    Query *new_subquery;
+
+    /* Does the source call provenance()?  Then the statement stores the
+     * provenance of the rows by itself (checked before the rewrite replaces
+     * the calls). */
+    stores_provenance = provenance_function_walker(
+      (Node *)src_rte->subquery->targetList, (void *)constants);
+
+    new_subquery =
       process_query(constants, src_rte->subquery, &removed, false, false, false,
                     NULL);
     if (new_subquery == NULL)
       return;
     src_rte->subquery = new_subquery;
+
+    /* The rewrite strips a provsql column the source projects: ProvSQL manages
+     * that column itself. */
+    for (i = 0; removed != NULL && i < n_source_columns; ++i)
+      if (removed[i])
+        projects_provsql = true;
   }
 
   /* The rewrite may have retyped an output column (an aggregate becomes an
@@ -15902,14 +15919,27 @@ static void process_insert_select(const constants_t *constants, Query *q) {
   }
 
   if (provsql_attno == 0) {
-    /* The target cannot store provenance.  The source SELECT was rewritten
-     * above (so it returns the right rows), but its auto-added provsql column
-     * has no target column to land in -- drop it so the INSERT's column
-     * mapping stays consistent, and warn that provenance is not propagated. */
+    /* The target cannot store provenance.  A provsql column the source
+     * projected has been stripped, and the INSERT's column mapping still
+     * expects it: refuse, instead of letting the planner fail on the dangling
+     * reference.  It is not given the meaning of provenance() either: the
+     * provsql column of an input relation is the token of that input, which
+     * is the provenance of the output row only in the simplest queries. */
+    if (projects_provsql)
+      provsql_error("INSERT ... SELECT into a table without provenance tracking "
+                    "cannot select the provsql column of a provenance-tracked "
+                    "relation; use provenance() to store the provenance of each "
+                    "row");
+
+    /* The source SELECT was rewritten above (so it returns the right rows),
+     * but its auto-added provsql column has no target column to land in --
+     * drop it so the INSERT's column mapping stays consistent, and warn that
+     * provenance is not propagated, unless the statement stores it itself. */
     remove_provsql_from_select(src_rte->subquery);
-    provsql_warning("INSERT ... SELECT on provenance-tracked "
-                    "tables: source provenance is not propagated "
-                    "to inserted rows");
+    if (!stores_provenance)
+      provsql_warning("INSERT ... SELECT on provenance-tracked "
+                      "tables: source provenance is not propagated "
+                      "to inserted rows");
     return;
   }
 

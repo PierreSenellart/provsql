@@ -6,7 +6,6 @@ ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as
 reads_col
 2
 (1 row)
-WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
 add_provenance
 
 (1 row)

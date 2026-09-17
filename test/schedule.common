@@ -108,6 +108,7 @@ test: having_certified
 test: having_arithmetic
 test: having_agg_fptras
 test: insert_select_sublink
+test: insert_select_provsql_column
 test: inert_provenance_sublink
 test: conditioning
 test: given_conditioning
