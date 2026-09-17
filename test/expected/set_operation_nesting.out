@@ -1,0 +1,173 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|a|c|p
+left-nested|1|3|0.8500
+left-nested|2|1|0.2000
+left-nested|2|1|0.5000
+left-nested|3|1|0.4000
+left-nested|5|1|0.5000
+left-nested|7|1|0.5000
+left-nested|9|1|0.2000
+left-nested|9|1|0.4000
+left-nested||1|0.4000
+(9 rows)
+remove_provenance
+
+(1 row)
+q|a|c|p
+right-nested|1|3|0.8500
+right-nested|2|1|0.2000
+right-nested|2|1|0.5000
+right-nested|3|1|0.4000
+right-nested|5|1|0.5000
+right-nested|7|1|0.5000
+right-nested|9|1|0.4000
+right-nested|9|1|0.2000
+right-nested||1|0.4000
+(9 rows)
+remove_provenance
+
+(1 row)
+q|n
+two levels|11 (*)
+(1 row)
+remove_provenance
+
+(1 row)
+q|n|nd
+top level|9|6
+(1 row)
+remove_provenance
+
+(1 row)
+q|a|c
+ALL under non-ALL|1|5
+ALL under non-ALL|2|2
+ALL under non-ALL|3|1
+ALL under non-ALL|5|2
+ALL under non-ALL|7|2
+ALL under non-ALL|9|1
+ALL under non-ALL||1
+(7 rows)
+remove_provenance
+
+(1 row)
+q|a|c
+non-ALL under non-ALL|1|3
+non-ALL under non-ALL|2|2
+non-ALL under non-ALL|3|1
+non-ALL under non-ALL|5|1
+non-ALL under non-ALL|7|1
+non-ALL under non-ALL|9|2
+non-ALL under non-ALL||1
+(7 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+EXCEPT under UNION ALL|1|0.4500
+EXCEPT under UNION ALL|2|0.2000
+EXCEPT under UNION ALL|2|0.5000
+EXCEPT under UNION ALL|5|0.5000
+EXCEPT under UNION ALL|7|0.5000
+EXCEPT under UNION ALL|9|0.2000
+(6 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+chained EXCEPT|1|0.4500
+chained EXCEPT|2|0.4000
+chained EXCEPT|5|0.5000
+chained EXCEPT|7|0.5000
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+EXCEPT over UNION|1|0.4500
+EXCEPT over UNION|2|0.4000
+EXCEPT over UNION|5|0.5000
+EXCEPT over UNION|7|0.5000
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+EXCEPT ALL over UNION ALL|1|0.3000
+EXCEPT ALL over UNION ALL|1|0.3000
+EXCEPT ALL over UNION ALL|2|0.4000
+EXCEPT ALL over UNION ALL|5|0.5000
+EXCEPT ALL over UNION ALL|7|0.5000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|a|p
+(0 rows)
+ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported
+remove_provenance
+
+(1 row)
+q|rows
+ORDER BY a DESC|NULL 9 7 5 3 2 1
+(1 row)
+remove_provenance
+
+(1 row)
+q|rows
+ORDER BY 1 NULLS FIRST|NULL 1 2 3 5 7 9
+(1 row)
+WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry their provenance in the uncut result, so what is computed from them is not sound under uncertainty
+remove_provenance
+
+(1 row)
+q|a|c
+LIMIT 2|1|3
+LIMIT 2|2|1
+(2 rows)
+remove_provenance
+
+(1 row)
+q|rows
+OFFSET 1 LIMIT 2|2 3
+(1 row)
+remove_provenance
+
+(1 row)
+q|rows
+EXCEPT DESC LIMIT 2|7 5
+(1 row)
+WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry their provenance in the uncut result, so what is computed from them is not sound under uncertainty
+remove_provenance
+
+(1 row)
+q|rows
+arm LIMIT|2 7
+(1 row)
+remove_provenance
+
+(1 row)
+q|rows
+UNION ALL LIMIT 3|1 1 1
+(1 row)
+remove_provenance
+
+(1 row)
+q|rows
+ORDER BY second column|9 7 5
+(1 row)

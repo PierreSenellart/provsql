@@ -294,11 +294,34 @@ Step 3: Set-Operation Handling
 
 If the query has ``setOperations`` (``UNION``, ``EXCEPT``):
 
+The rewriting takes one set operation per query level: a tree of
+``UNION ALL`` nodes, or a single ``EXCEPT`` over two leaves, with a
+non-``ALL`` top node handled by a wrapper.
+
 - **Non-ALL variants** (``UNION``, ``EXCEPT`` without ``ALL``):
   :cfunc:`rewrite_non_all_into_external_group_by` wraps the set
   operation in a new outer query with ``GROUP BY`` on all columns.
   This implements duplicate elimination as provenance addition (⊕).
-  The function then re-enters :cfunc:`process_query` on the wrapper.
+  The ``ORDER BY`` / ``LIMIT`` / ``OFFSET`` of the statement move to
+  the wrapper, since they apply to the deduplicated result (their
+  sort references are remapped onto the wrapper's renumbered target
+  list).  Every ``UNION`` below a non-``ALL`` ``UNION`` is made
+  ``ALL``: the one ``GROUP BY`` merges the whole subtree, and ⊕ is
+  associative.  The function then re-enters :cfunc:`process_query`
+  on the wrapper.
+
+- **Nested set operations**: once the top node is ``ALL``,
+  :cfunc:`nest_set_operations` replaces every subtree that does not
+  fit the level -- a non-``ALL`` ``UNION`` or an ``EXCEPT`` under a
+  ``UNION ALL``, any set operation under an ``EXCEPT`` -- by a leaf:
+  a subquery built as the parser would build a parenthesised set
+  operation (``Var`` target list on the leftmost leaf, typed by the
+  node's column descriptions).  The recursion into subqueries then
+  rewrites it at its own level, wrapper included.  This is the
+  rewriting a user would do by hand by moving the inner set operation
+  to a ``FROM`` subquery; without it, a ``UNION`` under a
+  ``UNION ALL`` would lose its deduplication.  The range table is
+  rebuilt to hold exactly the remaining leaves.
 
 - ``UNION ALL``: each branch is processed independently.
   :cfunc:`process_set_operation_union` validates the pure-``UNION``

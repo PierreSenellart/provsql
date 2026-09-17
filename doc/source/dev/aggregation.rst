@@ -366,14 +366,14 @@ the inputs the aggregate reads; the value-aware evaluators
 :cfunc:`make_aggregation_expression`:
 
 - **NULL-skipping aggregates** (``sum``, ``min``, ``max``, ``avg``,
-  ``string_agg``, ``choose``, ...).  ``provenance_semimod`` returns ``NULL`` for a
-  ``NULL`` value and :sqlfunc:`provenance_aggregate` drops such
-  entries, so a row with a ``NULL`` argument is no child.  A
-  ``FILTER (WHERE f)`` clause is folded into the argument, as
-  ``CASE WHEN f THEN arg END``, which makes a row failing ``f``
-  indistinguishable from a row with a ``NULL`` argument -- including
-  for ``HAVING agg IS [NOT] NULL``, which splits the group on that
-  per-row value.
+  ``string_agg``, ``choose``, ...).  :sqlfunc:`provenance_semimod`
+  returns ``NULL`` for a ``NULL`` value and
+  :sqlfunc:`provenance_aggregate` drops such entries, so a row with
+  a ``NULL`` argument is no child.  A ``FILTER (WHERE f)`` clause is
+  folded into the argument, as ``CASE WHEN f THEN arg END``, which
+  makes a row failing ``f`` indistinguishable from a row with a
+  ``NULL`` argument -- including for ``HAVING agg IS [NOT] NULL``,
+  which splits the group on that per-row value.
 - ``count``.  ``count(*)`` contributes the constant 1 and
   ``count(e)`` the value ``CASE WHEN e IS NOT NULL THEN 1 ELSE 0
   END``; with a ``FILTER`` the condition becomes ``f`` (respectively
@@ -387,9 +387,9 @@ the inputs the aggregate reads; the value-aware evaluators
   ``jsonb_agg``, ``json_object_agg``, ``jsonb_object_agg``, and
   user-defined aggregates with a non-strict transition function; see
   :cfunc:`aggregate_keeps_nulls`), whose result enumerates every
-  input.  They use ``provenance_semimod_nullable``, which maps a
+  input.  They use :sqlfunc:`provenance_semimod_nullable`, which maps a
   ``NULL`` value to a ``semimod`` gate over the constant value gate
-  ``gate_null()``; a ``FILTER`` is copied onto the token
+  :sqlfunc:`gate_null`; a ``FILTER`` is copied onto the token
   ``array_agg``, removing children exactly as it removes inputs.  No
   existence issue arises here: over an empty input these aggregates
   are ``NULL``, and a comparison with ``NULL`` never holds.
@@ -409,8 +409,8 @@ ProvSQL's own ``choose``, non-strict and NULL-skipping, is exempted.
 No user-defined aggregate has an evaluator, so this choice shows in
 the displayed circuit and in ``HAVING agg IS [NOT] NULL`` only.
 
-``gate_null()`` is a constant in the manner of ``gate_zero()`` and
-``gate_one()``, but of type ``value``, with ``NULL`` as its display
+:sqlfunc:`gate_null` is a constant in the manner of
+:sqlfunc:`gate_zero` and :sqlfunc:`gate_one`, but of type ``value``, with ``NULL`` as its display
 text.  The |cpp| side knows it by its UUID (``GATE_NULL_UUID`` in
 :cfile:`having_semantics.hpp`), which is what distinguishes it from
 the value gate of the string ``'NULL'``: its seed, ``'null'``, is not

@@ -7270,6 +7270,192 @@ static void remove_provenance_attribute_setoperations(Query *q, bool *removed) {
 }
 
 /**
+ * @brief Make every UNION reachable from @p node through UNION nodes an ALL.
+ *
+ * Used below a non-ALL UNION, whose outer GROUP BY deduplicates the whole
+ * subtree at once.
+ */
+static void flatten_union_descendants(Node *node) {
+  SetOperationStmt *stmt;
+
+  if (!IsA(node, SetOperationStmt))
+    return;
+  stmt = (SetOperationStmt *)node;
+  if (stmt->op != SETOP_UNION)
+    return;
+  stmt->all = true;
+  flatten_union_descendants(stmt->larg);
+  flatten_union_descendants(stmt->rarg);
+}
+
+/** @brief Range-table index of the leftmost leaf of a set-operation tree. */
+static Index set_operation_leftmost_leaf(Node *node) {
+  while (IsA(node, SetOperationStmt))
+    node = ((SetOperationStmt *)node)->larg;
+  return ((RangeTblRef *)node)->rtindex;
+}
+
+/**
+ * @brief Move the leaves of @p node into @p rtable, renumbering them.
+ *
+ * @p node is a set-operation tree over the range table @p old_rtable; its
+ * @c RangeTblRef leaves are rewritten in place to index @p rtable, to which
+ * the entries they named are appended in traversal order.
+ */
+static void set_operation_move_leaves(Node *node, List *old_rtable,
+                                      List **rtable) {
+  if (IsA(node, RangeTblRef)) {
+    RangeTblRef *rtr = (RangeTblRef *)node;
+    *rtable = lappend(*rtable, list_nth(old_rtable, rtr->rtindex - 1));
+    rtr->rtindex = list_length(*rtable);
+  } else {
+    SetOperationStmt *stmt = (SetOperationStmt *)node;
+    set_operation_move_leaves(stmt->larg, old_rtable, rtable);
+    set_operation_move_leaves(stmt->rarg, old_rtable, rtable);
+  }
+}
+
+/**
+ * @brief Turn the set-operation subtree @p stmt into a query of its own.
+ *
+ * Builds what the parser produces for a parenthesised set operation used as
+ * a leaf: a @c Query whose range table holds the leaves of @p stmt, whose
+ * @c setOperations is @p stmt, and whose target list is made of @c Var nodes
+ * on the leftmost leaf, typed by the column descriptions of @p stmt and named
+ * after that leaf's columns.
+ */
+static Query *set_operation_as_query(SetOperationStmt *stmt, List *old_rtable) {
+  Query *sub = makeNode(Query);
+  RangeTblEntry *leftmost;
+  ListCell *lc_type, *lc_typmod, *lc_coll, *lc_te;
+  AttrNumber attno = 0;
+
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  sub->jointree = makeFromExpr(NIL, NULL);
+  set_operation_move_leaves((Node *)stmt, old_rtable, &sub->rtable);
+  sub->setOperations = (Node *)stmt;
+
+  leftmost = (RangeTblEntry *)linitial(sub->rtable); /* leaves come in order */
+  lc_te = list_head(leftmost->subquery->targetList);
+  forthree (lc_type, stmt->colTypes, lc_typmod, stmt->colTypmods,
+            lc_coll, stmt->colCollations) {
+    TargetEntry *leaf_te;
+    Var *v;
+
+    while (lc_te != NULL && ((TargetEntry *)lfirst(lc_te))->resjunk)
+      lc_te = my_lnext(leftmost->subquery->targetList, lc_te);
+    leaf_te = (TargetEntry *)lfirst(lc_te);
+    lc_te = my_lnext(leftmost->subquery->targetList, lc_te);
+
+    ++attno;
+    v = makeVar(1, attno, lfirst_oid(lc_type), lfirst_int(lc_typmod),
+                lfirst_oid(lc_coll), 0);
+    sub->targetList = lappend(
+      sub->targetList,
+      makeTargetEntry((Expr *)v, attno,
+                      leaf_te->resname ? pstrdup(leaf_te->resname) : NULL,
+                      false));
+  }
+  return sub;
+}
+
+/**
+ * @brief Nest the set-operation subtrees that the rewriting cannot take in
+ *        place, each as a subquery leaf.
+ *
+ * The rewriting handles one set operation per query level: a tree of UNION
+ * ALL nodes (the ⊎ of its leaves), or a single EXCEPT over two leaves; a
+ * non-ALL top node is first wrapped by
+ * @c rewrite_non_all_into_external_group_by.  Anything else below the top
+ * node would be mistreated: a UNION under a UNION ALL would lose its
+ * deduplication, an EXCEPT there is another operation altogether, and so is
+ * any set operation below an EXCEPT.  Each such subtree becomes a query of
+ * its own, which the recursion into subqueries then rewrites at its own
+ * level; this is the rewriting a user would do by hand by moving the inner
+ * set operation to a FROM subquery.
+ *
+ * Runs on a query whose top set operation is already ALL.  The range table is
+ * rebuilt, so that it holds exactly the remaining leaves, the leftmost first.
+ *
+ * @return @c true if anything was nested.
+ */
+static bool nest_set_operations_rec(Node **nodep, SetOperationStmt *parent,
+                                    List *old_rtable, List **rtable) {
+  Node *node = *nodep;
+  SetOperationStmt *stmt;
+  bool nested;
+
+  if (IsA(node, RangeTblRef)) {
+    set_operation_move_leaves(node, old_rtable, rtable);
+    return false;
+  }
+
+  stmt = (SetOperationStmt *)node;
+  if (parent == NULL ||
+      (parent->op == SETOP_UNION && stmt->op == SETOP_UNION && stmt->all)) {
+    /* Stays at this level: the top node, or a UNION ALL under a UNION ALL. */
+    nested = nest_set_operations_rec(&stmt->larg, stmt, old_rtable, rtable);
+    nested = nest_set_operations_rec(&stmt->rarg, stmt, old_rtable, rtable) ||
+             nested;
+    return nested;
+  } else {
+    RangeTblEntry *rte = makeNode(RangeTblEntry);
+    RangeTblRef *rtr = makeNode(RangeTblRef);
+    List *colnames = NIL;
+    ListCell *lc;
+
+    rte->rtekind = RTE_SUBQUERY;
+    rte->subquery = set_operation_as_query(stmt, old_rtable);
+    foreach (lc, rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      colnames = lappend(colnames,
+                         makeString(pstrdup(te->resname ? te->resname : "?column?")));
+    }
+    rte->eref = makeAlias("*SELECT*", colnames);
+    rte->inFromCl = false;
+    rte->lateral = false;
+    rte->inh = false;
+#if PG_VERSION_NUM < 160000
+    rte->requiredPerms = 0;
+#endif
+
+    *rtable = lappend(*rtable, rte);
+    rtr->rtindex = list_length(*rtable);
+    *nodep = (Node *)rtr;
+    return true;
+  }
+}
+
+/** @brief Entry point of @c nest_set_operations_rec for the query @p q. */
+static bool nest_set_operations(Query *q) {
+  List *rtable = NIL;
+  Index old_leftmost = set_operation_leftmost_leaf(q->setOperations);
+  ListCell *lc;
+  bool nested;
+
+  /* Only leaf subqueries are expected in the range table of a set operation;
+   * leave any other shape alone. */
+  foreach (lc, q->rtable)
+    if (((RangeTblEntry *)lfirst(lc))->rtekind != RTE_SUBQUERY)
+      return false;
+
+  nested = nest_set_operations_rec(&q->setOperations, NULL, q->rtable, &rtable);
+  /* The leaf references now index the rebuilt range table (which, when
+   * nothing was nested, lists the same entries in traversal order). */
+  q->rtable = rtable;
+
+  /* The target list names the columns of the leftmost leaf, now entry 1. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (IsA(te->expr, Var) && ((Var *)te->expr)->varno == old_leftmost &&
+        ((Var *)te->expr)->varlevelsup == 0)
+      ((Var *)te->expr)->varno = 1;
+  }
+  return nested;
+}
+
+/**
  * @brief Wrap a non-ALL set operation in an outer GROUP BY query.
  *
  * UNION / EXCEPT (without ALL) would deduplicate tuples before ProvSQL can
@@ -7296,10 +7482,11 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
   int sortgroupref = 0;
 
   stmt->all = true;
-  // we might leave sub nodes of the SetOperationsStmt tree with all = false
-  // but only for recursive trees of operators and only union can be recursive
-  // https://doxygen.postgresql.org/prepunion_8c_source.html#l00479
-  // we will set therefore set them later in process_set_operation_union
+  /* A UNION below a non-ALL UNION needs no deduplication of its own: the
+   * outer GROUP BY merges everything, and ⊕ is associative.  Such nodes are
+   * made ALL here, so that nest_set_operations leaves them in place. */
+  if (stmt->op == SETOP_UNION)
+    flatten_union_descendants((Node *)stmt);
 
   rte->rtekind = RTE_SUBQUERY;
   rte->subquery = q;
@@ -7320,7 +7507,44 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
   new_query->jointree = jointree;
   new_query->targetList = copyObject(q->targetList);
 
+  /* ORDER BY / LIMIT / OFFSET apply to the result of the set operation, that
+   * is, after deduplication: they belong on the wrapper.  Left on the inner
+   * (now ALL) query they would sort and cut the rows not yet merged. */
+  new_query->sortClause = q->sortClause;
+  new_query->limitCount = q->limitCount;
+  new_query->limitOffset = q->limitOffset;
+#if PG_VERSION_NUM >= 130000
+  new_query->limitOption = q->limitOption;
+  q->limitOption = LIMIT_OPTION_COUNT;
+#endif
+  q->sortClause = NIL;
+  q->limitCount = q->limitOffset = NULL;
+
   if (new_query->targetList) {
+    /* The entries are renumbered for the GROUP BY; the sort clauses, which
+     * in a set operation only ever name output columns, follow.  Collect
+     * first, for each sort clause, the position of the entry it names. */
+    List *sort_positions = NIL;
+    ListCell *lc_sort, *lc_pos;
+
+    foreach (lc_sort, new_query->sortClause) {
+      SortGroupClause *sc = (SortGroupClause *)lfirst(lc_sort);
+      int position = 0, i = 0;
+      foreach (lc, new_query->targetList) {
+        ++i;
+        if (((TargetEntry *)lfirst(lc))->ressortgroupref == sc->tleSortGroupRef)
+          position = i;
+      }
+      if (position == 0)
+        provsql_error("ORDER BY of a set operation on an expression that is "
+                      "not an output column is not supported");
+      sort_positions = lappend_int(sort_positions, position);
+    }
+    forboth (lc_sort, new_query->sortClause, lc_pos, sort_positions)
+      ((SortGroupClause *)lfirst(lc_sort))->tleSortGroupRef = lfirst_int(lc_pos);
+    foreach (lc, q->targetList)
+      ((TargetEntry *)lfirst(lc))->ressortgroupref = 0;
+
     foreach (lc, new_query->targetList) {
       TargetEntry *te = (TargetEntry *)lfirst(lc);
       SortGroupClause *sgc = makeNode(SortGroupClause);
@@ -14802,10 +15026,9 @@ static Query *process_query(const constants_t *constants, Query *q,
 
   if(provsql_active) {
     if (q->setOperations) {
-      // TODO: Nest set operations as subqueries in FROM,
-      // so that we only do set operations on base tables
-
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
+      if (stmt->all)
+        nest_set_operations(q);
       if (!stmt->all) {
         /* Check if any branch has aggregates – non-ALL set operations
          * on aggregate results are not supported because agg_token
@@ -15465,6 +15688,61 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
  * user's plan, so they see depth >= 1 and skip the NOTICE. */
 static int provsql_executor_depth = 0;
 
+
+/**
+ * @brief Whether a LIMIT / OFFSET cuts a provenance-tracked query below the
+ *        top level of @p q.
+ *
+ * The rows a LIMIT / OFFSET keeps carry the tokens they have in the uncut
+ * result: that they made the cut, which depends on the rows ranked before
+ * them, is not recorded.  At the top level this is a sound reading (the
+ * statement displays some rows of the uncut result, each correctly
+ * annotated).  Below it -- in a FROM or LATERAL subquery, a CTE, an arm of a
+ * set operation -- the cut feeds further computation, whose annotations then
+ * miss that dependence.  Sublink bodies are not examined: a LIMIT there is
+ * either lowered or rejected by the sublink rewrites.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          Query to inspect, with the queries nested in its range
+ *                   table and its WITH clause.
+ * @param top        True for the statement's own query, whose LIMIT is not
+ *                   reported.
+ * @return  True if such a cut exists.
+ */
+static bool nested_limit_on_provenance(const constants_t *constants, Query *q,
+                                       bool top) {
+  ListCell *lc;
+  bool cuts =
+    q->limitOffset != NULL ||
+    (q->limitCount != NULL &&
+     !(IsA(q->limitCount, Const) && ((Const *)q->limitCount)->constisnull));
+
+  if (!top && cuts && has_provenance(constants, q))
+    return true;
+
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL &&
+        nested_limit_on_provenance(constants, r->subquery, false))
+      return true;
+  }
+  foreach (lc, q->cteList) {
+    CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+    if (IsA(cte->ctequery, Query) &&
+        nested_limit_on_provenance(constants, (Query *)cte->ctequery, false))
+      return true;
+  }
+  return false;
+}
+
+/** @brief Emit the warning @c nested_limit_on_provenance calls for. */
+static void warn_nested_limit(void) {
+  provsql_warning("LIMIT / OFFSET in a subquery over provenance-tracked "
+                  "relations: the rows kept carry their provenance in the "
+                  "uncut result, so what is computed from them is not sound "
+                  "under uncertainty");
+}
+
 /**
  * @brief PostgreSQL planner hook – entry point for provenance rewriting.
  *
@@ -15500,6 +15778,18 @@ static PlannedStmt *provsql_planner(Query *q,
         provsql_error("a subquery over a provenance-tracked relation cannot be "
                       "used as a scalar subquery / IN / EXISTS expression; put "
                       "it in the FROM clause instead");
+      {
+        /* The source SELECT of an INSERT is the statement's top level. */
+        ListCell *lc_src;
+        foreach (lc_src, q->rtable) {
+          RangeTblEntry *src = (RangeTblEntry *)lfirst(lc_src);
+          if (src->rtekind == RTE_SUBQUERY && src->subquery != NULL &&
+              nested_limit_on_provenance(&constants, src->subquery, true)) {
+            warn_nested_limit();
+            break;
+          }
+        }
+      }
       rewrite_dml_rv_surface(&constants, q);
       process_insert_select(&constants, q);
     }
@@ -15529,6 +15819,10 @@ static PlannedStmt *provsql_planner(Query *q,
       provsql_error("a subquery over a provenance-tracked relation cannot be "
                     "used as a scalar subquery / IN / EXISTS expression; put "
                     "it in the FROM clause instead");
+
+    if (provsql_active && constants.ok &&
+        nested_limit_on_provenance(&constants, q, true))
+      warn_nested_limit();
 
     /* Query-time TID / BID / OPAQUE classifier.  Emits a NOTICE for
      * the user's outermost SELECT when the GUC is on.  Runs on the

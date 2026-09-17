@@ -26,21 +26,6 @@ SELECT
 FROM
     personnel;
 
-SELECT
-    *
-FROM
-    personnel
-EXCEPT
-SELECT
-    *
-FROM
-    personnel
-EXCEPT
-SELECT
-    *
-FROM
-    personnel;
-
 -- DISTINCT on aggregate results
 SELECT DISTINCT city, COUNT(*) FROM personnel GROUP BY city;
 

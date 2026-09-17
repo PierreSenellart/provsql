@@ -3,7 +3,6 @@ ERROR:  ProvSQL: provenance() called on a table without provenance
 ERROR:  ProvSQL: DISTINCT ON not supported
 ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported
 ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported
-ERROR:  ProvSQL: Unsupported chain of EXCEPT operations
 ERROR:  ProvSQL: DISTINCT on aggregate results not supported
 ERROR:  ProvSQL: Non-ALL set operations (UNION, EXCEPT) on aggregate results not supported
 ERROR:  ProvSQL: ORDER BY on aggregate results from a subquery not supported

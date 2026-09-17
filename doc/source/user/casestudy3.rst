@@ -282,3 +282,13 @@ an ordinary join), so each ``(line, next stop)`` row carries the lineage of
 the records that produced it. Feeding that row's ``provenance()`` to
 :sqlfunc:`sr_boolean` therefore reports whether the hop to the next stop is
 wheelchair-accessible, just as the per-destination query of Step 4 did.
+
+This query makes ProvSQL emit a ``WARNING`` about the ``LIMIT`` in a
+subquery. The rows a ``LIMIT`` keeps carry the provenance they have
+without the cut: that a stop *is* the next one, which depends on the
+stops ranked before it, is not part of its provenance. If the tokens stood
+for the uncertain existence of stops, the result would miss the worlds
+where the next stop is absent and a later one takes its place. Here they
+stand for wheelchair accessibility and every stop exists, so which stop
+comes next is a plain fact of the timetable, and the answer means what it
+says. See :doc:`querying` for the general rule.

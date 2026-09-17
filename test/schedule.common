@@ -86,6 +86,9 @@ test: sr_boolexpr probability_having probability_having_avg_min_max having_boole
 test: having_bool_agg
 test: having_array_agg
 test: agg_filter
+test: set_operation_nesting
+test: set_operation_with_ties
+test: limit_warning
 test: having_choose
 test: having_first_present
 test: having_correlated

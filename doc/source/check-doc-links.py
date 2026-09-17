@@ -125,8 +125,7 @@ INTERNAL_FUNCTIONS = {
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',
     'provenance_arith',
-    'provenance_delta', 'provenance_semimod',
-    'provenance_semimod_nullable', 'gate_null',
+    'provenance_delta',
     'provenance_evaluate_compiled',
     # Internal constants and utilities
     'uuid_ns_provsql', 'epsilon',
