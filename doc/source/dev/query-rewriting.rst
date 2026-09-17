@@ -331,9 +331,18 @@ non-``ALL`` top node handled by a wrapper.
   gate is emitted at this level (multiset sum, see the R-rules
   section below).
 
-- ``EXCEPT ALL``: :cfunc:`transform_except_into_join` rewrites
-  ``A EXCEPT ALL B`` as a ``LEFT JOIN`` with a ``provenance_monus``
-  (⊖) gate, plus a filter removing zero-provenance tuples.
+- **Difference**: :cfunc:`transform_except_into_join` rewrites the
+  internal node ``A EXCEPT ALL B`` as a ``LEFT JOIN`` with a
+  ``provenance_monus`` (⊖) gate, plus a filter removing
+  zero-provenance tuples.  This node is the multiset difference of the
+  algebra (each left tuple loses the ⊕ of the equal right tuples, the
+  ``NOT IN`` reading), which is *not* SQL's ``EXCEPT ALL``: the rows
+  differ as soon as the left operand has duplicates.  It only arises
+  from the rewriting itself -- the wrapper of a non-``ALL`` ``EXCEPT``,
+  outer-join lowering, the uncorrelated antijoin.  An ``EXCEPT ALL``
+  written by the user over tracked relations is refused by
+  :cfunc:`refuse_except_all`, which runs in the planner hook on the
+  statement as written, before any of those nodes exist.
 
 - ``INTERSECT`` is not supported (raises an error).
 
@@ -462,7 +471,7 @@ Step 9: Expression Building -- ``make_provenance_expression``
 - ``SR_PLUS`` (``UNION ALL``): uses the single provenance token
   from the union directly (each branch already has its own token).
 
-- ``SR_MONUS`` (``EXCEPT ALL``): wraps the two tokens in
+- ``SR_MONUS`` (the internal difference node): wraps the two tokens in
   ``provenance_monus(left, right)``.
 
 If a single table is in the ``FROM`` clause, no combining function is
@@ -581,7 +590,7 @@ target-list rewriting, ``HAVING`` handling, where-provenance...).
        :cfunc:`make_provenance_expression`.
    * - (R4)
      - Multiset difference :math:`-`
-     - ``EXCEPT ALL`` is rewritten by
+     - The internal ``EXCEPT ALL`` node is rewritten by
        :cfunc:`transform_except_into_join` into a ``LEFT JOIN`` on
        all data columns, and the ``SR_MONUS`` branch of
        :cfunc:`make_provenance_expression` wraps the two tokens in

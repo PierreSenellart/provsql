@@ -11,16 +11,13 @@ r EXCEPT u|2|0.5000|t
 r EXCEPT u|9|0.0000|f
 r EXCEPT u||0.0000|f
 (4 rows)
-remove_provenance
-
-(1 row)
-q|a|p
-r EXCEPT ALL u|1|0.0000
-r EXCEPT ALL u|1|0.0000
-r EXCEPT ALL u|2|0.5000
-r EXCEPT ALL u|9|0.0000
-r EXCEPT ALL u||0.0000
-(5 rows)
+ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+q|a
+u EXCEPT ALL u (untracked)|7
+u EXCEPT ALL u (untracked)|9
+u EXCEPT ALL u (untracked)|
+(3 rows)
 remove_provenance
 
 (1 row)

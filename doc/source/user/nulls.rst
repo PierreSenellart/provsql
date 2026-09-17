@@ -182,21 +182,6 @@ deterministic and only a few tables are probabilistic -- but note the
 API asymmetry: :sqlfunc:`get_prob` returns NULL for such a token
 ("never set"), while evaluation uses 1.0.
 
-``EXCEPT ALL``: the Documented Bag Difference
-----------------------------------------------
-
-Plain ``EXCEPT`` (set semantics) is a full SQL-conformance target. For
-``EXCEPT ALL``, ProvSQL deliberately implements a *different multiset
-difference* than SQL: a left row is removed entirely whenever a
-syntactically equal right row exists, rather than cancelling copies
-one-for-one (SQL's ``max(0, m − n)``). The reason is provenance
-tractability: SQL's semantics assigns no canonical provenance to an
-individual surviving copy (which left copy is cancelled by which right
-copy is an arbitrary pairing), whereas the chosen semantics is definable
-row by row. The two coincide after duplicate elimination. Matching is
-syntactic in both readings: a NULL row on the right removes NULL rows on
-the left.
-
 Empty Groups in Evaluated Worlds
 ---------------------------------
 

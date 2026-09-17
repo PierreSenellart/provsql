@@ -62,7 +62,7 @@ Every semiring must override the following pure-virtual methods:
 ``zero``, ``one``, ``plus``, and ``times`` are load-bearing: every
 evaluator traverses the circuit applying them.  ``monus`` and
 ``delta`` are only exercised by specific SQL features --
-``EXCEPT`` / ``EXCEPT ALL``, the null-padded antijoin branch of
+``EXCEPT``, ``NOT IN`` and the other antijoins, the null-padded branch of
 outer-join lowering, and ``IS NULL`` tests for ``monus``;
 ``GROUP BY`` with aggregates (without ``HAVING``) and
 ``IS NOT NULL`` tests for ``delta``.  A semiring that

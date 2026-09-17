@@ -33,11 +33,12 @@ SELECT * FROM result_formula;
 
 DROP TABLE result_formula;
 
--- EXCEPT ALL implements the NOT-IN semantics of the ICDE 2026 paper (§IV-B):
+-- The difference of the algebra has the NOT-IN semantics of the ICDE 2026
+-- paper (§IV-B):
 --   ⟪q1 − q2⟫ = {{ (u, α ⊖ ⊕_{β:(u,β)∈q2} β) | (u,α) ∈ q1 }}
 -- The sum ⊕β ranges over ALL right tuples equal to u (the right arm is grouped
 -- first), and every left tuple is kept.  With a duplicate-valued right arm this
--- differs from the old per-match ⊕(α⊖βi).
+-- differs from the old per-match ⊕(α⊖βi).  EXCEPT is ε of that difference.
 CREATE TABLE ea_a(x int);
 CREATE TABLE ea_b(x int);
 INSERT INTO ea_a VALUES (1);
@@ -49,17 +50,13 @@ DO $$ BEGIN
   PERFORM set_prob(provsql, 0.5) FROM ea_b;
 END $$;
 
--- One left row, two equal right rows: NOT-IN keeps one row with provenance
--- a ⊖ (b1 ⊕ b2), so P = P(a ∧ ¬b1 ∧ ¬b2) = 0.5^3 = 0.125 (not the old 0.375),
--- and EXCEPT ALL returns exactly one row (not two).
-CREATE TABLE ea_all AS
-  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
-  FROM (SELECT x FROM ea_a EXCEPT ALL SELECT x FROM ea_b) t;
-SELECT remove_provenance('ea_all');
-SELECT count(*) AS n_rows, min(p) AS p_except_all FROM ea_all;
-DROP TABLE ea_all;
+-- SQL's EXCEPT ALL is not that operator (its rows differ as soon as the left
+-- operand has duplicates) and is refused over tracked relations.
+SELECT x FROM ea_a EXCEPT ALL SELECT x FROM ea_b;
 
--- EXCEPT (set semantics ε(q1−q2)) coincides here (single left value).
+-- One left row, two equal right rows: one row with provenance a ⊖ (b1 ⊕ b2),
+-- so P = P(a ∧ ¬b1 ∧ ¬b2) = 0.5^3 = 0.125 (not the old 0.375), and exactly one
+-- row (not two).
 CREATE TABLE ea_set AS
   SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
   FROM (SELECT x FROM ea_a EXCEPT SELECT x FROM ea_b) t;

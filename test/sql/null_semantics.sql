@@ -142,15 +142,14 @@ SELECT * FROM ns_q3 ORDER BY a NULLS LAST;
 DROP TABLE ns_q3;
 
 -- -------------------------------------------------------------------------
--- 3. EXCEPT ALL, against ProvSQL's documented bag difference (every
---    matching left copy removed; matching is syntactic).  On the actual
---    instance the surviving multiset is {2, 3, 3}: the 1 row is removed
---    by gr1, both NULL rows by gr2.
+-- 3. EXCEPT once more, on the matching itself, which is syntactic: on the
+--    actual instance the surviving set is {2, 3}: the 1 row is removed by
+--    gr1, both NULL rows by gr2.
 -- -------------------------------------------------------------------------
 CREATE TABLE ns_ea AS
   SELECT a, sr_formula(provenance(),'ns_map') AS f,
          round(probability_evaluate(provenance())::numeric,4) AS p
-  FROM (SELECT a FROM ns_r EXCEPT ALL SELECT a FROM ns_gr) q;
+  FROM (SELECT a FROM ns_r EXCEPT SELECT a FROM ns_gr) q;
 SELECT remove_provenance('ns_ea');
 SELECT * FROM ns_ea ORDER BY a NULLS LAST, f;
 DROP TABLE ns_ea;

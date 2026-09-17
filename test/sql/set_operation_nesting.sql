@@ -98,11 +98,14 @@ CREATE TABLE sn_t9 AS SELECT a, sn_p(provenance()) AS p
 SELECT remove_provenance('sn_t9');
 SELECT 'EXCEPT over UNION' AS q, a, p FROM sn_t9 ORDER BY a;
 
--- r EXCEPT ALL (s UNION ALL w): one row per left row; each a=1 row 0.5*0.6.
+-- r EXCEPT (s UNION ALL w): the same annotations again.
 CREATE TABLE sn_t10 AS SELECT a, sn_p(provenance()) AS p
-  FROM (SELECT a FROM sn_r EXCEPT ALL (SELECT a FROM sn_s UNION ALL SELECT a FROM sn_w)) t;
+  FROM (SELECT a FROM sn_r EXCEPT (SELECT a FROM sn_s UNION ALL SELECT a FROM sn_w)) t;
 SELECT remove_provenance('sn_t10');
-SELECT 'EXCEPT ALL over UNION ALL' AS q, a, p FROM sn_t10 ORDER BY a;
+SELECT 'EXCEPT over UNION ALL' AS q, a, p FROM sn_t10 ORDER BY a;
+
+-- EXCEPT ALL is refused wherever it is nested.
+SELECT a FROM sn_r UNION ALL (SELECT a FROM sn_s EXCEPT ALL SELECT a FROM sn_w);
 
 -- The statement once listed as unsupported: personnel-style t EXCEPT t EXCEPT t.
 CREATE TABLE sn_t11 AS SELECT a, sn_p(provenance()) AS p FROM

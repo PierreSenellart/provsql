@@ -55,7 +55,7 @@ The following SQL constructs are supported with full provenance tracking:
 * ``GROUP BY``
 * ``SELECT DISTINCT`` (set semantics)
 * ``UNION`` and ``UNION ALL``
-* ``EXCEPT`` and ``EXCEPT ALL``
+* ``EXCEPT``
 * ``VALUES`` tables (treated as having no provenance)
 * Aggregation (``SUM``, ``COUNT``, ``MIN``, ``MAX``, ``AVG``,
   ``COUNT(DISTINCT …)``, ``string_agg``, ``array_agg``)
@@ -90,6 +90,11 @@ will either raise an error or may cause incorrect provenance tracking:
   semantics), over cyclic data *without* an absorptive provenance class, or on
   PostgreSQL versions before 15
 * ``INTERSECT``
+* ``EXCEPT ALL`` over provenance-tracked relations: SQL removes as many
+  copies of a row as the right-hand side has, without saying which, so
+  the copies it keeps have no provenance of their own. Use ``EXCEPT``,
+  which returns the same rows whenever the left-hand side has no
+  duplicates, or ``NOT IN`` / ``NOT EXISTS``
 * **Outer joins with a provenance-tracked relation on a null-padded
   side**, beyond the supported two-relation shape (see
   :doc:`the chapter on NULLs <nulls>`): refused with an explicit error;

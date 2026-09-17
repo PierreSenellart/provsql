@@ -108,12 +108,12 @@ remove_provenance
 
 (1 row)
 q|a|p
-EXCEPT ALL over UNION ALL|1|0.3000
-EXCEPT ALL over UNION ALL|1|0.3000
-EXCEPT ALL over UNION ALL|2|0.4000
-EXCEPT ALL over UNION ALL|5|0.5000
-EXCEPT ALL over UNION ALL|7|0.5000
-(5 rows)
+EXCEPT over UNION ALL|1|0.4500
+EXCEPT over UNION ALL|2|0.4000
+EXCEPT over UNION ALL|5|0.5000
+EXCEPT over UNION ALL|7|0.5000
+(4 rows)
+ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
 remove_provenance
 
 (1 row)

@@ -48,5 +48,10 @@ SELECT name AS provsql FROM personnel;
 
 -- Hand-made provsql column inside a set-operation arm
 SELECT name, provenance() AS provsql FROM personnel
-EXCEPT ALL
+UNION ALL
 SELECT name, provenance() AS provsql FROM personnel;
+
+-- EXCEPT ALL over tracked relations, at the top level and nested
+SELECT name FROM personnel EXCEPT ALL SELECT name FROM personnel;
+SELECT name FROM (SELECT name FROM personnel EXCEPT ALL SELECT name FROM personnel) t;
+WITH c AS (SELECT name FROM personnel EXCEPT ALL SELECT name FROM personnel) SELECT * FROM c;

@@ -16145,6 +16145,55 @@ static bool nested_limit_on_provenance(const constants_t *constants, Query *q,
   return false;
 }
 
+/** @brief Whether a set-operation tree contains an @c EXCEPT @c ALL node. */
+static bool set_operation_has_except_all(Node *node) {
+  SetOperationStmt *stmt;
+
+  if (node == NULL || !IsA(node, SetOperationStmt))
+    return false;
+  stmt = (SetOperationStmt *)node;
+  if (stmt->op == SETOP_EXCEPT && stmt->all)
+    return true;
+  return set_operation_has_except_all(stmt->larg) ||
+         set_operation_has_except_all(stmt->rarg);
+}
+
+/**
+ * @brief Walker: is there, anywhere in the statement as the user wrote it, an
+ *        @c EXCEPT @c ALL over provenance-tracked relations?
+ *
+ * SQL's @c EXCEPT @c ALL removes as many copies of a tuple as the right
+ * operand has; which copies go is unspecified, so no copy has a provenance of
+ * its own, and the condition for the j-th copy to survive is a count over all
+ * the tuples of both sides.  The difference of the algebra (each left tuple
+ * loses the @c ⊕ of the equal right tuples, the @c NOT @c IN reading) is not
+ * that operator: its rows differ from SQL's as soon as the left operand has
+ * duplicates.  It remains what @c EXCEPT, @c NOT @c IN, antijoins and
+ * outer-join padding are built from, as internal @c EXCEPT @c ALL nodes the
+ * rewriting creates after this check; the SQL construct itself is refused.
+ */
+static bool except_all_on_provenance_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    if (set_operation_has_except_all(q->setOperations) &&
+        has_provenance((const constants_t *)data, q))
+      return true;
+    return query_tree_walker(q, except_all_on_provenance_walker, data, 0);
+  }
+  return expression_tree_walker(node, except_all_on_provenance_walker, data);
+}
+
+/** @brief Raise the error @c except_all_on_provenance_walker calls for. */
+static void refuse_except_all(const constants_t *constants, Query *q) {
+  if (except_all_on_provenance_walker((Node *)q, (void *)constants))
+    provsql_error("EXCEPT ALL over provenance-tracked relations is not "
+                  "supported: the copies it keeps have no provenance of their "
+                  "own. Use EXCEPT, which returns the same rows when the left "
+                  "operand has no duplicates, or NOT IN / NOT EXISTS.");
+}
+
 /** @brief Emit the warning @c nested_limit_on_provenance calls for. */
 static void warn_nested_limit(void) {
   provsql_warning("LIMIT / OFFSET in a subquery over provenance-tracked "
@@ -16188,6 +16237,7 @@ static PlannedStmt *provsql_planner(Query *q,
         provsql_error("a subquery over a provenance-tracked relation cannot be "
                       "used as a scalar subquery / IN / EXISTS expression; put "
                       "it in the FROM clause instead");
+      refuse_except_all(&constants, q);
       {
         /* The source SELECT of an INSERT is the statement's top level. */
         ListCell *lc_src;
@@ -16229,6 +16279,9 @@ static PlannedStmt *provsql_planner(Query *q,
       provsql_error("a subquery over a provenance-tracked relation cannot be "
                     "used as a scalar subquery / IN / EXISTS expression; put "
                     "it in the FROM clause instead");
+
+    if (provsql_active && constants.ok)
+      refuse_except_all(&constants, q);
 
     if (provsql_active && constants.ok &&
         nested_limit_on_provenance(&constants, q, true))

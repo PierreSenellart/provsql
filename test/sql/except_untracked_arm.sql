@@ -27,11 +27,12 @@ CREATE TABLE eua_1 AS SELECT a, eua_p(provenance()) AS p, present(provenance()) 
 SELECT remove_provenance('eua_1');
 SELECT 'r EXCEPT u' AS q, a, p, here FROM eua_1 ORDER BY a;
 
--- r EXCEPT ALL u: one row per left row.
-CREATE TABLE eua_2 AS SELECT a, eua_p(provenance()) AS p
-  FROM (SELECT a FROM eua_r EXCEPT ALL SELECT a FROM eua_u) t;
-SELECT remove_provenance('eua_2');
-SELECT 'r EXCEPT ALL u' AS q, a, p FROM eua_2 ORDER BY a, p;
+-- EXCEPT ALL is refused as soon as an arm is tracked, and is plain PostgreSQL
+-- otherwise.
+SELECT a FROM eua_r EXCEPT ALL SELECT a FROM eua_u;
+SELECT a FROM eua_u EXCEPT ALL SELECT a FROM eua_r;
+CREATE TABLE eua_2 AS SELECT a FROM eua_u EXCEPT ALL SELECT a FROM eua_u WHERE a = 1;
+SELECT 'u EXCEPT ALL u (untracked)' AS q, a FROM eua_2 ORDER BY a;
 
 -- u EXCEPT r.  SQL: {7}.  A matched row survives exactly when every tracked
 -- row equal to it is absent: 1 - P(some r row): 0.25 for a=1 (two rows), 0.5

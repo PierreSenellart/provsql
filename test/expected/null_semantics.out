@@ -86,11 +86,9 @@ remove_provenance
 a|f|p
 1|r1 ⊖ gr1|0.2500
 2|r2|0.5000
-3|r3|0.5000
-3|r4|0.5000
-|r5 ⊖ gr2|0.2500
-|r6 ⊖ gr2|0.2500
-(6 rows)
+3|r3 ⊕ r4|0.7500
+|(r5 ⊖ gr2) ⊕ (r6 ⊖ gr2)|0.3750
+(4 rows)
 remove_provenance
 
 (1 row)

@@ -35,7 +35,7 @@ The rewriter handles:
   (`EXISTS` / `NOT EXISTS`, `IN` / `NOT IN`, quantified comparisons such
   as `= ANY`, scalar subqueries), correlated or not
 - GROUP BY, aggregation (including `FILTER` clauses), HAVING, SELECT DISTINCT
-- UNION / UNION ALL / EXCEPT / EXCEPT ALL
+- UNION / UNION ALL / EXCEPT
 - VALUES
 - Common table expressions (`WITH`), including `WITH RECURSIVE` on PostgreSQL 15+
 - UPDATE / INSERT / DELETE (when `provsql.update_provenance` is enabled)
