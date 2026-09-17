@@ -24,7 +24,7 @@ remove_provenance
 stop_name|formula
 DestB|1 ⊗ 1 ⊗ 0 ⊗ 1
 (1 row)
-WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry their provenance in the uncut result, so what is computed from them is not sound under uncertainty
+WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty.
 remove_provenance
 
 (1 row)

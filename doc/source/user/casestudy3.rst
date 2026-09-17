@@ -285,7 +285,7 @@ wheelchair-accessible, just as the per-destination query of Step 4 did.
 
 This query makes ProvSQL emit a ``WARNING`` about the ``LIMIT`` in a
 subquery. The rows a ``LIMIT`` keeps carry the provenance they have
-without the cut: that a stop *is* the next one, which depends on the
+in the full result: that a stop *is* the next one, which depends on the
 stops ranked before it, is not part of its provenance. If the tokens stood
 for the uncertain existence of stops, the result would miss the worlds
 where the next stop is absent and a later one takes its place. Here they

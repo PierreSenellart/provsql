@@ -108,13 +108,14 @@ will either raise an error or may cause incorrect provenance tracking:
   query
 
 ``LIMIT`` and ``OFFSET`` deserve a word. The rows they keep carry the
-provenance they have in the result *without* the cut: that a row made
-the cut, which depends on the rows ranked before it, is not recorded.
-At the top level of a statement this is a sound reading -- the statement
+provenance they have in the *full* result: that a row was among those
+kept, which depends on the rows ranked before it, is not recorded. At
+the top level of a statement this is a sound reading -- the statement
 shows some rows of the full result, each correctly annotated. In a
 subquery (in ``FROM``, ``LATERAL``, a ``WITH`` clause, or an arm of a set
-operation) the cut feeds further computation, whose provenance then
-misses that dependence; ProvSQL emits a ``WARNING`` in that case.
+operation) the truncated result feeds further computation, whose
+provenance then misses that dependence; ProvSQL emits a ``WARNING`` in
+that case.
 
 For unsupported correlated subqueries, ``LATERAL`` can be used as a
 workaround.

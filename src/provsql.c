@@ -7509,7 +7509,7 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
 
   /* ORDER BY / LIMIT / OFFSET apply to the result of the set operation, that
    * is, after deduplication: they belong on the wrapper.  Left on the inner
-   * (now ALL) query they would sort and cut the rows not yet merged. */
+   * (now ALL) query they would sort and truncate the rows not yet merged. */
   new_query->sortClause = q->sortClause;
   new_query->limitCount = q->limitCount;
   new_query->limitOffset = q->limitOffset;
@@ -15690,34 +15690,35 @@ static int provsql_executor_depth = 0;
 
 
 /**
- * @brief Whether a LIMIT / OFFSET cuts a provenance-tracked query below the
- *        top level of @p q.
+ * @brief Whether a LIMIT / OFFSET applies to a provenance-tracked query below
+ *        the top level of @p q.
  *
- * The rows a LIMIT / OFFSET keeps carry the tokens they have in the uncut
- * result: that they made the cut, which depends on the rows ranked before
- * them, is not recorded.  At the top level this is a sound reading (the
- * statement displays some rows of the uncut result, each correctly
- * annotated).  Below it -- in a FROM or LATERAL subquery, a CTE, an arm of a
- * set operation -- the cut feeds further computation, whose annotations then
- * miss that dependence.  Sublink bodies are not examined: a LIMIT there is
- * either lowered or rejected by the sublink rewrites.
+ * The rows a LIMIT / OFFSET keeps carry the tokens they have in the full
+ * result: that they were among the rows kept, which depends on the rows
+ * ranked before them, is not recorded.  At the top level this is a sound
+ * reading (the statement displays some rows of the full result, each
+ * correctly annotated).  Below it -- in a FROM or LATERAL subquery, a CTE, an
+ * arm of a set operation -- the truncated result feeds further computation,
+ * whose annotations then miss that dependence.  Sublink bodies are not
+ * examined: a LIMIT there is either lowered or rejected by the sublink
+ * rewrites.
  *
  * @param constants  Extension OID cache.
  * @param q          Query to inspect, with the queries nested in its range
  *                   table and its WITH clause.
  * @param top        True for the statement's own query, whose LIMIT is not
  *                   reported.
- * @return  True if such a cut exists.
+ * @return  True if there is such a LIMIT / OFFSET.
  */
 static bool nested_limit_on_provenance(const constants_t *constants, Query *q,
                                        bool top) {
   ListCell *lc;
-  bool cuts =
+  bool truncates =
     q->limitOffset != NULL ||
     (q->limitCount != NULL &&
      !(IsA(q->limitCount, Const) && ((Const *)q->limitCount)->constisnull));
 
-  if (!top && cuts && has_provenance(constants, q))
+  if (!top && truncates && has_provenance(constants, q))
     return true;
 
   foreach (lc, q->rtable) {
@@ -15738,9 +15739,9 @@ static bool nested_limit_on_provenance(const constants_t *constants, Query *q,
 /** @brief Emit the warning @c nested_limit_on_provenance calls for. */
 static void warn_nested_limit(void) {
   provsql_warning("LIMIT / OFFSET in a subquery over provenance-tracked "
-                  "relations: the rows kept carry their provenance in the "
-                  "uncut result, so what is computed from them is not sound "
-                  "under uncertainty");
+                  "relations: the rows kept carry the provenance they have "
+                  "in the full result, so what is computed from them is not "
+                  "sound under uncertainty.");
 }
 
 /**

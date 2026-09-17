@@ -2,9 +2,9 @@
 \pset format unaligned
 
 -- LIMIT / OFFSET over provenance-tracked relations.  The rows kept carry the
--- tokens they have without the cut.  At the top level of a statement that is
--- a sound reading, and nothing is reported; below it the cut feeds further
--- computation, and a warning is raised (once per statement).
+-- tokens they have in the full result.  At the top level of a statement that
+-- is a sound reading, and nothing is reported; below it the truncated result
+-- feeds further computation, and a warning is raised (once per statement).
 
 CREATE TABLE lw_t(a int); INSERT INTO lw_t VALUES (1),(2),(3);
 CREATE TABLE lw_u(a int); INSERT INTO lw_u VALUES (1),(2),(3);
