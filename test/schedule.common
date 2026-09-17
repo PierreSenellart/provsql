@@ -165,6 +165,7 @@ test: keyword_table
 # Where-provenance
 test: where_provenance
 test: where_provenance_join
+test: where_provenance_or
 
 # Full example from tutorial
 test: tutorial

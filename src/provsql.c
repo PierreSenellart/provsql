@@ -2638,49 +2638,88 @@ static Expr *add_eq_from_OpExpr_to_Expr(const constants_t *constants,
 
 /**
  * @brief Walk a join-condition or WHERE quals node and add @c eq gates for
- *        every equality it contains.
+ *        the column equalities that make the row an answer.
  *
- * Dispatches to @c add_eq_from_OpExpr_to_Expr for simple @c OpExpr nodes
- * and iterates over the arguments of an AND @c BoolExpr.  OR/NOT inside a
- * join ON clause are rejected with an error.
+ * An equality @c A = @c B of a selection lets the value of either column have
+ * been copied from the other (Buneman, Khanna & Tan): an @c eq gate merges
+ * the where-provenance of the two positions.  Over a Boolean combination this
+ * follows the reading of a disjunction as a union, whose where-provenance is
+ * the union of those of its arms: a row gets the equalities of the disjuncts
+ * it satisfies.  Which ones it does is known when the row is built, so an
+ * equality reached under a condition @p cond contributes
+ * @c "CASE WHEN cond THEN provenance_eq(token, i, j) ELSE token END".  Under
+ * an @c AND the children inherit @p cond; under an @c OR the child φ gets
+ * @c "cond AND (φ IS TRUE)"; a @c NOT contributes nothing, a negated equality
+ * copying no value.
  *
  * @param constants  Extension OID cache.
- * @param quals      Root of the quals tree (@c OpExpr or @c BoolExpr), or
- *                   @c NULL (in which case @p result is returned unchanged).
+ * @param quals      Root of the quals tree, or @c NULL (in which case
+ *                   @p result is returned unchanged).
  * @param result     Provenance expression to wrap.
  * @param columns    Per-RTE column-numbering array.
+ * @param cond       Condition under which @p quals is what selects the row,
+ *                   or @c NULL when it always is.
  * @return  Updated provenance expression with zero or more @c eq gates added.
  */
-static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
-                                       Node *quals, Expr *result,
-                                       int **columns) {
-  OpExpr *oe;
-
+static Expr *add_eq_from_Quals_to_Expr_cond(const constants_t *constants,
+                                            Node *quals, Expr *result,
+                                            int **columns, Expr *cond) {
   if (!quals)
     return result;
 
   if (IsA(quals, OpExpr)) {
-    oe = (OpExpr *)quals;
-    result = add_eq_from_OpExpr_to_Expr(constants, oe, result, columns);
-  } /* Sometimes OpExpr is nested within a BoolExpr */
-  else if (IsA(quals, BoolExpr)) {
-    BoolExpr *be = (BoolExpr *)quals;
-    /* In some cases, there can be an OR or a NOT specified with ON clause */
-    if (be->boolop == OR_EXPR || be->boolop == NOT_EXPR) {
-      provsql_error("Boolean operators OR and NOT in a join...on "
-                    "clause are not supported");
-    } else {
-      ListCell *lc2;
-      foreach (lc2, be->args) {
-        if (IsA(lfirst(lc2), OpExpr)) {
-          oe = (OpExpr *)lfirst(lc2);
-          result = add_eq_from_OpExpr_to_Expr(constants, oe, result, columns);
-        }
-      }
+    Expr *with_eq = add_eq_from_OpExpr_to_Expr(constants, (OpExpr *)quals,
+                                               result, columns);
+    if (with_eq == result || cond == NULL)
+      return with_eq;
+    else {
+      CaseExpr *ce = makeNode(CaseExpr);
+      CaseWhen *cw = makeNode(CaseWhen);
+
+      cw->expr = (Expr *)copyObject(cond);
+      cw->result = with_eq;
+      cw->location = -1;
+      ce->casetype = constants->OID_TYPE_UUID;
+      ce->casecollid = InvalidOid;
+      ce->arg = NULL;
+      ce->args = list_make1(cw);
+      ce->defresult = (Expr *)copyObject(result);
+      ce->location = -1;
+      return (Expr *)ce;
     }
-  } else { /* Handle other cases */
+  } else if (IsA(quals, BoolExpr)) {
+    BoolExpr *be = (BoolExpr *)quals;
+    ListCell *lc;
+
+    if (be->boolop == NOT_EXPR)
+      return result;
+    foreach (lc, be->args) {
+      Node *child = (Node *)lfirst(lc);
+      Expr *child_cond = cond;
+
+      if (be->boolop == OR_EXPR) {
+        BooleanTest *bt = makeNode(BooleanTest);
+        bt->arg = (Expr *)copyObject(child);
+        bt->booltesttype = IS_TRUE;
+        bt->location = -1;
+        child_cond = cond == NULL
+                     ? (Expr *)bt
+                     : makeBoolExpr(AND_EXPR, list_make2(copyObject(cond), bt),
+                                    -1);
+      }
+      result = add_eq_from_Quals_to_Expr_cond(constants, child, result, columns,
+                                              child_cond);
+    }
   }
   return result;
+}
+
+/** @brief @c add_eq_from_Quals_to_Expr_cond for quals that always apply. */
+static Expr *add_eq_from_Quals_to_Expr(const constants_t *constants,
+                                       Node *quals, Expr *result,
+                                       int **columns) {
+  return add_eq_from_Quals_to_Expr_cond(constants, quals, result, columns,
+                                        NULL);
 }
 
 /**
