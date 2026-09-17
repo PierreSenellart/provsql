@@ -252,13 +252,19 @@ Non-recursive common table expressions (``WITH`` clauses) are
 inlined as subqueries in the range table via :cfunc:`inline_ctes`.
 This converts ``RTE_CTE`` entries to ``RTE_SUBQUERY`` so that the
 subsequent recursive processing can track provenance through them.
-Recursive CTEs are handled by ``lower_recursive_cte`` (inside
-:cfunc:`inline_ctes`): under the ``'boolean'`` or ``'absorptive'``
-provenance class, recognised reachability shapes are driven through
-the bounded-treewidth compiler and other recursive queries through
-the generic fixpoint ``eval_recursive`` (see
-:ref:`recursive-lowering` below); outside those classes a recursive
-CTE raises an error.
+Recursive CTEs (``UNION`` recursion, PostgreSQL 15 or later) are handled
+by ``lower_recursive_cte`` (inside :cfunc:`inline_ctes`), in every
+provenance class, through the generic fixpoint ``eval_recursive``: on
+acyclic data it reaches a structural fixpoint, and the circuit is sound
+for any semiring.  The provenance class matters in two places only.
+Under ``'boolean'`` or ``'absorptive'``, recognised reachability shapes
+are driven through the bounded-treewidth compiler instead (see
+:ref:`recursive-lowering` below), and on cyclic data the fixpoint stops
+at the value-fixpoint bound and marks its tokens with the
+``'absorptive'`` assumption; under the other classes, cyclic data ends
+in the iteration-bound error of ``eval_recursive``.  A ``UNION ALL``
+recursion, or a term with a set-returning function in its target list,
+raises an error in every class.
 
 Before any of this, :cfunc:`normalize_distinct_into_group_by` turns a
 guarded ``SELECT DISTINCT`` into its provenance-identical
@@ -334,7 +340,11 @@ non-``ALL`` top node handled by a wrapper.
 - **Difference**: :cfunc:`transform_except_into_join` rewrites the
   internal node ``A EXCEPT ALL B`` as a ``LEFT JOIN`` with a
   ``provenance_monus`` (⊖) gate, plus a filter removing
-  zero-provenance tuples.  This node is the multiset difference of the
+  zero-provenance tuples.  Beforehand,
+  ``group_set_difference_right_arm`` wraps the right operand in a
+  ``GROUP BY`` on all its columns, so that a left tuple meets a single
+  right row whose token is the ⊕ of the equal right tuples: α ⊖ ⊕β, and
+  not one ⊖ per matching right tuple.  This node is the multiset difference of the
   algebra (each left tuple loses the ⊕ of the equal right tuples, the
   ``NOT IN`` reading), which is *not* SQL's ``EXCEPT ALL``: the rows
   differ as soon as the left operand has duplicates.  It only arises

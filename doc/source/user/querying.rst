@@ -46,8 +46,9 @@ The following SQL constructs are supported with full provenance tracking:
   ``IN``/``NOT IN``, quantified comparisons such as ``= ANY`` or
   ``<> ALL``, scalar subqueries, ``ARRAY(SELECT …)``), correlated or
   not: they are internally decorrelated and rewritten.  The subquery
-  body may involve a single provenance-tracked relation, or join
-  several of them as a comma-separated ``FROM`` list; e.g., ``NOT IN``
+  body may involve a single provenance-tracked relation, or an inner
+  join of several, written with ``JOIN`` or as a comma-separated
+  ``FROM`` list; e.g., ``NOT IN``
   over a joined body carries the same antijoin provenance as the
   equivalent ``EXCEPT``.  An aggregate body can be compared against a
   constant or an outer column, including through ``IN``/``NOT IN``
@@ -78,9 +79,9 @@ Unsupported SQL Features
 The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking:
 
-* **Subqueries outside FROM** whose body uses explicit ``JOIN``
-  syntax (rewrite the body as a comma-separated ``FROM`` list with the
-  join condition in ``WHERE``) or ``LIMIT``/``OFFSET`` (it would pick
+* **Subqueries outside FROM** whose body uses an outer join
+  (``LEFT`` / ``RIGHT`` / ``FULL``; inner joins, in any syntax, are
+  fine) or ``LIMIT``/``OFFSET`` (it would pick
   an order-dependent subset); also, when an *uncorrelated* body with
   no ``WHERE`` clause is compared against an outer column, only
   non-star aggregate bodies are supported (``max(x)``, ``count(x)``,

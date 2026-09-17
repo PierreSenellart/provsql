@@ -1185,7 +1185,7 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
 
 #if PG_VERSION_NUM >= 150000
 /**
- * @brief Lower a recursive CTE to a provenance-aware fixpoint (PROTOTYPE).
+ * @brief Lower a recursive CTE to a provenance-aware fixpoint.
  *
  * ProvSQL cannot rewrite @c WITH @c RECURSIVE in place: the recursive term
  * forbids the aggregate that provenance-merging needs.  Instead, for a recursive
@@ -1198,11 +1198,26 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
  * a plain scan of that table, which the rest of @c process_query handles as an
  * ordinary tracked relation.
  *
+ * Under the @c 'absorptive' or @c 'boolean' provenance class, a CTE that
+ * @c detect_reachability_cte recognises as reachability over a tracked edge
+ * relation is driven through @c provsql.eval_reachability instead (compilation
+ * along a tree decomposition of the data graph), which falls back to
+ * @c eval_recursive on any failure; @p entry then records what the planting of
+ * aggregations over the CTE needs.
+ *
  * Returns @c true on success, @c false if the shape is unsupported (the caller
- * falls back to the normal error).  Boolean provenance, acyclic data, and
- * UNION (set) recursion only; the driver guards non-termination.  It performs
- * SPI work and temp-table creation during planning, and recognises only the
- * linear/UNION shape.
+ * raises the error): only @c UNION (set) recursion is lowered, and not a term
+ * with a set-returning function in its target list.  The lowering applies in
+ * every provenance class.  On acyclic data the fixpoint is structural and the
+ * circuit sound for any semiring; on cyclic data @c eval_recursive stops at
+ * the value fixpoint under an absorptive class (tokens marked with the
+ * @c 'absorptive' assumption) and hits its iteration bound otherwise.  SPI
+ * work and temp-table creation happen during planning.
+ *
+ * @param cte    the recursive CTE
+ * @param r      the range-table entry referencing it, turned into a subquery
+ *               scanning the populated table
+ * @param entry  memo entry filled with the reachability details, or @c NULL
  */
 static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                                 LoweredCte *entry) {
@@ -8826,19 +8841,26 @@ static Node *normalize_bool_agg_having(Node *n) {
 }
 
 /**
- * @brief Rewrite an EXCEPT query into a LEFT JOIN with monus provenance.
+ * @brief Rewrite a difference node into a LEFT JOIN with monus provenance.
  *
- * EXCEPT cannot be handled directly because it deduplicates.  This function
- * transforms:
+ * The node is the internal @c EXCEPT @c ALL of two leaves, the multiset
+ * difference of the algebra: the one left under the outer GROUP BY of a
+ * non-ALL @c EXCEPT, and the ones built by outer-join lowering and antijoins
+ * (an @c EXCEPT @c ALL written by the user over tracked relations is refused
+ * earlier by @c refuse_except_all).  This function transforms:
  * @code
- *   SELECT … FROM A EXCEPT SELECT … FROM B
+ *   SELECT … FROM A EXCEPT ALL SELECT … FROM B
  * @endcode
- * into a LEFT JOIN of A and B on equality of all non-provenance columns,
- * clears @c setOperations, and leaves the monus token combination to
- * @c make_provenance_expression (which will see @c SR_MONUS).
+ * into a LEFT JOIN of A and B on all non-provenance columns, compared with
+ * IS NOT DISTINCT FROM (two NULLs match, as in SQL's set operations), clears
+ * @c setOperations, and leaves the monus token combination to
+ * @c make_provenance_expression (which will see @c SR_MONUS).  The right arm
+ * has been grouped on its columns beforehand by
+ * @c group_set_difference_right_arm, so that a left tuple meets one right row
+ * carrying the ⊕ of its equal right tuples.
  *
- * Only simple (non-chained) EXCEPT is supported; chained EXCEPT raises an
- * error.
+ * A set operation as an operand raises an error; @c nest_set_operations has
+ * turned such operands into leaves before this point.
  *
  * @param constants  Extension OID cache.
  * @param q          Query to rewrite in place.
@@ -9017,8 +9039,6 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
   fe->fromlist = list_make1(je);
 
   q->jointree = fe;
-
-  // TODO: Add group by in the right-side table
 
   q->setOperations = 0;
 
@@ -9786,14 +9806,21 @@ static void check_unlowered_outer_joins(const constants_t *constants,
 }
 
 /**
- * @brief Lower a top-level outer @c JOIN of two base relations into the
- *        UNION-ALL of its matched and null-padded antijoin arms.
+ * @brief Lower an outer @c JOIN of two tracked arms into the UNION-ALL of its
+ *        matched and null-padded antijoin arms.
  *
- * Fires only on @c jointree->fromlist ==
- * @c [JoinExpr(JOIN_LEFT|JOIN_RIGHT|JOIN_FULL, RTR, RTR)] whose arms are
- * provenance-tracked base relations and where no outer Var references the join
- * RTE directly.  Everything else falls through unchanged.  Returns @c true if
- * the query was rewritten.
+ * Fires only on a @c SELECT whose @c jointree->fromlist ==
+ * @c [JoinExpr(JOIN_LEFT|JOIN_RIGHT|JOIN_FULL, RTR, RTR)], each arm a
+ * provenance-tracked base relation or non-LATERAL subquery, and where no Var
+ * references the join RTE directly (so no @c USING / @c NATURAL merged
+ * column).  The subquery replaces the join's range-table slot and the two arm
+ * RTEs are neutralized.  Everything else falls through unchanged: a chain of
+ * outer joins, an outer join beside other FROM items, an untracked arm.  What
+ * falls through with a tracked relation on a null-padded side is refused by
+ * @c check_unlowered_outer_joins; a join whose padded side is untracked is
+ * sound as it stands.
+ *
+ * @return @c true if the query was rewritten.
  */
 static bool lower_outer_joins(const constants_t *constants, Query *q) {
   JoinExpr *je;
@@ -9938,9 +9965,9 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
 /* -------------------------------------------------------------------------
  * Scalar-subquery decorrelation
  *
- * A correlated scalar subquery (SELECT Q.x FROM Q WHERE corr), used as a
- * top-level target-list entry of a query whose FROM is a single tracked base
- * relation R, is decorrelated to a LEFT JOIN:
+ * A correlated scalar subquery (SELECT Q.x FROM Q WHERE corr) of a query over
+ * R is decorrelated to a LEFT JOIN; in the basic shape, a target-list entry
+ * over a single tracked relation R:
  *
  *   SELECT R.cols, choose(Q.x)
  *   FROM   R LEFT JOIN Q ON corr
@@ -9950,8 +9977,11 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
  * The corrected outer-join lowering (lower_outer_joins, which runs next)
  * supplies the 0-match NULL row, choose() picks the single matched value, and
  * the count<=1 HAVING gates out the (SQL-illegal) >=2-match worlds -- no
- * gate-level special case.  Anything outside this shape returns false and the
- * caller's "Subqueries not supported" error still fires.
+ * gate-level special case.  The other accepted shapes (WHERE comparisons,
+ * aggregate and ORDER BY … LIMIT 1 bodies, several sublinks sharing a join,
+ * multi-relation FROM on either side) are listed at
+ * decorrelate_scalar_sublinks.  Anything else returns false and is left to the
+ * caller's handling of unsupported sublinks.
  * ------------------------------------------------------------------------- */
 
 /** @brief Mutator: lift a scalar subquery's body into the outer query level.
@@ -11792,14 +11822,38 @@ static Node *oj_replace_sublink_mut(Node *node, void *cx) {
 }
 
 /**
- * @brief Decorrelate a single top-level scalar subquery into a LEFT JOIN.
+ * @brief Decorrelate scalar subqueries into a LEFT JOIN with grouping.
  *
- * Restricted (v1) to: a @c CMD_SELECT whose FROM is a single tracked base
- * relation R, with exactly one SubLink in the whole query, that SubLink being
- * an @c EXPR_SUBLINK that is the direct expression of a target-list entry,
- * whose body is @c "SELECT val FROM Q [WHERE corr]" over a single base relation
- * Q referencing only Q (level 0) and R (level 1).  Returns @c true if the
- * query was rewritten in place.
+ * Accepted, in a @c CMD_SELECT:
+ * - one @c EXPR_SUBLINK that is a target-list entry, or sits in a target-list
+ *   entry under @c agg_token arithmetic only (the sublink becomes a
+ *   @c choose() in place and the arithmetic carries its token), or is a direct
+ *   operand of a comparison in a WHERE conjunct (the conjunct moves to HAVING);
+ * - or several target-list sublinks with the same body relation and
+ *   correlation, differing in the value only, which share one LEFT JOIN
+ *   (single base relation in the outer FROM only).
+ *
+ * The body is @c "SELECT val FROM Q [WHERE corr]" with one non-junk output
+ * column, where @c val is:
+ * - a plain value: @c choose(val) with the group restricted by
+ *   @c count(key) @c <= @c 1;
+ * - @c DISTINCT @c val: the restriction becomes @c count(DISTINCT @c val)
+ *   @c <= @c 1;
+ * - a value with @c ORDER @c BY … @c LIMIT @c 1: @c choose(val @c ORDER @c BY
+ *   @c key), no count restriction;
+ * - a single bare aggregate: that aggregate over the group, @c count(*)
+ *   rewritten to count the matched rows only.
+ *
+ * A body over several relations is first collapsed into one derived
+ * cross-product (@c oj_wrap_body_from), and an outer FROM that is not a single
+ * tracked relation or non-LATERAL subquery is wrapped into one
+ * (@c oj_wrap_outer_from).  A value body, or @c count(*), needs a correlation
+ * on a column of Q; a non-star aggregate body does not.  Declined: any other
+ * @c LIMIT / @c OFFSET, a CTE in the body, a sublink nested in anything other
+ * than the arithmetic above.
+ *
+ * @return @c true if the query was rewritten in place; @c false leaves it
+ *         untouched for the caller's handling of unsupported sublinks.
  */
 static bool decorrelate_scalar_sublinks(const constants_t *constants,
                                         Query *q) {
@@ -15361,7 +15415,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     decorrelate_scalar_sublinks(constants, q);
   }
 
-  /* Lower a top-level outer JOIN (LEFT / RIGHT / FULL) of two base relations
+  /* Lower a top-level outer JOIN (LEFT / RIGHT / FULL) of two tracked arms
    * into the UNION-ALL of its matched and null-padded antijoin arms, so the
    * non-monotone outer-join provenance (the 0-match world) is captured.  No-op
    * on every other shape.  Runs before provenance discovery / set-op handling
