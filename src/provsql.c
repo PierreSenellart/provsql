@@ -156,6 +156,7 @@ static Query *process_query(const constants_t *constants, Query *q,
                             bool in_boolean_rewrite,
                             const InvFreeMarkerCtx *inv_ctx);
 static bool has_provenance(const constants_t *constants, Query *q);
+static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
 static bool has_rv_or_provenance_call(Node *node, void *data);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
 static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
@@ -6681,6 +6682,14 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         FromExpr *jt = q->jointree;
         List *from_list = jt->fromlist;
         List *where_args = NIL;
+        /* A column declared NOT NULL can still be NULL on the padded side of
+         * an outer join; only a FROM list of plain relations is trusted. */
+        bool from_is_plain = true;
+        ListCell *lc_from;
+
+        foreach (lc_from, from_list)
+          if (!IsA(lfirst(lc_from), RangeTblRef))
+            from_is_plain = false;
 
         for (i = rtable_base + 1; i <= rtable_base + n_aggs; i++) {
           RangeTblRef *rtr = makeNode(RangeTblRef);
@@ -6690,7 +6699,12 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
           rtr->rtindex = i;
           from_list = lappend(from_list, rtr);
 
-          /* outer_0.gb_j = outer_i.gb_j for each GROUP BY column j */
+          /* original.gb_j matches outer_i.gb_j for each GROUP BY column j.
+           * GROUP BY puts the rows with a NULL key in one group, so the match
+           * is the NULL-identical IS NOT DISTINCT FROM (a DistinctExpr under a
+           * NOT): a plain "=" never holds on NULL and would lose that group.
+           * A key that cannot be NULL keeps "=", which PostgreSQL can hash or
+           * merge on. */
           foreach(lc2, groupby_tes) {
             TargetEntry *gb_te = lfirst(lc2);
             int gb_attno = ++j + 1; /* col 1 = agg, cols 2+ = GB */
@@ -6698,7 +6712,11 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
             Oid opno   = find_equality_operator(ytype, ytype);
             Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
             Form_pg_operator opform;
-            OpExpr *oe = makeNode(OpExpr);
+            bool nullable = !from_is_plain ||
+                            !expr_provably_not_null((Node *)gb_te->expr, q, 0);
+            /* An OpExpr and a DistinctExpr share their layout. */
+            OpExpr *oe = nullable ? (OpExpr *)makeNode(DistinctExpr)
+                                  : makeNode(OpExpr);
             Expr *le = copyObject(gb_te->expr);
             Var *rv = makeNode(Var);
             Oid collation=exprCollation((Node*) le);
@@ -6721,10 +6739,18 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
             rv->vartypmod = -1; rv->location = -1;
 
             oe->args   = list_make2(le, rv);
-            where_args = lappend(where_args, oe);
+            where_args = lappend(
+              where_args,
+              nullable ? (Node *)makeBoolExpr(NOT_EXPR, list_make1(oe), -1)
+                       : (Node *)oe);
           }
         }
 
+        /* The join conditions are added to the WHERE clause of the query, not
+         * put in its place: the aggregates without DISTINCT are still computed
+         * at this level, over the rows that clause selects. */
+        if (jt->quals != NULL)
+          where_args = lcons(jt->quals, where_args);
         if (list_length(where_args) == 0) {
           jt->quals = NULL;
         } else if (list_length(where_args) == 1) {

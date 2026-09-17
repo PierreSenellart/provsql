@@ -53,6 +53,7 @@ test: outer_join
 test: scalar_subquery
 test: join_syntax_equivalence
 test: agg_distinct agg_order_by agg_arithmetic
+test: agg_distinct_null_where
 test: agg_token_casts
 test: agg_support
 test: agg_case
