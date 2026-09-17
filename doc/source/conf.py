@@ -336,6 +336,7 @@ _C_FUNC_MAP = {
     'migrate_probabilistic_quals': '/doxygen-c/html/provsql_8c.html#a807c78bed512a1e85cfd8da28a75078e',
     'normalize_bool_agg_having':   '/doxygen-c/html/provsql_8c.html#a2052985298a365c613a97000258920df',
     'normalize_inner_joins':       '/doxygen-c/html/provsql_8c.html#a10df1e54af32bc885820a2c4fb41d3f1',
+    'rows_are_products_of_distinct_inputs': '/doxygen-c/html/provsql_8c.html#af1487e59da977e955ba43589293d0e70',
     'lower_outer_joins':           '/doxygen-c/html/provsql_8c.html#abc3dba035da6be115630d6d785ff5312',
     'process_inert_fetches':       '/doxygen-c/html/provsql_8c.html#ae65ccb57ae31650530372f9529ecb579',
     'rewrite_cond_predicates':     '/doxygen-c/html/provsql_8c.html#a89f14c4a67b4aeb8c1f5361065f7d895',

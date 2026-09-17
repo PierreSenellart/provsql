@@ -1495,6 +1495,14 @@ Certificate and per-input markers (``src/safe_query_cert.{h,c}``)
    for every evaluator, so a query carrying them evaluates identically
    whether or not the analysis ran.
 
+   Neither is built for a query whose rows are products of distinct
+   inputs -- nothing merges or subtracts rows at any level, and no
+   relation occurs twice
+   (:cfunc:`rows_are_products_of_distinct_inputs`): ``'independent'``,
+   which precedes ``'inversion-free'`` in the default chain, always
+   applies to such rows, and the markers cost one gate and one key per
+   input per output row at query time.
+
 Structured d-DNNF builder (``src/StructuredDNNF.{h,cpp}``)
    :cfunc:`StructuredDNNFBuilder` compiles the monotone lineage top-down
    into a ProvSQL :cfunc:`dDNNF`: it expands the circuit to a canonical

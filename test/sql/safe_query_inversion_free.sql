@@ -595,7 +595,9 @@ SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS t3_if
 --      So each arm certifies its own inversion-free root and the union carries
 --      that annotated token verbatim.  Branch 1 is the 4-atom self-join witness
 --      (only x=1 qualifies, 0.5^4); branch 2 a 2-atom read-once join A(x),B(x)
---      (x=1 and x=2, 0.5^2 each).  Expect one acceptance NOTICE per arm, and
+--      (x=1 and x=2, 0.5^2 each), grouped: a join that merges no rows and
+--      uses no relation twice gets no certificate, since 'independent'
+--      always applies to its rows (see the last case of this file).  Expect one acceptance NOTICE per arm, and
 --      per-row 'inversion-free' == 'possible-worlds'.
 CREATE TEMP TABLE ifr_ua AS
   SELECT s1.x AS x, provenance() AS p
@@ -605,7 +607,8 @@ CREATE TEMP TABLE ifr_ua AS
   UNION ALL
   SELECT a.x AS x, provenance() AS p
     FROM ifr_a a, ifr_b b
-   WHERE a.x = b.x;
+   WHERE a.x = b.x
+   GROUP BY a.x;
 SELECT remove_provenance('ifr_ua');
 SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 6)  AS ua_if,
           round(probability_evaluate(p, 'possible-worlds')::numeric, 6) AS ua_pw
@@ -679,6 +682,28 @@ SELECT remove_provenance('ifr_overlap');
 SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 8)  AS o_if,
           round(probability_evaluate(p, 'possible-worlds')::numeric, 8) AS o_pw
   FROM ifr_overlap ORDER BY x;
+
+-- (15) A join that merges no rows and uses no relation twice: every row is a
+--      product of distinct inputs, 'independent' always applies, and neither
+--      certificate nor per-input order keys are built (they cost a gate and a
+--      key per input per row).  No NOTICE, no annotation gate under the rows;
+--      the default method is exact; naming 'inversion-free' says why it
+--      cannot apply.  The same join under a GROUP BY is certified as before.
+CREATE TEMP TABLE ifr_plain AS
+  SELECT r.x AS x, provenance() AS p FROM ifo_r r, ifo_s s WHERE r.x = s.x;
+SELECT remove_provenance('ifr_plain');
+SELECT x, get_gate_type(p) AS root,
+       (SELECT array_agg(get_gate_type(c) ORDER BY get_gate_type(c)::text)
+          FROM unnest(get_children(p)) c) AS children,
+       round(probability_evaluate(p)::numeric, 8) AS pr
+  FROM ifr_plain ORDER BY x;
+SELECT probability_evaluate(p, 'inversion-free') FROM ifr_plain WHERE x = 1;
+CREATE TEMP TABLE ifr_plain_g AS
+  SELECT r.x AS x, provenance() AS p FROM ifo_r r, ifo_s s WHERE r.x = s.x
+  GROUP BY r.x;
+SELECT remove_provenance('ifr_plain_g');
+SELECT x, round(probability_evaluate(p, 'inversion-free')::numeric, 8) AS pr
+  FROM ifr_plain_g ORDER BY x;
 
 RESET provsql.provenance;
 RESET provsql.verbose_level;

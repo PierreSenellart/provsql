@@ -14556,6 +14556,58 @@ static FlatAtomOrigin *flatten_spj_subqueries(Query *probe, int *nflat_out) {
  * @p *cert_out may still be set (the cert attaches even without markers, and
  * the path then declines at evaluation and falls back).
  */
+/**
+ * @brief Whether every output row of @p q has a provenance that is a product
+ *        of distinct input tokens.
+ *
+ * True when nothing in @p q merges rows or subtracts them (no grouping,
+ * aggregation, @c DISTINCT, set operation, sublink, at any level) and no
+ * relation occurs twice: the token of a row is then the ⊗ of one token per
+ * relation, all different.  Such a circuit is read-once, the @c independent
+ * probability method always applies to it, and the order keys and certificate
+ * of the inversion-free route, which comes after it in the default chain,
+ * would never be read.  They cost a gate and a key per input per output row,
+ * so they are not built.
+ *
+ * @param q       query to inspect, before provenance discovery
+ * @param relids  relations met so far (in/out)
+ */
+static bool rows_are_products_of_distinct_inputs(const Query *q, List **relids)
+{
+  ListCell *lc;
+
+  if (q->setOperations != NULL || q->groupClause != NIL ||
+      q->groupingSets != NIL || q->distinctClause != NIL || q->hasAggs ||
+      q->hasWindowFuncs || q->hasSubLinks || q->hasRecursive ||
+      q->cteList != NIL)
+    return false;
+
+  foreach (lc, q->rtable) {
+    RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+    switch (rte->rtekind) {
+    case RTE_RELATION:
+      if (list_member_oid(*relids, rte->relid))
+        return false;
+      *relids = lappend_oid(*relids, rte->relid);
+      break;
+    case RTE_SUBQUERY:
+      if (rte->subquery == NULL ||
+          !rows_are_products_of_distinct_inputs(rte->subquery, relids))
+        return false;
+      break;
+    case RTE_JOIN:
+    case RTE_VALUES:
+#if PG_VERSION_NUM >= 120000
+    case RTE_RESULT:
+#endif
+      break;
+    default:
+      return false;
+    }
+  }
+  return true;
+}
+
 static InvFreeMarkerCtx *build_inversion_free_ctx(const constants_t *constants,
                                                   Query *q, char **cert_out) {
   bool            has_subq = false, has_group = false;
@@ -15330,6 +15382,7 @@ static Query *process_query(const constants_t *constants, Query *q,
   int columns_len = 0;
   unsigned i = 0;
   char *inv_cert = NULL;            /* serialised inversion-free certificate (root) */
+  List *inv_relids = NIL;           /* relations met by rows_are_products_of_distinct_inputs */
   const InvFreeMarkerCtx *local_inv_ctx = NULL; /* this query's marker context */
   List *given_evidence = NIL;       /* captured given(...) whole-tuple evidence */
   if (provsql_verbose >= 50)
@@ -15644,7 +15697,8 @@ static Query *process_query(const constants_t *constants, Query *q,
        * certificate here (the cert lives on the parent's per-row root). */
       local_inv_ctx = inv_ctx;
     } else if (top_level && provsql_inversion_free
-               && OidIsValid(constants->OID_FUNCTION_ANNOTATE)) {
+               && OidIsValid(constants->OID_FUNCTION_ANNOTATE)
+               && !rows_are_products_of_distinct_inputs(q, &inv_relids)) {
       /* Build the inversion-free marker context tree.  The detector runs on a
        * flattened copy (single-base SPJ subqueries / views inlined to their
        * base relation in place; on PG 18 the synthetic RTE_GROUP is stripped),

@@ -1128,7 +1128,9 @@ public:
   double evaluate(EvalContext &ctx, const Tolerance &) const override {
     if(ctx.explicitly_named && !ctx.inv_free_cert)
       provsql_error("method 'inversion-free' requires an inversion-free "
-                    "certificate on the provenance root");
+                    "certificate on the provenance root (none is attached "
+                    "to the rows of a join that merges no rows and uses no "
+                    "relation twice: 'independent' applies to them)");
     std::map<gate_t, StructuredDNNFBuilder::InputKey> keys;
     if(!collect_inversion_free_keys(*ctx.gc, ctx.gc_root, *ctx.gc_to_bc, ctx.c,
                                     ctx.gate, keys)) {

@@ -368,3 +368,19 @@ x|o_if|o_pw
 2|0.37500000|0.37500000
 3|0.25000000|0.25000000
 (3 rows)
+remove_provenance
+
+(1 row)
+x|root|children|pr
+1|times|{input,input}|0.25000000
+2|times|{input,input}|0.25000000
+(2 rows)
+ERROR:  ProvSQL: method 'inversion-free' requires an inversion-free certificate on the provenance root (none is attached to the rows of a join that merges no rows and uses no relation twice: 'independent' applies to them)
+NOTICE:  ProvSQL: inversion-free UCQ(OBDD): 2 atoms, 1 classes, root=0, order=[0] [certificate attached]
+remove_provenance
+
+(1 row)
+x|pr
+1|0.25000000
+2|0.25000000
+(2 rows)
