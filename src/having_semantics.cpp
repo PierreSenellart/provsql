@@ -15,6 +15,7 @@ extern "C" {
 #include "c_cpp_compatibility.h"
 
 #include <climits>
+#include <strings.h>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -75,7 +76,7 @@ bool aggtype_is_numeric(unsigned oid) {
 
 // Parse a PostgreSQL array output literal -- "{1,2}", "{a,\"b,c\"}" -- into its
 // top-level element texts (surrounding double quotes removed, backslash escapes
-// resolved).  Returns false on a malformed or nested-array literal.  Sufficient
+// resolved; a NULL element becomes array_null_element()).  Returns false on a malformed or nested-array literal.  Sufficient
 // for one-dimensional arrays of scalar elements, which is what array_agg over a
 // provenance-tracked column produces.
 bool parse_array_literal(const std::string &s, std::vector<std::string> &out) {
@@ -100,6 +101,10 @@ bool parse_array_literal(const std::string &s, std::vector<std::string> &out) {
     } else {
       while (i < n && s[i] != ',' && s[i] != '}') { elem.push_back(s[i]); i++; }
       while (!elem.empty() && isspace((unsigned char) elem.back())) elem.pop_back();
+      // An unquoted NULL (any case) is the NULL element; the string 'NULL' is
+      // always output quoted.
+      if (elem.size() == 4 && strcasecmp(elem.c_str(), "NULL") == 0)
+        elem = array_null_element();
     }
     out.push_back(elem);
     while (i < n && isspace((unsigned char) s[i])) i++;

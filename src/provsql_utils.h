@@ -213,6 +213,10 @@ typedef struct constants_t {
   Oid OID_FUNCTION_PROVENANCE_CMP_TIMES; ///< OID of the provenance_cmp_times FUNCTION
   Oid OID_FUNCTION_PROVENANCE_AGGREGATE; ///< OID of the provenance_aggregate FUNCTION
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD; ///< OID of the provenance_semimod FUNCTION
+  /** @brief OID of @c provenance_semimod_nullable, the variant used for
+   *  aggregates that see their NULL inputs (@c array_agg, ...); @c InvalidOid
+   *  on a schema that predates it. */
+  Oid OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE;
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
   Oid OID_FUNCTION_GATE_ONE; ///< OID of the provenance_one FUNCTION
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION

@@ -1571,6 +1571,20 @@ $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'one');
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+/**
+ * @brief Return the UUID of the value gate standing for the NULL value
+ *
+ * A constant, like gate_zero() and gate_one(); the gate itself is a
+ * <tt>value</tt> gate that displays as <tt>NULL</tt>. Its UUID is what
+ * tells it apart from the value gate of the string <tt>'NULL'</tt>; the
+ * seed <tt>'null'</tt> is no <tt>'value' || text</tt>, so no actual value
+ * shares it.
+ */
+CREATE OR REPLACE FUNCTION gate_null() RETURNS uuid AS
+$$
+  SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'null');
+$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
 /** @brief Return the epsilon threshold used for probability comparisons */
 CREATE OR REPLACE FUNCTION epsilon() RETURNS DOUBLE PRECISION AS
 $$
@@ -7215,6 +7229,41 @@ BEGIN
   PERFORM set_extra(value_token, CAST(val AS VARCHAR));
 
   --create semimod gate
+  PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
+
+  RETURN semimod_token;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
+
+/**
+ * @brief Semimodule gate for an aggregate that sees its NULL inputs
+ *
+ * Variant of provenance_semimod() used by the query rewriter for
+ * <tt>array_agg</tt>, <tt>json_agg</tt> and the like, whose result lists
+ * every input, NULLs included: a NULL value still yields a semimod gate,
+ * over the constant value gate gate_null().
+ *
+ * @param val the scalar value, possibly NULL
+ * @param token the provenance token to multiply
+ */
+CREATE OR REPLACE FUNCTION provenance_semimod_nullable(val anyelement, token UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  semimod_token uuid;
+  value_token uuid;
+BEGIN
+  IF val IS NOT NULL THEN
+    RETURN provenance_semimod(val, token);
+  END IF;
+
+  value_token := gate_null();
+  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
+    INTO semimod_token;
+
+  PERFORM create_gate(value_token,'value');
+  PERFORM set_extra(value_token, 'NULL');
+
   PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
 
   RETURN semimod_token;

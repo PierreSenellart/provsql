@@ -46,6 +46,26 @@ bool aggtype_is_boolean(unsigned oid);
 // (scalar 'true'/'false' vs array-element 't'/'f').
 bool aggtype_elem_is_boolean(unsigned oid);
 bool aggtype_is_numeric(unsigned oid);
+/**
+ * @brief UUID of the constant value gate standing for the NULL value: the
+ *        result of the SQL function @c gate_null() (test @c agg_filter checks
+ *        the two agree).
+ */
+constexpr const char *GATE_NULL_UUID = "417134e7-a404-57a7-86fd-2577ebe0f3ba";
+
+/**
+ * @brief The text standing for a NULL array element, on both sides of an
+ *        @c array_agg comparison.
+ *
+ * It starts with a NUL byte, which no PostgreSQL text value contains, so it
+ * equals itself and no actual element: exactly how array equality treats
+ * NULL elements.
+ */
+inline const std::string &array_null_element() {
+  static const std::string null_element("\0NULL", 5);
+  return null_element;
+}
+
 bool parse_array_literal(const std::string &s, std::vector<std::string> &out);
 bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale);
 bool rescale_to(long mantissa, int scale, int target_scale, long &out);
@@ -552,6 +572,9 @@ void provsql_having(
           std::string m_str;
           gate_t k_gate{};
           if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
+          // A NULL input of the aggregate: its value gate is gate_null().
+          if (c.getUUID(c.getWires(ch)[1]) == GATE_NULL_UUID)
+            m_str = array_null_element();
           vals.push_back(m_str);
           kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
         }

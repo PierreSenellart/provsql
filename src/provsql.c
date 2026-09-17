@@ -22,6 +22,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pg_config.h"
+#include "access/transam.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
@@ -2719,10 +2720,11 @@ static Expr *combine_prov_atts(const constants_t *constants,
  * Helper for the @c avg rewrite: the numerator uses @c rv_sum_or_null
  * (@c NULL on an empty group) and the denominator uses @c sum, so the two
  * differ only in @p aggfnoid.  @p arg is an @c Expr of type
- * @c random_variable (the wrapped per-row contribution).
+ * @c random_variable (the wrapped per-row contribution); @p filter is the
+ * user's FILTER clause, or @c NULL.
  */
 static Aggref *build_rv_sum_aggref(const constants_t *constants,
-                                   Oid aggfnoid, Expr *arg) {
+                                   Oid aggfnoid, Expr *arg, Expr *filter) {
   TargetEntry *te = makeNode(TargetEntry);
   Aggref *agg = makeNode(Aggref);
 
@@ -2735,6 +2737,7 @@ static Aggref *build_rv_sum_aggref(const constants_t *constants,
   agg->aggkind = AGGKIND_NORMAL;
   agg->aggtranstype = InvalidOid;
   agg->args = list_make1(te);
+  agg->aggfilter = (Expr *)copyObject(filter);
   agg->location = -1;
 #if PG_VERSION_NUM >= 140000
   agg->aggno = agg->aggtransno = -1;
@@ -2765,6 +2768,11 @@ static Aggref *build_rv_sum_aggref(const constants_t *constants,
  * Any RV aggregate not recognised here (a future addition, or an older
  * schema whose helper OIDs are absent) falls back to the additive
  * identity-@c 0 wrap and its own @c aggfnoid, the historical behaviour.
+ *
+ * Every aggregate rebuilt here carries the user's FILTER clause over: the
+ * result is a @c random_variable built from the rows the aggregate reads, so
+ * leaving PostgreSQL to drop the rows failing the filter is all it takes (an
+ * empty selection is NULL, as for an empty group).
  *
  * Routing happens at @c make_aggregation_expression on
  * @c agg_ref->aggtype @c == @c OID_TYPE_RANDOM_VARIABLE.  @c SR_PLUS (UNION
@@ -2823,9 +2831,9 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
      * count sum. */
     div->args = list_make2(
       build_rv_sum_aggref(constants, constants->OID_AGG_RV_SUM_OR_NULL,
-                          (Expr *)num_wrap),
+                          (Expr *)num_wrap, agg_ref->aggfilter),
       build_rv_sum_aggref(constants, constants->OID_AGG_SUM_RV,
-                          (Expr *)ind_wrap));
+                          (Expr *)ind_wrap, agg_ref->aggfilter));
     div->location = -1;
     return (Expr *)div;
   }
@@ -2908,6 +2916,7 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
         arg_te->expr = (Expr *)lfirst(lc);
         impl_agg->args = lappend(impl_agg->args, arg_te);
       }
+      impl_agg->aggfilter = (Expr *)copyObject(agg_ref->aggfilter);
       impl_agg->location = agg_ref->location;
 #if PG_VERSION_NUM >= 140000
       impl_agg->aggno = impl_agg->aggtransno = -1;
@@ -2964,12 +2973,83 @@ static Expr *make_rv_aggregate_expression(const constants_t *constants,
   new_agg->aggkind = AGGKIND_NORMAL;
   new_agg->aggtranstype = InvalidOid;
   new_agg->args = list_make1(te);
+  new_agg->aggfilter = (Expr *)copyObject(agg_ref->aggfilter);
   new_agg->location = agg_ref->location;
 #if PG_VERSION_NUM >= 140000
   new_agg->aggno = new_agg->aggtransno = -1;
 #endif
 
   return (Expr *)new_agg;
+}
+
+
+/**
+ * @brief Whether a NULL input is part of what aggregate @p aggfnoid sees.
+ *
+ * SQL aggregates ignore NULL inputs, with a few built-in exceptions whose
+ * result lists every input, NULLs included: @c array_agg, @c json_agg,
+ * @c jsonb_agg, @c json_object_agg, @c jsonb_object_agg.  For built-in
+ * aggregates the catalog cannot tell the two kinds apart (a non-strict
+ * transition function says nothing: @c sum(bigint) and @c string_agg have one
+ * and skip NULLs), hence the explicit list.
+ *
+ * For a user-defined aggregate the transition function is all there is to go
+ * by.  A strict one is never called on a NULL input, so the aggregate skips
+ * NULLs.  A non-strict one does receive them; what it makes of them is
+ * unknown, and the row is kept, which loses nothing: a kept NULL input can
+ * still be ignored downstream, a dropped one cannot be recovered.  ProvSQL's
+ * own @c choose is non-strict and skips NULLs.
+ */
+static bool aggregate_keeps_nulls(const constants_t *constants, Oid aggfnoid) {
+  if (aggfnoid < FirstNormalObjectId) {
+    char *name = get_func_name(aggfnoid);
+    bool keeps;
+
+    if (name == NULL)
+      return false;
+    keeps = strcmp(name, "array_agg") == 0 || strcmp(name, "json_agg") == 0 ||
+            strcmp(name, "jsonb_agg") == 0 ||
+            strcmp(name, "json_object_agg") == 0 ||
+            strcmp(name, "jsonb_object_agg") == 0;
+    pfree(name);
+    return keeps;
+  } else {
+    HeapTuple tup;
+    Oid transfn;
+
+    if (aggfnoid == constants->OID_FUNCTION_CHOOSE)
+      return false;
+    tup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(aggfnoid));
+    if (!HeapTupleIsValid(tup))
+      return false;
+    transfn = ((Form_pg_aggregate)GETSTRUCT(tup))->aggtransfn;
+    ReleaseSysCache(tup);
+    return !func_strict(transfn);
+  }
+}
+
+/** @brief Build @c "CASE WHEN cond THEN then_expr [ELSE else_expr] END". */
+static Expr *make_case_when(Expr *cond, Expr *then_expr, Expr *else_expr) {
+  CaseExpr *ce = makeNode(CaseExpr);
+  CaseWhen *cw = makeNode(CaseWhen);
+
+  cw->expr = cond;
+  cw->result = then_expr;
+  cw->location = -1;
+
+  ce->casetype = exprType((Node *)then_expr);
+  ce->casecollid = exprCollation((Node *)then_expr);
+  ce->arg = NULL;
+  ce->args = list_make1(cw);
+  /* The executor evaluates defresult unconditionally: an absent ELSE is a
+   * NULL constant, as the parser builds it. */
+  ce->defresult = else_expr != NULL
+                  ? else_expr
+                  : (Expr *)makeNullConst(ce->casetype,
+                                          exprTypmod((Node *)then_expr),
+                                          ce->casecollid);
+  ce->location = -1;
+  return (Expr *)ce;
 }
 
 /**
@@ -3009,6 +3089,10 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     result = linitial(prov_atts);
   } else {
     Oid aggregation_function = agg_ref->aggfnoid;
+    /* The user's FILTER clause.  It stays on the original Aggref (the value
+     * shown to the user) and is reflected below in what the gate aggregates. */
+    Expr *filter = (Expr *)copyObject(agg_ref->aggfilter);
+    bool keeps_nulls = aggregate_keeps_nulls(constants, aggregation_function);
 
     /* Aggregates that return random_variable (sum_rv, avg_rv, and any
      * future RV-returning aggregate) get a different rewrite: instead
@@ -3063,7 +3147,17 @@ static Expr *make_aggregation_expression(const constants_t *constants,
        * of ones. */
       Const *one = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
                              sizeof(int32), Int32GetDatum(1), false, true);
-      expr_s->args = list_make2(one, expr);
+      if (filter == NULL)
+        expr_s->args = list_make2(one, expr);
+      else {
+        /* count(*) FILTER (WHERE f) counts the rows satisfying f, but a row
+         * failing f still witnesses the group: it stays in the aggregate and
+         * contributes 0, as a NULL expr does for count(expr) below. */
+        Const *zero = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                                sizeof(int32), Int32GetDatum(0), false, true);
+        expr_s->args = list_make2(
+          make_case_when(filter, (Expr *)one, (Expr *)zero), expr);
+      }
     } else if (aggregation_function == F_COUNT_ANY) // count(expr)
     {
       /* count(expr) counts only rows where expr IS NOT NULL, but -- unlike the
@@ -3075,31 +3169,29 @@ static Expr *make_aggregation_expression(const constants_t *constants,
        * yet keeps the group alive, so HAVING count(expr)=0 is correctly true.
        * count(*) keeps the constant 1 above. */
       Expr *arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
-      CaseExpr *ce = makeNode(CaseExpr);
-      CaseWhen *cw = makeNode(CaseWhen);
       NullTest *nt = makeNode(NullTest);
+      Expr *counted;
 
       nt->arg = (Expr *)arg;
       nt->nulltesttype = IS_NOT_NULL;
       nt->argisrow = false;
       nt->location = -1;
 
-      cw->expr = (Expr *)nt;
-      cw->result = (Expr *)makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
-                                     sizeof(int32), Int32GetDatum(1), false,
-                                     true);
-      cw->location = -1;
+      /* With a FILTER, the row is counted when it satisfies the filter and
+       * expr IS NOT NULL. */
+      counted = filter == NULL
+                ? (Expr *)nt
+                : makeBoolExpr(AND_EXPR, list_make2(filter, nt), -1);
 
-      ce->casetype = constants->OID_TYPE_INT;
-      ce->casecollid = InvalidOid;
-      ce->arg = NULL;
-      ce->args = list_make1(cw);
-      ce->defresult = (Expr *)makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
-                                        sizeof(int32), Int32GetDatum(0), false,
-                                        true);
-      ce->location = -1;
-
-      expr_s->args = list_make2(ce, expr);
+      expr_s->args = list_make2(
+        make_case_when(counted,
+                       (Expr *)makeConst(constants->OID_TYPE_INT, -1,
+                                         InvalidOid, sizeof(int32),
+                                         Int32GetDatum(1), false, true),
+                       (Expr *)makeConst(constants->OID_TYPE_INT, -1,
+                                         InvalidOid, sizeof(int32),
+                                         Int32GetDatum(0), false, true)),
+        expr);
       /* Keep the gate's aggfnoid as count, as count(*) above does: the per-row
        * CASE already makes the value 0/1 so the
        * VALUE is the SUM of those, but preserving the COUNT identity tells the
@@ -3109,9 +3201,27 @@ static Expr *make_aggregation_expression(const constants_t *constants,
        * all-absent world: enumerate_valid_worlds routes a COUNT with non-unit
        * (0/1) values to the value-aware sum_dp with the empty world retained,
        * while count(*) (all-unit) keeps using count_enum. */
-    } else {
+    } else if (keeps_nulls) {
+      /* The aggregate sees its NULL inputs (array_agg, json_agg, ...): every
+       * row it reads is a child of the gate, a NULL value included, and a
+       * FILTER removes rows from the token array exactly as it removes them
+       * from the aggregate's input.  No group-existence issue arises (compare
+       * count above): over an empty input these aggregates are NULL, and a
+       * comparison with NULL never holds. */
+      if (OidIsValid(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE))
+        expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE;
       expr_s->args =
         list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
+      agg->aggfilter = filter;
+    } else {
+      /* A NULL-skipping aggregate: agg(x) FILTER (WHERE f) is
+       * agg(CASE WHEN f THEN x END).  provenance_semimod drops NULL values, so
+       * a row failing f is no child of the gate, and the per-row value
+       * HAVING ... IS [NOT] NULL splits on is NULL for it. */
+      Expr *arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
+      if (filter != NULL)
+        arg = make_case_when(filter, arg, NULL);
+      expr_s->args = list_make2(arg, expr);
     }
 
     expr_s->location = -1;
@@ -3538,37 +3648,29 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 }
 
 /**
- * @brief Build @c "⊕(array_agg(K) FILTER (WHERE V IS [NOT] NULL))" -- the
- *        per-row provenance @c ⊕ over just the value rows (@p filter @c =
- *        @c IS_NOT_NULL) or just the null-valued rows (@p filter @c = @c IS_NULL)
- *        of an aggregate's group.
+ * @brief Build @c "⊕(array_agg(K) FILTER (WHERE cond))" -- the per-row
+ *        provenance @c ⊕ over the rows of an aggregate's group that satisfy
+ *        @p cond.
  *
  * @p base_arr is the aggregate's @c array_agg(provenance_semimod(V, K)) Aggref;
- * we copy it, swap its argument to @c K, and add the @c FILTER on @p V (the
- * per-row aggregated value, NULL exactly when the row does not contribute).  The
- * filtered @c array_agg is @c NULL (not an empty array) for a group with no row
- * of the requested kind, so it is wrapped in @c COALESCE(..., '{}') -- the STRICT
- * @c provenance_plus then yields @c gate_zero rather than NULL.
+ * we copy it, swap its argument to @c K, and set its @c FILTER to @p cond (which
+ * replaces the user's FILTER that @p base_arr carries for a NULL-keeping
+ * aggregate: the caller folds it into @p cond).  The filtered @c array_agg is
+ * @c NULL (not an empty array) for a group with no such row, so it is wrapped in
+ * @c COALESCE(..., '{}') -- the STRICT @c provenance_plus then yields
+ * @c gate_zero rather than NULL.
  */
 static FuncExpr *having_null_filtered_plus(const constants_t *constants,
-                                           Aggref *base_arr, Node *V, Node *K,
-                                           NullTestType filter) {
+                                           Aggref *base_arr, Node *K,
+                                           Expr *cond) {
   Aggref *arr = (Aggref *)copyObject(base_arr);
   TargetEntry *te = (TargetEntry *)linitial(arr->args);
-  NullTest *flt = makeNode(NullTest);
   ArrayExpr *empty = makeNode(ArrayExpr);
   CoalesceExpr *coal = makeNode(CoalesceExpr);
   FuncExpr *plus = makeNode(FuncExpr);
 
   te->expr = (Expr *)copyObject(K); /* array_agg(K) instead of the semimod */
-
-  /* The provenance array_agg never carries a user FILTER (make_aggregation_
-   * expression builds a fresh Aggref), so setting aggfilter directly is safe. */
-  flt->arg = (Expr *)copyObject(V);
-  flt->nulltesttype = filter;
-  flt->argisrow = false;
-  flt->location = -1;
-  arr->aggfilter = (Expr *)flt;
+  arr->aggfilter = cond;
 
   empty->array_typeid = constants->OID_TYPE_UUID_ARRAY;
   empty->array_collid = InvalidOid;
@@ -3594,11 +3696,14 @@ static FuncExpr *having_null_filtered_plus(const constants_t *constants,
  * @brief Convert a @c NullTest on an aggregate (@c agg IS [NOT] NULL) into a
  *        provenance expression.
  *
- * @c sum / @c avg / @c min / @c max / @c array_agg / @c choose are NULL exactly
- * when no value row contributes (every aggregated value absent or NULL).  Split
- * the group's rows into value rows (@c V @c IS @c NOT @c NULL → tokens @c Kn, the
- * rows the aggregate is defined over) and null-valued rows (@c V @c IS @c NULL →
- * tokens @c Kz, present but not contributing).  Then:
+ * @c sum / @c avg / @c min / @c max / @c choose are NULL exactly when no value
+ * row contributes (every aggregated value absent or NULL).  Split the group's
+ * rows into value rows (@c V @c IS @c NOT @c NULL → tokens @c Kn, the rows the
+ * aggregate is defined over) and the others (@c V @c IS @c NULL → tokens
+ * @c Kz, present but not contributing); a FILTER is already folded into @c V by
+ * @c make_aggregation_expression.  A NULL-keeping aggregate (@c array_agg, ...)
+ * is instead NULL exactly when it reads no row at all: its value rows are the
+ * rows passing its FILTER (all rows without one), whatever their value.  Then:
  *
  * - @c IS @c NOT @c NULL → @c δ(⊕Kn): a value row is present.
  * - @c IS @c NULL, scalar (no GROUP BY) → @c "1 ⊖ ⊕Kn": the single result row
@@ -3623,6 +3728,7 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
   Node *arg = (Node *)nt->arg;
   FuncExpr *pa, *plusKn;
   Node *V, *K;
+  Expr *value_rows, *other_rows;
   Aggref *base_arr;
   bool is_scalar;
   NullTestType ntt;
@@ -3652,24 +3758,54 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
     Aggref *arr = (Aggref *)list_nth(pa->args, 3);
     TargetEntry *te;
     FuncExpr *sm;
-    if (!IsA(arr, Aggref) || list_length(arr->args) != 1)
+    /* The semimod is the first argument; an ordered aggregate carries its sort
+     * keys as further (junk) arguments. */
+    if (!IsA(arr, Aggref) || arr->args == NIL)
       provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
     te = (TargetEntry *)linitial(arr->args);
     if (!IsA(te->expr, FuncExpr) ||
-        ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD)
+        (((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD &&
+         ((FuncExpr *)te->expr)->funcid != constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE))
       provsql_error("unexpected aggregate shape in HAVING IS [NOT] NULL");
     sm = (FuncExpr *)te->expr;
     V = (Node *)list_nth(sm->args, 0); /* per-row aggregated value */
     K = (Node *)list_nth(sm->args, 1); /* per-row provenance token */
     base_arr = arr;
+
+    /* Which rows does the aggregate read, and which does it leave out? */
+    if (aggregate_keeps_nulls(
+          constants,
+          DatumGetInt32(((Const *)linitial(pa->args))->constvalue))) {
+      if (arr->aggfilter != NULL) {
+        BooleanTest *bt = makeNode(BooleanTest);
+        bt->arg = (Expr *)copyObject(arr->aggfilter);
+        bt->booltesttype = IS_NOT_TRUE;
+        bt->location = -1;
+        value_rows = (Expr *)copyObject(arr->aggfilter);
+        other_rows = (Expr *)bt;
+      } else {
+        value_rows = NULL; /* every row */
+        other_rows = (Expr *)makeBoolConst(false, false);
+      }
+    } else {
+      NullTest *nn = makeNode(NullTest), *n = makeNode(NullTest);
+      nn->arg = (Expr *)copyObject(V);
+      nn->nulltesttype = IS_NOT_NULL;
+      n->arg = (Expr *)copyObject(V);
+      n->nulltesttype = IS_NULL;
+      nn->argisrow = n->argisrow = false;
+      nn->location = n->location = -1;
+      value_rows = (Expr *)nn;
+      other_rows = (Expr *)n;
+    }
   }
 
   ntt = nt->nulltesttype;
   if (negated)
     ntt = (ntt == IS_NULL) ? IS_NOT_NULL : IS_NULL;
 
-  /* ⊕Kn: the OR of the value-row tokens (V IS NOT NULL). */
-  plusKn = having_null_filtered_plus(constants, base_arr, V, K, IS_NOT_NULL);
+  /* ⊕Kn: the OR of the value-row tokens. */
+  plusKn = having_null_filtered_plus(constants, base_arr, K, value_rows);
 
   if (ntt == IS_NOT_NULL) {
     /* δ(⊕Kn): a value row is present. */
@@ -3701,7 +3837,7 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
      * means a null-valued row is present: δ(⊕Kz) ⊗ (1 ⊖ ⊕Kn). */
     {
       FuncExpr *plusKz =
-        having_null_filtered_plus(constants, base_arr, V, K, IS_NULL);
+        having_null_filtered_plus(constants, base_arr, K, other_rows);
       FuncExpr *deltaKz = makeNode(FuncExpr);
       FuncExpr *times = makeNode(FuncExpr);
       ArrayExpr *factors = makeNode(ArrayExpr);
@@ -6719,9 +6855,11 @@ static Node *try_push_into_aggref(OpExpr *op, const constants_t *constants) {
     return NULL;
   ar = (Aggref *)aggn;
   /* Need a single ordinary argument: skip count(*) (aggstar), DISTINCT /
-   * FILTER / ORDER BY aggregates, and RV-returning aggregates. */
+   * ORDER BY aggregates, and RV-returning aggregates.  A FILTER is no
+   * obstacle: it only selects the rows aggregated, and the identities used
+   * here hold over any multiset of rows; the copied Aggref keeps it. */
   if (ar->aggstar || list_length(ar->args) != 1 ||
-      ar->aggdistinct != NIL || ar->aggfilter != NULL || ar->aggorder != NIL)
+      ar->aggdistinct != NIL || ar->aggorder != NIL)
     return NULL;
   if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
       ar->aggtype == constants->OID_TYPE_RANDOM_VARIABLE)

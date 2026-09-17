@@ -1,0 +1,266 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+count(*) f >= 1|1|0.5200
+count(*) f >= 1|2|0.0000
+count(*) f >= 1|3|0.0000
+count(*) f >= 1|4|0.0000
+count(*) f >= 1|5|0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+count(*) f = 0|1|0.2400
+count(*) f = 0|2|0.5000
+count(*) f = 0|3|0.5000
+count(*) f = 0|4|0.7500
+count(*) f = 0|5|0.5000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+count(w) f = 1|1|0.5000
+count(w) f = 1|2|0.5000
+count(w) f = 1|3|0.0000
+count(w) f = 1|4|0.5000
+count(w) f = 1|5|0.5000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+subquery c >= 1|1|0.5200
+subquery c >= 1|2|0.0000
+subquery c >= 1|3|0.0000
+subquery c >= 1|4|0.0000
+subquery c >= 1|5|0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|p
+scalar f = 0|1.0000
+(1 row)
+remove_provenance
+
+(1 row)
+q|p
+scalar f < 2|0.9200
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+sum f >= 7|1|0.2000
+sum f >= 7|2|0.0000
+sum f >= 7|3|0.0000
+sum f >= 7|4|0.0000
+sum f >= 7|5|0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+min f = 6|1|0.4000
+min f = 6|2|0.0000
+min f = 6|3|0.0000
+min f = 6|4|0.0000
+min f = 6|5|0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+avg f > 5|1|0.2000
+avg f > 5|2|0.0000
+avg f > 5|3|0.0000
+avg f > 5|4|0.0000
+avg f > 5|5|0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+sum f IS NULL|1|0.2400
+sum f IS NULL|2|0.5000
+sum f IS NULL|3|0.5000
+sum f IS NULL|4|0.7500
+sum f IS NULL|5|0.5000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+sum f IS NOT NULL|1|0.5200
+sum f IS NOT NULL|2|0.0000
+sum f IS NOT NULL|3|0.0000
+sum f IS NOT NULL|4|0.0000
+sum f IS NOT NULL|5|0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+bool_or f|1|0.0000
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+bool_or|1|0.2000
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|ec|es
+expected|1|0.6000|3.8000
+(1 row)
+remove_provenance
+
+(1 row)
+q|c|cf|s|sf|st|aa|aaf
+values|3 (*)|2 (*)|18 (*)|13 (*)|q (*)|{p,NULL,q} (*)|{p,q} (*)
+(1 row)
+q|count_differ|sum_differ|array_differ
+distinct gates|t|t|t
+(1 row)
+q|count_all|count_filter|sum_filter|string_agg_f|array_all|array_filter|json_all
+children|1 1 1|0 1 1|6 7|q|<null> p q|p q|<null> p q
+(1 row)
+remove_provenance
+
+(1 row)
+q|strict|nonstrict|choose|nonstrict_filter
+user-defined|5 7|<null> 5 7|5 7|<null> 7
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|s|a|mx|mn|pr|sd|med|empty_sum
+random_variable|50|25|20|20|6|5|25|
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|s
+random_variable p=0.5|25
+(1 row)
+remove_provenance
+
+(1 row)
+q|s2|gate|children
+folded|26 (*)|agg|12 14
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+sum f *2 >= 14|1|0.2000
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa = {p,NULL,q}|1|0.0400
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa = {p,q}|1|0.0600
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa = {"NULL"}|4|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa = {NULL}|4|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa = {"NULL",NULL}|4|0.2500
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa <> {"NULL"}|4|0.5000
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa = {-null}|5|0.5000
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa(-null) = {NULL}|5|0.0000
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa f = {p,q}|1|0.1000
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+aa IS NULL|1|0.0000
+aa IS NULL|2|0.0000
+aa IS NULL|3|0.0000
+aa IS NULL|4|0.0000
+aa IS NULL|5|0.0000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+aa IS NOT NULL|1|0.7600
+aa IS NOT NULL|2|0.5000
+aa IS NOT NULL|3|0.5000
+aa IS NOT NULL|4|0.7500
+aa IS NOT NULL|5|0.5000
+(5 rows)
+remove_provenance
+
+(1 row)
+q|g|p
+aa f IS NULL|1|0.5600
+aa f IS NULL|2|0.5000
+aa f IS NULL|3|0.5000
+aa f IS NULL|4|0.7500
+aa f IS NULL|5|0.5000
+(5 rows)
+NOTICE:  table af_t26 does not have provenance tracking
+remove_provenance
+
+(1 row)
+q|known_constant|gate|shown|null_children_g1
+null value gate|t|value|NULL|1
+(1 row)

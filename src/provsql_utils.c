@@ -425,6 +425,9 @@ static constants_t initialize_constants(bool failure_if_not_possible)
 
   constants.OID_FUNCTION_PROVENANCE_SEMIMOD = get_provsql_func_oid("provenance_semimod");
   CheckOid(OID_FUNCTION_PROVENANCE_SEMIMOD);
+  /* Optional: absent from schemas older than 1.13.0. */
+  constants.OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE =
+    get_provsql_func_oid("provenance_semimod_nullable");
 
   constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
   CheckOid(OID_FUNCTION_GATE_ZERO);

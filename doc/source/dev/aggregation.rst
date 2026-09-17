@@ -320,8 +320,8 @@ What the Rewriter Builds
 
 The generic rewriting pipeline in :doc:`query-rewriting` covers
 aggregation at the *pipeline* level: Step 4 calls
-:cfunc:`rewrite_agg_distinct` to lift ``COUNT(DISTINCT ...)``
-into an inner ``GROUP BY``, Step 8 calls
+:cfunc:`rewrite_agg_distinct` to lift a single-argument
+``AGG(DISTINCT ...)`` into an inner ``GROUP BY``, Step 8 calls
 :cfunc:`migrate_probabilistic_quals`, then
 :cfunc:`replace_aggregations_by_provenance_aggregate` (and
 :cfunc:`rewrite_agg_cases`), then
@@ -341,10 +341,10 @@ replace an ``Aggref`` is a ``FuncExpr`` for
 - the original ``Aggref`` itself, so PostgreSQL still computes
   the scalar value (this is what ends up inside the
   :cfunc:`agg_token`);
-- an ``ARRAY[...]`` of per-tuple ``provenance_semimod(arg, t)``
-  calls -- one ``semimod`` gate per row of the input, glueing
-  the row's provenance ``t`` to the row's contributed value
-  ``arg``;
+- an ``array_agg`` of per-tuple ``provenance_semimod(arg, t)``
+  calls -- one ``semimod`` gate per input the aggregate reads,
+  glueing the row's provenance ``t`` to the row's contributed value
+  ``arg`` (see :ref:`agg-inputs` below for which rows those are);
 - a boolean ``is_scalar`` (``DEFAULT false``), set for scalar
   (no ``GROUP BY``) aggregation; it flows into the high bit of
   the ``agg`` gate's ``info2``.
@@ -354,6 +354,81 @@ That fourth argument is where the semimodule construction of
 ``semimod`` gate is one simple tensor :math:`k \star m`, and the
 ``agg`` gate at the root of the :sqlfunc:`provenance_aggregate` call is
 their formal sum :math:`\sum_i (k_i \star m_i)`.
+
+.. _agg-inputs:
+
+Which rows are children of the ``agg`` gate
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The invariant is that the children of an ``agg`` gate are exactly
+the inputs the aggregate reads; the value-aware evaluators
+(``HAVING``, moments, sampling) rely on it.  Three cases, decided in
+:cfunc:`make_aggregation_expression`:
+
+- **NULL-skipping aggregates** (``sum``, ``min``, ``max``, ``avg``,
+  ``string_agg``, ``choose``, ...).  ``provenance_semimod`` returns ``NULL`` for a
+  ``NULL`` value and :sqlfunc:`provenance_aggregate` drops such
+  entries, so a row with a ``NULL`` argument is no child.  A
+  ``FILTER (WHERE f)`` clause is folded into the argument, as
+  ``CASE WHEN f THEN arg END``, which makes a row failing ``f``
+  indistinguishable from a row with a ``NULL`` argument -- including
+  for ``HAVING agg IS [NOT] NULL``, which splits the group on that
+  per-row value.
+- ``count``.  ``count(*)`` contributes the constant 1 and
+  ``count(e)`` the value ``CASE WHEN e IS NOT NULL THEN 1 ELSE 0
+  END``; with a ``FILTER`` the condition becomes ``f`` (respectively
+  ``f AND e IS NOT NULL``).  A row that does not count thus *stays* a
+  child, of value 0: it still witnesses its group, and a lifted
+  ``HAVING count(...) = 0`` replaces the group's δ, so dropping the
+  row would let the comparison hold in the world where the group is
+  empty.  The gate keeps the ``COUNT`` operator, which is what tells
+  evaluators that the empty input has value 0 and not ``NULL``.
+- **NULL-keeping aggregates** (``array_agg``, ``json_agg``,
+  ``jsonb_agg``, ``json_object_agg``, ``jsonb_object_agg``, and
+  user-defined aggregates with a non-strict transition function; see
+  :cfunc:`aggregate_keeps_nulls`), whose result enumerates every
+  input.  They use ``provenance_semimod_nullable``, which maps a
+  ``NULL`` value to a ``semimod`` gate over the constant value gate
+  ``gate_null()``; a ``FILTER`` is copied onto the token
+  ``array_agg``, removing children exactly as it removes inputs.  No
+  existence issue arises here: over an empty input these aggregates
+  are ``NULL``, and a comparison with ``NULL`` never holds.
+  ``HAVING agg IS [NOT] NULL`` accordingly splits the group on "passes
+  the filter", not on the value.
+
+For built-in aggregates the catalog cannot tell the first and last
+cases apart: a non-strict transition function says nothing
+(``sum(bigint)`` and ``string_agg`` have one and skip ``NULL``), hence
+the explicit list.  For a user-defined aggregate the transition
+function is all there is to go by: a strict one is never called on a
+``NULL`` input, so the aggregate is NULL-skipping; a non-strict one
+does receive ``NULL`` inputs, and the aggregate is treated as
+NULL-keeping, which loses nothing (a kept ``NULL`` input can still be
+ignored by an evaluator, a dropped one cannot be recovered).
+ProvSQL's own ``choose``, non-strict and NULL-skipping, is exempted.
+No user-defined aggregate has an evaluator, so this choice shows in
+the displayed circuit and in ``HAVING agg IS [NOT] NULL`` only.
+
+``gate_null()`` is a constant in the manner of ``gate_zero()`` and
+``gate_one()``, but of type ``value``, with ``NULL`` as its display
+text.  The |cpp| side knows it by its UUID (``GATE_NULL_UUID`` in
+:cfile:`having_semantics.hpp`), which is what distinguishes it from
+the value gate of the string ``'NULL'``: its seed, ``'null'``, is not
+of the form ``'value' || text`` that every actual value has.  The
+``array_agg`` comparison of :cfile:`having_semantics.hpp` maps it, and
+an unquoted ``NULL`` of the constant array, to one element that equals
+only itself, which is how PostgreSQL compares arrays.
+
+Aggregates over ``random_variable`` (next section but one) take a
+different route, and handle ``FILTER`` differently: the aggregates
+:cfunc:`make_rv_aggregate_expression` rebuilds simply carry the clause
+over, since their result is a ``random_variable`` built from the rows
+PostgreSQL feeds them.
+
+Constant arithmetic on an aggregate (``sum(x) * 2``) is pushed into
+the argument by :cfunc:`try_push_into_aggref` before all this, so it
+composes with ``FILTER``: the identities it uses hold over any multiset
+of rows.
 
 The row-level side of the rewrite is much simpler.  It reuses the
 ordinary :cfunc:`get_provenance_attributes` collection, combines the
@@ -383,8 +458,9 @@ Currently Supported Aggregates
 ------------------------------
 
 The :cfunc:`AggregationOperator` enum in :cfile:`Aggregation.h`
-lists the operators recognised in |cpp|: ``COUNT``
-(normalised to ``SUM`` over ``INT``), ``SUM``, ``MIN``, ``MAX``,
+lists the operators recognised in |cpp|: ``COUNT`` (whose per-row
+values are 0 or 1, but which stays distinct from ``SUM`` because it is
+0, not ``NULL``, over an empty input), ``SUM``, ``MIN``, ``MAX``,
 ``AVG``, ``AND``, ``OR``, ``CHOOSE``, and ``ARRAY_AGG``.  Only the
 aggregates the Monte-Carlo sampler and the subset enumerator
 evaluate *directly* get an :cfunc:`Aggregator` accumulator (the
