@@ -5766,6 +5766,15 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
     {
       bool lift_having = q->havingQual != NULL &&
                          needs_having_lift((Node *) q->havingQual, constants);
+      /* A comparison on an aggregate over random_variable (HAVING sum(x) > 40):
+       * a placeholder operator PostgreSQL cannot evaluate, to be turned into a
+       * comparison gate like its WHERE counterpart. */
+      bool rv_having = aggregation && q->havingQual != NULL &&
+                       expr_contains_rv_cmp((Node *) q->havingQual, constants);
+
+      if (rv_having && lift_having)
+        provsql_error("HAVING clause mixes agg_token and random_variable "
+                      "comparisons; this combination is not supported");
 
       if (aggregation && !lift_having) {
         if (q->groupClause == NIL && q->groupingSets == NIL) {
@@ -5795,6 +5804,37 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
           deltaExpr->location = -1;
 
           result = (Expr *)deltaExpr;
+        }
+
+        if (rv_having) {
+          /* The group is an answer in the worlds where it exists and the
+           * comparison holds: δ(⊕ k) ⊗ ⟦cmp⟧.  The aggregate is itself a
+           * mixture over the presence of the rows, so the comparison gate
+           * already follows which rows contribute; the δ factor is still
+           * needed, since an empty selection has a value too (a sum of 0, for
+           * which sum(x) < 40 holds) while the group does not exist there.  A
+           * scalar aggregation's row always exists: the comparison alone. */
+          Expr *cmp = (Expr *) rv_Expr_to_provenance((Expr *) q->havingQual,
+                                                     constants, false);
+          if (q->groupClause == NIL && q->groupingSets == NIL) {
+            result = cmp;
+          } else {
+            FuncExpr *times = makeNode(FuncExpr);
+            ArrayExpr *array = makeNode(ArrayExpr);
+
+            array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+            array->element_typeid = constants->OID_TYPE_UUID;
+            array->elements = list_make2(result, cmp);
+            array->location = -1;
+
+            times->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+            times->funcresulttype = constants->OID_TYPE_UUID;
+            times->funcvariadic = true;
+            times->args = list_make1(array);
+            times->location = -1;
+            result = (Expr *) times;
+          }
+          q->havingQual = NULL;
         }
       }
 

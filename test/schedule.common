@@ -235,6 +235,7 @@ test: continuous_covariance
 test: continuous_stat_aggregates
 test: continuous_case
 test: continuous_having
+test: continuous_having_rv_cmp
 test: continuous_sample_truncated
 test: continuous_analytical_curves
 

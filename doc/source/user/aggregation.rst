@@ -113,6 +113,13 @@ aggregate in a moment function such as
 PostgreSQL on the surviving groups while ProvSQL still tracks the
 per-group provenance.
 
+A ``random_variable`` aggregate can also be compared directly, as in
+``HAVING sum(measurement) > 40``. The outcome is then uncertain, and
+goes into the provenance of the group: its probability is that of the
+group existing and the comparison holding. Such a comparison cannot be
+combined, in one ``HAVING`` clause, with a comparison on an ordinary
+aggregate (``count(*) > 2``).
+
 Arithmetic in HAVING
 ~~~~~~~~~~~~~~~~~~~~~~
 

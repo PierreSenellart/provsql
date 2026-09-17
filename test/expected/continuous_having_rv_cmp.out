@@ -1,0 +1,75 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|ok
+sum > 60|1|t
+sum > 60|2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|ok
+sum > 40|1|t
+sum > 40|2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|ok
+uncertain, sum > 40|1|t
+uncertain, sum > 40|2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|ok
+uncertain, always true|1|t
+uncertain, always true|2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|ok
+scalar|t
+(1 row)
+remove_provenance
+
+(1 row)
+q|ok
+scalar, uncertain, always true|t
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|ok
+NOT|1|t
+NOT|2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|ok
+avg > 20|1|t
+avg > 20|2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g|ok
+regular atom|1|t
+regular atom|2|t
+(2 rows)
+remove_provenance
+
+(1 row)
+q|g
+expected(sum) > 40|1
+(1 row)
+ERROR:  ProvSQL: HAVING clause mixes agg_token and random_variable comparisons; this combination is not supported
