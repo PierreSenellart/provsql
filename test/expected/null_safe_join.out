@@ -1,0 +1,90 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+k|p
+1|0.2500
+2|0.5000
+4|0.2500
+|0.2500
+(4 rows)
+nested_loop|array_eq|is_distinct
+f|t|f
+(1 row)
+remove_provenance
+
+(1 row)
+t|n|p
+a|1.0|0.2500
+b|2.0|0.5000
+d|4.0|0.5000
+||0.2500
+(4 rows)
+nested_loop|array_eq|is_distinct
+f|t|f
+(1 row)
+remove_provenance
+
+(1 row)
+arr|p
+{1}|0.2500
+{2}|0.5000
+{4,NULL}|0.2500
+|0.2500
+(4 rows)
+nested_loop|array_eq|is_distinct
+t|f|t
+(1 row)
+remove_provenance
+
+(1 row)
+nn|p
+1|0.2500
+2|0.5000
+3|0.2500
+4|0.5000
+(4 rows)
+nested_loop|array_eq|is_distinct
+f|f|f
+(1 row)
+nested_loop|array_eq|is_distinct
+f|f|f
+(1 row)
+nested_loop|array_eq|is_distinct
+f|t|f
+(1 row)
+remove_provenance
+
+(1 row)
+nn|rnn|p
+1|1|0.2500
+1||0.2500
+2||0.5000
+3||0.5000
+4|5|0.2500
+4||0.2500
+(6 rows)
+nested_loop
+f
+(1 row)
+remove_provenance
+
+(1 row)
+k|c
+1|1 (*)
+2|1 (*)
+4|1 (*)
+|0 (*)
+(4 rows)
+nested_loop|array_eq|is_distinct
+f|t|f
+(1 row)
+nested_loop|array_eq|is_distinct
+f|f|f
+(1 row)

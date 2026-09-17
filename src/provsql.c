@@ -62,6 +62,7 @@
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
+#include "utils/typcache.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_cast.h"
 #include "commands/createas.h"
@@ -157,6 +158,9 @@ static Query *process_query(const constants_t *constants, Query *q,
                             const InvFreeMarkerCtx *inv_ctx);
 static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
+static bool output_provably_not_null(const Query *sub, AttrNumber attno);
+static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
+                                     bool nullable);
 static bool expr_contains_aggref(Node *node);
 static bool has_rv_or_provenance_call(Node *node, void *data);
 static Expr *wrap_in_assume_boolean(const constants_t *constants, Expr *expr);
@@ -6788,48 +6792,26 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 
           /* original.gb_j matches outer_i.gb_j for each GROUP BY column j.
            * GROUP BY puts the rows with a NULL key in one group, so the match
-           * is the NULL-identical IS NOT DISTINCT FROM (a DistinctExpr under a
-           * NOT): a plain "=" never holds on NULL and would lose that group.
-           * A key that cannot be NULL keeps "=", which PostgreSQL can hash or
-           * merge on. */
+           * has to take two NULLs as equal: a plain "=" never holds on NULL and
+           * would lose that group.  A key that cannot be NULL keeps "=". */
           foreach(lc2, groupby_tes) {
             TargetEntry *gb_te = lfirst(lc2);
             int gb_attno = ++j + 1; /* col 1 = agg, cols 2+ = GB */
             Oid ytype  = exprType((Node *)gb_te->expr);
-            Oid opno   = find_equality_operator(ytype, ytype);
-            Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
-            Form_pg_operator opform;
             bool nullable = !from_is_plain ||
                             !expr_provably_not_null((Node *)gb_te->expr, q, 0);
-            /* An OpExpr and a DistinctExpr share their layout. */
-            OpExpr *oe = nullable ? (OpExpr *)makeNode(DistinctExpr)
-                                  : makeNode(OpExpr);
             Expr *le = copyObject(gb_te->expr);
             Var *rv = makeNode(Var);
             Oid collation=exprCollation((Node*) le);
-
-            if (!HeapTupleIsValid(opInfo))
-              provsql_error("could not find equality operator for type %u",
-                            ytype);
-            opform = (Form_pg_operator)GETSTRUCT(opInfo);
-
-            oe->opno         = opno;
-            oe->opfuncid     = opform->oprcode;
-            oe->opresulttype = opform->oprresult;
-            oe->opcollid     = InvalidOid;
-            oe->inputcollid  = collation;
-            oe->location     = -1;
-            ReleaseSysCache(opInfo);
 
             rv->varno = i; rv->varattno = gb_attno;
             rv->vartype = ytype; rv->varcollid = collation;
             rv->vartypmod = -1; rv->location = -1;
 
-            oe->args   = list_make2(le, rv);
             where_args = lappend(
               where_args,
-              nullable ? (Node *)makeBoolExpr(NOT_EXPR, list_make1(oe), -1)
-                       : (Node *)oe);
+              make_null_safe_equality(le, (Expr *)rv, ytype, collation,
+                                      nullable));
           }
         }
 
@@ -8894,29 +8876,12 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 
     if (v->vartype != constants->OID_TYPE_UUID) {
       /* SQL's EXCEPT matches tuples syntactically (two NULLs are the same
-       * value), so the antijoin condition is the NULL-identical
-       * "l IS NOT DISTINCT FROM r" -- a DistinctExpr under a NOT -- and
-       * not the plain "=", which never matches a NULL row and would leave
-       * NULL rows of the left side unremoved. */
-      DistinctExpr *oe = makeNode(DistinctExpr);
-      Oid opno = find_equality_operator(v->vartype, v->vartype);
-      Operator opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
-      Form_pg_operator opform;
-      Var *leftArg, *rightArg;
-
-      if (!HeapTupleIsValid(opInfo))
-        provsql_error("could not find operator with OID %u to compare variables of type %u",
-                      opno, v->vartype);
-
-      opform = (Form_pg_operator)GETSTRUCT(opInfo);
-      leftArg = makeNode(Var);
-      rightArg = makeNode(Var);
-
-      oe->opno = opno;
-      oe->opfuncid = opform->oprcode;
-      oe->opresulttype = opform->oprresult;
-      oe->opcollid = InvalidOid;
-      oe->inputcollid = DEFAULT_COLLATION_OID;
+       * value): a plain "=" never matches a NULL row and would leave NULL
+       * rows of the left side unremoved.  "=" is enough when the column
+       * cannot be NULL on one side. */
+      Var *leftArg = makeNode(Var), *rightArg = makeNode(Var);
+      RangeTblEntry *lrte, *rrte;
+      bool nullable;
 
       leftArg->varno = ((RangeTblRef *)setOps->larg)->rtindex;
       rightArg->varno = ((RangeTblRef *)setOps->rarg)->rtindex;
@@ -8932,18 +8897,23 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 #endif
 
       leftArg->vartype = rightArg->vartype = v->vartype;
-      leftArg->varcollid = rightArg->varcollid = InvalidOid;
+      leftArg->varcollid = rightArg->varcollid = v->varcollid;
       leftArg->vartypmod = rightArg->vartypmod = -1;
       leftArg->location = rightArg->location = -1;
 
-      oe->args = list_make2(leftArg, rightArg);
-      oe->location = -1;
-      /* IS NOT DISTINCT FROM has no node of its own: it is the negation
-       * of the DistinctExpr. */
-      expr->args = lappend(expr->args,
-                           makeBoolExpr(NOT_EXPR, list_make1(oe), -1));
+      lrte = rt_fetch(leftArg->varno, q->rtable);
+      rrte = rt_fetch(rightArg->varno, q->rtable);
+      nullable =
+        !(lrte->rtekind == RTE_SUBQUERY &&
+          output_provably_not_null(lrte->subquery, attno)) &&
+        !(rrte->rtekind == RTE_SUBQUERY &&
+          output_provably_not_null(rrte->subquery, attno));
 
-      ReleaseSysCache(opInfo);
+      expr->args = lappend(expr->args,
+                           make_null_safe_equality((Expr *)leftArg,
+                                                   (Expr *)rightArg,
+                                                   v->vartype, v->varcollid,
+                                                   nullable));
     }
 
     ++attno;
@@ -10631,6 +10601,123 @@ static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup)
     return notnull;
   }
   return false;
+}
+
+/**
+ * @brief Whether output column @p attno of subquery @p sub can never be NULL.
+ *
+ * Conservative: @p sub is a plain @c SELECT (no set operation, no grouping
+ * sets) whose FROM is a list of relations and subqueries without any join
+ * node, so that no outer join can pad the column, and the column is a
+ * constant, a column declared @c NOT @c NULL, or such a column of a nested
+ * subquery of the same kind.
+ */
+static bool output_provably_not_null(const Query *sub, AttrNumber attno)
+{
+  ListCell *lc;
+  TargetEntry *te;
+  Node *e;
+
+  if (sub == NULL || sub->setOperations != NULL || sub->groupingSets != NIL ||
+      sub->jointree == NULL || attno <= 0 ||
+      attno > list_length(sub->targetList))
+    return false;
+  foreach (lc, sub->jointree->fromlist)
+    if (!IsA(lfirst(lc), RangeTblRef))
+      return false;
+
+  te = (TargetEntry *)list_nth(sub->targetList, attno - 1);
+  e = (Node *)te->expr;
+  while (e && IsA(e, RelabelType))
+    e = (Node *)((RelabelType *)e)->arg;
+  if (e && IsA(e, Var)) {
+    const Var *v = (const Var *)e;
+    if (v->varlevelsup == 0 && v->varno > 0 &&
+        (int)v->varno <= list_length(sub->rtable)) {
+      RangeTblEntry *rte = rt_fetch(v->varno, sub->rtable);
+      if (rte->rtekind == RTE_SUBQUERY && !rte->lateral)
+        return output_provably_not_null(rte->subquery, v->varattno);
+    }
+  }
+  return expr_provably_not_null(e, sub, 0);
+}
+
+/**
+ * @brief Build a comparison of @p l and @p r under which two NULLs are equal.
+ *
+ * This is what set operations and @c GROUP @c BY mean by "the same value".
+ * The direct spelling, @c IS @c NOT @c DISTINCT @c FROM, is not an operator:
+ * PostgreSQL can neither hash nor merge on it, and a join on it is a nested
+ * loop, quadratic in the size of its inputs.  Hence, in order of preference:
+ * - @p nullable false (one side at least is never NULL): plain @c "=";
+ * - @c "ARRAY[l] = ARRAY[r]": array equality takes two NULL elements as equal
+ *   and compares the others with the element type's default equality, and it
+ *   is an ordinary hashable and mergeable operator;
+ * - @c "NOT (l IS DISTINCT FROM r)" when the type has no array type, no
+ *   default equality, or is itself an array (@c ARRAY[] of an array is a
+ *   multidimensional array, not an array with one element).
+ *
+ * @param l,r        the two operands, of type @p type (not copied)
+ * @param type       their common type
+ * @param collation  collation of the comparison, or @c InvalidOid
+ * @param nullable   false if one operand at least is known never to be NULL
+ */
+static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
+                                     bool nullable)
+{
+  Oid array_type = InvalidOid;
+  Oid opno;
+  Operator opInfo;
+  Form_pg_operator opform;
+  OpExpr *oe;
+
+  if (nullable && !type_is_array(type)) {
+    TypeCacheEntry *tce = lookup_type_cache(type, TYPECACHE_EQ_OPR);
+    if (OidIsValid(tce->eq_opr))
+      array_type = get_array_type(type);
+  }
+
+  if (nullable && OidIsValid(array_type)) {
+    ArrayExpr *la = makeNode(ArrayExpr), *ra = makeNode(ArrayExpr);
+    la->array_typeid = ra->array_typeid = array_type;
+    la->array_collid = ra->array_collid = collation;
+    la->element_typeid = ra->element_typeid = type;
+    la->elements = list_make1(l);
+    ra->elements = list_make1(r);
+    la->multidims = ra->multidims = false;
+    la->location = ra->location = -1;
+    oe = makeNode(OpExpr);
+    oe->opno = ARRAY_EQ_OP;
+    oe->opfuncid = F_ARRAY_EQ;
+    oe->opresulttype = BOOLOID;
+    oe->opretset = false;
+    oe->opcollid = InvalidOid;
+    oe->inputcollid = collation;
+    oe->args = list_make2(la, ra);
+    oe->location = -1;
+    return (Node *)oe;
+  }
+
+  opno = find_equality_operator(type, type);
+  opInfo = SearchSysCache1(OPEROID, ObjectIdGetDatum(opno));
+  if (!HeapTupleIsValid(opInfo))
+    provsql_error("could not find equality operator for type %u", type);
+  opform = (Form_pg_operator)GETSTRUCT(opInfo);
+  /* An OpExpr and a DistinctExpr share their layout. */
+  oe = nullable ? (OpExpr *)makeNode(DistinctExpr) : makeNode(OpExpr);
+  oe->opno = opno;
+  oe->opfuncid = opform->oprcode;
+  oe->opresulttype = opform->oprresult;
+  oe->opretset = false;
+  oe->opcollid = InvalidOid;
+  oe->inputcollid = collation;
+  oe->args = list_make2(l, r);
+  oe->location = -1;
+  ReleaseSysCache(opInfo);
+  /* IS NOT DISTINCT FROM has no node of its own: it is the negation of the
+   * DistinctExpr. */
+  return nullable ? (Node *)makeBoolExpr(NOT_EXPR, list_make1(oe), -1)
+                  : (Node *)oe;
 }
 
 /**
