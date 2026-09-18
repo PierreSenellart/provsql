@@ -220,7 +220,7 @@ remove_provenance
 
 (1 row)
 r|a|f|e
-933.33|28.0|9.333333333333334|7
+933.33|28.0|9.333333|7
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
@@ -229,7 +229,7 @@ remove_provenance
 
 (1 row)
 eq|n|f
-t|7|2.3333333333333335
+t|7|2.333333
 (1 row)
 WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost

@@ -10870,6 +10870,29 @@ static void check_unlowered_outer_joins(const constants_t *constants,
       : je->jointype == JOIN_RIGHT ? "RIGHT" : "FULL");
 }
 
+#if PG_VERSION_NUM < 130000
+/**
+ * @brief Replace the Vars of join RTEs in the expressions of @p q by the
+ *        columns of the joined relations (before PostgreSQL 13, the parser
+ *        builds a column read through a join as a Var of the join).
+ */
+static void flatten_join_aliases(Query *q) {
+#if PG_VERSION_NUM >= 120000
+#define PROVSQL_FLATTEN(n) flatten_join_alias_vars(q, (n))
+#else
+  PlannerInfo root;
+  MemSet(&root, 0, sizeof(root));
+  root.parse = q;
+#define PROVSQL_FLATTEN(n) flatten_join_alias_vars(&root, (n))
+#endif
+  q->targetList = (List *)PROVSQL_FLATTEN((Node *)q->targetList);
+  if (q->jointree != NULL)
+    q->jointree->quals = PROVSQL_FLATTEN(q->jointree->quals);
+  q->havingQual = PROVSQL_FLATTEN(q->havingQual);
+#undef PROVSQL_FLATTEN
+}
+#endif
+
 /**
  * @brief Lower an outer @c JOIN of two tracked arms into the UNION-ALL of its
  *        matched and null-padded antijoin arms.
@@ -10929,6 +10952,12 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
   if (!oj_rte_has_provsql(constants, R_rte) ||
       !oj_rte_has_provsql(constants, S_rte))
     return false;
+#if PG_VERSION_NUM < 130000
+  /* Before PostgreSQL 13, a column read through the join (an unqualified
+   * name, a merged USING column) is a Var of the join RTE: flatten them to
+   * the columns of the arms, as the parser of later versions does. */
+  flatten_join_aliases(q);
+#endif
   if (oj_refs_join_index(q, join_idx))
     return false;
 
@@ -19609,6 +19638,28 @@ static void remap_positional_sort(Query *q, const char *src, List *resolved,
   }
 }
 
+/** @brief Whether @p v is a column of a table or view of @p q, directly or
+ *  through joins (before PostgreSQL 13, @c * over a join expands to Vars of
+ *  the join RTE). */
+static bool var_of_relation(Query *q, Var *v) {
+  for (;;) {
+    RangeTblEntry *rte;
+    Node *alias;
+    if (v->varno < 1 || v->varno > list_length(q->rtable))
+      return false;
+    rte = rt_fetch(v->varno, q->rtable);
+    if (rte->rtekind == RTE_RELATION)
+      return true;
+    if (rte->rtekind != RTE_JOIN || v->varattno <= 0 ||
+        v->varattno > list_length(rte->joinaliasvars))
+      return false;
+    alias = (Node *)list_nth(rte->joinaliasvars, v->varattno - 1);
+    if (alias == NULL || !IsA(alias, Var))
+      return false;
+    v = (Var *)alias;
+  }
+}
+
 /**
  * @brief Put the @c provsql column that @c * expands to at the end of the
  *        target list of @p q, as the rewriting shows it.
@@ -19643,8 +19694,7 @@ static void place_star_provsql_last(Query *q, const char *src) {
         strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0 &&
         IsA(te->expr, Var) && ((Var *)te->expr)->vartype == UUIDOID &&
         ((Var *)te->expr)->varlevelsup == 0 &&
-        rt_fetch(((Var *)te->expr)->varno, q->rtable)->rtekind ==
-          RTE_RELATION &&
+        var_of_relation(q, (Var *)te->expr) &&
         colref_is_star(src, ((Var *)te->expr)->location)) {
       any = true;
       if (last == NULL)

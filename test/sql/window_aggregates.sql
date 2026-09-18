@@ -133,7 +133,7 @@ CREATE TABLE wa_untracked AS
   SELECT id,
          lag(x) OVER (PARTITION BY g ORDER BY x, id) AS prev,
          ntile(2) OVER (PARTITION BY g ORDER BY x, id) AS half,
-         percent_rank() OVER (PARTITION BY g ORDER BY x) AS pr,
+         round(percent_rank() OVER (PARTITION BY g ORDER BY x)::numeric, 4) AS pr,
          sum(x) OVER (PARTITION BY g ORDER BY x, id ROWS 1 PRECEDING) AS last2
   FROM wa;
 SELECT remove_provenance('wa_untracked');
