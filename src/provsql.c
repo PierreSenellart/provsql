@@ -16868,6 +16868,87 @@ static Node *pull_up_vars_mutator(Node *node, void *cx) {
 }
 
 /**
+ * @brief Move the window values of a @c SELECT @c DISTINCT into a subquery.
+ *
+ * @c DISTINCT becomes a @c GROUP @c BY on every output column, and a window
+ * value cannot be a grouping key, windows being computed after grouping:
+ * @c SELECT @c DISTINCT @c a, @c count(*) @c OVER (...) is rewritten as the
+ * @c DISTINCT, @c ORDER @c BY and @c LIMIT of the query over the query without
+ * them; its junk entries, keys of its windows, stay in the subquery.  Returns
+ * @c NULL, leaving @p q alone, when an entry reads @c provenance(), which the
+ * rows of the subquery would not give.
+ */
+static Query *distinct_over_windows(const constants_t *constants, Query *q) {
+  Query *outer;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  List *colnames = NIL;
+  ListCell *lc;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (!te->resjunk &&
+        reads_provenance_walker((Node *)te->expr, (void *)constants))
+      return NULL;
+  }
+
+  outer = makeNode(Query);
+  outer->commandType = CMD_SELECT;
+  outer->querySource = q->querySource;
+  outer->canSetTag = q->canSetTag;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    TargetEntry *ote;
+    /* A junk entry of a DISTINCT query is a key of its windows: it stays
+     * in the subquery. */
+    if (te->resjunk) {
+      colnames = lappend(colnames, makeString(pstrdup("?junk?")));
+      continue;
+    }
+    if (te->resname == NULL)
+      te->resname = pstrdup("?column?");
+    ote = makeTargetEntry(
+      (Expr *)makeVar(1, te->resno, exprType((Node *)te->expr),
+                      exprTypmod((Node *)te->expr),
+                      exprCollation((Node *)te->expr), 0),
+      te->resno, te->resname, false);
+    ote->ressortgroupref = te->ressortgroupref;
+    ote->resorigtbl = te->resorigtbl;
+    ote->resorigcol = te->resorigcol;
+    outer->targetList = lappend(outer->targetList, ote);
+    colnames = lappend(colnames, makeString(pstrdup(te->resname)));
+  }
+  outer->distinctClause = q->distinctClause;
+  outer->sortClause = q->sortClause;
+  outer->limitCount = q->limitCount;
+  outer->limitOffset = q->limitOffset;
+#if PG_VERSION_NUM >= 130000
+  outer->limitOption = q->limitOption;
+  q->limitOption = LIMIT_OPTION_COUNT;
+#endif
+  q->distinctClause = NIL;
+  q->sortClause = NIL;
+  q->limitCount = q->limitOffset = NULL;
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = q;
+  rte->eref = makeAlias("distinct_rows", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  outer->rtable = list_make1(rte);
+  outer->jointree = makeFromExpr(list_make1(rtr), NULL);
+
+  /* The query is one level deeper than it was. */
+  IncrementVarSublevelsUp((Node *)q, 1, 1);
+  return outer;
+}
+
+/**
  * @brief Rewrite the LIMIT / OFFSET of @p q into the filter of a rank, or
  *        return @c NULL if it is not (@c limit_lowerable).
  *
@@ -17401,6 +17482,13 @@ static Query *process_query(const constants_t *constants, Query *q,
    * provenance-identical to its GROUP BY twin -- normalising here lets
    * them recognise it with no DISTINCT-specific arm.  Idempotent with
    * the late site below. */
+  if (provsql_active && q->distinctClause != NIL && q->hasWindowFuncs &&
+      !q->hasDistinctOn && !q->hasAggs) {
+    Query *outer = distinct_over_windows(constants, q);
+    if (outer)
+      return process_query(constants, outer, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
   if (provsql_active)
     normalize_distinct_into_group_by(q);
 

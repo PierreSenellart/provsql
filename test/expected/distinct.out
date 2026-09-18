@@ -20,3 +20,12 @@ count
 2 (*)
 3 (*)
 (3 rows)
+WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
+remove_provenance
+
+(1 row)
+city|first
+Berlin|Ellen
+New York|John
+Paris|Dave
+(3 rows)

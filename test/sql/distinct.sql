@@ -18,3 +18,13 @@ CREATE TABLE distinct_result AS
 SELECT remove_provenance('distinct_result');
 SELECT * FROM distinct_result ORDER BY count::numeric;
 DROP TABLE distinct_result;
+
+-- DISTINCT over a window value: the window is computed in a subquery, the
+-- DISTINCT over it (a window value cannot be a grouping key).
+CREATE TABLE distinct_result AS
+  SELECT DISTINCT city, first_value(name) OVER (PARTITION BY city ORDER BY id
+    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS first
+  FROM personnel;
+SELECT remove_provenance('distinct_result');
+SELECT city, first FROM distinct_result ORDER BY city;
+DROP TABLE distinct_result;
