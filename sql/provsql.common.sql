@@ -2845,10 +2845,16 @@ DECLARE
   token uuid := public.uuid_generate_v5(
     provsql.uuid_ns_provsql(), concat('arith', op::text, children::text));
 BEGIN
+  IF op IS NULL OR children IS NULL THEN
+    RETURN NULL;
+  END IF;
   PERFORM provsql.create_gate(token, 'arith', children, op, NULL, val::text);
-  RETURN provsql.agg_token_make(token, val);
+  -- A NULL value (a division by zero on a row the database as it is may not
+  -- have) keeps the gate: its value in the other worlds is in the circuit.
+  RETURN format('( %s , %s )', token::text,
+                COALESCE(val::text, 'NULL'))::provsql.agg_token;
 END
-$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 -- agg_token \<op\> agg_token --------------------------------------------
@@ -2877,7 +2883,7 @@ $$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, (b)::uuid],
 CREATE OR REPLACE FUNCTION agg_token_div(a agg_token, b agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
-     provsql.agg_token_value(a) / provsql.agg_token_value(b)); $$
+     provsql.agg_token_value(a) / NULLIF(provsql.agg_token_value(b), 0)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief Unary -agg_token (gate_arith NEG). */
@@ -2913,7 +2919,7 @@ $$ SELECT provsql.agg_arith_make(1, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
 CREATE OR REPLACE FUNCTION agg_token_div_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
-     provsql.agg_token_value(a) / b); $$
+     provsql.agg_token_value(a) / NULLIF(b, 0)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 -- numeric \<op\> agg_token ----------------------------------------------
@@ -2942,7 +2948,7 @@ $$ SELECT provsql.agg_arith_make(1, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
 CREATE OR REPLACE FUNCTION numeric_div_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
-     a / provsql.agg_token_value(b)); $$
+     a / NULLIF(provsql.agg_token_value(b), 0)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /**
@@ -2957,21 +2963,21 @@ $$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
 CREATE OR REPLACE FUNCTION agg_token_intdiv(a agg_token, b agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(11, ARRAY[(a)::uuid, (b)::uuid],
-     trunc(provsql.agg_token_value(a) / provsql.agg_token_value(b))); $$
+     trunc(provsql.agg_token_value(a) / NULLIF(provsql.agg_token_value(b), 0))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief agg_token / numeric, in integer division (internal; see agg_token_intdiv). */
 CREATE OR REPLACE FUNCTION agg_token_intdiv_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(11, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
-     trunc(provsql.agg_token_value(a) / b)); $$
+     trunc(provsql.agg_token_value(a) / NULLIF(b, 0))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief numeric / agg_token, in integer division (internal; see agg_token_intdiv). */
 CREATE OR REPLACE FUNCTION numeric_intdiv_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(11, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
-     trunc(a / provsql.agg_token_value(b))); $$
+     trunc(a / NULLIF(provsql.agg_token_value(b), 0))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 -- Operator declarations -----------------------------------------------
