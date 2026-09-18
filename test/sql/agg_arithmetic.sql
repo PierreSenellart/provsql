@@ -116,3 +116,16 @@ CREATE TABLE agg_arith_cg AS
 SELECT remove_provenance('agg_arith_cg');
 SELECT city, s, g, n FROM agg_arith_cg ORDER BY city;
 DROP TABLE agg_arith_cg;
+
+-- A boolean aggregate where a boolean is read (a CASE condition, AND, OR,
+-- NOT) or compared: the agg_token is cast back to boolean, not read as one.
+CREATE TABLE agg_arith_bool AS
+  SELECT city,
+         CASE WHEN bool_or(position = 'Director') THEN 'yes' ELSE 'no' END AS has_dir,
+         bool_or(position = 'Director') = true AS eq_true,
+         NOT every(position = 'Director') AS not_every,
+         CASE count(*) WHEN 2 THEN 'two' ELSE 'other' END AS simple_case
+  FROM personnel GROUP BY city;
+SELECT remove_provenance('agg_arith_bool');
+SELECT city, has_dir, eq_true, not_every, simple_case FROM agg_arith_bool ORDER BY city;
+DROP TABLE agg_arith_bool;

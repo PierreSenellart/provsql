@@ -2758,6 +2758,11 @@ CREATE OR REPLACE FUNCTION agg_token_to_int8(agg_token)
   RETURNS bigint
   AS 'provsql','agg_token_to_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Cast an agg_token to boolean (extracts the aggregate value, loses provenance) */
+CREATE OR REPLACE FUNCTION agg_token_to_bool(agg_token)
+  RETURNS boolean
+  AS 'provsql','agg_token_to_bool' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /** @brief Cast an agg_token to text (extracts the aggregate value, loses provenance) */
 CREATE OR REPLACE FUNCTION agg_token_to_text(agg_token)
   RETURNS text
@@ -2958,6 +2963,8 @@ CREATE CAST (agg_token AS integer) WITH FUNCTION agg_token_to_int4(agg_token) AS
 CREATE CAST (agg_token AS bigint) WITH FUNCTION agg_token_to_int8(agg_token) AS ASSIGNMENT;
 /** @brief Assignment cast from agg_token to text (extracts value, not UUID) */
 CREATE CAST (agg_token AS text) WITH FUNCTION agg_token_to_text(agg_token) AS ASSIGNMENT;
+/** @brief Assignment cast from agg_token to boolean (bool_and, bool_or, every) */
+CREATE CAST (agg_token AS boolean) WITH FUNCTION agg_token_to_bool(agg_token) AS ASSIGNMENT;
 
 /**
  * @brief Condition a discrete aggregate's distribution on an event:

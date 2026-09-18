@@ -78,7 +78,7 @@ INTERNAL_FUNCTIONS = {
     'agg_token_in', 'agg_token_out', 'agg_token_cast',
     'agg_token_to_float', 'agg_token_to_float8',
     'agg_token_to_int', 'agg_token_to_int4', 'agg_token_to_int8',
-    'agg_token_to_numeric',
+    'agg_token_to_numeric', 'agg_token_to_bool',
     'agg_token_to_text', 'agg_token_uuid',
     'agg_token_eq_numeric', 'agg_token_ne_numeric',
     'agg_token_lt_numeric', 'agg_token_le_numeric',

@@ -259,6 +259,27 @@ agg_token_to_int8(PG_FUNCTION_ARGS)
   PG_RETURN_DATUM(result);
 }
 
+PG_FUNCTION_INFO_V1(agg_token_to_bool);
+/**
+ * @brief Cast an @c agg_token to @c boolean, extracting only the value.
+ *
+ * The value of a boolean aggregate (@c bool_or, @c bool_and, @c every).
+ * Emits a WARNING that provenance information is lost during the conversion.
+ * @return Boolean datum parsed from the aggregate value string.
+ */
+Datum
+agg_token_to_bool(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+
+  provsql_warning("converting agg_token to boolean: provenance information is lost");
+
+  if (agg_token_val_is_null(aggtok))
+    PG_RETURN_NULL();
+
+  return DirectFunctionCall1(boolin, CStringGetDatum(aggtok->val));
+}
+
 PG_FUNCTION_INFO_V1(agg_token_to_text);
 /**
  * @brief Cast an @c agg_token to @c text, extracting only the value.

@@ -7211,8 +7211,21 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
      * garbage length header out of the token's UUID text and crashes (or
      * silently corrupts the materialised tuple). */
     CaseExpr *ce = (CaseExpr *)result;
+    ListCell *lc;
+    /* The conditions are read as booleans (CASE WHEN bool_or(x) ...), and
+     * the tested expression of a simple CASE as a value of its type. */
+    foreach (lc, ce->args) {
+      CaseWhen *cw = (CaseWhen *)lfirst(lc);
+      if (exprType((Node *)cw->expr) == constants->OID_TYPE_AGG_TOKEN)
+        cw->expr = (Expr *)cast_agg_token_to_type((Node *)cw->expr, BOOLOID,
+                                                  constants);
+    }
+    if (ce->arg != NULL && IsA(ce->arg, FuncExpr) &&
+        ((FuncExpr *)ce->arg)->funcid ==
+          constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      ce->arg = (Expr *)wrap_agg_token_with_cast((FuncExpr *)ce->arg,
+                                                 constants);
     if (ce->casetype != constants->OID_TYPE_AGG_TOKEN) {
-      ListCell *lc;
       foreach (lc, ce->args) {
         CaseWhen *cw = (CaseWhen *)lfirst(lc);
         if (exprType((Node *)cw->result) == constants->OID_TYPE_AGG_TOKEN)
@@ -7224,6 +7237,13 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
         ce->defresult = (Expr *)cast_agg_token_to_type(
           (Node *)ce->defresult, ce->casetype, constants);
     }
+  } else if (IsA(result, BoolExpr)) {
+    /* bool_or(x) AND y, NOT every(x): the arguments are booleans. */
+    ListCell *lc;
+    foreach (lc, ((BoolExpr *)result)->args)
+      if (exprType((Node *)lfirst(lc)) == constants->OID_TYPE_AGG_TOKEN)
+        lfirst(lc) = cast_agg_token_to_type((Node *)lfirst(lc), BOOLOID,
+                                            constants);
   } else if (IsA(result, CoalesceExpr) || IsA(result, MinMaxExpr)) {
     /* COALESCE(sum(x), 0), GREATEST(count(*), 3): as for CASE, an
      * agg_token argument under another result type is cast back, or the

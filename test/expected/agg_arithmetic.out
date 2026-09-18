@@ -146,3 +146,23 @@ Berlin|11|3|2
 New York|3|3|2
 Paris|14|3|3
 (3 rows)
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+city|has_dir|eq_true|not_every|simple_case
+Berlin|no|f|t|two
+New York|yes|t|t|two
+Paris|no|f|t|other
+(3 rows)

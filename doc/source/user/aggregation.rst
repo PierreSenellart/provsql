@@ -68,7 +68,9 @@ both in the same query and over subquery results:
 
 When such an operation is performed, the aggregate result is cast from
 its internal ``agg_token`` representation back to the original aggregate
-return type (e.g., ``bigint`` for ``COUNT``, ``numeric`` for ``AVG``).
+return type (e.g., ``bigint`` for ``COUNT``, ``numeric`` for ``AVG``,
+``boolean`` for ``bool_or`` read as a condition, as in
+``CASE WHEN bool_or(x) THEN … END``).
 A warning is emitted to indicate that the provenance information is lost
 in the conversion. The provenance of the aggregate group itself is still
 tracked in the ``provsql`` column.

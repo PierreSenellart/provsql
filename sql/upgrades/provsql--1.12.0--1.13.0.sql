@@ -2239,6 +2239,16 @@ CREATE OR REPLACE FUNCTION actual(k bigint)
 $$ SELECT k $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 -- ----------------------------------------------------------------------
+-- 6i. A boolean aggregate (bool_or, bool_and, every) in a boolean context
+--     is cast back to boolean, as the others are to their type.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION agg_token_to_bool(agg_token)
+  RETURNS boolean
+  AS 'provsql','agg_token_to_bool' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE CAST (agg_token AS boolean) WITH FUNCTION agg_token_to_bool(agg_token) AS ASSIGNMENT;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.
