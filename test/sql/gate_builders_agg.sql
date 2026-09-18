@@ -16,9 +16,9 @@ CREATE SCHEMA gba_ref;
 -- is created.  Here they are no-ops; the address is what the reference is
 -- for, and what the C function recorded is checked directly.
 CREATE FUNCTION gba_ref.set_infos(token uuid, info1 int, info2 int DEFAULT NULL) RETURNS void
-  LANGUAGE sql AS $$ SELECT $$;
+  LANGUAGE plpgsql AS $$ BEGIN END $$;
 CREATE FUNCTION gba_ref.set_extra(token uuid, data text) RETURNS void
-  LANGUAGE sql AS $$ SELECT $$;
+  LANGUAGE plpgsql AS $$ BEGIN END $$;
 
 CREATE FUNCTION gba_ref.provenance_aggregate(
     aggfnoid integer,
