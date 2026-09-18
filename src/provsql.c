@@ -17072,7 +17072,10 @@ static bool uncertain_value_walker(Node *node, void *cx) {
   if (IsA(node, FuncExpr) &&
       ((FuncExpr *)node)->funcid == ctx->constants->OID_FUNCTION_PROVENANCE)
     return true;
-  if (OidIsValid(ctx->constants->OID_TYPE_RANDOM_VARIABLE) &&
+  /* The walker also hands over lists (the arguments of a COALESCE...),
+   * which have no type. */
+  if (!IsA(node, List) &&
+      OidIsValid(ctx->constants->OID_TYPE_RANDOM_VARIABLE) &&
       exprType(node) == ctx->constants->OID_TYPE_RANDOM_VARIABLE)
     return true;
   if (IsA(node, Var)) {
