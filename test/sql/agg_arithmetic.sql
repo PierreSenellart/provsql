@@ -129,3 +129,13 @@ CREATE TABLE agg_arith_bool AS
 SELECT remove_provenance('agg_arith_bool');
 SELECT city, has_dir, eq_true, not_every, simple_case FROM agg_arith_bool ORDER BY city;
 DROP TABLE agg_arith_bool;
+
+-- Division of integers truncates toward zero, in the displayed value as in
+-- SQL; a numeric operand makes it a numeric division.
+CREATE TABLE agg_arith_div AS
+  SELECT city, COUNT(*) / 2 AS half, SUM(id) / 3 AS third,
+         COUNT(*) / 2.0 AS half_num, 7 / COUNT(*) AS inv, -COUNT(*) / 2 AS neg
+  FROM personnel GROUP BY city;
+SELECT remove_provenance('agg_arith_div');
+SELECT city, half, third, half_num, inv, neg FROM agg_arith_div ORDER BY city;
+DROP TABLE agg_arith_div;

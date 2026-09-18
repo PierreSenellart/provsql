@@ -155,7 +155,9 @@ Integer division follows SQL's truncation-toward-zero semantics rather
 than real division: ``HAVING sum(x) / 2 = 5`` is true for a group whose
 integer sum is ``10`` or ``11`` (both floor to ``5``), exactly as a plain
 PostgreSQL ``sum(x) / 2`` would.  Writing ``sum(x) / 2.0`` instead opts
-into real (numeric) division.
+into real (numeric) division.  The displayed value of such an expression in
+the ``SELECT`` list follows the same rule: ``count(*) / 2`` shows ``1`` for
+a count of 3.
 
 The ``choose`` Aggregate
 -------------------------

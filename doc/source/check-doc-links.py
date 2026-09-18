@@ -98,6 +98,7 @@ INTERNAL_FUNCTIONS = {
     # below.  agg_token_make / agg_value_gate / agg_token_value are the
     # internal helpers those operator bodies call.
     'agg_token_plus', 'agg_token_minus', 'agg_token_times', 'agg_token_div',
+    'agg_token_intdiv', 'agg_token_intdiv_numeric', 'numeric_intdiv_agg_token',
     'agg_token_neg',
     'agg_token_plus_numeric', 'agg_token_minus_numeric',
     'agg_token_times_numeric', 'agg_token_div_numeric',

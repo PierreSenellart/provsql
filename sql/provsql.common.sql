@@ -2938,6 +2938,34 @@ $$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
      a / provsql.agg_token_value(b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
+/**
+ * @brief agg_token / agg_token, in integer division (internal)
+ *
+ * The rewriter calls it instead of agg_token_div when both operands were
+ * integers in the query, as for count(*) / count(x): SQL divides them
+ * with truncation toward zero, and the displayed value does too.  The gate
+ * is that of agg_token_div, whose integer operands the evaluators read.
+ */
+CREATE OR REPLACE FUNCTION agg_token_intdiv(a agg_token, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
+     trunc(provsql.agg_token_value(a) / provsql.agg_token_value(b))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token / numeric, in integer division (internal; see agg_token_intdiv). */
+CREATE OR REPLACE FUNCTION agg_token_intdiv_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     trunc(provsql.agg_token_value(a) / b)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief numeric / agg_token, in integer division (internal; see agg_token_intdiv). */
+CREATE OR REPLACE FUNCTION numeric_intdiv_agg_token(a numeric, b agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+     trunc(a / provsql.agg_token_value(b))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
 -- Operator declarations -----------------------------------------------
 CREATE OPERATOR + (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_plus,  COMMUTATOR = +);
 CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_minus);

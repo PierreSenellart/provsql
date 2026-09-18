@@ -7290,6 +7290,41 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   pstate = make_parsestate(NULL);
   newop = make_op(pstate, list_make1(makeString(opname)), l, r, NULL, -1);
   free_parsestate(pstate);
+
+  /* A division the query made on integers (count(*) / 2) truncates toward
+   * zero, where the agg_token operator divides as numeric: call its integer
+   * variant (agg_token_div -> agg_token_intdiv, ...). */
+  if (strcmp(opname, "/") == 0 && IsA(newop, OpExpr) &&
+      (op->opresulttype == INT2OID || op->opresulttype == INT4OID ||
+       op->opresulttype == INT8OID)) {
+    OpExpr *div = (OpExpr *)newop;
+    char *fname;
+    const char *intname = NULL;
+    Oid argtypes[2];
+    Oid intfn;
+
+    set_opfuncid(div);
+    fname = get_func_name(div->opfuncid);
+    if (fname != NULL && strcmp(fname, "agg_token_div") == 0)
+      intname = "agg_token_intdiv";
+    else if (fname != NULL && strcmp(fname, "agg_token_div_numeric") == 0)
+      intname = "agg_token_intdiv_numeric";
+    else if (fname != NULL && strcmp(fname, "numeric_div_agg_token") == 0)
+      intname = "numeric_intdiv_agg_token";
+    if (intname != NULL && list_length(div->args) == 2) {
+      argtypes[0] = exprType((Node *)linitial(div->args));
+      argtypes[1] = exprType((Node *)lsecond(div->args));
+      intfn = LookupFuncName(list_make2(makeString("provsql"),
+                                        makeString((char *)intname)),
+                             2, argtypes, true);
+      if (OidIsValid(intfn)) {
+        FuncExpr *fe = makeFuncExpr(intfn, div->opresulttype, div->args,
+                                    InvalidOid, InvalidOid,
+                                    COERCE_EXPLICIT_CALL);
+        newop = (Expr *)fe;
+      }
+    }
+  }
   pfree(opname);
   return (Node *)newop;
 }
