@@ -130,3 +130,16 @@ AGG left|1|2|3 (*)
 AGG left|2|1|2 (*)
 AGG left|3|0|
 (3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|rid|lid|e|no_token
+PADDED GROUP|1|1|750|f
+PADDED GROUP||1|750|f
+(2 rows)

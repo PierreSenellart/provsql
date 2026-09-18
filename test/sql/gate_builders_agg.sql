@@ -429,8 +429,11 @@ FROM (
          provsql.provenance_aggregate(2108, 23, 0, NULL::uuid[]),
          gba_ref.provenance_aggregate(2108, 23, 0, NULL::uuid[])
 ) t ORDER BY label;
--- A NULL value gives a NULL agg_token, as it did.
-SELECT provsql.provenance_aggregate(2108, 23, NULL::int, ARRAY[gba_leaf(80), gba_leaf(81)]) IS NULL AS c_null,
+-- A NULL value over rows (none of them present in the database as it is:
+-- the group exists in other worlds) keeps its token, with a NULL value;
+-- the reference implementation returned a NULL agg_token.
+SELECT provsql.provenance_aggregate(2108, 23, NULL::int, ARRAY[gba_leaf(80), gba_leaf(81)]) IS NOT NULL AS c_token,
+       provsql.agg_token_value(provsql.provenance_aggregate(2108, 23, NULL::int, ARRAY[gba_leaf(80), gba_leaf(81)])) IS NULL AS c_value_null,
        gba_ref.provenance_aggregate(2108, 23, NULL::int, ARRAY[gba_leaf(80), gba_leaf(81)]) IS NULL AS ref_null;
 
 -- Two aggregations that record different things over the same children are
@@ -456,7 +459,7 @@ FROM (
   SELECT 'min int[] / text[]',
          provsql.provenance_aggregate(2135, 1009, ARRAY['10'], gba_leaves(91, 2))
 ) t GROUP BY label ORDER BY label;
-SELECT provsql.provenance_aggregate(2108, 23, NULL::text, ARRAY[gba_leaf(93)]) IS NULL AS null_value_no_token,
+SELECT provsql.provenance_aggregate(2108, 23, NULL::text, ARRAY[gba_leaf(93)]) IS NOT NULL AS null_value_keeps_token,
        provsql.provenance_aggregate(2108, 25, ''::text, ARRAY[gba_leaf(93)])::uuid
          <> provsql.provenance_aggregate(2108, 25, ':'::text, ARRAY[gba_leaf(93)])::uuid AS empty_and_colon_differ;
 

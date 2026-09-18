@@ -198,4 +198,21 @@ CREATE TABLE oj_t AS
 SELECT remove_provenance('oj_t');
 SELECT 'AGG left' AS q, id, c, c1 FROM oj_t WHERE holds ORDER BY id;
 DROP TABLE oj_t;
+-- A group absent from the database as it is (its padded row has a match)
+-- keeps its aggregate's circuit, with a NULL value: sum is 1500 in the
+-- worlds where the match is absent, so its expectation at p = 0.5 is 750.
+CREATE TABLE oj_l4(id int, v float8);
+INSERT INTO oj_l4 VALUES (1,1100),(1,400);
+CREATE TABLE oj_r4(id int NOT NULL UNIQUE);
+INSERT INTO oj_r4 VALUES (1);
+SELECT add_provenance('oj_l4');
+SELECT add_provenance('oj_r4');
+SELECT set_prob(provsql, 0.5) FROM oj_r4 \g /dev/null
+CREATE TABLE oj_t AS
+  SELECT r.id AS rid, l.id AS lid, expected(sum(l.v)) AS e,
+         sum(l.v) IS NULL AS no_token
+  FROM oj_l4 l LEFT JOIN oj_r4 r ON r.id = l.id GROUP BY r.id, l.id;
+SELECT remove_provenance('oj_t');
+SELECT 'PADDED GROUP' AS q, rid, lid, e, no_token FROM oj_t ORDER BY rid;
+DROP TABLE oj_t, oj_l4, oj_r4;
 DROP TABLE oj_da, oj_db, oj_da_plain, oj_db_plain;

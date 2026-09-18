@@ -636,7 +636,11 @@ Datum provenance_aggregate(PG_FUNCTION_ARGS) {
                                       val);
   }
 
-  if (val == NULL)
+  /* A NULL value over no row at all is SQL's NULL: there is nothing to
+   * keep.  Over rows absent from the database as it is (the displayed value
+   * reads only the present ones), the group exists in other worlds: the
+   * token keeps its circuit, with a NULL value (an empty val). */
+  if (val == NULL && n == 0)
     PG_RETURN_NULL();
   result = (agg_token *)palloc0(sizeof(agg_token));
   {
@@ -646,7 +650,8 @@ Datum provenance_aggregate(PG_FUNCTION_ARGS) {
     memcpy(result->tok, t.data, 36);
     pfree(t.data);
   }
-  strlcpy(result->val, val, sizeof(result->val));
+  if (val != NULL)
+    strlcpy(result->val, val, sizeof(result->val));
   PG_RETURN_POINTER(result);
 }
 

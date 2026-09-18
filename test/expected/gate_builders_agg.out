@@ -81,14 +81,14 @@ NULL array|t|t
 NULL children only|t|t
 no child|t|t
 (3 rows)
-c_null|ref_null
-t|t
+c_token|c_value_null|ref_null
+t|t|t
 (1 row)
 label|gates|types|values
 array_agg int / text|2|{1007,1009}|{"{1,2}","{1,2}"}
 min int[] / text[]|2|{1007,1009}|{"{10}","{9}"}
 (2 rows)
-null_value_no_token|empty_and_colon_differ
+null_value_keeps_token|empty_and_colon_differ
 t|t
 (1 row)
 create_gate
