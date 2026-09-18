@@ -305,6 +305,9 @@ static bool is_target_agg_var(Node *node,
   return false;
 }
 
+static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
+                                    const constants_t *constants);
+
 /**
  * @brief Tree-mutator that retypes a specific Var to @c agg_token.
  *
@@ -329,28 +332,55 @@ aggregation_type_mutator(Node *node, void *ctx) {
   if (IsA(node, FuncExpr)) {
     FuncExpr *f = (FuncExpr *)node;
 
-    /* Check if this is a cast wrapping our target Var */
+    /* A cast of our target Var to a type agg_token casts to directly
+     * (count::numeric) becomes that cast.  Any other function over it
+     * (min_date::timestamp, abs(count)) reads the value: the Var is cast back
+     * to its own type first. */
     if (list_length(f->args) == 1 &&
         is_target_agg_var(linitial(f->args), context)) {
-      /* Look up the cast from agg_token to the target type */
-      HeapTuple castTuple = SearchSysCache2(CASTSOURCETARGET,
-                                            ObjectIdGetDatum(context->constants->OID_TYPE_AGG_TOKEN),
-                                            ObjectIdGetDatum(f->funcresulttype));
+      Var *v = (Var *)linitial(f->args);
+      Oid orig_type = v->vartype;
+      bool replaced = false;
 
-      if (HeapTupleIsValid(castTuple)) {
-        Form_pg_cast castForm = (Form_pg_cast) GETSTRUCT(castTuple);
-        if (OidIsValid(castForm->castfunc)) {
-          f->funcid = castForm->castfunc;
+      if (f->funcformat == COERCE_EXPLICIT_CAST ||
+          f->funcformat == COERCE_IMPLICIT_CAST) {
+        HeapTuple castTuple = SearchSysCache2(CASTSOURCETARGET,
+                                              ObjectIdGetDatum(context->constants->OID_TYPE_AGG_TOKEN),
+                                              ObjectIdGetDatum(f->funcresulttype));
+
+        if (HeapTupleIsValid(castTuple)) {
+          Form_pg_cast castForm = (Form_pg_cast) GETSTRUCT(castTuple);
+          if (OidIsValid(castForm->castfunc)) {
+            f->funcid = castForm->castfunc;
+            replaced = true;
+          }
+          ReleaseSysCache(castTuple);
         }
-        ReleaseSysCache(castTuple);
       }
 
-      /* Retype the Var inside */
-      ((Var *)linitial(f->args))->vartype =
-        context->constants->OID_TYPE_AGG_TOKEN;
+      v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+      if (!replaced && orig_type != context->constants->OID_TYPE_AGG_TOKEN)
+        linitial(f->args) =
+          cast_agg_token_to_type((Node *)v, orig_type, context->constants);
 
       return (Node *)f;
     }
+  }
+
+  if ((IsA(node, CoerceViaIO) &&
+       is_target_agg_var((Node *)((CoerceViaIO *)node)->arg, context)) ||
+      (IsA(node, RelabelType) &&
+       is_target_agg_var((Node *)((RelabelType *)node)->arg, context))) {
+    /* A conversion through the type's I/O (min_date::text) or a relabeling
+     * reads the value: cast the Var back to its own type first. */
+    Expr **argp = IsA(node, CoerceViaIO) ? &((CoerceViaIO *)node)->arg
+                                         : &((RelabelType *)node)->arg;
+    Var *v = (Var *)*argp;
+    Oid orig_type = v->vartype;
+    v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+    *argp = (Expr *)cast_agg_token_to_type((Node *)v, orig_type,
+                                           context->constants);
+    return node;
   }
 
   if (IsA(node, Var)) {
@@ -7092,27 +7122,8 @@ static Node *wrap_agg_token_with_cast(FuncExpr *prov_agg,
                                       const constants_t *constants) {
   Const *typ_const = (Const *)lsecond(prov_agg->args);
   Oid target_type = DatumGetObjectId(typ_const->constvalue);
-  CoercionPathType pathtype;
-  Oid castfuncid;
 
-  pathtype = find_coercion_pathway(target_type,
-                                   constants->OID_TYPE_AGG_TOKEN,
-                                   COERCION_EXPLICIT, &castfuncid);
-  if (pathtype == COERCION_PATH_FUNC && OidIsValid(castfuncid)) {
-    FuncExpr *cast = makeNode(FuncExpr);
-    cast->funcid = castfuncid;
-    cast->funcresulttype = target_type;
-    cast->funcretset = false;
-    cast->funcvariadic = false;
-    cast->funcformat = COERCE_IMPLICIT_CAST;
-    cast->args = list_make1(prov_agg);
-    cast->location = -1;
-    return (Node *)cast;
-  }
-
-  provsql_error("no cast from agg_token to %s for arithmetic on aggregate",
-                format_type_be(target_type));
-  return (Node *)prov_agg; /* unreachable */
+  return cast_agg_token_to_type((Node *)prov_agg, target_type, constants);
 }
 
 /**
@@ -7140,6 +7151,23 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
     cast->args = list_make1(arg);
     cast->location = -1;
     return (Node *)cast;
+  }
+
+  /* No cast to that type (date, timestamp, ...): through the text of the
+   * value, read by the input function of the type. */
+  pathtype = find_coercion_pathway(TEXTOID, constants->OID_TYPE_AGG_TOKEN,
+                                   COERCION_EXPLICIT, &castfuncid);
+  if (pathtype == COERCION_PATH_FUNC && OidIsValid(castfuncid)) {
+    FuncExpr *totext = makeFuncExpr(castfuncid, TEXTOID, list_make1(arg),
+                                    InvalidOid, DEFAULT_COLLATION_OID,
+                                    COERCE_IMPLICIT_CAST);
+    CoerceViaIO *io = makeNode(CoerceViaIO);
+    io->arg = (Expr *)totext;
+    io->resulttype = target_type;
+    io->resultcollid = get_typcollation(target_type);
+    io->coerceformat = COERCE_IMPLICIT_CAST;
+    io->location = -1;
+    return (Node *)io;
   }
 
   provsql_error("no cast from agg_token to %s for arithmetic on aggregate",
@@ -7409,6 +7437,22 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
         ce->defresult = (Expr *)cast_agg_token_to_type(
           (Node *)ce->defresult, ce->casetype, constants);
     }
+  } else if (IsA(result, CoerceViaIO) &&
+             exprType((Node *)((CoerceViaIO *)result)->arg) ==
+               constants->OID_TYPE_AGG_TOKEN &&
+             ((CoerceViaIO *)result)->resulttype !=
+               constants->OID_TYPE_AGG_TOKEN) {
+    /* min(d)::text: a conversion through the type's I/O reads the value of
+     * the aggregate in its own type, not the text of the agg_token. */
+    CoerceViaIO *io = (CoerceViaIO *)result;
+    if (IsA(io->arg, FuncExpr) &&
+        ((FuncExpr *)io->arg)->funcid ==
+          constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      io->arg = (Expr *)wrap_agg_token_with_cast((FuncExpr *)io->arg,
+                                                 constants);
+    else
+      return cast_agg_token_to_type((Node *)io->arg, io->resulttype,
+                                    constants);
   } else if (IsA(result, BoolExpr)) {
     /* bool_or(x) AND y, NOT every(x): the arguments are booleans. */
     ListCell *lc;

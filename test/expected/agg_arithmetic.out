@@ -174,3 +174,36 @@ Berlin|1 (*)|3 (*)|1.00000000000000000000 (*)|3 (*)|-1 (*)
 New York|1 (*)|1 (*)|1.00000000000000000000 (*)|3 (*)|-1 (*)
 Paris|1 (*)|4 (*)|1.5000000000000000 (*)|2 (*)|-1 (*)
 (3 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+remove_provenance
+
+(1 row)
+label|ts|txt
+a|Wed Jan 15 00:00:00 2020|01-15-2020
+b|Sat Feb 01 00:00:00 2020|02-01-2020
+(2 rows)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+remove_provenance
+
+(1 row)
+label|month
+a|01-15-2020
+a|02-15-2020
+b|02-01-2020
+b|03-01-2020
+(4 rows)
+label|month
+a|01-15-2020
+a|02-15-2020
+b|02-01-2020
+b|03-01-2020
+(4 rows)

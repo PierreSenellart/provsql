@@ -139,3 +139,33 @@ CREATE TABLE agg_arith_div AS
 SELECT remove_provenance('agg_arith_div');
 SELECT city, half, third, half_num, inv, neg FROM agg_arith_div ORDER BY city;
 DROP TABLE agg_arith_div;
+
+-- An aggregate of a type agg_token has no cast to (a date) is read through
+-- the text of its value: casts of it, in the query and on a subquery column,
+-- and a series bounded by such aggregates.
+CREATE TABLE agg_arith_dates(label text, d date);
+INSERT INTO agg_arith_dates VALUES
+  ('a','2020-01-15'),('a','2020-03-10'),('b','2020-02-01');
+CREATE TABLE agg_arith_dates_plain AS SELECT * FROM agg_arith_dates;
+SELECT add_provenance('agg_arith_dates');
+CREATE TABLE agg_arith_dc AS
+  SELECT label, min(d)::timestamp AS ts, min(d)::text AS txt
+  FROM agg_arith_dates GROUP BY label;
+SELECT remove_provenance('agg_arith_dc');
+SELECT label, ts, txt FROM agg_arith_dc ORDER BY label;
+DROP TABLE agg_arith_dc;
+CREATE TABLE agg_arith_dc AS
+  SELECT t2.label, g::date AS month
+  FROM (SELECT max(d) AS max FROM agg_arith_dates) t1
+  CROSS JOIN (SELECT label, min(d) AS min FROM agg_arith_dates GROUP BY label) t2
+  CROSS JOIN LATERAL generate_series(t2.min::timestamp, t1.max::timestamp,
+                                     '1 month') g;
+SELECT remove_provenance('agg_arith_dc');
+SELECT label, month FROM agg_arith_dc ORDER BY label, month;
+SELECT t2.label, g::date AS month
+FROM (SELECT max(d) AS max FROM agg_arith_dates_plain) t1
+CROSS JOIN (SELECT label, min(d) AS min FROM agg_arith_dates_plain GROUP BY label) t2
+CROSS JOIN LATERAL generate_series(t2.min::timestamp, t1.max::timestamp,
+                                   '1 month') g
+ORDER BY label, month;
+DROP TABLE agg_arith_dc, agg_arith_dates, agg_arith_dates_plain;
