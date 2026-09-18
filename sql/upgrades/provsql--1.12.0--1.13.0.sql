@@ -2305,6 +2305,321 @@ CREATE FUNCTION agg_token_plain_text(agg_token)
   AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 -- ----------------------------------------------------------------------
+-- 6m. expected / moment of AVG conditioned on its group existing take the
+--     exact route, as the unconditional moment does.
+-- ----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agg_raw_moment(
+  token agg_token,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  aggregation_function VARCHAR;
+  child_pairs uuid[];
+  pair_children uuid[];
+  n integer;
+  i integer;
+  j integer;
+  vals float8[];
+  toks uuid[];
+  total float8;
+  total_probability float8;
+  tup integer[];
+  d integer;
+  prod_v float8;
+  distinct_tok uuid[];
+  conj_token uuid;
+  prob float8;
+  sign_max float8;
+BEGIN
+  IF token IS NULL OR k IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF k < 0 THEN
+    RAISE EXCEPTION 'agg_raw_moment(): k must be non-negative (got %)', k;
+  END IF;
+
+  -- Aggregate-carrier CASE (a gate_case over aggregate branches): a first-match
+  -- guarded selection.  The moment is CONDITIONAL on the CASE's value being
+  -- defined (NULL only when it never is, mirroring the MIN/MAX convention):
+  --   E[pick^k | defined ∧ prov]
+  --     = Σ_i P(region_i ∧ def_i) · E[value_i^k | region_i ∧ def_i]
+  --       / Σ_i P(region_i ∧ def_i),
+  -- where region_i = (¬g_1 ∧ … ∧ ¬g_{i-1}) ∧ g_i ∧ prov is the world set that
+  -- selects branch i (the default's region is "all guards false") and def_i is
+  -- the branch's defined event (agg_defined_event: gate_one for sum / count /
+  -- constants, "some row present" for min / max / avg, recursive for a nested
+  -- CASE).  Both factors are exact: probability() over the region ∧ def event,
+  -- and the conditional aggregate moment (a recursive agg_raw_moment on the
+  -- branch aggregate, which conditions on its own definedness within the
+  -- region, so the two factors weigh the same worlds).  The regions are
+  -- mutually exclusive, so the terms sum with no inclusion-exclusion, and
+  -- correlation between a guard and its branch (shared input tuples) is
+  -- carried by the conditioning, exactly as HAVING carries it.  When every
+  -- branch is defined everywhere, the defined mass equals P(prov) and the
+  -- formula reduces to the plain region-weighted sum.
+  IF get_gate_type(token) = 'case' THEN
+    IF k = 0 THEN
+      RETURN 1;
+    END IF;
+    DECLARE
+      wires uuid[] := get_children(token);
+      nw integer := array_length(get_children(token), 1);
+      m integer := (array_length(get_children(token), 1) - 1) / 2;
+      running_neg uuid := gate_one();
+      region_full uuid;
+      prov_p float8;
+      p float8;
+      total float8 := 0;
+      def_mass float8 := 0;
+      ci integer;
+      vuid uuid;
+      bm float8;
+    BEGIN
+      prov_p := probability(prov);
+      IF prov_p IS NULL OR prov_p <= 0 THEN
+        RETURN NULL;   -- impossible conditioning event
+      END IF;
+      -- Branches 1..m are the guarded WHENs; branch m+1 is the ELSE default,
+      -- whose region is "all guards false".
+      FOR ci IN 1 .. m + 1 LOOP
+        IF ci <= m THEN
+          region_full := provenance_times(running_neg, wires[2 * ci - 1], prov);
+          vuid := wires[2 * ci];
+          running_neg :=
+            provenance_times(running_neg, provenance_not(wires[2 * ci - 1]));
+        ELSE
+          region_full := provenance_times(running_neg, prov);
+          vuid := wires[nw];
+        END IF;
+        p := probability(provenance_times(region_full,
+                                          agg_defined_event(vuid)));
+        IF p > 0 THEN
+          -- E[value_i^k | region_i ∧ def_i]: a constant branch is a Dirac
+          -- (c^k, exact); a single aggregate or nested CASE is exact via
+          -- agg_raw_moment (whose MIN/MAX/CASE arms condition on their own
+          -- definedness within the region); an arithmetic / composite branch
+          -- takes the Monte-Carlo scalar path (which composes with the
+          -- aggregate leaves).
+          IF get_gate_type(vuid) = 'value' THEN
+            bm := power(CAST(get_extra(vuid) AS float8), k);
+          ELSIF get_gate_type(vuid) IN ('agg', 'case') THEN
+            bm := agg_raw_moment(agg_token_make(vuid, 0), k, region_full,
+                                 method, arguments);
+          ELSE
+            bm := rv_moment(vuid, k, false, region_full);
+          END IF;
+          total := total + p * bm;
+          def_mass := def_mass + p;
+        END IF;
+      END LOOP;
+      IF def_mass <= epsilon() THEN
+        RETURN NULL;   -- the CASE's value is never defined under prov
+      END IF;
+      RETURN total / def_mass;
+    END;
+  END IF;
+
+  IF get_gate_type(token) <> 'agg' THEN
+    IF get_gate_type(token) IN ('arith', 'conditioned') THEN
+      RAISE EXCEPTION 'expected / variance / moment over an arithmetic '
+        'combination of aggregates (e.g. SUM(x) + SUM(y) or SUM(x) + 5), or a '
+        'conditioning of one, is not yet supported: a moment can be taken only '
+        'over a single aggregate (SUM / COUNT / MIN / MAX), optionally '
+        'conditioned (SUM(x) | C)'
+        USING HINT = 'Take the moment of each aggregate separately, or condition '
+          'the bare aggregate.';
+    ELSE
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
+    END IF;
+  END IF;
+  IF k = 0 THEN
+    RETURN 1;
+  END IF;
+
+  SELECT pp.proname::varchar FROM pg_proc pp
+    WHERE oid=(get_infos(token)).info1
+    INTO aggregation_function;
+
+  child_pairs := get_children(token);
+  n := COALESCE(array_length(child_pairs, 1), 0);
+
+  IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+    -- count(col) keeps the COUNT identity at the gate level but its value is a
+    -- SUM of per-row 0/1 indicators, so its moments are computed exactly like
+    -- SUM (and its empty group is the real value 0, like SUM).  count(*)
+    -- arrives here as 'sum' (it normalises to F_SUM_INT4); count(col) as 'count'.
+    -- Trivial empty aggregation: SUM = 0, so SUM^k = 0 for k >= 1.
+    -- Note: agg_token semantics treat the "no row included" world as
+    -- SUM = 0, so this stays consistent with k = 1 (= expected()).
+    IF n = 0 THEN
+      RETURN 0;
+    END IF;
+
+    -- Collapsed fast path: a correlated COUNT / SUM whose per-row selection
+    -- events share a single continuous latent has an O(G·n) 1-D quadrature,
+    -- vastly cheaper than the O(n^k) tuple enumeration below (which is the
+    -- O(n^2) pair-probability bottleneck for the variance).  Only fires
+    -- unconditionally (prov = one) and for k in {1, 2}; agg_collapsed_moment
+    -- returns NULL when the shared-latent pattern does not match, and we
+    -- fall through to the exact enumeration.
+    IF prov = gate_one() AND k <= 2 THEN
+      total := agg_collapsed_moment((token)::uuid, k);
+      IF total IS NOT NULL THEN
+        RETURN total;
+      END IF;
+    END IF;
+
+    -- Extract per-child token + value arrays.
+    vals := ARRAY[]::float8[];
+    toks := ARRAY[]::uuid[];
+    FOR i IN 1..n LOOP
+      pair_children := get_children(child_pairs[i]);
+      toks := toks || pair_children[1];
+      vals := vals || CAST(get_extra(pair_children[2]) AS float8);
+    END LOOP;
+
+    -- Enumerate all k-tuples (i_1, ..., i_k) in {1..n}^k.  tup is the
+    -- current tuple; we step through them in lexicographic order.
+    total := 0;
+    tup := array_fill(1, ARRAY[k]);
+    LOOP
+      prod_v := 1;
+      FOR j IN 1..k LOOP
+        prod_v := prod_v * vals[tup[j]];
+      END LOOP;
+
+      SELECT array_agg(DISTINCT toks[idx]) INTO distinct_tok
+        FROM unnest(tup) AS idx;
+
+      IF prov <> gate_one() THEN
+        distinct_tok := distinct_tok || prov;
+      END IF;
+      conj_token := provenance_times(VARIADIC distinct_tok);
+      prob := probability_evaluate(conj_token, method, arguments);
+
+      total := total + prod_v * prob;
+
+      d := k;
+      WHILE d >= 1 AND tup[d] = n LOOP
+        tup[d] := 1;
+        d := d - 1;
+      END LOOP;
+      EXIT WHEN d = 0;
+      tup[d] := tup[d] + 1;
+    END LOOP;
+  ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+    -- Rank enumeration: per distinct value v, P(MIN = v) is the
+    -- probability that some t_i with v_i=v is true and all t_j with
+    -- smaller v are false.  For MAX we negate values so the same
+    -- "smaller-than" rank logic computes MIN-of-negated, then flip.
+    -- The outer multiplier picks up the right sign for the k-th moment
+    -- of MAX: E[MAX^k] = (-1)^k * E[MIN(-v)^k], so sign_max = (-1)^k.
+    sign_max := CASE
+                  WHEN aggregation_function = 'max'
+                  THEN power(-1::float8, k)
+                  ELSE 1
+                END;
+
+    -- MIN/MAX over the empty input world are NULL (no elements), not ±Infinity:
+    -- SQL returns one row with a NULL value.  The moment is therefore CONDITIONAL
+    -- on the aggregate being defined (non-empty) -- the empty world is excluded
+    -- and the result renormalised by P(prov AND non-empty).  (count, whose empty
+    -- value 0 is a real value, keeps the empty world; sum keeps it too, as 0.)
+    IF n = 0 THEN
+      RETURN NULL;  -- structurally empty: MIN/MAX undefined
+    END IF;
+
+    -- Numerator E[MIN^k . 1{prov AND non-empty}] (the rank sum naturally omits
+    -- the empty world, since every term requires a present token).
+    WITH tok_value AS (
+      SELECT (get_children(c))[1] AS tok,
+             (CASE WHEN aggregation_function='max' THEN -1 ELSE 1 END)
+               * CAST(get_extra((get_children(c))[2]) AS DOUBLE PRECISION) AS v
+      FROM UNNEST(child_pairs) AS c
+    ) SELECT sign_max * COALESCE(SUM(p * power(v, k)), 0) FROM (
+        SELECT t1.v AS v,
+          probability_evaluate(
+            CASE WHEN prov = gate_one()
+                 THEN provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                       provenance_plus(ARRAY_AGG(t2.tok)))
+                 ELSE provenance_times(prov,
+                        provenance_monus(provenance_plus(ARRAY_AGG(t1.tok)),
+                                         provenance_plus(ARRAY_AGG(t2.tok)))) END,
+            method, arguments) AS p
+        FROM tok_value t1 LEFT OUTER JOIN tok_value t2 ON t1.v > t2.v
+        GROUP BY t1.v) tmp
+      INTO total;
+
+    -- Denominator P(prov AND non-empty) = P(prov (x) (+) tokens).
+    SELECT probability_evaluate(
+             CASE WHEN prov = gate_one()
+                  THEN provenance_plus(ARRAY_AGG(tok))
+                  ELSE provenance_times(prov, provenance_plus(ARRAY_AGG(tok))) END,
+             method, arguments)
+      FROM (SELECT (get_children(c))[1] AS tok FROM UNNEST(child_pairs) AS c) s
+      INTO total_probability;
+
+    IF total_probability <= epsilon() THEN
+      RETURN NULL;  -- never defined under prov: MIN/MAX undefined
+    END IF;
+    RETURN total / total_probability;  -- already conditional; skip generic norm
+  ELSIF aggregation_function = 'avg' THEN
+    -- AVG = SUM/COUNT is a ratio of two correlated world-dependent
+    -- quantities, so the k-tuple expansion above does not apply.  Like
+    -- MIN/MAX, AVG over the empty world is NULL, so its moment conditions
+    -- on the aggregate being defined (COUNT >= 1), NULL when it never is.
+    -- Two routes:
+    --  * EXACT (independent rows, unconditional): the joint (sum, count)
+    --    PMF folded in C by agg_avg_moment_exact --
+    --    E[AVG^k | COUNT>=1] = Σ_{(s,c), c>=1} (s/c)^k pmf(s,c) / P(c>=1).
+    --  * Monte-Carlo scalar fallback otherwise (an outer conditioning
+    --    event, shared leaves, compound contributors): rv_moment samples
+    --    the agg gate per world; its NaN-skip on empty draws implements
+    --    the same conditional-on-defined convention, at the
+    --    provsql.rv_mc_samples budget (0 raises, per convention).
+    IF n = 0 THEN
+      RETURN NULL;  -- structurally empty: AVG undefined
+    END IF;
+    -- Conditioning on AVG being defined, or on its group existing (the delta
+    -- of that event, provenance() of a GROUP BY row), is what the moment
+    -- already does: the exact route applies.
+    IF prov <> gate_one() THEN
+      DECLARE
+        def uuid := agg_defined_event((token)::uuid);
+      BEGIN
+        IF prov = def OR prov = provenance_delta(def) THEN
+          prov := gate_one();
+        END IF;
+      END;
+    END IF;
+    IF prov = gate_one() THEN
+      total := agg_avg_moment_exact((token)::uuid, k);
+      IF total IS NOT NULL THEN
+        RETURN total;
+      END IF;
+    END IF;
+    RETURN rv_moment((token)::uuid, k, false, prov);
+  ELSE
+    RAISE EXCEPTION USING MESSAGE=
+      'Cannot compute moment for aggregation function ' || aggregation_function;
+  END IF;
+
+  -- Conditional normalisation: E[X^k · 1_A] / P(A) = E[X^k | A].
+  IF prov <> gate_one()
+     AND total <> 0
+     AND total <> 'Infinity'::float8
+     AND total <> '-Infinity'::float8 THEN
+    total := total / probability_evaluate(prov, method, arguments);
+  END IF;
+
+  RETURN total;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

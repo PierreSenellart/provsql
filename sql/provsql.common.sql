@@ -7630,6 +7630,18 @@ BEGIN
     IF n = 0 THEN
       RETURN NULL;  -- structurally empty: AVG undefined
     END IF;
+    -- Conditioning on AVG being defined, or on its group existing (the delta
+    -- of that event, provenance() of a GROUP BY row), is what the moment
+    -- already does: the exact route applies.
+    IF prov <> gate_one() THEN
+      DECLARE
+        def uuid := agg_defined_event((token)::uuid);
+      BEGIN
+        IF prov = def OR prov = provenance_delta(def) THEN
+          prov := gate_one();
+        END IF;
+      END;
+    END IF;
     IF prov = gate_one() THEN
       total := agg_avg_moment_exact((token)::uuid, k);
       IF total IS NOT NULL THEN
