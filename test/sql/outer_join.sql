@@ -215,4 +215,13 @@ CREATE TABLE oj_t AS
 SELECT remove_provenance('oj_t');
 SELECT 'PADDED GROUP' AS q, rid, lid, e, no_token FROM oj_t ORDER BY rid;
 DROP TABLE oj_t, oj_l4, oj_r4;
+-- A correlated EXISTS in WHERE above the lowered join reads the joined
+-- columns through the subquery that replaces them.
+CREATE TABLE oj_t AS
+  SELECT oj_da.id, w, sr_boolean(provenance()) AS holds
+  FROM oj_da LEFT JOIN oj_db ON oj_da.id = oj_db.id
+  WHERE EXISTS (SELECT 1 FROM (VALUES (1), (3)) v(x) WHERE v.x = oj_da.id);
+SELECT remove_provenance('oj_t');
+SELECT 'EXISTS left' AS q, id, w FROM oj_t WHERE holds ORDER BY id, w;
+DROP TABLE oj_t;
 DROP TABLE oj_da, oj_db, oj_da_plain, oj_db_plain;

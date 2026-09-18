@@ -290,3 +290,51 @@ CREATE TABLE agg_arith_ty AS SELECT pg_typeof(c)::text AS t FROM agg_arith_fn;
 SELECT remove_provenance('agg_arith_ty');
 SELECT DISTINCT t FROM agg_arith_ty;
 DROP TABLE agg_arith_ty, agg_arith_fn;
+
+-- A division by zero of an aggregate, on a row kept for the other worlds
+-- (its WHERE fails in the database as it is), is a NULL value, not an error.
+CREATE TABLE agg_arith_fn AS
+  SELECT p.city, c.n, 10 / c.n AS q
+  FROM (SELECT DISTINCT city FROM personnel) p
+       JOIN LATERAL (SELECT count(*) AS n FROM personnel r
+                     WHERE r.city = p.city AND r.id > 5) c ON true
+  WHERE c.n > 0;
+SELECT remove_provenance('agg_arith_fn');
+SELECT city, n, q FROM agg_arith_fn ORDER BY city;
+DROP TABLE agg_arith_fn;
+
+-- Arithmetic on aggregates of another type than a number stays as written:
+-- a timestamp minus a timestamp.
+CREATE TABLE agg_arith_ts(g int, t timestamp);
+INSERT INTO agg_arith_ts VALUES (1,'2020-01-01'),(1,'2020-01-03'),(2,'2020-02-01');
+SELECT add_provenance('agg_arith_ts');
+CREATE TABLE agg_arith_fn AS
+  SELECT g, CAST(max(t) AS timestamp) - CAST(min(t) AS timestamp) AS d
+  FROM agg_arith_ts GROUP BY g;
+SELECT remove_provenance('agg_arith_fn');
+SELECT g, d FROM agg_arith_fn ORDER BY g;
+DROP TABLE agg_arith_fn, agg_arith_ts;
+
+-- A correlated scalar subquery in an expression beside aggregates, a COALESCE
+-- in the target list of an ORDER BY ... LIMIT, and a window ordered by a
+-- COUNT(DISTINCT): planned without internal errors.
+SET client_min_messages = error;
+CREATE TABLE agg_arith_fn AS
+  SELECT p.city, count(*)::real / (SELECT count(*) FROM personnel q
+                                   WHERE q.city = p.city)::real AS r
+  FROM personnel p GROUP BY p.city;
+RESET client_min_messages;
+SELECT remove_provenance('agg_arith_fn');
+SELECT city, r FROM agg_arith_fn ORDER BY city;
+DROP TABLE agg_arith_fn;
+CREATE TABLE agg_arith_fn AS
+  SELECT id, COALESCE(position, 'none') AS pos FROM personnel ORDER BY id LIMIT 2;
+SELECT remove_provenance('agg_arith_fn');
+SELECT count(*) AS n FROM agg_arith_fn;
+DROP TABLE agg_arith_fn;
+CREATE TABLE agg_arith_fn AS
+  SELECT city, rank() OVER (ORDER BY count(DISTINCT position) DESC, city) AS r
+  FROM personnel GROUP BY city;
+SELECT remove_provenance('agg_arith_fn');
+SELECT city, r FROM agg_arith_fn ORDER BY city;
+DROP TABLE agg_arith_fn;

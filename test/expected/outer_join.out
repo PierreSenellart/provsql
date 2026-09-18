@@ -143,3 +143,11 @@ q|rid|lid|e|no_token
 PADDED GROUP|1|1|750|f
 PADDED GROUP||1|750|f
 (2 rows)
+remove_provenance
+
+(1 row)
+q|id|w
+EXISTS left|1|5
+EXISTS left|1|7
+EXISTS left|3|
+(3 rows)
