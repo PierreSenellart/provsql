@@ -10500,11 +10500,20 @@ BEGIN
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 
-/** @brief Evaluate provenance over the Boolean semiring (true/false) */
-CREATE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass)
+/** @brief Evaluate provenance over the Boolean semiring (true/false)
+ *
+ * The optional @p token2value mapping gives the Boolean value of the
+ * leaves; a leaf it does not map, and every leaf when it is omitted, is
+ * true.  Without a mapping, the result is whether the token holds in the
+ * database as it is, every input tuple present.
+ */
+CREATE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass = NULL)
   RETURNS BOOLEAN AS
 $$
 BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
   RETURN provsql.provenance_evaluate_compiled(
     token,
     token2value,
@@ -10512,7 +10521,18 @@ BEGIN
     TRUE
   );
 END
-$$ LANGUAGE plpgsql STRICT PARALLEL SAFE STABLE;
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+/**
+ * @brief Whether a token holds in the database as it is (internal)
+ *
+ * @c sr_boolean(token) without a mapping, with a fast path for leaves.  The
+ * rewriter filters by it the rows a displayed aggregate value reads, so that
+ * the value is the one plain SQL computes on the same data.
+ */
+CREATE FUNCTION plain_truth(token uuid)
+  RETURNS boolean AS
+  'provsql', 'plain_truth' LANGUAGE C PARALLEL SAFE STABLE;
 
 /** @brief Structural universal-zero test (C backend of nonzero's default mode) */
 CREATE FUNCTION true_nonzero(token uuid)

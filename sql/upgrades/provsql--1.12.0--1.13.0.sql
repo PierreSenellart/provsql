@@ -2273,6 +2273,31 @@ $$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
 
 
 -- ----------------------------------------------------------------------
+-- 6k. The displayed value of an aggregate reads only the rows that hold
+--     in the database as it is (plain_truth); sr_boolean's mapping is
+--     optional, every leaf being true without one.
+-- ----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION sr_boolean(token ANYELEMENT, token2value regclass = NULL)
+  RETURNS BOOLEAN AS
+$$
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  RETURN provsql.provenance_evaluate_compiled(
+    token,
+    token2value,
+    'boolean',
+    TRUE
+  );
+END
+$$ LANGUAGE plpgsql CALLED ON NULL INPUT PARALLEL SAFE STABLE;
+
+CREATE FUNCTION plain_truth(token uuid)
+  RETURNS boolean AS
+  'provsql', 'plain_truth' LANGUAGE C PARALLEL SAFE STABLE;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

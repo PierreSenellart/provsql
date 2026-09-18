@@ -110,3 +110,12 @@ WITH TIES|t|1=0.0920 2=0.1880 3=0.2632 4=0.0290 5=0.6000 6=0.9000
 q|exact|probabilities
 WITH TIES, first|t|1=0.0180 2=0.3000 3=0.4200 4=0.4000 5=0.0043 6=0.0648
 (1 row)
+remove_provenance
+
+(1 row)
+q|c|s
+DISPLAY limit|2 (*)|12 (*)
+(1 row)
+q|c|s
+PLAIN limit|2|12
+(1 row)

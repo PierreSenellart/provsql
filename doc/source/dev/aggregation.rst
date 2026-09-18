@@ -395,7 +395,17 @@ replace an ``Aggref`` is a ``FuncExpr`` for
 - the OID of its result type;
 - the original ``Aggref`` itself, so PostgreSQL still computes
   the scalar value (this is what ends up inside the
-  :cfunc:`agg_token`);
+  :cfunc:`agg_token`).  When a row reaching the aggregate may be
+  false in the database as it is (:cfunc:`plain_row_token`: its
+  token has a ``monus`` or a ``cmp``, or comes from a relation of
+  derived tokens), a ``FILTER (WHERE plain_truth(t))`` on the row
+  token ``t`` is added to it, so that the value is the one plain SQL
+  computes on the same data.  ``plain_truth`` is ``sr_boolean``
+  without a mapping, walking ``times`` / ``plus`` / ``monus`` / …
+  gates directly and evaluating a comparison over the Boolean
+  semiring.  The ``HAVING`` pruning bounds, which range over every
+  world, read the ``Aggref`` without that filter
+  (:cfunc:`aggref_over_all_rows`);
 - an ``array_agg`` of per-tuple ``provenance_semimod(arg, t)``
   calls -- one ``semimod`` gate per input the aggregate reads,
   glueing the row's provenance ``t`` to the row's contributed value

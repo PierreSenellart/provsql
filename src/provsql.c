@@ -3346,11 +3346,14 @@ static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
  * @param prov_atts  List of provenance @c Var nodes.
  * @param op         Semiring operation (determines how tokens are combined).
  * @param is_scalar  Aggregation has no GROUP BY (single always-present row).
+ * @param plain_token  The row token the displayed value is filtered by
+ *                   (@c plain_row_token), or @c NULL.
  * @return  Provenance expression of type @c agg_token.
  */
 static Expr *make_aggregation_expression(const constants_t *constants,
                                          Aggref *agg_ref, List *prov_atts,
-                                         semiring_operation op, bool is_scalar) {
+                                         semiring_operation op, bool is_scalar,
+                                         Expr *plain_token) {
   Expr *result;
   FuncExpr *expr_s;
   Aggref *agg = makeNode(Aggref);
@@ -3388,6 +3391,20 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     if (keeps_nulls && aggregation_function != F_COUNT_ &&
         aggregation_function != F_COUNT_ANY)
       agg->aggfilter = filter;
+
+    /* The value shown is the one plain SQL computes: over the rows that hold
+     * in the database as it is, not over those kept only for their
+     * provenance (see plain_row_token). */
+    if (plain_token != NULL) {
+      FuncExpr *truth = makeFuncExpr(constants->OID_FUNCTION_PLAIN_TRUTH,
+                                     BOOLOID,
+                                     list_make1(copyObject(plain_token)),
+                                     InvalidOid, InvalidOid,
+                                     COERCE_EXPLICIT_CALL);
+      agg_ref->aggfilter = agg_ref->aggfilter == NULL
+        ? (Expr *)truth
+        : makeBoolExpr(AND_EXPR, list_make2(agg_ref->aggfilter, truth), -1);
+    }
 
     // aggregating all semirings in an array
     te_inner->resno = 1;
@@ -4168,6 +4185,28 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
  * @brief The original @c Aggref behind the aggregate side of a comparison, or
  *        @c NULL if @p node is not a lowered aggregate of this query level.
  */
+/**
+ * @brief Copy of the displayed aggregate @p ar without the @c plain_truth
+ *        filter @c make_aggregation_expression may have added: over every row
+ *        a world may contain, not only those of the database as it is.
+ */
+static Aggref *aggref_over_all_rows(Aggref *ar, const constants_t *constants) {
+  Aggref *res = (Aggref *)copyObject(ar);
+  Node *f = (Node *)res->aggfilter;
+  if (f == NULL || !OidIsValid(constants->OID_FUNCTION_PLAIN_TRUTH))
+    return res;
+  if (IsA(f, FuncExpr) &&
+      ((FuncExpr *)f)->funcid == constants->OID_FUNCTION_PLAIN_TRUTH)
+    res->aggfilter = NULL;
+  else if (IsA(f, BoolExpr) && ((BoolExpr *)f)->boolop == AND_EXPR &&
+           list_length(((BoolExpr *)f)->args) == 2 &&
+           IsA(lsecond(((BoolExpr *)f)->args), FuncExpr) &&
+           ((FuncExpr *)lsecond(((BoolExpr *)f)->args))->funcid ==
+             constants->OID_FUNCTION_PLAIN_TRUTH)
+    res->aggfilter = (Expr *)linitial(((BoolExpr *)f)->args);
+  return res;
+}
+
 static Aggref *having_side_aggref(Node *node, const constants_t *constants) {
   FuncExpr *fe;
 
@@ -4178,7 +4217,7 @@ static Aggref *having_side_aggref(Node *node, const constants_t *constants) {
   if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE ||
       list_length(fe->args) < 3 || !IsA(lthird(fe->args), Aggref))
     return NULL;
-  return (Aggref *)lthird(fe->args);
+  return aggref_over_all_rows((Aggref *)lthird(fe->args), constants);
 }
 
 /** @brief Copy of @p ar with @p cond ANDed to its FILTER clause. */
@@ -7101,6 +7140,119 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
 }
 
 
+/**
+ * @brief Whether a provenance expression of @p q may be false in the
+ *        database as it is, every input tuple present.
+ *
+ * A token built only by @c ⊗, @c ⊕, @c δ, projections and equalities over the
+ * tuples of TID / BID relations is true there; so is the provenance column of
+ * a subquery built that way.  A @c monus (a lowered outer join, @c EXCEPT,
+ * @c NOT @c IN), a comparison (a @c HAVING, a @c WHERE on an uncertain value,
+ * a rank-filtered @c LIMIT), a relation of derived tokens, or anything not
+ * recognized may be false.
+ */
+static bool token_may_be_false(const constants_t *constants, Query *q,
+                               Node *e) {
+  if (e == NULL)
+    return false;
+  if (IsA(e, RelabelType))
+    return token_may_be_false(constants, q,
+                              (Node *)((RelabelType *)e)->arg);
+  if (IsA(e, Var)) {
+    Var *v = (Var *)e;
+    RangeTblEntry *rte;
+    if (v->varlevelsup != 0 || v->varno < 1 ||
+        v->varno > list_length(q->rtable))
+      return true;
+    rte = rt_fetch(v->varno, q->rtable);
+    if (rte->rtekind == RTE_RELATION) {
+      ProvenanceTableInfo info;
+      return !provsql_lookup_table_info(rte->relid, &info) ||
+             (info.kind != PROVSQL_TABLE_TID &&
+              info.kind != PROVSQL_TABLE_BID);
+    }
+    if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL &&
+        rte->subquery->setOperations == NULL) {
+      TargetEntry *te = get_tle_by_resno(rte->subquery->targetList,
+                                         v->varattno);
+      return te == NULL ||
+             token_may_be_false(constants, rte->subquery, (Node *)te->expr);
+    }
+    return true;
+  }
+  if (IsA(e, FuncExpr)) {
+    FuncExpr *f = (FuncExpr *)e;
+    ListCell *lc;
+    if (f->funcid == constants->OID_FUNCTION_GATE_ONE)
+      return false;
+    if (f->funcid != constants->OID_FUNCTION_PROVENANCE_TIMES &&
+        f->funcid != constants->OID_FUNCTION_PROVENANCE_PLUS &&
+        f->funcid != constants->OID_FUNCTION_PROVENANCE_DELTA &&
+        f->funcid != constants->OID_FUNCTION_PROVENANCE_PROJECT &&
+        f->funcid != constants->OID_FUNCTION_PROVENANCE_EQ)
+      return true;
+    foreach (lc, f->args)
+      if (token_may_be_false(constants, q, (Node *)lfirst(lc)))
+        return true;
+    return false;
+  }
+  if (IsA(e, ArrayExpr)) {
+    ListCell *lc;
+    foreach (lc, ((ArrayExpr *)e)->elements)
+      if (token_may_be_false(constants, q, (Node *)lfirst(lc)))
+        return true;
+    return false;
+  }
+  if (IsA(e, Aggref) &&
+      ((Aggref *)e)->aggfnoid == constants->OID_FUNCTION_ARRAY_AGG) {
+    ListCell *lc;
+    foreach (lc, ((Aggref *)e)->args)
+      if (token_may_be_false(constants, q,
+                             (Node *)((TargetEntry *)lfirst(lc))->expr))
+        return true;
+    return false;
+  }
+  if (IsA(e, TargetEntry))
+    return token_may_be_false(constants, q,
+                              (Node *)((TargetEntry *)e)->expr);
+  return true;
+}
+
+/**
+ * @brief The row token a displayed aggregate value is filtered by, or
+ *        @c NULL when every row of @p q holds in the database as it is.
+ *
+ * The displayed value of an aggregate is PostgreSQL's aggregate over the
+ * rows the rewritten query keeps.  Some are kept only for their provenance,
+ * false in the actual data: the null-padded rows of a lowered outer join
+ * that do have a match, the groups a @c HAVING rejects, the rows beyond a
+ * rank-filtered @c LIMIT.  When @c token_may_be_false says such rows can
+ * reach the aggregate, the value reads only the rows whose token holds
+ * (@c plain_truth), so that it is the value plain SQL computes on the same
+ * data.  The comparisons on random variables among @p prov_atts have no
+ * value there and are left out.
+ */
+static Expr *plain_row_token(const constants_t *constants, Query *q,
+                             List *prov_atts, semiring_operation op) {
+  List *atts = NIL;
+  bool may_be_false = (op == SR_MONUS);
+  ListCell *lc;
+
+  if (op == SR_PLUS || !OidIsValid(constants->OID_FUNCTION_PLAIN_TRUTH))
+    return NULL;
+  foreach (lc, prov_atts) {
+    Node *a = (Node *)lfirst(lc);
+    if (!IsA(a, Var))
+      continue;
+    atts = lappend(atts, a);
+    if (!may_be_false && token_may_be_false(constants, q, a))
+      may_be_false = true;
+  }
+  if (!may_be_false || atts == NIL)
+    return NULL;
+  return make_row_token(constants, atts, op);
+}
+
 /* -------------------------------------------------------------------------
  * Aggregation replacement mutator
  * ------------------------------------------------------------------------- */
@@ -7111,6 +7263,7 @@ typedef struct aggregation_mutator_context {
   semiring_operation op;        ///< Semiring operation for combining tokens
   const constants_t *constants; ///< Extension OID cache
   bool is_scalar;               ///< Aggregation has no GROUP BY (single always-present row)
+  Expr *plain_token;            ///< Row token the displayed value is filtered by, or NULL
 } aggregation_mutator_context;
 
 /**
@@ -7129,7 +7282,8 @@ static Node *aggregation_mutator(Node *node, void *ctx) {
     Aggref *ar_v = (Aggref *)node;
     return (Node *)make_aggregation_expression(context->constants, ar_v,
                                                context->prov_atts, context->op,
-                                               context->is_scalar);
+                                               context->is_scalar,
+                                               context->plain_token);
   }
 
   return expression_tree_mutator(node, aggregation_mutator, ctx);
@@ -7652,7 +7806,9 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
    * always-present result row; mark its agg gates so the value-aware evaluators
    * treat the empty-input world as real (vs the "no row" of a grouped query). */
   bool is_scalar = (q->groupClause == NIL && q->groupingSets == NIL);
-  aggregation_mutator_context context = {prov_atts, op, constants, is_scalar};
+  aggregation_mutator_context context =
+    {prov_atts, op, constants, is_scalar,
+     plain_row_token(constants, q, prov_atts, op)};
   ListCell *lc;
 
   /* First push distributive constant arithmetic into aggregate arguments

@@ -125,7 +125,7 @@ INTERNAL_FUNCTIONS = {
     'true_nonzero',
     # Window ranks: built by the rewriter for rank() / dense_rank() /
     # row_number() over tracked relations, never called by users.
-    'row_number_as_rank', 'window_distinct_tokens',
+    'row_number_as_rank', 'window_distinct_tokens', 'plain_truth',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',

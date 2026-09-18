@@ -207,3 +207,9 @@ a|02-15-2020
 b|02-01-2020
 b|03-01-2020
 (4 rows)
+remove_provenance
+
+(1 row)
+n|cities
+2 (*)|Berlin,New York (*)
+(1 row)

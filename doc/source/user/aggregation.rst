@@ -26,6 +26,20 @@ gate marking the aggregation boundary:
 The resulting provenance token encodes *which* input tuples were combined
 to produce each aggregate value.
 
+The value displayed for an aggregate (``3 (*)``) is the one plain SQL
+computes on the same data, without provenance.  Some rows of a rewritten
+query are kept only for the worlds where they exist, and are absent from
+the database as it is: the null-padded row of an outer join for a row that
+does have a match, a group that a ``HAVING`` rejects, a row beyond an
+``ORDER BY … LIMIT``.  Such rows do not count in the displayed value; they
+do in its provenance.  Whether a row holds in the database as it is, every
+input tuple present, is :sqlfunc:`sr_boolean` without a mapping:
+
+.. code-block:: postgresql
+
+    SELECT e.name, p.project, sr_boolean(provenance())
+    FROM employees e LEFT JOIN projects p ON p.lead = e.id;
+
 NULL inputs are skipped exactly as SQL prescribes: a NULL-valued row
 contributes to ``count(*)`` but not to ``sum`` / ``avg`` / ``min`` /
 ``max`` or ``count(col)``, and an all-NULL group's aggregate is NULL --

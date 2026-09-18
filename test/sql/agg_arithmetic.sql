@@ -169,3 +169,12 @@ CROSS JOIN LATERAL generate_series(t2.min::timestamp, t1.max::timestamp,
                                    '1 month') g
 ORDER BY label, month;
 DROP TABLE agg_arith_dc, agg_arith_dates, agg_arith_dates_plain;
+
+-- The displayed value of an aggregate reads only the rows that hold in the
+-- database as it is: not the groups a HAVING of a subquery rejects.
+CREATE TABLE agg_arith_hv AS
+  SELECT count(*) AS n, string_agg(city, ',' ORDER BY city) AS cities
+  FROM (SELECT city FROM personnel GROUP BY city HAVING count(*) <= 2) t;
+SELECT remove_provenance('agg_arith_hv');
+SELECT n, cities FROM agg_arith_hv;
+DROP TABLE agg_arith_hv;

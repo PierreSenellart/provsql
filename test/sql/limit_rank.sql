@@ -176,6 +176,17 @@ SELECT * FROM lr_check('WITH TIES, first',
 \echo limit_rank: WITH TIES skipped on PostgreSQL < 13
 \endif
 
+-- An aggregate over a rank-filtered LIMIT displays the value of the rows
+-- the LIMIT keeps, as plain SQL does, not of every candidate row.
+CREATE TABLE lr_t AS
+  SELECT count(*) AS c, sum(x) AS s
+  FROM (SELECT x FROM lr ORDER BY x, id LIMIT 2) t;
+SELECT remove_provenance('lr_t');
+SELECT 'DISPLAY limit' AS q, c, s FROM lr_t;
+DROP TABLE lr_t;
+SELECT 'PLAIN limit' AS q, count(*) AS c, sum(x) AS s
+FROM (SELECT x FROM lr_plain ORDER BY x, id LIMIT 2) t;
+
 DROP FUNCTION lr_check(text, text);
 DROP VIEW lr_world.lr;
 DROP SCHEMA lr_world;

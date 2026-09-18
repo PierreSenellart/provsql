@@ -41,8 +41,10 @@ extern "C" {
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "provsql_utils.h"
+#include "provsql_mmap.h"
 
 PG_FUNCTION_INFO_V1(provenance_evaluate_compiled);
+PG_FUNCTION_INFO_V1(plain_truth);
 }
 
 #include <string>
@@ -397,4 +399,112 @@ Datum provenance_evaluate_compiled(PG_FUNCTION_ARGS)
   }
 
   PG_RETURN_NULL();
+}
+
+namespace {
+
+/** Truth of the gates already met, in the database as it is: a gate never
+ *  changes once created, nor does an input tuple's presence for the rows
+ *  that read it.  Bounded, so that a long session does not grow it forever. */
+std::unordered_map<std::string, bool> plain_truth_memo;
+constexpr size_t plain_truth_memo_max = 1000000;
+
+/** 1 / 0 for a gate whose truth follows from its type and its children's,
+ *  -1 for one that needs the full evaluation (a comparison, ...). */
+int quick_plain_truth(const pg_uuid_t &token, unsigned depth)
+{
+  std::string key = uuid2string(token);
+  auto it = plain_truth_memo.find(key);
+  if (it != plain_truth_memo.end())
+    return it->second;
+  if (depth > 64)
+    return -1;
+
+  unsigned nb_children = 0;
+  pg_uuid_t *children = NULL;
+  gate_type type = provsql_fetch_gate(&token, &nb_children, &children);
+  int res = -1;
+
+  switch (type) {
+  case gate_input: case gate_mulinput: case gate_one:
+    res = 1;
+    break;
+  case gate_zero:
+    res = 0;
+    break;
+  case gate_times: case gate_plus: {
+    bool is_times = type == gate_times;
+    res = is_times ? 1 : 0;
+    for (unsigned i = 0; i < nb_children; ++i) {
+      int c = quick_plain_truth(children[i], depth + 1);
+      if (c < 0) { res = -1; break; }
+      if (is_times && !c) { res = 0; break; }
+      if (!is_times && c) { res = 1; break; }
+    }
+    break;
+  }
+  case gate_monus:
+    if (nb_children == 2) {
+      int a = quick_plain_truth(children[0], depth + 1);
+      int b = a == 1 ? quick_plain_truth(children[1], depth + 1) : 0;
+      res = a < 0 || b < 0 ? -1 : (a && !b);
+    }
+    break;
+  case gate_delta: case gate_project: case gate_eq: case gate_annotation:
+  case gate_assumed:
+    if (nb_children >= 1)
+      res = quick_plain_truth(children[0], depth + 1);
+    break;
+  default:
+    break;
+  }
+  free(children);
+
+  if (res >= 0) {
+    if (plain_truth_memo.size() >= plain_truth_memo_max)
+      plain_truth_memo.clear();
+    plain_truth_memo.emplace(std::move(key), res == 1);
+  }
+  return res;
+}
+
+} // namespace
+
+/**
+ * @brief Whether a token holds in the database as it is, every input tuple
+ *        present: @c sr_boolean without a mapping.
+ *
+ * The rewriter filters by it the rows a displayed aggregate value reads, so
+ * that the value is what plain SQL computes on the same data: a row kept only
+ * for its provenance (the padding of a lowered outer join, a group a
+ * @c HAVING rejects, a row beyond a rank-filtered @c LIMIT) does not count.
+ * Gates whose truth follows from their children's (⊗, ⊕, ⊖, δ, ...) are
+ * walked directly, through the backend's gate cache; a comparison is left to
+ * the evaluation over the Boolean semiring, with no mapping to read.
+ */
+Datum plain_truth(PG_FUNCTION_ARGS)
+{
+  pg_uuid_t token;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_BOOL(true);
+  token = *PG_GETARG_UUID_P(0);
+
+  try {
+    int quick = quick_plain_truth(token, 0);
+    if (quick >= 0)
+      PG_RETURN_BOOL(quick == 1);
+
+    GenericCircuit c = getGenericCircuit(token);
+    gate_t g = c.getGate(uuid2string(token));
+    semiring::Boolean sr;
+    std::unordered_map<gate_t, bool> mapping;
+    provsql_having(c, g, mapping, sr);
+    PG_RETURN_BOOL(c.evaluate<semiring::Boolean>(g, mapping, sr));
+  } catch(const std::exception &e) {
+    provsql_error("plain_truth: %s", e.what());
+  } catch(...) {
+    provsql_error("plain_truth: Unknown exception");
+  }
+  PG_RETURN_BOOL(true);
 }

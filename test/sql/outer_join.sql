@@ -152,3 +152,40 @@ DROP TABLE oj_t;
 
 DROP TABLE oj_subl;
 DROP TABLE oj_subr;
+
+-- The displayed value of an aggregate is the one plain SQL computes: the
+-- null-padded rows kept for the worlds without a match are not counted
+-- where the row does have a match.
+CREATE TABLE oj_da(id int, v int);
+CREATE TABLE oj_db(id int, w int);
+INSERT INTO oj_da VALUES (1,10),(2,20),(3,30);
+INSERT INTO oj_db VALUES (1,5),(1,7),(2,8);
+CREATE TABLE oj_da_plain AS SELECT * FROM oj_da;
+CREATE TABLE oj_db_plain AS SELECT * FROM oj_db;
+SELECT add_provenance('oj_da');
+SELECT add_provenance('oj_db');
+CREATE TABLE oj_t AS
+  SELECT oj_da.id, count(*) AS c, count(w) AS cw, sum(w) AS s
+  FROM oj_da LEFT JOIN oj_db ON oj_da.id = oj_db.id GROUP BY oj_da.id;
+SELECT remove_provenance('oj_t');
+SELECT 'DISPLAY left' AS q, id, c, cw, s FROM oj_t ORDER BY id;
+DROP TABLE oj_t;
+SELECT 'PLAIN left' AS q, oj_da_plain.id, count(*) AS c, count(w) AS cw,
+       sum(w) AS s
+FROM oj_da_plain LEFT JOIN oj_db_plain ON oj_da_plain.id = oj_db_plain.id
+GROUP BY oj_da_plain.id ORDER BY 2;
+CREATE TABLE oj_t AS
+  SELECT count(*) AS c
+  FROM oj_da FULL JOIN oj_db ON oj_da.id = oj_db.id
+  WHERE oj_da.id IS NULL OR oj_db.id IS NULL;
+SELECT remove_provenance('oj_t');
+SELECT 'DISPLAY full' AS q, c FROM oj_t;
+DROP TABLE oj_t;
+-- The rows the padding keeps are false in the database as it is.
+CREATE TABLE oj_t AS
+  SELECT oj_da.id, w, sr_boolean(provenance()) AS holds
+  FROM oj_da LEFT JOIN oj_db ON oj_da.id = oj_db.id;
+SELECT remove_provenance('oj_t');
+SELECT 'HOLDS left' AS q, id, w, holds FROM oj_t ORDER BY id, w;
+DROP TABLE oj_t;
+DROP TABLE oj_da, oj_db, oj_da_plain, oj_db_plain;

@@ -105,3 +105,12 @@ id|p
 7|0.357290599567
 (1 row)
 limit_rank: WITH TIES skipped on PostgreSQL < 13
+remove_provenance
+
+(1 row)
+q|c|s
+DISPLAY limit|2 (*)|12 (*)
+(1 row)
+q|c|s
+PLAIN limit|2|12
+(1 row)

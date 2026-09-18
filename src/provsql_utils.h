@@ -240,6 +240,9 @@ typedef struct constants_t {
   /** @brief OID of the marker @c actual(), which keeps a LIMIT a truncation
    *  of the actual result; @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_ACTUAL;
+  /** @brief OID of @c plain_truth(), whether a token holds in the database
+   *  as it is; @c InvalidOid on a schema that predates it. */
+  Oid OID_FUNCTION_PLAIN_TRUTH;
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
   Oid OID_FUNCTION_GATE_ONE; ///< OID of the provenance_one FUNCTION
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION
