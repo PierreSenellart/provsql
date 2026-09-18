@@ -170,6 +170,19 @@ typedef enum provsql_route {
   PROVSQL_ROUTE_REACHABILITY = 3  ///< Recursive-reachability compiler (@c src/reachability_evaluate.cpp)
 } provsql_route;
 
+/** @brief The name of a route, as the probability dispatcher reports it
+ *         and as the annotation wrapper of a materialised root carries it
+ *         (@c "route:<name>"); NULL for @c PROVSQL_ROUTE_NONE. */
+static inline const char *provsql_route_name(provsql_route route)
+{
+  switch(route) {
+  case PROVSQL_ROUTE_SQ_REWRITE:   return "sq-rewrite";
+  case PROVSQL_ROUTE_BOUNDED_JW:   return "bounded-jw";
+  case PROVSQL_ROUTE_REACHABILITY: return "reachability";
+  default:                         return NULL;
+  }
+}
+
 /** Names of gate types */
 extern const char *gate_type_name[];
 

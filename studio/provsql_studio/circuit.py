@@ -706,10 +706,12 @@ def _parse_if_key(extra: str | None) -> dict | None:
 
 
 # provsql_route tags (src/provsql_utils.h), as the info fields carry them:
-# in info1 of a route's gate_assumed wrapper, and in info2 of a materialised
-# certified d-D root (whose info1 is DNNF_CERT_INFO).  The value is the name
-# probability_evaluate reports and accepts as a method.  Append-only on the
-# extension side, so unknown tags simply yield no marker here.
+# in info1 of a route's gate_assumed wrapper, and, in circuits stored before
+# the route went on an annotation wrapper of the root, in info2 of a
+# materialised certified d-D root (whose info1 is DNNF_CERT_INFO).  The value
+# is the name probability_evaluate reports and accepts as a method.
+# Append-only on the extension side, so unknown tags simply yield no marker
+# here.
 _ROUTE_BY_TAG = {
     "1": "sq-rewrite",
     "2": "bounded-jw",
@@ -732,9 +734,11 @@ def _elide_markers(
     truncation.  A
     ``gate_annotation`` carries the inversion-free certificate on a result root
     (``C``-prefixed ``extra``) or a per-input order key on a leaf
-    (``K``-prefixed) -- the IF badge plus inspector detail.  Either kind is a
-    no-op for evaluation; rendering it as its own circle would only push the
-    real gate down and add a letter the user must interpret.
+    (``K``-prefixed) -- the IF badge plus inspector detail -- or names the
+    route that produced a materialised root (``route:``-prefixed; the route
+    badge).  Either kind is a no-op for evaluation; rendering it as its own
+    circle would only push the real gate down and add a letter the user must
+    interpret.
 
     A surviving node may sit under wrappers of *both* kinds, in any order (e.g.
     an ``assumed`` over an ``annotation`` over the real root), so it can
@@ -790,6 +794,12 @@ def _elide_markers(
             route = _ROUTE_BY_TAG.get(str(by_id[w].get("info1")))
             if route is not None:
                 m["route"] = route
+        elif (by_id[w].get("extra") or "").startswith("route:"):
+            # The route that produced this root, named on a transparent
+            # annotation of its own ("route:<name>"): a root is addressed by
+            # its shape and may be built by other routes too, so the name is
+            # not written on the root itself.
+            m["route"] = by_id[w]["extra"][len("route:"):]
         else:
             m["inversion_free"] = True
             extra = by_id[w].get("extra")

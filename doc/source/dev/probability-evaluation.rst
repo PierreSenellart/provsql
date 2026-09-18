@@ -485,23 +485,27 @@ all three, plus a genuinely read-once circuit, report ``independent``.
 Circuit production (planner) and evaluation (here) are separate steps, so
 the *circuit* is the channel between them -- the same one ``mobius`` uses
 (a dedicated gate type) and ``inversion-free`` uses (a certificate in the
-root's ``extra``).  Each route stamps a ``provsql_route`` tag on the root it
-produces:
+root's ``extra``).  Each route marks the root it produces, on a gate the
+route owns rather than on the root itself: a materialised root is addressed
+by its shape, which another route or the ordinary rewriting may build too,
+and a gate records only what follows from its address.
 
 .. list-table::
    :header-rows: 1
    :widths: 22 78
 
    * - Route
-     - Where the tag lives
+     - Where the mark lives
    * - ``sq-rewrite``
      - ``info1`` of the ``gate_assumed`` wrapper minted by
        :sqlfunc:`assume_boolean` (the entry point the rewriter calls; the
        ``'boolean'`` assumption kind alone does not identify the route,
        since :sqlfunc:`provenance_assume` is public).
    * - ``bounded-jw``
-     - ``info2`` of the materialised d-D root, alongside ``DNNF_CERT_INFO``
-       in ``info1`` (``materializeCertifiedDD`` in :cfile:`CertifiedDDMaterialize.cpp`).
+     - the text ``route:bounded-jw`` of a transparent ``gate_annotation``
+       wrapping the materialised d-D root (``wrapRoute`` in
+       :cfile:`CertifiedDDMaterialize.cpp`); the root keeps
+       ``DNNF_CERT_INFO`` in ``info1``, a fact about the gate.
    * - ``reachability``
      - ``info1`` of the ``'absorptive'`` ``gate_assumed`` wrapper
        (``wrapAssumedAbsorptive``), and ``info2`` of the
@@ -509,9 +513,13 @@ produces:
        enough: the truncated-fixpoint path mints ``'absorptive'`` wrappers
        too.
 
-``rootRoute()`` in :cfile:`probability_evaluate.cpp` reads the tag back
-(skipping transparent ``gate_annotation`` wrappers, which sit *above* a
-route's root), and ``RouteMethod`` turns it into three catalog members.
+Circuits stored by earlier versions carry ``bounded-jw`` as a tag in
+``info2`` of the root itself; ``rootRoute()`` still reads it there.
+
+``rootRoute()`` in :cfile:`probability_evaluate.cpp` reads the mark back
+(walking down the transparent ``gate_annotation`` wrappers above a route's
+root, and stopping at one that names a route), and ``RouteMethod`` turns it
+into three catalog members.
 Their ``applicable()`` tests the tag, so exactly one of the four
 independent-sweep methods is admissible on any circuit and their identical
 ``estimatedCost`` never has to be tie-broken; ``IndependentMethod`` declines
@@ -523,8 +531,9 @@ wrong label.
 
 The tag is only read off the route's own root gate: a circuit that combines
 route output with further provenance is no longer that route's circuit and
-reports as the ordinary evaluation it is.  Because the tags are persisted in
-``info1`` / ``info2``, ``provsql_route`` is append-only like ``gate_type``.
+reports as the ordinary evaluation it is.  Because the tags are persisted
+(in ``info1`` / ``info2``, and by name in the annotation's text),
+``provsql_route`` is append-only like ``gate_type``.
 
 The probability methods do not funnel through
 :cfunc:`BooleanCircuit::makeDD`: ``TreeDecompositionMethod`` and

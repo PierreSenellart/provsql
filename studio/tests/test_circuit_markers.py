@@ -143,6 +143,23 @@ def test_elide_markers_route_tag_on_safe_query_wrapper():
     assert markers["t"]["route"] == "sq-rewrite"
 
 
+def test_elide_markers_reads_route_off_annotation_wrapper():
+    # The joint-width compiler names its route on a transparent annotation
+    # of the materialised root ("route:<name>"): the root itself, addressed
+    # by its shape, may be built by other routes and carries no route.  The
+    # wrapper is elided into the route badge, not the inversion-free one.
+    rows = [
+        {"node": "w", "parent": None, "child_pos": None,
+         "gate_type": "annotation", "extra": "route:bounded-jw"},
+        {"node": "t", "parent": "w", "child_pos": 0, "gate_type": "times",
+         "info1": "1"},
+    ]
+    _, new_root, markers = circuit._elide_markers(rows, "w")
+    assert new_root == "t"
+    assert markers["t"]["route"] == "bounded-jw"
+    assert "inversion_free" not in markers["t"]
+
+
 def test_elide_markers_untagged_assumed_wrapper_has_no_route():
     # A wrapper minted by the public provenance_assume carries no route tag,
     # so it badges the assumption without claiming a producing route.

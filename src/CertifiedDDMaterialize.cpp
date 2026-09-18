@@ -270,13 +270,16 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
     stack.pop_back();
   }
 
-  /* Stamp the producing route on each materialised root, in info2 (info1
-   * being the d-D certificate the root already carries), so the probability
+  /* Name the producing route on each materialised root, so the probability
    * dispatcher can report the route as its own evaluation method instead of
-   * the generic 'independent'.  Only a certified multi-wire AND/OR root is
-   * stamped: a root that collapsed to a bare leaf token, to a shared
-   * constant or to a single child is not a gate this materialisation owns,
-   * and its info fields are not ours to write. */
+   * the generic 'independent'.  The name goes on a transparent annotation
+   * wrapper of the root, "route:<name>", not on the root itself: a root is
+   * addressed by its shape, and another route, or the ordinary rewriting,
+   * may build the same gate; the wrapper's address hashes the name, so it
+   * records nothing that does not follow from its address.  Only a certified
+   * multi-wire AND/OR root is wrapped: a root that collapsed to a bare leaf
+   * token, to a shared constant or to a single child is not a gate this
+   * materialisation owns.  The map then points the root at its wrapper. */
   if (route != PROVSQL_ROUTE_NONE)
     for (const auto &r : roots) {
       const auto t = dd.getGateType(r);
@@ -285,11 +288,26 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
         continue;
       const auto it = uuid_of.find(r);
       if (it != uuid_of.end())
-        provsql_internal_set_infos(&it->second, DNNF_CERT_INFO,
-                                   static_cast<unsigned>(route));
+        it->second = wrapRoute(it->second, route);
     }
 
   return uuid_of;
+}
+
+pg_uuid_t wrapRoute(const pg_uuid_t &child, provsql_route route)
+{
+  static std::unordered_set<std::string> created;
+  constexpr std::size_t kCreatedCap = 1u << 20;
+  if (created.size() > kCreatedCap)
+    created.clear();
+
+  const std::string text = std::string("route:") + provsql_route_name(route);
+  const pg_uuid_t token =
+    provsqlUuidV5("annotation" + uuid2string(child) + text);
+  if (created.insert(uuid2string(token)).second)
+    provsql_internal_create_gate_with(&token, gate_annotation, 1, &child,
+                                      false, 0, 0, text.c_str());
+  return token;
 }
 
 pg_uuid_t wrapAssumedAbsorptive(const pg_uuid_t &child)

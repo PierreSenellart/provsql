@@ -69,6 +69,17 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
   provsql_route route = PROVSQL_ROUTE_NONE);
 
 /**
+ * @brief Wrap a materialised root in a transparent annotation naming the
+ *        route that produced it, @c "route:<name>", and return the
+ *        wrapper's UUID.
+ *
+ * The route is a fact about how the token was obtained, not about the gate,
+ * which another route or the ordinary rewriting may build too; so it goes on
+ * a gate of its own, whose address hashes the name.
+ */
+pg_uuid_t wrapRoute(const pg_uuid_t &child, provsql_route route);
+
+/**
  * @brief Wrap a materialised root in the @c 'absorptive' assumption
  *        marker and return the wrapper's UUID.
  *

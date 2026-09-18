@@ -1005,13 +1005,27 @@ provsql_route rootRoute(const GenericCircuit *gc, gate_t root)
 
   gate_t g = root;
   // Bounded walk: transparent annotation wrappers never nest deeply, and the
-  // bound keeps a malformed circuit from looping here.
+  // bound keeps a malformed circuit from looping here.  A wrapper whose text
+  // names a route ("route:<name>") is the route's own marker on the root it
+  // produced (see wrapRoute in CertifiedDDMaterialize.cpp).
   for(unsigned i = 0; i < 8; ++i) {
     if(gc->getGateType(g) != gate_annotation || gc->getWires(g).size() != 1)
       break;
+    const std::string text = gc->getExtra(g);
+    if(text.rfind("route:", 0) == 0) {
+      const std::string name = text.substr(6);
+      for(auto r : {PROVSQL_ROUTE_SQ_REWRITE, PROVSQL_ROUTE_BOUNDED_JW,
+                    PROVSQL_ROUTE_REACHABILITY})
+        if(name == provsql_route_name(r))
+          return r;
+      return PROVSQL_ROUTE_NONE;
+    }
     g = gc->getWires(g)[0];
   }
 
+  // The tag on the gate itself: info1 of a route's gate_assumed wrapper, or,
+  // for circuits stored before the route went on an annotation wrapper,
+  // info2 of the materialised root (info1 being its d-D certificate).
   const auto [info1, info2] = gc->getInfos(g);
   const unsigned tag =
     gc->getGateType(g) == gate_assumed ? info1

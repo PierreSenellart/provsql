@@ -31,7 +31,7 @@
     assumed:  'Assumption marker: the wrapped subcircuit is sound only '
             + 'under the named evaluation assumption (boolean / absorptive)',
     annotation: 'Annotation wrapper: query-level metadata (inversion-free '
-            + 'certificate / input order key)',
+            + 'certificate / input order key / producing route)',
     conditioned: 'Conditioned gate (∣): "A given B". Children are the '
             + 'target A and the evidence B (plus, for discrete events, '
             + 'their joint A∧B); P(A|B) = P(A∧B)/P(B). A terminal token: '
