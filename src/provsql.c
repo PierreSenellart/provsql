@@ -8399,6 +8399,22 @@ static bool replace_window_aggregations(const constants_t *constants,
   ListCell *lc;
   AttrNumber resno = list_length(q->targetList);
 
+  /* A window partitioned or ordered by an uncertain value (an aggregate or
+   * window result of a subquery) has other frames in other worlds: it runs
+   * on the plain values (sort_on_plain_values). */
+  foreach (lc, q->windowClause) {
+    WindowClause *wc = (WindowClause *)lfirst(lc);
+    List *keys = list_concat(list_copy(wc->partitionClause),
+                             wc->orderClause);
+    ListCell *lk;
+    foreach (lk, keys) {
+      TargetEntry *te = get_sortgroupclause_tle(
+        (SortGroupClause *)lfirst(lk), q->targetList);
+      if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
+        return false;
+    }
+  }
+
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     Expr *orig;
@@ -14437,6 +14453,28 @@ static void cast_agg_token_args(List *args,
   }
 }
 
+/** @brief Walker: the type of the first @c CaseTestExpr below @p node. */
+static bool case_test_type_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, CaseTestExpr)) {
+    *(Oid *)cx = ((CaseTestExpr *)node)->typeId;
+    return true;
+  }
+  return expression_tree_walker(node, case_test_type_walker, cx);
+}
+
+/** @brief The type of the tested value of a simple @c CASE, as its WHEN
+ *  comparisons read it, or @c InvalidOid. */
+static Oid case_test_type(List *whens) {
+  Oid t = InvalidOid;
+  ListCell *lc;
+  foreach (lc, whens)
+    if (case_test_type_walker((Node *)((CaseWhen *)lfirst(lc))->expr, &t))
+      break;
+  return t;
+}
+
 /**
  * @brief Cast one @c agg_token expression read as a value of type @p type:
  *        a subquery's aggregate column to its own type (else @p type), any
@@ -14537,6 +14575,13 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     CaseExpr *ce = (CaseExpr *)node;
     Oid agg = ctx->constants->OID_TYPE_AGG_TOKEN;
     ListCell *lc;
+    /* CASE rn WHEN 1 ...: the tested value, in the type its placeholder in
+     * the WHEN comparisons was given. */
+    if (ce->arg != NULL && exprType((Node *)ce->arg) == agg) {
+      Oid tested = case_test_type(ce->args);
+      if (OidIsValid(tested))
+        ce->arg = (Expr *)cast_agg_token_node((Node *)ce->arg, tested, ctx);
+    }
     foreach (lc, ce->args) {
       CaseWhen *cw = (CaseWhen *)lfirst(lc);
       if (exprType((Node *)cw->expr) == agg)
@@ -17568,63 +17613,100 @@ static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
 static void sort_on_plain_values(const constants_t *constants, Query *q,
                                  bool top_level) {
   ListCell *lc;
-  bool sorted = false;
+  bool sorted = false, windowed = false;
+  List *moved = NIL;   /* pairs (old ref, new ref) of the keys moved */
+  List **lists[1 + 32];
+  int nlists = 0, k;
 
-  foreach (lc, q->sortClause) {
-    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
-    TargetEntry *te = get_sortgroupclause_tle(sgc, q->targetList);
-    Oid ltype, rtype;
-    Node *key;
-    TargetEntry *junk;
+  lists[nlists++] = &q->sortClause;
+  foreach (lc, q->windowClause) {
+    WindowClause *wc = (WindowClause *)lfirst(lc);
+    if (nlists + 2 > (int)lengthof(lists))
+      break;
+    lists[nlists++] = &wc->partitionClause;
+    lists[nlists++] = &wc->orderClause;
+  }
 
-    if (exprType((Node *)te->expr) != constants->OID_TYPE_AGG_TOKEN ||
-        !OidIsValid(sgc->sortop))
-      continue;
-    {
-      ListCell *lc2;
-      bool shared = false;
-      foreach (lc2, q->groupClause)
-        if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
-            sgc->tleSortGroupRef)
-          shared = true;
-      foreach (lc2, q->distinctClause)
-        if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
-            sgc->tleSortGroupRef)
-          shared = true;
-      if (shared)
+  for (k = 0; k < nlists; ++k) {
+    foreach (lc, *lists[k]) {
+      SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+      TargetEntry *te = get_sortgroupclause_tle(sgc, q->targetList);
+      Oid ltype, rtype;
+      Node *key;
+      TargetEntry *junk;
+      ListCell *lm;
+      bool done = false;
+
+      if (exprType((Node *)te->expr) != constants->OID_TYPE_AGG_TOKEN)
         continue;
-    }
-    if (!OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT))
-      provsql_error("ORDER BY on the result of an aggregate function is not "
-                    "supported by this version of the provsql schema; run "
-                    "ALTER EXTENSION provsql UPDATE");
-    op_input_types(sgc->sortop, &ltype, &rtype);
+      /* A key already moved (the same column in two clauses). */
+      for (lm = list_head(moved); lm != NULL; lm = my_lnext(moved, my_lnext(moved, lm)))
+        if ((Index)lfirst_int(lm) == sgc->tleSortGroupRef) {
+          sgc->tleSortGroupRef = lfirst_int(my_lnext(moved, lm));
+          done = true;
+          break;
+        }
+      if (done) {
+        if (k == 0) sorted = true; else windowed = true;
+        continue;
+      }
+      if (k == 0) {
+        ListCell *lc2;
+        bool shared = false;
+        foreach (lc2, q->groupClause)
+          if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
+              sgc->tleSortGroupRef)
+            shared = true;
+        foreach (lc2, q->distinctClause)
+          if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
+              sgc->tleSortGroupRef)
+            shared = true;
+        if (shared)
+          continue;
+      }
+      if (OidIsValid(sgc->sortop))
+        op_input_types(sgc->sortop, &ltype, &rtype);
+      else if (OidIsValid(sgc->eqop))
+        op_input_types(sgc->eqop, &ltype, &rtype);
+      else
+        continue;
+      if (!OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT))
+        provsql_error("ORDER BY on the result of an aggregate function is not "
+                      "supported by this version of the provsql schema; run "
+                      "ALTER EXTENSION provsql UPDATE");
 
-    key = (Node *)makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT,
-                               TEXTOID,
-                               list_make1(copyObject(te->expr)),
-                               DEFAULT_COLLATION_OID, InvalidOid,
-                               COERCE_EXPLICIT_CALL);
-    if (ltype != TEXTOID) {
-      CoerceViaIO *io = makeNode(CoerceViaIO);
-      io->arg = (Expr *)key;
-      io->resulttype = ltype;
-      io->resultcollid = get_typcollation(ltype);
-      io->coerceformat = COERCE_IMPLICIT_CAST;
-      io->location = -1;
-      key = (Node *)io;
+      key = (Node *)makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT,
+                                 TEXTOID,
+                                 list_make1(copyObject(te->expr)),
+                                 DEFAULT_COLLATION_OID, InvalidOid,
+                                 COERCE_EXPLICIT_CALL);
+      if (ltype != TEXTOID) {
+        CoerceViaIO *io = makeNode(CoerceViaIO);
+        io->arg = (Expr *)key;
+        io->resulttype = ltype;
+        io->resultcollid = get_typcollation(ltype);
+        io->coerceformat = COERCE_IMPLICIT_CAST;
+        io->location = -1;
+        key = (Node *)io;
+      }
+      junk = makeTargetEntry((Expr *)key, list_length(q->targetList) + 1,
+                             NULL, true);
+      junk->ressortgroupref = assignSortGroupRef(junk, q->targetList);
+      moved = lappend_int(lappend_int(moved, sgc->tleSortGroupRef),
+                          junk->ressortgroupref);
+      sgc->tleSortGroupRef = junk->ressortgroupref;
+      q->targetList = lappend(q->targetList, junk);
+      if (k == 0) sorted = true; else windowed = true;
     }
-    junk = makeTargetEntry((Expr *)key, list_length(q->targetList) + 1,
-                           NULL, true);
-    junk->ressortgroupref = te->ressortgroupref;
-    te->ressortgroupref = 0;
-    q->targetList = lappend(q->targetList, junk);
-    sorted = true;
   }
   if (sorted && top_level)
     provsql_warning("ORDER BY on an aggregate result sorts on its plain "
                     "value, the one computed on the database as it is, "
                     "disregarding provenance");
+  if (windowed)
+    provsql_warning("window partitioned or ordered by an aggregate result: "
+                    "it is computed on the plain values, those of the "
+                    "database as it is, disregarding provenance");
 }
 
 static Query *process_query(const constants_t *constants, Query *q,

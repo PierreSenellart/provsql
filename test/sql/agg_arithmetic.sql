@@ -247,3 +247,20 @@ CREATE TABLE agg_arith_fn AS
 SELECT remove_provenance('agg_arith_fn');
 SELECT city, v, d FROM agg_arith_fn ORDER BY city;
 DROP TABLE agg_arith_fn;
+
+-- A simple CASE on a window value of a CTE, and windows partitioned or
+-- ordered by aggregate results: on the plain values, with a warning.
+CREATE TABLE agg_arith_fn AS
+  WITH w AS (SELECT id, rank() OVER (ORDER BY id) AS rn FROM personnel)
+  SELECT id, CASE rn WHEN 1 THEN 'first' WHEN 2 THEN 'second' END AS d
+  FROM w;
+SELECT remove_provenance('agg_arith_fn');
+SELECT id, d FROM agg_arith_fn WHERE d IS NOT NULL ORDER BY id;
+DROP TABLE agg_arith_fn;
+CREATE TABLE agg_arith_fn AS
+  SELECT city, c, rank() OVER (ORDER BY c DESC, city) AS r,
+         sum(c) OVER (PARTITION BY c) AS s
+  FROM (SELECT city, count(*) AS c FROM personnel GROUP BY city) t;
+SELECT remove_provenance('agg_arith_fn');
+SELECT city, c, r, s FROM agg_arith_fn ORDER BY city;
+DROP TABLE agg_arith_fn;

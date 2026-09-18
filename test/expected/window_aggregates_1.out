@@ -107,6 +107,7 @@ id|prev|half|pr|last2
 6|5|2|1|12
 (6 rows)
 WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
+WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: it is computed on the plain values, those of the database as it is, disregarding provenance
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 remove_provenance
