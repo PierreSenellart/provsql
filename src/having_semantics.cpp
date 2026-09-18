@@ -11,9 +11,12 @@ extern "C" {
 #include "postgres.h"
 #include "catalog/pg_type.h"
 #include "utils/lsyscache.h"
+#include "utils/typcache.h"
+#include "fmgr.h"
 }
 #include "c_cpp_compatibility.h"
 
+#include <algorithm>
 #include <climits>
 #include <strings.h>
 #include <string>
@@ -72,6 +75,49 @@ bool aggtype_is_numeric(unsigned oid) {
     default:
       return false;
   }
+}
+
+// Dense ranks of the values and of the threshold under the comparison
+// function of their type (a date, a timestamp...), read by the type's input
+// function from the text the gates hold.
+bool rank_values_by_type(unsigned typoid, const std::vector<std::string> &vals,
+                         const std::string &threshold,
+                         std::vector<long> &ranks, long &threshold_rank) {
+  TypeCacheEntry *tce = lookup_type_cache(typoid, TYPECACHE_CMP_PROC_FINFO);
+  if (tce == NULL || !OidIsValid(tce->cmp_proc))
+    return false;
+  Oid typinput, typioparam;
+  getTypeInputInfo(typoid, &typinput, &typioparam);
+  Oid collation = get_typcollation(typoid);
+
+  std::vector<Datum> datums;
+  datums.reserve(vals.size() + 1);
+  for (const auto &v : vals)
+    datums.push_back(OidInputFunctionCall(typinput, const_cast<char *>(v.c_str()),
+                                          typioparam, -1));
+  datums.push_back(OidInputFunctionCall(typinput,
+                                        const_cast<char *>(threshold.c_str()),
+                                        typioparam, -1));
+
+  auto cmp = [&](size_t a, size_t b) -> int {
+    return DatumGetInt32(FunctionCall2Coll(&tce->cmp_proc_finfo, collation,
+                                           datums[a], datums[b]));
+  };
+  std::vector<size_t> order(datums.size());
+  for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+  std::sort(order.begin(), order.end(),
+            [&](size_t a, size_t b) { return cmp(a, b) < 0; });
+
+  std::vector<long> rank(datums.size());
+  long r = 0;
+  for (size_t k = 0; k < order.size(); ++k) {
+    if (k > 0 && cmp(order[k - 1], order[k]) != 0)
+      ++r;
+    rank[order[k]] = r;
+  }
+  ranks.assign(rank.begin(), rank.end() - 1);
+  threshold_rank = rank.back();
+  return true;
 }
 
 // Parse a PostgreSQL array output literal -- "{1,2}", "{a,\"b,c\"}" -- into its

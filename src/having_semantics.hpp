@@ -46,6 +46,16 @@ bool aggtype_is_boolean(unsigned oid);
 // (scalar 'true'/'false' vs array-element 't'/'f').
 bool aggtype_elem_is_boolean(unsigned oid);
 bool aggtype_is_numeric(unsigned oid);
+
+/**
+ * @brief Map values of type @p typoid, given as text, and a threshold to
+ *        their dense ranks under the type's comparison function.
+ *
+ * @return @c false when the type has no comparison function.
+ */
+bool rank_values_by_type(unsigned typoid, const std::vector<std::string> &vals,
+                         const std::string &threshold,
+                         std::vector<long> &ranks, long &threshold_rank);
 /**
  * @brief UUID of the constant value gate standing for the NULL value: the
  *        result of the SQL function @c gate_null() (test @c agg_filter checks
@@ -599,6 +609,97 @@ void provsql_having(
         return true;
       }
 
+      // The possible worlds of an aggregate over integer-mapped values
+      // compared with an integer threshold: the closed forms, or the
+      // enumeration.
+      auto finish_domain = [&](const std::vector<long> &mvals, long C,
+                               const std::vector<typename SemiringT::value_type> &kvals)
+        -> bool {
+        // A certified enumeration needs the *complete* valid worlds (every
+        // contributor present or explicitly negated): the upset shortcut
+        // and the monotone MIN/MAX skips below produce overlapping,
+        // non-exclusive disjuncts, sound for absorptive evaluation but
+        // unmarkable.  When certifying, request the full enumeration --
+        // the same one non-absorptive semirings already use.
+        const bool certify = certifiable_contributors(kvals);
+
+        // MIN / MAX in an absorptive semiring: the single-scan closed form
+        // replaces the 2^n world enumeration -- for the existential
+        // comparisons (MIN below, MAX above the constant) in every
+        // absorptive semiring, for the others only when ⊗ distributes over
+        // ⊖ (see min_max_scan).  A certifying semiring keeps the
+        // enumeration, whose exclusive world terms its certificate needs.
+        if ((agg_kind == AggregationOperator::MIN ||
+             agg_kind == AggregationOperator::MAX) &&
+            S.absorptive() && !certify) {
+          const bool existential =
+            (agg_kind == AggregationOperator::MIN)
+              ? (effective_op == ComparisonOperator::LT ||
+                 effective_op == ComparisonOperator::LE)
+              : (effective_op == ComparisonOperator::GT ||
+                 effective_op == ComparisonOperator::GE);
+          if (existential || S.mul_sub_left_distributive()) {
+            pw_out = min_max_scan(mvals, C, kvals, effective_op, agg_kind);
+            return true;
+          }
+        }
+
+        bool upset = false;
+        auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind,
+                                             certify ? false : S.absorptive(),
+                                             upset, is_scalar);
+
+        // Comparisons preserved as the group grows, whose valid worlds are
+        // therefore closed under supersets: MIN below and MAX above the
+        // constant, COUNT above it (count(col) carries 0/1 values), SUM
+        // above it when no contributor is negative.
+        const bool above = (effective_op == ComparisonOperator::GT ||
+                            effective_op == ComparisonOperator::GE);
+        const bool below = (effective_op == ComparisonOperator::LT ||
+                            effective_op == ComparisonOperator::LE);
+        bool monotone = false;
+        switch (agg_kind) {
+        case AggregationOperator::MIN:   monotone = below; break;
+        case AggregationOperator::MAX:   monotone = above; break;
+        case AggregationOperator::COUNT: monotone = above; break;
+        case AggregationOperator::SUM:
+          monotone = above &&
+            std::all_of(mvals.begin(), mvals.end(), [](long v) { return v >= 0; });
+          break;
+        default: break;
+        }
+
+        pw_out = combine_exhaustive_worlds(worlds, kvals, upset, monotone);
+        return true;
+      };
+
+      // ---- Ordered domain: MIN / MAX over a type that is neither numeric nor
+      //      text (date, timestamp, ...).  Their value in a world only depends
+      //      on the order of the values, so values and threshold are mapped to
+      //      their ranks under the type's own comparison function, and the
+      //      integer machinery below applies. ----
+      if (!aggtype_is_numeric(aggtype) &&
+          (agg_kind == AggregationOperator::MIN ||
+           agg_kind == AggregationOperator::MAX)) {
+        std::string C_str;
+        if (!extract_constant_string(c, const_side, C_str)) return false;
+        std::vector<std::string> m_strs;
+        std::vector<typename SemiringT::value_type> kvals;
+        for (gate_t ch : children) {
+          if (c.getGateType(ch) != gate_semimod) return false;
+          std::string m_str;
+          gate_t k_gate{};
+          if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
+          m_strs.push_back(m_str);
+          kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
+        }
+        std::vector<long> ranks;
+        long C_rank = 0;
+        if (!rank_values_by_type(aggtype, m_strs, C_str, ranks, C_rank))
+          return false;
+        return finish_domain(ranks, C_rank, kvals);
+      }
+
       // ---- Numeric comparison domain (int / numeric / float): unify by
       //      scaling every value and the threshold to a common integer
       //      grid by their decimal text, so a numeric(p,d) / finite-decimal
@@ -636,62 +737,7 @@ void provsql_having(
       for (size_t i = 0; i < m_mant.size(); ++i)
         if (!rescale_to(m_mant[i], m_scale[i], target_scale, mvals[i])) return false;
 
-      // A certified enumeration needs the *complete* valid worlds (every
-      // contributor present or explicitly negated): the upset shortcut
-      // and the monotone MIN/MAX skips below produce overlapping,
-      // non-exclusive disjuncts, sound for absorptive evaluation but
-      // unmarkable.  When certifying, request the full enumeration --
-      // the same one non-absorptive semirings already use.
-      const bool certify = certifiable_contributors(kvals);
-
-      // MIN / MAX in an absorptive semiring: the single-scan closed form
-      // replaces the 2^n world enumeration -- for the existential
-      // comparisons (MIN below, MAX above the constant) in every
-      // absorptive semiring, for the others only when ⊗ distributes over
-      // ⊖ (see min_max_scan).  A certifying semiring keeps the
-      // enumeration, whose exclusive world terms its certificate needs.
-      if ((agg_kind == AggregationOperator::MIN ||
-           agg_kind == AggregationOperator::MAX) &&
-          S.absorptive() && !certify) {
-        const bool existential =
-          (agg_kind == AggregationOperator::MIN)
-            ? (effective_op == ComparisonOperator::LT ||
-               effective_op == ComparisonOperator::LE)
-            : (effective_op == ComparisonOperator::GT ||
-               effective_op == ComparisonOperator::GE);
-        if (existential || S.mul_sub_left_distributive()) {
-          pw_out = min_max_scan(mvals, C, kvals, effective_op, agg_kind);
-          return true;
-        }
-      }
-
-      bool upset = false;
-      auto worlds = enumerate_valid_worlds(mvals, C, effective_op, agg_kind,
-                                           certify ? false : S.absorptive(),
-                                           upset, is_scalar);
-
-      // Comparisons preserved as the group grows, whose valid worlds are
-      // therefore closed under supersets: MIN below and MAX above the
-      // constant, COUNT above it (count(col) carries 0/1 values), SUM
-      // above it when no contributor is negative.
-      const bool above = (effective_op == ComparisonOperator::GT ||
-                          effective_op == ComparisonOperator::GE);
-      const bool below = (effective_op == ComparisonOperator::LT ||
-                          effective_op == ComparisonOperator::LE);
-      bool monotone = false;
-      switch (agg_kind) {
-      case AggregationOperator::MIN:   monotone = below; break;
-      case AggregationOperator::MAX:   monotone = above; break;
-      case AggregationOperator::COUNT: monotone = above; break;
-      case AggregationOperator::SUM:
-        monotone = above &&
-          std::all_of(mvals.begin(), mvals.end(), [](long v) { return v >= 0; });
-        break;
-      default: break;
-      }
-
-      pw_out = combine_exhaustive_worlds(worlds, kvals, upset, monotone);
-      return true;
+      return finish_domain(mvals, C, kvals);
     };
 
     // General possible-worlds evaluation for a comparison over an *arithmetic
@@ -723,6 +769,18 @@ void provsql_having(
       std::map<gate_t, int> kindex;
       std::vector<gate_t> kgates;
 
+      // A number, the whole text of it: a date such as 2022-08-05 is not
+      // 2022.
+      auto parse_number = [](const std::string &s, double &out) -> bool {
+        try {
+          std::size_t pos = 0;
+          out = std::stod(s, &pos);
+          return pos == s.size();
+        } catch (...) {
+          return false;
+        }
+      };
+
       std::function<bool(gate_t)> collect = [&](gate_t gx) -> bool {
         gate_type gt = c.getGateType(gx);
         if (gt == gate_agg) {
@@ -749,7 +807,7 @@ void provsql_having(
             } else
               idx = it->second;
             double m;
-            try { m = std::stod(ms); } catch (...) { return false; }
+            if (!parse_number(ms, m)) return false;
             ai.contribs.emplace_back(idx, m);
           }
           aggs.emplace(gx, std::move(ai));
@@ -788,14 +846,14 @@ void provsql_having(
         gate_type gt = c.getGateType(gx);
         if (gt == gate_value) {
           std::string s = c.getExtra(gx);
-          try { out = std::stod(s); } catch (...) { return false; }
+          if (!parse_number(s, out)) return false;
           is_int = text_is_int(s);
           return true;
         }
         if (gt == gate_semimod) {       // constant threshold
           std::string ms; gate_t kg{};
           if (!semimod_extract_string_and_K(c, gx, ms, kg)) return false;
-          try { out = std::stod(ms); } catch (...) { return false; }
+          if (!parse_number(ms, out)) return false;
           is_int = text_is_int(ms);
           return true;
         }
