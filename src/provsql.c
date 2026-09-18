@@ -246,7 +246,9 @@ static Node *reduce_varattno_mutator(Node *node, void *ctx) {
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
 
-    if (v->varno == context->varno) {
+    /* A whole-row reference (attribute 0) or a system column keeps its
+     * number. */
+    if (v->varno == context->varno && v->varattno > 0) {
       v->varattno += context->offset[v->varattno - 1];
     }
   }

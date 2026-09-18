@@ -684,3 +684,13 @@ pid|sid|sorted|p
 2|20||0.5000
 (3 rows)
 ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+p|k|n
+1|1|2
+1|3|2
+(2 rows)

@@ -1249,3 +1249,24 @@ WHERE d.sid NOT IN (SELECT d2.sid FROM pj_det d2
 
 DROP TABLE pj_photo;
 DROP TABLE pj_det;
+
+-- A whole-row reference to a subquery whose rows are filtered by a correlated
+-- EXISTS: the reference keeps attribute number 0 when the provenance column of
+-- the subquery is renumbered.
+CREATE TABLE ssw(id int, p int, k int, t int, pos int);
+INSERT INTO ssw VALUES (1,1,1,1,1),(2,1,2,1,2),(3,1,3,1,1),(4,1,4,1,3),
+  (5,1,1,2,3),(6,1,2,2,1),(7,1,3,2,5),(8,1,4,2,6);
+SELECT add_provenance('ssw');
+CREATE TABLE ssw_r AS
+  SELECT p, k, json_agg(sub) AS rows
+  FROM (SELECT p, k, t, pos FROM ssw w
+        WHERE EXISTS (SELECT 1 FROM ssw WHERE pos = 1 AND t = 1
+                                         AND p = w.p AND k = w.k)
+        ORDER BY 1, 2, 3, 4) sub
+  GROUP BY p, k;
+SELECT remove_provenance('ssw_r');
+SELECT p, k,
+       json_array_length(regexp_replace(
+         agg_token_value_text(agg_token_uuid(rows)), ' \(\*\)$', '')::json) AS n
+FROM ssw_r ORDER BY p, k;
+DROP TABLE ssw_r, ssw;
