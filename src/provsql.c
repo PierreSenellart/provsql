@@ -6757,6 +6757,8 @@ static Query *build_inner_for_distinct_key(Query *q, Expr *key_expr,
   inner->distinctClause = NIL;
   inner->hasDistinctOn = false;
   inner->havingQual  = NULL;
+  inner->windowClause = NIL;
+  inner->hasWindowFuncs = false;
 
   /* First column: the DISTINCT key */
   {
@@ -7142,6 +7144,9 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
                                           (void *)constants)) {
       /* Expression contains provenance() – skip it, it will be
        * handled later by the provenance rewriter */
+    } else if (contain_windowfuncs((Node *)te->expr)) {
+      /* A window over the groups (rank() OVER (ORDER BY count(DISTINCT x))):
+       * computed at this level, after the grouping; not a key. */
     } else {
       /* Aggregate-free column – treat as GROUP BY key */
       TargetEntry *te_copy = copyObject(te);
