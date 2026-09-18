@@ -234,3 +234,16 @@ CREATE TABLE agg_arith_fn AS
 SELECT remove_provenance('agg_arith_fn');
 SELECT r FROM agg_arith_fn;
 DROP TABLE agg_arith_fn;
+
+-- CASE over a subquery's aggregates: the branches are read as values of the
+-- CASE's type, a boolean aggregate as the condition (it read the agg_token
+-- as a numeric).
+CREATE TABLE agg_arith_fn AS
+  SELECT city, CASE WHEN c > 2 THEN m ELSE 0 END AS v,
+         CASE WHEN has_dir THEN 'yes' ELSE 'no' END AS d
+  FROM (SELECT city, count(*) AS c, max(id) AS m,
+               bool_or(position = 'Director') AS has_dir
+        FROM personnel GROUP BY city) t;
+SELECT remove_provenance('agg_arith_fn');
+SELECT city, v, d FROM agg_arith_fn ORDER BY city;
+DROP TABLE agg_arith_fn;

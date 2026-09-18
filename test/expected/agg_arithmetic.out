@@ -268,3 +268,18 @@ remove_provenance
 r
 2.333
 (1 row)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to boolean: provenance information is lost
+remove_provenance
+
+(1 row)
+city|v|d
+Berlin|0|no
+New York|0|yes
+Paris|6|no
+(3 rows)

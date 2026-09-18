@@ -14415,6 +14415,21 @@ static void cast_agg_token_args(List *args,
 }
 
 /**
+ * @brief Cast one @c agg_token expression read as a value of type @p type:
+ *        a subquery's aggregate column to its own type (else @p type), any
+ *        other @c agg_token to @p type.
+ */
+static Node *cast_agg_token_node(Node *n, Oid type,
+                                 insert_agg_token_casts_context *ctx) {
+  if (IsA(n, Var)) {
+    List *l = list_make1(n);
+    cast_agg_token_in_list(list_head(l), ctx, true, type);
+    return (Node *)linitial(l);
+  }
+  return cast_agg_token_to_type(n, type, ctx->constants);
+}
+
+/**
  * @brief Cast the @c agg_token arguments of an operator or function that
  *        reads values.
  *
@@ -14491,6 +14506,26 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     FuncExpr *fe = (FuncExpr *)node;
     if (fe->funcid != ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
       cast_agg_token_func_args(fe->args, fe->funcid, ctx);
+    return node;
+  }
+  if (IsA(node, CaseExpr)) {
+    /* CASE WHEN c THEN avg_col ELSE 0 END: the branches are read as values
+     * of the CASE's type, the conditions as booleans. */
+    CaseExpr *ce = (CaseExpr *)node;
+    Oid agg = ctx->constants->OID_TYPE_AGG_TOKEN;
+    ListCell *lc;
+    foreach (lc, ce->args) {
+      CaseWhen *cw = (CaseWhen *)lfirst(lc);
+      if (exprType((Node *)cw->expr) == agg)
+        cw->expr = (Expr *)cast_agg_token_node((Node *)cw->expr, BOOLOID, ctx);
+      if (ce->casetype != agg && exprType((Node *)cw->result) == agg)
+        cw->result = (Expr *)cast_agg_token_node((Node *)cw->result,
+                                                 ce->casetype, ctx);
+    }
+    if (ce->casetype != agg && ce->defresult != NULL &&
+        exprType((Node *)ce->defresult) == agg)
+      ce->defresult = (Expr *)cast_agg_token_node((Node *)ce->defresult,
+                                                  ce->casetype, ctx);
     return node;
   }
   if (IsA(node, WindowFunc)) {
