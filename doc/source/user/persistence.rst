@@ -39,11 +39,11 @@ transactional undo, that makes rollback harmless:
   is left as the transaction found it -- including at savepoint
   granularity.
 
-  The same holds for a gate's annotations, the integer pair
-  ``set_infos`` records and the string ``set_extra`` attaches: each is
+  The same holds for what a gate records besides its children, an
+  integer pair and a string, given when the gate is created: each is
   written once and accepts the value it already holds.
-  They are not cleared on rollback, and do not need to be -- an
-  annotation is a function of the gate, so a rolled-back write leaves the
+  They are not cleared on rollback, and do not need to be -- what a gate
+  records is a function of its address, so a rolled-back write leaves the
   field holding the value any later writer would have written.
 
   To give a tuple a *different* probability, give it a different input

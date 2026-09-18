@@ -11,6 +11,14 @@
 -- written another text, the reference would fail with "already records".
 
 CREATE SCHEMA gba_ref;
+-- The former bodies annotated the gate after creating it, through set_infos
+-- and set_extra, which no longer exist: what a gate records is given when it
+-- is created.  Here they are no-ops; the address is what the reference is
+-- for, and what the C function recorded is checked directly.
+CREATE FUNCTION gba_ref.set_infos(token uuid, info1 int, info2 int DEFAULT NULL) RETURNS void
+  LANGUAGE sql AS $$ SELECT $$;
+CREATE FUNCTION gba_ref.set_extra(token uuid, data text) RETURNS void
+  LANGUAGE sql AS $$ SELECT $$;
 
 CREATE FUNCTION gba_ref.provenance_aggregate(
     aggfnoid integer,
@@ -51,9 +59,9 @@ BEGIN
       uuid_ns_provsql(),
       concat('agg',aggfnoid,tokens,CASE WHEN is_scalar THEN 'S' ELSE '' END));
     PERFORM create_gate(agg_tok, 'agg', tokens);
-    PERFORM set_infos(agg_tok, aggfnoid,
+    PERFORM gba_ref.set_infos(agg_tok, aggfnoid,
                       CASE WHEN is_scalar THEN aggtype | (-2147483648) ELSE aggtype END);
-    PERFORM set_extra(agg_tok, agg_val);
+    PERFORM gba_ref.set_extra(agg_tok, agg_val);
   END IF;
 
   RETURN '( '||agg_tok||' , '||agg_val||' )';
@@ -82,7 +90,7 @@ BEGIN
 
   --create value gates
   PERFORM create_gate(value_token,'value');
-  PERFORM set_extra(value_token, CAST(val AS VARCHAR));
+  PERFORM gba_ref.set_extra(value_token, CAST(val AS VARCHAR));
 
   --create semimod gate
   PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
@@ -107,7 +115,7 @@ BEGIN
     INTO semimod_token;
 
   PERFORM create_gate(value_token,'value');
-  PERFORM set_extra(value_token, 'NULL');
+  PERFORM gba_ref.set_extra(value_token, 'NULL');
 
   PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
 
@@ -456,8 +464,8 @@ SELECT provsql.provenance_aggregate(2108, 23, NULL::text, ARRAY[gba_leaf(93)]) I
 -- worker's answer, since the address determines the infos and the text.  If
 -- something else was recorded at that address by hand, the first value stays
 -- (the worker logs it), and the query goes on.
-SELECT provsql.create_gate(public.uuid_generate_v5(provsql.uuid_ns_provsql(), 'valuegba by hand'), 'value');
-SELECT provsql.set_extra(public.uuid_generate_v5(provsql.uuid_ns_provsql(), 'valuegba by hand'), 'something else');
+SELECT provsql.create_gate(public.uuid_generate_v5(provsql.uuid_ns_provsql(), 'valuegba by hand'), 'value',
+                           NULL, NULL, NULL, 'something else');
 SELECT provsql.get_extra((provsql.get_children(provsql.provenance_semimod('gba by hand'::text, gba_leaf(95))))[2]) AS first_value_stays;
 
 DROP FUNCTION gba_leaf(int); DROP FUNCTION gba_leaves(int, int); DROP FUNCTION gba_semimod(uuid, uuid);

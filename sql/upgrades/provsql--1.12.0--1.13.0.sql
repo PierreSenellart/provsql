@@ -2203,6 +2203,14 @@ $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
 
 -- ----------------------------------------------------------------------
+-- 6f. A gate's infos and text are given when it is created; nothing sets
+--     them afterwards.
+-- ----------------------------------------------------------------------
+
+DROP FUNCTION IF EXISTS set_infos(uuid, int, int);
+DROP FUNCTION IF EXISTS set_extra(uuid, text);
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

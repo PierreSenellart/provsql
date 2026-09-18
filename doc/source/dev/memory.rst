@@ -112,18 +112,19 @@ database that does not live in the default tablespace (it runs outside
 any transaction and so cannot read ``pg_database`` itself).
 
 Writes and reads follow one rule: a write is not answered, a read is.
-Creating a gate (``C``) sends and returns.  The gates whose infos or
-text follow from their address, which is the case of value gates, of
-annotations, of comparisons and of aggregates (the address of an
-``agg`` gate hashes its result type and its value), are created
-together with what they record by a single ``G`` message
-(:cfunc:`provsql_internal_create_gate_with`), for the same reason: the
-write-once rule can have nothing to refuse.  Should it refuse
-nonetheless, because something else was written at that address by
-hand, the first value stays and the worker logs a warning.  The
-``set_infos`` and ``set_extra`` messages (``I``, ``E``), which still
-wait for the worker's verdict, remain for the internal callers that
-have not moved to ``G`` yet.
+Creating a gate (``C``) sends and returns.  A gate that records infos
+or a text is created together with them by a single ``G`` message
+(:cfunc:`provsql_internal_create_gate_with`, :sqlfunc:`create_gate`
+with six arguments); nothing sets them afterwards.  This is sound
+because what a gate records follows from its address: a content-addressed
+gate hashes it (a value gate its text, an ``agg`` gate its result type
+and value, an annotation its text), and a gate with a fresh token has no
+other writer.  The write-once rule can then have nothing to refuse;
+should it refuse nonetheless, because something else was written at
+that address by hand, the first value stays and the worker logs a
+warning.  The worker still applies the ``I`` and ``E`` messages of
+earlier versions, which WAL records may replay, the same way and
+without answering.
 
 The worker reads the pipe through a buffer of one ``PIPE_BUF``-sized
 read at a time (:cfunc:`provsql_worker_read`), and parses messages from
@@ -244,8 +245,8 @@ per-child coefficient map (which :cfunc:`MMappedCircuit`'s extra-copy
 path preserves verbatim, the same mechanism as ``gate_arith``).  The
 ``info1`` field doubles as the persisted **d-DNNF certificate** on
 ``gate_plus`` / ``gate_times`` gates (deterministic / decomposable
-bits, written via the internal ``set_infos`` entry point by the
-reachability and joint-width compilers and loaded back by
+bits, given at creation by the reachability and joint-width compilers
+and loaded back by
 :cfunc:`createGenericCircuit`).
 
 :cfunc:`MMappedVector` (:cfile:`MMappedVector.h` /

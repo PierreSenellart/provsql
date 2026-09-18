@@ -45,8 +45,7 @@ DECLARE
   hist jsonb;
   total int;
 BEGIN
-  PERFORM provsql.create_gate(sum_tok, 'arith', ARRAY[x, y]);
-  PERFORM provsql.set_infos(sum_tok, 0);  -- PROVSQL_ARITH_PLUS = 0
+  PERFORM provsql.create_gate(sum_tok, 'arith', ARRAY[x, y], 0, NULL, NULL);  -- PROVSQL_ARITH_PLUS = 0
   hist := provsql.rv_histogram(sum_tok, 30);
   SELECT sum((b->>'count')::int) INTO total
     FROM jsonb_array_elements(hist) b;

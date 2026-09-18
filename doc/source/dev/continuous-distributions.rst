@@ -285,8 +285,8 @@ shape routes through :sqlfunc:`erlang`), :sqlfunc:`lognormal`,
 :sqlfunc:`categorical`, :sqlfunc:`mixture` (two overloads), and
 :sqlfunc:`as_random` (three numeric overloads via the
 ``double precision`` form). They validate parameters and mint
-the appropriate gate via :sqlfunc:`create_gate`, ``set_extra``,
-:sqlfunc:`set_prob`, ``set_infos``.
+the appropriate gate via :sqlfunc:`create_gate`, with its infos and
+text, and :sqlfunc:`set_prob`.
 
 The discrete count families are pure-SQL constructors over the
 categorical encoding: :sqlfunc:`poisson`, :sqlfunc:`binomial`,

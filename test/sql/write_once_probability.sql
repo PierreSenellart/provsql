@@ -123,33 +123,22 @@ SELECT k, round(sum(get_prob(provsql))::numeric, 4) AS mass
 SELECT (get_table_info('wo_bid'::regclass::oid)).kind AS kind_after_replace_block;
 SET provsql.active = on;
 
--- A gate's annotations are written once too: writing what the gate holds
--- is a no-op, writing something else is refused.  The two info fields go
--- once each, 0 meaning "nothing recorded", because a certified gate is
--- marked as certified when it is built and tagged with the route that
--- made it a query root afterwards.
+-- A gate's infos and text are written once too, when the gate is created:
+-- creating it again with what it holds is a no-op, with something else
+-- keeps what it holds (the worker logs the difference; nothing waits for
+-- it).  The two info fields go once each, 0 meaning "nothing recorded".
 DO $$
 DECLARE t uuid := public.uuid_generate_v4();
 BEGIN
-  PERFORM create_gate(t, 'input');
-  PERFORM set_infos(t, 1, 0);
-  PERFORM set_infos(t, 0, 2);   -- the other field, later: allowed
-  PERFORM set_infos(t, 1, 2);   -- exactly what it holds: a no-op
+  PERFORM create_gate(t, 'input', NULL, 1, 0, NULL);
+  PERFORM create_gate(t, 'input', NULL, 0, 2, NULL);   -- the other field, later: allowed
+  PERFORM create_gate(t, 'input', NULL, 1, 2, NULL);   -- exactly what it holds: a no-op
+  PERFORM create_gate(t, 'input', NULL, 1, 3, NULL);   -- something else: kept as it was
   RAISE NOTICE 'infos now (%, %)', (get_infos(t)).info1, (get_infos(t)).info2;
-  BEGIN
-    PERFORM set_infos(t, 1, 3);
-    RAISE NOTICE 're-annotating was accepted';
-  EXCEPTION WHEN others THEN
-    RAISE NOTICE 'refused: %', regexp_replace(SQLERRM, '[0-9a-f-]{36}', '<token>');
-  END;
-  PERFORM set_extra(t, 'first');
-  PERFORM set_extra(t, 'first');
-  BEGIN
-    PERFORM set_extra(t, 'second');
-    RAISE NOTICE 're-annotating was accepted';
-  EXCEPTION WHEN others THEN
-    RAISE NOTICE 'refused: %', regexp_replace(SQLERRM, '[0-9a-f-]{36}', '<token>');
-  END;
+  PERFORM create_gate(t, 'input', NULL, NULL, NULL, 'first');
+  PERFORM create_gate(t, 'input', NULL, NULL, NULL, 'first');
+  PERFORM create_gate(t, 'input', NULL, NULL, NULL, 'second');
+  RAISE NOTICE 'text now %', get_extra(t);
 END $$;
 
 -- replace_input refuses what it is not for, and points at what is.

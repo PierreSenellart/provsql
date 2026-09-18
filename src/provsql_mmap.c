@@ -782,40 +782,7 @@ void provsql_internal_create_gate_with(const pg_uuid_t *token, gate_type type,
   pfree(msg);
 }
 
-/** @brief Internal entry point behind set_infos(): worker IPC only. */
-void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
-                                unsigned info2)
-{
-  char result;
-  unsigned had1, had2;
 
-  STARTWRITEM();
-  ADDWRITEM("I", char);
-  ADDWRITEDB();
-  ADDWRITEM(token, pg_uuid_t);
-  ADDWRITEM(&info1, unsigned);
-  ADDWRITEM(&info2, unsigned);
-  provsql_before_store_write(buffer, bufferpos);
-
-  provsql_shmem_lock_exclusive();
-  if(!SENDWRITEM() || !READB(result, char) || !READB(had1, unsigned)
-     || !READB(had2, unsigned)) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot communicate with pipe (message type I)");
-  }
-  provsql_shmem_unlock();
-
-  if((provsql_set_annotation_result) result == PROVSQL_SET_ANNOTATION_ALREADY_SET)
-    ereport(ERROR,
-            (errmsg("gate %s already records the annotation (%u, %u), "
-                    "not (%u, %u)",
-                    DatumGetCString(DirectFunctionCall1(
-                                      uuid_out, UUIDPGetDatum((pg_uuid_t *) token))),
-                    had1, had2, info1, info2),
-             errdetail("A gate's annotation is written once, like the gate "
-                       "itself and its probability, so that a transaction "
-                       "that rolls back leaves the circuit as it found it.")));
-}
 
 PG_FUNCTION_INFO_V1(create_gate);
 /** @brief PostgreSQL-callable wrapper for create_gate(). */
@@ -877,84 +844,71 @@ Datum create_gate(PG_FUNCTION_ARGS)
   PG_RETURN_VOID();
 }
 
+/* set_infos and set_extra: the SQL functions are gone (a gate is created
+   with what it records), but the install scripts of earlier versions bind
+   these symbols, and an upgrade runs them.  What they send is applied
+   write-once and not answered, like everything a backend writes. */
+static void send_unanswered(const char *msg, size_t len)
+{
+#ifdef PROVSQL_INPROCESS_STORE
+  if(!provsql_inproc_send(msg, len))
+    provsql_error("Cannot write to pipe (message type %c)", msg[0]);
+#else
+  if(len > PIPE_BUF)
+    provsql_error("message type %c too long", msg[0]);
+  provsql_shmem_lock_shared();
+  if(write(provsql_shared_state->pipebmw, msg, len) != (ssize_t) len) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type %c)", msg[0]);
+  }
+  provsql_shmem_unlock();
+#endif
+}
+
 PG_FUNCTION_INFO_V1(set_infos);
-/** @brief PostgreSQL-callable wrapper for set_infos(). */
+/** @brief Entry point of the @c set_infos of earlier versions' scripts. */
 Datum set_infos(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  unsigned info1 = PG_GETARG_INT32(1);
-  unsigned info2 = PG_GETARG_INT32(2);
+  unsigned info1 = PG_ARGISNULL(1) ? 0 : (unsigned) PG_GETARG_INT32(1);
+  unsigned info2 = PG_ARGISNULL(2) ? 0 : (unsigned) PG_GETARG_INT32(2);
+  char msg[sizeof(char) + 2 * sizeof(Oid) + sizeof(pg_uuid_t) + 2 * sizeof(unsigned)];
+  char *p = msg;
 
-
-  if(PG_ARGISNULL(1))
-    info1=0;
-  if(PG_ARGISNULL(2))
-    info2=0;
-
-  provsql_internal_set_infos(token, info1, info2);
-
+  if(PG_ARGISNULL(0))
+    PG_RETURN_VOID();
+  *p++ = 'I';
+  memcpy(p, &MyDatabaseId, sizeof(Oid)); p += sizeof(Oid);
+  memcpy(p, &MyDatabaseTableSpace, sizeof(Oid)); p += sizeof(Oid);
+  memcpy(p, token, sizeof(pg_uuid_t)); p += sizeof(pg_uuid_t);
+  memcpy(p, &info1, sizeof(unsigned)); p += sizeof(unsigned);
+  memcpy(p, &info2, sizeof(unsigned));
+  provsql_before_store_write(msg, sizeof(msg));
+  send_unanswered(msg, sizeof(msg));
   PG_RETURN_VOID();
 }
 
-/** @brief Internal entry point behind set_extra(): worker IPC only. */
-void provsql_internal_set_extra(const pg_uuid_t *token, const char *str)
-{
-  unsigned len=strlen(str);
-  char result;
-  unsigned had_len = 0;
-  char *had = NULL;
-
-  STARTWRITEM();
-  ADDWRITEM("E", char);
-  ADDWRITEDB();
-  ADDWRITEM(token, pg_uuid_t);
-  ADDWRITEM(&len, unsigned);
-
-#ifdef PROVSQL_INPROCESS_STORE
-  provsql_buffer_ensure(bufferpos+len);
-#else
-  assert(PIPE_BUF-bufferpos>len);
-#endif
-  memcpy(buffer+bufferpos, str, len), bufferpos+=len;
-  provsql_before_store_write(buffer, bufferpos);
-
-  provsql_shmem_lock_exclusive();
-  if(!SENDWRITEM() || !READB(result, char) || !READB(had_len, unsigned)) {
-    provsql_shmem_unlock();
-    provsql_error("Cannot communicate with pipe (message type E)");
-  }
-  if(had_len > 0) {
-    had = palloc(had_len + 1);
-    if(!READB_BYTES(had, had_len)) {
-      provsql_shmem_unlock();
-      provsql_error("Cannot communicate with pipe (message type E)");
-    }
-    had[had_len] = '\0';
-  }
-  provsql_shmem_unlock();
-
-  if((provsql_set_annotation_result) result == PROVSQL_SET_ANNOTATION_ALREADY_SET)
-    ereport(ERROR,
-            (errmsg("gate %s already records the annotation \"%s\", not \"%s\"",
-                    DatumGetCString(DirectFunctionCall1(
-                                      uuid_out, UUIDPGetDatum((pg_uuid_t *) token))),
-                    had ? had : "", str),
-             errdetail("A gate's annotation is written once, like the gate "
-                       "itself and its probability, so that a transaction "
-                       "that rolls back leaves the circuit as it found it.")));
-}
-
 PG_FUNCTION_INFO_V1(set_extra);
-/** @brief PostgreSQL-callable wrapper for set_extra(). */
+/** @brief Entry point of the @c set_extra of earlier versions' scripts. */
 Datum set_extra(PG_FUNCTION_ARGS)
 {
   pg_uuid_t *token = DatumGetUUIDP(PG_GETARG_DATUM(0));
-  text *data = PG_GETARG_TEXT_P(1);
-  char *str=text_to_cstring(data);
+  char *str = text_to_cstring(PG_GETARG_TEXT_PP(1));
+  unsigned len = (unsigned) strlen(str);
+  size_t total = sizeof(char) + 2 * sizeof(Oid) + sizeof(pg_uuid_t) + sizeof(unsigned) + len;
+  char *msg = palloc(total);
+  char *p = msg;
 
-  provsql_internal_set_extra(token, str);
+  *p++ = 'E';
+  memcpy(p, &MyDatabaseId, sizeof(Oid)); p += sizeof(Oid);
+  memcpy(p, &MyDatabaseTableSpace, sizeof(Oid)); p += sizeof(Oid);
+  memcpy(p, token, sizeof(pg_uuid_t)); p += sizeof(pg_uuid_t);
+  memcpy(p, &len, sizeof(unsigned)); p += sizeof(unsigned);
+  memcpy(p, str, len);
+  provsql_before_store_write(msg, total);
+  send_unanswered(msg, total);
+  pfree(msg);
   pfree(str);
-
   PG_RETURN_VOID();
 }
 

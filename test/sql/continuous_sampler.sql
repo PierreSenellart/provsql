@@ -81,8 +81,7 @@ DECLARE
   cmp_token uuid;
   p double precision;
 BEGIN
-  PERFORM provsql.create_gate(sum_token, 'arith', ARRAY[x, y]);
-  PERFORM provsql.set_infos(sum_token, 0);  -- PROVSQL_ARITH_PLUS = 0
+  PERFORM provsql.create_gate(sum_token, 'arith', ARRAY[x, y], 0, NULL, NULL);  -- PROVSQL_ARITH_PLUS = 0
   cmp_token := provsql.provenance_cmp(
     sum_token,
     '>(double precision,double precision)'::regoperator::oid,
@@ -104,8 +103,7 @@ DECLARE
   cmp_token uuid;
   p double precision;
 BEGIN
-  PERFORM provsql.create_gate(sum_token, 'arith', ARRAY[x, x]);
-  PERFORM provsql.set_infos(sum_token, 0);
+  PERFORM provsql.create_gate(sum_token, 'arith', ARRAY[x, x], 0, NULL, NULL);
   cmp_token := provsql.provenance_cmp(
     sum_token,
     '>(double precision,double precision)'::regoperator::oid,
@@ -131,8 +129,7 @@ DECLARE
 BEGIN
   -- TIMES (1)
   arith_token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(arith_token, 'arith', ARRAY[x, y]);
-  PERFORM provsql.set_infos(arith_token, 1);
+  PERFORM provsql.create_gate(arith_token, 'arith', ARRAY[x, y], 1, NULL, NULL);
   cmp_token := provsql.provenance_cmp(arith_token,
     '>(double precision,double precision)'::regoperator::oid,
     zero);
@@ -143,8 +140,7 @@ BEGIN
 
   -- MINUS (2): U(1,2) - U(1,2) > 0 has probability 0.5
   arith_token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(arith_token, 'arith', ARRAY[x, y]);
-  PERFORM provsql.set_infos(arith_token, 2);
+  PERFORM provsql.create_gate(arith_token, 'arith', ARRAY[x, y], 2, NULL, NULL);
   cmp_token := provsql.provenance_cmp(arith_token,
     '>(double precision,double precision)'::regoperator::oid,
     zero);
@@ -155,8 +151,7 @@ BEGIN
 
   -- NEG (4): -U(1,2) > 0 has probability 0
   arith_token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(arith_token, 'arith', ARRAY[x]);
-  PERFORM provsql.set_infos(arith_token, 4);
+  PERFORM provsql.create_gate(arith_token, 'arith', ARRAY[x], 4, NULL, NULL);
   cmp_token := provsql.provenance_cmp(arith_token,
     '>(double precision,double precision)'::regoperator::oid,
     zero);

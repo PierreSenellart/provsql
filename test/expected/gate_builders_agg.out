@@ -94,9 +94,6 @@ t|t
 create_gate
 
 (1 row)
-set_extra
-
-(1 row)
 first_value_stays
 something else
 (1 row)

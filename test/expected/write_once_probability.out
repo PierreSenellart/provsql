@@ -66,6 +66,5 @@ kind_after_replace_block
 bid
 (1 row)
 NOTICE:  infos now (1, 2)
-NOTICE:  refused: gate <token> already records the annotation (1, 2), not (1, 3)
-NOTICE:  refused: gate <token> already records the annotation "first", not "second"
+NOTICE:  text now first
 NOTICE:  refused: replace_input: <token> is a gate of type one, not an input

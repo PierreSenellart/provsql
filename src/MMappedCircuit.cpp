@@ -603,48 +603,42 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
     }
 
     case 'I':
-    {
-      pg_uuid_t token;
-      unsigned info1, info2;
-      std::pair<unsigned, unsigned> existing{0, 0};
-
-      if(!READM(token, pg_uuid_t) || !READM(info1, unsigned) || !READM(info2, unsigned))
-        provsql_error("Cannot read from pipe (message type I)");
-
-      auto result = circuit->setInfos(token, info1, info2, &existing);
-      char return_value = static_cast<char>(result);
-
-      if(!WRITEB(&return_value, char) || !WRITEB(&existing.first, unsigned)
-         || !WRITEB(&existing.second, unsigned))
-        provsql_error("Cannot write response to pipe (message type I)");
-      break;
-    }
-
     case 'E':
     {
+      /* Infos or text written after the gate.  Nothing in this version
+         sends them (a gate is created with what it records, message G);
+         the install scripts of earlier versions, run by an upgrade, and
+         WAL records of earlier versions still do.  Applied write-once
+         like G, and not answered. */
       pg_uuid_t token;
-      unsigned len;
-      auto result = MMappedCircuit::SetAnnotationResult::Unchanged;
-      std::string existing;
 
-      if(!READM(token, pg_uuid_t) || !READM(len, unsigned))
-        provsql_error("Cannot read from pipe (message type E)");
-
-      if(len>0) {
-        std::vector<char> data(len);
-        if(!READM_BYTES(data.data(), len))
+      if(!READM(token, pg_uuid_t))
+        provsql_error("Cannot read from pipe (message type %c)", c);
+      if(c == 'I') {
+        unsigned info1, info2;
+        std::pair<unsigned, unsigned> existing{0, 0};
+        if(!READM(info1, unsigned) || !READM(info2, unsigned))
+          provsql_error("Cannot read from pipe (message type I)");
+        if(circuit->setInfos(token, info1, info2, &existing)
+           == MMappedCircuit::SetAnnotationResult::AlreadySet)
+          provsql_warning("gate %s already records the annotation (%u, %u), not (%u, %u)",
+                          uuid2string(token).c_str(), existing.first, existing.second,
+                          info1, info2);
+      } else {
+        unsigned len;
+        if(!READM(len, unsigned))
           provsql_error("Cannot read from pipe (message type E)");
-
-        result = circuit->setExtra(token, std::string(data.data(), len),
-                                   &existing);
-      }
-
-      {
-        char return_value = static_cast<char>(result);
-        unsigned existing_len = existing.size();
-        if(!WRITEB(&return_value, char) || !WRITEB(&existing_len, unsigned)
-           || !WRITEB_BYTES(existing.data(), existing_len))
-          provsql_error("Cannot write response to pipe (message type E)");
+        if(len > 0) {
+          std::vector<char> data(len);
+          std::string existing;
+          if(!READM_BYTES(data.data(), len))
+            provsql_error("Cannot read from pipe (message type E)");
+          if(circuit->setExtra(token, std::string(data.data(), len), &existing)
+             == MMappedCircuit::SetAnnotationResult::AlreadySet)
+            provsql_warning("gate %s already records the annotation \"%s\", not \"%s\"",
+                            uuid2string(token).c_str(), existing.c_str(),
+                            std::string(data.data(), len).c_str());
+        }
       }
       break;
     }

@@ -234,45 +234,6 @@ gate_type provsql_fetch_gate(const pg_uuid_t *token,
                              unsigned *nb_children_out,
                              pg_uuid_t **children_out);
 
-/**
- * @brief Outcome of an annotation write, mirroring
- *        @c MMappedCircuit::SetAnnotationResult across the IPC boundary.
- */
-typedef enum provsql_set_annotation_result {
-  PROVSQL_SET_ANNOTATION_NO_SUCH_GATE = 0, ///< The token names no gate
-  PROVSQL_SET_ANNOTATION_WRITTEN      = 1, ///< The gate had none and now has this one
-  PROVSQL_SET_ANNOTATION_UNCHANGED    = 2, ///< The gate already held exactly this
-  PROVSQL_SET_ANNOTATION_ALREADY_SET  = 3  ///< The gate holds a different one; refused
-} provsql_set_annotation_result;
-
-/**
- * @brief Write a gate's info fields from in-extension C/C++ code, once.
- *
- * Internal entry point behind the SQL-callable @c set_infos().  Like a
- * probability, an annotation is a fact appended to the gate; the two
- * fields are written once each, with @c 0 meaning "nothing recorded"
- * (see @c MMappedCircuit::setInfos).  Writing a different value over a
- * recorded one raises.
- *
- * @param token  UUID of the gate.
- * @param info1  First (gate-type-specific) info value, or @c 0 to leave it.
- * @param info2  Second info value, or @c 0 to leave it.
- */
-void provsql_internal_set_infos(const pg_uuid_t *token, unsigned info1,
-                                unsigned info2);
-
-/**
- * @brief Write a gate's extra string from in-extension C/C++ code, once.
- *
- * Internal entry point behind the SQL-callable @c set_extra().  Writing
- * the string the gate already holds is a no-op -- which is also what
- * keeps the @c extra file from accumulating abandoned copies of it --
- * and writing a different one raises.
- *
- * @param token  UUID of the gate.
- * @param str    NUL-terminated extra string to attach.
- */
-void provsql_internal_set_extra(const pg_uuid_t *token, const char *str);
 
 #ifdef PROVSQL_INPROCESS_STORE
 

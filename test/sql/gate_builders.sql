@@ -11,6 +11,14 @@
 -- when the C function runs: what is compared is the address and the shape.
 
 CREATE SCHEMA gb_ref;
+-- The former bodies annotated the gate after creating it, through set_infos
+-- and set_extra, which no longer exist: what a gate records is given when it
+-- is created.  Here they are no-ops; the address is what the reference is
+-- for, and what the C function recorded is checked directly.
+CREATE FUNCTION gb_ref.set_infos(token uuid, info1 int, info2 int DEFAULT NULL) RETURNS void
+  LANGUAGE sql AS $$ SELECT $$;
+CREATE FUNCTION gb_ref.set_extra(token uuid, data text) RETURNS void
+  LANGUAGE sql AS $$ SELECT $$;
 
 CREATE FUNCTION gb_ref.provenance_times(VARIADIC tokens uuid[])
   RETURNS UUID AS
@@ -198,7 +206,7 @@ BEGIN
   );
   -- wire it up in the circuit
   PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
-  PERFORM set_infos(cmp_token, comparison_op::integer);
+  PERFORM gb_ref.set_infos(cmp_token, comparison_op::integer);
   RETURN cmp_token;
 END
 $$ LANGUAGE plpgsql
@@ -218,7 +226,7 @@ BEGIN
   annotated := public.uuid_generate_v5(uuid_ns_provsql(),
                                        concat('annotation', token, extra));
   PERFORM create_gate(annotated, 'annotation', ARRAY[token]);
-  PERFORM set_extra(annotated, extra);
+  PERFORM gb_ref.set_extra(annotated, extra);
   RETURN annotated;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
@@ -246,7 +254,7 @@ BEGIN
   wrapped := public.uuid_generate_v5(uuid_ns_provsql(),
                                      concat('assumed', assumption, token));
   PERFORM create_gate(wrapped, 'assumed', ARRAY[token]);
-  PERFORM set_extra(wrapped, assumption);
+  PERFORM gb_ref.set_extra(wrapped, assumption);
   RETURN wrapped;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
@@ -260,7 +268,7 @@ BEGIN
   wrapped := gb_ref.provenance_assume(token, 'boolean');
   IF wrapped IS NOT NULL THEN
     -- 1 = PROVSQL_ROUTE_SQ_REWRITE (see provsql_route in src/provsql_utils.h)
-    PERFORM set_infos(wrapped, 1, 0);
+    PERFORM gb_ref.set_infos(wrapped, 1, 0);
   END IF;
   RETURN wrapped;
 END
@@ -276,7 +284,7 @@ DECLARE
 BEGIN
   project_token:=uuid_generate_v5(uuid_ns_provsql(),concat('project', token, positions));
   PERFORM create_gate(project_token, 'project', ARRAY[token]);
-  PERFORM set_extra(project_token, ARRAY_AGG(pair)::text)
+  PERFORM gb_ref.set_extra(project_token, ARRAY_AGG(pair)::text)
   FROM (
     SELECT ARRAY[(CASE WHEN info=0 THEN NULL ELSE info END), idx] AS pair
     FROM unnest(positions) WITH ORDINALITY AS a(info, idx)
@@ -297,7 +305,7 @@ BEGIN
   eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat('eq',token,pos1,',',pos2));
 
   PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
-  PERFORM set_infos(eq_token, pos1, pos2);
+  PERFORM gb_ref.set_infos(eq_token, pos1, pos2);
   RETURN eq_token;
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
@@ -316,7 +324,7 @@ BEGIN
     concat('arith', op::text, children::text)
   );
   PERFORM create_gate(arith_token, 'arith', children);
-  PERFORM set_infos(arith_token, op);
+  PERFORM gb_ref.set_infos(arith_token, op);
   RETURN arith_token;
 END
 $$ LANGUAGE plpgsql

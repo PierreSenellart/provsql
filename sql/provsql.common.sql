@@ -130,6 +130,18 @@ CREATE OR REPLACE FUNCTION create_gate(
  * @param token UUID identifying the new gate
  * @param type gate type (see provenance_gate)
  * @param children optional array of child gate UUIDs
+ * The infos are used in different ways by different gate types: for
+ * mulinput, info1 is the value of the multivalued variable; for eq, info1
+ * and info2 are the attribute positions equated; for agg, info1 is the OID
+ * of the aggregate function and info2 that of its result type; for cmp,
+ * info1 is the OID of the comparison operator; for arith, info1 is the
+ * operator.  The text is used in different ways too: for project,
+ * a text-encoded array of two-element arrays mapping input attributes to
+ * output attributes; for value and agg, the text-encoded scalar value; for
+ * rv, the distribution family and its parameters; for assumed, the
+ * assumption kind; for annotation, inert metadata read only by the code
+ * that placed it.
+ *
  * @param info1 first info, or NULL
  * @param info2 second info, or NULL
  * @param extra text of the gate, or NULL
@@ -390,26 +402,6 @@ CREATE OR REPLACE FUNCTION get_prob(
   RETURNS DOUBLE PRECISION AS
   'provsql','get_prob' LANGUAGE C STABLE PARALLEL SAFE;
 
-/**
- * @brief Set additional integer values on provenance circuit gate
- *
- * This function sets two integer values associated to a circuit gate, used in
- * different ways by different gate types:
- *   - for mulinput, info1 indicates the value of this multivalued variable
- *   - for eq, info1 and info2 indicate the attribute index of the
-       equijoin in, respectively, the first and second columns
- *   - for agg, info1 is the oid of the aggregate function and info2 the
-       oid of the aggregate result type
- *   - for cmp, info1 is the oid of the comparison operator
- *
- * @param token UUID of the circuit gate
- * @param info1 first integer value
- * @param info2 second integer value
- */
-CREATE OR REPLACE FUNCTION set_infos(
-  token UUID, info1 INT, info2 INT DEFAULT NULL)
-  RETURNS void AS
-  'provsql','set_infos' LANGUAGE C PARALLEL SAFE;
 
 /** @brief Get the integer info values associated with a circuit gate */
 CREATE OR REPLACE FUNCTION get_infos(
@@ -781,24 +773,6 @@ CREATE OR REPLACE FUNCTION inversion_free_key(root TEXT, sec TEXT, factor INT)
   RETURNS TEXT AS
   'provsql','inversion_free_key' LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
-/**
- * @brief Set extra text information on provenance circuit gate
- *
- * This function sets text-encoded data associated to a circuit gate, used in
- * different ways by different gate types:
- *   - for project, it is a text-encoded ARRAY of two-element ARRAYs that
- *     indicate mappings between input attribute (first element) and output
- *     attribute (second element)
- *   - for value and agg, it is the text-encoded (base for value, computed
- *     for agg) scalar value
- *
- * @param token UUID of the circuit gate
- * @param data text-encoded information
- */
-CREATE OR REPLACE FUNCTION set_extra(
-  token UUID, data TEXT)
-  RETURNS void AS
-  'provsql','set_extra' LANGUAGE C PARALLEL SAFE STRICT;
 /** @brief Get the text-encoded extra data associated with a circuit gate */
 CREATE OR REPLACE FUNCTION get_extra(token UUID)
   RETURNS TEXT AS

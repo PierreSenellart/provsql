@@ -94,7 +94,7 @@ typedef enum gate_type {
  *
  * @warning The flag is folded into the gate's content UUID (see
  * @c provenance_aggregate), so a scalar and a grouped aggregate over identical
- * children stay distinct gates and their @c set_infos calls do not clobber.
+ * children stay distinct gates recording different infos.
  */
 #define PROVSQL_AGG_SCALAR_FLAG 0x80000000u
 #define PROVSQL_AGG_TYPE_MASK   0x7FFFFFFFu
