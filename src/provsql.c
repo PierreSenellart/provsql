@@ -15812,6 +15812,355 @@ static void normalize_inner_joins(Query *q) {
   }
 }
 
+/* -------------------------------------------------------------------------
+ * LIMIT / OFFSET
+ *
+ * ORDER BY ... LIMIT k keeps, in each possible world, the present rows that
+ * fewer than k present rows precede: the rows whose row_number() is at most
+ * k, or whose rank() is, with FETCH ... WITH TIES.  A query over tracked
+ * relations with such a clause is rewritten into the filter of that rank,
+ * which the window-function rewriting tracks; every candidate row is output,
+ * annotated with the condition.  LIMIT actual(k) keeps the truncation of the
+ * result as computed on the actual data instead, each kept row carrying its
+ * annotation in the full result.
+ * ------------------------------------------------------------------------- */
+
+/** @brief Whether @p n is a call of the marker @c actual(), up to coercions. */
+static bool is_actual_marker(const constants_t *constants, Node *n) {
+  if (n == NULL || !OidIsValid(constants->OID_FUNCTION_ACTUAL))
+    return false;
+  n = strip_implicit_coercions(n);
+  return IsA(n, FuncExpr) &&
+         ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_ACTUAL;
+}
+
+/** @brief Whether the LIMIT / OFFSET of @p q removes rows. */
+static bool limit_truncates(const Query *q) {
+  return q->limitOffset != NULL ||
+         (q->limitCount != NULL &&
+          !(IsA(q->limitCount, Const) && ((Const *)q->limitCount)->constisnull));
+}
+
+/** @brief Context for @c uncertain_value_walker. */
+typedef struct uncertain_value_ctx {
+  const constants_t *constants;
+  Query *q;                     ///< Query whose range table the Vars index
+} uncertain_value_ctx;
+
+/**
+ * @brief Walker: whether an expression of @c ctx->q may have different values
+ *        in different possible worlds -- an aggregate, a window function, a
+ *        provenance, a random variable, or a subquery column computed so.
+ */
+static bool uncertain_value_walker(Node *node, void *cx) {
+  uncertain_value_ctx *ctx = (uncertain_value_ctx *)cx;
+
+  if (node == NULL)
+    return false;
+  if (IsA(node, Aggref) || IsA(node, WindowFunc) || IsA(node, GroupingFunc) ||
+      IsA(node, SubLink))
+    return true;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == ctx->constants->OID_FUNCTION_PROVENANCE)
+    return true;
+  if (OidIsValid(ctx->constants->OID_TYPE_RANDOM_VARIABLE) &&
+      exprType(node) == ctx->constants->OID_TYPE_RANDOM_VARIABLE)
+    return true;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    RangeTblEntry *rte;
+
+    if (v->varlevelsup != 0 || v->varattno <= 0 ||
+        v->varno > (Index)list_length(ctx->q->rtable))
+      return false;
+    rte = rt_fetch(v->varno, ctx->q->rtable);
+    if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL) {
+      TargetEntry *te = get_tle_by_resno(rte->subquery->targetList,
+                                         v->varattno);
+      uncertain_value_ctx sub = {ctx->constants, rte->subquery};
+      return te != NULL && uncertain_value_walker((Node *)te->expr, &sub);
+    }
+    if (rte->rtekind == RTE_JOIN &&
+        v->varattno <= list_length(rte->joinaliasvars))
+      return uncertain_value_walker(
+        (Node *)list_nth(rte->joinaliasvars, v->varattno - 1), ctx);
+    return false;
+  }
+  return expression_tree_walker(node, uncertain_value_walker, cx);
+}
+
+/** @brief Walker: whether an expression calls @c provenance(). */
+static bool reads_provenance_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_PROVENANCE)
+    return true;
+  return expression_tree_walker(node, reads_provenance_walker, cx);
+}
+
+/** @brief Whether @p n is a constant or a parameter, up to coercions. */
+static bool is_const_or_param(Node *n) {
+  n = strip_implicit_coercions(n);
+  return IsA(n, Const) || IsA(n, Param);
+}
+
+/**
+ * @brief Whether the LIMIT / OFFSET of @p q, a query over tracked relations,
+ *        is rewritten into the filter of a rank (@c lower_limit_to_rank).
+ *
+ * That needs an @c ORDER @c BY on values that are the same in every world,
+ * no @c actual() marker, a query that keeps its input rows (no aggregation,
+ * grouping, @c DISTINCT, set operation or set-returning function), limits
+ * that are constants or parameters, and the rank tracking of window
+ * functions (PostgreSQL 11 and later).  @c OFFSET with @c WITH @c TIES is
+ * left out: the rows it skips are counted by position, among peers too.
+ */
+static bool limit_lowerable(const constants_t *constants, Query *q) {
+#ifdef FRAMEOPTION_EXCLUDE_GROUP
+  ListCell *lc;
+  bool ties = false;
+
+  if (!limit_truncates(q) || is_actual_marker(constants, q->limitCount) ||
+      is_actual_marker(constants, q->limitOffset))
+    return false;
+  if (q->commandType != CMD_SELECT || q->utilityStmt != NULL ||
+      q->sortClause == NIL || q->groupClause != NIL ||
+      q->groupingSets != NIL || q->hasAggs || q->havingQual != NULL ||
+      q->distinctClause != NIL || q->hasDistinctOn ||
+      q->setOperations != NULL || q->hasTargetSRFs || q->rowMarks != NIL ||
+      q->hasSubLinks)
+    return false;
+  if ((q->limitCount != NULL && !is_const_or_param(q->limitCount)) ||
+      (q->limitOffset != NULL && !is_const_or_param(q->limitOffset)))
+    return false;
+#if PG_VERSION_NUM >= 130000
+  ties = q->limitOption == LIMIT_OPTION_WITH_TIES;
+#endif
+  if (ties && q->limitOffset != NULL)
+    return false;
+  if (!ties && !OidIsValid(constants->OID_FUNCTION_ROW_NUMBER_AS_RANK))
+    return false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (OidIsValid(constants->OID_FUNCTION_GIVEN) && IsA(te->expr, FuncExpr) &&
+        ((FuncExpr *)te->expr)->funcid == constants->OID_FUNCTION_GIVEN)
+      return false;
+  }
+  foreach (lc, q->sortClause) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    ListCell *lc_te;
+    foreach (lc_te, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+      if (te->ressortgroupref == sgc->tleSortGroupRef) {
+        uncertain_value_ctx ctx = {constants, q};
+        if (uncertain_value_walker((Node *)te->expr, &ctx))
+          return false;
+        break;
+      }
+    }
+  }
+  return true;
+#else
+  (void)constants;
+  (void)q;
+  return false;
+#endif
+}
+
+/** @brief Context for @c pull_up_vars_mutator. */
+typedef struct pull_up_vars_ctx {
+  Query *inner;   ///< Query whose target list exposes the Vars
+  List *pulled;   ///< Vars already exposed, in the order of their entries
+  List *resnos;   ///< Their resnos in @c inner (integers)
+} pull_up_vars_ctx;
+
+/** @brief Mutator: replace each Var of level 0 by a reference to an entry of
+ *  @c ctx->inner exposing it, appended if needed. */
+static Node *pull_up_vars_mutator(Node *node, void *cx) {
+  pull_up_vars_ctx *ctx = (pull_up_vars_ctx *)cx;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0) {
+    Var *v = (Var *)node;
+    ListCell *lc_v, *lc_r;
+    AttrNumber resno = 0;
+
+    forboth (lc_v, ctx->pulled, lc_r, ctx->resnos) {
+      if (equal(lfirst(lc_v), v)) {
+        resno = (AttrNumber)lfirst_int(lc_r);
+        break;
+      }
+    }
+    if (resno == 0) {
+      resno = list_length(ctx->inner->targetList) + 1;
+      ctx->inner->targetList = lappend(
+        ctx->inner->targetList,
+        makeTargetEntry((Expr *)copyObject(v), resno, pstrdup("?column?"),
+                        false));
+      ctx->pulled = lappend(ctx->pulled, v);
+      ctx->resnos = lappend_int(ctx->resnos, resno);
+    }
+    return (Node *)makeVar(1, resno, v->vartype, v->vartypmod, v->varcollid, 0);
+  }
+  return expression_tree_mutator(node, pull_up_vars_mutator, cx);
+}
+
+/**
+ * @brief Rewrite the LIMIT / OFFSET of @p q into the filter of a rank, or
+ *        return @c NULL if it is not (@c limit_lowerable).
+ *
+ * @p q, without its LIMIT and OFFSET, becomes the subquery of
+ * @code
+ *   SELECT ... FROM (SELECT ..., row_number() OVER (ORDER BY ...) AS rk
+ *                    FROM ...) limited
+ *   WHERE rk > m AND rk <= m + k ORDER BY ...
+ * @endcode
+ * with @c rank() for @c WITH @c TIES; the enclosing comparison on the rank,
+ * an aggregate of the subquery once rewritten, goes into the annotation of
+ * each row.  The subquery exposes the output columns and the sort keys; the
+ * entries that read @c provenance() move to the enclosing query, where the
+ * provenance of a row includes the comparison.
+ */
+static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
+  Query *outer;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  WindowClause *wc;
+  WindowFunc *rank;
+  Var *rk;
+  List *inner_tl = NIL, *outer_tl = NIL, *moved = NIL, *colnames = NIL;
+  List *conds = NIL;
+  Node *count, *offset;
+  pull_up_vars_ctx pctx;
+  ListCell *lc;
+  Index winref = 0;
+  AttrNumber resno = 0;
+  bool ties = false;
+
+  if (!limit_lowerable(constants, q))
+    return NULL;
+#if PG_VERSION_NUM >= 130000
+  ties = q->limitOption == LIMIT_OPTION_WITH_TIES;
+  q->limitOption = LIMIT_OPTION_COUNT;
+#endif
+  count = q->limitCount;
+  if (count != NULL && IsA(count, Const) && ((Const *)count)->constisnull)
+    count = NULL;
+  offset = q->limitOffset;
+  q->limitCount = q->limitOffset = NULL;
+
+  /* The subquery's entries, in order; the entries reading provenance() are
+   * kept for the enclosing query and filled in below. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (reads_provenance_walker((Node *)te->expr, (void *)constants)) {
+      moved = lappend(moved, te);
+      outer_tl = lappend(outer_tl, NULL);
+    } else {
+      TargetEntry *out;
+      te->resno = ++resno;
+      out = makeTargetEntry(
+        (Expr *)makeVar(1, resno, exprType((Node *)te->expr),
+                        exprTypmod((Node *)te->expr),
+                        exprCollation((Node *)te->expr), 0),
+        0, te->resname, te->resjunk);
+      out->ressortgroupref = te->ressortgroupref;
+      out->resorigtbl = te->resorigtbl;
+      out->resorigcol = te->resorigcol;
+      if (te->resname == NULL)
+        te->resname = pstrdup("?column?");
+      te->resjunk = false;
+      inner_tl = lappend(inner_tl, te);
+      outer_tl = lappend(outer_tl, out);
+    }
+  }
+  q->targetList = inner_tl;
+
+  pctx.inner = q;
+  pctx.pulled = NIL;
+  pctx.resnos = NIL;
+  {
+    ListCell *lc_m = list_head(moved);
+    foreach (lc, outer_tl) {
+      if (lfirst(lc) == NULL) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc_m);
+        TargetEntry *out = makeTargetEntry(
+          (Expr *)pull_up_vars_mutator((Node *)te->expr, &pctx), 0,
+          te->resname, te->resjunk);
+        lfirst(lc) = out;
+        lc_m = my_lnext(moved, lc_m);
+      }
+    }
+  }
+  resno = 0;
+  foreach (lc, outer_tl)
+    ((TargetEntry *)lfirst(lc))->resno = ++resno;
+
+  /* The rank, over the ORDER BY of the query. */
+  foreach (lc, q->windowClause)
+    winref = Max(winref, ((WindowClause *)lfirst(lc))->winref);
+  wc = makeNode(WindowClause);
+  wc->orderClause = (List *)copyObject(q->sortClause);
+  wc->frameOptions = FRAMEOPTION_DEFAULTS;
+  wc->winref = winref + 1;
+  q->windowClause = lappend(q->windowClause, wc);
+  rank = makeNode(WindowFunc);
+  rank->winfnoid = ties ? F_RANK_ : F_ROW_NUMBER;
+  rank->wintype = INT8OID;
+  rank->winref = wc->winref;
+  rank->location = -1;
+  q->targetList = lappend(
+    q->targetList,
+    makeTargetEntry((Expr *)rank, list_length(q->targetList) + 1,
+                    pstrdup("rank"), false));
+  q->hasWindowFuncs = true;
+  rk = makeVar(1, list_length(q->targetList), INT8OID, -1, InvalidOid, 0);
+  q->sortClause = NIL;
+
+  foreach (lc, q->targetList)
+    colnames = lappend(colnames,
+                       makeString(pstrdup(((TargetEntry *)lfirst(lc))->resname)));
+
+  /* The subquery is one level deeper than the query was. */
+  IncrementVarSublevelsUp((Node *)q, 1, 1);
+
+  if (offset != NULL)
+    conds = lappend(conds, build_binop(">", copyObject((Node *)rk), offset));
+  if (count != NULL)
+    conds = lappend(conds, build_binop(
+      "<=", copyObject((Node *)rk),
+      offset == NULL ? count
+                     : build_binop("+", copyObject(offset), count)));
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = q;
+  rte->eref = makeAlias("limited", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+
+  outer = makeNode(Query);
+  outer->commandType = CMD_SELECT;
+  outer->querySource = q->querySource;
+  outer->canSetTag = q->canSetTag;
+  outer->rtable = list_make1(rte);
+  outer->jointree = makeFromExpr(
+    list_make1(rtr),
+    list_length(conds) == 1 ? (Node *)linitial(conds)
+                            : (Node *)makeBoolExpr(AND_EXPR, conds, -1));
+  outer->targetList = outer_tl;
+  outer->sortClause = (List *)copyObject(wc->orderClause);
+  return outer;
+}
+
 /** @brief Walker: apply @c normalize_inner_joins to every nested Query --
  *  sublink subselects, subquery RTEs, CTE bodies -- so that e.g. a sublink
  *  body is already canonical when the sublink pre-passes inspect it. */
@@ -16021,6 +16370,18 @@ static Query *process_query(const constants_t *constants, Query *q,
    * passes. */
   if (provsql_active)
     lower_outer_joins(constants, q);
+
+  /* ORDER BY ... LIMIT k: the filter of a rank.  Before the provenance
+   * columns are removed from the target list, since the query is restarted
+   * on the enclosing query, whose target list is the user's.  The
+   * inversion-free markers of the query, computed on its range table, do not
+   * carry over: the rows of the filter are not products of inputs. */
+  if (provsql_active && limit_truncates(q) && has_provenance(constants, q)) {
+    Query *limited = lower_limit_to_rank(constants, q);
+    if (limited)
+      return process_query(constants, limited, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
 
   {
     Bitmapset *removed_sortgrouprefs = NULL;
@@ -16755,18 +17116,20 @@ static int provsql_executor_depth = 0;
 
 
 /**
- * @brief Whether a LIMIT / OFFSET applies to a provenance-tracked query below
- *        the top level of @p q.
+ * @brief Whether a LIMIT / OFFSET that stays a truncation applies to a
+ *        provenance-tracked query below the top level of @p q.
  *
- * The rows a LIMIT / OFFSET keeps carry the tokens they have in the full
- * result: that they were among the rows kept, which depends on the rows
- * ranked before them, is not recorded.  At the top level this is a sound
- * reading (the statement displays some rows of the full result, each
- * correctly annotated).  Below it -- in a FROM or LATERAL subquery, a CTE, an
- * arm of a set operation -- the truncated result feeds further computation,
- * whose annotations then miss that dependence.  Sublink bodies are not
- * examined: a LIMIT there is either lowered or rejected by the sublink
- * rewrites.
+ * A LIMIT that is the filter of a rank (@c limit_lowerable) is tracked.  The
+ * others -- @c LIMIT @c actual(k), a LIMIT without ORDER BY, over an
+ * aggregation... -- truncate the result as computed on the actual data, and
+ * the rows kept carry the tokens they have in the full result: that they were
+ * among the rows kept, which depends on the rows before them, is not
+ * recorded.  At the top level, the statement displays some rows of the full
+ * result, each correctly annotated.  Below it -- in a FROM or LATERAL
+ * subquery, a CTE, an arm of a set operation -- the truncated result feeds
+ * further computation, whose annotations then miss that dependence.  Sublink
+ * bodies are not examined: a LIMIT there is either lowered or rejected by the
+ * sublink rewrites.
  *
  * @param constants  Extension OID cache.
  * @param q          Query to inspect, with the queries nested in its range
@@ -16778,12 +17141,10 @@ static int provsql_executor_depth = 0;
 static bool nested_limit_on_provenance(const constants_t *constants, Query *q,
                                        bool top) {
   ListCell *lc;
-  bool truncates =
-    q->limitOffset != NULL ||
-    (q->limitCount != NULL &&
-     !(IsA(q->limitCount, Const) && ((Const *)q->limitCount)->constisnull));
 
-  if (!top && truncates && has_provenance(constants, q))
+  /* A LIMIT that becomes the filter of a rank loses no provenance. */
+  if (!top && limit_truncates(q) && has_provenance(constants, q) &&
+      !limit_lowerable(constants, q))
     return true;
 
   foreach (lc, q->rtable) {

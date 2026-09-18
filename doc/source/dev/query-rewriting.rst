@@ -285,6 +285,31 @@ provenance discovery and set-operation handling so that the
 constructed ``UNION`` / ``EXCEPT`` subqueries are processed by the
 recursive passes.
 
+Then :cfunc:`lower_limit_to_rank` turns an ``ORDER BY … LIMIT`` /
+``OFFSET`` into the filter of a rank, when :cfunc:`limit_lowerable`
+accepts it (no ``actual()`` marker, sort keys whose values are the same
+in every world, a query that keeps its input rows): the query, without
+its ``LIMIT``, becomes the subquery of
+
+.. code-block:: text
+
+   SELECT … FROM (SELECT …, row_number() OVER (ORDER BY …) AS rank
+                  FROM …) limited
+   WHERE rank > m AND rank <= m + k ORDER BY …
+
+with ``rank()`` for ``WITH TIES``.  The window rewriting then tracks the
+rank (see :doc:`aggregation`), and the comparison on it, a column of the
+subquery, goes into each row's annotation.  The subquery exposes the
+output columns and the sort keys; the target entries that read
+``provenance()`` move to the enclosing query, where the provenance of a
+row includes the comparison, and correlated references go one level
+down.  This runs before Step 2, since the rewriting restarts on the
+enclosing query, whose target list is the user's; and without the
+inversion-free markers of the query, whose rows are no longer products
+of inputs.  A ``LIMIT`` it leaves alone stays a truncation of the actual
+result, reported by a warning below the top level of the statement
+(:cfunc:`nested_limit_on_provenance`).
+
 Step 2: Strip Existing Provenance Columns
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

@@ -147,6 +147,7 @@ id
 3
 (2 rows)
 NOTICE:  ProvSQL: query result is OPAQUE
+NOTICE:  ProvSQL: query result is OPAQUE
 remove_provenance
 
 (1 row)

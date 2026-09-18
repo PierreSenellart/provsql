@@ -1,0 +1,2 @@
+\set ECHO none
+limit_rank: skipped on PostgreSQL < 11

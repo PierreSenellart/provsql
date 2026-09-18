@@ -147,7 +147,9 @@ SELECT remove_provenance('sn_o5');
 SELECT 'EXCEPT DESC LIMIT 2' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o5;
 
 -- An arm's own ORDER BY / LIMIT stays on the arm: (max of r) UNION w = {7,2,9}
-CREATE TABLE sn_o6 AS (SELECT a FROM sn_r ORDER BY a DESC LIMIT 1)
+-- (a truncation of the actual arm, with actual(): the filter of a rank is
+-- tested in limit_rank)
+CREATE TABLE sn_o6 AS (SELECT a FROM sn_r ORDER BY a DESC LIMIT actual(1))
   UNION SELECT a FROM sn_w ORDER BY a LIMIT 2;
 SELECT remove_provenance('sn_o6');
 SELECT 'arm LIMIT' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o6;

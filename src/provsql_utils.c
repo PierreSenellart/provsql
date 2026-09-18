@@ -433,6 +433,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     get_provsql_func_oid("row_number_as_rank");
   constants.OID_FUNCTION_WINDOW_DISTINCT_TOKENS =
     get_provsql_func_oid("window_distinct_tokens");
+  constants.OID_FUNCTION_ACTUAL = get_provsql_func_oid("actual");
 
   constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
   CheckOid(OID_FUNCTION_GATE_ZERO);

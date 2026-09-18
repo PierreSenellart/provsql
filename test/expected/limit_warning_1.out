@@ -24,4 +24,4 @@ WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relation
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty.
 -- warning: over an aggregation
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty.
--- no warning: the filter of a rank, in a FROM subquery, alone as OFFSET, in LATERAL, a CTE, an arm, below an INSERT
+limit_warning: the filter of a rank skipped on PostgreSQL < 11

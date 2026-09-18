@@ -115,22 +115,68 @@ will either raise an error or may cause incorrect provenance tracking:
   single input row, but the window value is an opaque scalar. A
   ``WARNING`` is emitted
 
-``LIMIT`` and ``OFFSET`` deserve a word. The rows they keep carry the
-provenance they have in the *full* result: that a row was among those
-kept, which depends on the rows ranked before it, is not recorded. At
-the top level of a statement this is a sound reading -- the statement
-shows some rows of the full result, each correctly annotated. In a
-subquery (in ``FROM``, ``LATERAL``, a ``WITH`` clause, or an arm of a set
-operation) the truncated result feeds further computation, whose
-provenance then misses that dependence; ProvSQL emits a ``WARNING`` in
-that case.
-
 For unsupported correlated subqueries, ``LATERAL`` can be used as a
 workaround.
 For comparison or duplicate elimination on aggregate results, explicitly
 cast the aggregate column to its base type (e.g., ``cnt::bigint``),
 which extracts the value but loses the provenance information on that
 column.
+
+.. _limit:
+
+ORDER BY, LIMIT and OFFSET
+--------------------------
+
+Over provenance-tracked relations, ``ORDER BY … LIMIT k`` is read in
+every possible world: a row is kept when it is present and fewer than
+``k`` present rows come before it in the order. The result therefore
+has every row that may be among the first ``k``, each annotated with
+that condition, and not just the first ``k`` rows of the actual data:
+
+.. code-block:: postgresql
+
+    -- every employee, with the probability of being among the three
+    -- best paid
+    SELECT name, probability_evaluate(provenance())
+    FROM employees
+    ORDER BY salary DESC
+    LIMIT 3;
+
+``FETCH FIRST k ROWS WITH TIES`` keeps a row when fewer than ``k``
+present rows come strictly before it, so that the rows tied with the
+``k``-th are kept as well (``rank()``). ``LIMIT k`` and
+``FETCH FIRST k ROWS ONLY`` number the rows (``row_number()``): when the
+``ORDER BY`` leaves ties, SQL does not say which of the tied rows are
+kept; ProvSQL then reads the clause as ``WITH TIES`` and emits a
+``WARNING``. ``OFFSET m`` requires, in addition, that at least ``m``
+present rows come before. The same holds in a subquery, in ``FROM``,
+``LATERAL``, a ``WITH`` clause, or an arm of a set operation: a
+``LATERAL`` subquery with ``ORDER BY … LIMIT k`` gives the first ``k``
+rows of each group, as a ``rank()`` compared with ``k`` does (see
+:ref:`window-aggregates`). This needs PostgreSQL 11 or later.
+
+When the order of the rows is not in question, for instance to look at
+the first rows of a result, or when the tokens do not stand for the
+existence of the rows, the marker :sqlfunc:`actual` keeps the truncation of the
+actual result:
+
+.. code-block:: postgresql
+
+    SELECT name, probability_evaluate(provenance())
+    FROM employees
+    ORDER BY salary DESC
+    LIMIT actual(3);
+
+It applies to ``FETCH FIRST actual(k) ROWS`` and ``OFFSET actual(m)``
+too. The rows kept carry the provenance they have in the *full* result:
+that a row was among those kept is not recorded. At the top level of a
+statement, the statement shows some rows of the full result, each
+correctly annotated. In a subquery, the truncated result feeds further
+computation, whose provenance then misses that dependence, and ProvSQL
+emits a ``WARNING``. The same holds of a ``LIMIT`` without ``ORDER BY``,
+of an ``OFFSET`` with ``WITH TIES``, and of a ``LIMIT`` over an
+aggregation, a ``DISTINCT`` or a set operation, which are not read in
+every world.
 
 Provenance in Nested Queries
 -----------------------------

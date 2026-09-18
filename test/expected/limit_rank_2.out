@@ -1,0 +1,91 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+q|exact|probabilities
+top 2|t|1=0.0900 2=0.5000 3=0.5600 4=0.4000 5=0.0616 6=0.3402
+(1 row)
+q|exact|probabilities
+first|t|1=0.0080 2=0.0160 3=0.0112 4=0.0019 5=0.6000 6=0.3600
+(1 row)
+q|exact|probabilities
+OFFSET and LIMIT|t|1=0.1920 2=0.4300 3=0.4326 4=0.1313 5=0.0000 6=0.5400
+(1 row)
+q|exact|probabilities
+OFFSET alone|t|1=0.1080 2=0.3120 3=0.5572 4=0.3710 5=0.0000 6=0.0000
+(1 row)
+q|exact|probabilities
+after a selection, NULLs first|t|1=0.2000 2=0.5000 3=0.6300 4=0.2200
+(1 row)
+q|exact|probabilities
+several keys|t|1=0.1720 2=0.5000 3=0.7000 4=0.4000 5=0.2508 6=0.7002
+(1 row)
+q|exact|probabilities
+top 1 per group, LATERAL|t|a:1=0.0180 a:2=0.3000 a:3=0.2100 a:4=0.4000 b:5=0.0600 b:6=0.9000
+(1 row)
+q|exact|probabilities
+in a CTE, then filtered|t|1=0.1720 2=0.5000 3=0.7000 5=0.2508 6=0.7002
+(1 row)
+q|exact|probabilities
+arms of UNION ALL|t|1=0.0260 2=0.3160 3=0.2212 4=0.4019 5=0.6043 6=0.4248
+(1 row)
+q|exact|probabilities
+arm of UNION|t|1=0.0180 2=0.3000 3=0.2100 4=0.4000 5=0.6000 6=0.9000
+(1 row)
+q|exact|probabilities
+joined back|t|2-1=0.1000 3-1=0.1120 3-2=0.2100 4-1=0.0800 4-2=0.2000 4-3=0.2800 6-5=0.2041
+(1 row)
+remove_provenance
+
+(1 row)
+id|g|x|y|p
+1|a|10|1|0.0900
+2|a|20||0.5000
+3|a|20|3|0.5600
+4|a|30|4|0.4000
+5|b|5||0.0616
+6|b|7|6|0.3402
+(6 rows)
+remove_provenance
+
+(1 row)
+id|p
+2|0.5000
+4|0.4000
+(2 rows)
+remove_provenance
+
+(1 row)
+id
+1
+6
+(2 rows)
+WARNING:  ProvSQL: row_number() is tracked as rank(), which it differs from when rows tie on the ORDER BY of its window
+remove_provenance
+
+(1 row)
+candidates
+6
+(1 row)
+remove_provenance
+
+(1 row)
+id|rn
+1|4 (*)
+2|2 (*)
+3|3 (*)
+4|1 (*)
+5|6 (*)
+6|5 (*)
+(6 rows)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 Poisson-binomial): provenance circuit reduced from 55 to 3 gates
+remove_provenance
+
+(1 row)
+id|p
+7|0.000007894274
+(1 row)
+limit_rank: WITH TIES skipped on PostgreSQL < 13

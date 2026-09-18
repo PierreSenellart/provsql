@@ -100,7 +100,8 @@ WHERE s0.stop_name = 'Depart'
 SELECT remove_provenance('cs3_formula');
 SELECT stop_name, formula FROM cs3_formula;
 
--- LATERAL: the next stop after Depart on each line (ORDER BY ... LIMIT 1).
+-- LATERAL: the next stop after Depart on each line (ORDER BY ... LIMIT
+-- actual(1): every stop exists, the tokens stand for accessibility).
 -- Provenance flows through the lateral subquery even though cs3_stop_times and
 -- cs3_routes are untracked: DestA's hop (trip T1) is accessible, DestB's is not.
 CREATE TEMP TABLE cs3_next AS
@@ -119,7 +120,7 @@ JOIN LATERAL (
   WHERE t2.trip_id = t1.trip_id
     AND t2.stop_sequence > t1.stop_sequence
   ORDER BY t2.stop_sequence
-  LIMIT 1
+  LIMIT actual(1)
 ) nxt ON true
 WHERE s0.stop_name = 'Depart';
 

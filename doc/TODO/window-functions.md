@@ -192,9 +192,19 @@ arithmetic off the aggregate), and a top-3 over 300 rows takes half a second.
 The row's
 annotation becomes α ⊗ ⟦count of present rows before it < 3⟧, a `COUNT`
 comparison: the existing evaluators (the Poisson-binomial pre-pass for
-probabilities) apply. This is also the exact annotation of a `LIMIT k` inside a
-query, which today only raises a warning; `ORDER BY … LIMIT k` in a subquery
-could be lowered to it.
+probabilities) apply. This is also the exact annotation of a `LIMIT k`, and
+`ORDER BY … LIMIT k` is now lowered to it, at every level of a statement
+(`lower_limit_to_rank`, test `limit_rank`, user documentation in
+`user/querying.rst`): the query becomes the subquery of a filter on
+`row_number()` (or `rank()` for `FETCH … WITH TIES`), and returns every row
+that may be kept, annotated with that condition. `LIMIT actual(k)` keeps the
+truncation of the actual result, each kept row carrying its provenance in the
+full result. Left as truncations: a `LIMIT` without `ORDER BY`, over an
+aggregation, `DISTINCT` or set operation, `OFFSET` with `WITH TIES`, and every
+`LIMIT` before PostgreSQL 11. `OFFSET m LIMIT k` compares the same rank twice,
+which the closed-form evaluators decline (a shared aggregate): it goes through
+the general enumeration, limited in size; a range comparison in the COUNT
+evaluator would lift that.
 
 ### Tier 3: offset functions
 
@@ -274,9 +284,8 @@ A first version can take the quadratic form, with the documentation saying so.
    others" where possible (`count`, `sum`), and otherwise document the value as
    meant for Boolean and absorptive evaluation, or add an explicit flag on the
    aggregate gate?
-2. Should `ORDER BY … LIMIT k` in a subquery be rewritten to a rank comparison
-   once tier 2 exists, replacing the present warning by an exact annotation when
-   the order is total?
-3. Linear-size circuits for running aggregates: worth the change in the
+2. Linear-size circuits for running aggregates: worth the change in the
    evaluators from the start, or only once the quadratic form has shown its
-   limits?
+   limits? For a top-k (`LIMIT k`, `rank() <= k`), a circuit of `O(n·k)` gates,
+   "exactly j of the first i rows are present" for `j < k`, is deterministic and
+   decomposable, and would replace the quadratic prefix counts.

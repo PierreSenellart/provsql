@@ -13,7 +13,8 @@
  *    @c RangeTblRefs, with no kind-altering features (@c SubLinks,
  *    modifying @c CTEs, @c cteList, @c DISTINCT, @c GROUP BY,
  *    @c HAVING, aggregates, window functions, set-returning
- *    functions in the target list).  Either zero or one
+ *    functions in the target list, an @c ORDER @c BY ... @c LIMIT not
+ *    marked @c actual()).  Either zero or one
  *    provenance-tracked base relations are reached either directly
  *    (@c RTE_RELATION) or through any depth of subqueries
  *    (@c RTE_SUBQUERY -- view bodies after PG rewriting and inline
@@ -38,6 +39,7 @@
 
 #include "lib/stringinfo.h"
 #include "nodes/bitmapset.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/nodes.h"
 #include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
@@ -99,6 +101,41 @@ static bool classify_fromlist_shape_ok(Node *n) {
 }
 
 /**
+ * @brief Whether the ORDER BY ... LIMIT / OFFSET of @p q makes the lineage
+ *        of each row depend on the rows before it.
+ *
+ * Over tracked relations, such a clause keeps the rows that the rank filter
+ * of the rewriter selects in each world, so a row's annotation reads the
+ * rows sorted before it.  A clause marked @c actual() truncates the actual
+ * result and leaves lineages alone, as a LIMIT without ORDER BY does.
+ * Conservative: a clause the rewriter leaves a truncation (on PostgreSQL
+ * < 11, for instance) is reported too.
+ */
+static bool limit_is_rank_filter(const Query *q) {
+  constants_t constants;
+  Node *nodes[2];
+  int i;
+
+  if (q->sortClause == NIL ||
+      (q->limitOffset == NULL &&
+       (q->limitCount == NULL ||
+        (IsA(q->limitCount, Const) && ((Const *) q->limitCount)->constisnull))))
+    return false;
+  constants = get_constants(false);
+  if (!constants.ok || !OidIsValid(constants.OID_FUNCTION_ACTUAL))
+    return true;
+  nodes[0] = q->limitCount;
+  nodes[1] = q->limitOffset;
+  for (i = 0; i < 2; ++i) {
+    Node *n = nodes[i] ? strip_implicit_coercions(nodes[i]) : NULL;
+    if (n != NULL && IsA(n, FuncExpr) &&
+        ((FuncExpr *) n)->funcid == constants.OID_FUNCTION_ACTUAL)
+      return false;
+  }
+  return true;
+}
+
+/**
  * @brief Recursive walker shared by the top-level entry point and the
  *        @c RTE_SUBQUERY descent.
  *
@@ -126,7 +163,8 @@ static void classify_walk(Query                 *q,
 
   /* Shape gate at this level.  Anything that turns row lineage
    * into a composite (aggregates, GROUP BY, HAVING, DISTINCT,
-   * window functions, SRFs in the target list) breaks the
+   * window functions, SRFs in the target list, a LIMIT that is the
+   * filter of a rank) breaks the
    * per-row independent-atom property TID demands, so we refuse
    * to certify.  Hidden subqueries, modifying CTEs, named CTEs,
    * and set operations are conservative rejects from the original
@@ -145,7 +183,8 @@ static void classify_walk(Query                 *q,
       || q->havingQual != NULL
       || q->hasAggs
       || q->hasWindowFuncs
-      || q->hasTargetSRFs)
+      || q->hasTargetSRFs
+      || limit_is_rank_filter(q))
     *shape_ok = false;
 
   if (*shape_ok && q->jointree != NULL && q->jointree->fromlist != NIL) {

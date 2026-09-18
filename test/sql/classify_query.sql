@@ -24,8 +24,8 @@
 --    kind-altering features (SubLinks, modifying CTEs, DISTINCT,
 --    GROUP BY, HAVING, aggregates, window functions, SRFs in the
 --    target list), one tracked relation reached either directly or
---    through any depth of RTE_SUBQUERY entries.  ORDER BY, LIMIT,
---    OFFSET are transparent.
+--    through any depth of RTE_SUBQUERY entries.  ORDER BY, and LIMIT,
+--    OFFSET marked actual(), are transparent.
 --  * UNION ALL : a fully-UNION-ALL tree of subquery legs, each
 --    independently TID, over pairwise-disjoint relid sets, promotes
 --    to TID with the cumulative source list.
@@ -152,7 +152,8 @@ SELECT remove_provenance('cq_r11');
 SELECT id, k FROM cq_r11 ORDER BY id, k;
 
 -- Transparent operators --------------------------------------------
--- ORDER BY, LIMIT, OFFSET do not change row lineages; the
+-- ORDER BY, and LIMIT, OFFSET marked actual() (a truncation of the
+-- actual result), do not change row lineages; the
 -- classifier should look through them and inherit the source's
 -- recorded kind.  (The result-printing queries below remove_provenance
 -- on the materialised temp first, then SELECT plain rows -- no
@@ -165,13 +166,13 @@ CREATE TEMP TABLE cq_r12 AS SELECT id FROM cq_tid ORDER BY id DESC;
 SELECT remove_provenance('cq_r12');
 SELECT id FROM cq_r12 ORDER BY id;
 
--- (13) TID under LIMIT.
-CREATE TEMP TABLE cq_r13 AS SELECT id FROM cq_tid ORDER BY id LIMIT 2;
+-- (13) TID under LIMIT actual().
+CREATE TEMP TABLE cq_r13 AS SELECT id FROM cq_tid ORDER BY id LIMIT actual(2);
 SELECT remove_provenance('cq_r13');
 SELECT id FROM cq_r13 ORDER BY id;
 
--- (14) TID under OFFSET.
-CREATE TEMP TABLE cq_r14 AS SELECT id FROM cq_tid ORDER BY id OFFSET 1;
+-- (14) TID under OFFSET actual().
+CREATE TEMP TABLE cq_r14 AS SELECT id FROM cq_tid ORDER BY id OFFSET actual(1);
 SELECT remove_provenance('cq_r14');
 SELECT id FROM cq_r14 ORDER BY id;
 
@@ -179,10 +180,18 @@ SELECT id FROM cq_r14 ORDER BY id;
 -- Each of these turns per-row lineage into a composite (an OR of
 -- input atoms for DISTINCT / GROUP BY, a sum over a group for
 -- aggregates, a per-row function of multiple inputs for window
--- functions, an atom-sharing fan-out for SRFs).  None of them
+-- functions and for ORDER BY ... LIMIT, an atom-sharing fan-out for
+-- SRFs).  None of them
 -- preserve the per-row independent-atom property TID demands, so
 -- the classifier rejects them and reports OPAQUE while still
 -- enumerating the visible tracked sources for diagnostics.
+
+-- (14b) ORDER BY ... LIMIT without actual(): the rank filter, each
+--       row's annotation reading the rows before it.  Only the
+--       classification is shown: the rows kept depend on whether the
+--       rewriter tracks the rank (PostgreSQL 11 and later).
+CREATE TEMP TABLE cq_r14b AS SELECT id FROM cq_tid ORDER BY id LIMIT 2;
+DROP TABLE cq_r14b;
 
 -- (15) DISTINCT.
 CREATE TEMP TABLE cq_r15 AS SELECT DISTINCT label FROM cq_tid;

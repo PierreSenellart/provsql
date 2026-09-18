@@ -2230,6 +2230,15 @@ $$
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 -- ----------------------------------------------------------------------
+-- 6h. ORDER BY ... LIMIT k is tracked as the filter of a rank; LIMIT
+--     actual(k) keeps the truncation of the actual result.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION actual(k bigint)
+  RETURNS bigint AS
+$$ SELECT k $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

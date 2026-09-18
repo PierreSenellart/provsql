@@ -326,7 +326,8 @@ being among them:
 
 For probabilities, such a comparison of a rank with a constant is
 evaluated without enumerating possible worlds, as a
-``HAVING count(*) <= k`` is. ``row_number`` is tracked as ``rank``,
+``HAVING count(*) <= k`` is. ``ORDER BY … LIMIT k`` is read in the same way (see
+:ref:`limit`). ``row_number`` is tracked as ``rank``,
 which it equals when the ``ORDER BY`` of the window leaves no ties;
 with ties, which SQL itself does not order, the value shown and tracked
 is the rank, and a ``WARNING`` says so.

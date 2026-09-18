@@ -268,14 +268,14 @@ stop after it on that trip:
       WHERE t2.trip_id = t1.trip_id
         AND t2.stop_sequence > t1.stop_sequence
       ORDER BY t2.stop_sequence
-      LIMIT 1
+      LIMIT actual(1)
     ) nxt ON true
     WHERE s0.stop_name = 'Bagneux'
     ORDER BY r.route_long_name, nxt.stop_name;
 
 The ``LATERAL`` subquery runs once per outer row and may reference its
-columns (``t1.trip_id``, ``t1.stop_sequence``); the ``ORDER BY … LIMIT 1``
-keeps only the immediately following stop. Provenance flows through it
+columns (``t1.trip_id``, ``t1.stop_sequence``); the ``ORDER BY … LIMIT
+actual(1)`` keeps only the immediately following stop. Provenance flows through it
 unchanged: ``stops`` and ``trips`` are provenance-tracked (the untracked
 ``stop_times`` and ``routes`` contribute *certain* provenance, exactly as in
 an ordinary join), so each ``(line, next stop)`` row carries the lineage of
@@ -283,12 +283,13 @@ the records that produced it. Feeding that row's ``provenance()`` to
 :sqlfunc:`sr_boolean` therefore reports whether the hop to the next stop is
 wheelchair-accessible, just as the per-destination query of Step 4 did.
 
-This query makes ProvSQL emit a ``WARNING`` about the ``LIMIT`` in a
-subquery. The rows a ``LIMIT`` keeps carry the provenance they have
-in the full result: that a stop *is* the next one, which depends on the
-stops ranked before it, is not part of its provenance. If the tokens stood
-for the uncertain existence of stops, the result would miss the worlds
-where the next stop is absent and a later one takes its place. Here they
-stand for wheelchair accessibility and every stop exists, so which stop
-comes next is a plain fact of the timetable, and the answer means what it
-says. See :doc:`querying` for the general rule.
+Without ``actual``, ``ORDER BY … LIMIT 1`` would be read in every
+possible world: each later stop would be a candidate, annotated with the
+condition that no stop before it is present, since the tokens could stand
+for the uncertain existence of stops. Here they stand for wheelchair
+accessibility and every stop exists, so which stop comes next is a plain
+fact of the timetable: ``LIMIT actual(1)`` keeps the next stop of the
+actual data, and its row carries the provenance it has in the full
+result. ProvSQL emits a ``WARNING`` about this ``LIMIT`` in a subquery,
+since that provenance does not say that the stop is the next one; here,
+the answer means what it says. See :ref:`limit` for the general rule.
