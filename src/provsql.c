@@ -6370,6 +6370,8 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
  * Idempotent: when @c q->hasGroupRTE is already false, returns without
  * doing anything.
  */
+static void remove_rte_and_renumber(Query *q, Index rtindex);
+
 void strip_group_rte_pg18(Query *q) {
   resolve_group_rte_ctx grp_ctx;
   bool found = false;
@@ -6395,7 +6397,6 @@ void strip_group_rte_pg18(Query *q) {
   if (!found)
     return;
 
-  q->rtable      = list_truncate(q->rtable, rte_len);
   q->hasGroupRTE = false;
 
   foreach (lc, q->targetList) {
@@ -6416,6 +6417,14 @@ void strip_group_rte_pg18(Query *q) {
    * expects. */
   if (q->havingQual)
     q->havingQual = resolve_group_rte_vars_mutator(q->havingQual, &grp_ctx);
+
+  /* The RTE_GROUP is last as the parser leaves it, but a rewrite may have
+   * appended entries since (an uncorrelated scalar subquery moved to FROM):
+   * those move down one place, with every reference to them. */
+  if (rte_len + 1 == list_length(q->rtable))
+    q->rtable = list_truncate(q->rtable, rte_len);
+  else
+    remove_rte_and_renumber(q, (Index)(rte_len + 1));
 }
 #endif
 
@@ -15748,6 +15757,26 @@ static Node *renumber_rte_mut(Node *node, void *cx) {
   }
   return expression_tree_mutator(node, renumber_rte_mut, cx);
 }
+
+#if PG_VERSION_NUM >= 160000
+/** @brief Remove entry @p rtindex, referenced nowhere any more, from the
+ *  range table of @p q, and renumber the references to the entries after
+ *  it. */
+static void remove_rte_and_renumber(Query *q, Index rtindex) {
+  renumber_rte_ctx rctx;
+  int old_size = list_length(q->rtable);
+  int i;
+
+  rctx.old_size = old_size;
+  rctx.old_to_new = (int *)palloc0((old_size + 1) * sizeof(int));
+  rctx.sublevels_up = 0;
+  for (i = 1; i <= old_size; ++i)
+    rctx.old_to_new[i] = i < (int)rtindex ? i : (i == (int)rtindex ? 0 : i - 1);
+  q->rtable = list_delete_nth_cell(q->rtable, (int)rtindex - 1);
+  query_tree_mutator(q, renumber_rte_mut, &rctx, QTW_DONT_COPY_QUERY);
+  pfree(rctx.old_to_new);
+}
+#endif
 
 /**
  * @brief Canonicalise explicit inner joins in @p q's FROM to the comma-join

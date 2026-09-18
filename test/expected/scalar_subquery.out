@@ -694,3 +694,13 @@ p|k|n
 1|1|2
 1|3|2
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+c|n|g
+2 (*)|1 (*)|0
+2 (*)|2 (*)|1
+(2 rows)

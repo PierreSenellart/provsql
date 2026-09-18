@@ -1270,3 +1270,16 @@ SELECT p, k,
          agg_token_value_text(agg_token_uuid(rows)), ' \(\*\)$', '')::json) AS n
 FROM ssw_r ORDER BY p, k;
 DROP TABLE ssw_r, ssw;
+
+-- An uncorrelated scalar subquery in the target list of a grouped query with
+-- an aggregate: moved to FROM, after PostgreSQL 18's RTE_GROUP entry, which is
+-- removed without dropping the entries that follow it.
+CREATE TABLE ssg(id int, v int);
+INSERT INTO ssg VALUES (1,10),(2,20),(3,30);
+SELECT add_provenance('ssg');
+CREATE TABLE ssg_r AS
+  SELECT (SELECT count(v) FROM ssg WHERE v > 10) AS c, count(*) AS n, id % 2 AS g
+  FROM ssg GROUP BY id % 2;
+SELECT remove_provenance('ssg_r');
+SELECT c, n, g FROM ssg_r ORDER BY g;
+DROP TABLE ssg_r, ssg;
