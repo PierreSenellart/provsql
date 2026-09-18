@@ -812,4 +812,14 @@ pg_uuid_t provsql_plant_canonical(const char *work_name, gate_type type,
                                   const pg_uuid_t *target,
                                   unsigned info1, unsigned info2);
 
+/**
+ * @brief Forget what @c gate_builders.c remembers of the store (planted
+ *        gates, value gates written).  For @c circuit_cleanup, which may
+ *        remove gates.
+ */
+#ifdef __cplusplus
+extern "C"
+#endif
+void provsql_gate_builders_forget(void);
+
 #endif /* PROVSQL_UTILS_H */

@@ -17,6 +17,7 @@
 #include "fmgr.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
+#include "parser/parse_coerce.h"
 #include "lib/stringinfo.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -25,6 +26,7 @@
 #include "utils/memutils.h"
 #include "utils/uuid.h"
 
+#include "agg_token.h"
 #include "provsql_mmap.h"
 #include "provsql_utils.h"
 
@@ -398,4 +400,388 @@ Datum provenance_plus(PG_FUNCTION_ARGS) {
     return uuid_result(&tokens[0]);
   result = nary_gate(gate_plus, "plus", "plus-canonical", tokens, n);
   return uuid_result(&result);
+}
+
+/* -------------------------------------------------------------------------
+ * Values
+ *
+ * A value gate is addressed by "value" followed by CAST(val AS varchar), and
+ * carries that text as its extra.  The cast is resolved as the parser resolves
+ * it (a cast function, the output function, or nothing for a text-like type),
+ * once per call site: true::varchar is 'true' where the output function of
+ * boolean writes 't'.
+ * ------------------------------------------------------------------------- */
+
+typedef struct VarcharCast {
+  Oid type;
+  CoercionPathType path;
+  FmgrInfo fn;
+  int nargs;
+} VarcharCast;
+
+/** @brief @c CAST(val AS varchar) of argument @p argno, as a C string. */
+static char *varchar_of_argument(FunctionCallInfo fcinfo, int argno) {
+  VarcharCast *cast = (VarcharCast *)fcinfo->flinfo->fn_extra;
+  Oid type = get_fn_expr_argtype(fcinfo->flinfo, argno);
+  Datum val = PG_GETARG_DATUM(argno);
+
+  if (!OidIsValid(type))
+    provsql_error("cannot determine the type of the value");
+  if (cast == NULL || cast->type != type) {
+    Oid funcid = InvalidOid;
+
+    if (cast == NULL)
+      cast = (VarcharCast *)MemoryContextAllocZero(fcinfo->flinfo->fn_mcxt,
+                                                   sizeof(VarcharCast));
+    cast->path = find_coercion_pathway(VARCHAROID, type, COERCION_EXPLICIT,
+                                       &funcid);
+    if (cast->path == COERCION_PATH_FUNC) {
+      fmgr_info_cxt(funcid, &cast->fn, fcinfo->flinfo->fn_mcxt);
+      cast->nargs = get_func_nargs(funcid);
+    } else if (cast->path != COERCION_PATH_RELABELTYPE) {
+      bool is_varlena;
+      cast->path = COERCION_PATH_COERCEVIAIO;
+      getTypeOutputInfo(type, &funcid, &is_varlena);
+      fmgr_info_cxt(funcid, &cast->fn, fcinfo->flinfo->fn_mcxt);
+    }
+    cast->type = type;
+    fcinfo->flinfo->fn_extra = cast;
+  }
+
+  switch (cast->path) {
+  case COERCION_PATH_FUNC: {
+    Datum r;
+    if (cast->nargs == 1)
+      r = FunctionCall1(&cast->fn, val);
+    else if (cast->nargs == 2)
+      r = FunctionCall2(&cast->fn, val, Int32GetDatum(-1));
+    else
+      r = FunctionCall3(&cast->fn, val, Int32GetDatum(-1), BoolGetDatum(true));
+    return text_to_cstring(DatumGetTextPP(r));
+  }
+  case COERCION_PATH_RELABELTYPE:
+    return text_to_cstring(DatumGetTextPP(val));
+  default:
+    return OutputFunctionCall(&cast->fn, val);
+  }
+}
+
+/* The value gates this backend has written, extra included.  The same few
+ * values come back row after row (the 1 of every count), and writing the
+ * extra waits for the worker's answer; a gate of the store stays as it is
+ * once written, so there is nothing to repeat.  Emptied when it grows large,
+ * and by circuit_cleanup, which may remove gates. */
+static HTAB *written_values = NULL;
+#define WRITTEN_VALUES_MAX 65536
+
+void provsql_gate_builders_forget(void) {
+  if (written_values != NULL) {
+    hash_destroy(written_values);
+    written_values = NULL;
+  }
+  while (planted_scopes != NULL)
+    planted_forget(planted_scopes);
+}
+
+/** @brief The value gate of the text @p str, at the address named @p name
+ *         (@c "value" followed by @p str, or @c "null"). */
+static pg_uuid_t value_gate(const char *prefix, const char *suffix,
+                            const char *extra) {
+  StringInfoData buf;
+  pg_uuid_t token;
+  bool found;
+
+  name_begin(&buf, prefix);
+  appendStringInfoString(&buf, suffix);
+  token = name_end(&buf);
+
+  if (written_values != NULL
+      && hash_get_num_entries(written_values) >= WRITTEN_VALUES_MAX) {
+    hash_destroy(written_values);
+    written_values = NULL;
+  }
+  if (written_values == NULL) {
+    HASHCTL ctl;
+    memset(&ctl, 0, sizeof(ctl));
+    ctl.keysize = sizeof(pg_uuid_t);
+    ctl.entrysize = sizeof(pg_uuid_t);
+    ctl.hcxt = TopMemoryContext;
+    written_values = hash_create("ProvSQL value gates written", 256, &ctl,
+                                 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+  }
+  if (hash_search(written_values, &token, HASH_FIND, NULL) == NULL) {
+    provsql_internal_create_gate(&token, gate_value, 0, NULL);
+    provsql_internal_set_extra(&token, extra);
+    hash_search(written_values, &token, HASH_ENTER, &found);
+  }
+  return token;
+}
+
+/** @brief The semimod gate @p value_token ⊗ @p token. */
+static Datum semimod_gate(const pg_uuid_t *value_token, const pg_uuid_t *token) {
+  StringInfoData buf;
+  pg_uuid_t semimod, children[2];
+
+  name_begin(&buf, "semimod");
+  name_add_uuid(&buf, value_token);
+  name_add_uuid(&buf, token);
+  semimod = name_end(&buf);
+  children[0] = *token;
+  children[1] = *value_token;
+  provsql_internal_create_gate(&semimod, gate_semimod, 2, children);
+  return uuid_result(&semimod);
+}
+
+static const pg_uuid_t *semimod_token_argument(FunctionCallInfo fcinfo) {
+  if (PG_ARGISNULL(1))
+    provsql_error("provenance_semimod: the provenance token must not be NULL");
+  return PG_GETARG_UUID_P(1);
+}
+
+PG_FUNCTION_INFO_V1(provenance_semimod);
+/**
+ * @brief The semimodule gate @c val ⊗ @c token of an aggregated row.
+ *
+ * A NULL value does not take part in the aggregate (SQL aggregates skip NULL
+ * inputs; @c count(*) passes a constant 1): no gate, NULL is returned and
+ * @c provenance_aggregate drops it.
+ */
+Datum provenance_semimod(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token;
+  pg_uuid_t value_token;
+  char *str;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+  token = semimod_token_argument(fcinfo);
+  str = varchar_of_argument(fcinfo, 0);
+  value_token = value_gate("value", str, str);
+  return semimod_gate(&value_token, token);
+}
+
+PG_FUNCTION_INFO_V1(provenance_semimod_nullable);
+/**
+ * @brief @c provenance_semimod for the aggregates that see their NULL inputs
+ *        (@c array_agg, @c json_agg, ...): a NULL value gives a gate over the
+ *        constant value gate @c gate_null().
+ */
+Datum provenance_semimod_nullable(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token = semimod_token_argument(fcinfo);
+  pg_uuid_t value_token;
+
+  if (PG_ARGISNULL(0))
+    value_token = value_gate("null", "", "NULL");
+  else {
+    char *str = varchar_of_argument(fcinfo, 0);
+    value_token = value_gate("value", str, str);
+  }
+  return semimod_gate(&value_token, token);
+}
+
+PG_FUNCTION_INFO_V1(provenance_aggregate);
+/**
+ * @brief The @c agg gate of a group, paired with the aggregate's value.
+ *
+ * The address hashes the aggregate function and the scalar flag along with
+ * the children: @c SUM(x) and @c AVG(x) over the same children, or a scalar
+ * and a grouped aggregate, record different infos and must be different
+ * gates.  The flag is the high bit of info2, whose low 31 bits are the result
+ * type.  NULL children are rows whose value was NULL; they are dropped.  No
+ * child gives 𝟘.
+ */
+Datum provenance_aggregate(PG_FUNCTION_ARGS) {
+  int32 aggfnoid, aggtype;
+  bool is_scalar = !PG_ARGISNULL(4) && PG_GETARG_BOOL(4);
+  pg_uuid_t *tokens = NULL, agg, nothing;
+  char *val = NULL;
+  int n = 0;
+  agg_token *result;
+
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+    provsql_error("provenance_aggregate: the aggregate function and its "
+                  "result type must not be NULL");
+  aggfnoid = PG_GETARG_INT32(0);
+  aggtype = PG_GETARG_INT32(1);
+  if (!PG_ARGISNULL(2))
+    val = varchar_of_argument(fcinfo, 2);
+  if (!PG_ARGISNULL(3)) {
+    memset(&nothing, 0xFF, sizeof(nothing));
+    n = filtered_tokens(PG_GETARG_ARRAYTYPE_P(3), &nothing, &tokens);
+  }
+
+  if (n == 0)
+    agg = *address_of_zero();
+  else {
+    StringInfoData buf;
+
+    name_begin(&buf, "agg");
+    appendStringInfo(&buf, "%d", aggfnoid);
+    name_add_uuid_array(&buf, tokens, n);
+    if (is_scalar)
+      appendStringInfoChar(&buf, 'S');
+    agg = name_end(&buf);
+    provsql_internal_create_gate(&agg, gate_agg, (unsigned)n, tokens);
+    provsql_internal_set_infos(&agg, (unsigned)aggfnoid,
+                               is_scalar ? ((unsigned)aggtype | 0x80000000u)
+                                         : (unsigned)aggtype);
+    if (val != NULL)
+      provsql_internal_set_extra(&agg, val);
+  }
+
+  if (val == NULL)
+    PG_RETURN_NULL();
+  result = (agg_token *)palloc0(sizeof(agg_token));
+  {
+    StringInfoData t;
+    initStringInfo(&t);
+    name_add_uuid(&t, &agg);
+    memcpy(result->tok, t.data, 36);
+    pfree(t.data);
+  }
+  strlcpy(result->val, val, sizeof(result->val));
+  PG_RETURN_POINTER(result);
+}
+
+static bool same_token(const pg_uuid_t *a, const pg_uuid_t *b) {
+  return memcmp(a->data, b->data, UUID_LEN) == 0;
+}
+
+PG_FUNCTION_INFO_V1(provenance_monus);
+/**
+ * @brief @c token1 ⊖ @c token2.
+ *
+ * A NULL second argument is the row without a match in the outer join of the
+ * difference: nothing to subtract, and X ⊖ 𝟘 = X.  (Not the NULL ≡ 𝟙 of
+ * @c provenance_times: each combinator reads NULL as its own neutral.)
+ * X ⊖ X = 𝟘 and 𝟘 ⊖ X = 𝟘 are applied as well.
+ */
+Datum provenance_monus(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token1, *token2;
+  StringInfoData buf;
+  pg_uuid_t monus, children[2];
+
+  if (PG_ARGISNULL(0))
+    ereport(ERROR,
+            (errmsg("provenance_monus is called with first argument NULL")));
+  token1 = PG_GETARG_UUID_P(0);
+  if (PG_ARGISNULL(1))
+    return uuid_result(token1);
+  token2 = PG_GETARG_UUID_P(1);
+
+  if (same_token(token1, token2) || same_token(token1, address_of_zero()))
+    return uuid_result(address_of_zero());
+  if (same_token(token2, address_of_zero()))
+    return uuid_result(token1);
+
+  name_begin(&buf, "monus");
+  name_add_uuid(&buf, token1);
+  name_add_uuid(&buf, token2);
+  monus = name_end(&buf);
+  children[0] = *token1;
+  children[1] = *token2;
+  provsql_internal_create_gate(&monus, gate_monus, 2, children);
+  return uuid_result(&monus);
+}
+
+PG_FUNCTION_INFO_V1(provenance_delta);
+/**
+ * @brief δ(@c token).  A NULL token is an untracked source, 𝟙, and δ(𝟙) = 𝟙;
+ *        δ(𝟘) = 𝟘.
+ */
+Datum provenance_delta(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token;
+  StringInfoData buf;
+  pg_uuid_t delta;
+
+  if (PG_ARGISNULL(0))
+    return uuid_result(address_of_one());
+  token = PG_GETARG_UUID_P(0);
+  if (same_token(token, address_of_zero()) || same_token(token, address_of_one()))
+    return uuid_result(token);
+
+  name_begin(&buf, "delta");
+  name_add_uuid(&buf, token);
+  delta = name_end(&buf);
+  provsql_internal_create_gate(&delta, gate_delta, 1, token);
+  return uuid_result(&delta);
+}
+
+PG_FUNCTION_INFO_V1(provenance_cmp);
+/**
+ * @brief The comparison gate @c left @c op @c right of a HAVING condition.
+ *
+ * A comparison with a NULL operand is unknown in every possible world: the
+ * row is annotated 𝟘.  Hence not strict: a NULL result would read as the
+ * neutral of ⊗ and turn "unknown" into "certainly true".
+ */
+Datum provenance_cmp(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *left, *right;
+  Oid op;
+  StringInfoData buf;
+  pg_uuid_t cmp, children[2];
+
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
+    return uuid_result(address_of_zero());
+  left = PG_GETARG_UUID_P(0);
+  op = PG_GETARG_OID(1);
+  right = PG_GETARG_UUID_P(2);
+
+  name_begin(&buf, "cmp");
+  name_add_uuid(&buf, left);
+  appendStringInfo(&buf, "%u", op);
+  name_add_uuid(&buf, right);
+  cmp = name_end(&buf);
+  children[0] = *left;
+  children[1] = *right;
+  provsql_internal_create_gate(&cmp, gate_cmp, 2, children);
+  provsql_internal_set_infos(&cmp, (unsigned)op, 0);
+  return uuid_result(&cmp);
+}
+
+PG_FUNCTION_INFO_V1(annotate);
+/**
+ * @brief A transparent @c annotation gate over @c token, carrying @c extra.
+ *
+ * The address hashes @c extra along with the child: two annotations of one
+ * token with different texts are different gates.  NULL on a NULL token.
+ */
+Datum annotate(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token;
+  char *extra = NULL;
+  StringInfoData buf;
+  pg_uuid_t annotated;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+  token = PG_GETARG_UUID_P(0);
+  if (!PG_ARGISNULL(1))
+    extra = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+  name_begin(&buf, "annotation");
+  name_add_uuid(&buf, token);
+  if (extra != NULL)
+    appendStringInfoString(&buf, extra);
+  annotated = name_end(&buf);
+  provsql_internal_create_gate(&annotated, gate_annotation, 1, token);
+  if (extra != NULL)
+    provsql_internal_set_extra(&annotated, extra);
+  return uuid_result(&annotated);
+}
+
+PG_FUNCTION_INFO_V1(inversion_free_key);
+/**
+ * @brief The order key of an input on the inversion-free route,
+ *        @c "K<factor> <bytes of root>:<root><bytes of sec>:<sec>".  Strict.
+ */
+Datum inversion_free_key(PG_FUNCTION_ARGS) {
+  text *root = PG_GETARG_TEXT_PP(0), *sec = PG_GETARG_TEXT_PP(1);
+  StringInfoData buf;
+
+  initStringInfo(&buf);
+  appendStringInfo(&buf, "K%d %d:", PG_GETARG_INT32(2),
+                   (int)VARSIZE_ANY_EXHDR(root));
+  appendBinaryStringInfo(&buf, VARDATA_ANY(root), VARSIZE_ANY_EXHDR(root));
+  appendStringInfo(&buf, "%d:", (int)VARSIZE_ANY_EXHDR(sec));
+  appendBinaryStringInfo(&buf, VARDATA_ANY(sec), VARSIZE_ANY_EXHDR(sec));
+  PG_RETURN_TEXT_P(cstring_to_text_with_len(buf.data, buf.len));
 }

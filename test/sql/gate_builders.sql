@@ -111,6 +111,126 @@ BEGIN
 END
 $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
 
+CREATE FUNCTION gb_ref.provenance_monus(token1 UUID, token2 UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  monus_token uuid;
+BEGIN
+  IF token1 IS NULL THEN
+    RAISE EXCEPTION USING MESSAGE='provenance_monus is called with first argument NULL';
+  END IF;
+
+  IF token2 IS NULL THEN
+    -- The ⊖-right-neutral 0: a NULL second argument is the no-match case
+    -- of the difference operator's LEFT OUTER JOIN (nothing to subtract),
+    -- so X ⊖ NULL = X ⊖ 0 = X.  Note this is NOT the NULL ≡ 1 reading of
+    -- provenance_times; each combinator maps NULL to its own neutral.
+    RETURN token1;
+  END IF;
+
+  IF token1 = token2 THEN
+    -- X-X=0
+    monus_token:=gate_zero();
+  ELSIF token1 = gate_zero() THEN
+    -- 0-X=0
+    monus_token:=gate_zero();
+  ELSIF token2 = gate_zero() THEN
+    -- X-0=X
+    monus_token:=token1;
+  ELSE
+    monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
+    PERFORM create_gate(monus_token, 'monus', ARRAY[token1::uuid, token2::uuid]);
+  END IF;
+
+  RETURN monus_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE FUNCTION gb_ref.provenance_delta
+  (token UUID)
+  RETURNS UUID AS
+$$
+DECLARE
+  delta_token uuid;
+BEGIN
+  -- NULL token ≡ 1 (untracked source), and δ(1) = 1.  Tested first: the
+  -- equality comparisons below are not NULL-safe.
+  IF token IS NULL THEN
+    return gate_one();
+  END IF;
+
+  IF token = gate_zero() OR token = gate_one() THEN
+    return token;
+  END IF;
+
+  delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
+
+  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
+
+  RETURN delta_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE FUNCTION gb_ref.provenance_cmp(
+  left_token  UUID,
+  comparison_op OID,
+  right_token UUID
+)
+RETURNS UUID AS
+$$
+DECLARE
+  cmp_token UUID;
+BEGIN
+  -- A comparison with a NULL operand (a NULL random_variable cell, or an
+  -- aggregate that is NULL on the instance) is unknown under SQL's 3VL in
+  -- every possible world: the row is annotated zero.  The function must
+  -- not be STRICT: a NULL result would read as the neutral token
+  -- (provenance_times drops it), silently turning "unknown" into
+  -- "certainly true".
+  IF left_token IS NULL OR right_token IS NULL OR comparison_op IS NULL THEN
+    RETURN gate_zero();
+  END IF;
+  -- deterministic v5 namespace id
+  cmp_token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('cmp', left_token::text, comparison_op::text, right_token::text)
+  );
+  -- wire it up in the circuit
+  PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
+  PERFORM set_infos(cmp_token, comparison_op::integer);
+  RETURN cmp_token;
+END
+$$ LANGUAGE plpgsql
+  SET search_path=provsql,pg_temp,public
+  SECURITY DEFINER
+  IMMUTABLE
+  PARALLEL SAFE;
+
+CREATE FUNCTION gb_ref.annotate(token UUID, extra TEXT) RETURNS UUID AS
+$$
+DECLARE
+  annotated uuid;
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  annotated := public.uuid_generate_v5(uuid_ns_provsql(),
+                                       concat('annotation', token, extra));
+  PERFORM create_gate(annotated, 'annotation', ARRAY[token]);
+  PERFORM set_extra(annotated, extra);
+  RETURN annotated;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE FUNCTION gb_ref.inversion_free_key(root TEXT, sec TEXT, factor INT)
+  RETURNS TEXT AS
+$$ SELECT 'K' || factor::text || ' '
+       || octet_length(root) || ':' || root
+       || octet_length(sec)  || ':' || sec $$
+  LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
 CREATE TABLE gb_tok(i int, t uuid);
 INSERT INTO gb_tok SELECT i, public.uuid_generate_v5(provsql.uuid_ns_provsql(), 'gb-leaf-' || i)
   FROM generate_series(1, 60) i;
@@ -172,6 +292,44 @@ SELECT 'empty array' AS f,
        gb_same(gb_ref.provenance_times(VARIADIC '{}'::uuid[]), provsql.provenance_times(VARIADIC '{}'::uuid[])) AS times,
        provsql.provenance_plus('{}'::uuid[]) = provsql.gate_zero() AS plus_is_zero;
 
+-- provenance_monus, provenance_delta, provenance_cmp.  The C function runs
+-- first here, so that it is the one that creates the gate.
+CREATE FUNCTION gb_tok(k int) RETURNS uuid LANGUAGE sql AS $$ SELECT (gb_tokens(k))[1] $$;
+SELECT 'monus' AS f, label, gb_same(c, r) AS result,
+       CASE WHEN provsql.get_gate_type(c) = 'monus' THEN provsql.get_children(c) = ARRAY[gb_tok(a), gb_tok(b)] END AS children_in_order
+FROM (SELECT label, a, b, provsql.provenance_monus(gb_tok(a), gb_tok(b)) AS c,
+             gb_ref.provenance_monus(gb_tok(a), gb_tok(b)) AS r
+      FROM (VALUES ('two tokens', 11, 12), ('the other way', 12, 11), ('X - X', 13, 13),
+                   ('0 - X', -2, 14), ('X - 0', 14, -2), ('X - NULL', 15, 0),
+                   ('1 - X', -1, 16), ('X - 1', 16, -1), ('0 - NULL', -2, 0)) v(label, a, b)) t
+ORDER BY label;
+SELECT provsql.provenance_monus(NULL, gb_tok(11));
+SELECT 'delta' AS f, label, gb_same(c, r) AS result
+FROM (SELECT label, provsql.provenance_delta(gb_tok(a)) AS c, gb_ref.provenance_delta(gb_tok(a)) AS r
+      FROM (VALUES ('a token', 17), ('0', -2), ('1', -1), ('NULL', 0)) v(label, a)) t
+ORDER BY label;
+SELECT 'cmp' AS f, label, gb_same(c, r) AS result,
+       (provsql.get_infos(c)).info1 AS info1, (provsql.get_infos(c)).info2 AS info2
+FROM (SELECT label, provsql.provenance_cmp(gb_tok(a), op::oid, gb_tok(b)) AS c,
+             gb_ref.provenance_cmp(gb_tok(a), op::oid, gb_tok(b)) AS r
+      FROM (VALUES ('>', 18, 521, 19), ('the other way', 19, 521, 18), ('another operator', 18, 97, 19),
+                   ('NULL left', 0, 521, 19), ('NULL right', 18, 521, 0), ('NULL operator', 18, NULL, 19)) v(label, a, op, b)) t
+ORDER BY label;
+
+-- annotate and the order keys it carries on the inversion-free route.
+SELECT 'annotate' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS extra,
+       provsql.get_children(c) = ARRAY[gb_tok(a)] AS over_the_token
+FROM (SELECT label, a, provsql.annotate(gb_tok(a), x) AS c, gb_ref.annotate(gb_tok(a), x) AS r
+      FROM (VALUES ('a text', 21, 'gb note'), ('another text, same token', 21, 'gb other note'),
+                   ('same text, another token', 22, 'gb note'), ('empty text', 23, ''),
+                   ('NULL text', 24, NULL), ('NULL token', 0, 'gb note'),
+                   ('not ASCII', 25, 'gb clé – ⊗')) v(label, a, x)) t
+ORDER BY label;
+SELECT 'key' AS f, provsql.inversion_free_key(root, sec, factor) AS key,
+       provsql.inversion_free_key(root, sec, factor) IS NOT DISTINCT FROM gb_ref.inversion_free_key(root, sec, factor) AS same
+FROM (VALUES ('12', '7', 0), ('a b:c', '', 3), ('clé', '⊗', -1), (NULL, 'x', 1), ('x', NULL, 1), ('x', 'y', NULL)) v(root, sec, factor)
+ORDER BY root, sec;
+
 -- A gate planted for a multiset of tokens of a working table is returned in
 -- place of an ordinary gate, whatever the order of the children, by the
 -- session that planted it and for as long as the working table exists.  The
@@ -219,6 +377,6 @@ SELECT provsql.get_gate_type(provsql.provenance_plus(gb_tokens(2,1))) AS type,
 DROP TABLE gb_work2;
 
 DROP TABLE gb_tok, gb_cases, gb_planted;
-DROP FUNCTION gb_tokens(int[]); DROP FUNCTION gb_same(uuid, uuid); DROP FUNCTION gb_no_survivor(int[]);
+DROP FUNCTION gb_tok(int); DROP FUNCTION gb_tokens(int[]); DROP FUNCTION gb_same(uuid, uuid); DROP FUNCTION gb_no_survivor(int[]);
 SET client_min_messages = warning;
 DROP SCHEMA gb_ref CASCADE;

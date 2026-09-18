@@ -266,6 +266,7 @@ Datum circuit_cleanup(PG_FUNCTION_ARGS)
   /* Our own caches answer "this gate exists" without contacting the
      worker, which would survive the rebuild as a lie. */
   circuit_cache_reset();
+  provsql_gate_builders_forget();
 
   /* The root set outlives the SPI session that fills it, so it is
      allocated in our own context: SPI_finish frees everything palloc'd

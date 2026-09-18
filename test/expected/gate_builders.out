@@ -48,6 +48,49 @@ null array|t|t|t
 f|times|plus_is_zero
 empty array|same one / 0 children|t
 (1 row)
+f|label|result|children_in_order
+monus|0 - NULL|same zero / 0 children|
+monus|0 - X|same zero / 0 children|
+monus|1 - X|same monus / 2 children|t
+monus|the other way|same monus / 2 children|t
+monus|two tokens|same monus / 2 children|t
+monus|X - 0|same input / 0 children|
+monus|X - 1|same monus / 2 children|t
+monus|X - NULL|same input / 0 children|
+monus|X - X|same zero / 0 children|
+(9 rows)
+ERROR:  provenance_monus is called with first argument NULL
+f|label|result
+delta|0|same zero / 0 children
+delta|1|same one / 0 children
+delta|a token|same delta / 1 children
+delta|NULL|same one / 0 children
+(4 rows)
+f|label|result|info1|info2
+cmp|>|same cmp / 2 children|521|0
+cmp|another operator|same cmp / 2 children|97|0
+cmp|NULL left|same zero / 0 children|0|0
+cmp|NULL operator|same zero / 0 children|0|0
+cmp|NULL right|same zero / 0 children|0|0
+cmp|the other way|same cmp / 2 children|521|0
+(6 rows)
+f|label|result|extra|over_the_token
+annotate|another text, same token|same annotation / 1 children|gb other note|t
+annotate|a text|same annotation / 1 children|gb note|t
+annotate|empty text|same annotation / 1 children||t
+annotate|not ASCII|same annotation / 1 children|gb clé – ⊗|t
+annotate|NULL text|same annotation / 1 children||t
+annotate|NULL token|||
+annotate|same text, another token|same annotation / 1 children|gb note|t
+(7 rows)
+f|key|same
+key|K0 2:121:7|t
+key|K3 5:a b:c0:|t
+key|K-1 4:clé3:⊗|t
+key||t
+key||t
+key||t
+(6 rows)
 planted_scope
 
 (1 row)

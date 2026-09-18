@@ -474,23 +474,12 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
  * different certificates to a shared root).  The wrapper is transparent
  * (identity) for EVERY evaluator; @p extra is inert metadata read only by the
  * code that placed it.  No-op (returns NULL) on a NULL input.
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>), with the declared cost of the
+ * function it replaces, so that plans stay the same.
  */
 CREATE OR REPLACE FUNCTION annotate(token UUID, extra TEXT) RETURNS UUID AS
-$$
-DECLARE
-  annotated uuid;
-BEGIN
-  IF token IS NULL THEN
-    RETURN NULL;
-  END IF;
-  annotated := public.uuid_generate_v5(uuid_ns_provsql(),
-                                       concat('annotation', token, extra));
-  PERFORM create_gate(annotated, 'annotation', ARRAY[token]);
-  PERFORM set_extra(annotated, extra);
-  RETURN annotated;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
-   SECURITY DEFINER PARALLEL SAFE;
+  'provsql','annotate' LANGUAGE C COST 100 PARALLEL SAFE;
 
 /**
  * @brief Peel every transparent @c gate_annotation wrapper off @p token,
@@ -780,13 +769,13 @@ CREATE OPERATOR ! (RIGHTARG=UUID, PROCEDURE=provenance_not);
  * including text containing spaces, colons or digits.  @p factor is the atom's
  * factor id (or -1 for the shared self-join guard).  @c IMMUTABLE so the planner
  * can fold it and the marker dedups by content-addressing.
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>); it was an inlined SQL function,
+ * hence the default cost.
  */
 CREATE OR REPLACE FUNCTION inversion_free_key(root TEXT, sec TEXT, factor INT)
   RETURNS TEXT AS
-$$ SELECT 'K' || factor::text || ' '
-       || octet_length(root) || ':' || root
-       || octet_length(sec)  || ':' || sec $$
-  LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+  'provsql','inversion_free_key' LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
 /**
  * @brief Set extra text information on provenance circuit gate
@@ -1637,42 +1626,13 @@ CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
  *
  * Implements m-semiring monus. Returns token1 if token2 is NULL
  * (used for LEFT OUTER JOIN semantics in the EXCEPT rewriting).
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>), with the declared cost of the
+ * PL/pgSQL function it was, so that plans stay the same.
  */
 CREATE OR REPLACE FUNCTION provenance_monus(token1 UUID, token2 UUID)
   RETURNS UUID AS
-$$
-DECLARE
-  monus_token uuid;
-BEGIN
-  IF token1 IS NULL THEN
-    RAISE EXCEPTION USING MESSAGE='provenance_monus is called with first argument NULL';
-  END IF;
-
-  IF token2 IS NULL THEN
-    -- The ⊖-right-neutral 0: a NULL second argument is the no-match case
-    -- of the difference operator's LEFT OUTER JOIN (nothing to subtract),
-    -- so X ⊖ NULL = X ⊖ 0 = X.  Note this is NOT the NULL ≡ 1 reading of
-    -- provenance_times; each combinator maps NULL to its own neutral.
-    RETURN token1;
-  END IF;
-
-  IF token1 = token2 THEN
-    -- X-X=0
-    monus_token:=gate_zero();
-  ELSIF token1 = gate_zero() THEN
-    -- 0-X=0
-    monus_token:=gate_zero();
-  ELSIF token2 = gate_zero() THEN
-    -- X-0=X
-    monus_token:=token1;
-  ELSE
-    monus_token:=uuid_generate_v5(uuid_ns_provsql(),concat('monus',token1,token2));
-    PERFORM create_gate(monus_token, 'monus', ARRAY[token1::uuid, token2::uuid]);
-  END IF;
-
-  RETURN monus_token;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+  'provsql','provenance_monus' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Create a project gate for where-provenance tracking
@@ -1936,6 +1896,9 @@ $$ LANGUAGE plpgsql SET client_min_messages = warning;
  * @param left_token provenance token for the left operand
  * @param comparison_op OID of the comparison operator
  * @param right_token provenance token for the right operand
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>), with the declared cost of the
+ * PL/pgSQL function it was, so that plans stay the same.
  */
 CREATE OR REPLACE FUNCTION provenance_cmp(
   left_token  UUID,
@@ -1943,34 +1906,7 @@ CREATE OR REPLACE FUNCTION provenance_cmp(
   right_token UUID
 )
 RETURNS UUID AS
-$$
-DECLARE
-  cmp_token UUID;
-BEGIN
-  -- A comparison with a NULL operand (a NULL random_variable cell, or an
-  -- aggregate that is NULL on the instance) is unknown under SQL's 3VL in
-  -- every possible world: the row is annotated zero.  The function must
-  -- not be STRICT: a NULL result would read as the neutral token
-  -- (provenance_times drops it), silently turning "unknown" into
-  -- "certainly true".
-  IF left_token IS NULL OR right_token IS NULL OR comparison_op IS NULL THEN
-    RETURN gate_zero();
-  END IF;
-  -- deterministic v5 namespace id
-  cmp_token := public.uuid_generate_v5(
-    uuid_ns_provsql(),
-    concat('cmp', left_token::text, comparison_op::text, right_token::text)
-  );
-  -- wire it up in the circuit
-  PERFORM create_gate(cmp_token, 'cmp', ARRAY[left_token, right_token]);
-  PERFORM set_infos(cmp_token, comparison_op::integer);
-  RETURN cmp_token;
-END
-$$ LANGUAGE plpgsql
-  SET search_path=provsql,pg_temp,public
-  SECURITY DEFINER
-  IMMUTABLE
-  PARALLEL SAFE;
+  'provsql','provenance_cmp' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief The factors of a row annotation an aggregate comparison does not
@@ -7058,31 +6994,14 @@ CREATE AGGREGATE rv_percentile_impl(
  *
  * Used internally for aggregate provenance. Returns the token unchanged
  * if it is gate_zero() or gate_one(), and gate_one() if the token is NULL.
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>), with the declared cost of the
+ * PL/pgSQL function it was, so that plans stay the same.
  */
 CREATE OR REPLACE FUNCTION provenance_delta
   (token UUID)
   RETURNS UUID AS
-$$
-DECLARE
-  delta_token uuid;
-BEGIN
-  -- NULL token ≡ 1 (untracked source), and δ(1) = 1.  Tested first: the
-  -- equality comparisons below are not NULL-safe.
-  IF token IS NULL THEN
-    return gate_one();
-  END IF;
-
-  IF token = gate_zero() OR token = gate_one() THEN
-    return token;
-  END IF;
-
-  delta_token:=uuid_generate_v5(uuid_ns_provsql(),concat('delta',token));
-
-  PERFORM create_gate(delta_token,'delta',ARRAY[token::uuid]);
-
-  RETURN delta_token;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+  'provsql','provenance_delta' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Build an aggregate provenance gate from grouped tokens
@@ -7098,6 +7017,9 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
  * @param is_scalar true for a scalar (no GROUP BY) aggregation, whose
  *        output row exists even when no tuple is present; stored in the
  *        high bit of info2
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>), with the declared cost of the
+ * PL/pgSQL function it was, so that plans stay the same.
  */
 CREATE OR REPLACE FUNCTION provenance_aggregate(
     aggfnoid integer,
@@ -7106,46 +7028,7 @@ CREATE OR REPLACE FUNCTION provenance_aggregate(
     tokens uuid[],
     is_scalar boolean DEFAULT false)
   RETURNS agg_token AS
-$$
-DECLARE
-  c INTEGER;
-  agg_tok uuid;
-  agg_val varchar;
-BEGIN
-  -- Drop the NULL placeholders array_agg keeps for rows that did not produce a
-  -- semimod gate (provenance_semimod returns NULL for a NULL aggregated value),
-  -- so a NULL input never participates in the aggregate.
-  tokens := array_remove(tokens, NULL);
-  c:=COALESCE(array_length(tokens, 1), 0);
-
-  agg_val = CAST(val as VARCHAR);
-
-  IF c = 0 THEN
-    agg_tok := gate_zero();
-  ELSE
-    -- aggfnoid must be part of the UUID: SUM(id) and AVG(id) over the
-    -- same children would otherwise collapse to a single gate, and
-    -- their concurrent set_infos calls would overwrite each other's
-    -- aggregation operator (resulting in the wrong agg_kind being
-    -- read by provsql_having under cross-backend contention).  The
-    -- scalar-aggregation flag must likewise be hashed: a scalar and a
-    -- grouped aggregate over identical children carry different info2 and
-    -- must stay distinct gates, else the concurrent set_infos calls would
-    -- clobber the flag.  The flag is stored in the high bit of info2 (the
-    -- low 31 bits keep the result-type OID); aggtype itself is passed clean
-    -- so the agg_token->scalar cast still finds a valid type.
-    agg_tok := uuid_generate_v5(
-      uuid_ns_provsql(),
-      concat('agg',aggfnoid,tokens,CASE WHEN is_scalar THEN 'S' ELSE '' END));
-    PERFORM create_gate(agg_tok, 'agg', tokens);
-    PERFORM set_infos(agg_tok, aggfnoid,
-                      CASE WHEN is_scalar THEN aggtype | (-2147483648) ELSE aggtype END);
-    PERFORM set_extra(agg_tok, agg_val);
-  END IF;
-
-  RETURN '( '||agg_tok||' , '||agg_val||' )';
-END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
+  'provsql','provenance_aggregate' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Create a semimodule scalar multiplication gate
@@ -7155,37 +7038,13 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURIT
  *
  * @param val the scalar value
  * @param token the provenance token to multiply
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>), with the declared cost of the
+ * PL/pgSQL function it was, so that plans stay the same.
  */
 CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
   RETURNS UUID AS
-$$
-DECLARE
-  semimod_token uuid;
-  value_token uuid;
-BEGIN
-  -- A NULL value means this row does not participate in the aggregate (SQL
-  -- aggregates ignore NULL inputs; only count(*) counts rows unconditionally,
-  -- and it passes a constant 1 here).  Produce no semimod gate so the row is
-  -- skipped when provenance_aggregate builds the agg gate.
-  IF val IS NULL THEN
-    RETURN NULL;
-  END IF;
-
-  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('value',CAST(val AS VARCHAR)))
-    INTO value_token;
-  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
-    INTO semimod_token;
-
-  --create value gates
-  PERFORM create_gate(value_token,'value');
-  PERFORM set_extra(value_token, CAST(val AS VARCHAR));
-
-  --create semimod gate
-  PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
-
-  RETURN semimod_token;
-END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
+  'provsql','provenance_semimod' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Semimodule gate for an aggregate that sees its NULL inputs
@@ -7197,30 +7056,13 @@ $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURIT
  *
  * @param val the scalar value, possibly NULL
  * @param token the provenance token to multiply
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>), with the declared cost of the
+ * PL/pgSQL function it was, so that plans stay the same.
  */
 CREATE OR REPLACE FUNCTION provenance_semimod_nullable(val anyelement, token UUID)
   RETURNS UUID AS
-$$
-DECLARE
-  semimod_token uuid;
-  value_token uuid;
-BEGIN
-  IF val IS NOT NULL THEN
-    RETURN provenance_semimod(val, token);
-  END IF;
-
-  value_token := gate_null();
-  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
-    INTO semimod_token;
-
-  PERFORM create_gate(value_token,'value');
-  PERFORM set_extra(value_token, 'NULL');
-
-  PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
-
-  RETURN semimod_token;
-END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
+  'provsql','provenance_semimod_nullable' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /** @} */
 

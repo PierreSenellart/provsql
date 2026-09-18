@@ -1,0 +1,86 @@
+\set ECHO none
+label|same_token|gate
+integer|t|semimod of the row token and value "918273"
+bigint|t|semimod of the row token and value "9182736455463"
+smallint|t|semimod of the row token and value "9182"
+numeric|t|semimod of the row token and value "918273.6450"
+numeric, trailing zeros|t|semimod of the row token and value "918273.000"
+double precision|t|semimod of the row token and value "9.1827325e+15"
+real|t|semimod of the row token and value "9182.5"
+boolean|t|semimod of the row token and value "true"
+text|t|semimod of the row token and value "gba text 918273"
+varchar|t|semimod of the row token and value "gba varchar 918273"
+varchar(n)|t|semimod of the row token and value "gba vc"
+char(n), padded|t|semimod of the row token and value "gba ch"
+name|t|semimod of the row token and value "gba_name"
+date|t|semimod of the row token and value "09-18-2026"
+timestamp|t|semimod of the row token and value "Fri Sep 18 01:02:03.5 2026"
+interval|t|semimod of the row token and value "@ 918 days 2 hours"
+uuid|t|semimod of the row token and value "00000000-0000-4000-8000-000000918273"
+integer[]|t|semimod of the row token and value "{9,1,8,2,7,3}"
+text[] with quotes|t|semimod of the row token and value "{"gba a","gba \"b\"",NULL}"
+enum|t|semimod of the row token and value "gba large"
+domain|t|semimod of the row token and value "918.27"
+jsonb|t|semimod of the row token and value "{"gba": [918, 273]}"
+text reading NULL|t|semimod of the row token and value "NULL"
+empty text|t|semimod of the row token and value ""
+long text|t|semimod of the row token and value "gba long 918273 gba long 918273 gba long"
+(25 rows)
+c_null|ref_null
+t|t
+(1 row)
+label|same_token|gate|over_gate_null
+nullable, a number|t|semimod of the row token and value "564738"|f
+nullable, NULL|t|semimod of the row token and value "NULL"|t
+nullable, text reading NULL|t|semimod of the row token and value "NULL"|f
+(3 rows)
+same
+t
+(1 row)
+ERROR:  ProvSQL: provenance_semimod: the provenance token must not be NULL
+different_semimod|same_value_gate
+t|t
+(1 row)
+label|same_token|same_value|type|children|info1|info2|extra|value_is_cut_extra
+integer|t|t|agg|3|2108|23|918273|t
+bigint|t|t|agg|3|2108|23|9182736455463|t
+smallint|t|t|agg|3|2108|23|9182|t
+numeric|t|t|agg|3|2108|23|918273.6450|t
+numeric, trailing zeros|t|t|agg|3|2108|23|918273.000|t
+double precision|t|t|agg|3|2108|23|9.1827325e+15|t
+real|t|t|agg|3|2108|23|9182.5|t
+boolean|t|t|agg|3|2108|23|true|t
+text|t|t|agg|3|2108|23|gba text 918273|t
+varchar|t|t|agg|3|2108|23|gba varchar 918273|t
+varchar(n)|t|t|agg|3|2108|23|gba vc|t
+char(n), padded|t|t|agg|3|2108|23|gba ch|t
+name|t|t|agg|3|2108|23|gba_name|t
+date|t|t|agg|3|2108|23|09-18-2026|t
+timestamp|t|t|agg|3|2108|23|Fri Sep 18 01:02:03.5 2026|t
+interval|t|t|agg|3|2108|23|@ 918 days 2 hours|t
+uuid|t|t|agg|3|2108|23|00000000-0000-4000-8000-000000918273|t
+integer[]|t|t|agg|3|2108|23|{9,1,8,2,7,3}|t
+text[] with quotes|t|t|agg|3|2108|23|{"gba a","gba \"b\"",NULL}|t
+enum|t|t|agg|3|2108|23|gba large|t
+domain|t|t|agg|3|2108|23|918.27|t
+jsonb|t|t|agg|3|2108|23|{"gba": [918, 273]}|t
+text reading NULL|t|t|agg|3|2108|23|NULL|t
+empty text|t|t|agg|3|2108|23||t
+long text|t|t|agg|3|2108|23|gba long 918273 gba long 918273 gba long|t
+(25 rows)
+label|same_token|type|children_as_given|info2
+NULL children dropped|t|agg|t|23
+scalar|t|agg|t|-2147483625
+other aggregate function|t|agg|t|1700
+(3 rows)
+distinct_gates
+3
+(1 row)
+label|same_token|is_zero
+no child|t|t
+NULL array|t|t
+NULL children only|t|t
+(3 rows)
+c_null|ref_null
+t|t
+(1 row)

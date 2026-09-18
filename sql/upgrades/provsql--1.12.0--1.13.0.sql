@@ -1007,27 +1007,7 @@ $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
  */
 CREATE OR REPLACE FUNCTION provenance_semimod_nullable(val anyelement, token UUID)
   RETURNS UUID AS
-$$
-DECLARE
-  semimod_token uuid;
-  value_token uuid;
-BEGIN
-  IF val IS NOT NULL THEN
-    RETURN provenance_semimod(val, token);
-  END IF;
-
-  value_token := gate_null();
-  SELECT uuid_generate_v5(uuid_ns_provsql(),concat('semimod',value_token,token))
-    INTO semimod_token;
-
-  PERFORM create_gate(value_token,'value');
-  PERFORM set_extra(value_token, 'NULL');
-
-  PERFORM create_gate(semimod_token,'semimod',ARRAY[token::uuid,value_token]);
-
-  RETURN semimod_token;
-END
-$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql,pg_temp,public SECURITY DEFINER IMMUTABLE;
+  'provsql','provenance_semimod_nullable' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 -- ----------------------------------------------------------------------
 -- 6c. Gate-building functions in C: same gates at the same addresses,
@@ -1041,6 +1021,43 @@ CREATE OR REPLACE FUNCTION provenance_times(VARIADIC tokens uuid[])
 CREATE OR REPLACE FUNCTION provenance_plus(tokens uuid[])
   RETURNS UUID AS
   'provsql','provenance_plus' LANGUAGE C COST 100 STRICT PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
+  RETURNS UUID AS
+  'provsql','provenance_semimod' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_aggregate(
+    aggfnoid integer,
+    aggtype integer,
+    val anyelement,
+    tokens uuid[],
+    is_scalar boolean DEFAULT false)
+  RETURNS agg_token AS
+  'provsql','provenance_aggregate' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_monus(token1 UUID, token2 UUID)
+  RETURNS UUID AS
+  'provsql','provenance_monus' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_delta
+  (token UUID)
+  RETURNS UUID AS
+  'provsql','provenance_delta' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_cmp(
+  left_token  UUID,
+  comparison_op OID,
+  right_token UUID
+)
+RETURNS UUID AS
+  'provsql','provenance_cmp' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION annotate(token UUID, extra TEXT) RETURNS UUID AS
+  'provsql','annotate' LANGUAGE C COST 100 PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inversion_free_key(root TEXT, sec TEXT, factor INT)
+  RETURNS TEXT AS
+  'provsql','inversion_free_key' LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
 -- ----------------------------------------------------------------------
 -- 6d. Planted gates are remembered by the session that plants them; the
