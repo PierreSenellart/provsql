@@ -14359,12 +14359,16 @@ static Oid get_agg_token_orig_type(Var *v, insert_agg_token_casts_context *ctx) 
  */
 static void cast_agg_token_in_list(ListCell *lc,
                                    insert_agg_token_casts_context *ctx,
-                                   bool through_text) {
+                                   bool through_text, Oid fallback) {
   Var *v = (Var *)lfirst(lc);
   Oid target = get_agg_token_orig_type(v, ctx);
   HeapTuple castTuple;
 
+  /* The column is not a bare aggregate (arithmetic on one): its type is the
+   * one its consumer reads it as, when there is one. */
   if (!OidIsValid(target))
+    target = fallback;
+  if (!OidIsValid(target) || IsPolymorphicType(target))
     return;
 
   castTuple = SearchSysCache2(CASTSOURCETARGET,
@@ -14400,12 +14404,13 @@ static void cast_agg_token_in_list(ListCell *lc,
  * @brief Wrap any agg_token Vars in an argument list.
  */
 static void cast_agg_token_args(List *args,
-                                insert_agg_token_casts_context *ctx) {
+                                insert_agg_token_casts_context *ctx,
+                                Oid fallback) {
   ListCell *lc;
   foreach (lc, args) {
     if (IsA(lfirst(lc), Var) &&
         ((Var *)lfirst(lc))->vartype == ctx->constants->OID_TYPE_AGG_TOKEN)
-      cast_agg_token_in_list(lc, ctx, !ctx->in_having);
+      cast_agg_token_in_list(lc, ctx, !ctx->in_having, fallback);
   }
 }
 
@@ -14442,7 +14447,7 @@ static void cast_agg_token_func_args(List *args, Oid funcid,
          procForm->pronamespace == constants->OID_SCHEMA_PROVSQL))
       continue;
     if (IsA(arg, Var))
-      cast_agg_token_in_list(lc, ctx, true);
+      cast_agg_token_in_list(lc, ctx, true, formal);
     else if (!IsPolymorphicType(formal))
       lfirst(lc) = cast_agg_token_to_type(arg, formal, constants);
   }
@@ -14489,19 +14494,21 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     return node;
   }
   if (IsA(node, WindowFunc)) {
-    cast_agg_token_args(((WindowFunc *)node)->args, ctx);
+    cast_agg_token_args(((WindowFunc *)node)->args, ctx, InvalidOid);
     return node;
   }
   if (IsA(node, CoalesceExpr)) {
-    cast_agg_token_args(((CoalesceExpr *)node)->args, ctx);
+    cast_agg_token_args(((CoalesceExpr *)node)->args, ctx,
+                        ((CoalesceExpr *)node)->coalescetype);
     return node;
   }
   if (IsA(node, MinMaxExpr)) {
-    cast_agg_token_args(((MinMaxExpr *)node)->args, ctx);
+    cast_agg_token_args(((MinMaxExpr *)node)->args, ctx,
+                        ((MinMaxExpr *)node)->minmaxtype);
     return node;
   }
   if (IsA(node, NullIfExpr)) {
-    cast_agg_token_args(((NullIfExpr *)node)->args, ctx);
+    cast_agg_token_args(((NullIfExpr *)node)->args, ctx, InvalidOid);
     return node;
   }
 
@@ -14526,23 +14533,25 @@ insert_having_agg_token_casts_mutator(Node *node, void *data) {
     Node *swapped = try_swap_agg_arith((OpExpr *)node, ctx->constants);
     if (swapped != NULL)
       return swapped;
-    cast_agg_token_args(((OpExpr *)node)->args, ctx);
+    cast_agg_token_args(((OpExpr *)node)->args, ctx, InvalidOid);
     return node;
   }
   if (IsA(node, WindowFunc)) {
-    cast_agg_token_args(((WindowFunc *)node)->args, ctx);
+    cast_agg_token_args(((WindowFunc *)node)->args, ctx, InvalidOid);
     return node;
   }
   if (IsA(node, CoalesceExpr)) {
-    cast_agg_token_args(((CoalesceExpr *)node)->args, ctx);
+    cast_agg_token_args(((CoalesceExpr *)node)->args, ctx,
+                        ((CoalesceExpr *)node)->coalescetype);
     return node;
   }
   if (IsA(node, MinMaxExpr)) {
-    cast_agg_token_args(((MinMaxExpr *)node)->args, ctx);
+    cast_agg_token_args(((MinMaxExpr *)node)->args, ctx,
+                        ((MinMaxExpr *)node)->minmaxtype);
     return node;
   }
   if (IsA(node, NullIfExpr)) {
-    cast_agg_token_args(((NullIfExpr *)node)->args, ctx);
+    cast_agg_token_args(((NullIfExpr *)node)->args, ctx, InvalidOid);
     return node;
   }
   return expression_tree_mutator(node, insert_having_agg_token_casts_mutator,

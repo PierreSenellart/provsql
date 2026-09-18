@@ -261,3 +261,10 @@ Berlin|0 (*)
 New York|0 (*)
 Paris|3 (*)
 (3 rows)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+remove_provenance
+
+(1 row)
+r
+2.333
+(1 row)

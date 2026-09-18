@@ -225,3 +225,12 @@ CREATE TABLE agg_arith_fn AS
 SELECT remove_provenance('agg_arith_fn');
 SELECT city, n FROM agg_arith_fn ORDER BY city;
 DROP TABLE agg_arith_fn;
+
+-- A cast with a type modifier (a two-argument function) of arithmetic on a
+-- subquery's aggregate reads its value (it read the agg_token as a numeric).
+CREATE TABLE agg_arith_fn AS
+  SELECT CAST(r AS DECIMAL(10,3)) AS r
+  FROM (SELECT count(*) * 1.0 / 3 AS r FROM personnel) t;
+SELECT remove_provenance('agg_arith_fn');
+SELECT r FROM agg_arith_fn;
+DROP TABLE agg_arith_fn;
