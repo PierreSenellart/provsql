@@ -107,6 +107,7 @@ int provsql_rv_mc_samples = 10000; ///< Default sample count for analytical-eval
 double provsql_ess_warn_fraction = 0.1; ///< Effective-sample-size warning threshold for likelihood weighting: warn when the posterior ESS falls below this fraction of the accepted draws; controlled by the @c provsql.ess_warn_fraction GUC
 int provsql_dtree_max_subproblems = 0; ///< Debug/safety hard cap on d-tree subproblems before it bails (0 = off; the chooser auto-budgets at the next-best method's cost regardless); @c provsql.dtree_max_subproblems GUC
 int provsql_joint_max_treewidth = 10; ///< Maximum joint treewidth the joint-width UCQ compiler attempts before declining (caller falls back to the ladder); @c provsql.joint_max_treewidth GUC
+int provsql_gate_cache_size = 65536; ///< Byte budget, in kB, of the per-backend gate cache; @c provsql.gate_cache_size GUC
 int provsql_joint_max_states = 65536; ///< Per-bag DP state-count cap of the joint-width UCQ compiler (the true safety net); @c provsql.joint_max_states GUC
 bool provsql_joint_width = true; ///< Recognise unsafe UCQs at planner time and route their existence provenance through the joint-width compiler (on by default); the @c provsql.joint_width GUC is a debug-only switch to disable it
 bool provsql_mobius = true; ///< Try the safe-UCQ Möbius-inversion route (a guaranteed-PTIME exact route for its class) BEFORE the joint-width compiler, which it short-circuits on success (on by default); the @c provsql.mobius GUC is a debug-only switch to disable it
@@ -17527,6 +17528,26 @@ void _PG_init(void) {
                           INT_MAX,
                           PGC_USERSET,
                           0,
+                          NULL,
+                          NULL,
+                          NULL);
+
+  DefineCustomIntVariable("provsql.gate_cache_size",
+                          "Size of the per-backend cache of gates, in kilobytes.",
+                          "A backend remembers the type and children of the "
+                          "gates it created or read, so that walking a "
+                          "circuit it just built (a comparison on an "
+                          "aggregate deciding which factors of a row it "
+                          "supersedes, for instance) does not ask the worker "
+                          "for each gate again. When the budget is exceeded "
+                          "the oldest entries are forgotten and read back "
+                          "from the store when needed. Default 65536 (64 MB).",
+                          &provsql_gate_cache_size,
+                          65536,
+                          64,
+                          INT_MAX / 1024,
+                          PGC_USERSET,
+                          GUC_UNIT_KB,
                           NULL,
                           NULL,
                           NULL);

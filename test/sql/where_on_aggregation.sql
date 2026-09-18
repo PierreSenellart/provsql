@@ -251,5 +251,24 @@ SELECT 'fused token = subquery token' AS shape,
 DROP TABLE woa4_fused;
 DROP TABLE woa4_sub;
 
+-- The factors a comparison supersedes are found by walking gates the
+-- backend just created, through its gate cache; with the smallest cache,
+-- every gate is read back from the store instead, and the tokens are the
+-- same.
+SET provsql.gate_cache_size = 64;
+CREATE TABLE woa4_small AS
+  SELECT g, provenance() AS tok
+  FROM (SELECT g, count(*) AS c FROM woa4_r GROUP BY g) x WHERE c >= 2;
+SELECT remove_provenance('woa4_small');
+RESET provsql.gate_cache_size;
+CREATE TABLE woa4_large AS
+  SELECT g, provenance() AS tok
+  FROM (SELECT g, count(*) AS c FROM woa4_r GROUP BY g) x WHERE c >= 2;
+SELECT remove_provenance('woa4_large');
+SELECT 'smallest cache' AS shape, bool_and(f.tok = u.tok) AS identical, count(*) AS groups
+  FROM woa4_small f JOIN woa4_large u ON f.g = u.g;
+DROP TABLE woa4_small;
+DROP TABLE woa4_large;
+
 DROP TABLE woa4_r;
 DROP TABLE woa4_s;

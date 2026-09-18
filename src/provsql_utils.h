@@ -531,6 +531,7 @@ extern int provsql_joint_max_treewidth;
  * net (the static enumerating-variable count is only a predictor).  Default
  * 1<<16. */
 extern int provsql_joint_max_states;
+extern int provsql_gate_cache_size;
 
 /* Recognise unsafe UCQs at planner time and route their existence provenance
  * through the joint-width compiler (on by default); provsql.joint_width is a

@@ -9,7 +9,7 @@
  * - @c circuit_cache_get_type()
  *
  * The cache is a process-local Boost multi-index container bounded by
- * @c MAX_CIRCUIT_CACHE_SIZE bytes.  On overflow, the oldest (FIFO) entry
+ * @c provsql.gate_cache_size kilobytes.  On overflow, the oldest (FIFO) entry
  * is evicted.  The C wrappers manage a singleton @c CircuitCache instance
  * and translate between @c pg_uuid_t / @c gate_type (C types) and the
  * C++ @c CircuitCacheInfos structure.
@@ -20,8 +20,11 @@ extern "C" {
 #include "circuit_cache.h"
 }
 
-/** @brief Maximum total byte size of the in-process circuit gate cache (1 MiB). */
-constexpr unsigned MAX_CIRCUIT_CACHE_SIZE = 1 << 20;
+/** @brief Byte budget of the cache: @c provsql.gate_cache_size, in kB. */
+static inline unsigned long max_cache_size()
+{
+  return static_cast<unsigned long>(provsql_gate_cache_size) * 1024UL;
+}
 
 bool CircuitCache::insert(const CircuitCacheInfos& infos)
 {
@@ -34,7 +37,7 @@ bool CircuitCache::insert(const CircuitCacheInfos& infos)
      * overwrite it; otherwise just touch the LRU position. The
      * eviction loop is not re-run here: a replace can only grow an
      * entry by (delta children count) * sizeof(pg_uuid_t), which is
-     * negligible against MAX_CIRCUIT_CACHE_SIZE and self-corrects on
+     * negligible against the budget and self-corrects on
      * the next true insert. */
     auto current_size_delta = static_cast<long>(infos.size())
                               - static_cast<long>(p.first->size());
@@ -49,7 +52,7 @@ bool CircuitCache::insert(const CircuitCacheInfos& infos)
     return false;
   } else {
     current_size+=infos.size();
-    while(current_size>MAX_CIRCUIT_CACHE_SIZE && !il.empty()) {
+    while(current_size>max_cache_size() && !il.empty()) {
       /* Evict the LRU tail. Use back() rather than *il.end() to avoid
        * dereferencing the past-the-end iterator (undefined behaviour). */
       current_size -= il.back().size();

@@ -228,6 +228,19 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     gate-creation paths). See :doc:`continuous-distributions` for
     the broader hybrid-evaluation context.
 
+.. _provsql-gate-cache-size:
+
+``provsql.gate_cache_size`` (default: ``64MB``)
+    Size of the cache in which each backend remembers the type and
+    children of the gates it created or read. Walking a circuit the
+    backend has just built, as a comparison on an aggregate does to
+    decide which factors of a row it supersedes, then costs no exchange
+    with the background worker; a gate beyond the budget is forgotten
+    and read back from the store when needed. A query whose plan
+    creates all its gates before walking them (a hash aggregate over a
+    large table) wants a budget that holds them; roughly 100 bytes per
+    gate.
+
 .. _provsql-synchronous-commit:
 
 ``provsql.synchronous_commit`` (default: ``off``)

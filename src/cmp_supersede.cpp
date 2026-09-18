@@ -29,6 +29,14 @@
  * The function is read-only: it returns the surviving factors flattened, and
  * the caller rebuilds the product with @c provenance_times, so no gate is
  * minted here.
+ *
+ * The walk needs the type and the children of a few gates, all of which this
+ * backend created moments earlier in the same query (the comparison, the
+ * aggregates under it, their semimod wires, the row tokens and their δ and
+ * ⊕).  They are read one by one through @c provsql_fetch_gate, which answers
+ * from the per-session cache and asks the worker only on a miss; loading the
+ * subcircuit under all these roots at once, as was done before, cost a
+ * synchronous round trip and a serialisation per group.
  */
 extern "C"
 {
@@ -38,16 +46,17 @@ extern "C"
 #include "utils/array.h"
 #include "utils/uuid.h"
 #include "provsql_utils.h"
+#include "provsql_mmap.h"
 }
 
+#include <cstdlib>
+#include <cstring>
 #include <exception>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-#include "CircuitFromMMap.h"
-#include "GenericCircuit.h"
-#include "provsql_utils_cpp.h"
 
 extern "C"
 {
@@ -56,25 +65,65 @@ PG_FUNCTION_INFO_V1(cmp_surviving_factors);
 
 namespace {
 
+struct UuidHash {
+  std::size_t operator()(const pg_uuid_t &u) const {
+    std::size_t h;
+    std::memcpy(&h, u.data, sizeof(h));
+    return h;
+  }
+};
+struct UuidEq {
+  bool operator()(const pg_uuid_t &a, const pg_uuid_t &b) const {
+    return std::memcmp(a.data, b.data, UUID_LEN) == 0;
+  }
+};
+using UuidSet = std::unordered_set<pg_uuid_t, UuidHash, UuidEq>;
+
+/** @brief A gate as the walk sees it: its type and its children, fetched
+ *         once per call. */
+struct Gate {
+  gate_type type;
+  std::vector<pg_uuid_t> wires;
+};
+
+class Gates {
+public:
+  const Gate &operator[](const pg_uuid_t &u) {
+    auto it = memo.find(u);
+    if(it != memo.end())
+      return it->second;
+    Gate g;
+    unsigned n = 0;
+    pg_uuid_t *children = nullptr;
+    g.type = provsql_fetch_gate(&u, &n, &children);
+    if(children) {
+      g.wires.assign(children, children + n);
+      free(children);
+    }
+    return memo.emplace(u, std::move(g)).first->second;
+  }
+private:
+  std::unordered_map<pg_uuid_t, Gate, UuidHash, UuidEq> memo;
+};
+
 /** @brief Collect the provenance children of every @c gate_semimod under the
  *         @c gate_agg gates reachable from @p g (directly or under
  *         @c gate_arith): the group the comparison ranges over. */
-void collect_group_tokens(const GenericCircuit &gc, gate_t g,
-                          std::unordered_set<gate_t> &out,
-                          std::unordered_set<gate_t> &seen)
+void collect_group_tokens(Gates &gates, const pg_uuid_t &g,
+                          UuidSet &out, UuidSet &seen)
 {
   if(!seen.insert(g).second)
     return;
 
-  const gate_type t = gc.getGateType(g);
+  const Gate &gate = gates[g];
 
-  if(t == gate_agg) {
-    for(gate_t ch : gc.getWires(g)) {
-      if(gc.getGateType(ch) != gate_semimod)
+  if(gate.type == gate_agg) {
+    for(const pg_uuid_t &ch : gate.wires) {
+      const Gate &sm = gates[ch];
+      if(sm.type != gate_semimod)
         continue;
-      const auto &sm = gc.getWires(ch);
-      if(sm.size() == 2)
-        out.insert(sm[0]);          // [k_gate, value_gate]
+      if(sm.wires.size() == 2)
+        out.insert(sm.wires[0]);    // [k_gate, value_gate]
     }
     return;
   }
@@ -82,36 +131,37 @@ void collect_group_tokens(const GenericCircuit &gc, gate_t g,
   /* A HAVING with Boolean connectives lifts to a product / sum / difference
    * of comparison gates, so the groups being compared sit under that
    * structure, not directly under a single cmp. */
+  const gate_type t = gate.type;
   if(t == gate_arith || t == gate_cmp || t == gate_times ||
-     t == gate_plus || t == gate_monus || t == gate_delta)
-    for(gate_t ch : gc.getWires(g))
-      collect_group_tokens(gc, ch, out, seen);
+     t == gate_plus || t == gate_monus || t == gate_delta) {
+    const std::vector<pg_uuid_t> wires = gate.wires;   // the memo may grow
+    for(const pg_uuid_t &ch : wires)
+      collect_group_tokens(gates, ch, out, seen);
+  }
 }
 
 /** @brief Whether @p g is a δ collapsing exactly the group @p group. */
-bool delta_subsumed_by(const GenericCircuit &gc, gate_t g,
-                       const std::unordered_set<gate_t> &group)
+bool delta_subsumed_by(Gates &gates, const pg_uuid_t &g, const UuidSet &group)
 {
-  if(gc.getGateType(g) != gate_delta || group.empty())
+  const Gate &d = gates[g];
+  if(d.type != gate_delta || group.empty())
     return false;
-
-  const auto &dw = gc.getWires(g);
-  if(dw.size() != 1)
+  if(d.wires.size() != 1)
     return false;
 
   // The δ wraps the group's ⊕; a one-row group may carry that row's token
   // directly, with no ⊕ to wrap.
-  std::vector<gate_t> operands;
-  if(gc.getGateType(dw[0]) == gate_plus) {
-    const auto &pw = gc.getWires(dw[0]);
-    operands.assign(pw.begin(), pw.end());
-  } else {
-    operands.push_back(dw[0]);
-  }
+  const pg_uuid_t child = d.wires[0];
+  std::vector<pg_uuid_t> operands;
+  const Gate &c = gates[child];
+  if(c.type == gate_plus)
+    operands = c.wires;
+  else
+    operands.push_back(child);
 
   if(operands.size() != group.size())
     return false;
-  for(gate_t o : operands)
+  for(const pg_uuid_t &o : operands)
     if(group.find(o) == group.end())
       return false;
   return true;
@@ -121,16 +171,16 @@ bool delta_subsumed_by(const GenericCircuit &gc, gate_t g,
  *
  * A ⊗ is flattened so a δ nested inside it can be dropped on its own; a
  * subsumed δ contributes nothing; anything else stands as one factor. */
-void surviving_factors(const GenericCircuit &gc, gate_t g,
-                       const std::unordered_set<gate_t> &group,
-                       std::vector<gate_t> &out)
+void surviving_factors(Gates &gates, const pg_uuid_t &g, const UuidSet &group,
+                       std::vector<pg_uuid_t> &out)
 {
-  if(delta_subsumed_by(gc, g, group))
+  if(delta_subsumed_by(gates, g, group))
     return;
 
-  if(gc.getGateType(g) == gate_times) {
-    for(gate_t ch : gc.getWires(g))
-      surviving_factors(gc, ch, group, out);
+  if(gates[g].type == gate_times) {
+    const std::vector<pg_uuid_t> wires = gates[g].wires;
+    for(const pg_uuid_t &ch : wires)
+      surviving_factors(gates, ch, group, out);
     return;
   }
 
@@ -142,9 +192,10 @@ void surviving_factors(const GenericCircuit &gc, gate_t g,
 /**
  * @brief @c cmp_surviving_factors(tokens uuid[], cmp uuid) -> uuid[]
  *
- * Given the row-annotation factors at the level owning a lifted comparison and
- * that comparison's gate, returns the factors the comparison does not subsume,
- * for the caller to multiply with it.  NULL entries are dropped.
+ * @param tokens  The row-annotation factors at the level owning the comparison.
+ * @param cmp     The lifted comparison gate.
+ * @return        The factors of @p tokens the comparison does not subsume,
+ *                flattened; NULL on a NULL argument.
  */
 Datum cmp_surviving_factors(PG_FUNCTION_ARGS)
 {
@@ -153,7 +204,7 @@ Datum cmp_surviving_factors(PG_FUNCTION_ARGS)
 
   try {
     ArrayType *arr = PG_GETARG_ARRAYTYPE_P(0);
-    pg_uuid_t cmp = *DatumGetUUIDP(PG_GETARG_DATUM(1));
+    const pg_uuid_t cmp = *DatumGetUUIDP(PG_GETARG_DATUM(1));
     Datum *elems;
     bool *nulls;
     int nelems;
@@ -163,36 +214,23 @@ Datum cmp_surviving_factors(PG_FUNCTION_ARGS)
 
     deconstruct_array(arr, UUIDOID, 16, false, 'c', &elems, &nulls, &nelems);
 
-    /* The row tokens are siblings of the comparison, not its descendants, so
-     * they must be loaded into one circuit with it: only then do a delta and
-     * the aggregate's semimod wires resolve to the same gate_t and become
-     * comparable. */
-    std::vector<pg_uuid_t> roots;
-    roots.push_back(cmp);
+    Gates gates;
+    UuidSet group, seen;
+    collect_group_tokens(gates, cmp, group, seen);
+
+    std::vector<Datum> kept;
+    UuidSet emitted;
+
     for(int i = 0; i < nelems; ++i) {
       if(nulls[i])
         continue;
-      roots.push_back(*DatumGetUUIDP(elems[i]));
-    }
-
-    std::vector<gate_t> gates;
-    GenericCircuit gc = getJointCircuit(roots, gates);
-
-    std::unordered_set<gate_t> group, seen;
-    collect_group_tokens(gc, gates[0], group, seen);
-
-    std::vector<Datum> kept;
-    std::unordered_set<gate_t> emitted;
-
-    for(std::size_t r = 1; r < gates.size(); ++r) {
-      std::vector<gate_t> factors;
-      surviving_factors(gc, gates[r], group, factors);
-      for(gate_t f : factors) {
+      std::vector<pg_uuid_t> factors;
+      surviving_factors(gates, *DatumGetUUIDP(elems[i]), group, factors);
+      for(const pg_uuid_t &f : factors) {
         if(!emitted.insert(f).second)
           continue;                 // one copy of a factor shared by two inputs
-        pg_uuid_t out = string2uuid(gc.getUUID(f));
         pg_uuid_t *p = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
-        *p = out;
+        *p = f;
         kept.push_back(UUIDPGetDatum(p));
       }
     }

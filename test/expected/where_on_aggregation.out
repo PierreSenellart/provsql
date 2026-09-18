@@ -122,3 +122,12 @@ remove_provenance
 shape|identical
 fused token = subquery token|t
 (1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+shape|identical|groups
+smallest cache|t|2
+(1 row)
