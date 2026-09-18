@@ -13,7 +13,8 @@ HAVING count(*) > 2;
 
 SELECT remove_provenance('result_having_on_count');
 SELECT city, formula, counting
-FROM result_having_on_count;
+FROM result_having_on_count
+ORDER BY city;
 
 DROP TABLE result_having_on_count;
 
@@ -28,7 +29,8 @@ HAVING SUM(id) > 2;
 
 SELECT remove_provenance('result_having_on_sum');
 SELECT city, formula, counting
-FROM result_having_on_sum;
+FROM result_having_on_sum
+ORDER BY city;
 
 DROP TABLE result_having_on_sum;
 
@@ -42,7 +44,8 @@ HAVING count(*) <= 3;
 
 SELECT remove_provenance('result_having_why_count_leq3');
 SELECT city, formula
-FROM result_having_why_count_leq3;
+FROM result_having_why_count_leq3
+ORDER BY city;
 
 DROP TABLE result_having_why_count_leq3;
 
@@ -56,7 +59,8 @@ HAVING SUM(id) >= 7;
 
 SELECT remove_provenance('result_having_why_sum_geq7');
 SELECT city, formula
-FROM result_having_why_sum_geq7;
+FROM result_having_why_sum_geq7
+ORDER BY city;
 
 DROP TABLE result_having_why_sum_geq7;
 
@@ -155,7 +159,8 @@ FROM (
 
 SELECT remove_provenance('result_complex_having');
 SELECT city, formula
-FROM result_complex_having;
+FROM result_complex_having
+ORDER BY city;
 
 DROP TABLE result_complex_having;
 
