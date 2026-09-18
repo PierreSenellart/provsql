@@ -43,7 +43,13 @@
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
 #endif
 #include "optimizer/planner.h"
+#if PG_VERSION_NUM >= 120000
+#include "access/relation.h"
+#else
+#include "access/heapam.h"
+#endif
 #include "parser/analyze.h"
+#include "parser/parse_clause.h"
 #include "parser/parser.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_node.h"
@@ -154,6 +160,20 @@ extern void _PG_init(void);
 extern void _PG_fini(void);
 
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
+/** @brief Depth of CREATE TABLE AS / SELECT INTO / CREATE MATERIALIZED VIEW
+ *  being executed: their query's output is stored, not shown. */
+static int provsql_in_ctas = 0;
+/** @brief Executor nesting depth.
+ *
+ * Tracks how deep we are inside @c Executor invocations.  Incremented
+ * in @c provsql_executor_start, decremented in @c provsql_executor_end.
+ * The classifier @c NOTICE only fires when this is zero, which
+ * corresponds to the user's outermost statement being planned (before
+ * any executor entry).  Plans built for PL/pgSQL function bodies that
+ * the rewriter inserts -- @c provenance_times, @c provenance_plus,
+ * @c provenance_aggregate, ... -- happen during execution of the
+ * user's plan, so they see depth >= 1 and skip the NOTICE. */
+static int provsql_executor_depth = 0;
 static post_parse_analyze_hook_type prev_post_parse_analyze = NULL; ///< Previous post-parse-analysis hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
@@ -17335,6 +17355,204 @@ static bool normalize_inner_joins_walker(Node *node, void *cx) {
   return expression_tree_walker(node, normalize_inner_joins_walker, cx);
 }
 
+/** @brief Context for @c wholerow_mutator. */
+typedef struct wholerow_ctx {
+  Query *q;                     ///< Query whose range table the Vars refer to
+  const constants_t *constants; ///< Extension OID cache
+} wholerow_ctx;
+
+/** @brief The whole-row Var @p n of a provenance-tracked relation of the
+ *  range table of @p q, or @c NULL. */
+static Var *tracked_wholerow(Query *q, Node *n) {
+  Var *v;
+  RangeTblEntry *rte;
+  if (n == NULL || !IsA(n, Var))
+    return NULL;
+  v = (Var *)n;
+  if (v->varattno != 0 || v->varlevelsup != 0 || v->varno < 1 ||
+      v->varno > list_length(q->rtable))
+    return NULL;
+  rte = rt_fetch(v->varno, q->rtable);
+  if (rte->rtekind != RTE_RELATION ||
+      get_attnum(rte->relid, PROVSQL_COLUMN_NAME) == InvalidAttrNumber)
+    return NULL;
+  return v;
+}
+
+/**
+ * @brief The row of the columns of @p v's relation other than @c provsql,
+ *        as an anonymous record; @c NULL where the whole row is (the
+ *        null-padded side of an outer join).
+ */
+static Node *row_without_provsql(Query *q, Var *v) {
+  RangeTblEntry *rte = rt_fetch(v->varno, q->rtable);
+  Relation rel = relation_open(rte->relid, AccessShareLock);
+  TupleDesc td = RelationGetDescr(rel);
+  List *args = NIL, *names = NIL;
+  Var *notnull_col = NULL;
+  RowExpr *row = makeNode(RowExpr);
+  NullTest *nt = makeNode(NullTest);
+  CaseWhen *cw = makeNode(CaseWhen);
+  CaseExpr *ce = makeNode(CaseExpr);
+  int i;
+
+  for (i = 0; i < td->natts; ++i) {
+    Form_pg_attribute att = TupleDescAttr(td, i);
+    Var *col;
+    if (att->attisdropped ||
+        strcmp(NameStr(att->attname), PROVSQL_COLUMN_NAME) == 0)
+      continue;
+    col = makeVar(v->varno, att->attnum, att->atttypid, att->atttypmod,
+                  att->attcollation, 0);
+    if (att->attnotnull && notnull_col == NULL)
+      notnull_col = col;
+    args = lappend(args, col);
+    names = lappend(names, makeString(pstrdup(NameStr(att->attname))));
+  }
+  row->args = args;
+  row->row_typeid = RECORDOID;
+  row->row_format = COERCE_IMPLICIT_CAST;
+  row->colnames = names;
+  row->location = -1;
+
+  /* A column declared NOT NULL is NULL only on the padding; without one,
+   * all the columns being NULL stands for it (a stored row with only NULLs
+   * then reads as NULL). */
+  if (notnull_col != NULL) {
+    nt->arg = (Expr *)copyObject(notnull_col);
+    nt->argisrow = false;
+  } else {
+    nt->arg = (Expr *)copyObject(row);
+    nt->argisrow = true;
+  }
+  nt->nulltesttype = IS_NULL;
+  nt->location = -1;
+  cw->expr = (Expr *)nt;
+  cw->result = (Expr *)makeNullConst(RECORDOID, -1, InvalidOid);
+  cw->location = -1;
+  ce->casetype = RECORDOID;
+  ce->casecollid = InvalidOid;
+  ce->args = list_make1(cw);
+  ce->defresult = (Expr *)row;
+  ce->location = -1;
+
+  relation_close(rel, AccessShareLock);
+  return (Node *)ce;
+}
+
+/** @brief Whether argument @p i of @p funcid takes any row: a parameter of
+ *  type @c record, @c "any", or a polymorphic one of a function whose result
+ *  type does not follow it (@c row_to_json, @c to_jsonb, @c json_agg...). */
+static bool param_takes_any_row(Oid funcid, int i) {
+  HeapTuple tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+  Form_pg_proc proc;
+  Oid formal;
+  bool res = false;
+  if (!HeapTupleIsValid(tp))
+    return false;
+  proc = (Form_pg_proc) GETSTRUCT(tp);
+  if (proc->pronargs > 0) {
+    formal = proc->proargtypes.values[Min(i, proc->pronargs - 1)];
+    if (i >= proc->pronargs && !OidIsValid(proc->provariadic))
+      formal = InvalidOid;
+    res = formal == RECORDOID || formal == ANYOID ||
+          (IsPolymorphicType(formal) && !IsPolymorphicType(proc->prorettype));
+  }
+  ReleaseSysCache(tp);
+  return res;
+}
+
+static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
+                                      bool top_level);
+
+/**
+ * @brief Mutator: replace the whole-row values of tracked relations read as
+ *        any row (see @c hide_provsql_in_wholerows).
+ */
+static Node *wholerow_mutator(Node *node, void *cx) {
+  wholerow_ctx *ctx = (wholerow_ctx *)cx;
+  ListCell *lc;
+  int i;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subselect != NULL && IsA(sl->subselect, Query))
+      hide_provsql_in_wholerows(ctx->constants, (Query *)sl->subselect, false);
+    sl->testexpr = wholerow_mutator(sl->testexpr, cx);
+    return node;
+  }
+  if (IsA(node, Query))
+    return node;
+  node = expression_tree_mutator(node, wholerow_mutator, cx);
+
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)node;
+    i = 0;
+    foreach (lc, fe->args) {
+      Var *v = tracked_wholerow(ctx->q, (Node *)lfirst(lc));
+      if (v != NULL && param_takes_any_row(fe->funcid, i))
+        lfirst(lc) = row_without_provsql(ctx->q, v);
+      ++i;
+    }
+  } else if (IsA(node, Aggref)) {
+    Aggref *ar = (Aggref *)node;
+    i = 0;
+    foreach (lc, ar->args) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      Var *v = tracked_wholerow(ctx->q, (Node *)te->expr);
+      if (!te->resjunk && v != NULL && param_takes_any_row(ar->aggfnoid, i)) {
+        te->expr = (Expr *)row_without_provsql(ctx->q, v);
+        if (i < list_length(ar->aggargtypes))
+          lfirst_oid(list_nth_cell(ar->aggargtypes, i)) = RECORDOID;
+      }
+      ++i;
+    }
+  } else if (IsA(node, CoerceViaIO)) {
+    CoerceViaIO *io = (CoerceViaIO *)node;
+    Var *v = tracked_wholerow(ctx->q, (Node *)io->arg);
+    if (v != NULL)
+      io->arg = (Expr *)row_without_provsql(ctx->q, v);
+  }
+  return node;
+}
+
+/**
+ * @brief Leave the @c provsql column out of the whole-row values of
+ *        provenance-tracked relations where any row is read.
+ *
+ * The row type of a tracked table has its @c provsql column, so that
+ * @c row_to_json(t), @c t::text or @c json_agg(t.*) show the token of the
+ * row, which is not data.  Where the value is read as any row -- the output
+ * of the statement shown to the user (not stored by a @c CREATE @c TABLE
+ * @c AS, nor returned by a function), a parameter of type @c record,
+ * @c "any" or polymorphic
+ * with a result type of its own (the json functions), a conversion to text
+ * -- it becomes the anonymous record of the other columns.  Where the
+ * table's own row type is needed (@c t::tbl, a function on it, a comparison
+ * of rows), it stays.  Runs on the query and the bodies of its sublinks,
+ * before the rewriting that would otherwise meet the whole-row value.
+ */
+static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
+                                      bool top_level) {
+  wholerow_ctx ctx = {q, constants};
+  ListCell *lc;
+
+  query_tree_mutator(q, wholerow_mutator, &ctx,
+                     QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES |
+                     QTW_IGNORE_CTE_SUBQUERIES);
+  /* The output of the statement, when it is shown: a table created from it,
+   * or the rows of a function, need the relation's own row type. */
+  if (top_level && provsql_in_ctas == 0 && provsql_executor_depth == 0)
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      Var *v = tracked_wholerow(q, (Node *)te->expr);
+      if (!te->resjunk && v != NULL)
+        te->expr = (Expr *)row_without_provsql(q, v);
+    }
+}
+
 /**
  * @brief Sort an @c ORDER @c BY on an aggregate result on its value.
  *
@@ -17589,6 +17807,11 @@ static Query *process_query(const constants_t *constants, Query *q,
    * runs SPI and creates temp tables at plan time. */
   if (provsql_active)
     inline_ctes(constants, q);
+
+  /* Whole-row values of tracked relations read as any row leave provsql
+   * out, before the rewritings below meet them. */
+  if (provsql_active)
+    hide_provsql_in_wholerows(constants, q, top_level);
 
   /* Decorrelate a top-level scalar subquery into a LEFT JOIN + choose() +
    * GROUP BY + count<=1 HAVING.  Runs before lower_outer_joins so the LEFT JOIN
@@ -18327,17 +18550,6 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
   return expression_tree_walker(node, query_defines_handmade_provsql, cx);
 }
 
-/** @brief Executor nesting depth.
- *
- * Tracks how deep we are inside @c Executor invocations.  Incremented
- * in @c provsql_executor_start, decremented in @c provsql_executor_end.
- * The classifier @c NOTICE only fires when this is zero, which
- * corresponds to the user's outermost statement being planned (before
- * any executor entry).  Plans built for PL/pgSQL function bodies that
- * the rewriter inserts -- @c provenance_times, @c provenance_plus,
- * @c provenance_aggregate, ... -- happen during execution of the
- * user's plan, so they see depth >= 1 and skip the NOTICE. */
-static int provsql_executor_depth = 0;
 
 
 /**
@@ -19109,9 +19321,15 @@ static void provsql_ProcessUtility(
     ) {
   Node              *parsetree = pstmt ? pstmt->utilityStmt : NULL;
   ProvSQLCtasCapture cap = {0};
+  bool               ctas = parsetree != NULL &&
+                            IsA(parsetree, CreateTableAsStmt);
 
   provsql_ProcessUtility_capture(parsetree, &cap);
 
+  if (ctas)
+    ++provsql_in_ctas;
+  PG_TRY();
+  {
   if (prev_ProcessUtility)
     prev_ProcessUtility(pstmt, queryString,
 #if PG_VERSION_NUM >= 140000
@@ -19136,6 +19354,16 @@ static void provsql_ProcessUtility(
                             completionTag
 #endif
                             );
+  }
+  PG_CATCH();
+  {
+    if (ctas)
+      --provsql_in_ctas;
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
+  if (ctas)
+    --provsql_in_ctas;
 
   provsql_ProcessUtility_apply(parsetree, &cap);
 }
@@ -19368,6 +19596,63 @@ static void place_star_provsql_last(Query *q, const char *src) {
   }
 }
 
+/** @brief Context for @c rowstar_mutator. */
+typedef struct rowstar_ctx {
+  List *queries;    ///< Enclosing queries, innermost first
+  const char *src;  ///< Text of the statement
+} rowstar_ctx;
+
+/**
+ * @brief Mutator: leave the @c provsql column that @c * expands to out of
+ *        the anonymous rows @c ROW(t.*), at any depth of the statement.
+ *
+ * An anonymous record has positional field names (@c f1, @c f2...), so the
+ * other fields are unchanged; a row cast to the table's own type
+ * (@c ROW(t.*)::t) is typed and keeps every column.
+ */
+static Node *rowstar_mutator(Node *node, void *cx) {
+  rowstar_ctx *ctx = (rowstar_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Query)) {
+    ctx->queries = lcons(node, ctx->queries);
+    query_tree_mutator((Query *)node, rowstar_mutator, cx, QTW_DONT_COPY_QUERY);
+    ctx->queries = list_delete_first(ctx->queries);
+    return node;
+  }
+  node = expression_tree_mutator(node, rowstar_mutator, cx);
+  if (IsA(node, RowExpr) && ((RowExpr *)node)->row_typeid == RECORDOID) {
+    RowExpr *row = (RowExpr *)node;
+    List *args = NIL, *names = NIL;
+    ListCell *lc, *lcn = list_head(row->colnames);
+    foreach (lc, row->args) {
+      Node *a = (Node *)lfirst(lc);
+      bool drop = false;
+      if (IsA(a, Var) && ((Var *)a)->vartype == UUIDOID &&
+          ((Var *)a)->varlevelsup < (Index)list_length(ctx->queries)) {
+        Var *v = (Var *)a;
+        Query *q = (Query *)list_nth(ctx->queries, v->varlevelsup);
+        RangeTblEntry *rte = rt_fetch(v->varno, q->rtable);
+        drop = rte->rtekind == RTE_RELATION && v->varattno > 0 &&
+               strcmp(get_attname(rte->relid, v->varattno, false),
+                      PROVSQL_COLUMN_NAME) == 0 &&
+               colref_is_star(ctx->src, v->location);
+      }
+      if (!drop) {
+        args = lappend(args, a);
+        if (lcn != NULL)
+          names = lappend(names, lfirst(lcn));
+      }
+      if (lcn != NULL)
+        lcn = my_lnext(row->colnames, lcn);
+    }
+    row->args = args;
+    if (row->colnames != NIL)
+      row->colnames = names;
+  }
+  return node;
+}
+
 /**
  * @brief Post-parse-analysis hook: see @c place_star_provsql_last.
  *
@@ -19399,9 +19684,12 @@ static void provsql_post_parse_analyze(ParseState *pstate, Query *query) {
       q->stmt_location = query->stmt_location;
       q->stmt_len = query->stmt_len;
     }
-    if (q->commandType == CMD_SELECT && q->utilityStmt == NULL &&
-        q->setOperations == NULL)
-      place_star_provsql_last(q, pstate->p_sourcetext);
+    if (q->commandType == CMD_SELECT && q->utilityStmt == NULL) {
+      rowstar_ctx rctx = {NIL, pstate->p_sourcetext};
+      if (q->setOperations == NULL)
+        place_star_provsql_last(q, pstate->p_sourcetext);
+      rowstar_mutator((Node *)q, &rctx);
+    }
   }
 }
 

@@ -25,6 +25,12 @@ are those of ``t``, then ``e``, then ``provsql``.  A position in ``ORDER BY``
 counts the columns in that order, and so does the column list of a view or
 of a ``CREATE TABLE AS`` over ``SELECT *``.
 
+A whole row of a tracked table read as any row -- ``SELECT t FROM t``,
+``row_to_json(t)``, ``json_agg(t)``, ``t::text``, ``ROW(t.*)`` -- has its
+columns other than ``provsql``, as on the untracked table.  Where the
+table's own row type is needed (``ROW(t.*)::t``, a function declared on
+it, a column of a table created from the row), the row keeps it.
+
 The final provenance token in each output row is a UUID that represents a
 gate in a *provenance circuit* – a DAG recording how that result was derived.
 

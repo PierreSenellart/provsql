@@ -39,3 +39,28 @@ a|c
 2|4
 1|5
 (2 rows)
+remove_provenance
+
+(1 row)
+a|j|s|r|rb
+1|{"a":1,"b":10}|(1,10)|(1,10)|10
+2|{"a":2,"b":20}|(2,20)|(2,20)|20
+(2 rows)
+format_type
+star_t
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+remove_provenance
+
+(1 row)
+j
+[{"a":1,"b":10}, 
+ {"a":2,"b":20}]
+(1 row)
+remove_provenance
+
+(1 row)
+a|j
+1|{"a":1,"c":5}
+2|
+(2 rows)

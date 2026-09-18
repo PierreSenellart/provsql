@@ -39,5 +39,31 @@ SELECT remove_provenance('star_r');
 SELECT * FROM star_r;
 DROP TABLE star_r;
 
+-- Whole-row values read as any row leave provsql out: the output, the json
+-- functions, a conversion to text, an anonymous ROW(t.*); a null-padded row
+-- of an outer join stays NULL; a row of the table's own type keeps it all.
+CREATE TABLE star_r AS
+  SELECT a, row_to_json(t)::text AS j, t::text AS s,
+         ROW(t.*)::text AS r, (ROW(t.*)::star_t).b AS rb
+  FROM star_t t;
+SELECT remove_provenance('star_r');
+SELECT a, j, s, r, rb FROM star_r ORDER BY a;
+DROP TABLE star_r;
+-- A table created from a whole row gets the table's row type, as in SQL
+CREATE TABLE star_r AS SELECT t AS w FROM star_t t;
+SELECT format_type(atttypid, NULL) FROM pg_attribute
+WHERE attrelid = 'star_r'::regclass AND attname = 'w';
+DROP TABLE star_r;
+CREATE TABLE star_r AS SELECT json_agg(t ORDER BY a)::text AS j FROM star_t t;
+SELECT remove_provenance('star_r');
+SELECT j FROM star_r;
+DROP TABLE star_r;
+CREATE TABLE star_r AS
+  SELECT t.a, row_to_json(u)::text AS j, sr_boolean(provenance()) AS holds
+  FROM star_t t LEFT JOIN star_u u ON u.a = t.a AND u.c = 5;
+SELECT remove_provenance('star_r');
+SELECT a, j FROM star_r WHERE holds ORDER BY a;
+DROP TABLE star_r;
+
 DROP VIEW star_v, star_v2, star_o, star_j;
 DROP TABLE star_t, star_u;
