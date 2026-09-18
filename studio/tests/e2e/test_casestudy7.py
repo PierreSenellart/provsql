@@ -11,6 +11,7 @@ Backed by the `cs7_studio_url` session fixture (Studio on the Case Study 7
 database) and pytest-playwright's `page`."""
 from __future__ import annotations
 
+import os
 import re
 
 import psycopg
@@ -226,3 +227,32 @@ def test_part_c_recursion(page: Page, cs7_studio_url: str, cs7_dsn: str) -> None
          scheme="absorptive")
     _pin(page, "r5")
     assert _approx(_marg(page, "exact"), 0.5496, 2e-3)
+
+
+# --- The route of a joint-width root -------------------------------------
+
+def test_joint_width_root_route(page: Page, cs7_studio_url: str) -> None:
+    """The joint-width compiler names its route on a transparent annotation
+    wrapping the materialised root.  Studio elides the wrapper into the
+    route badge of the root below: no node of its own, the ``bounded-jw``
+    method offered on that root, the d-D certificate still shown."""
+    page.goto(cs7_studio_url + "/circuit")
+    expect(page.locator("body")).to_have_class(re.compile(r"\bmode-circuit\b"),
+                                               timeout=8000)
+    _run(page, "SELECT DISTINCT 1 FROM bid b, expertise e, topic_of t "
+               "WHERE b.reviewer=e.reviewer AND e.topic=t.topic AND t.paper=b.paper")
+    _pin(page)
+    svg = page.locator("#sidebar-body svg").first
+    expect(svg).to_be_visible(timeout=8000)
+    # No annotation node is drawn: the wrapper is elided.
+    assert svg.locator(".node-group").filter(has_text="@").count() == 0
+    # The root below carries the certificate badge, as before.
+    expect(svg.locator(".dnnf-certified-badge").first).to_be_visible()
+    # The route is read off the wrapper: the bounded-jw method is offered
+    # on this root and evaluates to the same value as independent.
+    meth = page.locator("#eval-method")
+    assert meth.locator('option[value="bounded-jw"]').evaluate("o => !o.hidden")
+    assert _approx(_marg(page, "bounded-jw"), 0.881791, 5e-3)
+    shot = os.environ.get("PROVSQL_E2E_SCREENSHOT")
+    if shot:
+        page.screenshot(path=shot, full_page=True)
