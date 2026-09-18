@@ -91,6 +91,34 @@ key||t
 key||t
 key||t
 (6 rows)
+f|label|result|extra|route
+assume|absorptive|same assumed / 1 children|absorptive|0
+assume|boolean|same assumed / 1 children|boolean|0
+assume|NULL token|||
+(3 rows)
+ERROR:  provenance_assume: unknown assumption other
+f|label|result|extra|route|same_gate_as_untagged
+assume_boolean|already wrapped untagged|same assumed / 1 children|boolean|1|t
+assume_boolean|a token|same assumed / 1 children|boolean|1|t
+(2 rows)
+f|label|result|extra
+project|a dropped position|same project / 1 children|{{2,1},{NULL,2},{1,3}}
+project|identity|same project / 1 children|{{1,1},{2,2},{3,3}}
+project|none|same project / 1 children|
+project|one position|same project / 1 children|{{5,1}}
+project|permutation|same project / 1 children|{{3,1},{1,2},{2,3}}
+(5 rows)
+f|label|result|pos1|pos2
+eq|1 = 2|same eq / 1 children|1|2
+eq|2 = 1|same eq / 1 children|2|1
+eq|3 = 3|same eq / 1 children|3|3
+(3 rows)
+f|label|result|op|children_in_order
+arith|minus, same children|same arith / 2 children|2|t
+arith|negation|same arith / 1 children|4|t
+arith|plus|same arith / 2 children|0|t
+arith|the other way|same arith / 2 children|0|t
+(4 rows)
 planted_scope
 
 (1 row)

@@ -905,10 +905,9 @@ private:
       return mkConst(false);   // no surviving combination -> probability 0
     pg_uuid_t u = provsqlUuidV5(name);
     if(created.insert(uuid2string(u)).second) {
-      provsql_internal_create_gate(&u, gate_mobius,
-                                   static_cast<unsigned>(ch.size()),
-                                   ch.data());
-      provsql_internal_set_extra(&u, extra.c_str());
+      provsql_internal_create_gate_with(&u, gate_mobius,
+                                        static_cast<unsigned>(ch.size()),
+                                        ch.data(), false, 0, 0, extra.c_str());
       ++st.dd_size;
     }
     return u;

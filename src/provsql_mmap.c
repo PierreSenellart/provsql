@@ -859,6 +859,19 @@ Datum create_gate(PG_FUNCTION_ARGS)
   else
     children_data = NULL;
 
+  if(PG_NARGS() > 3) {
+    /* create_gate(token, type, children, info1, info2, extra): the gate
+       and what it records in one unanswered message. */
+    bool has_infos = !PG_ARGISNULL(3) || !PG_ARGISNULL(4);
+    unsigned info1 = PG_ARGISNULL(3) ? 0 : (unsigned) PG_GETARG_INT32(3);
+    unsigned info2 = PG_ARGISNULL(4) ? 0 : (unsigned) PG_GETARG_INT32(4);
+    char *extra = PG_ARGISNULL(5) ? NULL : text_to_cstring(PG_GETARG_TEXT_PP(5));
+
+    provsql_internal_create_gate_with(token, type, nb_children, children_data,
+                                      has_infos, info1, info2, extra);
+    PG_RETURN_VOID();
+  }
+
   provsql_internal_create_gate(token, type, nb_children, children_data);
 
   PG_RETURN_VOID();

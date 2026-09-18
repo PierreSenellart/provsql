@@ -1498,6 +1498,711 @@ END
 $$ LANGUAGE plpgsql;
 
 -- ----------------------------------------------------------------------
+-- 6e. Gates created together with what they record: create_gate with infos
+--     and text, and the builders that use it.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION create_gate(
+  token UUID,
+  type provenance_gate,
+  children uuid[],
+  info1 INT,
+  info2 INT,
+  extra TEXT)
+  RETURNS void AS
+  'provsql','create_gate' LANGUAGE C PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION replace_block(
+  _tbl regclass, old_key UUID, probs DOUBLE PRECISION[] DEFAULT NULL)
+  RETURNS void AS
+$$
+DECLARE
+  r RECORD;
+  n INT;
+  i INT := 0;
+  new_key UUID;
+  new_tok UUID;
+  was_active TEXT;
+BEGIN
+  IF provsql.get_gate_type(old_key) <> 'input' THEN
+    RAISE EXCEPTION 'replace_block: % is not a block key gate', old_key;
+  END IF;
+
+  -- The rewriter has no business in the bookkeeping below: the tokens of
+  -- _tbl are what this function is here to rewrite, not provenance to
+  -- carry into a temporary table.  Restored before returning; a failure
+  -- aborts the transaction, which restores it too.
+  was_active := coalesce(current_setting('provsql.active', true), 'on');
+  PERFORM set_config('provsql.active', 'off', true);
+
+  EXECUTE format(
+    'CREATE TEMP TABLE provsql_replace_block_tmp ON COMMIT DROP AS
+       SELECT t.provsql AS old_token,
+              NULL::uuid AS new_token,
+              (provsql.get_infos(t.provsql)).info1 AS ord
+         FROM %s t
+        WHERE provsql.get_gate_type(t.provsql) = ''mulinput''
+          AND (provsql.get_children(t.provsql))[1] = %L', _tbl, old_key);
+
+  SELECT count(*) INTO n FROM provsql_replace_block_tmp;
+  IF n = 0 THEN
+    RAISE EXCEPTION 'replace_block: no row of % belongs to block %', _tbl, old_key;
+  END IF;
+  IF probs IS NOT NULL AND array_length(probs, 1) <> n THEN
+    RAISE EXCEPTION 'replace_block: block % has % rows but % probabilities were given',
+      old_key, n, array_length(probs, 1);
+  END IF;
+
+  new_key := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(new_key, 'input');
+
+  FOR r IN SELECT old_token, ord FROM provsql_replace_block_tmp ORDER BY ord LOOP
+    i := i + 1;
+    new_tok := public.uuid_generate_v4();
+    PERFORM provsql.create_gate(new_tok, 'mulinput', ARRAY[new_key], r.ord, n, NULL);
+    IF probs IS NOT NULL THEN
+      PERFORM provsql.set_prob(new_tok, probs[i]);
+    END IF;
+    PERFORM provsql.note_fresh_leaf(new_tok);
+    UPDATE provsql_replace_block_tmp SET new_token = new_tok
+      WHERE old_token = r.old_token;
+  END LOOP;
+
+  EXECUTE format(
+    'UPDATE %s t SET provsql = b.new_token
+       FROM provsql_replace_block_tmp b WHERE t.provsql = b.old_token', _tbl);
+
+  DROP TABLE provsql_replace_block_tmp;
+  PERFORM set_config('provsql.active', was_active, true);
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION provenance_assume(token UUID, assumption TEXT)
+  RETURNS UUID AS
+  'provsql','provenance_assume' LANGUAGE C COST 100 PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION assume_boolean(token UUID) RETURNS UUID AS
+  'provsql','assume_boolean' LANGUAGE C COST 100 PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION repair_key(_tbl regclass, key_att text)
+  RETURNS void AS
+$$
+DECLARE
+  r RECORD;
+  rows_query TEXT;
+  block_key_cols INT2[];
+BEGIN
+  -- Resolve the (possibly comma-separated) key_att text into the
+  -- corresponding pg_attribute.attnum values for the safe-query
+  -- metadata.  Names are trimmed; quoting is not supported because
+  -- repair_key has never accepted quoted identifiers in key_att.
+  IF key_att = '' THEN
+    block_key_cols := ARRAY[]::INT2[];
+  ELSE
+    SELECT array_agg(a.attnum ORDER BY t.ord)::INT2[]
+      INTO block_key_cols
+      FROM unnest(string_to_array(key_att, ',')) WITH ORDINALITY AS t(name, ord)
+      JOIN pg_attribute a
+        ON a.attrelid = _tbl
+       AND a.attname  = trim(t.name)
+       AND a.attnum   > 0
+       AND NOT a.attisdropped;
+    IF block_key_cols IS NULL OR array_length(block_key_cols, 1) IS NULL THEN
+      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att;
+    END IF;
+    IF array_length(block_key_cols, 1) > 16 THEN
+      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported';
+    END IF;
+  END IF;
+
+  -- Same column shape as add_provenance: no UNIQUE, no DEFAULT past
+  -- the initial backfill (the guard trigger added after the rename
+  -- takes over both jobs once the column has been renamed to its
+  -- final name).  The DEFAULT is kept here only so the second pass
+  -- below can read provsql_temp from the user-visible rows
+  -- without a separate UPDATE.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql_temp UUID DEFAULT public.uuid_generate_v4()', _tbl);
+
+  -- Build a per-group mapping (key columns + a fresh key_token + the
+  -- group size) once, then use it for both the create_gate(key_token,
+  -- 'input') first pass and the per-row mulinput second pass.  Going
+  -- through a temp table avoids re-running uuid_generate_v4() (which
+  -- would produce different UUIDs the second time).  USING (%1$s) on
+  -- the second pass handles the multi-column case uniformly.
+  -- ON COMMIT DROP plus the explicit DROP TABLE at the end of this
+  -- function leave the temp table cleaned up across transactions and
+  -- across repeated calls in the same transaction.
+  IF key_att = '' THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %s', _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %s t CROSS JOIN provsql_repair_key_tmp k', _tbl);
+  ELSE
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_repair_key_tmp ON COMMIT DROP AS
+         SELECT %1$s,
+                public.uuid_generate_v4() AS provsql_key_token,
+                COUNT(*) AS provsql_group_size
+           FROM %2$s
+       GROUP BY %1$s', key_att, _tbl);
+    rows_query := format(
+      'SELECT t.provsql_temp,
+              k.provsql_key_token AS key_token,
+              ROW_NUMBER() OVER (PARTITION BY k.provsql_key_token
+                                 ORDER BY t.ctid) AS within_group,
+              k.provsql_group_size AS group_size
+         FROM %2$s t
+         JOIN provsql_repair_key_tmp k USING (%1$s)', key_att, _tbl);
+  END IF;
+
+  -- Pass 1: one input gate per group key.
+  FOR r IN SELECT provsql_key_token FROM provsql_repair_key_tmp LOOP
+    PERFORM provsql.create_gate(r.provsql_key_token, 'input');
+  END LOOP;
+
+  -- Pass 2: per row, attach a mulinput gate to its group's key token.
+  -- The block size goes in info2 rather than the uniform 1/size going
+  -- in the probability: a repaired row's probability is the user's to
+  -- write (the documented "repair_key then set_prob(provenance(), p)"
+  -- pattern), and probabilities are written once.  A row nobody gives
+  -- a probability evaluates at 1/size all the same -- see
+  -- MMappedCircuit::getProb.
+  FOR r IN EXECUTE rows_query LOOP
+    PERFORM provsql.create_gate(r.provsql_temp, 'mulinput', ARRAY[r.key_token],
+                                r.within_group::int, r.group_size::int, NULL);
+  END LOOP;
+
+  DROP TABLE provsql_repair_key_tmp;
+
+  EXECUTE format('ALTER TABLE %s ALTER COLUMN provsql_temp DROP DEFAULT', _tbl);
+  EXECUTE format('ALTER TABLE %s RENAME COLUMN provsql_temp TO provsql', _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
+  -- Base BID tables also have themselves as their sole ancestor.  Same
+  -- rationale as the @c add_provenance branch above.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
+  RETURNS UUID AS
+  'provsql','provenance_project' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_eq(token UUID, pos1 int, pos2 int)
+  RETURNS UUID AS
+  'provsql','provenance_eq' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION provenance_arith(
+  op       INTEGER,
+  children UUID[]
+)
+RETURNS UUID AS
+  'provsql','provenance_arith' LANGUAGE C COST 100 STRICT PARALLEL SAFE IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION agg_value_gate(v numeric)
+  RETURNS uuid AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('value', v::text));
+BEGIN
+  PERFORM provsql.create_gate(token, 'value', NULL, NULL, NULL, v::text);
+  RETURN token;
+END
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION agg_arith_make(op int, children uuid[], val numeric)
+  RETURNS agg_token AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('arith', op::text, children::text));
+BEGIN
+  PERFORM provsql.create_gate(token, 'arith', children, op, NULL, val::text);
+  RETURN provsql.agg_token_make(token, val);
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION rv_parametric2(
+    family text,
+    p1_tok uuid, p1_lit double precision,
+    p2_tok uuid, p2_lit double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+  wires uuid[] := ARRAY[]::uuid[];
+  s1 text;
+  s2 text;
+BEGIN
+  IF p1_tok IS NOT NULL THEN
+    wires := wires || p1_tok;
+    s1 := '$' || (array_length(wires, 1) - 1);
+  ELSE
+    IF NOT provsql.is_finite_float8(p1_lit) THEN
+      RAISE EXCEPTION 'provsql.%: literal parameter must be finite (got %)',
+        family, p1_lit;
+    END IF;
+    s1 := p1_lit::text;
+  END IF;
+  IF p2_tok IS NOT NULL THEN
+    wires := wires || p2_tok;
+    s2 := '$' || (array_length(wires, 1) - 1);
+  ELSE
+    IF NOT provsql.is_finite_float8(p2_lit) THEN
+      RAISE EXCEPTION 'provsql.%: literal parameter must be finite (got %)',
+        family, p2_lit;
+    END IF;
+    s2 := p2_lit::text;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', wires, NULL, NULL,
+                              family || ':' || s1 || ',' || s2);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION rv_parametric1(family text, p_tok uuid)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', ARRAY[p_tok], NULL, NULL, family || ':$0');
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION normal(mu double precision, sigma double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(sigma) THEN
+    RAISE EXCEPTION 'provsql.normal: parameters must be finite (got mu=%, sigma=%)', mu, sigma;
+  END IF;
+  IF sigma < 0 THEN
+    RAISE EXCEPTION 'provsql.normal: sigma must be non-negative (got %)', sigma;
+  END IF;
+  IF sigma = 0 THEN
+    RETURN provsql.as_random(mu);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'normal:' || mu || ',' || sigma);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION logistic(mu double precision, s double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(s) THEN
+    RAISE EXCEPTION 'provsql.logistic: parameters must be finite (got mu=%, s=%)', mu, s;
+  END IF;
+  IF s < 0 THEN
+    RAISE EXCEPTION 'provsql.logistic: scale s must be non-negative (got %)', s;
+  END IF;
+  IF s = 0 THEN
+    RETURN provsql.as_random(mu);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'logistic:' || mu || ',' || s);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION uniform(a double precision, b double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(a) OR NOT provsql.is_finite_float8(b) THEN
+    RAISE EXCEPTION 'provsql.uniform: bounds must be finite (got a=%, b=%)', a, b;
+  END IF;
+  IF a > b THEN
+    RAISE EXCEPTION 'provsql.uniform: a must be <= b (got a=%, b=%)', a, b;
+  END IF;
+  IF a = b THEN
+    RETURN provsql.as_random(a);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'uniform:' || a || ',' || b);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION exponential(lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.exponential: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.exponential: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'exponential:' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION erlang(k integer, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF k < 1 THEN
+    RAISE EXCEPTION 'provsql.erlang: k must be >= 1 (got %)', k;
+  END IF;
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.erlang: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.erlang: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  IF k = 1 THEN
+    RETURN provsql.exponential(lambda);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'erlang:' || k || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION gamma(k double precision, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(k) THEN
+    RAISE EXCEPTION 'provsql.gamma: k must be finite (got %)', k;
+  END IF;
+  IF k <= 0 THEN
+    RAISE EXCEPTION 'provsql.gamma: k must be strictly positive (got %)', k;
+  END IF;
+  IF NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.gamma: lambda must be finite (got %)', lambda;
+  END IF;
+  IF lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.gamma: lambda must be strictly positive (got %)', lambda;
+  END IF;
+  IF k = floor(k) AND k <= 2147483647 THEN
+    RETURN provsql.erlang(k::integer, lambda);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'gamma:' || k || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION lognormal(mu double precision, sigma double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(sigma) THEN
+    RAISE EXCEPTION 'provsql.lognormal: parameters must be finite (got mu=%, sigma=%)', mu, sigma;
+  END IF;
+  IF sigma < 0 THEN
+    RAISE EXCEPTION 'provsql.lognormal: sigma must be non-negative (got %)', sigma;
+  END IF;
+  IF sigma = 0 THEN
+    RETURN provsql.as_random(exp(mu));
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'lognormal:' || mu || ',' || sigma);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION weibull(k double precision, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(k) OR NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.weibull: parameters must be finite (got k=%, lambda=%)', k, lambda;
+  END IF;
+  IF k <= 0 OR lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.weibull: parameters must be strictly positive (got k=%, lambda=%)', k, lambda;
+  END IF;
+  IF k = 1 THEN
+    RETURN provsql.exponential(1 / lambda);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'weibull:' || k || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION pareto(xm double precision, alpha double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(xm) OR NOT provsql.is_finite_float8(alpha) THEN
+    RAISE EXCEPTION 'provsql.pareto: parameters must be finite (got xm=%, alpha=%)', xm, alpha;
+  END IF;
+  IF xm <= 0 OR alpha <= 0 THEN
+    RAISE EXCEPTION 'provsql.pareto: parameters must be strictly positive (got xm=%, alpha=%)', xm, alpha;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'pareto:' || xm || ',' || alpha);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gamma(alpha double precision, beta double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(alpha) OR NOT provsql.is_finite_float8(beta) THEN
+    RAISE EXCEPTION 'provsql.inverse_gamma: parameters must be finite (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  IF alpha <= 0 OR beta <= 0 THEN
+    RAISE EXCEPTION 'provsql.inverse_gamma: parameters must be strictly positive (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'inverse_gamma:' || alpha || ',' || beta);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION inverse_gaussian(mu double precision, lambda double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(mu) OR NOT provsql.is_finite_float8(lambda) THEN
+    RAISE EXCEPTION 'provsql.inverse_gaussian: parameters must be finite (got mu=%, lambda=%)', mu, lambda;
+  END IF;
+  IF mu <= 0 OR lambda <= 0 THEN
+    RAISE EXCEPTION 'provsql.inverse_gaussian: parameters must be strictly positive (got mu=%, lambda=%)', mu, lambda;
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'inverse_gaussian:' || mu || ',' || lambda);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION beta(alpha double precision, beta double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF NOT provsql.is_finite_float8(alpha) OR NOT provsql.is_finite_float8(beta) THEN
+    RAISE EXCEPTION 'provsql.beta: parameters must be finite (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  IF alpha <= 0 OR beta <= 0 THEN
+    RAISE EXCEPTION 'provsql.beta: parameters must be strictly positive (got alpha=%, beta=%)', alpha, beta;
+  END IF;
+  IF alpha = 1 AND beta = 1 THEN
+    RETURN provsql.uniform(0, 1);
+  END IF;
+  token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'beta:' || alpha || ',' || beta);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION categorical(
+  probs    double precision[],
+  outcomes double precision[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  n integer;
+  p_sum double precision := 0.0;
+  i integer;
+  key_token uuid;
+  mix_token uuid;
+  mul_token uuid;
+  mul_tokens uuid[] := ARRAY[]::uuid[];
+  mix_wires  uuid[];
+  pi_i double precision;
+  vi_i double precision;
+BEGIN
+  IF probs IS NULL OR outcomes IS NULL THEN
+    RAISE EXCEPTION 'provsql.categorical: probs and outcomes must be non-null';
+  END IF;
+  n := array_length(probs, 1);
+  IF n IS NULL OR n < 1 THEN
+    RAISE EXCEPTION 'provsql.categorical: probs must be non-empty';
+  END IF;
+  IF array_length(outcomes, 1) <> n THEN
+    RAISE EXCEPTION 'provsql.categorical: probs and outcomes must have the same length (got % and %)',
+      n, array_length(outcomes, 1);
+  END IF;
+
+  FOR i IN 1..n LOOP
+    pi_i := probs[i];
+    vi_i := outcomes[i];
+    -- PostgreSQL diverges from IEEE 754: NaN = NaN is TRUE there, so
+    -- the canonical x <> x NaN test doesn't fire.  Compare against the
+    -- literal 'NaN'::float8 instead, and reject ±Infinity for outcomes
+    -- explicitly.
+    IF pi_i IS NULL OR pi_i = 'NaN'::float8 OR pi_i < 0 OR pi_i > 1 THEN
+      RAISE EXCEPTION 'provsql.categorical: probs[%] must be in [0,1] (got %)', i, pi_i;
+    END IF;
+    IF vi_i IS NULL OR vi_i = 'NaN'::float8
+       OR vi_i = 'Infinity'::float8 OR vi_i = '-Infinity'::float8 THEN
+      RAISE EXCEPTION 'provsql.categorical: outcomes[%] must be finite (got %)', i, vi_i;
+    END IF;
+    p_sum := p_sum + pi_i;
+  END LOOP;
+  IF abs(p_sum - 1.0) > 1e-9 THEN
+    RAISE EXCEPTION 'provsql.categorical: probs must sum to 1 within 1e-9 (got %)', p_sum;
+  END IF;
+
+  -- Degenerate case: exactly one positive-mass outcome (the rest are
+  -- zero).  The "categorical" is then a Dirac point mass; skip the
+  -- block-allocation entirely and return @c as_random(v), which yields
+  -- a shared, v5-keyed gate_value -- exactly what downstream
+  -- evaluators (rv_moment, AnalyticEvaluator, rv_support) treat
+  -- specially.  Saves a key gate and a mulinput per call, and lets
+  -- two calls to @c categorical({1.0}, {v}) collide on the same
+  -- gate_value UUID instead of producing distinct anonymous blocks.
+  DECLARE
+    nb_positive integer := 0;
+    only_idx    integer := 0;
+  BEGIN
+    FOR i IN 1..n LOOP
+      IF probs[i] > 0.0 THEN
+        nb_positive := nb_positive + 1;
+        only_idx := i;
+      END IF;
+    END LOOP;
+    IF nb_positive = 1 THEN
+      RETURN provsql.as_random(outcomes[only_idx]);
+    END IF;
+  END;
+
+  -- Mint the block's key anchor.  Probability 1.0 matches the
+  -- joint-table convention: the categorical mass lives on the
+  -- mulinputs, the key just identifies the block.
+  key_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(key_token, 'input');
+  PERFORM provsql.set_prob(key_token, 1.0);
+
+  -- One mulinput per positive-probability outcome.  Zero-probability
+  -- entries contribute no mass and are skipped: the gate_mixture's
+  -- wire vector is otherwise polluted with no-op leaves.
+  FOR i IN 1..n LOOP
+    pi_i := probs[i];
+    IF pi_i <= 0.0 THEN CONTINUE; END IF;
+    mul_token := public.uuid_generate_v4();
+    PERFORM provsql.create_gate(mul_token, 'mulinput', ARRAY[key_token],
+                                i - 1, NULL, outcomes[i]::text);
+    PERFORM provsql.set_prob(mul_token, pi_i);
+    mul_tokens := mul_tokens || mul_token;
+  END LOOP;
+
+  mix_wires := ARRAY[key_token] || mul_tokens;
+  mix_token := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(mix_token, 'mixture', mix_wires);
+  RETURN provsql.random_variable_make(mix_token);
+END
+$$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION as_random(c double precision)
+  RETURNS random_variable AS
+$$
+DECLARE
+  -- Canonicalise -0.0 to +0.0: IEEE 754 defines x + 0.0 = +0.0 for
+  -- both signed zeros, and is identity for finite, NaN, and ±Infinity.
+  -- Without this, as_random(-0.0) and as_random(+0.0) would produce
+  -- different gate UUIDs (their CAST AS VARCHAR text representations
+  -- differ: '-0' vs '0') even though they denote the same constant.
+  c_canon double precision := c + 0.0;
+  c_text varchar := CAST(c_canon AS VARCHAR);
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('value', c_text));
+BEGIN
+  PERFORM provsql.create_gate(token, 'value', NULL, NULL, NULL, c_text);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION observe(x random_variable, datum double precision)
+  RETURNS uuid AS
+$$
+DECLARE
+  leaf uuid := (x)::uuid;
+  result uuid;
+BEGIN
+  IF provsql.get_gate_type(leaf) <> 'rv' THEN
+    RAISE EXCEPTION 'provsql.observe: the argument must be a bare '
+      'random-variable leaf (a gate_rv), got a % gate', provsql.get_gate_type(leaf)
+      USING HINT = 'observe binds a datum to a single distribution leaf; '
+        'observing a derived quantity (a sum, product, or comparison) needs '
+        'a change-of-variables density and is out of scope.';
+  END IF;
+  IF NOT provsql.is_finite_float8(datum) THEN
+    RAISE EXCEPTION 'provsql.observe: datum must be finite (got %)', datum;
+  END IF;
+  result := public.uuid_generate_v4();
+  PERFORM provsql.create_gate(result, 'observe', ARRAY[leaf], NULL, NULL, datum::text);
+  RETURN result;
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION rv_percentile_make(fraction double precision,
+                                              pairs uuid[])
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+BEGIN
+  IF fraction IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF fraction < 0 OR fraction > 1 THEN
+    RAISE EXCEPTION
+      'percentile_cont: fraction must be between 0 and 1 (got %)', fraction;
+  END IF;
+  token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('arith', '10', pairs::text, fraction::text));
+  -- 10 = PROVSQL_ARITH_PERCENTILE
+  PERFORM create_gate(token, 'arith', pairs, 10, NULL, fraction::text);
+  RETURN random_variable_make(token);
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

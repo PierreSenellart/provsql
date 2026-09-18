@@ -286,8 +286,8 @@ pg_uuid_t provsql_plant_canonical(const char *work_name, gate_type type,
   address = canonical_address(type == gate_plus ? "plus-canonical"
                                                 : "times-canonical",
                               children, n);
-  provsql_internal_create_gate(&address, type, 1, target);
-  provsql_internal_set_infos(&address, info1, info2);
+  provsql_internal_create_gate_with(&address, type, 1, target,
+                                    true, info1, info2, NULL);
 
   if (planted == NULL) {
     HASHCTL ctl;
@@ -788,4 +788,161 @@ Datum inversion_free_key(PG_FUNCTION_ARGS) {
   appendStringInfo(&buf, "%d:", (int)VARSIZE_ANY_EXHDR(sec));
   appendBinaryStringInfo(&buf, VARDATA_ANY(sec), VARSIZE_ANY_EXHDR(sec));
   PG_RETURN_TEXT_P(cstring_to_text_with_len(buf.data, buf.len));
+}
+
+/* -------------------------------------------------------------------------
+ * The other content-addressed builders: assumption wrappers, where-provenance
+ * gates, arithmetic.  Each records what its address hashes, so the gate goes
+ * with its infos or text in one unanswered message.
+ * ------------------------------------------------------------------------- */
+
+/** @brief The @c assumed wrapper of @p token under @p assumption, with
+ *         @p info1 as the route tag (0 for none). */
+static pg_uuid_t assumed_gate(const pg_uuid_t *token, const char *assumption,
+                              unsigned info1) {
+  StringInfoData buf;
+  pg_uuid_t wrapped;
+
+  if (strcmp(assumption, "boolean") != 0 && strcmp(assumption, "absorptive") != 0)
+    ereport(ERROR, (errmsg("provenance_assume: unknown assumption %s", assumption)));
+  name_begin(&buf, "assumed");
+  appendStringInfoString(&buf, assumption);
+  name_add_uuid(&buf, token);
+  wrapped = name_end(&buf);
+  provsql_internal_create_gate_with(&wrapped, gate_assumed, 1, token,
+                                    info1 != 0, info1, 0, assumption);
+  return wrapped;
+}
+
+PG_FUNCTION_INFO_V1(provenance_assume);
+/** @brief Wrap @c token in the assumption marker @c assumption
+ *         (@c 'boolean' or @c 'absorptive').  NULL on a NULL token. */
+Datum provenance_assume(PG_FUNCTION_ARGS) {
+  pg_uuid_t wrapped;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+  if (PG_ARGISNULL(1))
+    ereport(ERROR, (errmsg("provenance_assume: unknown assumption NULL")));
+  wrapped = assumed_gate(PG_GETARG_UUID_P(0),
+                         text_to_cstring(PG_GETARG_TEXT_PP(1)), 0);
+  return uuid_result(&wrapped);
+}
+
+PG_FUNCTION_INFO_V1(assume_boolean);
+/** @brief The Boolean-assumption wrapper the safe-query rewriter puts on
+ *         every per-row root, tagged @c PROVSQL_ROUTE_SQ_REWRITE. */
+Datum assume_boolean(PG_FUNCTION_ARGS) {
+  pg_uuid_t wrapped;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+  wrapped = assumed_gate(PG_GETARG_UUID_P(0), "boolean",
+                         PROVSQL_ROUTE_SQ_REWRITE);
+  return uuid_result(&wrapped);
+}
+
+PG_FUNCTION_INFO_V1(provenance_project);
+/**
+ * @brief The where-provenance @c project gate of @c token: its text lists,
+ *        for each output position, the input position it comes from (NULL
+ *        for a position given as 0), as @c '{{in,out},...}'.
+ */
+Datum provenance_project(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token;
+  ArrayType *positions;
+  Datum *elems;
+  bool *nulls;
+  int n, i;
+  StringInfoData buf, extra;
+  pg_uuid_t project;
+
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+    provsql_error("provenance_project: NULL argument");
+  token = PG_GETARG_UUID_P(0);
+  positions = PG_GETARG_ARRAYTYPE_P(1);
+  deconstruct_array(positions, INT4OID, sizeof(int32), true, 'i',
+                    &elems, &nulls, &n);
+
+  /* The address hashes the array as its text form, '{p1,p2,...}'. */
+  name_begin(&buf, "project");
+  name_add_uuid(&buf, token);
+  appendStringInfoChar(&buf, '{');
+  initStringInfo(&extra);
+  appendStringInfoChar(&extra, '{');
+  for (i = 0; i < n; ++i) {
+    if (i > 0) {
+      appendStringInfoChar(&buf, ',');
+      appendStringInfoChar(&extra, ',');
+    }
+    if (nulls[i]) {
+      appendStringInfoString(&buf, "NULL");
+      appendStringInfo(&extra, "{NULL,%d}", i + 1);
+    } else {
+      int32 pos = DatumGetInt32(elems[i]);
+      appendStringInfo(&buf, "%d", pos);
+      if (pos == 0)
+        appendStringInfo(&extra, "{NULL,%d}", i + 1);
+      else
+        appendStringInfo(&extra, "{%d,%d}", pos, i + 1);
+    }
+  }
+  appendStringInfoChar(&buf, '}');
+  appendStringInfoChar(&extra, '}');
+  project = name_end(&buf);
+  provsql_internal_create_gate_with(&project, gate_project, 1, token,
+                                    false, 0, 0, n > 0 ? extra.data : NULL);
+  return uuid_result(&project);
+}
+
+PG_FUNCTION_INFO_V1(provenance_eq);
+/** @brief The where-provenance @c eq gate of @c token, equating positions
+ *         @c pos1 and @c pos2 (its infos). */
+Datum provenance_eq(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token;
+  StringInfoData buf;
+  pg_uuid_t eq;
+  int32 pos1 = PG_ARGISNULL(1) ? 0 : PG_GETARG_INT32(1);
+  int32 pos2 = PG_ARGISNULL(2) ? 0 : PG_GETARG_INT32(2);
+
+  if (PG_ARGISNULL(0))
+    provsql_error("provenance_eq: NULL token");
+  token = PG_GETARG_UUID_P(0);
+  name_begin(&buf, "eq");
+  name_add_uuid(&buf, token);
+  if (!PG_ARGISNULL(1))
+    appendStringInfo(&buf, "%d", pos1);
+  appendStringInfoChar(&buf, ',');
+  if (!PG_ARGISNULL(2))
+    appendStringInfo(&buf, "%d", pos2);
+  eq = name_end(&buf);
+  provsql_internal_create_gate_with(&eq, gate_eq, 1, token,
+                                    true, (unsigned)pos1, (unsigned)pos2, NULL);
+  return uuid_result(&eq);
+}
+
+PG_FUNCTION_INFO_V1(provenance_arith);
+/** @brief The @c arith gate applying operator @c op (a @c provsql_arith_op,
+ *         its info1) to @c children, in order. */
+Datum provenance_arith(PG_FUNCTION_ARGS) {
+  StringInfoData buf;
+  pg_uuid_t arith, *children = NULL, nothing;
+  int n = 0;
+  int32 op = PG_ARGISNULL(0) ? 0 : PG_GETARG_INT32(0);
+
+  name_begin(&buf, "arith");
+  if (!PG_ARGISNULL(0))
+    appendStringInfo(&buf, "%d", op);
+  if (!PG_ARGISNULL(1)) {
+    ArrayType *arr = PG_GETARG_ARRAYTYPE_P(1);
+    if (array_contains_nulls(arr))
+      provsql_error("provenance_arith: children array must not contain NULL elements");
+    memset(&nothing, 0xFF, sizeof(nothing));
+    n = filtered_tokens(arr, &nothing, &children);
+    name_add_uuid_array(&buf, children, n);
+  }
+  arith = name_end(&buf);
+  provsql_internal_create_gate_with(&arith, gate_arith, (unsigned)n, children,
+                                    true, (unsigned)op, 0, NULL);
+  return uuid_result(&arith);
 }

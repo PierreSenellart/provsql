@@ -147,13 +147,14 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
                             const std::string key = uuid2string(token);
                             if (!created.insert(key).second)
                               return;
-                            provsql_internal_create_gate(
+                            /* The certificate goes with the gate, in one
+                             * unanswered message: any route certifying
+                             * this shape records the same thing. */
+                            provsql_internal_create_gate_with(
                               &token, type,
                               static_cast<unsigned>(children.size()),
-                              children.empty() ? NULL : children.data());
-                            if (certified)
-                              provsql_internal_set_infos(&token,
-                                                         DNNF_CERT_INFO, 0);
+                              children.empty() ? NULL : children.data(),
+                              certified, DNNF_CERT_INFO, 0, NULL);
                           };
 
   std::vector<gate_t> stack(roots);
@@ -301,11 +302,11 @@ pg_uuid_t wrapAssumedAbsorptive(const pg_uuid_t &child)
   const pg_uuid_t token =
     provsqlUuidV5("assumedabsorptive" + uuid2string(child));
   if (created.insert(uuid2string(token)).second) {
-    provsql_internal_create_gate(&token, gate_assumed, 1, &child);
-    provsql_internal_set_extra(&token, "absorptive");
     /* The route tag, not the assumption kind, is what identifies this as the
      * reachability compiler's output (see provsql_route). */
-    provsql_internal_set_infos(&token, PROVSQL_ROUTE_REACHABILITY, 0);
+    provsql_internal_create_gate_with(&token, gate_assumed, 1, &child,
+                                      true, PROVSQL_ROUTE_REACHABILITY, 0,
+                                      "absorptive");
   }
   return token;
 }

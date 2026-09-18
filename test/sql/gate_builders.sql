@@ -231,6 +231,101 @@ $$ SELECT 'K' || factor::text || ' '
        || octet_length(sec)  || ':' || sec $$
   LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
+CREATE FUNCTION gb_ref.provenance_assume(token UUID, assumption TEXT)
+  RETURNS UUID AS
+$$
+DECLARE
+  wrapped uuid;
+BEGIN
+  IF token IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF assumption NOT IN ('boolean', 'absorptive') THEN
+    RAISE EXCEPTION 'provenance_assume: unknown assumption %', assumption;
+  END IF;
+  wrapped := public.uuid_generate_v5(uuid_ns_provsql(),
+                                     concat('assumed', assumption, token));
+  PERFORM create_gate(wrapped, 'assumed', ARRAY[token]);
+  PERFORM set_extra(wrapped, assumption);
+  RETURN wrapped;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE FUNCTION gb_ref.assume_boolean(token UUID) RETURNS UUID AS
+$$
+DECLARE
+  wrapped uuid;
+BEGIN
+  wrapped := gb_ref.provenance_assume(token, 'boolean');
+  IF wrapped IS NOT NULL THEN
+    -- 1 = PROVSQL_ROUTE_SQ_REWRITE (see provsql_route in src/provsql_utils.h)
+    PERFORM set_infos(wrapped, 1, 0);
+  END IF;
+  RETURN wrapped;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
+   SECURITY DEFINER PARALLEL SAFE;
+
+CREATE FUNCTION gb_ref.provenance_project(token UUID, VARIADIC positions int[])
+  RETURNS UUID AS
+$$
+DECLARE
+  project_token uuid;
+  rec record;
+BEGIN
+  project_token:=uuid_generate_v5(uuid_ns_provsql(),concat('project', token, positions));
+  PERFORM create_gate(project_token, 'project', ARRAY[token]);
+  PERFORM set_extra(project_token, ARRAY_AGG(pair)::text)
+  FROM (
+    SELECT ARRAY[(CASE WHEN info=0 THEN NULL ELSE info END), idx] AS pair
+    FROM unnest(positions) WITH ORDINALITY AS a(info, idx)
+    ORDER BY idx
+  ) t;
+
+  RETURN project_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE FUNCTION gb_ref.provenance_eq(token UUID, pos1 int, pos2 int)
+  RETURNS UUID AS
+$$
+DECLARE
+  eq_token uuid;
+  rec record;
+BEGIN
+  eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat('eq',token,pos1,',',pos2));
+
+  PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
+  PERFORM set_infos(eq_token, pos1, pos2);
+  RETURN eq_token;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+
+CREATE FUNCTION gb_ref.provenance_arith(
+  op       INTEGER,
+  children UUID[]
+)
+RETURNS UUID AS
+$$
+DECLARE
+  arith_token UUID;
+BEGIN
+  arith_token := public.uuid_generate_v5(
+    uuid_ns_provsql(),
+    concat('arith', op::text, children::text)
+  );
+  PERFORM create_gate(arith_token, 'arith', children);
+  PERFORM set_infos(arith_token, op);
+  RETURN arith_token;
+END
+$$ LANGUAGE plpgsql
+  SET search_path=provsql,pg_temp,public
+  SECURITY DEFINER
+  IMMUTABLE
+  PARALLEL SAFE
+  STRICT;
+
 CREATE TABLE gb_tok(i int, t uuid);
 INSERT INTO gb_tok SELECT i, public.uuid_generate_v5(provsql.uuid_ns_provsql(), 'gb-leaf-' || i)
   FROM generate_series(1, 60) i;
@@ -329,6 +424,36 @@ SELECT 'key' AS f, provsql.inversion_free_key(root, sec, factor) AS key,
        provsql.inversion_free_key(root, sec, factor) IS NOT DISTINCT FROM gb_ref.inversion_free_key(root, sec, factor) AS same
 FROM (VALUES ('12', '7', 0), ('a b:c', '', 3), ('clé', '⊗', -1), (NULL, 'x', 1), ('x', NULL, 1), ('x', 'y', NULL)) v(root, sec, factor)
 ORDER BY root, sec;
+
+-- Assumption wrappers, where-provenance gates, arithmetic: created with what
+-- they record.  The C function runs first here too.
+SELECT 'assume' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS extra,
+       (provsql.get_infos(c)).info1 AS route
+FROM (SELECT label, provsql.provenance_assume(gb_tok(a), x) AS c, gb_ref.provenance_assume(gb_tok(a), x) AS r
+      FROM (VALUES ('boolean', 31, 'boolean'), ('absorptive', 31, 'absorptive'), ('NULL token', 0, 'boolean')) v(label, a, x)) t
+ORDER BY label;
+SELECT provsql.provenance_assume(gb_tok(31), 'other');
+SELECT 'assume_boolean' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS extra,
+       (provsql.get_infos(c)).info1 AS route,
+       c = provsql.provenance_assume(gb_tok(a), 'boolean') AS same_gate_as_untagged
+FROM (SELECT label, a, provsql.assume_boolean(gb_tok(a)) AS c, gb_ref.assume_boolean(gb_tok(a)) AS r
+      FROM (VALUES ('a token', 32), ('already wrapped untagged', 31)) v(label, a)) t
+ORDER BY label;
+SELECT 'project' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS extra
+FROM (SELECT label, provsql.provenance_project(gb_tok(33), VARIADIC p) AS c, gb_ref.provenance_project(gb_tok(33), VARIADIC p) AS r
+      FROM (VALUES ('identity', '{1,2,3}'::int[]), ('permutation', '{3,1,2}'), ('a dropped position', '{2,0,1}'),
+                   ('one position', '{5}'), ('none', '{}')) v(label, p)) t
+ORDER BY label;
+SELECT 'eq' AS f, label, gb_same(c, r) AS result, (provsql.get_infos(c)).info1 AS pos1, (provsql.get_infos(c)).info2 AS pos2
+FROM (SELECT label, provsql.provenance_eq(gb_tok(34), p1, p2) AS c, gb_ref.provenance_eq(gb_tok(34), p1, p2) AS r
+      FROM (VALUES ('1 = 2', 1, 2), ('2 = 1', 2, 1), ('3 = 3', 3, 3)) v(label, p1, p2)) t
+ORDER BY label;
+SELECT 'arith' AS f, label, gb_same(c, r) AS result, (provsql.get_infos(c)).info1 AS op,
+       provsql.get_children(c) = gb_tokens(VARIADIC ch) AS children_in_order
+FROM (SELECT label, ch, provsql.provenance_arith(op, gb_tokens(VARIADIC ch)) AS c, gb_ref.provenance_arith(op, gb_tokens(VARIADIC ch)) AS r
+      FROM (VALUES ('plus', 0, '{35,36}'::int[]), ('the other way', 0, '{36,35}'), ('minus, same children', 2, '{35,36}'),
+                   ('negation', 4, '{35}')) v(label, op, ch)) t
+ORDER BY label;
 
 -- A gate planted for a multiset of tokens of a working table is returned in
 -- place of an ordinary gate, whatever the order of the children, by the

@@ -115,6 +115,34 @@ CREATE OR REPLACE FUNCTION create_gate(
   children uuid[] DEFAULT NULL)
   RETURNS void AS
   'provsql','create_gate' LANGUAGE C PARALLEL SAFE;
+
+/**
+ * @brief Create a gate together with what it records (internal)
+ *
+ * One unanswered message to the worker, where create_gate() followed by
+ * set_infos() or set_extra() would wait for the worker's verdict on each.
+ * For the callers that know what the gate records when they create it: a
+ * gate whose address hashes its infos and text, or a fresh token nobody else
+ * can have written to.  Infos and text are still written once: should
+ * something else be recorded at that address, the first value stays and the
+ * worker logs it.
+ *
+ * @param token UUID identifying the new gate
+ * @param type gate type (see provenance_gate)
+ * @param children optional array of child gate UUIDs
+ * @param info1 first info, or NULL
+ * @param info2 second info, or NULL
+ * @param extra text of the gate, or NULL
+ */
+CREATE OR REPLACE FUNCTION create_gate(
+  token UUID,
+  type provenance_gate,
+  children uuid[],
+  info1 INT,
+  info2 INT,
+  extra TEXT)
+  RETURNS void AS
+  'provsql','create_gate' LANGUAGE C PARALLEL SAFE;
 /**
  * @brief Return the gate type of a provenance token
  *
@@ -339,8 +367,7 @@ BEGIN
   FOR r IN SELECT old_token, ord FROM provsql_replace_block_tmp ORDER BY ord LOOP
     i := i + 1;
     new_tok := public.uuid_generate_v4();
-    PERFORM provsql.create_gate(new_tok, 'mulinput', ARRAY[new_key]);
-    PERFORM provsql.set_infos(new_tok, r.ord, n);
+    PERFORM provsql.create_gate(new_tok, 'mulinput', ARRAY[new_key], r.ord, n, NULL);
     IF probs IS NOT NULL THEN
       PERFORM provsql.set_prob(new_tok, probs[i]);
     END IF;
@@ -413,27 +440,13 @@ CREATE OR REPLACE FUNCTION get_infos(
  * assumption and the child, so identical children always wrap to the
  * same outer UUID per assumption.  No-op (returns NULL) on a NULL
  * input.
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>): the gate is created together
+ * with what it records, in one unanswered message.
  */
 CREATE OR REPLACE FUNCTION provenance_assume(token UUID, assumption TEXT)
   RETURNS UUID AS
-$$
-DECLARE
-  wrapped uuid;
-BEGIN
-  IF token IS NULL THEN
-    RETURN NULL;
-  END IF;
-  IF assumption NOT IN ('boolean', 'absorptive') THEN
-    RAISE EXCEPTION 'provenance_assume: unknown assumption %', assumption;
-  END IF;
-  wrapped := public.uuid_generate_v5(uuid_ns_provsql(),
-                                     concat('assumed', assumption, token));
-  PERFORM create_gate(wrapped, 'assumed', ARRAY[token]);
-  PERFORM set_extra(wrapped, assumption);
-  RETURN wrapped;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
-   SECURITY DEFINER PARALLEL SAFE;
+  'provsql','provenance_assume' LANGUAGE C COST 100 PARALLEL SAFE;
 
 /**
  * @brief Wrap @p token in a Boolean-assumption marker (compatibility
@@ -446,21 +459,12 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
  * and the probability dispatcher reads the tag back to report
  * @c sq-rewrite rather than the generic @c independent.  Build an untagged
  * Boolean-assumption wrapper with @c provenance_assume directly.
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>): the gate is created together
+ * with what it records, in one unanswered message.
  */
 CREATE OR REPLACE FUNCTION assume_boolean(token UUID) RETURNS UUID AS
-$$
-DECLARE
-  wrapped uuid;
-BEGIN
-  wrapped := provenance_assume(token, 'boolean');
-  IF wrapped IS NOT NULL THEN
-    -- 1 = PROVSQL_ROUTE_SQ_REWRITE (see provsql_route in src/provsql_utils.h)
-    PERFORM set_infos(wrapped, 1, 0);
-  END IF;
-  RETURN wrapped;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public
-   SECURITY DEFINER PARALLEL SAFE;
+  'provsql','assume_boolean' LANGUAGE C COST 100 PARALLEL SAFE;
 
 /**
  * @brief Wrap @p token in a fresh transparent @c gate_annotation carrying
@@ -1372,9 +1376,8 @@ BEGIN
   -- a probability evaluates at 1/size all the same -- see
   -- MMappedCircuit::getProb.
   FOR r IN EXECUTE rows_query LOOP
-    PERFORM provsql.create_gate(r.provsql_temp, 'mulinput', ARRAY[r.key_token]);
-    PERFORM provsql.set_infos(r.provsql_temp, r.within_group::int,
-                              r.group_size::int);
+    PERFORM provsql.create_gate(r.provsql_temp, 'mulinput', ARRAY[r.key_token],
+                                r.within_group::int, r.group_size::int, NULL);
   END LOOP;
 
   DROP TABLE provsql_repair_key_tmp;
@@ -1641,26 +1644,13 @@ CREATE OR REPLACE FUNCTION provenance_monus(token1 UUID, token2 UUID)
  *
  * @param token child provenance token
  * @param positions array encoding attribute position mappings
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>): the gate is created together
+ * with what it records, in one unanswered message.
  */
 CREATE OR REPLACE FUNCTION provenance_project(token UUID, VARIADIC positions int[])
   RETURNS UUID AS
-$$
-DECLARE
-  project_token uuid;
-  rec record;
-BEGIN
-  project_token:=uuid_generate_v5(uuid_ns_provsql(),concat('project', token, positions));
-  PERFORM create_gate(project_token, 'project', ARRAY[token]);
-  PERFORM set_extra(project_token, ARRAY_AGG(pair)::text)
-  FROM (
-    SELECT ARRAY[(CASE WHEN info=0 THEN NULL ELSE info END), idx] AS pair
-    FROM unnest(positions) WITH ORDINALITY AS a(info, idx)
-    ORDER BY idx
-  ) t;
-
-  RETURN project_token;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+  'provsql','provenance_project' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Create an equijoin gate for where-provenance tracking
@@ -1668,21 +1658,13 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARA
  * @param token child provenance token
  * @param pos1 attribute index in the first relation
  * @param pos2 attribute index in the second relation
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>): the gate is created together
+ * with what it records, in one unanswered message.
  */
 CREATE OR REPLACE FUNCTION provenance_eq(token UUID, pos1 int, pos2 int)
   RETURNS UUID AS
-$$
-DECLARE
-  eq_token uuid;
-  rec record;
-BEGIN
-  eq_token:=uuid_generate_v5(uuid_ns_provsql(),concat('eq',token,pos1,',',pos2));
-
-  PERFORM create_gate(eq_token, 'eq', ARRAY[token::uuid]);
-  PERFORM set_infos(eq_token, pos1, pos2);
-  RETURN eq_token;
-END
-$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SECURITY DEFINER PARALLEL SAFE IMMUTABLE;
+  'provsql','provenance_eq' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Create a plus (sum) gate from an array of provenance tokens
@@ -1959,30 +1941,16 @@ $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
  * @param op        Operator tag (@c provsql_arith_op).
  * @param children  Ordered list of child gate UUIDs.
  * @return  UUID of the (possibly pre-existing) @c gate_arith.
+ *
+ * Implemented in C (<tt>gate_builders.c</tt>): the gate is created together
+ * with what it records, in one unanswered message.
  */
 CREATE OR REPLACE FUNCTION provenance_arith(
   op       INTEGER,
   children UUID[]
 )
 RETURNS UUID AS
-$$
-DECLARE
-  arith_token UUID;
-BEGIN
-  arith_token := public.uuid_generate_v5(
-    uuid_ns_provsql(),
-    concat('arith', op::text, children::text)
-  );
-  PERFORM create_gate(arith_token, 'arith', children);
-  PERFORM set_infos(arith_token, op);
-  RETURN arith_token;
-END
-$$ LANGUAGE plpgsql
-  SET search_path=provsql,pg_temp,public
-  SECURITY DEFINER
-  IMMUTABLE
-  PARALLEL SAFE
-  STRICT;
+  'provsql','provenance_arith' LANGUAGE C COST 100 STRICT PARALLEL SAFE IMMUTABLE;
 
 /**
  * @brief Create a guarded-selection gate over scalar (RV) children.
@@ -2869,8 +2837,7 @@ DECLARE
   token uuid := public.uuid_generate_v5(
     provsql.uuid_ns_provsql(), concat('value', v::text));
 BEGIN
-  PERFORM provsql.create_gate(token, 'value');
-  PERFORM provsql.set_extra(token, v::text);
+  PERFORM provsql.create_gate(token, 'value', NULL, NULL, NULL, v::text);
   RETURN token;
 END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE
@@ -2889,9 +2856,10 @@ CREATE OR REPLACE FUNCTION agg_arith_make(op int, children uuid[], val numeric)
   RETURNS agg_token AS
 $$
 DECLARE
-  token uuid := provsql.provenance_arith(op, children);
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('arith', op::text, children::text));
 BEGIN
-  PERFORM provsql.set_extra(token, val::text);
+  PERFORM provsql.create_gate(token, 'arith', children, op, NULL, val::text);
   RETURN provsql.agg_token_make(token, val);
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
@@ -3528,8 +3496,8 @@ BEGIN
     s2 := p2_lit::text;
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv', wires);
-  PERFORM provsql.set_extra(token, family || ':' || s1 || ',' || s2);
+  PERFORM provsql.create_gate(token, 'rv', wires, NULL, NULL,
+                              family || ':' || s1 || ',' || s2);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql VOLATILE PARALLEL SAFE;
@@ -3544,8 +3512,7 @@ DECLARE
   token uuid;
 BEGIN
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv', ARRAY[p_tok]);
-  PERFORM provsql.set_extra(token, family || ':$0');
+  PERFORM provsql.create_gate(token, 'rv', ARRAY[p_tok], NULL, NULL, family || ':$0');
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -3719,8 +3686,7 @@ BEGIN
     RETURN provsql.as_random(mu);
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'normal:' || mu || ',' || sigma);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'normal:' || mu || ',' || sigma);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -3760,8 +3726,7 @@ BEGIN
     RETURN provsql.as_random(mu);
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'logistic:' || mu || ',' || s);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'logistic:' || mu || ',' || s);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -3797,8 +3762,7 @@ BEGIN
     RETURN provsql.as_random(a);
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'uniform:' || a || ',' || b);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'uniform:' || a || ',' || b);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -3829,8 +3793,7 @@ BEGIN
     RAISE EXCEPTION 'provsql.exponential: lambda must be strictly positive (got %)', lambda;
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'exponential:' || lambda);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'exponential:' || lambda);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -3877,8 +3840,7 @@ BEGIN
     RETURN provsql.exponential(lambda);
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'erlang:' || k || ',' || lambda);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'erlang:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -3926,8 +3888,7 @@ BEGIN
     RETURN provsql.erlang(k::integer, lambda);
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'gamma:' || k || ',' || lambda);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'gamma:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -3995,8 +3956,7 @@ BEGIN
     RETURN provsql.as_random(exp(mu));
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'lognormal:' || mu || ',' || sigma);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'lognormal:' || mu || ',' || sigma);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -4036,8 +3996,7 @@ BEGIN
     RETURN provsql.exponential(1 / lambda);
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'weibull:' || k || ',' || lambda);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'weibull:' || k || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -4073,8 +4032,7 @@ BEGIN
     RAISE EXCEPTION 'provsql.pareto: parameters must be strictly positive (got xm=%, alpha=%)', xm, alpha;
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'pareto:' || xm || ',' || alpha);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'pareto:' || xm || ',' || alpha);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -4111,8 +4069,7 @@ BEGIN
     RAISE EXCEPTION 'provsql.inverse_gamma: parameters must be strictly positive (got alpha=%, beta=%)', alpha, beta;
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'inverse_gamma:' || alpha || ',' || beta);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'inverse_gamma:' || alpha || ',' || beta);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -4149,8 +4106,7 @@ BEGIN
     RAISE EXCEPTION 'provsql.inverse_gaussian: parameters must be strictly positive (got mu=%, lambda=%)', mu, lambda;
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'inverse_gaussian:' || mu || ',' || lambda);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'inverse_gaussian:' || mu || ',' || lambda);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -4324,8 +4280,7 @@ BEGIN
     RETURN provsql.uniform(0, 1);
   END IF;
   token := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(token, 'rv');
-  PERFORM provsql.set_extra(token, 'beta:' || alpha || ',' || beta);
+  PERFORM provsql.create_gate(token, 'rv', NULL, NULL, NULL, 'beta:' || alpha || ',' || beta);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT VOLATILE PARALLEL SAFE;
@@ -4823,10 +4778,9 @@ BEGIN
     pi_i := probs[i];
     IF pi_i <= 0.0 THEN CONTINUE; END IF;
     mul_token := public.uuid_generate_v4();
-    PERFORM provsql.create_gate(mul_token, 'mulinput', ARRAY[key_token]);
+    PERFORM provsql.create_gate(mul_token, 'mulinput', ARRAY[key_token],
+                                i - 1, NULL, outcomes[i]::text);
     PERFORM provsql.set_prob(mul_token, pi_i);
-    PERFORM provsql.set_infos(mul_token, (i - 1));
-    PERFORM provsql.set_extra(mul_token, outcomes[i]::text);
     mul_tokens := mul_tokens || mul_token;
   END LOOP;
 
@@ -5124,8 +5078,7 @@ DECLARE
   token uuid := public.uuid_generate_v5(
     provsql.uuid_ns_provsql(), concat('value', c_text));
 BEGIN
-  PERFORM provsql.create_gate(token, 'value');
-  PERFORM provsql.set_extra(token, c_text);
+  PERFORM provsql.create_gate(token, 'value', NULL, NULL, NULL, c_text);
   RETURN provsql.random_variable_make(token);
 END
 $$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
@@ -5820,8 +5773,7 @@ BEGIN
     RAISE EXCEPTION 'provsql.observe: datum must be finite (got %)', datum;
   END IF;
   result := public.uuid_generate_v4();
-  PERFORM provsql.create_gate(result, 'observe', ARRAY[leaf]);
-  PERFORM provsql.set_extra(result, datum::text);
+  PERFORM provsql.create_gate(result, 'observe', ARRAY[leaf], NULL, NULL, datum::text);
   RETURN result;
 END
 $$ LANGUAGE plpgsql VOLATILE
@@ -6892,9 +6844,8 @@ BEGIN
   token := public.uuid_generate_v5(
     uuid_ns_provsql(),
     concat('arith', '10', pairs::text, fraction::text));
-  PERFORM create_gate(token, 'arith', pairs);
-  PERFORM set_infos(token, 10);  -- 10 = PROVSQL_ARITH_PERCENTILE
-  PERFORM set_extra(token, fraction::text);
+  -- 10 = PROVSQL_ARITH_PERCENTILE
+  PERFORM create_gate(token, 'arith', pairs, 10, NULL, fraction::text);
   RETURN random_variable_make(token);
 END
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
