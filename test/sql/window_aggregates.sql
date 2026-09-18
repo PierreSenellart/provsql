@@ -235,6 +235,15 @@ SELECT remove_provenance('wa_top');
 SELECT id, round(p::numeric, 12) AS p FROM wa_top;
 DROP TABLE wa_ranks, wa_row_number_ties, wa_many, wa_top;
 
+-- A self-join of ranked rows whose condition has a unary operator.
+CREATE TABLE wa_neg AS
+  WITH r AS (SELECT id, x, row_number() OVER (PARTITION BY g ORDER BY x, id) AS rn FROM wa)
+  SELECT r1.id AS id1, r2.id AS id2
+  FROM r r1 JOIN r r2 ON r1.x = -(-r2.x) AND r1.rn = r2.rn AND r1.id < r2.id;
+SELECT remove_provenance('wa_neg');
+SELECT count(*) AS pairs FROM wa_neg;
+DROP TABLE wa_neg;
+
 -- Not tracked: a GROUPS offset counts the peer groups that are present.
 CREATE TABLE wa_groups_offset AS
   SELECT id, sum(x) OVER (PARTITION BY g ORDER BY x

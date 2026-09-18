@@ -13696,7 +13696,7 @@ static bool join_qual_has_agg_token_walker(Node *node,
 {
   if (node == NULL)
     return false;
-  if (IsA(node, OpExpr)) {
+  if (IsA(node, OpExpr) && list_length(((OpExpr *) node)->args) == 2) {
     OpExpr *oe = (OpExpr *) node;
     Node *left = (Node *) linitial(oe->args);
     Node *right = (Node *) lsecond(oe->args);

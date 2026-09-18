@@ -205,6 +205,12 @@ remove_provenance
 id|p
 7|0.000007894274
 (1 row)
+remove_provenance
+
+(1 row)
+pairs
+1
+(1 row)
 WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
 remove_provenance
 
