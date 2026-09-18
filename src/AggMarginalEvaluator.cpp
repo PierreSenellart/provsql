@@ -97,7 +97,8 @@ static bool parseProductContributor(GenericCircuit &gc, gate_t k,
  * any escape to an outside parent fails.  Constants (@c gate_one /
  * @c gate_zero / @c gate_value) carry no randomness and may be shared
  * freely, so they are exempt.  The caller separately requires
- * @c ref[agg]==1 (the agg is consumed by this cmp alone). */
+ * @c ref[agg]==1, and so for the arithmetic above it (the agg is consumed
+ * by this cmp alone, @c aggPrivateToCmp). */
 static bool aggSubtreePrivate(GenericCircuit &gc, gate_t agg,
                               const std::vector<unsigned> &ref)
 {
@@ -1146,7 +1147,7 @@ unsigned runAggMarginalEvaluator(GenericCircuit &gc)
 
     /* The aggregate must be consumed by this cmp alone: a shared agg
      * would couple two HAVING comparators over the same aggregate. */
-    if (ref[static_cast<std::size_t>(agg)] != 1) continue;
+    if (!aggPrivateToCmp(match, ref)) continue;
     bool ok = true;
 
     /* Parse every contributor: either a plain product of independent
