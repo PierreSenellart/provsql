@@ -9721,6 +9721,83 @@ static bool provenance_in_sublink_walker(Node *node, void *data) {
   return expression_tree_walker(node, provenance_in_sublink_walker, data);
 }
 
+/** @brief Walker: a @c provsql column or a @c provenance() call. */
+static bool reads_token_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var) && ((Var *)node)->vartype == constants->OID_TYPE_UUID)
+    return true;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_PROVENANCE)
+    return true;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, reads_token_walker, data, 0);
+  return expression_tree_walker(node, reads_token_walker, data);
+}
+
+/**
+ * @brief Walker over the expressions of one query level: a sublink whose
+ *        body reads a tracked relation for its data.
+ *
+ * A body whose output columns are all provenance tokens (@c (SELECT
+ * provsql FROM t WHERE ...), @c provenance(), @c array_agg(provsql)), other
+ * than an @c EXISTS, fetches the tokens to work on them, not data: it is not
+ * counted.  The body itself is another
+ * level, not walked here.
+ */
+static bool tracked_value_sublink_walker(Node *node, void *data) {
+  const constants_t *constants = (const constants_t *)data;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subselect != NULL && IsA(sl->subselect, Query)) {
+      Query *sub = (Query *)sl->subselect;
+      bool token_fetch = sl->subLinkType != EXISTS_SUBLINK;
+      ListCell *lc;
+      foreach (lc, sub->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lc);
+        if (!te->resjunk && !reads_token_walker((Node *)te->expr, data))
+          token_fetch = false;
+      }
+      if (has_provenance(constants, sub) && !token_fetch)
+        return true;
+    }
+    return tracked_value_sublink_walker(sl->testexpr, data);
+  }
+  if (IsA(node, Query))
+    return false;
+  return expression_tree_walker(node, tracked_value_sublink_walker, data);
+}
+
+/**
+ * @brief Walker: a query level the rewriting does not engage on
+ *        (@c has_provenance) that has a subquery expression reading tracked
+ *        data.
+ *
+ * Such a level (a FROM-less query, a LATERAL body computing @c ARRAY(SELECT
+ * ... FROM t)) is left to Postgres, which evaluates its subqueries on the
+ * data as it is, so their data is treated as certain.
+ */
+static bool untracked_level_with_tracked_sublink_walker(Node *node,
+                                                        void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    if (q->hasSubLinks && !has_provenance((const constants_t *)data, q) &&
+        query_tree_walker(q, tracked_value_sublink_walker, data,
+                          QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES))
+      return true;
+    return query_tree_walker(q, untracked_level_with_tracked_sublink_walker,
+                             data, 0);
+  }
+  return expression_tree_walker(node,
+                                untracked_level_with_tracked_sublink_walker,
+                                data);
+}
+
 /**
  * @brief Remove the auto-added @c provsql output column from a rewritten query.
  *
@@ -18925,6 +19002,13 @@ static PlannedStmt *provsql_planner(Query *q,
 
     if (provsql_active && constants.ok)
       refuse_except_all(&constants, q);
+
+    if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
+        untracked_level_with_tracked_sublink_walker((Node *)q,
+                                                    (void *)&constants))
+      provsql_warning("subquery over a provenance-tracked relation in a "
+                      "query without one is not tracked; its data is treated "
+                      "as certain");
 
     if (provsql_active && constants.ok &&
         top_limit_is_truncation(&constants, q))

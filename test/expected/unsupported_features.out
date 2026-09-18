@@ -13,3 +13,18 @@ ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQ
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is not tracked; its data is treated as certain
+found
+yes
+(1 row)
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is not tracked; its data is treated as certain
+remove_provenance
+
+(1 row)
+id|n
+1|1
+2|1
+(2 rows)
+token
+t
+(1 row)
