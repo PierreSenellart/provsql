@@ -63,7 +63,10 @@ EXTRA_CLEAN = sql/$(EXTENSION)--*.sql sql/$(EXTENSION).sql $(BASE_INSTALL) $(DEV
 # variable with empty value
 EMPTY =
 REGRESS = $(EMPTY)
-REGRESS_OPTS = --load-extension=plpgsql --inputdir=test --outputdir=$(shell mktemp -d /tmp/tmp.provsqlXXXX) --schedule test/schedule
+# --no-locale creates the regression database with the C locale, so that
+# text sorts the same way whatever the collation of the cluster (glibc, ICU,
+# or the C locale of the CI containers), and expected outputs are portable.
+REGRESS_OPTS = --load-extension=plpgsql --no-locale --inputdir=test --outputdir=$(shell mktemp -d /tmp/tmp.provsqlXXXX) --schedule test/schedule
 
 OS := $(shell uname)
 ARCH := $(shell uname -m)
@@ -203,7 +206,7 @@ installcheck: test/schedule
 # intended behavior.  Not part of the default `make installcheck`.
 .PHONY: installcheck-todo
 installcheck-todo:
-	$(MAKE) installcheck REGRESS_OPTS="--load-extension=plpgsql --inputdir=test/todo --outputdir=$(shell mktemp -d /tmp/tmp.provsql-todoXXXX) --schedule test/todo/schedule"
+	$(MAKE) installcheck REGRESS_OPTS="--load-extension=plpgsql --no-locale --inputdir=test/todo --outputdir=$(shell mktemp -d /tmp/tmp.provsql-todoXXXX) --schedule test/todo/schedule"
 
 tdkc: src/TreeDecomposition.cpp src/TreeDecomposition.h src/BooleanCircuit.cpp src/BooleanCircuit.h src/Circuit.hpp src/dDNNF.h src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.h src/dDNNFTreeDecompositionBuilder.cpp src/Circuit.h src/Graph.h src/PermutationStrategy.h src/TreeDecompositionKnowledgeCompiler.cpp src/kcmcp_protocol.cpp src/kcmcp_protocol.h src/kcmcp_server.cpp src/kcmcp_server.h src/dimacs_cnf.cpp src/dimacs_cnf.h src/tdkc_interrupt.h
 	$(CXX) $(PRECXXFLAGS) -DTDKC -W -Wall -o tdkc src/TreeDecomposition.cpp src/BooleanCircuit.cpp src/dDNNF.cpp src/dDNNFTreeDecompositionBuilder.cpp src/TreeDecompositionKnowledgeCompiler.cpp src/kcmcp_protocol.cpp src/kcmcp_server.cpp src/dimacs_cnf.cpp

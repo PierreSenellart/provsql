@@ -30,8 +30,8 @@ c_null|ref_null
 t|t
 (1 row)
 label|same_token|gate|over_gate_null
-nullable, a number|t|semimod of the row token and value "564738"|f
 nullable, NULL|t|semimod of the row token and value "NULL"|t
+nullable, a number|t|semimod of the row token and value "564738"|f
 nullable, text reading NULL|t|semimod of the row token and value "NULL"|f
 (3 rows)
 same
@@ -77,9 +77,9 @@ distinct_gates
 3
 (1 row)
 label|same_token|is_zero
-no child|t|t
 NULL array|t|t
 NULL children only|t|t
+no child|t|t
 (3 rows)
 c_null|ref_null
 t|t
