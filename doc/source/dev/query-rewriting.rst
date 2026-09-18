@@ -445,6 +445,13 @@ Passes surrounding the aggregation rewriting:
   to any surrounding aggregation token. See
   :ref:`probabilistic-qual-classifier` below for the routing matrix.
 
+- :cfunc:`replace_window_aggregations` rewrites, in a query without
+  aggregation, each aggregate used as a window function over a frame
+  determined by values into a :sqlfunc:`provenance_aggregate` call over
+  the same window (see :doc:`aggregation`).  It runs after
+  :cfunc:`migrate_probabilistic_quals`, like the aggregate replacement,
+  so the lifted comparisons are part of each row's contribution.
+
 - :cfunc:`insert_agg_token_casts` inserts type casts for
   :cfunc:`agg_token` values used in arithmetic or window functions.
 

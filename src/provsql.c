@@ -3121,6 +3121,148 @@ static Expr *make_case_when(Expr *cond, Expr *then_expr, Expr *else_expr) {
 }
 
 /**
+ * @brief The provenance token of the current row: its single provenance
+ *        attribute, or their product (@c SR_TIMES) or difference
+ *        (@c SR_MONUS).
+ */
+static Expr *make_row_token(const constants_t *constants, List *prov_atts,
+                            semiring_operation op) {
+  FuncExpr *expr;
+
+  if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
+    return linitial(prov_atts);
+
+  expr = makeNode(FuncExpr);
+  if (op == SR_TIMES) {
+    ArrayExpr *array = makeNode(ArrayExpr);
+
+    expr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
+    expr->funcvariadic = true;
+
+    array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+    array->element_typeid = constants->OID_TYPE_UUID;
+    array->elements = prov_atts;
+    array->location = -1;
+
+    expr->args = list_make1(array);
+  } else { // SR_MONUS
+    expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+    expr->args = prov_atts;
+  }
+  expr->funcresulttype = constants->OID_TYPE_UUID;
+  expr->location = -1;
+  return (Expr *)expr;
+}
+
+/**
+ * @brief The contribution of the current row to an aggregate gate:
+ *        @c provenance_semimod of the value it adds and of its token.
+ *
+ * @param constants  Extension OID cache.
+ * @param aggfnoid   The aggregate function.
+ * @param arg        Its argument, @c NULL for @c count(*).
+ * @param filter     Its @c FILTER clause, or @c NULL.  For an aggregate that
+ *                   keeps its NULL inputs, the caller puts the filter on the
+ *                   aggregation of the contributions instead.
+ * @param row_token  The row's token (@c make_row_token).
+ */
+static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
+                                  Expr *arg, Expr *filter, Expr *row_token) {
+  FuncExpr *expr_s = makeNode(FuncExpr);
+
+  expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
+  expr_s->funcresulttype = constants->OID_TYPE_UUID;
+
+  // check the particular case of count
+  if (aggfnoid == F_COUNT_) // count(*): counts every row
+  {
+    /* Every row contributes the constant 1, so the VALUE is the sum of
+     * those -- but the gate keeps the COUNT identity (as count(expr) below
+     * does).  Recording SUM instead would throw away the one thing that
+     * distinguishes the two over an empty set: a count is 0 there, a sum is
+     * NULL.  Evaluators would then have to guess it back from the values
+     * being all-unit, which cannot tell count(*) from a sum over a column
+     * of ones. */
+    Const *one = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                           sizeof(int32), Int32GetDatum(1), false, true);
+    if (filter == NULL)
+      expr_s->args = list_make2(one, row_token);
+    else {
+      /* count(*) FILTER (WHERE f) counts the rows satisfying f, but a row
+       * failing f still witnesses the group: it stays in the aggregate and
+       * contributes 0, as a NULL expr does for count(expr) below. */
+      Const *zero = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
+                              sizeof(int32), Int32GetDatum(0), false, true);
+      expr_s->args = list_make2(
+        make_case_when(filter, (Expr *)one, (Expr *)zero), row_token);
+    }
+  } else if (aggfnoid == F_COUNT_ANY) // count(expr)
+  {
+    /* count(expr) counts only rows where expr IS NOT NULL, but -- unlike the
+     * other aggregates -- an all-NULL group still has a defined result of 0
+     * (not NULL), so the row must stay PRESENT in the aggregate to carry the
+     * group's existence; it just contributes 0.  Pass the per-row value
+     * CASE WHEN expr IS NOT NULL THEN 1 ELSE 0 END: a NULL expr (e.g. the
+     * NULL-padded rows a LEFT JOIN manufactures) contributes 0 to the count
+     * yet keeps the group alive, so HAVING count(expr)=0 is correctly true.
+     * count(*) keeps the constant 1 above. */
+    NullTest *nt = makeNode(NullTest);
+    Expr *counted;
+
+    nt->arg = arg;
+    nt->nulltesttype = IS_NOT_NULL;
+    nt->argisrow = false;
+    nt->location = -1;
+
+    /* With a FILTER, the row is counted when it satisfies the filter and
+     * expr IS NOT NULL. */
+    counted = filter == NULL
+              ? (Expr *)nt
+              : makeBoolExpr(AND_EXPR, list_make2(filter, nt), -1);
+
+    expr_s->args = list_make2(
+      make_case_when(counted,
+                     (Expr *)makeConst(constants->OID_TYPE_INT, -1,
+                                       InvalidOid, sizeof(int32),
+                                       Int32GetDatum(1), false, true),
+                     (Expr *)makeConst(constants->OID_TYPE_INT, -1,
+                                       InvalidOid, sizeof(int32),
+                                       Int32GetDatum(0), false, true)),
+      row_token);
+    /* Keep the gate's aggfnoid as count, as count(*) above does: the per-row
+     * CASE already makes the value 0/1 so the
+     * VALUE is the SUM of those, but preserving the COUNT identity tells the
+     * HAVING evaluators that the empty-group result is 0 (a real, comparable
+     * value) rather than NULL as a genuine sum would be.  This is what lets a
+     * scalar true-on-empty predicate (count(col)=0, <k, <=k) keep the
+     * all-absent world: enumerate_valid_worlds routes a COUNT with non-unit
+     * (0/1) values to the value-aware sum_dp with the empty world retained,
+     * while count(*) (all-unit) keeps using count_enum. */
+  } else if (aggregate_keeps_nulls(constants, aggfnoid)) {
+    /* The aggregate sees its NULL inputs (array_agg, json_agg, ...): every
+     * row it reads is a child of the gate, a NULL value included, and a
+     * FILTER removes rows from the token array exactly as it removes them
+     * from the aggregate's input.  No group-existence issue arises (compare
+     * count above): over an empty input these aggregates are NULL, and a
+     * comparison with NULL never holds. */
+    if (OidIsValid(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE))
+      expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE;
+    expr_s->args = list_make2(arg, row_token);
+  } else {
+    /* A NULL-skipping aggregate: agg(x) FILTER (WHERE f) is
+     * agg(CASE WHEN f THEN x END).  provenance_semimod drops NULL values, so
+     * a row failing f is no child of the gate, and the per-row value
+     * HAVING ... IS [NOT] NULL splits on is NULL for it. */
+    if (filter != NULL)
+      arg = make_case_when(filter, arg, NULL);
+    expr_s->args = list_make2(arg, row_token);
+  }
+
+  expr_s->location = -1;
+  return expr_s;
+}
+
+/**
  * @brief Build the provenance expression for a single aggregate function.
  *
  * For @c SR_PLUS (union context) returns the first provenance attribute
@@ -3146,7 +3288,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
                                          Aggref *agg_ref, List *prov_atts,
                                          semiring_operation op, bool is_scalar) {
   Expr *result;
-  FuncExpr *expr, *expr_s;
+  FuncExpr *expr_s;
   Aggref *agg = makeNode(Aggref);
   FuncExpr *plus = makeNode(FuncExpr);
   TargetEntry *te_inner = makeNode(TargetEntry);
@@ -3174,125 +3316,14 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       return make_rv_aggregate_expression(constants, agg_ref, prov_atts, op);
     }
 
-    if (my_lnext(prov_atts, list_head(prov_atts)) == NULL)
-      expr = linitial(prov_atts);
-    else {
-      expr = makeNode(FuncExpr);
-      if (op == SR_TIMES) {
-        ArrayExpr *array = makeNode(ArrayExpr);
-
-        expr->funcid = constants->OID_FUNCTION_PROVENANCE_TIMES;
-        expr->funcvariadic = true;
-
-        array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
-        array->element_typeid = constants->OID_TYPE_UUID;
-        array->elements = prov_atts;
-        array->location = -1;
-
-        expr->args = list_make1(array);
-      } else { // SR_MONUS
-        expr->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
-        expr->args = prov_atts;
-      }
-      expr->funcresulttype = constants->OID_TYPE_UUID;
-      expr->location = -1;
-    }
-
-    // semimodule function
-    expr_s = makeNode(FuncExpr);
-    expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
-    expr_s->funcresulttype = constants->OID_TYPE_UUID;
-
-    // check the particular case of count
-    if (aggregation_function == F_COUNT_) // count(*): counts every row
-    {
-      /* Every row contributes the constant 1, so the VALUE is the sum of
-       * those -- but the gate keeps the COUNT identity (as count(expr) below
-       * does).  Recording SUM instead would throw away the one thing that
-       * distinguishes the two over an empty set: a count is 0 there, a sum is
-       * NULL.  Evaluators would then have to guess it back from the values
-       * being all-unit, which cannot tell count(*) from a sum over a column
-       * of ones. */
-      Const *one = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
-                             sizeof(int32), Int32GetDatum(1), false, true);
-      if (filter == NULL)
-        expr_s->args = list_make2(one, expr);
-      else {
-        /* count(*) FILTER (WHERE f) counts the rows satisfying f, but a row
-         * failing f still witnesses the group: it stays in the aggregate and
-         * contributes 0, as a NULL expr does for count(expr) below. */
-        Const *zero = makeConst(constants->OID_TYPE_INT, -1, InvalidOid,
-                                sizeof(int32), Int32GetDatum(0), false, true);
-        expr_s->args = list_make2(
-          make_case_when(filter, (Expr *)one, (Expr *)zero), expr);
-      }
-    } else if (aggregation_function == F_COUNT_ANY) // count(expr)
-    {
-      /* count(expr) counts only rows where expr IS NOT NULL, but -- unlike the
-       * other aggregates -- an all-NULL group still has a defined result of 0
-       * (not NULL), so the row must stay PRESENT in the aggregate to carry the
-       * group's existence; it just contributes 0.  Pass the per-row value
-       * CASE WHEN expr IS NOT NULL THEN 1 ELSE 0 END: a NULL expr (e.g. the
-       * NULL-padded rows a LEFT JOIN manufactures) contributes 0 to the count
-       * yet keeps the group alive, so HAVING count(expr)=0 is correctly true.
-       * count(*) keeps the constant 1 above. */
-      Expr *arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
-      NullTest *nt = makeNode(NullTest);
-      Expr *counted;
-
-      nt->arg = (Expr *)arg;
-      nt->nulltesttype = IS_NOT_NULL;
-      nt->argisrow = false;
-      nt->location = -1;
-
-      /* With a FILTER, the row is counted when it satisfies the filter and
-       * expr IS NOT NULL. */
-      counted = filter == NULL
-                ? (Expr *)nt
-                : makeBoolExpr(AND_EXPR, list_make2(filter, nt), -1);
-
-      expr_s->args = list_make2(
-        make_case_when(counted,
-                       (Expr *)makeConst(constants->OID_TYPE_INT, -1,
-                                         InvalidOid, sizeof(int32),
-                                         Int32GetDatum(1), false, true),
-                       (Expr *)makeConst(constants->OID_TYPE_INT, -1,
-                                         InvalidOid, sizeof(int32),
-                                         Int32GetDatum(0), false, true)),
-        expr);
-      /* Keep the gate's aggfnoid as count, as count(*) above does: the per-row
-       * CASE already makes the value 0/1 so the
-       * VALUE is the SUM of those, but preserving the COUNT identity tells the
-       * HAVING evaluators that the empty-group result is 0 (a real, comparable
-       * value) rather than NULL as a genuine sum would be.  This is what lets a
-       * scalar true-on-empty predicate (count(col)=0, <k, <=k) keep the
-       * all-absent world: enumerate_valid_worlds routes a COUNT with non-unit
-       * (0/1) values to the value-aware sum_dp with the empty world retained,
-       * while count(*) (all-unit) keeps using count_enum. */
-    } else if (keeps_nulls) {
-      /* The aggregate sees its NULL inputs (array_agg, json_agg, ...): every
-       * row it reads is a child of the gate, a NULL value included, and a
-       * FILTER removes rows from the token array exactly as it removes them
-       * from the aggregate's input.  No group-existence issue arises (compare
-       * count above): over an empty input these aggregates are NULL, and a
-       * comparison with NULL never holds. */
-      if (OidIsValid(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE))
-        expr_s->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE;
-      expr_s->args =
-        list_make2(((TargetEntry *)linitial(agg_ref->args))->expr, expr);
+    expr_s = make_row_semimod(
+      constants, aggregation_function,
+      aggregation_function == F_COUNT_
+        ? NULL : ((TargetEntry *)linitial(agg_ref->args))->expr,
+      filter, make_row_token(constants, prov_atts, op));
+    if (keeps_nulls && aggregation_function != F_COUNT_ &&
+        aggregation_function != F_COUNT_ANY)
       agg->aggfilter = filter;
-    } else {
-      /* A NULL-skipping aggregate: agg(x) FILTER (WHERE f) is
-       * agg(CASE WHEN f THEN x END).  provenance_semimod drops NULL values, so
-       * a row failing f is no child of the gate, and the per-row value
-       * HAVING ... IS [NOT] NULL splits on is NULL for it. */
-      Expr *arg = ((TargetEntry *)linitial(agg_ref->args))->expr;
-      if (filter != NULL)
-        arg = make_case_when(filter, arg, NULL);
-      expr_s->args = list_make2(arg, expr);
-    }
-
-    expr_s->location = -1;
 
     // aggregating all semirings in an array
     te_inner->resno = 1;
@@ -7155,6 +7186,11 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
     FuncExpr *fe = (FuncExpr *)result;
     if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
       maybe_cast_agg_token_args(fe->args, fe->funcid, constants);
+  } else if (IsA(result, WindowFunc)) {
+    /* A window function over the aggregates of the groups
+     * (sum(sum(x)) OVER ()): the window reads the values. */
+    WindowFunc *wf = (WindowFunc *)result;
+    maybe_cast_agg_token_args(wf->args, wf->winfnoid, constants);
   } else if (IsA(result, CaseExpr)) {
     /* A searched CASE whose branches became agg_token under a
      * non-agg_token CASE type.  The agg_case lowering replaces the whole
@@ -7350,6 +7386,225 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
     te->expr = (Expr *)cast_agg_token_mutator((Node *)te->expr,
                                               (void *)constants);
   }
+}
+
+/* -------------------------------------------------------------------------
+ * Window aggregates
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief Whether the frame of a window is determined by the values of the
+ *        rows, not by their positions.
+ *
+ * The rows a frame holds are known in each possible world only if they do
+ * not depend on which of the other rows are present: "the rows whose ordering
+ * value is at most the current one's" is such a frame, "the previous row" is
+ * not, since it is the previous row that is present.  Without @c ORDER BY,
+ * all rows are peers.  @c RANGE frames are determined by values; @c GROUPS
+ * frames are when their bounds are unbounded or the current row (an offset
+ * counts peer groups, and which groups are present varies); @c ROWS frames
+ * only when they span the whole partition.
+ */
+static bool window_frame_by_values(const WindowClause *wc) {
+  int fo = wc->frameOptions;
+  bool whole = (fo & FRAMEOPTION_START_UNBOUNDED_PRECEDING) &&
+               (fo & FRAMEOPTION_END_UNBOUNDED_FOLLOWING);
+
+  if (fo & FRAMEOPTION_ROWS)
+    return whole;
+  if (wc->orderClause == NIL || (fo & FRAMEOPTION_RANGE))
+    return true;
+#ifdef FRAMEOPTION_GROUPS
+  if (fo & FRAMEOPTION_GROUPS)
+    return !(fo & (FRAMEOPTION_START_OFFSET | FRAMEOPTION_END_OFFSET));
+#endif
+  return false;
+}
+
+/**
+ * @brief Whether every frame of a window contains its current row.
+ *
+ * The value of such a frame is only read in worlds where the frame has a row,
+ * as for a group of @c GROUP @c BY; otherwise the frame may be empty while the
+ * row exists, and the value is that of an aggregation over no row, as for a
+ * scalar aggregation.
+ */
+static bool window_frame_has_current_row(const WindowClause *wc) {
+  int fo = wc->frameOptions;
+
+  if (!(fo & (FRAMEOPTION_START_UNBOUNDED_PRECEDING |
+              FRAMEOPTION_START_CURRENT_ROW |
+              FRAMEOPTION_START_OFFSET_PRECEDING)))
+    return false;
+  if (!(fo & (FRAMEOPTION_END_UNBOUNDED_FOLLOWING |
+              FRAMEOPTION_END_CURRENT_ROW |
+              FRAMEOPTION_END_OFFSET_FOLLOWING)))
+    return false;
+#ifdef FRAMEOPTION_EXCLUDE_CURRENT_ROW
+  if (fo & (FRAMEOPTION_EXCLUDE_CURRENT_ROW | FRAMEOPTION_EXCLUDE_GROUP))
+    return false;
+#endif
+  return true;
+}
+
+/** @brief The @c WindowClause of @p q with reference @p winref. */
+static WindowClause *window_clause_of(Query *q, Index winref) {
+  ListCell *lc;
+  foreach (lc, q->windowClause) {
+    WindowClause *wc = (WindowClause *)lfirst(lc);
+    if (wc->winref == winref)
+      return wc;
+  }
+  return NULL;
+}
+
+/**
+ * @brief The provenance expression of an aggregate used as a window
+ *        function, or @c NULL if it is not tracked.
+ *
+ * @code
+ *   provenance_aggregate(fn, type,
+ *                        f(x) OVER w,
+ *                        array_agg(provenance_semimod(x, k)) OVER w,
+ *                        is_scalar)
+ * @endcode
+ * where k is the row's token and both window calls share the window w, so the
+ * gate aggregates the contributions of exactly the rows of the frame.  This
+ * is @c make_aggregation_expression with the frame in place of the group: a
+ * whole-partition window gives, for each row, the gate of the @c GROUP @c BY
+ * on the partition attributes.  The frame must be determined by values
+ * (@c window_frame_by_values).
+ */
+static Expr *make_window_aggregation_expression(const constants_t *constants,
+                                                Query *q, WindowFunc *wf,
+                                                List *prov_atts) {
+  WindowClause *wc = window_clause_of(q, wf->winref);
+  WindowFunc *tokens;
+  FuncExpr *semimod, *result;
+  Expr *filter;
+  bool is_scalar;
+
+  if (!wf->winagg || wc == NULL || !window_frame_by_values(wc))
+    return NULL;
+  if (OidIsValid(constants->OID_TYPE_RANDOM_VARIABLE) &&
+      wf->wintype == constants->OID_TYPE_RANDOM_VARIABLE)
+    return NULL;
+  if (wf->winfnoid != F_COUNT_ && list_length(wf->args) != 1)
+    return NULL;
+  /* An aggregate over aggregate values: what it reads is no fixed value. */
+  if (expr_contains_agg((Node *)wf->args, constants) ||
+      expr_contains_agg((Node *)wf->aggfilter, constants))
+    return NULL;
+
+  filter = (Expr *)copyObject(wf->aggfilter);
+  is_scalar = !window_frame_has_current_row(wc);
+
+  semimod = make_row_semimod(
+    constants, wf->winfnoid,
+    wf->winfnoid == F_COUNT_ ? NULL : (Expr *)copyObject(linitial(wf->args)),
+    filter,
+    make_row_token(constants, (List *)copyObject(prov_atts), SR_TIMES));
+
+  tokens = makeNode(WindowFunc);
+  tokens->winfnoid = constants->OID_FUNCTION_ARRAY_AGG;
+  tokens->wintype = constants->OID_TYPE_UUID_ARRAY;
+  tokens->wincollid = InvalidOid;
+  tokens->inputcollid = InvalidOid;
+  tokens->args = list_make1(semimod);
+  if (wf->winfnoid != F_COUNT_ && wf->winfnoid != F_COUNT_ANY &&
+      aggregate_keeps_nulls(constants, wf->winfnoid))
+    tokens->aggfilter = filter;
+  tokens->winref = wf->winref;
+  tokens->winstar = false;
+  tokens->winagg = true;
+  tokens->location = -1;
+
+  result = makeNode(FuncExpr);
+  result->funcid = constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
+  result->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
+  result->args = list_make5(
+    makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+              Int32GetDatum(wf->winfnoid), false, true),
+    makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+              Int32GetDatum(wf->wintype), false, true),
+    wf, tokens,
+    makeConst(BOOLOID, -1, InvalidOid, sizeof(bool),
+              BoolGetDatum(is_scalar), false, true));
+  result->location = -1;
+  return (Expr *)result;
+}
+
+/** @brief Context for @c window_aggregation_mutator. */
+typedef struct window_aggregation_context {
+  const constants_t *constants; ///< Extension OID cache
+  Query *q;                     ///< Query whose window clauses are read
+  List *prov_atts;              ///< List of provenance Var nodes
+  bool untracked;               ///< A window function was left untracked
+} window_aggregation_context;
+
+static Node *window_aggregation_mutator(Node *node, void *ctx) {
+  window_aggregation_context *c = (window_aggregation_context *)ctx;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, WindowFunc)) {
+    Expr *e = make_window_aggregation_expression(c->constants, c->q,
+                                                 (WindowFunc *)node,
+                                                 c->prov_atts);
+    if (e == NULL) {
+      c->untracked = true;
+      return node;
+    }
+    return (Node *)e;
+  }
+  return expression_tree_mutator(node, window_aggregation_mutator, ctx);
+}
+
+/**
+ * @brief Replace the window functions of @p q's target list by their
+ *        provenance expressions, where they have one.
+ *
+ * A window function leaves the rows of its input as they are, with their
+ * tokens; it is its value that depends on which rows are present, and that
+ * value becomes an @c agg_token.  An @c ORDER @c BY on such a value sorts on
+ * what is displayed, which is presentation, as @c ORDER @c BY is: the sort
+ * key is moved to a junk copy of the original window call.
+ *
+ * @return @c false if some window function was left untracked, its value an
+ *         opaque scalar.
+ */
+static bool replace_window_aggregations(const constants_t *constants,
+                                        Query *q, List *prov_atts) {
+  window_aggregation_context ctx = {constants, q, prov_atts, false};
+  List *junk = NIL;
+  ListCell *lc;
+  AttrNumber resno = list_length(q->targetList);
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Expr *orig;
+
+    /* A junk entry is a sort key only: it stays the displayed value. */
+    if (te->resjunk || !contain_windowfuncs((Node *)te->expr))
+      continue;
+    orig = (Expr *)copyObject(te->expr);
+    te->expr = (Expr *)window_aggregation_mutator((Node *)te->expr, &ctx);
+    if (!(IsA(te->expr, FuncExpr) &&
+          ((FuncExpr *)te->expr)->funcid ==
+            constants->OID_FUNCTION_PROVENANCE_AGGREGATE))
+      te->expr = (Expr *)cast_agg_token_mutator((Node *)te->expr,
+                                                (void *)constants);
+
+    if (te->ressortgroupref != 0 &&
+        exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN) {
+      TargetEntry *key = makeTargetEntry(orig, ++resno, NULL, true);
+      key->ressortgroupref = te->ressortgroupref;
+      te->ressortgroupref = 0;
+      junk = lappend(junk, key);
+    }
+  }
+  q->targetList = list_concat(q->targetList, junk);
+  return !ctx.untracked;
 }
 
 /**
@@ -15844,17 +16099,6 @@ static Query *process_query(const constants_t *constants, Query *q,
       Expr *provenance;
       List *rv_cmps;
 
-      /* Window functions are not supported: their per-row result has no
-       * aggregate-provenance semantics.  The query still executes and each
-       * output row carries its input row's tuple provenance, but the
-       * windowed computation itself (e.g. SUM() OVER ...) is an opaque
-       * scalar, not an agg_token.  Warn once per rewritten query level that
-       * actually involves provenance-tracked relations. */
-      if (q->hasWindowFuncs)
-        provsql_warning("window functions are not supported; provenance is "
-                        "tracked per input row only, and the windowed "
-                        "computation is treated as an opaque scalar");
-
       /* Single unified pass over WHERE: each top-level conjunct is
        * routed to the right evaluation site (HAVING for agg_token,
        * the returned rv_cmps list for random_variable, left in WHERE
@@ -15912,6 +16156,20 @@ static Query *process_query(const constants_t *constants, Query *q,
           }
         }
       }
+
+      /* An aggregate over a frame determined by values becomes an agg_token
+       * (replace_window_aggregations), after the WHERE pass so that the
+       * lifted comparisons are part of each row's token.  Any other window
+       * function (ranks, offsets, positional frames, windows over the groups
+       * of an aggregation or over a set operation) runs as before: each row
+       * keeps its input row's token and the value is an opaque scalar. */
+      if (q->hasWindowFuncs &&
+          (q->hasAggs || q->groupClause != NIL || q->groupingSets != NIL ||
+           has_union || has_difference ||
+           !replace_window_aggregations(constants, q, prov_atts)))
+        provsql_warning("window function not supported; provenance is "
+                        "tracked per input row only, and its value is "
+                        "treated as an opaque scalar");
 
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */

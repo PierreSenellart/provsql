@@ -107,13 +107,12 @@ will either raise an error or may cause incorrect provenance tracking:
   (non-ALL) with aggregates, ``ORDER BY`` or ``GROUP BY`` on aggregate
   results from a subquery
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
-  (``ROW_NUMBER``, ``RANK``, ``SUM`` ``OVER``, ``LAG``, ``LEAD``, etc.):
-  the query still executes and each output row carries the tuple
-  provenance of its single input row, but the windowed computation
-  itself has no aggregate-provenance semantics (``SUM(x) OVER (…)`` is an
-  opaque scalar, not an aggregation over the frame). A ``WARNING`` is
-  emitted whenever a window function appears in a provenance-tracked
-  query
+  other than aggregates over a frame determined by values (see
+  :ref:`window-aggregates`): ``ROW_NUMBER``, ``RANK``, ``LAG``,
+  ``LEAD``, ``ROWS`` frames with an offset, etc. The query still
+  executes and each output row carries the tuple provenance of its
+  single input row, but the window value is an opaque scalar. A
+  ``WARNING`` is emitted
 
 ``LIMIT`` and ``OFFSET`` deserve a word. The rows they keep carry the
 provenance they have in the *full* result: that a row was among those

@@ -1,16 +1,19 @@
 # Window functions
 
 Design note for provenance support of SQL window functions
-(`f(…) OVER (PARTITION BY … ORDER BY … [frame])`). Nothing of it is
-implemented yet.
+(`f(…) OVER (PARTITION BY … ORDER BY … [frame])`).
 
 ## Status today
 
-A query with a window function over provenance-tracked relations runs, with a
-warning (`process_query`, test on `q->hasWindowFuncs`): each output row carries
-the provenance of its input row, and the windowed value is an opaque scalar.
-That is right for the row, and says nothing of the value: `sum(x) OVER (…)` is a
-plain number, although which rows it sums depends on which rows are present.
+Tier 1 is implemented, together with the running aggregates of tier 2: an
+aggregate used as a window function over a frame determined by values becomes
+an `agg_token` over the rows of the frame (`replace_window_aggregations`, test
+`window_aggregates`, user documentation in `user/aggregation.rst`).
+
+Any other window function runs as before, with a warning: each output row
+carries the provenance of its input row, and the windowed value is an opaque
+scalar. That is right for the row, and says nothing of the value: `rank()` is a
+plain number, although which rows it counts depends on which rows are present.
 
 ## Why it matters
 
@@ -109,7 +112,7 @@ Two conventions need care.
 
 ## Plan
 
-### Tier 1: aggregates over a whole partition
+### Tier 1: aggregates over a whole partition (done)
 
 `f(x) OVER (PARTITION BY g)`, with f one of the supported aggregates, `FILTER`
 included. Exact, and no more expensive than `GROUP BY`.
@@ -134,18 +137,30 @@ content-addressed, so the rows of a partition share one aggregate gate.
 By δ-absorption this is the join of each row with the grouped query, the
 equivalence quoted above.
 
+As implemented, `is_scalar` is false when every frame contains its current row,
+so that a whole-partition window gets the very gate of the `GROUP BY` (checked
+in the test), and true when the frame may exclude it. For the latter,
+`provenance_aggregate` over no token now builds an `agg` gate without children
+rather than 𝟘, which also fixed `HAVING count(*) < 1` over no row (it failed with
+"This semiring does not support value gates"). Windows over the aggregates of a
+`GROUP BY` (`sum(sum(x)) OVER ()`) summed the `agg_token` datums as integers;
+`cast_agg_token_mutator` now casts the arguments of a `WindowFunc`, and they
+stay untracked.
+
 ### Tier 2: ranks and running aggregates
 
 - `sum`, `count`, `min`, `max`, `avg` with `ORDER BY` and the default frame, or an
   explicit value-based frame: the lowering of tier 1 applies unchanged, since
-  PostgreSQL's frame is then determined by values.
+  PostgreSQL's frame is then determined by values. Done, with
+  `window_frame_by_values` deciding: no `ORDER BY`, `RANGE`, `GROUPS` without
+  offsets, `ROWS` over the whole partition, any `EXCLUDE`.
 - `rank()`: `1 + count(*) OVER (PARTITION BY … ORDER BY … RANGE BETWEEN UNBOUNDED
   PRECEDING AND CURRENT ROW EXCLUDE GROUP)`, lowered as above with the scalar
   convention, the `+ 1` being arithmetic on an `agg_token` (an `arith` gate).
 - `row_number()`: equal to `rank()` when the ordering is total on the partition,
   which can be checked on the instance (a sub-instance of a totally ordered
   instance is totally ordered). With ties its value is unspecified by SQL
-  itself. To be decided: refuse, or treat as `rank()` with a warning.
+  itself: it is then read as `rank()`, with a warning.
 - `dense_rank()`: needs the number of distinct ordering values before the
   current row. PostgreSQL has no `DISTINCT` in window aggregates, so this goes
   through a subquery that merges peers first (one token per ordering value, the
@@ -190,10 +205,12 @@ join key, or the input of another aggregate. The "gaps and islands" idioms
 group by that number) are of that last kind: about a quarter of the uses of
 `lag` and `lead` in the DBA.SE corpus aggregate the value afterwards.
 
-One restriction has to be lifted: `ORDER BY` on an `agg_token` is refused today,
-and `ORDER BY rn` is the most common thing done with a row number. At the top
-level of a statement, sorting on the displayed value is presentation, like
-`ORDER BY` itself, and should be allowed (for aggregates as well).
+One restriction had to be lifted: `ORDER BY` on an `agg_token` is refused, and
+`ORDER BY rn` is the most common thing done with a row number. Sorting on the
+displayed value is presentation, like `ORDER BY` itself: a window value is now
+sorted that way (`replace_window_aggregations` moves the sort key to a junk copy
+of the original window call). The aggregates of a `GROUP BY` are still refused,
+and could be treated the same way.
 
 ## Cost
 
@@ -239,15 +256,13 @@ A first version can take the quadratic form, with the documentation saying so.
 
 ## Open questions
 
-1. `row_number()` over a non-total order: refuse, or read as `rank()` with a
-   warning? The check is data-dependent either way.
-2. Anchoring in non-absorptive semirings: decompose into "current row plus the
+1. Anchoring in non-absorptive semirings: decompose into "current row plus the
    others" where possible (`count`, `sum`), and otherwise document the value as
    meant for Boolean and absorptive evaluation, or add an explicit flag on the
    aggregate gate?
-3. Should `ORDER BY … LIMIT k` in a subquery be rewritten to a rank comparison
+2. Should `ORDER BY … LIMIT k` in a subquery be rewritten to a rank comparison
    once tier 2 exists, replacing the present warning by an exact annotation when
    the order is total?
-4. Linear-size circuits for running aggregates: worth the change in the
+3. Linear-size circuits for running aggregates: worth the change in the
    evaluators from the start, or only once the quadratic form has shown its
    limits?

@@ -1,0 +1,116 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+q|exact|probabilities
+whole partition|t|{0.182000000,0.428000000,0.532000000,0.400000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+whole table|t|{0.145600000,0.313720000,0.376600000,0.266800000,0.349200000,0.415800000}
+(1 row)
+q|exact|probabilities
+whole partition, ROWS|t|{0.110000000,0.242000000,0.322000000,0.340000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+running sum, peers included|t|{0.000000000,0.380000000,0.420000000,0.400000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+running count|t|{0.200000000,0.430000000,0.630000000,0.220000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+running count, descending|t|{0.090000000,0.360000000,0.560000000,0.400000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+count of a nullable column|t|{0.036000000,0.306000000,0.336000000,0.096000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+count(*) with FILTER|t|{0.174800000,0.404600000,0.499800000,0.334800000,0.349200000,0.559800000}
+(1 row)
+q|exact|probabilities
+sum with FILTER|t|{0.164000000,0.242000000,0.364000000,0.400000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+running max|t|{0.000000000,0.500000000,0.700000000,0.400000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+min|t|{0.200000000,0.100000000,0.140000000,0.080000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+avg|t|{0.080000000,0.440000000,0.616000000,0.400000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+share of the partition|t|{0.078000000,0.360000000,0.560000000,0.400000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+rest of the partition|t|{0.182000000,0.410000000,0.490000000,0.340000000,0.000000000,0.000000000}
+(1 row)
+remove_provenance
+
+(1 row)
+id|s|rs|rc|cy|a|ys
+1|80 (*)|10 (*)|1 (*)|4 (*)|20.0000000000000000 (*)|{1,NULL,3,4} (*)
+2|80 (*)|50 (*)|3 (*)|4 (*)|20.0000000000000000 (*)|{1,NULL,3,4} (*)
+3|80 (*)|50 (*)|3 (*)|4 (*)|20.0000000000000000 (*)|{1,NULL,3,4} (*)
+4|80 (*)|80 (*)|4 (*)|4 (*)|20.0000000000000000 (*)|{1,NULL,3,4} (*)
+5|12 (*)|5 (*)|1 (*)|4 (*)|6.0000000000000000 (*)|{NULL,6} (*)
+6|12 (*)|12 (*)|2 (*)|4 (*)|6.0000000000000000 (*)|{NULL,6} (*)
+(6 rows)
+id|s|rs|rc|cy|a|ys
+1|80|10|1|4|20.0000000000000000|{1,NULL,3,4}
+2|80|50|3|4|20.0000000000000000|{1,NULL,3,4}
+3|80|50|3|4|20.0000000000000000|{1,NULL,3,4}
+4|80|80|4|4|20.0000000000000000|{1,NULL,3,4}
+5|12|5|1|4|6.0000000000000000|{NULL,6}
+6|12|12|2|4|6.0000000000000000|{NULL,6}
+(6 rows)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|same
+same gate as GROUP BY|t
+(1 row)
+q|id|children
+running frame|1|1
+running frame|2|3
+running frame|3|3
+running frame|4|4
+running frame|5|1
+running frame|6|2
+(6 rows)
+remove_provenance
+
+(1 row)
+id|s
+5|12 (*)
+6|12 (*)
+1|80 (*)
+2|80 (*)
+3|80 (*)
+4|80 (*)
+(6 rows)
+WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
+remove_provenance
+
+(1 row)
+id|rk|rn|prev|last2
+1|1|1||10
+2|2|2|10|30
+3|2|3|20|40
+4|4|4|20|50
+5|1|1||5
+6|2|2|5|12
+(6 rows)
+WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+g|s|total|rk
+a|80 (*)|92|2
+b|12 (*)|92|1
+(2 rows)
+window_aggregates: frames with EXCLUDE or GROUPS skipped on PostgreSQL < 11

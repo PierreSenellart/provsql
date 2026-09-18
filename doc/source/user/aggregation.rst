@@ -77,7 +77,7 @@ Window functions over aggregate results (e.g. ``SUM(cnt) OVER ()``)
 execute but are **not** provenance-aware: the aggregate argument is cast
 back to its base type before the window computation, so the windowed
 value is an opaque scalar and a ``WARNING`` is emitted. See
-:doc:`querying` for the general limitation on window functions.
+:ref:`window-aggregates` for the window functions that are tracked.
 
 Random-Variable Aggregates
 ---------------------------
@@ -264,6 +264,67 @@ A branch that is an **arithmetic combination** of aggregates
 stay exact, but that branch's conditional moment is estimated by Monte Carlo, so
 it needs ``provsql.rv_mc_samples > 0``. (This is the same limitation the moment
 surface has for a bare ``sum(x) + sum(y)``.)
+
+.. _window-aggregates:
+
+Aggregates as Window Functions
+-------------------------------
+
+An aggregate used as a window function, ``f(x) OVER (…)``, is tracked
+as the aggregate of a group is. Each output row keeps the provenance of
+its input row, and the value becomes an ``agg_token`` over the rows of
+the frame: in each possible world, it is ``f`` applied to the rows of
+the frame that are present in that world. ``FILTER`` clauses and the
+aggregates of `Aggregate Functions`_ are supported.
+
+.. code-block:: postgresql
+
+    SELECT name, dept, salary,
+           sum(salary) OVER (PARTITION BY dept) AS dept_total,
+           count(*) OVER (PARTITION BY dept ORDER BY salary DESC) AS at_least_as_paid
+    FROM employees;
+
+As for the aggregates of a grouped subquery, a comparison on the value
+in an enclosing query goes into the provenance of the row. Here, the
+probability of each row is that the employee is present and that at
+most three present employees of the department, the employee included,
+earn at least as much:
+
+.. code-block:: postgresql
+
+    SELECT name, probability_evaluate(provenance())
+    FROM (SELECT name,
+                 count(*) OVER (PARTITION BY dept ORDER BY salary DESC) AS k
+          FROM employees) t
+    WHERE k <= 3;
+
+This requires the frame to be determined by the values of the rows, not
+by their positions: in a world where some rows are absent, "the previous
+row" is the previous row that is present, which differs from one world
+to the next. The frames tracked are those of a window without
+``ORDER BY``, ``RANGE`` frames (including the default frame of a window
+with ``ORDER BY``, the rows up to the current one and its peers),
+``GROUPS`` frames whose bounds are ``UNBOUNDED`` or ``CURRENT ROW``, and
+``ROWS`` frames that span the whole partition, with any ``EXCLUDE``
+clause. A frame that excludes the current row may be empty while the
+row exists: a ``count`` is then 0, the other aggregates ``NULL``.
+
+The other window functions still run, with a ``WARNING``: each row
+keeps the provenance of its input row, and the value is an opaque
+scalar. These are the ranking functions (``row_number``, ``rank``,
+``dense_rank``, ``ntile``, ``percent_rank``, ``cume_dist``), the offset
+functions (``lag``, ``lead``, ``first_value``, ``last_value``,
+``nth_value``), ``ROWS`` and ``GROUPS`` frames with an offset, and
+windows over the aggregates of a ``GROUP BY`` or over aggregate columns
+of a subquery.
+
+``ORDER BY`` on a window value sorts on its displayed value.
+
+All the rows of a partition share the gate of a whole-partition window,
+which is also the gate of the corresponding ``GROUP BY``. A frame that
+moves with the current row has a gate per row, with as many children as
+the frame has rows: the circuit of a running aggregate is quadratic in
+the size of the partition.
 
 Joining and exploding aggregated provenance
 --------------------------------------------

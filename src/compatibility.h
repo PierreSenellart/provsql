@@ -170,4 +170,13 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_ARRAY_AGG_ANYNONARRAY 2335
 #endif
 
+#if PG_VERSION_NUM < 110000
+/** @brief Window frame bounds given by an offset (pre-PG 11).  PostgreSQL 11
+ * renamed the @c FRAMEOPTION_*_VALUE_* flags @c FRAMEOPTION_*_OFFSET_*, when
+ * it added offsets to @c RANGE frames (@c GROUPS frames and @c EXCLUDE
+ * clauses, new then too, have no older name). */
+#define FRAMEOPTION_START_OFFSET_PRECEDING FRAMEOPTION_START_VALUE_PRECEDING
+#define FRAMEOPTION_END_OFFSET_FOLLOWING FRAMEOPTION_END_VALUE_FOLLOWING
+#endif
+
 #endif /* COMPATIBILITY_H */

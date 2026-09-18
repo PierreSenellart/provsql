@@ -418,6 +418,7 @@ Which rows are children of the ``agg`` gate
 The invariant is that the children of an ``agg`` gate are exactly
 the inputs the aggregate reads; the value-aware evaluators
 (``HAVING``, moments, sampling) rely on it.  Three cases, decided in
+:cfunc:`make_row_semimod`, which builds the contribution of a row for
 :cfunc:`make_aggregation_expression`:
 
 - **NULL-skipping aggregates** (``sum``, ``min``, ``max``, ``avg``,
@@ -507,6 +508,51 @@ These two pieces are independent: an evaluator that asks for the
 provenance of a *value* in the result reaches an ``agg`` gate; an
 evaluator that asks for the provenance of the *row* itself reaches
 a ``delta`` gate.
+
+Aggregates as window functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+An aggregate used as a window function, in a query without aggregation
+of its own, is rewritten by :cfunc:`replace_window_aggregations`, which
+calls :cfunc:`make_window_aggregation_expression` on each
+``WindowFunc`` of the target list:
+
+.. code-block:: sql
+
+    provenance_aggregate(fn, type,
+                         f(x) OVER w,
+                         array_agg(provenance_semimod(x, k)) OVER w,
+                         is_scalar)
+
+Both window calls reference the same ``WindowClause`` (the same
+``winref``), so the token array is collected over exactly the rows of
+the frame, and :cfunc:`make_row_semimod` builds each row's contribution
+as for a group. The row-level token is left as it is: a window function
+neither merges nor removes rows. For a whole-partition window, the gate
+of each row is the gate of the ``GROUP BY`` on the partition attributes,
+as the equivalence of a window aggregate with the join of each row to
+the grouped query predicts (Equivalence (4) of Lindner, Naumann and
+Lerner, `Window Function Optimization: Co-Evaluation and Other
+Techniques <https://www.vldb.org/pvldb/vol19/p3525-lindner.pdf>`_,
+PVLDB 19(11), 2026).
+
+The frame of a window is only known in each possible world if it
+depends on the values of the rows, not on their positions: the previous
+row of a world is its previous *present* row.
+:cfunc:`window_frame_by_values` accepts a window without ``ORDER BY``,
+``RANGE`` frames, ``GROUPS`` frames without offsets and ``ROWS`` frames
+over the whole partition; any other window function is left as it is,
+and :cfunc:`process_query` emits its warning.  ``is_scalar`` is set when
+the frame may exclude the current row
+(:cfunc:`window_frame_has_current_row`): the frame may then be empty in
+a world where the row exists, and has the value of an aggregation over
+no row, for which :sqlfunc:`provenance_aggregate` builds an ``agg`` gate
+without children rather than :sqlfunc:`gate_zero`. When the frame always
+contains the current row, the grouped convention is kept, which is what
+makes whole-partition gates those of the ``GROUP BY``.
+
+A sort key on a rewritten value is moved to a junk copy of the original
+window call, so ``ORDER BY`` sorts on the displayed value.
 
 
 Currently Supported Aggregates
