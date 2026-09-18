@@ -116,4 +116,31 @@ g|s|total|rk
 a|80 (*)|92|2
 b|12 (*)|92|1
 (2 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+id1|id2|d
+1|2|0
+2|3|3
+3|4|4
+5|6|6
+(4 rows)
+id1|id2|d
+1|2|0
+2|3|3
+3|4|4
+5|6|6
+(4 rows)
 window_aggregates: frames with EXCLUDE or GROUPS, and ranks, skipped on PostgreSQL < 11

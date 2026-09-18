@@ -7222,6 +7222,30 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
         ce->defresult = (Expr *)cast_agg_token_to_type(
           (Node *)ce->defresult, ce->casetype, constants);
     }
+  } else if (IsA(result, CoalesceExpr) || IsA(result, MinMaxExpr)) {
+    /* COALESCE(sum(x), 0), GREATEST(count(*), 3): as for CASE, an
+     * agg_token argument under another result type is cast back, or the
+     * executor would read the agg_token datum as a value of that type. */
+    List *args;
+    Oid type;
+    ListCell *lc;
+    if (IsA(result, CoalesceExpr)) {
+      args = ((CoalesceExpr *)result)->args;
+      type = ((CoalesceExpr *)result)->coalescetype;
+    } else {
+      args = ((MinMaxExpr *)result)->args;
+      type = ((MinMaxExpr *)result)->minmaxtype;
+    }
+    if (type != constants->OID_TYPE_AGG_TOKEN)
+      foreach (lc, args)
+        if (exprType((Node *)lfirst(lc)) == constants->OID_TYPE_AGG_TOKEN)
+          lfirst(lc) = cast_agg_token_to_type((Node *)lfirst(lc), type,
+                                              constants);
+  } else if (IsA(result, NullIfExpr)) {
+    /* NULLIF(sum(x), 0): the equality it applies decides the casts. */
+    NullIfExpr *ni = (NullIfExpr *)result;
+    set_opfuncid((OpExpr *)ni);
+    maybe_cast_agg_token_args(ni->args, ni->opfuncid, constants);
   }
 
   return result;

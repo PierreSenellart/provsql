@@ -105,3 +105,14 @@ SELECT remove_provenance('agg_arith_disp');
 SELECT provsql.agg_token_value_text(provsql.agg_token_uuid(expr)) AS disp
 FROM agg_arith_disp ORDER BY 1;
 DROP TABLE agg_arith_disp;
+
+-- COALESCE, GREATEST, NULLIF over an aggregate of the same query: the
+-- agg_token is cast back to the aggregate's type (with the warning), not read
+-- as a value of the expression's type.
+CREATE TABLE agg_arith_cg AS
+  SELECT city, COALESCE(SUM(id), 0) AS s, GREATEST(COUNT(*), 3) AS g,
+         NULLIF(COUNT(*), 1) AS n
+  FROM personnel GROUP BY city;
+SELECT remove_provenance('agg_arith_cg');
+SELECT city, s, g, n FROM agg_arith_cg ORDER BY city;
+DROP TABLE agg_arith_cg;

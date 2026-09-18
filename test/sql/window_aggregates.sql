@@ -145,6 +145,20 @@ CREATE TABLE wa_over_groups AS
 SELECT remove_provenance('wa_over_groups');
 SELECT * FROM wa_over_groups ORDER BY g;
 
+-- COALESCE over a window value, the rows then joined twice.
+CREATE TABLE wa_coalesce AS
+  WITH w AS (SELECT id, g, coalesce(sum(y) OVER (ORDER BY id), 0) AS sy FROM wa)
+  SELECT w1.id AS id1, w2.id AS id2, w2.sy - w1.sy AS d
+  FROM w w1 JOIN w w2 ON w1.g = w2.g AND w1.id + 1 = w2.id;
+SELECT remove_provenance('wa_coalesce');
+SELECT * FROM wa_coalesce ORDER BY id1;
+SELECT w1.id AS id1, w2.id AS id2, w2.sy - w1.sy AS d
+FROM (SELECT id, g, coalesce(sum(y) OVER (ORDER BY id), 0) AS sy FROM wa_plain) w1
+JOIN (SELECT id, g, coalesce(sum(y) OVER (ORDER BY id), 0) AS sy FROM wa_plain) w2
+  ON w1.g = w2.g AND w1.id + 1 = w2.id
+ORDER BY id1;
+DROP TABLE wa_coalesce;
+
 DROP TABLE wa_shown, wa_win, wa_grp, wa_sorted, wa_untracked, wa_over_groups;
 
 -- Frames with an EXCLUDE clause or in GROUPS mode (PostgreSQL 11+), and the

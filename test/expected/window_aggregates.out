@@ -116,6 +116,33 @@ g|s|total|rk
 a|80 (*)|92|2
 b|12 (*)|92|1
 (2 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+id1|id2|d
+1|2|0
+2|3|3
+3|4|4
+5|6|6
+(4 rows)
+id1|id2|d
+1|2|0
+2|3|3
+3|4|4
+5|6|6
+(4 rows)
 q|exact|probabilities
 rows strictly before|t|{0.200000000,0.400000000,0.560000000,0.048000000,0.600000000,0.360000000}
 (1 row)
