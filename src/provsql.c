@@ -255,26 +255,33 @@ static Node *reduce_varattno_mutator(Node *node, void *ctx) {
 }
 
 /**
- * @brief Adjust Var attribute numbers in @p targetList after columns are removed.
+ * @brief Adjust Var attribute numbers in @p q after columns are removed.
  *
  * When provenance columns are stripped from a subquery's target list, the
  * remaining columns shift left.  This function applies a pre-computed
  * @p offset array (one entry per original column) to correct all @c Var
- * nodes that reference range-table entry @p varno.
+ * nodes of @p q that reference range-table entry @p varno: in its target
+ * list, and in its @c WHERE, @c JOIN and @c HAVING conditions, where a
+ * comparison on a column after the removed one would otherwise read the
+ * wrong column.
  *
- * @param targetList  Target list of the outer query to patch.
- * @param varno       Range-table entry whose attribute numbers need fixing.
- * @param offset      Cumulative shift per original attribute (negative or zero).
+ * @param q       Outer query to patch.
+ * @param varno   Range-table entry whose attribute numbers need fixing.
+ * @param offset  Cumulative shift per original attribute (negative or zero).
  */
-static void reduce_varattno_by_offset(List *targetList, Index varno,
-                                      int *offset) {
+static void reduce_varattno_by_offset(Query *q, Index varno, int *offset) {
   ListCell *lc;
   reduce_varattno_mutator_context context = {varno, offset};
 
-  foreach (lc, targetList) {
+  /* The mutator changes the Vars in place (the copies it returns are
+   * dropped). */
+  foreach (lc, q->targetList) {
     Node *te = lfirst(lc);
     expression_tree_mutator(te, reduce_varattno_mutator, &context);
   }
+  expression_tree_mutator((Node *)q->jointree, reduce_varattno_mutator,
+                          &context);
+  expression_tree_mutator(q->havingQual, reduce_varattno_mutator, &context);
 }
 
 /** @brief Context for the @c aggregation_type_mutator tree walker. */
@@ -2298,7 +2305,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
               (i == 0 ? 0 : offset[i - 1]) - (inner_removed[i] ? 1 : 0);
           }
 
-          reduce_varattno_by_offset(q->targetList, rteid, offset);
+          reduce_varattno_by_offset(q, rteid, offset);
         }
 
         varattnoprovsql = 0;
