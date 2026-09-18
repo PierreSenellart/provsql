@@ -7630,14 +7630,27 @@ BEGIN
     IF n = 0 THEN
       RETURN NULL;  -- structurally empty: AVG undefined
     END IF;
-    -- Conditioning on AVG being defined, or on its group existing (the delta
-    -- of that event, provenance() of a GROUP BY row), is what the moment
-    -- already does: the exact route applies.
+    -- Conditioning on an event that AVG being defined implies -- some row
+    -- among a set holding AVG's rows present, as provenance() of a GROUP BY
+    -- row is, the group possibly having rows whose value is NULL -- is what
+    -- the moment already does: the exact route applies.
     IF prov <> gate_one() THEN
       DECLARE
-        def uuid := agg_defined_event((token)::uuid);
+        inner_prov uuid := prov;
+        prov_toks uuid[];
+        agg_toks uuid[];
       BEGIN
-        IF prov = def OR prov = provenance_delta(def) THEN
+        IF get_gate_type(inner_prov) = 'delta' THEN
+          inner_prov := (get_children(inner_prov))[1];
+        END IF;
+        IF get_gate_type(inner_prov) = 'plus' THEN
+          prov_toks := get_children(inner_prov);
+        ELSE
+          prov_toks := ARRAY[inner_prov];
+        END IF;
+        SELECT array_agg((get_children(c))[1]) INTO agg_toks
+          FROM unnest(child_pairs) AS c;
+        IF agg_toks <@ prov_toks THEN
           prov := gate_one();
         END IF;
       END;
