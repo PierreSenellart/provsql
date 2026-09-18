@@ -46,6 +46,9 @@ SELECT name, provenance() AS provsql FROM personnel;
 -- Hand-made provsql column from a plain expression
 SELECT name AS provsql FROM personnel;
 
+-- Hand-made provsql column from another uuid column
+SELECT u AS provsql FROM (SELECT gen_random_uuid() AS u, name FROM personnel) s;
+
 -- Hand-made provsql column inside a set-operation arm
 SELECT name, provenance() AS provsql FROM personnel
 UNION ALL

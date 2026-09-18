@@ -10,6 +10,7 @@ ERROR:  ProvSQL: GROUP BY on aggregate results from a subquery not supported
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
+ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.

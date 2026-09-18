@@ -17252,8 +17252,7 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
       if (te->resjunk || te->resname == NULL ||
           strcmp(te->resname, PROVSQL_COLUMN_NAME))
         continue;
-      if (IsA(te->expr, Var) &&
-          ((Var *)te->expr)->vartype == constants->OID_TYPE_UUID)
+      if (is_provsql_column(constants, q, (Node *)te->expr))
         continue; /* legitimate passthrough of a real provsql column */
       return true;
     }
