@@ -590,7 +590,8 @@ PG_FUNCTION_INFO_V1(provenance_aggregate);
  * integers and over their texts (same children, another result type), or a
  * floating-point sum whose rounding depends on the plan, are all different
  * gates.  NULL children are rows whose value was NULL; they are dropped.
- * No child gives 𝟘.
+ * No child gives 𝟘 for a group, and an agg gate without children for a
+ * scalar aggregation, whose value over no row is still defined.
  */
 Datum provenance_aggregate(PG_FUNCTION_ARGS) {
   int32 aggfnoid, aggtype;
@@ -612,7 +613,9 @@ Datum provenance_aggregate(PG_FUNCTION_ARGS) {
     n = filtered_tokens(PG_GETARG_ARRAYTYPE_P(3), &nothing, &tokens);
   }
 
-  if (n == 0)
+  /* A group without rows is no group; a scalar aggregation over no row has a
+   * value (0 for a count), that of an agg gate without children. */
+  if (n == 0 && !is_scalar)
     agg = *address_of_zero();
   else {
     StringInfoData buf;
