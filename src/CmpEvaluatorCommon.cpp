@@ -23,16 +23,54 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
   ComparisonOperator op = provsql_having_detail::map_cmp_op(gc, cmp, okop);
   if (!okop) return false;
 
-  /* Identify the gate_agg side; the other is the threshold constant.
-   * The reversed order (const compared to agg) calls for op flipping. */
+  /* Identify the aggregate side; the other is the threshold constant.
+   * The reversed order (const compared to agg) calls for op flipping.
+   * The aggregate side is s * agg + d, s = ±1 and d a sum of constants,
+   * once its constant arithmetic is peeled. */
   gate_t agg_side, const_side;
-  if (gc.getGateType(cw[0]) == gate_agg) {
-    agg_side = cw[0]; const_side = cw[1];
-  } else if (gc.getGateType(cw[1]) == gate_agg) {
-    agg_side = cw[1]; const_side = cw[0];
+  std::vector<gate_t> via;
+  std::vector<std::pair<int, std::string>> offsets;  // d as signed constants
+  int sign = 1;
+  auto peel = [&](gate_t g) -> gate_t {
+    while (gc.getGateType(g) == gate_arith) {
+      const auto &w = gc.getWires(g);
+      const unsigned aop = static_cast<unsigned>(gc.getInfos(g).first);
+      gate_t inner{};
+      if (aop == PROVSQL_ARITH_PLUS) {
+        int non_const = 0;
+        for (gate_t ch : w)
+          if (gc.getGateType(ch) != gate_value) { inner = ch; ++non_const; }
+        if (non_const != 1) return g;
+        for (gate_t ch : w)
+          if (ch != inner) offsets.emplace_back(sign, gc.getExtra(ch));
+      } else if (aop == PROVSQL_ARITH_MINUS && w.size() == 2) {
+        if (gc.getGateType(w[1]) == gate_value) {          // X - c
+          inner = w[0];
+          offsets.emplace_back(-sign, gc.getExtra(w[1]));
+        } else if (gc.getGateType(w[0]) == gate_value) {   // c - X
+          inner = w[1];
+          offsets.emplace_back(sign, gc.getExtra(w[0]));
+          sign = -sign;
+        } else
+          return g;
+      } else if (aop == PROVSQL_ARITH_NEG && w.size() == 1) {
+        inner = w[0];
+        sign = -sign;
+      } else
+        return g;
+      via.push_back(g);
+      g = inner;
+    }
+    return g;
+  };
+  agg_side = peel(cw[0]);
+  const_side = cw[1];
+  if (gc.getGateType(agg_side) != gate_agg) {
+    via.clear(); offsets.clear(); sign = 1;
+    agg_side = peel(cw[1]);
+    const_side = cw[0];
+    if (gc.getGateType(agg_side) != gate_agg) return false;
     op = provsql_having_detail::flip_op(op);
-  } else {
-    return false;
   }
 
   /* The comparison domain is the aggregate result type (info2 of the
@@ -54,8 +92,13 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
   if (!provsql_having_detail::parse_decimal_scaled(c_str, c_mant, c_scale))
     return false;
 
+  /* No child: only a scalar aggregation over no row, whose value is that of
+   * the empty input (a window frame that may be empty while its row exists);
+   * a group without rows is no gate_agg. */
   const auto &agg_children = gc.getWires(agg_side);
-  if (agg_children.empty()) return false;
+  if (agg_children.empty() &&
+      !(gc.getInfos(agg_side).second & PROVSQL_AGG_SCALAR_FLAG))
+    return false;
 
   std::vector<gate_t> semimods, ks;
   std::vector<long> m_mant;
@@ -86,9 +129,18 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
   AggregationOperator agg_kind =
     getAggregationOperator(gc.getInfos(agg_side).first);
 
-  /* Rescale every value and the threshold to a common integer grid. */
+  std::vector<long> d_mant(offsets.size());
+  std::vector<int> d_scale(offsets.size());
+  for (std::size_t i = 0; i < offsets.size(); ++i)
+    if (!provsql_having_detail::parse_decimal_scaled(offsets[i].second,
+                                                     d_mant[i], d_scale[i]))
+      return false;
+
+  /* Rescale every value, the threshold and the offsets to a common integer
+   * grid. */
   int target = c_scale;
   for (int s : m_scale) target = std::max(target, s);
+  for (int s : d_scale) target = std::max(target, s);
   long C = 0;
   if (!provsql_having_detail::rescale_to(c_mant, c_scale, target, C)) return false;
   std::vector<long> ms(m_mant.size());
@@ -96,6 +148,22 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
     if (!provsql_having_detail::rescale_to(m_mant[i], m_scale[i], target, ms[i]))
       return false;
 
+  /* s * agg + d  op  C  is  agg op C - d  (s = 1), or agg flip(op) d - C. */
+  long d = 0;
+  for (std::size_t i = 0; i < offsets.size(); ++i) {
+    long v = 0;
+    if (!provsql_having_detail::rescale_to(d_mant[i], d_scale[i], target, v))
+      return false;
+    d += offsets[i].first * v;
+  }
+  if (sign > 0)
+    C -= d;
+  else {
+    C = d - C;
+    op = provsql_having_detail::flip_op(op);
+  }
+
+  out.via = std::move(via);
   out.agg = agg_side;
   out.semimods = std::move(semimods);
   out.ks = std::move(ks);
@@ -103,6 +171,16 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
   out.agg_kind = agg_kind;
   out.op = op;
   out.C = C;
+  return true;
+}
+
+bool aggPrivateToCmp(const AggCmpMatch &match, const std::vector<unsigned> &ref)
+{
+  if (ref[static_cast<std::size_t>(match.agg)] != 1)
+    return false;
+  for (gate_t g : match.via)
+    if (ref[static_cast<std::size_t>(g)] != 1)
+      return false;
   return true;
 }
 

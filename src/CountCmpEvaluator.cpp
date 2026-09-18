@@ -283,7 +283,7 @@ unsigned runCountCmpEvaluator(GenericCircuit &gc)
      * const_side gate_one + gate_value(C), and any gate_one / gate_zero
      * inside a contributor) carry no randomness, so their ref counts
      * are not constrained. */
-    if (ref[static_cast<std::size_t>(agg)] != 1) continue;
+    if (!aggPrivateToCmp(match, ref)) continue;
     bool sound = true;
     std::vector<double> p;
     p.reserve(ks.size());

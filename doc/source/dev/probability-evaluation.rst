@@ -724,6 +724,15 @@ The chain (in order) :
   the general path.  Same shape match and independence certification as
   the COUNT / MIN-MAX evaluators (shared ``CmpEvaluatorCommon``).  See
   ``src/SumCmpEvaluator.{h,cpp}``.
+- The shape these three evaluators match (``matchAggCmp``) admits
+  constant arithmetic on the aggregate, ``agg + c``, ``c + agg``,
+  ``agg - c``, ``c - agg`` and ``-agg``, folded into the comparator and
+  the threshold.  That arithmetic reaches the comparison when the
+  aggregate is computed in a subquery and compared in the enclosing
+  query, where the rewriter cannot fold it: the rank of a window function
+  is one plus a count, and ``rk <= 3`` compares ``count + 1`` with 3.
+  The peeled ``gate_arith`` gates are subject to the same condition as
+  the ``gate_agg``, ``ref_count == 1`` (``aggPrivateToCmp``).
 - :cfunc:`runAggMarginalEvaluator` (same gate
   ``provsql.cmp_probability_evaluation``) : the hierarchical
   marginal-vector engine for the safe join shapes the flat COUNT /

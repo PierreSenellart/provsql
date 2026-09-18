@@ -83,7 +83,7 @@ unsigned runSumCmpEvaluator(GenericCircuit &gc)
     if (range <= 0 || range > kMaxSumRange) continue;
 
     /* Independence certification, identical to runCountCmpEvaluator. */
-    if (ref[static_cast<std::size_t>(match.agg)] != 1) continue;
+    if (!aggPrivateToCmp(match, ref)) continue;
     bool sound = true;
     std::vector<double> p;
     p.reserve(match.ks.size());

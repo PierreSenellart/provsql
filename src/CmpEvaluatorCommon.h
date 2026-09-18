@@ -46,7 +46,14 @@ struct AggCmpMatch {
   AggregationOperator agg_kind{};  ///< effective aggregate (SUM-of-1s remapped to COUNT)
   ComparisonOperator op{};         ///< comparator, flipped if the agg sits on the right
   long C{};                        ///< the constant threshold, on the same integer grid as @c ms
+  std::vector<gate_t> via;         ///< the @c gate_arith gates of constant arithmetic between the cmp and @c agg, folded into @c op and @c C
 };
+
+/**
+ * @brief Whether the aggregate of @p match is consumed by its comparison
+ *        alone: @c agg and every gate of @c via has reference count 1.
+ */
+bool aggPrivateToCmp(const AggCmpMatch &match, const std::vector<unsigned> &ref);
 
 /**
  * @brief Try to match @p cmp against
@@ -54,8 +61,12 @@ struct AggCmpMatch {
  *
  * Accepts both operand orders (agg left or right), flipping @c op in the
  * latter case.  Mirrors @c pw_from_cmp_gate's @c build_from and the
- * SUM-of-1s → COUNT remap.  Returns @c false (leaving @p out untouched)
- * on any shape mismatch; cheap to call.
+ * SUM-of-1s → COUNT remap.  The aggregate may be under constant
+ * arithmetic (@c agg + c, @c c + agg, @c agg - c, @c c - agg, @c -agg),
+ * which is folded into the comparator and the threshold: an aggregate
+ * computed in a subquery (@c rank(), @c count(*) + 1) and compared in an
+ * enclosing query reaches the comparison that way.  Returns @c false
+ * (leaving @p out untouched) on any shape mismatch; cheap to call.
  *
  * @param[in]  gc   Circuit to inspect.
  * @param[in]  cmp  Candidate @c gate_cmp.

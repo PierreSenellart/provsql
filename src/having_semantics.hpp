@@ -778,7 +778,7 @@ void provsql_having(
       if (aggs.empty())
         return false;
       const size_t n = kgates.size();
-      if (n == 0 || n > 24)            // 2^n enumeration: keep it bounded
+      if (n > 24)                      // 2^n enumeration: keep it bounded
         return false;
 
       // Numeric value of a subexpression in a given world, tracking whether it
@@ -919,6 +919,11 @@ void provsql_having(
                     [](const std::pair<const gate_t, AggInfo> &e) {
         return e.second.is_scalar;
       });
+      // No contributor at all: the empty world is the only one, and it is
+      // only a world for scalar aggregations (a window frame that may be
+      // empty while its row exists).
+      if (n == 0 && !empty_world_valid)
+        return false;
 
       std::vector<typename SemiringT::value_type> disjuncts;
       const uint64_t total = uint64_t(1) << n;

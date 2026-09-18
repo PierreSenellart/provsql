@@ -135,7 +135,7 @@ unsigned runMinMaxCmpEvaluator(GenericCircuit &gc)
      * reference count 1 (so the contributors are pairwise leaf-disjoint,
      * private to the cmp, and individually read-once).  See
      * CountCmpEvaluator.h for the full argument. */
-    if (ref[static_cast<std::size_t>(match.agg)] != 1) continue;
+    if (!aggPrivateToCmp(match, ref)) continue;
     bool sound = true;
     std::vector<double> p;
     p.reserve(match.ks.size());
