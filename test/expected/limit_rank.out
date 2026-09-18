@@ -36,6 +36,12 @@ q|exact|probabilities
 two conditions on one count|t|a=0.5940 b=0.5400
 (1 row)
 q|exact|probabilities
+after a filter on a rank|t|1=0.0007 2=0.0120 3=0.0084 4=0.0160 5=0.0600 6=0.9000
+(1 row)
+q|exact|probabilities
+a window over rows filtered on a rank|t|1=0.0007 2=0.0120 3=0.0084 4=0.0160 5=0.0600 6=0.9000
+(1 row)
+q|exact|probabilities
 joined back|t|2-1=0.1000 3-1=0.1120 3-2=0.2100 4-1=0.0800 4-2=0.2000 4-3=0.2800 6-5=0.2041
 (1 row)
 remove_provenance

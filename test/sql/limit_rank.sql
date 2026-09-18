@@ -89,6 +89,17 @@ SELECT * FROM lr_check('arm of UNION',
 SELECT * FROM lr_check('two conditions on one count',
   'SELECT g AS k FROM (SELECT g, count(*) AS c FROM lr GROUP BY g) u
    WHERE c > 1 AND c <= 3');
+SELECT * FROM lr_check('after a filter on a rank',
+  'SELECT id AS k FROM (SELECT id, g, x,
+                        row_number() OVER (PARTITION BY g ORDER BY x DESC, id) AS rn
+                        FROM lr) t
+   WHERE rn = 1 ORDER BY id DESC LIMIT 1');
+SELECT * FROM lr_check('a window over rows filtered on a rank',
+  'SELECT id AS k FROM (SELECT id, count(*) OVER (ORDER BY id DESC) AS c
+                        FROM (SELECT id FROM (SELECT id, g, x,
+                              row_number() OVER (PARTITION BY g ORDER BY x DESC, id) AS rn
+                              FROM lr) t WHERE rn = 1) f) z
+   WHERE c <= 1');
 SELECT * FROM lr_check('joined back',
   'SELECT t.id || ''-'' || w.id AS k
    FROM (SELECT id, g FROM lr ORDER BY x DESC, id LIMIT 2) t

@@ -16039,23 +16039,26 @@ static Node *pull_up_vars_mutator(Node *node, void *cx) {
  * @brief Rewrite the LIMIT / OFFSET of @p q into the filter of a rank, or
  *        return @c NULL if it is not (@c limit_lowerable).
  *
- * @p q, without its LIMIT and OFFSET, becomes the subquery of
+ * @p q, without its LIMIT and OFFSET, becomes the innermost query of
  * @code
  *   SELECT ... FROM (SELECT ..., row_number() OVER (ORDER BY ...) AS rk
- *                    FROM ...) limited
+ *                    FROM (q) limited_rows) limited
  *   WHERE rk > m AND rk <= m + k ORDER BY ...
  * @endcode
  * with @c rank() for @c WITH @c TIES; the enclosing comparison on the rank,
- * an aggregate of the subquery once rewritten, goes into the annotation of
- * each row.  The subquery exposes the output columns and the sort keys; the
- * entries that read @c provenance() move to the enclosing query, where the
- * provenance of a row includes the comparison.
+ * an aggregate of the middle query once rewritten, goes into the annotation
+ * of each row.  The rank is computed over the rows of @p q with their
+ * provenance, which includes what the WHERE of @p q contributes.  @p q
+ * exposes the output columns and the sort keys; the entries that read
+ * @c provenance() move to the enclosing query, where the provenance of a row
+ * includes the comparison.
  */
 static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
-  Query *outer;
+  Query *outer, *middle;
   RangeTblEntry *rte;
   RangeTblRef *rtr;
   WindowClause *wc;
+  List *sort;
   WindowFunc *rank;
   Var *rk;
   List *inner_tl = NIL, *outer_tl = NIL, *moved = NIL, *colnames = NIL;
@@ -16063,7 +16066,6 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
   Node *count, *offset;
   pull_up_vars_ctx pctx;
   ListCell *lc;
-  Index winref = 0;
   AttrNumber resno = 0;
   bool ties = false;
 
@@ -16126,33 +16128,64 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
   foreach (lc, outer_tl)
     ((TargetEntry *)lfirst(lc))->resno = ++resno;
 
-  /* The rank, over the ORDER BY of the query. */
-  foreach (lc, q->windowClause)
-    winref = Max(winref, ((WindowClause *)lfirst(lc))->winref);
+  /* The rank is computed one level up, over the rows as they come out of
+   * the query: their tokens then include what its own WHERE puts there (a
+   * comparison on an aggregate of a subquery, on a window value...), which a
+   * window of the query itself would not read. */
+  sort = q->sortClause;
+  q->sortClause = NIL;
+  middle = makeNode(Query);
+  middle->commandType = CMD_SELECT;
+  middle->querySource = q->querySource;
+  middle->canSetTag = q->canSetTag;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    TargetEntry *mte = makeTargetEntry(
+      (Expr *)makeVar(1, te->resno, exprType((Node *)te->expr),
+                      exprTypmod((Node *)te->expr),
+                      exprCollation((Node *)te->expr), 0),
+      te->resno, te->resname, false);
+    mte->ressortgroupref = te->ressortgroupref;
+    middle->targetList = lappend(middle->targetList, mte);
+    colnames = lappend(colnames, makeString(pstrdup(te->resname)));
+  }
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = q;
+  rte->eref = makeAlias("limited_rows", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  middle->rtable = list_make1(rte);
+  middle->jointree = makeFromExpr(list_make1(rtr), NULL);
+
   wc = makeNode(WindowClause);
-  wc->orderClause = (List *)copyObject(q->sortClause);
+  wc->orderClause = (List *)copyObject(sort);
   wc->frameOptions = FRAMEOPTION_DEFAULTS;
-  wc->winref = winref + 1;
-  q->windowClause = lappend(q->windowClause, wc);
+  wc->winref = 1;
+  middle->windowClause = list_make1(wc);
   rank = makeNode(WindowFunc);
   rank->winfnoid = ties ? F_RANK_ : F_ROW_NUMBER;
   rank->wintype = INT8OID;
   rank->winref = wc->winref;
   rank->location = -1;
-  q->targetList = lappend(
-    q->targetList,
-    makeTargetEntry((Expr *)rank, list_length(q->targetList) + 1,
+  middle->targetList = lappend(
+    middle->targetList,
+    makeTargetEntry((Expr *)rank, list_length(middle->targetList) + 1,
                     pstrdup("rank"), false));
-  q->hasWindowFuncs = true;
-  rk = makeVar(1, list_length(q->targetList), INT8OID, -1, InvalidOid, 0);
-  q->sortClause = NIL;
+  middle->hasWindowFuncs = true;
+  rk = makeVar(1, list_length(middle->targetList), INT8OID, -1, InvalidOid, 0);
 
-  foreach (lc, q->targetList)
+  colnames = NIL;
+  foreach (lc, middle->targetList)
     colnames = lappend(colnames,
                        makeString(pstrdup(((TargetEntry *)lfirst(lc))->resname)));
 
-  /* The subquery is one level deeper than the query was. */
-  IncrementVarSublevelsUp((Node *)q, 1, 1);
+  /* The query is two levels deeper than it was. */
+  IncrementVarSublevelsUp((Node *)q, 2, 1);
 
   if (offset != NULL)
     conds = lappend(conds, build_binop(">", copyObject((Node *)rk), offset));
@@ -16164,7 +16197,7 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
 
   rte = makeNode(RangeTblEntry);
   rte->rtekind = RTE_SUBQUERY;
-  rte->subquery = q;
+  rte->subquery = middle;
   rte->eref = makeAlias("limited", colnames);
   rte->inFromCl = true;
 #if PG_VERSION_NUM < 160000
@@ -16183,7 +16216,7 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
     list_length(conds) == 1 ? (Node *)linitial(conds)
                             : (Node *)makeBoolExpr(AND_EXPR, conds, -1));
   outer->targetList = outer_tl;
-  outer->sortClause = (List *)copyObject(wc->orderClause);
+  outer->sortClause = (List *)copyObject(sort);
   return outer;
 }
 

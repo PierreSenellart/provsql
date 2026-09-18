@@ -294,12 +294,16 @@ its ``LIMIT``, becomes the subquery of
 .. code-block:: text
 
    SELECT … FROM (SELECT …, row_number() OVER (ORDER BY …) AS rank
-                  FROM …) limited
+                  FROM (q) limited_rows) limited
    WHERE rank > m AND rank <= m + k ORDER BY …
 
 with ``rank()`` for ``WITH TIES``.  The window rewriting then tracks the
 rank (see :doc:`aggregation`), and the comparison on it, a column of the
-subquery, goes into each row's annotation.  The subquery exposes the
+subquery, goes into each row's annotation.  The rank is computed one
+level above the query, over its rows with their provenance: a ``WHERE``
+of the query on an uncertain value (a comparison on an aggregate of a
+subquery, on a window value) only goes into that provenance, and a rank
+in the query itself would count the rows it rejects.  The query exposes the
 output columns and the sort keys; the target entries that read
 ``provenance()`` move to the enclosing query, where the provenance of a
 row includes the comparison, and correlated references go one level

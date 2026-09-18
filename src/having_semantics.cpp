@@ -253,19 +253,29 @@ static bool side_has_agg(GenericCircuit &c, gate_t g) {
   return false;
 }
 
-// Collect cmp gates in the prov circuit
+// Collect cmp gates in the prov circuit, in post-order: a comparison comes
+// after every comparison below it, so that when it is resolved, the
+// comparisons its contributors read (a count over rows filtered by a
+// comparison on another aggregate) are already in the mapping.
 std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start) {
   std::vector<gate_t> out;
-  std::vector<gate_t> stack;
-  stack.push_back(start);
+  std::vector<std::pair<gate_t, bool>> stack;  // (gate, children pushed)
+  stack.emplace_back(start, false);
 
   std::unordered_set<gate_t> seen;
 
   while (!stack.empty()) {
-    gate_t cur = stack.back();
+    auto [cur, expanded] = stack.back();
     stack.pop_back();
 
-    if (!seen.insert(cur).second) continue;
+    if (!expanded) {
+      if (!seen.insert(cur).second) continue;
+      stack.emplace_back(cur, true);
+      for (gate_t ch : c.getWires(cur))
+        if (!seen.count(ch))
+          stack.emplace_back(ch, false);
+      continue;
+    }
 
     if (c.getGateType(cur) == gate_cmp) {
       const auto &cw = c.getWires(cur);
@@ -282,9 +292,6 @@ std::vector<gate_t> collect_sp_cmp_gates(GenericCircuit &c, gate_t start) {
           out.push_back(cur);
       }
     }
-
-    const auto &w = c.getWires(cur);
-    for (gate_t ch : w) stack.push_back(ch);
   }
   return out;
 }
