@@ -6608,6 +6608,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
 typedef struct {
   Index group_rtindex;
   List *groupexprs;
+  Index sublevels_up;   ///< Depth below the grouped query (in sublinks)
 } resolve_group_rte_ctx;
 
 static Node *
@@ -6615,10 +6616,24 @@ resolve_group_rte_vars_mutator(Node *node, void *raw_ctx) {
   resolve_group_rte_ctx *ctx = (resolve_group_rte_ctx *)raw_ctx;
   if (node == NULL)
     return NULL;
+  if (IsA(node, Query)) {
+    /* A sublink's query: its references to the grouped columns are one
+     * level up more. */
+    Node *res;
+    ctx->sublevels_up++;
+    res = (Node *)query_tree_mutator((Query *)node,
+                                     resolve_group_rte_vars_mutator, raw_ctx,
+                                     0);
+    ctx->sublevels_up--;
+    return res;
+  }
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
-    if (v->varno == ctx->group_rtindex) {
+    if (v->varno == ctx->group_rtindex &&
+        v->varlevelsup == ctx->sublevels_up) {
       Node *resolved = copyObject(list_nth(ctx->groupexprs, v->varattno - 1));
+      if (ctx->sublevels_up > 0)
+        IncrementVarSublevelsUp(resolved, (int)ctx->sublevels_up, 0);
 #if PG_VERSION_NUM >= 160000
       /* Clear varnullingrels: the group-step nulling bits reference the
        * group_rtindex RTE which does not exist in the fresh inner query.
@@ -6665,6 +6680,7 @@ void strip_group_rte_pg18(Query *q) {
     if (r->rtekind == RTE_GROUP) {
       grp_ctx.group_rtindex = idx;
       grp_ctx.groupexprs    = r->groupexprs;
+      grp_ctx.sublevels_up  = 0;
       found    = true;
       rte_len  = idx - 1;
       break;
