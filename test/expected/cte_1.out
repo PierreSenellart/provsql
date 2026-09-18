@@ -47,3 +47,24 @@ Paul|New York|1
 Susan|Berlin|1
 (7 rows)
 ERROR:  ProvSQL: Recursive CTEs not supported
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|untracked
+1|f
+3|t
+4|t
+(3 rows)
+remove_provenance
+
+(1 row)
+id|name
+1|a
+2|x
+3|b
+4|c
+(4 rows)
+ERROR:  ProvSQL: data-modifying CTE "ins" cannot read CTE "t", which is over a provenance-tracked relation

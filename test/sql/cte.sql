@@ -67,3 +67,33 @@ WITH RECURSIVE nums AS (
   SELECT n+1, name FROM nums WHERE n < 3
 )
 SELECT * FROM nums;
+
+-- A data-modifying CTE runs once, as native SQL; its RETURNING rows carry no
+-- provenance, and the rest of the query reads the data as it was before it.
+CREATE TABLE cte_foo(id int PRIMARY KEY, name text UNIQUE);
+INSERT INTO cte_foo VALUES (1, 'a'), (2, 'x');
+SELECT add_provenance('cte_foo');
+CREATE TABLE cte_ins_result AS
+  WITH input(id, name) AS (VALUES (1, 'a'), (3, 'b'), (4, 'c'))
+  , ins AS (
+     INSERT INTO cte_foo TABLE input
+     ON CONFLICT (name) DO NOTHING
+     RETURNING id)
+  SELECT f.id FROM input i JOIN cte_foo f USING (name)
+  UNION ALL
+  TABLE ins;
+ALTER TABLE cte_ins_result ADD COLUMN untracked boolean;
+UPDATE cte_ins_result SET untracked = (provsql = gate_one());
+SELECT remove_provenance('cte_ins_result');
+SELECT id, untracked FROM cte_ins_result ORDER BY id;
+DROP TABLE cte_ins_result;
+CREATE TABLE cte_foo_after AS SELECT id, name FROM cte_foo;
+SELECT remove_provenance('cte_foo_after');
+SELECT * FROM cte_foo_after ORDER BY id;
+DROP TABLE cte_foo_after;
+
+-- It cannot read a CTE that is rewritten for provenance
+WITH t AS (SELECT id + 10 AS id, name || '2' AS name FROM cte_foo)
+, ins AS (INSERT INTO cte_foo SELECT * FROM t RETURNING id)
+SELECT * FROM t;
+DROP TABLE cte_foo;

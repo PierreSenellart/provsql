@@ -2100,6 +2100,11 @@ static void plant_reach_conjunctions(List *candidates, List *lowered) {
  * @brief Inline CTE references in @p q as subqueries where the rewrite
  *        needs them, preserving CTEs whose bodies need no rewriting.
  */
+static bool cte_is_data_modifying(const CommonTableExpr *cte) {
+  return IsA(cte->ctequery, Query) &&
+    ((Query *)cte->ctequery)->commandType != CMD_SELECT;
+}
+
 static void inline_ctes(const constants_t *constants, Query *q) {
   List *lowered = NIL;
   List *kept = NIL;
@@ -2158,15 +2163,15 @@ static void inline_ctes(const constants_t *constants, Query *q) {
     int i = 0;
     foreach (lc, q->cteList) {
       CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
-      must_inline[i++] = cte->cterecursive ||
-        has_provenance(constants, (Query *)cte->ctequery);
+      must_inline[i++] = !cte_is_data_modifying(cte) && (cte->cterecursive ||
+        has_provenance(constants, (Query *)cte->ctequery));
     }
     do {
       changed = false;
       i = 0;
       foreach (lc, q->cteList) {
         CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
-        if (!must_inline[i]) {
+        if (!must_inline[i] && !cte_is_data_modifying(cte)) {
           ListCell *lc2;
           int j = 0;
           foreach (lc2, q->cteList) {
@@ -2183,6 +2188,26 @@ static void inline_ctes(const constants_t *constants, Query *q) {
         ++i;
       }
     } while (changed);
+    /* A data-modifying CTE (INSERT / UPDATE / DELETE / MERGE ... RETURNING)
+     * is never inlined: it must run exactly once, as native SQL, and its
+     * RETURNING rows carry no provenance.  It then cannot read a CTE that is
+     * inlined, whose definition leaves the WITH clause. */
+    foreach (lc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+      if (cte_is_data_modifying(cte)) {
+        ListCell *lc2;
+        int j = 0;
+        foreach (lc2, q->cteList) {
+          CommonTableExpr *other = (CommonTableExpr *)lfirst(lc2);
+          if (must_inline[j] &&
+              query_references_cte((Query *)cte->ctequery, other->ctename))
+            provsql_error("data-modifying CTE \"%s\" cannot read CTE \"%s\", "
+                          "which is over a provenance-tracked relation",
+                          cte->ctename, other->ctename);
+          ++j;
+        }
+      }
+    }
     i = 0;
     foreach (lc, q->cteList) {
       CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);

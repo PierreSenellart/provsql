@@ -30,7 +30,10 @@ The following SQL constructs are supported with full provenance tracking:
 * ``SELECT … FROM … WHERE`` (conjunctive queries, multiset semantics)
 * ``JOIN`` (inner joins, outer joins, natural joins)
 * ``LATERAL`` subqueries
-* Non-recursive CTEs (``WITH`` clauses)
+* Non-recursive CTEs (``WITH`` clauses).  A data-modifying CTE
+  (``INSERT`` / ``UPDATE`` / ``DELETE … RETURNING``) runs once, as
+  plain SQL, and the rows it returns carry no provenance; it may not
+  read another CTE over provenance-tracked relations
 * Recursive CTEs (``WITH RECURSIVE``) using ``UNION`` (set semantics) over
   provenance-tracked relations, on PostgreSQL 15+: the recursive CTE is
   transparently evaluated to a fixpoint and the result carries provenance like
