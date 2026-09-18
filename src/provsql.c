@@ -10901,15 +10901,25 @@ static bool oj_refs_join_index(Query *q, Index join_idx) {
 typedef struct oj_outer_ctx {
   Index R_idx, S_idx, new_idx;
   AttrNumber *R_map, *S_map;
+  Index sublevels_up;   ///< Depth below the query (in sublinks)
 } oj_outer_ctx;
 
 static Node *oj_outer_remap(Node *node, void *cx) {
   oj_outer_ctx *c = (oj_outer_ctx *)cx;
   if (node == NULL)
     return NULL;
+  if (IsA(node, Query)) {
+    /* A sublink's query (a correlated EXISTS in WHERE): its references to
+     * the joined relations are one level up more. */
+    Node *res;
+    c->sublevels_up++;
+    res = (Node *)query_tree_mutator((Query *)node, oj_outer_remap, cx, 0);
+    c->sublevels_up--;
+    return res;
+  }
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
-    if (v->varlevelsup == 0 &&
+    if (v->varlevelsup == c->sublevels_up &&
         (v->varno == c->R_idx || v->varno == c->S_idx)) {
       v = (Var *)copyObject(v);
       if ((Index)((Var *)node)->varno == c->R_idx)
@@ -11203,6 +11213,7 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
   octx.R_idx = R_idx;
   octx.S_idx = S_idx;
   octx.new_idx = join_idx;
+  octx.sublevels_up = 0;
   octx.R_map = R_map;
   octx.S_map = S_map;
   q->targetList = (List *)oj_outer_remap((Node *)q->targetList, &octx);
