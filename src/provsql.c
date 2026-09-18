@@ -17211,6 +17211,43 @@ static void refuse_except_all(const constants_t *constants, Query *q) {
                   "operand has no duplicates, or NOT IN / NOT EXISTS.");
 }
 
+/**
+ * @brief Whether the ORDER BY ... LIMIT / OFFSET of @p q, the top level of a
+ *        statement over tracked relations, stays a truncation of the actual
+ *        result without being marked so.
+ *
+ * An ORDER BY ... LIMIT is read in every possible world when
+ * @c limit_lowerable accepts it.  Over an aggregation, a DISTINCT, a set
+ * operation, or sort keys whose values vary between worlds, it is not: the
+ * statement then shows the first rows of the actual result, which @c actual()
+ * says explicitly.  Not reported where the rewriting of ranks is missing
+ * altogether (PostgreSQL < 11, or a schema without @c actual()).
+ */
+static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
+#ifdef FRAMEOPTION_EXCLUDE_GROUP
+  return OidIsValid(constants->OID_FUNCTION_ACTUAL) &&
+         OidIsValid(constants->OID_FUNCTION_ROW_NUMBER_AS_RANK) &&
+         q->sortClause != NIL && limit_truncates(q) &&
+         !is_actual_marker(constants, q->limitCount) &&
+         !is_actual_marker(constants, q->limitOffset) &&
+         has_provenance(constants, q) && !limit_lowerable(constants, q);
+#else
+  (void)constants;
+  (void)q;
+  return false;
+#endif
+}
+
+/** @brief Emit the warning @c top_limit_is_truncation calls for. */
+static void warn_top_limit(void) {
+  provsql_warning("ORDER BY ... LIMIT / OFFSET over provenance-tracked "
+                  "relations is not read in each possible world over an "
+                  "aggregation, a DISTINCT, a set operation or sort keys "
+                  "that vary between worlds: it truncates the actual result, "
+                  "whose rows keep the provenance they have in the full "
+                  "result; write LIMIT actual(k) to say so.");
+}
+
 /** @brief Emit the warning @c nested_limit_on_provenance calls for. */
 static void warn_nested_limit(void) {
   provsql_warning("LIMIT / OFFSET in a subquery over provenance-tracked "
@@ -17260,10 +17297,13 @@ static PlannedStmt *provsql_planner(Query *q,
         ListCell *lc_src;
         foreach (lc_src, q->rtable) {
           RangeTblEntry *src = (RangeTblEntry *)lfirst(lc_src);
-          if (src->rtekind == RTE_SUBQUERY && src->subquery != NULL &&
-              nested_limit_on_provenance(&constants, src->subquery, true)) {
-            warn_nested_limit();
-            break;
+          if (src->rtekind == RTE_SUBQUERY && src->subquery != NULL) {
+            if (top_limit_is_truncation(&constants, src->subquery))
+              warn_top_limit();
+            if (nested_limit_on_provenance(&constants, src->subquery, true)) {
+              warn_nested_limit();
+              break;
+            }
           }
         }
       }
@@ -17300,6 +17340,9 @@ static PlannedStmt *provsql_planner(Query *q,
     if (provsql_active && constants.ok)
       refuse_except_all(&constants, q);
 
+    if (provsql_active && constants.ok &&
+        top_limit_is_truncation(&constants, q))
+      warn_top_limit();
     if (provsql_active && constants.ok &&
         nested_limit_on_provenance(&constants, q, true))
       warn_nested_limit();

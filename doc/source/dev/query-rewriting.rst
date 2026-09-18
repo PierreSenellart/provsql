@@ -308,7 +308,8 @@ enclosing query, whose target list is the user's; and without the
 inversion-free markers of the query, whose rows are no longer products
 of inputs.  A ``LIMIT`` it leaves alone stays a truncation of the actual
 result, reported by a warning below the top level of the statement
-(:cfunc:`nested_limit_on_provenance`).
+(:cfunc:`nested_limit_on_provenance`), and at the top level when it has
+an ``ORDER BY`` and no ``actual()`` marker (``top_limit_is_truncation``).
 
 Step 2: Strip Existing Provenance Columns
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -119,6 +119,8 @@ SELECT a FROM sn_r UNION ALL (SELECT a FROM sn_s INTERSECT SELECT a FROM sn_w);
 -- ---------------------------------------------------------------------------
 -- 3. ORDER BY / LIMIT / OFFSET on a non-ALL set operation apply after the
 --    deduplication.  Rows are stored in query order and read back by ctid.
+--    Over a set operation, a LIMIT truncates the actual result, which
+--    actual() says (otherwise a warning is raised, see limit_warning).
 -- ---------------------------------------------------------------------------
 
 -- r UNION s = {1,2,3,5,7,9,NULL}
@@ -137,12 +139,12 @@ SELECT remove_provenance('sn_o3');
 SELECT 'LIMIT 2' AS q, a, c FROM sn_o3 ORDER BY a;
 
 -- OFFSET 1 LIMIT 2: 2, 3
-CREATE TABLE sn_o4 AS SELECT a FROM sn_r UNION SELECT a FROM sn_s ORDER BY a OFFSET 1 LIMIT 2;
+CREATE TABLE sn_o4 AS SELECT a FROM sn_r UNION SELECT a FROM sn_s ORDER BY a OFFSET actual(1) LIMIT actual(2);
 SELECT remove_provenance('sn_o4');
 SELECT 'OFFSET 1 LIMIT 2' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o4;
 
 -- EXCEPT: r EXCEPT w = {1,5,7} (2 is kept with a zero-able token), DESC LIMIT 2: 7, 5
-CREATE TABLE sn_o5 AS SELECT a FROM sn_r EXCEPT SELECT a FROM sn_w ORDER BY a DESC LIMIT 2;
+CREATE TABLE sn_o5 AS SELECT a FROM sn_r EXCEPT SELECT a FROM sn_w ORDER BY a DESC LIMIT actual(2);
 SELECT remove_provenance('sn_o5');
 SELECT 'EXCEPT DESC LIMIT 2' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o5;
 
@@ -150,17 +152,17 @@ SELECT 'EXCEPT DESC LIMIT 2' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS row
 -- (a truncation of the actual arm, with actual(): the filter of a rank is
 -- tested in limit_rank)
 CREATE TABLE sn_o6 AS (SELECT a FROM sn_r ORDER BY a DESC LIMIT actual(1))
-  UNION SELECT a FROM sn_w ORDER BY a LIMIT 2;
+  UNION SELECT a FROM sn_w ORDER BY a LIMIT actual(2);
 SELECT remove_provenance('sn_o6');
 SELECT 'arm LIMIT' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o6;
 
 -- The ALL forms were never affected.
-CREATE TABLE sn_o7 AS SELECT a FROM sn_r UNION ALL SELECT a FROM sn_s ORDER BY a LIMIT 3;
+CREATE TABLE sn_o7 AS SELECT a FROM sn_r UNION ALL SELECT a FROM sn_s ORDER BY a LIMIT actual(3);
 SELECT remove_provenance('sn_o7');
 SELECT 'UNION ALL LIMIT 3' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o7;
 
 -- Two columns, ordered by the second one.
-CREATE TABLE sn_o8 AS SELECT a, -a AS b FROM sn_r UNION SELECT a, -a FROM sn_w ORDER BY b LIMIT 3;
+CREATE TABLE sn_o8 AS SELECT a, -a AS b FROM sn_r UNION SELECT a, -a FROM sn_w ORDER BY b LIMIT actual(3);
 SELECT remove_provenance('sn_o8');
 SELECT 'ORDER BY second column' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o8;
 

@@ -174,9 +174,11 @@ statement, the statement shows some rows of the full result, each
 correctly annotated. In a subquery, the truncated result feeds further
 computation, whose provenance then misses that dependence, and ProvSQL
 emits a ``WARNING``. The same holds of a ``LIMIT`` without ``ORDER BY``,
-of an ``OFFSET`` with ``WITH TIES``, and of a ``LIMIT`` over an
-aggregation, a ``DISTINCT`` or a set operation, which are not read in
-every world.
+of an ``OFFSET`` with ``WITH TIES``, and of an ``ORDER BY … LIMIT`` over
+an aggregation, a ``DISTINCT`` or a set operation, or on values that
+vary between worlds (an aggregate, a window function), which are not
+read in every world; for the latter, ProvSQL emits a ``WARNING`` at the
+top level of a statement too, unless the ``LIMIT`` is marked ``actual``.
 
 Provenance in Nested Queries
 -----------------------------

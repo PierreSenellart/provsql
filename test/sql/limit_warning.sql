@@ -6,9 +6,10 @@
 -- lost, and nothing is reported.  A LIMIT that stays a truncation of the
 -- actual result -- marked actual(), without ORDER BY, over an aggregation --
 -- keeps rows that carry the tokens they have in the full result.  At the top
--- level of a statement that is a sound reading, and nothing is reported; below
--- it the truncated result feeds further computation, and a warning is raised
--- (once per statement).
+-- level of a statement that is a sound reading, but an ORDER BY ... LIMIT that
+-- is not read in each world (over a set operation, an aggregation...) is
+-- reported unless marked actual(); below the top level the truncated result
+-- feeds further computation, and a warning is raised (once per statement).
 
 CREATE TABLE lw_t(a int); INSERT INTO lw_t VALUES (1),(2),(3);
 CREATE TABLE lw_u(a int); INSERT INTO lw_u VALUES (1),(2),(3);
@@ -22,7 +23,7 @@ INSERT INTO lw_dst SELECT a FROM lw_t ORDER BY a LIMIT actual(1);
 CREATE TABLE lw_3 AS SELECT a FROM (SELECT a FROM lw_t ORDER BY a LIMIT ALL) s;
 CREATE TABLE lw_4 AS SELECT a FROM (SELECT a FROM lw_t ORDER BY a LIMIT NULL) s;
 CREATE TABLE lw_5 AS SELECT t.a FROM lw_t t, (SELECT a FROM lw_u ORDER BY a LIMIT 1) s WHERE t.a = s.a;
-CREATE TABLE lw_6 AS SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIMIT 2;
+CREATE TABLE lw_6 AS SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIMIT actual(2);
 
 \echo -- warning: FROM subquery
 CREATE TABLE lw_7 AS SELECT a FROM (SELECT a FROM lw_t ORDER BY a LIMIT actual(2)) s;
@@ -62,6 +63,13 @@ CREATE TABLE lw_18 AS WITH c AS (SELECT a FROM lw_t ORDER BY a LIMIT 2) SELECT a
 CREATE TABLE lw_19 AS (SELECT a FROM lw_t ORDER BY a LIMIT 1) UNION ALL SELECT a FROM lw_u;
 INSERT INTO lw_dst SELECT a FROM (SELECT a FROM lw_t ORDER BY a LIMIT 1) s;
 DROP TABLE lw_15, lw_16, lw_17, lw_18, lw_19;
+
+\echo -- warning: top level, not read in each world (set operation, aggregation), unless actual()
+CREATE TABLE lw_20 AS SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIMIT 2;
+CREATE TABLE lw_21 AS SELECT a, count(*) FROM lw_t GROUP BY a ORDER BY a LIMIT 2;
+INSERT INTO lw_dst SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIMIT 1;
+CREATE TABLE lw_22 AS SELECT a, count(*) FROM lw_t GROUP BY a ORDER BY a LIMIT actual(2);
+DROP TABLE lw_20, lw_21, lw_22;
 
 \else
 
