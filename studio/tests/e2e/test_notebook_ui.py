@@ -61,7 +61,7 @@ def _add_markdown_cell(page: Page, text: str) -> None:
 def test_run_cell_renders_rows_and_starts_kernel(page: Page, studio_url: str) -> None:
     _goto_notebook(page, studio_url)
     ta = _sql_cell_ta(page)
-    ta.fill("SELECT name FROM personnel ORDER BY id LIMIT 3;")
+    ta.fill("SELECT name FROM personnel WHERE id <= 3 ORDER BY id;")
     ta.focus()
     _run_focused(page)
     cell = page.locator(".nb-cell--sql").first
@@ -457,7 +457,7 @@ def test_query_jump_to_circuit_mode(page: Page, studio_url: str) -> None:
     auto-replays there."""
     _goto_notebook(page, studio_url)
     ta = _sql_cell_ta(page)
-    ta.fill("SELECT name FROM personnel ORDER BY id LIMIT 2;")
+    ta.fill("SELECT name FROM personnel WHERE id <= 2 ORDER BY id;")
     ta.focus()
     _run_focused(page)
     cell = page.locator(".nb-cell--sql").first
@@ -467,7 +467,7 @@ def test_query_jump_to_circuit_mode(page: Page, studio_url: str) -> None:
     cell.locator("[data-act='to-circuit']").click()
     expect(page.locator("body")).to_have_class("mode-circuit", timeout=8000)
     expect(page.locator("#request")).to_have_value(
-        "SELECT name FROM personnel ORDER BY id LIMIT 2;")
+        "SELECT name FROM personnel WHERE id <= 2 ORDER BY id;")
     expect(page.locator("#result-count")).to_have_text("2", timeout=8000)
 
 
