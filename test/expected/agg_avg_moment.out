@@ -18,6 +18,12 @@ SQL function "expected" statement 1
 e_avg_cond_close
 t
 (1 row)
+add_provenance
+
+(1 row)
+e_own|var_own
+28.877119|59.438290
+(1 row)
 agg_avg_moment_done
 ok
 (1 row)

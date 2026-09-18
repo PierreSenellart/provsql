@@ -142,3 +142,28 @@ min > 3|2|0.250000|0.250000|(d ∧ y2)
 min >= 3|1|0.187500|0.187500|(¬(a ∧ y1)) ∧ ((b ∧ y1) ∨ (c ∧ y1))
 min >= 3|2|0.250000|0.250000|(d ∧ y2)
 (18 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|usr|p
+max date =|1|0.2000
+(1 row)
+remove_provenance
+
+(1 row)
+q|usr|p
+min date <|1|0.9000
+(1 row)
+remove_provenance
+
+(1 row)
+q|cart|p
+join max date|1|0.1600
+join max date|2|0.2000
+join max date|3|0.6000
+join max date|4|0.0100
+join max date|5|0.9000
+(5 rows)

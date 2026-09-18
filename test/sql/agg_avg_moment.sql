@@ -58,4 +58,21 @@ DROP TABLE avj; DROP TABLE av_anchor; DROP TABLE avr; DROP TABLE av;
 RESET provsql.rv_mc_samples;
 RESET provsql.monte_carlo_seed;
 
+-- Conditioned on its own group (the provenance of the GROUP BY row), the
+-- moments of AVG are the unconditional ones, exact: brute force over the 8
+-- worlds gives E = 28.877119 and Var = 59.438290.
+CREATE TABLE avg_own(g int, id int, x int);
+INSERT INTO avg_own VALUES (1,1,10),(1,2,20),(1,3,40);
+SELECT add_provenance('avg_own');
+SELECT set_prob(provsql, CASE id WHEN 1 THEN 0.3 WHEN 2 THEN 0.6 ELSE 0.8 END)
+FROM avg_own \g /dev/null
+CREATE TABLE avg_own_r AS
+  SELECT avg(x) AS a, provenance() AS p FROM avg_own GROUP BY g;
+SET provsql.active = off;
+SELECT round(expected(a, p)::numeric, 6) AS e_own,
+       round(variance(a, p)::numeric, 6) AS var_own
+FROM avg_own_r;
+SET provsql.active = on;
+DROP TABLE avg_own_r; DROP TABLE avg_own;
+
 SELECT 'ok'::text AS agg_avg_moment_done;

@@ -285,3 +285,34 @@ DROP FUNCTION mms_sets(text, text, int);
 DROP FUNCTION mms_join_prob(text, text, int);
 DROP TABLE mm_names, mmy_name, mms_bool, mms_level, mms_w, mms_cost, mms_name;
 DROP TABLE mmy, mms, mms_plain;
+
+-- MIN / MAX of dates (a type neither numeric nor text) compared by their
+-- order; a date is not the number of its year.  By brute force over the
+-- worlds: max(d) = 2022-08-05 for user 1 is 0.2 (cart 2 without cart 3),
+-- min(d) < 2022-08-06 is 0.9; joined on max(d), carts 1..5 are 0.16, 0.2,
+-- 0.6, 0.01, 0.9.
+CREATE TABLE mmd(cart int, usr int, d date);
+INSERT INTO mmd VALUES (1,1,'2022-08-01'),(2,1,'2022-08-05'),(3,1,'2022-08-10'),
+                       (4,2,'2022-10-10'),(5,2,'2022-11-11');
+SELECT add_provenance('mmd');
+SELECT set_prob(provsql, CASE cart WHEN 1 THEN 0.8 WHEN 2 THEN 0.5 WHEN 3 THEN 0.6
+                                   WHEN 4 THEN 0.1 ELSE 0.9 END) FROM mmd \g /dev/null
+CREATE TABLE mmd_r AS
+  SELECT usr, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mmd GROUP BY usr HAVING max(d) = DATE '2022-08-05';
+SELECT remove_provenance('mmd_r');
+SELECT 'max date =' AS q, usr, p FROM mmd_r ORDER BY usr;
+DROP TABLE mmd_r;
+CREATE TABLE mmd_r AS
+  SELECT usr, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mmd GROUP BY usr HAVING min(d) < DATE '2022-08-06';
+SELECT remove_provenance('mmd_r');
+SELECT 'min date <' AS q, usr, p FROM mmd_r ORDER BY usr;
+DROP TABLE mmd_r;
+CREATE TABLE mmd_r AS
+  SELECT c.cart, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mmd c JOIN (SELECT usr, max(d) AS mx FROM mmd GROUP BY usr) m
+       ON c.usr = m.usr AND c.d = m.mx;
+SELECT remove_provenance('mmd_r');
+SELECT 'join max date' AS q, cart, p FROM mmd_r ORDER BY cart;
+DROP TABLE mmd_r, mmd;
