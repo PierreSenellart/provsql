@@ -50,6 +50,7 @@
 #include "access/heapam.h"
 #endif
 #include "parser/analyze.h"
+#include "access/xact.h"
 #include "utils/rel.h"
 #include "parser/parse_clause.h"
 #include "parser/parser.h"
@@ -176,6 +177,41 @@ static int provsql_in_ctas = 0;
  * @c provenance_aggregate, ... -- happen during execution of the
  * user's plan, so they see depth >= 1 and skip the NOTICE. */
 static int provsql_executor_depth = 0;
+
+/** @brief @c provsql_executor_depth when each open subtransaction started,
+ *  by nesting level, to restore it when the subtransaction aborts. */
+#define PROVSQL_MAX_SUBXACT_DEPTH 64
+static int provsql_subxact_depth[PROVSQL_MAX_SUBXACT_DEPTH];
+
+/**
+ * @brief Transaction callback: no executor runs between transactions.
+ *
+ * @c ExecutorEnd is not called for a statement that fails while it runs, so
+ * the counting of @c provsql_executor_start / @c provsql_executor_end is off
+ * after an error; the end of the transaction sets it back.
+ */
+static void provsql_xact_callback(XactEvent event, void *arg) {
+  (void) event;
+  (void) arg;
+  provsql_executor_depth = 0;
+}
+
+/** @brief Subtransaction callback: an aborted subtransaction (a PL/pgSQL
+ *  exception block) leaves the executor depth it started at. */
+static void provsql_subxact_callback(SubXactEvent event,
+                                     SubTransactionId mySubid,
+                                     SubTransactionId parentSubid, void *arg) {
+  int level = GetCurrentTransactionNestLevel();
+  (void) mySubid;
+  (void) parentSubid;
+  (void) arg;
+  if (level <= 0 || level >= PROVSQL_MAX_SUBXACT_DEPTH)
+    return;
+  if (event == SUBXACT_EVENT_START_SUB)
+    provsql_subxact_depth[level] = provsql_executor_depth;
+  else if (event == SUBXACT_EVENT_ABORT_SUB)
+    provsql_executor_depth = provsql_subxact_depth[level];
+}
 static post_parse_analyze_hook_type prev_post_parse_analyze = NULL; ///< Previous post-parse-analysis hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
@@ -20444,6 +20480,8 @@ void _PG_init(void) {
 
   planner_hook        = provsql_planner;
   post_parse_analyze_hook = provsql_post_parse_analyze;
+  RegisterXactCallback(provsql_xact_callback, NULL);
+  RegisterSubXactCallback(provsql_subxact_callback, NULL);
 #ifndef PROVSQL_INPROCESS_STORE
   shmem_startup_hook  = provsql_shmem_startup;
 #endif
@@ -20468,6 +20506,8 @@ void _PG_init(void) {
 void _PG_fini(void) {
   planner_hook        = prev_planner;
   post_parse_analyze_hook = prev_post_parse_analyze;
+  UnregisterXactCallback(provsql_xact_callback, NULL);
+  UnregisterSubXactCallback(provsql_subxact_callback, NULL);
   shmem_startup_hook  = prev_shmem_startup;
   ExecutorStart_hook  = prev_ExecutorStart;
   ExecutorEnd_hook    = prev_ExecutorEnd;
