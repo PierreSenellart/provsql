@@ -201,10 +201,8 @@ that may be kept, annotated with that condition. `LIMIT actual(k)` keeps the
 truncation of the actual result, each kept row carrying its provenance in the
 full result. Left as truncations: a `LIMIT` without `ORDER BY`, over an
 aggregation, `DISTINCT` or set operation, `OFFSET` with `WITH TIES`, and every
-`LIMIT` before PostgreSQL 11. `OFFSET m LIMIT k` compares the same rank twice,
-which the closed-form evaluators decline (a shared aggregate): it goes through
-the general enumeration, limited in size; a range comparison in the COUNT
-evaluator would lift that.
+`LIMIT` before PostgreSQL 11. `OFFSET m LIMIT k` compares the same rank twice;
+the COUNT evaluator resolves the two comparisons together, as a range.
 
 ### Tier 3: offset functions
 

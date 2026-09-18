@@ -86,6 +86,9 @@ SELECT * FROM lr_check('arms of UNION ALL',
 SELECT * FROM lr_check('arm of UNION',
   '(SELECT id AS k FROM lr ORDER BY x DESC, id LIMIT 1)
    UNION SELECT id FROM lr WHERE g = ''b''');
+SELECT * FROM lr_check('two conditions on one count',
+  'SELECT g AS k FROM (SELECT g, count(*) AS c FROM lr GROUP BY g) u
+   WHERE c > 1 AND c <= 3');
 SELECT * FROM lr_check('joined back',
   'SELECT t.id || ''-'' || w.id AS k
    FROM (SELECT id, g FROM lr ORDER BY x DESC, id LIMIT 2) t
@@ -135,12 +138,20 @@ CREATE TABLE lr_many_top AS
   SELECT id, probability_evaluate(provenance()) AS p
   FROM (SELECT id FROM lr_many ORDER BY score DESC LIMIT 3) u
   WHERE id = 7;
+-- OFFSET m LIMIT k compares the rank twice: the two comparisons on the one
+-- count make a range, evaluated by the same pre-pass.
+CREATE TABLE lr_many_range AS
+  SELECT id, probability_evaluate(provenance()) AS p
+  FROM (SELECT id FROM lr_many ORDER BY score DESC OFFSET 10 LIMIT 5) u
+  WHERE id = 7;
 RESET provsql.verbose_level;
 SELECT remove_provenance('lr_many_top');
 SELECT id, round(p::numeric, 12) AS p FROM lr_many_top;
+SELECT remove_provenance('lr_many_range');
+SELECT id, round(p::numeric, 12) AS p FROM lr_many_range;
 
 DROP TABLE lr_top, lr_actual, lr_actual2, lr_ties, lr_star, lr_many,
-  lr_many_top;
+  lr_many_top, lr_many_range;
 
 -- FETCH ... WITH TIES (PostgreSQL 13+): rank() <= k.
 SELECT current_setting('server_version_num')::int >= 130000 AS pg_has_with_ties

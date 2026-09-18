@@ -6,6 +6,8 @@
 #include "CountCmpEvaluator.h"
 
 #include <algorithm>
+#include <climits>
+#include <map>
 #include <vector>
 
 #include "Aggregation.h"          // ComparisonOperator + getAggregationOperator
@@ -201,6 +203,129 @@ static double cdfForOperator(const std::vector<double> &p,
   return r;
 }
 
+/* The values of a count satisfying "count op C", as the interval
+ * [lo, hi] ; false for NE, whose set is not an interval. */
+static bool countBounds(ComparisonOperator op, long C, long &lo, long &hi)
+{
+  lo = LONG_MIN;
+  hi = LONG_MAX;
+  switch (op) {
+    case ComparisonOperator::GE: lo = C;     return true;
+    case ComparisonOperator::GT: lo = C + 1; return true;
+    case ComparisonOperator::LE: hi = C;     return true;
+    case ComparisonOperator::LT: hi = C - 1; return true;
+    case ComparisonOperator::EQ: lo = hi = C; return true;
+    case ComparisonOperator::NE: return false;
+  }
+  return false;
+}
+
+/* Pr(lo <= B <= hi), the empty world (B = 0) counted only for a scalar
+ * aggregation, as in cdfForOperator.  O(N x hi). */
+static double probInRange(const std::vector<double> &p, long lo, long hi,
+                          bool is_scalar)
+{
+  const long N = static_cast<long>(p.size());
+  lo = std::max(lo, is_scalar ? 0L : 1L);
+  hi = std::min(hi, N);
+  if (lo > hi)
+    return 0.0;
+  const auto dp = partialPMF(p, static_cast<std::size_t>(hi));
+  double r = 0.0;
+  for (long j = lo; j <= hi; ++j)
+    r += dp[static_cast<std::size_t>(j)];
+  return r;
+}
+
+/* Two comparisons on one count, conjoined: "m < rank <= m + k" of an
+ * OFFSET m LIMIT k, or "count > 1 AND count <= 3" on the aggregate of a
+ * subquery.  The count is shared, which the single-comparison pass above
+ * refuses (it would couple the two comparisons), but the two only meet in
+ * one times gate: their conjunction is the event that the count lies in the
+ * intersection of their intervals, a single Poisson-binomial range.  The
+ * first comparison becomes a Bernoulli of that probability, the second
+ * 𝟙.  Conditions: each comparison has that times gate as its only parent,
+ * both read the count through the same constant arithmetic, whose topmost
+ * gate (or the count itself) has these two parents only, the rest of the
+ * chain and the contributors being private as in the single case. */
+static unsigned resolveCountRangePairs(GenericCircuit &gc,
+                                       const std::vector<unsigned> &ref)
+{
+  struct Candidate {
+    gate_t cmp;
+    AggCmpMatch match;
+  };
+  const auto nb = gc.getNbGates();
+  std::map<gate_t, std::vector<gate_t>> parents;
+  std::map<gate_t, std::vector<Candidate>> by_top;
+  unsigned resolved = 0;
+
+  for (std::size_t i = 0; i < nb; ++i) {
+    auto g = static_cast<gate_t>(i);
+    for (gate_t w : gc.getWires(g))
+      if (gc.getGateType(w) == gate_cmp)
+        parents[w].push_back(g);
+  }
+  for (const auto &kv : parents) {
+    AggCmpMatch match;
+    if (kv.second.size() != 1 || !matchAggCmp(gc, kv.first, match) ||
+        match.agg_kind != AggregationOperator::COUNT)
+      continue;
+    if (!std::all_of(match.ms.begin(), match.ms.end(),
+                     [](long m) { return m == 1; }))
+      continue;
+    const gate_t top = match.via.empty() ? match.agg : match.via.front();
+    by_top[top].push_back({kv.first, std::move(match)});
+  }
+
+  for (const auto &kv : by_top) {
+    const auto &pair = kv.second;
+    if (pair.size() != 2 || ref[static_cast<std::size_t>(kv.first)] != 2)
+      continue;
+    const AggCmpMatch &m0 = pair[0].match, &m1 = pair[1].match;
+    const gate_t parent = parents[pair[0].cmp].front();
+    if (parents[pair[1].cmp].front() != parent ||
+        gc.getGateType(parent) != gate_times ||
+        m0.agg != m1.agg || m0.via != m1.via)
+      continue;
+
+    bool sound = true;
+    for (std::size_t i = 1; i < m0.via.size(); ++i)
+      if (ref[static_cast<std::size_t>(m0.via[i])] != 1)
+        sound = false;
+    if (!m0.via.empty() && ref[static_cast<std::size_t>(m0.agg)] != 1)
+      sound = false;
+    std::vector<double> p;
+    p.reserve(m0.ks.size());
+    for (std::size_t i = 0; sound && i < m0.ks.size(); ++i) {
+      if (ref[static_cast<std::size_t>(m0.semimods[i])] != 1) {
+        sound = false;
+        break;
+      }
+      double pi = contributorProb(gc, m0.ks[i], ref, sound);
+      p.push_back(pi);
+    }
+    if (!sound)
+      continue;
+
+    long lo0, hi0, lo1, hi1;
+    if (!countBounds(m0.op, m0.C, lo0, hi0) ||
+        !countBounds(m1.op, m1.C, lo1, hi1))
+      continue;
+    const bool is_scalar =
+      (gc.getInfos(m0.agg).second & PROVSQL_AGG_SCALAR_FLAG) != 0;
+    double pr = probInRange(p, std::max(lo0, lo1), std::min(hi0, hi1),
+                            is_scalar);
+    if (pr < 0.0) pr = 0.0;
+    if (pr > 1.0) pr = 1.0;
+
+    gc.resolveCmpToBernoulli(pair[0].cmp, pr);
+    gc.resolveCmpToBernoulli(pair[1].cmp, 1.0);
+    resolved += 2;
+  }
+  return resolved;
+}
+
 }  // namespace
 
 unsigned runCountCmpEvaluator(GenericCircuit &gc)
@@ -311,6 +436,7 @@ unsigned runCountCmpEvaluator(GenericCircuit &gc)
     ++resolved;
   }
 
+  resolved += resolveCountRangePairs(gc, ref);
   return resolved;
 }
 

@@ -33,6 +33,9 @@ q|exact|probabilities
 arm of UNION|t|1=0.0180 2=0.3000 3=0.2100 4=0.4000 5=0.6000 6=0.9000
 (1 row)
 q|exact|probabilities
+two conditions on one count|t|a=0.5940 b=0.5400
+(1 row)
+q|exact|probabilities
 joined back|t|2-1=0.1000 3-1=0.1120 3-2=0.2100 4-1=0.0800 4-2=0.2000 4-3=0.2800 6-5=0.2041
 (1 row)
 remove_provenance
@@ -82,11 +85,18 @@ add_provenance
 
 (1 row)
 NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 Poisson-binomial): provenance circuit reduced from 55 to 3 gates
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (2 Poisson-binomial): provenance circuit reduced from 59 to 5 gates
 remove_provenance
 
 (1 row)
 id|p
 7|0.000007894274
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+7|0.357290599567
 (1 row)
 q|exact|probabilities
 WITH TIES|t|1=0.0920 2=0.1880 3=0.2632 4=0.0290 5=0.6000 6=0.9000

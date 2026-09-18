@@ -55,7 +55,12 @@ namespace provsql {
  * For every @c gate_cmp whose shape matches the first-slice scope
  * (see file docstring), computes the comparator's probability by
  * Poisson-binomial CDF and replaces the cmp by a Bernoulli
- * @c gate_input via @c GenericCircuit::resolveCmpToBernoulli.
+ * @c gate_input via @c GenericCircuit::resolveCmpToBernoulli.  Two
+ * cmps on the same COUNT whose only parent is one @c times gate
+ * (@c count @c > @c m @c AND @c count @c <= @c m @c + @c k) are
+ * resolved together, as the probability that the count lies in the
+ * intersection of their intervals: the first becomes that Bernoulli,
+ * the second @c gate_one.
  *
  * @param gc  Circuit to mutate in place.
  * @return    Number of comparators resolved by this pass.

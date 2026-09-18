@@ -693,7 +693,14 @@ The chain (in order) :
   COUNT).  The DP
   dispatches on the smaller side of ``C`` (lower tail directly,
   or upper tail via inverted Bernoullis) for ``O(N x min(C, N -
-  C))`` total cost per cmp.  See ``src/CountCmpEvaluator.{h,cpp}``.
+  C))`` total cost per cmp.  Two cmps on the same COUNT, which the
+  ``ref_count(gate_agg) == 1`` condition refuses, are resolved together
+  when their only parent is one ``times`` gate (``count > m AND count <=
+  m + k``, the two comparisons of an ``OFFSET m LIMIT k`` on a rank):
+  their conjunction is the event that the count lies in the intersection
+  of their intervals, a single Poisson-binomial range of cost
+  ``O(N x hi)``; the first cmp becomes that Bernoulli, the second
+  ``gate_one``.  See ``src/CountCmpEvaluator.{h,cpp}``.
 - :cfunc:`runMinMaxCmpEvaluator` (same gate
   ``provsql.cmp_probability_evaluation``) : recognises HAVING
   ``gate_cmp(gate_agg(MIN|MAX, semimod children), gate_value(C))`` and
