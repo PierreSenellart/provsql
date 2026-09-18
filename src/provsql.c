@@ -41,6 +41,7 @@
 #else
 #include "optimizer/var.h"              /* contain_vars_of_level */
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
+#include "optimizer/tlist.h"            /* get_sortgroupclause_tle */
 #endif
 #include "optimizer/planner.h"
 #if PG_VERSION_NUM >= 120000
@@ -49,6 +50,7 @@
 #include "access/heapam.h"
 #endif
 #include "parser/analyze.h"
+#include "utils/rel.h"
 #include "parser/parse_clause.h"
 #include "parser/parser.h"
 #include "parser/parse_coerce.h"
@@ -19716,7 +19718,8 @@ static Node *rowstar_mutator(Node *node, void *cx) {
         Query *q = (Query *)list_nth(ctx->queries, v->varlevelsup);
         RangeTblEntry *rte = rt_fetch(v->varno, q->rtable);
         drop = rte->rtekind == RTE_RELATION && v->varattno > 0 &&
-               strcmp(get_attname(rte->relid, v->varattno, false),
+               v->varattno <= list_length(rte->eref->colnames) &&
+               strcmp(strVal(list_nth(rte->eref->colnames, v->varattno - 1)),
                       PROVSQL_COLUMN_NAME) == 0 &&
                colref_is_star(ctx->src, v->location);
       }
