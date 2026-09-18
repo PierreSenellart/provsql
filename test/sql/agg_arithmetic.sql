@@ -282,3 +282,11 @@ CREATE TABLE agg_arith_fn AS
 SELECT remove_provenance('agg_arith_fn');
 SELECT p FROM agg_arith_fn;
 DROP TABLE agg_arith_fn, agg_arith_id;
+
+-- A parameter of type "any" (pg_typeof) takes a stored agg_token as it is.
+CREATE TABLE agg_arith_fn AS
+  SELECT city, count(*) AS c FROM personnel GROUP BY city;
+CREATE TABLE agg_arith_ty AS SELECT pg_typeof(c)::text AS t FROM agg_arith_fn;
+SELECT remove_provenance('agg_arith_ty');
+SELECT DISTINCT t FROM agg_arith_ty;
+DROP TABLE agg_arith_ty, agg_arith_fn;

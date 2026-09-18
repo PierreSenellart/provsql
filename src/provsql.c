@@ -14576,7 +14576,7 @@ static void cast_agg_token_in_list(ListCell *lc,
    * one its consumer reads it as, when there is one. */
   if (!OidIsValid(target))
     target = fallback;
-  if (!OidIsValid(target) || IsPolymorphicType(target))
+  if (!OidIsValid(target) || get_typtype(target) == TYPTYPE_PSEUDO)
     return;
 
   castTuple = SearchSysCache2(CASTSOURCETARGET,
@@ -14686,10 +14686,13 @@ static void cast_agg_token_func_args(List *args, Oid funcid,
     Oid formal = i < procForm->pronargs ? procForm->proargtypes.values[i]
                                         : InvalidOid;
     ++i;
+    /* A pseudo-type parameter other than a polymorphic one ("any", as of
+     * pg_typeof) takes the agg_token as it is. */
     if (exprType(arg) != constants->OID_TYPE_AGG_TOKEN ||
         !OidIsValid(formal) || formal == constants->OID_TYPE_AGG_TOKEN ||
         (IsPolymorphicType(formal) &&
-         procForm->pronamespace == constants->OID_SCHEMA_PROVSQL))
+         procForm->pronamespace == constants->OID_SCHEMA_PROVSQL) ||
+        (!IsPolymorphicType(formal) && get_typtype(formal) == TYPTYPE_PSEUDO))
       continue;
     if (IsA(arg, Var))
       cast_agg_token_in_list(lc, ctx, true, formal);

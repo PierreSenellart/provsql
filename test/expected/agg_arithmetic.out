@@ -312,3 +312,9 @@ remove_provenance
 p
 0.6250
 (1 row)
+remove_provenance
+
+(1 row)
+t
+agg_token
+(1 row)
