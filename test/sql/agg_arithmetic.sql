@@ -250,10 +250,14 @@ DROP TABLE agg_arith_fn;
 
 -- A simple CASE on a window value of a CTE, and windows partitioned or
 -- ordered by aggregate results: on the plain values, with a warning.
+-- (Before PostgreSQL 11, rank() is not tracked and warns otherwise: the
+-- warnings are left out, the values are the same.)
+SET client_min_messages = error;
 CREATE TABLE agg_arith_fn AS
   WITH w AS (SELECT id, rank() OVER (ORDER BY id) AS rn FROM personnel)
   SELECT id, CASE rn WHEN 1 THEN 'first' WHEN 2 THEN 'second' END AS d
   FROM w;
+RESET client_min_messages;
 SELECT remove_provenance('agg_arith_fn');
 SELECT id, d FROM agg_arith_fn WHERE d IS NOT NULL ORDER BY id;
 DROP TABLE agg_arith_fn;
