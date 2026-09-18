@@ -490,21 +490,26 @@ Datum plain_truth(PG_FUNCTION_ARGS)
     PG_RETURN_BOOL(true);
   token = *PG_GETARG_UUID_P(0);
 
-  try {
-    int quick = quick_plain_truth(token, 0);
-    if (quick >= 0)
-      PG_RETURN_BOOL(quick == 1);
+  int quick = quick_plain_truth(token, 0);
+  if (quick >= 0)
+    PG_RETURN_BOOL(quick == 1);
 
+  /* A token the Boolean semiring cannot evaluate (a comparison on a random
+   * variable, which has no value in the database as it is) holds: the row
+   * counts, as it did before this filter. */
+  bool res = true;
+  try {
     GenericCircuit c = getGenericCircuit(token);
     gate_t g = c.getGate(uuid2string(token));
     semiring::Boolean sr;
     std::unordered_map<gate_t, bool> mapping;
     provsql_having(c, g, mapping, sr);
-    PG_RETURN_BOOL(c.evaluate<semiring::Boolean>(g, mapping, sr));
-  } catch(const std::exception &e) {
-    provsql_error("plain_truth: %s", e.what());
-  } catch(...) {
-    provsql_error("plain_truth: Unknown exception");
+    res = c.evaluate<semiring::Boolean>(g, mapping, sr);
+  } catch(const std::exception &) {
+    res = true;
   }
-  PG_RETURN_BOOL(true);
+  if (plain_truth_memo.size() >= plain_truth_memo_max)
+    plain_truth_memo.clear();
+  plain_truth_memo.emplace(uuid2string(token), res);
+  PG_RETURN_BOOL(res);
 }

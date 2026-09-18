@@ -7289,6 +7289,21 @@ static bool token_may_be_false(const constants_t *constants, Query *q,
  * data.  The comparisons on random variables among @p prov_atts have no
  * value there and are left out.
  */
+/** @brief Walker: does the expression call one of the random_variable
+ *         comparison gate builders? */
+static bool rv_cmp_walker(Node *node, void *ctx) {
+  const constants_t *constants = (const constants_t *)ctx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr)) {
+    int i;
+    for (i = 0; i < 6; ++i)
+      if (((FuncExpr *)node)->funcid == constants->OID_FUNCTION_RV_CMP[i])
+        return true;
+  }
+  return expression_tree_walker(node, rv_cmp_walker, ctx);
+}
+
 static Expr *plain_row_token(const constants_t *constants, Query *q,
                              List *prov_atts, semiring_operation op) {
   List *atts = NIL;
@@ -7299,8 +7314,15 @@ static Expr *plain_row_token(const constants_t *constants, Query *q,
     return NULL;
   foreach (lc, prov_atts) {
     Node *a = (Node *)lfirst(lc);
-    if (!IsA(a, Var))
+    if (!IsA(a, Var)) {
+      /* A comparison lifted from WHERE: on an aggregate of a subquery, it
+       * has a value here; on a random variable, none. */
+      if (rv_cmp_walker(a, (void *)constants))
+        continue;
+      atts = lappend(atts, a);
+      may_be_false = true;
       continue;
+    }
     atts = lappend(atts, a);
     if (!may_be_false && token_may_be_false(constants, q, a))
       may_be_false = true;
@@ -14108,15 +14130,22 @@ static void error_for_mixed_qual(qual_class c)
  * @param constants  Extension OID cache.
  * @param q          Query whose @c jointree->quals and @c havingQual
  *                   may both be mutated in place.
- * @return List of @c FuncExpr nodes (one per lifted RV conjunct), each
- *         producing a @c UUID.  The caller conjoins these into
- *         @c prov_atts before @c make_provenance_expression.
+ * @return List of @c FuncExpr nodes (one per lifted RV conjunct, and, in an
+ *         aggregating query, per agg_token conjunct), each producing a
+ *         @c UUID.  The caller conjoins these into @c prov_atts before
+ *         @c make_provenance_expression.
  */
 static List *
 migrate_probabilistic_quals(const constants_t *constants, Query *q)
 {
   List *rv_cmps = NIL;
   Node *quals;
+  /* A comparison on the aggregate of a subquery reads a value of each row:
+   * without aggregation here, HAVING (per row) is its place; with one, it
+   * must filter the rows the aggregation reads, in their tokens, as a
+   * random_variable comparison does, not their groups. */
+  bool aggregating = q->hasAggs || q->groupClause != NIL ||
+                     q->groupingSets != NIL;
 
   if (!q->jointree || !q->jointree->quals)
     return NIL;
@@ -14133,7 +14162,11 @@ migrate_probabilistic_quals(const constants_t *constants, Query *q)
 
     switch (c) {
       case QUAL_PURE_AGG:
-        q->havingQual = add_to_havingQual(q->havingQual, (Expr *)quals);
+        if (aggregating)
+          rv_cmps = lappend(rv_cmps, having_Expr_to_provenance_cmp(
+                                       (Expr *)quals, constants, false));
+        else
+          q->havingQual = add_to_havingQual(q->havingQual, (Expr *)quals);
         q->jointree->quals = NULL;
         break;
       case QUAL_PURE_RV:
@@ -14165,7 +14198,11 @@ migrate_probabilistic_quals(const constants_t *constants, Query *q)
 
       switch (c) {
         case QUAL_PURE_AGG:
-          q->havingQual = add_to_havingQual(q->havingQual, conjunct);
+          if (aggregating)
+            rv_cmps = lappend(rv_cmps, having_Expr_to_provenance_cmp(
+                                         conjunct, constants, false));
+          else
+            q->havingQual = add_to_havingQual(q->havingQual, conjunct);
           be->args = my_list_delete_cell(be->args, cell, prev);
           if (prev)
             cell = my_lnext(be->args, prev);

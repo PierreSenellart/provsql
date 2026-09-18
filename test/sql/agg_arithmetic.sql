@@ -178,3 +178,50 @@ CREATE TABLE agg_arith_hv AS
 SELECT remove_provenance('agg_arith_hv');
 SELECT n, cities FROM agg_arith_hv;
 DROP TABLE agg_arith_hv;
+
+-- Functions and operators over aggregate results read their values: round
+-- and abs over arithmetic on a subquery's aggregate, an array aggregate
+-- compared to an array, a series between aggregates of a subquery, and a
+-- timestamp minus a subquery's min (a type agg_token has no cast to).
+-- Floating-point arithmetic stays as the query wrote it, and ProvSQL's own
+-- functions still receive the agg_token.
+CREATE TABLE agg_arith_fn AS
+  SELECT round(s * 100.0 / 3, 2) AS r, abs(-s * 1.0) AS a,
+         CAST(s AS real) / 3 AS f, expected(c) AS e
+  FROM (SELECT sum(id) AS s, count(*) AS c FROM personnel) t;
+SELECT remove_provenance('agg_arith_fn');
+SELECT r, a, f, e FROM agg_arith_fn;
+DROP TABLE agg_arith_fn;
+CREATE TABLE agg_arith_fn AS
+  SELECT array_agg(id ORDER BY id) = ARRAY[1,2,3,4,5,6,7] AS eq,
+         cardinality(array_agg(id)) AS n, CAST(count(*) AS real) / 3 AS f
+  FROM personnel;
+SELECT remove_provenance('agg_arith_fn');
+SELECT eq, n, f FROM agg_arith_fn;
+DROP TABLE agg_arith_fn;
+CREATE TABLE agg_arith_fn AS
+  SELECT g FROM (SELECT min(id) AS lo, max(id) AS hi FROM personnel) m,
+                generate_series(m.lo, m.hi, 3) g;
+SELECT remove_provenance('agg_arith_fn');
+SELECT g FROM agg_arith_fn ORDER BY g;
+DROP TABLE agg_arith_fn;
+CREATE TABLE agg_arith_ts(id int, t timestamp);
+INSERT INTO agg_arith_ts VALUES (1,'2020-01-01'),(2,'2020-01-03');
+SELECT add_provenance('agg_arith_ts');
+CREATE TABLE agg_arith_fn AS
+  SELECT id, t - m.first AS d
+  FROM agg_arith_ts, (SELECT min(t) AS first FROM agg_arith_ts) m;
+SELECT remove_provenance('agg_arith_fn');
+SELECT id, d FROM agg_arith_fn ORDER BY id;
+DROP TABLE agg_arith_fn, agg_arith_ts;
+
+-- A comparison in WHERE on a subquery's aggregate filters the rows an
+-- aggregation reads, not its groups (plain SQL: 1 city, Paris, with 3).
+CREATE TABLE agg_arith_fn AS
+  SELECT p.city, count(*) AS n
+  FROM personnel p JOIN (SELECT city, count(*) AS c FROM personnel
+                         GROUP BY city) t ON p.city = t.city
+  WHERE t.c >= 3 GROUP BY p.city;
+SELECT remove_provenance('agg_arith_fn');
+SELECT city, n FROM agg_arith_fn ORDER BY city;
+DROP TABLE agg_arith_fn;
