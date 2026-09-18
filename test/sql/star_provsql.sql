@@ -65,5 +65,23 @@ SELECT remove_provenance('star_r');
 SELECT a, j FROM star_r WHERE holds ORDER BY a;
 DROP TABLE star_r;
 
+-- Whole rows of a subquery and of a view over a tracked table: provsql,
+-- which the rewriting adds to the subquery, is not among the fields; an
+-- aggregate of the subquery is a value.
+CREATE VIEW star_w AS SELECT a, b FROM star_t;
+CREATE TABLE star_r AS
+  SELECT row_to_json(x)::text AS jx, row_to_json(w)::text AS jw
+  FROM (SELECT a, b FROM star_t) x JOIN star_w w ON w.a = x.a;
+SELECT remove_provenance('star_r');
+SELECT jx, jw FROM star_r ORDER BY jx;
+DROP TABLE star_r;
+CREATE TABLE star_r AS
+  SELECT row_to_json(g)::text AS j
+  FROM (SELECT a, count(*) AS n FROM star_t GROUP BY a) g;
+SELECT remove_provenance('star_r');
+SELECT j FROM star_r ORDER BY j;
+DROP TABLE star_r;
+DROP VIEW star_w;
+
 DROP VIEW star_v, star_v2, star_o, star_j;
 DROP TABLE star_t, star_u;

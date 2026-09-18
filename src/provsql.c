@@ -14769,6 +14769,12 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     cast_agg_token_args(((WindowFunc *)node)->args, ctx, InvalidOid);
     return node;
   }
+  if (IsA(node, RowExpr)) {
+    /* ROW(...) of a subquery's columns (a whole row read as a record): its
+     * fields are the values. */
+    cast_agg_token_args(((RowExpr *)node)->args, ctx, InvalidOid);
+    return node;
+  }
   if (IsA(node, CoalesceExpr)) {
     cast_agg_token_args(((CoalesceExpr *)node)->args, ctx,
                         ((CoalesceExpr *)node)->coalescetype);
@@ -17573,65 +17579,105 @@ static bool normalize_inner_joins_walker(Node *node, void *cx) {
 typedef struct wholerow_ctx {
   Query *q;                     ///< Query whose range table the Vars refer to
   const constants_t *constants; ///< Extension OID cache
+  bool outer_join;              ///< Whether @c q has an outer join
 } wholerow_ctx;
 
-/** @brief The whole-row Var @p n of a provenance-tracked relation of the
- *  range table of @p q, or @c NULL. */
-static Var *tracked_wholerow(Query *q, Node *n) {
+/** @brief Walker: an outer join in a join tree. */
+static bool has_outer_join_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, JoinExpr) && ((JoinExpr *)node)->jointype != JOIN_INNER)
+    return true;
+  if (IsA(node, JoinExpr) || IsA(node, FromExpr) || IsA(node, List))
+    return expression_tree_walker(node, has_outer_join_walker, data);
+  return false;
+}
+
+/** @brief The whole-row Var @p n of a provenance-tracked relation, or of a
+ *  subquery the rewriting tracks (a view, a derived table), of the range
+ *  table of the query of @p ctx, or @c NULL. */
+static Var *tracked_wholerow(wholerow_ctx *ctx, Node *n) {
   Var *v;
   RangeTblEntry *rte;
   if (n == NULL || !IsA(n, Var))
     return NULL;
   v = (Var *)n;
   if (v->varattno != 0 || v->varlevelsup != 0 || v->varno < 1 ||
-      v->varno > list_length(q->rtable))
+      v->varno > list_length(ctx->q->rtable))
     return NULL;
-  rte = rt_fetch(v->varno, q->rtable);
-  if (rte->rtekind != RTE_RELATION ||
-      get_attnum(rte->relid, PROVSQL_COLUMN_NAME) == InvalidAttrNumber)
-    return NULL;
-  return v;
+  rte = rt_fetch(v->varno, ctx->q->rtable);
+  if (rte->rtekind == RTE_RELATION)
+    return get_attnum(rte->relid, PROVSQL_COLUMN_NAME) != InvalidAttrNumber
+             ? v : NULL;
+  if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL &&
+      rte->subquery->commandType == CMD_SELECT &&
+      has_provenance(ctx->constants, rte->subquery))
+    return v;
+  return NULL;
 }
 
 /**
- * @brief The row of the columns of @p v's relation other than @c provsql,
- *        as an anonymous record; @c NULL where the whole row is (the
- *        null-padded side of an outer join).
+ * @brief The row of the columns of @p v's relation or subquery other than
+ *        @c provsql, as an anonymous record; @c NULL where the whole row is
+ *        (the null-padded side of an outer join).
+ *
+ * The columns of a subquery are those of its target list: the provenance
+ * column the rewriting will add to it is not among them.
  */
-static Node *row_without_provsql(Query *q, Var *v) {
-  RangeTblEntry *rte = rt_fetch(v->varno, q->rtable);
-  Relation rel = relation_open(rte->relid, AccessShareLock);
-  TupleDesc td = RelationGetDescr(rel);
+static Node *row_without_provsql(wholerow_ctx *ctx, Var *v) {
+  RangeTblEntry *rte = rt_fetch(v->varno, ctx->q->rtable);
   List *args = NIL, *names = NIL;
   Var *notnull_col = NULL;
   RowExpr *row = makeNode(RowExpr);
-  NullTest *nt = makeNode(NullTest);
-  CaseWhen *cw = makeNode(CaseWhen);
-  CaseExpr *ce = makeNode(CaseExpr);
-  int i;
+  NullTest *nt;
+  CaseWhen *cw;
+  CaseExpr *ce;
 
-  for (i = 0; i < td->natts; ++i) {
-    Form_pg_attribute att = TupleDescAttr(td, i);
-    Var *col;
-    if (att->attisdropped ||
-        strcmp(NameStr(att->attname), PROVSQL_COLUMN_NAME) == 0)
-      continue;
-    col = makeVar(v->varno, att->attnum, att->atttypid, att->atttypmod,
-                  att->attcollation, 0);
-    if (att->attnotnull && notnull_col == NULL)
-      notnull_col = col;
-    args = lappend(args, col);
-    names = lappend(names, makeString(pstrdup(NameStr(att->attname))));
+  if (rte->rtekind == RTE_RELATION) {
+    Relation rel = relation_open(rte->relid, AccessShareLock);
+    TupleDesc td = RelationGetDescr(rel);
+    int i;
+    for (i = 0; i < td->natts; ++i) {
+      Form_pg_attribute att = TupleDescAttr(td, i);
+      Var *col;
+      if (att->attisdropped ||
+          strcmp(NameStr(att->attname), PROVSQL_COLUMN_NAME) == 0)
+        continue;
+      col = makeVar(v->varno, att->attnum, att->atttypid, att->atttypmod,
+                    att->attcollation, 0);
+      if (att->attnotnull && notnull_col == NULL)
+        notnull_col = col;
+      args = lappend(args, col);
+      names = lappend(names, makeString(pstrdup(NameStr(att->attname))));
+    }
+    relation_close(rel, AccessShareLock);
+  } else {
+    ListCell *lc;
+    foreach (lc, rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (te->resjunk ||
+          (te->resname != NULL && strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0))
+        continue;
+      args = lappend(args, makeVar(v->varno, te->resno,
+                                   exprType((Node *)te->expr),
+                                   exprTypmod((Node *)te->expr),
+                                   exprCollation((Node *)te->expr), 0));
+      names = lappend(names, makeString(pstrdup(te->resname ? te->resname
+                                                            : "?column?")));
+    }
   }
   row->args = args;
   row->row_typeid = RECORDOID;
   row->row_format = COERCE_IMPLICIT_CAST;
   row->colnames = names;
   row->location = -1;
+  if (!ctx->outer_join)
+    return (Node *)row;
 
   /* A column declared NOT NULL is NULL only on the padding; without one,
-   * all the columns being NULL stands for it (a stored row with only NULLs
-   * then reads as NULL). */
+   * all the columns being NULL stands for it (a row with only NULLs then
+   * reads as NULL, in a query with an outer join). */
+  nt = makeNode(NullTest);
   if (notnull_col != NULL) {
     nt->arg = (Expr *)copyObject(notnull_col);
     nt->argisrow = false;
@@ -17641,16 +17687,16 @@ static Node *row_without_provsql(Query *q, Var *v) {
   }
   nt->nulltesttype = IS_NULL;
   nt->location = -1;
+  cw = makeNode(CaseWhen);
   cw->expr = (Expr *)nt;
   cw->result = (Expr *)makeNullConst(RECORDOID, -1, InvalidOid);
   cw->location = -1;
+  ce = makeNode(CaseExpr);
   ce->casetype = RECORDOID;
   ce->casecollid = InvalidOid;
   ce->args = list_make1(cw);
   ce->defresult = (Expr *)row;
   ce->location = -1;
-
-  relation_close(rel, AccessShareLock);
   return (Node *)ce;
 }
 
@@ -17705,9 +17751,9 @@ static Node *wholerow_mutator(Node *node, void *cx) {
     FuncExpr *fe = (FuncExpr *)node;
     i = 0;
     foreach (lc, fe->args) {
-      Var *v = tracked_wholerow(ctx->q, (Node *)lfirst(lc));
+      Var *v = tracked_wholerow(ctx, (Node *)lfirst(lc));
       if (v != NULL && param_takes_any_row(fe->funcid, i))
-        lfirst(lc) = row_without_provsql(ctx->q, v);
+        lfirst(lc) = row_without_provsql(ctx, v);
       ++i;
     }
   } else if (IsA(node, Aggref)) {
@@ -17715,9 +17761,9 @@ static Node *wholerow_mutator(Node *node, void *cx) {
     i = 0;
     foreach (lc, ar->args) {
       TargetEntry *te = (TargetEntry *)lfirst(lc);
-      Var *v = tracked_wholerow(ctx->q, (Node *)te->expr);
+      Var *v = tracked_wholerow(ctx, (Node *)te->expr);
       if (!te->resjunk && v != NULL && param_takes_any_row(ar->aggfnoid, i)) {
-        te->expr = (Expr *)row_without_provsql(ctx->q, v);
+        te->expr = (Expr *)row_without_provsql(ctx, v);
         if (i < list_length(ar->aggargtypes))
           lfirst_oid(list_nth_cell(ar->aggargtypes, i)) = RECORDOID;
       }
@@ -17725,9 +17771,9 @@ static Node *wholerow_mutator(Node *node, void *cx) {
     }
   } else if (IsA(node, CoerceViaIO)) {
     CoerceViaIO *io = (CoerceViaIO *)node;
-    Var *v = tracked_wholerow(ctx->q, (Node *)io->arg);
+    Var *v = tracked_wholerow(ctx, (Node *)io->arg);
     if (v != NULL)
-      io->arg = (Expr *)row_without_provsql(ctx->q, v);
+      io->arg = (Expr *)row_without_provsql(ctx, v);
   }
   return node;
 }
@@ -17750,8 +17796,11 @@ static Node *wholerow_mutator(Node *node, void *cx) {
  */
 static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
                                       bool top_level) {
-  wholerow_ctx ctx = {q, constants};
+  wholerow_ctx ctx = {q, constants, false};
   ListCell *lc;
+
+  ctx.outer_join = q->jointree != NULL &&
+                   has_outer_join_walker((Node *)q->jointree->fromlist, NULL);
 
   query_tree_mutator(q, wholerow_mutator, &ctx,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES |
@@ -17761,9 +17810,9 @@ static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
   if (top_level && provsql_in_ctas == 0 && provsql_executor_depth == 0)
     foreach (lc, q->targetList) {
       TargetEntry *te = (TargetEntry *)lfirst(lc);
-      Var *v = tracked_wholerow(q, (Node *)te->expr);
+      Var *v = tracked_wholerow(&ctx, (Node *)te->expr);
       if (!te->resjunk && v != NULL)
-        te->expr = (Expr *)row_without_provsql(q, v);
+        te->expr = (Expr *)row_without_provsql(&ctx, v);
     }
 }
 

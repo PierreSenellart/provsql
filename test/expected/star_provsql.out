@@ -64,3 +64,19 @@ a|j
 1|{"a":1,"c":5}
 2|
 (2 rows)
+remove_provenance
+
+(1 row)
+jx|jw
+{"a":1,"b":10}|{"a":1,"b":10}
+{"a":2,"b":20}|{"a":2,"b":20}
+(2 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+j
+{"a":1,"n":1}
+{"a":2,"n":1}
+(2 rows)
