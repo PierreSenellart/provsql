@@ -271,8 +271,11 @@ FROM (SELECT provsql.provenance_semimod(918273, gba_leaf(60)) AS a,
              provsql.provenance_semimod(918273, gba_leaf(61)) AS b) t;
 
 -- provenance_aggregate: the agg_token (gate and value, the value cut to what
--- an agg_token holds), and the gate: children, infos, text.
-SELECT label, c::uuid = r::uuid AS same_token,
+-- an agg_token holds), and the gate: children, infos, text.  The address now
+-- hashes the result type and the value too, so the token differs from the
+-- reference's; the reference is still run, on the new gate, to check that
+-- what it would write is what the C function wrote.
+SELECT label, c::uuid <> r::uuid AS token_differs,
        provsql.agg_token_out(c)::text = provsql.agg_token_out(r)::text AS same_value,
        provsql.get_gate_type(c::uuid) AS type,
        array_length(provsql.get_children(c::uuid), 1) AS children,
@@ -384,7 +387,7 @@ FROM (
 -- NULL children are rows whose value was NULL; the order of the others is
 -- kept; no child is gate_zero; the scalar flag and the aggregate function
 -- change the address, and the flag is the high bit of info2.
-SELECT label, c::uuid = r::uuid AS same_token, provsql.get_gate_type(c::uuid) AS type,
+SELECT label, provsql.get_gate_type(c::uuid) AS type,
        provsql.get_children(c::uuid) = kept AS children_as_given,
        (provsql.get_infos(c::uuid)).info2 AS info2
 FROM (
@@ -421,6 +424,41 @@ FROM (
 -- A NULL value gives a NULL agg_token, as it did.
 SELECT provsql.provenance_aggregate(2108, 23, NULL::int, ARRAY[gba_leaf(80), gba_leaf(81)]) IS NULL AS c_null,
        gba_ref.provenance_aggregate(2108, 23, NULL::int, ARRAY[gba_leaf(80), gba_leaf(81)]) IS NULL AS ref_null;
+
+-- Two aggregations that record different things over the same children are
+-- two gates.  With the former address they were one, and the second failed
+-- with "already records": array_agg (2335) over integers and over their
+-- texts has the same children (a value gate is addressed by its text) but
+-- result types int[] (1007) and text[] (1009); min over int[] and over
+-- text[] (2135) has different values ('{10}' < '{9}' as text[]).  A value
+-- NULL and a value '' differ too.
+SELECT label, count(DISTINCT a::uuid) AS gates,
+       array_agg((provsql.get_infos(a::uuid)).info2 ORDER BY (provsql.get_infos(a::uuid)).info2) AS types,
+       array_agg(provsql.get_extra(a::uuid) ORDER BY provsql.get_extra(a::uuid)) AS values
+FROM (
+  SELECT 'array_agg int / text' AS label,
+         provsql.provenance_aggregate(2335, 1007, ARRAY[1, 2], gba_leaves(90, 2)) AS a
+  UNION ALL
+  SELECT 'array_agg int / text',
+         provsql.provenance_aggregate(2335, 1009, ARRAY['1', '2'], gba_leaves(90, 2))
+  UNION ALL
+  SELECT 'min int[] / text[]',
+         provsql.provenance_aggregate(2135, 1007, ARRAY[9], gba_leaves(91, 2))
+  UNION ALL
+  SELECT 'min int[] / text[]',
+         provsql.provenance_aggregate(2135, 1009, ARRAY['10'], gba_leaves(91, 2))
+) t GROUP BY label ORDER BY label;
+SELECT provsql.provenance_aggregate(2108, 23, NULL::text, ARRAY[gba_leaf(93)]) IS NULL AS null_value_no_token,
+       provsql.provenance_aggregate(2108, 25, ''::text, ARRAY[gba_leaf(93)])::uuid
+         <> provsql.provenance_aggregate(2108, 25, ':'::text, ARRAY[gba_leaf(93)])::uuid AS empty_and_colon_differ;
+
+-- A gate is created together with what it records, without waiting for the
+-- worker's answer, since the address determines the infos and the text.  If
+-- something else was recorded at that address by hand, the first value stays
+-- (the worker logs it), and the query goes on.
+SELECT provsql.create_gate(public.uuid_generate_v5(provsql.uuid_ns_provsql(), 'valuegba by hand'), 'value');
+SELECT provsql.set_extra(public.uuid_generate_v5(provsql.uuid_ns_provsql(), 'valuegba by hand'), 'something else');
+SELECT provsql.get_extra((provsql.get_children(provsql.provenance_semimod('gba by hand'::text, gba_leaf(95))))[2]) AS first_value_stays;
 
 DROP FUNCTION gba_leaf(int); DROP FUNCTION gba_leaves(int, int); DROP FUNCTION gba_semimod(uuid, uuid);
 SET client_min_messages = warning;

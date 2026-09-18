@@ -466,11 +466,10 @@ static char *varchar_of_argument(FunctionCallInfo fcinfo, int argno) {
   }
 }
 
-/* The value gates this backend has written, extra included.  The same few
- * values come back row after row (the 1 of every count), and writing the
- * extra waits for the worker's answer; a gate of the store stays as it is
- * once written, so there is nothing to repeat.  Emptied when it grows large,
- * and by circuit_cleanup, which may remove gates. */
+/* The value gates this backend has written.  The same few values come back
+ * row after row (the 1 of every count), and a gate of the store stays as it
+ * is once written, so there is nothing to repeat.  Emptied when it grows
+ * large, and by circuit_cleanup, which may remove gates. */
 static HTAB *written_values = NULL;
 #define WRITTEN_VALUES_MAX 65536
 
@@ -510,8 +509,8 @@ static pg_uuid_t value_gate(const char *prefix, const char *suffix,
                                  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
   }
   if (hash_search(written_values, &token, HASH_FIND, NULL) == NULL) {
-    provsql_internal_create_gate(&token, gate_value, 0, NULL);
-    provsql_internal_set_extra(&token, extra);
+    provsql_internal_create_gate_with(&token, gate_value, 0, NULL,
+                                      false, 0, 0, extra);
     hash_search(written_values, &token, HASH_ENTER, &found);
   }
   return token;
@@ -582,12 +581,16 @@ PG_FUNCTION_INFO_V1(provenance_aggregate);
 /**
  * @brief The @c agg gate of a group, paired with the aggregate's value.
  *
- * The address hashes the aggregate function and the scalar flag along with
- * the children: @c SUM(x) and @c AVG(x) over the same children, or a scalar
- * and a grouped aggregate, record different infos and must be different
- * gates.  The flag is the high bit of info2, whose low 31 bits are the result
- * type.  NULL children are rows whose value was NULL; they are dropped.  No
- * child gives 𝟘.
+ * The address hashes everything the gate records: the aggregate function
+ * and the scalar flag (info1 and the high bit of info2), the children, then
+ * the result type (the low bits of info2) and the value text (the extra),
+ * after a colon each.  A gate's infos and text are written once, so what is
+ * written has to follow from the address: @c SUM(x) and @c AVG(x) over the
+ * same children, a scalar and a grouped aggregate, @c array_agg over
+ * integers and over their texts (same children, another result type), or a
+ * floating-point sum whose rounding depends on the plan, are all different
+ * gates.  NULL children are rows whose value was NULL; they are dropped.
+ * No child gives 𝟘.
  */
 Datum provenance_aggregate(PG_FUNCTION_ARGS) {
   int32 aggfnoid, aggtype;
@@ -619,13 +622,15 @@ Datum provenance_aggregate(PG_FUNCTION_ARGS) {
     name_add_uuid_array(&buf, tokens, n);
     if (is_scalar)
       appendStringInfoChar(&buf, 'S');
-    agg = name_end(&buf);
-    provsql_internal_create_gate(&agg, gate_agg, (unsigned)n, tokens);
-    provsql_internal_set_infos(&agg, (unsigned)aggfnoid,
-                               is_scalar ? ((unsigned)aggtype | 0x80000000u)
-                                         : (unsigned)aggtype);
+    appendStringInfo(&buf, ":%d", aggtype);
     if (val != NULL)
-      provsql_internal_set_extra(&agg, val);
+      appendStringInfo(&buf, ":%s", val);
+    agg = name_end(&buf);
+    provsql_internal_create_gate_with(&agg, gate_agg, (unsigned)n, tokens,
+                                      true, (unsigned)aggfnoid,
+                                      is_scalar ? ((unsigned)aggtype | 0x80000000u)
+                                                : (unsigned)aggtype,
+                                      val);
   }
 
   if (val == NULL)
@@ -733,8 +738,8 @@ Datum provenance_cmp(PG_FUNCTION_ARGS) {
   cmp = name_end(&buf);
   children[0] = *left;
   children[1] = *right;
-  provsql_internal_create_gate(&cmp, gate_cmp, 2, children);
-  provsql_internal_set_infos(&cmp, (unsigned)op, 0);
+  provsql_internal_create_gate_with(&cmp, gate_cmp, 2, children,
+                                    true, (unsigned)op, 0, NULL);
   return uuid_result(&cmp);
 }
 
@@ -762,9 +767,8 @@ Datum annotate(PG_FUNCTION_ARGS) {
   if (extra != NULL)
     appendStringInfoString(&buf, extra);
   annotated = name_end(&buf);
-  provsql_internal_create_gate(&annotated, gate_annotation, 1, token);
-  if (extra != NULL)
-    provsql_internal_set_extra(&annotated, extra);
+  provsql_internal_create_gate_with(&annotated, gate_annotation, 1, token,
+                                    false, 0, 0, extra);
   return uuid_result(&annotated);
 }
 

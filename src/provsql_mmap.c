@@ -69,6 +69,45 @@ void provsql_buffer_ensure(size_t need)
 char buffer[PIPE_BUF]={}; // flawfinder: ignore
 unsigned bufferpos=0;
 
+/* The worker's read buffer.  A message is a dozen fields, and a read() per
+   field made the worker slower than the backends that feed it: they then
+   wait on the full pipe.  The pipe holds 64 KiB, which is what one read()
+   can bring back. */
+#define WORKER_READ_BUFFER (64 * 1024)
+static char worker_buffer[WORKER_READ_BUFFER]; // flawfinder: ignore
+static size_t worker_buffer_pos = 0, worker_buffer_len = 0;
+
+bool provsql_worker_buffered(void)
+{
+  return worker_buffer_pos < worker_buffer_len;
+}
+
+bool provsql_worker_read(void *dst, size_t n)
+{
+  char *p = dst;
+
+  while(n > 0) {
+    size_t avail = worker_buffer_len - worker_buffer_pos;
+    if(avail > 0) {
+      size_t take = avail < n ? avail : n;
+      memcpy(p, worker_buffer + worker_buffer_pos, take);
+      worker_buffer_pos += take;
+      p += take;
+      n -= take;
+      continue;
+    }
+    {
+      ssize_t r = read(provsql_shared_state->pipebmr, worker_buffer, // flawfinder: ignore
+                       WORKER_READ_BUFFER);
+      if(r <= 0)
+        return false;
+      worker_buffer_pos = 0;
+      worker_buffer_len = (size_t) r;
+    }
+  }
+  return true;
+}
+
 bool provsql_read_all(int fd, void *dst, size_t n)
 {
   char *p = dst;
@@ -668,6 +707,79 @@ bool provsql_internal_get_prob_written(const pg_uuid_t *token, double *prob)
   if(prob)
     *prob = stored;
   return has != 0;
+}
+
+void provsql_internal_create_gate_with(const pg_uuid_t *token, gate_type type,
+                                       unsigned nb_children,
+                                       const pg_uuid_t *children,
+                                       bool has_infos, unsigned info1,
+                                       unsigned info2, const char *extra)
+{
+  char flag = has_infos ? 1 : 0;
+  unsigned len = extra != NULL ? (unsigned) strlen(extra) : 0;
+  size_t total = sizeof(char) + 2 * sizeof(Oid) + sizeof(pg_uuid_t)
+                 + sizeof(gate_type) + sizeof(unsigned)
+                 + nb_children * sizeof(pg_uuid_t)
+                 + sizeof(char) + 3 * sizeof(unsigned) + len;
+  char *msg = palloc(total);
+  char *p = msg;
+  unsigned i;
+
+  *p++ = 'G';
+  memcpy(p, &MyDatabaseId, sizeof(Oid)); p += sizeof(Oid);
+  memcpy(p, &MyDatabaseTableSpace, sizeof(Oid)); p += sizeof(Oid);
+  memcpy(p, token, sizeof(pg_uuid_t)); p += sizeof(pg_uuid_t);
+  memcpy(p, &type, sizeof(gate_type)); p += sizeof(gate_type);
+  memcpy(p, &nb_children, sizeof(unsigned)); p += sizeof(unsigned);
+  for(i=0; i<nb_children; ++i) {
+    memcpy(p, &children[i], sizeof(pg_uuid_t));
+    p += sizeof(pg_uuid_t);
+  }
+  *p++ = flag;
+  memcpy(p, &info1, sizeof(unsigned)); p += sizeof(unsigned);
+  memcpy(p, &info2, sizeof(unsigned)); p += sizeof(unsigned);
+  memcpy(p, &len, sizeof(unsigned)); p += sizeof(unsigned);
+  if(len > 0)
+    memcpy(p, extra, len);
+
+  circuit_cache_create_gate(*token, type, nb_children, children);
+  provsql_before_store_write(msg, total);
+
+  /* The message goes down the pipe as it is: in one write when it fits, so
+     that it is atomic and the shared lock is enough; in PIPE_BUF pieces
+     under the exclusive lock otherwise. */
+#ifdef PROVSQL_INPROCESS_STORE
+  provsql_shmem_lock_shared();
+  if(!provsql_inproc_send(msg, total)) {
+    provsql_shmem_unlock();
+    provsql_error("Cannot write to pipe (message type G)");
+  }
+  provsql_shmem_unlock();
+#else
+  if(total <= PIPE_BUF) {
+    provsql_shmem_lock_shared();
+    if(write(provsql_shared_state->pipebmw, msg, total) != (ssize_t) total) {
+      provsql_shmem_unlock();
+      provsql_error("Cannot write to pipe (message type G)");
+    }
+    provsql_shmem_unlock();
+  } else {
+    size_t left = total;
+    p = msg;
+    provsql_shmem_lock_exclusive();
+    while(left > 0) {
+      size_t chunk = left > PIPE_BUF ? PIPE_BUF : left;
+      if(write(provsql_shared_state->pipebmw, p, chunk) != (ssize_t) chunk) {
+        provsql_shmem_unlock();
+        provsql_error("Cannot write to pipe (message type G)");
+      }
+      p += chunk;
+      left -= chunk;
+    }
+    provsql_shmem_unlock();
+  }
+#endif
+  pfree(msg);
 }
 
 /** @brief Internal entry point behind set_infos(): worker IPC only. */

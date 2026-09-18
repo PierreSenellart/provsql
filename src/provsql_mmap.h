@@ -152,6 +152,22 @@ void provsql_internal_create_gate(const pg_uuid_t *token, gate_type type,
                                   const pg_uuid_t *children_data);
 
 /**
+ * @brief Create a gate together with its infos and its text, in one message
+ *        that is not answered.
+ *
+ * For the gates whose address determines what they record (a value gate and
+ * its text, an annotation, a comparison and its operator, an aggregate), so
+ * that the write-once rule has nothing to refuse and nobody needs to wait for
+ * its answer.  @p extra NULL records no text; @p has_infos false records no
+ * infos.
+ */
+void provsql_internal_create_gate_with(const pg_uuid_t *token, gate_type type,
+                                       unsigned nb_children,
+                                       const pg_uuid_t *children,
+                                       bool has_infos, unsigned info1,
+                                       unsigned info2, const char *extra);
+
+/**
  * @brief Outcome of a probability write, mirroring
  *        @c MMappedCircuit::SetProbResult across the IPC boundary.
  */
@@ -301,8 +317,18 @@ extern char buffer[PIPE_BUF];
 /** Current write position within @c buffer. */
 extern unsigned bufferpos;
 
+/**
+ * @brief The worker's buffered read of the request pipe: what the pipe
+ *        holds is read in one call, and the messages are parsed from the
+ *        buffer.  @c false on EOF or error.
+ */
+bool provsql_worker_read(void *dst, size_t n);
+/** @brief Whether the worker's read buffer holds unread bytes, which
+ *         @c poll() cannot see. */
+bool provsql_worker_buffered(void);
+
 /** @brief Read one value of @p type from the background-to-main pipe. */
-#define READM(var, type) (read(provsql_shared_state->pipebmr, &var, sizeof(type))==(ssize_t)sizeof(type)) // flawfinder: ignore
+#define READM(var, type) provsql_worker_read(&var, sizeof(type))
 /** @brief Read one value of @p type from the main-to-background pipe. */
 #define READB(var, type) (read(provsql_shared_state->pipembr, &var, sizeof(type))==(ssize_t)sizeof(type)) // flawfinder: ignore
 /** @brief Write one value of @p type to the main-to-background pipe. */
@@ -313,7 +339,7 @@ extern unsigned bufferpos;
 /** @brief Read exactly @p n bytes of a reply from the main-to-background pipe. */
 #define READB_BYTES(ptr, n) provsql_read_all(provsql_shared_state->pipembr, (ptr), (n)) // flawfinder: ignore
 /** @brief Read exactly @p n bytes of a request from the background-to-main pipe. */
-#define READM_BYTES(ptr, n) provsql_read_all(provsql_shared_state->pipebmr, (ptr), (n)) // flawfinder: ignore
+#define READM_BYTES(ptr, n) provsql_worker_read((ptr), (n))
 /** @brief Write @p n reply bytes to the main-to-background pipe. */
 #define WRITEB_BYTES(ptr, n) (write(provsql_shared_state->pipembw, (ptr), (n))!=-1)
 

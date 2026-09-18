@@ -41,7 +41,7 @@ ERROR:  ProvSQL: provenance_semimod: the provenance token must not be NULL
 different_semimod|same_value_gate
 t|t
 (1 row)
-label|same_token|same_value|type|children|info1|info2|extra|value_is_cut_extra
+label|token_differs|same_value|type|children|info1|info2|extra|value_is_cut_extra
 integer|t|t|agg|3|2108|23|918273|t
 bigint|t|t|agg|3|2108|23|9182736455463|t
 smallint|t|t|agg|3|2108|23|9182|t
@@ -68,10 +68,10 @@ text reading NULL|t|t|agg|3|2108|23|NULL|t
 empty text|t|t|agg|3|2108|23||t
 long text|t|t|agg|3|2108|23|gba long 918273 gba long 918273 gba long|t
 (25 rows)
-label|same_token|type|children_as_given|info2
-NULL children dropped|t|agg|t|23
-scalar|t|agg|t|-2147483625
-other aggregate function|t|agg|t|1700
+label|type|children_as_given|info2
+NULL children dropped|agg|t|23
+scalar|agg|t|-2147483625
+other aggregate function|agg|t|1700
 (3 rows)
 distinct_gates
 3
@@ -83,4 +83,20 @@ NULL children only|t|t
 (3 rows)
 c_null|ref_null
 t|t
+(1 row)
+label|gates|types|values
+array_agg int / text|2|{1007,1009}|{"{1,2}","{1,2}"}
+min int[] / text[]|2|{1007,1009}|{"{10}","{9}"}
+(2 rows)
+null_value_no_token|empty_and_colon_differ
+t|t
+(1 row)
+create_gate
+
+(1 row)
+set_extra
+
+(1 row)
+first_value_stays
+something else
 (1 row)

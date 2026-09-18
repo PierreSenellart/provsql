@@ -7008,7 +7008,11 @@ CREATE OR REPLACE FUNCTION provenance_delta
  *
  * Called internally by the query rewriter for GROUP BY queries.
  * Creates an agg gate linking all contributing tokens and records
- * the aggregate function OID and the computed scalar value.
+ * the aggregate function OID and the computed scalar value.  The gate's
+ * address hashes everything it records, result type and value included:
+ * what is recorded is written once, and two aggregations that differ only
+ * there (a polymorphic aggregate over two types with the same texts, a
+ * floating-point sum rounded differently by two plans) must be two gates.
  *
  * @param aggfnoid OID of the SQL aggregate function
  * @param aggtype OID of the aggregate result type

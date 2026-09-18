@@ -111,6 +111,26 @@ what lets it resolve the directory, through ``GetDatabasePath``, for a
 database that does not live in the default tablespace (it runs outside
 any transaction and so cannot read ``pg_database`` itself).
 
+Writes and reads follow one rule: a write is not answered, a read is.
+Creating a gate (``C``) sends and returns.  The gates whose infos or
+text follow from their address, which is the case of value gates, of
+annotations, of comparisons and of aggregates (the address of an
+``agg`` gate hashes its result type and its value), are created
+together with what they record by a single ``G`` message
+(:cfunc:`provsql_internal_create_gate_with`), for the same reason: the
+write-once rule can have nothing to refuse.  Should it refuse
+nonetheless, because something else was written at that address by
+hand, the first value stays and the worker logs a warning.  The
+``set_infos`` and ``set_extra`` messages (``I``, ``E``), which still
+wait for the worker's verdict, remain for the internal callers that
+have not moved to ``G`` yet.
+
+The worker reads the pipe through a buffer of one ``PIPE_BUF``-sized
+read at a time (:cfunc:`provsql_worker_read`), and parses messages from
+it; when the buffer holds unread bytes, the main loop serves them before
+polling the pipe again.  With a ``read()`` per field the worker was
+slower than the backends that fed it, and they waited on the full pipe.
+
 
 Shared Memory: ``provsql_shmem``
 --------------------------------

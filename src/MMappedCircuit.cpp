@@ -500,7 +500,7 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
 {
     MMappedCircuit *circuit = getCircuit(db_oid, db_tablespace);
 
-    if(c=='C' || c=='P' || c=='I' || c=='E')
+    if(c=='C' || c=='G' || c=='P' || c=='I' || c=='E')
       store_dirty = true;
 
     switch(c) {
@@ -519,6 +519,52 @@ extern "C" void provsql_mmap_dispatch(char c, Oid db_oid, Oid db_tablespace)
           provsql_error("Cannot read from pipe (message type C)");
 
       circuit->createGate(token, type, children);
+      break;
+    }
+
+    case 'G':
+    {
+      /* A gate with what it records, in one message that is not answered:
+         the sender's address determines the infos and the text, so the
+         write-once rule cannot refuse them.  If it does, someone wrote
+         something else at that address by hand (or hashes collided): the
+         first value stays, and the worker's log says so. */
+      pg_uuid_t token;
+      gate_type type;
+      unsigned nb_children, info1, info2, len;
+      char has_infos;
+
+      if(!READM(token, pg_uuid_t) || !READM(type, gate_type) || !READM(nb_children, unsigned))
+        provsql_error("Cannot read from pipe (message type G)");
+
+      std::vector<pg_uuid_t> children(nb_children);
+      for(unsigned i=0; i<nb_children; ++i)
+        if(!READM(children[i], pg_uuid_t))
+          provsql_error("Cannot read from pipe (message type G)");
+      if(!READM(has_infos, char) || !READM(info1, unsigned) || !READM(info2, unsigned)
+         || !READM(len, unsigned))
+        provsql_error("Cannot read from pipe (message type G)");
+      std::vector<char> data(len);
+      if(len > 0 && !READM_BYTES(data.data(), len))
+        provsql_error("Cannot read from pipe (message type G)");
+
+      circuit->createGate(token, type, children);
+      if(has_infos) {
+        std::pair<unsigned, unsigned> existing{0, 0};
+        if(circuit->setInfos(token, info1, info2, &existing)
+           == MMappedCircuit::SetAnnotationResult::AlreadySet)
+          provsql_warning("gate %s already records the annotation (%u, %u), not (%u, %u)",
+                          uuid2string(token).c_str(), existing.first, existing.second,
+                          info1, info2);
+      }
+      if(len > 0) {
+        std::string existing;
+        if(circuit->setExtra(token, std::string(data.data(), len), &existing)
+           == MMappedCircuit::SetAnnotationResult::AlreadySet)
+          provsql_warning("gate %s already records the annotation \"%s\", not \"%s\"",
+                          uuid2string(token).c_str(), existing.c_str(),
+                          std::string(data.data(), len).c_str());
+      }
       break;
     }
 
@@ -829,17 +875,21 @@ void provsql_mmap_main_loop()
 
     /* Wait indefinitely while there is nothing to force out; once a write
        has landed, wake up after the flush interval and force it, so an
-       idle store is never more than that far behind the disk. */
-    int r = poll(&pfd, 1,
-                 store_dirty ? PROVSQL_STORE_FLUSH_INTERVAL_MS : -1);
-    if(r < 0) {
-      if(errno == EINTR)
+       idle store is never more than that far behind the disk.  Bytes
+       already read into the buffer are served first: poll() does not see
+       them. */
+    if(!provsql_worker_buffered()) {
+      int r = poll(&pfd, 1,
+                   store_dirty ? PROVSQL_STORE_FLUSH_INTERVAL_MS : -1);
+      if(r < 0) {
+        if(errno == EINTR)
+          continue;
+        break;
+      }
+      if(r == 0) {
+        provsql_store_flush();
         continue;
-      break;
-    }
-    if(r == 0) {
-      provsql_store_flush();
-      continue;
+      }
     }
 
     if(!READM(c, char))
