@@ -428,6 +428,11 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   /* Optional: absent from schemas older than 1.13.0. */
   constants.OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE =
     get_provsql_func_oid("provenance_semimod_nullable");
+  /* Optional: absent from schemas older than 1.13.0. */
+  constants.OID_FUNCTION_ROW_NUMBER_AS_RANK =
+    get_provsql_func_oid("row_number_as_rank");
+  constants.OID_FUNCTION_WINDOW_DISTINCT_TOKENS =
+    get_provsql_func_oid("window_distinct_tokens");
 
   constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
   CheckOid(OID_FUNCTION_GATE_ZERO);

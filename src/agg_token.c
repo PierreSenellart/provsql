@@ -18,6 +18,7 @@
 #include "utils/uuid.h"
 #include "utils/numeric.h"
 #include "utils/fmgrprotos.h"
+#include "access/xact.h"
 #include "executor/spi.h"
 #include "access/htup_details.h"
 
@@ -282,4 +283,34 @@ agg_token_to_text(PG_FUNCTION_ARGS)
   memcpy(VARDATA(txt_result), aggtok->val, len);
 
   PG_RETURN_TEXT_P(txt_result);
+}
+
+PG_FUNCTION_INFO_V1(row_number_as_rank);
+/**
+ * @brief The @c agg_token of @c rank() standing for @c row_number().
+ *
+ * The two are equal when the @c ORDER @c BY of the window leaves no ties;
+ * with ties, SQL itself does not determine which row gets which number.
+ * The rank is what is tracked: when @p row_number differs from it, a warning
+ * says so, once per statement.
+ *
+ * @param rank        The @c agg_token of the rank of the row.
+ * @param row_number  The row number PostgreSQL gave the row.
+ * @return @p rank.
+ */
+Datum
+row_number_as_rank(PG_FUNCTION_ARGS)
+{
+  static TimestampTz warned = 0;
+  agg_token *rank = (agg_token *) PG_GETARG_POINTER(0);
+  int64 row_number = PG_GETARG_INT64(1);
+
+  if (!agg_token_val_is_null(rank) &&
+      strtoll(rank->val, NULL, 10) != row_number &&
+      warned != GetCurrentStatementStartTimestamp()) {
+    warned = GetCurrentStatementStartTimestamp();
+    provsql_warning("row_number() is tracked as rank(), which it differs "
+                    "from when rows tie on the ORDER BY of its window");
+  }
+  PG_RETURN_POINTER(rank);
 }

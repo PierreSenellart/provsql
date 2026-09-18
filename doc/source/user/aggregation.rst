@@ -309,10 +309,31 @@ with ``ORDER BY``, the rows up to the current one and its peers),
 clause. A frame that excludes the current row may be empty while the
 row exists: a ``count`` is then 0, the other aggregates ``NULL``.
 
+The ranking functions ``rank``, ``dense_rank`` and ``row_number`` are
+tracked too (on PostgreSQL 11 and later): the rank of a row is one plus
+the number of present rows strictly before it, its dense rank one plus
+the number of distinct ordering values of these rows. Selecting the
+first rows of each partition then gives each row the probability of
+being among them:
+
+.. code-block:: postgresql
+
+    SELECT name, dept, probability_evaluate(provenance())
+    FROM (SELECT name, dept,
+                 rank() OVER (PARTITION BY dept ORDER BY salary DESC) AS rk
+          FROM employees) t
+    WHERE rk <= 3;
+
+For probabilities, such a comparison of a rank with a constant is
+evaluated without enumerating possible worlds, as a
+``HAVING count(*) <= k`` is. ``row_number`` is tracked as ``rank``,
+which it equals when the ``ORDER BY`` of the window leaves no ties;
+with ties, which SQL itself does not order, the value shown and tracked
+is the rank, and a ``WARNING`` says so.
+
 The other window functions still run, with a ``WARNING``: each row
 keeps the provenance of its input row, and the value is an opaque
-scalar. These are the ranking functions (``row_number``, ``rank``,
-``dense_rank``, ``ntile``, ``percent_rank``, ``cume_dist``), the offset
+scalar. These are ``ntile``, ``percent_rank``, ``cume_dist``, the offset
 functions (``lag``, ``lead``, ``first_value``, ``last_value``,
 ``nth_value``), ``ROWS`` and ``GROUPS`` frames with an offset, and
 windows over the aggregates of a ``GROUP BY`` or over aggregate columns

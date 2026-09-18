@@ -7534,6 +7534,62 @@ static Expr *make_window_aggregation_expression(const constants_t *constants,
   return (Expr *)result;
 }
 
+/**
+ * @brief The number of rows strictly before the current one, as the
+ *        aggregate @c count(*) over a window, or @c NULL on PostgreSQL < 11.
+ *
+ * The rank of a row is one plus the number of rows strictly before it, the
+ * rows of the frame @c RANGE @c BETWEEN @c UNBOUNDED @c PRECEDING @c AND
+ * @c CURRENT @c ROW @c EXCLUDE @c GROUP.  That window, a copy of the one of
+ * @p wf with this frame, is appended to @p q.  The frame excludes the current
+ * row, so it may be empty (a count of 0, the scalar convention), and the
+ * count does not depend on the presence of the row, whose token multiplies
+ * the comparisons on it: the comparison evaluators see independent
+ * contributors, and fold the @c + @c 1 into their threshold.
+ */
+static WindowFunc *make_rank_window(Query *q, WindowFunc *wf) {
+#ifdef FRAMEOPTION_EXCLUDE_GROUP
+  WindowClause *wc = window_clause_of(q, wf->winref);
+  WindowClause *frame;
+  WindowFunc *count;
+  Index winref = 0;
+  ListCell *lc;
+
+  if (wc == NULL)
+    return NULL;
+  foreach (lc, q->windowClause)
+    winref = Max(winref, ((WindowClause *)lfirst(lc))->winref);
+
+  frame = (WindowClause *)copyObject(wc);
+  frame->name = NULL;
+  frame->refname = NULL;
+  frame->frameOptions = FRAMEOPTION_NONDEFAULT | FRAMEOPTION_RANGE |
+                        FRAMEOPTION_BETWEEN |
+                        FRAMEOPTION_START_UNBOUNDED_PRECEDING |
+                        FRAMEOPTION_END_CURRENT_ROW | FRAMEOPTION_EXCLUDE_GROUP;
+  frame->startOffset = NULL;
+  frame->endOffset = NULL;
+  frame->winref = winref + 1;
+  q->windowClause = lappend(q->windowClause, frame);
+
+  count = makeNode(WindowFunc);
+  count->winfnoid = F_COUNT_;
+  count->wintype = INT8OID;
+  count->wincollid = InvalidOid;
+  count->inputcollid = InvalidOid;
+  count->args = NIL;
+  count->winref = frame->winref;
+  count->winstar = true;
+  count->winagg = true;
+  count->location = wf->location;
+  return count;
+#else
+  (void)q;
+  (void)wf;
+  return NULL;
+#endif
+}
+
 /** @brief Context for @c window_aggregation_mutator. */
 typedef struct window_aggregation_context {
   const constants_t *constants; ///< Extension OID cache
@@ -7542,15 +7598,152 @@ typedef struct window_aggregation_context {
   bool untracked;               ///< A window function was left untracked
 } window_aggregation_context;
 
+/**
+ * @brief The provenance expression of the rank of a row in the window of
+ *        @p wf, 1 + the number of rows strictly before it, or @c NULL.
+ */
+static Expr *make_rank_expression(window_aggregation_context *c,
+                                  WindowFunc *wf) {
+  WindowFunc *before = make_rank_window(c->q, wf);
+  Expr *count;
+
+  if (before == NULL)
+    return NULL;
+  count = make_window_aggregation_expression(c->constants, c->q, before,
+                                             c->prov_atts);
+  if (count == NULL)
+    return NULL;
+  return (Expr *)build_binop(
+    "+", (Node *)count,
+    (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                      Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+}
+
+/**
+ * @brief The provenance expression of the dense rank of a row in the window
+ *        of @p wf, 1 + the number of distinct ordering values strictly
+ *        before it, or @c NULL.
+ *
+ * An ordering value is present in a world when one of its rows is: the
+ * @c COUNT gate reads, for each distinct value of the rows strictly before,
+ * the ⊕ of their tokens, which @c window_distinct_tokens builds from the
+ * values and the tokens of that frame (window aggregates have no
+ * @c DISTINCT).  The ordering values are those of the @c ORDER @c BY of the
+ * window, as a row value, so that several keys make one value.
+ */
+static Expr *make_dense_rank_expression(window_aggregation_context *c,
+                                        WindowFunc *wf) {
+  const constants_t *constants = c->constants;
+  WindowClause *wc = window_clause_of(c->q, wf->winref);
+  WindowFunc *before, *vals, *tokens;
+  RowExpr *key;
+  FuncExpr *distinct, *agg;
+  List *names = NIL;
+  ListCell *lc;
+  int i = 0;
+
+  if (!OidIsValid(constants->OID_FUNCTION_WINDOW_DISTINCT_TOKENS) ||
+      wc == NULL)
+    return NULL;
+  if (wc->orderClause == NIL)       /* all rows are peers: rank 1 */
+    return make_rank_expression(c, wf);
+  before = make_rank_window(c->q, wf);
+  if (before == NULL)
+    return NULL;
+
+  key = makeNode(RowExpr);
+  foreach (lc, wc->orderClause) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    ListCell *lc_te;
+    foreach (lc_te, c->q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc_te);
+      if (te->ressortgroupref == sgc->tleSortGroupRef) {
+        key->args = lappend(key->args, copyObject(te->expr));
+        names = lappend(names, makeString(psprintf("f%d", ++i)));
+        break;
+      }
+    }
+  }
+  key->row_typeid = RECORDOID;
+  key->row_format = COERCE_IMPLICIT_CAST;
+  key->colnames = names;
+  key->location = -1;
+
+  vals = makeNode(WindowFunc);
+  vals->winfnoid = F_ARRAY_AGG_ANYNONARRAY;
+  vals->wintype = RECORDARRAYOID;
+  vals->args = list_make1(key);
+  vals->winref = before->winref;
+  vals->winagg = true;
+  vals->location = -1;
+
+  tokens = makeNode(WindowFunc);
+  tokens->winfnoid = constants->OID_FUNCTION_ARRAY_AGG;
+  tokens->wintype = constants->OID_TYPE_UUID_ARRAY;
+  tokens->args = list_make1(
+    make_row_token(constants, (List *)copyObject(c->prov_atts), SR_TIMES));
+  tokens->winref = before->winref;
+  tokens->winagg = true;
+  tokens->location = -1;
+
+  distinct = makeNode(FuncExpr);
+  distinct->funcid = constants->OID_FUNCTION_WINDOW_DISTINCT_TOKENS;
+  distinct->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
+  distinct->args = list_make2(vals, tokens);
+  distinct->location = -1;
+
+  /* The value of the count is the dense rank minus one; the frame may be
+   * empty (scalar convention). */
+  agg = makeNode(FuncExpr);
+  agg->funcid = constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
+  agg->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
+  agg->args = list_make5(
+    makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+              Int32GetDatum(F_COUNT_), false, true),
+    makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+              Int32GetDatum(INT8OID), false, true),
+    build_binop("-", (Node *)wf,
+                (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                                  Int64GetDatum(1), false, FLOAT8PASSBYVAL)),
+    distinct,
+    makeConst(BOOLOID, -1, InvalidOid, sizeof(bool), BoolGetDatum(true),
+              false, true));
+  agg->location = -1;
+
+  return (Expr *)build_binop(
+    "+", (Node *)agg,
+    (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                      Int64GetDatum(1), false, FLOAT8PASSBYVAL));
+}
+
 static Node *window_aggregation_mutator(Node *node, void *ctx) {
   window_aggregation_context *c = (window_aggregation_context *)ctx;
 
   if (node == NULL)
     return NULL;
   if (IsA(node, WindowFunc)) {
-    Expr *e = make_window_aggregation_expression(c->constants, c->q,
-                                                 (WindowFunc *)node,
-                                                 c->prov_atts);
+    WindowFunc *wf = (WindowFunc *)node;
+    Expr *e;
+
+    if (wf->winfnoid == F_RANK_)
+      e = make_rank_expression(c, wf);
+    else if (wf->winfnoid == F_DENSE_RANK_)
+      e = make_dense_rank_expression(c, wf);
+    else if (wf->winfnoid == F_ROW_NUMBER &&
+             OidIsValid(c->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK)) {
+      /* row_number() is its rank when the ORDER BY leaves no ties */
+      e = make_rank_expression(c, wf);
+      if (e != NULL) {
+        FuncExpr *check = makeNode(FuncExpr);
+        check->funcid = c->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK;
+        check->funcresulttype = c->constants->OID_TYPE_AGG_TOKEN;
+        check->args = list_make2(e, wf);
+        check->location = -1;
+        e = (Expr *)check;
+      }
+    } else
+      e = make_window_aggregation_expression(c->constants, c->q, wf,
+                                             c->prov_atts);
     if (e == NULL) {
       c->untracked = true;
       return node;

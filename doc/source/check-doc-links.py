@@ -122,6 +122,9 @@ INTERNAL_FUNCTIONS = {
     'planted_scope', 'plant_canonical',
     # C backend of nonzero's default mode; users call nonzero()/present()
     'true_nonzero',
+    # Window ranks: built by the rewriter for rank() / dense_rank() /
+    # row_number() over tracked relations, never called by users.
+    'row_number_as_rank', 'window_distinct_tokens',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',

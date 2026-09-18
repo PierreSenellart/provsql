@@ -2211,6 +2211,25 @@ DROP FUNCTION IF EXISTS set_infos(uuid, int, int);
 DROP FUNCTION IF EXISTS set_extra(uuid, text);
 
 -- ----------------------------------------------------------------------
+-- 6g. rank(), row_number() and dense_rank() over provenance-tracked
+--     relations: row_number() is tracked as rank(),
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
+  RETURNS agg_token
+  AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
+
+-- and dense_rank() counts the distinct values before the row.
+
+CREATE OR REPLACE FUNCTION window_distinct_tokens(vals anyarray, tokens uuid[])
+  RETURNS uuid[] AS
+$$
+  SELECT array_agg(s ORDER BY s)
+  FROM (SELECT provsql.provenance_semimod(1, provsql.provenance_plus(array_agg(tokens[i]))) AS s
+        FROM generate_subscripts(vals, 1) AS i GROUP BY vals[i]) g
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

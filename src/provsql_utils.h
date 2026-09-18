@@ -230,6 +230,13 @@ typedef struct constants_t {
    *  aggregates that see their NULL inputs (@c array_agg, ...); @c InvalidOid
    *  on a schema that predates it. */
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD_NULLABLE;
+  /** @brief OID of @c row_number_as_rank, which @c row_number() over tracked
+   *  relations is rewritten into; @c InvalidOid on a schema that predates
+   *  it. */
+  Oid OID_FUNCTION_ROW_NUMBER_AS_RANK;
+  /** @brief OID of @c window_distinct_tokens, used for @c dense_rank();
+   *  @c InvalidOid on a schema that predates it. */
+  Oid OID_FUNCTION_WINDOW_DISTINCT_TOKENS;
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
   Oid OID_FUNCTION_GATE_ONE; ///< OID of the provenance_one FUNCTION
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION

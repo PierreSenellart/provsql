@@ -2738,6 +2738,44 @@ $$
   END;
 $$ LANGUAGE sql STABLE STRICT PARALLEL SAFE;
 
+/**
+ * @brief The rank of a row standing for its row number (internal)
+ *
+ * Called by the query rewriter for <tt>row_number() OVER (…)</tt> over
+ * provenance-tracked relations, which is tracked as <tt>rank()</tt>: the two
+ * are equal when the <tt>ORDER BY</tt> of the window leaves no ties.  Returns
+ * @p rank, with a warning, once per statement, when @p row_number differs
+ * from it.
+ *
+ * @param rank the agg_token of the rank of the row
+ * @param row_number the row number PostgreSQL gave the row
+ */
+CREATE OR REPLACE FUNCTION row_number_as_rank(rank agg_token, row_number bigint)
+  RETURNS agg_token
+  AS 'provsql','row_number_as_rank' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
+
+/**
+ * @brief The contributions of the distinct values of a window frame
+ *        (internal)
+ *
+ * Called by the query rewriter for <tt>dense_rank() OVER (…)</tt> over
+ * provenance-tracked relations, which counts the distinct ordering values
+ * before the current row: one <tt>provenance_semimod(1, ⊕ tokens)</tt> per
+ * distinct value of @p vals, the ⊕ of the tokens of the rows that have it,
+ * which is present when one of them is.  Values are compared with the
+ * equality of their type, as the peers of a window are, NULLs being equal.
+ *
+ * @param vals the ordering values of the rows of the frame
+ * @param tokens the provenance tokens of these rows, in the same order
+ */
+CREATE OR REPLACE FUNCTION window_distinct_tokens(vals anyarray, tokens uuid[])
+  RETURNS uuid[] AS
+$$
+  SELECT array_agg(s ORDER BY s)
+  FROM (SELECT provsql.provenance_semimod(1, provsql.provenance_plus(array_agg(tokens[i]))) AS s
+        FROM generate_subscripts(vals, 1) AS i GROUP BY vals[i]) g
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
 /** @brief Cast an agg_token to numeric (extracts the aggregate value, loses provenance) */
 CREATE OR REPLACE FUNCTION agg_token_to_numeric(agg_token)
   RETURNS numeric

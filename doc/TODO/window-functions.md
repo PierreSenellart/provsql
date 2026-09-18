@@ -5,15 +5,15 @@ Design note for provenance support of SQL window functions
 
 ## Status today
 
-Tier 1 is implemented, together with the running aggregates of tier 2: an
-aggregate used as a window function over a frame determined by values becomes
-an `agg_token` over the rows of the frame (`replace_window_aggregations`, test
+Tiers 1 and 2 are implemented: an aggregate used as a window function over a
+frame determined by values, and `rank()`, `dense_rank()`, `row_number()`, become
+`agg_token`s over the rows of their frames (`replace_window_aggregations`, test
 `window_aggregates`, user documentation in `user/aggregation.rst`).
 
 Any other window function runs as before, with a warning: each output row
 carries the provenance of its input row, and the windowed value is an opaque
-scalar. That is right for the row, and says nothing of the value: `rank()` is a
-plain number, although which rows it counts depends on which rows are present.
+scalar. That is right for the row, and says nothing of the value: `lag(x)` is a
+plain value, although which row it reads depends on which rows are present.
 
 ## Why it matters
 
@@ -147,7 +147,7 @@ rather than 𝟘, which also fixed `HAVING count(*) < 1` over no row (it failed 
 `cast_agg_token_mutator` now casts the arguments of a `WindowFunc`, and they
 stay untracked.
 
-### Tier 2: ranks and running aggregates
+### Tier 2: ranks and running aggregates (done)
 
 - `sum`, `count`, `min`, `max`, `avg` with `ORDER BY` and the default frame, or an
   explicit value-based frame: the lowering of tier 1 applies unchanged, since
@@ -157,14 +157,25 @@ stay untracked.
 - `rank()`: `1 + count(*) OVER (PARTITION BY … ORDER BY … RANGE BETWEEN UNBOUNDED
   PRECEDING AND CURRENT ROW EXCLUDE GROUP)`, lowered as above with the scalar
   convention, the `+ 1` being arithmetic on an `agg_token` (an `arith` gate).
+  Done (`make_rank_window`, `make_rank_expression`); PostgreSQL 11 and later,
+  for `EXCLUDE`. Counting the current row instead (`EXCLUDE TIES`, no `+ 1`)
+  was tried and dropped: the count then reads the row's own token, which also
+  multiplies the comparison, and the correlation sent the comparison to
+  knowledge compilation (minutes for 50 rows).
 - `row_number()`: equal to `rank()` when the ordering is total on the partition,
   which can be checked on the instance (a sub-instance of a totally ordered
   instance is totally ordered). With ties its value is unspecified by SQL
-  itself: it is then read as `rank()`, with a warning.
+  itself: it is then read as `rank()`, with a warning. Done: the rank is
+  wrapped in `row_number_as_rank`, which warns once per statement when
+  PostgreSQL's row number differs from it.
 - `dense_rank()`: needs the number of distinct ordering values before the
   current row. PostgreSQL has no `DISTINCT` in window aggregates, so this goes
   through a subquery that merges peers first (one token per ordering value, the
-  ⊕ of its rows), as `AGG(DISTINCT)` does.
+  ⊕ of its rows), as `AGG(DISTINCT)` does. Done without the subquery: two
+  `array_agg` over the frame of the rows strictly before collect the ordering
+  values (a row value, for several keys) and the tokens, and
+  `window_distinct_tokens` groups them into one `semimod(1, ⊕ tokens)` per
+  value, under a scalar `COUNT` gate (`make_dense_rank_expression`).
 
 **The top-k idiom.** A rank compared with a constant in an enclosing query,
 
@@ -174,8 +185,11 @@ WHERE rk <= 3
 ```
 
 is a selection on an aggregate column of a subquery, which
-`migrate_probabilistic_quals` already routes to a comparison gate, and
-`normalize_agg_comparison` folds the `+ 1` into the threshold. The row's
+`migrate_probabilistic_quals` already routes to a comparison gate. The `+ 1` is
+not folded by `normalize_agg_comparison`, which only sees the subquery's
+column; the comparison evaluators fold it (`matchAggCmp` peels constant
+arithmetic off the aggregate), and a top-3 over 300 rows takes half a second.
+The row's
 annotation becomes α ⊗ ⟦count of present rows before it < 3⟧, a `COUNT`
 comparison: the existing evaluators (the Poisson-binomial pre-pass for
 probabilities) apply. This is also the exact annotation of a `LIMIT k` inside a

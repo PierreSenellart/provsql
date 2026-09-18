@@ -44,6 +44,9 @@ share of the partition|t|{0.078000000,0.360000000,0.560000000,0.400000000,0.6000
 q|exact|probabilities
 rest of the partition|t|{0.182000000,0.410000000,0.490000000,0.340000000,0.000000000,0.000000000}
 (1 row)
+q|exact|probabilities
+constant added|t|{0.090000000,0.306000000,0.490000000,0.220000000,0.600000000,0.900000000}
+(1 row)
 remove_provenance
 
 (1 row)
@@ -95,13 +98,13 @@ WARNING:  ProvSQL: window function not supported; provenance is tracked per inpu
 remove_provenance
 
 (1 row)
-id|rk|rn|prev|last2
-1|1|1||10
-2|2|2|10|30
-3|2|3|20|40
-4|4|4|20|50
-5|1|1||5
-6|2|2|5|12
+id|prev|half|pr|last2
+1||1|0|10
+2|10|1|0.3333333333333333|30
+3|20|2|0.3333333333333333|40
+4|20|2|1|50
+5||1|0|5
+6|5|2|1|12
 (6 rows)
 WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
@@ -133,6 +136,74 @@ RANGE with an offset|t|{0.000000000,0.380000000,0.420000000,0.340000000,0.000000
 (1 row)
 q|exact|probabilities
 RANGE before the row|t|{0.000000000,0.100000000,0.140000000,0.340000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+rank|t|{0.200000000,0.500000000,0.700000000,0.220000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+rank, first|t|{0.018000000,0.300000000,0.420000000,0.400000000,0.004320000,0.064800000}
+(1 row)
+q|exact|probabilities
+rank, beyond|t|{0.000000000,0.000000000,0.000000000,0.180000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+rank, subtracted|t|{0.092000000,0.188000000,0.263200000,0.028960000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+dense_rank|t|{0.200000000,0.500000000,0.700000000,0.332000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+dense_rank, equal|t|{0.000000000,0.000000000,0.000000000,0.068000000,0.000000000,0.000000000}
+(1 row)
+q|exact|probabilities
+dense_rank, two keys|t|{0.000000000,0.000000000,0.000000000,0.000000000,0.040800000,0.269640000}
+(1 row)
+q|exact|probabilities
+dense_rank, no ORDER BY|t|{0.200000000,0.500000000,0.700000000,0.400000000,0.600000000,0.900000000}
+(1 row)
+q|exact|probabilities
+row_number, total order|t|{0.200000000,0.500000000,0.630000000,0.220000000,0.600000000,0.900000000}
+(1 row)
+remove_provenance
+
+(1 row)
+id|rk|drk|rn
+1|1 (*)|3 (*)|1 (*)
+2|2 (*)|2 (*)|2 (*)
+3|2 (*)|2 (*)|3 (*)
+4|4 (*)|1 (*)|4 (*)
+5|1 (*)|5 (*)|1 (*)
+6|2 (*)|4 (*)|2 (*)
+(6 rows)
+id|rk|drk|rn
+1|1|3|1
+2|2|2|2
+3|2|2|3
+4|4|1|4
+5|1|5|1
+6|2|4|2
+(6 rows)
+WARNING:  ProvSQL: row_number() is tracked as rank(), which it differs from when rows tie on the ORDER BY of its window
+remove_provenance
+
+(1 row)
+id|rn
+1|1 (*)
+2|2 (*)
+3|2 (*)
+4|4 (*)
+5|1 (*)
+6|2 (*)
+(6 rows)
+add_provenance
+
+(1 row)
+NOTICE:  ProvSQL: gate_cmp expression was shortcut by probability-side pre-pass (1 Poisson-binomial): provenance circuit reduced from 55 to 3 gates
+remove_provenance
+
+(1 row)
+id|p
+7|0.000007894274
 (1 row)
 WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
 remove_provenance

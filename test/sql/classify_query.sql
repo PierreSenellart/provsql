@@ -203,7 +203,7 @@ SELECT label, c FROM cq_r17 ORDER BY label;
 
 -- (18) Window function in the target list.
 CREATE TEMP TABLE cq_r18 AS
-  SELECT id, row_number() OVER (ORDER BY id) AS rn FROM cq_tid;
+  SELECT id, ntile(2) OVER (ORDER BY id) AS rn FROM cq_tid;
 SELECT remove_provenance('cq_r18');
 SELECT id, rn FROM cq_r18 ORDER BY id;
 

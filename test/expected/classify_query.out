@@ -184,8 +184,8 @@ remove_provenance
 NOTICE:  ProvSQL: query result is TID (no provenance-tracked sources)
 id|rn
 1|1
-2|2
-3|3
+2|1
+3|2
 (3 rows)
 NOTICE:  ProvSQL: query result is OPAQUE
 remove_provenance

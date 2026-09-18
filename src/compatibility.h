@@ -170,6 +170,14 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_ARRAY_AGG_ANYNONARRAY 2335
 #endif
 
+#ifndef F_RANK_
+/** @brief OIDs of the ranking window functions (pre-PG 14, where
+ * @c fmgroids.h names them after their C symbols, @c F_WINDOW_RANK...). */
+#define F_ROW_NUMBER 3100
+#define F_RANK_ 3101
+#define F_DENSE_RANK_ 3102
+#endif
+
 #if PG_VERSION_NUM < 110000
 /** @brief Window frame bounds given by an offset (pre-PG 11).  PostgreSQL 11
  * renamed the @c FRAMEOPTION_*_VALUE_* flags @c FRAMEOPTION_*_OFFSET_*, when

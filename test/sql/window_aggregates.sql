@@ -79,6 +79,8 @@ SELECT * FROM wa_report('share of the partition',
   'x * 100 / sum(x) OVER (PARTITION BY g)', 'v > 30');
 SELECT * FROM wa_report('rest of the partition',
   'sum(x) OVER (PARTITION BY g) - x', 'v >= 20');
+SELECT * FROM wa_report('constant added',
+  'count(*) OVER (PARTITION BY g) + 1', 'v < 4');
 
 -- The displayed values are those of the query over the untracked copy.
 CREATE TABLE wa_shown AS
@@ -125,13 +127,13 @@ SELECT remove_provenance('wa_sorted');
 SELECT * FROM wa_sorted;
 
 -- Not tracked, with a warning: each row keeps its token, the value is an
--- opaque scalar.  Ranking and offset functions, positional frames, and
+-- opaque scalar.  Offset and distribution functions, positional frames, and
 -- windows over the groups of an aggregation.
 CREATE TABLE wa_untracked AS
   SELECT id,
-         rank() OVER (PARTITION BY g ORDER BY x) AS rk,
-         row_number() OVER (PARTITION BY g ORDER BY x, id) AS rn,
          lag(x) OVER (PARTITION BY g ORDER BY x, id) AS prev,
+         ntile(2) OVER (PARTITION BY g ORDER BY x, id) AS half,
+         percent_rank() OVER (PARTITION BY g ORDER BY x) AS pr,
          sum(x) OVER (PARTITION BY g ORDER BY x, id ROWS 1 PRECEDING) AS last2
   FROM wa;
 SELECT remove_provenance('wa_untracked');
@@ -145,9 +147,9 @@ SELECT * FROM wa_over_groups ORDER BY g;
 
 DROP TABLE wa_shown, wa_win, wa_grp, wa_sorted, wa_untracked, wa_over_groups;
 
--- Frames with an EXCLUDE clause or in GROUPS mode (PostgreSQL 11+).  A frame
--- that excludes the current row may be empty while the row exists: a count is
--- then 0, a sum NULL.
+-- Frames with an EXCLUDE clause or in GROUPS mode (PostgreSQL 11+), and the
+-- ranks built on them.  A frame that excludes the current row may be empty
+-- while the row exists: a count is then 0, a sum NULL.
 SELECT current_setting('server_version_num')::int >= 110000 AS pg_has_exclude
 \gset
 \if :pg_has_exclude
@@ -174,6 +176,65 @@ SELECT * FROM wa_report('RANGE before the row',
   'sum(x) OVER (PARTITION BY g ORDER BY x RANGE BETWEEN 15 PRECEDING AND 5 PRECEDING)',
   'v >= 5');
 
+-- Ranks: rank() is 1 + the number of rows strictly before, dense_rank() 1 +
+-- the number of distinct ordering values strictly before, and row_number()
+-- is its rank, equal when the ORDER BY leaves no ties.
+SELECT * FROM wa_report('rank',
+  'rank() OVER (PARTITION BY g ORDER BY x)', 'v <= 2');
+SELECT * FROM wa_report('rank, first',
+  'rank() OVER (ORDER BY x DESC)', 'v = 1');
+SELECT * FROM wa_report('rank, beyond',
+  'rank() OVER (PARTITION BY g ORDER BY x)', 'v > 2');
+SELECT * FROM wa_report('rank, subtracted',
+  '3 - rank() OVER (ORDER BY x)', 'v >= 1');
+SELECT * FROM wa_report('dense_rank',
+  'dense_rank() OVER (PARTITION BY g ORDER BY x)', 'v <= 2');
+SELECT * FROM wa_report('dense_rank, equal',
+  'dense_rank() OVER (PARTITION BY g ORDER BY x)', 'v = 3');
+SELECT * FROM wa_report('dense_rank, two keys',
+  'dense_rank() OVER (ORDER BY g, x)', 'v >= 4');
+SELECT * FROM wa_report('dense_rank, no ORDER BY',
+  'dense_rank() OVER (PARTITION BY g)', 'v = 1');
+SELECT * FROM wa_report('row_number, total order',
+  'row_number() OVER (PARTITION BY g ORDER BY x, id)', 'v <= 2');
+
+CREATE TABLE wa_ranks AS
+  SELECT id,
+         rank() OVER (PARTITION BY g ORDER BY x) AS rk,
+         dense_rank() OVER (ORDER BY x DESC) AS drk,
+         row_number() OVER (PARTITION BY g ORDER BY x, id) AS rn
+  FROM wa;
+SELECT remove_provenance('wa_ranks');
+SELECT * FROM wa_ranks ORDER BY id;
+SELECT id,
+       rank() OVER (PARTITION BY g ORDER BY x) AS rk,
+       dense_rank() OVER (ORDER BY x DESC) AS drk,
+       row_number() OVER (PARTITION BY g ORDER BY x, id) AS rn
+FROM wa_plain ORDER BY id;
+
+-- row_number() over ties: the rank is shown and tracked, with one warning.
+CREATE TABLE wa_row_number_ties AS
+  SELECT id, row_number() OVER (PARTITION BY g ORDER BY x) AS rn FROM wa;
+SELECT remove_provenance('wa_row_number_ties');
+SELECT * FROM wa_row_number_ties ORDER BY id;
+
+-- The top-k idiom over a larger table: the comparison of a rank with a
+-- constant is a COUNT comparison over independent rows, evaluated by the
+-- Poisson-binomial pre-pass.
+CREATE TABLE wa_many AS
+  SELECT i AS id, (i * 7919) % 1000 AS score FROM generate_series(1, 40) i;
+SELECT add_provenance('wa_many');
+SELECT set_prob(provenance(), 0.3 + (id % 5) / 10.0) FROM wa_many \g /dev/null
+SET provsql.verbose_level = 5;
+CREATE TABLE wa_top AS
+  SELECT id, probability_evaluate(provenance()) AS p
+  FROM (SELECT id, rank() OVER (ORDER BY score DESC) AS rk FROM wa_many) u
+  WHERE rk <= 3 AND id = 7;
+RESET provsql.verbose_level;
+SELECT remove_provenance('wa_top');
+SELECT id, round(p::numeric, 12) AS p FROM wa_top;
+DROP TABLE wa_ranks, wa_row_number_ties, wa_many, wa_top;
+
 -- Not tracked: a GROUPS offset counts the peer groups that are present.
 CREATE TABLE wa_groups_offset AS
   SELECT id, sum(x) OVER (PARTITION BY g ORDER BY x
@@ -185,7 +246,7 @@ DROP TABLE wa_groups_offset;
 
 \else
 
-\echo window_aggregates: frames with EXCLUDE or GROUPS skipped on PostgreSQL < 11
+\echo window_aggregates: frames with EXCLUDE or GROUPS, and ranks, skipped on PostgreSQL < 11
 
 \endif
 

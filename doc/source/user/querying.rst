@@ -107,9 +107,10 @@ will either raise an error or may cause incorrect provenance tracking:
   (non-ALL) with aggregates, ``ORDER BY`` or ``GROUP BY`` on aggregate
   results from a subquery
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
-  other than aggregates over a frame determined by values (see
-  :ref:`window-aggregates`): ``ROW_NUMBER``, ``RANK``, ``LAG``,
-  ``LEAD``, ``ROWS`` frames with an offset, etc. The query still
+  other than aggregates over a frame determined by values and the ranks
+  ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER`` (see
+  :ref:`window-aggregates`): ``LAG``, ``LEAD``, ``NTILE``, ``ROWS``
+  frames with an offset, etc. The query still
   executes and each output row carries the tuple provenance of its
   single input row, but the window value is an opaque scalar. A
   ``WARNING`` is emitted

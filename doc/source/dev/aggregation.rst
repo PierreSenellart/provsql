@@ -554,6 +554,29 @@ makes whole-partition gates those of the ``GROUP BY``.
 A sort key on a rewritten value is moved to a junk copy of the original
 window call, so ``ORDER BY`` sorts on the displayed value.
 
+The ranks are counts over a frame appended to the query
+(:cfunc:`make_rank_window`): a copy of the window of the rank with the
+frame ``RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE
+GROUP``, the rows strictly before the current one, which needs
+PostgreSQL 11.
+
+- ``rank()`` is ``1 + count(*)`` over that frame
+  (:cfunc:`make_rank_expression`).  The frame excludes the current row,
+  so the count does not read the token that multiplies the comparisons
+  on it, and the comparison evaluators, which fold the ``+ 1`` into
+  their threshold (see :doc:`probability-evaluation`), see independent
+  contributors.
+- ``dense_rank()`` counts the distinct ordering values of that frame
+  (:cfunc:`make_dense_rank_expression`). Window aggregates have no
+  ``DISTINCT``: two ``array_agg`` over the frame collect the ordering
+  values, as a row value, and the row tokens, and
+  ``window_distinct_tokens`` groups them by value into one
+  ``semimod(1, ⊕ tokens)`` per value, the children of a scalar ``COUNT``
+  gate whose value is ``dense_rank() - 1``.
+- ``row_number()`` is its rank wrapped in ``row_number_as_rank``,
+  which returns the rank and warns, once per statement, when PostgreSQL's
+  row number differs from it.
+
 
 Currently Supported Aggregates
 ------------------------------
