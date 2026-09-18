@@ -4106,8 +4106,10 @@ static Aggref *aggref_sibling(Aggref *ar, const char *name) {
                           true);
   Aggref *res;
 
+  /* An aggregate is a function with a pg_aggregate row; pg_proc.prokind only
+   * exists since PostgreSQL 11. */
   if (!OidIsValid(fn) || fn >= FirstNormalObjectId ||
-      get_func_prokind(fn) != PROKIND_AGGREGATE ||
+      !SearchSysCacheExists1(AGGFNOID, ObjectIdGetDatum(fn)) ||
       get_func_rettype(fn) != argtype)
     return NULL;
   res = (Aggref *)copyObject(ar);

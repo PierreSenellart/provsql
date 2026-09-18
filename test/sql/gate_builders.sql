@@ -366,7 +366,7 @@ INSERT INTO gb_cases VALUES
 SELECT 'times' AS f, label,
        gb_same(gb_ref.provenance_times(VARIADIC gb_tokens(VARIADIC idx)),
                provsql.provenance_times(VARIADIC gb_tokens(VARIADIC idx))) AS result
-  FROM gb_cases ORDER BY label;
+  FROM gb_cases ORDER BY label COLLATE "C";
 -- One deliberate difference: a ⊕ with no survivor is gate_zero; the former
 -- version returned a plus gate without children, which evaluates to the same.
 CREATE FUNCTION gb_no_survivor(idx int[]) RETURNS boolean LANGUAGE sql AS $$
@@ -374,12 +374,12 @@ CREATE FUNCTION gb_no_survivor(idx int[]) RETURNS boolean LANGUAGE sql AS $$
 SELECT 'plus' AS f, label,
        gb_same(gb_ref.provenance_plus(gb_tokens(VARIADIC idx)),
                provsql.provenance_plus(gb_tokens(VARIADIC idx))) AS result
-  FROM gb_cases WHERE NOT gb_no_survivor(idx) ORDER BY label;
+  FROM gb_cases WHERE NOT gb_no_survivor(idx) ORDER BY label COLLATE "C";
 SELECT 'plus, no survivor' AS f, label,
        provsql.provenance_plus(gb_tokens(VARIADIC idx)) = provsql.gate_zero() AS is_zero,
        provsql.get_gate_type(gb_ref.provenance_plus(gb_tokens(VARIADIC idx))) AS former_type,
        coalesce(array_length(provsql.get_children(gb_ref.provenance_plus(gb_tokens(VARIADIC idx))), 1), 0) AS former_children
-  FROM gb_cases WHERE gb_no_survivor(idx) ORDER BY label;
+  FROM gb_cases WHERE gb_no_survivor(idx) ORDER BY label COLLATE "C";
 
 -- Children are kept in the order given, not sorted.
 SELECT 'children order' AS f,
@@ -405,19 +405,19 @@ FROM (SELECT label, a, b, provsql.provenance_monus(gb_tok(a), gb_tok(b)) AS c,
       FROM (VALUES ('two tokens', 11, 12), ('the other way', 12, 11), ('X - X', 13, 13),
                    ('0 - X', -2, 14), ('X - 0', 14, -2), ('X - NULL', 15, 0),
                    ('1 - X', -1, 16), ('X - 1', 16, -1), ('0 - NULL', -2, 0)) v(label, a, b)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 SELECT provsql.provenance_monus(NULL, gb_tok(11));
 SELECT 'delta' AS f, label, gb_same(c, r) AS result
 FROM (SELECT label, provsql.provenance_delta(gb_tok(a)) AS c, gb_ref.provenance_delta(gb_tok(a)) AS r
       FROM (VALUES ('a token', 17), ('0', -2), ('1', -1), ('NULL', 0)) v(label, a)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 SELECT 'cmp' AS f, label, gb_same(c, r) AS result,
        (provsql.get_infos(c)).info1 AS info1, (provsql.get_infos(c)).info2 AS info2
 FROM (SELECT label, provsql.provenance_cmp(gb_tok(a), op::oid, gb_tok(b)) AS c,
              gb_ref.provenance_cmp(gb_tok(a), op::oid, gb_tok(b)) AS r
       FROM (VALUES ('>', 18, 521, 19), ('the other way', 19, 521, 18), ('another operator', 18, 97, 19),
                    ('NULL left', 0, 521, 19), ('NULL right', 18, 521, 0), ('NULL operator', 18, NULL, 19)) v(label, a, op, b)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 
 -- annotate and the order keys it carries on the inversion-free route.
 SELECT 'annotate' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS extra,
@@ -427,7 +427,7 @@ FROM (SELECT label, a, provsql.annotate(gb_tok(a), x) AS c, gb_ref.annotate(gb_t
                    ('same text, another token', 22, 'gb note'), ('empty text', 23, ''),
                    ('NULL text', 24, NULL), ('NULL token', 0, 'gb note'),
                    ('not ASCII', 25, 'gb clé – ⊗')) v(label, a, x)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 SELECT 'key' AS f, provsql.inversion_free_key(root, sec, factor) AS key,
        provsql.inversion_free_key(root, sec, factor) IS NOT DISTINCT FROM gb_ref.inversion_free_key(root, sec, factor) AS same
 FROM (VALUES ('12', '7', 0), ('a b:c', '', 3), ('clé', '⊗', -1), (NULL, 'x', 1), ('x', NULL, 1), ('x', 'y', NULL)) v(root, sec, factor)
@@ -439,29 +439,29 @@ SELECT 'assume' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS ex
        (provsql.get_infos(c)).info1 AS route
 FROM (SELECT label, provsql.provenance_assume(gb_tok(a), x) AS c, gb_ref.provenance_assume(gb_tok(a), x) AS r
       FROM (VALUES ('boolean', 31, 'boolean'), ('absorptive', 31, 'absorptive'), ('NULL token', 0, 'boolean')) v(label, a, x)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 SELECT provsql.provenance_assume(gb_tok(31), 'other');
 SELECT 'assume_boolean' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS extra,
        (provsql.get_infos(c)).info1 AS route,
        c = provsql.provenance_assume(gb_tok(a), 'boolean') AS same_gate_as_untagged
 FROM (SELECT label, a, provsql.assume_boolean(gb_tok(a)) AS c, gb_ref.assume_boolean(gb_tok(a)) AS r
       FROM (VALUES ('a token', 32), ('already wrapped untagged', 31)) v(label, a)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 SELECT 'project' AS f, label, gb_same(c, r) AS result, provsql.get_extra(c) AS extra
 FROM (SELECT label, provsql.provenance_project(gb_tok(33), VARIADIC p) AS c, gb_ref.provenance_project(gb_tok(33), VARIADIC p) AS r
       FROM (VALUES ('identity', '{1,2,3}'::int[]), ('permutation', '{3,1,2}'), ('a dropped position', '{2,0,1}'),
                    ('one position', '{5}'), ('none', '{}')) v(label, p)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 SELECT 'eq' AS f, label, gb_same(c, r) AS result, (provsql.get_infos(c)).info1 AS pos1, (provsql.get_infos(c)).info2 AS pos2
 FROM (SELECT label, provsql.provenance_eq(gb_tok(34), p1, p2) AS c, gb_ref.provenance_eq(gb_tok(34), p1, p2) AS r
       FROM (VALUES ('1 = 2', 1, 2), ('2 = 1', 2, 1), ('3 = 3', 3, 3)) v(label, p1, p2)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 SELECT 'arith' AS f, label, gb_same(c, r) AS result, (provsql.get_infos(c)).info1 AS op,
        provsql.get_children(c) = gb_tokens(VARIADIC ch) AS children_in_order
 FROM (SELECT label, ch, provsql.provenance_arith(op, gb_tokens(VARIADIC ch)) AS c, gb_ref.provenance_arith(op, gb_tokens(VARIADIC ch)) AS r
       FROM (VALUES ('plus', 0, '{35,36}'::int[]), ('the other way', 0, '{36,35}'), ('minus, same children', 2, '{35,36}'),
                    ('negation', 4, '{35}')) v(label, op, ch)) t
-ORDER BY label;
+ORDER BY label COLLATE "C";
 
 -- A gate planted for a multiset of tokens of a working table is returned in
 -- place of an ordinary gate, whatever the order of the children, by the

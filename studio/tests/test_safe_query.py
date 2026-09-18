@@ -349,9 +349,9 @@ def test_circuit_marks_absorptive_wrapper_and_certificates(client, test_dsn):
             cur.execute("SELECT provsql.set_prob(%s::uuid, 0.5)", (u,))
         plus = str(uuidlib.uuid4())
         cur.execute(
-            "SELECT provsql.create_gate(%s, 'plus', ARRAY[%s, %s]::uuid[])",
+            "SELECT provsql.create_gate(%s, 'plus', ARRAY[%s, %s]::uuid[],"
+            " 1, NULL, NULL)",
             (plus, a, b))
-        cur.execute("SELECT provsql.set_infos(%s::uuid, 1)", (plus,))
         cur.execute(
             "SELECT provsql.provenance_assume(%s::uuid, 'absorptive')",
             (plus,))

@@ -395,6 +395,8 @@ _C_FUNC_MAP = {
     # provsql_mmap – background worker
     'RegisterProvSQLMMapWorker': '/doxygen-c/html/provsql__mmap_8c.html#af31c1c517f22a6923f390b75d36506be',
     'provsql_internal_create_gate': '/doxygen-c/html/provsql__mmap_8c.html#a0c6ecef787adeb0669e6678e28dbe0d5',
+    'provsql_internal_create_gate_with': '/doxygen-c/html/provsql__mmap_8c.html#a28abb32034f13d8023ea77861db40030',
+    'provsql_worker_read':       '/doxygen-c/html/provsql__mmap_8c.html#aa0e8ab67fd51fbd527d91c715572cf45',
     'provsql_mmap_worker':       '/doxygen-c/html/provsql__mmap_8h.html#a3f084145f583f08b2532c36a79925697',
     'initialize_provsql_mmap':   '/doxygen-c/html/MMappedCircuit_8cpp.html#aa0bba27d6f73596ef0972bb0541cc244',
     'provsql_mmap_main_loop':    '/doxygen-c/html/MMappedCircuit_8cpp.html#a9215628e0312d309db481dbd27c8dabe',

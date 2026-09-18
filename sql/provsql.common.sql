@@ -2301,9 +2301,9 @@ LANGUAGE sql;
  * <tt>provsql.get_children</tt> length against the number of outgoing
  * edges reported.
  *
- * <tt>info1</tt> and <tt>info2</tt> are the integer values stored on
- * the gate by <tt>provsql.set_infos</tt>, formatted as text; their
- * meaning is gate-type-specific (see <tt>provsql.set_infos</tt>).
+ * <tt>info1</tt> and <tt>info2</tt> are the integer values recorded on
+ * the gate when it was created, formatted as text; their meaning is
+ * gate-type-specific.
  *
  * @param root root provenance token
  * @param max_depth maximum BFS depth (default 8)
