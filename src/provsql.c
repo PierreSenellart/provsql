@@ -2157,6 +2157,42 @@ static void plant_reach_conjunctions(List *candidates, List *lowered) {
  * @brief Inline CTE references in @p q as subqueries where the rewrite
  *        needs them, preserving CTEs whose bodies need no rewriting.
  */
+/** @brief Context for @c inline_ctes_in_sublinks_walker. */
+typedef struct inline_ctes_sublink_ctx {
+  List *cteList;   ///< CTE definitions to look up names in
+  List **lowered;  ///< Recursive CTEs already lowered (see inline_ctes_in_rtable)
+  List *kept;      ///< CTEs preserved as real CTEs
+} inline_ctes_sublink_ctx;
+
+/**
+ * @brief Walker: inline the CTE references of the subqueries of sublinks
+ *        (@c IN, @c EXISTS, scalar subqueries), at any depth.
+ *
+ * @c inline_ctes_in_rtable follows the range tables; a CTE read from a
+ * sublink would otherwise keep a reference to a CTE no longer in the
+ * @c WITH clause.
+ */
+static bool inline_ctes_in_sublinks_walker(Node *node, void *cx) {
+  inline_ctes_sublink_ctx *ctx = (inline_ctes_sublink_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subselect != NULL && IsA(sl->subselect, Query)) {
+      Query *sub = (Query *)sl->subselect;
+      inline_ctes_in_rtable(sub->rtable, ctx->cteList, ctx->lowered,
+                            ctx->kept);
+      query_tree_walker(sub, inline_ctes_in_sublinks_walker, cx,
+                        QTW_IGNORE_CTE_SUBQUERIES);
+    }
+    return inline_ctes_in_sublinks_walker(sl->testexpr, cx);
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, inline_ctes_in_sublinks_walker,
+                             cx, QTW_IGNORE_CTE_SUBQUERIES);
+  return expression_tree_walker(node, inline_ctes_in_sublinks_walker, cx);
+}
+
 static bool cte_is_data_modifying(const CommonTableExpr *cte) {
   return IsA(cte->ctequery, Query) &&
     ((Query *)cte->ctequery)->commandType != CMD_SELECT;
@@ -2296,6 +2332,11 @@ static void inline_ctes(const constants_t *constants, Query *q) {
   reach_conjs = detect_reach_conjunctions(q);
 #endif
   inline_ctes_in_rtable(q->rtable, q->cteList, &lowered, kept);
+  {
+    inline_ctes_sublink_ctx sctx = {q->cteList, &lowered, kept};
+    query_tree_walker(q, inline_ctes_in_sublinks_walker, &sctx,
+                      QTW_IGNORE_CTE_SUBQUERIES);
+  }
 #if PG_VERSION_NUM >= 150000
   plant_reach_aggregations(reach_aggs, lowered);
   plant_reach_conjunctions(reach_conjs, lowered);

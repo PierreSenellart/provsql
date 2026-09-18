@@ -97,3 +97,8 @@ WITH t AS (SELECT id + 10 AS id, name || '2' AS name FROM cte_foo)
 , ins AS (INSERT INTO cte_foo SELECT * FROM t RETURNING id)
 SELECT * FROM t;
 DROP TABLE cte_foo;
+
+-- A CTE read from a sublink is inlined there as well (the sublink rewriting
+-- then decides; before, the CTE was left unresolved).
+WITH c AS (SELECT id FROM personnel WHERE city = 'Paris')
+SELECT name FROM personnel WHERE id IN (SELECT id FROM c);
