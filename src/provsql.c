@@ -162,6 +162,19 @@ static void provsql_provenance_assign_hook(int newval, void *extra)
 extern void _PG_init(void);
 extern void _PG_fini(void);
 
+/**
+ * @brief Alias prefix of the subqueries @c rewrite_agg_distinct joins, one
+ *        per @c AGG(DISTINCT x).
+ *
+ * Their rows are the groups of the query, and the provenance of a group holds
+ * whenever one of its rows does: multiplying it into each row's token would
+ * change nothing (δ-absorption) but would make the rows of a group share a
+ * token, which the evaluators of an aggregate over independent rows (the
+ * exact AVG, ...) take as a correlation.  @c get_provenance_attributes leaves
+ * it out.
+ */
+#define PROVSQL_DISTINCT_ALIAS "provsql_distinct"
+
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 /** @brief Depth of CREATE TABLE AS / SELECT INTO / CREATE MATERIALIZED VIEW
  *  being executed: their query's output is stored, not shown. */
@@ -2443,6 +2456,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
                                        bool in_boolean_rewrite, bool top_level,
                                        const InvFreeMarkerCtx *inv_ctx) {
   List *prov_atts = NIL;
+  List *implied_atts = NIL;
 
   for(Index rteid = 1; rteid <= q->rtable->length; ++rteid) {
     RangeTblEntry *r = list_nth_node(RangeTblEntry, q->rtable, rteid-1);
@@ -2567,9 +2581,18 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
         if (cell != NULL) {
           r->eref->colnames = list_insert_nth(r->eref->colnames, varattnoprovsql-1,
                                               makeString(pstrdup(PROVSQL_COLUMN_NAME)));
-          prov_atts =
-            lappend(prov_atts, make_provenance_attribute(
-                      constants, q, r, rteid, varattnoprovsql));
+          /* The groups joined by rewrite_agg_distinct: implied by the rows,
+           * kept only if there is no row of another relation. */
+          if (r->eref->aliasname != NULL &&
+              strncmp(r->eref->aliasname, PROVSQL_DISTINCT_ALIAS,
+                      strlen(PROVSQL_DISTINCT_ALIAS)) == 0)
+            implied_atts =
+              lappend(implied_atts, make_provenance_attribute(
+                        constants, q, r, rteid, varattnoprovsql));
+          else
+            prov_atts =
+              lappend(prov_atts, make_provenance_attribute(
+                        constants, q, r, rteid, varattnoprovsql));
         }
         fix_type_of_aggregation_result(constants, q, rteid,
                                        r->subquery->targetList);
@@ -2631,6 +2654,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
     }
   }
 
+  if (prov_atts == NIL)
+    prov_atts = implied_atts;
   return prov_atts;
 }
 
@@ -7171,9 +7196,9 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         RangeTblEntry *rte = makeNode(RangeTblEntry);
         Alias *alias = makeNode(Alias), *eref = makeNode(Alias);
         ListCell *lc2;
-        char buf[16];
+        char buf[32];
 
-        snprintf(buf, sizeof(buf), "d%d", i + 1);
+        snprintf(buf, sizeof(buf), PROVSQL_DISTINCT_ALIAS "%d", i + 1);
         alias->aliasname = eref->aliasname = pstrdup(buf);
         eref->colnames = NIL;
         foreach (lc2, oq->targetList) {

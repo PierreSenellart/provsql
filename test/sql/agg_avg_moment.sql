@@ -75,4 +75,23 @@ FROM avg_own_r;
 SET provsql.active = on;
 DROP TABLE avg_own_r; DROP TABLE avg_own;
 
+-- The group also has a row whose value is NULL: its existence is implied by
+-- AVG being defined, the exact route still applies (E = 1.209302 by brute
+-- force).  Next to a COUNT(DISTINCT), whose rewrite joins the groups, the
+-- rows of AVG stay independent: the exact route too.
+CREATE TABLE avg_nul(g int, id int, x int);
+INSERT INTO avg_nul VALUES (1,1,2),(1,2,NULL),(1,3,1);
+SELECT add_provenance('avg_nul');
+SELECT set_prob(provsql, CASE id WHEN 1 THEN 0.3 WHEN 2 THEN 0.1 ELSE 0.8 END)
+FROM avg_nul \g /dev/null
+CREATE TABLE avg_nul_r AS
+  SELECT avg(x) AS a, count(DISTINCT x) AS c, provenance() AS p
+  FROM avg_nul GROUP BY g;
+SET provsql.active = off;
+SELECT round(expected(a, p)::numeric, 6) AS e_null_row,
+       round(expected(a)::numeric, 6) AS e_uncond
+FROM avg_nul_r;
+SET provsql.active = on;
+DROP TABLE avg_nul_r; DROP TABLE avg_nul;
+
 SELECT 'ok'::text AS agg_avg_moment_done;
