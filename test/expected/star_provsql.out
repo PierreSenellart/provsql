@@ -1,0 +1,41 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+cols
+a,b,e,provsql
+(1 row)
+cols
+x,y,z,provsql
+(1 row)
+remove_provenance
+
+(1 row)
+x|y|z
+1|10|-1
+2|20|-2
+(2 rows)
+remove_provenance
+
+(1 row)
+a|b|e
+2|20|-2
+1|10|-1
+(2 rows)
+remove_provenance
+
+(1 row)
+a
+1
+2
+(2 rows)
+remove_provenance
+
+(1 row)
+a|c
+2|4
+1|5
+(2 rows)

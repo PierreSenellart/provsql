@@ -49,6 +49,19 @@ When ``provsql.verbose_level >= 20`` (PostgreSQL 15+), the full query
 text is logged before and after rewriting.  At level ≥ 40, the time
 spent in the rewriter is logged.
 
+Before the planner hook, a ``post_parse_analyze_hook`` puts the
+``provsql`` column that ``*`` expands to last in the target list of the
+user's ``SELECT`` (and of the query of a ``CREATE VIEW`` or ``CREATE
+TABLE AS``), where the rewriting puts the row's provenance.  ``CREATE
+VIEW`` never plans its query: it pairs its column list with the analysed
+target list, so this has to happen at parse analysis.  Parse analysis
+also resolves a position in ``ORDER BY`` to a target entry and keeps no
+trace of it; the hook re-reads the statement's text to find the positional
+keys and points them at the columns in the order shown.  It leaves alone
+the statements run from functions (ProvSQL's own triggers read
+``provsql`` from ``SELECT *`` over transition tables), an explicit
+``provsql``, and set operations.
+
 
 Query-Time TID / BID Classifier
 -------------------------------

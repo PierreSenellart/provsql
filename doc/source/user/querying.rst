@@ -19,6 +19,12 @@ table, the hook intercepts the query plan before execution and:
    ``times`` for combined use of tuples such as in joins, ``monus`` for difference).
 3. Appends the resulting provenance token to the output as an extra column.
 
+The ``provsql`` column of a provenance-tracked table that ``*`` expands to
+takes that same last place: in ``SELECT *, a + 1 AS e FROM t`` the columns
+are those of ``t``, then ``e``, then ``provsql``.  A position in ``ORDER BY``
+counts the columns in that order, and so does the column list of a view or
+of a ``CREATE TABLE AS`` over ``SELECT *``.
+
 The final provenance token in each output row is a UUID that represents a
 gate in a *provenance circuit* – a DAG recording how that result was derived.
 

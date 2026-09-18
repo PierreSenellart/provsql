@@ -43,6 +43,8 @@
 #include "optimizer/clauses.h"          /* contain_volatile_functions */
 #endif
 #include "optimizer/planner.h"
+#include "parser/analyze.h"
+#include "parser/parser.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_node.h"
 #include "parser/parse_oper.h"
@@ -152,6 +154,7 @@ extern void _PG_init(void);
 extern void _PG_fini(void);
 
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
+static post_parse_analyze_hook_type prev_post_parse_analyze = NULL; ///< Previous post-parse-analysis hook (chained)
 
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
@@ -19138,6 +19141,271 @@ static void provsql_ProcessUtility(
 }
 
 /**
+ * @brief Whether the column reference written at @p loc of @p src is a star
+ *        (@c *, @c t.*, @c s.t.*).
+ */
+static bool colref_is_star(const char *src, int loc) {
+  const char *p;
+  if (src == NULL || loc < 0)
+    return false;
+  p = src + loc;
+  for (;;) {
+    while (isspace((unsigned char)*p))
+      p++;
+    if (*p == '*')
+      return true;
+    if (*p == '"') {
+      p++;
+      while (*p) {
+        if (*p == '"') {
+          if (p[1] == '"') { p += 2; continue; }
+          break;
+        }
+        p++;
+      }
+      if (*p != '"')
+        return false;
+      p++;
+    } else if (isalpha((unsigned char)*p) || *p == '_' ||
+               (unsigned char)*p >= 0x80) {
+      while (isalnum((unsigned char)*p) || *p == '_' || *p == '$' ||
+             (unsigned char)*p >= 0x80)
+        p++;
+    } else
+      return false;
+    while (isspace((unsigned char)*p))
+      p++;
+    if (*p != '.')
+      return false;
+    p++;
+  }
+}
+
+/** @brief The integer of a positional @c ORDER @c BY item, or 0. */
+static int sortby_position(Node *n) {
+  A_Const *c;
+  if (n == NULL || !IsA(n, A_Const))
+    return 0;
+  c = (A_Const *)n;
+#if PG_VERSION_NUM >= 150000
+  if (c->isnull || nodeTag(&c->val) != T_Integer)
+    return 0;
+  return intVal(&c->val);
+#else
+  if (c->val.type != T_Integer)
+    return 0;
+  return c->val.val.ival;
+#endif
+}
+
+/**
+ * @brief The @c ORDER @c BY items of the statement @p q was analysed from,
+ *        re-read from its text, or @c NIL.
+ *
+ * Parse analysis resolves a position (@c ORDER @c BY 3) to a target entry
+ * and keeps no trace of it: the text is the only place left that says
+ * whether a key was a position.  A @c CREATE @c VIEW is analysed with the
+ * location of the whole statement, hence the view's query; the query of a
+ * @c CREATE @c TABLE @c AS is within its statement.
+ */
+static List *statement_sort_items(Query *q, const char *src) {
+  char *text;
+  List *raw;
+  Node *stmt;
+  int len;
+
+  if (src == NULL || q->stmt_location < 0)
+    return NIL;
+  len = q->stmt_len > 0 ? q->stmt_len : (int)strlen(src + q->stmt_location);
+  text = pnstrdup(src + q->stmt_location, len);
+#if PG_VERSION_NUM >= 140000
+  raw = raw_parser(text, RAW_PARSE_DEFAULT);
+#else
+  raw = raw_parser(text);
+#endif
+  if (list_length(raw) != 1)
+    return NIL;
+  stmt = ((RawStmt *)linitial(raw))->stmt;
+  if (IsA(stmt, ViewStmt))
+    stmt = ((ViewStmt *)stmt)->query;
+  else if (IsA(stmt, CreateTableAsStmt))
+    stmt = ((CreateTableAsStmt *)stmt)->query;
+  if (!IsA(stmt, SelectStmt) || ((SelectStmt *)stmt)->op != SETOP_NONE)
+    return NIL;
+  return ((SelectStmt *)stmt)->sortClause;
+}
+
+/**
+ * @brief Point the positional @c ORDER @c BY keys of @p q at the columns in
+ *        the order the result shows them.
+ *
+ * @p resolved is the order in which parse analysis counted the columns,
+ * @p shown the order of the result, @c provsql last.  A key @c k resolved
+ * to @c resolved[k] now sorts on @c shown[k], with the operators of its type.
+ */
+static void remap_positional_sort(Query *q, const char *src, List *resolved,
+                                  List *shown) {
+  List *items = statement_sort_items(q, src);
+  ListCell *lc;
+  Index maxref = 0;
+
+  if (items == NIL)
+    return;
+  foreach (lc, q->targetList)
+    maxref = Max(maxref, ((TargetEntry *)lfirst(lc))->ressortgroupref);
+
+  foreach (lc, items) {
+    SortBy *sb = (SortBy *)lfirst(lc);
+    int pos = sortby_position(sb->node);
+    TargetEntry *orig, *want;
+    SortGroupClause *sgc = NULL;
+    ListCell *lc2;
+    Oid restype, sortop, eqop;
+    bool hashable, reverse;
+
+    if (pos <= 0 || pos > list_length(resolved) ||
+        sb->sortby_dir == SORTBY_USING)
+      continue;
+    orig = (TargetEntry *)list_nth(resolved, pos - 1);
+    want = (TargetEntry *)list_nth(shown, pos - 1);
+    if (orig == want || orig->ressortgroupref == 0)
+      continue;
+    foreach (lc2, q->sortClause)
+      if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
+          orig->ressortgroupref)
+        sgc = (SortGroupClause *)lfirst(lc2);
+    if (sgc == NULL)
+      continue;
+    if (want->ressortgroupref == 0)
+      want->ressortgroupref = ++maxref;
+
+    restype = exprType((Node *)want->expr);
+    reverse = sb->sortby_dir == SORTBY_DESC;
+    if (reverse)
+      get_sort_group_operators(restype, false, true, true, NULL, &eqop,
+                               &sortop, &hashable);
+    else
+      get_sort_group_operators(restype, true, true, false, &sortop, &eqop,
+                               NULL, &hashable);
+    sgc->tleSortGroupRef = want->ressortgroupref;
+    sgc->sortop = sortop;
+    sgc->eqop = eqop;
+    sgc->hashable = hashable;
+    sgc->nulls_first = sb->sortby_nulls == SORTBY_NULLS_DEFAULT
+                         ? reverse
+                         : sb->sortby_nulls == SORTBY_NULLS_FIRST;
+  }
+}
+
+/**
+ * @brief Put the @c provsql column that @c * expands to at the end of the
+ *        target list of @p q, as the rewriting shows it.
+ *
+ * @c * brings the @c provsql column of a table in the middle of the
+ * columns, while the result of the rewriting has the row's provenance last:
+ * a column list of a view over @c SELECT @c *, or a position in @c ORDER
+ * @c BY, then points at other columns than the user sees.  The first such
+ * column goes last, those of other stars (a join) are dropped, as the
+ * rewriting would drop them; positional @c ORDER @c BY keys follow.  Only
+ * the @c provsql column of a table or view is concerned; an explicit
+ * @c provsql is left in place.
+ */
+static void place_star_provsql_last(Query *q, const char *src) {
+  List *resolved = NIL, *shown = NIL, *junk = NIL, *tl;
+  TargetEntry *last = NULL;
+  Bitmapset *dropped = NULL;
+  ListCell *lc;
+  AttrNumber resno = 0;
+  bool any = false;
+  int k;
+  List **clauses[3];
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk) {
+      junk = lappend(junk, te);
+      continue;
+    }
+    resolved = lappend(resolved, te);
+    if (te->resname != NULL &&
+        strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0 &&
+        IsA(te->expr, Var) && ((Var *)te->expr)->vartype == UUIDOID &&
+        ((Var *)te->expr)->varlevelsup == 0 &&
+        rt_fetch(((Var *)te->expr)->varno, q->rtable)->rtekind ==
+          RTE_RELATION &&
+        colref_is_star(src, ((Var *)te->expr)->location)) {
+      any = true;
+      if (last == NULL)
+        last = te;
+      else if (te->ressortgroupref != 0)
+        dropped = bms_add_member(dropped, te->ressortgroupref);
+      continue;
+    }
+    shown = lappend(shown, te);
+  }
+  if (!any)
+    return;
+  shown = lappend(shown, last);
+
+  remap_positional_sort(q, src, resolved, shown);
+
+  tl = list_concat(list_copy(shown), junk);
+  foreach (lc, tl)
+    ((TargetEntry *)lfirst(lc))->resno = ++resno;
+  q->targetList = tl;
+
+  clauses[0] = &q->sortClause;
+  clauses[1] = &q->distinctClause;
+  clauses[2] = &q->groupClause;
+  for (k = 0; k < 3 && dropped != NULL; ++k) {
+    List *kept = NIL;
+    foreach (lc, *clauses[k]) {
+      SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+      if (!bms_is_member(sgc->tleSortGroupRef, dropped))
+        kept = lappend(kept, sgc);
+    }
+    *clauses[k] = kept;
+  }
+}
+
+/**
+ * @brief Post-parse-analysis hook: see @c place_star_provsql_last.
+ *
+ * Runs on the SELECT of a statement and on that of a CREATE VIEW (analysed
+ * on its own by @c DefineView), before the planner hook.
+ */
+#if PG_VERSION_NUM >= 140000
+static void provsql_post_parse_analyze(ParseState *pstate, Query *query,
+                                       JumbleState *jstate) {
+  if (prev_post_parse_analyze)
+    prev_post_parse_analyze(pstate, query, jstate);
+#else
+static void provsql_post_parse_analyze(ParseState *pstate, Query *query) {
+  if (prev_post_parse_analyze)
+    prev_post_parse_analyze(pstate, query);
+#endif
+  /* Only the statements of the user, not those of the functions the
+   * executor runs (ProvSQL's own triggers read provsql from SELECT * over
+   * their transition tables). */
+  if (provsql_active && provsql_executor_depth == 0 && pstate != NULL &&
+      pstate->p_sourcetext != NULL) {
+    Query *q = query;
+    /* CREATE TABLE AS / SELECT INTO: the query it stores the result of. */
+    if (q->commandType == CMD_UTILITY && q->utilityStmt != NULL &&
+        IsA(q->utilityStmt, CreateTableAsStmt) &&
+        IsA(((CreateTableAsStmt *)q->utilityStmt)->query, Query)) {
+      q = (Query *)((CreateTableAsStmt *)q->utilityStmt)->query;
+      /* Its text is that of the statement (statement_sort_items). */
+      q->stmt_location = query->stmt_location;
+      q->stmt_len = query->stmt_len;
+    }
+    if (q->commandType == CMD_SELECT && q->utilityStmt == NULL &&
+        q->setOperations == NULL)
+      place_star_provsql_last(q, pstate->p_sourcetext);
+  }
+}
+
+/**
  * @brief Extension initialization – called once when the shared library is loaded.
  *
  * Registers the GUC variables (@c provsql.active, @c where_provenance,
@@ -19734,6 +20002,7 @@ void _PG_init(void) {
   EmitWarningsOnPlaceholders("provsql");
 
   prev_planner = planner_hook;
+  prev_post_parse_analyze = post_parse_analyze_hook;
   prev_shmem_startup = shmem_startup_hook;
   prev_ExecutorStart = ExecutorStart_hook;
   prev_ExecutorEnd   = ExecutorEnd_hook;
@@ -19751,6 +20020,7 @@ void _PG_init(void) {
 #endif
 
   planner_hook        = provsql_planner;
+  post_parse_analyze_hook = provsql_post_parse_analyze;
 #ifndef PROVSQL_INPROCESS_STORE
   shmem_startup_hook  = provsql_shmem_startup;
 #endif
@@ -19774,6 +20044,7 @@ void _PG_init(void) {
  */
 void _PG_fini(void) {
   planner_hook        = prev_planner;
+  post_parse_analyze_hook = prev_post_parse_analyze;
   shmem_startup_hook  = prev_shmem_startup;
   ExecutorStart_hook  = prev_ExecutorStart;
   ExecutorEnd_hook    = prev_ExecutorEnd;
