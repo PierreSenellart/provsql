@@ -273,6 +273,45 @@ SELECT remove_provenance('je');
 SELECT k, b, f, p FROM je ORDER BY k, b;
 DROP TABLE je;
 
+-- NATURAL JOIN of two tracked tables: both have a provsql column, which is
+-- not a join column (the join would otherwise require equal tokens).  Same
+-- rows and provenance as USING the common data column.
+CREATE TABLE jn(k int, b int);
+INSERT INTO jn VALUES (1,10),(2,20),(2,21);
+SELECT add_provenance('jn');
+DO $$ BEGIN PERFORM set_prob(provsql, 0.5) FROM jn; END $$;
+CREATE TABLE je AS
+  SELECT a, b, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM jr NATURAL JOIN (SELECT k, b, provsql FROM jn) n;
+SELECT remove_provenance('je');
+SELECT a, b, p FROM je ORDER BY a, b;
+DROP TABLE je;
+CREATE TABLE je AS
+  SELECT a, b, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM jr NATURAL JOIN jn;
+SELECT remove_provenance('je');
+SELECT a, b, p FROM je ORDER BY a, b;
+DROP TABLE je;
+CREATE TABLE je AS
+  SELECT a, b, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM jr JOIN jn USING (k);
+SELECT remove_provenance('je');
+SELECT a, b, p FROM je ORDER BY a, b;
+DROP TABLE je;
+CREATE TABLE je AS
+  SELECT a, b, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM jr NATURAL LEFT JOIN jn;
+SELECT remove_provenance('je');
+SELECT a, b, p FROM je ORDER BY a, b NULLS LAST;
+DROP TABLE je;
+CREATE TABLE je AS
+  SELECT a, b, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM jr LEFT JOIN jn USING (k);
+SELECT remove_provenance('je');
+SELECT a, b, p FROM je ORDER BY a, b NULLS LAST;
+DROP TABLE je;
+DROP TABLE jn;
+
 DROP TABLE jmap;
 DROP TABLE jrmap;
 DROP TABLE jsmap;

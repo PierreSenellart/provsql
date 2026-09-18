@@ -16220,6 +16220,106 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
   return outer;
 }
 
+/** @brief Whether @p n is a column named @c provsql of type uuid of an entry
+ *         of @p q's range table. */
+static bool is_provsql_column(const constants_t *constants, Query *q, Node *n) {
+  Var *v;
+  RangeTblEntry *rte;
+
+  while (n != NULL && IsA(n, RelabelType))
+    n = (Node *)((RelabelType *)n)->arg;
+  if (n == NULL || !IsA(n, Var))
+    return false;
+  v = (Var *)n;
+  if (v->varlevelsup != 0 || v->varattno <= 0 ||
+      v->vartype != constants->OID_TYPE_UUID ||
+      v->varno > (Index)list_length(q->rtable))
+    return false;
+  rte = rt_fetch(v->varno, q->rtable);
+  return rte->eref != NULL && v->varattno <= list_length(rte->eref->colnames) &&
+         strcmp(strVal(list_nth(rte->eref->colnames, v->varattno - 1)),
+                PROVSQL_COLUMN_NAME) == 0;
+}
+
+/** @brief @p quals without the equalities between two @c provsql columns. */
+static Node *strip_provsql_equalities(const constants_t *constants, Query *q,
+                                      Node *quals) {
+  if (quals == NULL)
+    return NULL;
+  if (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR) {
+    BoolExpr *b = (BoolExpr *)quals;
+    List *kept = NIL;
+    ListCell *lc;
+    foreach (lc, b->args) {
+      Node *arg = strip_provsql_equalities(constants, q, (Node *)lfirst(lc));
+      if (arg != NULL)
+        kept = lappend(kept, arg);
+    }
+    if (kept == NIL)
+      return NULL;
+    if (list_length(kept) == 1)
+      return (Node *)linitial(kept);
+    b->args = kept;
+    return quals;
+  }
+  if (IsA(quals, OpExpr) && list_length(((OpExpr *)quals)->args) == 2 &&
+      is_provsql_column(constants, q, linitial(((OpExpr *)quals)->args)) &&
+      is_provsql_column(constants, q, lsecond(((OpExpr *)quals)->args)))
+    return NULL;
+  return quals;
+}
+
+/** @brief Remove the @c provsql columns from the join conditions of the
+ *         @c NATURAL and @c USING joins of @p jt (see
+ *         @c strip_provsql_join_columns). */
+static void strip_provsql_join_quals(const constants_t *constants, Query *q,
+                                     Node *jt) {
+  ListCell *lc;
+
+  if (jt == NULL)
+    return;
+  if (IsA(jt, FromExpr)) {
+    foreach (lc, ((FromExpr *)jt)->fromlist)
+      strip_provsql_join_quals(constants, q, (Node *)lfirst(lc));
+  } else if (IsA(jt, JoinExpr)) {
+    JoinExpr *je = (JoinExpr *)jt;
+    bool uses_provsql = false;
+    strip_provsql_join_quals(constants, q, je->larg);
+    strip_provsql_join_quals(constants, q, je->rarg);
+    foreach (lc, je->usingClause)
+      if (strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) == 0)
+        uses_provsql = true;
+    if (uses_provsql) {
+      je->quals = strip_provsql_equalities(constants, q, je->quals);
+      if (je->quals == NULL && je->jointype != JOIN_INNER)
+        je->quals = (Node *)makeBoolConst(true, false);
+    }
+  }
+}
+
+/**
+ * @brief Walker: a @c NATURAL join of two tracked relations, or a join
+ *        @c USING their @c provsql column, does not join on it.
+ *
+ * Both relations have a column @c provsql, which @c NATURAL makes a join
+ * column: the join would then require equal provenance tokens and keep no
+ * row.  The column is the provenance of each side, not data; the equality is
+ * removed from the join condition, in this query and the queries nested in
+ * it.  The merged column the join exposes is dropped from the output as any
+ * @c provsql column is.
+ */
+static bool strip_provsql_join_columns(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *sub = (Query *)node;
+    strip_provsql_join_quals((const constants_t *)cx, sub,
+                             (Node *)sub->jointree);
+    return query_tree_walker(sub, strip_provsql_join_columns, cx, 0);
+  }
+  return expression_tree_walker(node, strip_provsql_join_columns, cx);
+}
+
 /** @brief Walker: apply @c normalize_inner_joins to every nested Query --
  *  sublink subselects, subquery RTEs, CTE bodies -- so that e.g. a sublink
  *  body is already canonical when the sublink pre-passes inspect it. */
@@ -16260,6 +16360,7 @@ static Query *process_query(const constants_t *constants, Query *q,
    * downstream passes may assume the flat fromlist, and only outer joins
    * still appear as JoinExprs (for lower_outer_joins). */
   if (provsql_active) {
+    strip_provsql_join_columns((Node *)q, (void *)constants);
     normalize_inner_joins(q);
     query_tree_walker(q, normalize_inner_joins_walker, NULL, 0);
   }
