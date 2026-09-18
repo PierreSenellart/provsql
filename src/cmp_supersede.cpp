@@ -192,10 +192,9 @@ void surviving_factors(Gates &gates, const pg_uuid_t &g, const UuidSet &group,
 /**
  * @brief @c cmp_surviving_factors(tokens uuid[], cmp uuid) -> uuid[]
  *
- * @param tokens  The row-annotation factors at the level owning the comparison.
- * @param cmp     The lifted comparison gate.
- * @return        The factors of @p tokens the comparison does not subsume,
- *                flattened; NULL on a NULL argument.
+ * Given the row-annotation factors at the level owning the comparison and
+ * the lifted comparison gate, returns the factors the comparison does not
+ * subsume, flattened; NULL on a NULL argument.
  */
 Datum cmp_surviving_factors(PG_FUNCTION_ARGS)
 {
