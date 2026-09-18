@@ -193,6 +193,13 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
           if (wires.size() != 2) break;
           result = divInt(first, intervalOf(gc, wires[1], cache));
           break;
+        case PROVSQL_ARITH_INTDIV:
+          /* Truncation toward zero is monotone: truncate the bounds. */
+          if (wires.size() != 2) break;
+          result = divInt(first, intervalOf(gc, wires[1], cache));
+          if (std::isfinite(result.lo)) result.lo = std::trunc(result.lo);
+          if (std::isfinite(result.hi)) result.hi = std::trunc(result.hi);
+          break;
         case PROVSQL_ARITH_NEG:
           if (wires.size() != 1) break;
           result = neg(first);

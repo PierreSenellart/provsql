@@ -99,6 +99,7 @@ ArithmeticOperator arithOpFromTag(unsigned tag, bool &ok)
   case PROVSQL_ARITH_TIMES:      return ArithmeticOperator::TIMES;
   case PROVSQL_ARITH_MINUS:      return ArithmeticOperator::MINUS;
   case PROVSQL_ARITH_DIV:        return ArithmeticOperator::DIV;
+  case PROVSQL_ARITH_INTDIV:     return ArithmeticOperator::INTDIV;
   case PROVSQL_ARITH_NEG:        return ArithmeticOperator::NEG;
   case PROVSQL_ARITH_MAX:        return ArithmeticOperator::MAX;
   case PROVSQL_ARITH_MIN:        return ArithmeticOperator::MIN;

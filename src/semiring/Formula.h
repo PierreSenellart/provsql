@@ -363,6 +363,8 @@ virtual value_type arith(ArithmeticOperator op,
     return v.size() == 2 ? infix(" - ") : functional("minus");
   case ArithmeticOperator::DIV:
     return v.size() == 2 ? infix(" / ") : functional("div");
+  case ArithmeticOperator::INTDIV:
+    return functional("intdiv");
   case ArithmeticOperator::NEG:
     return v.size() == 1 ? "(-" + v[0] + ")" : functional("neg");
   case ArithmeticOperator::MAX:

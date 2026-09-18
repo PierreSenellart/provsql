@@ -110,6 +110,8 @@ double evalWithVar(const GenericCircuit &gc, gate_t g, gate_t var, double val)
           return (w.size() == 2) ? ev(w[0]) - ev(w[1]) : kNaN;
         case PROVSQL_ARITH_DIV:
           return (w.size() == 2) ? ev(w[0]) / ev(w[1]) : kNaN;
+        case PROVSQL_ARITH_INTDIV:
+          return (w.size() == 2) ? std::trunc(ev(w[0]) / ev(w[1])) : kNaN;
         case PROVSQL_ARITH_NEG:
           return (w.size() == 1) ? -ev(w[0]) : kNaN;
         default:

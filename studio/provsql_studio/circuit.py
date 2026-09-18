@@ -75,6 +75,7 @@ _ARITH_OP_GLYPH = {
     8: "ln",    # PROVSQL_ARITH_LN: natural logarithm
     9: "exp",   # PROVSQL_ARITH_EXP: e^x
     10: "pct",  # PROVSQL_ARITH_PERCENTILE: percentile_cont over a group
+    11: "div",  # PROVSQL_ARITH_INTDIV: SQL division of two integers
 }
 
 def _gate_label(row: dict, rv_families: dict | None = None) -> str:

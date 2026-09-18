@@ -1432,6 +1432,10 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_raw_moment(gc, g, 1,
             "Expectation of gate_arith TIMES with shared random variables");
         }
+        case PROVSQL_ARITH_INTDIV:
+          // Truncation has no linearity to push through.
+          return mc_raw_moment(gc, g, 1,
+            "Expectation of gate_arith INTDIV (integer division)");
         case PROVSQL_ARITH_DIV: {
           if (wires.size() != 2)
             throw CircuitException("gate_arith DIV must be binary");
@@ -1582,6 +1586,8 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_var(
             "Variance of gate_arith TIMES with shared random variables");
         }
+        case PROVSQL_ARITH_INTDIV:
+          return mc_var("Variance of gate_arith INTDIV (integer division)");
         case PROVSQL_ARITH_DIV: {
           if (wires.size() != 2)
             throw CircuitException("gate_arith DIV must be binary");
@@ -1741,6 +1747,9 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
           return mc_raw_moment(gc, g, k,
             "Raw moment of gate_arith TIMES with shared random variables");
         }
+        case PROVSQL_ARITH_INTDIV:
+          return mc_raw_moment(gc, g, k,
+            "Raw moment of gate_arith INTDIV (integer division)");
         case PROVSQL_ARITH_DIV: {
           if (wires.size() != 2)
             throw CircuitException("gate_arith DIV must be binary");

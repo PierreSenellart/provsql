@@ -268,3 +268,17 @@ CREATE TABLE agg_arith_fn AS
 SELECT remove_provenance('agg_arith_fn');
 SELECT city, c, r, s FROM agg_arith_fn ORDER BY city;
 DROP TABLE agg_arith_fn;
+
+-- The circuit of an integer division truncates as SQL does, in every world:
+-- over five rows at probability 1/2, count(*) / 2 = 1 when 2 or 3 rows are
+-- present, with probability (10 + 10) / 32 = 0.625.
+CREATE TABLE agg_arith_id(id int);
+INSERT INTO agg_arith_id SELECT generate_series(1, 5);
+SELECT add_provenance('agg_arith_id');
+SELECT set_prob(provsql, 0.5) FROM agg_arith_id \g /dev/null
+CREATE TABLE agg_arith_fn AS
+  SELECT round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM (SELECT count(*) / 2 AS c FROM agg_arith_id) s WHERE c = 1;
+SELECT remove_provenance('agg_arith_fn');
+SELECT p FROM agg_arith_fn;
+DROP TABLE agg_arith_fn, agg_arith_id;

@@ -125,7 +125,7 @@ typedef enum provsql_arith_op {
   PROVSQL_ARITH_LN    = 8, ///< unary, natural logarithm of child0
                            ///< (a negative draw raises at evaluation)
   PROVSQL_ARITH_EXP   = 9, ///< unary, e^child0
-  PROVSQL_ARITH_PERCENTILE = 10 ///< continuous percentile (order-statistic
+  PROVSQL_ARITH_PERCENTILE = 10,///< continuous percentile (order-statistic
                                 ///< aggregate): wires are interleaved
                                 ///< [ind_1, x_1, ..., ind_n, x_n] (even
                                 ///< count) where ind_i is the row's 0/1
@@ -135,6 +135,8 @@ typedef enum provsql_arith_op {
                                 ///< sorted and linearly interpolated at the
                                 ///< fraction (SQL @c percentile_cont); an
                                 ///< empty draw is NaN (undefined world).
+  PROVSQL_ARITH_INTDIV = 11 ///< binary, child0 / child1 truncated toward
+                            ///< zero: SQL's division of two integers
 } provsql_arith_op;
 
 /**

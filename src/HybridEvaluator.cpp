@@ -155,6 +155,12 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
       if (std::isnan(v)) return NaN;
       return first / v;
     }
+    case PROVSQL_ARITH_INTDIV: {
+      if (wires.size() != 2) return NaN;
+      double v = try_eval_constant(gc, wires[1]);
+      if (std::isnan(v)) return NaN;
+      return std::trunc(first / v);
+    }
     case PROVSQL_ARITH_NEG:
       if (wires.size() != 1) return NaN;
       return -first;

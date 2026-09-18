@@ -2255,19 +2255,19 @@ CREATE CAST (agg_token AS boolean) WITH FUNCTION agg_token_to_bool(agg_token) AS
 
 CREATE OR REPLACE FUNCTION agg_token_intdiv(a agg_token, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, (b)::uuid],
+$$ SELECT provsql.agg_arith_make(11, ARRAY[(a)::uuid, (b)::uuid],
      trunc(provsql.agg_token_value(a) / provsql.agg_token_value(b))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 CREATE OR REPLACE FUNCTION agg_token_intdiv_numeric(a agg_token, b numeric)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_arith_make(3, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+$$ SELECT provsql.agg_arith_make(11, ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
      trunc(provsql.agg_token_value(a) / b)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 CREATE OR REPLACE FUNCTION numeric_intdiv_agg_token(a numeric, b agg_token)
   RETURNS agg_token AS
-$$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
+$$ SELECT provsql.agg_arith_make(11, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
      trunc(a / provsql.agg_token_value(b))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 

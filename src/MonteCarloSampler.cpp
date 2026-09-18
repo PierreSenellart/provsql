@@ -283,6 +283,11 @@ double Sampler::evalScalar(gate_t g)
             throw CircuitException("gate_arith DIV must be binary");
           result = evalScalar(wires[0]) / evalScalar(wires[1]);
           break;
+        case PROVSQL_ARITH_INTDIV:
+          if(wires.size() != 2)
+            throw CircuitException("gate_arith INTDIV must be binary");
+          result = std::trunc(evalScalar(wires[0]) / evalScalar(wires[1]));
+          break;
         case PROVSQL_ARITH_NEG:
           if(wires.size() != 1)
             throw CircuitException("gate_arith NEG must be unary");

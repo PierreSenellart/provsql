@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <stdexcept>
@@ -917,12 +918,15 @@ void provsql_having(
             if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
             out = a - b; is_int = ai && bi; return true;
           }
-          if (aop == PROVSQL_ARITH_DIV) {
+          if (aop == PROVSQL_ARITH_DIV || aop == PROVSQL_ARITH_INTDIV) {
             if (w.size() != 2) return false;
             double a, b; bool ai, bi;
             if (!eval(w[0], world, a, ai) || !eval(w[1], world, b, bi)) return false;
             if (b == 0) return false;
-            if (ai && bi) {     // SQL integer division truncates toward zero
+            if (aop == PROVSQL_ARITH_INTDIV) {  // SQL division of integers
+              out = std::trunc(a / b);
+              is_int = true;
+            } else if (ai && bi) {     // SQL integer division truncates toward zero
               out = static_cast<double>(static_cast<long long>(a) /
                                         static_cast<long long>(b));
               is_int = true;

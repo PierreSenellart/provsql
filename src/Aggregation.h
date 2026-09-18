@@ -76,6 +76,7 @@ enum class ArithmeticOperator {
   TIMES,      ///< n-ary product
   MINUS,      ///< binary difference
   DIV,        ///< binary quotient
+  INTDIV,     ///< binary quotient truncated toward zero (integer division)
   NEG,        ///< unary negation
   MAX,        ///< n-ary maximum (order statistic)
   MIN,        ///< n-ary minimum (order statistic)
