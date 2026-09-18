@@ -2298,6 +2298,13 @@ CREATE FUNCTION plain_truth(token uuid)
   'provsql', 'plain_truth' LANGUAGE C PARALLEL SAFE STABLE;
 
 -- ----------------------------------------------------------------------
+-- 6l. ORDER BY on an aggregate result sorts on its value.
+-- ----------------------------------------------------------------------
+CREATE FUNCTION agg_token_plain_text(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

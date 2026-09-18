@@ -40,6 +40,12 @@ input tuple present, is :sqlfunc:`sr_boolean` without a mapping:
     SELECT e.name, p.project, sr_boolean(provenance())
     FROM employees e LEFT JOIN projects p ON p.lead = e.id;
 
+``ORDER BY`` on an aggregate result sorts on that displayed value, so
+the rows come in the order plain SQL gives them, each with its
+provenance.  The order is that of the database as it is, not of each
+world: a warning says so.  With a ``LIMIT``, the cut is therefore not
+read per world either (see :ref:`the section on LIMIT <limit>`).
+
 NULL inputs are skipped exactly as SQL prescribes: a NULL-valued row
 contributes to ``count(*)`` but not to ``sum`` / ``avg`` / ``min`` /
 ``max`` or ``count(col)``, and an all-NULL group's aggregate is NULL --

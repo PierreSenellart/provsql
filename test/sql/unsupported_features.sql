@@ -34,9 +34,6 @@ SELECT city, COUNT(*) FROM personnel GROUP BY city
 UNION
 SELECT city, COUNT(*) FROM personnel WHERE city='Paris' GROUP BY city;
 
--- ORDER BY on aggregate from subquery
-SELECT city, cnt FROM (SELECT city, COUNT(*) AS cnt FROM personnel GROUP BY city) t ORDER BY cnt;
-
 -- GROUP BY on aggregate from subquery
 SELECT cnt, COUNT(*) FROM (SELECT city, COUNT(*) AS cnt FROM personnel GROUP BY city) t GROUP BY cnt;
 

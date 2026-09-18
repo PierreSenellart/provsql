@@ -359,6 +359,7 @@ aggregation_type_mutator(Node *node, void *ctx) {
       }
 
       v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+      v->varcollid = InvalidOid;
       if (!replaced && orig_type != context->constants->OID_TYPE_AGG_TOKEN)
         linitial(f->args) =
           cast_agg_token_to_type((Node *)v, orig_type, context->constants);
@@ -378,6 +379,7 @@ aggregation_type_mutator(Node *node, void *ctx) {
     Var *v = (Var *)*argp;
     Oid orig_type = v->vartype;
     v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+    v->varcollid = InvalidOid;
     *argp = (Expr *)cast_agg_token_to_type((Node *)v, orig_type,
                                            context->constants);
     return node;
@@ -388,6 +390,7 @@ aggregation_type_mutator(Node *node, void *ctx) {
 
     if (v->varno == context->varno && v->varattno == context->varattno) {
       v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+      v->varcollid = InvalidOid;
     }
   }
   return expression_tree_mutator(node, aggregation_type_mutator, ctx);
@@ -465,7 +468,8 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
       query_tree_mutator(q, aggregation_type_mutator, &context,
                          QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
 
-      /* Check if the retyped column is used in ORDER BY or GROUP BY */
+      /* Check if the retyped column is used in GROUP BY (an ORDER BY on it
+       * sorts on its value, see sort_on_plain_values) */
       {
         ListCell *lc2;
         foreach (lc2, q->targetList) {
@@ -475,12 +479,6 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
             if (v->varno == rteid && v->varattno == attno &&
                 outer_te->ressortgroupref > 0) {
               ListCell *lc3;
-              foreach (lc3, q->sortClause) {
-                SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
-                if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
-                  provsql_error("ORDER BY on aggregate results from "
-                                "a subquery not supported");
-              }
               foreach (lc3, q->groupClause) {
                 SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
                 if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
@@ -16771,6 +16769,80 @@ static bool normalize_inner_joins_walker(Node *node, void *cx) {
   return expression_tree_walker(node, normalize_inner_joins_walker, cx);
 }
 
+/**
+ * @brief Sort an @c ORDER @c BY on an aggregate result on its value.
+ *
+ * An @c agg_token has no ordering.  Each sort key of @p q whose column is an
+ * @c agg_token (an aggregate of @p q, or a subquery's aggregate result)
+ * moves to a new junk column holding the value, read in the type the sort
+ * operator was chosen for: the value plain SQL computes on the same data.
+ * The column itself keeps its @c agg_token, and each row its provenance; the
+ * order is that of the database as it is, whatever the world.  At the top
+ * level of the statement, a warning says so.  A key also used for grouping or
+ * @c DISTINCT is left alone, refused elsewhere.
+ */
+static void sort_on_plain_values(const constants_t *constants, Query *q,
+                                 bool top_level) {
+  ListCell *lc;
+  bool sorted = false;
+
+  foreach (lc, q->sortClause) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    TargetEntry *te = get_sortgroupclause_tle(sgc, q->targetList);
+    Oid ltype, rtype;
+    Node *key;
+    TargetEntry *junk;
+
+    if (exprType((Node *)te->expr) != constants->OID_TYPE_AGG_TOKEN ||
+        !OidIsValid(sgc->sortop))
+      continue;
+    {
+      ListCell *lc2;
+      bool shared = false;
+      foreach (lc2, q->groupClause)
+        if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
+            sgc->tleSortGroupRef)
+          shared = true;
+      foreach (lc2, q->distinctClause)
+        if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
+            sgc->tleSortGroupRef)
+          shared = true;
+      if (shared)
+        continue;
+    }
+    if (!OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT))
+      provsql_error("ORDER BY on the result of an aggregate function is not "
+                    "supported by this version of the provsql schema; run "
+                    "ALTER EXTENSION provsql UPDATE");
+    op_input_types(sgc->sortop, &ltype, &rtype);
+
+    key = (Node *)makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT,
+                               TEXTOID,
+                               list_make1(copyObject(te->expr)),
+                               DEFAULT_COLLATION_OID, InvalidOid,
+                               COERCE_EXPLICIT_CALL);
+    if (ltype != TEXTOID) {
+      CoerceViaIO *io = makeNode(CoerceViaIO);
+      io->arg = (Expr *)key;
+      io->resulttype = ltype;
+      io->resultcollid = get_typcollation(ltype);
+      io->coerceformat = COERCE_IMPLICIT_CAST;
+      io->location = -1;
+      key = (Node *)io;
+    }
+    junk = makeTargetEntry((Expr *)key, list_length(q->targetList) + 1,
+                           NULL, true);
+    junk->ressortgroupref = te->ressortgroupref;
+    te->ressortgroupref = 0;
+    q->targetList = lappend(q->targetList, junk);
+    sorted = true;
+  }
+  if (sorted && top_level)
+    provsql_warning("ORDER BY on an aggregate result sorts on its plain "
+                    "value, the one computed on the database as it is, "
+                    "disregarding provenance");
+}
+
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
                             bool in_boolean_rewrite,
@@ -17281,8 +17353,6 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
 
       if (q->hasAggs) {
-        ListCell *lc_sort;
-
         // Compute aggregation expressions
         replace_aggregations_by_provenance_aggregate(
           constants, q, prov_atts,
@@ -17296,23 +17366,6 @@ static Query *process_query(const constants_t *constants, Query *q,
          * stays an agg_token instead of being cast to numeric (which would
          * discard the provenance and corrupt the CASE). */
         rewrite_agg_cases(constants, q);
-
-        // If there are any sort clauses on something whose type is now
-        // aggregate token, we throw an error: sorting aggregation values
-        // when provenance is captured is ill-defined
-        foreach (lc_sort, q->sortClause) {
-          SortGroupClause *sort = (SortGroupClause *)lfirst(lc_sort);
-          ListCell *lc_te;
-          foreach (lc_te, q->targetList) {
-            TargetEntry *te = (TargetEntry *)lfirst(lc_te);
-            if (sort->tleSortGroupRef == te->ressortgroupref) {
-              if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
-                provsql_error("ORDER BY on the result of an aggregate function is "
-                              "not supported");
-              break;
-            }
-          }
-        }
       }
 
       /* An aggregate over a frame determined by values becomes an agg_token
@@ -17384,6 +17437,8 @@ static Query *process_query(const constants_t *constants, Query *q,
         pfree(columns[i]);
     }
   }
+
+  sort_on_plain_values(constants, q, top_level);
 
   if (provsql_verbose >= 50)
     elog_node_display(NOTICE, "ProvSQL: After query rewriting", q, true);

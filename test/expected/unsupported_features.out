@@ -5,7 +5,6 @@ ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported
 ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported
 ERROR:  ProvSQL: DISTINCT on aggregate results not supported
 ERROR:  ProvSQL: Non-ALL set operations (UNION, EXCEPT) on aggregate results not supported
-ERROR:  ProvSQL: ORDER BY on aggregate results from a subquery not supported
 ERROR:  ProvSQL: GROUP BY on aggregate results from a subquery not supported
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself

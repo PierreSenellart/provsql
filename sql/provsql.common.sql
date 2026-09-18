@@ -2796,6 +2796,13 @@ CREATE OR REPLACE FUNCTION agg_token_value(agg_token)
   RETURNS numeric
   AS 'provsql','agg_token_value' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Value of an agg_token as text, NULL for a NULL value, without the
+ *  provenance-loss warning the public cast emits: the sort key of an
+ *  ORDER BY on an aggregate result (internal use). */
+CREATE FUNCTION agg_token_plain_text(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /** @brief Bundle a provenance gate UUID with a running value into an
  *  agg_token (inverse of the agg_token_uuid / agg_token_value
  *  accessors). */

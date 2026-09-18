@@ -107,8 +107,8 @@ will either raise an error or may cause incorrect provenance tracking:
 * ``GROUPING SETS``, ``CUBE``, ``ROLLUP``
 * **Operations on aggregate results requiring comparison or duplicate
   elimination:** ``DISTINCT`` on aggregates, ``UNION``/``EXCEPT``
-  (non-ALL) with aggregates, ``ORDER BY`` or ``GROUP BY`` on aggregate
-  results from a subquery
+  (non-ALL) with aggregates, ``GROUP BY`` on aggregate results from a
+  subquery
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
   other than aggregates over a frame determined by values and the ranks
   ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER`` (see

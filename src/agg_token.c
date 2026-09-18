@@ -18,6 +18,7 @@
 #include "utils/uuid.h"
 #include "utils/numeric.h"
 #include "utils/fmgrprotos.h"
+#include "utils/builtins.h"
 #include "access/xact.h"
 #include "executor/spi.h"
 #include "access/htup_details.h"
@@ -304,6 +305,25 @@ agg_token_to_text(PG_FUNCTION_ARGS)
   memcpy(VARDATA(txt_result), aggtok->val, len);
 
   PG_RETURN_TEXT_P(txt_result);
+}
+
+PG_FUNCTION_INFO_V1(agg_token_plain_text);
+/**
+ * @brief The value of an @c agg_token as @c text, NULL for a NULL value,
+ *        without the "provenance information is lost" warning.
+ *
+ * The internal accessor of the rewriter's sort keys: an @c ORDER @c BY on an
+ * aggregate result sorts on this value, read in the aggregate's type, while
+ * the column itself keeps its @c agg_token.
+ */
+Datum
+agg_token_plain_text(PG_FUNCTION_ARGS)
+{
+  agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
+
+  if (agg_token_val_is_null(aggtok))
+    PG_RETURN_NULL();
+  PG_RETURN_TEXT_P(cstring_to_text(aggtok->val));
 }
 
 PG_FUNCTION_INFO_V1(row_number_as_rank);
