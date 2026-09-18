@@ -7679,11 +7679,15 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     return NULL;
   is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
              strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0;
-  /* Floating-point arithmetic (CAST(count(*) AS real) / 30) stays as the
-   * query wrote it, on the values: the agg_token operators compute in
-   * numeric, which does not round as real / double precision do. */
-  if (!is_arith || op->opresulttype == FLOAT4OID ||
-      op->opresulttype == FLOAT8OID) {
+  /* Only arithmetic whose result is an integer or a numeric: floating-point
+   * arithmetic (CAST(count(*) AS real) / 30) stays as the query wrote it, on
+   * the values (the agg_token operators compute in numeric, which does not
+   * round as real / double precision do), and so does arithmetic on other
+   * types (a timestamp minus a timestamp). */
+  if (!is_arith || !(op->opresulttype == INT2OID ||
+                    op->opresulttype == INT4OID ||
+                    op->opresulttype == INT8OID ||
+                    op->opresulttype == NUMERICOID)) {
     pfree(opname);
     return NULL;
   }
