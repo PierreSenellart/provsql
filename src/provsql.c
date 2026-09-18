@@ -6668,6 +6668,127 @@ static Node *replace_having_distinct_mutator(Node *node, void *ctx) {
   return expression_tree_mutator(node, replace_having_distinct_mutator, ctx);
 }
 
+/** @brief Context for @c scalar_distinct_mutator. */
+typedef struct scalar_distinct_ctx {
+  int base;          ///< Range-table length before the outer subqueries
+  int o_index;       ///< Range-table index of the subquery of the aggregates
+  List *aggs;        ///< Aggregates moved to that subquery
+} scalar_distinct_ctx;
+
+/** @brief Mutator: renumber the Vars on the outer subqueries of
+ *  @c rewrite_agg_distinct, and replace each remaining aggregate by a Var on
+ *  the subquery computing it. */
+static Node *scalar_distinct_mutator(Node *node, void *cx) {
+  scalar_distinct_ctx *c = (scalar_distinct_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Aggref) && ((Aggref *)node)->agglevelsup == 0) {
+    Aggref *ar = (Aggref *)node;
+    c->aggs = lappend(c->aggs, ar);
+    return (Node *)makeVar(c->o_index, list_length(c->aggs), ar->aggtype, -1,
+                           ar->aggcollid, 0);
+  }
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0 &&
+      (int)((Var *)node)->varno > c->base) {
+    Var *v = (Var *)copyObject(node);
+    v->varno -= c->base;
+#if PG_VERSION_NUM >= 130000
+    v->varnosyn = 0;
+    v->varattnosyn = 0;
+#endif
+    return (Node *)v;
+  }
+  return expression_tree_mutator(node, scalar_distinct_mutator, cx);
+}
+
+/**
+ * @brief Turn the scalar query @p q rewritten by @c rewrite_agg_distinct into
+ *        a cross join of one-row subqueries.
+ *
+ * The @p n outer subqueries (range-table entries @p base + 1 to @p base +
+ * @p n) each compute one @c AGG(DISTINCT) as one row.  The query itself, a
+ * scalar aggregation over its FROM and WHERE, also returns one row, but when
+ * its WHERE keeps none, a Var of that row on an outer subquery reads an empty
+ * row.  The FROM, the WHERE and the aggregates without @c DISTINCT move to one
+ * more subquery, and the query is the cross join of these subqueries, without
+ * aggregation.
+ */
+static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
+  scalar_distinct_ctx c;
+  List *from = NIL, *orig_from = NIL, *new_rtable = NIL;
+  ListCell *lc;
+  int i = 0;
+
+  c.base = base;
+  c.o_index = n + 1;
+  c.aggs = NIL;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    te->expr = (Expr *)scalar_distinct_mutator((Node *)te->expr, &c);
+  }
+
+  foreach (lc, q->jointree->fromlist) {
+    Node *item = (Node *)lfirst(lc);
+    if (IsA(item, RangeTblRef) && ((RangeTblRef *)item)->rtindex > base)
+      continue;
+    orig_from = lappend(orig_from, item);
+  }
+  for (i = 1; i <= n; ++i) {
+    RangeTblRef *rtr = makeNode(RangeTblRef);
+    rtr->rtindex = i;
+    from = lappend(from, rtr);
+    new_rtable = lappend(new_rtable, list_nth(q->rtable, base + i - 1));
+  }
+
+  if (c.aggs != NIL) {
+    Query *o = makeNode(Query);
+    RangeTblEntry *rte = makeNode(RangeTblEntry);
+    RangeTblRef *rtr = makeNode(RangeTblRef);
+    List *colnames = NIL;
+
+    o->commandType = CMD_SELECT;
+    o->querySource = QSRC_ORIGINAL;
+    o->rtable = list_truncate(list_copy(q->rtable), base);
+#if PG_VERSION_NUM >= 160000
+    o->rteperminfos = q->rteperminfos;
+    q->rteperminfos = NIL;
+#endif
+    o->jointree = makeFromExpr(orig_from, q->jointree->quals);
+    i = 0;
+    foreach (lc, c.aggs) {
+      char name[16];
+      snprintf(name, sizeof(name), "agg%d", ++i);
+      o->targetList = lappend(o->targetList,
+                              makeTargetEntry((Expr *)lfirst(lc), i,
+                                              pstrdup(name), false));
+      colnames = lappend(colnames, makeString(pstrdup(name)));
+    }
+    o->hasAggs = true;
+
+    rte->rtekind = RTE_SUBQUERY;
+    rte->subquery = o;
+    rte->eref = makeAlias("o", colnames);
+    rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+    rte->requiredPerms = ACL_SELECT;
+#endif
+    new_rtable = lappend(new_rtable, rte);
+    rtr->rtindex = n + 1;
+    from = lappend(from, rtr);
+  }
+#if PG_VERSION_NUM >= 160000
+  else {
+    /* The base relations are gone with the FROM: so are their permission
+     * checks, which the outer subqueries make on their own copies. */
+    q->rteperminfos = NIL;
+  }
+#endif
+
+  q->rtable = new_rtable;
+  q->jointree = makeFromExpr(from, NULL);
+  q->hasAggs = false;
+}
+
 /**
  * @brief Rewrite every @c AGG(DISTINCT key) in @p q using independent subqueries.
  *
@@ -6911,6 +7032,13 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
         hrc.next_rtindex = rtable_base + (n_aggs - n_having) + 1;
         q->havingQual = replace_having_distinct_mutator(q->havingQual, &hrc);
       }
+
+      /* A query without GROUP BY returns one row, even when its WHERE keeps
+       * none: the columns of the outer subqueries would then be read from an
+       * empty row.  The query becomes a cross join of one-row subqueries. */
+      if (q->groupClause == NIL && q->groupingSets == NIL &&
+          q->havingQual == NULL && !q->hasSubLinks)
+        scalar_distinct_as_cross_join(q, rtable_base, n_aggs);
 
       return q;
     }

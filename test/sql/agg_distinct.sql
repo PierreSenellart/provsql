@@ -63,3 +63,21 @@ SELECT remove_provenance('agg_result3');
 SELECT * FROM agg_result3 ORDER BY city;
 
 DROP TABLE agg_result3;
+
+-- A query without GROUP BY returns one row even when its WHERE keeps none:
+-- the AGG(DISTINCT) subqueries and the other aggregates are then read from
+-- one-row subqueries, not from the empty rows of the query.
+CREATE TABLE agg_result4 AS
+  SELECT count(DISTINCT city) - count(DISTINCT position) AS d, count(*) AS n,
+         max(id) AS m
+  FROM personnel WHERE id > 100;
+SELECT remove_provenance('agg_result4');
+SELECT * FROM agg_result4;
+DROP TABLE agg_result4;
+CREATE TABLE agg_result4 AS
+  SELECT count(DISTINCT city) - count(DISTINCT position) AS d, count(*) AS n,
+         max(id) AS m
+  FROM personnel WHERE id > 2;
+SELECT remove_provenance('agg_result4');
+SELECT * FROM agg_result4;
+DROP TABLE agg_result4;
