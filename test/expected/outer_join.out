@@ -120,3 +120,13 @@ HOLDS left|2|8|t
 HOLDS left|2||f
 HOLDS left|3||t
 (6 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+q|id|c|c1
+AGG left|1|2|3 (*)
+AGG left|2|1|2 (*)
+AGG left|3|0|
+(3 rows)

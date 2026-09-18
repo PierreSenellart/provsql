@@ -42,3 +42,19 @@ by_city|New York|1
 by_city|Paris|1
 total|all|1
 (4 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+item|c
+a|7
+b|0
+(2 rows)
+remove_provenance
+
+(1 row)
+item|c
+a|7 (*)
+b|3 (*)
+c|2 (*)
+(3 rows)

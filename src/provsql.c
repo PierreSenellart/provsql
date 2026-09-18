@@ -309,6 +309,27 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
                                     const constants_t *constants);
 
 /**
+ * @brief Whether argument @p i of function @p funcid takes an @c agg_token
+ *        as it is: a parameter of type @c agg_token, or a polymorphic one of
+ *        a ProvSQL function (@c expected(cnt), @c sr_formula(cnt, ...)).
+ */
+static bool takes_agg_token(Oid funcid, int i, const constants_t *constants) {
+  HeapTuple tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+  bool res = false;
+  if (HeapTupleIsValid(tp)) {
+    Form_pg_proc procForm = (Form_pg_proc) GETSTRUCT(tp);
+    if (i < procForm->pronargs) {
+      Oid formal = procForm->proargtypes.values[i];
+      res = formal == constants->OID_TYPE_AGG_TOKEN ||
+            (IsPolymorphicType(formal) &&
+             procForm->pronamespace == constants->OID_SCHEMA_PROVSQL);
+    }
+    ReleaseSysCache(tp);
+  }
+  return res;
+}
+
+/**
  * @brief Tree-mutator that retypes a specific Var to @c agg_token.
  *
  * When the target Var is inside a cast FuncExpr, replaces the cast
@@ -360,11 +381,49 @@ aggregation_type_mutator(Node *node, void *ctx) {
 
       v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
       v->varcollid = InvalidOid;
-      if (!replaced && orig_type != context->constants->OID_TYPE_AGG_TOKEN)
+      if (!replaced && orig_type != context->constants->OID_TYPE_AGG_TOKEN &&
+          !takes_agg_token(f->funcid, 0, context->constants))
         linitial(f->args) =
           cast_agg_token_to_type((Node *)v, orig_type, context->constants);
 
       return (Node *)f;
+    }
+  }
+
+  if (IsA(node, OpExpr) || IsA(node, FuncExpr)) {
+    /* A polymorphic parameter of a function outside ProvSQL (a = ARRAY[1]
+     * over an array_agg column) reads the value: the Var is cast back to its
+     * own type, the only place where that type is still known. */
+    List *args = IsA(node, OpExpr) ? ((OpExpr *)node)->args
+                                   : ((FuncExpr *)node)->args;
+    Oid funcid;
+    HeapTuple tp;
+    ListCell *lc;
+    int i = 0;
+
+    if (IsA(node, OpExpr)) {
+      set_opfuncid((OpExpr *)node);
+      funcid = ((OpExpr *)node)->opfuncid;
+    } else
+      funcid = ((FuncExpr *)node)->funcid;
+    tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+    if (HeapTupleIsValid(tp)) {
+      Form_pg_proc procForm = (Form_pg_proc) GETSTRUCT(tp);
+      if (procForm->pronamespace != context->constants->OID_SCHEMA_PROVSQL)
+        foreach (lc, args) {
+          if (i < procForm->pronargs &&
+              IsPolymorphicType(procForm->proargtypes.values[i]) &&
+              is_target_agg_var((Node *)lfirst(lc), context)) {
+            Var *v = (Var *)lfirst(lc);
+            Oid orig_type = v->vartype;
+            v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+            v->varcollid = InvalidOid;
+            lfirst(lc) = cast_agg_token_to_type((Node *)v, orig_type,
+                                                context->constants);
+          }
+          ++i;
+        }
+      ReleaseSysCache(tp);
     }
   }
 
@@ -7392,15 +7451,23 @@ static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
      * arithmetic result is cast to whatever the parent expects. */
     if (i < procForm->pronargs && exprType(arg) == constants->OID_TYPE_AGG_TOKEN) {
       Oid formal_type = procForm->proargtypes.values[i];
+      bool is_aggregate = IsA(arg, FuncExpr) &&
+        ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
 
-      if (formal_type != constants->OID_TYPE_AGG_TOKEN &&
-          !IsPolymorphicType(formal_type)) {
-        if (IsA(arg, FuncExpr) &&
-            ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      /* A polymorphic parameter of a ProvSQL function (sr_formula(count(*),
+       * ...)) takes the agg_token itself; one of any other function
+       * (array_agg(x) = ARRAY[1]) reads the value, in the aggregate's own
+       * type, known for a bare aggregate. */
+      if (formal_type == constants->OID_TYPE_AGG_TOKEN)
+        ;
+      else if (IsPolymorphicType(formal_type)) {
+        if (is_aggregate &&
+            procForm->pronamespace != constants->OID_SCHEMA_PROVSQL)
           lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
-        else
-          lfirst(lc) = cast_agg_token_to_type(arg, formal_type, constants);
-      }
+      } else if (is_aggregate)
+        lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
+      else
+        lfirst(lc) = cast_agg_token_to_type(arg, formal_type, constants);
     }
     i++;
   }
@@ -7463,7 +7530,11 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     return NULL;
   is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
              strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0;
-  if (!is_arith) {
+  /* Floating-point arithmetic (CAST(count(*) AS real) / 30) stays as the
+   * query wrote it, on the values: the agg_token operators compute in
+   * numeric, which does not round as real / double precision do. */
+  if (!is_arith || op->opresulttype == FLOAT4OID ||
+      op->opresulttype == FLOAT8OID) {
     pfree(opname);
     return NULL;
   }
@@ -7493,8 +7564,29 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     r = rp;
 
   pstate = make_parsestate(NULL);
+  {
+    /* No agg_token version of the operator (timestamp - min(d)): decline,
+     * and let the casts read the value, rather than fail. */
+    List *names = list_make1(makeString(opname));
+    Operator tup = l != NULL
+      ? oper(pstate, names, exprType(l), exprType(r), true, -1)
+      : left_oper(pstate, names, exprType(r), true, -1);
+    if (tup == NULL) {
+      free_parsestate(pstate);
+      pfree(opname);
+      return NULL;
+    }
+    ReleaseSysCache(tup);
+  }
   newop = make_op(pstate, list_make1(makeString(opname)), l, r, NULL, -1);
   free_parsestate(pstate);
+
+  /* Only an agg_token operator carries the provenance; an operator that
+   * implicit casts reach otherwise (random_variable's) is not this one. */
+  if (exprType((Node *)newop) != constants->OID_TYPE_AGG_TOKEN) {
+    pfree(opname);
+    return NULL;
+  }
 
   /* A division the query made on integers (count(*) / 2) truncates toward
    * zero, where the agg_token operator divides as numeric: call its integer
@@ -13492,6 +13584,131 @@ static void group_set_difference_right_arm(const constants_t *constants,
   rarg_rte->subquery = G;
 }
 
+/** @brief The range-table indexes of the leaves of a set-operation tree. */
+static void union_leaves(Node *n, List **leaves) {
+  if (IsA(n, RangeTblRef))
+    *leaves = lappend_int(*leaves, ((RangeTblRef *)n)->rtindex);
+  else if (IsA(n, SetOperationStmt)) {
+    union_leaves(((SetOperationStmt *)n)->larg, leaves);
+    union_leaves(((SetOperationStmt *)n)->rarg, leaves);
+  }
+}
+
+/** @brief Set the type of column @p i on every node of a set-operation tree. */
+static void set_union_column_type(Node *n, int i, Oid type) {
+  SetOperationStmt *so;
+  if (!IsA(n, SetOperationStmt))
+    return;
+  so = (SetOperationStmt *)n;
+  if (i < list_length(so->colTypes)) {
+    lfirst_oid(list_nth_cell(so->colTypes, i)) = type;
+    lfirst_int(list_nth_cell(so->colTypmods, i)) = -1;
+    lfirst_oid(list_nth_cell(so->colCollations, i)) = InvalidOid;
+  }
+  set_union_column_type(so->larg, i, type);
+  set_union_column_type(so->rarg, i, type);
+}
+
+/** @brief Context for @c retype_union_var_mutator. */
+typedef struct retype_union_var_ctx {
+  Index varno;          ///< Range-table index the set operation's Vars use
+  AttrNumber varattno;  ///< Column to retype
+  Oid type;             ///< Its new type
+} retype_union_var_ctx;
+
+/** @brief Mutator: retype the Vars of one column of a set operation. */
+static Node *retype_union_var_mutator(Node *node, void *cx) {
+  retype_union_var_ctx *ctx = (retype_union_var_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 && v->varno == ctx->varno &&
+        v->varattno == ctx->varattno) {
+      v->vartype = ctx->type;
+      v->vartypmod = -1;
+      v->varcollid = get_typcollation(ctx->type);
+    }
+    return node;
+  }
+  return expression_tree_mutator(node, retype_union_var_mutator, cx);
+}
+
+/**
+ * @brief Give each column of a @c UNION one type across its arms, once
+ *        their aggregates have become @c agg_token.
+ *
+ * A column whose arms are all aggregates or @c NULL (the padding of a
+ * lowered outer join) is an @c agg_token, its @c NULL arms typed so.  A
+ * column where an aggregate meets a plain value (@c UNION @c ALL of a count
+ * and a constant) reads the aggregates as values, the plain value having no
+ * provenance to join.  The types are set on every node of the tree, and on
+ * the query's own Vars of the column, which the set operation reads from its
+ * first arm.
+ */
+static void reconcile_union_columns(const constants_t *constants,
+                                    SetOperationStmt *stmt, Query *q) {
+  List *leaves = NIL;
+  int ncols = list_length(stmt->colTypes);
+  int i;
+
+  union_leaves((Node *)stmt, &leaves);
+  for (i = 0; i < ncols; ++i) {
+    bool any_agg = false, all_agg_or_null = true;
+    Oid plain = InvalidOid;
+    ListCell *lc;
+    retype_union_var_ctx rctx;
+
+    foreach (lc, leaves) {
+      RangeTblEntry *rte = rt_fetch(lfirst_int(lc), q->rtable);
+      TargetEntry *te;
+      if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL ||
+          i >= list_length(rte->subquery->targetList))
+        continue;
+      te = list_nth_node(TargetEntry, rte->subquery->targetList, i);
+      if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN)
+        any_agg = true;
+      else {
+        if (!OidIsValid(plain))
+          plain = exprType((Node *)te->expr);
+        if (!IsA(te->expr, Const) || !((Const *)te->expr)->constisnull)
+          all_agg_or_null = false;
+      }
+    }
+    if (!any_agg)
+      continue;
+
+    if (!all_agg_or_null) {
+      /* The plain type: that of the column before the rewriting. */
+      Oid t = list_nth_oid(stmt->colTypes, i);
+      if (t != constants->OID_TYPE_AGG_TOKEN)
+        plain = t;
+    }
+    foreach (lc, leaves) {
+      RangeTblEntry *rte = rt_fetch(lfirst_int(lc), q->rtable);
+      TargetEntry *te;
+      if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL ||
+          i >= list_length(rte->subquery->targetList))
+        continue;
+      te = list_nth_node(TargetEntry, rte->subquery->targetList, i);
+      if (all_agg_or_null) {
+        if (exprType((Node *)te->expr) != constants->OID_TYPE_AGG_TOKEN)
+          te->expr = (Expr *)makeNullConst(constants->OID_TYPE_AGG_TOKEN, -1,
+                                           InvalidOid);
+      } else if (exprType((Node *)te->expr) ==
+                 constants->OID_TYPE_AGG_TOKEN)
+        te->expr = (Expr *)cast_agg_token_to_type((Node *)te->expr, plain,
+                                                  constants);
+    }
+    rctx.type = all_agg_or_null ? constants->OID_TYPE_AGG_TOKEN : plain;
+    set_union_column_type((Node *)stmt, i, rctx.type);
+    rctx.varno = linitial_int(leaves);
+    rctx.varattno = i + 1;
+    query_tree_mutator(q, retype_union_var_mutator, &rctx,
+                       QTW_DONT_COPY_QUERY | QTW_IGNORE_RT_SUBQUERIES);
+  }
+}
+
 /**
  * @brief Recursively annotate a UNION tree with the provenance UUID type.
  *
@@ -13989,45 +14206,82 @@ migrate_probabilistic_quals(const constants_t *constants, Query *q)
 typedef struct insert_agg_token_casts_context {
   Query *query;               ///< Outer query (to look up subquery RTEs)
   const constants_t *constants; ///< Extension OID cache
+  bool in_having;             ///< Walking the HAVING clause
 } insert_agg_token_casts_context;
+
+static Oid orig_agg_type_of_column(Query *sub, AttrNumber attno,
+                                   const constants_t *constants, int depth);
+
+/** @brief @c orig_agg_type_of_column for a Var of @p q, or @c InvalidOid. */
+static Oid orig_agg_type_of_var(Query *q, Var *v, const constants_t *constants,
+                                int depth) {
+  RangeTblEntry *rte;
+  if (v->varlevelsup != 0 || v->varno < 1 || v->varno > list_length(q->rtable))
+    return InvalidOid;
+  rte = rt_fetch(v->varno, q->rtable);
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+    return InvalidOid;
+  return orig_agg_type_of_column(rte->subquery, v->varattno, constants,
+                                 depth + 1);
+}
+
+/**
+ * @brief The type of the aggregate an @c agg_token column of @p sub comes
+ *        from, or @c InvalidOid.
+ *
+ * Follows the column down: to the @c provenance_aggregate() call that makes
+ * it (its second argument is the type), through the subqueries that pass it
+ * on, and through the arms of a set operation (the padding of a lowered
+ * outer join is one).
+ */
+static Oid orig_agg_type_of_column(Query *sub, AttrNumber attno,
+                                   const constants_t *constants, int depth) {
+  TargetEntry *te;
+  if (depth > 32 || attno < 1 || attno > list_length(sub->targetList))
+    return InvalidOid;
+  if (sub->setOperations != NULL) {
+    List *leaves = NIL;
+    ListCell *lc;
+    union_leaves(sub->setOperations, &leaves);
+    foreach (lc, leaves) {
+      RangeTblEntry *rte = rt_fetch(lfirst_int(lc), sub->rtable);
+      Oid t;
+      if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+        continue;
+      t = orig_agg_type_of_column(rte->subquery, attno, constants, depth + 1);
+      if (OidIsValid(t))
+        return t;
+    }
+    return InvalidOid;
+  }
+  te = list_nth_node(TargetEntry, sub->targetList, attno - 1);
+  if (IsA(te->expr, FuncExpr) &&
+      ((FuncExpr *)te->expr)->funcid ==
+        constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+    Const *aggtype_const = (Const *)lsecond(((FuncExpr *)te->expr)->args);
+    return DatumGetObjectId(aggtype_const->constvalue);
+  }
+  if (IsA(te->expr, Var))
+    return orig_agg_type_of_var(sub, (Var *)te->expr, constants, depth);
+  return InvalidOid;
+}
 
 /**
  * @brief Look up the original aggregate return type for an agg_token Var.
  *
- * Navigates from the Var's varno/varattno to the subquery's target list,
- * finds the provenance_aggregate() FuncExpr, and extracts the type OID
- * from its second argument (aggtype).
+ * The type of the aggregate the Var's subquery column comes from
+ * (@c orig_agg_type_of_column).
  */
 static Oid get_agg_token_orig_type(Var *v, insert_agg_token_casts_context *ctx) {
-  RangeTblEntry *rte;
-  TargetEntry *te;
-
-  if (v->varno < 1 || v->varno > list_length(ctx->query->rtable))
-    return InvalidOid;
-
-  rte = list_nth_node(RangeTblEntry, ctx->query->rtable, v->varno - 1);
-  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
-    return InvalidOid;
-
-  if (v->varattno < 1 || v->varattno > list_length(rte->subquery->targetList))
-    return InvalidOid;
-
-  te = list_nth_node(TargetEntry, rte->subquery->targetList, v->varattno - 1);
-  if (IsA(te->expr, FuncExpr)) {
-    FuncExpr *f = (FuncExpr *)te->expr;
-    if (f->funcid == ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-      Const *aggtype_const = (Const *)lsecond(f->args);
-      return DatumGetObjectId(aggtype_const->constvalue);
-    }
-  }
-  return InvalidOid;
+  return orig_agg_type_of_var(ctx->query, v, ctx->constants, 0);
 }
 
 /**
  * @brief Wrap an agg_token Var in a cast to its original type, in place.
  */
 static void cast_agg_token_in_list(ListCell *lc,
-                                   insert_agg_token_casts_context *ctx) {
+                                   insert_agg_token_casts_context *ctx,
+                                   bool through_text) {
   Var *v = (Var *)lfirst(lc);
   Oid target = get_agg_token_orig_type(v, ctx);
   HeapTuple castTuple;
@@ -14038,7 +14292,14 @@ static void cast_agg_token_in_list(ListCell *lc,
   castTuple = SearchSysCache2(CASTSOURCETARGET,
                               ObjectIdGetDatum(ctx->constants->OID_TYPE_AGG_TOKEN),
                               ObjectIdGetDatum(target));
-  if (HeapTupleIsValid(castTuple)) {
+  if (!HeapTupleIsValid(castTuple)) {
+    /* No cast to that type (a timestamp): through the text of the value --
+     * except in a HAVING clause, whose lowering reads the column itself. */
+    if (through_text)
+      lfirst(lc) = cast_agg_token_to_type((Node *)v, target, ctx->constants);
+    return;
+  }
+  {
     Form_pg_cast castForm = (Form_pg_cast)GETSTRUCT(castTuple);
     if (OidIsValid(castForm->castfunc)) {
       FuncExpr *fc = makeNode(FuncExpr);
@@ -14066,8 +14327,48 @@ static void cast_agg_token_args(List *args,
   foreach (lc, args) {
     if (IsA(lfirst(lc), Var) &&
         ((Var *)lfirst(lc))->vartype == ctx->constants->OID_TYPE_AGG_TOKEN)
-      cast_agg_token_in_list(lc, ctx);
+      cast_agg_token_in_list(lc, ctx, !ctx->in_having);
   }
+}
+
+/**
+ * @brief Cast the @c agg_token arguments of an operator or function that
+ *        reads values.
+ *
+ * An argument whose parameter is @c agg_token, or a polymorphic parameter of
+ * a ProvSQL function (@c sr_formula(cnt, ...)), keeps its @c agg_token.
+ * Otherwise a subquery's aggregate column is cast to its own type, the one
+ * the parser typed the expression with; any other @c agg_token (the result
+ * of arithmetic on one) is cast to the parameter's type, left alone when that
+ * is polymorphic.
+ */
+static void cast_agg_token_func_args(List *args, Oid funcid,
+                                     insert_agg_token_casts_context *ctx) {
+  const constants_t *constants = ctx->constants;
+  HeapTuple tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+  Form_pg_proc procForm;
+  ListCell *lc;
+  int i = 0;
+
+  if (!HeapTupleIsValid(tp))
+    return;
+  procForm = (Form_pg_proc) GETSTRUCT(tp);
+  foreach (lc, args) {
+    Node *arg = (Node *)lfirst(lc);
+    Oid formal = i < procForm->pronargs ? procForm->proargtypes.values[i]
+                                        : InvalidOid;
+    ++i;
+    if (exprType(arg) != constants->OID_TYPE_AGG_TOKEN ||
+        !OidIsValid(formal) || formal == constants->OID_TYPE_AGG_TOKEN ||
+        (IsPolymorphicType(formal) &&
+         procForm->pronamespace == constants->OID_SCHEMA_PROVSQL))
+      continue;
+    if (IsA(arg, Var))
+      cast_agg_token_in_list(lc, ctx, true);
+    else if (!IsPolymorphicType(formal))
+      lfirst(lc) = cast_agg_token_to_type(arg, formal, constants);
+  }
+  ReleaseSysCache(tp);
 }
 
 /**
@@ -14086,6 +14387,11 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
   if (node == NULL)
     return NULL;
 
+  /* Children first: an operator or a function over arithmetic on an
+   * agg_token (round(cnt * 100.0)) then sees the agg_token its argument
+   * has become, and casts it. */
+  node = expression_tree_mutator(node, insert_agg_token_casts_mutator, data);
+
   if (IsA(node, OpExpr)) {
     /* Arithmetic over an agg_token Var (e.g. cnt+1 where cnt comes from a
      * subquery aggregate) is kept as an agg_token (gate_arith) rather than
@@ -14093,36 +14399,90 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
     Node *swapped = try_swap_agg_arith((OpExpr *)node, ctx->constants);
     if (swapped != NULL)
       return swapped;
-    cast_agg_token_args(((OpExpr *)node)->args, ctx);
-    return (Node *)node;
+    set_opfuncid((OpExpr *)node);
+    cast_agg_token_func_args(((OpExpr *)node)->args,
+                             ((OpExpr *)node)->opfuncid, ctx);
+    return node;
+  }
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)node;
+    if (fe->funcid != ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      cast_agg_token_func_args(fe->args, fe->funcid, ctx);
+    return node;
   }
   if (IsA(node, WindowFunc)) {
     cast_agg_token_args(((WindowFunc *)node)->args, ctx);
-    return (Node *)node;
+    return node;
   }
   if (IsA(node, CoalesceExpr)) {
     cast_agg_token_args(((CoalesceExpr *)node)->args, ctx);
-    return (Node *)node;
+    return node;
   }
   if (IsA(node, MinMaxExpr)) {
     cast_agg_token_args(((MinMaxExpr *)node)->args, ctx);
-    return (Node *)node;
+    return node;
   }
   if (IsA(node, NullIfExpr)) {
     cast_agg_token_args(((NullIfExpr *)node)->args, ctx);
-    return (Node *)node;
+    return node;
   }
 
-  return expression_tree_mutator(node, insert_agg_token_casts_mutator, data);
+  return node;
+}
+
+/**
+ * @brief @c insert_agg_token_casts_mutator for the @c HAVING clause.
+ *
+ * Its comparisons read their aggregates as they are, the @c HAVING lowering
+ * building their gates from them: an operator is swapped for its
+ * @c agg_token version or has its subquery aggregate columns cast, and its
+ * arguments are left alone.
+ */
+static Node *
+insert_having_agg_token_casts_mutator(Node *node, void *data) {
+  insert_agg_token_casts_context *ctx = (insert_agg_token_casts_context *)data;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, OpExpr)) {
+    Node *swapped = try_swap_agg_arith((OpExpr *)node, ctx->constants);
+    if (swapped != NULL)
+      return swapped;
+    cast_agg_token_args(((OpExpr *)node)->args, ctx);
+    return node;
+  }
+  if (IsA(node, WindowFunc)) {
+    cast_agg_token_args(((WindowFunc *)node)->args, ctx);
+    return node;
+  }
+  if (IsA(node, CoalesceExpr)) {
+    cast_agg_token_args(((CoalesceExpr *)node)->args, ctx);
+    return node;
+  }
+  if (IsA(node, MinMaxExpr)) {
+    cast_agg_token_args(((MinMaxExpr *)node)->args, ctx);
+    return node;
+  }
+  if (IsA(node, NullIfExpr)) {
+    cast_agg_token_args(((NullIfExpr *)node)->args, ctx);
+    return node;
+  }
+  return expression_tree_mutator(node, insert_having_agg_token_casts_mutator,
+                                 data);
 }
 
 /**
  * @brief Walk query and insert agg_token casts where needed.
  */
 static void insert_agg_token_casts(const constants_t *constants, Query *q) {
-  insert_agg_token_casts_context ctx = {q, constants};
+  insert_agg_token_casts_context ctx = {q, constants, false};
+  Node *having = q->havingQual;
+
+  q->havingQual = NULL;
   query_tree_mutator(q, insert_agg_token_casts_mutator, &ctx,
                      QTW_DONT_COPY_QUERY | QTW_IGNORE_RC_SUBQUERIES);
+  ctx.in_having = true;
+  q->havingQual = insert_having_agg_token_casts_mutator(having, &ctx);
 }
 
 /** @brief Context for @c join_qual_has_agg_token_walker. */
@@ -17284,6 +17644,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
 
       if (stmt->op == SETOP_UNION) {
+        reconcile_union_columns(constants, stmt, q);
         process_set_operation_union(constants, stmt, q);
         has_union = true;
       } else if (stmt->op == SETOP_EXCEPT) {

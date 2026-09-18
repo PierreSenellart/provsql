@@ -34,3 +34,20 @@ SELECT level, grp, sr_counting(provenance(),'personnel_count') AS counting FROM 
 SELECT remove_provenance('union_all_agg_result');
 SELECT * FROM union_all_agg_result ORDER BY level, grp;
 DROP TABLE union_all_agg_result;
+
+-- A column where aggregates meet a plain value reads the aggregates as
+-- values; one whose arms are all aggregates stays an agg_token, also in a
+-- nested UNION ALL.
+CREATE TABLE union_all_agg_result AS
+  SELECT 'a' AS item, count(*) AS c FROM personnel
+  UNION ALL SELECT 'b', 0;
+SELECT remove_provenance('union_all_agg_result');
+SELECT item, c FROM union_all_agg_result ORDER BY item;
+DROP TABLE union_all_agg_result;
+CREATE TABLE union_all_agg_result AS
+  SELECT 'a' AS item, count(*) AS c FROM personnel
+  UNION ALL SELECT 'b', count(*) FROM personnel WHERE city = 'Paris'
+  UNION ALL SELECT 'c', count(*) FROM personnel WHERE city = 'Berlin';
+SELECT remove_provenance('union_all_agg_result');
+SELECT item, c FROM union_all_agg_result ORDER BY item;
+DROP TABLE union_all_agg_result;

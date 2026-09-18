@@ -188,4 +188,14 @@ CREATE TABLE oj_t AS
 SELECT remove_provenance('oj_t');
 SELECT 'HOLDS left' AS q, id, w, holds FROM oj_t ORDER BY id, w;
 DROP TABLE oj_t;
+-- An aggregate of the null-padded side, read through COALESCE and in
+-- arithmetic above the lowered join.
+CREATE TABLE oj_t AS
+  SELECT oj_da.id, COALESCE(t.c, 0) AS c, t.c + 1 AS c1,
+         sr_boolean(provenance()) AS holds
+  FROM oj_da LEFT JOIN (SELECT id, count(*) AS c FROM oj_db GROUP BY id) t
+       ON oj_da.id = t.id;
+SELECT remove_provenance('oj_t');
+SELECT 'AGG left' AS q, id, c, c1 FROM oj_t WHERE holds ORDER BY id;
+DROP TABLE oj_t;
 DROP TABLE oj_da, oj_db, oj_da_plain, oj_db_plain;
