@@ -109,7 +109,10 @@ CREATE TABLE af_t13 AS SELECT g, af_p(provenance()) AS p FROM af WHERE g=1
   GROUP BY g HAVING bool_or(v>6);
 SELECT remove_provenance('af_t13'); SELECT 'bool_or' AS q, g, p FROM af_t13 ORDER BY g;
 
--- Expected values.  count: 0.4+0.2 = 0.6   sum: 6*0.4+7*0.2 = 3.8
+-- Expected values, over the worlds where the aggregate has a value: a row
+-- the filter rejects still keeps the group (and counts 0), so the count is
+-- defined wherever the group is (0.76), while the sum reads its own rows only
+-- (b or c, 0.52).  count: 0.6/0.76 = 0.7895   sum: 3.8/0.52 = 7.3077
 CREATE TABLE af_t14 AS SELECT g,
     round(expected(count(*) FILTER (WHERE v>5))::numeric, 4) AS ec,
     round(expected(sum(v) FILTER (WHERE v>5))::numeric, 4) AS es

@@ -24,7 +24,7 @@ p_severe_given_referred|matches_bayes
 0.1434|t
 (1 row)
 region|e_total|e_total_given_highday
-North|3.50|5.50
+North|4.67|5.50
 (1 row)
 median_days|p95_days|mean_days
 4.95|9.88|5.41

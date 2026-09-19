@@ -475,15 +475,16 @@ number -- look at the per-region totals:
     SELECT * FROM casesum;
 
 The North has two possible contributions, 3 and 4, each present with
-probability 0.5. Its *expected* total -- the average over all the ways the
-days could turn out -- is:
+probability 0.5. Its *expected* total -- the average over the ways the days
+could turn out -- is:
 
 .. code-block:: postgresql
 
     SELECT expected(total) FROM casesum WHERE region = 'North';
 
-3.5 (that is :math:`0.5 \cdot 3 + 0.5 \cdot 4`). Now condition on an
-observation: suppose we *know* the high-count day (``n = 4``) really
+4.67. The region's row is there only where one of its days is, which leaves
+three equally likely ways: 3, 4, or both, worth 3, 4 and 7, so
+:math:`(3 + 4 + 7) / 3`. Now condition on an observation: suppose we *know* the high-count day (``n = 4``) really
 happened. The expected total *given* that:
 
 .. code-block:: postgresql

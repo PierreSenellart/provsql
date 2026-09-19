@@ -103,7 +103,7 @@ remove_provenance
 
 (1 row)
 q|g|ec|es
-expected|1|0.6000|3.8000
+expected|1|0.7895|7.3077
 (1 row)
 remove_provenance
 

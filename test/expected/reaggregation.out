@@ -16,16 +16,16 @@ remove_provenance
 
 (1 row)
 q|g|r|p|e
-count of counts|1|2|0.875000|1.250000
-count of counts|2|2|0.875000|1.250000
+count of counts|1|2|0.875000|1.428571
+count of counts|2|2|0.875000|1.428571
 max of maxes|1|20|0.875000|15.000000
 max of maxes|2|7|0.875000|5.571429
 min of mins|1|5|0.875000|8.571429
 min of mins|2|3|0.875000|3.857143
-sum of counts|1|3|0.875000|1.500000
-sum of counts|2|3|0.875000|1.500000
-sum of sums|1|35|0.875000|17.500000
-sum of sums|2|14|0.875000|7.000000
+sum of counts|1|3|0.875000|1.714286
+sum of counts|2|3|0.875000|1.714286
+sum of sums|1|35|0.875000|20.000000
+sum of sums|2|14|0.875000|8.000000
 (10 rows)
 ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
 ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported

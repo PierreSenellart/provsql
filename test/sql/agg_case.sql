@@ -18,11 +18,12 @@ SELECT add_provenance('cs');
 DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cs; END $$;
 
 -- CASE WHEN sum(x) > 3 THEN sum(y) ELSE sum(z).  Possible worlds:
---   {}      sum(x)=0  -> sum(z)=0
+--   {}      no row of the group: the CASE has no value
 --   {t1}    sum(x)=1  -> sum(z)=100
 --   {t2}    sum(x)=5  -> sum(y)=20
 --   {t1,t2} sum(x)=6  -> sum(y)=30
--- each world 0.25  =>  E=37.5, E[pick^2]=2825, Var=1418.75.
+-- each world 0.25, so the three defined ones weigh 1/3 each:
+-- E=50, E[pick^2]=3766.67, Var=1266.67.
 CREATE TABLE pick AS
   SELECT g, CASE WHEN sum(x) > 3 THEN sum(y) ELSE sum(z) END AS p FROM cs GROUP BY g;
 
@@ -96,7 +97,8 @@ DROP TABLE pickc; DROP TABLE pickc2; DROP TABLE cc;
 -- Arithmetic branch (`sum(y)+sum(z)`): no exact possible-worlds moment for the
 -- arithmetic combination, so that branch's conditional moment is estimated by
 -- the Monte-Carlo scalar path (the region probabilities stay exact).  Worlds:
---   {}->0, {t1}->sum(z)=100, {t2}->sum(y)+sum(z)=220, {t1,t2}->330  => E=162.5.
+--   {} has no row, {t1}->sum(z)=100, {t2}->sum(y)+sum(z)=220, {t1,t2}->330,
+--   so E = (100+220+330)/3 = 216.67.
 CREATE TABLE ca(g int, x numeric, y numeric, z numeric);
 INSERT INTO ca VALUES (1,1,10,100),(1,5,20,200);
 SELECT add_provenance('ca');
@@ -109,7 +111,7 @@ SET provsql.active = off;
 -- Actual world: sum(x)=6 > 3 selects sum(y)+sum(z) = 330 (an arith gate,
 -- whose actual-world value agg_arith_make recorded in extra).
 SELECT p AS display_arith FROM picka;
-SELECT abs(expected(p) - 162.5) < 5 AS arith_branch_mc_close FROM picka;
+SELECT abs(expected(p) - 216.67) < 5 AS arith_branch_mc_close FROM picka;
 SET provsql.active = on;
 DROP TABLE picka; DROP TABLE ca;
 

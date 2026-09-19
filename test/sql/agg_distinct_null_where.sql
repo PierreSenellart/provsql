@@ -71,7 +71,9 @@ SELECT remove_provenance('adn_h2');
 SELECT 'HAVING cd >= 1, WHERE' AS q, g, p FROM adn_h2 ORDER BY g;
 
 -- The aggregates beside the DISTINCT one range over the rows WHERE selects,
--- in the circuit too: E[count(*)] over w <> 2 is 0.5 per remaining row.
+-- in the circuit too: E[count(*)] over w <> 2 is 0.5 per remaining row,
+-- conditioned on the group having a row (so 1/0.75 for two rows, 0.5/0.5 for
+-- one).
 CREATE TABLE adn_e AS SELECT g, count(*) AS c, count(DISTINCT v) AS cd
   FROM adn WHERE w <> 2 GROUP BY g;
 SELECT remove_provenance('adn_e');

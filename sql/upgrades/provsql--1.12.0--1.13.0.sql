@@ -2380,7 +2380,10 @@ BEGIN
   IF gt = 'agg' THEN
     SELECT proname INTO fname
       FROM pg_proc WHERE oid = (get_infos(token)).info1;
-    IF fname IN ('sum', 'count') THEN
+    -- A scalar COUNT has a row in every world, counting a real 0 over none;
+    -- every other aggregate (a SUM over no row is SQL NULL, a grouped one has
+    -- no row at all) is defined only where a contributing row is.
+    IF fname = 'count' AND (get_infos(token)).info2 < 0 THEN
       RETURN gate_one();
     END IF;
     SELECT array_agg((get_children(c))[1]) INTO toks

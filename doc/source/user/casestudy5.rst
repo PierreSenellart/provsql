@@ -421,10 +421,11 @@ photo?
     GROUP BY p.id, p.station
     ORDER BY exp_detections DESC, p.id;
 
-By linearity of expectation, ``expected(COUNT(*))`` over a group is
-:math:`\sum_i P(\text{detection}_i \text{ is true})`. The same linearity
-applies to ``SUM`` aggregates: the expected total confidence mass per
-photo:
+A group's row is there only in the worlds where one of its detections is,
+and the expectation is over those: ``expected(COUNT(*))`` is
+:math:`\sum_i P(\text{detection}_i \text{ is true})` divided by the
+probability that the photo keeps a detection at all. The same holds of
+``SUM`` aggregates: the expected total confidence mass per photo:
 
 .. code-block:: postgresql
 

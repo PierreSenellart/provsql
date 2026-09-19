@@ -192,11 +192,15 @@ Expected values of aggregates
 
 For aggregate queries over a probabilistic table, the :sqlfunc:`expected`
 function computes the expected value of the aggregate result.  It
-supports ``COUNT``, ``SUM``, ``MIN``, ``MAX``, and ``AVG``.  ``MIN`` /
-``MAX`` / ``AVG`` are ``NULL`` on an empty group, so their expectations
-condition on the aggregate being *defined* (``NULL`` only when it never
-is); ``SUM`` / ``COUNT`` treat the all-rows-absent world as the real
-value 0.  ``AVG`` is exact over tuple-independent (or shared-anchor)
+supports ``COUNT``, ``SUM``, ``MIN``, ``MAX``, and ``AVG``.  The
+expectation is over the possible worlds in which the value exists: a
+grouped result row is there only where its group has a row, and a ``SUM``,
+``MIN``, ``MAX`` or ``AVG`` over no row is ``NULL`` (the expectation is
+``NULL`` only when the value never exists).  So ``expected(sum(x))`` of a
+group equals ``expected(sum(x), provenance())``, and a world is counted
+only where it contributes a value.  The one exception is a ``COUNT``
+without ``GROUP BY``: its row is there in every world, counting a real 0
+over no row.  ``AVG`` is exact over tuple-independent (or shared-anchor)
 groups via its joint (sum, count) distribution; other shapes are exact
 when they depend on at most 20 input tuples, whose possible worlds are
 then enumerated, and estimated by Monte Carlo at the

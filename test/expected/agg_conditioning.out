@@ -3,7 +3,7 @@ add_provenance
 
 (1 row)
 e_uncond|e_cond_operator|e_cond_twoarg|var_cond
-15.0000|20.0000|20.0000|100.0000
+20.0000|20.0000|20.0000|100.0000
 (1 row)
 gate|nchildren
 conditioned|2

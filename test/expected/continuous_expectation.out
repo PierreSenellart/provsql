@@ -82,9 +82,9 @@ add_provenance
 
 (1 row)
 NOTICE:  agg_expected_sum=60
-NOTICE:  agg_sum_expected=22
-NOTICE:  agg_sum_variance=310
-NOTICE:  agg_sum_moment_2=794
+NOTICE:  agg_sum_expected=27.848101265822784
+NOTICE:  agg_sum_variance=229.54654702771995
+NOTICE:  agg_sum_moment_2=1005.0632911392405
 NOTICE:  agg_sum_moment_0=1
 NOTICE:  agg_sum_moment_1_eq_expected=t
 NOTICE:  agg_sum_central_2_eq_variance=t

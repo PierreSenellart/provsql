@@ -266,7 +266,8 @@ BEGIN
 END
 $$;
 
--- E[SUM] = 0.5*10 + 0.4*20 + 0.3*30 = 22.
+-- E[SUM · 1(some row)] = 0.5*10 + 0.4*20 + 0.3*30 = 22, and the sum has a
+-- value only there (P = 0.79), so E[SUM] = 22/0.79 = 27.848.
 -- Var[SUM] = sum of v_i^2 * p_i * (1 - p_i) (rows independent here):
 --   100*0.5*0.5 + 400*0.4*0.6 + 900*0.3*0.7
 -- = 25 + 96 + 189 = 310.
