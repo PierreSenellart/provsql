@@ -283,7 +283,7 @@ the records that produced it. Feeding that row's ``provenance()`` to
 :sqlfunc:`sr_boolean` therefore reports whether the hop to the next stop is
 wheelchair-accessible, just as the per-destination query of Step 4 did.
 
-Without ``actual``, ``ORDER BY … LIMIT 1`` would be read in every
+Without ``plain``, ``ORDER BY … LIMIT 1`` would be read in every
 possible world: each later stop would be a candidate, annotated with the
 condition that no stop before it is present, since the tokens could stand
 for the uncertain existence of stops. Here they stand for wheelchair

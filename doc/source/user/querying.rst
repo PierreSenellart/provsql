@@ -204,7 +204,7 @@ of an ``OFFSET`` with ``WITH TIES``, and of an ``ORDER BY … LIMIT`` over
 an aggregation, a ``DISTINCT`` or a set operation, or on values that
 vary between worlds (an aggregate, a window function), which are not
 read in every world; for the latter, ProvSQL emits a ``WARNING`` at the
-top level of a statement too, unless the ``LIMIT`` is marked ``actual``.
+top level of a statement too, unless the ``LIMIT`` is marked ``plain``.
 
 Provenance in Nested Queries
 -----------------------------
