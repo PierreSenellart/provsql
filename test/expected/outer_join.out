@@ -185,3 +185,41 @@ id|a|b|own
 1|1|x|t
 2|2|y|t
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|id|t|w|p|present
+beside a FROM item|1||100|0.2500|f
+beside a FROM item|1|10|100|0.2500|t
+beside a FROM item|3||100|0.5000|t
+chain|1|||0.2500|f
+chain|1||100|0.2500|f
+chain|1|10||0.2500|f
+chain|1|10|100|0.2500|t
+chain|2|||0.2500|f
+chain|2|20||0.5000|t
+chain|2|21||0.5000|t
+chain|3|||0.5000|f
+chain|3||300|0.5000|t
+through the padded side|1|||0.5000|f
+through the padded side|1|10||0.2500|f
+through the padded side|1|10|100|0.2500|t
+through the padded side|2|||0.5000|f
+through the padded side|2|20||0.5000|t
+through the padded side|3|||1.0000|t
+(18 rows)
+remove_provenance
+
+(1 row)
+n_rows
+9
+(1 row)

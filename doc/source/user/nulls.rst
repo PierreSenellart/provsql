@@ -86,14 +86,17 @@ fully supported across possible worlds: ``sum(b) IS NULL`` holds in
 exactly the worlds where the group exists but no non-NULL-valued row is
 present.
 
-**Outer joins.** The supported shape -- a two-relation
-LEFT/RIGHT/FULL JOIN between tracked arms, with no outer reference to
-the join -- is lowered into its matched and NULL-padded arms with
-correct (monus) provenance for the padding. An outer join whose
-null-padded side is entirely *untracked* is also fine as-is: which rows
-are padded is then deterministic. Any other outer join with a tracked
-relation on a null-padded side is refused with an explicit error rather
-than silently mis-tracked.
+**Outer joins.** A LEFT/RIGHT/FULL JOIN between tracked arms is
+lowered into its matched and NULL-padded arms with correct (monus)
+provenance for the padding. Chains of outer joins, outer joins mixed
+with inner joins and outer joins beside other ``FROM`` items are
+brought to that shape first: each outer join, with the joins below it,
+is computed in a subquery of its own. An outer join whose null-padded
+side is entirely *untracked* is also fine as-is: which rows are padded
+is then deterministic. An outer join with a tracked relation on a
+null-padded side is refused with an explicit error, rather than
+silently mis-tracked, in a query with a ``LATERAL`` item, or when a
+column merged by ``USING`` / ``NATURAL`` is read through the join.
 
 **Comparisons on NULL random variables.** A comparison involving a NULL
 ``random_variable`` -- a NULL constant or a NULL cell -- is unknown in

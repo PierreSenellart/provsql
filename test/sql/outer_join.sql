@@ -270,3 +270,48 @@ SELECT remove_provenance('oj_t');
 SELECT * FROM oj_t ORDER BY id;
 DROP TABLE oj_t;
 DROP TABLE oj_rec;
+
+-- Chains of outer joins, and an outer join beside other FROM items: each
+-- outer join is lowered in a subquery of its own.  present(provenance())
+-- gives the rows of the plain result; the probabilities of the candidate
+-- rows are those of a count over the worlds.
+CREATE TABLE ojc_a(id int, u int);
+CREATE TABLE ojc_b(aid int, t int);
+CREATE TABLE ojc_c(aid int, w int);
+INSERT INTO ojc_a VALUES (1, 1), (2, 2), (3, 1);
+INSERT INTO ojc_b VALUES (1, 10), (2, 20), (2, 21);
+INSERT INTO ojc_c VALUES (1, 100), (3, 300);
+SELECT add_provenance('ojc_a');
+SELECT add_provenance('ojc_b');
+SELECT add_provenance('ojc_c');
+DO $$ BEGIN
+  PERFORM set_prob(provenance(), 0.5) FROM ojc_b;
+  PERFORM set_prob(provenance(), 0.5) FROM ojc_c;
+END $$;
+CREATE TABLE ojc_r AS
+  SELECT 'chain' AS q, a.id, b.t, c.w,
+         round(probability_evaluate(provenance())::numeric, 4) AS p,
+         present(provenance()) AS present
+  FROM ojc_a a LEFT JOIN ojc_b b ON b.aid = a.id LEFT JOIN ojc_c c ON c.aid = a.id
+  UNION ALL
+  SELECT 'through the padded side', a.id, b.t, c.w,
+         round(probability_evaluate(provenance())::numeric, 4),
+         present(provenance())
+  FROM ojc_a a LEFT JOIN ojc_b b ON b.aid = a.id AND b.t < 21
+               LEFT JOIN ojc_c c ON c.aid = b.aid
+  UNION ALL
+  SELECT 'beside a FROM item', a.id, b.t, x.w,
+         round(probability_evaluate(provenance())::numeric, 4),
+         present(provenance())
+  FROM ojc_a a LEFT JOIN ojc_b b ON b.aid = a.id, ojc_c x WHERE x.aid = a.u;
+SELECT remove_provenance('ojc_r');
+SELECT * FROM ojc_r ORDER BY q, id, t NULLS FIRST, w NULLS FIRST;
+DROP TABLE ojc_r;
+-- a.* over a chain: the provsql column of the relation is dropped
+CREATE TABLE ojc_r AS
+  SELECT a.*, b.t, c.w FROM ojc_a a LEFT JOIN ojc_b b ON b.aid = a.id
+                                    LEFT JOIN ojc_c c ON c.aid = a.id;
+SELECT remove_provenance('ojc_r');
+SELECT count(*) AS n_rows FROM ojc_r;
+DROP TABLE ojc_r;
+DROP TABLE ojc_a, ojc_b, ojc_c;

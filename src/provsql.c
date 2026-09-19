@@ -11713,6 +11713,296 @@ static void flatten_join_aliases(Query *q) {
 }
 #endif
 
+/** @brief Collect the range-table indexes of a join tree (its relations and
+ *  its joins). */
+static void join_tree_rtindexes(Node *n, Bitmapset **idx) {
+  if (n == NULL)
+    return;
+  if (IsA(n, RangeTblRef))
+    *idx = bms_add_member(*idx, ((RangeTblRef *)n)->rtindex);
+  else if (IsA(n, JoinExpr)) {
+    JoinExpr *je = (JoinExpr *)n;
+    join_tree_rtindexes(je->larg, idx);
+    join_tree_rtindexes(je->rarg, idx);
+    if (je->rtindex != 0)
+      *idx = bms_add_member(*idx, je->rtindex);
+  } else if (IsA(n, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)n)->fromlist)
+      join_tree_rtindexes((Node *)lfirst(lc), idx);
+  }
+}
+
+/** @brief Make @p rte an empty placeholder: an entry of the range table no
+ *  longer read (its relation moved to a subquery), which must neither be
+ *  scanned nor count as a source of provenance. */
+static void make_placeholder_rte(RangeTblEntry *rte) {
+  RangeTblEntry *r = makeNode(RangeTblEntry);
+#if PG_VERSION_NUM >= 120000
+  r->rtekind = RTE_RESULT;
+#else
+  Query *empty = makeNode(Query);
+  empty->commandType = CMD_SELECT;
+  empty->canSetTag = true;
+  empty->jointree = makeFromExpr(NIL, NULL);
+  r->rtekind = RTE_SUBQUERY;
+  r->subquery = empty;
+#endif
+  r->eref = makeAlias("*RESULT*", NIL);
+  r->inFromCl = false;
+  memcpy(rte, r, sizeof(RangeTblEntry));
+}
+
+/** @brief Context for @c moved_vars_mutator. */
+typedef struct moved_vars_ctx {
+  Bitmapset *moved;   ///< Range-table indexes moved into the subquery
+  Index new_idx;      ///< The subquery's index in the enclosing query
+  Query *sub;         ///< The subquery, whose target list exposes them
+  List *pulled;       ///< Vars exposed (level 0 in @c sub)
+  List *resnos;       ///< Their resnos in @c sub
+  Index depth;        ///< Levels below the enclosing query
+} moved_vars_ctx;
+
+/** @brief Mutator: a Var of a moved relation becomes a Var of the subquery's
+ *  column exposing it, at any depth. */
+static Node *moved_vars_mutator(Node *node, void *cx) {
+  moved_vars_ctx *ctx = (moved_vars_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == ctx->depth &&
+      bms_is_member(((Var *)node)->varno, ctx->moved)) {
+    Var *v = (Var *)copyObject(node);
+    Var *r;
+    ListCell *lc_v, *lc_r;
+    AttrNumber resno = 0;
+#if PG_VERSION_NUM >= 160000
+    /* The outer joins that can null it: those moved with it in the
+     * subquery, the others outside */
+    Bitmapset *outside = bms_difference(v->varnullingrels, ctx->moved);
+    v->varnullingrels = bms_intersect(v->varnullingrels, ctx->moved);
+#endif
+    v->varlevelsup = 0;
+    forboth (lc_v, ctx->pulled, lc_r, ctx->resnos)
+      if (equal(lfirst(lc_v), v)) {
+        resno = (AttrNumber)lfirst_int(lc_r);
+        break;
+      }
+    if (resno == 0) {
+      char name[32];
+      RangeTblEntry *src = rt_fetch(v->varno, ctx->sub->rtable);
+      resno = list_length(ctx->sub->targetList) + 1;
+      snprintf(name, sizeof(name), "c%d", resno);
+      /* The provsql column of a relation keeps its name, so that the
+       * subquery drops it as any provenance column of its target list */
+      if (v->varattno > 0 && v->vartype == UUIDOID &&
+          src->eref != NULL &&
+          v->varattno <= list_length(src->eref->colnames) &&
+          strcmp(strVal(list_nth(src->eref->colnames, v->varattno - 1)),
+                 PROVSQL_COLUMN_NAME) == 0)
+        strlcpy(name, PROVSQL_COLUMN_NAME, sizeof(name));
+      ctx->sub->targetList = lappend(
+        ctx->sub->targetList,
+        makeTargetEntry((Expr *)copyObject(v), resno, pstrdup(name), false));
+      ctx->pulled = lappend(ctx->pulled, v);
+      ctx->resnos = lappend_int(ctx->resnos, resno);
+    }
+    r = makeVar(ctx->new_idx, resno, v->vartype, v->vartypmod, v->varcollid,
+                ctx->depth);
+#if PG_VERSION_NUM >= 160000
+    r->varnullingrels = outside;
+#endif
+    return (Node *)r;
+  }
+  if (IsA(node, Query)) {
+    Node *r;
+    ++ctx->depth;
+    r = (Node *)query_tree_mutator((Query *)node, moved_vars_mutator, cx, 0);
+    --ctx->depth;
+    return r;
+  }
+  return expression_tree_mutator(node, moved_vars_mutator, cx);
+}
+
+/**
+ * @brief Move the join tree @c *slot of @p q into a subquery, which takes its
+ *        place.
+ *
+ * The subquery reads a copy of the range table, the entries not in the tree
+ * made placeholders (the indexes of the tree, in its conditions, stay valid);
+ * in @p q, the entries of the tree are placeholders, the tree's own join slot
+ * (or its relation's) holds the subquery, and the references to its
+ * relations read the columns the subquery exposes.
+ */
+static void wrap_join_tree(Query *q, Node **slot) {
+  Bitmapset *moved = NULL;
+  Query *sub;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  Index new_idx, i;
+  moved_vars_ctx ctx;
+  ListCell *lc;
+  List *colnames = NIL;
+
+  join_tree_rtindexes(*slot, &moved);
+  new_idx = IsA(*slot, JoinExpr) ? (Index)((JoinExpr *)*slot)->rtindex
+                                 : (Index)((RangeTblRef *)*slot)->rtindex;
+
+  sub = makeNode(Query);
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  sub->rtable = copyObject(q->rtable);
+#if PG_VERSION_NUM >= 160000
+  sub->rteperminfos = copyObject(q->rteperminfos);
+#endif
+  sub->jointree = makeFromExpr(list_make1(*slot), NULL);
+  i = 0;
+  foreach (lc, sub->rtable)
+    if (!bms_is_member(++i, moved))
+      make_placeholder_rte((RangeTblEntry *)lfirst(lc));
+
+  /* The subquery takes the tree's place (before the rest is rewritten,
+   * which copies the join tree) */
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = new_idx;
+  *slot = (Node *)rtr;
+
+  /* What the rest of q reads of the moved relations */
+  ctx.moved = moved;
+  ctx.new_idx = new_idx;
+  ctx.sub = sub;
+  ctx.pulled = NIL;
+  ctx.resnos = NIL;
+  ctx.depth = 0;
+  q->targetList = (List *)moved_vars_mutator((Node *)q->targetList, &ctx);
+  q->jointree = (FromExpr *)moved_vars_mutator((Node *)q->jointree, &ctx);
+  q->havingQual = moved_vars_mutator(q->havingQual, &ctx);
+  /* The joins left in q list their columns, some of the moved relations */
+  i = 0;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (!bms_is_member(++i, moved) && r->rtekind == RTE_JOIN)
+      r->joinaliasvars =
+        (List *)moved_vars_mutator((Node *)r->joinaliasvars, &ctx);
+  }
+  if (sub->targetList == NIL)
+    sub->targetList = list_make1(makeTargetEntry(
+      (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                        Int32GetDatum(1), false, true),
+      1, pstrdup("c1"), false));
+  foreach (lc, sub->targetList)
+    colnames = lappend(colnames,
+                       makeString(pstrdup(((TargetEntry *)lfirst(lc))->resname)));
+  sub->hasSubLinks = checkExprHasSubLink((Node *)sub->jointree);
+  /* One level deeper: its references to queries around q */
+  IncrementVarSublevelsUp((Node *)sub, 1, 1);
+
+  i = 0;
+  foreach (lc, q->rtable)
+    if (bms_is_member(++i, moved))
+      make_placeholder_rte((RangeTblEntry *)lfirst(lc));
+  rte = rt_fetch(new_idx, q->rtable);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = sub;
+  rte->eref = makeAlias("joined", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+}
+
+/** @brief Whether @p n is a join tree containing an outer join. */
+static bool join_tree_has_outer_join(Node *n) {
+  if (n != NULL && IsA(n, JoinExpr)) {
+    JoinExpr *je = (JoinExpr *)n;
+    return je->jointype == JOIN_LEFT || je->jointype == JOIN_RIGHT ||
+           je->jointype == JOIN_FULL || join_tree_has_outer_join(je->larg) ||
+           join_tree_has_outer_join(je->rarg);
+  }
+  return false;
+}
+
+/**
+ * @brief Bring the outer joins of @p q to the shape @c lower_outer_joins
+ *        lowers: one outer join of two range-table entries as the whole FROM.
+ *
+ * An arm of an outer join that is itself a join, and an outer join beside
+ * other FROM items, are moved into a subquery (@c wrap_join_tree), which the
+ * processing of the subquery then lowers, normalizing it again if needed:
+ * @c (a @c LEFT @c JOIN @c b) @c LEFT @c JOIN @c c reads
+ * @c (SELECT @c ... @c FROM @c a @c LEFT @c JOIN @c b) @c LEFT @c JOIN @c c.
+ * Not with a @c LATERAL entry (which could read the moved relations).
+ *
+ * @return @c true if @p q was changed.
+ */
+static bool normalize_outer_join_tree(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  bool changed = false;
+
+  if (q->commandType != CMD_SELECT || q->jointree == NULL ||
+      q->setOperations != NULL || !has_provenance(constants, q))
+    return false;
+  foreach (lc, q->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    if (r->lateral)
+      return false;
+  }
+  {
+    bool any = false;
+    foreach (lc, q->jointree->fromlist)
+      if (join_tree_has_outer_join((Node *)lfirst(lc)))
+        any = true;
+    if (!any)
+      return false;
+  }
+
+#if PG_VERSION_NUM < 130000
+  flatten_join_aliases(q);
+#endif
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(q);
+#endif
+
+  if (list_length(q->jointree->fromlist) > 1) {
+    /* An outer join beside other FROM items: into a subquery of its own */
+    foreach (lc, q->jointree->fromlist) {
+      Node **slot = (Node **)&lfirst(lc);
+      if (join_tree_has_outer_join(*slot)) {
+        wrap_join_tree(q, slot);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  {
+    Node *top = (Node *)linitial(q->jointree->fromlist);
+    JoinExpr *je;
+    if (!IsA(top, JoinExpr))
+      return false;
+    je = (JoinExpr *)top;
+    if (je->jointype == JOIN_INNER) {
+      /* An inner join over outer joins: each arm with one into a subquery */
+      if (join_tree_has_outer_join(je->larg)) {
+        wrap_join_tree(q, &je->larg);
+        changed = true;
+      }
+      if (join_tree_has_outer_join(je->rarg)) {
+        wrap_join_tree(q, &je->rarg);
+        changed = true;
+      }
+      return changed;
+    }
+    if (IsA(je->larg, JoinExpr)) {
+      wrap_join_tree(q, &je->larg);
+      changed = true;
+    }
+    if (IsA(je->rarg, JoinExpr)) {
+      wrap_join_tree(q, &je->rarg);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /**
  * @brief Lower an outer @c JOIN of two tracked arms into the UNION-ALL of its
  *        matched and null-padded antijoin arms.
@@ -19888,8 +20178,10 @@ static Query *process_query(const constants_t *constants, Query *q,
    * on every other shape.  Runs before provenance discovery / set-op handling
    * so the constructed UNION / EXCEPT subqueries are processed by the recursive
    * passes. */
-  if (provsql_active)
+  if (provsql_active) {
+    normalize_outer_join_tree(constants, q);
     lower_outer_joins(constants, q);
+  }
 
   /* ORDER BY ... LIMIT k: the filter of a rank.  Before the provenance
    * columns are removed from the target list, since the query is restarted
