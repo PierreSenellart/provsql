@@ -24,8 +24,8 @@ SELECT provsql.expected(provsql.as_random(9) ^ 0.5) = 3
 SELECT provsql.expected(provsql.sqrt(provsql.as_random(2.25))) = 1.5
        AS sqrt_sugar_folds;
 -- A domain-violating constant does NOT fold (the NaN-as-sentinel
--- convention keeps the gate intact); with the MC fallback disabled the
--- evaluator reports the missing decomposition rather than a NaN.
+-- convention keeps the gate intact); evaluated in its single possible
+-- world, it reports the domain violation rather than a NaN.
 \set VERBOSITY terse
 SELECT provsql.expected(provsql.ln(provsql.as_random(-1)));
 \set VERBOSITY default

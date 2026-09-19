@@ -6,8 +6,10 @@
 -- instantiation of the HAVING sumCountPMF machinery), conditional on the
 -- aggregate being DEFINED (COUNT >= 1: AVG over the empty world is NULL,
 -- the MIN/MAX convention).  A laminar shared-root group (join
--- provenance) stays exact; conditioning / non-product shapes fall back
--- to the Monte-Carlo scalar path at the rv_mc_samples budget.
+-- provenance) stays exact; conditioning / non-product shapes enumerate
+-- the possible worlds when there are few inputs (exact too), and fall
+-- back to the Monte-Carlo scalar path at the rv_mc_samples budget
+-- otherwise.
 
 SET provsql.rv_mc_samples = 0;
 
@@ -41,22 +43,17 @@ CREATE TABLE avj AS
 SET provsql.active = off;
 SELECT round(expected(a)::numeric, 4) AS e_avg_laminar FROM avj;
 
--- Conditioning declines the exact arm; without an MC budget the fallback
--- raises the standard actionable error ...
-SELECT expected(a, (SELECT provsql FROM av WHERE x = 10)) FROM avr;
-
--- ... and with a budget it estimates E[avg | row-10 present] =
--- (10 + 55)/2 = 32.5 (worlds {10} and {10,100}, each 1/2 given row 10).
-SET provsql.rv_mc_samples = 200000;
-SET provsql.monte_carlo_seed = 42;
-SELECT abs(expected(a, (SELECT provsql FROM av WHERE x = 10)) - 32.5) < 0.5
-       AS e_avg_cond_close
+-- Conditioning declines the independent-rows arm; the four worlds of the
+-- two rows are enumerated instead, still with no sampling:
+-- E[avg | row-10 present] = (10 + 55)/2 = 32.5 (worlds {10} and {10,100},
+-- each 1/2 given row 10).
+SELECT round(expected(a, (SELECT provsql FROM av WHERE x = 10))::numeric, 4)
+       AS e_avg_cond
 FROM avr;
 SET provsql.active = on;
 
 DROP TABLE avj; DROP TABLE av_anchor; DROP TABLE avr; DROP TABLE av;
 RESET provsql.rv_mc_samples;
-RESET provsql.monte_carlo_seed;
 
 -- Conditioned on its own group (the provenance of the GROUP BY row), the
 -- moments of AVG are the unconditional ones, exact: brute force over the 8

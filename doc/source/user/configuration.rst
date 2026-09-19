@@ -206,9 +206,13 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     analytical evaluators (:sqlfunc:`expected`, :sqlfunc:`variance`,
     :sqlfunc:`moment`, :sqlfunc:`rv_sample`, :sqlfunc:`rv_histogram`)
     when a sub-circuit cannot be decomposed and must be sampled.
+    Before sampling, :sqlfunc:`expected`, :sqlfunc:`variance` and
+    :sqlfunc:`moment` compute the moment exactly when the sub-circuit has
+    no continuous random variable and depends on at most 20 input tuples,
+    by enumerating their possible worlds.
     Set to ``0`` to disable the fallback entirely: callers raise an
     exception rather than sampling, which is useful when only
-    analytical answers are acceptable. Unrelated to
+    exact answers are acceptable. Unrelated to
     ``probability_evaluate(..., 'monte-carlo', 'n')`` where the sample
     count is an explicit argument.
 

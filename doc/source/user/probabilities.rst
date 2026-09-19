@@ -197,8 +197,10 @@ supports ``COUNT``, ``SUM``, ``MIN``, ``MAX``, and ``AVG``.  ``MIN`` /
 condition on the aggregate being *defined* (``NULL`` only when it never
 is); ``SUM`` / ``COUNT`` treat the all-rows-absent world as the real
 value 0.  ``AVG`` is exact over tuple-independent (or shared-anchor)
-groups via its joint (sum, count) distribution; other shapes are
-estimated by Monte Carlo at the ``provsql.rv_mc_samples`` budget:
+groups via its joint (sum, count) distribution; other shapes are exact
+when they depend on at most 20 input tuples, whose possible worlds are
+then enumerated, and estimated by Monte Carlo at the
+``provsql.rv_mc_samples`` budget otherwise:
 
 .. code-block:: postgresql
 

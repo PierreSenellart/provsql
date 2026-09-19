@@ -413,9 +413,43 @@ unsigned mc_samples_or_throw(const std::string &what)
   return static_cast<unsigned>(n);
 }
 
+/// Most Boolean inputs whose 2^n possible worlds the moment fallbacks
+/// enumerate, for an exact moment, before sampling.
+constexpr unsigned kEnumerateMaxInputs = 20;
+
+/**
+ * @brief The moment of order @p k of @p g, about @p mu (0 for a raw
+ *        moment), given @p event, over the possible worlds of the circuit
+ *        (@c enumerateScalarWorlds), or @c std::nullopt when they cannot be
+ *        enumerated.
+ *
+ * The worlds where @p g is undefined (NaN: an aggregate over no row) are left
+ * out, as the samplers leave out such draws.  NaN when it is never defined.
+ */
+std::optional<double> enumerated_moment(const GenericCircuit &gc, gate_t g,
+                                        unsigned k, double mu,
+                                        std::optional<gate_t> event,
+                                        const std::string &what)
+{
+  auto worlds = enumerateScalarWorlds(gc, g, event, kEnumerateMaxInputs);
+  if (!worlds) return std::nullopt;
+  if (event && worlds->empty())
+    throw CircuitException(what + ": conditioning event is infeasible");
+  double total = 0.0, mass = 0.0;
+  for (const auto &w : *worlds) {
+    if (std::isnan(w.second)) continue;
+    total += w.first * std::pow(w.second - mu, static_cast<double>(k));
+    mass += w.first;
+  }
+  if (!(mass > 0.0)) return std::numeric_limits<double>::quiet_NaN();
+  return total / mass;
+}
+
 double mc_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
                      const std::string &what)
 {
+  if (auto m = enumerated_moment(gc, g, k, 0.0, std::nullopt, what))
+    return *m;
   auto samples = monteCarloScalarSamples(gc, g, mc_samples_or_throw(what));
   if (samples.empty()) return 0.0;
   // NaN samples come from sampling-undefined worlds, e.g. an
@@ -436,6 +470,8 @@ double mc_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
 double mc_central_moment(const GenericCircuit &gc, gate_t g, unsigned k,
                          double mu, const std::string &what)
 {
+  if (auto m = enumerated_moment(gc, g, k, mu, std::nullopt, what))
+    return *m;
   auto samples = monteCarloScalarSamples(gc, g, mc_samples_or_throw(what));
   if (samples.empty()) return 0.0;
   double total = 0.0;
@@ -489,6 +525,8 @@ double mc_conditional_raw_moment(const GenericCircuit &gc, gate_t g,
                                  unsigned k, gate_t event_root,
                                  const std::string &what)
 {
+  if (auto m = enumerated_moment(gc, g, k, 0.0, event_root, what))
+    return *m;
   auto cs = monteCarloConditionalScalarSamples(
               gc, g, event_root, mc_samples_or_throw(what));
   check_acceptance_or_throw(cs, what);
@@ -511,6 +549,8 @@ double mc_conditional_central_moment(const GenericCircuit &gc, gate_t g,
                                      gate_t event_root,
                                      const std::string &what)
 {
+  if (auto m = enumerated_moment(gc, g, k, mu, event_root, what))
+    return *m;
   auto cs = monteCarloConditionalScalarSamples(
               gc, g, event_root, mc_samples_or_throw(what));
   check_acceptance_or_throw(cs, what);

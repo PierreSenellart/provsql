@@ -210,6 +210,21 @@ std::vector<double> monteCarloScalarSamples(
   const GenericCircuit &gc, gate_t root, unsigned samples);
 
 /**
+ * @brief The possible worlds of a circuit whose only random sources are
+ *        Boolean inputs: the exact alternative to @c monteCarloScalarSamples.
+ *
+ * For each assignment of the inputs reachable from @p root and @p event
+ * (at most @p max_inputs of them) in which @p event holds (when given), its
+ * probability and the value of @p root there (NaN where it is undefined, as
+ * an aggregate over no row).  @c std::nullopt when the circuit has another
+ * random source (a @c gate_rv, a mixture, an observation, a
+ * @c gate_mulinput), an input without a probability, or more inputs.
+ */
+std::optional<std::vector<std::pair<double, double>>>
+enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
+                      std::optional<gate_t> event, unsigned max_inputs);
+
+/**
  * @brief Coupled per-iteration draws of two scalar roots.
  *
  * Each iteration resets the per-iteration cache once and evaluates both

@@ -280,14 +280,17 @@ when the value never is. The regions are mutually exclusive, and
 the correlation between a guard and its branch (they share input tuples) is
 carried by the conditioning, exactly as in ``HAVING``. This covers branches
 that are a single aggregate (``sum`` / ``count`` / ``min`` / ``max``), a numeric
-constant (``ELSE 0``), or a nested ``CASE``; an ``avg`` branch takes the
-Monte-Carlo path (its exact arm, below, is unconditional-only).
+constant (``ELSE 0``), or a nested ``CASE``; an ``avg`` branch is exact
+when it depends on at most 20 input tuples (see
+:ref:`provsql.rv_mc_samples <provsql-rv-mc-samples>`), and takes the
+Monte-Carlo path otherwise.
 
 A branch that is an **arithmetic combination** of aggregates
 (``THEN sum(y) + sum(z)``) has no exact closed form -- the region probabilities
-stay exact, but that branch's conditional moment is estimated by Monte Carlo, so
-it needs ``provsql.rv_mc_samples > 0``. (This is the same limitation the moment
-surface has for a bare ``sum(x) + sum(y)``.)
+stay exact, but that branch's conditional moment is estimated by Monte Carlo
+unless it depends on at most 20 input tuples, so it may need
+``provsql.rv_mc_samples > 0``. (This is the same limitation the moment surface
+has for a bare ``sum(x) + sum(y)``.)
 
 .. _window-aggregates:
 

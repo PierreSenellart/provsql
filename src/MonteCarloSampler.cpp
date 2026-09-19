@@ -100,6 +100,12 @@ public:
   double evalScalar(gate_t g);
   double evalWeight(gate_t g);
 
+  /// Read the inputs from @p world instead of drawing them (enumeration
+  /// of the possible worlds); @c nullptr draws them again.
+  void fixInputs(const std::unordered_map<gate_t, bool> *world) {
+    fixed_ = world;
+  }
+
 private:
   /// Build the per-draw Distribution for a (possibly latent) gate_rv leaf,
   /// resolving wired parameters through evalScalar (so a shared latent
@@ -112,6 +118,7 @@ private:
   std::mt19937_64 &rng_;
   std::unordered_map<gate_t, bool> bool_cache_;
   std::unordered_map<gate_t, double> scalar_cache_;
+  const std::unordered_map<gate_t, bool> *fixed_ = nullptr;
   // Per-gate_rv Distribution, constructed once and reused across iterations
   // (NOT cleared in resetIteration): sampling then never re-parses the spec
   // or re-constructs the Distribution per draw.
@@ -131,6 +138,10 @@ bool Sampler::evalBool(gate_t g)
     case gate_input:
     case gate_update:
     {
+      if(fixed_ != nullptr) {
+        result = fixed_->at(g);
+        break;
+      }
       std::uniform_real_distribution<double> u(0.0, 1.0);
       result = u(rng_) < gc_.getProb(g);
       break;
@@ -794,6 +805,64 @@ std::vector<double> monteCarloScalarSamples(
     if(provsql_interrupted)
       throw CircuitException(
               "Interrupted after " + std::to_string(i + 1) + " samples");
+  }
+  return out;
+}
+
+std::optional<std::vector<std::pair<double, double>>>
+enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
+                      std::optional<gate_t> event, unsigned max_inputs)
+{
+  /* The random sources below root and event: Boolean inputs only */
+  std::vector<gate_t> inputs;
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> todo;
+  todo.push(root);
+  if(event) todo.push(*event);
+  while(!todo.empty()) {
+    gate_t g = todo.top();
+    todo.pop();
+    if(!seen.insert(g).second) continue;
+    switch(gc.getGateType(g)) {
+      case gate_input:
+      case gate_update:
+        if(std::isnan(gc.getProb(g))) return std::nullopt;
+        inputs.push_back(g);
+        break;
+      case gate_rv:
+      case gate_mixture:
+      case gate_observe:
+      case gate_mulinput:
+        return std::nullopt;
+      default:
+        break;
+    }
+    if(inputs.size() > max_inputs) return std::nullopt;
+    for(gate_t c : gc.getWires(g)) todo.push(c);
+  }
+
+  std::mt19937_64 rng;  /* unused: every input is fixed */
+  Sampler sampler(gc, rng);
+  std::unordered_map<gate_t, bool> world;
+  sampler.fixInputs(&world);
+  std::vector<std::pair<double, double>> out;
+  const std::uint64_t n_worlds = std::uint64_t(1) << inputs.size();
+  for(std::uint64_t w = 0; w < n_worlds; ++w) {
+    double p = 1.0;
+    for(std::size_t i = 0; i < inputs.size(); ++i) {
+      const bool present = (w >> i) & 1;
+      const double pi = gc.getProb(inputs[i]);
+      world[inputs[i]] = present;
+      p *= present ? pi : 1.0 - pi;
+    }
+    if(p == 0.0) continue;
+    sampler.resetIteration();
+    if(event && !sampler.evalBool(*event)) continue;
+    out.emplace_back(p, sampler.evalScalar(root));
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted after " + std::to_string(w + 1) +
+                             " worlds");
   }
   return out;
 }
