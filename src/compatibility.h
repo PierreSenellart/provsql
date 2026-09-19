@@ -145,6 +145,13 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_SUM_INT4 2108
 #endif
 
+#if PG_VERSION_NUM < 120000
+/** @brief Query-walker flag examining RTEs before recursing into them.
+ * PostgreSQL 12 renamed @c QTW_EXAMINE_RTES to this, when it added
+ * @c QTW_EXAMINE_RTES_AFTER. */
+#define QTW_EXAMINE_RTES_BEFORE QTW_EXAMINE_RTES
+#endif
+
 #if PG_VERSION_NUM >= 130000 && PG_VERSION_NUM < 140000
 /** @brief Five-element list constructor.  The linked-list implementation
  * (pre-PG 13) had it as a macro; the PG13 array rewrite dropped it; PG14
