@@ -354,4 +354,31 @@ BEGIN
 END $$;
 DROP TABLE seh_ones CASCADE;
 
+-- count is never NULL, not even over no row; stddev is NULL over a single
+-- value, so its IS NULL is refused rather than read as "no value".
+CREATE TABLE seh_n(g int, v int);
+INSERT INTO seh_n VALUES (0,10),(1,20),(1,30);
+SELECT add_provenance('seh_n');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM seh_n; END $$;
+DO $$
+DECLARE r record; rr record; ps text;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      ('count(*) IS NULL',     ''),
+      ('count(v) IS NOT NULL', ''),
+      ('count(v) IS NOT NULL', 'GROUP BY g'),
+      ('count(*) IS NULL',     'GROUP BY g')
+    ) AS v(pred, grp) LOOP
+    ps := '';
+    FOR rr IN EXECUTE format(
+      'SELECT round(provsql.probability_evaluate(provsql.provenance())::numeric, 4) AS p'
+      ' FROM seh_n %s HAVING %s ORDER BY 1', r.grp, r.pred) LOOP
+      ps := ps || ' ' || rr.p;
+    END LOOP;
+    RAISE NOTICE '% %:%', r.pred, r.grp, ps;
+  END LOOP;
+END $$;
+SELECT g FROM seh_n GROUP BY g HAVING stddev(v) IS NULL;
+DROP TABLE seh_n CASCADE;
+
 DROP TABLE seh_t CASCADE;

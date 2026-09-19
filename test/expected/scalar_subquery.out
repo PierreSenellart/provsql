@@ -740,3 +740,12 @@ a
 3
 3
 (6 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+n|total
+0 (*)|3 (*)
+(1 row)

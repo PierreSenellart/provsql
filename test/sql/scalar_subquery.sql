@@ -1310,3 +1310,17 @@ SELECT remove_provenance('ssp_r');
 SELECT a FROM ssp_r ORDER BY a;
 DROP TABLE ssp_r;
 DROP TABLE ssp, ssp_m;
+
+-- An uncorrelated scalar subquery next to an aggregation without GROUP BY
+-- whose input is empty: the aggregation gives one row, with the value of the
+-- subquery.
+CREATE TABLE ssa(id int, v int);
+INSERT INTO ssa VALUES (1,10),(2,20),(3,30);
+SELECT add_provenance('ssa');
+CREATE TABLE ssa_r AS
+  SELECT count(*) AS n, (SELECT count(*) FROM ssa) AS total
+  FROM ssa WHERE v > 100;
+SELECT remove_provenance('ssa_r');
+SELECT n, total FROM ssa_r;
+DROP TABLE ssa_r;
+DROP TABLE ssa;

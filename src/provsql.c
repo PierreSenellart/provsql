@@ -4136,6 +4136,48 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
     K = (Node *)list_nth(sm->args, 1); /* per-row provenance token */
     base_arr = arr;
 
+    /* count is never NULL, not even over no row.  The others below are NULL
+     * exactly when they read no value; any other aggregate (stddev,
+     * var_samp, corr, ... are NULL over a single value) is refused. */
+    {
+      Oid aggfnoid = DatumGetInt32(((Const *)linitial(pa->args))->constvalue);
+      char *name = get_func_name(aggfnoid);
+      static const char *const null_iff_no_value[] = {
+        "sum", "avg", "min", "max", "choose", "bool_and", "bool_or", "every",
+        "string_agg", "xmlagg", "stddev_pop", "var_pop", "bit_and", "bit_or",
+        "bit_xor", "range_agg", "range_intersect_agg", NULL};
+      bool known = aggregate_keeps_nulls(constants, aggfnoid);
+      const char *const *n;
+
+      if (name != NULL && strcmp(name, "count") == 0) {
+        /* IS NULL: 𝟘.  IS NOT NULL: 𝟙 for the single row of a scalar
+         * aggregation, the presence of the group, δ(⊕K), otherwise. */
+        FuncExpr *c = makeNode(FuncExpr);
+        ntt = nt->nulltesttype;
+        if (negated)
+          ntt = (ntt == IS_NULL) ? IS_NOT_NULL : IS_NULL;
+        pfree(name);
+        c->funcresulttype = constants->OID_TYPE_UUID;
+        c->location = -1;
+        if (ntt == IS_NOT_NULL && !is_scalar) {
+          c->funcid = constants->OID_FUNCTION_PROVENANCE_DELTA;
+          c->args = list_make1(having_null_filtered_plus(constants, arr, K, NULL));
+        } else {
+          c->funcid = ntt == IS_NULL ? constants->OID_FUNCTION_GATE_ZERO
+                                     : constants->OID_FUNCTION_GATE_ONE;
+          c->args = NIL;
+        }
+        return c;
+      }
+      for (n = null_iff_no_value; !known && name != NULL && *n != NULL; ++n)
+        if (strcmp(name, *n) == 0)
+          known = true;
+      if (!known)
+        provsql_error("HAVING IS [NOT] NULL is not supported on aggregate %s",
+                      name != NULL ? name : "(unknown)");
+      pfree(name);
+    }
+
     /* Which rows does the aggregate read, and which does it leave out? */
     if (aggregate_keeps_nulls(
           constants,
@@ -17350,6 +17392,114 @@ static Query *distinct_over_windows(const constants_t *constants, Query *q) {
   return outer;
 }
 
+/** @brief Is @p te a scalar subquery that @c move_uncorrelated_sublinks_to_from
+ *  moves to the FROM? */
+static bool is_movable_uncorrelated_sublink(const constants_t *constants,
+                                            TargetEntry *te) {
+  SubLink *sl;
+  if (!IsA(te->expr, SubLink))
+    return false;
+  sl = (SubLink *)te->expr;
+  return sl->subLinkType == EXPR_SUBLINK && IsA(sl->subselect, Query) &&
+         !sublink_is_inert(sl) &&
+         oj_build_uncorrelated_from_subquery(constants,
+                                             (Query *)sl->subselect) != NULL;
+}
+
+/**
+ * @brief Move an aggregation without @c GROUP @c BY into a subquery, leaving
+ *        out its uncorrelated scalar subqueries.
+ *
+ * @c move_uncorrelated_sublinks_to_from joins such a subquery to the FROM, and
+ * refers to its value in the target list.  In an aggregation without
+ * @c GROUP @c BY, that reference is to a column neither grouped nor aggregated,
+ * which reads nothing when the aggregation has no input row.  @c SELECT
+ * @c count(*), @c (SELECT count(*) @c FROM @c t) @c FROM @c r is rewritten as
+ * @c SELECT @c a.count, @c (SELECT count(*) @c FROM @c t) @c FROM
+ * @c (SELECT @c count(*) @c FROM @c r) @c a, whose @c ORDER @c BY and
+ * @c LIMIT it takes; the subquery is then moved at that level, which has one
+ * row.  Returns @c NULL, leaving @p q alone, when there is no such subquery,
+ * or when an entry reads @c provenance(), which the rows of the subquery would
+ * not give.
+ */
+static Query *scalar_agg_over_uncorrelated_sublinks(const constants_t *constants,
+                                                    Query *q) {
+  Query *outer;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  List *colnames = NIL, *inner_tl = NIL;
+  ListCell *lc;
+  bool found = false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (!te->resjunk &&
+        reads_provenance_walker((Node *)te->expr, (void *)constants))
+      return NULL;
+    if (!te->resjunk && is_movable_uncorrelated_sublink(constants, te))
+      found = true;
+  }
+  if (!found)
+    return NULL;
+
+  outer = makeNode(Query);
+  outer->commandType = CMD_SELECT;
+  outer->querySource = q->querySource;
+  outer->canSetTag = q->canSetTag;
+  outer->hasSubLinks = true;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    TargetEntry *ote;
+    if (!te->resjunk && is_movable_uncorrelated_sublink(constants, te)) {
+      ote = makeTargetEntry(te->expr, te->resno, te->resname, false);
+    } else {
+      AttrNumber resno = list_length(inner_tl) + 1;
+      if (te->resname == NULL)
+        te->resname = pstrdup("?column?");
+      ote = makeTargetEntry(
+        (Expr *)makeVar(1, resno, exprType((Node *)te->expr),
+                        exprTypmod((Node *)te->expr),
+                        exprCollation((Node *)te->expr), 0),
+        te->resno, te->resname, te->resjunk);
+      ote->resorigtbl = te->resorigtbl;
+      ote->resorigcol = te->resorigcol;
+      te->resno = resno;
+      inner_tl = lappend(inner_tl, te);
+      colnames = lappend(colnames, makeString(pstrdup(te->resname)));
+    }
+    ote->ressortgroupref = te->ressortgroupref;
+    outer->targetList = lappend(outer->targetList, ote);
+  }
+  q->targetList = inner_tl;
+  outer->sortClause = q->sortClause;
+  outer->limitCount = q->limitCount;
+  outer->limitOffset = q->limitOffset;
+#if PG_VERSION_NUM >= 130000
+  outer->limitOption = q->limitOption;
+  q->limitOption = LIMIT_OPTION_COUNT;
+#endif
+  q->sortClause = NIL;
+  q->limitCount = q->limitOffset = NULL;
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = q;
+  rte->eref = makeAlias("aggregated", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  outer->rtable = list_make1(rte);
+  outer->jointree = makeFromExpr(list_make1(rtr), NULL);
+
+  /* The query is one level deeper than it was; the subqueries moved out,
+   * uncorrelated, are not. */
+  IncrementVarSublevelsUp((Node *)q, 1, 1);
+  return outer;
+}
+
 /**
  * @brief Rewrite the LIMIT / OFFSET of @p q into the filter of a rank, or
  *        return @c NULL if it is not (@c limit_lowerable).
@@ -18196,6 +18346,14 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && q->distinctClause != NIL && q->hasWindowFuncs &&
       !q->hasDistinctOn && !q->hasAggs) {
     Query *outer = distinct_over_windows(constants, q);
+    if (outer)
+      return process_query(constants, outer, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
+  if (provsql_active && q->commandType == CMD_SELECT && q->hasAggs &&
+      q->hasSubLinks && q->groupClause == NIL && q->groupingSets == NIL &&
+      q->setOperations == NULL && q->distinctClause == NIL) {
+    Query *outer = scalar_agg_over_uncorrelated_sublinks(constants, q);
     if (outer)
       return process_query(constants, outer, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
