@@ -858,4 +858,14 @@ extern "C"
 #endif
 void provsql_gate_builders_forget(void);
 
+/** @brief UUID of the semiring zero gate: the result of the SQL function
+ *  @c gate_zero(), created with the extension (test @c agg_filter checks
+ *  the two agree). */
+#define PROVSQL_GATE_ZERO_UUID "19257535-6aaf-5275-b02b-899c48576553"
+/** @brief UUID of the semiring one gate, the result of @c gate_one(). */
+#define PROVSQL_GATE_ONE_UUID "d265daa9-f206-561d-845c-2a85fa0fa72c"
+/** @brief UUID of the constant value gate standing for the NULL value, the
+ *  result of @c gate_null(). */
+#define PROVSQL_GATE_NULL_UUID "417134e7-a404-57a7-86fd-2577ebe0f3ba"
+
 #endif /* PROVSQL_UTILS_H */

@@ -125,11 +125,17 @@ static void collect_roots(root_set *rs)
 
   PG_TRY();
   {
-    /* The semiring constants: the planner emits their UUIDs as literals,
-       so no row need mention them, and a store that lost them would read
-       them back as inputs rather than as constants. */
-    collect_from(rs, "SELECT provsql.gate_zero()");
-    collect_from(rs, "SELECT provsql.gate_one()");
+    /* The constants (zero, one, the NULL value): the planner emits their
+       UUIDs as literals, so no row need mention them, and a store that lost
+       them would read them back as inputs rather than as constants. */
+    {
+      const char *constants[] = {PROVSQL_GATE_ZERO_UUID, PROVSQL_GATE_ONE_UUID,
+                                 PROVSQL_GATE_NULL_UUID};
+      for(int i = 0; i < 3; ++i)
+        root_set_add(rs, DatumGetUUIDP(
+                       DirectFunctionCall1(uuid_in,
+                                           CStringGetDatum(constants[i]))));
+    }
 
     rc = SPI_execute(
       "SELECT c.oid::regclass::text AS rel, quote_ident(a.attname) AS col, "

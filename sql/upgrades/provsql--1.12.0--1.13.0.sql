@@ -2357,6 +2357,8 @@ CREATE AGGREGATE provenance_contributions_cat(uuid[]) (
   INITCOND = '{}'
 );
 
+-- The value gate of the NULL value, created like the zero and one gates
+SELECT create_gate(gate_null(), 'value', NULL, NULL, NULL, 'NULL');
 -- explode_table explodes the result of choose() only
 CREATE OR REPLACE FUNCTION explode_table(_tbl text, agg_token text)
 RETURNS void AS $$

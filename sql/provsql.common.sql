@@ -844,8 +844,8 @@ CREATE OR REPLACE FUNCTION check_store(
  *
  * A root is every value of a @c uuid, @c agg_token or @c random_variable
  * column, and of arrays of those, in every table and materialised view of
- * the database -- not only columns named @c provsql -- plus the semiring
- * constants @c gate_zero and @c gate_one.  A token that lives only
+ * the database -- not only columns named @c provsql -- plus the constants
+ * @c gate_zero, @c gate_one and @c gate_null.  A token that lives only
  * outside the database is **not** a root: one kept in a notebook cell, a
  * deep link, a file, or a @c text / @c jsonb column.  Content-addressed
  * gates come back by re-running the query that built them; freshly minted
@@ -10484,6 +10484,7 @@ SELECT reset_constants_cache();
 
 SELECT create_gate(gate_zero(), 'zero');
 SELECT create_gate(gate_one(), 'one');
+SELECT create_gate(gate_null(), 'value', NULL, NULL, NULL, 'NULL');
 
 /** @} */
 

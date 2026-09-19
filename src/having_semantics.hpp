@@ -57,12 +57,8 @@ bool aggtype_is_numeric(unsigned oid);
 bool rank_values_by_type(unsigned typoid, const std::vector<std::string> &vals,
                          const std::string &threshold,
                          std::vector<long> &ranks, long &threshold_rank);
-/**
- * @brief UUID of the constant value gate standing for the NULL value: the
- *        result of the SQL function @c gate_null() (test @c agg_filter checks
- *        the two agree).
- */
-constexpr const char *GATE_NULL_UUID = "417134e7-a404-57a7-86fd-2577ebe0f3ba";
+/** @brief @c PROVSQL_GATE_NULL_UUID, the value gate of the NULL value. */
+constexpr const char *GATE_NULL_UUID = PROVSQL_GATE_NULL_UUID;
 
 /**
  * @brief The text standing for a NULL array element, on both sides of an

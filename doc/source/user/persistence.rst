@@ -237,7 +237,8 @@ after a bulk reload or a round of experiments, not on a schedule.
 A **root** is every value of a ``uuid``, ``agg_token`` or
 ``random_variable`` column, and of arrays of those, in every table and
 materialised view of the database -- not only columns named ``provsql``
--- plus the semiring constants ``gate_zero`` and ``gate_one``.  A token
+-- plus the constants ``gate_zero``, ``gate_one`` and ``gate_null`` (the
+value gate of the NULL value).  A token
 that lives only *outside* the database is **not** a root: one kept in a
 notebook cell, a deep link, a file, a ``text`` column or a ``jsonb``
 document.  Content-addressed gates come back by re-running the query that

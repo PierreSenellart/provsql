@@ -283,8 +283,11 @@ SELECT remove_provenance('af_t25'); SELECT 'aa f IS NULL' AS q, g, p FROM af_t25
 
 -- The NULL value gate: a constant the C++ evaluators know by its UUID, of type
 -- value, displayed as NULL, and distinct from the value gate of the string.
+-- The UUIDs of the zero and one gates are constants of the C code too.
 CREATE TABLE af_t26 AS SELECT
-    gate_null() = '417134e7-a404-57a7-86fd-2577ebe0f3ba'::uuid AS known_constant,
+    gate_null() = '417134e7-a404-57a7-86fd-2577ebe0f3ba'::uuid AND
+    gate_zero() = '19257535-6aaf-5275-b02b-899c48576553'::uuid AND
+    gate_one() = 'd265daa9-f206-561d-845c-2a85fa0fa72c'::uuid AS known_constant,
     get_gate_type(gate_null()) AS gate, sr_formula(gate_null()) AS shown,
     (SELECT count(*) FROM af_g, unnest(get_children(agg_token_uuid(aa))) AS ch
       WHERE (get_children(ch))[2] = gate_null()) AS null_children_g1;

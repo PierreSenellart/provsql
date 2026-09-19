@@ -89,25 +89,22 @@ static pg_uuid_t name_end(StringInfo buf) {
   return u;
 }
 
-/** @brief Address of a gate named by a constant (@c "zero", @c "one"). */
-static pg_uuid_t constant_address(const char *name) {
-  StringInfoData buf;
-
-  name_begin(&buf, name);
-  return name_end(&buf);
+/** @brief The UUID @p text (one of the constants of @c provsql_utils.h). */
+static pg_uuid_t constant_uuid(const char *text) {
+  return *DatumGetUUIDP(DirectFunctionCall1(uuid_in, CStringGetDatum(text)));
 }
 
 static const pg_uuid_t *address_of_zero(void) {
   static pg_uuid_t u;
   static bool known = false;
-  if (!known) { u = constant_address("zero"); known = true; }
+  if (!known) { u = constant_uuid(PROVSQL_GATE_ZERO_UUID); known = true; }
   return &u;
 }
 
 static const pg_uuid_t *address_of_one(void) {
   static pg_uuid_t u;
   static bool known = false;
-  if (!known) { u = constant_address("one"); known = true; }
+  if (!known) { u = constant_uuid(PROVSQL_GATE_ONE_UUID); known = true; }
   return &u;
 }
 

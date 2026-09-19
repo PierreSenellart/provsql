@@ -134,7 +134,7 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
 
   const auto ensureOne = [&]() {
                            if (!have_one) {
-                             one_uuid = provsqlUuidV5("one");
+                             one_uuid = string2uuid(PROVSQL_GATE_ONE_UUID);
                              provsql_internal_create_gate(&one_uuid, gate_one,
                                                           0, NULL);
                              have_one = true;
@@ -232,7 +232,7 @@ std::unordered_map<gate_t, pg_uuid_t, hash_gate_t> materializeCertifiedDD(
         if (t == BooleanGate::AND)
           token = ensureOne();
         else {
-          token = provsqlUuidV5("zero");
+          token = string2uuid(PROVSQL_GATE_ZERO_UUID);
           createOnce(token, gate_zero, {}, false);
         }
       } else if (wires.size() == 1) {
