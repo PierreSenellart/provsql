@@ -1469,4 +1469,18 @@ CREATE TABLE sst_r AS
 SELECT remove_provenance('sst_r');
 SELECT u, n::text AS n, c::text AS c FROM sst_r ORDER BY u;
 DROP TABLE sst_r;
+-- With the provsql column in the target list (SELECT *): it stays the
+-- provenance of the rows, not a value column of the split.
+CREATE TABLE sst_r AS
+  SELECT *, (SELECT sum(t) FROM ssv WHERE ssv.pid = a.id) AS s,
+         (SELECT max(t) FROM ssv WHERE ssv.pid = a.id) AS m
+  FROM sst a;
+SELECT remove_provenance('sst_r');
+SELECT id, s::text AS s, m::text AS m FROM sst_r ORDER BY id;
+DROP TABLE sst_r;
+-- A correlation inside a FROM subquery of the body (a top-k per outer row)
+-- is no join: refused.
+SELECT a.id, (SELECT sum(t) FROM (SELECT t FROM ssv WHERE ssv.pid = a.id
+                                  ORDER BY t LIMIT 1) v) AS s
+FROM sst a;
 DROP TABLE sst, ssv;

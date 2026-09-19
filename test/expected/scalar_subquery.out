@@ -883,3 +883,17 @@ u|n|c
 1|2|1
 2|2|2
 (2 rows)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+id|s|m
+1|10|10
+2|14|10
+3||
+4||
+(4 rows)
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported

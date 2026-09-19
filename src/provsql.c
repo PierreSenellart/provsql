@@ -12117,6 +12117,21 @@ typedef struct moved_vars_ctx {
   Index depth;        ///< Levels below the enclosing query
 } moved_vars_ctx;
 
+/** @brief Whether @p v, a Var of range table @p rtable, is the @c provsql
+ *  column of its relation: a subquery exposing it keeps that name, so that
+ *  it drops it as any provenance column of its target list. */
+static bool is_provsql_column_var(List *rtable, Var *v) {
+  RangeTblEntry *src;
+  if (v->varattno <= 0 || v->vartype != UUIDOID || v->varno < 1 ||
+      v->varno > list_length(rtable))
+    return false;
+  src = rt_fetch(v->varno, rtable);
+  return src->eref != NULL &&
+         v->varattno <= list_length(src->eref->colnames) &&
+         strcmp(strVal(list_nth(src->eref->colnames, v->varattno - 1)),
+                PROVSQL_COLUMN_NAME) == 0;
+}
+
 /** @brief Mutator: a Var of a moved relation becomes a Var of the subquery's
  *  column exposing it, at any depth. */
 static Node *moved_vars_mutator(Node *node, void *cx) {
@@ -12143,16 +12158,9 @@ static Node *moved_vars_mutator(Node *node, void *cx) {
       }
     if (resno == 0) {
       char name[32];
-      RangeTblEntry *src = rt_fetch(v->varno, ctx->sub->rtable);
       resno = list_length(ctx->sub->targetList) + 1;
       snprintf(name, sizeof(name), "c%d", resno);
-      /* The provsql column of a relation keeps its name, so that the
-       * subquery drops it as any provenance column of its target list */
-      if (v->varattno > 0 && v->vartype == UUIDOID &&
-          src->eref != NULL &&
-          v->varattno <= list_length(src->eref->colnames) &&
-          strcmp(strVal(list_nth(src->eref->colnames, v->varattno - 1)),
-                 PROVSQL_COLUMN_NAME) == 0)
+      if (is_provsql_column_var(ctx->sub->rtable, v))
         strlcpy(name, PROVSQL_COLUMN_NAME, sizeof(name));
       ctx->sub->targetList = lappend(
         ctx->sub->targetList,
@@ -12939,7 +12947,10 @@ static Node *pull_up_vars_mutator(Node *node, void *cx) {
       resno = list_length(ctx->inner->targetList) + 1;
       ctx->inner->targetList = lappend(
         ctx->inner->targetList,
-        makeTargetEntry((Expr *)copyObject(v), resno, pstrdup("?column?"),
+        makeTargetEntry((Expr *)copyObject(v), resno,
+                        pstrdup(is_provsql_column_var(ctx->inner->rtable, v)
+                                  ? PROVSQL_COLUMN_NAME
+                                  : "?column?"),
                         false));
       ctx->pulled = lappend(ctx->pulled, v);
       ctx->resnos = lappend_int(ctx->resnos, resno);
@@ -14969,6 +14980,11 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   if ((Q_rte_orig->rtekind != RTE_RELATION &&
        !(Q_rte_orig->rtekind == RTE_SUBQUERY && !Q_rte_orig->lateral)) ||
       !oj_rte_has_provsql(constants, Q_rte_orig))
+    return false;
+  /* A correlation inside Q itself (FROM (SELECT ... WHERE r.a = q.a ORDER BY
+   * ... LIMIT 2) q): Q depends on the outer row, and is no relation to join */
+  if (Q_rte_orig->rtekind == RTE_SUBQUERY &&
+      reads_outside_walker((Node *)Q_rte_orig->subquery, 0))
     return false;
 
   /* Determine R.  If the outer FROM is already a single tracked relation or
