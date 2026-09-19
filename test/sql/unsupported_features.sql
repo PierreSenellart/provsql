@@ -71,3 +71,9 @@ SELECT remove_provenance('lateral_array');
 SELECT id, n FROM lateral_array ORDER BY id;
 DROP TABLE lateral_array;
 SELECT (SELECT provsql FROM personnel WHERE id = 1) IS NOT NULL AS token;
+
+-- A condition on an aggregate result other than a comparison or IS [NOT]
+-- NULL (x = ANY(array_agg(...))) is refused, in WHERE as in HAVING.
+SELECT city FROM (SELECT city, array_agg(id) AS ids FROM personnel
+                  GROUP BY city) t WHERE 3 = ANY(ids);
+SELECT city FROM personnel GROUP BY city HAVING 3 = ANY(array_agg(id));

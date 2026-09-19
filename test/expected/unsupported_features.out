@@ -28,3 +28,5 @@ id|n
 token
 t
 (1 row)
+ERROR:  ProvSQL: Unsupported aggregate comparison shape in the selection predicate
+ERROR:  ProvSQL: condition on an aggregate result not supported in HAVING: only comparisons, IS [NOT] NULL and their Boolean combinations are (not, e.g., x = ANY(array_agg(...)))

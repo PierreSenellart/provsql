@@ -4636,7 +4636,10 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
   else if (IsA(expr, NullTest))
     return having_NullTest_to_provenance((NullTest *)expr, constants, negated);
   else
-    provsql_error("Unknown structure within Boolean expression");
+    provsql_unsupported("condition on an aggregate result not supported in "
+                        "HAVING: only comparisons, IS [NOT] NULL and their "
+                        "Boolean combinations are (not, e.g., "
+                        "x = ANY(array_agg(...)))");
 }
 
 /* -------------------------------------------------------------------------
@@ -16100,7 +16103,8 @@ static bool check_expr_on_aggregate(Expr *expr, const constants_t *constants) {
      * unsupported rather than as an unrecognised node. */
     return false;
   default:
-    provsql_error("Unknown structure within Boolean expression");
+    /* Another form of condition (3 = ANY(array_agg(x)), ...): unsupported */
+    return false;
   }
 }
 
