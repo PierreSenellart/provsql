@@ -5,9 +5,10 @@ SELECT
     provenance ();
 
 SELECT DISTINCT ON (city)
-    *
+    city, count(*)
 FROM
-    personnel;
+    personnel
+GROUP BY city;
 
 SELECT DISTINCT
     1
@@ -20,7 +21,7 @@ SELECT
     *
 FROM
     personnel
-INTERSECT
+INTERSECT ALL
 SELECT
     *
 FROM

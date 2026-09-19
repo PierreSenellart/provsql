@@ -1324,3 +1324,30 @@ SELECT remove_provenance('ssa_r');
 SELECT n, total FROM ssa_r;
 DROP TABLE ssa_r;
 DROP TABLE ssa;
+
+-- DISTINCT in the body of IN / NOT IN / EXISTS changes nothing to the test:
+-- dropped, the same provenance as without it.  Not DISTINCT ON, which
+-- chooses rows.
+CREATE TABLE ssd(id int, k int);
+INSERT INTO ssd VALUES (1, 1), (2, 1), (3, 2);
+SELECT add_provenance('ssd');
+SELECT create_provenance_mapping('ssd_m', 'ssd', 'id');
+CREATE TABLE ssd_r AS
+  SELECT 'IN DISTINCT' AS q, id, sr_formula(provenance(), 'ssd_m') AS f
+  FROM ssd a WHERE a.k IN (SELECT DISTINCT k FROM ssd WHERE id > 1)
+  UNION ALL
+  SELECT 'IN', id, sr_formula(provenance(), 'ssd_m')
+  FROM ssd a WHERE a.k IN (SELECT k FROM ssd WHERE id > 1)
+  UNION ALL
+  SELECT 'NOT EXISTS DISTINCT', id, sr_formula(provenance(), 'ssd_m')
+  FROM ssd a
+  WHERE NOT EXISTS (SELECT DISTINCT 1 FROM ssd b WHERE b.k = a.k AND b.id > a.id)
+  UNION ALL
+  SELECT 'NOT EXISTS', id, sr_formula(provenance(), 'ssd_m')
+  FROM ssd a
+  WHERE NOT EXISTS (SELECT 1 FROM ssd b WHERE b.k = a.k AND b.id > a.id);
+SELECT remove_provenance('ssd_r');
+SELECT * FROM ssd_r ORDER BY q, id;
+DROP TABLE ssd_r;
+SELECT id FROM ssd a WHERE k IN (SELECT DISTINCT ON (k) k FROM ssd ORDER BY k, id);
+DROP TABLE ssd, ssd_m;

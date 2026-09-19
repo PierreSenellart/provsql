@@ -69,9 +69,12 @@ The following SQL constructs are supported with full provenance tracking:
   constant or an outer column, including through ``IN``/``NOT IN``
   (the single-row aggregate body makes these scalar comparisons)
 * ``GROUP BY``
-* ``SELECT DISTINCT`` (set semantics)
+* ``SELECT DISTINCT`` (set semantics), and ``DISTINCT ON``, read as
+  a ``LIMIT 1`` in each group (see :ref:`limit`)
 * ``UNION`` and ``UNION ALL``
 * ``EXCEPT``
+* ``INTERSECT`` (set semantics): each row has the provenance of its
+  copies on the left, ⊕-combined, times that of its copies on the right
 * ``VALUES`` tables (treated as having no provenance)
 * Aggregation (``SUM``, ``COUNT``, ``MIN``, ``MAX``, ``AVG``,
   ``COUNT(DISTINCT …)``, ``string_agg``, ``array_agg``)
@@ -109,17 +112,19 @@ will either raise an error or may cause incorrect provenance tracking:
 * **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
   semantics), over cyclic data *without* an absorptive provenance class, or on
   PostgreSQL versions before 15
-* ``INTERSECT``
 * ``EXCEPT ALL`` over provenance-tracked relations: SQL removes as many
   copies of a row as the right-hand side has, without saying which, so
   the copies it keeps have no provenance of their own. Use ``EXCEPT``,
   which returns the same rows whenever the left-hand side has no
-  duplicates, or ``NOT IN`` / ``NOT EXISTS``
+  duplicates, or ``NOT IN`` / ``NOT EXISTS``; likewise ``INTERSECT
+  ALL``, which keeps as many copies as the side with fewer has: use
+  ``INTERSECT``, or ``IN`` / ``EXISTS``
 * **Outer joins with a provenance-tracked relation on a null-padded
   side**, beyond the supported two-relation shape (see
   :doc:`the chapter on NULLs <nulls>`): refused with an explicit error;
   an outer join whose null-padded side is untracked is fine
-* ``DISTINCT ON``
+* ``DISTINCT ON`` over an aggregation, a set operation, or keys or an
+  order on values that vary between worlds
 * ``GROUPING SETS``, ``CUBE``, ``ROLLUP``
 * **Operations on aggregate results requiring comparison or duplicate
   elimination:** ``DISTINCT`` on aggregates, ``UNION``/``EXCEPT``
@@ -172,7 +177,10 @@ present rows come before. The same holds in a subquery, in ``FROM``,
 ``LATERAL``, a ``WITH`` clause, or an arm of a set operation: a
 ``LATERAL`` subquery with ``ORDER BY … LIMIT k`` gives the first ``k``
 rows of each group, as a ``rank()`` compared with ``k`` does (see
-:ref:`window-aggregates`). This needs PostgreSQL 11 or later.
+:ref:`window-aggregates`). So does ``SELECT DISTINCT ON (g) … ORDER BY
+g, …``, with ``k`` = 1: in each world, it keeps the rows of each group
+that no present row of the group comes before, reading ties as
+``WITH TIES``, with a ``WARNING``. This needs PostgreSQL 11 or later.
 
 When the order of the rows is not in question, for instance to look at
 the first rows of a result, or when the tokens do not stand for the

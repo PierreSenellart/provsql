@@ -2,7 +2,7 @@
 ERROR:  ProvSQL: provenance() called on a table without provenance
 ERROR:  ProvSQL: DISTINCT ON not supported
 ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported
-ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported
+ERROR:  ProvSQL: INTERSECT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use INTERSECT, or IN / EXISTS.
 ERROR:  ProvSQL: DISTINCT on aggregate results not supported
 ERROR:  ProvSQL: Non-ALL set operations (UNION, EXCEPT) on aggregate results not supported
 ERROR:  ProvSQL: GROUP BY on aggregate results from a subquery not supported

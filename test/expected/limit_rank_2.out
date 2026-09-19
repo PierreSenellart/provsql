@@ -21,6 +21,15 @@ q|exact|probabilities
 several keys|t|1=0.1720 2=0.5000 3=0.7000 4=0.4000 5=0.2508 6=0.7002
 (1 row)
 q|exact|probabilities
+DISTINCT ON|t|1=0.0180 2=0.3000 3=0.2100 4=0.4000 5=0.0600 6=0.9000
+(1 row)
+q|exact|probabilities
+DISTINCT ON, then LIMIT|t|1=0.2000 2=0.4000 3=0.2800 4=0.0480 5=0.0432 6=0.0259
+(1 row)
+q|exact|probabilities
+DISTINCT ON a key other than the first|t|a=0.8560 b=0.9000
+(1 row)
+q|exact|probabilities
 top 1 per group, LATERAL|t|a:1=0.0180 a:2=0.3000 a:3=0.2100 a:4=0.4000 b:5=0.0600 b:6=0.9000
 (1 row)
 q|exact|probabilities

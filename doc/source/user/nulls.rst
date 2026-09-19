@@ -68,8 +68,8 @@ their different SQL answers. (See Step 12 of
 annotation is the ⊕ of all contributing tokens; ``UNION`` merges NULL
 rows from both sides; ``EXCEPT`` matches NULL rows on the two sides
 against each other (its antijoin uses ``IS NOT DISTINCT FROM``
-matching). ``INTERSECT`` is not supported and fails with an explicit
-error.
+matching); ``INTERSECT`` matches them likewise, two NULL rows being
+the same row.
 
 **Aggregates.** ``sum`` / ``avg`` / ``min`` / ``max`` skip NULL inputs;
 ``count(col)`` counts non-NULL values while ``count(*)`` counts rows;

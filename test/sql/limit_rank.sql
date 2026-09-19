@@ -73,6 +73,15 @@ SELECT * FROM lr_check('after a selection, NULLs first',
   'SELECT id AS k FROM lr WHERE g = ''a'' ORDER BY y NULLS FIRST, id LIMIT 2');
 SELECT * FROM lr_check('several keys',
   'SELECT id AS k FROM lr ORDER BY g, x DESC, id LIMIT 3');
+-- DISTINCT ON (g) keeps the first row of each group: the filter of
+-- row_number() OVER (PARTITION BY g ORDER BY ...) <= 1, checked world by
+-- world; with a LIMIT on top, and the ORDER BY key of the rows kept.
+SELECT * FROM lr_check('DISTINCT ON',
+  'SELECT DISTINCT ON (g) id AS k FROM lr ORDER BY g, x DESC, id');
+SELECT * FROM lr_check('DISTINCT ON, then LIMIT',
+  'SELECT DISTINCT ON (g) id AS k FROM lr ORDER BY g, x, id LIMIT 1');
+SELECT * FROM lr_check('DISTINCT ON a key other than the first',
+  'SELECT DISTINCT ON (g) g AS k FROM lr WHERE y IS NOT NULL ORDER BY g, id');
 SELECT * FROM lr_check('top 1 per group, LATERAL',
   'SELECT gs.g || '':'' || u.id AS k
    FROM (SELECT DISTINCT g FROM provsql_test.lr_plain) gs,

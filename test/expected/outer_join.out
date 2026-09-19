@@ -175,3 +175,13 @@ l|x|d|present
 1|1||f
 1|2||t
 (3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|a|b|own
+1|1|x|t
+2|2|y|t
+(2 rows)

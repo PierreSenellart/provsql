@@ -119,7 +119,18 @@ remove_provenance
 (1 row)
 q|a|p
 (0 rows)
-ERROR:  ProvSQL: Set operations other than UNION and EXCEPT not supported
+remove_provenance
+
+(1 row)
+q|a|p
+UNION ALL over INTERSECT|1|0.5000
+UNION ALL over INTERSECT|1|0.5000
+UNION ALL over INTERSECT|2|0.5000
+UNION ALL over INTERSECT|5|0.5000
+UNION ALL over INTERSECT|7|0.5000
+UNION ALL over INTERSECT|9|0.0800
+(6 rows)
+ERROR:  ProvSQL: INTERSECT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use INTERSECT, or IN / EXISTS.
 remove_provenance
 
 (1 row)

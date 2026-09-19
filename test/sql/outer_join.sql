@@ -255,3 +255,18 @@ SELECT remove_provenance('oj_t');
 SELECT * FROM oj_t ORDER BY x, d;
 DROP TABLE oj_t;
 DROP TABLE oj_c;
+
+-- A FROM function with several columns (a record from a jsonb value): it adds
+-- no provenance; each row has that of the row it is computed from.
+CREATE TABLE oj_rec(id int, data jsonb);
+INSERT INTO oj_rec VALUES (1, '{"a": 1, "b": "x"}'), (2, '{"a": 2, "b": "y"}');
+SELECT add_provenance('oj_rec');
+CREATE TABLE oj_t AS
+  SELECT j.id, r.a, r.b,
+         provenance() = (SELECT provenance() FROM oj_rec k WHERE k.id = j.id)
+           AS own
+  FROM oj_rec j, LATERAL jsonb_to_record(j.data) AS r(a int, b text);
+SELECT remove_provenance('oj_t');
+SELECT * FROM oj_t ORDER BY id;
+DROP TABLE oj_t;
+DROP TABLE oj_rec;

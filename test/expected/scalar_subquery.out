@@ -749,3 +749,27 @@ remove_provenance
 n|total
 0 (*)|3 (*)
 (1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|id|f
+IN|1|(1 ⊗ 2 ⊗ (𝟙 ⊖ (1 ⊖ (1 ⊗ 2)))) ⊕ (1 ⊗ 2 ⊗ (1 ⊖ (1 ⊗ 2)))
+IN|2|(2 ⊗ 2 ⊗ (𝟙 ⊖ (2 ⊖ (2 ⊗ 2)))) ⊕ (2 ⊗ 2 ⊗ (2 ⊖ (2 ⊗ 2)))
+IN|3|(3 ⊗ 3 ⊗ (𝟙 ⊖ (3 ⊖ (3 ⊗ 3)))) ⊕ (3 ⊗ 3 ⊗ (3 ⊖ (3 ⊗ 3)))
+IN DISTINCT|1|(1 ⊗ 2 ⊗ (𝟙 ⊖ (1 ⊖ (1 ⊗ 2)))) ⊕ (1 ⊗ 2 ⊗ (1 ⊖ (1 ⊗ 2)))
+IN DISTINCT|2|(2 ⊗ 2 ⊗ (𝟙 ⊖ (2 ⊖ (2 ⊗ 2)))) ⊕ (2 ⊗ 2 ⊗ (2 ⊖ (2 ⊗ 2)))
+IN DISTINCT|3|(3 ⊗ 3 ⊗ (𝟙 ⊖ (3 ⊖ (3 ⊗ 3)))) ⊕ (3 ⊗ 3 ⊗ (3 ⊖ (3 ⊗ 3)))
+NOT EXISTS|1|(1 ⊖ (1 ⊗ 2)) ⊗ (𝟙 ⊖ (1 ⊗ 2))
+NOT EXISTS|2|2
+NOT EXISTS|3|3
+NOT EXISTS DISTINCT|1|(1 ⊖ (1 ⊗ 2)) ⊗ (𝟙 ⊖ (1 ⊗ 2))
+NOT EXISTS DISTINCT|2|2
+NOT EXISTS DISTINCT|3|3
+(12 rows)
+ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported

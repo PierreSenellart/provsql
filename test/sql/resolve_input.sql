@@ -9,9 +9,8 @@ SELECT relation, row_data->>'name' AS name
 FROM ri_q, LATERAL provsql.resolve_input(u);
 DROP TABLE ri_q;
 
--- Every personnel row resolves back to itself.  Capture provsql values into a
--- non-tracked table first so the LATERAL call doesn't run under the rewriter
--- (which rejects FROM functions with multiple output attributes).
+-- Every personnel row resolves back to itself (the provsql values captured
+-- into a non-tracked table first).
 CREATE TABLE ri_all AS SELECT provsql AS u FROM personnel;
 SELECT remove_provenance('ri_all');
 SELECT row_data->>'name' AS name

@@ -234,6 +234,8 @@ static Query *process_query(const constants_t *constants, Query *q,
 static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
 static bool output_provably_not_null(const Query *sub, AttrNumber attno);
+static RangeTblEntry *oj_make_subquery_rte(Query *sub);
+static bool distinct_on_lowerable(const constants_t *constants, Query *q);
 static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
                                      bool nullable);
 static bool expr_contains_aggref(Node *node);
@@ -2642,8 +2644,17 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
                                   constants, q, r, rteid, attid));
           }
         } else {
-          provsql_error("FROM function with multiple output "
-                        "attributes not supported");
+          /* Several columns (json_to_record, a record-returning function):
+           * computed from its arguments, it adds no provenance of its own --
+           * unless a column of it is a provsql one (a function returning
+           * the rows of a tracked table), which is not a token of this
+           * query. */
+          int c;
+          for (c = 0; c < func->funccolcount; ++c)
+            if (!strcmp(get_rte_attribute_name(r, attid + c),
+                        PROVSQL_COLUMN_NAME))
+              provsql_error("FROM function returning a provsql column not "
+                            "supported");
         }
 
         attid += func->funccolcount;
@@ -9025,6 +9036,132 @@ static Query *set_operation_as_query(SetOperationStmt *stmt, List *old_rtable) {
   return sub;
 }
 
+/** @brief A side of an @c INTERSECT, as a subquery: a leaf, or a set
+ *  operation made a query of its own. */
+static Query *intersect_side(Node *node, List *rtable) {
+  if (IsA(node, RangeTblRef))
+    return ((RangeTblEntry *)list_nth(
+              rtable, ((RangeTblRef *)node)->rtindex - 1))->subquery;
+  return set_operation_as_query((SetOperationStmt *)node, rtable);
+}
+
+/** @brief Column @p attno of the side @p side (range-table entry @p varno),
+ *  coerced to the type of the column of the set operation. */
+static Expr *intersect_column(Query *side, Index varno, AttrNumber attno,
+                              Oid type, int32 typmod) {
+  TargetEntry *te = get_tle_by_resno(side->targetList, attno);
+  Oid t = exprType((Node *)te->expr);
+  Var *v = makeVar(varno, attno, t, exprTypmod((Node *)te->expr),
+                   exprCollation((Node *)te->expr), 0);
+  if (t == type)
+    return (Expr *)v;
+  return (Expr *)coerce_to_target_type(NULL, (Node *)v, t, type, typmod,
+                                       COERCION_IMPLICIT,
+                                       COERCE_IMPLICIT_CAST, -1);
+}
+
+/**
+ * @brief Rewrite an @c INTERSECT into the deduplicated join of its sides.
+ *
+ * @c A @c INTERSECT @c B, under set semantics, is
+ * @c SELECT @c DISTINCT @c a.* @c FROM @c A @c a, @c B @c b where every
+ * column of @c a matches that of @c b, two NULLs being equal: each row has
+ * the provenance (⊕ of the rows of @c A equal to it) ⊗ (⊕ of those of
+ * @c B).  The provenance columns of the sides (a @c * over a tracked
+ * relation) are not compared; the target list keeps an entry for them, which
+ * the rewriting of the join then removes, so that what it reports removed is
+ * what the caller's target list has.  @c ORDER @c BY and @c LIMIT move to the
+ * join.  @c INTERSECT @c ALL is refused: it keeps min(m, n) copies of a row,
+ * without saying which, so no copy has a provenance of its own.
+ */
+static Query *rewrite_intersect(const constants_t *constants, Query *q) {
+  SetOperationStmt *so = (SetOperationStmt *)q->setOperations;
+  Query *n, *left, *right;
+  List *quals = NIL, *distinct = NIL;
+  ListCell *lc, *lct, *lcm, *lcc;
+  RangeTblRef *l = makeNode(RangeTblRef), *r = makeNode(RangeTblRef);
+  Index sgref = 0;
+  AttrNumber attno = 0;
+
+  if (so->all)
+    provsql_error("INTERSECT ALL over provenance-tracked relations is not "
+                  "supported: the copies it keeps have no provenance of their "
+                  "own. Use INTERSECT, or IN / EXISTS.");
+
+  left = intersect_side(so->larg, q->rtable);
+  right = intersect_side(so->rarg, q->rtable);
+
+  n = makeNode(Query);
+  n->commandType = CMD_SELECT;
+  n->querySource = q->querySource;
+  n->canSetTag = q->canSetTag;
+  n->rtable = list_make2(oj_make_subquery_rte(left), oj_make_subquery_rte(right));
+  l->rtindex = 1;
+  r->rtindex = 2;
+
+  foreach (lc, q->targetList)
+    if (((TargetEntry *)lfirst(lc))->ressortgroupref > sgref)
+      sgref = ((TargetEntry *)lfirst(lc))->ressortgroupref;
+
+  forthree (lct, so->colTypes, lcm, so->colTypmods, lcc, so->colCollations) {
+    Oid type = lfirst_oid(lct);
+    int32 typmod = lfirst_int(lcm);
+    Oid collation = lfirst_oid(lcc);
+    TargetEntry *te = get_tle_by_resno(q->targetList, ++attno);
+    TargetEntry *nte;
+    bool is_provsql = type == constants->OID_TYPE_UUID && te != NULL &&
+                      te->resname != NULL &&
+                      strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0;
+
+    if (is_provsql)
+      nte = makeTargetEntry(
+        (Expr *)makeVar(1, attno, type, typmod, collation, 0), attno,
+        pstrdup(PROVSQL_COLUMN_NAME), false);
+    else {
+      nte = makeTargetEntry(
+        intersect_column(left, 1, attno, type, typmod), attno,
+        te && te->resname ? pstrdup(te->resname) : NULL, false);
+      quals = lappend(quals,
+                      make_null_safe_equality(
+                        (Expr *)copyObject(nte->expr),
+                        intersect_column(right, 2, attno, type, typmod),
+                        type, collation, true));
+    }
+    if (te != NULL) {
+      nte->ressortgroupref = te->ressortgroupref;
+      nte->resorigtbl = te->resorigtbl;
+      nte->resorigcol = te->resorigcol;
+    }
+    /* Every column, provsql ones included (the DISTINCT becomes a GROUP BY
+     * on every column; a provsql one leaves it when it is removed) */
+    {
+      SortGroupClause *sgc = makeNode(SortGroupClause);
+      if (nte->ressortgroupref == 0)
+        nte->ressortgroupref = ++sgref;
+      sgc->tleSortGroupRef = nte->ressortgroupref;
+      get_sort_group_operators(type, false, true, false, &sgc->sortop,
+                               &sgc->eqop, NULL, &sgc->hashable);
+      distinct = lappend(distinct, sgc);
+    }
+    n->targetList = lappend(n->targetList, nte);
+  }
+
+  n->jointree = makeFromExpr(
+    list_make2(l, r),
+    quals == NIL ? NULL
+                 : (list_length(quals) == 1 ? (Node *)linitial(quals)
+                                            : (Node *)makeBoolExpr(AND_EXPR,
+                                                                   quals, -1)));
+  n->distinctClause = distinct;
+  n->sortClause = q->sortClause;
+  n->limitCount = q->limitCount;
+  n->limitOffset = q->limitOffset;
+#if PG_VERSION_NUM >= 130000
+  n->limitOption = q->limitOption;
+#endif
+  return n;
+}
+
 /**
  * @brief Nest the set-operation subtrees that the rewriting cannot take in
  *        place, each as a subquery leaf.
@@ -12441,6 +12578,36 @@ static Node *extract_quantified_corr(SubLink *sl, bool *antijoin, bool neg,
   return (list_length(conjs) == 1)
            ? (Node *)linitial(conjs)
            : (Node *)makeBoolExpr(AND_EXPR, conjs, -1);
+}
+
+/**
+ * @brief Walker: drop the @c DISTINCT of the bodies of @c EXISTS, @c IN and
+ *        quantified-comparison subqueries.
+ *
+ * Whether a row, or a value, is there does not depend on how many times: the
+ * @c DISTINCT changes nothing to the test, and the rewritings of these
+ * subqueries, which refuse it, apply without it.  (Not @c DISTINCT @c ON,
+ * which chooses rows.)  The query's own level only: nested queries have
+ * their turn.
+ */
+static bool drop_semijoin_distinct_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if ((sl->subLinkType == EXISTS_SUBLINK ||
+         sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK) &&
+        sl->subselect != NULL && IsA(sl->subselect, Query)) {
+      Query *sub = (Query *)sl->subselect;
+      if (sub->distinctClause != NIL && !sub->hasDistinctOn &&
+          sub->limitCount == NULL && sub->limitOffset == NULL)
+        sub->distinctClause = NIL;
+    }
+    return drop_semijoin_distinct_walker(sl->testexpr, cx);
+  }
+  if (IsA(node, Query))
+    return false;
+  return expression_tree_walker(node, drop_semijoin_distinct_walker, cx);
 }
 
 /**
@@ -17471,7 +17638,7 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
   if (q->commandType != CMD_SELECT || q->utilityStmt != NULL ||
       q->sortClause == NIL || q->groupClause != NIL ||
       q->groupingSets != NIL || q->hasAggs || q->havingQual != NULL ||
-      q->distinctClause != NIL || q->hasDistinctOn ||
+      (q->distinctClause != NIL && !distinct_on_lowerable(constants, q)) ||
       q->setOperations != NULL || q->hasTargetSRFs || q->rowMarks != NIL ||
       q->hasSubLinks)
     return false;
@@ -17742,50 +17909,28 @@ static Query *scalar_agg_over_uncorrelated_sublinks(const constants_t *constants
 }
 
 /**
- * @brief Rewrite the LIMIT / OFFSET of @p q into the filter of a rank, or
- *        return @c NULL if it is not (@c limit_lowerable).
- *
- * @p q, without its LIMIT and OFFSET, becomes the innermost query of
- * @code
- *   SELECT ... FROM (SELECT ..., row_number() OVER (ORDER BY ...) AS rk
- *                    FROM (q) limited_rows) limited
- *   WHERE rk > m AND rk <= m + k ORDER BY ...
- * @endcode
- * with @c rank() for @c WITH @c TIES; the enclosing comparison on the rank,
- * an aggregate of the middle query once rewritten, goes into the annotation
- * of each row.  The rank is computed over the rows of @p q with their
- * provenance, which includes what the WHERE of @p q contributes.  @p q
- * exposes the output columns and the sort keys; the entries that read
- * @c provenance() move to the enclosing query, where the provenance of a row
- * includes the comparison.
+ * @brief The core of @c lower_limit_to_rank and @c lower_distinct_on_to_rank:
+ *        keep the rows of @p q whose rank, in the window of partition
+ *        @p partition and order @p order, is above @p offset and at most
+ *        @p offset + @p count (either may be @c NULL); @c rank() if @p ties,
+ *        @c row_number() otherwise.  The enclosing query is sorted by
+ *        @p outer_sort.  @p q has no ORDER BY, LIMIT or OFFSET left of its
+ *        own.
  */
-static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
+static Query *lower_to_rank_filter(const constants_t *constants, Query *q,
+                                   List *partition, List *order, Node *count,
+                                   Node *offset, bool ties, List *outer_sort) {
   Query *outer, *middle;
   RangeTblEntry *rte;
   RangeTblRef *rtr;
   WindowClause *wc;
-  List *sort;
   WindowFunc *rank;
   Var *rk;
   List *inner_tl = NIL, *outer_tl = NIL, *moved = NIL, *colnames = NIL;
   List *conds = NIL;
-  Node *count, *offset;
   pull_up_vars_ctx pctx;
   ListCell *lc;
   AttrNumber resno = 0;
-  bool ties = false;
-
-  if (!limit_lowerable(constants, q))
-    return NULL;
-#if PG_VERSION_NUM >= 130000
-  ties = q->limitOption == LIMIT_OPTION_WITH_TIES;
-  q->limitOption = LIMIT_OPTION_COUNT;
-#endif
-  count = q->limitCount;
-  if (count != NULL && IsA(count, Const) && ((Const *)count)->constisnull)
-    count = NULL;
-  offset = q->limitOffset;
-  q->limitCount = q->limitOffset = NULL;
 
   /* The subquery's entries, in order; the entries reading provenance() are
    * kept for the enclosing query and filled in below. */
@@ -17838,7 +17983,6 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
    * the query: their tokens then include what its own WHERE puts there (a
    * comparison on an aggregate of a subquery, on a window value...), which a
    * window of the query itself would not read. */
-  sort = q->sortClause;
   q->sortClause = NIL;
   middle = makeNode(Query);
   middle->commandType = CMD_SELECT;
@@ -17869,7 +18013,8 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
   middle->jointree = makeFromExpr(list_make1(rtr), NULL);
 
   wc = makeNode(WindowClause);
-  wc->orderClause = (List *)copyObject(sort);
+  wc->partitionClause = (List *)copyObject(partition);
+  wc->orderClause = (List *)copyObject(order);
   wc->frameOptions = FRAMEOPTION_DEFAULTS;
   wc->winref = 1;
   middle->windowClause = list_make1(wc);
@@ -17922,8 +18067,143 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
     list_length(conds) == 1 ? (Node *)linitial(conds)
                             : (Node *)makeBoolExpr(AND_EXPR, conds, -1));
   outer->targetList = outer_tl;
-  outer->sortClause = (List *)copyObject(sort);
+  outer->sortClause = (List *)copyObject(outer_sort);
   return outer;
+}
+
+/**
+ * @brief Rewrite the LIMIT / OFFSET of @p q into the filter of a rank, or
+ *        return @c NULL if it is not (@c limit_lowerable).
+ *
+ * @p q, without its LIMIT and OFFSET, becomes the innermost query of
+ * @code
+ *   SELECT ... FROM (SELECT ..., row_number() OVER (ORDER BY ...) AS rk
+ *                    FROM (q) limited_rows) limited
+ *   WHERE rk > m AND rk <= m + k ORDER BY ...
+ * @endcode
+ * with @c rank() for @c WITH @c TIES; the enclosing comparison on the rank,
+ * an aggregate of the middle query once rewritten, goes into the annotation
+ * of each row.  The rank is computed over the rows of @p q with their
+ * provenance, which includes what the WHERE of @p q contributes.  @p q
+ * exposes the output columns and the sort keys; the entries that read
+ * @c provenance() move to the enclosing query, where the provenance of a row
+ * includes the comparison.
+ */
+static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
+  Node *count, *offset;
+  bool ties = false;
+
+  if (!limit_lowerable(constants, q))
+    return NULL;
+#if PG_VERSION_NUM >= 130000
+  ties = q->limitOption == LIMIT_OPTION_WITH_TIES;
+  q->limitOption = LIMIT_OPTION_COUNT;
+#endif
+  count = q->limitCount;
+  if (count != NULL && IsA(count, Const) && ((Const *)count)->constisnull)
+    count = NULL;
+  offset = q->limitOffset;
+  q->limitCount = q->limitOffset = NULL;
+
+  return lower_to_rank_filter(constants, q, NIL, q->sortClause, count, offset,
+                              ties, q->sortClause);
+}
+
+/**
+ * @brief Whether the @c DISTINCT @c ON of @p q is rewritten into the filter of
+ *        a rank (@c lower_distinct_on_to_rank): a query that keeps its input
+ *        rows, keys and order on values that are the same in every world.
+ */
+static bool distinct_on_lowerable(const constants_t *constants, Query *q) {
+#ifdef FRAMEOPTION_EXCLUDE_GROUP
+  ListCell *lc;
+  if (q->commandType != CMD_SELECT || !q->hasDistinctOn ||
+      q->groupClause != NIL || q->groupingSets != NIL || q->hasAggs ||
+      q->havingQual != NULL || q->setOperations != NULL ||
+      q->hasTargetSRFs || q->rowMarks != NIL || q->hasSubLinks ||
+      q->hasWindowFuncs ||
+      !OidIsValid(constants->OID_FUNCTION_ROW_NUMBER_AS_RANK))
+    return false;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    uncertain_value_ctx ctx = {constants, q};
+    if (te->ressortgroupref != 0 &&
+        uncertain_value_walker((Node *)te->expr, &ctx))
+      return false;
+  }
+  return true;
+#else
+  (void)constants;
+  (void)q;
+  return false;
+#endif
+}
+
+/**
+ * @brief Rewrite the @c DISTINCT @c ON of @p q into the filter of a rank, or
+ *        return @c NULL if it is not.
+ *
+ * @c SELECT @c DISTINCT @c ON @c (k) @c ... @c ORDER @c BY @c k, @c o keeps,
+ * for each value of @c k, the first row in the order of @c o: in each world,
+ * the rows with no present row of the same @c k before them, that is,
+ * @c row_number() @c OVER @c (PARTITION @c BY @c k @c ORDER @c BY @c o)
+ * @c <= 1, tracked as the rank it is when @c o leaves no ties (with a warning
+ * otherwise, as for @c LIMIT).  The same conditions as @c limit_lowerable:
+ * keys and order on values that are the same in every world, a query that
+ * keeps its input rows.  The ORDER BY, LIMIT and OFFSET apply to the result.
+ */
+static Query *lower_distinct_on_to_rank(const constants_t *constants,
+                                        Query *q) {
+#ifdef FRAMEOPTION_EXCLUDE_GROUP
+  List *partition, *order = NIL, *sort;
+  Node *limit_count, *limit_offset;
+  ListCell *lc;
+  Query *outer;
+#if PG_VERSION_NUM >= 130000
+  LimitOption limit_option = q->limitOption;
+#endif
+
+  if (!distinct_on_lowerable(constants, q))
+    return NULL;
+
+  partition = q->distinctClause;
+  foreach (lc, q->sortClause) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    ListCell *lc2;
+    bool key = false;
+    foreach (lc2, partition)
+      if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef ==
+          sgc->tleSortGroupRef)
+        key = true;
+    if (!key)
+      order = lappend(order, sgc);
+  }
+  sort = q->sortClause;
+  limit_count = q->limitCount;
+  limit_offset = q->limitOffset;
+  q->distinctClause = NIL;
+  q->hasDistinctOn = false;
+  q->limitCount = q->limitOffset = NULL;
+#if PG_VERSION_NUM >= 130000
+  q->limitOption = LIMIT_OPTION_COUNT;
+#endif
+
+  outer = lower_to_rank_filter(
+    constants, q, partition, order,
+    (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                      Int64GetDatum(1), false, FLOAT8PASSBYVAL),
+    NULL, false, sort);
+  outer->limitCount = limit_count;
+  outer->limitOffset = limit_offset;
+#if PG_VERSION_NUM >= 130000
+  outer->limitOption = limit_option;
+#endif
+  return outer;
+#else
+  (void)constants;
+  (void)q;
+  return NULL;
+#endif
 }
 
 /** @brief Whether @p n is a column named @c provsql of type uuid of an entry
@@ -18591,6 +18871,18 @@ static Query *process_query(const constants_t *constants, Query *q,
       return process_query(constants, outer, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
+  if (provsql_active && q->hasDistinctOn && has_provenance(constants, q)) {
+    Query *lowered = lower_distinct_on_to_rank(constants, q);
+    if (lowered)
+      return process_query(constants, lowered, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
+  if (provsql_active && q->setOperations != NULL &&
+      IsA(q->setOperations, SetOperationStmt) &&
+      ((SetOperationStmt *)q->setOperations)->op == SETOP_INTERSECT &&
+      has_provenance(constants, q))
+    return process_query(constants, rewrite_intersect(constants, q), removed,
+                         wrap_root, top_level, in_boolean_rewrite, NULL);
   if (provsql_active && q->commandType == CMD_SELECT && q->hasAggs &&
       q->hasSubLinks && q->groupClause == NIL && q->groupingSets == NIL &&
       q->setOperations == NULL && q->distinctClause == NIL) {
@@ -18624,6 +18916,8 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active) {
     rewrite_array_sublinks(constants, q);
     normalize_quantified_aggregate_sublinks(constants, q);
+    query_tree_walker(q, drop_semijoin_distinct_walker, NULL,
+                      QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
     rewrite_uncorrelated_antijoin(constants, q);
     rewrite_predicate_sublinks(constants, q);
     move_uncorrelated_where_predicates(constants, q);

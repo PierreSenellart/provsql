@@ -113,8 +113,13 @@ CREATE TABLE sn_t11 AS SELECT a, sn_p(provenance()) AS p FROM
 SELECT remove_provenance('sn_t11');
 SELECT 'w EXCEPT w EXCEPT w' AS q, a, p FROM sn_t11 ORDER BY a;
 
--- INTERSECT stays unsupported, nested or not.
-SELECT a FROM sn_r UNION ALL (SELECT a FROM sn_s INTERSECT SELECT a FROM sn_w);
+-- INTERSECT, nested: the deduplicated join of its sides; 9 is in both s and
+-- w, with probability 0.4 * 0.2.  INTERSECT ALL is refused.
+CREATE TABLE sn_t12 AS SELECT a, sn_p(provenance()) AS p FROM
+  (SELECT a FROM sn_r UNION ALL (SELECT a FROM sn_s INTERSECT SELECT a FROM sn_w)) t;
+SELECT remove_provenance('sn_t12');
+SELECT 'UNION ALL over INTERSECT' AS q, a, p FROM sn_t12 ORDER BY a, p;
+SELECT a FROM sn_s INTERSECT ALL SELECT a FROM sn_w;
 
 -- ---------------------------------------------------------------------------
 -- 3. ORDER BY / LIMIT / OFFSET on a non-ALL set operation apply after the

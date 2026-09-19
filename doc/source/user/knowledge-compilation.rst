@@ -131,13 +131,10 @@ tool's output back programmatically:
     SELECT * FROM tseytin_cnf_mapping(
       '00000000-0000-0000-0000-000000000000');
 
-Feed it a concrete token, either a literal UUID or one materialised in a
-plain table. You cannot pull the token inline from a provenance-tracked
-relation in the same statement (``FROM suspects s,
-tseytin_cnf_mapping(s.provsql) m``): while ``provsql.active`` is on the
-planner hook refuses to rewrite a multi-column function applied to a
-tracked relation (*FROM function with multiple output attributes not
-supported*). Set ``provsql.active`` off for that pattern.
+Feed it a concrete token: a literal UUID, one materialised in a plain
+table, or one read inline from a provenance-tracked relation
+(``FROM suspects s, tseytin_cnf_mapping(s.provsql) m``), whose rows then
+keep the provenance of the row of ``suspects`` they come from.
 
 The ``variable`` column matches the DIMACS numbering, ``gate`` is the
 original-circuit input UUID, and ``probability`` its weight. In ProvSQL
