@@ -407,8 +407,9 @@ row_number_as_rank(PG_FUNCTION_ARGS)
       strtoll(rank->val, NULL, 10) != row_number &&
       warned != GetCurrentStatementStartTimestamp()) {
     warned = GetCurrentStatementStartTimestamp();
-    provsql_warning("row_number() is tracked as rank(), which it differs "
-                    "from when rows tie on the ORDER BY of its window");
+    provsql_warning("row_number() / LIMIT / DISTINCT ON is tracked as rank() "
+                    "(WITH TIES), which it differs from when rows tie on the "
+                    "ORDER BY");
   }
   PG_RETURN_POINTER(rank);
 }

@@ -78,7 +78,7 @@ id
 1
 6
 (2 rows)
-WARNING:  ProvSQL: row_number() is tracked as rank(), which it differs from when rows tie on the ORDER BY of its window
+WARNING:  ProvSQL: row_number() / LIMIT / DISTINCT ON is tracked as rank() (WITH TIES), which it differs from when rows tie on the ORDER BY
 remove_provenance
 
 (1 row)
