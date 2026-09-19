@@ -14448,14 +14448,16 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
 
   /* What replaces the SubLink, over the LEFT-JOIN group:
    *  - value body  -> choose(val) picks the single matched value;
-   *  - aggregate body -> the aggregate itself.  count(*) is rewritten to
-   *    count(Q.key) so the null-padded antijoin row (Q.key IS NULL) is not
-   *    counted -- an empty correlated group must give 0, not 1.
+   *  - aggregate body -> the aggregate itself, over the matched rows only:
+   *    count(*) is rewritten to count(Q.key), and any other aggregate gets
+   *    FILTER (WHERE Q.key IS NOT NULL), so that the null-padded antijoin
+   *    row (Q.key IS NULL) is not read -- an empty correlated group must
+   *    give 0 for count(*) and count(1), NULL for sum(1).
    * For a target-list SubLink it replaces the entry directly; for a WHERE
    * SubLink it is substituted into the conjunct, which moves to HAVING. */
   if (is_agg_body) {
     Aggref *agg = (Aggref *)valexpr; /* the remapped body aggregate */
-    if (agg->aggstar) {
+    {
       Var *qkey = NULL;
       /* Prefer the constant match indicator projected by
        * oj_wrap_body_with_match_ind: under the NULL-guarded antijoin
@@ -14472,7 +14474,7 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
           }
         }
       }
-      if (qkey == NULL) {
+      if (qkey == NULL && scan.found_var != NULL) {
         qkey = (Var *)copyObject(scan.found_var);
         qkey->varno = Q_idx;
 #if PG_VERSION_NUM >= 130000
@@ -14480,10 +14482,28 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
         qkey->varattnosyn = 0;
 #endif
       }
-      repl_expr = (Expr *)oj_make_aggref(F_COUNT_ANY, INT8OID, qkey->vartype,
-                                         (Expr *)qkey);
-    } else {
-      repl_expr = valexpr;
+      if (qkey == NULL)
+        /* No correlation, no null-padded row to leave out */
+        repl_expr = valexpr;
+      else if (agg->aggstar)
+        repl_expr = (Expr *)oj_make_aggref(F_COUNT_ANY, INT8OID,
+                                           qkey->vartype, (Expr *)qkey);
+      else {
+        /* Any other aggregate reads the matched rows only: one of a
+         * constant (count(1), sum(1)) would read the null-padded row too */
+        NullTest *nt = makeNode(NullTest);
+        Aggref *filtered = (Aggref *)copyObject(agg);
+        nt->arg = (Expr *)qkey;
+        nt->nulltesttype = IS_NOT_NULL;
+        nt->argisrow = false;
+        nt->location = -1;
+        filtered->aggfilter =
+          filtered->aggfilter == NULL
+            ? (Expr *)nt
+            : (Expr *)makeBoolExpr(AND_EXPR,
+                                   list_make2(filtered->aggfilter, nt), -1);
+        repl_expr = (Expr *)filtered;
+      }
     }
   } else if (is_limit1) {
     /* ORDER BY … LIMIT 1 = argmax: choose(val ORDER BY key).  The subselect's
