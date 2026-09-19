@@ -38,6 +38,24 @@
 #define provsql_error(fmt, ...)   elog(ERROR,   "ProvSQL: " fmt, ##__VA_ARGS__)
 
 /**
+ * @brief Refuse a query ProvSQL cannot track, and abort the transaction.
+ *
+ * Like @c provsql_error, with SQLSTATE @c 0A000 (@c feature_not_supported)
+ * rather than @c XX000 (@c internal_error), so that clients can tell a
+ * deliberate refusal from a bug.
+ *
+ * @param fmt  A string literal format string (printf-style).
+ * @param ...  Optional format arguments.
+ */
+#ifdef TDKC
+#define provsql_unsupported(fmt, ...) provsql_error(fmt, ##__VA_ARGS__)
+#else
+#define provsql_unsupported(fmt, ...)                                         \
+  ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),                     \
+                  errmsg("ProvSQL: " fmt, ##__VA_ARGS__)))
+#endif
+
+/**
  * @brief Emit a ProvSQL warning message (execution continues).
  *
  * Expands to @c elog(WARNING, "ProvSQL: " fmt, ...).  The message is sent

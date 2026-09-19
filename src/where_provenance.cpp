@@ -132,7 +132,7 @@ static string where_provenance_internal
             provsql_error("Incorrect extra information on eq gate");
           c.setGateEquality(f, v[0].first, v[0].second);
         } else if(type == "monusr" || type == "monusl" || type == "monus") {
-          provsql_error("Where-provenance of non-monotone query not supported");
+          provsql_unsupported("Where-provenance of non-monotone query not supported");
         } else {
           provsql_error("Where-provenance does not support gates of type %s", type.c_str());
         }

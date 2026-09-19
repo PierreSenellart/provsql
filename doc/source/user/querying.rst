@@ -95,7 +95,10 @@ Unsupported SQL Features
 -------------------------
 
 The following constructs are **not** currently supported; queries using them
-will either raise an error or may cause incorrect provenance tracking:
+will either raise an error or may cause incorrect provenance tracking.
+A query ProvSQL refuses raises an error with SQLSTATE ``0A000``
+(``feature_not_supported``), so that a client can tell it from an internal
+error (``XX000``):
 
 * **Subqueries outside FROM** whose body uses an outer join
   (``LEFT`` / ``RIGHT`` / ``FULL``; inner joins, in any syntax, are
