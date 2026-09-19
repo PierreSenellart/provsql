@@ -8159,14 +8159,20 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
     /* min(d)::text: a conversion through the type's I/O reads the value of
      * the aggregate in its own type, not the text of the agg_token. */
     CoerceViaIO *io = (CoerceViaIO *)result;
+    bool saved = agg_cast_explicit;
+    Node *cast = NULL;
+    agg_cast_explicit = io->coerceformat == COERCE_EXPLICIT_CAST;
     if (IsA(io->arg, FuncExpr) &&
         ((FuncExpr *)io->arg)->funcid ==
           constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
       io->arg = (Expr *)wrap_agg_token_with_cast((FuncExpr *)io->arg,
                                                  constants);
     else
-      return cast_agg_token_to_type((Node *)io->arg, io->resulttype,
+      cast = cast_agg_token_to_type((Node *)io->arg, io->resulttype,
                                     constants);
+    agg_cast_explicit = saved;
+    if (cast != NULL)
+      return cast;
   } else if (IsA(result, BoolExpr)) {
     /* bool_or(x) AND y, NOT every(x): the arguments are booleans. */
     ListCell *lc;
