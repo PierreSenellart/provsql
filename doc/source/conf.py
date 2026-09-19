@@ -149,7 +149,7 @@ _SQL_FUNC_MAP = {
     'inversion_free_key':       '/doxygen-sql/html/group__gate__manipulation.html#gabc9bef4d7d0f4147d0f962534b2bedb1',
     'provenance_guard':         '/doxygen-sql/html/group__table__management.html#ga82b3a444b6bd09a949375e1bb6210333',
     'provenance_aggregate':     '/doxygen-sql/html/group__aggregate__provenance.html#ga84525ef02ef6429eda7664e050b83d69',
-    'plain':                    '/doxygen-sql/html/group__aggregate__provenance.html#gaffc93a3e76407014dfc22b25df9ea2d1',
+    'plain':                    '/doxygen-sql/html/group__aggregate__provenance.html#gadd4022a0b0f1e64975b8d1a9613edf17',
     'provenance_semimod':       '/doxygen-sql/html/group__aggregate__provenance.html#ga9a5934a6cee96b33c666d3456d960672',
     'provenance_semimod_nullable': '/doxygen-sql/html/group__aggregate__provenance.html#gafbe959567b7a3d11ef955cc650544a9a',
     'provenance_times':         '/doxygen-sql/html/group__semiring__operations.html#ga78437a737b6eb9bb21772ec9fb7fcd1d',

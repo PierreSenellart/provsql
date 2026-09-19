@@ -7081,7 +7081,7 @@ $$
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /**
- * @brief Keep a LIMIT, FETCH or OFFSET a truncation of the actual result
+ * @brief Mark a part of a query to be evaluated as plain SQL, not tracked
  *
  * Over provenance-tracked relations, <tt>ORDER BY … LIMIT k</tt> keeps, in
  * each possible world, the rows that fewer than @p k present rows precede:
@@ -7091,11 +7091,11 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
  * actual data, and each row kept carries its provenance in the full result.
  * The function returns its argument.
  *
- * @param k number of rows
+ * @param value the marked value
  */
-CREATE OR REPLACE FUNCTION plain(k bigint)
-  RETURNS bigint AS
-$$ SELECT k $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION plain(value anyelement)
+  RETURNS anyelement AS
+$$ SELECT value $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 /** @} */
 

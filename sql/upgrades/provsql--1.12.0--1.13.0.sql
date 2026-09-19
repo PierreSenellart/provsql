@@ -2234,9 +2234,9 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 --     plain(k) keeps the truncation of the actual result.
 -- ----------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION plain(k bigint)
-  RETURNS bigint AS
-$$ SELECT k $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+CREATE OR REPLACE FUNCTION plain(value anyelement)
+  RETURNS anyelement AS
+$$ SELECT value $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 -- ----------------------------------------------------------------------
 -- 6i. A boolean aggregate (bool_or, bool_and, every) in a boolean context
