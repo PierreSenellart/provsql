@@ -62,6 +62,7 @@
 #include "parser/parse_func.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_relation.h"
+#include "parser/parse_type.h"
 #include "utils/builtins.h"
 #if PG_VERSION_NUM >= 120000
 #include "utils/float.h"                /* get_float8_infinity (moved out of builtins.h in PG12) */
@@ -239,6 +240,7 @@ static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
 static bool output_provably_not_null(const Query *sub, AttrNumber attno);
 static RangeTblEntry *oj_make_subquery_rte(Query *sub);
+static bool is_inert_subselect(Query *q);
 static bool oj_rte_has_provsql(const constants_t *constants,
                                RangeTblEntry *rel);
 static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
@@ -2517,6 +2519,8 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
 
         ++attid;
       }
+    } else if (r->rtekind == RTE_SUBQUERY && is_inert_subselect(r->subquery)) {
+      /* Evaluated as plain SQL (plain(NULL::t)): no provenance */
     } else if (r->rtekind == RTE_SUBQUERY) {
       /* An arm of a top-level UNION / UNION ALL is itself a user-evaluated
        * provenance root: UNION ALL carries each arm's per-row token verbatim
@@ -9994,8 +9998,10 @@ static bool has_provenance_walker(Node *node, void *data) {
       } else if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL) {
         /* A FROM-source subquery contributes its provenance to ours;
          * process_query recurses on it explicitly, so we must detect
-         * tracked relations / rv_cmp / provenance() inside it. */
-        if (has_provenance_walker((Node *)r->subquery, data))
+         * tracked relations / rv_cmp / provenance() inside it -- but for
+         * one evaluated as plain SQL (plain(NULL::t)). */
+        if (!is_inert_subselect(r->subquery) &&
+            has_provenance_walker((Node *)r->subquery, data))
           return true;
       }
     }
@@ -10307,6 +10313,131 @@ static bool mark_plain_sublinks_walker(Node *node, void *cx) {
   if (IsA(node, Query))
     return query_tree_walker((Query *)node, mark_plain_sublinks_walker, cx, 0);
   return expression_tree_walker(node, mark_plain_sublinks_walker, cx);
+}
+
+/** @brief Walker: replace each FROM item @c plain(v), @c v a value of the row
+ *  type of a table, by a subquery reading that table as plain SQL.
+ *
+ * @c SELECT @c * @c FROM @c plain(NULL::t) reads @c t without tracking it:
+ * the subquery has @c t's columns at the positions of its row type (a NULL
+ * for a dropped column, @c NULL::uuid for its provenance column, named
+ * @c plain_provsql and dropped from the output of a @c * as any provenance
+ * column), and is marked inert, so that the rewriting leaves it alone. */
+static bool rewrite_plain_from_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      RangeTblFunction *rtf;
+      FuncExpr *fe;
+      Oid relid;
+      Relation rel;
+      TupleDesc desc;
+      StringInfoData sql;
+      int k;
+      List *raw, *analyzed;
+      Query *sub;
+
+      if (r->rtekind != RTE_FUNCTION || list_length(r->functions) != 1 ||
+          r->funcordinality)
+        continue;
+      rtf = (RangeTblFunction *)linitial(r->functions);
+      if (!IsA(rtf->funcexpr, FuncExpr))
+        continue;
+      fe = (FuncExpr *)rtf->funcexpr;
+      if (fe->funcid != constants->OID_FUNCTION_PLAIN ||
+          list_length(fe->args) != 1)
+        continue;
+      relid = typeidTypeRelid(exprType((Node *)linitial(fe->args)));
+      if (!OidIsValid(relid))
+        continue;
+
+      rel = relation_open(relid, AccessShareLock);
+      desc = RelationGetDescr(rel);
+      initStringInfo(&sql);
+      appendStringInfoString(&sql, "SELECT ");
+      for (k = 0; k < desc->natts; ++k) {
+        Form_pg_attribute att = TupleDescAttr(desc, k);
+        if (k > 0)
+          appendStringInfoString(&sql, ", ");
+        if (att->attisdropped)
+          appendStringInfo(&sql, "NULL::int AS dropped_%d", k + 1);
+        else if (strcmp(NameStr(att->attname), PROVSQL_COLUMN_NAME) == 0 &&
+                 att->atttypid == constants->OID_TYPE_UUID)
+          appendStringInfoString(&sql, "NULL::uuid AS plain_provsql");
+        else
+          appendStringInfo(&sql, "%s", quote_identifier(NameStr(att->attname)));
+      }
+      appendStringInfo(&sql, " FROM %s",
+                       quote_qualified_identifier(
+                         get_namespace_name(RelationGetNamespace(rel)),
+                         RelationGetRelationName(rel)));
+      relation_close(rel, AccessShareLock);
+
+      raw = pg_parse_query(sql.data);
+#if PG_VERSION_NUM >= 150000
+      analyzed = pg_analyze_and_rewrite_fixedparams(
+        linitial_node(RawStmt, raw), sql.data, NULL, 0, NULL);
+#else
+      analyzed = pg_analyze_and_rewrite(linitial_node(RawStmt, raw), sql.data,
+                                        NULL, 0, NULL);
+#endif
+      sub = linitial_node(Query, analyzed);
+      sub->queryId = PROVSQL_INERT_QUERY_ID;
+      sub->canSetTag = false;
+      /* Where the reads of the enclosing query expect the row type's
+       * columns: the same positions */
+      r->rtekind = RTE_SUBQUERY;
+      r->subquery = sub;
+      r->functions = NIL;
+      r->funcordinality = false;
+    }
+    return query_tree_walker(q, rewrite_plain_from_walker, cx, 0);
+  }
+  return expression_tree_walker(node, rewrite_plain_from_walker, cx);
+}
+
+/**
+ * @brief Hide, in the target list of @p q, the entries reading the provenance
+ *        placeholder of a @c plain(NULL::t) source (the @c provsql column of
+ *        a @c *): made junk, moved last, so that the other columns keep their
+ *        positions.  For the statement itself, whose columns only its client
+ *        reads.
+ */
+static void hide_plain_provsql_columns(Query *q) {
+  List *kept = NIL, *hidden = NIL;
+  ListCell *lc;
+  AttrNumber resno = 0;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    bool hide = false;
+    if (!te->resjunk && IsA(te->expr, Var) &&
+        ((Var *)te->expr)->varlevelsup == 0 && ((Var *)te->expr)->varattno > 0) {
+      Var *v = (Var *)te->expr;
+      RangeTblEntry *r = rt_fetch(v->varno, q->rtable);
+      if (r->rtekind == RTE_SUBQUERY && is_inert_subselect(r->subquery)) {
+        TargetEntry *ste = get_tle_by_resno(r->subquery->targetList,
+                                            v->varattno);
+        hide = ste != NULL && ste->resname != NULL &&
+               strcmp(ste->resname, "plain_provsql") == 0;
+      }
+    }
+    if (hide) {
+      te->resjunk = true;
+      hidden = lappend(hidden, te);
+    } else
+      kept = lappend(kept, te);
+  }
+  if (hidden == NIL)
+    return;
+  q->targetList = list_concat(kept, hidden);
+  foreach (lc, q->targetList)
+    ((TargetEntry *)lfirst(lc))->resno = ++resno;
 }
 
 /** @brief The statement being rewritten, whose relations a frozen part is
@@ -21233,10 +21364,16 @@ static PlannedStmt *provsql_planner(Query *q,
   Query *saved_freeze_statement = freeze_statement;
   provsql_inert_subselects = NIL;
   freeze_statement = q;
-  if (provsql_active) {
+  {
     const constants_t mconstants = get_constants(false);
-    if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN))
-      mark_plain_sublinks_walker((Node *)q, (void *)&mconstants);
+    if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN)) {
+      /* A plain SQL transformation, done even with provsql.active off */
+      rewrite_plain_from_walker((Node *)q, (void *)&mconstants);
+      if (q->commandType == CMD_SELECT)
+        hide_plain_provsql_columns(q);
+      if (provsql_active)
+        mark_plain_sublinks_walker((Node *)q, (void *)&mconstants);
+    }
   }
 
   if (q->commandType == CMD_INSERT && q->rtable && provsql_active) {

@@ -243,6 +243,15 @@ silences the warning: ``plain((SELECT max(x) FROM t))``,
     SELECT id, plain((SELECT count(*) FROM posts c WHERE c.parent = p.id))
     FROM posts p;
 
+A whole table can be read as plain SQL too, in ``FROM``: ``plain`` of a
+value of its row type (the usual ``NULL::t``) stands for the table, its
+columns without the ``provsql`` one, and brings no provenance of its own
+(the rows of a join with it carry the provenance of the other side only):
+
+.. code-block:: postgresql
+
+    SELECT * FROM plain(NULL::employees);
+
 Provenance in Nested Queries
 -----------------------------
 

@@ -48,6 +48,24 @@ SELECT v, n::text AS n FROM if_r;
 DROP TABLE if_r;
 RESET provsql.implicit_freeze;
 
+-- A table read as plain SQL in FROM: plain(NULL::t), its columns without the
+-- provenance one, no provenance of its own (next to a tracked relation, the
+-- rows carry that one's only), even with a dropped column.
+ALTER TABLE if_b ADD COLUMN gone int;
+ALTER TABLE if_b DROP COLUMN gone;
+ALTER TABLE if_b ADD COLUMN note text DEFAULT 'n';
+SELECT * FROM plain(NULL::if_b) ORDER BY id;
+SELECT create_provenance_mapping('if_m', 'if_a', 'id');
+CREATE TABLE if_r AS
+  SELECT a.id, b.w, b.note, sr_formula(provenance(), 'if_m') AS f
+  FROM if_a a JOIN plain(NULL::if_b) b ON b.id = a.id;
+SELECT remove_provenance('if_r');
+SELECT * FROM if_r ORDER BY id;
+DROP TABLE if_r, if_m;
+SET provsql.active = off;
+SELECT count(*) AS n FROM plain(NULL::if_b);
+RESET provsql.active;
+
 SELECT remove_provenance('if_a');
 SELECT remove_provenance('if_b');
 DROP TABLE if_a, if_b;
