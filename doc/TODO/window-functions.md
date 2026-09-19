@@ -197,7 +197,7 @@ probabilities) apply. This is also the exact annotation of a `LIMIT k`, and
 (`lower_limit_to_rank`, test `limit_rank`, user documentation in
 `user/querying.rst`): the query becomes the subquery of a filter on
 `row_number()` (or `rank()` for `FETCH … WITH TIES`), and returns every row
-that may be kept, annotated with that condition. `LIMIT actual(k)` keeps the
+that may be kept, annotated with that condition. `LIMIT plain(k)` keeps the
 truncation of the actual result, each kept row carrying its provenance in the
 full result. Left as truncations: a `LIMIT` without `ORDER BY`, over an
 aggregation, `DISTINCT` or set operation, `OFFSET` with `WITH TIES`, and every

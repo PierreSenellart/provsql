@@ -25,7 +25,7 @@
 --    GROUP BY, HAVING, aggregates, window functions, SRFs in the
 --    target list), one tracked relation reached either directly or
 --    through any depth of RTE_SUBQUERY entries.  ORDER BY, and LIMIT,
---    OFFSET marked actual(), are transparent.
+--    OFFSET marked plain(), are transparent.
 --  * UNION ALL : a fully-UNION-ALL tree of subquery legs, each
 --    independently TID, over pairwise-disjoint relid sets, promotes
 --    to TID with the cumulative source list.
@@ -152,7 +152,7 @@ SELECT remove_provenance('cq_r11');
 SELECT id, k FROM cq_r11 ORDER BY id, k;
 
 -- Transparent operators --------------------------------------------
--- ORDER BY, and LIMIT, OFFSET marked actual() (a truncation of the
+-- ORDER BY, and LIMIT, OFFSET marked plain() (a truncation of the
 -- actual result), do not change row lineages; the
 -- classifier should look through them and inherit the source's
 -- recorded kind.  (The result-printing queries below remove_provenance
@@ -166,13 +166,13 @@ CREATE TEMP TABLE cq_r12 AS SELECT id FROM cq_tid ORDER BY id DESC;
 SELECT remove_provenance('cq_r12');
 SELECT id FROM cq_r12 ORDER BY id;
 
--- (13) TID under LIMIT actual().
-CREATE TEMP TABLE cq_r13 AS SELECT id FROM cq_tid ORDER BY id LIMIT actual(2);
+-- (13) TID under LIMIT plain().
+CREATE TEMP TABLE cq_r13 AS SELECT id FROM cq_tid ORDER BY id LIMIT plain(2);
 SELECT remove_provenance('cq_r13');
 SELECT id FROM cq_r13 ORDER BY id;
 
--- (14) TID under OFFSET actual().
-CREATE TEMP TABLE cq_r14 AS SELECT id FROM cq_tid ORDER BY id OFFSET actual(1);
+-- (14) TID under OFFSET plain().
+CREATE TEMP TABLE cq_r14 AS SELECT id FROM cq_tid ORDER BY id OFFSET plain(1);
 SELECT remove_provenance('cq_r14');
 SELECT id FROM cq_r14 ORDER BY id;
 
@@ -186,7 +186,7 @@ SELECT id FROM cq_r14 ORDER BY id;
 -- the classifier rejects them and reports OPAQUE while still
 -- enumerating the visible tracked sources for diagnostics.
 
--- (14b) ORDER BY ... LIMIT without actual(): the rank filter, each
+-- (14b) ORDER BY ... LIMIT without plain(): the rank filter, each
 --       row's annotation reading the rows before it.  Only the
 --       classification is shown: the rows kept depend on whether the
 --       rewriter tracks the rank (PostgreSQL 11 and later).

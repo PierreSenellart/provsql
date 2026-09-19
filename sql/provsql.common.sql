@@ -7086,14 +7086,14 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
  * Over provenance-tracked relations, <tt>ORDER BY … LIMIT k</tt> keeps, in
  * each possible world, the rows that fewer than @p k present rows precede:
  * every row that may be among them is output, annotated with that condition.
- * <tt>LIMIT actual(k)</tt> (<tt>FETCH FIRST actual(k) ROWS</tt>,
- * <tt>OFFSET actual(m)</tt>) instead truncates the result as computed on the
+ * <tt>LIMIT plain(k)</tt> (<tt>FETCH FIRST plain(k) ROWS</tt>,
+ * <tt>OFFSET plain(m)</tt>) instead truncates the result as computed on the
  * actual data, and each row kept carries its provenance in the full result.
  * The function returns its argument.
  *
  * @param k number of rows
  */
-CREATE OR REPLACE FUNCTION actual(k bigint)
+CREATE OR REPLACE FUNCTION plain(k bigint)
   RETURNS bigint AS
 $$ SELECT k $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 

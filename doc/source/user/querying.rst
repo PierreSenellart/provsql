@@ -176,7 +176,7 @@ rows of each group, as a ``rank()`` compared with ``k`` does (see
 
 When the order of the rows is not in question, for instance to look at
 the first rows of a result, or when the tokens do not stand for the
-existence of the rows, the marker :sqlfunc:`actual` keeps the truncation of the
+existence of the rows, the marker :sqlfunc:`plain` keeps the truncation of the
 actual result:
 
 .. code-block:: postgresql
@@ -184,9 +184,9 @@ actual result:
     SELECT name, probability_evaluate(provenance())
     FROM employees
     ORDER BY salary DESC
-    LIMIT actual(3);
+    LIMIT plain(3);
 
-It applies to ``FETCH FIRST actual(k) ROWS`` and ``OFFSET actual(m)``
+It applies to ``FETCH FIRST plain(k) ROWS`` and ``OFFSET plain(m)``
 too. The rows kept carry the provenance they have in the *full* result:
 that a row was among those kept is not recorded. At the top level of a
 statement, the statement shows some rows of the full result, each

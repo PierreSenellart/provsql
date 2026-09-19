@@ -6,7 +6,7 @@ SET search_path TO provsql_test, provsql;
 -- the present rows that fewer than k present rows precede: the filter of
 -- row_number() <= k, or of rank() <= k with FETCH ... WITH TIES.  Every row
 -- that may be kept is output, annotated with that condition.  LIMIT
--- actual(k) truncates the actual result instead.  Rows 2 and 3 tie on x; y
+-- plain(k) truncates the actual result instead.  Rows 2 and 3 tie on x; y
 -- has NULLs.
 SELECT current_setting('server_version_num')::int >= 110000 AS pg_has_exclude
 \gset
@@ -113,15 +113,15 @@ CREATE TABLE lr_top AS
 SELECT remove_provenance('lr_top');
 SELECT id, g, x, y, round(p::numeric, 4) AS p FROM lr_top ORDER BY id;
 
--- LIMIT actual(k): the first k rows of the actual result, with the
+-- LIMIT plain(k): the first k rows of the actual result, with the
 -- provenance of the full result (the probability of the row itself).
 CREATE TABLE lr_actual AS
   SELECT id, probability_evaluate(provenance()) AS p
-  FROM lr ORDER BY x DESC, id LIMIT actual(2);
+  FROM lr ORDER BY x DESC, id LIMIT plain(2);
 SELECT remove_provenance('lr_actual');
 SELECT id, round(p::numeric, 4) AS p FROM lr_actual ORDER BY id;
 CREATE TABLE lr_actual2 AS
-  SELECT id FROM lr ORDER BY x, id OFFSET actual(1) FETCH FIRST actual(2) ROWS ONLY;
+  SELECT id FROM lr ORDER BY x, id OFFSET plain(1) FETCH FIRST plain(2) ROWS ONLY;
 SELECT remove_provenance('lr_actual2');
 SELECT id FROM lr_actual2 ORDER BY id;
 

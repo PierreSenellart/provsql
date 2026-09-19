@@ -17147,18 +17147,18 @@ static void normalize_inner_joins(Query *q) {
  * k, or whose rank() is, with FETCH ... WITH TIES.  A query over tracked
  * relations with such a clause is rewritten into the filter of that rank,
  * which the window-function rewriting tracks; every candidate row is output,
- * annotated with the condition.  LIMIT actual(k) keeps the truncation of the
+ * annotated with the condition.  LIMIT plain(k) keeps the truncation of the
  * result as computed on the actual data instead, each kept row carrying its
  * annotation in the full result.
  * ------------------------------------------------------------------------- */
 
-/** @brief Whether @p n is a call of the marker @c actual(), up to coercions. */
+/** @brief Whether @p n is a call of the marker @c plain(), up to coercions. */
 static bool is_actual_marker(const constants_t *constants, Node *n) {
-  if (n == NULL || !OidIsValid(constants->OID_FUNCTION_ACTUAL))
+  if (n == NULL || !OidIsValid(constants->OID_FUNCTION_PLAIN))
     return false;
   n = strip_implicit_coercions(n);
   return IsA(n, FuncExpr) &&
-         ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_ACTUAL;
+         ((FuncExpr *)n)->funcid == constants->OID_FUNCTION_PLAIN;
 }
 
 /** @brief Whether the LIMIT / OFFSET of @p q removes rows. */
@@ -17241,7 +17241,7 @@ static bool is_const_or_param(Node *n) {
  *        is rewritten into the filter of a rank (@c lower_limit_to_rank).
  *
  * That needs an @c ORDER @c BY on values that are the same in every world,
- * no @c actual() marker, a query that keeps its input rows (no aggregation,
+ * no @c plain() marker, a query that keeps its input rows (no aggregation,
  * grouping, @c DISTINCT, set operation or set-returning function), limits
  * that are constants or parameters, and the rank tracking of window
  * functions (PostgreSQL 11 and later).  @c OFFSET with @c WITH @c TIES is
@@ -19149,7 +19149,7 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
  *        provenance-tracked query below the top level of @p q.
  *
  * A LIMIT that is the filter of a rank (@c limit_lowerable) is tracked.  The
- * others -- @c LIMIT @c actual(k), a LIMIT without ORDER BY, over an
+ * others -- @c LIMIT @c plain(k), a LIMIT without ORDER BY, over an
  * aggregation... -- truncate the result as computed on the actual data, and
  * the rows kept carry the tokens they have in the full result: that they were
  * among the rows kept, which depends on the rows before them, is not
@@ -19248,13 +19248,13 @@ static void refuse_except_all(const constants_t *constants, Query *q) {
  * An ORDER BY ... LIMIT is read in every possible world when
  * @c limit_lowerable accepts it.  Over an aggregation, a DISTINCT, a set
  * operation, or sort keys whose values vary between worlds, it is not: the
- * statement then shows the first rows of the actual result, which @c actual()
+ * statement then shows the first rows of the actual result, which @c plain()
  * says explicitly.  Not reported where the rewriting of ranks is missing
- * altogether (PostgreSQL < 11, or a schema without @c actual()).
+ * altogether (PostgreSQL < 11, or a schema without @c plain()).
  */
 static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
 #ifdef FRAMEOPTION_EXCLUDE_GROUP
-  return OidIsValid(constants->OID_FUNCTION_ACTUAL) &&
+  return OidIsValid(constants->OID_FUNCTION_PLAIN) &&
          OidIsValid(constants->OID_FUNCTION_ROW_NUMBER_AS_RANK) &&
          q->sortClause != NIL && limit_truncates(q) &&
          !is_actual_marker(constants, q->limitCount) &&
@@ -19274,7 +19274,7 @@ static void warn_top_limit(void) {
                   "aggregation, a DISTINCT, a set operation or sort keys "
                   "that vary between worlds: it truncates the actual result, "
                   "whose rows keep the provenance they have in the full "
-                  "result; write LIMIT actual(k) to say so.");
+                  "result; write LIMIT plain(k) to say so.");
 }
 
 /** @brief Emit the warning @c nested_limit_on_provenance calls for. */

@@ -300,7 +300,7 @@ recursive passes.
 
 Then :cfunc:`lower_limit_to_rank` turns an ``ORDER BY … LIMIT`` /
 ``OFFSET`` into the filter of a rank, when :cfunc:`limit_lowerable`
-accepts it (no ``actual()`` marker, sort keys whose values are the same
+accepts it (no ``plain()`` marker, sort keys whose values are the same
 in every world, a query that keeps its input rows): the query, without
 its ``LIMIT``, becomes the subquery of
 
@@ -326,7 +326,7 @@ inversion-free markers of the query, whose rows are no longer products
 of inputs.  A ``LIMIT`` it leaves alone stays a truncation of the actual
 result, reported by a warning below the top level of the statement
 (:cfunc:`nested_limit_on_provenance`), and at the top level when it has
-an ``ORDER BY`` and no ``actual()`` marker (``top_limit_is_truncation``).
+an ``ORDER BY`` and no ``plain()`` marker (``top_limit_is_truncation``).
 
 Step 2: Strip Existing Provenance Columns
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -239,9 +239,9 @@ typedef struct constants_t {
   /** @brief OID of @c window_distinct_tokens, used for @c dense_rank();
    *  @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_WINDOW_DISTINCT_TOKENS;
-  /** @brief OID of the marker @c actual(), which keeps a LIMIT a truncation
+  /** @brief OID of the marker @c plain(), which keeps a LIMIT a truncation
    *  of the actual result; @c InvalidOid on a schema that predates it. */
-  Oid OID_FUNCTION_ACTUAL;
+  Oid OID_FUNCTION_PLAIN;
   /** @brief OID of @c plain_truth(), whether a token holds in the database
    *  as it is; @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_PLAIN_TRUTH;

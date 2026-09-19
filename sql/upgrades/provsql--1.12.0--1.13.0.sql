@@ -2231,10 +2231,10 @@ $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 
 -- ----------------------------------------------------------------------
 -- 6h. ORDER BY ... LIMIT k is tracked as the filter of a rank; LIMIT
---     actual(k) keeps the truncation of the actual result.
+--     plain(k) keeps the truncation of the actual result.
 -- ----------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION actual(k bigint)
+CREATE OR REPLACE FUNCTION plain(k bigint)
   RETURNS bigint AS
 $$ SELECT k $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
 

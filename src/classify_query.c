@@ -14,7 +14,7 @@
  *    modifying @c CTEs, @c cteList, @c DISTINCT, @c GROUP BY,
  *    @c HAVING, aggregates, window functions, set-returning
  *    functions in the target list, an @c ORDER @c BY ... @c LIMIT not
- *    marked @c actual()).  Either zero or one
+ *    marked @c plain()).  Either zero or one
  *    provenance-tracked base relations are reached either directly
  *    (@c RTE_RELATION) or through any depth of subqueries
  *    (@c RTE_SUBQUERY -- view bodies after PG rewriting and inline
@@ -106,7 +106,7 @@ static bool classify_fromlist_shape_ok(Node *n) {
  *
  * Over tracked relations, such a clause keeps the rows that the rank filter
  * of the rewriter selects in each world, so a row's annotation reads the
- * rows sorted before it.  A clause marked @c actual() truncates the actual
+ * rows sorted before it.  A clause marked @c plain() truncates the actual
  * result and leaves lineages alone, as a LIMIT without ORDER BY does.
  * Conservative: a clause the rewriter leaves a truncation (on PostgreSQL
  * < 11, for instance) is reported too.
@@ -122,14 +122,14 @@ static bool limit_is_rank_filter(const Query *q) {
         (IsA(q->limitCount, Const) && ((Const *) q->limitCount)->constisnull))))
     return false;
   constants = get_constants(false);
-  if (!constants.ok || !OidIsValid(constants.OID_FUNCTION_ACTUAL))
+  if (!constants.ok || !OidIsValid(constants.OID_FUNCTION_PLAIN))
     return true;
   nodes[0] = q->limitCount;
   nodes[1] = q->limitOffset;
   for (i = 0; i < 2; ++i) {
     Node *n = nodes[i] ? strip_implicit_coercions(nodes[i]) : NULL;
     if (n != NULL && IsA(n, FuncExpr) &&
-        ((FuncExpr *) n)->funcid == constants.OID_FUNCTION_ACTUAL)
+        ((FuncExpr *) n)->funcid == constants.OID_FUNCTION_PLAIN)
       return false;
   }
   return true;
