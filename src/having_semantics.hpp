@@ -1036,9 +1036,59 @@ void provsql_having(
       return true;
     };
 
+    // ---- Two array_agg() aggregates compared with each other (a join on
+    //      two aggregated arrays): the worlds of the tuples of both, which
+    //      may be shared, where the arrays are equal (=) or differ (<>).
+    //      Elements are compared as their texts, as against a constant. ----
+    auto build_array_pair = [&](gate_t Lx, gate_t Rx,
+                                ComparisonOperator opx) -> bool {
+      if (opx != ComparisonOperator::EQ && opx != ComparisonOperator::NE)
+        return false;
+      std::map<gate_t, std::size_t> bit;
+      std::vector<typename SemiringT::value_type> kvals;
+      std::vector<std::size_t> bits[2];
+      std::vector<std::string> vals[2];
+      const gate_t sides[2] = {Lx, Rx};
+
+      for (int side = 0; side < 2; ++side) {
+        if (getAggregationOperator(c.getInfos(sides[side]).first) !=
+            AggregationOperator::ARRAY_AGG)
+          return false;
+        for (gate_t ch : c.getWires(sides[side])) {
+          if (c.getGateType(ch) != gate_semimod) return false;
+          std::string m_str;
+          gate_t k_gate{};
+          if (!semimod_extract_string_and_K(c, ch, m_str, k_gate)) return false;
+          if (c.getUUID(c.getWires(ch)[1]) == GATE_NULL_UUID)
+            m_str = array_null_element();
+          auto it = bit.find(k_gate);
+          if (it == bit.end()) {
+            if (kvals.size() >= 20)
+              return false;             // 2^n enumeration: keep it bounded
+            it = bit.emplace(k_gate, kvals.size()).first;
+            kvals.push_back(c.evaluate<SemiringT>(k_gate, mapping, S));
+          }
+          bits[side].push_back(it->second);
+          vals[side].push_back(m_str);
+        }
+      }
+      if (kvals.empty())
+        return false;
+
+      auto worlds = enumerate_array_agg_pair_worlds(
+        bits[0], vals[0], bits[1], vals[1], kvals.size(),
+        opx == ComparisonOperator::EQ);
+      pw_out = combine_exhaustive_worlds(worlds, kvals, /*upset=*/false,
+                                         /*monotone=*/false);
+      return true;
+    };
+
     if (c.getGateType(L) == gate_agg && build_from(L, R, op))
       return true;
     if (c.getGateType(R) == gate_agg && build_from(R, L, flip_op(op)))
+      return true;
+    if (c.getGateType(L) == gate_agg && c.getGateType(R) == gate_agg &&
+        build_array_pair(L, R, op))
       return true;
 
     return build_general(L, R, op);

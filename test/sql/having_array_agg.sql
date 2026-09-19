@@ -61,6 +61,26 @@ CREATE TABLE r7 AS SELECT g, round(probability_evaluate(provenance())::numeric,4
   FROM hb GROUP BY g HAVING array_agg(flag ORDER BY flag) <> ARRAY[true];
 SELECT remove_provenance('r7'); SELECT 'bool <>[t]' AS q, g, p FROM r7 ORDER BY g;
 
+-- Two array_agg() compared with each other (a join on aggregated arrays):
+-- the worlds of the rows of both sides, where the arrays are equal.  Over
+-- hc = {'a','b'} at p = 0.5, group A ({1='a', 2='b'}) matches on {a,b},
+-- {a} or {b}, each 0.25 * 0.25, so 0.1875; group B ({3='c'}) never matches.
+CREATE TABLE hc(nm text);
+INSERT INTO hc VALUES ('a'), ('b');
+SELECT add_provenance('hc');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM hc; END $$;
+CREATE TABLE r9 AS
+  SELECT l.g, round(probability_evaluate(provenance())::numeric,4) AS p
+  FROM (SELECT g, array_agg(nm ORDER BY nm) AS a FROM haa GROUP BY g) l
+  JOIN (SELECT array_agg(nm ORDER BY nm) AS a FROM hc) r ON l.a = r.a;
+SELECT remove_provenance('r9'); SELECT 'array = array' AS q, g, p FROM r9 ORDER BY g, p;
+
+-- Another comparison of two aggregates, which no pass resolves (text min
+-- against text min): refused, rather than reported as an internal error.
+SELECT probability_evaluate(provenance())
+  FROM (SELECT g, min(nm) AS m FROM haa GROUP BY g) l
+  JOIN (SELECT min(nm) AS m FROM haa) r ON l.m = r.m;
+
 DROP TABLE r1; DROP TABLE r2; DROP TABLE r3; DROP TABLE r4;
-DROP TABLE r5; DROP TABLE r6; DROP TABLE r7; DROP TABLE r8;
-DROP TABLE haa; DROP TABLE hb;
+DROP TABLE r5; DROP TABLE r6; DROP TABLE r7; DROP TABLE r8; DROP TABLE r9;
+DROP TABLE haa; DROP TABLE hb; DROP TABLE hc;

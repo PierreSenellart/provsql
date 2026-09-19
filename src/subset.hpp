@@ -111,4 +111,31 @@ std::vector<mask_t> enumerate_array_agg_worlds(
   bool want_equal
   );
 
+/**
+ * @brief Enumerate the worlds where the arrays of two @c array_agg()
+ *        aggregates are equal (@p want_equal) or differ.
+ *
+ * A world is a subset of the contributing tuples of both aggregates, which
+ * may share tuples: @p lbits and @p rbits give, for each element of the left
+ * and the right array, the bit of the tuple it comes from, among @p nbits.
+ * A side with no present tuple is @c NULL, which no comparison satisfies, so
+ * those worlds are left out.
+ *
+ * @param lbits       Bit of each element of the left array, in its order.
+ * @param lvals       Element texts of the left array, in its order.
+ * @param rbits       Bit of each element of the right array, in its order.
+ * @param rvals       Element texts of the right array, in its order.
+ * @param nbits       Number of tuples the worlds range over.
+ * @param want_equal  @c true for @c =, @c false for @c <>.
+ * @return            Vector of bitmasks, one per valid world.
+ */
+std::vector<mask_t> enumerate_array_agg_pair_worlds(
+  const std::vector<std::size_t> &lbits,
+  const std::vector<std::string> &lvals,
+  const std::vector<std::size_t> &rbits,
+  const std::vector<std::string> &rvals,
+  std::size_t nbits,
+  bool want_equal
+  );
+
 #endif /* SUBSET_HPP */

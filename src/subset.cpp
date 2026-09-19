@@ -462,6 +462,36 @@ std::vector<mask_t> enumerate_valid_worlds(
   return enumerate_exhaustive(values, constant, op, agg_kind, absorptive, upset);
 }
 
+std::vector<mask_t> enumerate_array_agg_pair_worlds(
+  const std::vector<std::size_t> &lbits,
+  const std::vector<std::string> &lvals,
+  const std::vector<std::size_t> &rbits,
+  const std::vector<std::string> &rvals,
+  std::size_t nbits,
+  bool want_equal)
+{
+  std::vector<mask_t> worlds;
+  mask_t mask(nbits);
+  const auto side = [](const std::vector<std::size_t> &bits,
+                       const std::vector<std::string> &vals,
+                       const mask_t &m) {
+                      std::vector<std::string> present;
+                      for(std::size_t i = 0; i < vals.size(); ++i)
+                        if(m[bits[i]]) present.push_back(vals[i]);
+                      return present;
+                    };
+
+  while(increment(mask)) {
+    std::vector<std::string> l = side(lbits, lvals, mask);
+    if(l.empty()) continue;             // NULL: no comparison holds
+    std::vector<std::string> r = side(rbits, rvals, mask);
+    if(r.empty()) continue;
+    if((l == r) == want_equal)
+      worlds.push_back(mask);
+  }
+  return worlds;
+}
+
 std::vector<mask_t> enumerate_array_agg_worlds(
   const std::vector<std::string> &vals,
   const std::vector<std::string> &target,

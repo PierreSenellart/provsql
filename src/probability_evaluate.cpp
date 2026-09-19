@@ -78,6 +78,7 @@ PG_FUNCTION_INFO_V1(probability_bounds);
 #include "provsql_utils_cpp.h"
 #include "tool_registry_sync.h"
 #include "semiring/BoolExpr.h"
+#include "semiring/Semiring.h"
 #include "mobius_evaluate.h"
 
 using namespace std;
@@ -2450,6 +2451,16 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
     if(isnull)
       PG_RETURN_NULL();
     return result;
+  } catch(const semiring::SemiringGateException &e) {
+    /* A gate the resolution passes left for the semiring itself: a
+     * comparison of aggregate results none of them could resolve, whose
+     * value gates the Boolean translation then meets.  A shape ProvSQL does
+     * not support, not an internal error. */
+    provsql_unsupported("probability_evaluate: a comparison ProvSQL could not "
+                        "resolve remains in the circuit (%s): supported are a "
+                        "comparison of an aggregate with a constant, between "
+                        "numeric aggregates, and between two array_agg results",
+                        e.what());
   } catch(const std::exception &e) {
     provsql_error("probability_evaluate: %s", e.what());
   } catch(...) {

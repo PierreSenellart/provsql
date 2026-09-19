@@ -212,6 +212,13 @@ the type's own (under its default collation, for text).
     SELECT userid FROM badges GROUP BY userid
     HAVING min(name) = 'Enthusiast';
 
+An ``array_agg`` compares with a constant array, or with another
+``array_agg`` (the condition of a join on two aggregated arrays), using
+``=`` or ``<>``: the worlds are those where the arrays, read in the
+aggregate's input order, are equal.  A comparison of two aggregate results
+that none of these covers -- ``min`` of a text column against another
+``min``, say -- is refused when its probability is asked for.
+
 It may compare :sqlfunc:`choose` of such a column with a constant using
 ``=`` or ``<>``:
 

@@ -61,3 +61,14 @@ q|g|p
 bool <>[t]|A|0.5000
 bool <>[t]|B|0.0000
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|g|p
+array = array|A|0.1875
+array = array|B|0.0000
+(2 rows)
+ERROR:  ProvSQL: probability_evaluate: a comparison ProvSQL could not resolve remains in the circuit (This semiring does not support value gates.): supported are a comparison of an aggregate with a constant, between numeric aggregates, and between two array_agg results

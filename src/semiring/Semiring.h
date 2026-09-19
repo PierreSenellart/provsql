@@ -72,6 +72,23 @@ virtual char const * what() const noexcept {
 };
 
 /**
+ * @brief A gate kind this semiring does not interpret (a comparison, a
+ *        semimodule multiplication, an aggregation, a value).
+ *
+ * Thrown by the defaults of the methods below.  In the measure
+ * interpretation, which interprets them all, it means that the resolution
+ * passes left a comparison of aggregate results unresolved: a shape ProvSQL
+ * does not support, which @c probability_evaluate reports as such.
+ */
+class SemiringGateException : public SemiringException
+{
+public:
+/** @brief Construct with a descriptive error message. */
+SemiringGateException(const std::string &m) : SemiringException(m) {
+}
+};
+
+/**
  * @brief Abstract base class for (m-)semirings.
  *
  * @tparam V  The carrier type (e.g. @c bool, @c unsigned, @c std::string).
@@ -159,7 +176,7 @@ virtual value_type delta(value_type x) const = 0;
  * @throws SemiringException if not overridden.
  */
 virtual value_type cmp(value_type s1, ComparisonOperator op, value_type s2) const {
-  throw SemiringException("This semiring does not support cmp gates.");
+  throw SemiringGateException("This semiring does not support cmp gates.");
 }
 
 /**
@@ -171,7 +188,7 @@ virtual value_type cmp(value_type s1, ComparisonOperator op, value_type s2) cons
  * @throws SemiringException if not overridden.
  */
 virtual value_type semimod(value_type x, value_type s) const {
-  throw SemiringException("This semiring does not support semimod gates.");
+  throw SemiringGateException("This semiring does not support semimod gates.");
 }
 
 /**
@@ -183,7 +200,7 @@ virtual value_type semimod(value_type x, value_type s) const {
  * @throws SemiringException if not overridden.
  */
 virtual value_type agg(AggregationOperator op, const std::vector<value_type> &s) {
-  throw SemiringException("This semiring does not support agg gates.");
+  throw SemiringGateException("This semiring does not support agg gates.");
 }
 
 /**
@@ -196,7 +213,7 @@ virtual value_type agg(AggregationOperator op, const std::vector<value_type> &s)
  * @throws SemiringException if not overridden.
  */
 virtual value_type value(const std::string &s) const {
-  throw SemiringException("This semiring does not support value gates.");
+  throw SemiringGateException("This semiring does not support value gates.");
 }
 
 /**
