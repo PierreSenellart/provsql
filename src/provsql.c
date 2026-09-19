@@ -10681,6 +10681,32 @@ static bool recount_cte_refs_walker(Node *node, void *cx) {
   return expression_tree_walker(node, recount_cte_refs_walker, cx);
 }
 
+#if PG_VERSION_NUM < 130000
+/**
+ * @brief Walker: reset @c varnoold / @c varoattno of every @c Var to its
+ *        @c varno / @c varattno.
+ *
+ * The rewriting moves Vars between range tables, setting @c varno and
+ * @c varattno only.  Before PostgreSQL 13, @c equal() also compares these
+ * two fields, kept for debugging: the planner then fails to match a
+ * moved Var with a copy of it (for instance "could not find pathkey item
+ * to sort" when sorting the input of a merge join).
+ */
+static bool reset_varnoold_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    v->varnoold = v->varno;
+    v->varoattno = v->varattno;
+    return false;
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, reset_varnoold_walker, cx, 0);
+  return expression_tree_walker(node, reset_varnoold_walker, cx);
+}
+#endif
+
 /**
  * @brief Whether a subquery expression remains in @p q's own clauses (its
  *        target list, conditions or HAVING): what @c hasSubLinks must say
@@ -21504,6 +21530,9 @@ static PlannedStmt *provsql_planner(Query *q,
       if (new_query != NULL)
         q = new_query;
       recount_cte_refs_walker((Node *)q, NULL);
+#if PG_VERSION_NUM < 130000
+      reset_varnoold_walker((Node *)q, NULL);
+#endif
       freeze_statement = q;
 
       if (provsql_active && provsql_executor_depth == 0 &&
