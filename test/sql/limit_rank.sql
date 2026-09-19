@@ -194,6 +194,19 @@ SELECT 'PLAIN limit' AS q, count(*) AS c, sum(x) AS s
 FROM (SELECT x FROM lr_plain ORDER BY x, id LIMIT 2) t;
 
 DROP FUNCTION lr_check(text, text);
+-- Without ProvSQL's schema in the search_path: the operators the rewriting
+-- builds on its own types (the rank as a count plus one, arithmetic on an
+-- aggregate) are looked up in that schema.
+SET search_path TO provsql_test;
+CREATE TABLE lr_nopath AS SELECT id FROM lr ORDER BY x DESC, id LIMIT 2;
+CREATE TABLE lr_nopath_agg AS SELECT g, count(*) + 1 AS c FROM lr GROUP BY g;
+SELECT provsql.remove_provenance('lr_nopath');
+SELECT provsql.remove_provenance('lr_nopath_agg');
+SELECT count(*) AS candidates FROM lr_nopath;
+SELECT g, c::text AS c, pg_typeof(c) AS type FROM lr_nopath_agg ORDER BY g;
+DROP TABLE lr_nopath, lr_nopath_agg;
+SET search_path TO provsql_test, provsql;
+
 DROP VIEW lr_world.lr;
 DROP SCHEMA lr_world;
 DROP TABLE lr, lr_plain;

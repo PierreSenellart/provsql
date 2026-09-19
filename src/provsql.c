@@ -3771,10 +3771,40 @@ static bool const_as_double(Node *n, double *out) {
   return true;
 }
 
+/**
+ * @brief The name of operator @p op between types @p ltype and @p rtype
+ *        (@c InvalidOid for a prefix operator's left side), for a lookup.
+ *
+ * Qualified with the @c provsql schema when an operand has a type of it
+ * (@c agg_token, @c random_variable): its operators are there, and a
+ * session need not have the schema in its @c search_path.
+ */
+static List *operator_name(const char *op, Oid ltype, Oid rtype) {
+  Oid ns = get_namespace_oid("provsql", true);
+  Oid types[2];
+  int i;
+  types[0] = ltype;
+  types[1] = rtype;
+  for (i = 0; i < 2 && OidIsValid(ns); ++i) {
+    HeapTuple tup;
+    if (!OidIsValid(types[i]))
+      continue;
+    tup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(types[i]));
+    if (HeapTupleIsValid(tup)) {
+      bool ours = ((Form_pg_type)GETSTRUCT(tup))->typnamespace == ns;
+      ReleaseSysCache(tup);
+      if (ours)
+        return list_make2(makeString(pstrdup("provsql")),
+                          makeString(pstrdup(op)));
+    }
+  }
+  return list_make1(makeString(pstrdup(op)));
+}
+
 /** @brief Build `l <op> r`, resolving the operator by name. */
 static Node *build_binop(const char *op, Node *l, Node *r) {
   ParseState *p = make_parsestate(NULL);
-  Node *e = (Node *)make_op(p, list_make1(makeString(pstrdup(op))),
+  Node *e = (Node *)make_op(p, operator_name(op, exprType(l), exprType(r)),
                             l, r, NULL, -1);
   free_parsestate(p);
   return e;
@@ -7861,7 +7891,8 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   {
     /* No agg_token version of the operator (timestamp - min(d)): decline,
      * and let the casts read the value, rather than fail. */
-    List *names = list_make1(makeString(opname));
+    List *names = operator_name(opname, l != NULL ? exprType(l) : InvalidOid,
+                                exprType(r));
     Operator tup = l != NULL
       ? oper(pstate, names, exprType(l), exprType(r), true, -1)
       : left_oper(pstate, names, exprType(r), true, -1);
@@ -7872,7 +7903,10 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     }
     ReleaseSysCache(tup);
   }
-  newop = make_op(pstate, list_make1(makeString(opname)), l, r, NULL, -1);
+  newop = make_op(pstate,
+                  operator_name(opname, l != NULL ? exprType(l) : InvalidOid,
+                                exprType(r)),
+                  l, r, NULL, -1);
   free_parsestate(pstate);
 
   /* Only an agg_token operator carries the provenance; an operator that
