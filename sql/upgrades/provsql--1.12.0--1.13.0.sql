@@ -2359,6 +2359,67 @@ CREATE AGGREGATE provenance_contributions_cat(uuid[]) (
 
 -- The value gate of the NULL value, created like the zero and one gates
 SELECT create_gate(gate_null(), 'value', NULL, NULL, NULL, 'NULL');
+-- A CASE over aggregates: the NULL value is never defined, and a NULL value
+-- is displayed as NULL
+CREATE OR REPLACE FUNCTION agg_defined_event(token uuid)
+  RETURNS uuid AS $$
+DECLARE
+  gt provenance_gate := get_gate_type(token);
+  fname varchar;
+  toks uuid[];
+  wires uuid[];
+  nw integer;
+  m integer;
+  i integer;
+  running_neg uuid := gate_one();
+  parts uuid[] := '{}';
+BEGIN
+  IF token = gate_null() THEN
+    RETURN gate_zero();     -- the NULL value: never defined
+  END IF;
+  IF gt = 'agg' THEN
+    SELECT proname INTO fname
+      FROM pg_proc WHERE oid = (get_infos(token)).info1;
+    IF fname IN ('sum', 'count') THEN
+      RETURN gate_one();
+    END IF;
+    SELECT array_agg((get_children(c))[1]) INTO toks
+      FROM unnest(get_children(token)) AS c;
+    IF toks IS NULL THEN
+      RETURN gate_zero();   -- structurally empty aggregate: never defined
+    END IF;
+    RETURN provenance_plus(toks);
+  ELSIF gt = 'case' THEN
+    wires := get_children(token);
+    nw := array_length(wires, 1);
+    m := (nw - 1) / 2;
+    FOR i IN 1..m LOOP
+      parts := parts || provenance_times(
+        running_neg, wires[2 * i - 1],
+        agg_defined_event(wires[2 * i]));
+      running_neg := provenance_times(running_neg,
+                                      provenance_not(wires[2 * i - 1]));
+    END LOOP;
+    parts := parts || provenance_times(running_neg,
+                                       agg_defined_event(wires[nw]));
+    RETURN provenance_plus(parts);
+  END IF;
+  -- value / arith / anything else: a value exists in every world.
+  RETURN gate_one();
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION agg_case(
+  children UUID[]
+)
+RETURNS agg_token AS
+$$
+  SELECT format('( %s , %s )', t::text,
+                coalesce(provsql.agg_gate_value(t)::text, ''))::provsql.agg_token
+  FROM (SELECT provsql.provenance_case(children) AS t) AS s;
+$$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
 -- explode_table explodes the result of choose() only
 CREATE OR REPLACE FUNCTION explode_table(_tbl text, agg_token text)
 RETURNS void AS $$

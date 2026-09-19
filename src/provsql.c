@@ -5603,8 +5603,32 @@ node_is_agg_token(Node *n, const constants_t *constants)
  * having_OpExpr_to_provenance_cmp uses for the aggregate side of a HAVING
  * comparison).  Returns NULL for a branch that is not an agg_token (e.g. a bare
  * numeric constant -- deferred), so the caller declines the whole CASE. */
+static Node *agg_arm_to_uuid_or_null(Node *arm, const constants_t *constants);
+
+/* A branch whose value is NULL (an aggregate over no row at all, a NULL
+ * constant) has the value gate of the NULL value, gate_null(), never
+ * defined, rather than a NULL child. */
 static Node *
 agg_arm_to_uuid(Node *arm, const constants_t *constants)
+{
+  Node *uuid = agg_arm_to_uuid_or_null(arm, constants);
+  CoalesceExpr *c;
+  if (uuid == NULL || !OidIsValid(constants->OID_FUNCTION_GATE_NULL))
+    return uuid;
+  c = makeNode(CoalesceExpr);
+  c->coalescetype = constants->OID_TYPE_UUID;
+  c->coalescecollid = InvalidOid;
+  c->args = list_make2(uuid,
+                       makeFuncExpr(constants->OID_FUNCTION_GATE_NULL,
+                                    constants->OID_TYPE_UUID, NIL, InvalidOid,
+                                    InvalidOid, COERCE_EXPLICIT_CALL));
+  c->location = -1;
+  return (Node *)c;
+}
+
+/* agg_arm_to_uuid, NULL for a NULL value. */
+static Node *
+agg_arm_to_uuid_or_null(Node *arm, const constants_t *constants)
 {
   Node *node = arm;
   FuncExpr *castToUUID;
@@ -5666,6 +5690,10 @@ case_is_agg_carrier(CaseExpr *ce, const constants_t *constants)
   ListCell *lc;
 
   if (ce->arg != NULL || !OidIsValid(constants->OID_FUNCTION_AGG_CASE))
+    return false;
+  /* The value of agg_case is a number: a CASE of another type (a date, a
+   * text) is left to be evaluated as plain SQL */
+  if (TypeCategory(ce->casetype) != TYPCATEGORY_NUMERIC)
     return false;
   foreach (lc, ce->args) {
     CaseWhen *cw = (CaseWhen *)lfirst(lc);

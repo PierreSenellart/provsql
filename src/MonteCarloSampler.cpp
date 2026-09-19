@@ -236,7 +236,12 @@ double Sampler::evalScalar(gate_t g)
 
   switch(type) {
     case gate_value:
-      result = parseDoubleStrict(gc_.getExtra(g));
+      /* The NULL value (a NULL branch of a CASE): undefined, as an aggregate
+       * over no row */
+      if(gc_.getUUID(g) == PROVSQL_GATE_NULL_UUID)
+        result = std::numeric_limits<double>::quiet_NaN();
+      else
+        result = parseDoubleStrict(gc_.getExtra(g));
       break;
     case gate_rv:
     {

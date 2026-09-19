@@ -251,6 +251,9 @@ typedef struct constants_t {
   /** @brief OID of the @c provenance_contributions_cat aggregate, which
    *  collects them; @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_PROVENANCE_CONTRIBUTIONS_CAT;
+  /** @brief OID of @c gate_null(), the value gate of the NULL value (a NULL
+   *  branch of a CASE over aggregates) */
+  Oid OID_FUNCTION_GATE_NULL;
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
   Oid OID_FUNCTION_GATE_ONE; ///< OID of the provenance_one FUNCTION
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION

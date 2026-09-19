@@ -166,4 +166,34 @@ SELECT g, p, pg_typeof(p) AS p_type FROM pickf;
 SET provsql.active = on;
 DROP TABLE pickf; DROP TABLE cf;
 
+-- A branch whose value is NULL -- an aggregate over the padded rows of an
+-- outer join only, a NULL constant -- is NULL in every world; a CASE of a
+-- type other than a number (a timestamp) is evaluated as plain SQL.
+CREATE TABLE cn_t(tag text, e int, w int);
+CREATE TABLE cn_p(id int, score int, d date);
+INSERT INTO cn_t VALUES ('a', 1, 2), ('b', 3, NULL), ('c', NULL, 4);
+INSERT INTO cn_p VALUES (1, 10, '2020-01-01'), (2, 20, '2021-01-01'),
+                        (3, 30, '2019-01-01');
+SELECT add_provenance('cn_t');
+SELECT add_provenance('cn_p');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cn_p; END $$;
+CREATE TABLE cn_r AS
+  SELECT t.tag,
+         CASE WHEN max(e.score) > max(w.score) THEN max(e.score)
+              ELSE max(w.score) END AS s,
+         round(expected(CASE WHEN max(e.score) > max(w.score) THEN max(e.score)
+                             ELSE max(w.score) END)::numeric, 4) AS e_s,
+         CASE WHEN max(e.d) > max(w.d) THEN max(e.d) ELSE max(w.d) END AS d
+  FROM cn_t t LEFT JOIN cn_p e ON e.id = t.e LEFT JOIN cn_p w ON w.id = t.w
+  GROUP BY t.tag;
+SELECT remove_provenance('cn_r');
+SELECT tag, s::text AS s, e_s, d FROM cn_r ORDER BY tag;
+DROP TABLE cn_r;
+CREATE TABLE cn_r AS
+  SELECT t.tag, CASE WHEN max(e.score) > 15 THEN max(e.score) END AS s
+  FROM cn_t t JOIN cn_p e ON e.id = t.e GROUP BY t.tag;
+SELECT remove_provenance('cn_r');
+SELECT tag, s::text AS s FROM cn_r ORDER BY tag;
+DROP TABLE cn_r, cn_t, cn_p;
+
 SELECT 'ok'::text AS agg_case_done;

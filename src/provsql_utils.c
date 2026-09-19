@@ -445,6 +445,7 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     get_provsql_func_oid("provenance_semimod_flat");
   constants.OID_FUNCTION_PROVENANCE_CONTRIBUTIONS_CAT =
     get_provsql_func_oid("provenance_contributions_cat");
+  constants.OID_FUNCTION_GATE_NULL = get_provsql_func_oid("gate_null");
 
   constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
   CheckOid(OID_FUNCTION_GATE_ZERO);

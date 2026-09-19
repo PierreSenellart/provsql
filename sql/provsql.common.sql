@@ -6120,7 +6120,8 @@ CREATE OR REPLACE FUNCTION agg_case(
 )
 RETURNS agg_token AS
 $$
-  SELECT provsql.agg_token_make(t, coalesce(provsql.agg_gate_value(t), 0))
+  SELECT format('( %s , %s )', t::text,
+                coalesce(provsql.agg_gate_value(t)::text, ''))::provsql.agg_token
   FROM (SELECT provsql.provenance_case(children) AS t) AS s;
 $$ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -7361,6 +7362,9 @@ DECLARE
   running_neg uuid := gate_one();
   parts uuid[] := '{}';
 BEGIN
+  IF token = gate_null() THEN
+    RETURN gate_zero();     -- the NULL value: never defined
+  END IF;
   IF gt = 'agg' THEN
     SELECT proname INTO fname
       FROM pg_proc WHERE oid = (get_infos(token)).info1;
