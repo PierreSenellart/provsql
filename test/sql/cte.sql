@@ -98,10 +98,15 @@ WITH t AS (SELECT id + 10 AS id, name || '2' AS name FROM cte_foo)
 SELECT * FROM t;
 DROP TABLE cte_foo;
 
--- A CTE read from a sublink is inlined there as well (the sublink rewriting
--- then decides; before, the CTE was left unresolved).
-WITH c AS (SELECT id FROM personnel WHERE city = 'Paris')
-SELECT name FROM personnel WHERE id IN (SELECT id FROM c);
+-- A CTE read from a sublink is inlined there as well, a derived table the
+-- body of the sublink reads.
+CREATE TABLE cte_result_sublink AS
+  WITH c AS (SELECT id FROM personnel WHERE city = 'Paris')
+  SELECT name, sr_counting(provenance(), 'personnel_count') AS counting
+  FROM personnel WHERE id IN (SELECT id FROM c);
+SELECT remove_provenance('cte_result_sublink');
+SELECT * FROM cte_result_sublink ORDER BY name;
+DROP TABLE cte_result_sublink;
 
 -- A CTE inlined in another CTE's body, itself inlined, reads a CTE kept as a
 -- CTE (untracked): the reference follows it down.

@@ -68,7 +68,14 @@ id|name
 4|c
 (4 rows)
 ERROR:  ProvSQL: data-modifying CTE "ins" cannot read CTE "t", which is over a provenance-tracked relation
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+remove_provenance
+
+(1 row)
+name|counting
+Dave|1
+Magdalen|1
+Nancy|1
+(3 rows)
 remove_provenance
 
 (1 row)

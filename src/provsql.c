@@ -12246,6 +12246,218 @@ static bool oj_wrap_outer_from(const constants_t *constants, Query *q,
   return true;
 }
 
+/** @brief Context for @c pull_up_vars_mutator. */
+typedef struct pull_up_vars_ctx {
+  Query *inner;   ///< Query whose target list exposes the Vars
+  List *pulled;   ///< Vars already exposed, in the order of their entries
+  List *resnos;   ///< Their resnos in @c inner (integers)
+} pull_up_vars_ctx;
+
+/** @brief Mutator: replace each Var of level 0 by a reference to an entry of
+ *  @c ctx->inner exposing it, appended if needed. */
+static Node *pull_up_vars_mutator(Node *node, void *cx) {
+  pull_up_vars_ctx *ctx = (pull_up_vars_ctx *)cx;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0) {
+    Var *v = (Var *)node;
+    ListCell *lc_v, *lc_r;
+    AttrNumber resno = 0;
+
+    forboth (lc_v, ctx->pulled, lc_r, ctx->resnos) {
+      if (equal(lfirst(lc_v), v)) {
+        resno = (AttrNumber)lfirst_int(lc_r);
+        break;
+      }
+    }
+    if (resno == 0) {
+      resno = list_length(ctx->inner->targetList) + 1;
+      ctx->inner->targetList = lappend(
+        ctx->inner->targetList,
+        makeTargetEntry((Expr *)copyObject(v), resno, pstrdup("?column?"),
+                        false));
+      ctx->pulled = lappend(ctx->pulled, v);
+      ctx->resnos = lappend_int(ctx->resnos, resno);
+    }
+    return (Node *)makeVar(1, resno, v->vartype, v->vartypmod, v->varcollid, 0);
+  }
+  return expression_tree_mutator(node, pull_up_vars_mutator, cx);
+}
+
+/** @brief Context for @c pull_up_vars_deep_mutator. */
+typedef struct pull_up_vars_deep_ctx {
+  pull_up_vars_ctx base; ///< The subquery exposing the Vars
+  Index depth;           ///< Levels below the query whose Vars are pulled up
+} pull_up_vars_deep_ctx;
+
+/** @brief Mutator: @c pull_up_vars_mutator, also for the Vars of the query
+ *  that nested queries (subquery expressions) read from one or more levels
+ *  down. */
+static Node *pull_up_vars_deep_mutator(Node *node, void *cx) {
+  pull_up_vars_deep_ctx *ctx = (pull_up_vars_deep_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == ctx->depth) {
+    Var *v = (Var *)copyObject(node);
+    Var *r;
+    v->varlevelsup = 0;
+    r = (Var *)pull_up_vars_mutator((Node *)v, &ctx->base);
+    r->varlevelsup = ctx->depth;
+    return (Node *)r;
+  }
+  if (IsA(node, Query)) {
+    Node *r;
+    ++ctx->depth;
+    r = (Node *)query_tree_mutator((Query *)node, pull_up_vars_deep_mutator,
+                                   cx, 0);
+    --ctx->depth;
+    return r;
+  }
+  return expression_tree_mutator(node, pull_up_vars_deep_mutator, cx);
+}
+
+/** @brief Context for @c reads_outside_walker. */
+typedef struct reads_outside_ctx {
+  Index depth; ///< Levels below the node the walk started from
+} reads_outside_ctx;
+
+/** @brief Walker: a reference (a Var, a CTE) to a query above the one the
+ *  walk started in, @p depth levels up counting from there. */
+static bool reads_outside_walker_rec(Node *node, void *cx) {
+  reads_outside_ctx *ctx = (reads_outside_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var))
+    return ((Var *)node)->varlevelsup > ctx->depth;
+  if (IsA(node, Aggref))
+    if (((Aggref *)node)->agglevelsup > ctx->depth)
+      return true;
+  if (IsA(node, RangeTblEntry)) {
+    RangeTblEntry *r = (RangeTblEntry *)node;
+    return r->rtekind == RTE_CTE && r->ctelevelsup > ctx->depth;
+  }
+  if (IsA(node, Query)) {
+    bool r;
+    ++ctx->depth;
+    r = query_tree_walker((Query *)node, reads_outside_walker_rec, cx,
+                          QTW_EXAMINE_RTES_BEFORE);
+    --ctx->depth;
+    return r;
+  }
+  return expression_tree_walker(node, reads_outside_walker_rec, cx);
+}
+
+/** @brief Whether @p node reads a query above its own level, which is
+ *  @p depth: 0 for an expression, the query for a Query being one level
+ *  below itself (so that a Query argument starts at its own level). */
+static bool reads_outside_walker(Node *node, Index depth) {
+  reads_outside_ctx ctx;
+  ctx.depth = depth;
+  if (node != NULL && IsA(node, Query))
+    return query_tree_walker((Query *)node, reads_outside_walker_rec, &ctx,
+                             QTW_EXAMINE_RTES_BEFORE);
+  return reads_outside_walker_rec(node, &ctx);
+}
+
+/**
+ * @brief Move the subquery tests of the @c WHERE of a subquery body @p sub into
+ *        a derived table of it.
+ *
+ * @c x @c IN @c (SELECT @c a @c FROM @c Q @c WHERE @c t @c IN @c (SELECT ...))
+ * has a body with a subquery test of its own, which the decorrelation of the
+ * outer test does not take; with it moved,
+ * @c x @c IN @c (SELECT @c d.a @c FROM @c (SELECT @c a @c FROM @c Q @c WHERE
+ * @c t @c IN @c (SELECT ...)) @c d), the body reads a derived table, whose own
+ * test its rewriting then handles.  Only the conjuncts that read nothing
+ * outside the body move (the correlation stays where the decorrelation looks
+ * for it).  Returns whether anything moved.
+ */
+static bool wrap_body_sublinks(Query *sub) {
+  List *conjs, *moved = NIL, *kept = NIL;
+  Query *d;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  pull_up_vars_deep_ctx pctx;
+  ListCell *lc;
+  List *colnames = NIL;
+  Node *quals;
+
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT ||
+      !sub->hasSubLinks || sub->jointree == NULL ||
+      sub->jointree->quals == NULL || sub->hasAggs ||
+      sub->groupClause != NIL || sub->groupingSets != NIL ||
+      sub->setOperations != NULL || sub->cteList != NIL ||
+      sub->hasWindowFuncs || sub->limitCount || sub->limitOffset ||
+      checkExprHasSubLink((Node *)sub->targetList))
+    return false;
+  quals = sub->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    if (checkExprHasSubLink(c) && !reads_outside_walker(c, 0))
+      moved = lappend(moved, c);
+    else
+      kept = lappend(kept, c);
+  }
+  if (moved == NIL)
+    return false;
+
+  d = makeNode(Query);
+  d->commandType = CMD_SELECT;
+  d->canSetTag = true;
+  d->rtable = sub->rtable;
+#if PG_VERSION_NUM >= 160000
+  d->rteperminfos = sub->rteperminfos;
+  sub->rteperminfos = NIL;
+#endif
+  d->jointree = makeFromExpr(
+    sub->jointree->fromlist,
+    list_length(moved) == 1 ? (Node *)linitial(moved)
+                            : (Node *)makeBoolExpr(AND_EXPR, moved, -1));
+  d->hasSubLinks = true;
+
+  pctx.base.inner = d;
+  pctx.base.pulled = NIL;
+  pctx.base.resnos = NIL;
+  pctx.depth = 0;
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    te->expr = (Expr *)pull_up_vars_deep_mutator((Node *)te->expr, &pctx);
+  }
+  kept = (List *)pull_up_vars_deep_mutator((Node *)kept, &pctx);
+  if (d->targetList == NIL)
+    d->targetList = list_make1(makeTargetEntry(
+      (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                        Int32GetDatum(1), false, true),
+      1, pstrdup("?column?"), false));
+  foreach (lc, d->targetList)
+    colnames = lappend(colnames, makeString(pstrdup(
+      ((TargetEntry *)lfirst(lc))->resname)));
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = d;
+  rte->eref = makeAlias("tested", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  sub->rtable = list_make1(rte);
+  sub->jointree = makeFromExpr(
+    list_make1(rtr),
+    kept == NIL ? NULL
+                : (list_length(kept) == 1 ? (Node *)linitial(kept)
+                                          : (Node *)makeBoolExpr(AND_EXPR,
+                                                                 kept, -1)));
+  sub->hasSubLinks = checkExprHasSubLink((Node *)kept);
+  return true;
+}
+
 /**
  * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
  *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
@@ -12284,7 +12496,11 @@ static bool predicate_subselect_decorrelatable(const constants_t *constants,
     bool any_tracked = false;
     foreach (lc, sub->rtable) {
       RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-      if (r->rtekind != RTE_RELATION)
+      /* A derived table is fine too (a body whose own subquery tests
+       * wrap_body_sublinks moved into one), if it reads nothing around. */
+      if (r->rtekind != RTE_RELATION &&
+          !(r->rtekind == RTE_SUBQUERY && r->subquery != NULL && !r->lateral &&
+            !reads_outside_walker((Node *)r->subquery, 0)))
         return false;
       if (oj_rte_has_provsql(constants, r))
         any_tracked = true;
@@ -12883,6 +13099,7 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
     }
     if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
       sl = (SubLink *)inner;
+      wrap_body_sublinks((Query *)sl->subselect);
       if (sl->subLinkType == EXISTS_SUBLINK &&
           predicate_subselect_decorrelatable(constants,
                                              (Query *)sl->subselect, false)) {
@@ -13091,7 +13308,11 @@ static bool oj_wrap_body_from(const constants_t *constants, Query *sub) {
     bool any_tracked = false;
     foreach (lc, sub->rtable) {
       RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-      if (r->rtekind != RTE_RELATION)
+      /* A derived table is fine too (a body whose own subquery tests
+       * wrap_body_sublinks moved into one), if it reads nothing around. */
+      if (r->rtekind != RTE_RELATION &&
+          !(r->rtekind == RTE_SUBQUERY && r->subquery != NULL && !r->lateral &&
+            !reads_outside_walker((Node *)r->subquery, 0)))
         return false;
       if (oj_rte_has_provsql(constants, r))
         any_tracked = true;
@@ -17878,77 +18099,6 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
     }
   }
   return true;
-}
-
-/** @brief Context for @c pull_up_vars_mutator. */
-typedef struct pull_up_vars_ctx {
-  Query *inner;   ///< Query whose target list exposes the Vars
-  List *pulled;   ///< Vars already exposed, in the order of their entries
-  List *resnos;   ///< Their resnos in @c inner (integers)
-} pull_up_vars_ctx;
-
-/** @brief Mutator: replace each Var of level 0 by a reference to an entry of
- *  @c ctx->inner exposing it, appended if needed. */
-static Node *pull_up_vars_mutator(Node *node, void *cx) {
-  pull_up_vars_ctx *ctx = (pull_up_vars_ctx *)cx;
-
-  if (node == NULL)
-    return NULL;
-  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0) {
-    Var *v = (Var *)node;
-    ListCell *lc_v, *lc_r;
-    AttrNumber resno = 0;
-
-    forboth (lc_v, ctx->pulled, lc_r, ctx->resnos) {
-      if (equal(lfirst(lc_v), v)) {
-        resno = (AttrNumber)lfirst_int(lc_r);
-        break;
-      }
-    }
-    if (resno == 0) {
-      resno = list_length(ctx->inner->targetList) + 1;
-      ctx->inner->targetList = lappend(
-        ctx->inner->targetList,
-        makeTargetEntry((Expr *)copyObject(v), resno, pstrdup("?column?"),
-                        false));
-      ctx->pulled = lappend(ctx->pulled, v);
-      ctx->resnos = lappend_int(ctx->resnos, resno);
-    }
-    return (Node *)makeVar(1, resno, v->vartype, v->vartypmod, v->varcollid, 0);
-  }
-  return expression_tree_mutator(node, pull_up_vars_mutator, cx);
-}
-
-/** @brief Context for @c pull_up_vars_deep_mutator. */
-typedef struct pull_up_vars_deep_ctx {
-  pull_up_vars_ctx base; ///< The subquery exposing the Vars
-  Index depth;           ///< Levels below the query whose Vars are pulled up
-} pull_up_vars_deep_ctx;
-
-/** @brief Mutator: @c pull_up_vars_mutator, also for the Vars of the query
- *  that nested queries (subquery expressions) read from one or more levels
- *  down. */
-static Node *pull_up_vars_deep_mutator(Node *node, void *cx) {
-  pull_up_vars_deep_ctx *ctx = (pull_up_vars_deep_ctx *)cx;
-  if (node == NULL)
-    return NULL;
-  if (IsA(node, Var) && ((Var *)node)->varlevelsup == ctx->depth) {
-    Var *v = (Var *)copyObject(node);
-    Var *r;
-    v->varlevelsup = 0;
-    r = (Var *)pull_up_vars_mutator((Node *)v, &ctx->base);
-    r->varlevelsup = ctx->depth;
-    return (Node *)r;
-  }
-  if (IsA(node, Query)) {
-    Node *r;
-    ++ctx->depth;
-    r = (Node *)query_tree_mutator((Query *)node, pull_up_vars_deep_mutator,
-                                   cx, 0);
-    --ctx->depth;
-    return r;
-  }
-  return expression_tree_mutator(node, pull_up_vars_deep_mutator, cx);
 }
 
 /** @brief Whether @p n, a conjunct of a @c WHERE, tests a subquery over a

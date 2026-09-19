@@ -1402,3 +1402,34 @@ SELECT remove_provenance('ssz_r');
 SELECT * FROM ssz_r ORDER BY q, id;
 DROP TABLE ssz_r;
 DROP TABLE ssz, ssw2;
+
+-- Nested subquery tests: the body's own test moves into a derived table the
+-- body reads, whose rewriting then handles it; three levels deep too.
+CREATE TABLE ssn(id int, parentid int, u int, v int);
+INSERT INTO ssn VALUES (1, NULL, 1, 5), (2, 1, 2, 3), (3, 1, 1, 0), (4, 2, 2, -1);
+CREATE TABLE ssm(pid int, t int);
+INSERT INTO ssm VALUES (1, 10), (2, 4), (2, 10);
+SELECT add_provenance('ssn');
+SELECT add_provenance('ssm');
+SELECT create_provenance_mapping('ssn_m', 'ssn', 'id');
+CREATE TABLE ssn_r AS
+  SELECT 'IN (IN)' AS q, id FROM (
+    SELECT id FROM ssn
+    WHERE id IN (SELECT pid FROM ssm WHERE t IN (SELECT v + 10 FROM ssn))) t
+  WHERE present(provenance())
+  UNION ALL
+  SELECT 'NOT IN (IN)', id FROM (
+    SELECT id FROM ssn
+    WHERE id NOT IN (SELECT pid FROM ssm WHERE t IN (SELECT v + 10 FROM ssn))) t
+  WHERE present(provenance())
+  UNION ALL
+  SELECT 'IN (IN (IN))', id FROM (
+    SELECT id FROM ssn
+    WHERE u IN (SELECT pid FROM ssm WHERE pid IN (
+                  SELECT parentid FROM ssn WHERE id IN (
+                    SELECT pid FROM ssm WHERE t = 10)))) t
+  WHERE present(provenance());
+SELECT remove_provenance('ssn_r');
+SELECT * FROM ssn_r ORDER BY q, id;
+DROP TABLE ssn_r;
+DROP TABLE ssn, ssm, ssn_m;

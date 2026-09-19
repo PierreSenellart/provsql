@@ -808,3 +808,23 @@ q|id
 EXISTS AND EXISTS|1
 IN AND NOT IN|1
 (2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|id
+IN (IN (IN))|1
+IN (IN (IN))|3
+IN (IN)|1
+IN (IN)|2
+NOT IN (IN)|3
+NOT IN (IN)|4
+(6 rows)
