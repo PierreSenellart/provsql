@@ -22,3 +22,15 @@ SELECT *,formula(provenance(),'personnel_name') AS formula FROM (
 SELECT remove_provenance('union_result');
 SELECT * FROM union_result;
 DROP TABLE union_result;
+
+-- A non-ALL UNION whose branches have a provsql column followed by other
+-- columns: the columns of the deduplicating GROUP BY are those left.
+CREATE TABLE union_result AS
+  SELECT a.id, a.provsql, b.name
+  FROM personnel a JOIN personnel b ON a.id = b.id
+  UNION
+  SELECT a.id, a.provsql, b.name
+  FROM personnel a JOIN personnel b ON a.id = b.id;
+SELECT remove_provenance('union_result');
+SELECT * FROM union_result ORDER BY id;
+DROP TABLE union_result;

@@ -81,3 +81,23 @@ CREATE TABLE agg_result4 AS
 SELECT remove_provenance('agg_result4');
 SELECT * FROM agg_result4;
 DROP TABLE agg_result4;
+
+-- AGG(DISTINCT) with constant extra arguments, ordered by the key.
+CREATE TABLE agg_result5 AS
+  SELECT city, string_agg(DISTINCT position, ', ' ORDER BY position) AS s
+  FROM personnel GROUP BY city;
+SELECT remove_provenance('agg_result5');
+SELECT * FROM agg_result5 ORDER BY city;
+DROP TABLE agg_result5;
+SELECT string_agg(DISTINCT position, name) FROM personnel;
+
+-- AGG(DISTINCT) in a LATERAL subquery reading a column of a subquery whose
+-- provsql column, in the middle of its columns, is moved last.
+CREATE TABLE agg_result6 AS
+  SELECT a.id, b.n
+  FROM (SELECT *, string_to_array(name || ' ' || name, ' ') AS arr
+        FROM personnel) a
+  LEFT JOIN LATERAL (SELECT count(DISTINCT e) AS n FROM unnest(arr) e) b ON true;
+SELECT remove_provenance('agg_result6');
+SELECT * FROM agg_result6 ORDER BY id;
+DROP TABLE agg_result6;

@@ -59,3 +59,14 @@ node|f
 2|a
 4|c ⊗ b ⊗ a
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+node|present
+2|t
+3|t
+(2 rows)
+ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)

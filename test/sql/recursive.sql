@@ -152,3 +152,30 @@ SELECT remove_provenance('twoarm_result');
 SELECT * FROM twoarm_result ORDER BY node;
 DROP TABLE twoarm_result;
 DROP TABLE dedge;
+
+-- A recursive CTE reads another CTE of the WITH, defined after it: it is
+-- inlined into the body the fixpoint evaluates.
+CREATE TABLE sib_e(src int, dst int);
+INSERT INTO sib_e VALUES (1, 2), (2, 3), (3, 4);
+SELECT add_provenance('sib_e');
+CREATE TABLE sib_r AS
+  WITH RECURSIVE reach(node) AS (
+      SELECT dst FROM edges WHERE src = 1
+    UNION
+      SELECT e.dst FROM edges e JOIN reach r ON e.src = r.node
+  ), edges AS (SELECT src, dst FROM sib_e WHERE dst <> 4)
+  SELECT node, present(provenance()) AS present FROM reach;
+SELECT remove_provenance('sib_r');
+SELECT * FROM sib_r ORDER BY node;
+DROP TABLE sib_r;
+
+-- A window function in the recursive term: not a monotone fixpoint, refused
+-- up front.
+WITH RECURSIVE r AS (
+    SELECT src, 0 AS i FROM sib_e
+  UNION
+    SELECT e.src, CASE WHEN e.dst = lag(e.dst) OVER (ORDER BY e.src)
+                       THEN r.i ELSE r.i + 1 END
+    FROM sib_e e JOIN r ON e.src = r.src WHERE r.i < 3)
+SELECT * FROM r;
+DROP TABLE sib_e;

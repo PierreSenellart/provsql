@@ -300,34 +300,43 @@ static Var *make_provenance_attribute(const constants_t *constants, Query *q,
  * Helper mutators: attribute-number fixup and type patching
  * ------------------------------------------------------------------------- */
 
-/** @brief Context for the @c reduce_varattno_mutator tree walker. */
-typedef struct reduce_varattno_mutator_context {
-  Index varno;  ///< Range-table entry whose attribute numbers are being adjusted
-  int *offset;  ///< Per-attribute cumulative shift to apply
-} reduce_varattno_mutator_context;
+/** @brief Context for the @c reduce_varattno_walker tree walker. */
+typedef struct reduce_varattno_context {
+  Index varno;       ///< Range-table entry whose attribute numbers are being adjusted
+  int *offset;       ///< Per-attribute cumulative shift to apply
+  Index sublevels_up; ///< Levels below the query owning @c varno
+} reduce_varattno_context;
 
 /**
- * @brief Tree-mutator callback that adjusts Var attribute numbers.
+ * @brief Tree-walker callback that adjusts Var attribute numbers, in place.
  * @param node  Current expression tree node.
- * @param ctx   Pointer to a @c reduce_varattno_mutator_context.
- * @return      Possibly modified node.
+ * @param ctx   Pointer to a @c reduce_varattno_context.
+ * @return      Always false (walk everything).
  */
-static Node *reduce_varattno_mutator(Node *node, void *ctx) {
-  reduce_varattno_mutator_context *context = (reduce_varattno_mutator_context *)ctx;
+static bool reduce_varattno_walker(Node *node, void *ctx) {
+  reduce_varattno_context *context = (reduce_varattno_context *)ctx;
   if (node == NULL)
-    return NULL;
+    return false;
 
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
 
     /* A whole-row reference (attribute 0) or a system column keeps its
      * number. */
-    if (v->varno == context->varno && v->varattno > 0) {
+    if (v->varno == context->varno &&
+        v->varlevelsup == context->sublevels_up && v->varattno > 0)
       v->varattno += context->offset[v->varattno - 1];
-    }
+    return false;
+  }
+  if (IsA(node, Query)) {
+    bool r;
+    ++context->sublevels_up;
+    r = query_tree_walker((Query *)node, reduce_varattno_walker, ctx, 0);
+    --context->sublevels_up;
+    return r;
   }
 
-  return expression_tree_mutator(node, reduce_varattno_mutator, ctx);
+  return expression_tree_walker(node, reduce_varattno_walker, ctx);
 }
 
 /**
@@ -336,28 +345,19 @@ static Node *reduce_varattno_mutator(Node *node, void *ctx) {
  * When provenance columns are stripped from a subquery's target list, the
  * remaining columns shift left.  This function applies a pre-computed
  * @p offset array (one entry per original column) to correct all @c Var
- * nodes of @p q that reference range-table entry @p varno: in its target
- * list, and in its @c WHERE, @c JOIN and @c HAVING conditions, where a
- * comparison on a column after the removed one would otherwise read the
- * wrong column.
+ * nodes that reference range-table entry @p varno of @p q: in its target
+ * list and conditions, where a comparison on a column after the removed one
+ * would otherwise read the wrong column, and in the queries nested in it (a
+ * @c LATERAL subquery, a function of the @c FROM list, a subquery
+ * expression), which reach it from further down.
  *
  * @param q       Outer query to patch.
  * @param varno   Range-table entry whose attribute numbers need fixing.
  * @param offset  Cumulative shift per original attribute (negative or zero).
  */
 static void reduce_varattno_by_offset(Query *q, Index varno, int *offset) {
-  ListCell *lc;
-  reduce_varattno_mutator_context context = {varno, offset};
-
-  /* The mutator changes the Vars in place (the copies it returns are
-   * dropped). */
-  foreach (lc, q->targetList) {
-    Node *te = lfirst(lc);
-    expression_tree_mutator(te, reduce_varattno_mutator, &context);
-  }
-  expression_tree_mutator((Node *)q->jointree, reduce_varattno_mutator,
-                          &context);
-  expression_tree_mutator(q->havingQual, reduce_varattno_mutator, &context);
+  reduce_varattno_context context = {varno, offset, 0};
+  query_tree_walker(q, reduce_varattno_walker, &context, 0);
 }
 
 /** @brief Context for the @c aggregation_type_mutator tree walker. */
@@ -1430,6 +1430,11 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
       if (sub->rtekind == RTE_SUBQUERY && sub->subquery != NULL &&
           sub->subquery->hasTargetSRFs)
         return false;
+      /* Nor a window function (lag() over the working table): not monotone,
+       * the rounds need not reach a fixpoint. */
+      if (sub->rtekind == RTE_SUBQUERY && sub->subquery != NULL &&
+          sub->subquery->hasWindowFuncs)
+        return false;
     }
   }
 
@@ -1644,7 +1649,9 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
   ListCell *lc;
   foreach (lc, rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-    if (r->rtekind == RTE_CTE) {
+    if (r->rtekind == RTE_CTE && r->self_reference) {
+      /* The working table of the recursive CTE whose body this is */
+    } else if (r->rtekind == RTE_CTE) {
       ListCell *lc2;
       foreach (lc2, cteList) {
         CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
@@ -1668,7 +1675,13 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
               r->ctelevelsup = 0;
             } else {
               LoweredCte *e = (LoweredCte *)palloc0(sizeof(LoweredCte));
-              if (lower_recursive_cte(cte, r, e)) {
+              /* The body may read the other CTEs of the WITH, before or
+               * after it: inline them into a copy of it, which is what is
+               * evaluated on its own. */
+              CommonTableExpr *body = copyObject(cte);
+              inline_ctes_in_rtable(((Query *)body->ctequery)->rtable,
+                                    cteList, lowered, kept);
+              if (lower_recursive_cte(body, r, e)) {
                 /* Lowering succeeded; remember the scan subquery so any
                  * further reference to this CTE reuses it. */
                 e->name = pstrdup(cte->ctename);
@@ -1684,6 +1697,12 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
           } else {
             r->rtekind = RTE_SUBQUERY;
             r->subquery = copyObject((Query *)cte->ctequery);
+            /* The body was one level below the WITH, it is now
+             * ctelevelsup + 1 levels below: its references to the other
+             * CTEs of the WITH (those kept as CTEs) and to outer queries
+             * move up accordingly. */
+            if (r->ctelevelsup > 0)
+              IncrementVarSublevelsUp((Node *)r->subquery, r->ctelevelsup, 1);
             r->ctename = NULL;
             r->ctelevelsup = 0;
             /* Recurse: the inlined subquery may reference other CTEs
@@ -6833,6 +6852,10 @@ static Query *build_inner_for_distinct_key(Query *q, Expr *key_expr,
 
   inner->targetList  = new_tl;
   inner->groupClause = new_gc;
+  /* inner lies two levels below q (in the outer query that aggregates it,
+   * a subquery of q): what q reads from outside (a LATERAL reference, a kept
+   * CTE) is two levels further up. */
+  IncrementVarSublevelsUp((Node *)inner, 2, 1);
   return inner;
 }
 
@@ -6909,8 +6932,13 @@ static Query *build_outer_for_distinct_key(TargetEntry *orig_agg_te,
     key_var->location   = -1;
     arg_te->resno = 1;
     arg_te->expr  = (Expr *)key_var;
+    /* An ORDER BY on the key inside the aggregate refers to it */
+    arg_te->ressortgroupref =
+      ((TargetEntry *)linitial(ar->args))->ressortgroupref;
 
-    ar->args        = list_make1(arg_te);
+    /* The other arguments are constants (the separator of string_agg) */
+    ar->args        = list_concat(list_make1(arg_te),
+                                  list_copy_tail(ar->args, 1));
     ar->aggdistinct = NIL;
     agg_te->resno   = resno++;
     new_tl = list_make1(agg_te);
@@ -7148,6 +7176,43 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
  * @param constants    Extension OID cache.
  * @return   Rewritten query, or @c NULL if no @c AGG(DISTINCT) was found.
  */
+/**
+ * @brief Can @p ar, an @c AGG(DISTINCT), be computed over the distinct values
+ *        of its first argument?
+ *
+ * Its other arguments must be constants (@c string_agg(DISTINCT x, ',')), and
+ * an @c ORDER @c BY inside it must be on the first argument, the only one the
+ * subquery of distinct values provides.
+ */
+static bool agg_distinct_args_supported(Aggref *ar) {
+  TargetEntry *first;
+  ListCell *lc;
+  bool is_first = true;
+  if (ar->args == NIL)
+    return false;
+  first = (TargetEntry *)linitial(ar->args);
+  foreach (lc, ar->args) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (is_first) {
+      is_first = false;
+      continue;
+    }
+    if (!te->resjunk && (contain_var_clause((Node *)te->expr) ||
+                         contain_aggs_of_level((Node *)te->expr, 0)))
+      return false;
+    /* A junk argument is an ORDER BY key other than the arguments */
+    if (te->resjunk)
+      return false;
+  }
+  foreach (lc, ar->aggorder) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    if (first->ressortgroupref == 0 ||
+        sgc->tleSortGroupRef != first->ressortgroupref)
+      return false;
+  }
+  return true;
+}
+
 static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
   List *groupby_tes = NIL;
   ListCell *lc;
@@ -7230,8 +7295,9 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
      * them. */
     foreach (lc, list_concat(list_copy(tctx.aggs), hctx.aggs)) {
       Aggref *ar = lfirst(lc);
-      if(list_length(ar->args) != 1)
-        provsql_error("AGG(DISTINCT) with more than one argument is not supported");
+      if(!agg_distinct_args_supported(ar))
+        provsql_error("AGG(DISTINCT) with more than one argument is not "
+                      "supported, unless the others are constants");
       else {
         TargetEntry *syn = makeNode(TargetEntry);
         Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
@@ -9089,7 +9155,17 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
 
   rte->rtekind = RTE_SUBQUERY;
   rte->subquery = q;
-  rte->eref = copyObject(((RangeTblEntry *)linitial(q->rtable))->eref);
+  /* The columns of the set operation, as its target list has them now: the
+   * provsql columns of its branches are already removed from it, wherever
+   * they were, so the names and positions are no longer those of the
+   * leftmost branch. */
+  rte->eref = makeAlias("unnamed_subquery", NIL);
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    rte->eref->colnames =
+      lappend(rte->eref->colnames,
+              makeString(pstrdup(te->resname ? te->resname : "?column?")));
+  }
   rte->inFromCl = true;
 #if PG_VERSION_NUM < 160000
   // For PG_VERSION_NUM >= 160000, rte->perminfoindex==0 so no need to
@@ -9104,7 +9180,19 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
   new_query->canSetTag = true;
   new_query->rtable = list_make1(rte);
   new_query->jointree = jointree;
-  new_query->targetList = copyObject(q->targetList);
+  /* One Var per output column of the set operation, by its position there */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    TargetEntry *nte = makeTargetEntry(
+      (Expr *)makeVar(1, te->resno, exprType((Node *)te->expr),
+                      exprTypmod((Node *)te->expr),
+                      exprCollation((Node *)te->expr), 0),
+      te->resno, te->resname, te->resjunk);
+    nte->ressortgroupref = te->ressortgroupref;
+    nte->resorigtbl = te->resorigtbl;
+    nte->resorigcol = te->resorigcol;
+    new_query->targetList = lappend(new_query->targetList, nte);
+  }
 
   /* ORDER BY / LIMIT / OFFSET apply to the result of the set operation, that
    * is, after deduplication: they belong on the wrapper.  Left on the inner
@@ -9890,6 +9978,66 @@ static bool untracked_level_with_tracked_sublink_walker(Node *node,
                                 data);
 }
 
+/** @brief Context for @c count_cte_refs_walker. */
+typedef struct count_cte_refs_ctx {
+  const char *name; ///< CTE counted
+  Index depth;      ///< Levels below the query whose WITH defines it
+  int count;        ///< References found
+} count_cte_refs_ctx;
+
+/** @brief Walker: count the references to a CTE of an enclosing query. */
+static bool count_cte_refs_walker(Node *node, void *cx) {
+  count_cte_refs_ctx *ctx = (count_cte_refs_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    bool r;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+      if (rte->rtekind == RTE_CTE && !rte->self_reference &&
+          rte->ctelevelsup == ctx->depth &&
+          strcmp(rte->ctename, ctx->name) == 0)
+        ++ctx->count;
+    }
+    ++ctx->depth;
+    r = query_tree_walker(q, count_cte_refs_walker, cx, 0);
+    --ctx->depth;
+    return r;
+  }
+  return expression_tree_walker(node, count_cte_refs_walker, cx);
+}
+
+/**
+ * @brief Walker: set the reference count of every CTE to the number of its
+ *        references in the rewritten query.
+ *
+ * The rewriting copies subqueries (the arms of a lowered outer join, ...), and
+ * with them their references to the CTEs kept as CTEs.  PostgreSQL inlines a
+ * CTE referenced once, into the one reference it finds; the other copies
+ * would then refer to a CTE that has no plan.
+ */
+static bool recount_cte_refs_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    foreach (lc, q->cteList) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+      count_cte_refs_ctx ctx;
+      ctx.name = cte->ctename;
+      ctx.count = 0;
+      ctx.depth = 0; /* the bodies of the WITH are one level down, as usual */
+      count_cte_refs_walker((Node *)q, &ctx);
+      cte->cterefcount = ctx.count;
+    }
+    return query_tree_walker(q, recount_cte_refs_walker, cx, 0);
+  }
+  return expression_tree_walker(node, recount_cte_refs_walker, cx);
+}
+
 /** @brief Set when @c process_query warns of a nested scalar subquery, so that
  *  @c provsql_planner does not warn of it again. */
 static bool nested_sublink_warned = false;
@@ -10553,12 +10701,23 @@ static RangeTblEntry *oj_make_subquery_rte(Query *sub) {
   return rte;
 }
 
-/** @brief Copy an outer-join arm RTE into the range table of subquery @p sub.
+/** @brief Copy an outer-join arm RTE into the range table of subquery @p sub,
+ *  @p depth levels below @p outer.
  *  A base relation carries its permission info (PG 16+); a subquery has no
  *  direct permissions (its inner query keeps its own rteperminfos). */
 static RangeTblEntry *oj_copy_rel(Query *outer, Query *sub,
-                                  RangeTblEntry *orig) {
+                                  RangeTblEntry *orig, int depth) {
   RangeTblEntry *c = copyObject(orig);
+  /* @p sub is @p depth levels below @p outer: what the arm reads from outside
+   * itself (a CTE kept as a CTE, an outer query) is that much further up. */
+  if (c->rtekind == RTE_SUBQUERY && c->subquery != NULL)
+    IncrementVarSublevelsUp((Node *)c->subquery, depth, 1);
+  else if (c->rtekind == RTE_FUNCTION)
+    IncrementVarSublevelsUp((Node *)c->functions, depth, 1);
+  else if (c->rtekind == RTE_VALUES)
+    IncrementVarSublevelsUp((Node *)c->values_lists, depth, 1);
+  else if (c->rtekind == RTE_CTE)
+    c->ctelevelsup += depth;
 #if PG_VERSION_NUM >= 160000
   if (orig->rtekind == RTE_RELATION && orig->perminfoindex != 0) {
     RTEPermissionInfo *pi = getRTEPermissionInfo(outer->rteperminfos, orig);
@@ -10647,7 +10806,7 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
                                   RangeTblEntry *R, RangeTblEntry *S,
                                   Index R_idx, Index S_idx, oj_cols *Rc,
                                   oj_cols *Sc, Node *theta, bool select_r,
-                                  bool select_s) {
+                                  bool select_s, int depth) {
   Query *sub = makeNode(Query);
   RangeTblEntry *Rcopy, *Scopy, *jrte = makeNode(RangeTblEntry);
   JoinExpr *je = makeNode(JoinExpr);
@@ -10660,8 +10819,8 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
 
   sub->commandType = CMD_SELECT;
   sub->canSetTag = true;
-  Rcopy = oj_copy_rel(outer, sub, R);
-  Scopy = oj_copy_rel(outer, sub, S);
+  Rcopy = oj_copy_rel(outer, sub, R, depth);
+  Scopy = oj_copy_rel(outer, sub, S, depth);
 
   /* Synthetic join RTE: eref / joinaliasvars / joinleftcols / joinrightcols
    * kept consistent so the ruleutils deparser does not segfault. */
@@ -10697,6 +10856,7 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
   rctx.from[0] = R_idx; rctx.to[0] = 1;
   rctx.from[1] = S_idx; rctx.to[1] = 2;
   theta2 = oj_renum_mut(copyObject(theta), &rctx);
+  IncrementVarSublevelsUp(theta2, depth, 1);
 
   lr->rtindex = 1;
   rr->rtindex = 2;
@@ -10731,7 +10891,7 @@ static Query *oj_build_join_query(const constants_t *constants, Query *outer,
 
 /** @brief Build the plain-scan subquery @c "SELECT R.cols FROM R". */
 static Query *oj_build_rel_query(const constants_t *constants, Query *outer,
-                                 RangeTblEntry *R, oj_cols *Rc) {
+                                 RangeTblEntry *R, oj_cols *Rc, int depth) {
   Query *sub = makeNode(Query);
   RangeTblEntry *Rcopy;
   RangeTblRef *rtr = makeNode(RangeTblRef);
@@ -10741,7 +10901,7 @@ static Query *oj_build_rel_query(const constants_t *constants, Query *outer,
 
   sub->commandType = CMD_SELECT;
   sub->canSetTag = true;
-  Rcopy = oj_copy_rel(outer, sub, R);
+  Rcopy = oj_copy_rel(outer, sub, R, depth);
   sub->rtable = list_make1(Rcopy);
   rtr->rtindex = 1;
   fe->fromlist = list_make1(rtr);
@@ -10770,10 +10930,12 @@ static Query *oj_build_diff(const constants_t *constants, Query *outer,
                             bool keep_left) {
   RangeTblEntry *kept_rel = keep_left ? R : S;
   oj_cols *Kc = keep_left ? Rc : Sc;
-  Query *ls = oj_build_rel_query(constants, outer, kept_rel, Kc);
+  /* Q (the union, in place of the join) ⊃ A (the antijoin arm) ⊃ D (this
+   * difference) ⊃ its two arms: four levels below the outer query. */
+  Query *ls = oj_build_rel_query(constants, outer, kept_rel, Kc, 4);
   /* Matched-projection arm projects the kept side's columns only. */
   Query *mp = oj_build_join_query(constants, outer, R, S, R_idx, S_idx, Rc, Sc,
-                                  theta, keep_left, !keep_left);
+                                  theta, keep_left, !keep_left, 4);
   RangeTblEntry *ls_rte = oj_make_subquery_rte(ls);
   RangeTblEntry *mp_rte = oj_make_subquery_rte(mp);
   Query *D = makeNode(Query);
@@ -10908,8 +11070,10 @@ static Query *oj_build_union(const constants_t *constants, Query *outer,
   int i, pos = 0, k;
 
   /* Matched arm (R ⋈ S), then the requested antijoin branches. */
+  /* Q is in place of the join, one level below the outer query; its arms
+   * two levels below. */
   arms = lappend(arms, oj_build_join_query(constants, outer, R, S, R_idx,
-                                           S_idx, Rc, Sc, theta, true, true));
+                                           S_idx, Rc, Sc, theta, true, true, 2));
   if (jointype == JOIN_LEFT || jointype == JOIN_FULL)
     arms = lappend(arms, oj_build_antijoin(constants, outer, R, S, R_idx,
                                            S_idx, Rc, Sc, theta, true));
@@ -12036,6 +12200,28 @@ static bool output_provably_not_null(const Query *sub, AttrNumber attno)
   return expr_provably_not_null(e, sub, 0);
 }
 
+/** @brief Does @p type have a default equality operator? */
+static bool type_has_equality(Oid type) {
+  return OidIsValid(lookup_type_cache(type, TYPECACHE_EQ_OPR)->eq_opr);
+}
+
+/**
+ * @brief @p e as text, through its output function.
+ *
+ * Grouping and matching on a column whose type has no equality (@c json,
+ * @c xml, @c point...) are done on its text: the copies of a value that the
+ * rewriting compares come from the same row, hence have the same text.
+ */
+static Expr *expr_as_text(Expr *e) {
+  CoerceViaIO *c = makeNode(CoerceViaIO);
+  c->arg = e;
+  c->resulttype = TEXTOID;
+  c->resultcollid = DEFAULT_COLLATION_OID;
+  c->coerceformat = COERCE_IMPLICIT_CAST;
+  c->location = -1;
+  return (Expr *)c;
+}
+
 /**
  * @brief Build a comparison of @p l and @p r under which two NULLs are equal.
  *
@@ -12064,6 +12250,10 @@ static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
   Operator opInfo;
   Form_pg_operator opform;
   OpExpr *oe;
+
+  if (!type_has_equality(type))
+    return make_null_safe_equality(expr_as_text(l), expr_as_text(r), TEXTOID,
+                                   DEFAULT_COLLATION_OID, nullable);
 
   if (nullable && !type_is_array(type)) {
     TypeCacheEntry *tce = lookup_type_cache(type, TYPECACHE_EQ_OPR);
@@ -13792,7 +13982,15 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
           }
         }
       }
-      if (gte == NULL) {
+      if (!type_has_equality(Rc.type[i])) {
+        /* No equality: group by its text, which determines it */
+        Var *v = makeVar(R_idx, Rc.attno[i], Rc.type[i], Rc.typmod[i],
+                         Rc.coll[i], 0);
+        gte = makeTargetEntry(expr_as_text((Expr *)v),
+                              list_length(q->targetList) + 1,
+                              pstrdup(Rc.name[i]), true /* resjunk */);
+        q->targetList = lappend(q->targetList, gte);
+      } else if (gte == NULL) {
         Var *v = makeVar(R_idx, Rc.attno[i], Rc.type[i], Rc.typmod[i],
                          Rc.coll[i], 0);
         gte = makeTargetEntry((Expr *)v, list_length(q->targetList) + 1,
@@ -13803,8 +14001,9 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
         gte->ressortgroupref = ++sgref;
       sgc = makeNode(SortGroupClause);
       sgc->tleSortGroupRef = gte->ressortgroupref;
-      get_sort_group_operators(Rc.type[i], false, true, false, &sgc->sortop,
-                               &sgc->eqop, NULL, &sgc->hashable);
+      get_sort_group_operators(exprType((Node *)gte->expr), false, true, false,
+                               &sgc->sortop, &sgc->eqop, NULL,
+                               &sgc->hashable);
       q->groupClause = lappend(q->groupClause, sgc);
     }
   }
@@ -13917,7 +14116,7 @@ static void group_set_difference_right_arm(const constants_t *constants,
   RangeTblEntry *w_rte;
   RangeTblRef *rtr;
   FromExpr *fe;
-  List *tl = NIL;
+  List *tl = NIL, *keys = NIL;
   ListCell *lc;
   int colno = 0, sgref = 0;
   bool any_group = false;
@@ -13975,15 +14174,29 @@ static void group_set_difference_right_arm(const constants_t *constants,
                           te->resname ? pstrdup(te->resname) : NULL, false);
 
     /* Group by every column (a UUID provsql column would already have been
-     * rejected upstream; raw arms expose only value columns here). */
+     * rejected upstream; raw arms expose only value columns here), by its
+     * text when its type has no equality: the column itself is then not a
+     * key, but its text determines it. */
+    tl = lappend(tl, nte);
     sgc = makeNode(SortGroupClause);
-    sgc->tleSortGroupRef = nte->ressortgroupref = ++sgref;
+    if (!type_has_equality(coltype)) {
+      /* A junk entry, after the columns, whose positions it must not shift */
+      TargetEntry *kte = makeTargetEntry(expr_as_text((Expr *)copyObject(v)),
+                                         0, NULL, true);
+      keys = lappend(keys, kte);
+      sgc->tleSortGroupRef = kte->ressortgroupref = ++sgref;
+      coltype = TEXTOID;
+    } else
+      sgc->tleSortGroupRef = nte->ressortgroupref = ++sgref;
     get_sort_group_operators(coltype, false, true, false, &sgc->sortop,
                              &sgc->eqop, NULL, &sgc->hashable);
     G->groupClause = lappend(G->groupClause, sgc);
     any_group = true;
-
-    tl = lappend(tl, nte);
+  }
+  foreach (lc, keys) {
+    TargetEntry *kte = (TargetEntry *)lfirst(lc);
+    kte->resno = list_length(tl) + 1;
+    tl = lappend(tl, kte);
   }
   G->targetList = tl;
 
@@ -18489,9 +18702,18 @@ static Query *process_query(const constants_t *constants, Query *q,
             provsql_error("Non-ALL set operations (UNION, EXCEPT) on "
                           "aggregate results not supported");
         }
-        q = rewrite_non_all_into_external_group_by(q);
-        return process_query(constants, q, removed, wrap_root, top_level,
-                             in_boolean_rewrite, inv_ctx);
+        {
+          /* The provsql columns were removed from q above: that is what the
+           * caller has to know, not what the wrapper, which has none,
+           * removes. */
+          bool *removed_here = *removed;
+          Query *result;
+          q = rewrite_non_all_into_external_group_by(q);
+          result = process_query(constants, q, removed, wrap_root, top_level,
+                                 in_boolean_rewrite, inv_ctx);
+          *removed = removed_here;
+          return result;
+        }
       }
     }
 
@@ -19439,6 +19661,7 @@ static PlannedStmt *provsql_planner(Query *q,
 
       if (new_query != NULL)
         q = new_query;
+      recount_cte_refs_walker((Node *)q, NULL);
 
       if (provsql_active && provsql_executor_depth == 0 &&
           !untracked_sublink_warned && !nested_sublink_warned &&

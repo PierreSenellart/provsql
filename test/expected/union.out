@@ -15,3 +15,15 @@ remove_provenance
 formula
 (Dave ⊕ Dave ⊕ Ellen ⊕ John ⊕ Magdalen ⊕ Magdalen ⊕ Nancy ⊕ Nancy ⊕ Paul ⊕ Susan)
 (1 row)
+remove_provenance
+
+(1 row)
+id|name
+1|John
+2|Paul
+3|Dave
+4|Ellen
+5|Magdalen
+6|Nancy
+7|Susan
+(7 rows)

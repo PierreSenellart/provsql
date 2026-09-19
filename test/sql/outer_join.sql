@@ -225,3 +225,33 @@ SELECT remove_provenance('oj_t');
 SELECT 'EXISTS left' AS q, id, w FROM oj_t WHERE holds ORDER BY id, w;
 DROP TABLE oj_t;
 DROP TABLE oj_da, oj_db, oj_da_plain, oj_db_plain;
+
+-- A json column on the preserved side: json has no equality, the lowering
+-- matches it on its text.
+CREATE TABLE oj_j(id int, data jsonb);
+INSERT INTO oj_j VALUES (1, '{"c": [2, 3]}'), (2, '{"c": [4]}'), (3, '{"c": []}');
+SELECT add_provenance('oj_j');
+CREATE TABLE oj_t AS
+  SELECT x1.id, x1.child::text AS child, x2.id AS id2,
+         present(provenance()) AS present
+  FROM (SELECT *, json_array_elements((data->>'c')::json) child FROM oj_j) x1
+  LEFT JOIN oj_j x2 ON x1.child::text::int = x2.id;
+SELECT remove_provenance('oj_t');
+SELECT * FROM oj_t ORDER BY id, child, id2;
+DROP TABLE oj_t;
+DROP TABLE oj_j;
+
+-- The preserved side reads a CTE kept as a CTE (untracked): its copies in the
+-- arms of the lowering still find it.
+CREATE TABLE oj_c(l int, d int);
+INSERT INTO oj_c VALUES (1, 1), (1, 2);
+SELECT add_provenance('oj_c');
+CREATE TABLE oj_t AS
+  WITH c AS (SELECT generate_series(1, 3) AS x)
+  SELECT t.l, t.x, m2.d, present(provenance()) AS present
+  FROM (SELECT m.l, c.x FROM c JOIN oj_c m ON c.x = m.d) t
+  LEFT JOIN oj_c m2 ON m2.l = t.l AND m2.d = t.x + 1;
+SELECT remove_provenance('oj_t');
+SELECT * FROM oj_t ORDER BY x, d;
+DROP TABLE oj_t;
+DROP TABLE oj_c;

@@ -102,3 +102,16 @@ DROP TABLE cte_foo;
 -- then decides; before, the CTE was left unresolved).
 WITH c AS (SELECT id FROM personnel WHERE city = 'Paris')
 SELECT name FROM personnel WHERE id IN (SELECT id FROM c);
+
+-- A CTE inlined in another CTE's body, itself inlined, reads a CTE kept as a
+-- CTE (untracked): the reference follows it down.
+CREATE TABLE cte_result_kept AS
+  WITH k AS (SELECT 1 AS a UNION SELECT 2),
+       r AS (SELECT city, count(*) AS n FROM personnel, k WHERE k.a = 1
+             GROUP BY city),
+       r2 AS (SELECT city FROM r)
+  SELECT city, sr_counting(provenance(), 'personnel_count') AS counting
+  FROM r2;
+SELECT remove_provenance('cte_result_kept');
+SELECT * FROM cte_result_kept ORDER BY city;
+DROP TABLE cte_result_kept;

@@ -45,3 +45,24 @@ remove_provenance
 d|n|m
 -2 (*)|5 (*)|7 (*)
 (1 row)
+remove_provenance
+
+(1 row)
+city|s
+Berlin|Analyst, Field agent (*)
+New York|Director, Janitor (*)
+Paris|Analyst, Double agent, HR (*)
+(3 rows)
+ERROR:  ProvSQL: AGG(DISTINCT) with more than one argument is not supported, unless the others are constants
+remove_provenance
+
+(1 row)
+id|n
+1|1
+2|1
+3|1
+4|1
+5|1
+6|1
+7|1
+(7 rows)
