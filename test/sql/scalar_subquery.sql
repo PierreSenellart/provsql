@@ -1433,3 +1433,40 @@ SELECT remove_provenance('ssn_r');
 SELECT * FROM ssn_r ORDER BY q, id;
 DROP TABLE ssn_r;
 DROP TABLE ssn, ssm, ssn_m;
+
+-- Correlated aggregate subqueries in the target list: an aggregate of a
+-- constant (count(1), sum(1)) reads the matched rows only (0 and NULL over
+-- none, as in SQL); several of them, or one next to a window or a GROUP BY,
+-- are computed in a subquery.
+CREATE TABLE sst(id int, parentid int, u int);
+INSERT INTO sst VALUES (1, NULL, 1), (2, 1, 2), (3, 1, 1), (4, 2, 2);
+CREATE TABLE ssv(pid int, t int);
+INSERT INTO ssv VALUES (1, 10), (2, 4), (2, 10);
+SELECT add_provenance('sst');
+SELECT add_provenance('ssv');
+CREATE TABLE sst_r AS
+  SELECT a.id,
+         (SELECT sum(1) FROM ssv WHERE ssv.pid = a.id AND t = 10) AS s1,
+         (SELECT count(1) FROM ssv WHERE ssv.pid = a.id) AS c1,
+         (SELECT count(*) FROM sst c WHERE c.parentid = a.id) AS children,
+         (SELECT max(t) FROM ssv WHERE ssv.pid = a.id) + 1 AS m
+  FROM sst a;
+SELECT remove_provenance('sst_r');
+SELECT id, s1::text AS s1, c1::text AS c1, children::text AS children,
+       m::text AS m
+FROM sst_r ORDER BY id;
+DROP TABLE sst_r;
+CREATE TABLE sst_r AS
+  SELECT row_number() OVER (ORDER BY a.id) AS rn, a.id,
+         (SELECT count(*) FROM sst c WHERE c.parentid = a.id) AS children
+  FROM sst a;
+SELECT remove_provenance('sst_r');
+SELECT rn::text AS rn, id, children::text AS children FROM sst_r ORDER BY id;
+DROP TABLE sst_r;
+CREATE TABLE sst_r AS
+  SELECT a.u, count(*) AS n, (SELECT count(*) FROM ssv WHERE ssv.pid = a.u) AS c
+  FROM sst a GROUP BY a.u;
+SELECT remove_provenance('sst_r');
+SELECT u, n::text AS n, c::text AS c FROM sst_r ORDER BY u;
+DROP TABLE sst_r;
+DROP TABLE sst, ssv;

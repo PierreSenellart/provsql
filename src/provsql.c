@@ -236,6 +236,8 @@ static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
 static bool output_provably_not_null(const Query *sub, AttrNumber attno);
 static RangeTblEntry *oj_make_subquery_rte(Query *sub);
+static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
+                                     Node *e);
 static bool query_has_own_sublinks(Query *q);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
 static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
@@ -10687,6 +10689,17 @@ static Expr *except_arm_column(RangeTblEntry *rte, Var *arg, Var *v) {
                                        COERCE_IMPLICIT_CAST, -1);
 }
 
+/** @brief Whether column @p attno of the EXCEPT arm @p rte is the result of
+ *  an aggregate (@c expr_is_aggregate_result): not compared, the other
+ *  columns determining it. */
+static bool except_column_is_aggregate_result(const constants_t *constants,
+                                              RangeTblEntry *rte,
+                                              AttrNumber attno) {
+  TargetEntry *te = get_tle_by_resno(rte->subquery->targetList, attno);
+  return te != NULL &&
+         expr_is_aggregate_result(constants, rte->subquery, (Node *)te->expr);
+}
+
 /**
  * @brief Rewrite a difference node into a LEFT JOIN with monus provenance.
  *
@@ -10739,7 +10752,14 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
 
     v = (Var *)te->expr;
 
-    if (v->vartype != constants->OID_TYPE_UUID) {
+    if (v->vartype != constants->OID_TYPE_UUID &&
+        !(IsA(setOps->larg, RangeTblRef) &&
+          rt_fetch(((RangeTblRef *)setOps->larg)->rtindex, q->rtable)->rtekind ==
+            RTE_SUBQUERY &&
+          except_column_is_aggregate_result(
+            constants,
+            rt_fetch(((RangeTblRef *)setOps->larg)->rtindex, q->rtable),
+            attno))) {
       /* SQL's EXCEPT matches tuples syntactically (two NULLs are the same
        * value): a plain "=" never matches a NULL row and would leave NULL
        * rows of the left side unremoved.  "=" is enough when the column
@@ -14580,6 +14600,24 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
       SortGroupClause *sgc;
       ListCell *lc2;
 
+      /* An aggregate result of R (a subquery computed by an earlier
+       * split, a grouped subquery) is a function of R's other columns,
+       * the ones it is computed from: no key, and no need of one. */
+      if (Rc.type[i] == constants->OID_TYPE_AGG_TOKEN)
+        continue;
+      if (R_rte->rtekind == RTE_SUBQUERY && R_rte->subquery != NULL) {
+        /* Not rewritten yet: such a column is still an aggregate, or a
+         * subquery expression, of the subquery */
+        TargetEntry *rte_te =
+          get_tle_by_resno(R_rte->subquery->targetList, Rc.attno[i]);
+        if (rte_te != NULL &&
+            ((R_rte->subquery->hasAggs &&
+              contain_aggs_of_level((Node *)rte_te->expr, 0)) ||
+             expr_is_aggregate_result(constants, R_rte->subquery,
+                                      (Node *)rte_te->expr)))
+          continue;
+      }
+
       /* Reuse an existing target entry that already projects this R column. */
       foreach (lc2, q->targetList) {
         TargetEntry *te = (TargetEntry *)lfirst(lc2);
@@ -14692,6 +14730,47 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
 }
 
 /**
+ * @brief Whether @p e, an expression of @p q, is the result of an aggregate:
+ *        an @c agg_token, or, not rewritten yet, an aggregate of a subquery
+ *        it reads or a subquery expression, through subqueries and joins.
+ *
+ * Such a value is a function of the other columns of its row (the grouping
+ * keys, the columns its subquery reads): matching or grouping rows on those
+ * suffices, and on it would compare aggregates.
+ */
+static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
+                                     Node *e) {
+  e = strip_implicit_coercions(e);
+  if (e == NULL)
+    return false;
+  if (exprType(e) == constants->OID_TYPE_AGG_TOKEN)
+    return true;
+  if (IsA(e, SubLink) && ((SubLink *)e)->subLinkType == EXPR_SUBLINK)
+    return true;
+  if (IsA(e, Var) && ((Var *)e)->varlevelsup == 0 && ((Var *)e)->varattno > 0 &&
+      ((Var *)e)->varno <= (Index)list_length(q->rtable)) {
+    Var *v = (Var *)e;
+    RangeTblEntry *rte = rt_fetch(v->varno, q->rtable);
+    if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL) {
+      TargetEntry *te = get_tle_by_resno(rte->subquery->targetList,
+                                         v->varattno);
+      if (te == NULL)
+        return false;
+      if (rte->subquery->hasAggs &&
+          contain_aggs_of_level((Node *)te->expr, 0))
+        return true;
+      return expr_is_aggregate_result(constants, rte->subquery,
+                                      (Node *)te->expr);
+    }
+    if (rte->rtekind == RTE_JOIN &&
+        v->varattno <= list_length(rte->joinaliasvars))
+      return expr_is_aggregate_result(
+        constants, q, (Node *)list_nth(rte->joinaliasvars, v->varattno - 1));
+  }
+  return false;
+}
+
+/**
  * @brief Group the right-hand arm of a set difference by all its columns so
  *        the per-tuple right provenances ⊕-combine before the monus.
  *
@@ -14732,8 +14811,6 @@ static void group_set_difference_right_arm(const constants_t *constants,
   ListCell *lc;
   int colno = 0, sgref = 0;
   bool any_group = false;
-
-  (void)constants;
 
   if (q->setOperations == NULL || !IsA(q->setOperations, SetOperationStmt))
     return;
@@ -14790,6 +14867,9 @@ static void group_set_difference_right_arm(const constants_t *constants,
      * text when its type has no equality: the column itself is then not a
      * key, but its text determines it. */
     tl = lappend(tl, nte);
+    /* An aggregate result is a function of the other columns: no key */
+    if (expr_is_aggregate_result(constants, origB, (Node *)te->expr))
+      continue;
     sgc = makeNode(SortGroupClause);
     if (!type_has_equality(coltype)) {
       /* A junk entry, after the columns, whose positions it must not shift */
@@ -18132,6 +18212,262 @@ static bool conjunct_tests_tracked_sublink(const constants_t *constants,
   return tctx.found;
 }
 
+/** @brief Context for @c targetlist_sublink_mutator. */
+typedef struct tl_sublink_ctx {
+  const constants_t *constants;
+  pull_up_vars_deep_ctx pull;  ///< The subquery, and the Vars it exposes
+  bool take_all;               ///< Move every subquery, not just the first
+  bool taken;                  ///< One was moved already
+  bool agg_bodies_only;        ///< Only move a subquery with an aggregate body
+  List *keys;                  ///< The grouping expressions (grouped query)
+} tl_sublink_ctx;
+
+/** @brief Walker: count the scalar subquery expressions with an aggregate
+ *  body in @p node (not in their bodies). */
+static bool count_agg_body_sublinks_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (sl->subLinkType == EXPR_SUBLINK && IsA(sl->subselect, Query) &&
+        ((Query *)sl->subselect)->hasAggs)
+      ++*(int *)cx;
+    return count_agg_body_sublinks_walker(sl->testexpr, cx);
+  }
+  return expression_tree_walker(node, count_agg_body_sublinks_walker, cx);
+}
+
+/** @brief The number of scalar subquery expressions with an aggregate body in
+ *  @p node. */
+static int count_agg_body_sublinks(Node *node) {
+  int n = 0;
+  count_agg_body_sublinks_walker(node, &n);
+  return n;
+}
+
+/** @brief Walker context for @c outer_refs_are_keys_walker. */
+typedef struct outer_refs_ctx {
+  List *keys;    ///< Grouping expressions of the query the refs point to
+  Index depth;   ///< Levels below that query
+  bool ok;       ///< Cleared on a reference to something else
+} outer_refs_ctx;
+
+/** @brief Walker: every Var of the query @c depth levels up is one of its
+ *  grouping expressions, and no aggregate of that query is read. */
+static bool outer_refs_are_keys_walker(Node *node, void *cx) {
+  outer_refs_ctx *ctx = (outer_refs_ctx *)cx;
+  if (node == NULL || !ctx->ok)
+    return false;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == ctx->depth) {
+    Var *v = (Var *)copyObject(node);
+    ListCell *lc;
+    bool found = false;
+    v->varlevelsup = 0;
+    foreach (lc, ctx->keys)
+      if (equal(lfirst(lc), v))
+        found = true;
+    if (!found)
+      ctx->ok = false;
+    return false;
+  }
+  if (IsA(node, Aggref) && ((Aggref *)node)->agglevelsup == ctx->depth) {
+    ctx->ok = false;
+    return false;
+  }
+  if (IsA(node, Query)) {
+    bool r;
+    ++ctx->depth;
+    r = query_tree_walker((Query *)node, outer_refs_are_keys_walker, cx, 0);
+    --ctx->depth;
+    return r;
+  }
+  return expression_tree_walker(node, outer_refs_are_keys_walker, cx);
+}
+
+/** @brief Walker: expose in @c ctx->base.inner the Vars of its level that
+ *  the subquery expressions in @p node read (@c ctx->depth levels up from
+ *  where the walk is). */
+static bool expose_outer_refs_walker(Node *node, void *cx) {
+  pull_up_vars_deep_ctx *ctx = (pull_up_vars_deep_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var) && ctx->depth > 0 &&
+      ((Var *)node)->varlevelsup == ctx->depth) {
+    Var *v = (Var *)copyObject(node);
+    v->varlevelsup = 0;
+    (void)pull_up_vars_mutator((Node *)v, &ctx->base);
+    return false;
+  }
+  if (IsA(node, Query)) {
+    bool r;
+    ++ctx->depth;
+    r = query_tree_walker((Query *)node, expose_outer_refs_walker, cx, 0);
+    --ctx->depth;
+    return r;
+  }
+  return expression_tree_walker(node, expose_outer_refs_walker, cx);
+}
+
+/** @brief Mutator: the subquery expressions to compute in the subquery become
+ *  references to its columns; the Vars of the query, in the target list and
+ *  in the subqueries left, references to the columns exposing them. */
+static Node *targetlist_sublink_mutator(Node *node, void *cx) {
+  tl_sublink_ctx *ctx = (tl_sublink_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, SubLink) && ((SubLink *)node)->subLinkType == EXPR_SUBLINK &&
+      (ctx->take_all || !ctx->taken) &&
+      (!ctx->agg_bodies_only ||
+       (IsA(((SubLink *)node)->subselect, Query) &&
+        ((Query *)((SubLink *)node)->subselect)->hasAggs)) &&
+      conjunct_tests_tracked_sublink(ctx->constants, node)) {
+    bool movable = true;
+    if (ctx->keys != NIL) {
+      outer_refs_ctx octx;
+      octx.keys = ctx->keys;
+      octx.depth = 0;
+      octx.ok = true;
+      outer_refs_are_keys_walker(node, &octx);
+      movable = octx.ok;
+    }
+    if (movable) {
+      Query *inner = ctx->pull.base.inner;
+      AttrNumber resno;
+      /* The columns it reads are exposed too: the value is a function of
+       * them, which a later decorrelation over the subquery relies on */
+      expose_outer_refs_walker(node, &ctx->pull);
+      resno = list_length(inner->targetList) + 1;
+      inner->targetList = lappend(
+        inner->targetList,
+        makeTargetEntry((Expr *)copyObject(node), resno,
+                        pstrdup("?column?"), false));
+      ctx->taken = true;
+      return (Node *)makeVar(1, resno, exprType(node), exprTypmod(node),
+                             exprCollation(node), 0);
+    }
+  }
+  if (IsA(node, SubLink))
+    return pull_up_vars_deep_mutator(node, &ctx->pull);
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == 0)
+    return pull_up_vars_mutator(node, &ctx->pull.base);
+  return expression_tree_mutator(node, targetlist_sublink_mutator, cx);
+}
+
+/**
+ * @brief Compute the subquery expressions of a target list in a subquery.
+ *
+ * The rewriting of a scalar subquery handles one of them in a query that
+ * keeps its input rows.  With several, or next to aggregates, a window or a
+ * @c DISTINCT, the join and the @c WHERE move into a subquery that computes
+ * them as columns (the first one only when the query keeps its rows; the
+ * enclosing query is then split again), and the rest reads those columns.
+ * In a grouped query, a subquery moves if the columns of the query it reads
+ * are grouping expressions: its value is the same for the rows of a group.
+ * Returns @c NULL, leaving @p q alone, when there is nothing to do; not for a
+ * query with a @c WITH, or with a subquery in its @c HAVING.
+ */
+static Query *split_targetlist_sublinks(const constants_t *constants,
+                                        Query *q) {
+  tl_sublink_ctx ctx;
+  Query *inner;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  ListCell *lc;
+  List *colnames = NIL;
+  int n = 0;
+  bool aggregated;
+
+  if (q->commandType != CMD_SELECT || q->setOperations != NULL ||
+      q->cteList != NIL || q->rowMarks != NIL || q->groupingSets != NIL ||
+      q->jointree == NULL || q->rtable == NIL ||
+      checkExprHasSubLink(q->havingQual))
+    return NULL;
+  aggregated = q->hasAggs || q->groupClause != NIL;
+  /* An aggregation without GROUP BY reads no column of its rows outside
+   * its aggregates: scalar_agg_over_uncorrelated_sublinks handles it */
+  if (aggregated && q->groupClause == NIL)
+    return NULL;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (checkExprHasSubLink((Node *)te->expr) &&
+        conjunct_tests_tracked_sublink(constants, (Node *)te->expr))
+      n += count_agg_body_sublinks((Node *)te->expr);
+  }
+  ctx.agg_bodies_only = !aggregated && !q->hasWindowFuncs &&
+                        q->distinctClause == NIL;
+  if (ctx.agg_bodies_only) {
+    /* The rows kept: several value subqueries on one body are decorrelated
+     * together already; two with aggregate bodies are not */
+    if (n < 2)
+      return NULL;
+  } else if (!checkExprHasSubLink((Node *)q->targetList))
+    return NULL;
+
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(q);
+#endif
+
+  inner = makeNode(Query);
+  inner->commandType = CMD_SELECT;
+  inner->canSetTag = true;
+  inner->rtable = q->rtable;
+#if PG_VERSION_NUM >= 160000
+  inner->rteperminfos = q->rteperminfos;
+#endif
+  inner->jointree = q->jointree;
+  inner->hasSubLinks = true;
+
+  ctx.constants = constants;
+  ctx.pull.base.inner = inner;
+  ctx.pull.base.pulled = NIL;
+  ctx.pull.base.resnos = NIL;
+  ctx.pull.depth = 0;
+  ctx.take_all = aggregated || q->hasWindowFuncs || q->distinctClause != NIL;
+  ctx.taken = false;
+  ctx.keys = NIL;
+  if (aggregated)
+    foreach (lc, q->groupClause)
+      ctx.keys = lappend(ctx.keys,
+                         get_sortgroupclause_expr((SortGroupClause *)lfirst(lc),
+                                                  q->targetList));
+
+  {
+    List *new_tl = NIL;
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)copyObject(lfirst(lc));
+      te->expr = (Expr *)targetlist_sublink_mutator((Node *)te->expr, &ctx);
+      new_tl = lappend(new_tl, te);
+    }
+    if (!ctx.taken)
+      return NULL; /* nothing movable: q untouched so far */
+    q->targetList = new_tl;
+  }
+  q->havingQual = pull_up_vars_mutator(q->havingQual, &ctx.pull.base);
+  foreach (lc, inner->targetList)
+    colnames = lappend(colnames, makeString(pstrdup(
+      ((TargetEntry *)lfirst(lc))->resname)));
+
+  IncrementVarSublevelsUp((Node *)inner, 1, 1);
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = inner;
+  rte->eref = makeAlias("computed", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+#if PG_VERSION_NUM >= 160000
+  q->rteperminfos = NIL;
+#endif
+  q->rtable = list_make1(rte);
+  q->jointree = makeFromExpr(list_make1(rtr), NULL);
+  q->hasSubLinks = checkExprHasSubLink((Node *)q->targetList);
+  return q;
+}
+
 /**
  * @brief Test the subqueries of a @c WHERE one after the other: move all but
  *        the first into an enclosing query.
@@ -19482,6 +19818,10 @@ static Query *process_query(const constants_t *constants, Query *q,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
       split_aggregation_over_sublinks(constants, q) != NULL)
+    return process_query(constants, q, removed, wrap_root, top_level,
+                         in_boolean_rewrite, NULL);
+  if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
+      split_targetlist_sublinks(constants, q) != NULL)
     return process_query(constants, q, removed, wrap_root, top_level,
                          in_boolean_rewrite, NULL);
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
