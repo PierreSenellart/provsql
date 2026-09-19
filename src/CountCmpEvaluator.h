@@ -37,10 +37,13 @@
  * probability path.  Like @c runAnalyticEvaluator, the pass runs
  * inside @c probability_evaluate.cpp, not at load time.
  *
- * Empty-group semantics mirror @c count_enum and SQL : worlds with
- * zero present children are excluded.  In particular the
- * "all-absent" mass @c dp[N][0] is never included regardless of
- * operator.
+ * Empty-group semantics mirror @c count_enum and SQL : for a grouped
+ * aggregate, worlds with zero present children are excluded (an empty
+ * group is no row), so the "all-absent" mass @c dp[N][0] is not
+ * included.  For a scalar aggregate (@c PROVSQL_AGG_SCALAR_FLAG: no
+ * GROUP BY, or a window frame that may exclude its current row, as for
+ * ranks) the empty world is real, and its mass is added when
+ * @c 0 @c op @c C holds.
  */
 #ifndef PROVSQL_COUNT_CMP_EVALUATOR_H
 #define PROVSQL_COUNT_CMP_EVALUATOR_H

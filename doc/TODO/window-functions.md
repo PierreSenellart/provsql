@@ -285,5 +285,11 @@ A first version can take the quadratic form, with the documentation saying so.
 2. Linear-size circuits for running aggregates: worth the change in the
    evaluators from the start, or only once the quadratic form has shown its
    limits? For a top-k (`LIMIT k`, `rank() <= k`), a circuit of `O(n·k)` gates,
-   "exactly j of the first i rows are present" for `j < k`, is deterministic and
-   decomposable, and would replace the quadratic prefix counts.
+   "exactly j of the first i rows are present" for `j < k`, would replace the
+   quadratic prefix counts. It is deterministic, and decomposable only when the
+   annotations of the rows share no input (a top-k directly over a
+   tuple-independent table); after a join, it is a polynomial circuit whose
+   probability still needs knowledge compilation. In absorptive semirings
+   where ⊗ distributes over ⊖, the same size is reached in the semiring itself,
+   through the sums S_C of the worlds of size C and their include/exclude
+   recurrence (`SC_recurrence`, `atMost_eq_S_monus_S` in the Lean library).
