@@ -227,7 +227,10 @@ part is a constant; ProvSQL says which part in a ``WARNING``:
   nested in an expression, a subquery in a query over no tracked
   relation);
 * an ``ORDER BY … LIMIT`` that is not read in every world (see
-  :ref:`limit`), and a ``LIMIT`` in a subquery.
+  :ref:`limit`), and a ``LIMIT`` in a subquery;
+* an aggregate result read as a plain value by a function, an operator or
+  a comparison that ProvSQL does not track (``round(avg(x))``,
+  ``json_build_object('n', count(*))``, see :doc:`aggregation`).
 
 When the part reads only relations that the rest of the statement does
 not track, the result is the provenance of the statement with those
@@ -238,7 +241,8 @@ setting :ref:`provsql.implicit_freeze <provsql-implicit-freeze>` to
 ``'error'`` refuses the query instead.
 
 Marking the part with :sqlfunc:`plain` says that plain SQL is meant, and
-silences the warning: ``plain((SELECT max(x) FROM t))``,
+silences the warning (for an aggregate result, an explicit cast does, as
+``count(*)::numeric``, with a warning that its provenance is lost): ``plain((SELECT max(x) FROM t))``,
 ``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``:
 
 .. code-block:: postgresql

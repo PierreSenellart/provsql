@@ -91,9 +91,14 @@ its internal ``agg_token`` representation back to the original aggregate
 return type (e.g., ``bigint`` for ``COUNT``, ``numeric`` for ``AVG``,
 ``boolean`` for ``bool_or`` read as a condition, as in
 ``CASE WHEN bool_or(x) THEN … END``).
-A warning is emitted to indicate that the provenance information is lost
-in the conversion. The provenance of the aggregate group itself is still
-tracked in the ``provsql`` column.
+The value is then evaluated as plain SQL, on the data as it is (see
+:ref:`plain-sql`): the planner emits one warning for the statement, naming a
+relation it tracks, and :ref:`provsql.implicit_freeze
+<provsql-implicit-freeze>` set to ``'error'`` refuses the query. An explicit
+cast (``cnt::numeric``) says that the plain value is meant: it still warns
+that the provenance information is lost in the conversion, but it is never
+refused. The provenance of the aggregate group itself is still tracked in
+the ``provsql`` column.
 
 Window functions over aggregate results (e.g. ``SUM(cnt) OVER ()``)
 execute but are **not** provenance-aware: the aggregate argument is cast

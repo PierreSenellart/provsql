@@ -111,8 +111,9 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     of the statement tracks the same relations. ``'warn'`` emits a
     ``WARNING`` naming such a relation; ``'error'`` refuses the query
     (SQLSTATE ``0A000``, ``feature_not_supported``). A
-    part that reads only relations the rest does not track, or that is
-    marked with :sqlfunc:`plain`, is never refused.
+    part that reads only relations the rest does not track, that is
+    marked with :sqlfunc:`plain`, or an aggregate result read through an
+    explicit cast (``count(*)::numeric``), is never refused.
 
 .. _provsql-classify-top-level:
 

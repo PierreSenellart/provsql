@@ -2304,6 +2304,15 @@ CREATE FUNCTION agg_token_plain_text(agg_token)
   RETURNS text
   AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Value of an agg_token as text, NULL for a NULL value, without the
+ *  provenance-loss warning of the public casts: the value of an aggregate
+ *  result read as a plain value where ProvSQL casts it (in a function, an
+ *  operator, a comparison), which the planner reports once as evaluated as
+ *  plain SQL (internal use). */
+CREATE FUNCTION agg_token_frozen_value(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 -- ----------------------------------------------------------------------
 -- 6m. expected / moment of AVG conditioned on its group existing take the
 --     exact route, as the unconditional moment does.

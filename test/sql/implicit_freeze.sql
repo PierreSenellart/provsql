@@ -66,6 +66,16 @@ SET provsql.active = off;
 SELECT count(*) AS n FROM plain(NULL::if_b);
 RESET provsql.active;
 
+-- An aggregate result read as a plain value by a function is evaluated as
+-- plain SQL: refused under 'error'; an explicit cast says so, and runs.
+SET provsql.implicit_freeze = 'error';
+SELECT round(avg(v)) AS r FROM if_a;
+CREATE TABLE if_r AS SELECT count(*)::numeric AS n FROM if_a;
+RESET provsql.implicit_freeze;
+SELECT remove_provenance('if_r');
+SELECT * FROM if_r;
+DROP TABLE if_r;
+
 SELECT remove_provenance('if_a');
 SELECT remove_provenance('if_b');
 DROP TABLE if_a, if_b;

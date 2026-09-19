@@ -2803,6 +2803,15 @@ CREATE FUNCTION agg_token_plain_text(agg_token)
   RETURNS text
   AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief Value of an agg_token as text, NULL for a NULL value, without the
+ *  provenance-loss warning of the public casts: the value of an aggregate
+ *  result read as a plain value where ProvSQL casts it (in a function, an
+ *  operator, a comparison), which the planner reports once as evaluated as
+ *  plain SQL (internal use). */
+CREATE FUNCTION agg_token_frozen_value(agg_token)
+  RETURNS text
+  AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
 /** @brief Bundle a provenance gate UUID with a running value into an
  *  agg_token (inverse of the agg_token_uuid / agg_token_value
  *  accessors). */

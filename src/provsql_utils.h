@@ -236,6 +236,10 @@ typedef struct constants_t {
   /** @brief OID of @c agg_token_plain_text(), the sort key of an ORDER BY on
    *  an aggregate result; @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT;
+  /** @brief OID of @c agg_token_frozen_value(), the value of an aggregate
+   *  result that ProvSQL casts to a plain value; @c InvalidOid on a schema
+   *  that predates it. */
+  Oid OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE;
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
   Oid OID_FUNCTION_GATE_ONE; ///< OID of the provenance_one FUNCTION
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION

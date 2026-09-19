@@ -397,6 +397,41 @@ static bool is_target_agg_var(Node *node,
 static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
                                     const constants_t *constants);
 
+/** @brief Whether the casts of @c agg_token values built now are explicit,
+ *  written by the user (@c count(*)::numeric): they say that the plain value
+ *  is meant, like @c plain().  The others, which ProvSQL inserts where a
+ *  value is read, are frozen values (@c frozen_agg_value). */
+static bool agg_cast_explicit = false;
+
+/**
+ * @brief The value of the @c agg_token @p arg as a @p target_type, read by
+ *        ProvSQL where the query reads a plain value.
+ *
+ * Through @c agg_token_frozen_value, which does not warn: the planner
+ * reports the statement's frozen values once, where it finds that function
+ * (@c report_frozen_agg_values).  @c NULL on a schema without it.
+ */
+static Node *frozen_agg_value(Node *arg, Oid target_type,
+                              const constants_t *constants) {
+  FuncExpr *value;
+  CoerceViaIO *io;
+  if (!OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE))
+    return NULL;
+  /* A cast, which the rewritings peel as such (peel_agg_casts) */
+  value = makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE,
+                       TEXTOID, list_make1(arg), InvalidOid,
+                       DEFAULT_COLLATION_OID, COERCE_IMPLICIT_CAST);
+  if (target_type == TEXTOID)
+    return (Node *)value;
+  io = makeNode(CoerceViaIO);
+  io->arg = (Expr *)value;
+  io->resulttype = target_type;
+  io->resultcollid = get_typcollation(target_type);
+  io->coerceformat = COERCE_IMPLICIT_CAST;
+  io->location = -1;
+  return (Node *)io;
+}
+
 /**
  * @brief Whether argument @p i of function @p funcid takes an @c agg_token
  *        as it is: a parameter of type @c agg_token, or a polymorphic one of
@@ -451,6 +486,19 @@ aggregation_type_mutator(Node *node, void *ctx) {
       Var *v = (Var *)linitial(f->args);
       Oid orig_type = v->vartype;
       bool replaced = false;
+
+      /* A coercion the parser inserted (count compared with a numeric)
+       * reads the value */
+      if (f->funcformat == COERCE_IMPLICIT_CAST) {
+        Node *frozen;
+        v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+        v->varcollid = InvalidOid;
+        frozen = frozen_agg_value((Node *)v, f->funcresulttype,
+                                  context->constants);
+        if (frozen != NULL)
+          return frozen;
+        v->vartype = orig_type;
+      }
 
       if (f->funcformat == COERCE_EXPLICIT_CAST ||
           f->funcformat == COERCE_IMPLICIT_CAST) {
@@ -526,10 +574,17 @@ aggregation_type_mutator(Node *node, void *ctx) {
                                          : &((RelabelType *)node)->arg;
     Var *v = (Var *)*argp;
     Oid orig_type = v->vartype;
+    bool saved = agg_cast_explicit;
+    agg_cast_explicit =
+      (IsA(node, CoerceViaIO) &&
+       ((CoerceViaIO *)node)->coerceformat == COERCE_EXPLICIT_CAST) ||
+      (IsA(node, RelabelType) &&
+       ((RelabelType *)node)->relabelformat == COERCE_EXPLICIT_CAST);
     v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
     v->varcollid = InvalidOid;
     *argp = (Expr *)cast_agg_token_to_type((Node *)v, orig_type,
                                            context->constants);
+    agg_cast_explicit = saved;
     return node;
   }
 
@@ -3977,6 +4032,30 @@ static OpExpr *normalize_agg_comparison(OpExpr *cmp,
   return res;
 }
 
+
+/**
+ * @brief Strip one cast layer around an aggregate: a single-argument cast
+ *        (the agg_token -> numeric cast the aggregate-lowering pass wraps, a
+ *        cast the parser inserted), or the value of an aggregate read through
+ *        its text (@c frozen_agg_value).
+ */
+static Node *strip_agg_cast(Node *n) {
+  if (n != NULL && IsA(n, CoerceViaIO) &&
+      ((CoerceViaIO *)n)->coerceformat == COERCE_IMPLICIT_CAST &&
+      IsA(((CoerceViaIO *)n)->arg, FuncExpr) &&
+      ((FuncExpr *)((CoerceViaIO *)n)->arg)->funcformat ==
+        COERCE_IMPLICIT_CAST &&
+      list_length(((FuncExpr *)((CoerceViaIO *)n)->arg)->args) == 1)
+    n = (Node *)((CoerceViaIO *)n)->arg;
+  if (n != NULL && IsA(n, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)n;
+    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
+         fe->funcformat == COERCE_EXPLICIT_CAST) &&
+        list_length(fe->args) == 1)
+      n = (Node *)linitial(fe->args);
+  }
+  return n;
+}
 /**
  * @brief Convert a comparison @c OpExpr on aggregate results into a
  *        @c provenance_cmp gate expression.
@@ -4016,14 +4095,7 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
     Node *node = (Node *)lfirst(list_nth_cell(opExpr->args, i));
     Node *agg_node = NULL;
 
-    if (IsA(node, FuncExpr)) {
-      FuncExpr *fe = (FuncExpr *)node;
-      if (fe->funcformat == COERCE_IMPLICIT_CAST ||
-          fe->funcformat == COERCE_EXPLICIT_CAST) {
-        if (fe->args->length == 1)
-          node = lfirst(list_head(fe->args));
-      }
-    }
+    node = strip_agg_cast(node);
 
     // Identify the aggregate side.  It is either already agg_token-typed (a
     // bare provenance_aggregate / agg_token Var, or agg_token arithmetic on a
@@ -4186,13 +4258,7 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
   NullTestType ntt;
 
   /* Unwrap a single-argument implicit/explicit cast around the aggregate. */
-  if (IsA(arg, FuncExpr)) {
-    FuncExpr *fe = (FuncExpr *)arg;
-    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
-         fe->funcformat == COERCE_EXPLICIT_CAST) &&
-        list_length(fe->args) == 1)
-      arg = (Node *)linitial(fe->args);
-  }
+  arg = strip_agg_cast(arg);
   if (!IsA(arg, FuncExpr) ||
       ((FuncExpr *)arg)->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
     provsql_unsupported("HAVING IS [NOT] NULL is only supported directly on an "
@@ -5420,13 +5486,7 @@ build_rv_case(CaseExpr *ce, const constants_t *constants)
 static bool
 node_is_agg_token(Node *n, const constants_t *constants)
 {
-  if (n != NULL && IsA(n, FuncExpr)) {
-    FuncExpr *fe = (FuncExpr *)n;
-    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
-         fe->funcformat == COERCE_EXPLICIT_CAST) &&
-        list_length(fe->args) == 1)
-      n = (Node *)linitial(fe->args);
-  }
+  n = strip_agg_cast(n);
   return n != NULL && exprType(n) == constants->OID_TYPE_AGG_TOKEN;
 }
 
@@ -5442,13 +5502,7 @@ agg_arm_to_uuid(Node *arm, const constants_t *constants)
   Node *node = arm;
   FuncExpr *castToUUID;
 
-  if (node != NULL && IsA(node, FuncExpr)) {
-    FuncExpr *fe = (FuncExpr *)node;
-    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
-         fe->funcformat == COERCE_EXPLICIT_CAST) &&
-        list_length(fe->args) == 1)
-      node = (Node *)linitial(fe->args);
-  }
+  node = strip_agg_cast(node);
   if (node == NULL)
     return NULL;
 
@@ -7725,6 +7779,12 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
   CoercionPathType pathtype;
   Oid castfuncid;
 
+  if (!agg_cast_explicit) {
+    Node *frozen = frozen_agg_value(arg, target_type, constants);
+    if (frozen != NULL)
+      return frozen;
+  }
+
   pathtype = find_coercion_pathway(target_type, constants->OID_TYPE_AGG_TOKEN,
                                    COERCION_EXPLICIT, &castfuncid);
   if (pathtype == COERCION_PATH_FUNC && OidIsValid(castfuncid)) {
@@ -7859,6 +7919,15 @@ static Node *peel_agg_casts(Node *n) {
       }
     } else if (n != NULL && IsA(n, RelabelType)) {
       n = (Node *)((RelabelType *)n)->arg;
+      continue;
+    } else if (n != NULL && IsA(n, CoerceViaIO) &&
+               ((CoerceViaIO *)n)->coerceformat == COERCE_IMPLICIT_CAST &&
+               IsA(((CoerceViaIO *)n)->arg, FuncExpr) &&
+               ((FuncExpr *)((CoerceViaIO *)n)->arg)->funcformat ==
+                 COERCE_IMPLICIT_CAST &&
+               list_length(((FuncExpr *)((CoerceViaIO *)n)->arg)->args) == 1) {
+      /* The value of an aggregate read through its text (frozen_agg_value) */
+      n = (Node *)((CoerceViaIO *)n)->arg;
       continue;
     }
     return n;
@@ -8034,8 +8103,12 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
     maybe_cast_agg_token_args(op->args, op->opfuncid, constants);
   } else if (IsA(result, FuncExpr)) {
     FuncExpr *fe = (FuncExpr *)result;
-    if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+    if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+      bool saved = agg_cast_explicit;
+      agg_cast_explicit = fe->funcformat == COERCE_EXPLICIT_CAST;
       maybe_cast_agg_token_args(fe->args, fe->funcid, constants);
+      agg_cast_explicit = saved;
+    }
   } else if (IsA(result, WindowFunc)) {
     /* A window function over the aggregates of the groups
      * (sum(sum(x)) OVER ()): the window reads the values. */
@@ -10601,6 +10674,21 @@ static void report_freeze(const constants_t *constants, Node *frozen,
   else
     provsql_warning("%s, although the statement also tracks %s; %s", msg,
                     shared, hint);
+}
+
+/** @brief Walker: a value of an aggregate result read by ProvSQL as a
+ *  plain value (@c frozen_agg_value), at any level. */
+static bool frozen_agg_value_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid ==
+        constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE)
+    return true;
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, frozen_agg_value_walker, cx, 0);
+  return expression_tree_walker(node, frozen_agg_value_walker, cx);
 }
 
 /**
@@ -16289,6 +16377,16 @@ static void cast_agg_token_in_list(ListCell *lc,
   if (!OidIsValid(target) || get_typtype(target) == TYPTYPE_PSEUDO)
     return;
 
+  /* Read as a plain value (not in a HAVING clause, whose lowering reads the
+   * column itself) */
+  if (through_text && !agg_cast_explicit) {
+    Node *frozen = frozen_agg_value((Node *)v, target, ctx->constants);
+    if (frozen != NULL) {
+      lfirst(lc) = frozen;
+      return;
+    }
+  }
+
   castTuple = SearchSysCache2(CASTSOURCETARGET,
                               ObjectIdGetDatum(ctx->constants->OID_TYPE_AGG_TOKEN),
                               ObjectIdGetDatum(target));
@@ -16582,16 +16680,8 @@ static bool join_qual_has_agg_token_walker(Node *node,
     Node *right = (Node *) lsecond(oe->args);
 
     /* Unwrap casts */
-    if (IsA(left, FuncExpr) &&
-        (((FuncExpr *)left)->funcformat == COERCE_IMPLICIT_CAST ||
-         ((FuncExpr *)left)->funcformat == COERCE_EXPLICIT_CAST) &&
-        list_length(((FuncExpr *)left)->args) == 1)
-      left = linitial(((FuncExpr *)left)->args);
-    if (IsA(right, FuncExpr) &&
-        (((FuncExpr *)right)->funcformat == COERCE_IMPLICIT_CAST ||
-         ((FuncExpr *)right)->funcformat == COERCE_EXPLICIT_CAST) &&
-        list_length(((FuncExpr *)right)->args) == 1)
-      right = linitial(((FuncExpr *)right)->args);
+    left = strip_agg_cast(left);
+    right = strip_agg_cast(right);
 
     if (IsA(left, Var) && IsA(right, Var)) {
       Var *left_var = (Var *)left;
@@ -16851,13 +16941,7 @@ static TargetEntry *agg_nulltest_target(Query *q, NullTest *nt,
   TargetEntry *te;
 
   /* Unwrap a single-argument cast, as the HAVING converter does. */
-  if (IsA(arg, FuncExpr)) {
-    FuncExpr *fe = (FuncExpr *) arg;
-    if ((fe->funcformat == COERCE_IMPLICIT_CAST ||
-         fe->funcformat == COERCE_EXPLICIT_CAST) &&
-        list_length(fe->args) == 1)
-      arg = (Node *) linitial(fe->args);
-  }
+  arg = strip_agg_cast(arg);
 
   if (!IsA(arg, Var))
     return NULL;
@@ -21608,6 +21692,16 @@ static PlannedStmt *provsql_planner(Query *q,
                       "subquery over a provenance-tracked relation in a "
                       "position that is not tracked is evaluated as plain "
                       "SQL", NULL);
+
+      if (provsql_active && provsql_executor_depth == 0 &&
+          OidIsValid(constants.OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE) &&
+          frozen_agg_value_walker((Node *)q, (void *)&constants))
+        report_freeze(&constants, NULL,
+                      "aggregate result read as a plain value (by a "
+                      "function, an operator, a comparison) is evaluated as "
+                      "plain SQL, not tracked",
+                      "cast it explicitly (::numeric, ::text, ...) to say "
+                      "so");
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
