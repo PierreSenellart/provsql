@@ -23,12 +23,23 @@
  * representation.
  *
  * @c val holds the textual representation of the current aggregate value
- * (e.g., a decimal integer or floating-point number).  An 80-character
- * buffer is sufficient for all numeric types supported by ProvSQL.
+ * (e.g., a decimal integer or floating-point number).  A longer value (the
+ * text of a @c string_agg, an array, a multirange...) keeps its first
+ * @c AGG_TOKEN_PREFIX_LEN characters, and the last byte of @c val is set to
+ * @c AGG_TOKEN_TRUNCATED: the whole value is that of the gate, read by
+ * @c agg_token_value_cstring.
  */
 typedef struct agg_token {
   char tok[2*UUID_LEN+5]; ///< Provenance UUID as a text string
   char val[80];           ///< Aggregate running value as a text string
 } agg_token;
+
+/** @brief Length of the prefix of a value too long for @c agg_token::val. */
+#define AGG_TOKEN_PREFIX_LEN (sizeof(((agg_token *)0)->val) - 2)
+/** @brief Last byte of @c agg_token::val when the value is a prefix. */
+#define AGG_TOKEN_TRUNCATED '\x01'
+
+void agg_token_set_value(agg_token *aggtok, const char *val, size_t len);
+const char *agg_token_value_cstring(const agg_token *aggtok);
 
 #endif /* AGG_TOKEN_H */

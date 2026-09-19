@@ -85,3 +85,22 @@ DROP TABLE att_lookup;
 DROP TABLE att_map;
 SELECT remove_provenance('att');
 DROP TABLE att;
+
+-- A value too long for an agg_token (80 bytes) is read in full from the
+-- gate: the display, the cast to text, and the cast back to the aggregate's
+-- type.
+CREATE TABLE att_long(w text, t tsrange);
+INSERT INTO att_long
+  SELECT repeat('abcdefghij', 3) || i,
+         tsrange(timestamp '2023-01-01' + i * interval '1 day',
+                 timestamp '2023-01-01' + i * interval '1 day' + interval '1 hour')
+  FROM generate_series(1, 5) i;
+SELECT add_provenance('att_long');
+CREATE TABLE att_long_r AS
+  SELECT string_agg(w, ',' ORDER BY w) AS s, range_agg(t) AS r FROM att_long;
+SELECT remove_provenance('att_long_r');
+SELECT s, length(s::text) AS len FROM att_long_r;
+SELECT cardinality(array(SELECT unnest(r::text::tsmultirange))) AS ranges
+FROM att_long_r;
+DROP TABLE att_long_r;
+DROP TABLE att_long;

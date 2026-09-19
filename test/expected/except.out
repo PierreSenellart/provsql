@@ -25,3 +25,22 @@ remove_provenance
 n_rows|p_except
 1|0.1250
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+m|present
+d1|t
+d2|f
+d3|t
+d4|f
+(4 rows)
+remove_provenance
+
+(1 row)
+v|present
+d2|f
+d4|t
+(2 rows)

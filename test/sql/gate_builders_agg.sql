@@ -278,18 +278,20 @@ SELECT a <> b AS different_semimod,
 FROM (SELECT provsql.provenance_semimod(918273, gba_leaf(60)) AS a,
              provsql.provenance_semimod(918273, gba_leaf(61)) AS b) t;
 
--- provenance_aggregate: the agg_token (gate and value, the value cut to what
--- an agg_token holds), and the gate: children, infos, text.  The address now
--- hashes the result type and the value too, so the token differs from the
--- reference's; the reference is still run, on the new gate, to check that
--- what it would write is what the C function wrote.
+-- provenance_aggregate: the agg_token (gate and value), and the gate:
+-- children, infos, text.  The address now hashes the result type and the
+-- value too, so the token differs from the reference's; the reference is still
+-- run, on the new gate, to check that what it would write is what the C
+-- function wrote.  A value too long for an agg_token is the text of its gate;
+-- the reference, which records no text, keeps the part the token holds.
 SELECT label, c::uuid <> r::uuid AS token_differs,
-       provsql.agg_token_out(c)::text = provsql.agg_token_out(r)::text AS same_value,
+       left(provsql.agg_token_out(c)::text, 78) =
+         left(provsql.agg_token_out(r)::text, 78) AS same_value,
        provsql.get_gate_type(c::uuid) AS type,
        array_length(provsql.get_children(c::uuid), 1) AS children,
        (provsql.get_infos(c::uuid)).info1 AS info1, (provsql.get_infos(c::uuid)).info2 AS info2,
        left(provsql.get_extra(c::uuid), 40) AS extra,
-       provsql.agg_token_out(c)::text = left(provsql.get_extra(c::uuid), 79) || ' (*)' AS value_is_cut_extra
+       provsql.agg_token_out(c)::text = provsql.get_extra(c::uuid) || ' (*)' AS value_is_extra
 FROM (
   SELECT 0 AS k, 'integer' AS label,
          provsql.provenance_aggregate(2108, 23, 918273, gba_leaves(100, 3)) AS c,

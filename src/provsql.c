@@ -10174,6 +10174,30 @@ static Node *normalize_bool_agg_having(Node *n) {
  * @param q          Query to rewrite in place.
  * @return  Always true (errors out on unsupported cases).
  */
+/**
+ * @brief @p arg, a column of the EXCEPT arm @p rte, with the type of that
+ *        column, coerced to the type of the set operation's column @p v.
+ */
+static Expr *except_arm_column(RangeTblEntry *rte, Var *arg, Var *v) {
+  TargetEntry *te;
+  Oid type;
+
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+    return (Expr *)arg;
+  te = get_tle_by_resno(rte->subquery->targetList, arg->varattno);
+  if (te == NULL)
+    return (Expr *)arg;
+  type = exprType((Node *)te->expr);
+  if (type == v->vartype)
+    return (Expr *)arg;
+  arg->vartype = type;
+  arg->vartypmod = exprTypmod((Node *)te->expr);
+  arg->varcollid = exprCollation((Node *)te->expr);
+  return (Expr *)coerce_to_target_type(NULL, (Node *)arg, type, v->vartype,
+                                       v->vartypmod, COERCION_IMPLICIT,
+                                       COERCE_IMPLICIT_CAST, -1);
+}
+
 static bool transform_except_into_join(const constants_t *constants, Query *q) {
   SetOperationStmt *setOps = (SetOperationStmt *)q->setOperations;
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -10235,11 +10259,15 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
         !(rrte->rtekind == RTE_SUBQUERY &&
           output_provably_not_null(rrte->subquery, attno));
 
+      /* An arm's column may have another type than the set operation's
+       * (varchar under text): read it with its own type, coerced. */
       expr->args = lappend(expr->args,
-                           make_null_safe_equality((Expr *)leftArg,
-                                                   (Expr *)rightArg,
-                                                   v->vartype, v->varcollid,
-                                                   nullable));
+                           make_null_safe_equality(
+                             except_arm_column(lrte, leftArg, v),
+                             except_arm_column(rrte, rightArg, v),
+                             v->vartype, v->varcollid, nullable));
+      if (v->varno == leftArg->varno && v->varattno == attno)
+        te->expr = except_arm_column(lrte, (Var *)copyObject(v), v);
     }
 
     ++attno;

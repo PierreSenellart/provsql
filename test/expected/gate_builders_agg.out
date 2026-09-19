@@ -41,7 +41,7 @@ ERROR:  ProvSQL: provenance_semimod: the provenance token must not be NULL
 different_semimod|same_value_gate
 t|t
 (1 row)
-label|token_differs|same_value|type|children|info1|info2|extra|value_is_cut_extra
+label|token_differs|same_value|type|children|info1|info2|extra|value_is_extra
 integer|t|t|agg|3|2108|23|918273|t
 bigint|t|t|agg|3|2108|23|9182736455463|t
 smallint|t|t|agg|3|2108|23|9182|t

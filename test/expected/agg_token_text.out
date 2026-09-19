@@ -57,3 +57,17 @@ B|z|4 ⊗ δ(4)
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+s|len
+abcdefghijabcdefghijabcdefghij1,abcdefghijabcdefghijabcdefghij2,abcdefghijabcdefghijabcdefghij3,abcdefghijabcdefghijabcdefghij4,abcdefghijabcdefghijabcdefghij5 (*)|159
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+ranges
+5
+(1 row)

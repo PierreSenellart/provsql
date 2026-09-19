@@ -66,3 +66,23 @@ DROP TABLE ea_set;
 
 DROP TABLE ea_a;
 DROP TABLE ea_b;
+
+-- A left arm whose column is text, a right arm whose column is varchar, and
+-- a set-returning function in the left arm, which keeps it a subquery scan:
+-- each arm is read with its own type.
+CREATE TABLE ea_v(v varchar(12));
+INSERT INTO ea_v VALUES ('d2'),('d4');
+SELECT add_provenance('ea_v');
+CREATE TABLE ea_v_r AS
+  SELECT m, present(provenance())
+  FROM (SELECT 'd' || generate_series(1, 4) AS m EXCEPT SELECT v FROM ea_v) t;
+SELECT remove_provenance('ea_v_r');
+SELECT m, present FROM ea_v_r ORDER BY m;
+DROP TABLE ea_v_r;
+CREATE TABLE ea_v_r AS
+  SELECT v, present(provenance())
+  FROM (SELECT v FROM ea_v EXCEPT SELECT 'd' || generate_series(1, 2)) t;
+SELECT remove_provenance('ea_v_r');
+SELECT v, present FROM ea_v_r ORDER BY v;
+DROP TABLE ea_v_r;
+DROP TABLE ea_v;

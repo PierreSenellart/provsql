@@ -651,7 +651,7 @@ Datum provenance_aggregate(PG_FUNCTION_ARGS) {
     pfree(t.data);
   }
   if (val != NULL)
-    strlcpy(result->val, val, sizeof(result->val));
+    agg_token_set_value(result, val, strlen(val));
   PG_RETURN_POINTER(result);
 }
 

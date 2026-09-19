@@ -26,6 +26,64 @@
 #include "provsql_utils.h"
 #include "agg_token.h"
 
+/**
+ * @brief Set the value of @p aggtok to the @p len first bytes of @p val.
+ *
+ * A value too long for @c agg_token::val keeps its first
+ * @c AGG_TOKEN_PREFIX_LEN bytes, marked by @c AGG_TOKEN_TRUNCATED in the last
+ * byte; @p aggtok must be zeroed.
+ */
+void agg_token_set_value(agg_token *aggtok, const char *val, size_t len)
+{
+  if(len < sizeof(aggtok->val) - 1) {
+    memcpy(aggtok->val, val, len);
+    aggtok->val[len] = '\0';
+  } else {
+    memcpy(aggtok->val, val, AGG_TOKEN_PREFIX_LEN);
+    aggtok->val[AGG_TOKEN_PREFIX_LEN] = '\0';
+    aggtok->val[sizeof(aggtok->val) - 1] = AGG_TOKEN_TRUNCATED;
+  }
+}
+
+/**
+ * @brief The value of @p aggtok, as a C string.
+ *
+ * The value stored in the token, or, when it is only a prefix, the value of
+ * its gate, read with @c provsql.agg_token_value_text; the prefix is returned
+ * if the gate gives none that starts with it.
+ */
+const char *agg_token_value_cstring(const agg_token *aggtok)
+{
+  MemoryContext caller = CurrentMemoryContext;
+  Oid argtypes[1] = {TEXTOID};
+  Datum args[1];
+  char *full = NULL;
+
+  if(aggtok->val[sizeof(aggtok->val) - 1] != AGG_TOKEN_TRUNCATED ||
+     strlen(aggtok->val) != AGG_TOKEN_PREFIX_LEN)
+    return aggtok->val;
+
+  args[0] = CStringGetTextDatum(aggtok->tok);
+  if(SPI_connect() != SPI_OK_CONNECT)
+    return aggtok->val;
+  if(SPI_execute_with_args("SELECT provsql.agg_token_value_text($1::uuid)",
+                           1, argtypes, args, NULL, true, 1) == SPI_OK_SELECT &&
+     SPI_processed == 1) {
+    char *v = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
+    size_t n;
+    /* agg_token_value_text gives the value followed by " (*)"; it is that
+     * of the token if it starts with the prefix the token holds. */
+    if(v != NULL && (n = strlen(v)) >= AGG_TOKEN_PREFIX_LEN + 4 &&
+       strcmp(v + n - 4, " (*)") == 0 &&
+       strncmp(v, aggtok->val, AGG_TOKEN_PREFIX_LEN) == 0) {
+      v[n - 4] = '\0';
+      full = MemoryContextStrdup(caller, v);
+    }
+  }
+  SPI_finish();
+  return full != NULL ? full : aggtok->val;
+}
+
 PG_FUNCTION_INFO_V1(agg_token_in);
 /**
  * @brief Parse an @c agg_token value from its text representation.
@@ -42,7 +100,7 @@ agg_token_in(PG_FUNCTION_ARGS)
   const unsigned toklen=sizeof(result->tok)-1;
   unsigned vallen;
 
-  result = (agg_token *)palloc(sizeof(agg_token));
+  result = (agg_token *)palloc0(sizeof(agg_token));
 
   // str is ( UUID , string ) with UUID starting at 2 and with length
   // 20 (2*UUID-LEN=16) plus 4 hashes; then three characters we can
@@ -61,10 +119,7 @@ agg_token_in(PG_FUNCTION_ARGS)
   result->tok[toklen]='\0';
 
   vallen=strlen(str)-toklen-2-3-2;
-  if(vallen>=sizeof(result->val))
-    vallen=sizeof(result->val)-1;
-  strncpy(result->val, str+2+toklen+3, vallen);
-  result->val[vallen]='\0';
+  agg_token_set_value(result, str+2+toklen+3, vallen);
 
   PG_RETURN_POINTER(result);
 }
@@ -94,7 +149,7 @@ agg_token_out(PG_FUNCTION_ARGS)
   if (provsql_aggtoken_text_as_uuid)
     result = psprintf("%s", aggtok->tok);
   else
-    result = psprintf("%s (*)", aggtok->val);
+    result = psprintf("%s (*)", agg_token_value_cstring(aggtok));
 
   PG_RETURN_CSTRING(result);
 }
@@ -158,7 +213,7 @@ agg_token_to_numeric(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
 
   result = DirectFunctionCall3(numeric_in,
-                               CStringGetDatum(aggtok->val),
+                               CStringGetDatum(agg_token_value_cstring(aggtok)),
                                ObjectIdGetDatum(InvalidOid),
                                Int32GetDatum(-1));
   PG_RETURN_DATUM(result);
@@ -185,7 +240,7 @@ agg_token_value(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
 
   result = DirectFunctionCall3(numeric_in,
-                               CStringGetDatum(aggtok->val),
+                               CStringGetDatum(agg_token_value_cstring(aggtok)),
                                ObjectIdGetDatum(InvalidOid),
                                Int32GetDatum(-1));
   PG_RETURN_DATUM(result);
@@ -210,7 +265,7 @@ agg_token_to_float8(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
 
   result = DirectFunctionCall1(float8in,
-                               CStringGetDatum(aggtok->val));
+                               CStringGetDatum(agg_token_value_cstring(aggtok)));
   PG_RETURN_DATUM(result);
 }
 
@@ -233,7 +288,7 @@ agg_token_to_int4(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
 
   result = DirectFunctionCall1(int4in,
-                               CStringGetDatum(aggtok->val));
+                               CStringGetDatum(agg_token_value_cstring(aggtok)));
   PG_RETURN_DATUM(result);
 }
 
@@ -256,7 +311,7 @@ agg_token_to_int8(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
 
   result = DirectFunctionCall1(int8in,
-                               CStringGetDatum(aggtok->val));
+                               CStringGetDatum(agg_token_value_cstring(aggtok)));
   PG_RETURN_DATUM(result);
 }
 
@@ -278,7 +333,7 @@ agg_token_to_bool(PG_FUNCTION_ARGS)
   if (agg_token_val_is_null(aggtok))
     PG_RETURN_NULL();
 
-  return DirectFunctionCall1(boolin, CStringGetDatum(aggtok->val));
+  return DirectFunctionCall1(boolin, CStringGetDatum(agg_token_value_cstring(aggtok)));
 }
 
 PG_FUNCTION_INFO_V1(agg_token_to_text);
@@ -295,14 +350,16 @@ agg_token_to_text(PG_FUNCTION_ARGS)
 {
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
   text *txt_result;
+  const char *val;
   int len;
 
   provsql_warning("converting agg_token to text: provenance information is lost");
 
-  len = strlen(aggtok->val);
+  val = agg_token_value_cstring(aggtok);
+  len = strlen(val);
   txt_result = (text *) palloc(len + VARHDRSZ);
   SET_VARSIZE(txt_result, len + VARHDRSZ);
-  memcpy(VARDATA(txt_result), aggtok->val, len);
+  memcpy(VARDATA(txt_result), val, len);
 
   PG_RETURN_TEXT_P(txt_result);
 }
@@ -323,7 +380,7 @@ agg_token_plain_text(PG_FUNCTION_ARGS)
 
   if (agg_token_val_is_null(aggtok))
     PG_RETURN_NULL();
-  PG_RETURN_TEXT_P(cstring_to_text(aggtok->val));
+  PG_RETURN_TEXT_P(cstring_to_text(agg_token_value_cstring(aggtok)));
 }
 
 PG_FUNCTION_INFO_V1(row_number_as_rank);
