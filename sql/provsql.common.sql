@@ -7063,6 +7063,30 @@ CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
   'provsql','provenance_semimod' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
+ * @brief The contributions of an aggregate result to an aggregate of the
+ *        same kind over it (internal)
+ *
+ * For a row of token @p token whose value @p val is the result of
+ * @c sum / @c count / @c max / @c min over a group, aggregated again by
+ * @c sum / @c max / @c min: the contributions @c semimod(v_i, token ⊗ k_i)
+ * of the group's own contributions @c semimod(v_i, k_i), so that
+ * @c sum(sum(x)) is @c sum(x) over the rows of the groups -- semimodule
+ * scalar multiplication, in every semiring.  Collected by
+ * @c provenance_contributions_cat.
+ */
+CREATE FUNCTION provenance_semimod_flat(val agg_token, token uuid)
+  RETURNS uuid[] AS
+  'provsql','provenance_semimod_flat' LANGUAGE C PARALLEL SAFE IMMUTABLE;
+
+/** @brief Concatenation of the arrays of contributions of
+ *  @c provenance_semimod_flat (internal) */
+CREATE AGGREGATE provenance_contributions_cat(uuid[]) (
+  SFUNC = array_cat,
+  STYPE = uuid[],
+  INITCOND = '{}'
+);
+
+/**
  * @brief Semimodule gate for an aggregate that sees its NULL inputs
  *
  * Variant of provenance_semimod() used by the query rewriter for

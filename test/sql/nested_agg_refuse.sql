@@ -72,9 +72,11 @@ SELECT * FROM result_d ORDER BY id;
 DROP TABLE result_d;
 
 -- Case E: aggregating an aggregate result of the inner subquery (max of
--- a count, sum of a count, a HAVING over it) is refused at planning time,
--- like GROUP BY or ORDER BY on such a column: the outer aggregate would
--- otherwise run on the raw agg_token composite.
+-- a count, a HAVING over it) is refused at planning time, like GROUP BY or
+-- ORDER BY on such a column: the outer aggregate would otherwise run on the
+-- raw agg_token composite.  An aggregate of the same kind (sum of a count)
+-- is that of the rows of the groups, and a count of a count counts the
+-- groups: both are supported (see reaggregation).
 SELECT max(c) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
 SELECT sum(c) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
 SELECT count(c) FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;

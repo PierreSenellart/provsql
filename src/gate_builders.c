@@ -577,6 +577,62 @@ Datum provenance_semimod_nullable(PG_FUNCTION_ARGS) {
   return semimod_gate(&value_token, token);
 }
 
+static bool same_token(const pg_uuid_t *a, const pg_uuid_t *b);
+
+PG_FUNCTION_INFO_V1(provenance_semimod_flat);
+/**
+ * @brief The contributions @c semimod(v_i, token ⊗ k_i) of the aggregate
+ *        result @c val, whose gate aggregates the contributions
+ *        @c semimod(v_i, k_i), for an aggregate of the same kind over it.
+ *
+ * @c token ⊗ (⊕ k_i ⊗ v_i) = ⊕ (token ⊗ k_i) ⊗ v_i: the outer aggregate of
+ * the rows of the groups, in every semiring.  An empty array for a NULL
+ * value, which the outer aggregate skips.
+ */
+Datum provenance_semimod_flat(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token = semimod_token_argument(fcinfo);
+  agg_token *aggtok;
+  pg_uuid_t agg, *children = NULL, *out;
+  unsigned n = 0, i;
+  gate_type type;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_ARRAYTYPE_P(construct_empty_array(UUIDOID));
+  aggtok = (agg_token *)PG_GETARG_POINTER(0);
+  agg = *DatumGetUUIDP(DirectFunctionCall1(uuid_in,
+                                           CStringGetDatum(aggtok->tok)));
+  type = provsql_fetch_gate(&agg, &n, &children);
+  if (type != gate_agg)
+    provsql_error("provenance_semimod_flat: not the result of an aggregate");
+
+  out = (pg_uuid_t *)palloc(sizeof(pg_uuid_t) * (n > 0 ? n : 1));
+  for (i = 0; i < n; ++i) {
+    unsigned m = 0;
+    pg_uuid_t *wires = NULL, scaled, pair[2];
+
+    if (provsql_fetch_gate(&children[i], &m, &wires) != gate_semimod || m != 2)
+      provsql_error("provenance_semimod_flat: unexpected contribution");
+    pair[0] = *token;
+    pair[1] = wires[0];
+    if (same_token(token, address_of_one()))
+      scaled = wires[0];
+    else if (same_token(&wires[0], address_of_one()))
+      scaled = *token;
+    else
+      scaled = nary_gate(gate_times, "times", "times-canonical", pair, 2);
+    out[i] = *DatumGetUUIDP(semimod_gate(&wires[1], &scaled));
+    free(wires);
+  }
+  free(children);
+  {
+    Datum *elems = (Datum *)palloc(sizeof(Datum) * (n > 0 ? n : 1));
+    for (i = 0; i < n; ++i)
+      elems[i] = UUIDPGetDatum(&out[i]);
+    PG_RETURN_ARRAYTYPE_P(construct_array(elems, (int)n, UUIDOID, UUID_LEN,
+                                          false, 'c'));
+  }
+}
+
 PG_FUNCTION_INFO_V1(provenance_aggregate);
 /**
  * @brief The @c agg gate of a group, paired with the aggregate's value.

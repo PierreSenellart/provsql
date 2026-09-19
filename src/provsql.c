@@ -26,6 +26,7 @@
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_class.h"           /* RELKIND_VIEW */
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
@@ -623,20 +624,74 @@ static bool agg_token_var_walker(Node *node, void *context) {
   return expression_tree_walker(node, agg_token_var_walker, context);
 }
 
+static Oid orig_agg_arg_of_var(Query *q, Var *v, const constants_t *constants,
+                               int depth, int argno);
+
+/**
+ * @brief Whether the aggregate @p agg of query @p q reads an aggregate result
+ *        of a subquery that it aggregates again as the rows of their groups.
+ *
+ * @c sum over a @c sum or a @c count, @c max over a @c max, @c min over a
+ * @c min: the outer aggregate of a group of rows is that of the rows of
+ * their groups (@c provenance_semimod_flat); and @c count over a @c count,
+ * which is never NULL, counts the groups.  A single argument, a column of
+ * the subquery, without @c DISTINCT, @c ORDER @c BY or @c FILTER.
+ */
+static bool reaggregates_agg_result(const constants_t *constants, Query *q,
+                                    Aggref *agg) {
+  Node *arg;
+  Oid inner;
+  const char *outer_name, *inner_name;
+
+  if (list_length(agg->args) != 1 || agg->aggdistinct != NIL ||
+      agg->aggorder != NIL || agg->aggfilter != NULL ||
+      agg->aggdirectargs != NIL || agg->aggkind != AGGKIND_NORMAL ||
+      !OidIsValid(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_FLAT))
+    return false;
+  arg = (Node *)((TargetEntry *)linitial(agg->args))->expr;
+  if (!IsA(arg, Var) ||
+      ((Var *)arg)->vartype != constants->OID_TYPE_AGG_TOKEN)
+    return false;
+  inner = orig_agg_arg_of_var(q, (Var *)arg, constants, 0, 0);
+  if (!OidIsValid(inner) ||
+      get_func_namespace(agg->aggfnoid) != PG_CATALOG_NAMESPACE ||
+      get_func_namespace(inner) != PG_CATALOG_NAMESPACE)
+    return false;
+  outer_name = get_func_name(agg->aggfnoid);
+  inner_name = get_func_name(inner);
+  if (strcmp(outer_name, "sum") == 0)
+    return strcmp(inner_name, "sum") == 0 || strcmp(inner_name, "count") == 0;
+  if (strcmp(outer_name, "max") == 0 || strcmp(outer_name, "min") == 0 ||
+      strcmp(outer_name, "count") == 0)
+    return strcmp(inner_name, outer_name) == 0;
+  return false;
+}
+
+/** @brief Context for @c aggref_over_agg_token_walker. */
+typedef struct aggref_over_agg_token_ctx {
+  const constants_t *constants; ///< Extension OID cache
+  Query *q;                     ///< The query whose aggregates are walked
+} aggref_over_agg_token_ctx;
+
 /** @brief expression_tree_walker raising an error on an @c Aggref whose
  *  arguments read an @c agg_token column: aggregating an aggregate result
- *  from a subquery (max of a count, sum of a sum...) is refused, like
+ *  from a subquery (max of a count, avg of a sum...) is refused, like
  *  grouping or sorting on it, because the outer aggregate would run on the
- *  raw token composite rather than on a possible-world value. */
+ *  raw token composite rather than on a possible-world value -- unless it
+ *  aggregates it again as the rows of their groups
+ *  (@c reaggregates_agg_result). */
 static bool aggref_over_agg_token_walker(Node *node, void *context) {
+  aggref_over_agg_token_ctx *ctx = (aggref_over_agg_token_ctx *)context;
+  void *cx = (void *)ctx->constants;
   if (node == NULL)
     return false;
   if (IsA(node, Aggref)) {
     Aggref *agg = (Aggref *)node;
-    if (agg_token_var_walker((Node *)agg->args, context) ||
-        agg_token_var_walker((Node *)agg->aggdirectargs, context) ||
-        agg_token_var_walker((Node *)agg->aggorder, context) ||
-        agg_token_var_walker((Node *)agg->aggfilter, context))
+    if ((agg_token_var_walker((Node *)agg->args, cx) ||
+         agg_token_var_walker((Node *)agg->aggdirectargs, cx) ||
+         agg_token_var_walker((Node *)agg->aggorder, cx) ||
+         agg_token_var_walker((Node *)agg->aggfilter, cx)) &&
+        !reaggregates_agg_result(ctx->constants, ctx->q, agg))
       provsql_unsupported("aggregation over aggregate results from "
                           "a subquery not supported");
   }
@@ -707,9 +762,11 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
       }
 
       /* ... or aggregated again by the outer query */
-      aggref_over_agg_token_walker((Node *)q->targetList,
-                                   (void *)constants);
-      aggref_over_agg_token_walker(q->havingQual, (void *)constants);
+      {
+        aggref_over_agg_token_ctx actx = {constants, q};
+        aggref_over_agg_token_walker((Node *)q->targetList, (void *)&actx);
+        aggref_over_agg_token_walker(q->havingQual, (void *)&actx);
+      }
     }
     ++attno;
   }
@@ -3667,6 +3724,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
      * shown to the user) and is reflected below in what the gate aggregates. */
     Expr *filter = (Expr *)copyObject(agg_ref->aggfilter);
     bool keeps_nulls = aggregate_keeps_nulls(constants, aggregation_function);
+    bool flat = false;
 
     /* Aggregates that return random_variable (sum_rv, avg_rv, and any
      * future RV-returning aggregate) get a different rewrite: instead
@@ -3680,11 +3738,55 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       return make_rv_aggregate_expression(constants, agg_ref, prov_atts, op);
     }
 
-    expr_s = make_row_semimod(
-      constants, aggregation_function,
-      aggregation_function == F_COUNT_
-        ? NULL : ((TargetEntry *)linitial(agg_ref->args))->expr,
-      filter, make_row_token(constants, prov_atts, op));
+    /* An aggregate result of a subquery, aggregated again as the rows of
+     * its group (reaggregates_agg_result): the value shown reads the value
+     * of each; the contributions are those of the rows of the groups, but
+     * for a count of the groups. */
+    if (aggregation_function != F_COUNT_ &&
+        IsA(((TargetEntry *)linitial(agg_ref->args))->expr, Var) &&
+        ((Var *)((TargetEntry *)linitial(agg_ref->args))->expr)->vartype ==
+          constants->OID_TYPE_AGG_TOKEN) {
+      TargetEntry *arg_te = (TargetEntry *)linitial(agg_ref->args);
+      Expr *token_var = arg_te->expr;
+      Oid argtype = linitial_oid(agg_ref->aggargtypes);
+      CoerceViaIO *io = makeNode(CoerceViaIO);
+      io->arg = (Expr *)makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT,
+                                     TEXTOID, list_make1(copyObject(token_var)),
+                                     InvalidOid, DEFAULT_COLLATION_OID,
+                                     COERCE_EXPLICIT_CALL);
+      io->resulttype = argtype;
+      io->resultcollid = get_typcollation(argtype);
+      io->coerceformat = COERCE_EXPLICIT_CAST;
+      io->location = -1;
+      arg_te->expr = (Expr *)io;
+      if (aggregation_function != F_COUNT_ANY) {
+        expr_s = makeFuncExpr(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_FLAT,
+                              constants->OID_TYPE_UUID_ARRAY,
+                              list_make2(token_var,
+                                         make_row_token(constants, prov_atts,
+                                                        op)),
+                              InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+        te_inner->resno = 1;
+        te_inner->expr = (Expr *)expr_s;
+        agg->aggfnoid = constants->OID_FUNCTION_PROVENANCE_CONTRIBUTIONS_CAT;
+        agg->aggtype = constants->OID_TYPE_UUID_ARRAY;
+        agg->args = list_make1(te_inner);
+        agg->aggkind = AGGKIND_NORMAL;
+        agg->location = -1;
+#if PG_VERSION_NUM >= 140000
+        agg->aggno = agg->aggtransno = -1;
+#endif
+        agg->aggargtypes = list_make1_oid(constants->OID_TYPE_UUID_ARRAY);
+        flat = true;
+      }
+    }
+
+    if (!flat)
+      expr_s = make_row_semimod(
+        constants, aggregation_function,
+        aggregation_function == F_COUNT_
+          ? NULL : ((TargetEntry *)linitial(agg_ref->args))->expr,
+        filter, make_row_token(constants, prov_atts, op));
     if (keeps_nulls && aggregation_function != F_COUNT_ &&
         aggregation_function != F_COUNT_ANY)
       agg->aggfilter = filter;
@@ -3704,41 +3806,43 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     }
 
     // aggregating all semirings in an array
-    te_inner->resno = 1;
-    te_inner->expr = (Expr *)expr_s;
-    agg->aggfnoid = constants->OID_FUNCTION_ARRAY_AGG;
-    agg->aggtype = constants->OID_TYPE_UUID_ARRAY;
-    agg->args = list_make1(te_inner);
-    agg->aggkind = AGGKIND_NORMAL;
-    agg->location = -1;
+    if (!flat) {
+      te_inner->resno = 1;
+      te_inner->expr = (Expr *)expr_s;
+      agg->aggfnoid = constants->OID_FUNCTION_ARRAY_AGG;
+      agg->aggtype = constants->OID_TYPE_UUID_ARRAY;
+      agg->args = list_make1(te_inner);
+      agg->aggkind = AGGKIND_NORMAL;
+      agg->location = -1;
 #if PG_VERSION_NUM >= 140000
-    agg->aggno = agg->aggtransno = -1;
+      agg->aggno = agg->aggtransno = -1;
 #endif
 
-    agg->aggargtypes = list_make1_oid(constants->OID_TYPE_UUID);
+      agg->aggargtypes = list_make1_oid(constants->OID_TYPE_UUID);
 
-    /* An ordered aggregate (e.g. array_agg(x ORDER BY k)) is order-sensitive:
-     * the HAVING array_agg evaluator matches the per-row values against the
-     * constant array in children order, which is the order this token
-     * aggregate collects rows.  Carry the original ORDER BY over (sort keys
-     * re-attached as junk arguments) so that order is the user's on every
-     * PostgreSQL version; otherwise it is plan order, which only coincides
-     * when PG >= 16 pre-sorts the ordered-aggregate input
-     * (enable_presorted_aggregate). */
-    if (agg_ref->aggorder != NIL) {
-      AttrNumber sort_resno = 2;
-      ListCell *lc;
-      foreach (lc, agg_ref->args) {
-        TargetEntry *arg_te = (TargetEntry *)lfirst(lc);
-        TargetEntry *te_sort;
-        if (arg_te->ressortgroupref == 0)
-          continue;
-        te_sort = makeTargetEntry((Expr *)copyObject(arg_te->expr),
-                                  sort_resno++, NULL, true);
-        te_sort->ressortgroupref = arg_te->ressortgroupref;
-        agg->args = lappend(agg->args, te_sort);
+      /* An ordered aggregate (e.g. array_agg(x ORDER BY k)) is order-sensitive:
+       * the HAVING array_agg evaluator matches the per-row values against the
+       * constant array in children order, which is the order this token
+       * aggregate collects rows.  Carry the original ORDER BY over (sort keys
+       * re-attached as junk arguments) so that order is the user's on every
+       * PostgreSQL version; otherwise it is plan order, which only coincides
+       * when PG >= 16 pre-sorts the ordered-aggregate input
+       * (enable_presorted_aggregate). */
+      if (agg_ref->aggorder != NIL) {
+        AttrNumber sort_resno = 2;
+        ListCell *lc;
+        foreach (lc, agg_ref->args) {
+          TargetEntry *arg_te = (TargetEntry *)lfirst(lc);
+          TargetEntry *te_sort;
+          if (arg_te->ressortgroupref == 0)
+            continue;
+          te_sort = makeTargetEntry((Expr *)copyObject(arg_te->expr),
+                                    sort_resno++, NULL, true);
+          te_sort->ressortgroupref = arg_te->ressortgroupref;
+          agg->args = lappend(agg->args, te_sort);
+        }
+        agg->aggorder = (List *)copyObject((Node *)agg_ref->aggorder);
       }
-      agg->aggorder = (List *)copyObject((Node *)agg_ref->aggorder);
     }
 
     // final aggregation function
@@ -16299,33 +16403,43 @@ typedef struct insert_agg_token_casts_context {
   bool in_having;             ///< Walking the HAVING clause
 } insert_agg_token_casts_context;
 
-static Oid orig_agg_type_of_column(Query *sub, AttrNumber attno,
-                                   const constants_t *constants, int depth);
+static Oid orig_agg_arg_of_column(Query *sub, AttrNumber attno,
+                                  const constants_t *constants, int depth,
+                                  int argno);
 
-/** @brief @c orig_agg_type_of_column for a Var of @p q, or @c InvalidOid. */
-static Oid orig_agg_type_of_var(Query *q, Var *v, const constants_t *constants,
-                                int depth) {
+/** @brief @c orig_agg_arg_of_column for a Var of @p q, or @c InvalidOid. */
+static Oid orig_agg_arg_of_var(Query *q, Var *v, const constants_t *constants,
+                               int depth, int argno) {
   RangeTblEntry *rte;
   if (v->varlevelsup != 0 || v->varno < 1 || v->varno > list_length(q->rtable))
     return InvalidOid;
   rte = rt_fetch(v->varno, q->rtable);
   if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
     return InvalidOid;
-  return orig_agg_type_of_column(rte->subquery, v->varattno, constants,
-                                 depth + 1);
+  return orig_agg_arg_of_column(rte->subquery, v->varattno, constants,
+                                depth + 1, argno);
+}
+
+/** @brief The type of the aggregate an @c agg_token Var of @p q comes from
+ *  (@c orig_agg_arg_of_column), or @c InvalidOid. */
+static Oid orig_agg_type_of_var(Query *q, Var *v, const constants_t *constants,
+                                int depth) {
+  return orig_agg_arg_of_var(q, v, constants, depth, 1);
 }
 
 /**
- * @brief The type of the aggregate an @c agg_token column of @p sub comes
- *        from, or @c InvalidOid.
+ * @brief The aggregate function (@p argno 0) or the type (@p argno 1) of the
+ *        aggregate an @c agg_token column of @p sub comes from, or
+ *        @c InvalidOid.
  *
  * Follows the column down: to the @c provenance_aggregate() call that makes
- * it (its second argument is the type), through the subqueries that pass it
- * on, and through the arms of a set operation (the padding of a lowered
- * outer join is one).
+ * it (its first two arguments are the aggregate and its type), through the
+ * subqueries that pass it on, and through the arms of a set operation (the
+ * padding of a lowered outer join is one).
  */
-static Oid orig_agg_type_of_column(Query *sub, AttrNumber attno,
-                                   const constants_t *constants, int depth) {
+static Oid orig_agg_arg_of_column(Query *sub, AttrNumber attno,
+                                  const constants_t *constants, int depth,
+                                  int argno) {
   TargetEntry *te;
   if (depth > 32 || attno < 1 || attno > list_length(sub->targetList))
     return InvalidOid;
@@ -16338,7 +16452,8 @@ static Oid orig_agg_type_of_column(Query *sub, AttrNumber attno,
       Oid t;
       if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
         continue;
-      t = orig_agg_type_of_column(rte->subquery, attno, constants, depth + 1);
+      t = orig_agg_arg_of_column(rte->subquery, attno, constants, depth + 1,
+                                 argno);
       if (OidIsValid(t))
         return t;
     }
@@ -16348,11 +16463,11 @@ static Oid orig_agg_type_of_column(Query *sub, AttrNumber attno,
   if (IsA(te->expr, FuncExpr) &&
       ((FuncExpr *)te->expr)->funcid ==
         constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-    Const *aggtype_const = (Const *)lsecond(((FuncExpr *)te->expr)->args);
-    return DatumGetObjectId(aggtype_const->constvalue);
+    Const *c = (Const *)list_nth(((FuncExpr *)te->expr)->args, argno);
+    return DatumGetObjectId(c->constvalue);
   }
   if (IsA(te->expr, Var))
-    return orig_agg_type_of_var(sub, (Var *)te->expr, constants, depth);
+    return orig_agg_arg_of_var(sub, (Var *)te->expr, constants, depth, argno);
   return InvalidOid;
 }
 
@@ -16360,7 +16475,7 @@ static Oid orig_agg_type_of_column(Query *sub, AttrNumber attno,
  * @brief Look up the original aggregate return type for an agg_token Var.
  *
  * The type of the aggregate the Var's subquery column comes from
- * (@c orig_agg_type_of_column).
+ * (@c orig_agg_type_of_var).
  */
 static Oid get_agg_token_orig_type(Var *v, insert_agg_token_casts_context *ctx) {
   return orig_agg_type_of_var(ctx->query, v, ctx->constants, 0);

@@ -380,6 +380,28 @@ moves with the current row has a gate per row, with as many children as
 the frame has rows: the circuit of a running aggregate is quadratic in
 the size of the partition.
 
+.. _reaggregation:
+
+Aggregates of aggregate results
+-------------------------------
+
+An aggregate of the aggregate results of a subquery is supported when it is
+of the same kind: ``sum`` over a ``sum`` or a ``count``, ``max`` over a
+``max``, ``min`` over a ``min``.  It is then the aggregate of the rows of
+the groups, each contributing with the provenance of its group row times its
+own, as semimodule scalar multiplication gives, in every semiring; and
+``count`` over a ``count`` counts the groups:
+
+.. code-block:: postgresql
+
+    SELECT dept, sum(n) AS employees          -- = count(*) per dept
+    FROM (SELECT dept, city, count(*) AS n FROM employees
+          GROUP BY dept, city) t
+    GROUP BY dept;
+
+Any other aggregate of an aggregate result (``avg`` of a ``count``, ``max``
+of a ``sum``...) is refused.
+
 Joining and exploding aggregated provenance
 --------------------------------------------
 
