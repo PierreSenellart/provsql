@@ -439,6 +439,8 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     get_provsql_func_oid("agg_token_plain_text");
   constants.OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE =
     get_provsql_func_oid("agg_token_frozen_value");
+  constants.OID_FUNCTION_AGG_TOKEN_EXPLODE_CHILDREN =
+    get_provsql_func_oid("agg_token_explode_children");
 
   constants.OID_FUNCTION_GATE_ZERO = get_provsql_func_oid("gate_zero");
   CheckOid(OID_FUNCTION_GATE_ZERO);

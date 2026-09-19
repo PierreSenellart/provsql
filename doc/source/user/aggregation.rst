@@ -392,7 +392,10 @@ ordinary (non-aggregate) column is rewritten automatically at plan time:
 the aggregated relation is replaced by a subquery that *explodes* the
 aggregate into one row per contributing child, recombining the child's
 value and provenance, so the join then runs as a plain ``text = text``
-comparison with provenance correctly propagated.
+comparison with provenance correctly propagated.  This reads the value of
+the aggregate as one of the values it aggregates, which only holds for
+:sqlfunc:`choose`: exploding the result of any other aggregate (a
+``count``, whose rows each contribute 1) is refused.
 
 .. code-block:: postgresql
 

@@ -58,6 +58,17 @@ FROM att GROUP BY grp HAVING max(val) = 'x';
 -- recombining each child's value and provenance.  The table is rebuilt in
 -- place (same schema), so its provsql column survives for readout.
 CREATE TABLE att_grp AS SELECT grp, choose(val ORDER BY id) AS pick FROM att GROUP BY grp;
+-- Only choose(): the value of any other aggregate is none of those it
+-- aggregates (a count contributes a 1 per row), explicitly or through a
+-- join on a stored aggregate column.
+CREATE TABLE att_cnt AS SELECT grp, count(*) AS n FROM att GROUP BY grp;
+CREATE TABLE att_k(k int);
+INSERT INTO att_k VALUES (1), (2);
+\set VERBOSITY terse
+SELECT explode_table('att_cnt', 'n');
+SELECT att_cnt.grp FROM att_cnt JOIN att_k ON att_cnt.n = att_k.k;
+\set VERBOSITY default
+DROP TABLE att_cnt, att_k;
 SELECT explode_table('att_grp', 'pick');
 -- Materialise the per-row provenance formula, then strip the auto-added
 -- provsql column (a non-deterministic UUID) before printing.

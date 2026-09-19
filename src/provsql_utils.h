@@ -240,6 +240,10 @@ typedef struct constants_t {
    *  result that ProvSQL casts to a plain value; @c InvalidOid on a schema
    *  that predates it. */
   Oid OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE;
+  /** @brief OID of @c agg_token_explode_children(), the children of the
+   *  gate of a @c choose() result exploded into rows; @c InvalidOid on a
+   *  schema that predates it. */
+  Oid OID_FUNCTION_AGG_TOKEN_EXPLODE_CHILDREN;
   Oid OID_FUNCTION_GATE_ZERO; ///< OID of the provenance_zero FUNCTION
   Oid OID_FUNCTION_GATE_ONE; ///< OID of the provenance_one FUNCTION
   Oid OID_OPERATOR_NOT_EQUAL_UUID; ///< OID of the <> operator on UUIDs FUNCTION

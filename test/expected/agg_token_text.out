@@ -34,6 +34,8 @@ B|0.000000
 (2 rows)
 ERROR:  ProvSQL: provenance_evaluate_compiled: comparing an aggregate with a text constant in HAVING is only implemented for choose()
 CONTEXT:  PL/pgSQL function sr_formula(anyelement,regclass) line 6 at RETURN
+ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or cast it explicitly (::bigint, ...) to read its plain value
+ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or cast it explicitly (::bigint, ...) to read its plain value
 explode_table
 
 (1 row)

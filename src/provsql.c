@@ -17171,7 +17171,11 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
   agg_to_uuid->location       = -1;
 
   get_children_of_agg = makeNode(FuncExpr);
-  get_children_of_agg->funcid         = constants->OID_FUNCTION_GET_CHILDREN;
+  /* Refused at execution unless the aggregate is choose() */
+  get_children_of_agg->funcid         =
+    OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_EXPLODE_CHILDREN)
+      ? constants->OID_FUNCTION_AGG_TOKEN_EXPLODE_CHILDREN
+      : constants->OID_FUNCTION_GET_CHILDREN;
   get_children_of_agg->funcresulttype = constants->OID_TYPE_UUID_ARRAY;
   get_children_of_agg->funcretset     = false;
   get_children_of_agg->funcvariadic   = false;

@@ -2304,6 +2304,67 @@ CREATE FUNCTION agg_token_plain_text(agg_token)
   RETURNS text
   AS 'provsql','agg_token_plain_text' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+/** @brief The children of the aggregation gate @p token, one per
+ *  contribution, to explode an aggregate result into rows (a join on it,
+ *  @c explode_table).  Only for @c choose(), whose value is one of its
+ *  contributions; any other aggregate is refused, its value being none of
+ *  them (@c count(*) contributes a 1 per row) (internal use). */
+CREATE FUNCTION agg_token_explode_children(token uuid)
+  RETURNS uuid[] AS
+$$
+BEGIN
+  IF provsql.get_gate_type(token) <> 'agg' THEN
+    RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+      MESSAGE = 'ProvSQL: only the result of an aggregate can be exploded '
+                'into rows';
+  END IF;
+  IF (provsql.get_infos(token)).info1 <>
+       'provsql.choose(anyelement)'::regprocedure::oid THEN
+    RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+      MESSAGE = format('ProvSQL: the result of %s() cannot be exploded into '
+                       'rows, one per value it aggregates: only that of '
+                       'choose() is one of them; compare it in a HAVING '
+                       'clause, or cast it explicitly (::bigint, ...) to '
+                       'read its plain value',
+                       (SELECT proname FROM pg_catalog.pg_proc
+                        WHERE oid = (provsql.get_infos(token)).info1));
+  END IF;
+  RETURN provsql.get_children(token);
+END
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
+
+-- explode_table explodes the result of choose() only
+CREATE OR REPLACE FUNCTION explode_table(_tbl text, agg_token text)
+RETURNS void AS $$
+DECLARE
+  _nsp text;
+BEGIN
+    -- Resolve the schema actually holding _tbl so the rebuilt table is
+    -- recreated in place (the provsql helper functions are schema-qualified
+    -- so this works whatever the caller's search_path is).
+    SELECT n.nspname INTO _nsp
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.oid = _tbl::regclass;
+
+    EXECUTE format('
+    CREATE TABLE %1$I.temp_exploded AS
+    SELECT
+        %2$I.*,
+        provsql.get_extra(children[2]) AS new_t,
+        provsql.provenance_times(children[1], provsql) AS new_provsql
+    FROM %1$I.%2$I,
+    LATERAL (
+        SELECT provsql.get_children(sm) AS children
+        FROM UNNEST(provsql.agg_token_explode_children(%3$I)) AS sm
+    ) AS sub', _nsp, _tbl, agg_token);
+    EXECUTE format('DROP TABLE %I.%I', _nsp, _tbl);
+    EXECUTE format('ALTER TABLE %I.temp_exploded DROP COLUMN %I, DROP COLUMN provsql', _nsp, agg_token);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME COLUMN new_t TO %I', _nsp, agg_token);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME COLUMN new_provsql TO provsql', _nsp);
+    EXECUTE format('ALTER TABLE %I.temp_exploded RENAME TO %I', _nsp, _tbl);
+END;
+$$ LANGUAGE plpgsql;
+
 /** @brief Value of an agg_token as text, NULL for a NULL value, without the
  *  provenance-loss warning of the public casts: the value of an aggregate
  *  result read as a plain value where ProvSQL casts it (in a function, an
