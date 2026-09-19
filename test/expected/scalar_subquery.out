@@ -773,3 +773,25 @@ NOT EXISTS DISTINCT|2|2
 NOT EXISTS DISTINCT|3|3
 (12 rows)
 ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+q|u|v|c
+DISTINCT EXISTS|1||1
+DISTINCT EXISTS|2||4
+GROUP BY NOT IN|1|0|1
+GROUP BY NOT IN|2|-1|1
+count IN||2|1
+(5 rows)

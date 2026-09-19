@@ -17920,6 +17920,102 @@ static Node *pull_up_vars_mutator(Node *node, void *cx) {
 }
 
 /**
+ * @brief Move the join and the @c WHERE of an aggregation or a @c DISTINCT
+ *        whose @c WHERE tests subqueries into a subquery of its own.
+ *
+ * @c SELECT @c count(*) @c FROM @c r @c WHERE @c r.a @c IN @c (SELECT ...) is
+ * rewritten as @c SELECT @c count(*) @c FROM @c (SELECT @c r.a @c FROM @c r
+ * @c WHERE @c r.a @c IN @c (SELECT ...)) @c s: the subquery tests are then in a
+ * query that keeps its input rows, which their rewritings handle, and the
+ * grouping, aggregates, @c HAVING, @c DISTINCT, @c ORDER @c BY and @c LIMIT
+ * apply to its rows.  The subquery exposes the columns the rest reads.
+ * Returns @c NULL, leaving @p q alone, unless the @c WHERE has a subquery over
+ * a tracked relation and neither the target list nor the @c HAVING has one.
+ */
+static Query *split_aggregation_over_sublinks(const constants_t *constants,
+                                              Query *q) {
+  Query *inner;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  pull_up_vars_ctx pctx;
+  sublink_tracked_ctx tctx;
+  ListCell *lc;
+  List *colnames = NIL;
+
+  if (q->commandType != CMD_SELECT || q->setOperations != NULL ||
+      q->groupingSets != NIL || q->rowMarks != NIL || q->jointree == NULL ||
+      q->jointree->quals == NULL ||
+      !(q->hasAggs || q->groupClause != NIL || q->distinctClause != NIL))
+    return NULL;
+  if (checkExprHasSubLink((Node *)q->targetList) ||
+      checkExprHasSubLink(q->havingQual))
+    return NULL;
+  tctx.constants = constants;
+  tctx.found = false;
+  sublink_over_tracked_walker(q->jointree->quals, &tctx);
+  if (!tctx.found)
+    return NULL;
+
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(q);
+#endif
+
+  inner = makeNode(Query);
+  inner->commandType = CMD_SELECT;
+  inner->canSetTag = true;
+  inner->rtable = q->rtable;
+#if PG_VERSION_NUM >= 160000
+  inner->rteperminfos = q->rteperminfos;
+  q->rteperminfos = NIL;
+#endif
+  inner->jointree = q->jointree;
+  inner->cteList = q->cteList;
+  inner->hasRecursive = q->hasRecursive;
+  inner->hasModifyingCTE = q->hasModifyingCTE;
+  inner->hasSubLinks = true;
+
+  pctx.inner = inner;
+  pctx.pulled = NIL;
+  pctx.resnos = NIL;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    te->expr = (Expr *)pull_up_vars_mutator((Node *)te->expr, &pctx);
+  }
+  q->havingQual = pull_up_vars_mutator(q->havingQual, &pctx);
+  if (inner->targetList == NIL) {
+    /* count(*) alone reads no column: the rows are what counts */
+    inner->targetList = list_make1(makeTargetEntry(
+      (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                        Int32GetDatum(1), false, true),
+      1, pstrdup("?column?"), false));
+  }
+  foreach (lc, inner->targetList)
+    colnames = lappend(colnames, makeString(pstrdup(
+      ((TargetEntry *)lfirst(lc))->resname)));
+
+  /* One level deeper: what inner reads from the queries around q */
+  IncrementVarSublevelsUp((Node *)inner, 1, 1);
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = inner;
+  rte->eref = makeAlias("filtered", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  q->rtable = list_make1(rte);
+  q->jointree = makeFromExpr(list_make1(rtr), NULL);
+  q->cteList = NIL;
+  q->hasRecursive = false;
+  q->hasModifyingCTE = false;
+  q->hasSubLinks = false;
+  return q;
+}
+
+/**
  * @brief Move the window values of a @c SELECT @c DISTINCT into a subquery.
  *
  * @c DISTINCT becomes a @c GROUP @c BY on every output column, and a window
@@ -19066,6 +19162,10 @@ static Query *process_query(const constants_t *constants, Query *q,
       has_provenance(constants, q))
     return process_query(constants, rewrite_grouping_sets(q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
+  if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
+      split_aggregation_over_sublinks(constants, q) != NULL)
+    return process_query(constants, q, removed, wrap_root, top_level,
+                         in_boolean_rewrite, NULL);
   if (provsql_active && q->hasDistinctOn && has_provenance(constants, q)) {
     Query *lowered = lower_distinct_on_to_rank(constants, q);
     if (lowered)

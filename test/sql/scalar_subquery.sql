@@ -1351,3 +1351,29 @@ SELECT * FROM ssd_r ORDER BY q, id;
 DROP TABLE ssd_r;
 SELECT id FROM ssd a WHERE k IN (SELECT DISTINCT ON (k) k FROM ssd ORDER BY k, id);
 DROP TABLE ssd, ssd_m;
+
+-- An aggregation, a GROUP BY or a DISTINCT whose WHERE tests subqueries: the
+-- join and the WHERE go into a subquery, which the rewritings of the tests
+-- handle, and the aggregation applies to its rows.
+CREATE TABLE ssx(id int, u int, v int);
+INSERT INTO ssx VALUES (1, 1, 5), (2, 2, 3), (3, 1, 0), (4, 2, -1);
+CREATE TABLE ssy(pid int, t int);
+INSERT INTO ssy VALUES (1, 10), (2, 4), (2, 10);
+SELECT add_provenance('ssx');
+SELECT add_provenance('ssy');
+SELECT create_provenance_mapping('ssx_m', 'ssx', 'id');
+CREATE TABLE ssx_r AS
+  SELECT 'count IN' AS q, NULL::int AS u, count(*)::text AS v,
+         sr_counting(provenance(), 'ssx_m') AS c
+  FROM ssx WHERE id IN (SELECT pid FROM ssy WHERE t = 10)
+  UNION ALL
+  SELECT 'DISTINCT EXISTS', u, NULL, sr_counting(provenance(), 'ssx_m')
+  FROM (SELECT DISTINCT u FROM ssx a
+        WHERE EXISTS (SELECT 1 FROM ssy WHERE ssy.pid = a.id)) t
+  UNION ALL
+  SELECT 'GROUP BY NOT IN', u, sum(v)::text, sr_counting(provenance(), 'ssx_m')
+  FROM ssx WHERE id NOT IN (SELECT pid FROM ssy) GROUP BY u;
+SELECT remove_provenance('ssx_r');
+SELECT * FROM ssx_r ORDER BY q, u;
+DROP TABLE ssx_r;
+DROP TABLE ssx, ssy, ssx_m;
