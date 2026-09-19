@@ -171,7 +171,38 @@ CREATE TABLE sn_o8 AS SELECT a, -a AS b FROM sn_r UNION SELECT a, -a FROM sn_w O
 SELECT remove_provenance('sn_o8');
 SELECT 'ORDER BY second column' AS q, string_agg(a::text, ' ' ORDER BY ctid) AS rows FROM sn_o8;
 
+-- ---------------------------------------------------------------------------
+-- CTEs read by the arms: an arm moved to a query of its own (a side of an
+-- INTERSECT, a nested set operation, the grouped right arm of an EXCEPT, the
+-- arms of a lowered outer join) reads them from one level further down.
+CREATE TABLE sn_c1 AS
+  WITH m1 AS (SELECT a FROM sn_r), m2 AS (SELECT a FROM sn_s)
+  SELECT a, sn_c(provenance()) AS c, sn_p(provenance()) AS p
+  FROM (SELECT a FROM m1 INTERSECT SELECT a FROM m2) t;
+SELECT remove_provenance('sn_c1');
+SELECT 'INTERSECT of CTEs' AS q, a, c, p FROM sn_c1 ORDER BY a;
+CREATE TABLE sn_c2 AS
+  WITH m1 AS (SELECT a FROM sn_r)
+  SELECT a, sn_c(provenance()) AS c, sn_p(provenance()) AS p
+  FROM ((SELECT a FROM m1 EXCEPT SELECT a FROM sn_w) UNION SELECT a FROM m1) t;
+SELECT remove_provenance('sn_c2');
+SELECT 'nested EXCEPT over a CTE' AS q, a, c, p FROM sn_c2 ORDER BY a;
+CREATE TABLE sn_c3 AS
+  WITH m2 AS (SELECT a FROM sn_s WHERE a > 1)
+  SELECT a, sn_c(provenance()) AS c, sn_p(provenance()) AS p
+  FROM (SELECT a FROM sn_r EXCEPT SELECT sn_w.a FROM sn_w, m2 WHERE sn_w.a = m2.a) t;
+SELECT remove_provenance('sn_c3');
+SELECT 'EXCEPT, right arm over a CTE' AS q, a, c, p FROM sn_c3 ORDER BY a;
+CREATE TABLE sn_c4 AS
+  WITH m2 AS (SELECT a FROM sn_s WHERE a > 1)
+  SELECT r.a, w.a AS b, sn_c(provenance()) AS c, sn_p(provenance()) AS p
+  FROM sn_r r LEFT JOIN (SELECT sn_w.a FROM sn_w, m2 WHERE sn_w.a = m2.a) w
+    ON r.a + 7 = w.a;
+SELECT remove_provenance('sn_c4');
+SELECT 'LEFT JOIN, padded side over a CTE' AS q, a, b, c, p FROM sn_c4
+ORDER BY a, b NULLS FIRST, c;
+
 DROP FUNCTION sn_c(uuid); DROP FUNCTION sn_p(uuid);
 DROP TABLE sn_r, sn_s, sn_w, sn_one, sn_t1, sn_t2, sn_t3, sn_t4, sn_t5, sn_t6,
   sn_t7, sn_t8, sn_t9, sn_t10, sn_t11, sn_o1, sn_o2, sn_o3, sn_o4, sn_o5, sn_o6,
-  sn_o7, sn_o8;
+  sn_o7, sn_o8, sn_c1, sn_c2, sn_c3, sn_c4;

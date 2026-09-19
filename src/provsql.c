@@ -9080,6 +9080,16 @@ static Query *set_operation_as_query(SetOperationStmt *stmt, List *old_rtable) {
   sub->jointree = makeFromExpr(NIL, NULL);
   set_operation_move_leaves((Node *)stmt, old_rtable, &sub->rtable);
   sub->setOperations = (Node *)stmt;
+  /* The leaves are one level further down: what they read from above (a
+   * CTE, a correlated column) is one level further up */
+  {
+    ListCell *lc;
+    foreach (lc, sub->rtable) {
+      RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc);
+      if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL)
+        IncrementVarSublevelsUp((Node *)rte->subquery, 1, 1);
+    }
+  }
 
   leftmost = (RangeTblEntry *)linitial(sub->rtable); /* leaves come in order */
   lc_te = list_head(leftmost->subquery->targetList);
@@ -9164,6 +9174,9 @@ static Query *rewrite_intersect(const constants_t *constants, Query *q) {
   n->commandType = CMD_SELECT;
   n->querySource = q->querySource;
   n->canSetTag = q->canSetTag;
+  n->cteList = q->cteList; /* read by the sides, at the same level */
+  n->hasRecursive = q->hasRecursive;
+  n->hasModifyingCTE = q->hasModifyingCTE;
   n->rtable = list_make2(oj_make_subquery_rte(left), oj_make_subquery_rte(right));
   l->rtindex = 1;
   r->rtindex = 2;
@@ -15463,6 +15476,10 @@ static void group_set_difference_right_arm(const constants_t *constants,
    * when the arm already carries a groupClause. */
   if (origB->groupClause != NIL || origB->groupingSets != NIL)
     return;
+
+  /* The arm goes one level down, into G: what it reads from above (a CTE,
+   * a correlated column) is one level further up */
+  IncrementVarSublevelsUp((Node *)origB, 1, 1);
 
   G = makeNode(Query);
   G->commandType = CMD_SELECT;

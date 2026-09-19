@@ -182,3 +182,38 @@ remove_provenance
 q|rows
 ORDER BY second column|9 7 5
 (1 row)
+remove_provenance
+
+(1 row)
+q|a|c|p
+INTERSECT of CTEs|1|2|0.3000
+(1 row)
+remove_provenance
+
+(1 row)
+q|a|c|p
+nested EXCEPT over a CTE|1|4|0.7500
+nested EXCEPT over a CTE|2|1|0.5000
+nested EXCEPT over a CTE|5|2|0.5000
+nested EXCEPT over a CTE|7|2|0.5000
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|c|p
+EXCEPT, right arm over a CTE|1|2|0.7500
+EXCEPT, right arm over a CTE|2|1|0.5000
+EXCEPT, right arm over a CTE|5|1|0.5000
+EXCEPT, right arm over a CTE|7|1|0.5000
+(4 rows)
+remove_provenance
+
+(1 row)
+q|a|b|c|p
+LEFT JOIN, padded side over a CTE|1||1|0.5000
+LEFT JOIN, padded side over a CTE|1||1|0.5000
+LEFT JOIN, padded side over a CTE|2||0|0.4600
+LEFT JOIN, padded side over a CTE|2|9|1|0.0400
+LEFT JOIN, padded side over a CTE|5||1|0.5000
+LEFT JOIN, padded side over a CTE|7||1|0.5000
+(6 rows)
