@@ -7322,6 +7322,10 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
     } else if (contain_windowfuncs((Node *)te->expr)) {
       /* A window over the groups (rank() OVER (ORDER BY count(DISTINCT x))):
        * computed at this level, after the grouping; not a key. */
+    } else if (q->groupClause == NIL && q->groupingSets == NIL) {
+      /* Without GROUP BY, a column outside the aggregates reads no row (a
+       * constant, as the empty grouping set of a ROLLUP has): the query stays
+       * one row, even over none, and the column no key. */
     } else {
       /* Aggregate-free column – treat as GROUP BY key */
       TargetEntry *te_copy = copyObject(te);

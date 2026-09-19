@@ -37,3 +37,20 @@ CREATE TABLE gs_r4 AS
 SELECT remove_provenance('gs_r4');
 SELECT * FROM gs_r4;
 DROP TABLE gs_r4;
+
+-- COUNT(DISTINCT) over the empty grouping set: one row, certain, even when
+-- no row matches (count 0), as without DISTINCT.
+CREATE TABLE gs_r5 AS
+  SELECT city, count(DISTINCT classification) AS n,
+         probability_evaluate(provenance()) AS p
+  FROM personnel WHERE id > 100 GROUP BY ROLLUP (city);
+SELECT remove_provenance('gs_r5');
+SELECT city, n::text AS n, p FROM gs_r5;
+DROP TABLE gs_r5;
+CREATE TABLE gs_r6 AS
+  SELECT count(DISTINCT classification) AS n, 7 AS k,
+         probability_evaluate(provenance()) AS p
+  FROM personnel;
+SELECT remove_provenance('gs_r6');
+SELECT n::text AS n, k, p FROM gs_r6;
+DROP TABLE gs_r6;
