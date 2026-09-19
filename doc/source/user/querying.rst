@@ -68,7 +68,7 @@ The following SQL constructs are supported with full provenance tracking:
   equivalent ``EXCEPT``.  An aggregate body can be compared against a
   constant or an outer column, including through ``IN``/``NOT IN``
   (the single-row aggregate body makes these scalar comparisons)
-* ``GROUP BY``
+* ``GROUP BY``, with ``GROUPING SETS``, ``ROLLUP`` and ``CUBE``
 * ``SELECT DISTINCT`` (set semantics), and ``DISTINCT ON``, read as
   a ``LIMIT 1`` in each group (see :ref:`limit`)
 * ``UNION`` and ``UNION ALL``
@@ -125,7 +125,6 @@ will either raise an error or may cause incorrect provenance tracking:
   an outer join whose null-padded side is untracked is fine
 * ``DISTINCT ON`` over an aggregation, a set operation, or keys or an
   order on values that vary between worlds
-* ``GROUPING SETS``, ``CUBE``, ``ROLLUP``
 * **Operations on aggregate results requiring comparison or duplicate
   elimination:** ``DISTINCT`` on aggregates, ``UNION``/``EXCEPT``
   (non-ALL) with aggregates, ``GROUP BY`` on aggregate results from a

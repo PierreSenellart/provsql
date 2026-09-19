@@ -52,6 +52,7 @@
 #include "parser/analyze.h"
 #include "access/xact.h"
 #include "utils/rel.h"
+#include "parser/parse_agg.h"
 #include "parser/parse_clause.h"
 #include "parser/parser.h"
 #include "parser/parse_coerce.h"
@@ -9161,6 +9162,189 @@ static Query *rewrite_intersect(const constants_t *constants, Query *q) {
   n->limitOption = q->limitOption;
 #endif
   return n;
+}
+
+/** @brief Context for @c grouping_set_mutator. */
+typedef struct grouping_set_ctx {
+  List *absent;  ///< Grouping expressions not in the set: NULL in its rows
+  List *set;     ///< The sortgrouprefs of the set (integers)
+} grouping_set_ctx;
+
+/**
+ * @brief Mutator: the value of an expression in the rows of one grouping set.
+ *
+ * A grouping expression not in the set is NULL there, but for the aggregates,
+ * which read the input rows; @c GROUPING(a, b, ...) is the constant whose bits,
+ * from the left, say which of its arguments are not in the set.
+ */
+static Node *grouping_set_mutator(Node *node, void *cx) {
+  grouping_set_ctx *ctx = (grouping_set_ctx *)cx;
+  ListCell *lc;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Aggref) || IsA(node, Query) || IsA(node, SubLink))
+    return node;
+  if (IsA(node, GroupingFunc) && ((GroupingFunc *)node)->agglevelsup == 0) {
+    int32 value = 0;
+    foreach (lc, ((GroupingFunc *)node)->refs)
+      value = (value << 1) | (list_member_int(ctx->set, lfirst_int(lc)) ? 0 : 1);
+    return (Node *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                             Int32GetDatum(value), false, true);
+  }
+  foreach (lc, ctx->absent)
+    if (equal(node, lfirst(lc)))
+      return (Node *)makeNullConst(exprType(node), exprTypmod(node),
+                                   exprCollation(node));
+  return expression_tree_mutator(node, grouping_set_mutator, cx);
+}
+
+/**
+ * @brief Rewrite a @c GROUP @c BY with @c GROUPING @c SETS, @c ROLLUP or
+ *        @c CUBE into the @c UNION @c ALL of one @c GROUP @c BY per set.
+ *
+ * In the rows of a set, the grouping expressions not in it are NULL, outside
+ * the aggregates, and @c GROUPING() is a constant; the empty set is an
+ * aggregation without @c GROUP @c BY (one row, even over no input row).  Each
+ * @c GROUP @c BY is then rewritten as usual.  The branches expose every entry
+ * (a set operation has no junk ones); an enclosing query keeps those of the
+ * statement, its @c DISTINCT, @c ORDER @c BY and @c LIMIT.
+ */
+static Query *rewrite_grouping_sets(Query *q) {
+  List *sets, *arms = NIL, *colnames = NIL;
+  List *types = NIL, *typmods = NIL, *collations = NIL;
+  Query *setop, *outer;
+  Node *tree = NULL;
+  ListCell *lc, *lc2;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  int k = 0;
+
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(q);
+#endif
+#if PG_VERSION_NUM >= 140000
+  sets = expand_grouping_sets(q->groupingSets, q->groupDistinct, -1);
+#else
+  sets = expand_grouping_sets(q->groupingSets, -1);
+#endif
+
+  foreach (lc, sets) {
+    List *set = (List *)lfirst(lc);
+    Query *arm = copyObject(q);
+    grouping_set_ctx ctx;
+    ListCell *lct;
+
+    ctx.set = set;
+    ctx.absent = NIL;
+    arm->groupingSets = NIL;
+#if PG_VERSION_NUM >= 140000
+    arm->groupDistinct = false;
+#endif
+    arm->groupClause = NIL;
+    foreach (lc2, q->groupClause) {
+      SortGroupClause *sgc = (SortGroupClause *)lfirst(lc2);
+      if (list_member_int(set, sgc->tleSortGroupRef))
+        arm->groupClause = lappend(arm->groupClause, copyObject(sgc));
+      else
+        ctx.absent = lappend(
+          ctx.absent,
+          copyObject(get_sortgroupclause_expr(sgc, q->targetList)));
+    }
+    arm->sortClause = NIL;
+    arm->distinctClause = NIL;
+    arm->limitCount = arm->limitOffset = NULL;
+    foreach (lct, arm->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lct);
+      bool grouped = te->ressortgroupref != 0 &&
+                     list_member_int(set, te->ressortgroupref);
+      te->expr = (Expr *)grouping_set_mutator((Node *)te->expr, &ctx);
+      te->resjunk = false;
+      if (te->resname == NULL)
+        te->resname = pstrdup("?column?");
+      if (!grouped)
+        te->ressortgroupref = 0;
+    }
+    arm->havingQual = grouping_set_mutator(arm->havingQual, &ctx);
+    arm->hasAggs = true;
+    arms = lappend(arms, arm);
+  }
+
+  /* The set operation over the branches */
+  setop = makeNode(Query);
+  setop->commandType = CMD_SELECT;
+  setop->canSetTag = true;
+  foreach (lc, arms)
+    setop->rtable = lappend(setop->rtable,
+                            oj_make_subquery_rte((Query *)lfirst(lc)));
+  foreach (lc, ((Query *)linitial(arms))->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    types = lappend_oid(types, exprType((Node *)te->expr));
+    typmods = lappend_int(typmods, exprTypmod((Node *)te->expr));
+    collations = lappend_oid(collations, exprCollation((Node *)te->expr));
+    setop->targetList = lappend(
+      setop->targetList,
+      makeTargetEntry((Expr *)makeVar(1, te->resno, exprType((Node *)te->expr),
+                                      exprTypmod((Node *)te->expr),
+                                      exprCollation((Node *)te->expr), 0),
+                      te->resno, pstrdup(te->resname), false));
+    colnames = lappend(colnames, makeString(pstrdup(te->resname)));
+  }
+  foreach (lc, arms) {
+    RangeTblRef *leaf = makeNode(RangeTblRef);
+    leaf->rtindex = ++k;
+    if (tree == NULL)
+      tree = (Node *)leaf;
+    else {
+      SetOperationStmt *so = makeNode(SetOperationStmt);
+      so->op = SETOP_UNION;
+      so->all = true;
+      so->larg = tree;
+      so->rarg = (Node *)leaf;
+      so->colTypes = list_copy(types);
+      so->colTypmods = list_copy(typmods);
+      so->colCollations = list_copy(collations);
+      tree = (Node *)so;
+    }
+  }
+  setop->jointree = makeFromExpr(NIL, NULL);
+  if (IsA(tree, RangeTblRef)) {
+    /* A single set: the branch itself */
+    setop = (Query *)linitial(arms);
+  } else
+    setop->setOperations = tree;
+
+  /* The statement's entries, DISTINCT, ORDER BY, LIMIT */
+  outer = makeNode(Query);
+  outer->commandType = CMD_SELECT;
+  outer->querySource = q->querySource;
+  outer->canSetTag = q->canSetTag;
+  rte = oj_make_subquery_rte(setop);
+  rte->eref->colnames = colnames;
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  outer->rtable = list_make1(rte);
+  outer->jointree = makeFromExpr(list_make1(rtr), NULL);
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    TargetEntry *ote = makeTargetEntry(
+      (Expr *)makeVar(1, te->resno, exprType((Node *)te->expr),
+                      exprTypmod((Node *)te->expr),
+                      exprCollation((Node *)te->expr), 0),
+      te->resno, te->resname, te->resjunk);
+    ote->ressortgroupref = te->ressortgroupref;
+    ote->resorigtbl = te->resorigtbl;
+    ote->resorigcol = te->resorigcol;
+    outer->targetList = lappend(outer->targetList, ote);
+  }
+  outer->distinctClause = q->distinctClause;
+  outer->hasDistinctOn = q->hasDistinctOn;
+  outer->sortClause = q->sortClause;
+  outer->limitCount = q->limitCount;
+  outer->limitOffset = q->limitOffset;
+#if PG_VERSION_NUM >= 130000
+  outer->limitOption = q->limitOption;
+#endif
+  return outer;
 }
 
 /**
@@ -18867,6 +19051,13 @@ static Query *process_query(const constants_t *constants, Query *q,
       return process_query(constants, outer, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
+  if (provsql_active && q->groupingSets != NIL &&
+      !(q->groupClause == NIL && list_length(q->groupingSets) == 1 &&
+        ((GroupingSet *)linitial(q->groupingSets))->kind ==
+          GROUPING_SET_EMPTY) &&
+      has_provenance(constants, q))
+    return process_query(constants, rewrite_grouping_sets(q), removed,
+                         wrap_root, top_level, in_boolean_rewrite, NULL);
   if (provsql_active && q->hasDistinctOn && has_provenance(constants, q)) {
     Query *lowered = lower_distinct_on_to_rank(constants, q);
     if (lowered)

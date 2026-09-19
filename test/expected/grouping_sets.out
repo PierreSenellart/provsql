@@ -1,2 +1,32 @@
 \set ECHO none
-ERROR:  ProvSQL: GROUPING SETS, CUBE, and ROLLUP not supported
+remove_provenance
+
+(1 row)
+city|n|counting
+|7 (*)|1
+Berlin|2 (*)|1
+New York|2 (*)|1
+Paris|3 (*)|1
+(4 rows)
+remove_provenance
+
+(1 row)
+city|classification|n|g
+Berlin|secret|2 (*)|0
+Berlin||2 (*)|1
+New York||2 (*)|1
+Paris||3 (*)|1
+||7 (*)|3
+(5 rows)
+remove_provenance
+
+(1 row)
+rows|total
+17|1
+(1 row)
+remove_provenance
+
+(1 row)
+n
+0 (*)
+(1 row)

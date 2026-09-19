@@ -409,4 +409,7 @@ Grouping Sets
 
 `GROUPING SETS, CUBE, and ROLLUP
 <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>`_
-are not supported.
+are read as the ``UNION ALL`` of one ``GROUP BY`` per grouping set: each
+group has the provenance it has in that ``GROUP BY``, and the empty set
+``()`` is an aggregation without ``GROUP BY``, whose single row is always
+there.
