@@ -32,8 +32,12 @@ grp|prob
 A|0.625000
 B|0.000000
 (2 rows)
-ERROR:  ProvSQL: provenance_evaluate_compiled: comparing an aggregate with a text constant in HAVING is only implemented for choose()
-CONTEXT:  PL/pgSQL function sr_formula(anyelement,regclass) line 6 at RETURN
+remove_provenance
+
+(1 row)
+grp|formula
+A|(1 ⊗ (𝟙 ⊖ (2 ⊕ 3))) ⊕ (3 ⊗ (𝟙 ⊖ (1 ⊕ 2))) ⊕ (1 ⊗ 3 ⊗ (𝟙 ⊖ 2))
+(1 row)
 ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or cast it explicitly (::bigint, ...) to read its plain value
 ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or cast it explicitly (::bigint, ...) to read its plain value
 explode_table

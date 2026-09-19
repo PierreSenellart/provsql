@@ -49,10 +49,15 @@ SELECT remove_provenance('r_prob');
 SELECT grp, round(prob::numeric, 6) AS prob FROM r_prob ORDER BY grp;
 DROP TABLE r_prob;
 
--- Only choose() is supported for an aggregate-vs-text comparison; any other
--- aggregate (here max) must raise a clear error rather than a wrong answer.
-SELECT grp, sr_formula(provenance(),'att_map')
-FROM att GROUP BY grp HAVING max(val) = 'x';
+-- max / min over text compare with a text constant by the order of the
+-- values, under the default collation: max(val) = 'x' holds when a row of
+-- value 'x' is there and none above it.
+CREATE TABLE att_max AS
+  SELECT grp, sr_formula(provenance(),'att_map') AS formula
+  FROM att GROUP BY grp HAVING max(val) = 'x';
+SELECT remove_provenance('att_max');
+SELECT * FROM att_max ORDER BY grp;
+DROP TABLE att_max;
 
 -- explode_table: expand an agg_token column back into one row per child,
 -- recombining each child's value and provenance.  The table is rebuilt in

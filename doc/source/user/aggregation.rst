@@ -202,8 +202,18 @@ over the choice.
 Comparing an aggregate with a text constant
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A ``HAVING`` clause may compare a text-valued aggregate with a text
-constant using ``=`` or ``<>``:
+A ``HAVING`` clause may compare ``min`` or ``max`` of a column of any
+ordered type -- text, date, timestamp... -- with a constant, by any
+comparison: the value in a world only depends on the order of the values,
+the type's own (under its default collation, for text).
+
+.. code-block:: postgresql
+
+    SELECT userid FROM badges GROUP BY userid
+    HAVING min(name) = 'Enthusiast';
+
+It may compare :sqlfunc:`choose` of such a column with a constant using
+``=`` or ``<>``:
 
 .. code-block:: postgresql
 
@@ -212,7 +222,8 @@ constant using ``=`` or ``<>``:
     GROUP BY city
     HAVING choose(position ORDER BY name) = 'Analyst';
 
-This is supported **only for** :sqlfunc:`choose`, which is *PICKFIRST*: in
+Among the other aggregates of a text column, this is supported **only
+for** :sqlfunc:`choose`, which is *PICKFIRST*: in
 any possible world its value is the first surviving occurrence of the
 group. Because "first" depends on the order of the group's occurrences,
 make the result deterministic with an explicit in-aggregate ordering,

@@ -366,7 +366,9 @@ void provsql_having(
       //      their text representation (bool, date, uuid, enum, ...); numeric
       //      choose() goes to the numeric domain below (which also supports the
       //      ordering comparisons).  Only = / <> are exposed here. ----
-      if (aggtype_is_text(aggtype) ||
+      if ((aggtype_is_text(aggtype) &&
+           agg_kind != AggregationOperator::MIN &&
+           agg_kind != AggregationOperator::MAX) ||
           (agg_kind == AggregationOperator::CHOOSE &&
            !aggtype_is_numeric(aggtype))) {
         std::string C_str;
@@ -670,11 +672,12 @@ void provsql_having(
         return true;
       };
 
-      // ---- Ordered domain: MIN / MAX over a type that is neither numeric nor
-      //      text (date, timestamp, ...).  Their value in a world only depends
-      //      on the order of the values, so values and threshold are mapped to
-      //      their ranks under the type's own comparison function, and the
-      //      integer machinery below applies. ----
+      // ---- Ordered domain: MIN / MAX over a type that is not numeric (text,
+      //      date, timestamp, ...).  Their value in a world only depends on
+      //      the order of the values, so values and threshold are mapped to
+      //      their ranks under the type's own comparison function (with its
+      //      default collation, for text), and the integer machinery below
+      //      applies. ----
       if (!aggtype_is_numeric(aggtype) &&
           (agg_kind == AggregationOperator::MIN ||
            agg_kind == AggregationOperator::MAX)) {
