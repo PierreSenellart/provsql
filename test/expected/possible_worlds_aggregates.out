@@ -1,0 +1,31 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: row_number() / LIMIT / DISTINCT ON is tracked as rank() (WITH TIES), which it differs from when rows tie on the ORDER BY
+remove_provenance
+
+(1 row)
+uid|pid|pr
+4|1|0.128906
+4|2|0.128906
+4|3|0.128906
+4|4|0.128906
+(4 rows)
+provsql.last_eval_method
+possible-worlds,possible-worlds-aggregates
+(1 row)
+remove_provenance
+
+(1 row)
+id|pr
+1|0.500000
+2|0.500000
+3|0.500000
+(3 rows)
+provsql.last_eval_method
+possible-worlds,possible-worlds-aggregates
+(1 row)

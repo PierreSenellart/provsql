@@ -2132,6 +2132,38 @@ static void record_last_eval_method(const std::string &actual_method)
  * @return        Float8 Datum containing the computed probability (undefined
  *                when @p isnull is set to @c true).
  */
+/// Name of the exact route that enumerates the worlds of the inputs on the
+/// circuit as it is, comparisons and aggregates evaluated per world.
+static const char *const kPossibleWorldsAgg = "possible-worlds-aggregates";
+/// Most inputs it enumerates the 2^n worlds of.
+static const unsigned kPossibleWorldsAggMaxInputs = 20;
+
+/// The most contributions an aggregation gate below @p root has, 0 when
+/// neither a comparison nor an aggregation is there.  The worst case of the
+/// Boolean view is the enumeration of the subsets of those contributions, so
+/// this is what the enumeration of the worlds of the inputs competes with.
+static unsigned maxAggContributions(const GenericCircuit &gc, gate_t root)
+{
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> todo;
+  unsigned most = 0;
+  bool any = false;
+  todo.push(root);
+  while(!todo.empty()) {
+    gate_t g = todo.top();
+    todo.pop();
+    if(!seen.insert(g).second) continue;
+    const gate_type t = gc.getGateType(g);
+    if(t == gate_cmp || t == gate_agg) {
+      any = true;
+      if(t == gate_agg)
+        most = std::max(most, static_cast<unsigned>(gc.getWires(g).size()));
+    }
+    for(gate_t c : gc.getWires(g)) todo.push(c);
+  }
+  return any ? std::max(most, 1u) : 0;
+}
+
 static Datum probability_evaluate_internal
   (pg_uuid_t token, const string &method, const string &args, bool *isnull)
 {
@@ -2311,6 +2343,44 @@ static Datum probability_evaluate_internal
      * iteration.  Fall through; the dispatch below passes
      * mc_fallback = mc_default so booleanSubcircuitProbability routes
      * to monteCarloRV. */
+  }
+
+  /* A comparison or an aggregation the resolution passes left in the
+   * circuit: the Boolean view of it (getBooleanCircuit, through
+   * provsql_having) enumerates the subsets of the comparison's own
+   * contributors, one Boolean term each -- millions of gates for the rank of
+   * a row among 21 candidates, where the contributors read the same handful
+   * of input tuples.  With fewer inputs than a comparison has contributions,
+   * enumerate the worlds of the inputs on the circuit as it is instead:
+   * exact, and 2^n evaluations of a circuit of its original size.  With as
+   * many inputs or fewer, the resolution is the cheaper of the two (and its
+   * closed forms cheaper still), so it keeps the circuit.  An explicitly
+   * named method keeps its own route. */
+  {
+    const bool named = !(method.empty() || method == "default");
+    const unsigned contributions = maxAggContributions(gc, gc_root);
+    if((!named || method == kPossibleWorldsAgg) && contributions > 0) {
+      /* At most as many inputs as the resolution would have contributions to
+       * enumerate subsets of, and never more than the bound */
+      const unsigned cap =
+        named ? kPossibleWorldsAggMaxInputs
+              : std::min(kPossibleWorldsAggMaxInputs, contributions - 1);
+      std::optional<double> p;
+      try {
+        p = provsql::enumerateBooleanProbability(gc, gc_root, cap);
+      } catch(const CircuitException &) {
+        if(named) throw;
+        p = std::nullopt;             /* a gate it cannot evaluate: fall back */
+      }
+      if(p) {
+        record_last_eval_method(kPossibleWorldsAgg);
+        return Float8GetDatum(*p);
+      }
+      if(named)
+        provsql_error("probability_evaluate: method %s needs a circuit whose "
+                      "only random sources are at most %u input tuples",
+                      kPossibleWorldsAgg, kPossibleWorldsAggMaxInputs);
+    }
   }
 
   double result;

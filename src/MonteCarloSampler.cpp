@@ -814,11 +814,13 @@ std::vector<double> monteCarloScalarSamples(
   return out;
 }
 
-std::optional<std::vector<std::pair<double, double>>>
-enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
-                      std::optional<gate_t> event, unsigned max_inputs)
+/** @brief The Boolean inputs the worlds of @p root (and @p event) range over,
+ *  or @c nullopt when another random source, an input without a probability,
+ *  or more than @p max_inputs inputs make the enumeration inapplicable. */
+static std::optional<std::vector<gate_t>>
+enumerableInputs(const GenericCircuit &gc, gate_t root,
+                 std::optional<gate_t> event, unsigned max_inputs)
 {
-  /* The random sources below root and event: Boolean inputs only */
   std::vector<gate_t> inputs;
   std::unordered_set<gate_t> seen;
   std::stack<gate_t> todo;
@@ -845,6 +847,50 @@ enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
     if(inputs.size() > max_inputs) return std::nullopt;
     for(gate_t c : gc.getWires(g)) todo.push(c);
   }
+  return inputs;
+}
+
+std::optional<double>
+enumerateBooleanProbability(const GenericCircuit &gc, gate_t root,
+                            unsigned max_inputs)
+{
+  auto inputs_opt = enumerableInputs(gc, root, std::nullopt, max_inputs);
+  if(!inputs_opt) return std::nullopt;
+  const std::vector<gate_t> &inputs = *inputs_opt;
+
+  std::mt19937_64 rng;  /* unused: every input is fixed */
+  Sampler sampler(gc, rng);
+  std::unordered_map<gate_t, bool> world;
+  sampler.fixInputs(&world);
+  double total = 0.0;
+  const std::uint64_t n_worlds = std::uint64_t(1) << inputs.size();
+  for(std::uint64_t w = 0; w < n_worlds; ++w) {
+    double p = 1.0;
+    for(std::size_t i = 0; i < inputs.size(); ++i) {
+      const bool present = (w >> i) & 1;
+      const double pi = gc.getProb(inputs[i]);
+      world[inputs[i]] = present;
+      p *= present ? pi : 1.0 - pi;
+    }
+    if(p == 0.0) continue;
+    sampler.resetIteration();
+    if(sampler.evalBool(root))
+      total += p;
+
+    if(provsql_interrupted)
+      throw CircuitException("Interrupted after " + std::to_string(w + 1) +
+                             " worlds");
+  }
+  return total;
+}
+
+std::optional<std::vector<std::pair<double, double>>>
+enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
+                      std::optional<gate_t> event, unsigned max_inputs)
+{
+  auto inputs_opt = enumerableInputs(gc, root, event, max_inputs);
+  if(!inputs_opt) return std::nullopt;
+  const std::vector<gate_t> &inputs = *inputs_opt;
 
   std::mt19937_64 rng;  /* unused: every input is fixed */
   Sampler sampler(gc, rng);

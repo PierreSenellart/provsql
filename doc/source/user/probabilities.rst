@@ -699,6 +699,11 @@ table summarises where each shines:
      - exact
      - Very few input tuples (a couple of dozen at most): brute force over all
        ``2^N`` worlds.
+   * - ``possible-worlds-aggregates``
+     - exact
+     - A comparison of aggregate results (a ``HAVING`` clause, the rank of a
+       ``LIMIT``) over few input tuples: the same brute force, the aggregates'
+       values computed in each world rather than turned into Boolean terms.
    * - ``sieve``
      - exact
      - Few clauses: a small monotone-DNF provenance (inclusion-exclusion).
@@ -789,6 +794,22 @@ Each method in detail:
     .. code-block:: postgresql
 
         SELECT probability_evaluate(provenance(), 'possible-worlds') FROM suspects;
+
+``'possible-worlds-aggregates'``
+    The same enumeration, with the aggregates' values computed in each world:
+    a comparison is then read from the values it compares there.  Every other
+    route works on the Boolean form of the circuit, in which a comparison of
+    aggregate results becomes one term per subset of the rows it aggregates --
+    the rank of a row among 21 candidates is millions of gates, though those
+    rows read a handful of input tuples.  So the chooser takes this route when
+    a comparison aggregates more rows than the circuit has input tuples, and
+    at most 20 of them; below that, the resolution and its closed forms are
+    cheaper:
+
+    .. code-block:: postgresql
+
+        SELECT probability_evaluate(provenance(), 'possible-worlds-aggregates')
+        FROM top_users;
 
 ``'sieve'``
     Exact computation by inclusion-exclusion over the clauses of a monotone-DNF

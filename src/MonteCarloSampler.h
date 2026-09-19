@@ -225,6 +225,25 @@ enumerateScalarWorlds(const GenericCircuit &gc, gate_t root,
                       std::optional<gate_t> event, unsigned max_inputs);
 
 /**
+ * @brief The probability of @p root, exactly, over the possible worlds of the
+ *        circuit as it is: the alternative to the Boolean view for a circuit
+ *        with comparison or aggregation gates.
+ *
+ * Every assignment of the inputs reachable from @p root (at most
+ * @p max_inputs of them) is evaluated as one world, the comparisons and
+ * aggregates read from the values they take there, and the probabilities of
+ * the worlds where @p root holds are summed.  So a rank or a @c HAVING
+ * comparison costs @c 2^n evaluations of the circuit, rather than the
+ * @c 2^contributors Boolean terms its resolution would emit.
+ * @c std::nullopt when the circuit has another random source (a
+ * @c gate_rv, a mixture, an observation, a @c gate_mulinput), an input
+ * without a probability, or more inputs than @p max_inputs.
+ */
+std::optional<double>
+enumerateBooleanProbability(const GenericCircuit &gc, gate_t root,
+                            unsigned max_inputs);
+
+/**
  * @brief Coupled per-iteration draws of two scalar roots.
  *
  * Each iteration resets the per-iteration cache once and evaluates both
