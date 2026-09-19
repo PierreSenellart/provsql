@@ -969,7 +969,7 @@ CREATE OR REPLACE FUNCTION table_info_invalidate()
 DROP TRIGGER IF EXISTS table_info_invalidate ON table_info;
 CREATE TRIGGER table_info_invalidate
   AFTER INSERT OR UPDATE OR DELETE ON table_info
-  FOR EACH ROW EXECUTE PROCEDURE provsql.table_info_invalidate();
+  FOR EACH ROW EXECUTE FUNCTION provsql.table_info_invalidate();
 
 /**
  * @brief Record per-relation provenance metadata used by the
@@ -1189,7 +1189,7 @@ BEGIN
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
   -- Seed the base-ancestor set to {self}: a base TID table's atoms
@@ -1361,7 +1361,7 @@ BEGIN
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
     _tbl);
   PERFORM provsql.set_table_info(_tbl::oid, 'bid', block_key_cols);
   -- Base BID tables also have themselves as their sole ancestor.  Same
@@ -1405,7 +1405,7 @@ DROP EVENT TRIGGER IF EXISTS provsql_cleanup_table_info;
 -- @c EXECUTE @c PROCEDURE (rather than the PG 11+ @c EXECUTE
 -- @c FUNCTION alias) so the extension installs on PG 10 too.
 CREATE EVENT TRIGGER provsql_cleanup_table_info ON sql_drop
-  EXECUTE PROCEDURE provsql.cleanup_table_info();
+  EXECUTE FUNCTION provsql.cleanup_table_info();
 
 /**
  * @brief Registry of provenance mappings

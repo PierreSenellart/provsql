@@ -25,18 +25,6 @@
 #include "postgres.h"
 #include "utils/uuid.h"
 
-#if PG_VERSION_NUM < 100000
-/// Number of bytes in a UUID
-#define UUID_LEN 16
-
-/** UUID structure. In versions of PostgreSQL < 10, pg_uuid_t is declared
- * to be an opaque struct pg_uuid_t in uuid.h, so we have to give the
- * definition of struct pg_uuid_t; this problem is resolved in PostgreSQL 10. */
-struct pg_uuid_t
-{
-  unsigned char data[UUID_LEN]; ///< Raw 16-byte UUID storage
-};
-#endif /* PG_VERSION_NUM */
 
 #include "postgres_ext.h"
 #include "nodes/pg_list.h"

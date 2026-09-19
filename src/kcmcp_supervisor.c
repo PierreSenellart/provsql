@@ -40,7 +40,7 @@
 
 #if PG_VERSION_NUM < 120000
 /* WL_EXIT_ON_PM_DEATH (have WaitLatch exit on postmaster death) was introduced
- * in PostgreSQL 12; on PG 10/11 fall back to the older WL_POSTMASTER_DEATH and
+ * in PostgreSQL 12; on PG 11 fall back to the older WL_POSTMASTER_DEATH and
  * leave the supervise loop ourselves when WaitLatch reports it (see kcmcp_wait). */
 #define WL_EXIT_ON_PM_DEATH WL_POSTMASTER_DEATH
 #endif
@@ -141,7 +141,7 @@ static void kill_server(pid_t child)
 
 /* Wait on the latch (and an optional timeout), resetting it.  Returns true if
  * the postmaster died: on PG >= 12 WL_EXIT_ON_PM_DEATH makes WaitLatch exit the
- * process itself (so this never returns true); on PG 10/11 it degrades to
+ * process itself (so this never returns true); on PG 11 it degrades to
  * WL_POSTMASTER_DEATH and WaitLatch returns with that bit set, which the caller
  * turns into a clean exit from the supervise loop. */
 static bool kcmcp_wait(long timeout_ms)
@@ -263,9 +263,7 @@ void RegisterProvSQLKCMCPWorker(void)
   BackgroundWorker worker;
   memset(&worker, 0, sizeof(worker));
   snprintf(worker.bgw_name, BGW_MAXLEN, "ProvSQL KCMCP Supervisor");
-#if PG_VERSION_NUM >= 110000
   snprintf(worker.bgw_type, BGW_MAXLEN, "ProvSQL KCMCP");
-#endif
   worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
   worker.bgw_start_time = BgWorkerStart_PostmasterStart;
   worker.bgw_restart_time = 1;

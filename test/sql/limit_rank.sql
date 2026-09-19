@@ -8,9 +8,6 @@ SET search_path TO provsql_test, provsql;
 -- that may be kept is output, annotated with that condition.  LIMIT
 -- plain(k) truncates the actual result instead.  Rows 2 and 3 tie on x; y
 -- has NULLs.
-SELECT current_setting('server_version_num')::int >= 110000 AS pg_has_exclude
-\gset
-\if :pg_has_exclude
 
 CREATE TABLE lr_plain(id int, g text, x int, y int, p float8);
 INSERT INTO lr_plain VALUES
@@ -201,8 +198,3 @@ DROP VIEW lr_world.lr;
 DROP SCHEMA lr_world;
 DROP TABLE lr, lr_plain;
 
-\else
-
-\echo limit_rank: skipped on PostgreSQL < 11
-
-\endif

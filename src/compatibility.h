@@ -155,7 +155,7 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #if PG_VERSION_NUM < 130000
 /** @brief Alignment codes for the array routines (@c construct_array /
  * @c deconstruct_array).  The @c TYPALIGN_* macros (in @c catalog/pg_type.h)
- * were introduced in PostgreSQL 13; on PG 10-12 the alignment is passed as
+ * were introduced in PostgreSQL 13; on PG 11-12 the alignment is passed as
  * the older @c 'i' / @c 'c' characters. */
 #define TYPALIGN_INT 'i'
 #define TYPALIGN_CHAR 'c'
@@ -178,13 +178,5 @@ List *list_insert_nth(List *list, int pos, void *datum);
 #define F_DENSE_RANK_ 3102
 #endif
 
-#if PG_VERSION_NUM < 110000
-/** @brief Window frame bounds given by an offset (pre-PG 11).  PostgreSQL 11
- * renamed the @c FRAMEOPTION_*_VALUE_* flags @c FRAMEOPTION_*_OFFSET_*, when
- * it added offsets to @c RANGE frames (@c GROUPS frames and @c EXCLUDE
- * clauses, new then too, have no older name). */
-#define FRAMEOPTION_START_OFFSET_PRECEDING FRAMEOPTION_START_VALUE_PRECEDING
-#define FRAMEOPTION_END_OFFSET_FOLLOWING FRAMEOPTION_END_VALUE_FOLLOWING
-#endif
 
 #endif /* COMPATIBILITY_H */

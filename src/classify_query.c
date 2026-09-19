@@ -108,8 +108,7 @@ static bool classify_fromlist_shape_ok(Node *n) {
  * of the rewriter selects in each world, so a row's annotation reads the
  * rows sorted before it.  A clause marked @c plain() truncates the actual
  * result and leaves lineages alone, as a LIMIT without ORDER BY does.
- * Conservative: a clause the rewriter leaves a truncation (on PostgreSQL
- * < 11, for instance) is reported too.
+ * Conservative: a clause the rewriter leaves a truncation is reported too.
  */
 static bool limit_is_rank_filter(const Query *q) {
   constants_t constants;

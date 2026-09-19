@@ -50,9 +50,6 @@ DROP TABLE lw_1, lw_2, lw_3, lw_4, lw_5, lw_6, lw_7, lw_8, lw_9, lw_10, lw_11,
 
 -- The filter of a rank needs PostgreSQL 11 (window frames with EXCLUDE);
 -- before, these LIMITs stay truncations, with the warning.
-SELECT current_setting('server_version_num')::int >= 110000 AS pg_has_exclude
-\gset
-\if :pg_has_exclude
 
 \echo -- no warning: the filter of a rank, in a FROM subquery, alone as OFFSET, in LATERAL, a CTE, an arm, below an INSERT
 CREATE TABLE lw_15 AS SELECT a FROM (SELECT a FROM lw_t ORDER BY a LIMIT 2) s;
@@ -71,10 +68,5 @@ INSERT INTO lw_dst SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIMIT 
 CREATE TABLE lw_22 AS SELECT a, count(*) FROM lw_t GROUP BY a ORDER BY a LIMIT plain(2);
 DROP TABLE lw_20, lw_21, lw_22;
 
-\else
-
-\echo limit_warning: the filter of a rank skipped on PostgreSQL < 11
-
-\endif
 
 DROP TABLE lw_t, lw_u, lw_dst;

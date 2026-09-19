@@ -20,7 +20,7 @@ extern "C" {
 #include "utils/builtins.h"
 #include "utils/tuplestore.h"
 
-#include "compatibility.h"   /* TYPALIGN_INT fallback for PG < 11 */
+#include "compatibility.h"   /* TYPALIGN_INT fallback for PG < 13 */
 
 PG_FUNCTION_INFO_V1(rv_families);
 }

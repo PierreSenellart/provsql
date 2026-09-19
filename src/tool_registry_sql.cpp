@@ -41,7 +41,7 @@ extern "C" {
 #include "varatt.h"
 #endif
 
-#include "compatibility.h"   /* TYPALIGN_INT fallback for PG < 11 */
+#include "compatibility.h"   /* TYPALIGN_INT fallback for PG < 13 */
 
 PG_FUNCTION_INFO_V1(tool_registry_list);
 PG_FUNCTION_INFO_V1(tool_registry_register);

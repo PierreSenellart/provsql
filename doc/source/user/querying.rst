@@ -179,7 +179,7 @@ rows of each group, as a ``rank()`` compared with ``k`` does (see
 :ref:`window-aggregates`). So does ``SELECT DISTINCT ON (g) … ORDER BY
 g, …``, with ``k`` = 1: in each world, it keeps the rows of each group
 that no present row of the group comes before, reading ties as
-``WITH TIES``, with a ``WARNING``. This needs PostgreSQL 11 or later.
+``WITH TIES``, with a ``WARNING``.
 
 When the order of the rows is not in question, for instance to look at
 the first rows of a result, or when the tokens do not stand for the

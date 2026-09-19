@@ -91,8 +91,8 @@
 #include "provsql_utils.h"
 #include "safe_query.h"
 
-#if PG_VERSION_NUM < 100000
-#error "ProvSQL requires PostgreSQL version 10 or later"
+#if PG_VERSION_NUM < 110000
+#error "ProvSQL requires PostgreSQL version 11 or later"
 #endif
 
 #include "compatibility.h"
@@ -4498,8 +4498,7 @@ static Aggref *aggref_sibling(Aggref *ar, const char *name) {
                           true);
   Aggref *res;
 
-  /* An aggregate is a function with a pg_aggregate row; pg_proc.prokind only
-   * exists since PostgreSQL 11. */
+  /* An aggregate is a function with a pg_aggregate row */
   if (!OidIsValid(fn) || fn >= FirstNormalObjectId ||
       !SearchSysCacheExists1(AGGFNOID, ObjectIdGetDatum(fn)) ||
       get_func_rettype(fn) != argtype)
@@ -7169,27 +7168,6 @@ static void scalar_distinct_as_cross_join(Query *q, int base, int n) {
 }
 
 /**
- * @brief Rewrite every @c AGG(DISTINCT key) in @p q using independent subqueries.
- *
- * For a single DISTINCT aggregate, produces a subquery:
- * @code
- *   SELECT AGG(key), gb...  FROM (SELECT key, gb... FROM t GROUP BY key, gb...) GROUP BY gb...
- * @endcode
- * For multiple DISTINCT aggregates with different keys, produces an JOIN
- * of one such subquery per aggregate, joined on the GROUP BY columns.
- * Non-DISTINCT aggregates are left untouched.
- *
- * @c AGG(DISTINCT) aggregates appearing in the @c HAVING clause are handled
- * the same way (one deduped outer per aggregate) and the @c HAVING Aggref is
- * replaced by a @c Var to its outer's count column, so the comparison's
- * provenance is built over the per-distinct-value rows rather than the raw
- * tuples.
- *
- * @param q            Query to inspect and possibly rewrite.
- * @param constants    Extension OID cache.
- * @return   Rewritten query, or @c NULL if no @c AGG(DISTINCT) was found.
- */
-/**
  * @brief Can @p ar, an @c AGG(DISTINCT), be computed over the distinct values
  *        of its first argument?
  *
@@ -7226,6 +7204,27 @@ static bool agg_distinct_args_supported(Aggref *ar) {
   return true;
 }
 
+/**
+ * @brief Rewrite every @c AGG(DISTINCT key) in @p q using independent subqueries.
+ *
+ * For a single DISTINCT aggregate, produces a subquery:
+ * @code
+ *   SELECT AGG(key), gb...  FROM (SELECT key, gb... FROM t GROUP BY key, gb...) GROUP BY gb...
+ * @endcode
+ * For multiple DISTINCT aggregates with different keys, produces an JOIN
+ * of one such subquery per aggregate, joined on the GROUP BY columns.
+ * Non-DISTINCT aggregates are left untouched.
+ *
+ * @c AGG(DISTINCT) aggregates appearing in the @c HAVING clause are handled
+ * the same way (one deduped outer per aggregate) and the @c HAVING Aggref is
+ * replaced by a @c Var to its outer's count column, so the comparison's
+ * provenance is built over the per-distinct-value rows rather than the raw
+ * tuples.
+ *
+ * @param q            Query to inspect and possibly rewrite.
+ * @param constants    Extension OID cache.
+ * @return   Rewritten query, or @c NULL if no @c AGG(DISTINCT) was found.
+ */
 static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
   List *groupby_tes = NIL;
   ListCell *lc;
@@ -8371,7 +8370,7 @@ static Expr *make_window_aggregation_expression(const constants_t *constants,
 
 /**
  * @brief The number of rows strictly before the current one, as the
- *        aggregate @c count(*) over a window, or @c NULL on PostgreSQL < 11.
+ *        aggregate @c count(*) over a window.
  *
  * The rank of a row is one plus the number of rows strictly before it, the
  * rows of the frame @c RANGE @c BETWEEN @c UNBOUNDED @c PRECEDING @c AND
@@ -8383,7 +8382,6 @@ static Expr *make_window_aggregation_expression(const constants_t *constants,
  * contributors, and fold the @c + @c 1 into their threshold.
  */
 static WindowFunc *make_rank_window(Query *q, WindowFunc *wf) {
-#ifdef FRAMEOPTION_EXCLUDE_GROUP
   WindowClause *wc = window_clause_of(q, wf->winref);
   WindowClause *frame;
   WindowFunc *count;
@@ -8418,11 +8416,6 @@ static WindowFunc *make_rank_window(Query *q, WindowFunc *wf) {
   count->winagg = true;
   count->location = wf->location;
   return count;
-#else
-  (void)q;
-  (void)wf;
-  return NULL;
-#endif
 }
 
 /** @brief Context for @c window_aggregation_mutator. */
@@ -10637,6 +10630,30 @@ static Node *normalize_bool_agg_having(Node *n) {
 }
 
 /**
+ * @brief @p arg, a column of the EXCEPT arm @p rte, with the type of that
+ *        column, coerced to the type of the set operation's column @p v.
+ */
+static Expr *except_arm_column(RangeTblEntry *rte, Var *arg, Var *v) {
+  TargetEntry *te;
+  Oid type;
+
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
+    return (Expr *)arg;
+  te = get_tle_by_resno(rte->subquery->targetList, arg->varattno);
+  if (te == NULL)
+    return (Expr *)arg;
+  type = exprType((Node *)te->expr);
+  if (type == v->vartype)
+    return (Expr *)arg;
+  arg->vartype = type;
+  arg->vartypmod = exprTypmod((Node *)te->expr);
+  arg->varcollid = exprCollation((Node *)te->expr);
+  return (Expr *)coerce_to_target_type(NULL, (Node *)arg, type, v->vartype,
+                                       v->vartypmod, COERCION_IMPLICIT,
+                                       COERCE_IMPLICIT_CAST, -1);
+}
+
+/**
  * @brief Rewrite a difference node into a LEFT JOIN with monus provenance.
  *
  * The node is the internal @c EXCEPT @c ALL of two leaves, the multiset
@@ -10662,30 +10679,6 @@ static Node *normalize_bool_agg_having(Node *n) {
  * @param q          Query to rewrite in place.
  * @return  Always true (errors out on unsupported cases).
  */
-/**
- * @brief @p arg, a column of the EXCEPT arm @p rte, with the type of that
- *        column, coerced to the type of the set operation's column @p v.
- */
-static Expr *except_arm_column(RangeTblEntry *rte, Var *arg, Var *v) {
-  TargetEntry *te;
-  Oid type;
-
-  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL)
-    return (Expr *)arg;
-  te = get_tle_by_resno(rte->subquery->targetList, arg->varattno);
-  if (te == NULL)
-    return (Expr *)arg;
-  type = exprType((Node *)te->expr);
-  if (type == v->vartype)
-    return (Expr *)arg;
-  arg->vartype = type;
-  arg->vartypmod = exprTypmod((Node *)te->expr);
-  arg->varcollid = exprCollation((Node *)te->expr);
-  return (Expr *)coerce_to_target_type(NULL, (Node *)arg, type, v->vartype,
-                                       v->vartypmod, COERCION_IMPLICIT,
-                                       COERCE_IMPLICIT_CAST, -1);
-}
-
 static bool transform_except_into_join(const constants_t *constants, Query *q) {
   SetOperationStmt *setOps = (SetOperationStmt *)q->setOperations;
   RangeTblEntry *rte = makeNode(RangeTblEntry);
@@ -17803,12 +17796,10 @@ static bool is_const_or_param(Node *n) {
  * That needs an @c ORDER @c BY on values that are the same in every world,
  * no @c plain() marker, a query that keeps its input rows (no aggregation,
  * grouping, @c DISTINCT, set operation or set-returning function), limits
- * that are constants or parameters, and the rank tracking of window
- * functions (PostgreSQL 11 and later).  @c OFFSET with @c WITH @c TIES is
+ * that are constants or parameters.  @c OFFSET with @c WITH @c TIES is
  * left out: the rows it skips are counted by position, among peers too.
  */
 static bool limit_lowerable(const constants_t *constants, Query *q) {
-#ifdef FRAMEOPTION_EXCLUDE_GROUP
   ListCell *lc;
   bool ties = false;
 
@@ -17853,11 +17844,6 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
     }
   }
   return true;
-#else
-  (void)constants;
-  (void)q;
-  return false;
-#endif
 }
 
 /** @brief Context for @c pull_up_vars_mutator. */
@@ -18295,7 +18281,6 @@ static Query *lower_limit_to_rank(const constants_t *constants, Query *q) {
  *        rows, keys and order on values that are the same in every world.
  */
 static bool distinct_on_lowerable(const constants_t *constants, Query *q) {
-#ifdef FRAMEOPTION_EXCLUDE_GROUP
   ListCell *lc;
   if (q->commandType != CMD_SELECT || !q->hasDistinctOn ||
       q->groupClause != NIL || q->groupingSets != NIL || q->hasAggs ||
@@ -18312,11 +18297,6 @@ static bool distinct_on_lowerable(const constants_t *constants, Query *q) {
       return false;
   }
   return true;
-#else
-  (void)constants;
-  (void)q;
-  return false;
-#endif
 }
 
 /**
@@ -18334,7 +18314,6 @@ static bool distinct_on_lowerable(const constants_t *constants, Query *q) {
  */
 static Query *lower_distinct_on_to_rank(const constants_t *constants,
                                         Query *q) {
-#ifdef FRAMEOPTION_EXCLUDE_GROUP
   List *partition, *order = NIL, *sort;
   Node *limit_count, *limit_offset;
   ListCell *lc;
@@ -18379,11 +18358,6 @@ static Query *lower_distinct_on_to_rank(const constants_t *constants,
   outer->limitOption = limit_option;
 #endif
   return outer;
-#else
-  (void)constants;
-  (void)q;
-  return NULL;
-#endif
 }
 
 /** @brief Whether @p n is a column named @c provsql of type uuid of an entry
@@ -19952,22 +19926,15 @@ static void refuse_except_all(const constants_t *constants, Query *q) {
  * @c limit_lowerable accepts it.  Over an aggregation, a DISTINCT, a set
  * operation, or sort keys whose values vary between worlds, it is not: the
  * statement then shows the first rows of the actual result, which @c plain()
- * says explicitly.  Not reported where the rewriting of ranks is missing
- * altogether (PostgreSQL < 11, or a schema without @c plain()).
+ * says explicitly.  Not reported on a schema without @c plain().
  */
 static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
-#ifdef FRAMEOPTION_EXCLUDE_GROUP
   return OidIsValid(constants->OID_FUNCTION_PLAIN) &&
          OidIsValid(constants->OID_FUNCTION_ROW_NUMBER_AS_RANK) &&
          q->sortClause != NIL && limit_truncates(q) &&
          !is_actual_marker(constants, q->limitCount) &&
          !is_actual_marker(constants, q->limitOffset) &&
          has_provenance(constants, q) && !limit_lowerable(constants, q);
-#else
-  (void)constants;
-  (void)q;
-  return false;
-#endif
 }
 
 /** @brief Emit the warning @c top_limit_is_truncation calls for. */
@@ -20602,11 +20569,7 @@ static void provsql_ProcessUtility_apply(Node *parsetree,
   appendStringInfo(&trigger_sql,
       "CREATE TRIGGER provenance_guard "
       "BEFORE INSERT OR UPDATE OF provsql ON %s.%s "
-      /* "EXECUTE PROCEDURE" is the legacy form, kept as a valid synonym
-       * of "EXECUTE FUNCTION" through PG 18 -- matches the rest of the
-       * codebase and stays PG 10-compatible.  Promote when PG 10 drops
-       * out of the support floor. */
-      "FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()",
+      "FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()",
       quote_identifier(nspname), quote_identifier(relname));
   if (SPI_connect() != SPI_OK_CONNECT)
     provsql_error("CTAS lineage hook: SPI_connect failed");

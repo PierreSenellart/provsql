@@ -44,7 +44,7 @@ To clone the development version directly:
 Prerequisites
 ^^^^^^^^^^^^^
 
-1. **PostgreSQL ≥ 10.** ProvSQL has been tested with versions 10–18 under
+1. **PostgreSQL ≥ 11.** ProvSQL has been tested with versions 11–18 under
    Linux, macOS (x86-64 and ARM), and Windows Subsystem for Linux.
 
 2. **Build tools.** ``make``, a C/C++ compiler supporting C++17, and
@@ -228,11 +228,11 @@ your checkout). To upgrade an existing installation:
    **PostgreSQL < 12** across any version boundary whose upgrade
    script appends gate-type enum values (1.5.0 and several later
    releases do): such scripts run ``ALTER TYPE ... ADD VALUE``
-   statements, which PostgreSQL 10 and 11 reject inside the single
+   statements, which PostgreSQL 11 rejects inside the single
    transaction PostgreSQL wraps the upgrade chain in. Fresh installs
    (``CREATE EXTENSION provsql``) work on every supported PostgreSQL
    version; the restriction only affects the in-place upgrade path.
-   To move an existing database forward under PostgreSQL 10 or 11,
+   To move an existing database forward under PostgreSQL 11,
    upgrade to PostgreSQL 12+ first -- copying the store by hand, since
    ``pg_upgrade`` leaves it behind (see :doc:`persistence`) -- and then
    run ``ALTER EXTENSION provsql UPDATE``, or drop and recreate the

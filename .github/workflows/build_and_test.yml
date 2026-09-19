@@ -61,7 +61,7 @@ jobs:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     strategy:
       matrix:
-        pg: [18, 17, 16, 15, 14, 13, 12, 11, 10]
+        pg: [18, 17, 16, 15, 14, 13, 12, 11]
     name: 🐘 PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools

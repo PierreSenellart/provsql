@@ -17,7 +17,7 @@ Website: **<https://provsql.org/>** – Documentation: **<https://provsql.org/do
 
 ## Quick Install
 
-**Prerequisites:** PostgreSQL ≥ 10, a C++17 compiler, PostgreSQL development
+**Prerequisites:** PostgreSQL ≥ 11, a C++17 compiler, PostgreSQL development
 headers, `uuid-ossp`, and the Boost libraries (`libboost-dev`,
 `libboost-serialization-dev`).
 

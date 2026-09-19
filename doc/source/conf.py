@@ -529,7 +529,7 @@ _C_FUNC_MAP = {
     'find_external_tool':        '/doxygen-c/html/external__tool_8cpp.html#afc4e5f1da9e5c67b5476d87a80726739',
     'format_external_tool_status': '/doxygen-c/html/external__tool_8cpp.html#a9dea3c210f8e5188da8c3d56d6d21f2a',
     # Global state
-    'provsql_interrupted':       '/doxygen-c/html/provsql__utils_8h.html#a9692a0205a857ed2cc29558470c2ed77',
+    'provsql_interrupted':       '/doxygen-c/html/provsql__utils_8h.html#a98a087a83e4f8c263311b390cc5bc395',
     # Error reporting macros
     'provsql_error':             '/doxygen-c/html/provsql__error_8h.html#aad553d1e9e68bc5ad84b4a1d3a5302d1',
     'provsql_warning':           '/doxygen-c/html/provsql__error_8h.html#ae09e94e07fbfb516602a4107a22f585f',

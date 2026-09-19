@@ -40,7 +40,7 @@ PostgreSQL bugs with |cpp| extensions.
 PostgreSQL Version Compatibility
 --------------------------------
 
-ProvSQL supports PostgreSQL 10 through 18.  Version-specific C code
+ProvSQL supports PostgreSQL 11 through 18.  Version-specific C code
 uses the ``PG_VERSION_NUM`` macro (from PostgreSQL's own ``pg_config.h``):
 
 .. code-block:: c
@@ -589,7 +589,7 @@ Nine GitHub Actions workflows are defined:
    * - Workflow
      - What it does
    * - ``build_and_test.yml``
-     - Builds and tests on Linux with PostgreSQL 10--18 (Docker-based).
+     - Builds and tests on Linux with PostgreSQL 11--18 (Docker-based).
        Also builds and pushes the Docker image on tagged releases.
        Runs on every push.
    * - ``macos.yml``

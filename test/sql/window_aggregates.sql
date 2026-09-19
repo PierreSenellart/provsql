@@ -164,9 +164,6 @@ DROP TABLE wa_shown, wa_win, wa_grp, wa_sorted, wa_untracked, wa_over_groups;
 -- Frames with an EXCLUDE clause or in GROUPS mode (PostgreSQL 11+), and the
 -- ranks built on them.  A frame that excludes the current row may be empty
 -- while the row exists: a count is then 0, a sum NULL.
-SELECT current_setting('server_version_num')::int >= 110000 AS pg_has_exclude
-\gset
-\if :pg_has_exclude
 
 SELECT * FROM wa_report('rows strictly before',
   'count(*) OVER (PARTITION BY g ORDER BY x RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP)',
@@ -267,11 +264,6 @@ SELECT remove_provenance('wa_groups_offset');
 SELECT * FROM wa_groups_offset ORDER BY id;
 DROP TABLE wa_groups_offset;
 
-\else
-
-\echo window_aggregates: frames with EXCLUDE or GROUPS, and ranks, skipped on PostgreSQL < 11
-
-\endif
 
 DROP FUNCTION wa_report(text, text, text);
 DROP FUNCTION wa_check(text, text);

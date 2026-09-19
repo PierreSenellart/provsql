@@ -123,7 +123,7 @@ DO $$ BEGIN
     CREATE CONSTRAINT TRIGGER stamp_commit_time
       AFTER INSERT ON provsql.update_provenance
       DEFERRABLE INITIALLY DEFERRED
-      FOR EACH ROW EXECUTE PROCEDURE provsql.stamp_commit_time();
+      FOR EACH ROW EXECUTE FUNCTION provsql.stamp_commit_time();
   END IF;
 END $$;
 
@@ -154,12 +154,12 @@ BEGIN
   EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
   EXECUTE format(
     'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
-    'ON %s FOR EACH ROW EXECUTE PROCEDURE provsql.provenance_guard()',
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
     _tbl);
 
-  EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %s REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.insert_statement_trigger()', _tbl);
-  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %s REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.delete_statement_trigger()', _tbl);
-  EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE PROCEDURE provsql.update_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %s REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE FUNCTION provsql.insert_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %s REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE FUNCTION provsql.delete_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE FUNCTION provsql.update_statement_trigger()', _tbl);
 
   PERFORM provsql.set_table_info(_tbl::oid, 'tid');
   PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);

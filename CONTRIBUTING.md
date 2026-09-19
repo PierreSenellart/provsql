@@ -28,7 +28,7 @@ it before submitting a non-trivial pull request.
 
 ## Development setup
 
-**Prerequisites:** PostgreSQL ≥ 10 with development headers, a C++17 compiler,
+**Prerequisites:** PostgreSQL ≥ 11 with development headers, a C++17 compiler,
 `uuid-ossp`, and the Boost libraries (`libboost-dev`,
 `libboost-serialization-dev`). See the [installation
 guide](https://provsql.org/docs/user/getting-provsql.html) for details.
@@ -154,7 +154,7 @@ checker can validate them.
    describe user-visible changes; that is what the maintainer
    draws from when assembling release notes.
 
-CI runs on Linux (PostgreSQL 10–18), macOS, and WSL for the
+CI runs on Linux (PostgreSQL 11–18), macOS, and WSL for the
 extension, and on a Py 3.10/3.11/3.12/3.13 × PG 14/15/16 matrix
 for Studio. Failures on any applicable workflow block merging.
 

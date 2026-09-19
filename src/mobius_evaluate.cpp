@@ -57,7 +57,7 @@ extern "C" {
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
-#include "access/htup_details.h"   /* heap_form_tuple (PG 10 declares it here) */
+#include "access/htup_details.h"   /* heap_form_tuple */
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "executor/spi.h"
