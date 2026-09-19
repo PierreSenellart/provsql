@@ -20,7 +20,7 @@ count
 2 (*)
 3 (*)
 (3 rows)
-WARNING:  ProvSQL: window function not supported; provenance is tracked per input row only, and its value is treated as an opaque scalar
+WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
 remove_provenance
 
 (1 row)

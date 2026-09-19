@@ -96,7 +96,7 @@ test: set_operation_nesting
 test: set_operation_with_ties
 test: except_untracked_arm
 test: null_safe_join
-test: limit_warning limit_rank
+test: limit_warning limit_rank implicit_freeze
 test: having_impossible
 test: having_choose
 test: having_first_present

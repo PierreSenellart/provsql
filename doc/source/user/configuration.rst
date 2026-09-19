@@ -103,6 +103,16 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     Enable provenance tracking for ``INSERT``, ``UPDATE``, and ``DELETE``
     statements (see :doc:`data-modification`). Requires PostgreSQL ≥ 14.
 
+.. _provsql-implicit-freeze:
+
+``provsql.implicit_freeze`` (default: ``'warn'``)
+    What happens when part of a query is evaluated as plain SQL, on the
+    data as it is, and not tracked (see :ref:`plain-sql`), while the rest
+    of the statement tracks the same relations. ``'warn'`` emits a
+    ``WARNING`` naming such a relation; ``'error'`` refuses the query. A
+    part that reads only relations the rest does not track, or that is
+    marked with :sqlfunc:`plain`, is never refused.
+
 .. _provsql-classify-top-level:
 
 ``provsql.classify_top_level`` (default: ``off``)

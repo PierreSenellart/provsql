@@ -1,0 +1,35 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL
+WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance; mark it plain() to evaluate it as plain SQL
+ERROR:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL (provsql.implicit_freeze is 'error')
+ERROR:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL (provsql.implicit_freeze is 'error')
+ERROR:  ProvSQL: ORDER BY ... LIMIT / OFFSET over provenance-tracked relations is not read in each possible world over an aggregation, a DISTINCT, a set operation or sort keys that vary between worlds: it truncates the actual result, whose rows keep the provenance they have in the full result, although the statement also tracks if_a; write LIMIT plain(k) to say so (provsql.implicit_freeze is 'error')
+remove_provenance
+
+(1 row)
+id|g|l|above
+1|1||2
+2|1|10|1
+3|1|20|0
+(3 rows)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+v|n
+10|1
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

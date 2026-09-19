@@ -207,6 +207,42 @@ vary between worlds (an aggregate, a window function), which are not
 read in every world; for the latter, ProvSQL emits a ``WARNING`` at the
 top level of a statement too, unless the ``LIMIT`` is marked ``plain``.
 
+.. _plain-sql:
+
+Parts Evaluated as Plain SQL
+----------------------------
+
+A few constructs are not tracked: the rewriting leaves them to
+PostgreSQL, which evaluates them on the data as it is. The result is
+then the exact provenance of a slightly different query, in which that
+part is a constant; ProvSQL says which part in a ``WARNING``:
+
+* a window function other than those of :ref:`window-aggregates`, whose
+  value is the one of the data as it is;
+* a window partitioned or ordered by an aggregate result;
+* a subquery in a position no rewriting handles (a scalar subquery
+  nested in an expression, a subquery in a query over no tracked
+  relation);
+* an ``ORDER BY … LIMIT`` that is not read in every world (see
+  :ref:`limit`), and a ``LIMIT`` in a subquery.
+
+When the part reads only relations that the rest of the statement does
+not track, the result is the provenance of the statement with those
+relations untracked, a sound possible-world model. When it reads a
+relation the rest tracks, the same tuples are uncertain for the rest and
+taken as they are for that part: the warning names such a relation, and
+setting :ref:`provsql.implicit_freeze <provsql-implicit-freeze>` to
+``'error'`` refuses the query instead.
+
+Marking the part with :sqlfunc:`plain` says that plain SQL is meant, and
+silences the warning: ``plain((SELECT max(x) FROM t))``,
+``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``:
+
+.. code-block:: postgresql
+
+    SELECT id, plain((SELECT count(*) FROM posts c WHERE c.parent = p.id))
+    FROM posts p;
+
 Provenance in Nested Queries
 -----------------------------
 

@@ -143,7 +143,7 @@ remove_provenance
 q|rows
 ORDER BY 1 NULLS FIRST|NULL 1 2 3 5 7 9
 (1 row)
-WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty.
+WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty, although the statement also tracks sn_r; write LIMIT plain(k) to say so
 remove_provenance
 
 (1 row)
@@ -163,7 +163,7 @@ remove_provenance
 q|rows
 EXCEPT DESC LIMIT 2|7 5
 (1 row)
-WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty.
+WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty, although the statement also tracks sn_r; write LIMIT plain(k) to say so
 remove_provenance
 
 (1 row)

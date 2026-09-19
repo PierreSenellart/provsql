@@ -3,7 +3,7 @@ repair_key
 
 (1 row)
 ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
-WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is not tracked; its data is treated as certain
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked; mark it plain() to evaluate it as plain SQL
 reads_col
 2
 (1 row)

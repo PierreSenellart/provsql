@@ -108,6 +108,9 @@ static bool provsql_active = true; ///< @c true while ProvSQL query rewriting is
 bool provsql_where_provenance = false;
 static bool provsql_update_provenance = false; ///< @c true when provenance tracking for DML is enabled
 int provsql_verbose = 100; ///< Verbosity level; controlled by the @c provsql.verbose_level GUC
+/** @brief Values of @c provsql.implicit_freeze */
+enum { PROVSQL_FREEZE_WARN, PROVSQL_FREEZE_ERROR };
+int provsql_implicit_freeze = PROVSQL_FREEZE_WARN; ///< What an implicit freezing does: warn, or error; @c provsql.implicit_freeze GUC
 char *provsql_last_eval_method = NULL; ///< Last probability evaluation method(s) used; exposed via @c provsql.last_eval_method
 char *provsql_transaction_token = NULL; ///< Textual UUID of the update gate standing for the current transaction, or empty; set with @c SET @c LOCAL by @c provsql.transaction_token()
 bool provsql_aggtoken_text_as_uuid = false; ///< When @c true, @c agg_token::text emits the underlying provenance UUID instead of @c "value (*)"
@@ -236,6 +239,8 @@ static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
 static bool output_provably_not_null(const Query *sub, AttrNumber attno);
 static RangeTblEntry *oj_make_subquery_rte(Query *sub);
+static bool oj_rte_has_provsql(const constants_t *constants,
+                               RangeTblEntry *rel);
 static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
                                      Node *e);
 static bool query_has_own_sublinks(Query *q);
@@ -10273,6 +10278,154 @@ static bool reads_token_walker(Node *node, void *data) {
   return expression_tree_walker(node, reads_token_walker, data);
 }
 
+/** @brief The last subquery expression @c tracked_value_sublink_walker found
+ *  reading tracked data. */
+static SubLink *last_tracked_sublink = NULL;
+
+/** @brief Walker: tag the subqueries of subquery expressions in @p node. */
+static bool mark_plain_inner_walker(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink) && IsA(((SubLink *)node)->subselect, Query))
+    ((Query *)((SubLink *)node)->subselect)->queryId = PROVSQL_INERT_QUERY_ID;
+  if (IsA(node, Query))
+    return false;
+  return expression_tree_walker(node, mark_plain_inner_walker, cx);
+}
+
+/** @brief Walker: mark the subquery expressions inside a @c plain() call as
+ *  inert, evaluated as plain SQL (@c PROVSQL_INERT_QUERY_ID). */
+static bool mark_plain_sublinks_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_PLAIN) {
+    mark_plain_inner_walker((Node *)((FuncExpr *)node)->args, NULL);
+    return false;
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, mark_plain_sublinks_walker, cx, 0);
+  return expression_tree_walker(node, mark_plain_sublinks_walker, cx);
+}
+
+/** @brief The statement being rewritten, whose relations a frozen part is
+ *  compared with (@c report_freeze). */
+static Query *freeze_statement = NULL;
+
+/** @brief Context for @c freeze_relations_walker. */
+typedef struct freeze_rels_ctx {
+  const constants_t *constants;
+  Node *skip;        ///< A node not to enter (the frozen part)
+  List *relids;      ///< The base relations read (OIDs)
+  List *names;       ///< The relations as read, for messages (OIDs)
+  bool unknown;      ///< A tracked relation with no recorded base relations
+} freeze_rels_ctx;
+
+/** @brief Walker: the base relations of the tracked relations read in a
+ *  tree, but in @c ctx->skip. */
+static bool freeze_relations_walker(Node *node, void *cx) {
+  freeze_rels_ctx *ctx = (freeze_rels_ctx *)cx;
+  if (node == NULL || node == ctx->skip)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_RELATION &&
+          oj_rte_has_provsql(ctx->constants, r)) {
+        Oid anc[PROVSQL_TABLE_INFO_MAX_ANCESTORS];
+        uint16 n = 0, k;
+        ctx->names = list_append_unique_oid(ctx->names, r->relid);
+        if (provsql_lookup_ancestry(r->relid, &n, anc) && n > 0)
+          for (k = 0; k < n; ++k)
+            ctx->relids = list_append_unique_oid(ctx->relids, anc[k]);
+        else {
+          ctx->unknown = true;
+          ctx->relids = list_append_unique_oid(ctx->relids, r->relid);
+        }
+      }
+    }
+    return query_tree_walker(q, freeze_relations_walker, cx, 0);
+  }
+  return expression_tree_walker(node, freeze_relations_walker, cx);
+}
+
+/** @brief Walker: a window function outside any @c plain() call. */
+static bool unmarked_window_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, WindowFunc))
+    return true;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_PLAIN)
+    return false;
+  if (IsA(node, Query))
+    return false;
+  return expression_tree_walker(node, unmarked_window_walker, cx);
+}
+
+/**
+ * @brief Report an implicit freezing: a part of the statement evaluated as
+ *        plain SQL on the data as it is, not tracked.
+ *
+ * @p frozen is that part (a subquery expression), or @c NULL when it is
+ * computed from the rows of the query itself (a window value, the cut of a
+ * @c LIMIT), which then reads the relations the rest tracks.  The freezing
+ * is coherent when the frozen part reads no base relation that the rest of
+ * the statement tracks (a relation with no recorded base relations counts as
+ * all of them): the result is then the provenance of the statement with the
+ * frozen relations untracked.  An incoherent freezing is refused under
+ * @c provsql.implicit_freeze = @c 'error', a warning otherwise, naming a
+ * relation read both ways.
+ *
+ * @param msg   What is frozen, the message
+ * @param hint  How to say it is meant, or @c NULL for the plain() marker
+ */
+static void report_freeze(const constants_t *constants, Node *frozen,
+                          const char *msg, const char *hint) {
+  freeze_rels_ctx inside, rest;
+  const char *shared = NULL;
+  ListCell *lc;
+
+  if (hint == NULL)
+    hint = "mark it plain() to evaluate it as plain SQL";
+  if (freeze_statement == NULL) {
+    provsql_warning("%s; %s", msg, hint);
+    return;
+  }
+  rest.constants = inside.constants = constants;
+  rest.relids = inside.relids = NIL;
+  rest.names = inside.names = NIL;
+  rest.unknown = inside.unknown = false;
+  rest.skip = frozen;
+  inside.skip = NULL;
+  freeze_relations_walker((Node *)freeze_statement, &rest);
+  if (frozen == NULL) {
+    if (rest.names != NIL)
+      shared = get_rel_name(linitial_oid(rest.names));
+  } else {
+    freeze_relations_walker(frozen, &inside);
+    foreach (lc, inside.relids)
+      if (list_member_oid(rest.relids, lfirst_oid(lc)) ||
+          ((inside.unknown || rest.unknown) && rest.relids != NIL)) {
+        shared = get_rel_name(lfirst_oid(lc));
+        break;
+      }
+  }
+  if (shared == NULL)
+    provsql_warning("%s; %s", msg, hint);
+  else if (provsql_implicit_freeze == PROVSQL_FREEZE_ERROR)
+    provsql_error("%s, although the statement also tracks %s; %s "
+                  "(provsql.implicit_freeze is 'error')",
+                  msg, shared, hint);
+  else
+    provsql_warning("%s, although the statement also tracks %s; %s", msg,
+                    shared, hint);
+}
+
 /**
  * @brief Walker over the expressions of one query level: a sublink whose
  *        body reads a tracked relation for its data.
@@ -10298,8 +10451,10 @@ static bool tracked_value_sublink_walker(Node *node, void *data) {
         if (!te->resjunk && !reads_token_walker((Node *)te->expr, data))
           token_fetch = false;
       }
-      if (has_provenance(constants, sub) && !token_fetch)
+      if (has_provenance(constants, sub) && !token_fetch) {
+        last_tracked_sublink = sl;
         return true;
+      }
     }
     return tracked_value_sublink_walker(sl->testexpr, data);
   }
@@ -19895,9 +20050,10 @@ static void sort_on_plain_values(const constants_t *constants, Query *q,
                     "value, the one computed on the database as it is, "
                     "disregarding provenance");
   if (windowed)
-    provsql_warning("window partitioned or ordered by an aggregate result: "
-                    "it is computed on the plain values, those of the "
-                    "database as it is, disregarding provenance");
+    report_freeze(constants, NULL,
+                  "window partitioned or ordered by an aggregate result: it "
+                  "is computed on the plain values, those of the database as "
+                  "it is, not tracked", NULL);
 }
 
 static Query *process_query(const constants_t *constants, Query *q,
@@ -20420,9 +20576,10 @@ static Query *process_query(const constants_t *constants, Query *q,
         provsql_error("Subqueries (EXISTS, IN, scalar subquery) not supported");
         supported = false;
       } else {
-        provsql_warning(
-          "scalar subquery nested in an expression is not tracked; its data is "
-          "treated as certain and the result keeps only the outer provenance");
+        report_freeze(constants, (Node *)linitial(nested),
+                      "scalar subquery nested in an expression is evaluated "
+                      "as plain SQL, not tracked; the result keeps only the "
+                      "outer provenance", NULL);
         nested_sublink_warned = true;
       }
     }
@@ -20532,9 +20689,11 @@ static Query *process_query(const constants_t *constants, Query *q,
           (q->hasAggs || q->groupClause != NIL || q->groupingSets != NIL ||
            has_union || has_difference ||
            !replace_window_aggregations(constants, q, prov_atts)))
-        provsql_warning("window function not supported; provenance is "
-                        "tracked per input row only, and its value is "
-                        "treated as an opaque scalar");
+        if (unmarked_window_walker((Node *)q->targetList, (void *)constants))
+          report_freeze(constants, NULL,
+                        "window function not supported: its value is "
+                        "evaluated as plain SQL, not tracked; provenance is "
+                        "tracked per input row only", NULL);
 
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */
@@ -21025,22 +21184,24 @@ static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
          has_provenance(constants, q) && !limit_lowerable(constants, q);
 }
 
-/** @brief Emit the warning @c top_limit_is_truncation calls for. */
-static void warn_top_limit(void) {
-  provsql_warning("ORDER BY ... LIMIT / OFFSET over provenance-tracked "
-                  "relations is not read in each possible world over an "
-                  "aggregation, a DISTINCT, a set operation or sort keys "
-                  "that vary between worlds: it truncates the actual result, "
-                  "whose rows keep the provenance they have in the full "
-                  "result; write LIMIT plain(k) to say so.");
+/** @brief Report the freezing @c top_limit_is_truncation calls for. */
+static void warn_top_limit(const constants_t *constants) {
+  report_freeze(constants, NULL,
+                "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
+                "relations is not read in each possible world over an "
+                "aggregation, a DISTINCT, a set operation or sort keys that "
+                "vary between worlds: it truncates the actual result, whose "
+                "rows keep the provenance they have in the full result",
+                "write LIMIT plain(k) to say so");
 }
 
-/** @brief Emit the warning @c nested_limit_on_provenance calls for. */
-static void warn_nested_limit(void) {
-  provsql_warning("LIMIT / OFFSET in a subquery over provenance-tracked "
-                  "relations: the rows kept carry the provenance they have "
-                  "in the full result, so what is computed from them is not "
-                  "sound under uncertainty.");
+/** @brief Report the freezing @c nested_limit_on_provenance calls for. */
+static void warn_nested_limit(const constants_t *constants) {
+  report_freeze(constants, NULL,
+                "LIMIT / OFFSET in a subquery over provenance-tracked "
+                "relations: the rows kept carry the provenance they have in "
+                "the full result, so what is computed from them is not sound "
+                "under uncertainty", "write LIMIT plain(k) to say so");
 }
 
 /**
@@ -21069,7 +21230,14 @@ static PlannedStmt *provsql_planner(Query *q,
   /* Scope the inert-fetch record to this rewrite (re-entrant: nested
    * planner invocations save and restore their own). */
   List *saved_inert_subselects = provsql_inert_subselects;
+  Query *saved_freeze_statement = freeze_statement;
   provsql_inert_subselects = NIL;
+  freeze_statement = q;
+  if (provsql_active) {
+    const constants_t mconstants = get_constants(false);
+    if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN))
+      mark_plain_sublinks_walker((Node *)q, (void *)&mconstants);
+  }
 
   if (q->commandType == CMD_INSERT && q->rtable && provsql_active) {
     const constants_t constants = get_constants(false);
@@ -21086,9 +21254,9 @@ static PlannedStmt *provsql_planner(Query *q,
           RangeTblEntry *src = (RangeTblEntry *)lfirst(lc_src);
           if (src->rtekind == RTE_SUBQUERY && src->subquery != NULL) {
             if (top_limit_is_truncation(&constants, src->subquery))
-              warn_top_limit();
+              warn_top_limit(&constants);
             if (nested_limit_on_provenance(&constants, src->subquery, true)) {
-              warn_nested_limit();
+              warn_nested_limit(&constants);
               break;
             }
           }
@@ -21131,18 +21299,19 @@ static PlannedStmt *provsql_planner(Query *q,
     if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
         untracked_level_with_tracked_sublink_walker((Node *)q,
                                                     (void *)&constants)) {
-      provsql_warning("subquery over a provenance-tracked relation in a "
-                      "query without one is not tracked; its data is treated "
-                      "as certain");
+      report_freeze(&constants, (Node *)last_tracked_sublink,
+                    "subquery over a provenance-tracked relation in a query "
+                    "without one is evaluated as plain SQL, not tracked",
+                    NULL);
       untracked_sublink_warned = true;
     }
 
     if (provsql_active && constants.ok &&
         top_limit_is_truncation(&constants, q))
-      warn_top_limit();
+      warn_top_limit(&constants);
     if (provsql_active && constants.ok &&
         nested_limit_on_provenance(&constants, q, true))
-      warn_nested_limit();
+      warn_nested_limit(&constants);
 
     /* Query-time TID / BID / OPAQUE classifier.  Emits a NOTICE for
      * the user's outermost SELECT when the GUC is on.  Runs on the
@@ -21198,13 +21367,15 @@ static PlannedStmt *provsql_planner(Query *q,
       if (new_query != NULL)
         q = new_query;
       recount_cte_refs_walker((Node *)q, NULL);
+      freeze_statement = q;
 
       if (provsql_active && provsql_executor_depth == 0 &&
           !untracked_sublink_warned && !nested_sublink_warned &&
           tracked_sublink_remains_walker((Node *)q, (void *)&constants))
-        provsql_warning("subquery over a provenance-tracked relation in a "
-                        "position that is not tracked; its data is treated "
-                        "as certain");
+        report_freeze(&constants, (Node *)last_tracked_sublink,
+                      "subquery over a provenance-tracked relation in a "
+                      "position that is not tracked is evaluated as plain "
+                      "SQL", NULL);
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)
@@ -21215,6 +21386,7 @@ static PlannedStmt *provsql_planner(Query *q,
   }
 
   provsql_inert_subselects = saved_inert_subselects;
+  freeze_statement = saved_freeze_statement;
 
   if (prev_planner)
     return prev_planner(q,
@@ -22114,6 +22286,23 @@ void _PG_init(void) {
                            NULL,
                            NULL,
                            NULL);
+  {
+    static const struct config_enum_entry freeze_options[] = {
+      {"warn", PROVSQL_FREEZE_WARN, false},
+      {"error", PROVSQL_FREEZE_ERROR, false},
+      {NULL, 0, false}};
+    DefineCustomEnumVariable("provsql.implicit_freeze",
+                             "What a part of a query evaluated as plain SQL, "
+                             "not tracked, does when the rest of the "
+                             "statement tracks the same relations.",
+                             "'warn' (the default) emits a warning; 'error' "
+                             "refuses the query.  Marking the part plain() "
+                             "evaluates it as plain SQL silently; a part "
+                             "reading only relations the rest does not "
+                             "track is always a warning.",
+                             &provsql_implicit_freeze, PROVSQL_FREEZE_WARN,
+                             freeze_options, PGC_USERSET, 0, NULL, NULL, NULL);
+  }
   DefineCustomEnumVariable("provsql.provenance",
                            "Provenance class tracked and assumed by the rewriter.",
                            "Declares, for the session, the most specific "

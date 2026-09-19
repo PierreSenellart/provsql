@@ -464,7 +464,7 @@ a|v1|v1_gate
 20|50.0000000000000000 (*)|arith
 30|75.0000000000000000 (*)|arith
 (3 rows)
-WARNING:  ProvSQL: scalar subquery nested in an expression is not tracked; its data is treated as certain and the result keeps only the outer provenance
+WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance; mark it plain() to evaluate it as plain SQL
 remove_provenance
 
 (1 row)
@@ -722,13 +722,13 @@ remove_provenance
 a|f
 x|3 ⊗ ((𝟙 ⊖ 3) ⊕ 3)
 (1 row)
-WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked; its data is treated as certain
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked is evaluated as plain SQL; mark it plain() to evaluate it as plain SQL
 a
 1
 2
 3
 (3 rows)
-WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked; its data is treated as certain
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked is evaluated as plain SQL, although the statement also tracks ssp; mark it plain() to evaluate it as plain SQL
 remove_provenance
 
 (1 row)
