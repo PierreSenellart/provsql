@@ -1283,3 +1283,30 @@ CREATE TABLE ssg_r AS
 SELECT remove_provenance('ssg_r');
 SELECT c, n, g FROM ssg_r ORDER BY g;
 DROP TABLE ssg_r, ssg;
+
+-- A FROM-less query with a scalar subquery over a tracked relation: the value
+-- depends on the relation, as with an untracked FROM.  In a set-returning
+-- function's argument, the subquery is not tracked, with a warning.
+CREATE TABLE ssp(n int);
+INSERT INTO ssp VALUES (3);
+SELECT add_provenance('ssp');
+SELECT create_provenance_mapping('ssp_m', 'ssp', 'n');
+CREATE TABLE ssp_r AS
+  SELECT (SELECT n FROM ssp) AS a;
+SELECT remove_provenance('ssp_r');
+SELECT a, sr_formula(agg_token_uuid(a), 'ssp_m') AS f FROM ssp_r;
+DROP TABLE ssp_r;
+CREATE TABLE ssp_r AS
+  SELECT 'x' AS a, sr_formula(provenance(), 'ssp_m') AS f
+  WHERE 2 < (SELECT n FROM ssp);
+SELECT remove_provenance('ssp_r');
+SELECT a, f FROM ssp_r;
+DROP TABLE ssp_r;
+SELECT generate_series(1, (SELECT n FROM ssp)) AS a ORDER BY a;
+CREATE TABLE ssp_r AS
+  SELECT generate_series(1, (SELECT n FROM ssp)) AS a
+  UNION ALL SELECT generate_series((SELECT n FROM ssp), 1, -1);
+SELECT remove_provenance('ssp_r');
+SELECT a FROM ssp_r ORDER BY a;
+DROP TABLE ssp_r;
+DROP TABLE ssp, ssp_m;

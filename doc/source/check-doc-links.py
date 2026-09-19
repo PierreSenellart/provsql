@@ -156,6 +156,9 @@ INTERNAL_FUNCTIONS = {
     'false',
     # Transition functions for aggregates
     'choose_function',
+    # array_agg with {} over no rows, used by the rewriting of ARRAY(SELECT
+    # ...), and its transition function
+    'array_collect', 'array_collect_step',
     'union_tstzintervals_plus', 'union_tstzintervals_plus_state',
     'union_tstzintervals_times', 'union_tstzintervals_times_state',
     'union_tstzintervals_monus',

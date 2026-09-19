@@ -2674,6 +2674,22 @@ $$ SELECT provsql.agg_arith_make(3, ARRAY[provsql.agg_value_gate(a), (b)::uuid],
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 -- ----------------------------------------------------------------------
+-- 6o. array_collect: array_agg with the empty array over no rows, the
+--     value of ARRAY(SELECT ...).
+-- ----------------------------------------------------------------------
+
+CREATE FUNCTION array_collect_step(state ANYARRAY, data ANYNONARRAY)
+  RETURNS ANYARRAY AS
+$$ SELECT array_append(state, data) $$
+LANGUAGE sql PARALLEL SAFE IMMUTABLE;
+
+CREATE AGGREGATE array_collect(ANYNONARRAY) (
+  SFUNC = array_collect_step,
+  STYPE = ANYARRAY,
+  INITCOND = '{}'
+);
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

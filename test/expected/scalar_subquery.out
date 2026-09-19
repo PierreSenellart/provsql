@@ -521,7 +521,7 @@ remove_provenance
 a|asc_arr
 1|{1,2,3} (*)
 2|{40,50} (*)
-3|
+3|{} (*)
 (3 rows)
 remove_provenance
 
@@ -529,7 +529,7 @@ remove_provenance
 a|desc_arr
 1|{3,2,1} (*)
 2|{50,40} (*)
-3|
+3|{} (*)
 (3 rows)
 add_provenance
 
@@ -704,3 +704,39 @@ c|n|g
 2 (*)|1 (*)|0
 2 (*)|2 (*)|1
 (2 rows)
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+remove_provenance
+
+(1 row)
+a|f
+3 (*)|choose(3*3)
+(1 row)
+remove_provenance
+
+(1 row)
+a|f
+x|3 ⊗ ((𝟙 ⊖ 3) ⊕ 3)
+(1 row)
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked; its data is treated as certain
+a
+1
+2
+3
+(3 rows)
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked; its data is treated as certain
+remove_provenance
+
+(1 row)
+a
+1
+1
+2
+2
+3
+3
+(6 rows)

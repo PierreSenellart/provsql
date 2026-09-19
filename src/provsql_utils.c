@@ -618,6 +618,10 @@ static constants_t initialize_constants(bool failure_if_not_possible)
    * Optional lookup (0 on schemas predating it). */
   constants.OID_FUNCTION_CHOOSE = get_provsql_func_oid("choose");
 
+  /* array_collect(anynonarray): array_agg, but {} over no rows.  Optional
+   * lookup (0 on schemas predating it, where array_agg is used instead). */
+  constants.OID_FUNCTION_ARRAY_COLLECT = get_provsql_func_oid("array_collect");
+
   /* assume_boolean is installed by the 1.6.0 upgrade script.  Treat
    * its absence as a soft signal: on older schemas the safe-query
    * rewriter (gated behind the 'boolean' provenance class) refuses to

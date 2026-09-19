@@ -56,7 +56,7 @@ AggregationOperator getAggregationOperator(Oid oid)
     op = AggregationOperator::CHOOSE;
   } else if(func_name == "avg") {
     op = AggregationOperator::AVG;
-  } else if(func_name == "array_agg") {
+  } else if(func_name == "array_agg" || func_name == "array_collect") {
     op = AggregationOperator::ARRAY_AGG;
   } else if(func_name == "bool_and" || func_name == "every") {
     op = AggregationOperator::AND;

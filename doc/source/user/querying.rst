@@ -101,7 +101,11 @@ will either raise an error or may cause incorrect provenance tracking:
   no ``WHERE`` clause is compared against an outer column, only
   non-star aggregate bodies are supported (``max(x)``, ``count(x)``,
   …, including via ``IN``/``NOT IN``) -- a plain value body or
-  ``count(*)`` in that position is not
+  ``count(*)`` in that position is not.  A scalar subquery nested in a
+  larger expression (``1 + (SELECT …)``, an argument of a function such
+  as ``generate_series(1, (SELECT n FROM t))``) is evaluated by
+  PostgreSQL on the data as it is, its data treated as certain, and
+  ProvSQL emits a ``WARNING``
 * **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
   semantics), over cyclic data *without* an absorptive provenance class, or on
   PostgreSQL versions before 15

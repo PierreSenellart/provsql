@@ -305,6 +305,7 @@ typedef struct constants_t {
   Oid OID_AGG_RV_PERCENTILE_IMPL;  ///< provsql.rv_percentile_impl(fraction float8, ind rv, x rv)
   /**@}*/
   Oid OID_FUNCTION_CHOOSE; ///< OID of the choose(anyelement) aggregate (keeps the first non-NULL value); used to decorrelate scalar subqueries into a LEFT JOIN + GROUP BY
+  Oid OID_FUNCTION_ARRAY_COLLECT; ///< OID of the array_collect(anynonarray) aggregate (array_agg with @c {} over no rows); the value of a decorrelated @c ARRAY(SELECT ...)
   /** @brief OID of @c provsql.assume_boolean(uuid)->uuid.
    *
    *  Installed by the @c 1.5.0--1.6.0 upgrade script.  Wraps its child

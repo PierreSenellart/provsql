@@ -9848,6 +9848,32 @@ static bool untracked_level_with_tracked_sublink_walker(Node *node,
                                 data);
 }
 
+/** @brief Set when @c process_query warns of a nested scalar subquery, so that
+ *  @c provsql_planner does not warn of it again. */
+static bool nested_sublink_warned = false;
+
+/**
+ * @brief Walker over a rewritten query: a sublink, at any level, whose body
+ *        still reads a tracked relation for its data.
+ *
+ * The rewriting replaces every subquery expression it supports; one left over
+ * (the argument of a set-returning function in the target list, ...) is
+ * evaluated by Postgres on the data as it is.
+ */
+static bool tracked_sublink_remains_walker(Node *node, void *data) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    if (q->hasSubLinks &&
+        query_tree_walker(q, tracked_value_sublink_walker, data,
+                          QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES))
+      return true;
+    return query_tree_walker(q, tracked_sublink_remains_walker, data, 0);
+  }
+  return expression_tree_walker(node, tracked_sublink_remains_walker, data);
+}
+
 /**
  * @brief Remove the auto-added @c provsql output column from a rewritten query.
  *
@@ -12248,13 +12274,14 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
 
 /**
  * @brief Rewrite a top-level @c ARRAY(SELECT Q.col FROM Q WHERE corr) target-list
- *        entry into the aggregate body @c (SELECT array_agg(Q.col) FROM Q WHERE
- *        corr).
+ *        entry into the aggregate body @c (SELECT array_collect(Q.col) FROM Q
+ *        WHERE corr).
  *
  * A pre-pass for @c decorrelate_scalar_sublinks: an @c ARRAY_SUBLINK collects the
- * correlated rows into an array, which is exactly @c array_agg over the group, so
- * mutating it into an @c EXPR_SUBLINK aggregate body lets the aggregate arm lower
- * it to @c array_agg(Q.col) over the @c "R ⟕ Q" group -- no @c count gate, since
+ * correlated rows into an array, which is exactly @c array_collect over the group
+ * (@c array_agg, except that no rows give @c {}, not NULL), so mutating it into
+ * an @c EXPR_SUBLINK aggregate body lets the aggregate arm lower it to
+ * @c array_collect(Q.col) over the @c "R ⟕ Q" group -- no @c count gate, since
  * an array may have zero, one, or many elements.  Subselects that are not
  * decorrelatable (untracked / multi-relation / uncorrelated) are left untouched.
  */
@@ -12270,7 +12297,7 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     SubLink *sl;
     Query *sub;
     TargetEntry *innerte;
-    Oid elemtype, arrtype;
+    Oid elemtype, arrtype, aggfn;
     oj_sublink_scan scan;
     Aggref *agg;
     NullTest *nt;
@@ -12311,6 +12338,12 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     if (scan.found_var == NULL)
       continue; /* uncorrelated: decorrelation would bail anyway */
 
+    /* array_collect, not array_agg: ARRAY(SELECT ...) over no rows is {},
+     * where array_agg would be NULL. */
+    aggfn = OidIsValid(constants->OID_FUNCTION_ARRAY_COLLECT)
+              ? constants->OID_FUNCTION_ARRAY_COLLECT
+              : F_ARRAY_AGG_ANYNONARRAY;
+
     if (sub->sortClause) {
       /* ARRAY(SELECT v FROM Q WHERE corr ORDER BY key) -> the ordered aggregate
        * array_agg(v ORDER BY key): the body's ORDER BY moves inside the
@@ -12327,7 +12360,7 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
         args = lappend(args, ate);
         argtypes = lappend_oid(argtypes, exprType((Node *)ate->expr));
       }
-      agg->aggfnoid = F_ARRAY_AGG_ANYNONARRAY;
+      agg->aggfnoid = aggfn;
       agg->aggtype = arrtype;
       agg->aggtranstype = InvalidOid;
       agg->aggargtypes = argtypes;
@@ -12340,8 +12373,7 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
       agg->aggno = agg->aggtransno = -1;
 #endif
     } else {
-      agg = oj_make_aggref(F_ARRAY_AGG_ANYNONARRAY, arrtype, elemtype,
-                           innerte->expr);
+      agg = oj_make_aggref(aggfn, arrtype, elemtype, innerte->expr);
     }
     /* array_agg keeps NULLs in its value, so the LEFT JOIN's null-padded
      * antijoin row (Q key IS NULL) would inject a spurious NULL element.
@@ -18036,6 +18068,37 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && q->havingQual != NULL)
     q->havingQual = normalize_bool_agg_having((Node *) q->havingQual);
 
+  if (q->rtable == NULL && q->commandType == CMD_SELECT &&
+      q->setOperations == NULL &&
+      (decorr_value_sublink_walker((Node *)q->targetList, (void *)constants) ||
+       (q->jointree &&
+        decorr_value_sublink_walker(q->jointree->quals, (void *)constants)))) {
+    /* FROM-less SELECT with a scalar subquery over a tracked relation, which
+     * the decorrelation handles for an untracked outer: give the query the
+     * source of one row and no column, (SELECT) AS provsql_one, so that it
+     * does here too. */
+    Query *one = makeNode(Query);
+    RangeTblEntry *rte = makeNode(RangeTblEntry);
+    RangeTblRef *rtr = makeNode(RangeTblRef);
+
+    one->commandType = CMD_SELECT;
+    one->querySource = QSRC_ORIGINAL;
+    one->canSetTag = true;
+    one->jointree = makeFromExpr(NIL, NULL);
+
+    rte->rtekind = RTE_SUBQUERY;
+    rte->subquery = one;
+    rte->alias = makeAlias("provsql_one", NIL);
+    rte->eref = makeAlias("provsql_one", NIL);
+    rte->inFromCl = true;
+    q->rtable = list_make1(rte);
+
+    rtr->rtindex = 1;
+    if (q->jointree == NULL)
+      q->jointree = makeFromExpr(NIL, NULL);
+    q->jointree->fromlist = list_make1(rtr);
+  }
+
   if (q->rtable == NULL) {
     /* FROM-less SELECT: the rest of the rewriter indexes into
      * q->rtable, so it can't process anything tied to a base relation.
@@ -18409,6 +18472,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         provsql_warning(
           "scalar subquery nested in an expression is not tracked; its data is "
           "treated as certain and the result keeps only the outer provenance");
+        nested_sublink_warned = true;
       }
     }
 
@@ -19105,6 +19169,7 @@ static PlannedStmt *provsql_planner(Query *q,
      * on FROM-less queries that have neither rv_cmp nor provenance(),
      * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
+    bool untracked_sublink_warned = false;
 
     /* A subquery over a provenance-tracked relation used in an expression
      * context (scalar subquery / IN / EXISTS) is not supported -- and would
@@ -19121,10 +19186,12 @@ static PlannedStmt *provsql_planner(Query *q,
 
     if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
         untracked_level_with_tracked_sublink_walker((Node *)q,
-                                                    (void *)&constants))
+                                                    (void *)&constants)) {
       provsql_warning("subquery over a provenance-tracked relation in a "
                       "query without one is not tracked; its data is treated "
                       "as certain");
+      untracked_sublink_warned = true;
+    }
 
     if (provsql_active && constants.ok &&
         top_limit_is_truncation(&constants, q))
@@ -19176,6 +19243,7 @@ static PlannedStmt *provsql_planner(Query *q,
       if (provsql_verbose >= 40)
         begin = clock();
 
+      nested_sublink_warned = false;
       new_query = process_query(&constants, q, &removed, false, true, false,
                                 NULL);
 
@@ -19185,6 +19253,13 @@ static PlannedStmt *provsql_planner(Query *q,
 
       if (new_query != NULL)
         q = new_query;
+
+      if (provsql_active && provsql_executor_depth == 0 &&
+          !untracked_sublink_warned && !nested_sublink_warned &&
+          tracked_sublink_remains_walker((Node *)q, (void *)&constants))
+        provsql_warning("subquery over a provenance-tracked relation in a "
+                        "position that is not tracked; its data is treated "
+                        "as certain");
 
 #if PG_VERSION_NUM >= 150000
       if (provsql_verbose >= 20)

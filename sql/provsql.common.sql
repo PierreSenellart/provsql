@@ -10784,6 +10784,22 @@ CREATE AGGREGATE choose(ANYELEMENT) (
   STYPE = ANYELEMENT
 );
 
+/** @brief Transition function of @c array_collect */
+CREATE FUNCTION array_collect_step(state ANYARRAY, data ANYNONARRAY)
+  RETURNS ANYARRAY AS
+$$ SELECT array_append(state, data) $$
+LANGUAGE sql PARALLEL SAFE IMMUTABLE;
+
+/** @brief @c array_agg, but the empty array over no rows, not NULL
+ *
+ * This is the value of @c ARRAY(SELECT ...): ProvSQL rewrites such a
+ * subquery into this aggregate over the matching rows. */
+CREATE AGGREGATE array_collect(ANYNONARRAY) (
+  SFUNC = array_collect_step,
+  STYPE = ANYARRAY,
+  INITCOND = '{}'
+);
+
 /** @brief Explodes a table column containing aggregated provenance into multiple rows.
  *
  *  For each row in the input table, this function unnests the children of the
