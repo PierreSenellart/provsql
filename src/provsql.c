@@ -12324,10 +12324,13 @@ static bool normalize_outer_join_tree(const constants_t *constants, Query *q) {
   strip_group_rte_pg18(q);
 #endif
 
+  /* Each wrap_join_tree replaces q->jointree by a rewritten copy: the next
+   * slot is looked up in that copy */
   if (list_length(q->jointree->fromlist) > 1) {
     /* An outer join beside other FROM items: into a subquery of its own */
-    foreach (lc, q->jointree->fromlist) {
-      Node **slot = (Node **)&lfirst(lc);
+    int i, n = list_length(q->jointree->fromlist);
+    for (i = 0; i < n; ++i) {
+      Node **slot = (Node **)&lfirst(list_nth_cell(q->jointree->fromlist, i));
       if (join_tree_has_outer_join(*slot)) {
         wrap_join_tree(q, slot);
         changed = true;
@@ -12337,27 +12340,23 @@ static bool normalize_outer_join_tree(const constants_t *constants, Query *q) {
   }
   {
     Node *top = (Node *)linitial(q->jointree->fromlist);
+    bool inner, wrap_left, wrap_right;
     JoinExpr *je;
     if (!IsA(top, JoinExpr))
       return false;
     je = (JoinExpr *)top;
-    if (je->jointype == JOIN_INNER) {
-      /* An inner join over outer joins: each arm with one into a subquery */
-      if (join_tree_has_outer_join(je->larg)) {
-        wrap_join_tree(q, &je->larg);
-        changed = true;
-      }
-      if (join_tree_has_outer_join(je->rarg)) {
-        wrap_join_tree(q, &je->rarg);
-        changed = true;
-      }
-      return changed;
-    }
-    if (IsA(je->larg, JoinExpr)) {
+    /* An inner join over outer joins: each arm with one into a subquery */
+    inner = je->jointype == JOIN_INNER;
+    wrap_left = inner ? join_tree_has_outer_join(je->larg)
+                      : IsA(je->larg, JoinExpr);
+    wrap_right = inner ? join_tree_has_outer_join(je->rarg)
+                       : IsA(je->rarg, JoinExpr);
+    if (wrap_left) {
       wrap_join_tree(q, &je->larg);
+      je = (JoinExpr *)linitial(q->jointree->fromlist);
       changed = true;
     }
-    if (IsA(je->rarg, JoinExpr)) {
+    if (wrap_right) {
       wrap_join_tree(q, &je->rarg);
       changed = true;
     }

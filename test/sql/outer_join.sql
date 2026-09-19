@@ -314,4 +314,21 @@ CREATE TABLE ojc_r AS
 SELECT remove_provenance('ojc_r');
 SELECT count(*) AS n_rows FROM ojc_r;
 DROP TABLE ojc_r;
+-- A join as an arm of the last outer join of a chain, and joins as both
+-- arms: each moves into a subquery in turn.
+CREATE TABLE ojc_r AS
+  SELECT 'join on the padded side' AS q, a.id, b.t, c.w,
+         round(probability_evaluate(provenance())::numeric, 4) AS p,
+         present(provenance()) AS present
+  FROM ojc_a a LEFT JOIN ojc_b b ON b.aid = a.id
+               LEFT JOIN (ojc_c c JOIN ojc_b b2 ON b2.aid = c.aid) ON c.aid = a.id
+  UNION ALL
+  SELECT 'joins on both sides', a.id, b.t, c.w,
+         round(probability_evaluate(provenance())::numeric, 4),
+         present(provenance())
+  FROM (ojc_a a JOIN ojc_c x ON x.aid = a.u)
+       LEFT JOIN (ojc_b b JOIN ojc_c c ON c.aid = b.aid - 1) ON b.aid = a.id + 1;
+SELECT remove_provenance('ojc_r');
+SELECT * FROM ojc_r ORDER BY q, id, t NULLS FIRST, w NULLS FIRST, p;
+DROP TABLE ojc_r;
 DROP TABLE ojc_a, ojc_b, ojc_c;

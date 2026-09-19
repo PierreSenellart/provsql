@@ -223,3 +223,20 @@ remove_provenance
 n_rows
 9
 (1 row)
+remove_provenance
+
+(1 row)
+q|id|t|w|p|present
+join on the padded side|1|||0.5000|f
+join on the padded side|1||100|0.0000|f
+join on the padded side|1|10||0.2500|f
+join on the padded side|1|10|100|0.2500|t
+join on the padded side|2|||0.2500|f
+join on the padded side|2|20||0.5000|t
+join on the padded side|2|21||0.5000|t
+join on the padded side|3|||1.0000|t
+joins on both sides|1|||0.1250|f
+joins on both sides|1|20|100|0.2500|t
+joins on both sides|1|21|100|0.2500|t
+joins on both sides|3|||0.5000|t
+(12 rows)
