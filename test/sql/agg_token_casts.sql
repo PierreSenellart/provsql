@@ -18,6 +18,32 @@ SELECT s::numeric AS s_num, s::double precision AS s_f8, s::integer AS s_i4,
 FROM atr;
 SELECT provsql.agg_token_value(s) AS s_value FROM atr;
 DROP TABLE atr;
+
+-- An aggregate result read from a subquery (here over VALUES): cast to
+-- its value there, like anywhere it is read as a value.
+CREATE TABLE atr AS
+  SELECT (SELECT max(x) FROM (VALUES (100 - c), (0)) v(x)) AS m,
+         (SELECT max(x) FROM (VALUES (s)) v(x)) AS m1,
+         (SELECT c::numeric + y FROM (VALUES (1)) v(y)) AS m2
+  FROM (SELECT count(*) AS c, sum(v) AS s FROM atc) t;
+SELECT remove_provenance('atr');
+SELECT * FROM atr;
+DROP TABLE atr;
+
+-- An "any" parameter, declared or VARIADIC, reads the value too.
+CREATE TABLE atr AS
+  SELECT json_build_object('n', count(*), 'vs', array_agg(v ORDER BY v)) AS j,
+         concat(count(*), '!') AS c, format('%s', sum(v)) AS f
+  FROM atc;
+SELECT remove_provenance('atr');
+SELECT * FROM atr;
+DROP TABLE atr;
+CREATE TABLE atr AS
+  SELECT json_build_object('n', c) AS j, concat(c, '!') AS cc
+  FROM (SELECT count(*) AS c FROM atc) t;
+SELECT remove_provenance('atr');
+SELECT * FROM atr;
+DROP TABLE atr;
 DROP TABLE atc;
 
 -- Literals: '( <uuid> , <value> )'.  The casts read only the value part,

@@ -378,6 +378,7 @@ typedef struct aggregation_type_mutator_context {
   Index varno;                ///< Range-table entry index of the aggregate var
   Index varattno;             ///< Attribute number of the aggregate column
   const constants_t *constants; ///< Extension OID cache
+  Index depth;                ///< Subquery levels below the query walked
 } aggregation_type_mutator_context;
 
 /**
@@ -387,7 +388,8 @@ static bool is_target_agg_var(Node *node,
                               aggregation_type_mutator_context *context) {
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
-    return v->varno == context->varno && v->varattno == context->varattno;
+    return v->varlevelsup == context->depth && v->varno == context->varno &&
+           v->varattno == context->varattno;
   }
   return false;
 }
@@ -531,13 +533,26 @@ aggregation_type_mutator(Node *node, void *ctx) {
     return node;
   }
 
-  if (IsA(node, Var)) {
+  if (IsA(node, Var) && is_target_agg_var(node, context)) {
     Var *v = (Var *)node;
+    Oid orig_type = v->vartype;
 
-    if (v->varno == context->varno && v->varattno == context->varattno) {
-      v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
-      v->varcollid = InvalidOid;
-    }
+    v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
+    v->varcollid = InvalidOid;
+    /* In a subquery, which the agg_token casts do not visit, the Var is
+     * read as a value: cast it back to its own type. */
+    if (context->depth > 0 && orig_type != context->constants->OID_TYPE_AGG_TOKEN)
+      return cast_agg_token_to_type(node, orig_type, context->constants);
+    return node;
+  }
+  if (IsA(node, Query)) {
+    /* A subquery reading the column from above (a SubLink, a LATERAL
+     * subquery), at its own level */
+    ++context->depth;
+    query_tree_mutator((Query *)node, aggregation_type_mutator, ctx,
+                       QTW_DONT_COPY_QUERY);
+    --context->depth;
+    return node;
   }
   return expression_tree_mutator(node, aggregation_type_mutator, ctx);
 }
@@ -602,7 +617,7 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
                                            Query *q, Index rteid,
                                            List *targetList) {
   ListCell *lc;
-  aggregation_type_mutator_context context = {0, 0, constants};
+  aggregation_type_mutator_context context = {0, 0, constants, 0};
   Index attno = 1;
 
   foreach (lc, targetList) {
@@ -7743,6 +7758,17 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
 }
 
 /**
+ * @brief The type of parameter @p i of a function, @c provariadic for the
+ *        arguments a @c VARIADIC parameter spreads over (json_build_object's
+ *        @c "any"), or @c InvalidOid.
+ */
+static Oid formal_arg_type(Form_pg_proc procForm, int i) {
+  if (i < procForm->pronargs)
+    return procForm->proargtypes.values[i];
+  return procForm->provariadic; /* InvalidOid when not variadic */
+}
+
+/**
  * @brief Cast @c provenance_aggregate arguments of an operator or
  *        function when the formal parameter type requires it.
  *
@@ -7780,18 +7806,21 @@ static void maybe_cast_agg_token_args(List *args, Oid parent_funcid,
      * ORDER BY) and its provenance can no longer be carried.  A bare
      * provenance_aggregate is cast to its own aggregate type; a swapped
      * arithmetic result is cast to whatever the parent expects. */
-    if (i < procForm->pronargs && exprType(arg) == constants->OID_TYPE_AGG_TOKEN) {
-      Oid formal_type = procForm->proargtypes.values[i];
+    Oid formal_type = formal_arg_type(procForm, i);
+    if (OidIsValid(formal_type) &&
+        exprType(arg) == constants->OID_TYPE_AGG_TOKEN) {
       bool is_aggregate = IsA(arg, FuncExpr) &&
         ((FuncExpr *)arg)->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE;
 
       /* A polymorphic parameter of a ProvSQL function (sr_formula(count(*),
        * ...)) takes the agg_token itself; one of any other function
        * (array_agg(x) = ARRAY[1]) reads the value, in the aggregate's own
-       * type, known for a bare aggregate. */
+       * type, known for a bare aggregate; so does an "any" one
+       * (json_build_object(k, count(*)), format('%s', count(*))), of which
+       * ProvSQL has none. */
       if (formal_type == constants->OID_TYPE_AGG_TOKEN)
         ;
-      else if (IsPolymorphicType(formal_type)) {
+      else if (IsPolymorphicType(formal_type) || formal_type == ANYOID) {
         if (is_aggregate &&
             procForm->pronamespace != constants->OID_SCHEMA_PROVSQL)
           lfirst(lc) = wrap_agg_token_with_cast((FuncExpr *)arg, constants);
@@ -16328,20 +16357,21 @@ static void cast_agg_token_func_args(List *args, Oid funcid,
   procForm = (Form_pg_proc) GETSTRUCT(tp);
   foreach (lc, args) {
     Node *arg = (Node *)lfirst(lc);
-    Oid formal = i < procForm->pronargs ? procForm->proargtypes.values[i]
-                                        : InvalidOid;
+    Oid formal = formal_arg_type(procForm, i);
     ++i;
-    /* A pseudo-type parameter other than a polymorphic one ("any", as of
-     * pg_typeof) takes the agg_token as it is. */
+    /* An "any" parameter (json_build_object(k, cnt), concat(cnt, '!'))
+     * reads the value, like a polymorphic one; any other pseudo-type
+     * parameter takes the agg_token as it is. */
     if (exprType(arg) != constants->OID_TYPE_AGG_TOKEN ||
         !OidIsValid(formal) || formal == constants->OID_TYPE_AGG_TOKEN ||
         (IsPolymorphicType(formal) &&
          procForm->pronamespace == constants->OID_SCHEMA_PROVSQL) ||
-        (!IsPolymorphicType(formal) && get_typtype(formal) == TYPTYPE_PSEUDO))
+        (!IsPolymorphicType(formal) && formal != ANYOID &&
+         get_typtype(formal) == TYPTYPE_PSEUDO))
       continue;
     if (IsA(arg, Var))
       cast_agg_token_in_list(lc, ctx, true, formal);
-    else if (!IsPolymorphicType(formal))
+    else if (!IsPolymorphicType(formal) && formal != ANYOID)
       lfirst(lc) = cast_agg_token_to_type(arg, formal, constants);
   }
   ReleaseSysCache(tp);
