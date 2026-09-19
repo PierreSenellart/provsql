@@ -82,6 +82,18 @@ SELECT remove_provenance('r5');
 SELECT round(probability_evaluate(ev_tok)::numeric, 3) AS p_ev FROM r5;
 DROP TABLE r5;
 
+-- An inert fetch next to an IN, which is decorrelated into a join: the fetch
+-- is copied with the target list and must still be recognised (and planned).
+CREATE TABLE r6 AS
+  SELECT t1.id, (SELECT provenance() FROM isub t2 WHERE t2.id = t1.id) AS tok
+  FROM isub t1 WHERE t1.id IN (SELECT id FROM isub WHERE id > 1);
+SELECT remove_provenance('r6');
+SET provsql.active = off;
+SELECT r6.id, r6.tok = isub.provsql AS own_token
+FROM r6 JOIN isub USING (id) ORDER BY r6.id;
+RESET provsql.active;
+DROP TABLE r6;
+
 -- Still rejected: provenance() in EXISTS (a boolean predicate, not a value
 -- fetch -- an inert fetch cannot honour its probabilistic semantics).
 SELECT 1 AS bad WHERE EXISTS (SELECT provenance() FROM isub WHERE id = 2);

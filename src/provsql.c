@@ -235,6 +235,7 @@ static bool has_provenance(const constants_t *constants, Query *q);
 static bool expr_provably_not_null(Node *e, const Query *q, Index levelsup);
 static bool output_provably_not_null(const Query *sub, AttrNumber attno);
 static RangeTblEntry *oj_make_subquery_rte(Query *sub);
+static bool query_has_own_sublinks(Query *q);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
 static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
                                      bool nullable);
@@ -9559,9 +9560,15 @@ static bool has_rv_or_provenance_call(Node *node, void *data) {
  * ------------------------------------------------------------------------- */
 static List *provsql_inert_subselects = NIL;
 
+/** @brief The @c queryId marking an inert provenance()-fetch subselect (and
+ *  its copies).  PostgreSQL sets @c queryId only on the query of a statement,
+ *  not on those of its sublinks. */
+#define PROVSQL_INERT_QUERY_ID 0x70727673 /* "prvs", fits every queryId type */
+
 /** @brief Is @p q a recorded inert provenance()-fetch subselect? */
 static bool is_inert_subselect(Query *q) {
-  return q != NULL && list_member_ptr(provsql_inert_subselects, q);
+  return q != NULL && (list_member_ptr(provsql_inert_subselects, q) ||
+                       q->queryId == PROVSQL_INERT_QUERY_ID);
 }
 
 /** @brief Does @p sl wrap a recorded inert provenance()-fetch subselect?
@@ -10173,6 +10180,18 @@ static bool recount_cte_refs_walker(Node *node, void *cx) {
     return query_tree_walker(q, recount_cte_refs_walker, cx, 0);
   }
   return expression_tree_walker(node, recount_cte_refs_walker, cx);
+}
+
+/**
+ * @brief Whether a subquery expression remains in @p q's own clauses (its
+ *        target list, conditions or HAVING): what @c hasSubLinks must say
+ *        after a rewriting removed some, since the planner plans the
+ *        subquery expressions only of a query that says it has some.
+ */
+static bool query_has_own_sublinks(Query *q) {
+  return checkExprHasSubLink((Node *)q->targetList) ||
+         (q->jointree && checkExprHasSubLink((Node *)q->jointree)) ||
+         checkExprHasSubLink(q->havingQual);
 }
 
 /** @brief Set when @c process_query warns of a nested scalar subquery, so that
@@ -13253,22 +13272,13 @@ static bool move_uncorrelated_where_predicates(const constants_t *constants,
   }
 
   if (changed) {
-    oj_sublink_scan scan;
     q->jointree->quals =
       (newconjs == NIL)
         ? NULL
         : (list_length(newconjs) == 1 ? (Node *)linitial(newconjs)
                                       : (Node *)makeBoolExpr(AND_EXPR, newconjs,
                                                              -1));
-    scan.n_sublinks = 0;
-    scan.found_sublink = NULL;
-    scan.target_varno = 0;
-    scan.found_var = NULL;
-    oj_sublink_scan_walker((Node *)q->targetList, &scan);
-    if (q->jointree->quals)
-      oj_sublink_scan_walker(q->jointree->quals, &scan);
-    if (scan.n_sublinks == 0)
-      q->hasSubLinks = false;
+    q->hasSubLinks = query_has_own_sublinks(q);
   }
   return changed;
 }
@@ -13430,16 +13440,7 @@ static bool rewrite_uncorrelated_antijoin(const constants_t *constants,
            ? (Node *)linitial(newconjs)
            : (Node *)makeBoolExpr(AND_EXPR, newconjs, -1));
   {
-    oj_sublink_scan scan;
-    scan.n_sublinks = 0;
-    scan.found_sublink = NULL;
-    scan.target_varno = 0;
-    scan.found_var = NULL;
-    oj_sublink_scan_walker((Node *)q->targetList, &scan);
-    if (q->jointree->quals)
-      oj_sublink_scan_walker(q->jointree->quals, &scan);
-    if (scan.n_sublinks == 0)
-      q->hasSubLinks = false;
+    q->hasSubLinks = query_has_own_sublinks(q);
   }
   return true;
 }
@@ -13499,17 +13500,7 @@ static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
   }
 
   if (changed) {
-    oj_sublink_scan scan;
-    /* Some correlated sublinks may remain; clear hasSubLinks only if none do. */
-    scan.n_sublinks = 0;
-    scan.found_sublink = NULL;
-    scan.target_varno = 0;
-    scan.found_var = NULL;
-    oj_sublink_scan_walker((Node *)q->targetList, &scan);
-    if (q->jointree->quals)
-      oj_sublink_scan_walker(q->jointree->quals, &scan);
-    if (scan.n_sublinks == 0)
-      q->hasSubLinks = false;
+    q->hasSubLinks = query_has_own_sublinks(q);
   }
   return changed;
 }
@@ -14242,7 +14233,9 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   }
 
   q->hasAggs = true;
-  q->hasSubLinks = false;
+  /* The sublink is gone, not the others (an inert provenance() fetch in the
+   * target list). */
+  q->hasSubLinks = query_has_own_sublinks(q);
   return true;
 }
 
@@ -17164,6 +17157,9 @@ static bool process_inert_fetches_walker(Node *node, void *cx) {
       keep_only_provenance_output(processed);
       sl->subselect = (Node *)processed;
       provsql_inert_subselects = lappend(provsql_inert_subselects, processed);
+      /* Also marked in the query itself, so that the copies the rewritings
+       * make of the expression holding it are recognised too */
+      processed->queryId = PROVSQL_INERT_QUERY_ID;
       return false; /* handled; do not descend into it */
     }
     /* A non-inert sublink: descend into its testexpr only, not its
