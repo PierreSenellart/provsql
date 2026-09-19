@@ -1377,3 +1377,28 @@ SELECT remove_provenance('ssx_r');
 SELECT * FROM ssx_r ORDER BY q, u;
 DROP TABLE ssx_r;
 DROP TABLE ssx, ssy, ssx_m;
+
+-- Several subquery tests in a WHERE: tested one after the other, each in a
+-- query of its own; filtered by present(provenance()), the plain SQL result.
+CREATE TABLE ssz(id int, parentid int, u int, v int);
+INSERT INTO ssz VALUES (1, NULL, 1, 5), (2, 1, 2, 3), (3, 1, 1, 0), (4, 2, 2, -1);
+CREATE TABLE ssw2(pid int, t int);
+INSERT INTO ssw2 VALUES (1, 10), (2, 4), (2, 10);
+SELECT add_provenance('ssz');
+SELECT add_provenance('ssw2');
+CREATE TABLE ssz_r AS
+  SELECT 'EXISTS AND EXISTS' AS q, id FROM (
+    SELECT id FROM ssz a
+    WHERE EXISTS (SELECT 1 FROM ssz c WHERE c.parentid = a.id AND c.u = 1)
+      AND EXISTS (SELECT 1 FROM ssz c WHERE c.parentid = a.id AND c.u = 2)) t
+  WHERE present(provenance())
+  UNION ALL
+  SELECT 'IN AND NOT IN', id FROM (
+    SELECT id FROM ssz
+    WHERE id IN (SELECT pid FROM ssw2 WHERE t = 10)
+      AND u NOT IN (SELECT pid FROM ssw2 WHERE t = 4) AND v >= 0) t
+  WHERE present(provenance());
+SELECT remove_provenance('ssz_r');
+SELECT * FROM ssz_r ORDER BY q, id;
+DROP TABLE ssz_r;
+DROP TABLE ssz, ssw2;

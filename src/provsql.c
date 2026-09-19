@@ -17919,6 +17919,154 @@ static Node *pull_up_vars_mutator(Node *node, void *cx) {
   return expression_tree_mutator(node, pull_up_vars_mutator, cx);
 }
 
+/** @brief Context for @c pull_up_vars_deep_mutator. */
+typedef struct pull_up_vars_deep_ctx {
+  pull_up_vars_ctx base; ///< The subquery exposing the Vars
+  Index depth;           ///< Levels below the query whose Vars are pulled up
+} pull_up_vars_deep_ctx;
+
+/** @brief Mutator: @c pull_up_vars_mutator, also for the Vars of the query
+ *  that nested queries (subquery expressions) read from one or more levels
+ *  down. */
+static Node *pull_up_vars_deep_mutator(Node *node, void *cx) {
+  pull_up_vars_deep_ctx *ctx = (pull_up_vars_deep_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var) && ((Var *)node)->varlevelsup == ctx->depth) {
+    Var *v = (Var *)copyObject(node);
+    Var *r;
+    v->varlevelsup = 0;
+    r = (Var *)pull_up_vars_mutator((Node *)v, &ctx->base);
+    r->varlevelsup = ctx->depth;
+    return (Node *)r;
+  }
+  if (IsA(node, Query)) {
+    Node *r;
+    ++ctx->depth;
+    r = (Node *)query_tree_mutator((Query *)node, pull_up_vars_deep_mutator,
+                                   cx, 0);
+    --ctx->depth;
+    return r;
+  }
+  return expression_tree_mutator(node, pull_up_vars_deep_mutator, cx);
+}
+
+/** @brief Whether @p n, a conjunct of a @c WHERE, tests a subquery over a
+ *  tracked relation. */
+static bool conjunct_tests_tracked_sublink(const constants_t *constants,
+                                           Node *n) {
+  sublink_tracked_ctx tctx;
+  tctx.constants = constants;
+  tctx.found = false;
+  sublink_over_tracked_walker(n, &tctx);
+  return tctx.found;
+}
+
+/**
+ * @brief Test the subqueries of a @c WHERE one after the other: move all but
+ *        the first into an enclosing query.
+ *
+ * @c SELECT @c ... @c FROM @c r @c WHERE @c c @c AND @c EXISTS(A) @c AND
+ * @c EXISTS(B) becomes @c SELECT @c ... @c FROM @c (SELECT @c ... @c FROM @c r
+ * @c WHERE @c c @c AND @c EXISTS(A)) @c s @c WHERE @c EXISTS(B), the
+ * references to @c r, in @c B too, reading the columns @c s exposes.  Each
+ * level then has a single subquery test, which its rewriting handles (the
+ * enclosing query is split again if more remain).  Returns @c NULL, leaving
+ * @p q alone, unless two conjuncts at least test subqueries over tracked
+ * relations; not for a query with a @c WITH, whose references would have to
+ * follow.
+ */
+static Query *split_predicate_sublinks(const constants_t *constants,
+                                       Query *q) {
+  Node *quals;
+  List *conjs, *kept = NIL, *later = NIL;
+  bool first_taken = false;
+  Query *inner;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  pull_up_vars_deep_ctx pctx;
+  ListCell *lc;
+  List *colnames = NIL;
+
+  if (q->commandType != CMD_SELECT || q->setOperations != NULL ||
+      q->cteList != NIL || q->rowMarks != NIL || q->jointree == NULL ||
+      q->jointree->quals == NULL || q->hasAggs || q->groupClause != NIL ||
+      q->groupingSets != NIL || q->distinctClause != NIL)
+    return NULL;
+  quals = q->jointree->quals;
+  conjs = (IsA(quals, BoolExpr) && ((BoolExpr *)quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)quals)->args
+            : list_make1(quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    if (!conjunct_tests_tracked_sublink(constants, c))
+      kept = lappend(kept, c);
+    else if (!first_taken) {
+      kept = lappend(kept, c);
+      first_taken = true;
+    } else
+      later = lappend(later, c);
+  }
+  if (later == NIL)
+    return NULL;
+
+#if PG_VERSION_NUM >= 180000
+  strip_group_rte_pg18(q);
+#endif
+
+  inner = makeNode(Query);
+  inner->commandType = CMD_SELECT;
+  inner->canSetTag = true;
+  inner->rtable = q->rtable;
+#if PG_VERSION_NUM >= 160000
+  inner->rteperminfos = q->rteperminfos;
+  q->rteperminfos = NIL;
+#endif
+  inner->jointree = makeFromExpr(
+    q->jointree->fromlist,
+    list_length(kept) == 1 ? (Node *)linitial(kept)
+                           : (Node *)makeBoolExpr(AND_EXPR, kept, -1));
+  inner->hasSubLinks = true;
+
+  pctx.base.inner = inner;
+  pctx.base.pulled = NIL;
+  pctx.base.resnos = NIL;
+  pctx.depth = 0;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    te->expr = (Expr *)pull_up_vars_deep_mutator((Node *)te->expr, &pctx);
+  }
+  later = (List *)pull_up_vars_deep_mutator((Node *)later, &pctx);
+  if (inner->targetList == NIL)
+    inner->targetList = list_make1(makeTargetEntry(
+      (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                        Int32GetDatum(1), false, true),
+      1, pstrdup("?column?"), false));
+  foreach (lc, inner->targetList)
+    colnames = lappend(colnames, makeString(pstrdup(
+      ((TargetEntry *)lfirst(lc))->resname)));
+
+  IncrementVarSublevelsUp((Node *)inner, 1, 1);
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = inner;
+  rte->eref = makeAlias("tested", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  q->rtable = list_make1(rte);
+  q->jointree = makeFromExpr(
+    list_make1(rtr),
+    list_length(later) == 1 ? (Node *)linitial(later)
+                            : (Node *)makeBoolExpr(AND_EXPR, later, -1));
+  q->hasSubLinks = true;
+  return q;
+}
+
 /**
  * @brief Move the join and the @c WHERE of an aggregation or a @c DISTINCT
  *        whose @c WHERE tests subqueries into a subquery of its own.
@@ -19164,6 +19312,10 @@ static Query *process_query(const constants_t *constants, Query *q,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
   if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
       split_aggregation_over_sublinks(constants, q) != NULL)
+    return process_query(constants, q, removed, wrap_root, top_level,
+                         in_boolean_rewrite, NULL);
+  if (provsql_active && q->hasSubLinks && has_provenance(constants, q) &&
+      split_predicate_sublinks(constants, q) != NULL)
     return process_query(constants, q, removed, wrap_root, top_level,
                          in_boolean_rewrite, NULL);
   if (provsql_active && q->hasDistinctOn && has_provenance(constants, q)) {

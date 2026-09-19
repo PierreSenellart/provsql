@@ -795,3 +795,16 @@ GROUP BY NOT IN|1|0|1
 GROUP BY NOT IN|2|-1|1
 count IN||2|1
 (5 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+q|id
+EXISTS AND EXISTS|1
+IN AND NOT IN|1
+(2 rows)
