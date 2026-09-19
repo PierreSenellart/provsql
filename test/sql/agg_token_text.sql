@@ -97,10 +97,10 @@ INSERT INTO att_long
   FROM generate_series(1, 5) i;
 SELECT add_provenance('att_long');
 CREATE TABLE att_long_r AS
-  SELECT string_agg(w, ',' ORDER BY w) AS s, range_agg(t) AS r FROM att_long;
+  SELECT string_agg(w, ',' ORDER BY w) AS s, array_agg(t ORDER BY t) AS r
+  FROM att_long;
 SELECT remove_provenance('att_long_r');
 SELECT s, length(s::text) AS len FROM att_long_r;
-SELECT cardinality(array(SELECT unnest(r::text::tsmultirange))) AS ranges
-FROM att_long_r;
+SELECT cardinality(r::text::tsrange[]) AS ranges FROM att_long_r;
 DROP TABLE att_long_r;
 DROP TABLE att_long;
