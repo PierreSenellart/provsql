@@ -63,6 +63,31 @@ SELECT provsql.eval_recursive(
   'SELECT 1 UNION SELECT e.dst FROM cedge e JOIN cyc r ON e.src = r.node',
   'cyc', 'node', 'node integer', 3);
 \set VERBOSITY default
+-- Its SQLSTATE and tag, read from the raised error rather than from the
+-- message, which VERBOSITY terse above leaves out (its CONTEXT carries the
+-- deparsed round, whose text differs between PostgreSQL versions).  A recursion
+-- whose rounds do not end has no provenance to give, so the refusal is
+-- deliberate; the bag recursion answers the same way.
+DO $$
+DECLARE d text;
+BEGIN
+  PERFORM provsql.eval_recursive(
+    'SELECT 1 UNION SELECT e.dst FROM cedge e JOIN cyc r ON e.src = r.node',
+    'cyc', 'node', 'node integer', 3);
+EXCEPTION WHEN feature_not_supported THEN
+  GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+  RAISE NOTICE '% / %', SQLSTATE, d;
+END $$;
+DO $$
+DECLARE d text;
+BEGIN
+  PERFORM provsql.eval_recursive_all(
+    'SELECT 1', 'SELECT e.dst FROM cedge e JOIN cyc2 r ON e.src = r.node',
+    'cyc2', 'cyc2_all', 'node', 'node integer', 3);
+EXCEPTION WHEN feature_not_supported THEN
+  GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+  RAISE NOTICE '% / %', SQLSTATE, d;
+END $$;
 DROP TABLE cedge;
 
 -- Cyclic data under provsql.boolean_provenance: the provenance value converges
@@ -212,6 +237,29 @@ SET provsql.active = off;
 SELECT n, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n, p;
 SET provsql.active = on;
 DROP TABLE bag_r;
+
+-- A body whose columns include a provsql one -- SELECT * over a tracked
+-- relation, expanded before any hook of ours can hide it -- would give the
+-- working table two columns of that name, and the token the star asks for is
+-- not data the rounds carry: refused, where the same recursion written with
+-- explicit columns answers.
+CREATE TABLE bag_star(id int, parent_id int);
+INSERT INTO bag_star VALUES (1, NULL), (2, 1), (3, 2);
+SELECT add_provenance('bag_star');
+WITH RECURSIVE t(id, parent_id) AS (
+    SELECT * FROM bag_star WHERE id = 1
+  UNION ALL
+    SELECT b.* FROM bag_star b JOIN t ON t.id = b.parent_id)
+SELECT count(*) FROM t;
+CREATE TABLE bag_r AS
+  WITH RECURSIVE t(id) AS (
+      SELECT id FROM bag_star WHERE id = 1
+    UNION ALL
+      SELECT b.id FROM bag_star b JOIN t ON t.id = b.parent_id)
+  SELECT count(*)::text AS n FROM t;
+SELECT remove_provenance('bag_r');
+SELECT n FROM bag_r;
+DROP TABLE bag_r, bag_star;
 
 -- The generators of the corpora: a counter, an array extended per round, a
 -- string built up.  Every row derives from the one row of the seed, so each

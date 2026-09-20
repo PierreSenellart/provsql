@@ -23,7 +23,9 @@ node|boolean_expression
 add_provenance
 
 (1 row)
-ERROR:  eval_recursive: no fixpoint after 3 rounds (cyclic data?)
+ERROR:  ProvSQL: the rounds of this recursion do not reach a fixpoint (after 3 of them): on cyclic data the derivations of a tuple grow without end, and only an absorptive provenance class has a value for it (set provsql.provenance to absorptive or to boolean)
+NOTICE:  0A000 / provsql-reason: recursion-no-fixpoint; scope: deliberate
+NOTICE:  0A000 / provsql-reason: recursion-does-not-end; scope: deliberate
 add_provenance
 
 (1 row)
@@ -85,6 +87,18 @@ n|p
 3|0.500000
 4|0.437500
 (3 rows)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
+DETAIL:  provsql-reason: recursion-shape; scope: gap
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+n
+3
+(1 row)
 add_provenance
 
 (1 row)

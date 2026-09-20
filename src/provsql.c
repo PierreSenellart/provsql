@@ -1783,6 +1783,18 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
     }
   }
 
+  /* A body whose columns include a provsql one -- "SELECT *" over a tracked
+   * relation, expanded at parse analysis, before any hook of ours -- would give
+   * the working table two columns of that name, its own and the driver's.  The
+   * value the user asked for is a token, which the rounds do not carry as data,
+   * so the shape is refused rather than half-answered. */
+  {
+    ListCell *lcc;
+    foreach (lcc, cte->ctecolnames)
+      if (strcmp(strVal(lfirst(lcc)), PROVSQL_COLUMN_NAME) == 0)
+        return false;
+  }
+
   /* Deparse the whole recursive CTE body to SQL.  It references the working
    * relation by the CTE name; the driver creates a temp table of that name. */
   /* A bound of a term that reads a tracked relation is evaluated as plain SQL:

@@ -1781,7 +1781,17 @@ BEGIN
     -- Hard safety bound (also catches genuinely unbounded recursion, e.g. an
     -- unbounded counter, where even the tuple set never stabilises).
     IF iters > max_iter THEN
-      RAISE EXCEPTION 'eval_recursive: no fixpoint after % rounds (cyclic data?)', max_iter;
+      /* The rounds do not converge: on cyclic data the annotations grow with
+       * the number of derivations, and there is no provenance to give -- a
+       * refusal by what the recursion means, not a limit of the driver. */
+      RAISE EXCEPTION 'ProvSQL: the rounds of this recursion do not reach a '
+                      'fixpoint (after % of them): on cyclic data the '
+                      'derivations of a tuple grow without end, and only an '
+                      'absorptive provenance class has a value for it (set '
+                      'provsql.provenance to absorptive or to boolean)',
+                      max_iter
+        USING ERRCODE = 'feature_not_supported',
+              DETAIL = 'provsql-reason: recursion-no-fixpoint; scope: deliberate';
     END IF;
 
     -- One round of naive evaluation: re-run the CTE body over the current
@@ -1909,7 +1919,16 @@ BEGIN
 
     iters := iters + 1;
     IF iters > max_iter THEN
-      RAISE EXCEPTION 'eval_recursive_all: no end after % rounds', max_iter;
+      /* A bag recursion is defined when a round derives nothing; one whose
+       * rounds do not end has no answer to give, in SQL either (PostgreSQL
+       * runs it forever), so this is what the recursion means and not a limit
+       * of the driver. */
+      RAISE EXCEPTION 'ProvSQL: the rounds of this UNION ALL recursion do not '
+                      'end (after % of them): its answer is the rows of every '
+                      'round, which SQL itself does not reach either on such '
+                      'data', max_iter
+        USING ERRCODE = 'feature_not_supported',
+              DETAIL = 'provsql-reason: recursion-does-not-end; scope: deliberate';
     END IF;
 
     EXECUTE format('TRUNCATE _new_all');
