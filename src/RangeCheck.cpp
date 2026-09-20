@@ -1266,12 +1266,17 @@ unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc)
     }
 
     /* Scalar aggregation (no GROUP BY): the single result row always exists, so
-     * a tautological predicate (count >= 0, count > -K, ...) is gate_one --
-     * probability 1, including the empty-input world.  The "group is non-empty"
-     * rewrite below is the grouped semantics (the empty group is no row), which
-     * is exactly the empty-world over-credit the doc comment on
-     * decideAggVsConstCmp warns against; for a scalar agg that world is real. */
-    if ((gc.getInfos(agg_side).second & PROVSQL_AGG_SCALAR_FLAG) != 0) {
+     * a tautological predicate is gate_one -- probability 1, including the
+     * empty-input world -- but only where the aggregate has a value there.
+     * count(*) does (it is 0, and count >= 0 holds); sum, min, max and avg are
+     * NULL over no row, the comparison is then unknown and the row is filtered
+     * out, so the empty world must be excluded exactly as it is for a group.
+     * The "group is non-empty" rewrite below does that, and is what the doc
+     * comment on decideAggVsConstCmp calls the empty-world over-credit only
+     * where the aggregate is defined on the empty input. */
+    if ((gc.getInfos(agg_side).second & PROVSQL_AGG_SCALAR_FLAG) != 0 &&
+        getAggregationOperator(gc.getInfos(agg_side).first) ==
+          AggregationOperator::COUNT) {
       gc.resolveCmpToBernoulli(c, 1.0);
       ++resolved;
       continue;

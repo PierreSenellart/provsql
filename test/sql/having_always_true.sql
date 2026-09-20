@@ -113,4 +113,51 @@ SELECT remove_provenance('att_neg');
 SELECT * FROM att_neg;
 DROP TABLE att_neg;
 
+-- (6) A tautology over a scalar aggregation (no GROUP BY) is gate_one only
+--     where the aggregate has a value over no row: count(*) is 0 there and
+--     count(*) >= 0 holds, so p = 1; min, max, sum and avg are NULL, the
+--     comparison is unknown and the row is filtered out, so the empty world
+--     is excluded exactly as it is for a group.  att_t has six rows at
+--     p = 0.5, so P(non-empty) = 1 - 1/64 = 0.984375.
+SET provsql.cmp_probability_evaluation = on;
+DO $$
+DECLARE r record; p numeric;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      ('count(*) >= 0', 1.000000),
+      ('max(v) >= 0',   0.984375),
+      ('min(v) >= 0',   0.984375),
+      ('sum(v) >= 0',   0.984375),
+      ('max(v) > -1',   0.984375)) v(pred, truth)
+  LOOP
+    EXECUTE format(
+      'SELECT round(provsql.probability_evaluate(provsql.provenance())::numeric, 6)'
+      ' FROM att_t HAVING %s', r.pred) INTO p;
+    RAISE NOTICE 'scalar tautology %  p=%  (truth %)', rpad(r.pred, 14), p, r.truth;
+  END LOOP;
+END $$;
+
+-- (7) The same, reading the aggregate results of a subquery: a max of a max is
+--     the max over the rows of the groups (see reaggregation), so the rewriter
+--     sees the flattened contributions, whose tokens are products rather than
+--     inputs.  That is the shape where the empty world was credited: the three
+--     groups of att_t hold all six rows, so P(some group exists) is again
+--     0.984375, and max(m) >= 2 is P(a row with v >= 2 is present) = 1 - 1/8.
+DO $$
+DECLARE r record; p numeric;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+      ('max(m) >= 0', 0.984375),
+      ('max(m) >= 2', 0.875000),
+      ('min(m) >= 0', 0.984375)) v(pred, truth)
+  LOOP
+    EXECUTE format(
+      'SELECT round(provsql.probability_evaluate(provsql.provenance())::numeric, 6)'
+      ' FROM (SELECT g, max(v) AS m FROM att_t GROUP BY g) t HAVING %s', r.pred)
+      INTO p;
+    RAISE NOTICE 'reaggregated tautology %  p=%  (truth %)',
+                 rpad(r.pred, 14), p, r.truth;
+  END LOOP;
+END $$;
+
 DROP TABLE att_t;

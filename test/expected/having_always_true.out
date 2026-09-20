@@ -47,3 +47,11 @@ remove_provenance
 g|p_neg
 1|0.5000
 (1 row)
+NOTICE:  scalar tautology count(*) >= 0   p=1.000000  (truth 1.000000)
+NOTICE:  scalar tautology max(v) >= 0     p=0.984375  (truth 0.984375)
+NOTICE:  scalar tautology min(v) >= 0     p=0.984375  (truth 0.984375)
+NOTICE:  scalar tautology sum(v) >= 0     p=0.984375  (truth 0.984375)
+NOTICE:  scalar tautology max(v) > -1     p=0.984375  (truth 0.984375)
+NOTICE:  reaggregated tautology max(m) >= 0     p=0.984375  (truth 0.984375)
+NOTICE:  reaggregated tautology max(m) >= 2     p=0.875000  (truth 0.875000)
+NOTICE:  reaggregated tautology min(m) >= 0     p=0.984375  (truth 0.984375)
