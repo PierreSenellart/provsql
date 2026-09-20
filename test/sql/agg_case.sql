@@ -209,8 +209,20 @@ DROP TABLE cn_r, cn_t, cn_p;
 -- 50/3 - 100/9 = 5.555556, both conditional on the group existing as every
 -- moment is.  Both rows of the second group are NULL-valued, so the default
 -- answers in every world the group exists in; the third group is certain of
--- its single row.  A default that is not a constant, and a third argument,
--- stay as the query wrote them and are read as plain values (no (*) marker).
+-- its single row.  A default needs not be constant: an expression of the row
+-- that holds no aggregate -- the grouping key here -- is the same in every
+-- world, so it is lifted into a value gate like a constant.  A third argument
+-- is left as the query wrote it and read as a plain value.
+--
+-- GREATEST and LEAST of an aggregate and such an expression are the CASE they
+-- mean as well, and SQL's reading of a NULL argument as "no value" is what
+-- their two NULL guards carry: GREATEST(NULL, 10) is 10, where a plain
+-- "CASE WHEN a > b" would fall to its ELSE and answer NULL.  Over the first
+-- group, whose two rows are one null-valued and one of 5, the sum is NULL in
+-- the world holding only the first (one world in three where the group exists)
+-- and 5 in the other two, so GREATEST(sum(v), 2) takes 2 and 5, E = 4, and
+-- LEAST(sum(v), 2) is 2 in every one of them.  The third group is certain of
+-- its 7.
 CREATE TABLE cc(g int, v int);
 INSERT INTO cc VALUES (1,NULL),(1,5),(2,NULL),(2,NULL),(3,7);
 SELECT add_provenance('cc');
@@ -227,6 +239,22 @@ SELECT g, s0::text AS s0, round(expected(s0, provsql)::numeric, 6) AS e_s0,
        cnt::text AS cnt, dflt_var::text AS dflt_var, three::text AS three,
        round(probability(provsql)::numeric, 6) AS p
 FROM cc_r ORDER BY g;
+SET provsql.active = on;
+DROP TABLE cc_r;
+CREATE TABLE cc_r AS
+  SELECT g, GREATEST(sum(v), 2) AS gt, LEAST(sum(v), 2) AS ls FROM cc GROUP BY g;
+SET provsql.active = off;
+SELECT g, gt::text AS gt, round(expected(gt, provsql)::numeric, 6) AS e_gt,
+       ls::text AS ls, round(expected(ls, provsql)::numeric, 6) AS e_ls
+FROM cc_r ORDER BY g;
+SET provsql.active = on;
+DROP TABLE cc_r;
+-- The NULL argument: the second group has no value in any world, so both are
+-- the other argument, as SQL says.
+CREATE TABLE cc_r AS
+  SELECT GREATEST(sum(v), 2) AS gt, LEAST(sum(v), 2) AS ls FROM cc WHERE g = 2;
+SET provsql.active = off;
+SELECT gt::text AS gt, ls::text AS ls FROM cc_r;
 SET provsql.active = on;
 DROP TABLE cc_r, cc;
 

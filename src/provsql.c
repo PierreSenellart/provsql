@@ -273,6 +273,7 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
                                         Oid value_type);
 static bool node_varies_walker(Node *n, void *ctx);
 static bool oj_contains_sublink_walker(Node *node, void *cx);
+static bool has_aggtoken(Node *node, const constants_t *constants);
 static void report_freeze(const constants_t *constants, Node *frozen,
                           const char *scope, const char *tag,
                           const char *msg, const char *hint);
@@ -6131,11 +6132,15 @@ coalesce_agg_to_case(CoalesceExpr *co, const constants_t *constants)
       ((FuncExpr *)stripped)->funcid !=
         constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
     return NULL;
-  {
-    Node *dflt = peel_agg_casts((Node *)lsecond(co->args));
-    if (dflt == NULL || !IsA(dflt, Const))
-      return NULL;
-  }
+  /* The default may be any expression of the row that holds no aggregate of its
+   * own: a constant, a grouping column, an expression over them.  Its value is
+   * lifted into a value gate (agg_arm_to_uuid), so what it needs is to be the
+   * same in every world, which an expression over the grouping keys is.  A
+   * default that is itself an aggregate would need two of them on one row,
+   * which the CASE reads as two branches rather than as a default. */
+  if (has_aggtoken((Node *)lsecond(co->args), constants) ||
+      contain_aggs_of_level((Node *)lsecond(co->args), 0))
+    return NULL;
 
   nt = makeNode(NullTest);
   nt->arg = (Expr *)copyObject(agg);
@@ -6158,6 +6163,119 @@ coalesce_agg_to_case(CoalesceExpr *co, const constants_t *constants)
   return ce;
 }
 
+/**
+ * @brief @c GREATEST / @c LEAST of two arguments as the searched @c CASE it
+ *        means.
+ *
+ * @c GREATEST(a,b) is the larger of the two values, and SQL reads a @c NULL
+ * argument as no value rather than as an unknown: @c GREATEST(NULL,5) is 5.
+ * The @c CASE that says so is
+ * @code
+ *   CASE WHEN a IS NULL THEN b WHEN b IS NULL THEN a
+ *        WHEN a > b THEN a ELSE b END
+ * @endcode
+ * (@c "<" for @c LEAST), whose guards are the readings
+ * @c having_Expr_to_provenance_cmp already builds: an @c IS @c NULL on an
+ * aggregate, a comparison between two of them, and the indicator of a regular
+ * condition where an argument is not an aggregate.  The two @c NULL guards are
+ * what a plain @c "CASE @c WHEN @c a @c > @c b" would get wrong, its unknown
+ * comparison falling to the @c ELSE.
+ *
+ * Two arguments, and an aggregate one has to be a kind whose @c NULL-ness has a
+ * reading (@c count, @c sum, @c avg, @c min, @c max, @c choose); anything else
+ * is left to be read as a plain value.
+ */
+static CaseExpr *minmax_agg_to_case(MinMaxExpr *mm, const constants_t *constants)
+{
+  Node *a, *b;
+  Oid cmpop;
+  CaseExpr *ce;
+  List *arms = NIL;
+  ListCell *lc;
+  int i = 0;
+
+  if (list_length(mm->args) != 2 ||
+      TypeCategory(mm->minmaxtype) != TYPCATEGORY_NUMERIC)
+    return NULL;
+  foreach (lc, mm->args) {
+    Node *arg = strip_agg_cast((Node *)lfirst(lc));
+
+    if (arg != NULL && IsA(arg, FuncExpr) &&
+        ((FuncExpr *)arg)->funcid ==
+          constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+      /* An aggregate: its NULL-ness must have a reading. */
+      Oid aggfnoid =
+        DatumGetInt32(((Const *)linitial(((FuncExpr *)arg)->args))->constvalue);
+      char *name = get_func_name(aggfnoid);
+      bool ok = name != NULL &&
+                (strcmp(name, "count") == 0 || strcmp(name, "sum") == 0 ||
+                 strcmp(name, "avg") == 0 || strcmp(name, "min") == 0 ||
+                 strcmp(name, "max") == 0 || strcmp(name, "choose") == 0);
+      if (name != NULL)
+        pfree(name);
+      if (!ok)
+        return NULL;
+      i++;
+    }
+  }
+  if (i == 0)
+    return NULL;   /* no aggregate: nothing of ours to carry */
+
+  a = (Node *)linitial(mm->args);
+  b = (Node *)lsecond(mm->args);
+  cmpop = OpernameGetOprid(
+    list_make1(makeString(mm->op == IS_GREATEST ? ">" : "<")),
+    mm->minmaxtype, mm->minmaxtype);
+  if (!OidIsValid(cmpop))
+    return NULL;
+
+  {
+    NullTest *a_null = makeNode(NullTest);
+    NullTest *b_null = makeNode(NullTest);
+    CaseWhen *w1 = makeNode(CaseWhen);
+    CaseWhen *w2 = makeNode(CaseWhen);
+    CaseWhen *w3 = makeNode(CaseWhen);
+    OpExpr *cmp = makeNode(OpExpr);
+
+    a_null->arg = (Expr *)copyObject(a);
+    a_null->nulltesttype = IS_NULL;
+    a_null->argisrow = false;
+    a_null->location = -1;
+    b_null->arg = (Expr *)copyObject(b);
+    b_null->nulltesttype = IS_NULL;
+    b_null->argisrow = false;
+    b_null->location = -1;
+    cmp->opno = cmpop;
+    cmp->opfuncid = InvalidOid;
+    cmp->opresulttype = BOOLOID;
+    cmp->opretset = false;
+    cmp->opcollid = InvalidOid;
+    cmp->inputcollid = mm->inputcollid;
+    cmp->args = list_make2(copyObject(a), copyObject(b));
+    cmp->location = -1;
+
+    w1->expr = (Expr *)a_null;
+    w1->result = (Expr *)copyObject(b);
+    w1->location = -1;
+    w2->expr = (Expr *)b_null;
+    w2->result = (Expr *)copyObject(a);
+    w2->location = -1;
+    w3->expr = (Expr *)cmp;
+    w3->result = (Expr *)copyObject(a);
+    w3->location = -1;
+    arms = list_make3(w1, w2, w3);
+  }
+
+  ce = makeNode(CaseExpr);
+  ce->casetype = mm->minmaxtype;
+  ce->casecollid = mm->minmaxcollid;
+  ce->arg = NULL;
+  ce->args = arms;
+  ce->defresult = (Expr *)copyObject(b);
+  ce->location = mm->location;
+  return ce;
+}
+
 /* Target-list mutator: lower each aggregate-carrier searched CASE into an
  * agg_case gate_case.  Sub-expressions are mutated first so a CASE nested in a
  * branch value lowers before its parent wraps it. */
@@ -6173,6 +6291,14 @@ rewrite_agg_case_mutator(Node *node, void *context)
       node, rewrite_agg_case_mutator, context);
     Node *lowered = build_agg_case(ce, constants);
     return lowered != NULL ? lowered : (Node *)ce;
+  }
+  if (IsA(node, MinMaxExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
+    MinMaxExpr *mm = (MinMaxExpr *)expression_tree_mutator(
+      node, rewrite_agg_case_mutator, context);
+    CaseExpr *ce = minmax_agg_to_case(mm, constants);
+    Node *lowered = ce != NULL && case_is_agg_carrier(ce, constants)
+      ? build_agg_case(ce, constants) : NULL;
+    return lowered != NULL ? lowered : (Node *)mm;
   }
   if (IsA(node, CoalesceExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
     CoalesceExpr *co = (CoalesceExpr *)expression_tree_mutator(

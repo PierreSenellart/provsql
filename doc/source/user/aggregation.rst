@@ -344,10 +344,28 @@ The guard is the one ``HAVING sum(pm25) IS NOT NULL`` lowers to, so the value
 is the aggregate in every world where a row it reads a value from is present,
 and the constant in the worlds where the group exists without one (all its
 rows null-valued, as the padded rows of an outer join are). Two arguments and
-a constant default: a default that is itself uncertain, or a third argument,
-leaves the ``COALESCE`` to be read as a plain value. ``GREATEST``, ``LEAST``
-and ``NULLIF`` over an aggregate have no such reading and are read as plain
-values too.
+a default that holds no aggregate of its own -- a constant, a grouping column, an
+expression over them, all of which are the same in every world. A default that
+is itself an aggregate, or a third argument, leaves the ``COALESCE`` to be read
+as a plain value.
+
+``GREATEST`` and ``LEAST`` of an aggregate and such an expression are tracked
+the same way, being the ``CASE`` they mean:
+
+.. code-block:: postgresql
+
+    SELECT district, GREATEST(sum(pm25), 2) AS floored
+    FROM readings GROUP BY district;
+    --  =  CASE WHEN sum(pm25) IS NULL THEN 2 WHEN 2 IS NULL THEN sum(pm25)
+    --          WHEN sum(pm25) > 2 THEN sum(pm25) ELSE 2 END
+
+The two ``NULL`` guards are SQL's reading of a ``NULL`` argument as *no value*
+rather than as an unknown -- ``GREATEST(NULL, 2)`` is 2 -- which a bare
+``CASE WHEN a > b`` would get wrong, its unknown comparison falling to the
+``ELSE``. Two arguments, and an aggregate one has to be a kind whose
+``NULL``-ness has a reading (``count``, ``sum``, ``avg``, ``min``, ``max``,
+:sqlfunc:`choose`). ``NULLIF`` over an aggregate has no such reading and is
+read as a plain value.
 
 .. _window-aggregates:
 
