@@ -51,13 +51,46 @@ FROM ro_c ORDER BY g;
 SET provsql.active = on;
 DROP TABLE ro_c;
 
--- (d) dense_rank would count the distinct counts before the group, which is
--- a DISTINCT on aggregate results: left untracked, with the warning.
+-- (d) dense_rank counts the distinct counts up to the group's own, a DISTINCT
+-- on aggregate results: the counts are exploded into one row per value they
+-- take, deduplicated once over the whole relation, and counted.  Over the 32
+-- worlds: the two-row groups have E[dense_rank] = 1.25, and the one-row group
+-- 1, its count being the smallest whenever the group is there.
 CREATE TABLE ro_d AS
   SELECT g, dense_rank() OVER (ORDER BY c) AS dr
   FROM (SELECT g, count(*) AS c FROM ro GROUP BY g) s;
-SELECT remove_provenance('ro_d');
-SELECT 'dense_rank' AS q, g, dr::text AS dr FROM ro_d ORDER BY g;
+SET provsql.active = off;
+SELECT 'dense_rank' AS q, g, dr::text AS dr,
+       round(expected(dr, provsql)::numeric, 6) AS e_dense
+FROM ro_d ORDER BY g;
+SET provsql.active = on;
 DROP TABLE ro_d;
+
+-- (e) dense_rank per partition: the keys are deduplicated once, over every
+-- partition at once, and counted within the partition of the row.  Over the
+-- 64 worlds of the six rows, E[dense_rank] = 1.166667 for the two-row groups
+-- and 1 for the one-row ones.
+CREATE TABLE rop(part text, g int);
+INSERT INTO rop VALUES ('x',1), ('x',1), ('x',2), ('y',3), ('y',3), ('y',4);
+SELECT add_provenance('rop');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM rop; END $$;
+CREATE TABLE rop_d AS
+  SELECT part, g, dense_rank() OVER (PARTITION BY part ORDER BY count(*)) AS dr
+  FROM rop GROUP BY part, g;
+SET provsql.active = off;
+SELECT 'dense_rank per partition' AS q, part, g, dr::text AS dr,
+       round(expected(dr, provsql)::numeric, 6) AS e_dense
+FROM rop_d ORDER BY part, g;
+SET provsql.active = on;
+DROP TABLE rop_d; DROP TABLE rop;
+
+-- (f) The values of a sum() are none of its contributions, so the counts of a
+-- dense_rank over it cannot be deduplicated: the window is left untracked,
+-- with the warning, rather than refused.
+CREATE TABLE ro_f AS
+  SELECT g, dense_rank() OVER (ORDER BY sum(v)) AS dr FROM ro GROUP BY g;
+SELECT remove_provenance('ro_f');
+SELECT 'dense_rank over a sum' AS q, g, dr FROM ro_f ORDER BY g;
+DROP TABLE ro_f;
 
 DROP TABLE ro;

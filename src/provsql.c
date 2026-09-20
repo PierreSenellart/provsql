@@ -186,6 +186,10 @@ extern void _PG_fini(void);
  *  (@c rewrite_explode_agg_value). */
 #define PROVSQL_EXPLODE_ALIAS "provsql_agg_value"
 
+/** @brief Alias of the deduplicated keys a dense rank counts
+ *  (@c make_dense_rank_subquery). */
+#define PROVSQL_DENSE_ALIAS "provsql_dense_keys"
+
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 /** @brief Depth of CREATE TABLE AS / SELECT INTO / CREATE MATERIALIZED VIEW
  *  being executed: their query's output is stored, not shown. */
@@ -17700,6 +17704,46 @@ static bool aggref_values_are_contributions(const constants_t *constants,
 }
 
 /**
+ * @brief Whether column @p attno of the subquery @p rte is the result of an
+ *        aggregate that can be exploded into one row per value it takes.
+ *
+ * The aggregate is not always computed by the subquery itself: a level that
+ * only forwards the column stands between them whenever a rewriting has moved
+ * the aggregation (the deduplication of a @c count(DISTINCT), the
+ * decorrelation of a subquery that reads it).  Such a column is followed down
+ * to the aggregate it forwards, the explosion being the same wherever the
+ * value is read.
+ */
+static bool agg_column_explodable(const constants_t *constants,
+                                  RangeTblEntry *rte, AttrNumber attno) {
+  int levels;
+
+  /* A forwarded column, over the few levels a rewriting inserts */
+  for (levels = 0; levels < 8; ++levels) {
+    TargetEntry *te;
+    Var *v;
+
+    if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || attno < 1 ||
+        attno > list_length(rte->subquery->targetList))
+      return false;
+    te = get_tle_by_resno(rte->subquery->targetList, attno);
+    if (te == NULL)
+      return false;
+    if (IsA(te->expr, Aggref))
+      return aggref_values_are_contributions(constants, (Aggref *)te->expr);
+    if (!IsA(te->expr, Var))
+      return false;
+    v = (Var *)te->expr;
+    if (v->varlevelsup != 0 || v->varno < 1 ||
+        v->varno > (Index)list_length(rte->subquery->rtable))
+      return false;
+    rte = rt_fetch(v->varno, rte->subquery->rtable);
+    attno = v->varattno;
+  }
+  return false;
+}
+
+/**
  * @brief Whether @p q reads the value of an aggregate of one of its
  *        subqueries as data: a @c GROUP @c BY key, or a @c DISTINCT column.
  *
@@ -17743,14 +17787,13 @@ static bool agg_value_read_as_data(const constants_t *constants, Query *q,
       continue;
     r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
     if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL ||
-        !r->subquery->hasAggs ||
         v->varattno > list_length(r->subquery->targetList))
       continue;
     sub_te = (TargetEntry *)list_nth(r->subquery->targetList, v->varattno - 1);
-    /* A bare aggregate call: arithmetic over aggregates takes its values
-     * over the worlds too, but not one read off the contributions. */
-    if (!IsA(sub_te->expr, Aggref) ||
-        !aggref_values_are_contributions(constants, (Aggref *)sub_te->expr) ||
+    /* An aggregate whose values are read off its contributions: arithmetic
+     * over aggregates takes its values over the worlds too, but none of
+     * them is one of the contributions. */
+    if (!agg_column_explodable(constants, r, v->varattno) ||
         !has_provenance(constants, r->subquery))
       continue;
     *rteid = v->varno;
@@ -17928,6 +17971,11 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   jt->quals    = (Node *)eq;
 
   inner_src = copyObject(src_rte);
+  /* The subquery is one level deeper now: what it reads of the levels above
+   * (a correlated body, the row a rank compares with) is read one further
+   * up. */
+  if (inner_src->subquery != NULL)
+    IncrementVarSublevelsUp((Node *)inner_src->subquery, 1, 1);
 
   inner = makeNode(Query);
   inner->commandType   = CMD_SELECT;
@@ -21242,6 +21290,211 @@ static Expr *make_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf,
   return (Expr *)sl;
 }
 
+/**
+ * @brief Add a column of @p src to the @c DISTINCT list @p tl of the values
+ *        subquery of a dense rank.
+ */
+static void add_dense_distinct_col(List **tl, List **dclause, List **colnames,
+                                   Var *src, const char *name, Index *ref) {
+  Var *v = makeVar(1, src->varattno, src->vartype, src->vartypmod,
+                   src->varcollid, 0);
+  TargetEntry *te = makeTargetEntry((Expr *)v, list_length(*tl) + 1,
+                                    pstrdup(name), false);
+  SortGroupClause *d = makeNode(SortGroupClause);
+
+  te->ressortgroupref = ++(*ref);
+  d->tleSortGroupRef = te->ressortgroupref;
+  get_sort_group_operators(src->vartype, false, true, false, &d->sortop,
+                           &d->eqop, NULL, &d->hashable);
+  *tl = lappend(*tl, te);
+  *dclause = lappend(*dclause, d);
+  *colnames = lappend(*colnames, makeString(pstrdup(name)));
+}
+
+/**
+ * @brief The dense rank of the current row among those of @p ctx->rtindex, as
+ *        a subquery counting the keys up to its own, or @c NULL.
+ *
+ * @c dense_rank() @c OVER @c (PARTITION @c BY @c p @c ORDER @c BY @c k) is the
+ * number of distinct keys of the partition that do not come after the current
+ * row's:
+ * @code{.sql}
+ *   (SELECT count(*)
+ *      FROM (SELECT DISTINCT b.p, b.k FROM R b) v
+ *     WHERE v.p IS NOT DISTINCT FROM a.p AND (v.k < a.k OR v.k = a.k))
+ * @endcode
+ *
+ * The keys are deduplicated once, over the whole relation and every
+ * partition at once, so that the deduplication is not correlated: a
+ * correlated body that groups rows of its own is not tracked, whereas this
+ * one only compares.  Over an aggregate result the deduplication is the
+ * explosion of that aggregate into one row per value it takes
+ * (@c rewrite_explode_agg_value), so @c v holds every value the key takes
+ * over the possible worlds, each with the provenance of taking it: in every
+ * world the rows of @c v are the keys of that world, and counting those up to
+ * the current row's is the dense rank there.
+ *
+ * Ties need no identity column, unlike @c rank(): the current row's own key
+ * is one of the keys counted.
+ */
+static Expr *make_dense_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf) {
+  WindowClause *wc = window_clause_of(ctx->q, wf->winref);
+  RangeTblEntry *ranked = rt_fetch(ctx->rtindex, ctx->q->rtable);
+  SortGroupClause *sgc;
+  TargetEntry *key_te, *count_te;
+  Query *vals, *sub;
+  RangeTblEntry *vals_rte, *sub_rte;
+  RangeTblRef *rtr;
+  Alias *alias, *eref;
+  List *tl = NIL, *dclause = NIL, *colnames = NIL, *quals = NIL;
+  ListCell *lc;
+  Oid keytype, eqop, sortop;
+  bool hashable;
+  Index ref = 0;
+  AttrNumber key_attno;
+  Aggref *count;
+  SubLink *sl;
+  Node *before, *same;
+
+  if (wc == NULL || list_length(wc->orderClause) != 1)
+    return NULL;                /* one ordering key, the common shape */
+  sgc = (SortGroupClause *)linitial(wc->orderClause);
+  key_te = get_sortgroupclause_tle(sgc, ctx->q->targetList);
+  if (key_te == NULL || !IsA(key_te->expr, Var) || !OidIsValid(sgc->sortop))
+    return NULL;
+  keytype = exprType((Node *)key_te->expr);
+  get_sort_group_operators(keytype, false, true, false, &sortop, &eqop, NULL,
+                           &hashable);
+  if (!OidIsValid(eqop))
+    return NULL;                /* no equality to tell the keys apart */
+  /* The keys are deduplicated, which for an aggregate result is its
+   * explosion: an aggregate whose values are none of its contributions (a
+   * sum()) is left to the window machinery, and its value frozen, rather
+   * than refused from inside the deduplication. */
+  if (!agg_column_explodable(ctx->constants, ranked,
+                             ((Var *)key_te->expr)->varattno))
+    return NULL;
+
+  /* --- (SELECT DISTINCT b.p, ..., b.k FROM R b) --- */
+  vals = makeNode(Query);
+  vals->commandType = CMD_SELECT;
+  vals->canSetTag = true;
+  vals_rte = copyObject(ranked);
+  /* Two levels below the ranked relation's own */
+  if (vals_rte->rtekind == RTE_SUBQUERY && vals_rte->subquery != NULL)
+    IncrementVarSublevelsUp((Node *)vals_rte->subquery, 2, 1);
+  vals->rtable = list_make1(vals_rte);
+#if PG_VERSION_NUM >= 160000
+  if (ranked->rtekind == RTE_RELATION && ranked->perminfoindex != 0) {
+    RTEPermissionInfo *pi = getRTEPermissionInfo(ctx->q->rteperminfos, ranked);
+    vals->rteperminfos = list_make1(copyObject(pi));
+    vals_rte->perminfoindex = 1;
+  }
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  vals->jointree = makeFromExpr(list_make1(rtr), NULL);
+
+  foreach (lc, wc->partitionClause) {
+    TargetEntry *pte = get_sortgroupclause_tle((SortGroupClause *)lfirst(lc),
+                                               ctx->q->targetList);
+    if (pte == NULL || !IsA(pte->expr, Var))
+      return NULL;
+    add_dense_distinct_col(&tl, &dclause, &colnames, (Var *)pte->expr,
+                           "partition", &ref);
+  }
+  add_dense_distinct_col(&tl, &dclause, &colnames, (Var *)key_te->expr, "key",
+                         &ref);
+  key_attno = list_length(tl);
+  vals->targetList = tl;
+  vals->distinctClause = dclause;
+  vals->hasDistinctOn = false;
+
+  /* --- SELECT count(*) FROM <those values> v WHERE ... --- */
+  sub = makeNode(Query);
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  alias = makeNode(Alias);
+  eref  = makeNode(Alias);
+  alias->aliasname = PROVSQL_DENSE_ALIAS;
+  eref->aliasname  = PROVSQL_DENSE_ALIAS;
+  eref->colnames   = colnames;
+  sub_rte = makeNode(RangeTblEntry);
+  sub_rte->rtekind  = RTE_SUBQUERY;
+  sub_rte->subquery = vals;
+  sub_rte->alias    = alias;
+  sub_rte->eref     = eref;
+  sub_rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  sub_rte->requiredPerms = 0;
+#endif
+  sub->rtable = list_make1(sub_rte);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+
+  /* The partition, matched as GROUP BY matches (two NULLs equal) */
+  {
+    AttrNumber attno = 1;
+    foreach (lc, wc->partitionClause) {
+      TargetEntry *pte = get_sortgroupclause_tle((SortGroupClause *)lfirst(lc),
+                                                 ctx->q->targetList);
+      Var *inner = makeVar(1, attno, exprType((Node *)pte->expr),
+                           exprTypmod((Node *)pte->expr),
+                           exprCollation((Node *)pte->expr), 0);
+      Var *outer = (Var *)copyObject(pte->expr);
+      outer->varlevelsup = 1;
+      quals = lappend(quals,
+                      make_null_safe_equality((Expr *)inner, (Expr *)outer,
+                                              inner->vartype, inner->varcollid,
+                                              true));
+      ++attno;
+    }
+  }
+
+  /* v.k <sortop> a.k OR v.k = a.k: the keys up to the current row's */
+  {
+    Var *key_inner = makeVar(1, key_attno, keytype,
+                             exprTypmod((Node *)key_te->expr),
+                             exprCollation((Node *)key_te->expr), 0);
+    Var *key_outer = (Var *)copyObject(key_te->expr);
+    key_outer->varlevelsup = 1;
+    before = (Node *)make_opclause(sgc->sortop, BOOLOID, false,
+                                   (Expr *)key_inner, (Expr *)key_outer,
+                                   InvalidOid,
+                                   exprCollation((Node *)key_inner));
+    same = (Node *)make_opclause(eqop, BOOLOID, false,
+                                 (Expr *)copyObject(key_inner),
+                                 (Expr *)copyObject(key_outer), InvalidOid,
+                                 exprCollation((Node *)key_inner));
+    quals = lappend(quals, makeBoolExpr(OR_EXPR, list_make2(before, same), -1));
+  }
+  sub->jointree = makeFromExpr(list_make1(rtr),
+                               list_length(quals) == 1
+                                 ? (Node *)linitial(quals)
+                                 : (Node *)makeBoolExpr(AND_EXPR, quals, -1));
+
+  count = makeNode(Aggref);
+  count->aggfnoid = F_COUNT_;
+  count->aggtype = INT8OID;
+  count->aggtranstype = InvalidOid;
+  count->aggargtypes = NIL;
+  count->aggkind = AGGKIND_NORMAL;
+  count->aggstar = true;
+  count->location = -1;
+#if PG_VERSION_NUM >= 140000
+  count->aggno = count->aggtransno = -1;
+#endif
+  count_te = makeTargetEntry((Expr *)count, 1, pstrdup("dense_rank"), false);
+  sub->targetList = list_make1(count_te);
+  sub->hasAggs = true;
+
+  sl = makeNode(SubLink);
+  sl->subLinkType = EXPR_SUBLINK;
+  sl->subselect = (Node *)sub;
+  sl->location = -1;
+  return (Expr *)sl;
+}
+
 /** @brief Mutator: each rank window over the key of @p ctx becomes the
  *  subquery counting the rows before the current one. */
 static Node *replace_rank_window_mutator(Node *node, void *cx) {
@@ -21251,10 +21504,14 @@ static Node *replace_rank_window_mutator(Node *node, void *cx) {
   if (IsA(node, WindowFunc)) {
     WindowFunc *wf = (WindowFunc *)node;
     Expr *e = NULL;
-    /* dense_rank() would count the distinct keys, which is a DISTINCT on
-     * aggregate results: left untracked, as before. */
+    /* dense_rank() counts the distinct keys, a DISTINCT on aggregate results,
+     * which the explosion of an aggregate value into one row per value it
+     * takes carries (rewrite_explode_agg_value). */
     if (wf->winfnoid == F_RANK_ || wf->winfnoid == F_ROW_NUMBER)
       e = make_rank_subquery(ctx, wf, false);
+    else if (wf->winfnoid == F_DENSE_RANK_ &&
+             OidIsValid(ctx->constants->OID_FUNCTION_AGG_POSSIBLE_VALUES))
+      e = make_dense_rank_subquery(ctx, wf);
     if (e == NULL) {
       ctx->declined = true;
       return node;

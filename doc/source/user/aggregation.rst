@@ -388,16 +388,16 @@ scalar. These are ``ntile``, ``percent_rank``, ``cume_dist``, the offset
 functions (``lag``, ``lead``, ``first_value``, ``last_value``,
 ``nth_value``), ``ROWS`` and ``GROUPS`` frames with an offset, and the
 windows over aggregate results other than the ranks below (an aggregate
-over them, ``dense_rank``, a ``PARTITION BY`` on one).
+over them).
 
 .. _rank-over-aggregate:
 
 Ranking the groups of an aggregation
 -------------------------------------
 
-``rank()`` and ``row_number()`` over an ``ORDER BY`` that reads an
-aggregate result -- the aggregates of the query's own ``GROUP BY``, or
-the aggregate columns of a subquery -- are tracked:
+``rank()``, ``dense_rank()`` and ``row_number()`` over an ``ORDER BY``
+that reads an aggregate result -- the aggregates of the query's own
+``GROUP BY``, or the aggregate columns of a subquery -- are tracked:
 
 .. code-block:: postgresql
 
@@ -413,6 +413,17 @@ rank is then an aggregate result of its own, whose distribution
 :sqlfunc:`expected` and the others report. ``ORDER BY`` an aggregate
 with a ``LIMIT`` is the filter of that rank (see :ref:`limit`), so the
 top ``k`` groups are those that are among the first ``k`` in a world.
+
+``dense_rank()`` counts the distinct values instead of the groups, so it
+reads the values of the aggregate as data: the aggregate is exploded into
+one row per value it takes (see :ref:`explode-agg-value`), those values
+are deduplicated over the whole relation, and the rank of a group counts
+the ones up to its own value. The deduplication is done once, for every
+partition at once, and only the counting is per row: this keeps it out of
+a correlated subquery, which ProvSQL does not track when it groups rows
+of its own. A ``dense_rank`` over an aggregate whose values cannot be
+exploded, a ``sum()`` for instance, keeps the untracked window above,
+with its ``WARNING``.
 
 ``ORDER BY`` on a window value sorts on its displayed value.
 
