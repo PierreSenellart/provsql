@@ -14627,12 +14627,23 @@ static Node *extract_quantified_corr(SubLink *sl, bool *antijoin, bool neg,
   /* The final sense after an enclosing NOT; guards are an antijoin matter. */
   null_guards = *antijoin ^ neg;
 
-  /* The testexpr is a single "x op Param" (single-column), or -- only for a row
-   * IN -- a BoolExpr AND of per-column "xᵢ = Paramᵢ". */
+  /* The testexpr is a single "x op Param" (single-column), or a BoolExpr of
+   * per-column ones: an AND for a row ANY ("(x⃗) IN (Q)", each component
+   * matching), an OR for a row ALL ("(x⃗) <> ALL (Q)", which PostgreSQL builds
+   * as the disjunction of the per-column "xᵢ <> Paramᵢ").  De Morgan is why the
+   * trees differ and why each belongs to one kind: "∀q. ⋁ᵢ xᵢ <> qᵢ" is
+   * "¬∃q. ⋀ᵢ xᵢ = qᵢ", so negating every component (which ALL does) and
+   * conjoining them, as below, is the witness the antijoin wants -- the same
+   * one "NOT IN" reaches through its AND tree.  An AND tree for ALL is
+   * "(x⃗) = ALL (Q)", whose witness is a DISJUNCTION, "∃q. ⋁ᵢ xᵢ <> qᵢ": the
+   * conjoining below would compute another condition, so it is declined. */
   if (IsA(sl->testexpr, OpExpr))
     opexprs = list_make1(sl->testexpr);
   else if (sl->subLinkType == ANY_SUBLINK && IsA(sl->testexpr, BoolExpr) &&
            ((BoolExpr *)sl->testexpr)->boolop == AND_EXPR)
+    opexprs = ((BoolExpr *)sl->testexpr)->args;
+  else if (sl->subLinkType == ALL_SUBLINK && IsA(sl->testexpr, BoolExpr) &&
+           ((BoolExpr *)sl->testexpr)->boolop == OR_EXPR)
     opexprs = ((BoolExpr *)sl->testexpr)->args;
   else
     return NULL;

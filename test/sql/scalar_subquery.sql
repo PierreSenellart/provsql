@@ -1046,6 +1046,34 @@ SELECT remove_provenance('mp5');
 SELECT a, p FROM mp5 ORDER BY a;
 DROP TABLE mp5;
 
+-- The same condition spelled "<> ALL": PostgreSQL builds its testexpr as an OR
+-- of the per-column "<>", where NOT IN gives an AND of the per-column "=", and
+-- both mean the antijoin -- "for every q some component differs" is "there is
+-- no q every component of which is equal".  The two spellings must therefore
+-- give the same rows with the same provenance, NULL guards included; a row of
+-- mp_r with a NULL component is there to exercise them, and a row equal to the
+-- body's own (2,1), which survives only in the worlds without it:
+-- 1 - 0.5 * 0.5 = 0.75, where the rows that match nothing survive at 1.
+-- "= ALL" over a row is a different condition (its witness is a disjunction)
+-- and is declined.
+INSERT INTO mp_r VALUES (2, 1), (7, NULL);   -- (2,1) is the body's own row
+CREATE TABLE mp6 AS
+  SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mp_r WHERE (mp_r.a, mp_r.k) <> ALL
+    (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+SELECT remove_provenance('mp6');
+SELECT a, p FROM mp6 ORDER BY a;
+DROP TABLE mp6;
+CREATE TABLE mp6 AS
+  SELECT mp_r.a AS a, round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM mp_r WHERE (mp_r.a, mp_r.k) NOT IN
+    (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+SELECT remove_provenance('mp6');
+SELECT a, p FROM mp6 ORDER BY a;
+DROP TABLE mp6;
+SELECT mp_r.a FROM mp_r WHERE (mp_r.a, mp_r.k) = ALL
+  (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+
 DROP TABLE mp_q2;
 DROP TABLE mp_q1;
 DROP TABLE mp_r;

@@ -78,7 +78,10 @@ The following SQL constructs are supported with full provenance tracking:
   join of several, written with ``JOIN`` or as a comma-separated
   ``FROM`` list; e.g., ``NOT IN``
   over a joined body carries the same antijoin provenance as the
-  equivalent ``EXCEPT``.  An aggregate body can be compared against a
+  equivalent ``EXCEPT``. A row comparison against a subquery is supported in
+  both spellings, ``(a, b) NOT IN (…)`` and ``(a, b) <> ALL (…)``, which are
+  the same condition and get the same provenance; an *ordering* row comparison
+  (``(a, b) < ANY (…)``) is not.  An aggregate body can be compared against a
   constant or an outer column, including through ``IN``/``NOT IN``
   (the single-row aggregate body makes these scalar comparisons).
   A block with no tracked relation of its own, which reads them only
