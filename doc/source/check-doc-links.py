@@ -128,6 +128,7 @@ INTERNAL_FUNCTIONS = {
     'row_number_as_rank', 'window_distinct_tokens', 'plain_truth', 'agg_token_plain_text',
     'agg_token_frozen_value', 'agg_token_explode_children',
     'agg_possible_values',
+    'agg_gate_value_missing',
     'provenance_semimod_flat', 'provenance_contributions_cat',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',

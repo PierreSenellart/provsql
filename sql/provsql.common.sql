@@ -2577,6 +2577,39 @@ $$ LANGUAGE plpgsql STRICT SET search_path=provsql,pg_temp,public SECURITY DEFIN
 /** @brief Implicit PostgreSQL cast from agg_token to UUID (delegates to agg_token_uuid()) */
 CREATE CAST (agg_token AS UUID) WITH FUNCTION agg_token_uuid(agg_token) AS IMPLICIT;
 
+/** @brief Whether @p token carries a value but records none in the actual
+ *  data: an aggregate over no row there, a value gate without a constant.
+ *
+ *  Told apart from a value this reading does not take -- a timestamp, which
+ *  @c agg_gate_value gives up on because it reads numbers, or a random
+ *  variable, which has no value in the actual data at all -- because the two
+ *  call for opposite answers in @c agg_guard_holds: a comparison with a side
+ *  that HAS no value there does not hold, while one whose value is simply not
+ *  read leaves the truth undecided (internal use). */
+CREATE OR REPLACE FUNCTION agg_gate_value_missing(token uuid)
+  RETURNS boolean AS
+$$
+DECLARE
+  gt provsql.provenance_gate := provsql.get_gate_type(token);
+  ch uuid[];
+BEGIN
+  IF gt IN ('agg', 'arith', 'value') THEN
+    RETURN provsql.get_extra(token) IS NULL;
+  ELSIF gt = 'semimod' THEN
+    ch := provsql.get_children(token);
+    RETURN array_length(ch, 1) = 2
+           AND provsql.get_extra(ch[2]) IS NULL;
+  ELSIF gt = 'conditioned' THEN
+    ch := provsql.get_children(token);
+    RETURN array_length(ch, 1) >= 1
+           AND provsql.agg_gate_value_missing(ch[1]);
+  END IF;
+  /* Any other gate: nothing is claimed */
+  RETURN false;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
 /**
  * @brief Deterministic truth of a Boolean guard sub-circuit over aggregate
  *        comparisons, evaluated in the actual world (all input tuples present).
@@ -2628,15 +2661,13 @@ BEGIN
     l := agg_gate_value(ch[1]);
     r := agg_gate_value(ch[2]);
     IF l IS NULL OR r IS NULL THEN
-      /* A side that carries a value but has none in the actual data -- an
-       * aggregate over no row there, as a group kept only for other worlds is
-       * -- makes the comparison unknown there, which is what provenance_cmp
-       * annotates zero: it does not hold.  A side that carries no value at
-       * all (a random variable) leaves the truth undecided. */
-      IF get_gate_type(ch[1]) IN ('agg', 'arith', 'value', 'semimod',
-                                  'conditioned', 'case')
-         AND get_gate_type(ch[2]) IN ('agg', 'arith', 'value', 'semimod',
-                                      'conditioned', 'case') THEN
+      /* A side with no value in the actual data -- an aggregate over no row
+       * there, as a group kept only for other worlds is -- makes the
+       * comparison unknown there, which is what provenance_cmp annotates
+       * zero: it does not hold.  A side whose value this reading does not
+       * take, a timestamp or a random variable, leaves the truth undecided
+       * instead: the value is there, only not as a number. */
+      IF agg_gate_value_missing(ch[1]) OR agg_gate_value_missing(ch[2]) THEN
         RETURN false;
       END IF;
       RETURN NULL;
