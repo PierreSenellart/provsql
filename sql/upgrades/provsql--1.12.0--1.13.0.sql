@@ -1091,7 +1091,12 @@ DECLARE
   -- the tuple set stabilises: on cyclic data, but also on acyclic data through
   -- a null-padded row that re-derives itself or a projection onto constants.
   -- The circuit then keeps growing, one summand per round, and only an
-  -- absorptive class has a value for it (a ⊕ a = a absorbs the surplus).  A
+  -- absorptive class has a value for it: 1 ⊕ a = 1 gives x ⊕ x ⊗ y = x, so a
+  -- derivation that extends another is absorbed by it, and every step of a
+  -- cycle contracts -- a ⊖ b <= a by residuation, so a monus in the cycle is
+  -- covered too, not only a product.  (Where the surplus derivation adds
+  -- nothing at all, as a null-padded row re-deriving itself does, the same
+  -- fact reads as idempotence, a ⊕ a = a.)  A
   -- minimal derivation cannot repeat a tuple, so it has depth <= (number of
   -- derivable tuples); after that many naive rounds the value equals the least
   -- fixpoint of an absorptive class, and the surplus derivations are absorbed
