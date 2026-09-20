@@ -1551,12 +1551,6 @@ $$
   SELECT public.uuid_generate_v5(provsql.uuid_ns_provsql(),'null');
 $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-/** @brief Return the epsilon threshold used for probability comparisons */
-CREATE OR REPLACE FUNCTION epsilon() RETURNS DOUBLE PRECISION AS
-$$
-  SELECT CAST(0.001 AS DOUBLE PRECISION)
-$$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
-
 /** @} */
 
 /** @defgroup semiring_operations Semiring operations
@@ -7540,7 +7534,7 @@ BEGIN
           def_mass := def_mass + p;
         END IF;
       END LOOP;
-      IF def_mass <= epsilon() THEN
+      IF def_mass <= 0 THEN
         RETURN NULL;   -- the CASE's value is never defined under prov
       END IF;
       RETURN total / def_mass;
@@ -7616,7 +7610,7 @@ BEGIN
           RETURN total;
         END IF;
         prob := probability_evaluate(defined_tok, method, arguments);
-        IF prob IS NULL OR prob <= epsilon() THEN
+        IF prob IS NULL OR prob <= 0 THEN
           RETURN NULL;
         END IF;
         RETURN total / prob;
@@ -7661,7 +7655,7 @@ BEGIN
         defined_tok := provenance_times(prov, defined_tok);
       END IF;
       prob := probability_evaluate(defined_tok, method, arguments);
-      IF prob IS NULL OR prob <= epsilon() THEN
+      IF prob IS NULL OR prob <= 0 THEN
         RETURN NULL;   -- never defined: SQL NULL
       END IF;
       RETURN total / prob;   -- already conditional; skip the generic norm
@@ -7718,7 +7712,7 @@ BEGIN
       FROM (SELECT (get_children(c))[1] AS tok FROM UNNEST(child_pairs) AS c) s
       INTO total_probability;
 
-    IF total_probability <= epsilon() THEN
+    IF total_probability <= 0 THEN
       RETURN NULL;  -- never defined under prov: MIN/MAX undefined
     END IF;
     RETURN total / total_probability;  -- already conditional; skip generic norm

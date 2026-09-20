@@ -2493,6 +2493,8 @@ DECLARE
   conj_token uuid;
   prob float8;
   sign_max float8;
+  is_scalar boolean;
+  defined_tok uuid;
 BEGIN
   IF token IS NULL OR k IS NULL THEN
     RETURN NULL;
@@ -2575,7 +2577,7 @@ BEGIN
           def_mass := def_mass + p;
         END IF;
       END LOOP;
-      IF def_mass <= epsilon() THEN
+      IF def_mass <= 0 THEN
         RETURN NULL;   -- the CASE's value is never defined under prov
       END IF;
       RETURN total / def_mass;
@@ -2584,13 +2586,10 @@ BEGIN
 
   IF get_gate_type(token) <> 'agg' THEN
     IF get_gate_type(token) IN ('arith', 'conditioned') THEN
-      RAISE EXCEPTION 'expected / variance / moment over an arithmetic '
-        'combination of aggregates (e.g. SUM(x) + SUM(y) or SUM(x) + 5), or a '
-        'conditioning of one, is not yet supported: a moment can be taken only '
-        'over a single aggregate (SUM / COUNT / MIN / MAX), optionally '
-        'conditioned (SUM(x) | C)'
-        USING HINT = 'Take the moment of each aggregate separately, or condition '
-          'the bare aggregate.';
+      -- An arithmetic combination of aggregates (SUM(x) + SUM(y), SUM(x) / 2),
+      -- or a conditioning of one: the scalar evaluator, exact over the
+      -- possible worlds of few inputs, sampled otherwise
+      RETURN rv_moment((token)::uuid, k, false, prov);
     ELSE
       RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
     END IF;
@@ -2607,30 +2606,17 @@ BEGIN
   n := COALESCE(array_length(child_pairs, 1), 0);
 
   IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
-    -- count(col) keeps the COUNT identity at the gate level but its value is a
-    -- SUM of per-row 0/1 indicators, so its moments are computed exactly like
-    -- SUM (and its empty group is the real value 0, like SUM).  count(*)
-    -- arrives here as 'sum' (it normalises to F_SUM_INT4); count(col) as 'count'.
-    -- Trivial empty aggregation: SUM = 0, so SUM^k = 0 for k >= 1.
-    -- Note: agg_token semantics treat the "no row included" world as
-    -- SUM = 0, so this stays consistent with k = 1 (= expected()).
-    IF n = 0 THEN
-      RETURN 0;
-    END IF;
-
-    -- Collapsed fast path: a correlated COUNT / SUM whose per-row selection
-    -- events share a single continuous latent has an O(G·n) 1-D quadrature,
-    -- vastly cheaper than the O(n^k) tuple enumeration below (which is the
-    -- O(n^2) pair-probability bottleneck for the variance).  Only fires
-    -- unconditionally (prov = one) and for k in {1, 2}; agg_collapsed_moment
-    -- returns NULL when the shared-latent pattern does not match, and we
-    -- fall through to the exact enumeration.
-    IF prov = gate_one() AND k <= 2 THEN
-      total := agg_collapsed_moment((token)::uuid, k);
-      IF total IS NOT NULL THEN
-        RETURN total;
-      END IF;
-    END IF;
+    -- count(*) and count(col) both keep the COUNT identity at the gate level,
+    -- their value being the SUM of per-row 1 / 0-or-1 indicators, so their
+    -- moments are computed exactly like SUM.
+    --
+    -- The value exists only where a contributing row does: SUM over no row is
+    -- SQL NULL, and a grouped aggregation has no row there at all.  So the
+    -- moment conditions on that event, as the MIN / MAX arms do, and
+    -- @c expected(sum(x)) of a group equals @c expected(sum(x), provenance()).
+    -- A scalar COUNT is the exception: its row is always there and counts a
+    -- real 0 over no row.
+    is_scalar := (get_infos(token)).info2 < 0;   -- the scalar flag, high bit
 
     -- Extract per-child token + value arrays.
     vals := ARRAY[]::float8[];
@@ -2640,6 +2626,39 @@ BEGIN
       toks := toks || pair_children[1];
       vals := vals || CAST(get_extra(pair_children[2]) AS float8);
     END LOOP;
+    defined_tok := CASE
+      WHEN aggregation_function = 'count' AND is_scalar THEN gate_one()
+      WHEN n = 0 THEN gate_zero()
+      ELSE provenance_plus(toks) END;
+
+    IF n = 0 THEN
+      -- No contributing row at all: a real 0 for a scalar COUNT, SQL NULL
+      -- (never defined) otherwise.
+      RETURN CASE WHEN defined_tok = gate_one() THEN 0 ELSE NULL END;
+    END IF;
+
+    -- Collapsed fast path: a correlated COUNT / SUM whose per-row selection
+    -- events share a single continuous latent has an O(G·n) 1-D quadrature,
+    -- vastly cheaper than the O(n^k) tuple enumeration below (which is the
+    -- O(n^2) pair-probability bottleneck for the variance).  Only fires
+    -- unconditionally (prov = one) and for k in {1, 2}; agg_collapsed_moment
+    -- returns NULL when the shared-latent pattern does not match, and we
+    -- fall through to the exact enumeration.  Its moment counts the worlds
+    -- without a row as 0, which contribute nothing, so it only needs the
+    -- conditional normalisation below.
+    IF prov = gate_one() AND k <= 2 THEN
+      total := agg_collapsed_moment((token)::uuid, k);
+      IF total IS NOT NULL THEN
+        IF defined_tok = gate_one() THEN
+          RETURN total;
+        END IF;
+        prob := probability_evaluate(defined_tok, method, arguments);
+        IF prob IS NULL OR prob <= 0 THEN
+          RETURN NULL;
+        END IF;
+        RETURN total / prob;
+      END IF;
+    END IF;
 
     -- Enumerate all k-tuples (i_1, ..., i_k) in {1..n}^k.  tup is the
     -- current tuple; we step through them in lexicographic order.
@@ -2670,6 +2689,20 @@ BEGIN
       EXIT WHEN d = 0;
       tup[d] := tup[d] + 1;
     END LOOP;
+
+    -- Conditional on the value existing (and on prov): every k-tuple of the
+    -- sum above names a row, so the worlds without one contribute 0 and only
+    -- the normalisation is left.
+    IF defined_tok <> gate_one() THEN
+      IF prov <> gate_one() THEN
+        defined_tok := provenance_times(prov, defined_tok);
+      END IF;
+      prob := probability_evaluate(defined_tok, method, arguments);
+      IF prob IS NULL OR prob <= 0 THEN
+        RETURN NULL;   -- never defined: SQL NULL
+      END IF;
+      RETURN total / prob;   -- already conditional; skip the generic norm
+    END IF;
   ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
     -- Rank enumeration: per distinct value v, P(MIN = v) is the
     -- probability that some t_i with v_i=v is true and all t_j with
@@ -2722,7 +2755,7 @@ BEGIN
       FROM (SELECT (get_children(c))[1] AS tok FROM UNNEST(child_pairs) AS c) s
       INTO total_probability;
 
-    IF total_probability <= epsilon() THEN
+    IF total_probability <= 0 THEN
       RETURN NULL;  -- never defined under prov: MIN/MAX undefined
     END IF;
     RETURN total / total_probability;  -- already conditional; skip generic norm
@@ -2848,6 +2881,17 @@ CREATE AGGREGATE array_collect(ANYNONARRAY) (
   STYPE = ANYARRAY,
   INITCOND = '{}'
 );
+
+-- ----------------------------------------------------------------------
+-- 6p. epsilon(): a 0.001 threshold nothing compares a probability with any
+--     more.  An event of probability 0.001 is possible, so what it used to
+--     decide -- that an aggregate is never defined, that a value is out of
+--     the support -- is decided by impossibility (<= 0) instead.  Every
+--     function that called it (agg_raw_moment, agg_case, agg_defined_event,
+--     support) is redefined above or by an earlier upgrade.
+-- ----------------------------------------------------------------------
+
+DROP FUNCTION IF EXISTS epsilon();
 
 -- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
