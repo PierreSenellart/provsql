@@ -318,3 +318,18 @@ Berlin|2
 New York|3
 Paris|1
 (3 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+g|ln|sqrt|pow|exp|e_ln|e_sqrt
+1|1.3862943611198906|2.000000000000000|16.000000000000000|54.598150033144239|0.902683|1.601961
+2|2.1972245773362194|3.000000000000000|81.000000000000000|8103.0839275753840|2.197225|3.000000
+(2 rows)

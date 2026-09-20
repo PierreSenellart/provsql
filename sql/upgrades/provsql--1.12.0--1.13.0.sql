@@ -3180,6 +3180,49 @@ $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
   SET search_path=provsql,pg_temp,public;
 
 -- ----------------------------------------------------------------------
+-- 6s. ln / exp / sqrt of an aggregate result, and its power of a constant:
+--     the gate computes them in every world, where reading them off the value
+--     of the database as it is left the result untracked.
+-- ----------------------------------------------------------------------
+
+/** @brief ln(agg_token) (gate_arith LN): the logarithm of the value the
+ *  aggregate takes, in every world, rather than of the one it takes in the
+ *  database as it is. */
+CREATE OR REPLACE FUNCTION ln(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(8, ARRAY[(a)::uuid],
+     ln(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief exp(agg_token) (gate_arith EXP). */
+CREATE OR REPLACE FUNCTION exp(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(9, ARRAY[(a)::uuid],
+     exp(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief sqrt(agg_token): the square root is the power of one half
+ *  (gate_arith POW, whose exponent is a value gate). */
+CREATE OR REPLACE FUNCTION sqrt(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(7,
+     ARRAY[(a)::uuid, provsql.agg_value_gate(0.5)],
+     sqrt(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief agg_token ^ numeric (gate_arith POW, constant lifted to a value
+ *  gate). */
+CREATE OR REPLACE FUNCTION agg_token_pow_numeric(a agg_token, b numeric)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(7,
+     ARRAY[(a)::uuid, provsql.agg_value_gate(b)],
+     provsql.agg_token_value(a) ^ b); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+CREATE OPERATOR ^ (LEFTARG=agg_token, RIGHTARG=numeric,
+                   PROCEDURE=agg_token_pow_numeric);
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

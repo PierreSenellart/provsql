@@ -8226,7 +8226,8 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   if (opname == NULL)
     return NULL;
   is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
-             strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0;
+             strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0 ||
+             strcmp(opname, "^") == 0;
   /* Only arithmetic whose result is an integer or a numeric: floating-point
    * arithmetic (CAST(count(*) AS real) / 30) stays as the query wrote it, on
    * the values (the agg_token operators compute in numeric, which does not
@@ -8332,6 +8333,60 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
 }
 
 /**
+ * @brief The @c agg_token counterpart of a function over an aggregate result,
+ *        or @c NULL where there is none.
+ *
+ * @c ln(sum(x)) reads, as the query writes it, the value the sum takes in the
+ * database as it is: the function is applied to a number, and what it gives is
+ * not tracked.  ProvSQL defines the same functions over @c agg_token, whose
+ * gate carries the operation (@c gate_arith) and computes it in every world,
+ * so the call is re-resolved onto them -- the swap @c try_swap_agg_arith does
+ * for the arithmetic operators.
+ *
+ * Only a function of @c pg_catalog whose counterpart exists is swapped; one of
+ * anything else, or over a value that is no aggregate result, is left to read
+ * the value.
+ */
+static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
+  char *name;
+  Node *arg;
+  Oid counterpart;
+  List *names;
+  Oid argtypes[1];
+  FuncExpr *swapped;
+
+  if (list_length(f->args) != 1 ||
+      get_func_namespace(f->funcid) != PG_CATALOG_NAMESPACE)
+    return NULL;
+  arg = peel_agg_casts((Node *)linitial(f->args));
+  if (exprType(arg) != constants->OID_TYPE_AGG_TOKEN)
+    return NULL;
+  name = get_func_name(f->funcid);
+  if (name == NULL)
+    return NULL;
+
+  names = list_make2(makeString("provsql"), makeString(name));
+  argtypes[0] = constants->OID_TYPE_AGG_TOKEN;
+  counterpart = LookupFuncName(names, 1, argtypes, true);
+  list_free(names);
+  pfree(name);
+  if (!OidIsValid(counterpart))
+    return NULL;
+
+  swapped = makeNode(FuncExpr);
+  swapped->funcid = counterpart;
+  swapped->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
+  swapped->funcretset = false;
+  swapped->funcvariadic = false;
+  swapped->funcformat = COERCE_EXPLICIT_CALL;
+  swapped->funccollid = InvalidOid;
+  swapped->inputcollid = InvalidOid;
+  swapped->args = list_make1(arg);
+  swapped->location = f->location;
+  return (Node *)swapped;
+}
+
+/**
  * @brief Tree-mutator that casts @c provenance_aggregate results back
  *        to the original aggregate return type where needed.
  *
@@ -8368,7 +8423,10 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
   } else if (IsA(result, FuncExpr)) {
     FuncExpr *fe = (FuncExpr *)result;
     if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+      Node *swapped = try_swap_agg_func(fe, constants);
       bool saved = agg_cast_explicit;
+      if (swapped != NULL)
+        return swapped;
       agg_cast_explicit = fe->funcformat == COERCE_EXPLICIT_CAST;
       maybe_cast_agg_token_args(fe->args, fe->funcid, constants);
       agg_cast_explicit = saved;
@@ -15191,7 +15249,8 @@ static bool oj_is_arith_opexpr(Node *node) {
   if (opname == NULL)
     return false;
   is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
-             strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0;
+             strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0 ||
+             strcmp(opname, "^") == 0;
   pfree(opname);
   return is_arith;
 }

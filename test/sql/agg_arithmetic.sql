@@ -338,3 +338,26 @@ CREATE TABLE agg_arith_fn AS
 SELECT remove_provenance('agg_arith_fn');
 SELECT city, r FROM agg_arith_fn ORDER BY city;
 DROP TABLE agg_arith_fn;
+
+-- ln, exp, sqrt of an aggregate result, and its power of a constant: the gate
+-- carries the operation and computes it in every world, where reading the
+-- value of the database as it is would leave the result untracked.  Over the
+-- worlds of the two rows of the first group (1.5 and 2.5, each present with
+-- probability one half), the sum takes 1.5, 2.5 and 4, so
+-- E[ln(sum)] = (ln 1.5 + ln 2.5 + ln 4) / 3 = 0.902683 and
+-- E[sqrt(sum)] = 1.601961, the second group being certain of its single row of 9.
+CREATE TABLE agg_fn_d(g int, v numeric);
+INSERT INTO agg_fn_d VALUES (1, 1.5), (1, 2.5), (2, 9.0);
+SELECT add_provenance('agg_fn_d');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_fn_d; END $$;
+CREATE TABLE agg_fn_r AS
+  SELECT g, ln(sum(v)) AS l, sqrt(sum(v)) AS s, sum(v) ^ 2 AS p,
+         exp(sum(v)) AS e
+  FROM agg_fn_d GROUP BY g;
+SET provsql.active = off;
+SELECT g, l::text AS ln, s::text AS sqrt, p::text AS pow, e::text AS exp,
+       round(expected(l, provsql)::numeric, 6) AS e_ln,
+       round(expected(s, provsql)::numeric, 6) AS e_sqrt
+FROM agg_fn_r ORDER BY g;
+SET provsql.active = on;
+DROP TABLE agg_fn_r; DROP TABLE agg_fn_d;

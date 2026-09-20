@@ -102,6 +102,7 @@ INTERNAL_FUNCTIONS = {
     'agg_token_neg',
     'agg_token_plus_numeric', 'agg_token_minus_numeric',
     'agg_token_times_numeric', 'agg_token_div_numeric',
+    'agg_token_pow_numeric',
     'numeric_plus_agg_token', 'numeric_minus_agg_token',
     'numeric_times_agg_token', 'numeric_div_agg_token',
     'agg_token_eq_agg_token', 'agg_token_ne_agg_token',
