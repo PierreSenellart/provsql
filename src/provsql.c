@@ -268,6 +268,8 @@ static Query *rewrite_explode_agg_cmp_truth(Query *q,
 static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
                                         Index rteid, AttrNumber attno,
                                         Oid value_type);
+static bool node_varies_walker(Node *n, void *ctx);
+static bool oj_contains_sublink_walker(Node *node, void *cx);
 static bool rte_column_is_aggregate(const constants_t *constants,
                                     RangeTblEntry *rte, AttrNumber attno);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
@@ -10744,6 +10746,7 @@ typedef struct {
   List *direct;                 /* sublinks in a decorrelatable position */
   List *nested;                 /* tracked EXPR_SUBLINKs nested in an expression */
   bool has_unsupported_direct;  /* a tracked sublink in a direct position remains */
+  SubLink *offender;            /* the first such one, for the refusal message */
 } sublink_classify_ctx;
 
 /**
@@ -10762,8 +10765,11 @@ static bool sublink_classify_walker(Node *node, void *cx) {
     SubLink *sl = (SubLink *)node;
     if (IsA(sl->subselect, Query) &&
         has_provenance(c->constants, (Query *)sl->subselect)) {
-      if (list_member_ptr(c->direct, sl) || sl->subLinkType != EXPR_SUBLINK)
+      if (list_member_ptr(c->direct, sl) || sl->subLinkType != EXPR_SUBLINK) {
         c->has_unsupported_direct = true;
+        if (c->offender == NULL)
+          c->offender = sl;
+      }
       else
         c->nested = lappend(c->nested, sl);
       return false; /* do not descend into a tracked sublink */
@@ -10775,13 +10781,142 @@ static bool sublink_classify_walker(Node *node, void *cx) {
   return expression_tree_walker(node, sublink_classify_walker, cx);
 }
 
+/** @brief Context of @c tracked_sublink_count_walker. */
+typedef struct {
+  const constants_t *constants;
+  int n;
+} tracked_sublink_count_ctx;
+
+/** @brief Walker: count the sublinks over a tracked relation, one by one (not
+ *  one per clause), without descending into one that is already counted. */
+static bool tracked_sublink_count_walker(Node *node, void *cx) {
+  tracked_sublink_count_ctx *c = (tracked_sublink_count_ctx *)cx;
+
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query) &&
+        has_provenance(c->constants, (Query *)sl->subselect)) {
+      c->n++;
+      return false;
+    }
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, tracked_sublink_count_walker, cx,
+                             QTW_IGNORE_RT_SUBQUERIES);
+  return expression_tree_walker(node, tracked_sublink_count_walker, cx);
+}
+
+/**
+ * @brief Why a tracked sublink of @p q could not be rewritten.
+ *
+ * The refusal used to name the constructs rather than the obstacle
+ * (@c "Subqueries @c (EXISTS, @c IN, @c scalar @c subquery) @c not
+ * @c supported"), which says nothing about what to change -- and says it of a
+ * query whose neighbours, of the same construct, are tracked.  The shape of the
+ * body, of the block around it, and their number are what decide, so they are
+ * what the message names.  The order of the tests is the order in which the
+ * rewrites give up.
+ *
+ * @param constants  Extension OID cache.
+ * @param q          The block holding the sublink.
+ * @param sl         The sublink the rewrites left behind, or @c NULL.
+ * @return  A phrase to read after @c "not supported here:".
+ */
+static const char *sublink_unsupported_reason(const constants_t *constants,
+                                             Query *q, SubLink *sl) {
+  Query *b = (sl != NULL && IsA(sl->subselect, Query))
+               ? (Query *)sl->subselect : NULL;
+
+  if (b != NULL) {
+    ListCell *lc;
+
+    if (b->setOperations != NULL)
+      return "its body is a set operation (UNION, INTERSECT, EXCEPT), whose "
+             "rows the decorrelation cannot group";
+    if (b->limitCount != NULL || b->limitOffset != NULL)
+      return "its body truncates its rows with LIMIT or OFFSET, which the "
+             "decorrelation would read on the data as it is";
+    if (b->cteList != NIL)
+      return "its body has a WITH clause";
+    if (b->groupClause != NIL || b->groupingSets != NIL ||
+        b->havingQual != NULL)
+      return "its body groups rows of its own";
+    if (b->hasWindowFuncs)
+      return "its body has a window function";
+    if (b->distinctClause != NIL && b->hasAggs)
+      return "its body both deduplicates and aggregates";
+    if (query_has_tracked_sublink(constants, b))
+      return "its body holds a subquery of its own over a tracked relation";
+    foreach (lc, b->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_SUBQUERY)
+        return "its body reads a subquery in its own FROM clause";
+      if (r->rtekind == RTE_FUNCTION || r->rtekind == RTE_VALUES)
+        return "its body reads something other than a relation in its FROM "
+               "clause";
+    }
+    if (b->jointree != NULL) {
+      foreach (lc, b->jointree->fromlist)
+        if (IsA(lfirst(lc), JoinExpr))
+          return "its body has an outer join";
+    }
+  }
+
+  /* Not the body: the block around it.  A level that groups or aggregates of
+   * its own has no room for the grouping the decorrelation adds, and the
+   * decorrelation serves one subquery at a time. */
+  if (q->groupClause != NIL || q->groupingSets != NIL || q->hasAggs ||
+      q->havingQual != NULL)
+    return "this block groups or aggregates rows of its own, where the "
+           "decorrelation needs to group them by the outer rows";
+  if (q->distinctClause != NIL)
+    return "this block deduplicates its rows";
+  if (q->setOperations != NULL)
+    return "this block is a set operation";
+  if (q->hasWindowFuncs)
+    return "this block has a window function";
+  {
+    tracked_sublink_count_ctx c;
+
+    c.constants = constants;
+    c.n = 0;
+    tracked_sublink_count_walker((Node *)q->targetList, (void *)&c);
+    if (q->jointree != NULL)
+      tracked_sublink_count_walker((Node *)q->jointree, (void *)&c);
+    if (q->havingQual != NULL)
+      tracked_sublink_count_walker(q->havingQual, (void *)&c);
+    if (c.n > 1)
+      return "this block has more than one subquery over a tracked relation, "
+             "and the decorrelation groups its rows for one of them";
+  }
+  if (sl != NULL && sl->subLinkType != EXPR_SUBLINK &&
+      sl->subLinkType != EXISTS_SUBLINK && sl->subLinkType != ANY_SUBLINK &&
+      sl->subLinkType != ALL_SUBLINK)
+    return "it is a form the decorrelation does not cover (ROWCOMPARE, "
+           "MULTIEXPR, ...)";
+  /* A quantified comparison read as a VALUE rather than as a condition. */
+  if (sl != NULL &&
+      (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK) &&
+      oj_contains_sublink_walker((Node *)q->targetList, (void *)sl))
+    return "it is read as a value rather than as a condition, and SQL gives "
+           "IN or a quantified comparison the unknown truth where no row "
+           "matches and a comparison is unknown, which the count of the "
+           "matches does not tell from false (EXISTS as a value is supported)";
+  return "the position it is in, or the correlation it carries, is not one the "
+         "decorrelation covers (a correlation that is not an equality of "
+         "columns, a body reading no tracked relation of its own)";
+}
+
 /**
  * @brief Partition @p q's remaining tracked sublinks into unsupported-direct vs
  *        arithmetic-nested.  Returns the list of nested @c SubLink nodes (for
  *        warnings) and sets @p *has_direct if any unsupported direct form remains.
  */
 static List *classify_remaining_sublinks(const constants_t *constants, Query *q,
-                                         bool *has_direct) {
+                                         bool *has_direct,
+                                         SubLink **offender) {
   sublink_classify_ctx c;
   ListCell *lc;
 
@@ -10789,6 +10924,7 @@ static List *classify_remaining_sublinks(const constants_t *constants, Query *q,
   c.direct = NIL;
   c.nested = NIL;
   c.has_unsupported_direct = false;
+  c.offender = NULL;
 
   /* Direct positions: a target entry that IS the sublink (a coercion allowed). */
   foreach (lc, q->targetList) {
@@ -10810,6 +10946,8 @@ static List *classify_remaining_sublinks(const constants_t *constants, Query *q,
     sublink_classify_walker(q->havingQual, &c);
 
   *has_direct = c.has_unsupported_direct;
+  if (offender != NULL)
+    *offender = c.offender;
   return c.nested;
 }
 
@@ -23204,9 +23342,15 @@ static Query *process_query(const constants_t *constants, Query *q,
        * certain.  A tracked sublink still in a direct position (a GROUP BY body, a
        * multi-relation EXISTS…) is a genuinely unsupported form and still errors. */
       bool has_direct = false;
-      List *nested = classify_remaining_sublinks(constants, q, &has_direct);
+      SubLink *offender = NULL;
+      List *nested =
+        classify_remaining_sublinks(constants, q, &has_direct, &offender);
       if (has_direct || nested == NIL) {
-        provsql_unsupported("Subqueries (EXISTS, IN, scalar subquery) not supported");
+        if (offender == NULL && nested != NIL)
+          offender = (SubLink *)linitial(nested);
+        provsql_unsupported(
+          "subquery over a provenance-tracked relation not supported here: %s",
+          sublink_unsupported_reason(constants, q, offender));
         supported = false;
       } else {
         report_freeze(constants, (Node *)linitial(nested),

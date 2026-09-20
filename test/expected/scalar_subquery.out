@@ -83,7 +83,7 @@ add_provenance
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body truncates its rows with LIMIT or OFFSET, which the decorrelation would read on the data as it is
 add_provenance
 
 (1 row)
@@ -683,7 +683,7 @@ pid|sid|sorted|p
 1|||0.6000
 2|20||0.5000
 (3 rows)
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body has an outer join
 add_provenance
 
 (1 row)
@@ -772,7 +772,7 @@ NOT EXISTS DISTINCT|1|(1 ⊖ (1 ⊗ 2)) ⊗ (𝟙 ⊖ (1 ⊗ 2))
 NOT EXISTS DISTINCT|2|2
 NOT EXISTS DISTINCT|3|3
 (12 rows)
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: the position it is in, or the correlation it carries, is not one the decorrelation covers (a correlation that is not an equality of columns, a body reading no tracked relation of its own)
 add_provenance
 
 (1 row)
@@ -896,4 +896,4 @@ id|s|m
 3||
 4||
 (4 rows)
-ERROR:  ProvSQL: Subqueries (EXISTS, IN, scalar subquery) not supported
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body reads a subquery in its own FROM clause
