@@ -23806,26 +23806,43 @@ static void refuse_except_all(const constants_t *constants, Query *q) {
  * @c limit_lowerable accepts it.  Over an aggregation, a DISTINCT, a set
  * operation, or sort keys whose values vary between worlds, it is not: the
  * statement then shows the first rows of the actual result, which @c plain()
- * says explicitly.  Not reported on a schema without @c plain().
+ * says explicitly.  A LIMIT with no ORDER BY at all is such a truncation too:
+ * SQL leaves which rows it keeps open, and the rows the actual data gives are
+ * not the rows another world would give -- one of them absent, the result
+ * there holds a row this answer does not.  It is reported, not read: under the
+ * rank semantics no row precedes another there, so every row would tie at
+ * rank 1 and @c WITH @c TIES would keep them all, but whoever writes
+ * @c LIMIT @c k asks for @c k rows and would not expect the whole relation
+ * back.  Not reported on a schema without @c plain().
  */
 static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
   return OidIsValid(constants->OID_FUNCTION_PLAIN) &&
          OidIsValid(constants->OID_FUNCTION_ROW_NUMBER_AS_RANK) &&
-         q->sortClause != NIL && limit_truncates(q) &&
+         limit_truncates(q) &&
          !is_actual_marker(constants, q->limitCount) &&
          !is_actual_marker(constants, q->limitOffset) &&
          has_provenance(constants, q) && !limit_lowerable(constants, q);
 }
 
 /** @brief Report the freezing @c top_limit_is_truncation calls for. */
-static void warn_top_limit(const constants_t *constants) {
-  report_freeze(constants, NULL,
-                "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
-                "relations is not read in each possible world over an "
-                "aggregation, a DISTINCT, a set operation or sort keys that "
-                "vary between worlds: it truncates the actual result, whose "
-                "rows keep the provenance they have in the full result",
-                "write LIMIT plain(k) to say so");
+static void warn_top_limit(const constants_t *constants, Query *q) {
+  if (q->sortClause == NIL)
+    report_freeze(constants, NULL,
+                  "LIMIT / OFFSET with no ORDER BY over provenance-tracked "
+                  "relations keeps the rows the data as it is gives, in the "
+                  "order it gives them: which rows those are is left open by "
+                  "SQL and is not recorded, so another world drops one of "
+                  "them and keeps a row this result does not hold",
+                  "write LIMIT plain(k) to say so, or ORDER BY the rows to "
+                  "have the truncation read in every world");
+  else
+    report_freeze(constants, NULL,
+                  "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
+                  "relations is not read in each possible world over an "
+                  "aggregation, a DISTINCT, a set operation or sort keys that "
+                  "vary between worlds: it truncates the actual result, whose "
+                  "rows keep the provenance they have in the full result",
+                  "write LIMIT plain(k) to say so");
 }
 
 /** @brief Report the freezing @c nested_limit_on_provenance calls for. */
@@ -23893,7 +23910,7 @@ static PlannedStmt *provsql_planner(Query *q,
           RangeTblEntry *src = (RangeTblEntry *)lfirst(lc_src);
           if (src->rtekind == RTE_SUBQUERY && src->subquery != NULL) {
             if (top_limit_is_truncation(&constants, src->subquery))
-              warn_top_limit(&constants);
+              warn_top_limit(&constants, src->subquery);
             if (nested_limit_on_provenance(&constants, src->subquery, true)) {
               warn_nested_limit(&constants);
               break;
@@ -23945,10 +23962,14 @@ static PlannedStmt *provsql_planner(Query *q,
       untracked_sublink_warned = true;
     }
 
-    if (provsql_active && constants.ok &&
+    /* Only the user's own statement: the queries the rewriting runs itself
+     * (the body of provenance_times, of probability_evaluate, ...) are planned
+     * through this hook while the user's plan executes, and a LIMIT of theirs
+     * is theirs, not a loss to report. */
+    if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
         top_limit_is_truncation(&constants, q))
-      warn_top_limit(&constants);
-    if (provsql_active && constants.ok &&
+      warn_top_limit(&constants, q);
+    if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
         nested_limit_on_provenance(&constants, q, true))
       warn_nested_limit(&constants);
 

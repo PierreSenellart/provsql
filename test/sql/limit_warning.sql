@@ -6,10 +6,13 @@
 -- lost, and nothing is reported.  A LIMIT that stays a truncation of the
 -- actual result -- marked plain(), without ORDER BY, over an aggregation --
 -- keeps rows that carry the tokens they have in the full result.  At the top
--- level of a statement that is a sound reading, but an ORDER BY ... LIMIT that
--- is not read in each world (over a set operation, an aggregation...) is
--- reported unless marked plain(); below the top level the truncated result
--- feeds further computation, and a warning is raised (once per statement).
+-- level of a statement, showing some rows of the full result is a sound
+-- reading when the ORDER BY says which rows those are; an ORDER BY ... LIMIT
+-- that is not read in each world (over a set operation, an aggregation...) and
+-- a LIMIT with no ORDER BY at all (SQL leaves the rows it keeps open, so they
+-- are the answer of no world) are reported unless marked plain().  Below the
+-- top level the truncated result feeds further computation, and a warning is
+-- raised (once per statement).
 
 CREATE TABLE lw_t(a int); INSERT INTO lw_t VALUES (1),(2),(3);
 CREATE TABLE lw_u(a int); INSERT INTO lw_u VALUES (1),(2),(3);
@@ -67,6 +70,18 @@ CREATE TABLE lw_21 AS SELECT a, count(*) FROM lw_t GROUP BY a ORDER BY a LIMIT 2
 INSERT INTO lw_dst SELECT a FROM lw_t UNION SELECT a FROM lw_u ORDER BY a LIMIT 1;
 CREATE TABLE lw_22 AS SELECT a, count(*) FROM lw_t GROUP BY a ORDER BY a LIMIT plain(2);
 DROP TABLE lw_20, lw_21, lw_22;
+
+\echo -- warning: top level with no ORDER BY at all (LIMIT, OFFSET), unless plain()
+CREATE TABLE lw_23 AS SELECT a FROM lw_t LIMIT 2;
+CREATE TABLE lw_24 AS SELECT a FROM lw_t OFFSET 1;
+\echo -- and reported whether or not it truncates: the row count is not known here
+CREATE TABLE lw_25 AS SELECT a FROM lw_t LIMIT 1000;
+\echo -- no warning: plain(), and LIMIT ALL, which keeps every row
+CREATE TABLE lw_26 AS SELECT a FROM lw_t LIMIT plain(2);
+CREATE TABLE lw_27 AS SELECT a FROM lw_t LIMIT ALL;
+SELECT remove_provenance('lw_23');
+SELECT a FROM lw_23 ORDER BY a;
+DROP TABLE lw_23, lw_24, lw_25, lw_26, lw_27;
 
 
 DROP TABLE lw_t, lw_u, lw_dst;

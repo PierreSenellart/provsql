@@ -214,12 +214,25 @@ that a row was among those kept is not recorded. At the top level of a
 statement, the statement shows some rows of the full result, each
 correctly annotated. In a subquery, the truncated result feeds further
 computation, whose provenance then misses that dependence, and ProvSQL
-emits a ``WARNING``. The same holds of a ``LIMIT`` without ``ORDER BY``,
-of an ``OFFSET`` with ``WITH TIES``, and of an ``ORDER BY … LIMIT`` over
-an aggregation, a ``DISTINCT`` or a set operation, or on values that
-vary between worlds (an aggregate, a window function), which are not
-read in every world; for the latter, ProvSQL emits a ``WARNING`` at the
-top level of a statement too, unless the ``LIMIT`` is marked ``plain``.
+emits a ``WARNING``. The same holds of an ``OFFSET`` with ``WITH TIES``
+and of an ``ORDER BY … LIMIT`` over an aggregation, a ``DISTINCT`` or a
+set operation, or on values that vary between worlds (an aggregate, a
+window function), which are not read in every world; for the latter,
+ProvSQL emits a ``WARNING`` at the top level of a statement too, unless
+the ``LIMIT`` is marked ``plain``.
+
+A ``LIMIT`` or ``OFFSET`` with no ``ORDER BY`` at all is reported at the
+top level too. Which rows such a truncation keeps is left open by SQL,
+and the rows the data as it is gives are not the rows another world
+gives: with one of them absent, the result there holds a row the answer
+does not, so the kept rows are not the answer of any one world. Ordering
+the rows has the truncation read in every world instead, and ``plain(k)``
+says the truncation of the actual result is what was meant. ProvSQL reports
+such a ``LIMIT`` rather than reading it as ``WITH TIES``, which under the rank
+semantics would keep every row (none precedes another without an ``ORDER
+BY``): a ``LIMIT k`` asks for ``k`` rows. Whether a
+``LIMIT`` truncates at all is not known before the query runs, so
+``LIMIT 1000`` over ten rows is reported as well.
 
 .. _plain-sql:
 
