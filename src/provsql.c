@@ -217,6 +217,12 @@ static int provsql_executor_depth = 0;
 #define PROVSQL_MAX_SUBXACT_DEPTH 64
 static int provsql_subxact_depth[PROVSQL_MAX_SUBXACT_DEPTH];
 
+/** @brief An aggregate of the statement being planned reads the value of
+ *  another as a plain value, the pair not being one the reaggregation carries
+ *  (an avg of a count, a max of a sum).  Reported once, with the other
+ *  freezings, rather than refusing the statement for that one pair. */
+static bool agg_over_agg_frozen = false;
+
 /**
  * @brief Transaction callback: no executor runs between transactions.
  *
@@ -746,19 +752,65 @@ static bool reaggregates_agg_result(const constants_t *constants, Query *q,
   return false;
 }
 
+/**
+ * @brief Read the inner aggregate's value as a plain value inside @p agg:
+ *        replace each @c agg_token argument by its frozen value, of the type
+ *        the aggregate was resolved on.
+ *
+ * The outer aggregate is then an ordinary aggregate over plain numbers, over
+ * the rows of the subquery with their provenance: it gets an @c agg gate
+ * whose contributions carry values, so a comparison on it, a moment, an
+ * @c expected read it as they read any aggregate.  That is what an explicit
+ * @c ::numeric on the inner aggregate does; here ProvSQL inserts it, and
+ * reports the frozen value once for the statement.
+ *
+ * @return  False where the token is read in a position this does not cover
+ *          (a @c FILTER, an @c ORDER @c BY or a @c DISTINCT inside the
+ *          aggregate), which stays refused.
+ */
+static bool freeze_agg_token_args(Aggref *agg, const constants_t *constants) {
+  void *cx = (void *)constants;
+  ListCell *lc;
+  int i = 0;
+
+  if (agg_token_var_walker((Node *)agg->aggdirectargs, cx) ||
+      agg_token_var_walker((Node *)agg->aggorder, cx) ||
+      agg_token_var_walker((Node *)agg->aggdistinct, cx) ||
+      agg_token_var_walker((Node *)agg->aggfilter, cx))
+    return false;
+
+  foreach (lc, agg->args) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN) {
+      Oid target = i < list_length(agg->aggargtypes)
+                     ? list_nth_oid(agg->aggargtypes, i)
+                     : InvalidOid;
+      Node *value;
+      /* The type the aggregate reads, which the retyping of the column to
+       * agg_token left as it was */
+      if (!OidIsValid(target) || target == constants->OID_TYPE_AGG_TOKEN)
+        return false;
+      value = frozen_agg_value((Node *)te->expr, target, constants);
+      if (value == NULL)
+        return false;
+      te->expr = (Expr *)value;
+    }
+    ++i;
+  }
+  return true;
+}
+
 /** @brief Context for @c aggref_over_agg_token_walker. */
 typedef struct aggref_over_agg_token_ctx {
   const constants_t *constants; ///< Extension OID cache
   Query *q;                     ///< The query whose aggregates are walked
 } aggref_over_agg_token_ctx;
 
-/** @brief expression_tree_walker raising an error on an @c Aggref whose
- *  arguments read an @c agg_token column: aggregating an aggregate result
- *  from a subquery (max of a count, avg of a sum...) is refused, like
- *  grouping or sorting on it, because the outer aggregate would run on the
- *  raw token composite rather than on a possible-world value -- unless it
- *  aggregates it again as the rows of their groups
- *  (@c reaggregates_agg_result). */
+/** @brief expression_tree_walker noting an @c Aggref whose arguments read an
+ *  @c agg_token column: an aggregate of an aggregate result from a subquery
+ *  (max of a count, avg of a sum...) that is no pair the reaggregation
+ *  carries (@c reaggregates_agg_result) reads the inner value as a plain
+ *  value, reported once per statement, rather than refusing the statement. */
 static bool aggref_over_agg_token_walker(Node *node, void *context) {
   aggref_over_agg_token_ctx *ctx = (aggref_over_agg_token_ctx *)context;
   void *cx = (void *)ctx->constants;
@@ -771,8 +823,21 @@ static bool aggref_over_agg_token_walker(Node *node, void *context) {
          agg_token_var_walker((Node *)agg->aggorder, cx) ||
          agg_token_var_walker((Node *)agg->aggfilter, cx)) &&
         !reaggregates_agg_result(ctx->constants, ctx->q, agg)) {
-      provsql_unsupported(PROVSQL_GAP, "aggregate-over-aggregate", "aggregation over aggregate results from "
-                          "a subquery not supported");
+      /* Not a pair the reaggregation carries (an avg of a count, a max of a
+       * sum): read the inner value as a plain value and keep the outer
+       * aggregate tracked over the rows of the subquery, as an explicit
+       * ::numeric on the inner aggregate would.  Refusing the statement
+       * instead would refuse it whole, for one pair, where the answer is the
+       * provenance of the query with that value read on the database as it
+       * is. */
+      if (freeze_agg_token_args(agg, ctx->constants))
+        agg_over_agg_frozen = true;
+      else
+        provsql_unsupported(PROVSQL_GAP, "aggregate-over-aggregate",
+                            "aggregation over aggregate results from a "
+                            "subquery not supported where the aggregate "
+                            "reads them in a FILTER, an ORDER BY or a "
+                            "DISTINCT of its own");
     }
   }
   return expression_tree_walker(node, aggref_over_agg_token_walker, context);
@@ -24953,6 +25018,8 @@ static PlannedStmt *provsql_planner(Query *q,
   Query *saved_freeze_statement = freeze_statement;
   provsql_inert_subselects = NIL;
   freeze_statement = q;
+  if (provsql_executor_depth == 0)
+    agg_over_agg_frozen = false;
   {
     const constants_t mconstants = get_constants(false);
     if (mconstants.ok && OidIsValid(mconstants.OID_FUNCTION_PLAIN)) {
@@ -25137,7 +25204,21 @@ static PlannedStmt *provsql_planner(Query *q,
                       "position that is not tracked is evaluated as plain "
                       "SQL", NULL);
 
+      if (provsql_active && provsql_executor_depth == 0 && agg_over_agg_frozen)
+        report_freeze(&constants, NULL, PROVSQL_GAP, "aggregate-over-aggregate",
+                      "an aggregate of an aggregate result of another kind (an "
+                      "avg of a count, a max of a sum) reads the inner value "
+                      "as plain SQL, on the data as it is: the rows it "
+                      "aggregates carry their provenance, the value they carry "
+                      "is the one of the database as it is",
+                      "cast the inner aggregate explicitly (::numeric, ...) to "
+                      "say so");
+
+      /* The frozen values an aggregate over an aggregate result reads are
+       * reported just above, by what reads them: no second report of the same
+       * loss under the general tag. */
       if (provsql_active && provsql_executor_depth == 0 &&
+          !agg_over_agg_frozen &&
           OidIsValid(constants.OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE) &&
           frozen_agg_value_walker((Node *)q, (void *)&constants))
         report_freeze(&constants, NULL,

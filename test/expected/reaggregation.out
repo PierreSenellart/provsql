@@ -27,7 +27,22 @@ sum of counts|2|3|0.875000|1.714286
 sum of sums|1|35|0.875000|20.000000
 sum of sums|2|14|0.875000|8.000000
 (10 rows)
-ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+WARNING:  ProvSQL: an aggregate of an aggregate result of another kind (an avg of a count, a max of a sum) reads the inner value as plain SQL, on the data as it is: the rows it aggregates carry their provenance, the value they carry is the one of the database as it is, although the statement also tracks ra; cast the inner aggregate explicitly (::numeric, ...) to say so
 DETAIL:  provsql-reason: aggregate-over-aggregate; scope: gap
-ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+a|p|e|provsql
+3.0000000000000000 (*)|1.000000|3.000000|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+WARNING:  ProvSQL: an aggregate of an aggregate result of another kind (an avg of a count, a max of a sum) reads the inner value as plain SQL, on the data as it is: the rows it aggregates carry their provenance, the value they carry is the one of the database as it is, although the statement also tracks ra; cast the inner aggregate explicitly (::numeric, ...) to say so
 DETAIL:  provsql-reason: aggregate-over-aggregate; scope: gap
+m|p|e|provsql
+35 (*)|1.000000|32.666667|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+WARNING:  ProvSQL: an aggregate of an aggregate result of another kind (an avg of a count, a max of a sum) reads the inner value as plain SQL, on the data as it is: the rows it aggregates carry their provenance, the value they carry is the one of the database as it is, although the statement also tracks ra; cast the inner aggregate explicitly (::numeric, ...) to say so
+DETAIL:  provsql-reason: aggregate-over-aggregate; scope: gap
+remove_provenance
+
+(1 row)
+h|m|p|e
+1|30 (*)|0.875000|26.714286
+2|7 (*)|0.875000|6.714286
+(2 rows)

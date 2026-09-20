@@ -42,8 +42,31 @@ SELECT remove_provenance('ra_r');
 SELECT * FROM ra_r ORDER BY q, g;
 DROP TABLE ra_r;
 
--- Aggregates of another kind are still refused.
-SELECT avg(c) FROM (SELECT g, count(*) AS c FROM ra GROUP BY g) x;
-SELECT max(s) FROM (SELECT g, sum(v) AS s FROM ra GROUP BY g) x;
+-- An aggregate of another kind (an avg of a count, a max of a sum) reads the
+-- inner value on the database as it is, as an explicit ::numeric on the inner
+-- aggregate would, and the loss is reported.  The outer aggregate is tracked
+-- over the rows of the groups with those values: a scalar aggregation always
+-- yields a row, and its expectation is over the worlds where some group
+-- exists (63 of the 64).  Both match a count over the 64 worlds: avg of the
+-- counts (3, 3) is 3 wherever a group exists, max of the sums (35, 14) is
+-- 35 with probability 7/8 and 14 with probability 7/64, so 32.666667.
+SELECT avg(c) AS a, round(probability_evaluate(provenance())::numeric, 6) AS p,
+       round(expected(avg(c))::numeric, 6) AS e
+  FROM (SELECT g, count(*) AS c FROM ra GROUP BY g) x;
+SELECT max(s) AS m, round(probability_evaluate(provenance())::numeric, 6) AS p,
+       round(expected(max(s))::numeric, 6) AS e
+  FROM (SELECT g, sum(v) AS s FROM ra GROUP BY g) x;
+-- Grouped above, each answer row carries the provenance of its groups: h=1
+-- reads the groups of sums 30 and 7, present with probability 3/4 and 1/2,
+-- h=2 those of sums 5 and 7, so each row is there with probability 7/8 and
+-- the max is 26.714286 in expectation (23.375 over the 7/8).
+CREATE TABLE ra_h AS
+  SELECT h, max(s) AS m,
+         round(probability_evaluate(provenance())::numeric, 6) AS p,
+         round(expected(max(s))::numeric, 6) AS e
+  FROM (SELECT g, h, sum(v) AS s FROM ra GROUP BY g, h) x GROUP BY h;
+SELECT remove_provenance('ra_h');
+SELECT * FROM ra_h ORDER BY h;
+DROP TABLE ra_h;
 
 DROP TABLE ra;

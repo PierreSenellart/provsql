@@ -505,7 +505,19 @@ own, as semimodule scalar multiplication gives, in every semiring; and
     GROUP BY dept;
 
 Any other aggregate of an aggregate result (``avg`` of a ``count``, ``max``
-of a ``sum``...) is refused.
+of a ``sum``...) is not carried that way: there ProvSQL reads the inner
+value on the database as it is, as an explicit cast of the inner aggregate
+would, and reports that reading once for the statement (see
+:ref:`plain-sql`).  The outer aggregate is tracked as any aggregate is,
+over the rows of the subquery with their provenance and those values:
+
+.. code-block:: postgresql
+
+    SELECT avg(n) AS employees_per_city     -- n read on the data as it is
+    FROM (SELECT city, count(*) AS n FROM employees GROUP BY city) t;
+
+An aggregate that reads such a result in a ``FILTER``, an ``ORDER BY`` or a
+``DISTINCT`` of its own is refused.
 
 .. _explode-agg-value:
 
