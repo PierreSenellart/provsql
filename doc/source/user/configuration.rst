@@ -37,7 +37,11 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
     ``'semiring'``
         Universal semiring provenance (the default): circuits are
         faithful for every commutative (m-)semiring.  Recursive queries
-        require the structural fixpoint, so cyclic data is rejected.
+        require the structural fixpoint, so a recursion in which a tuple
+        is derived through itself is rejected: cyclic data does that, and
+        so does a null-padded row that re-derives itself, or a projection
+        onto constants, on acyclic data.  The refusal comes as soon as the
+        rows settle while the derivations do not.
 
     ``'absorptive'``
         Circuits may additionally be sound only for *absorptive*
@@ -45,14 +49,16 @@ or with `ALTER DATABASE <https://www.postgresql.org/docs/current/sql-alterdataba
         Boolean, min-plus over nonnegative costs, Viterbi…).
         Concretely:
 
-        * a recursive query over **cyclic** data stops at the
-          absorptive value fixpoint -- once every minimal,
-          tuple-repetition-free derivation is covered, the longer
-          (cyclic) ones being absorbed -- instead of failing; the
-          resulting tokens carry the ``'absorptive'`` assumption
-          marker, and non-absorptive evaluations (counting,
-          why-provenance -- genuinely infinite on cyclic data) refuse
-          them, following :cite:`DBLP:conf/icdt/DeutchMRT14`.
+        * a recursive query in which a tuple is derived through itself
+          (over **cyclic** data, or through a null-padded row that
+          re-derives itself on acyclic data) stops at the absorptive
+          value fixpoint -- once every minimal, tuple-repetition-free
+          derivation is covered, the longer ones being absorbed --
+          instead of failing; the resulting tokens carry the
+          ``'absorptive'`` assumption marker, and non-absorptive
+          evaluations (counting, why-provenance -- genuinely infinite
+          there) refuse them, following
+          :cite:`DBLP:conf/icdt/DeutchMRT14`.
         * **recursive reachability on bounded-treewidth data**
           compiles along a tree decomposition of the data graph into
           certified d-Ds (deterministic and decomposable, but not in

@@ -152,4 +152,48 @@ DROP TABLE absf_bmap;
 DROP TABLE absf_a;
 DROP TABLE absf_b;
 
+-- A tuple derived through itself on ACYCLIC data: the recursive term reads its
+-- own rows through an outer join, so a null-padded row re-derives itself at
+-- every round (a null key matches nothing), and the annotation gains a term
+-- each round although the rows settle.  Plain SQL returns three rows, so this
+-- is the same situation as cyclic data and not a divergence of the query: the
+-- default class refuses it, naming the derivation rather than the data, and
+-- 'absorptive' reads it as the absorptive fixpoint, tagged.
+--   e = {(1,2), (2,3)}, both at p = 0.5, so over the four worlds
+--   n=2 needs (1,2)            -> 0.5
+--   n=3 needs both             -> 0.25
+--   n=NULL needs (1,2), since 2 has no successor in {(1,2)} and 3 has none
+--     in {(1,2),(2,3)}         -> 0.5
+RESET provsql.provenance;
+CREATE TABLE absp_e(src int, dst int);
+INSERT INTO absp_e VALUES (1,2),(2,3);
+SELECT add_provenance('absp_e');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM absp_e; END $$;
+DO $$
+BEGIN
+  PERFORM n FROM (
+    WITH RECURSIVE r(n) AS (
+        SELECT dst FROM absp_e WHERE src = 1
+      UNION
+        SELECT x.dst FROM r LEFT JOIN absp_e x ON x.src = r.n)
+    SELECT n FROM r) s;
+  RAISE EXCEPTION 'expected the semiring class to refuse a self-derivation';
+EXCEPTION WHEN feature_not_supported THEN
+  RAISE NOTICE 'semiring class refuses the self-derivation';
+END $$;
+SET provsql.provenance = 'absorptive';
+CREATE TABLE absp_r AS
+  WITH RECURSIVE r(n) AS (
+      SELECT dst FROM absp_e WHERE src = 1
+    UNION
+      SELECT x.dst FROM r LEFT JOIN absp_e x ON x.src = r.n)
+  SELECT n, get_gate_type(provenance()) AS root_type,
+         round(probability_evaluate(provenance())::numeric, 6) AS prob
+  FROM r;
+SELECT remove_provenance('absp_r');
+SELECT * FROM absp_r ORDER BY n NULLS LAST;
+DROP TABLE absp_r;
+SELECT remove_provenance('absp_e');
+DROP TABLE absp_e;
+
 RESET provsql.provenance;

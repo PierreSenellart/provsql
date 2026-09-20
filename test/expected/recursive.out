@@ -23,7 +23,7 @@ node|boolean_expression
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: the rounds of this recursion do not reach a fixpoint (after 3 of them): on cyclic data the derivations of a tuple grow without end, and only an absorptive provenance class has a value for it (set provsql.provenance to absorptive or to boolean)
+ERROR:  ProvSQL: the rounds of this recursion do not reach a fixpoint (the rows settled after 3 of them, the derivations did not): a tuple is derived through itself, which cyclic data does, and so does a null-padded row that re-derives itself or a projection onto constants on acyclic data, so its annotation gains a term at every round.  Only an absorptive provenance class has a value for it (set provsql.provenance to absorptive or to boolean)
 NOTICE:  0A000 / provsql-reason: recursion-no-fixpoint; scope: deliberate
 NOTICE:  0A000 / provsql-reason: recursion-does-not-end; scope: deliberate
 add_provenance

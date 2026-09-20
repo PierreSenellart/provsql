@@ -1752,19 +1752,25 @@ DECLARE
   set_stable boolean;       -- user-column tuple set unchanged this round
   iters     int := 0;
   new_count int;            -- rows in provsql_rec_new this round (INSERT ROW_COUNT)
-  -- Under an absorptive semiring the provenance *value* converges on cyclic
-  -- data even though the circuit keeps growing structurally.  A minimal
-  -- derivation cannot repeat a tuple, so it has depth <= (number of derivable
-  -- tuples); after that many naive rounds the value equals the least fixpoint,
-  -- and the surplus (longer, cyclic) derivations are absorbed at evaluation
-  -- time.  We learn that bound from the tuple-set fixpoint, stop there, and
-  -- mark the resulting tokens with the 'absorptive' assumption so evaluation
-  -- under a non-absorptive semiring refuses rather than silently returning a
-  -- truncated value.
+  -- The derivations of a tuple can repeat through the tuple itself although
+  -- the tuple set stabilises: on cyclic data, but also on acyclic data through
+  -- a null-padded row that re-derives itself or a projection onto constants.
+  -- The circuit then keeps growing, one summand per round, and only an
+  -- absorptive class has a value for it (a ⊕ a = a absorbs the surplus).  A
+  -- minimal derivation cannot repeat a tuple, so it has depth <= (number of
+  -- derivable tuples); after that many naive rounds the value equals the least
+  -- fixpoint of an absorptive class, and the surplus derivations are absorbed
+  -- at evaluation time.  We learn that bound from the tuple-set fixpoint: in
+  -- an absorptive class we stop there and mark the tokens with the
+  -- 'absorptive' assumption, so evaluation under a non-absorptive semiring
+  -- refuses rather than silently returning a truncated value; in another class
+  -- there is no value to give, and reaching the bound is what tells us so --
+  -- the refusal comes then, rather than after max_iter rounds of building
+  -- circuit for an answer that will not come.
   absorptive_mode boolean :=
     coalesce(current_setting('provsql.provenance', true), 'semiring')
       IN ('absorptive', 'boolean');
-  truncated boolean := false; -- exited at the value fixpoint (cyclic data)
+  truncated boolean := false; -- exited at the value fixpoint
   ntuples   int := NULL;    -- the bound above, set once the tuple set stabilises
 BEGIN
   EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
@@ -1783,14 +1789,14 @@ BEGIN
     -- Hard safety bound (also catches genuinely unbounded recursion, e.g. an
     -- unbounded counter, where even the tuple set never stabilises).
     IF iters > max_iter THEN
-      /* The rounds do not converge: on cyclic data the annotations grow with
-       * the number of derivations, and there is no provenance to give -- a
-       * refusal by what the recursion means, not a limit of the driver. */
+      /* Not even the rows stop changing: the recursion derives tuples without
+       * end (an unbounded counter), which SQL does not terminate on either.
+       * A recursion whose rows settle while its derivations repeat exits at
+       * the value fixpoint below, tagged, and never reaches this. */
       RAISE EXCEPTION 'ProvSQL: the rounds of this recursion do not reach a '
-                      'fixpoint (after % of them): on cyclic data the '
-                      'derivations of a tuple grow without end, and only an '
-                      'absorptive provenance class has a value for it (set '
-                      'provsql.provenance to absorptive or to boolean)',
+                      'fixpoint (after % of them): the rows it derives keep '
+                      'changing, so there is no fixpoint to annotate -- plain '
+                      'SQL does not terminate on such a recursion either',
                       max_iter
         USING ERRCODE = 'feature_not_supported',
               DETAIL = 'provsql-reason: recursion-no-fixpoint; scope: deliberate';
@@ -1809,10 +1815,9 @@ BEGIN
       'SELECT EXISTS((TABLE provsql_rec_new EXCEPT TABLE %1$I) UNION ALL (TABLE %1$I EXCEPT TABLE provsql_rec_new))',
       work_name) INTO changed;
 
-    -- In an absorptive class, learn the round bound from the tuple-set
-    -- fixpoint (the set always stabilises after finitely many rounds, even on
-    -- cyclic data).
-    IF absorptive_mode AND ntuples IS NULL THEN
+    -- Learn the round bound from the tuple-set fixpoint (the set stabilises
+    -- after finitely many rounds even where the derivations do not).
+    IF ntuples IS NULL THEN
       EXECUTE format(
         'SELECT NOT EXISTS('
         || '(SELECT %2$s FROM provsql_rec_new EXCEPT SELECT %2$s FROM %1$I) UNION ALL '
@@ -1831,18 +1836,36 @@ BEGIN
     -- semiring.
     EXIT WHEN NOT changed;
 
-    -- Absorptive class on cyclic data: once the value-fixpoint bound is
-    -- reached (plus one confirming round, so that acyclic circuits whose
-    -- token depth lags the tuple-set saturation still exit through the
-    -- structural test above, untagged) we stop, even though the circuit
-    -- is not structurally stable.
-    IF absorptive_mode AND ntuples IS NOT NULL AND iters >= ntuples + 1 THEN
-      truncated := true;
-      EXIT;
+    -- The derivations repeat through a tuple: the rows have settled, the
+    -- circuit has not, and it will not (one summand per round from here on).
+    -- The bound is the tuple-set fixpoint plus one confirming round, so that a
+    -- recursion whose token depth merely lags the tuple-set saturation still
+    -- exits through the structural test above, untagged.
+    IF ntuples IS NOT NULL AND iters >= ntuples + 1 THEN
+      IF absorptive_mode THEN
+        -- The value of an absorptive class is reached: stop, tagged below.
+        truncated := true;
+        EXIT;
+      END IF;
+      /* No absorption: the annotation of such a tuple gains a term per round
+       * and has no value, so there is nothing to return -- a refusal by what
+       * the recursion means, not a limit of the driver. */
+      RAISE EXCEPTION 'ProvSQL: the rounds of this recursion do not reach a '
+                      'fixpoint (the rows settled after % of them, the '
+                      'derivations did not): a tuple is derived through '
+                      'itself, which cyclic data does, and so does a '
+                      'null-padded row that re-derives itself or a projection '
+                      'onto constants on acyclic data, so its annotation '
+                      'gains a term at every round.  Only an absorptive '
+                      'provenance class has a value for it (set '
+                      'provsql.provenance to absorptive or to boolean)',
+                      iters
+        USING ERRCODE = 'feature_not_supported',
+              DETAIL = 'provsql-reason: recursion-no-fixpoint; scope: deliberate';
     END IF;
   END LOOP;
 
-  -- Tokens of a truncated (cyclic) fixpoint are sound only under absorptive
+  -- Tokens of a truncated fixpoint are sound only under absorptive
   -- evaluation: record that in the circuit itself.
   IF truncated THEN
     EXECUTE format(

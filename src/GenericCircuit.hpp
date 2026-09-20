@@ -181,10 +181,12 @@ typename S::value_type GenericCircuit::evaluate(gate_t g, std::unordered_map<gat
                     "circuit), so its value is only defined for "
                     "absorptive semirings (probability, boolean, "
                     "formula-with-absorption, nonnegative tropical, "
-                    "...).  Counting and why-provenance of cyclic "
-                    "recursion are genuinely infinite; on acyclic "
-                    "data, re-run under the 'semiring' provenance "
-                    "class.");
+                    "...).  Counting and why-provenance of such a "
+                    "recursion are genuinely infinite: a tuple derived "
+                    "through itself gains a derivation per round, which "
+                    "cyclic data does and so does a null-padded row that "
+                    "re-derives itself or a projection onto constants, on "
+                    "acyclic data.");
           /* CAVEAT: absorptive() is a coarser gate than the compiled
            * reachability route's actual soundness condition.  That route
            * materialises its world enumeration with genuine negation: each
