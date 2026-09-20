@@ -3030,6 +3030,125 @@ CREATE AGGREGATE array_collect(ANYNONARRAY) (
 DROP FUNCTION IF EXISTS epsilon();
 
 -- ----------------------------------------------------------------------
+-- 6q. nonzero(token, 'boolean') without a mapping reads the truth of a
+--     comparison of aggregate results off the values they record
+--     (plain_truth), instead of over the worlds of what they aggregate, which
+--     costs one term per subset of the contributions.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION nonzero(token uuid,
+                        semiring text DEFAULT NULL,
+                        mapping regclass DEFAULT NULL)
+  RETURNS boolean AS
+$$
+BEGIN
+  IF token IS NULL THEN
+    RETURN true;
+  END IF;
+  IF semiring IS NULL THEN
+    RETURN provsql.true_nonzero(token);
+  ELSIF semiring = 'boolean' THEN
+    IF mapping IS NULL THEN
+      RETURN provsql.plain_truth(token);
+    END IF;
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'boolean', TRUE);
+  ELSIF semiring = 'counting' THEN
+    RETURN provsql.provenance_evaluate_compiled(token, mapping, 'counting', 1) <> 0;
+  ELSE
+    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring;
+  END IF;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+-- ----------------------------------------------------------------------
+-- 6r. agg_guard_holds: a comparison whose side carries a value but has none
+--     in the actual data (an aggregate over no row there) does not hold, as
+--     provenance_cmp annotates it zero, rather than leaving the truth
+--     undecided -- which sent plain_truth to the reading over the worlds of
+--     what the comparison aggregates.
+-- ----------------------------------------------------------------------
+
+/**
+ * @brief Deterministic truth of a Boolean guard sub-circuit over aggregate
+ *        comparisons, evaluated in the actual world (all input tuples present).
+ *
+ * Guards are the shapes @c having_Expr_to_provenance_cmp mints: @c cmp gates
+ * over aggregate-valued children (comparison-operator OID in @c info1),
+ * @c times / @c plus combinations (AND / OR, with negation pushed into the
+ * comparison operators), and the @c one / @c zero indicators of regular
+ * (aggregate-free) conditions.  Uses Kleene three-valued logic: returns
+ * @c NULL on any other gate shape, or when an operand's deterministic value
+ * cannot be resolved.
+ */
+CREATE OR REPLACE FUNCTION agg_guard_holds(token UUID)
+  RETURNS boolean AS
+$$
+DECLARE
+  gt provenance_gate := get_gate_type(token);
+  ch uuid[];
+  opname text;
+  l numeric;
+  r numeric;
+  all_true boolean;
+  any_true boolean;
+  any_null boolean;
+BEGIN
+  IF gt = 'one' THEN
+    RETURN true;
+  ELSIF gt = 'zero' THEN
+    RETURN false;
+  ELSIF gt IN ('times', 'plus') THEN
+    SELECT bool_and(h), bool_or(h), bool_or(h IS NULL)
+      INTO all_true, any_true, any_null
+      FROM (SELECT provsql.agg_guard_holds(c) AS h
+            FROM unnest(get_children(token)) AS c) AS s;
+    IF gt = 'times' THEN
+      -- AND: false dominates unknown (bool_and skips NULL inputs, so it is
+      -- false exactly when some child is false).
+      RETURN CASE WHEN NOT all_true THEN false
+                  WHEN any_null THEN NULL
+                  ELSE true END;
+    ELSE
+      -- OR: true dominates unknown.
+      RETURN CASE WHEN any_true THEN true
+                  WHEN any_null THEN NULL
+                  ELSE false END;
+    END IF;
+  ELSIF gt = 'cmp' THEN
+    ch := get_children(token);
+    l := agg_gate_value(ch[1]);
+    r := agg_gate_value(ch[2]);
+    IF l IS NULL OR r IS NULL THEN
+      /* A side that carries a value but has none in the actual data -- an
+       * aggregate over no row there, as a group kept only for other worlds is
+       * -- makes the comparison unknown there, which is what provenance_cmp
+       * annotates zero: it does not hold.  A side that carries no value at
+       * all (a random variable) leaves the truth undecided. */
+      IF get_gate_type(ch[1]) IN ('agg', 'arith', 'value', 'semimod',
+                                  'conditioned', 'case')
+         AND get_gate_type(ch[2]) IN ('agg', 'arith', 'value', 'semimod',
+                                      'conditioned', 'case') THEN
+        RETURN false;
+      END IF;
+      RETURN NULL;
+    END IF;
+    SELECT oprname INTO opname
+      FROM pg_catalog.pg_operator WHERE oid = (get_infos(token)).info1;
+    RETURN CASE opname
+      WHEN '<'  THEN l <  r
+      WHEN '<=' THEN l <= r
+      WHEN '='  THEN l =  r
+      WHEN '<>' THEN l <> r
+      WHEN '>=' THEN l >= r
+      WHEN '>'  THEN l >  r
+    END;
+  END IF;
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.

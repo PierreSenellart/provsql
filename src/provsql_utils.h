@@ -248,6 +248,10 @@ typedef struct constants_t {
    *  takes over the possible worlds, one per exploded row; @c InvalidOid on
    *  a schema that predates it. */
   Oid OID_FUNCTION_AGG_POSSIBLE_VALUES;
+  /** @brief OID of @c agg_guard_holds(), the truth of a comparison of
+   *  aggregate results in the database as it is, read off the values they
+   *  record; @c InvalidOid on a schema that predates it. */
+  Oid OID_FUNCTION_AGG_GUARD_HOLDS;
   /** @brief OID of @c provenance_semimod_flat(), the contributions of an
    *  aggregate result aggregated again; @c InvalidOid on a schema that
    *  predates it. */

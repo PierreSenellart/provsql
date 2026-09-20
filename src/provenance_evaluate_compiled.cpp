@@ -455,6 +455,34 @@ int quick_plain_truth(const pg_uuid_t &token, unsigned depth)
     if (nb_children >= 1)
       res = quick_plain_truth(children[0], depth + 1);
     break;
+  case gate_cmp: {
+    /* A comparison of aggregate results holds, in the database as it is, by
+     * the values its sides record there: agg_guard_holds reads them off the
+     * gates.  Deciding it that way rather than over the Boolean semiring
+     * matters, not merely for speed: the semiring reads a comparison through
+     * the worlds of what it aggregates, which is 2^n terms for n
+     * contributions, so a comparison over a few dozen rows -- one per row an
+     * exploded aggregate value produces -- would not finish.  A comparison
+     * whose sides record no value (a random variable, a text aggregate)
+     * yields NULL and takes the evaluation below. */
+    constants_t constants = get_constants(false);
+    if (!constants.ok || !OidIsValid(constants.OID_FUNCTION_AGG_GUARD_HOLDS))
+      break;
+    {
+      FmgrInfo flinfo;
+      LOCAL_FCINFO(fcinfo, 1);
+      Datum d;
+
+      fmgr_info(constants.OID_FUNCTION_AGG_GUARD_HOLDS, &flinfo);
+      InitFunctionCallInfoData(*fcinfo, &flinfo, 1, InvalidOid, NULL, NULL);
+      fcinfo->args[0].value = UUIDPGetDatum(&token);
+      fcinfo->args[0].isnull = false;
+      d = FunctionCallInvoke(fcinfo);
+      if (!fcinfo->isnull)
+        res = DatumGetBool(d) ? 1 : 0;
+    }
+    break;
+  }
   default:
     break;
   }

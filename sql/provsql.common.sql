@@ -2628,6 +2628,17 @@ BEGIN
     l := agg_gate_value(ch[1]);
     r := agg_gate_value(ch[2]);
     IF l IS NULL OR r IS NULL THEN
+      /* A side that carries a value but has none in the actual data -- an
+       * aggregate over no row there, as a group kept only for other worlds is
+       * -- makes the comparison unknown there, which is what provenance_cmp
+       * annotates zero: it does not hold.  A side that carries no value at
+       * all (a random variable) leaves the truth undecided. */
+      IF get_gate_type(ch[1]) IN ('agg', 'arith', 'value', 'semimod',
+                                  'conditioned', 'case')
+         AND get_gate_type(ch[2]) IN ('agg', 'arith', 'value', 'semimod',
+                                      'conditioned', 'case') THEN
+        RETURN false;
+      END IF;
       RETURN NULL;
     END IF;
     SELECT oprname INTO opname
@@ -10849,6 +10860,14 @@ BEGIN
   IF semiring IS NULL THEN
     RETURN provsql.true_nonzero(token);
   ELSIF semiring = 'boolean' THEN
+    IF mapping IS NULL THEN
+      /* Every leaf true: that truth is plain_truth, which walks the gates
+       * whose truth follows from their children's and reads a comparison of
+       * aggregate results off the values they record.  Reading such a
+       * comparison over the worlds of what it aggregates, as the evaluation
+       * below does, costs one term per subset of its contributions. */
+      RETURN provsql.plain_truth(token);
+    END IF;
     RETURN provsql.provenance_evaluate_compiled(token, mapping, 'boolean', TRUE);
   ELSIF semiring = 'counting' THEN
     RETURN provsql.provenance_evaluate_compiled(token, mapping, 'counting', 1) <> 0;
@@ -10861,11 +10880,13 @@ $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
 /**
  * @brief Presence in the vanilla SQL answer on this instance.
  *
- * Shorthand for <tt>nonzero(token, 'boolean')</tt> with every leaf true:
  * <tt>WHERE present(provenance())</tt> restores the result set the query
  * has without provenance tracking, filtering the zero-annotated extras
  * (antijoin arms, failed HAVING groups, unknown comparisons) that the
  * rewriting keeps visible.
+ *
+ * Shorthand for <tt>nonzero(token, 'boolean')</tt> with every leaf true,
+ * which reads that truth off the gates (@c plain_truth).
  */
 CREATE FUNCTION present(token uuid)
   RETURNS boolean AS

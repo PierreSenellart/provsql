@@ -444,6 +444,8 @@ static constants_t initialize_constants(bool failure_if_not_possible)
   /* Optional: absent from schemas older than 1.13.0. */
   constants.OID_FUNCTION_AGG_POSSIBLE_VALUES =
     get_provsql_func_oid("agg_possible_values");
+  constants.OID_FUNCTION_AGG_GUARD_HOLDS =
+    get_provsql_func_oid("agg_guard_holds");
   constants.OID_FUNCTION_PROVENANCE_SEMIMOD_FLAT =
     get_provsql_func_oid("provenance_semimod_flat");
   constants.OID_FUNCTION_PROVENANCE_CONTRIBUTIONS_CAT =

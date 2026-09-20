@@ -85,7 +85,7 @@ x|f
 y|t
 (2 rows)
 ERROR:  nonzero: unsupported semiring "formula" (supported: boolean, counting; NULL for the universal zero test)
-CONTEXT:  PL/pgSQL function nonzero(uuid,text,regclass) line 13 at RAISE
+CONTEXT:  PL/pgSQL function nonzero(uuid,text,regclass) line 21 at RAISE
 remove_provenance
 
 (1 row)
