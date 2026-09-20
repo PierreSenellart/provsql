@@ -1982,7 +1982,13 @@ double booleanSubcircuitProbability(GenericCircuit &gc, gate_t root,
   // approximate request would force provsql_having's non-terminating
   // threshold-lineage expansion -- those go straight to the estimators below.
   const bool sampleable_agg = circuitHasUnresolvedSampleableAgg(gc, root);
-  if (!circuitHasRV(gc, root) && !(sampleable_agg && tol.delta > 0.)) {
+  /* A contribution that is itself an aggregate result has no Boolean view at
+   * all (its value is one per world, not a gate_value the translation can
+   * read), so such a circuit goes straight to the estimators below rather than
+   * meeting the semiring as an unresolved comparison. */
+  const bool nested_agg = circuitHasNestedAggValue(gc, root);
+  if (!circuitHasRV(gc, root) && !nested_agg &&
+      !(sampleable_agg && tol.delta > 0.)) {
     try {
       gate_t gate;
       std::unordered_map<gate_t, gate_t> gc_to_bc;
@@ -2359,12 +2365,18 @@ static Datum probability_evaluate_internal
   {
     const bool named = !(method.empty() || method == "default");
     const unsigned contributions = maxAggContributions(gc, gc_root);
+    /* A contribution that is itself an aggregate result: the resolution passes
+     * decline it whatever the number of contributions, so the comparison of
+     * the counts below does not apply and the enumeration is the only exact
+     * route.  It gets the whole bound. */
+    const bool nested_agg = provsql::circuitHasNestedAggValue(gc, gc_root);
     if((!named || method == kPossibleWorldsAgg) && contributions > 0) {
       /* At most as many inputs as the resolution would have contributions to
        * enumerate subsets of, and never more than the bound */
       const unsigned cap =
-        named ? kPossibleWorldsAggMaxInputs
-              : std::min(kPossibleWorldsAggMaxInputs, contributions - 1);
+        (named || nested_agg)
+          ? kPossibleWorldsAggMaxInputs
+          : std::min(kPossibleWorldsAggMaxInputs, contributions - 1);
       std::optional<double> p;
       try {
         p = provsql::enumerateBooleanProbability(gc, gc_root, cap);

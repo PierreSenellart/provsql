@@ -131,7 +131,8 @@ INTERNAL_FUNCTIONS = {
     'agg_token_frozen_value', 'agg_token_explode_children',
     'agg_possible_values',
     'agg_gate_value_missing',
-    'provenance_semimod_flat', 'provenance_contributions_cat',
+    'provenance_semimod_flat', 'provenance_semimod_nested',
+    'provenance_contributions_cat',
     # Internal circuit operations
     'provenance_plus', 'provenance_times', 'provenance_monus',
     'provenance_project', 'provenance_eq', 'provenance_cmp',

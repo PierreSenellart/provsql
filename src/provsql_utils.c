@@ -448,6 +448,8 @@ static constants_t initialize_constants(bool failure_if_not_possible)
     get_provsql_func_oid("agg_guard_holds");
   constants.OID_FUNCTION_PROVENANCE_SEMIMOD_FLAT =
     get_provsql_func_oid("provenance_semimod_flat");
+  constants.OID_FUNCTION_PROVENANCE_SEMIMOD_NESTED =
+    get_provsql_func_oid("provenance_semimod_nested");
   constants.OID_FUNCTION_PROVENANCE_CONTRIBUTIONS_CAT =
     get_provsql_func_oid("provenance_contributions_cat");
   constants.OID_FUNCTION_GATE_NULL = get_provsql_func_oid("gate_null");

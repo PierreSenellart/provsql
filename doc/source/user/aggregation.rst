@@ -505,19 +505,30 @@ own, as semimodule scalar multiplication gives, in every semiring; and
     GROUP BY dept;
 
 Any other aggregate of an aggregate result (``avg`` of a ``count``, ``max``
-of a ``sum``...) is not carried that way: there ProvSQL reads the inner
-value on the database as it is, as an explicit cast of the inner aggregate
-would, and reports that reading once for the statement (see
-:ref:`plain-sql`).  The outer aggregate is tracked as any aggregate is,
-over the rows of the subquery with their provenance and those values:
+of a ``sum``, an aggregate of an arithmetic expression over aggregates) is
+tracked in a second way: the contribution of each row carries the *gate of
+the inner aggregate* rather than a value, so the value of the outer
+aggregate is read in every possible world:
 
 .. code-block:: postgresql
 
-    SELECT avg(n) AS employees_per_city     -- n read on the data as it is
+    SELECT avg(n) AS employees_per_city
     FROM (SELECT city, count(*) AS n FROM employees GROUP BY city) t;
 
+The value displayed is the one plain SQL computes, on the data as it is, as
+for any aggregate; what is read per world is what the probabilities and the
+moments are computed over.  Such a value is no constant of the database, so
+the closed forms do not apply to it: a probability or a moment over it is
+computed by enumerating the possible worlds of the input tuples, which is
+exact while they are few (``possible-worlds-aggregates``, see
+:ref:`route-methods`), and estimated by sampling beyond that.  So
+``expected(avg(n))`` is the average of the counts *of the cities present in
+each world*, not the average of the counts the database happens to hold.
+
 An aggregate that reads such a result in a ``FILTER``, an ``ORDER BY`` or a
-``DISTINCT`` of its own is refused.
+``DISTINCT`` of its own, or whose inner value is not numeric, reads it on
+the data as it is instead, and reports that reading once for the statement
+(see :ref:`plain-sql`).
 
 .. _explode-agg-value:
 

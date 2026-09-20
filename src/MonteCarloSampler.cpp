@@ -1183,4 +1183,31 @@ bool circuitHasUnresolvedSampleableAgg(const GenericCircuit &gc, gate_t root)
   return any;
 }
 
+bool circuitHasNestedAggValue(const GenericCircuit &gc, gate_t root)
+{
+  // True iff a gate_semimod carries an aggregate-valued M side: the
+  // contribution of a row whose value is itself an aggregate result (an avg of
+  // a count, a max of a sum, an aggregate of an arithmetic expression over
+  // aggregates -- provenance_semimod_nested).  Such a value is one per
+  // possible world, not a constant read off a gate_value, so every closed form
+  // declines it and the Boolean view of the comparison cannot be built: only
+  // an evaluator that reads a value per world (this sampler, or the exact
+  // enumeration of the worlds of the inputs) resolves it.
+  std::unordered_set<gate_t> seen;
+  std::stack<gate_t> stack;
+  stack.push(root);
+  while(!stack.empty()) {
+    gate_t g = stack.top();
+    stack.pop();
+    if(!seen.insert(g).second) continue;
+    if(gc.getGateType(g) == gate_semimod) {
+      const auto &w = gc.getWires(g);
+      if(w.size() == 2 && gc.getGateType(w[1]) != gate_value)
+        return true;
+    }
+    for(gate_t c : gc.getWires(g)) stack.push(c);
+  }
+  return false;
+}
+
 }  // namespace provsql

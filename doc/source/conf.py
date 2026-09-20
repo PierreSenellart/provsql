@@ -313,7 +313,7 @@ _C_FUNC_MAP = {
     'has_provenance':            '/doxygen-c/html/provsql_8c.html#af9a93235f73a9ae63ab01cf094d30372',
     'get_provenance_attributes': '/doxygen-c/html/provsql_8c.html#a84ea91c1664bbb8533394fc6da46651c',
     'make_provenance_expression':'/doxygen-c/html/provsql_8c.html#acf5596866c308cc3e125eafce39895ed',
-    'make_aggregation_expression': '/doxygen-c/html/provsql_8c.html#a2a45d955d286ed16ac2575325f93cb44',
+    'make_aggregation_expression': '/doxygen-c/html/provsql_8c.html#a1b1c109be0ffccebf95850749e76ec27',
     'make_row_semimod':          '/doxygen-c/html/provsql_8c.html#ad30864f605060aa66c818d5e91dcd6ec',
     'make_window_aggregation_expression': '/doxygen-c/html/provsql_8c.html#ac0b164f039481c7a9f563844a2afb976',
     'replace_window_aggregations': '/doxygen-c/html/provsql_8c.html#aa1bc0f5d6d296397767c73a7f8a495b4',

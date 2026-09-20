@@ -576,6 +576,33 @@ Datum provenance_semimod_nullable(PG_FUNCTION_ARGS) {
 
 static bool same_token(const pg_uuid_t *a, const pg_uuid_t *b);
 
+PG_FUNCTION_INFO_V1(provenance_semimod_nested);
+/**
+ * @brief The semimodule gate of a row whose value is itself an aggregate
+ *        result: @c semimod(the inner aggregate's gate, @p token).
+ *
+ * The contribution of an outer aggregate that reads an aggregate result of
+ * another kind (an avg of a count, a max of a sum, an aggregate of an
+ * arithmetic expression over aggregates).  Such a value is not one value of
+ * the database but one per possible world, so the M side of the semimod is
+ * the inner aggregate's own gate rather than a @c gate_value: an evaluator
+ * that reads a value per world (the sampler) resolves it, and the closed
+ * forms, which read the M side as a constant, decline it.
+ */
+Datum provenance_semimod_nested(PG_FUNCTION_ARGS) {
+  const pg_uuid_t *token;
+  agg_token *aggtok;
+  pg_uuid_t inner;
+
+  if (PG_ARGISNULL(0))
+    PG_RETURN_NULL();
+  token = semimod_token_argument(fcinfo);
+  aggtok = (agg_token *)PG_GETARG_POINTER(0);
+  inner = *DatumGetUUIDP(DirectFunctionCall1(uuid_in,
+                                             CStringGetDatum(aggtok->tok)));
+  return semimod_gate(&inner, token);
+}
+
 PG_FUNCTION_INFO_V1(provenance_semimod_flat);
 /**
  * @brief The contributions @c semimod(v_i, token ⊗ k_i) of the aggregate

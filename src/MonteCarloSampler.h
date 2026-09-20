@@ -156,6 +156,17 @@ bool circuitHasRV(const GenericCircuit &gc, gate_t root);
 bool circuitHasUnresolvedSampleableAgg(const GenericCircuit &gc, gate_t root);
 
 /**
+ * @brief Whether a contribution of an aggregate is itself an aggregate result
+ *        (a @c gate_semimod whose M side is no @c gate_value).
+ *
+ * The value of such a contribution is one per possible world, so the closed
+ * forms and the Boolean view of a comparison over it decline: the routes that
+ * resolve it are the exact enumeration of the worlds of the inputs and this
+ * sampler.
+ */
+bool circuitHasNestedAggValue(const GenericCircuit &gc, gate_t root);
+
+/**
  * @brief Estimate the joint distribution of @p cmps via Monte Carlo.
  *
  * For each of @p samples worlds, samples the underlying continuous

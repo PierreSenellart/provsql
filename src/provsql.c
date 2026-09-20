@@ -753,6 +753,53 @@ static bool reaggregates_agg_result(const constants_t *constants, Query *q,
 }
 
 /**
+ * @brief Whether the aggregate @p agg of an aggregate result of @e another
+ *        kind can be tracked per possible world.
+ *
+ * The contribution of each row is then @c semimod(g, k) with @c g the inner
+ * aggregate's own gate (@c provenance_semimod_nested), so the value of the
+ * outer aggregate is read in every world rather than frozen on the database
+ * as it is.  Only an evaluator that reads a value per world resolves such a
+ * gate, so the shape is kept narrow: one plain @c agg_token argument, an
+ * outer aggregate the samplers compute, and a numeric inner value.
+ */
+static bool nested_agg_trackable(const constants_t *constants, Query *q,
+                                 Aggref *agg) {
+  Node *arg;
+  Oid argtype;
+  const char *name;
+
+  if (!OidIsValid(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NESTED))
+    return false;
+  if (list_length(agg->args) != 1 || agg->aggdistinct != NIL ||
+      agg->aggorder != NIL || agg->aggfilter != NULL ||
+      agg->aggdirectargs != NIL || agg->aggkind != AGGKIND_NORMAL)
+    return false;
+  arg = (Node *)((TargetEntry *)linitial(agg->args))->expr;
+  if (!IsA(arg, Var) ||
+      ((Var *)arg)->vartype != constants->OID_TYPE_AGG_TOKEN)
+    return false;
+  if (get_func_namespace(agg->aggfnoid) != PG_CATALOG_NAMESPACE)
+    return false;
+  name = get_func_name(agg->aggfnoid);
+  if (strcmp(name, "sum") != 0 && strcmp(name, "min") != 0 &&
+      strcmp(name, "max") != 0 && strcmp(name, "avg") != 0)
+    return false;
+  /* The value the samplers read back, as a number */
+  argtype = list_length(agg->aggargtypes) == 1
+              ? linitial_oid(agg->aggargtypes) : InvalidOid;
+  switch (argtype) {
+  case INT2OID: case INT4OID: case INT8OID:
+  case NUMERICOID: case FLOAT4OID: case FLOAT8OID:
+    break;
+  default:
+    return false;
+  }
+  /* A pair the reaggregation carries is exact, and keeps its own route */
+  return !reaggregates_agg_result(constants, q, agg);
+}
+
+/**
  * @brief Read the inner aggregate's value as a plain value inside @p agg:
  *        replace each @c agg_token argument by its frozen value, of the type
  *        the aggregate was resolved on.
@@ -830,7 +877,9 @@ static bool aggref_over_agg_token_walker(Node *node, void *context) {
        * instead would refuse it whole, for one pair, where the answer is the
        * provenance of the query with that value read on the database as it
        * is. */
-      if (freeze_agg_token_args(agg, ctx->constants))
+      if (nested_agg_trackable(ctx->constants, ctx->q, agg))
+        ;  /* tracked per world: make_aggregation_expression builds its gate */
+      else if (freeze_agg_token_args(agg, ctx->constants))
         agg_over_agg_frozen = true;
       else
         provsql_unsupported(PROVSQL_GAP, "aggregate-over-aggregate",
@@ -4115,11 +4164,12 @@ static FuncExpr *make_row_semimod(const constants_t *constants, Oid aggfnoid,
  * @return  Provenance expression of type @c agg_token.
  */
 static Expr *make_aggregation_expression(const constants_t *constants,
-                                         Aggref *agg_ref, List *prov_atts,
+                                         Query *q, Aggref *agg_ref,
+                                         List *prov_atts,
                                          semiring_operation op, bool is_scalar,
                                          Expr *plain_token) {
   Expr *result;
-  FuncExpr *expr_s;
+  FuncExpr *expr_s = NULL;
   Aggref *agg = makeNode(Aggref);
   FuncExpr *plus = makeNode(FuncExpr);
   TargetEntry *te_inner = makeNode(TargetEntry);
@@ -4135,6 +4185,9 @@ static Expr *make_aggregation_expression(const constants_t *constants,
     Expr *filter = (Expr *)copyObject(agg_ref->aggfilter);
     bool keeps_nulls = aggregate_keeps_nulls(constants, aggregation_function);
     bool flat = false;
+    /* Read before the displayed value is rewritten below, which replaces the
+     * agg_token Var the predicate looks for */
+    bool nested = nested_agg_trackable(constants, q, agg_ref);
 
     /* Aggregates that return random_variable (sum_rv, avg_rv, and any
      * future RV-returning aggregate) get a different rewrite: instead
@@ -4169,7 +4222,18 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       io->coerceformat = COERCE_EXPLICIT_CAST;
       io->location = -1;
       arg_te->expr = (Expr *)io;
-      if (aggregation_function != F_COUNT_ANY) {
+      if (nested) {   /* never a count: see nested_agg_trackable */
+        /* An aggregate of an aggregate result of another kind (an avg of a
+         * count, a max of a sum): the contribution of each row carries the
+         * inner aggregate's own gate, not a value of the database, so the
+         * value of the outer aggregate is read in every world. */
+        expr_s = makeFuncExpr(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_NESTED,
+                              constants->OID_TYPE_UUID,
+                              list_make2(token_var,
+                                         make_row_token(constants, prov_atts,
+                                                        op)),
+                              InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+      } else if (aggregation_function != F_COUNT_ANY) {
         expr_s = makeFuncExpr(constants->OID_FUNCTION_PROVENANCE_SEMIMOD_FLAT,
                               constants->OID_TYPE_UUID_ARRAY,
                               list_make2(token_var,
@@ -4191,7 +4255,7 @@ static Expr *make_aggregation_expression(const constants_t *constants,
       }
     }
 
-    if (!flat)
+    if (!flat && !nested)
       expr_s = make_row_semimod(
         constants, aggregation_function,
         aggregation_function == F_COUNT_
@@ -8477,6 +8541,7 @@ static Expr *plain_row_token(const constants_t *constants, Query *q,
 
 /** @brief Context for the @c aggregation_mutator tree walker. */
 typedef struct aggregation_mutator_context {
+  Query *q;                     ///< The query being rewritten (to read what an aggregated column aggregates)
   List *prov_atts;              ///< List of provenance Var nodes
   semiring_operation op;        ///< Semiring operation for combining tokens
   const constants_t *constants; ///< Extension OID cache
@@ -8498,9 +8563,9 @@ static Node *aggregation_mutator(Node *node, void *ctx) {
 
   if (IsA(node, Aggref)) {
     Aggref *ar_v = (Aggref *)node;
-    return (Node *)make_aggregation_expression(context->constants, ar_v,
-                                               context->prov_atts, context->op,
-                                               context->is_scalar,
+    return (Node *)make_aggregation_expression(context->constants, context->q,
+                                               ar_v, context->prov_atts,
+                                               context->op, context->is_scalar,
                                                context->plain_token);
   }
 
@@ -9241,7 +9306,7 @@ replace_aggregations_by_provenance_aggregate(const constants_t *constants,
    * treat the empty-input world as real (vs the "no row" of a grouped query). */
   bool is_scalar = (q->groupClause == NIL && q->groupingSets == NIL);
   aggregation_mutator_context context =
-    {prov_atts, op, constants, is_scalar,
+    {q, prov_atts, op, constants, is_scalar,
      plain_row_token(constants, q, prov_atts, op)};
   ListCell *lc;
 

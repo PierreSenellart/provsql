@@ -804,7 +804,10 @@ Each method in detail:
     rows read a handful of input tuples.  So the chooser takes this route when
     a comparison aggregates more rows than the circuit has input tuples, and
     at most 20 of them; below that, the resolution and its closed forms are
-    cheaper:
+    cheaper.  It is also the route for an aggregate whose contributions are
+    themselves aggregate results (an ``avg`` of a ``count``, see
+    :ref:`reaggregation`), whatever the counts: no closed form reads such a
+    value, which is one per world:
 
     .. code-block:: postgresql
 

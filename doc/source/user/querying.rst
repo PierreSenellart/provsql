@@ -209,8 +209,8 @@ The constructs themselves:
   :sqlfunc:`choose`, which are exploded into one row per value they take
   (see :ref:`explode-agg-value`), in every arm of a set operation; and an
   aggregate of them that reads one in its ``FILTER``, its ``ORDER BY`` or
-  its ``DISTINCT`` (an aggregate of another kind reads the value on the
-  data as it is, see :ref:`reaggregation`)
+  its ``DISTINCT``, or whose inner value is not numeric (an aggregate of
+  another kind is tracked per possible world, see :ref:`reaggregation`)
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
   other than aggregates over a frame determined by values and the ranks
   ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER`` (see

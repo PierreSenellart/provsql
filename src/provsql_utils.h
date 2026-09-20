@@ -256,6 +256,11 @@ typedef struct constants_t {
    *  aggregate result aggregated again; @c InvalidOid on a schema that
    *  predates it. */
   Oid OID_FUNCTION_PROVENANCE_SEMIMOD_FLAT;
+  /** @brief OID of @c provenance_semimod_nested(), the contribution of an
+   *  aggregate result aggregated by an aggregate of another kind, whose M
+   *  side is the inner aggregate's gate; @c InvalidOid on a schema that
+   *  predates it. */
+  Oid OID_FUNCTION_PROVENANCE_SEMIMOD_NESTED;
   /** @brief OID of the @c provenance_contributions_cat aggregate, which
    *  collects them; @c InvalidOid on a schema that predates it. */
   Oid OID_FUNCTION_PROVENANCE_CONTRIBUTIONS_CAT;

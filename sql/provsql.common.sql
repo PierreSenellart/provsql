@@ -7405,6 +7405,22 @@ CREATE OR REPLACE FUNCTION provenance_semimod(val anyelement, token UUID)
   'provsql','provenance_semimod' LANGUAGE C COST 100 PARALLEL SAFE IMMUTABLE;
 
 /**
+ * @brief The contribution of an aggregate result to an aggregate of another
+ *        kind over it (internal)
+ *
+ * For a row of token @p token whose value @p val is the result of an
+ * aggregate of another kind than the one aggregating it (an @c avg of a
+ * @c count, a @c max of a @c sum, an aggregate of an arithmetic expression
+ * over aggregates): @c semimod(g, token), where @c g is the inner
+ * aggregate's own gate.  Its value is one per possible world, not one value
+ * of the database, so the evaluators that read a value per world resolve it
+ * and the closed forms decline it.
+ */
+CREATE FUNCTION provenance_semimod_nested(val agg_token, token uuid)
+  RETURNS uuid AS
+  'provsql','provenance_semimod_nested' LANGUAGE C PARALLEL SAFE IMMUTABLE;
+
+/**
  * @brief The contributions of an aggregate result to an aggregate of the
  *        same kind over it (internal)
  *
@@ -7908,6 +7924,16 @@ BEGIN
 
   child_pairs := get_children(token);
   n := COALESCE(array_length(child_pairs, 1), 0);
+
+  -- A contribution whose value is itself an aggregate (an avg of a count, a
+  -- max of a sum, an aggregate of an arithmetic expression over aggregates:
+  -- provenance_semimod_nested) takes one value per possible world, not a
+  -- constant read off its gate, so none of the closed forms below applies to
+  -- it.  The scalar evaluator reads such a value in every world.
+  IF EXISTS (SELECT 1 FROM unnest(child_pairs) AS c
+               WHERE get_gate_type((get_children(c))[2]) <> 'value') THEN
+    RETURN rv_moment((token)::uuid, k, false, prov);
+  END IF;
 
   IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
     -- count(*) and count(col) both keep the COUNT identity at the gate level,
