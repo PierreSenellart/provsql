@@ -18047,7 +18047,9 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
     return explode_setop_arms(src_rte->subquery, constants,
                               src_rte->subquery->setOperations, attno)
              ? q : NULL;
-  agg_te = (TargetEntry *)list_nth(src_rte->subquery->targetList, attno - 1);
+  agg_te = get_tle_by_resno(src_rte->subquery->targetList, attno);
+  if (agg_te == NULL || agg_te->resjunk)
+    return NULL;
   typmod = exprTypmod((Node *)agg_te->expr);
   coll   = exprCollation((Node *)agg_te->expr);
 
@@ -18062,8 +18064,8 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
    * produces (takes_agg_token), whatever the type declared here. */
   possible = makeFuncExpr(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES,
                           TEXTARRAYOID,
-                          list_make1(makeVar(1, attno, value_type, typmod,
-                                             coll, 0)),
+                          list_make1(makeVar(1, agg_te->resno, value_type,
+                                             typmod, coll, 0)),
                           InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
   unnest_call = makeFuncExpr(constants->OID_UNNEST, TEXTOID,
                              list_make1(possible), InvalidOid,
@@ -18097,25 +18099,32 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   val_rte->requiredPerms  = 0;
 #endif
 
-  /* --- The columns, the aggregate one now an exploded value --- */
+  /* --- The columns, the aggregate one now an exploded value --- *
+   * A junk entry is the subquery's own business -- a grouping key or a sort
+   * key it does not expose -- and no column of the range-table entry: a Var
+   * reading it would be out of range (the planner sizes what it reads by the
+   * columns the entry has).  The exposed columns keep their order, so the
+   * level above addresses the same ones. */
   i = 1;
   foreach (lc, src_rte->subquery->targetList) {
     TargetEntry *ste = (TargetEntry *)lfirst(lc);
-    TargetEntry *te = makeNode(TargetEntry);
+    TargetEntry *te;
 
-    te->resno   = i;
+    if (ste->resjunk)
+      continue;
+    te = makeNode(TargetEntry);
+    te->resno   = i++;
     te->resname = ste->resname ? pstrdup(ste->resname) : NULL;
-    te->resjunk = ste->resjunk;
-    if (i == attno)
+    te->resjunk = false;
+    if (ste->resno == attno)
       te->expr = (Expr *)explode_value_of_text(
         (Node *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
         value_type);
     else
-      te->expr = (Expr *)makeVar(1, i, exprType((Node *)ste->expr),
+      te->expr = (Expr *)makeVar(1, ste->resno, exprType((Node *)ste->expr),
                                  exprTypmod((Node *)ste->expr),
                                  exprCollation((Node *)ste->expr), 0);
     tl = lappend(tl, te);
-    ++i;
   }
 
   /* --- WHERE r.c_attno = v::T --- */
@@ -18127,7 +18136,7 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   eq->opcollid     = InvalidOid;
   eq->inputcollid  = coll;
   eq->args = list_make2(
-    makeVar(1, attno, value_type, typmod, coll, 0),
+    makeVar(1, agg_te->resno, value_type, typmod, coll, 0),
     explode_value_of_text(
       (Node *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
       value_type));
