@@ -602,6 +602,10 @@ a|p
 (5 rows)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: the position it is in, or the correlation it carries, is not one the decorrelation covers (a correlation that is not an equality of columns, a body reading no tracked relation of its own)
 DETAIL:  provsql-reason: position-or-correlation; scope: gap
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: it compares a row with the rows of the body by an ordering operator (< ANY, >= ANY): the semijoin on that lexicographic comparison is a provenance it could have, and the lowering does not build it yet
+DETAIL:  provsql-reason: row-ordering-existential; scope: gap
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: it compares a row with every row of the body by an ordering operator (>= ALL, < ALL): such a universal ordering condition is not one the supported fragment reads, and no rewriting will build it
+DETAIL:  provsql-reason: row-ordering-universal; scope: deliberate
 add_provenance
 
 (1 row)

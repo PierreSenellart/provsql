@@ -11086,6 +11086,27 @@ static sublink_reason sublink_unsupported_reason(const constants_t *constants,
     return sublink_reason_of(PROVSQL_GAP, "form-unsupported",
                             "it is a form the decorrelation does not cover (ROWCOMPARE, "
            "MULTIEXPR, ...)");
+  /* A row compared with the rows of the body by an ORDERING operator, which
+   * PostgreSQL gives a RowCompareExpr testexpr.  The existential form has a
+   * reading -- the semijoin on the lexicographic comparison -- and the lowering
+   * does not build it, so it is a gap; the universal one is a condition the
+   * fragment does not read at all, so refusing it is the answer.  (An
+   * existential form under a NOT is the universal one by duality; the tag then
+   * understates, which is the safer direction.) */
+  if (sl != NULL && sl->testexpr != NULL && IsA(sl->testexpr, RowCompareExpr)) {
+    if (sl->subLinkType == ALL_SUBLINK)
+      return sublink_reason_of(
+        PROVSQL_DELIBERATE, "row-ordering-universal",
+        "it compares a row with every row of the body by an ordering operator "
+        "(>= ALL, < ALL): such a universal ordering condition is not one the "
+        "supported fragment reads, and no rewriting will build it");
+    return sublink_reason_of(
+      PROVSQL_GAP, "row-ordering-existential",
+      "it compares a row with the rows of the body by an ordering operator "
+      "(< ANY, >= ANY): the semijoin on that lexicographic comparison is a "
+      "provenance it could have, and the lowering does not build it yet");
+  }
+
   /* A quantified comparison read as a VALUE rather than as a condition. */
   if (sl != NULL &&
       (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK) &&

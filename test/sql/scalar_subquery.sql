@@ -1073,6 +1073,14 @@ SELECT a, p FROM mp6 ORDER BY a;
 DROP TABLE mp6;
 SELECT mp_r.a FROM mp_r WHERE (mp_r.a, mp_r.k) = ALL
   (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+-- An ORDERING comparison of a row against the body is refused, and the two
+-- quantifiers are not refused for the same reason: the existential one has a
+-- reading the lowering does not build yet (a gap), the universal one is not a
+-- condition the fragment reads (deliberate).  The tags say which.
+SELECT mp_r.a FROM mp_r WHERE (mp_r.a, mp_r.k) < ANY
+  (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
+SELECT mp_r.a FROM mp_r WHERE (mp_r.a, mp_r.k) >= ALL
+  (SELECT mp_q1.a, mp_q2.k FROM mp_q1, mp_q2 WHERE mp_q1.k = mp_q2.k);
 
 DROP TABLE mp_q2;
 DROP TABLE mp_q1;
