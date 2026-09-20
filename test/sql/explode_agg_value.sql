@@ -177,6 +177,25 @@ SELECT remove_provenance('eav_z');
 SELECT * FROM eav_z ORDER BY c;
 DROP TABLE eav_z; DROP TABLE eavl; DROP TABLE eavr;
 
+-- The values of a min() or a max() over a text column are exploded the same
+-- way, the value read back through its own type: over the 8 worlds of three
+-- rows, 'a' is the maximum of its group only without the 'b' beside it
+-- (0.25), while 'b' and 'c' are maxima as soon as they are there (0.5).
+CREATE TABLE eav_t(g int, s text);
+INSERT INTO eav_t VALUES (1, 'b'), (1, 'a'), (2, 'c');
+SELECT add_provenance('eav_t');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eav_t; END $$;
+CREATE TABLE eav_tm AS
+  SELECT m, round(probability_evaluate(provenance())::numeric, 6) AS pr
+  FROM (SELECT g, max(s) AS m FROM eav_t GROUP BY g) x GROUP BY m;
+SELECT remove_provenance('eav_tm');
+SELECT * FROM eav_tm ORDER BY m;
+DROP TABLE eav_tm;
+CREATE TABLE eav_tn AS SELECT DISTINCT min(s) AS m FROM eav_t GROUP BY g;
+SELECT remove_provenance('eav_tn');
+SELECT * FROM eav_tn ORDER BY m;
+DROP TABLE eav_tn; DROP TABLE eav_t;
+
 -- An arm of a set operation that groups by columns it does not expose: those
 -- grouping keys are junk entries of the arm, no columns of it, and a row read
 -- from one is no row of the range table (it used to crash the planner).  Each
@@ -188,6 +207,34 @@ CREATE TABLE eav_j AS
 SELECT remove_provenance('eav_j');
 SELECT * FROM eav_j ORDER BY c;
 DROP TABLE eav_j;
+
+-- The displayed value of an aggregate reads the rows that hold in the data as
+-- it is, and the row of an exploded value holds there by a comparison of
+-- aggregate results: its truth is read off the values they record, not over
+-- the worlds of what they aggregate (one term per subset of the
+-- contributions, which a group of fifteen rows would already make
+-- unanswerable).  The answer keeps the value the data gives.
+CREATE TABLE eav_many(g int, v int);
+INSERT INTO eav_many SELECT 1, i FROM generate_series(1, 15) AS i;
+SELECT add_provenance('eav_many');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eav_many; END $$;
+CREATE TABLE eav_mx AS
+  SELECT g, degree FROM (
+    SELECT * FROM (SELECT g, count(*) AS degree FROM eav_many GROUP BY g) foo
+    GROUP BY g, degree HAVING degree = MAX(degree)) z
+  WHERE present(provenance());
+SELECT remove_provenance('eav_mx');
+SELECT * FROM eav_mx ORDER BY g, degree;
+DROP TABLE eav_mx;
+-- and an aggregate over those exploded rows, whose own displayed value reads
+-- the same comparisons
+CREATE TABLE eav_mn AS
+  SELECT count(*)::text AS n FROM (
+    SELECT * FROM (SELECT g, count(*) AS degree FROM eav_many GROUP BY g) foo
+    GROUP BY g, degree HAVING degree = MAX(degree)) z;
+SELECT remove_provenance('eav_mn');
+SELECT * FROM eav_mn;
+DROP TABLE eav_mn; DROP TABLE eav_many;
 
 -- The plain value of the sum, said explicitly, groups as plain SQL does.
 CREATE TABLE eav_p AS

@@ -101,10 +101,45 @@ c|pr
 0|0.625000
 1|0.250000
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+m|pr
+a|0.250000
+b|0.500000
+c|0.500000
+(3 rows)
+remove_provenance
+
+(1 row)
+m
+a
+b
+c
+(3 rows)
 remove_provenance
 
 (1 row)
 c
+1
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|degree
+1|15
+(1 row)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+n
 1
 (1 row)
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
