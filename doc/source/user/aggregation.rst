@@ -444,6 +444,57 @@ own, as semimodule scalar multiplication gives, in every semiring; and
 Any other aggregate of an aggregate result (``avg`` of a ``count``, ``max``
 of a ``sum``...) is refused.
 
+.. _explode-agg-value:
+
+Grouping by the value of an aggregate
+--------------------------------------
+
+The value of an aggregate is not one value of the database but one per
+possible world, so grouping rows by it, or deduplicating on it, is no
+operation on the data as it is.  ProvSQL reads it as the *explosion* of
+the aggregate into one row per value it takes over the worlds, each
+annotated by the condition that it takes that value:
+
+.. code-block:: postgresql
+
+    SELECT n, count(*) AS cities          -- how many cities have n employees
+    FROM (SELECT city, count(*) AS n FROM employees GROUP BY city) t
+    GROUP BY n;
+
+A city whose count is 1 or 2 over the worlds gives two rows, one per
+value, with the provenance of counting that many; the two are mutually
+exclusive, and exactly one of them is there in each world where the city
+is.  Grouping, deduplicating or uniting on the column is then an
+operation on data like any other, and the row of a value has the
+probability that some group takes it.
+
+An aggregate over exploded rows -- the ``count(*)`` above -- is an
+aggregate over rows that are uncertain like any others: its displayed
+value is the one of the database as it is, and :sqlfunc:`expected` and
+the other moments are taken over the worlds where the row is.
+
+The explosion applies to the aggregates whose values are read off their
+contributions one by one: a ``count()``, which takes every number of its
+contributions, and a ``min()``, a ``max()`` or a :sqlfunc:`choose`, which
+take one of the values they aggregate.  The values of a ``sum()`` are its
+subset sums and those of a ``string_agg()`` one per ordering: grouping by
+one of those is refused with SQLSTATE ``0A000``, and the plain value,
+said explicitly with a cast, groups as plain SQL does:
+
+.. code-block:: postgresql
+
+    SELECT total::numeric, count(*)        -- the plain value, not tracked
+    FROM (SELECT city, sum(salary) AS total FROM employees GROUP BY city) t
+    GROUP BY total::numeric;
+
+A ``NULL`` contribution is refused as well: whether the result is ``NULL``
+is then a value of its own, which a comparison of the aggregate with a
+value cannot express.  An aggregate of more than a thousand rows is
+refused too, an explosion multiplying the rows by the number of values.
+
+The explosion of an aggregate into the *values* it takes is not the one
+of the next section, which explodes it into the rows it aggregates.
+
 Joining and exploding aggregated provenance
 --------------------------------------------
 
