@@ -188,6 +188,9 @@ extern void _PG_fini(void);
 /** Alias of the two-row source the truth of a comparison of an aggregate
  *  explodes over (@c rewrite_explode_agg_cmp_truth). */
 #define PROVSQL_TRUTH_ALIAS "provsql_agg_truth"
+/** Column of the companion count that gates the NULL value of an exploded
+ *  aggregate (@c rewrite_explode_agg_value). */
+#define PROVSQL_AGG_COUNT_COLNAME "provsql_agg_count"
 
 /** @brief Alias of the deduplicated keys a dense rank counts
  *  (@c make_dense_rank_subquery). */
@@ -19421,6 +19424,8 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   AttrNumber i;
   Oid eqop, coll;
   int32 typmod;
+  Aggref *nullable_count = NULL;  /* count(arg), gating the NULL value */
+  AttrNumber cnt_resno = 0;       /* its column in the source */
 
   if (src_rte->rtekind != RTE_SUBQUERY || src_rte->subquery == NULL ||
       attno > list_length(src_rte->subquery->targetList))
@@ -19441,15 +19446,72 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   if (!OidIsValid(eqop))
     return NULL;
 
+  /* Can the aggregate take no value, in a world the query still answers?  An
+   * aggregation over the whole table gives its row in every world, including
+   * the one holding none of its rows, and there its sum (minimum, maximum,
+   * choice) is NULL -- a value of the aggregate like any other, which the rows
+   * of the explosion have to hold.  A count is 0 rather than NULL there, and a
+   * grouped aggregation has no row at all, so neither needs it.
+   *
+   * The row of that value is annotated by "no row contributes", which is the
+   * comparison count(arg) = 0 over the same argument: a companion count is
+   * added to the source for it, exposed to this wrapper only. */
+  {
+    Node *aggnode = strip_agg_cast((Node *)agg_te->expr);
+
+    if (aggnode != NULL && IsA(aggnode, Aggref) &&
+        src_rte->subquery->groupClause == NIL &&
+        src_rte->subquery->groupingSets == NIL) {
+      Aggref *ar = (Aggref *)aggnode;
+      char *name = get_func_name(ar->aggfnoid);
+
+      if (name != NULL &&
+          (strcmp(name, "sum") == 0 || strcmp(name, "min") == 0 ||
+           strcmp(name, "max") == 0 || strcmp(name, "choose") == 0) &&
+          list_length(ar->args) == 1 && !ar->aggstar) {
+        TargetEntry *arg = (TargetEntry *)linitial(ar->args);
+        {
+          Aggref *cnt = makeNode(Aggref);
+
+          /* count(expr), whose argument is the pseudo-type "any": the same
+           * aggregate the rewriting uses elsewhere to count the rows of a
+           * group that contribute a value. */
+          cnt->aggfnoid = F_COUNT_ANY;
+          cnt->aggtype = INT8OID;
+          cnt->aggtranstype = InvalidOid;
+          cnt->aggargtypes = list_copy(ar->aggargtypes);
+          cnt->args = list_make1(copyObject(arg));
+          cnt->aggorder = NIL;
+          cnt->aggdistinct = NIL;
+          cnt->aggfilter = ar->aggfilter ? copyObject(ar->aggfilter) : NULL;
+          cnt->aggstar = false;
+          cnt->aggvariadic = false;
+          cnt->aggkind = AGGKIND_NORMAL;
+          cnt->agglevelsup = 0;
+          cnt->aggsplit = AGGSPLIT_SIMPLE;
+          cnt->location = -1;
+#if PG_VERSION_NUM >= 140000
+          cnt->aggno = cnt->aggtransno = -1;
+#endif
+          nullable_count = cnt;
+          /* Appended to the copy below, so its column is the next one. */
+          cnt_resno = list_length(src_rte->subquery->targetList) + 1;
+        }
+      }
+      if (name != NULL)
+        pfree(name);
+    }
+  }
+
   /* --- LATERAL unnest(agg_possible_values(r.c_attno)) AS v --- *
    * agg_possible_values takes the aggregate result itself: its parameter is
    * polymorphic, so the Var reaches it as the agg_token the level below
    * produces (takes_agg_token), whatever the type declared here. */
-  possible = makeFuncExpr(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES,
-                          TEXTARRAYOID,
-                          list_make1(makeVar(1, agg_te->resno, value_type,
-                                             typmod, coll, 0)),
-                          InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+  possible = makeFuncExpr(
+    constants->OID_FUNCTION_AGG_POSSIBLE_VALUES, TEXTARRAYOID,
+    list_make2(makeVar(1, agg_te->resno, value_type, typmod, coll, 0),
+               makeBoolConst(nullable_count != NULL, false)),
+    InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
   /* An aggregate with no contribution at all -- one whose WHERE keeps no row --
    * has no value in any world: SQL gives the row with NULL, and its token is
    * NULL, on which agg_possible_values (strict) gives NULL.  Unnesting that
@@ -19531,11 +19593,15 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
     tl = lappend(tl, te);
   }
 
-  /* --- WHERE v IS NULL OR r.c_attno = v::T --- *
-   * The NULL value is the one an aggregate with no contribution takes, in
-   * every world: its row stands as it is, with the provenance it has, and no
-   * comparison to annotate it with (one against NULL would read as unknown,
-   * which is annotated zero and would drop the row). */
+  /* --- WHERE (v IS NULL AND r.c_attno IS NULL) OR r.c_attno = v::T --- *
+   * NULL is a value of the aggregate like any other: the one it takes where no
+   * row contributes to it, which an aggregation over the whole table reaches in
+   * the world holding none of its rows (a grouped one has no row there at all).
+   * Its row is therefore annotated by the aggregate having no value -- the
+   * reading of @c IS @c NULL on an aggregate -- and not by a comparison, one
+   * against NULL reading as unknown, which is annotated zero and would drop it.
+   * An aggregate with no contribution anywhere takes NULL in every world, and
+   * the same test annotates it @c one, leaving its row as it stands. */
   eq = makeNode(OpExpr);
   eq->opno         = eqop;
   eq->opfuncid     = InvalidOid;  /* the planner fills it in */
@@ -19557,16 +19623,55 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   jt = makeNode(FromExpr);
   jt->fromlist = list_make2(rtr1, rtr2);
   {
-    NullTest *nt = makeNode(NullTest);
-    nt->arg = (Expr *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0);
-    nt->nulltesttype = IS_NULL;
-    nt->argisrow = false;
-    nt->location = -1;
+    NullTest *v_null = makeNode(NullTest);
+    Node *null_arm;
+
+    v_null->arg = (Expr *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0);
+    v_null->nulltesttype = IS_NULL;
+    v_null->argisrow = false;
+    v_null->location = -1;
+    null_arm = (Node *)v_null;
+    if (cnt_resno != 0) {
+      /* The NULL value holds exactly where no row contributes: count(arg) = 0,
+       * an ordinary comparison of an aggregate with a constant, which carries
+       * the provenance of that world. */
+      OpExpr *no_row = makeNode(OpExpr);
+      Oid zero_eq = OpernameGetOprid(list_make1(makeString("=")), INT8OID,
+                                     INT8OID);
+
+      no_row->opno = zero_eq;
+      no_row->opfuncid = InvalidOid;
+      no_row->opresulttype = BOOLOID;
+      no_row->opretset = false;
+      no_row->opcollid = InvalidOid;
+      no_row->inputcollid = InvalidOid;
+      no_row->args = list_make2(
+        makeVar(1, cnt_resno, INT8OID, -1, InvalidOid, 0),
+        makeConst(INT8OID, -1, InvalidOid, sizeof(int64), Int64GetDatum(0),
+                  false, FLOAT8PASSBYVAL));
+      no_row->location = -1;
+      null_arm = (Node *)makeBoolExpr(AND_EXPR,
+                                      list_make2(v_null, no_row), -1);
+    }
     jt->quals = (Node *)makeBoolExpr(OR_EXPR,
-                                     list_make2(nt, (Node *)eq), -1);
+                                     list_make2(null_arm, (Node *)eq), -1);
   }
 
   inner_src = copyObject(src_rte);
+  if (nullable_count != NULL) {
+    /* The companion count goes on the copy the wrapper reads, not on the source
+     * the rest of the query sees: the wrapper's own target list leaves it out,
+     * so the level above finds the columns it had. */
+    Query *sub = inner_src->subquery;
+    TargetEntry *cnt_te =
+      makeTargetEntry((Expr *)nullable_count, cnt_resno,
+                      pstrdup(PROVSQL_AGG_COUNT_COLNAME), false);
+
+    sub->targetList = lappend(sub->targetList, cnt_te);
+    sub->hasAggs = true;
+    inner_src->eref->colnames = lappend(
+      inner_src->eref->colnames, makeString(pstrdup(PROVSQL_AGG_COUNT_COLNAME)));
+  }
   /* The subquery is one level deeper now: what it reads of the levels above
    * (a correlated body, the row a rank compares with) is read one further
    * up. */

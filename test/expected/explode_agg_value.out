@@ -72,7 +72,8 @@ c|pr
 k|s|present|pr
 none||t|1.000000
 one|30|t|0.500000
-(2 rows)
+one||f|0.500000
+(3 rows)
 ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be matched with the other arms': it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each, in every arm; use UNION ALL, or cast the aggregate explicitly (::numeric, ::text, ...) to read its plain value
 DETAIL:  provsql-reason: setop-aggregate-value; scope: gap
 ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be matched with the other arms': it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each, in every arm; use UNION ALL, or cast the aggregate explicitly (::numeric, ::text, ...) to read its plain value

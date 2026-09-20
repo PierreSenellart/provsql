@@ -124,11 +124,16 @@ FROM eav_i ORDER BY c;
 SET provsql.active = on;
 DROP TABLE eav_i;
 
--- An aggregate with no contribution at all -- one whose WHERE keeps no row --
--- has no value in any world, and SQL gives its row with NULL: the explosion
--- gives that single value, so the row is there, certain, rather than lost (it
--- was, which made the answer silently wrong).  The other arm sums one row, so
--- its value is 30 when that row is there.
+-- NULL is a value of an aggregate over the whole table like any other, and the
+-- explosion offers it: the aggregation gives its row in every world, including
+-- the world holding none of the rows it reads, and there its sum is NULL.  The
+-- first arm keeps no row at all, so NULL is its only value and its row is
+-- certain; the second sums one row, so it takes 30 where that row is there and
+-- NULL where it is not, one row each -- the second of which SQL returns in that
+-- world and ProvSQL did not list (which made the answer silently wrong: the
+-- three values of the first arm's kind were found in the campaign's corpora).
+-- The row of the NULL value is annotated by no row contributing, which is the
+-- comparison count(v) = 0 over the same argument.
 CREATE TABLE eav_nul AS
   SELECT 'none' AS k, sum(v) AS s FROM eav WHERE g = 99
   UNION
@@ -136,7 +141,7 @@ CREATE TABLE eav_nul AS
 SET provsql.active = off;
 SELECT k, s::text AS s, present(provsql) AS present,
        round(probability_evaluate(provsql)::numeric, 6) AS pr
-FROM eav_nul ORDER BY k;
+FROM eav_nul ORDER BY k, s;
 SET provsql.active = on;
 DROP TABLE eav_nul;
 

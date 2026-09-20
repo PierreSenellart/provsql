@@ -3002,7 +3002,8 @@ $$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
  *  them off the contributions one by one would be wrong.  A NULL
  *  contribution is refused as well: whether the result is NULL is then a
  *  value of its own, which a comparison cannot express (internal use). */
-CREATE FUNCTION agg_possible_values(input anyelement)
+CREATE FUNCTION agg_possible_values(input anyelement,
+                                    with_null boolean DEFAULT false)
   RETURNS text[] AS
 $$
 DECLARE
@@ -3016,6 +3017,7 @@ DECLARE
   first   int;
   sums    numeric[];
   one     numeric;
+  scalar_agg boolean;
 BEGIN
   /* The planner hands the aggregate result itself (an agg_token), whatever
    * the type the query declares for that column. */
@@ -3039,6 +3041,13 @@ BEGIN
   vals := ARRAY(SELECT provsql.get_extra((provsql.get_children(sm))[2])
                 FROM unnest(provsql.get_children(token)) AS sm);
   n := coalesce(array_length(vals, 1), 0);
+  /* NULL is a value of the aggregate like any other -- the one it takes where
+   * no row contributes, which an aggregation over the whole table reaches in
+   * the world holding none of its rows (a grouped one has no row there at all).
+   * Whether to offer it is the caller's to decide: the rewriting asks for it
+   * only where it can annotate that row with the aggregate having no value,
+   * and never for a count, which is 0 rather than NULL over no row. */
+  scalar_agg := with_null;
 
   IF (ns, fn) = ('pg_catalog', 'count') THEN
     /* A count contributes 1 per row it counts and 0 per row it does not -- a
@@ -3087,8 +3096,8 @@ BEGIN
     /* The value of a sum is the sum of the rows that are there, so its values
      * are its subset sums, reached by adding the contributions one at a time,
      * equal sums collapsing (three rows of 1 take three values, not eight).
-     * The empty subset is no value of its own: a sum over no row is NULL, and
-     * a group without a row is no group.  The planner only sends sums over an
+     * The empty subset is the NULL above, which a scalar aggregation takes and
+     * a grouped one does not (a group without a row is no group).  The planner only sends sums over an
      * integer column here, whose subset sums the evaluator's own arithmetic
      * reaches exactly. */
     sums := ARRAY[]::numeric[];
@@ -3106,7 +3115,9 @@ BEGIN
           HINT = 'cast it explicitly (::numeric, ...) to read its plain value';
       END IF;
     END LOOP;
-    RETURN ARRAY(SELECT s::text FROM unnest(sums) AS s ORDER BY s);
+    RETURN ARRAY(SELECT s::text FROM unnest(sums) AS s ORDER BY s)
+           || CASE WHEN scalar_agg THEN ARRAY[NULL::text]
+                   ELSE ARRAY[]::text[] END;
   END IF;
 
   IF n > max_values THEN
@@ -3119,7 +3130,9 @@ BEGIN
 
   /* One row per distinct contributed value: each is the minimum (maximum,
    * choice) of the world where only its own row is. */
-  RETURN ARRAY(SELECT DISTINCT v FROM unnest(vals) AS v ORDER BY v);
+  RETURN ARRAY(SELECT DISTINCT v FROM unnest(vals) AS v ORDER BY v)
+         || CASE WHEN scalar_agg THEN ARRAY[NULL::text]
+                 ELSE ARRAY[]::text[] END;
 END
 $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE;
 

@@ -570,6 +570,15 @@ explicitly with a cast, groups as plain SQL does:
     FROM (SELECT city, sum(salary) AS total FROM employees GROUP BY city) t
     GROUP BY total::numeric;
 
+``NULL`` is itself one of the values, for an aggregation over the whole table:
+it gives its row in every world, including the world holding none of the rows
+it reads, and its ``sum`` (``min``, ``max``, :sqlfunc:`choose`) is ``NULL``
+there. That row is annotated by no row contributing -- the comparison
+``count(x) = 0`` over the same argument -- so it is the answer of exactly the
+worlds where SQL returns it. A grouped aggregation needs no such value: a group
+without a row is no group, and its row is absent rather than ``NULL``. A
+``count`` needs none either, being ``0`` rather than ``NULL`` over no row.
+
 A ``NULL`` contribution is refused as well: whether the result is ``NULL``
 is then a value of its own, which a comparison of the aggregate with a
 value cannot express.  An aggregate of more than a thousand rows is
