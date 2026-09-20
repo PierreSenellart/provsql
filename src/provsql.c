@@ -185,6 +185,9 @@ extern void _PG_fini(void);
  *  one row per value the aggregate takes over the possible worlds
  *  (@c rewrite_explode_agg_value). */
 #define PROVSQL_EXPLODE_ALIAS "provsql_agg_value"
+/** Alias of the two-row source the truth of a comparison of an aggregate
+ *  explodes over (@c rewrite_explode_agg_cmp_truth). */
+#define PROVSQL_TRUTH_ALIAS "provsql_agg_truth"
 
 /** @brief Alias of the deduplicated keys a dense rank counts
  *  (@c make_dense_rank_subquery). */
@@ -260,6 +263,8 @@ static Var *group_key_var(Query *q, TargetEntry *te);
 static Query *split_aggregation_into_subquery(Query *q);
 static bool agg_column_explodable(const constants_t *constants,
                                   RangeTblEntry *rte, AttrNumber attno);
+static Query *rewrite_explode_agg_cmp_truth(Query *q,
+                                            const constants_t *constants);
 static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
                                         Index rteid, AttrNumber attno,
                                         Oid value_type);
@@ -18280,6 +18285,342 @@ static bool agg_value_read_as_data(const constants_t *constants, Query *q,
   return false;
 }
 
+/* -------------------------------------------------------------------------
+ * The truth of a comparison of an aggregate against a constant, as data
+ *
+ * "count(*) > 5" in the select list, or as the condition of a CASE whose
+ * branches are not aggregates, has one truth per possible world, exactly as
+ * the value of the aggregate itself has one value per world.  Reading it off
+ * the database as it is freezes it (the "aggregate result read as a plain
+ * value" warning); instead the row is exploded into the two rows the two
+ * truths give, each carrying the provenance of that truth:
+ *
+ *   SELECT g, count(*) > 5 AS flag FROM t GROUP BY g
+ *     -->
+ *   SELECT g, b AS flag FROM t, unnest(ARRAY[true,false]) AS b
+ *    GROUP BY g, b
+ *   HAVING (count(*) > 5 AND b) OR (NOT (count(*) > 5) AND NOT b)
+ *
+ * Every mechanism is one that already exists: the two-row source is untracked
+ * data, so grouping by it splits each group into the two copies without
+ * touching what the aggregate reads (each (g, b) group holds exactly the rows
+ * of g); and the HAVING is an aggregate comparison mixed with a deterministic
+ * condition, which having_Expr_to_provenance_cmp lowers to a comparison gate
+ * times the condition's indicator, dropping the physical cut so both copies
+ * survive with their annotation.  A group whose comparison can hold in no
+ * world keeps only its false copy (having_possible prunes the other).
+ *
+ * Only a comparison against a constant, and only in the select list: a
+ * comparison between two aggregates has no such two-row reading (the value of
+ * each side would have to be enumerated), and one in HAVING is already the
+ * provenance of the group.  A comparison inside a numeric CASE whose branches
+ * are aggregates is left to the agg_case lowering, which keeps one row.
+ * ------------------------------------------------------------------------- */
+
+/** @brief Does @p n hold a Var, an aggregate or a subquery -- anything that
+ *         is not the same in every row and every world? */
+static bool node_varies_walker(Node *n, void *ctx) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, Var) || IsA(n, Aggref) || IsA(n, GroupingFunc) ||
+      IsA(n, WindowFunc) || IsA(n, SubLink) || IsA(n, Param))
+    return true;
+  return expression_tree_walker(n, node_varies_walker, ctx);
+}
+
+/**
+ * @brief Is @p n a comparison of an aggregate of this level against a
+ *        constant, of a shape the explosion can annotate?
+ *
+ * The aggregate side must be a bare aggregate call, and one whose @c NULL-ness
+ * the explosion can express: @c count never is @c NULL, and @c sum / @c avg /
+ * @c min / @c max / @c choose are exactly when they read no value, which
+ * @c having_NullTest_to_provenance annotates.  Anything else -- arithmetic
+ * over aggregates, an aggregate that is @c NULL over a single value
+ * (@c stddev), two aggregates compared with each other -- would leave the
+ * worlds where the comparison is unknown out of both truths, and those rows
+ * would silently vanish, so it is declined and the value stays frozen.
+ *
+ * @param n        Node to test.
+ * @param agg_out  Out (optional): the aggregate call.
+ * @param nullable Out (optional): whether that aggregate can be @c NULL over a
+ *                 group that exists, so that the explosion needs its third,
+ *                 unknown row.
+ */
+static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
+                                     bool *nullable) {
+  OpExpr *op;
+  Node *l, *r, *agg_side;
+  char *opname;
+  bool is_cmp;
+  bool l_agg, r_agg;
+  Aggref *ar;
+
+  if (n == NULL || !IsA(n, OpExpr) || exprType(n) != BOOLOID)
+    return false;
+  op = (OpExpr *)n;
+  if (list_length(op->args) != 2)
+    return false;
+  opname = get_opname(op->opno);
+  if (opname == NULL)
+    return false;
+  is_cmp = strcmp(opname, "<") == 0 || strcmp(opname, "<=") == 0 ||
+           strcmp(opname, "=") == 0 || strcmp(opname, "<>") == 0 ||
+           strcmp(opname, ">=") == 0 || strcmp(opname, ">") == 0;
+  pfree(opname);
+  if (!is_cmp)
+    return false;
+  l = (Node *)linitial(op->args);
+  r = (Node *)lsecond(op->args);
+  l_agg = contain_aggs_of_level(l, 0);
+  r_agg = contain_aggs_of_level(r, 0);
+  if (l_agg == r_agg)  /* two aggregates, or none */
+    return false;
+  /* The other side must be the same in every world: a constant, not a
+   * grouping column (whose comparison is data already) and not a subquery. */
+  if (node_varies_walker(l_agg ? r : l, NULL))
+    return false;
+
+  agg_side = peel_agg_casts(l_agg ? l : r);
+  if (agg_side == NULL || !IsA(agg_side, Aggref))
+    return false;
+  ar = (Aggref *)agg_side;
+  {
+    char *name = get_func_name(ar->aggfnoid);
+    bool ok = false;
+    bool can_be_null = true;
+
+    if (name != NULL) {
+      if (strcmp(name, "count") == 0) {
+        ok = true;
+        can_be_null = false;
+      } else if (strcmp(name, "sum") == 0 || strcmp(name, "avg") == 0 ||
+                 strcmp(name, "min") == 0 || strcmp(name, "max") == 0 ||
+                 strcmp(name, "choose") == 0) {
+        ok = true;
+      }
+      pfree(name);
+    }
+    if (!ok)
+      return false;
+    if (agg_out != NULL)
+      *agg_out = ar;
+    if (nullable != NULL)
+      *nullable = can_be_null;
+  }
+  return true;
+}
+
+/** @brief Context of the search for a comparison to explode. */
+typedef struct agg_cmp_truth_ctx {
+  Node *found;       /**< The comparison, once found. */
+  Aggref *agg;       /**< The aggregate it compares. */
+  bool nullable;     /**< Whether that aggregate can have no value. */
+} agg_cmp_truth_ctx;
+
+/**
+ * @brief Find the first comparison of an aggregate against a constant.
+ *
+ * Descends into a @c CASE only when the @c agg_case lowering would not take
+ * it: that one keeps a single row, carrying the branch values themselves, and
+ * is the better reading where it applies (a numeric @c CASE with an aggregate
+ * in a branch).
+ */
+static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
+  if (n == NULL || ctx->found != NULL)
+    return false;
+  if (IsA(n, CaseExpr)) {
+    CaseExpr *ce = (CaseExpr *)n;
+    ListCell *lc;
+    if (TypeCategory(ce->casetype) == TYPCATEGORY_NUMERIC) {
+      foreach (lc, ce->args)
+        if (contain_aggs_of_level((Node *)((CaseWhen *)lfirst(lc))->result, 0))
+          return false;
+      if (contain_aggs_of_level((Node *)ce->defresult, 0))
+        return false;
+    }
+  }
+  if (agg_cmp_against_constant(n, &ctx->agg, &ctx->nullable)) {
+    ctx->found = n;
+    return true;
+  }
+  return expression_tree_walker(n, agg_cmp_truth_walker, (void *)ctx);
+}
+
+/** @brief Replace every copy of @c ctx->found by the truth column's Var. */
+typedef struct agg_cmp_subst_ctx {
+  Node *found;   /**< The comparison to replace. */
+  Var *truth;    /**< What replaces it. */
+} agg_cmp_subst_ctx;
+
+static Node *agg_cmp_subst_mutator(Node *n, void *context) {
+  agg_cmp_subst_ctx *ctx = (agg_cmp_subst_ctx *)context;
+
+  if (n == NULL)
+    return NULL;
+  if (n == ctx->found || equal(n, ctx->found))
+    return (Node *)copyObject(ctx->truth);
+  return expression_tree_mutator(n, agg_cmp_subst_mutator, context);
+}
+
+/**
+ * @brief Explode the truth of a comparison of an aggregate against a constant
+ *        into the two rows its two truths give.
+ *
+ * @return  The rewritten query, or @c NULL when no comparison of that shape is
+ *          read as data here.
+ */
+static Query *rewrite_explode_agg_cmp_truth(Query *q,
+                                            const constants_t *constants) {
+  agg_cmp_truth_ctx found = {NULL, NULL, false};
+  agg_cmp_subst_ctx subst;
+  ListCell *lc;
+  RangeTblEntry *rte;
+  RangeTblFunction *rtfunc;
+  FuncExpr *unnest_call;
+  ArrayExpr *two;
+  Alias *alias, *eref;
+  RangeTblRef *rtr;
+  SortGroupClause *sgc;
+  TargetEntry *bte;
+  Var *b;
+  Index maxref = 0;
+  Node *cmp, *pos, *neg;
+
+  /* A grouped aggregation of its own rows: the two-row source becomes another
+   * grouping key, which a set operation, a grouping set, a DISTINCT or a
+   * window over the groups would each read as one of their own. */
+  if (q->commandType != CMD_SELECT || !q->hasAggs || q->groupClause == NIL ||
+      q->groupingSets != NIL || q->setOperations != NULL ||
+      q->distinctClause != NIL || q->hasWindowFuncs || q->hasDistinctOn)
+    return NULL;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)   /* a sort or grouping key of its own, not an answer */
+      continue;
+    if (agg_cmp_truth_walker((Node *)te->expr, &found))
+      break;
+  }
+  if (found.found == NULL)
+    return NULL;
+  cmp = found.found;
+
+  /* --- unnest(ARRAY[true, false]) AS b --- */
+  two = makeNode(ArrayExpr);
+  two->array_typeid   = BOOLARRAYOID;
+  two->element_typeid = BOOLOID;
+  two->multidims      = false;
+  two->location       = -1;
+  /* The unknown of SQL's three-valued logic is a third row: a comparison
+   * against an aggregate that has no value is neither true nor false, and a
+   * world that leaves it unknown belongs to no other row. */
+  two->elements = list_make2(
+    makeConst(BOOLOID, -1, InvalidOid, 1, BoolGetDatum(true), false, true),
+    makeConst(BOOLOID, -1, InvalidOid, 1, BoolGetDatum(false), false, true));
+  if (found.nullable)
+    two->elements = lappend(two->elements,
+                            makeConst(BOOLOID, -1, InvalidOid, 1, (Datum)0,
+                                      true, true));
+  unnest_call = makeFuncExpr(constants->OID_UNNEST, BOOLOID, list_make1(two),
+                             InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+  unnest_call->funcretset = true;
+
+  rtfunc = makeNode(RangeTblFunction);
+  rtfunc->funcexpr          = (Node *)unnest_call;
+  rtfunc->funccolcount      = 1;
+  rtfunc->funccolnames      = NIL;
+  rtfunc->funccoltypes      = NIL;
+  rtfunc->funccoltypmods    = NIL;
+  rtfunc->funccolcollations = NIL;
+  rtfunc->funcparams        = NULL;
+
+  alias = makeNode(Alias);
+  eref  = makeNode(Alias);
+  alias->aliasname = PROVSQL_TRUTH_ALIAS;
+  eref->aliasname  = PROVSQL_TRUTH_ALIAS;
+  eref->colnames   = list_make1(makeString(PROVSQL_TRUTH_ALIAS));
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind        = RTE_FUNCTION;
+  rte->functions      = list_make1(rtfunc);
+  rte->funcordinality = false;
+  rte->alias          = alias;
+  rte->eref           = eref;
+  rte->lateral        = false;
+  rte->inFromCl       = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms  = 0;
+#endif
+
+  q->rtable = lappend(q->rtable, rte);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = list_length(q->rtable);
+  q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+  b = makeVar(rtr->rtindex, 1, BOOLOID, -1, InvalidOid, 0);
+
+  /* --- GROUP BY ..., b --- *
+   * A junk entry carries the key: the answers keep the columns they have, the
+   * truth reaching them where the comparison was. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->ressortgroupref > maxref)
+      maxref = te->ressortgroupref;
+  }
+  bte = makeTargetEntry((Expr *)copyObject(b), list_length(q->targetList) + 1,
+                        pstrdup(PROVSQL_TRUTH_ALIAS), true);
+  bte->ressortgroupref = maxref + 1;
+  q->targetList = lappend(q->targetList, bte);
+
+  sgc = makeNode(SortGroupClause);
+  sgc->tleSortGroupRef = bte->ressortgroupref;
+  get_sort_group_operators(BOOLOID, false, true, false, &sgc->sortop,
+                           &sgc->eqop, NULL, &sgc->hashable);
+  q->groupClause = lappend(q->groupClause, sgc);
+
+  /* --- The comparison becomes the truth column --- */
+  subst.found = cmp;
+  subst.truth = b;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te == bte)
+      continue;
+    te->expr = (Expr *)agg_cmp_subst_mutator((Node *)te->expr, (void *)&subst);
+  }
+
+  /* --- HAVING (cmp AND b) OR (NOT cmp AND NOT b) --- */
+  pos = (Node *)makeBoolExpr(AND_EXPR,
+                             list_make2(copyObject(cmp), copyObject(b)), -1);
+  neg = (Node *)makeBoolExpr(
+    AND_EXPR,
+    list_make2(makeBoolExpr(NOT_EXPR, list_make1(copyObject(cmp)), -1),
+               makeBoolExpr(NOT_EXPR, list_make1(copyObject(b)), -1)), -1);
+  pos = (Node *)makeBoolExpr(OR_EXPR, list_make2(pos, neg), -1);
+  if (found.nullable) {
+    /* The unknown row: the aggregate has no value, which is the only way the
+     * comparison is neither true nor false, the constant never being NULL. */
+    NullTest *bnull = makeNode(NullTest);
+    NullTest *anull = makeNode(NullTest);
+
+    bnull->arg = (Expr *)copyObject(b);
+    bnull->nulltesttype = IS_NULL;
+    bnull->argisrow = false;
+    bnull->location = -1;
+    anull->arg = (Expr *)copyObject(found.agg);
+    anull->nulltesttype = IS_NULL;
+    anull->argisrow = false;
+    anull->location = -1;
+    pos = (Node *)makeBoolExpr(
+      OR_EXPR,
+      list_make2(pos, makeBoolExpr(AND_EXPR,
+                                   list_make2(bnull, anull), -1)), -1);
+  }
+  q->havingQual = q->havingQual == NULL
+    ? pos
+    : (Node *)makeBoolExpr(AND_EXPR, list_make2(q->havingQual, pos), -1);
+  return q;
+}
+
 /**
  * @brief The text of an exploded value cast to the type of the aggregate.
  *
@@ -22730,6 +23071,16 @@ static Query *process_query(const constants_t *constants, Query *q,
           return process_query(constants, rewritten, removed, wrap_root,
                                top_level, in_boolean_rewrite, inv_ctx);
       }
+    }
+
+    /* The truth of a comparison of an aggregate against a constant, read in
+     * the select list, is one truth per world too: explode the rows into the
+     * two truths rather than freeze the one the database as it is gives. */
+    {
+      Query *rewritten = rewrite_explode_agg_cmp_truth(q, constants);
+      if (rewritten)
+        return process_query(constants, rewritten, removed, wrap_root,
+                             top_level, in_boolean_rewrite, inv_ctx);
     }
 
     /* Opt-in safe-query optimisation slot: when on, try to rewrite

@@ -578,6 +578,40 @@ refused too, an explosion multiplying the rows by the number of values.
 The explosion of an aggregate into the *values* it takes is not the one
 of the next section, which explodes it into the rows it aggregates.
 
+Reading the truth of a comparison
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A comparison of an aggregate against a constant has one truth per world in
+the same way, so reading one in the select list, or as the condition of a
+``CASE`` whose branches are not aggregates, explodes each row into the truths
+it takes:
+
+.. code-block:: postgresql
+
+    SELECT city, count(*) > 5 AS crowded FROM employees GROUP BY city;
+    SELECT city, CASE WHEN count(*) > 5 THEN 'crowded' ELSE 'quiet' END
+    FROM employees GROUP BY city;
+
+Each city gives the row where the comparison holds, annotated with the
+provenance of it holding, and the row where it does not -- and, where the
+aggregate can have no value, the third row of SQL's *unknown*, annotated with
+the provenance of the group existing without a value to compare.  A row whose
+truth holds in no world has probability zero, which is ProvSQL's reading of an
+absent row, and the ones provably so are dropped outright.
+
+The comparison is the condition the annotation carries, so no value of the
+aggregate has to be enumerated: unlike grouping by the value, this works for
+a ``sum()`` over any column and for an ``avg()``.  It applies to ``count``,
+``sum``, ``avg``, ``min``, ``max`` and :sqlfunc:`choose` compared against a
+constant, in a query that groups rows of its own.  A comparison between two
+aggregates, one against a column, one over an aggregate whose ``NULL`` says
+something else than "no value" (``stddev``, ``NULL`` over a single row), and a
+scalar aggregation -- whose one row is there even in the world where the table
+is empty, which no exploded row would be -- are read as plain values instead,
+with the warning that says so.  A comparison in ``HAVING`` needs none of this:
+it is already the provenance of the group.
+
+
 Joining and exploding aggregated provenance
 --------------------------------------------
 

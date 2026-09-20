@@ -156,3 +156,52 @@ total
 30
 90
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|f|p
+1|false|0.250000
+1|true|0.500000
+2|false|0.750000
+3|false|0.000000
+3|true|0.500000
+(5 rows)
+remove_provenance
+
+(1 row)
+g|f|p
+1|false|0.250000
+1|true|0.500000
+1|unknown|0.000000
+2|unknown|0.750000
+3|false|0.000000
+3|true|0.500000
+3|unknown|0.000000
+(7 rows)
+remove_provenance
+
+(1 row)
+g|lbl|p
+1|one|0.500000
+1|other|0.250000
+2|other|0.750000
+3|one|0.500000
+3|other|0.000000
+(5 rows)
+remove_provenance
+
+(1 row)
+g|f1|f2|f3
+1|false|true|true
+2|NULL|NULL|false
+3|false|NULL|false
+(3 rows)
+remove_provenance
+
+(1 row)
+f
+t
+(1 row)

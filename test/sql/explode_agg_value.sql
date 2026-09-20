@@ -261,3 +261,66 @@ SELECT * FROM eav_p ORDER BY total;
 DROP TABLE eav_p;
 
 DROP TABLE eav;
+
+-- The TRUTH of a comparison of an aggregate against a constant is one truth
+-- per world too, so a select-list comparison, or one in the condition of a
+-- CASE whose branches are not aggregates, explodes each row into the truths
+-- it takes: the rows are grouped by a two-row (three-row, where the aggregate
+-- can have no value) untracked source and the comparison moves into the
+-- HAVING, which annotates each copy with the provenance of that truth.
+-- Over the rows of ect, each present with probability one half:
+--   g = 1, its rows of 1 and 5: count(v) is 1 in each of the two singleton
+--     worlds and 2 in the world holding both, so count(v) = 1 weighs 0.5 and
+--     its false 0.25; sum(v) > 4 holds in {5} and {1,5}, 0.5, and fails in
+--     {1}, 0.25.
+--   g = 2, its two rows null-valued: count(v) is 0 in every world the group
+--     exists in (0.75), and sum(v) has no value there, so the comparison is
+--     unknown with probability 0.75 and its true and false rows are dropped
+--     as impossible in every world.
+--   g = 3, its single row of 7: true with the row, 0.5.
+-- A row of probability zero is a row present in no world, ProvSQL's reading
+-- of a zero annotation; the ones that are provably so are dropped outright.
+CREATE TABLE ect(g int, v int);
+INSERT INTO ect VALUES (1,1), (1,5), (2,NULL), (2,NULL), (3,7);
+SELECT add_provenance('ect');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ect; END $$;
+CREATE TABLE ect_c AS
+  SELECT g, count(v) = 1 AS f, probability(provenance()) AS p
+  FROM ect GROUP BY g;
+SELECT remove_provenance('ect_c');
+SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
+FROM ect_c ORDER BY g, f;
+DROP TABLE ect_c;
+CREATE TABLE ect_s AS
+  SELECT g, sum(v) > 4 AS f, probability(provenance()) AS p
+  FROM ect GROUP BY g;
+SELECT remove_provenance('ect_s');
+SELECT g, coalesce(f::text, 'unknown') AS f, round(p::numeric, 6) AS p
+FROM ect_s ORDER BY g, f;
+DROP TABLE ect_s;
+-- The condition of a CASE of another type than a number: the exploded row
+-- holds a truth, so PostgreSQL picks the branch of that truth.
+CREATE TABLE ect_case AS
+  SELECT g, CASE WHEN count(v) = 1 THEN 'one' ELSE 'other' END AS lbl,
+         probability(provenance()) AS p
+  FROM ect GROUP BY g;
+SELECT remove_provenance('ect_case');
+SELECT g, lbl, round(p::numeric, 6) AS p FROM ect_case ORDER BY g, lbl;
+DROP TABLE ect_case;
+-- Declined, and the value read as plain SQL reads it (one row per group, no
+-- (*) marker): two aggregates compared with each other, an aggregate whose
+-- NULL-ness is not the reading of "no value" (stddev over a single row), a
+-- comparison against a column, and a scalar aggregation, whose single row
+-- exists in every world -- including the one where no row of the table is.
+SET client_min_messages = error;
+CREATE TABLE ect_no AS
+  SELECT g, count(v) > sum(v) AS f1, stddev(v) > 1 AS f2, count(v) > g AS f3
+  FROM ect GROUP BY g;
+CREATE TABLE ect_sc AS SELECT count(v) > 1 AS f FROM ect;
+RESET client_min_messages;
+SELECT remove_provenance('ect_no');
+SELECT g, coalesce(f1::text,'NULL') AS f1, coalesce(f2::text,'NULL') AS f2,
+       coalesce(f3::text,'NULL') AS f3 FROM ect_no ORDER BY g;
+SELECT remove_provenance('ect_sc');
+SELECT * FROM ect_sc;
+DROP TABLE ect_no, ect_sc, ect;
