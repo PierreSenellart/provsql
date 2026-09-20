@@ -2718,13 +2718,21 @@ DECLARE
   ch uuid[];
   n integer;
   holds boolean;
+  extra text;
 BEGIN
   IF gt IN ('agg', 'arith', 'value') THEN
-    BEGIN
-      RETURN get_extra(token)::numeric;
-    EXCEPTION WHEN others THEN
-      RETURN NULL;   -- non-numeric aggregate (e.g. min over text)
-    END;
+    /* Reading the text as a number without a PL/pgSQL exception block, which
+     * a parallel worker cannot afford: entering one starts a subtransaction,
+     * and this function is called from the evaluator, which runs wherever the
+     * query does (PostgreSQL 11 raises "cannot start subtransactions during a
+     * parallel operation").  What is not the text of a number is the value of
+     * a non-numeric aggregate (a min over text, a timestamp), which this
+     * reading does not take. */
+    extra := get_extra(token);
+    IF extra ~ '^\s*([-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?|[Nn][Aa][Nn])\s*$' THEN
+      RETURN extra::numeric;
+    END IF;
+    RETURN NULL;
   ELSIF gt = 'semimod' THEN
     RETURN agg_gate_value((get_children(token))[2]);
   ELSIF gt = 'conditioned' THEN

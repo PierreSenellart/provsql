@@ -3231,6 +3231,72 @@ CREATE OPERATOR ^ (LEFTARG=agg_token, RIGHTARG=numeric,
                    PROCEDURE=agg_token_pow_numeric);
 
 -- ----------------------------------------------------------------------
+-- 6t. agg_gate_value reads the text of a value without a PL/pgSQL exception
+--     block: entering one starts a subtransaction, which a parallel worker
+--     cannot do, and the evaluator calls this function wherever the query
+--     runs.
+-- ----------------------------------------------------------------------
+
+/**
+ * @brief Deterministic (actual-world) scalar value of an aggregate-carrying
+ *        gate.
+ *
+ * Resolves the value an aggregate expression takes on the actual data -- the
+ * value an @c agg_token display cell carries: @c agg / @c arith gates record
+ * it in @c extra (set by aggregate evaluation and @c agg_arith_make), a
+ * @c value gate carries its constant, a @c semimod wraps a value gate, a
+ * @c conditioned gate has its target's value, and a @c case gate selects the
+ * first branch whose guard holds in the actual world (per
+ * @c agg_guard_holds), else the default.  Returns @c NULL when the gate is
+ * not aggregate-carrying or the value cannot be resolved (e.g. a
+ * non-numeric aggregate).
+ */
+CREATE OR REPLACE FUNCTION agg_gate_value(token UUID)
+  RETURNS numeric AS
+$$
+DECLARE
+  gt provenance_gate := get_gate_type(token);
+  ch uuid[];
+  n integer;
+  holds boolean;
+  extra text;
+BEGIN
+  IF gt IN ('agg', 'arith', 'value') THEN
+    /* Reading the text as a number without a PL/pgSQL exception block, which
+     * a parallel worker cannot afford: entering one starts a subtransaction,
+     * and this function is called from the evaluator, which runs wherever the
+     * query does (PostgreSQL 11 raises "cannot start subtransactions during a
+     * parallel operation").  What is not the text of a number is the value of
+     * a non-numeric aggregate (a min over text, a timestamp), which this
+     * reading does not take. */
+    extra := get_extra(token);
+    IF extra ~ '^\s*([-+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?|[Nn][Aa][Nn])\s*$' THEN
+      RETURN extra::numeric;
+    END IF;
+    RETURN NULL;
+  ELSIF gt = 'semimod' THEN
+    RETURN agg_gate_value((get_children(token))[2]);
+  ELSIF gt = 'conditioned' THEN
+    RETURN agg_gate_value((get_children(token))[1]);
+  ELSIF gt = 'case' THEN
+    ch := get_children(token);
+    n := array_length(ch, 1);
+    FOR i IN 1 .. (n - 1) / 2 LOOP
+      holds := agg_guard_holds(ch[2 * i - 1]);
+      IF holds IS NULL THEN
+        RETURN NULL;
+      ELSIF holds THEN
+        RETURN agg_gate_value(ch[2 * i]);
+      END IF;
+    END LOOP;
+    RETURN agg_gate_value(ch[n]);
+  END IF;
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+-- ----------------------------------------------------------------------
 -- 7. The C side caches the OID of each enum value per session; a backend
 --    warmed under the previous version would not know the two values
 --    added in section 1.
