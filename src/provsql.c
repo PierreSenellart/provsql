@@ -18019,7 +18019,10 @@ static bool agg_value_read_as_data(const constants_t *constants, Query *q,
     if (v == NULL)
       continue;
     r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
-    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL ||
+    /* A LATERAL subquery reads the rows of what comes before it in the FROM:
+     * the explosion wraps it in a subquery of its own, which carries no such
+     * dependency, so its aggregate is left to the freezing of its value. */
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL || r->lateral ||
         v->varattno > list_length(r->subquery->targetList))
       continue;
     sub_te = (TargetEntry *)list_nth(r->subquery->targetList, v->varattno - 1);
