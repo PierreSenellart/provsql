@@ -357,7 +357,10 @@ CREATE TABLE agg_fn_r AS
          exp(sum(v)) AS e
   FROM agg_fn_d GROUP BY g;
 SET provsql.active = off;
-SELECT g, l::text AS ln, s::text AS sqrt, p::text AS pow, e::text AS exp,
+-- Rounded: the scale PostgreSQL gives a numeric power, and the digits it
+-- prints of a float8, are not the same in every version it supports.
+SELECT g, round(l::text::numeric, 6) AS ln, round(s::text::numeric, 6) AS sqrt,
+       round(p::text::numeric, 6) AS pow, round(e::text::numeric, 6) AS exp,
        round(expected(l, provsql)::numeric, 6) AS e_ln,
        round(expected(s, provsql)::numeric, 6) AS e_sqrt
 FROM agg_fn_r ORDER BY g;
@@ -385,7 +388,10 @@ SET provsql.active = off;
 -- No row of the second group contributes to count(v), so the division has no
 -- value to read: NULL, as every arithmetic on an aggregate without a value,
 -- where the plain value would divide by the zero count(v) returns there.
-SELECT g, r::text AS r FROM agg_fl_r ORDER BY g;
+-- The text of an aggregate with no value is "NULL", not a number: the second
+-- group reads as no value at all, where the scale of the first is rounded away
+-- (it is not the same in every PostgreSQL version).
+SELECT g, round(nullif(r::text, 'NULL')::numeric, 6) AS r FROM agg_fl_r ORDER BY g;
 SET provsql.active = on;
 DROP TABLE agg_fl_r;
 CREATE TABLE agg_fl_r AS SELECT g, probability(provenance()) AS p
