@@ -117,7 +117,8 @@ INTERNAL_FUNCTIONS = {
     # called directly by users.  eval_reachability is the
     # decomposition-aligned route (bounded-treewidth data), backed by
     # reachability_materialize.
-    'eval_recursive', 'eval_reachability', 'reachability_materialize',
+    'eval_recursive', 'eval_recursive_all', 'eval_reachability',
+    'reachability_materialize',
     'reachability_materialize_hops', 'reachability_materialize_any',
     'reachability_materialize_cover',
     'plant_reach_any_groups', 'plant_reach_cover',

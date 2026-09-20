@@ -270,6 +270,8 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
                                         Oid value_type);
 static bool node_varies_walker(Node *n, void *ctx);
 static bool oj_contains_sublink_walker(Node *node, void *cx);
+typedef struct { const char *name; } CteRefCtx;
+static bool cte_reference_walker(Node *node, void *context);
 static bool rte_column_is_aggregate(const constants_t *constants,
                                     RangeTblEntry *rte, AttrNumber attno);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
@@ -1655,6 +1657,10 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                                 LoweredCte *entry) {
   Query         *cteq = (Query *) cte->ctequery;
   char          *body_text;
+  char          *q0_text = NULL;   /* the two terms, for the bag recursion */
+  char          *q1_text = NULL;
+  bool           bag = false;      /* UNION ALL: one row per derivation */
+  char          *all_name = NULL;  /* where the rounds of a bag recursion go */
   StringInfoData cols, coldef, call, scan;
   ListCell      *lcn, *lct;
   bool           first = true;
@@ -1663,15 +1669,16 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   if (cteq == NULL || !IsA(cteq, Query))
     return false;
 
-  /* Only UNION (set) recursion is in scope.  Reject UNION ALL (bag semantics,
-   * which the set-fixpoint driver does not model -- and which is unbounded on a
-   * graph with several paths) and anything that is not a plain UNION; the
-   * caller then raises the usual "Recursive CTEs not supported". */
+  /* A recursion of the two kinds, each with its own driver: UNION sums the
+   * derivations of a tuple and stops when the set of rows stops changing
+   * (eval_recursive), UNION ALL keeps one row per derivation and stops on a
+   * round that derives nothing (eval_recursive_all).  Anything that is not a
+   * plain UNION is left to the caller, which raises the refusal. */
   if (cteq->setOperations == NULL ||
       !IsA(cteq->setOperations, SetOperationStmt) ||
-      ((SetOperationStmt *) cteq->setOperations)->op != SETOP_UNION ||
-      ((SetOperationStmt *) cteq->setOperations)->all)
+      ((SetOperationStmt *) cteq->setOperations)->op != SETOP_UNION)
     return false;
+  bag = ((SetOperationStmt *) cteq->setOperations)->all;
 
   /* Reject a term whose target list contains a set-returning function
    * (e.g. SELECT unnest(...)).  Such a CTE is not a provenance fixpoint we
@@ -1698,6 +1705,35 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   /* Deparse the whole recursive CTE body to SQL.  It references the working
    * relation by the CTE name; the driver creates a temp table of that name. */
   body_text = pg_get_querydef(cteq, false);
+
+  /* The bag recursion needs its two terms apart: the rounds apply the recursive
+   * one to the previous round, where the set recursion re-runs the whole body
+   * over what has been derived so far.  Each arm of the set operation is a
+   * subquery entry of the body's range table; the recursive one is the arm that
+   * names the CTE. */
+  if (bag) {
+    SetOperationStmt *so = (SetOperationStmt *) cteq->setOperations;
+    RangeTblEntry *l, *r0;
+    CteRefCtx ctx;
+
+    if (!IsA(so->larg, RangeTblRef) || !IsA(so->rarg, RangeTblRef))
+      return false;
+    l = rt_fetch(((RangeTblRef *) so->larg)->rtindex, cteq->rtable);
+    r0 = rt_fetch(((RangeTblRef *) so->rarg)->rtindex, cteq->rtable);
+    if (l->rtekind != RTE_SUBQUERY || l->subquery == NULL ||
+        r0->rtekind != RTE_SUBQUERY || r0->subquery == NULL)
+      return false;
+    ctx.name = cte->ctename;
+    if (cte_reference_walker((Node *) r0->subquery, (void *) &ctx)) {
+      q0_text = pg_get_querydef(l->subquery, false);
+      q1_text = pg_get_querydef(r0->subquery, false);
+    } else if (cte_reference_walker((Node *) l->subquery, (void *) &ctx)) {
+      q0_text = pg_get_querydef(r0->subquery, false);
+      q1_text = pg_get_querydef(l->subquery, false);
+    } else
+      return false;   /* neither term recurses: not this shape */
+    all_name = psprintf("%s_provsql_all", cte->ctename);
+  }
 
   /* User column names (comma list) and column definitions (name type). */
   initStringInfo(&cols);
@@ -1736,7 +1772,10 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
     ReachabilityShape shape = {InvalidOid, 0, 0, NULL, InvalidOid, 0, true,
                                NULL, NULL, NIL, -1, 0, 0, 1};
     constants_t constants = get_constants(true);
-    if (provsql_absorptive_provenance &&
+    /* The reachability route compiles one circuit per reachable vertex, which
+     * is the SET reading: a bag recursion, whose answer holds one row per
+     * derivation, is not that and must not take it. */
+    if (!bag && provsql_absorptive_provenance &&
         detect_reachability_cte(cte, cteq, &constants, &shape)) {
       char *src_name;
       char *dst_name;
@@ -1812,6 +1851,16 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                          shape.hop_bound, shape.hop_seed,
                          shape.hops_position);
       appendStringInfoString(&call, ")");
+    } else if (bag) {
+      appendStringInfo(&call,
+                       "SELECT provsql.eval_recursive_all(%s, %s, %s, %s, %s, "
+                       "%s)",
+                       quote_literal_cstr(q0_text),
+                       quote_literal_cstr(q1_text),
+                       quote_literal_cstr(cte->ctename),
+                       quote_literal_cstr(all_name),
+                       quote_literal_cstr(cols.data),
+                       quote_literal_cstr(coldef.data));
     } else {
       appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
                        quote_literal_cstr(body_text),
@@ -1829,8 +1878,8 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
 
   /* Replace the CTE reference with a scan of the populated table. */
   initStringInfo(&scan);
-  appendStringInfo(&scan, "SELECT %s FROM %s",
-                   cols.data, quote_identifier(cte->ctename));
+  appendStringInfo(&scan, "SELECT %s FROM %s", cols.data,
+                   quote_identifier(bag ? all_name : cte->ctename));
   {
     List *raw = pg_parse_query(scan.data);
     List *analyzed = pg_analyze_and_rewrite_fixedparams(
@@ -1844,10 +1893,8 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
 }
 #endif
 
-/** @brief Context for @c cte_reference_walker. */
-typedef struct {
-  const char *name;   /**< CTE name searched for. */
-} CteRefCtx;
+/* CteRefCtx is declared with the forward declarations above: the recursive
+ * lowering uses the walker to tell the recursive term of a bag recursion. */
 
 /**
  * @brief Walker: does the tree contain an @c RTE_CTE reference to a CTE

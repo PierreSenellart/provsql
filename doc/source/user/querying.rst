@@ -46,7 +46,8 @@ The following SQL constructs are supported with full provenance tracking:
   (``INSERT`` / ``UPDATE`` / ``DELETE … RETURNING``) runs once, as
   plain SQL, and the rows it returns carry no provenance; it may not
   read another CTE over provenance-tracked relations
-* Recursive CTEs (``WITH RECURSIVE``) using ``UNION`` (set semantics) over
+* Recursive CTEs (``WITH RECURSIVE``) using ``UNION`` (set semantics) or
+  ``UNION ALL`` (bag semantics) over
   provenance-tracked relations, on PostgreSQL 15+: the recursive CTE is
   transparently evaluated to a fixpoint and the result carries provenance like
   any other query (e.g. the provenance of s–t reachability is the disjunction
@@ -55,7 +56,19 @@ The following SQL constructs are supported with full provenance tracking:
   ``provsql.provenance = 'absorptive'`` or ``'boolean'`` -- (an absorptive
   setting, under which the value converges); the resulting circuit is then
   sound only for absorptive evaluation (probability / Boolean), not for
-  multiplicity-counting semirings
+  multiplicity-counting semirings.
+
+  ``UNION ALL`` is the *bag* recursion and is read as SQL reads it: its rounds
+  apply the recursive term to the previous round rather than to everything
+  derived so far, its answer is the rows of every round taken together, and it
+  ends on a round that derives nothing. Each row is then one derivation,
+  annotated by the conjunction along it, and two derivations of the same tuple
+  are two rows -- where ``UNION`` returns one row annotated with their
+  disjunction. Over the two paths ``1→2→4`` and ``1→3→4``, each edge present
+  with probability one half, ``UNION ALL`` gives the row ``4`` twice, at 0.25
+  each, and ``UNION`` gives it once, at 0.4375. A ``UNION ALL`` recursion that
+  does not end -- over cyclic data, as in plain SQL -- stops at an iteration
+  bound with an error rather than running forever
 * Subqueries in the ``FROM`` clause (including deeply nested)
 * Subqueries outside ``FROM`` (``EXISTS``/``NOT EXISTS``,
   ``IN``/``NOT IN``, quantified comparisons such as ``= ANY`` or
@@ -168,9 +181,8 @@ The constructs themselves:
   as ``generate_series(1, (SELECT n FROM t))``) is evaluated by
   PostgreSQL on the data as it is, its data treated as certain, and
   ProvSQL emits a ``WARNING``
-* **Recursive CTEs** (``WITH RECURSIVE``) using ``UNION ALL`` (bag
-  semantics), over cyclic data *without* an absorptive provenance class, or on
-  PostgreSQL versions before 15
+* **Recursive CTEs** (``WITH RECURSIVE``) over cyclic data *without* an
+  absorptive provenance class, or on PostgreSQL versions before 15
 * ``EXCEPT ALL`` over provenance-tracked relations: SQL removes as many
   copies of a row as the right-hand side has, without saying which, so
   the copies it keeps have no provenance of their own. Use ``EXCEPT``,

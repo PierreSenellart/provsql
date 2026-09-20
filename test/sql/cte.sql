@@ -60,13 +60,9 @@ SELECT remove_provenance('cte_result5');
 SELECT * FROM cte_result5 ORDER BY name;
 DROP TABLE cte_result5;
 
--- Recursive CTE should error
-WITH RECURSIVE nums AS (
-  SELECT 1 AS n, name FROM personnel WHERE id=1
-  UNION ALL
-  SELECT n+1, name FROM nums WHERE n < 3
-)
-SELECT * FROM nums;
+-- A recursive CTE, of either kind, is tested in "recursive": that test is
+-- gated to the PostgreSQL versions whose lowering exists, where this file runs
+-- on every one of them.
 
 -- A data-modifying CTE runs once, as native SQL; its RETURNING rows carry no
 -- provenance, and the rest of the query reads the data as it was before it.

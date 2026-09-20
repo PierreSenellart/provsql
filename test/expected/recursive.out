@@ -71,3 +71,38 @@ node|present
 (2 rows)
 ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
 DETAIL:  provsql-reason: recursion-shape; scope: gap
+add_provenance
+
+(1 row)
+n|p
+2|0.500000
+3|0.500000
+4|0.250000
+4|0.250000
+(4 rows)
+n|p
+2|0.500000
+3|0.500000
+4|0.437500
+(3 rows)
+add_provenance
+
+(1 row)
+n|arr|p
+1|{1}|0.500000
+2|{1,2}|0.500000
+3|{1,2,3}|0.500000
+4|{1,2,3,4}|0.500000
+5|{1,2,3,4,5}|0.500000
+6|{1,2,3,4,5,6}|0.500000
+(6 rows)
+n|t|p
+1|x|0.500000
+2|xx|0.500000
+3|xxx|0.500000
+(3 rows)
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: the position it is in, or the correlation it carries, is not one the decorrelation covers (a correlation that is not an equality of columns, a body reading no tracked relation of its own)
+DETAIL:  provsql-reason: position-or-correlation; scope: gap

@@ -46,8 +46,6 @@ Nancy|Paris|1
 Paul|New York|1
 Susan|Berlin|1
 (7 rows)
-ERROR:  ProvSQL: Recursive CTEs not supported
-DETAIL:  provsql-reason: recursion-unsupported-version; scope: gap
 add_provenance
 
 (1 row)

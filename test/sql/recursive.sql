@@ -179,3 +179,77 @@ WITH RECURSIVE r AS (
     FROM sib_e e JOIN r ON e.src = r.src WHERE r.i < 3)
 SELECT * FROM r;
 DROP TABLE sib_e;
+
+-- A UNION ALL recursion is the bag one: its rounds read the previous round,
+-- its answer is the rows of every round together, and it ends on a round that
+-- derives nothing.  Each row is one derivation and two derivations of a tuple
+-- are two rows, where UNION returns one row annotated with their disjunction.
+-- Over the edges 1->2, 1->3, 2->4, 3->4, each present with probability one
+-- half, the seed {2, 3} reaches 4 by two paths: UNION ALL gives the row 4
+-- twice, annotated 12 (x) 24 and 13 (x) 34, at 0.25 each, where UNION gives it
+-- once at 1 - (1 - 0.25)^2 = 0.4375.
+CREATE TABLE bag_e(src int, dst int);
+INSERT INTO bag_e VALUES (1,2), (1,3), (2,4), (3,4);
+SELECT add_provenance('bag_e');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM bag_e; END $$;
+CREATE TABLE bag_r AS
+  WITH RECURSIVE reach(n) AS (
+      SELECT dst FROM bag_e WHERE src = 1
+    UNION ALL
+      SELECT e.dst FROM reach, bag_e e WHERE e.src = reach.n)
+  SELECT n FROM reach;
+SET provsql.active = off;
+SELECT n, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n, p;
+SET provsql.active = on;
+DROP TABLE bag_r;
+CREATE TABLE bag_r AS
+  WITH RECURSIVE reach(n) AS (
+      SELECT dst FROM bag_e WHERE src = 1
+    UNION
+      SELECT e.dst FROM reach, bag_e e WHERE e.src = reach.n)
+  SELECT n FROM reach;
+SET provsql.active = off;
+SELECT n, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n, p;
+SET provsql.active = on;
+DROP TABLE bag_r;
+
+-- The generators of the corpora: a counter, an array extended per round, a
+-- string built up.  Every row derives from the one row of the seed, so each
+-- carries its probability, and the bound ends the rounds.
+CREATE TABLE bag_seed(v int);
+INSERT INTO bag_seed VALUES (1);
+SELECT add_provenance('bag_seed');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM bag_seed; END $$;
+CREATE TABLE bag_param(n int);
+INSERT INTO bag_param VALUES (3);
+CREATE TABLE bag_r AS
+  WITH RECURSIVE fill(n, arr) AS (
+      SELECT v, ARRAY[v] FROM bag_seed
+    UNION ALL
+      SELECT n + 1, array_append(arr, n + 1) FROM fill
+      WHERE n < (SELECT n * 2 FROM bag_param))
+  SELECT n, arr FROM fill;
+SET provsql.active = off;
+SELECT n, arr::text AS arr, round(probability(provsql)::numeric, 6) AS p
+FROM bag_r ORDER BY n;
+SET provsql.active = on;
+DROP TABLE bag_r;
+CREATE TABLE bag_r AS
+  WITH RECURSIVE s(n, t) AS (
+      SELECT v, 'x'::text FROM bag_seed
+    UNION ALL
+      SELECT n + 1, t || 'x' FROM s WHERE n < 3)
+  SELECT n, t FROM s;
+SET provsql.active = off;
+SELECT n, t, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n;
+SET provsql.active = on;
+DROP TABLE bag_r;
+
+-- A bound read from a TRACKED relation is refused: each round is a query of
+-- its own, and an uncorrelated scalar subquery compared in a WHERE clause is a
+-- shape the decorrelation does not cover.  Asserted here without the recursion,
+-- which raises the same refusal from inside the driver (its CONTEXT carries
+-- the deparsed round, whose text is not the same in every PostgreSQL version).
+SELECT add_provenance('bag_param');
+SELECT v FROM bag_seed WHERE v < (SELECT n FROM bag_param);
+DROP TABLE bag_e, bag_seed, bag_param;

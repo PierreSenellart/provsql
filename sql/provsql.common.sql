@@ -1841,6 +1841,85 @@ END
 $$ LANGUAGE plpgsql SET client_min_messages = warning;
 
 /**
+ * @brief Drive a @c UNION @c ALL recursion, one round per bag of derivations
+ *
+ * The bag recursion is not a fixpoint over a set: its rounds are
+ * @c M0 @c = @c q0 and @c M(i+1) @c = @c q1 over @c Mi -- the PREVIOUS round,
+ * not what has been derived so far -- and its answer is the bag union of every
+ * round, which ends when a round derives nothing.  Each tuple of it is one
+ * derivation, annotated by the product along that derivation, and two
+ * derivations of the same tuple are two rows and are not merged: that is what
+ * distinguishes it from @c UNION, whose driver (@c eval_recursive) sums the
+ * derivations of a tuple into one row and stops when the set of rows stops
+ * changing.
+ *
+ * @c work_name holds the previous round, which the recursive term reads by the
+ * name of the CTE; @c all_name accumulates the answer and is what the query
+ * reads.  Ending on an empty round is SQL's own rule, so a recursion PostgreSQL
+ * runs to completion ends here too, and one it does not is caught by
+ * @p max_iter as before.
+ *
+ * @param q0_sql     the non-recursive term, as SQL
+ * @param q1_sql     the recursive term, reading @p work_name
+ * @param work_name  temp table of the previous round (the CTE's name)
+ * @param all_name   temp table accumulating the rounds
+ * @param colnames   comma-separated user column names
+ * @param coldef     column definitions ("name type, ...")
+ * @param max_iter   safety bound on the number of rounds
+ */
+CREATE OR REPLACE FUNCTION eval_recursive_all(
+  q0_sql    text,
+  q1_sql    text,
+  work_name text,
+  all_name  text,
+  colnames  text,
+  coldef    text,
+  max_iter  int DEFAULT 1000)
+  RETURNS void AS
+$$
+DECLARE
+  iters     int := 0;
+  new_count int;
+BEGIN
+  EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
+  EXECUTE format('DROP TABLE IF EXISTS %I', all_name);
+  DROP TABLE IF EXISTS _new_all;
+
+  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+  EXECUTE format('CREATE TEMP TABLE %I (LIKE %I)', all_name, work_name);
+  EXECUTE format('CREATE TEMP TABLE _new_all (LIKE %I)', work_name);
+  PERFORM provsql.planted_scope(all_name);
+
+  -- The first round: the non-recursive term.
+  EXECUTE format('INSERT INTO _new_all(%s) %s', colnames, q0_sql);
+  GET DIAGNOSTICS new_count = ROW_COUNT;
+
+  LOOP
+    EXIT WHEN new_count = 0;   -- a round that derives nothing ends the answer
+
+    -- Every row of the round is an answer, kept as it is: a second derivation
+    -- of a tuple is a second row, which is what UNION ALL says.
+    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM _new_all',
+                   all_name, colnames);
+
+    -- The round becomes the relation the recursive term reads.
+    EXECUTE format('TRUNCATE %I', work_name);
+    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM _new_all',
+                   work_name, colnames);
+
+    iters := iters + 1;
+    IF iters > max_iter THEN
+      RAISE EXCEPTION 'eval_recursive_all: no end after % rounds', max_iter;
+    END IF;
+
+    EXECUTE format('TRUNCATE _new_all');
+    EXECUTE format('INSERT INTO _new_all(%s) %s', colnames, q1_sql);
+    GET DIAGNOSTICS new_count = ROW_COUNT;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+/**
  * @brief Create a comparison gate for HAVING clause provenance
  *
  * @param left_token provenance token for the left operand
