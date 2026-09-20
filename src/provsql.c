@@ -14559,6 +14559,65 @@ static bool drop_semijoin_distinct_walker(Node *node, void *cx) {
   return expression_tree_walker(node, drop_semijoin_distinct_walker, cx);
 }
 
+/** @brief Context of @c bool_exists_mutator. */
+typedef struct bool_exists_ctx {
+  const constants_t *constants;
+  int lowered;     /**< how many subquery conditions were rewritten */
+  bool declined;   /**< one was met that cannot be, or a second one */
+} bool_exists_ctx;
+
+/**
+ * @brief Rewrite the @c EXISTS of a Boolean combination into the count of its
+ *        body.
+ *
+ * A subquery condition that is not a conjunct of the @c WHERE clause --
+ * @c "ψ @c OR @c EXISTS @c (Q)" -- is not the semijoin: the semijoin drops the
+ * rows of @c R without a match, which the other disjunct may license.  The
+ * semantics reads it as the atom @c "#(k+1) @c >= @c 1" over @c G_c(R,Q), i.e.
+ * the count of the body as a column of its own, combined with the other
+ * conditions by the rules of @c HAVING.  Writing the count comparison in place
+ * of the @c EXISTS gives exactly that: @c decorrelate_scalar_sublinks lifts the
+ * aggregate over @c "R @c ⟕ @c Q" and moves the whole conjunct that holds it --
+ * the disjunction -- into the @c HAVING clause, where
+ * @c having_Expr_to_provenance_cmp reads the combination, a regular disjunct
+ * becoming its indicator.  The annotation is then
+ * @c "α⊗(ψ̂ @c ⊕ @c δ(⊕β))".
+ *
+ * One condition per combination: two would need the counts of both bodies on
+ * one tuple, which the grouping of one @c G does not carry into the other, and
+ * the decorrelation takes one sublink per level anyway.
+ */
+static Node *bool_exists_mutator(Node *node, void *cx) {
+  bool_exists_ctx *ctx = (bool_exists_ctx *)cx;
+  bool neg = false;
+  Node *inner = node;
+
+  if (node == NULL || ctx->declined)
+    return node;
+  if (IsA(node, BoolExpr) && ((BoolExpr *)node)->boolop == NOT_EXPR &&
+      list_length(((BoolExpr *)node)->args) == 1) {
+    neg = true;
+    inner = (Node *)linitial(((BoolExpr *)node)->args);
+  }
+  if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
+    SubLink *sl = (SubLink *)inner;
+
+    if (sl->subLinkType != EXISTS_SUBLINK ||
+        !predicate_subselect_decorrelatable(ctx->constants,
+                                            (Query *)sl->subselect, false)) {
+      ctx->declined = true;   /* not a shape this reading covers */
+      return node;
+    }
+    if (ctx->lowered > 0) {
+      ctx->declined = true;   /* a second subquery condition */
+      return node;
+    }
+    ctx->lowered++;
+    return build_count_predicate((Query *)sl->subselect, NULL, neg);
+  }
+  return expression_tree_mutator(node, bool_exists_mutator, cx);
+}
+
 /**
  * @brief Rewrite top-level @c EXISTS / @c IN WHERE conjuncts (optionally negated)
  *        over tracked relations into correlated @c count(*) comparisons.
@@ -14636,6 +14695,20 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
                                               base_antijoin ^ neg);
         }
       }
+    }
+    /* Not a conjunct that IS a subquery condition: a Boolean combination
+     * holding one (psi OR EXISTS (Q)).  The condition becomes the count atom
+     * in place, the combination staying as the query wrote it. */
+    if (rewritten == NULL && IsA(c, BoolExpr)) {
+      bool_exists_ctx bctx;
+      Node *lowered;
+
+      bctx.constants = constants;
+      bctx.lowered = 0;
+      bctx.declined = false;
+      lowered = bool_exists_mutator((Node *)copyObject(c), (void *)&bctx);
+      if (bctx.lowered == 1 && !bctx.declined)
+        rewritten = lowered;
     }
     newconjs = lappend(newconjs, rewritten ? rewritten : c);
     if (rewritten)
@@ -15544,6 +15617,20 @@ static bool oj_is_arith_opexpr(Node *node) {
   return is_arith;
 }
 
+/** @brief Is @p opno one of the six comparison operators by name? */
+static bool is_comparison_opno(Oid opno) {
+  char *opname = get_opname(opno);
+  bool is_cmp;
+
+  if (opname == NULL)
+    return false;
+  is_cmp = strcmp(opname, "<") == 0 || strcmp(opname, "<=") == 0 ||
+           strcmp(opname, "=") == 0 || strcmp(opname, "<>") == 0 ||
+           strcmp(opname, ">=") == 0 || strcmp(opname, ">") == 0;
+  pfree(opname);
+  return is_cmp;
+}
+
 /**
  * @brief Is SubLink @p sl reachable from @p node through arithmetic only?
  *
@@ -15564,13 +15651,120 @@ static bool oj_tl_sublink_in_arith(Node *node, SubLink *sl) {
   node = peel_agg_casts(node);
   if (node == (Node *)sl)
     return true;
+  /* A comparison of the sublink against a constant: the Boolean value of
+   * EXISTS (Q) is written that way (rewrite_target_list_exists), and the
+   * comparison of the lifted aggregate against the constant is read as data by
+   * the explosion of its truth. */
+  if (IsA(node, OpExpr) && list_length(((OpExpr *)node)->args) == 2 &&
+      exprType(node) == BOOLOID && is_comparison_opno(((OpExpr *)node)->opno)) {
+    Node *l = peel_agg_casts((Node *)linitial(((OpExpr *)node)->args));
+    Node *r = peel_agg_casts((Node *)lsecond(((OpExpr *)node)->args));
+    if ((l == (Node *)sl && !node_varies_walker(r, NULL)) ||
+        (r == (Node *)sl && !node_varies_walker(l, NULL)))
+      return true;
+  }
   if (oj_is_arith_opexpr(node)) {
     ListCell *lc;
     foreach (lc, ((OpExpr *)node)->args)
       if (oj_tl_sublink_in_arith((Node *)lfirst(lc), sl))
         return true;
   }
+  /* A term over the value: CASE WHEN <the comparison above> THEN ... .  The
+   * lifted aggregate then sits in the CASE, which the agg_case lowering and the
+   * explosion of a comparison's truth both read. */
+  if (IsA(node, CaseExpr)) {
+    CaseExpr *ce = (CaseExpr *)node;
+    ListCell *lc;
+    foreach (lc, ce->args) {
+      CaseWhen *cw = (CaseWhen *)lfirst(lc);
+      if (oj_tl_sublink_in_arith((Node *)cw->expr, sl) ||
+          oj_tl_sublink_in_arith((Node *)cw->result, sl))
+        return true;
+    }
+    if (oj_tl_sublink_in_arith((Node *)ce->defresult, sl))
+      return true;
+  }
   return false;
+}
+
+/** @brief Context of @c tl_exists_mutator. */
+typedef struct tl_exists_ctx {
+  const constants_t *constants;
+  bool changed;
+} tl_exists_ctx;
+
+/**
+ * @brief Rewrite an @c EXISTS of the select list into the count of its body.
+ *
+ * @c EXISTS @c (Q) in the select list is a Boolean VALUE, not a condition: the
+ * semantics reads it as the count column of @c G_c(R,Q) under @c ">= 1", an
+ * aggregate expression whose value in a world is the Boolean SQL computes
+ * there (@c NOT @c EXISTS is @c "= 0").  Written as that comparison here, it
+ * takes the road the same test in @c WHERE takes: the aggregate-body arm of
+ * @c decorrelate_scalar_sublinks builds @c "R @c ⟕ @c Q" grouped by @c R and
+ * turns the body's @c count(*) into @c count(Q.key), and the comparison is
+ * then an ordinary one of an aggregate against a constant -- which
+ * @c rewrite_explode_agg_cmp_truth explodes into the two rows the semantics
+ * asks for, annotated @c "α⊗δ(⊕β)" and @c "α⊗(𝟙⊖⊕β)", the semijoin's and the
+ * antijoin's.
+ *
+ * A term over the value is rewritten in place, so @c "CASE @c WHEN @c EXISTS
+ * @c (Q) @c THEN @c ..." is covered as well.  A body the decorrelation cannot
+ * take is left alone.
+ */
+static Node *tl_exists_mutator(Node *node, void *cx) {
+  tl_exists_ctx *ctx = (tl_exists_ctx *)cx;
+  bool neg = false;
+  Node *inner = node;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, BoolExpr) && ((BoolExpr *)node)->boolop == NOT_EXPR &&
+      list_length(((BoolExpr *)node)->args) == 1) {
+    neg = true;
+    inner = (Node *)linitial(((BoolExpr *)node)->args);
+  }
+  if (IsA(inner, SubLink) &&
+      ((SubLink *)inner)->subLinkType == EXISTS_SUBLINK &&
+      IsA(((SubLink *)inner)->subselect, Query)) {
+    SubLink *sl = (SubLink *)inner;
+    Query *body = (Query *)sl->subselect;
+
+    if (predicate_subselect_decorrelatable(ctx->constants, body, false)) {
+      Node *cmp = build_count_predicate(body, NULL, neg);
+      if (cmp != NULL) {
+        ctx->changed = true;
+        return cmp;
+      }
+    }
+    return node;   /* not decorrelatable: left as the query wrote it */
+  }
+  return expression_tree_mutator(node, tl_exists_mutator, cx);
+}
+
+/**
+ * @brief Rewrite the @c EXISTS values of @p q's select list (@c tl_exists_mutator).
+ *
+ * Only this level's own target list, and only where the level is one the
+ * decorrelation can serve: it groups the outer rows, so a level that already
+ * groups or aggregates of its own has no room for it.
+ */
+static bool rewrite_target_list_exists(const constants_t *constants, Query *q) {
+  tl_exists_ctx ctx;
+  ListCell *lc;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || q->targetList == NIL)
+    return false;
+  if (q->groupClause || q->groupingSets || q->hasAggs || q->havingQual ||
+      q->distinctClause || q->setOperations || q->hasWindowFuncs)
+    return false;
+  ctx.constants = constants;
+  ctx.changed = false;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    te->expr = (Expr *)tl_exists_mutator((Node *)te->expr, (void *)&ctx);
+  }
+  return ctx.changed;
 }
 
 /** @brief Context for @c oj_replace_sublink_mut. */
@@ -18489,8 +18683,6 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
                                      bool *nullable) {
   OpExpr *op;
   Node *l, *r, *agg_side;
-  char *opname;
-  bool is_cmp;
   bool l_agg, r_agg;
   Aggref *ar;
 
@@ -18499,14 +18691,7 @@ static bool agg_cmp_against_constant(Node *n, Aggref **agg_out,
   op = (OpExpr *)n;
   if (list_length(op->args) != 2)
     return false;
-  opname = get_opname(op->opno);
-  if (opname == NULL)
-    return false;
-  is_cmp = strcmp(opname, "<") == 0 || strcmp(opname, "<=") == 0 ||
-           strcmp(opname, "=") == 0 || strcmp(opname, "<>") == 0 ||
-           strcmp(opname, ">=") == 0 || strcmp(opname, ">") == 0;
-  pfree(opname);
-  if (!is_cmp)
+  if (!is_comparison_opno(op->opno))
     return false;
   l = (Node *)linitial(op->args);
   r = (Node *)lsecond(op->args);
@@ -23040,6 +23225,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     rewrite_predicate_sublinks(constants, q);
     move_uncorrelated_where_predicates(constants, q);
     move_uncorrelated_sublinks_to_from(constants, q);
+    rewrite_target_list_exists(constants, q);
     decorrelate_scalar_sublinks(constants, q);
   }
 

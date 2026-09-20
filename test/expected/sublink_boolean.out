@@ -1,0 +1,47 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+id|p
+1|1.000000
+2|0.750000
+(2 rows)
+id|p
+1|1.000000
+2|0.250000
+(2 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+pid|has_child|p
+1|f|0.250000
+1|t|0.750000
+2|f|1.000000
+(3 rows)
+pid|childless|p
+1|f|0.750000
+1|t|0.250000
+2|f|0.000000
+2|t|1.000000
+(4 rows)
+pid|lbl|p
+1|none|0.250000
+1|some|0.750000
+2|none|1.000000
+(3 rows)
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: this block has more than one subquery over a tracked relation, and the decorrelation groups its rows for one of them
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: it is read as a value rather than as a condition, and SQL gives IN or a quantified comparison the unknown truth where no row matches and a comparison is unknown, which the count of the matches does not tell from false (EXISTS as a value is supported)
+WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance, although the statement also tracks sb_c; mark it plain() to evaluate it as plain SQL
+remove_provenance
+
+(1 row)
+pid|has_child|childless
+1|t|f
+2|f|t
+(2 rows)

@@ -74,7 +74,23 @@ The following SQL constructs are supported with full provenance tracking:
   EXISTS`` -- is tracked as well: the bodies are lifted into a ``FROM`` of
   its own, so the answer carries the provenance of the semijoin or the
   antijoin. Where a body cannot be lifted, the block keeps being evaluated
-  by plain SQL with the warning that says so, rather than refused
+  by plain SQL with the warning that says so, rather than refused.
+  A subquery condition needs not be a conjunct of the ``WHERE`` clause:
+  ``WHERE name = 'NY' OR EXISTS (…)`` is read as the atom "the count of the
+  body is at least one" over the outer join grouped by the outer rows,
+  combined with the other conditions as a ``HAVING`` clause is, so a row
+  licensed by the other disjunct keeps its own provenance and one licensed
+  only by the subquery gets the semijoin's. One subquery condition per
+  combination: two would need the counts of both bodies on one row
+* ``EXISTS (…)`` in the ``SELECT`` list, read as a Boolean *value* rather
+  than as a condition: it is that same count comparison, and the row
+  explodes into the two rows of its two truths (see
+  :ref:`explode-agg-value`), the true one annotated with the semijoin's
+  provenance and the false one with the antijoin's. ``NOT EXISTS`` exchanges
+  them, and a term over the value -- ``CASE WHEN EXISTS (…) THEN …`` --
+  follows. ``x IN (…)`` as a value is not read this way: SQL gives it
+  unknown where no row matches and a comparison is unknown, which a count
+  does not tell from false
 * ``GROUP BY``, with ``GROUPING SETS``, ``ROLLUP`` and ``CUBE``
 * ``SELECT DISTINCT`` (set semantics), and ``DISTINCT ON``, read as
   a ``LIMIT 1`` in each group (see :ref:`limit`)
