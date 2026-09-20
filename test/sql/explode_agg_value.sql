@@ -97,15 +97,38 @@ FROM eav_u ORDER BY c;
 SET provsql.active = on;
 DROP TABLE eav_u;
 
--- EXCEPT matches the rows it removes on those values: refused, as is a UNION
--- whose other arm aggregates nothing at that column.
-SELECT count(*) AS c FROM eav GROUP BY g
+-- EXCEPT and INTERSECT match the rows they remove or keep on those values,
+-- which is why the explosion is done in each arm and not on the result: the
+-- second arm counts only the rows over 20, so group 1 (whose rows are 10 and
+-- 20) has no counterpart there and its values survive the difference, while
+-- groups 2 and 3 count the same rows in both arms and cancel.  Over the 32
+-- worlds: 1 with probability 0.125 and 2 with 0.1875 for the difference, 0.75
+-- and 0.25 for the intersection.
+CREATE TABLE eav_e AS
+  SELECT count(*) AS c FROM eav GROUP BY g
   EXCEPT
   SELECT count(*) FROM eav WHERE v > 20 GROUP BY g;
-SELECT count(*) AS c FROM eav GROUP BY g UNION SELECT 1;
-SELECT count(*) AS c FROM eav GROUP BY g
+SET provsql.active = off;
+SELECT c, round(probability_evaluate(provsql)::numeric, 6) AS pr
+FROM eav_e ORDER BY c;
+SET provsql.active = on;
+DROP TABLE eav_e;
+
+CREATE TABLE eav_i AS
+  SELECT count(*) AS c FROM eav GROUP BY g
   INTERSECT
   SELECT count(*) FROM eav WHERE v > 20 GROUP BY g;
+SET provsql.active = off;
+SELECT c, round(probability_evaluate(provsql)::numeric, 6) AS pr
+FROM eav_i ORDER BY c;
+SET provsql.active = on;
+DROP TABLE eav_i;
+
+-- A set operation whose other arm aggregates nothing at that column is
+-- refused: only the values of a whole column, exploded in every arm, are
+-- matched together.
+SELECT count(*) AS c FROM eav GROUP BY g UNION SELECT 1;
+SELECT count(*) AS c FROM eav GROUP BY g EXCEPT SELECT 1;
 
 -- The values of a sum are its subset sums, which are not read off its
 -- contributions one by one: refused, as is grouping by or deduplicating on the

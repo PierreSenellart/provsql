@@ -133,9 +133,9 @@ error (``XX000``):
   its contributions:** grouping by, deduplicating on or uniting on the
   value of an aggregate other than a ``count``, a ``min``, a ``max`` or a
   :sqlfunc:`choose`, which are exploded into one row per value they take
-  (see :ref:`explode-agg-value`); ``EXCEPT`` and ``INTERSECT`` (non-ALL)
-  over aggregate results; and an aggregate of them other than one of the
-  same kind (see :ref:`reaggregation`)
+  (see :ref:`explode-agg-value`), in every arm of a set operation; and an
+  aggregate of them other than one of the same kind (see
+  :ref:`reaggregation`)
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
   other than aggregates over a frame determined by values and the ranks
   ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER`` (see

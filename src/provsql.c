@@ -260,6 +260,9 @@ static Var *group_key_var(Query *q, TargetEntry *te);
 static Query *split_aggregation_into_subquery(Query *q);
 static bool agg_column_explodable(const constants_t *constants,
                                   RangeTblEntry *rte, AttrNumber attno);
+static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
+                                        Index rteid, AttrNumber attno,
+                                        Oid value_type);
 static bool rte_column_is_aggregate(const constants_t *constants,
                                     RangeTblEntry *rte, AttrNumber attno);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
@@ -274,6 +277,51 @@ static Expr *wrap_in_annotate(const constants_t *constants, Expr *expr,
 /* -------------------------------------------------------------------------
  * Provenance attribute construction
  * ------------------------------------------------------------------------- */
+
+#if PG_VERSION_NUM >= 160000
+/**
+ * @brief Collect, in @p nulls, the outer joins of @p jtnode that null the
+ *        range-table entry @p varno, as their range-table indexes.
+ *
+ * From PG 16 on, a Var reading a relation on the null-padded side of an outer
+ * join carries the indexes of the joins that can null it
+ * (@c varnullingrels), and the planner refuses a plan whose Vars disagree
+ * with the join tree ("wrong varnullingrels ... for Var"): a Var ProvSQL
+ * builds itself has to carry them too.  The provenance column of the right
+ * arm of a difference, read above the LEFT JOIN that @c EXCEPT is lowered to,
+ * is one such Var.
+ *
+ * @return  Whether @p varno is under @p jtnode at all.
+ */
+static bool nulling_joins_of_rte(Node *jtnode, Index varno,
+                                 Bitmapset **nulls) {
+  if (jtnode == NULL)
+    return false;
+  if (IsA(jtnode, RangeTblRef))
+    return (Index)((RangeTblRef *)jtnode)->rtindex == varno;
+  if (IsA(jtnode, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)jtnode)->fromlist)
+      if (nulling_joins_of_rte((Node *)lfirst(lc), varno, nulls))
+        return true;
+    return false;
+  }
+  if (IsA(jtnode, JoinExpr)) {
+    JoinExpr *je = (JoinExpr *)jtnode;
+    bool left = nulling_joins_of_rte(je->larg, varno, nulls);
+    bool right = left ? false : nulling_joins_of_rte(je->rarg, varno, nulls);
+
+    if (!left && !right)
+      return false;
+    if (je->rtindex > 0 &&
+        ((left && (je->jointype == JOIN_RIGHT || je->jointype == JOIN_FULL)) ||
+         (right && (je->jointype == JOIN_LEFT || je->jointype == JOIN_FULL))))
+      *nulls = bms_add_member(*nulls, je->rtindex);
+    return true;
+  }
+  return false;
+}
+#endif
 
 /**
  * @brief Build a Var node that references the provenance column of a relation.
@@ -6436,6 +6484,25 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
   bool  jw_all_exist = false;
   List *jw_head_idx = NIL;
   List *jw_head_exprs = NIL;
+
+#if PG_VERSION_NUM >= 160000
+  /* The joins of the final join tree that null what each provenance Var
+   * reads.  Read here rather than where the Var is built: the difference of
+   * a set operation becomes a LEFT JOIN (@c transform_except_into_join) after
+   * the provenance attributes have been collected, and its right arm's
+   * provsql column is then read above that join. */
+  {
+    ListCell *lc_n;
+    foreach (lc_n, prov_atts) {
+      Var *v = (Var *)lfirst(lc_n);
+      Bitmapset *nulls = NULL;
+      if (!IsA(v, Var) || v->varlevelsup != 0 || q->jointree == NULL)
+        continue;
+      nulling_joins_of_rte((Node *)q->jointree, v->varno, &nulls);
+      v->varnullingrels = nulls;
+    }
+  }
+#endif
   /* Joint-width is the fallback for the genuinely #P-hard UCQs.  It must NOT
    * pre-empt a query another route already certifies: @c in_boolean_rewrite is
    * set throughout a safe-query rewrite's subtree (so jw defers to it even one
@@ -17804,19 +17871,6 @@ static bool agg_column_explodable(const constants_t *constants,
   return false;
 }
 
-/** @brief Whether every operation of the set-operation tree @p n is a
- *  @c UNION. */
-static bool setop_tree_all_union(Node *n) {
-  if (n == NULL || IsA(n, RangeTblRef))
-    return true;
-  if (IsA(n, SetOperationStmt)) {
-    SetOperationStmt *st = (SetOperationStmt *)n;
-    return st->op == SETOP_UNION && setop_tree_all_union(st->larg) &&
-           setop_tree_all_union(st->rarg);
-  }
-  return false;
-}
-
 /**
  * @brief Whether @p q reads the value of an aggregate of one of its
  *        subqueries as data: a @c GROUP @c BY key, or a @c DISTINCT column.
@@ -17899,6 +17953,44 @@ static Node *explode_value_of_text(Node *txt, Oid value_type) {
 }
 
 /**
+ * @brief Explode column @p attno of every arm of the set-operation tree @p n
+ *        of @p q.
+ *
+ * A set operation reads its rows from its arms, so the values are exploded in
+ * each arm rather than in its result: a @c UNION would give the same rows
+ * either way, but a difference matches its rows on those values, and matching
+ * on the value of an aggregate -- one per world -- is what the explosion is
+ * there to replace.
+ *
+ * @return  Whether every arm was exploded.
+ */
+static bool explode_setop_arms(Query *q, const constants_t *constants, Node *n,
+                               AttrNumber attno) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, RangeTblRef)) {
+    Index rtindex = ((RangeTblRef *)n)->rtindex;
+    RangeTblEntry *arm = rt_fetch(rtindex, q->rtable);
+    TargetEntry *te;
+
+    if (arm->rtekind != RTE_SUBQUERY || arm->subquery == NULL ||
+        attno > list_length(arm->subquery->targetList))
+      return false;
+    te = get_tle_by_resno(arm->subquery->targetList, attno);
+    if (te == NULL)
+      return false;
+    return rewrite_explode_agg_value(q, constants, rtindex, attno,
+                                     exprType((Node *)te->expr)) != NULL;
+  }
+  if (IsA(n, SetOperationStmt))
+    return explode_setop_arms(q, constants, ((SetOperationStmt *)n)->larg,
+                              attno) &&
+           explode_setop_arms(q, constants, ((SetOperationStmt *)n)->rarg,
+                              attno);
+  return false;
+}
+
+/**
  * @brief Explode the aggregate column @p attno of the subquery at @p rteid
  *        into one row per value that aggregate takes over the possible
  *        worlds.
@@ -17950,6 +18042,11 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   if (src_rte->rtekind != RTE_SUBQUERY || src_rte->subquery == NULL ||
       attno > list_length(src_rte->subquery->targetList))
     return NULL;
+  /* The rows of a set operation come from its arms: explode them there */
+  if (src_rte->subquery->setOperations != NULL)
+    return explode_setop_arms(src_rte->subquery, constants,
+                              src_rte->subquery->setOperations, attno)
+             ? q : NULL;
   agg_te = (TargetEntry *)list_nth(src_rte->subquery->targetList, attno - 1);
   typmod = exprTypmod((Node *)agg_te->expr);
   coll   = exprCollation((Node *)agg_te->expr);
@@ -21998,18 +22095,31 @@ static Query *process_query(const constants_t *constants, Query *q,
       ((SetOperationStmt *)q->setOperations)->op == SETOP_INTERSECT &&
       has_provenance(constants, q)) {
     /* The intersection matches its rows on their values, which for an
-     * aggregate are one per possible world: said here rather than left to
-     * the comparison the rewriting below would build out of them. */
+     * aggregate are one per possible world: the arms are exploded into one
+     * row per value first, so that the matching the rewriting below builds is
+     * over data.  Done here, the rewriting coming before the grouping that
+     * lets the explosion fire on its own. */
     SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
     AttrNumber col;
+    bool exploded = false;
 
-    for (col = 1; col <= (AttrNumber)list_length(stmt->colTypes); ++col)
-      if (setop_column_has_aggregate(constants, q, q->setOperations, col))
+    for (col = 1; col <= (AttrNumber)list_length(stmt->colTypes); ++col) {
+      if (!setop_column_has_aggregate(constants, q, q->setOperations, col))
+        continue;
+      if (!OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES) ||
+          !setop_column_explodable(constants, q, q->setOperations, col))
         provsql_unsupported(
-          "INTERSECT on aggregate results is not supported: the rows it keeps "
-          "are matched on values that are one per possible world; UNION of "
-          "them is supported, and casting the aggregate explicitly "
-          "(::numeric, ::text, ...) reads its plain value");
+          "the value of an aggregate of this intersection cannot be matched "
+          "with the one of its other arm: it is one value per possible world, "
+          "and only a count(), a min(), a max() and a choose() are exploded "
+          "into one row per value they take, in every arm; cast the aggregate "
+          "explicitly (::numeric, ::text, ...) to read its plain value");
+      if (explode_setop_arms(q, constants, q->setOperations, col))
+        exploded = true;
+    }
+    if (exploded)
+      return process_query(constants, q, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
     return process_query(constants, rewrite_intersect(constants, q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
   }
@@ -22143,9 +22253,10 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (stmt->all)
         nest_set_operations(q);
       if (!stmt->all) {
-        /* A branch with aggregates deduplicates values that are one per
-         * possible world: the explosion of each into one row per value it
-         * takes carries it, and what cannot be exploded is refused. */
+        /* A branch with aggregates deduplicates, unites or removes values
+         * that are one per possible world: the explosion of each into one row
+         * per value it takes carries it (in every arm, so that the difference
+         * matches rows on data), and what cannot be exploded is refused. */
         AttrNumber col;
         int ncols = list_length(stmt->colTypes);
 
@@ -22161,12 +22272,6 @@ static Query *process_query(const constants_t *constants, Query *q,
               "row per value they take, in every arm; use UNION ALL, or cast "
               "the aggregate explicitly (::numeric, ::text, ...) to read its "
               "plain value");
-          if (!setop_tree_all_union(q->setOperations))
-            provsql_unsupported(
-              "EXCEPT on aggregate results is not supported: the rows it "
-              "removes are matched on values that are one per possible world; "
-              "UNION of them is supported, and casting the aggregate "
-              "explicitly (::numeric, ::text, ...) reads its plain value");
         }
         {
           /* The provsql columns were removed from q above: that is what the

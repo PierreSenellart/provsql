@@ -31,11 +31,11 @@ FROM
 -- contributions one by one (see explode_agg_value for the ones that are)
 SELECT DISTINCT SUM(id) FROM personnel GROUP BY city;
 
--- EXCEPT on aggregate results: the rows it removes are matched on values that
--- are one per possible world
-SELECT city, COUNT(*) FROM personnel GROUP BY city
+-- EXCEPT on the value of an aggregate that cannot be exploded (the values of
+-- a SUM are its subset sums, not its contributions one by one)
+SELECT city, SUM(id) FROM personnel GROUP BY city
 EXCEPT
-SELECT city, COUNT(*) FROM personnel WHERE city='Paris' GROUP BY city;
+SELECT city, SUM(id) FROM personnel WHERE city='Paris' GROUP BY city;
 
 -- UNION (non-ALL) whose other arm aggregates nothing at that column
 SELECT COUNT(*) FROM personnel GROUP BY city UNION SELECT 1;

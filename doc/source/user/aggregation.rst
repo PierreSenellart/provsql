@@ -492,10 +492,21 @@ values of all of them:
     UNION
     SELECT count(*) FROM employees WHERE remote GROUP BY city;
 
-``EXCEPT`` and ``INTERSECT`` over aggregate results are refused, as is a
-``UNION`` whose other arm aggregates nothing at that column: only the
-values of a whole column, exploded in every arm, are deduplicated
-together.  ``UNION ALL`` keeps every row and needs none of this.
+``EXCEPT`` and ``INTERSECT`` work the same way, and show why the explosion
+is done in each arm rather than on the result of the set operation: a
+difference matches the rows it removes on their values, so both arms have
+to hold values of the database before they are compared.  A city counted
+alike in both arms cancels, one counted differently does not:
+
+.. code-block:: postgresql
+
+    SELECT count(*) FROM employees GROUP BY city
+    EXCEPT
+    SELECT count(*) FROM employees WHERE remote GROUP BY city;
+
+A set operation whose other arm aggregates nothing at that column is
+refused: only the values of a whole column, exploded in every arm, are
+matched together.  ``UNION ALL`` keeps every row and needs none of this.
 
 An aggregate over exploded rows -- the ``count(*)`` above -- is an
 aggregate over rows that are uncertain like any others: its displayed
