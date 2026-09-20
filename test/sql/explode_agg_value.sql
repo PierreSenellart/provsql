@@ -124,6 +124,22 @@ FROM eav_i ORDER BY c;
 SET provsql.active = on;
 DROP TABLE eav_i;
 
+-- An aggregate with no contribution at all -- one whose WHERE keeps no row --
+-- has no value in any world, and SQL gives its row with NULL: the explosion
+-- gives that single value, so the row is there, certain, rather than lost (it
+-- was, which made the answer silently wrong).  The other arm sums one row, so
+-- its value is 30 when that row is there.
+CREATE TABLE eav_nul AS
+  SELECT 'none' AS k, sum(v) AS s FROM eav WHERE g = 99
+  UNION
+  SELECT 'one', sum(v) FROM eav WHERE g = 2;
+SET provsql.active = off;
+SELECT k, s::text AS s, present(provsql) AS present,
+       round(probability_evaluate(provsql)::numeric, 6) AS pr
+FROM eav_nul ORDER BY k;
+SET provsql.active = on;
+DROP TABLE eav_nul;
+
 -- A set operation whose other arm aggregates nothing at that column is
 -- refused: only the values of a whole column, exploded in every arm, are
 -- matched together.

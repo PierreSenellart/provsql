@@ -18210,9 +18210,30 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
                           list_make1(makeVar(1, agg_te->resno, value_type,
                                              typmod, coll, 0)),
                           InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
-  unnest_call = makeFuncExpr(constants->OID_UNNEST, TEXTOID,
-                             list_make1(possible), InvalidOid,
-                             DEFAULT_COLLATION_OID, COERCE_EXPLICIT_CALL);
+  /* An aggregate with no contribution at all -- one whose WHERE keeps no row --
+   * has no value in any world: SQL gives the row with NULL, and its token is
+   * NULL, on which agg_possible_values (strict) gives NULL.  Unnesting that
+   * would yield no row and lose the answer, so it explodes into the one value
+   * it takes, NULL, which the qual below lets through unconditionally. */
+  {
+    CoalesceExpr *co = makeNode(CoalesceExpr);
+    ArrayExpr *one_null = makeNode(ArrayExpr);
+    Const *null_text = makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1,
+                                 (Datum)0, true, false);
+
+    one_null->array_typeid = TEXTARRAYOID;
+    one_null->element_typeid = TEXTOID;
+    one_null->multidims = false;
+    one_null->location = -1;
+    one_null->elements = list_make1(null_text);
+    co->coalescetype = TEXTARRAYOID;
+    co->coalescecollid = InvalidOid;
+    co->args = list_make2(possible, one_null);
+    co->location = -1;
+    unnest_call = makeFuncExpr(constants->OID_UNNEST, TEXTOID,
+                               list_make1(co), InvalidOid,
+                               DEFAULT_COLLATION_OID, COERCE_EXPLICIT_CALL);
+  }
   unnest_call->funcretset = true;
 
   rtfunc = makeNode(RangeTblFunction);
@@ -18270,7 +18291,11 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
     tl = lappend(tl, te);
   }
 
-  /* --- WHERE r.c_attno = v::T --- */
+  /* --- WHERE v IS NULL OR r.c_attno = v::T --- *
+   * The NULL value is the one an aggregate with no contribution takes, in
+   * every world: its row stands as it is, with the provenance it has, and no
+   * comparison to annotate it with (one against NULL would read as unknown,
+   * which is annotated zero and would drop the row). */
   eq = makeNode(OpExpr);
   eq->opno         = eqop;
   eq->opfuncid     = InvalidOid;  /* the planner fills it in */
@@ -18291,7 +18316,15 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   rtr2->rtindex = 2;
   jt = makeNode(FromExpr);
   jt->fromlist = list_make2(rtr1, rtr2);
-  jt->quals    = (Node *)eq;
+  {
+    NullTest *nt = makeNode(NullTest);
+    nt->arg = (Expr *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0);
+    nt->nulltesttype = IS_NULL;
+    nt->argisrow = false;
+    nt->location = -1;
+    jt->quals = (Node *)makeBoolExpr(OR_EXPR,
+                                     list_make2(nt, (Node *)eq), -1);
+  }
 
   inner_src = copyObject(src_rte);
   /* The subquery is one level deeper now: what it reads of the levels above
