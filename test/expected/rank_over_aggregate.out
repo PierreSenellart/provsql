@@ -58,13 +58,11 @@ dense_rank per partition|x|2|1|1.000000
 dense_rank per partition|y|3|2|1.166667
 dense_rank per partition|y|4|1|1.000000
 (4 rows)
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks ro; mark it plain() to evaluate it as plain SQL
-WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: it is computed on the plain values, those of the database as it is, not tracked, although the statement also tracks ro; mark it plain() to evaluate it as plain SQL
-remove_provenance
-
-(1 row)
-q|g|dr
-dense_rank over a sum|1|3
-dense_rank over a sum|2|1
-dense_rank over a sum|3|2
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+q|g|dr|e_dense
+dense_rank over a sum|1|3|2.166667
+dense_rank over a sum|2|1|1.000000
+dense_rank over a sum|3|2|1.583333
 (3 rows)

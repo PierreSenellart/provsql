@@ -27,23 +27,23 @@ SELECT
 FROM
     personnel;
 
--- DISTINCT on the value of an aggregate whose values are not read off its
--- contributions one by one (see explode_agg_value for the ones that are)
-SELECT DISTINCT SUM(id) FROM personnel GROUP BY city;
+-- DISTINCT on the value of an aggregate whose values cannot be enumerated
+-- (see explode_agg_value for the ones that can)
+SELECT DISTINCT AVG(id) FROM personnel GROUP BY city;
 
--- EXCEPT on the value of an aggregate that cannot be exploded (the values of
--- a SUM are its subset sums, not its contributions one by one)
-SELECT city, SUM(id) FROM personnel GROUP BY city
+-- EXCEPT on the value of an aggregate that cannot be enumerated (an AVG is a
+-- quotient no exact arithmetic reproduces from the contributions)
+SELECT city, AVG(id) FROM personnel GROUP BY city
 EXCEPT
-SELECT city, SUM(id) FROM personnel WHERE city='Paris' GROUP BY city;
+SELECT city, AVG(id) FROM personnel WHERE city='Paris' GROUP BY city;
 
 -- UNION (non-ALL) whose other arm aggregates nothing at that column
 SELECT COUNT(*) FROM personnel GROUP BY city UNION SELECT 1;
 
--- GROUP BY on the value of an aggregate whose values are not read off its
--- contributions one by one (a count(), a min(), a max() and a choose() are
--- exploded into one row per value instead, see explode_agg_value)
-SELECT total, COUNT(*) FROM (SELECT city, SUM(id) AS total FROM personnel GROUP BY city) t GROUP BY total;
+-- GROUP BY on the value of an aggregate whose values cannot be enumerated
+-- (a count(), a min(), a max(), a choose() and a sum() over an integer column
+-- are exploded into one row per value instead, see explode_agg_value)
+SELECT total, COUNT(*) FROM (SELECT city, AVG(id) AS total FROM personnel GROUP BY city) t GROUP BY total;
 
 -- Hand-made provsql column (collides with the auto-added provenance column)
 SELECT name, provenance() AS provsql FROM personnel;

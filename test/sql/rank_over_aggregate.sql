@@ -84,13 +84,18 @@ FROM rop_d ORDER BY part, g;
 SET provsql.active = on;
 DROP TABLE rop_d; DROP TABLE rop;
 
--- (f) The values of a sum() are none of its contributions, so the counts of a
--- dense_rank over it cannot be deduplicated: the window is left untracked,
--- with the warning, rather than refused.
+-- (f) A sum() over an integer column takes its subset sums, which can be
+-- enumerated, so a dense_rank over it is tracked like one over a count.  Over
+-- the 32 worlds: E[dense_rank] = 2.166667 for group 1 (sums 10, 20 or 30),
+-- 1 for group 2 (its 5 is the smallest sum whenever it is there) and 1.583333
+-- for group 3 (7, 8 or 15).
 CREATE TABLE ro_f AS
   SELECT g, dense_rank() OVER (ORDER BY sum(v)) AS dr FROM ro GROUP BY g;
-SELECT remove_provenance('ro_f');
-SELECT 'dense_rank over a sum' AS q, g, dr FROM ro_f ORDER BY g;
+SET provsql.active = off;
+SELECT 'dense_rank over a sum' AS q, g, dr::text AS dr,
+       round(expected(dr, provsql)::numeric, 6) AS e_dense
+FROM ro_f ORDER BY g;
+SET provsql.active = on;
 DROP TABLE ro_f;
 
 DROP TABLE ro;

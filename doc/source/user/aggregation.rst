@@ -513,15 +513,22 @@ aggregate over rows that are uncertain like any others: its displayed
 value is the one of the database as it is, and :sqlfunc:`expected` and
 the other moments are taken over the worlds where the row is.
 
-The explosion applies to the aggregates whose values are read off their
-contributions one by one: a ``count()``, which takes every number of the
-rows it counts -- zero included where a row it does not count, such as the
-null-padded row of an outer join, can be the only one there -- and a
-``min()``, a ``max()`` or a :sqlfunc:`choose`, which take one of the values
-they aggregate.  The values of a ``sum()`` are its
-subset sums and those of a ``string_agg()`` one per ordering: grouping by
-one of those is refused with SQLSTATE ``0A000``, and the plain value,
-said explicitly with a cast, groups as plain SQL does:
+The explosion applies to the aggregates whose values can be enumerated: a
+``count()``, which takes every number of the rows it counts -- zero
+included where a row it does not count, such as the null-padded row of an
+outer join, can be the only one there -- a ``min()``, a ``max()`` or a
+:sqlfunc:`choose`, which take one of the values they aggregate, and a
+``sum()`` over an integer column, which takes one of its subset sums (equal
+sums collapsing, so three rows of 1 give three values and not eight).
+
+A ``sum()`` over a column that is not an integer is refused, and with it
+``avg()``: the value of a summation is read back through the evaluator's own
+arithmetic, that of a ``double``, and a subset sum of numbers that are not
+integers is not the number that arithmetic reaches -- ``0.1 + 0.2``
+comparing unequal to ``0.3`` would drop a row silently rather than report
+anything.  A ``string_agg()`` takes one value per ordering.  Grouping by one
+of those is refused with SQLSTATE ``0A000``, and the plain value, said
+explicitly with a cast, groups as plain SQL does:
 
 .. code-block:: postgresql
 

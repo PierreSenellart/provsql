@@ -859,8 +859,9 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
                   provsql_unsupported(
                     "the value of this aggregate cannot be a GROUP BY key or "
                     "a DISTINCT column: it is one value per possible world, "
-                    "and only a count(), a min(), a max() and a choose() are "
-                    "exploded into one row per value they take; cast it "
+                    "and only a count(), a min(), a max(), a choose() and a "
+                    "sum() over an integer column take values that can be "
+                    "enumerated and exploded into one row each; cast it "
                     "explicitly (::numeric, ::text, ...) to group by its "
                     "plain value");
               }
@@ -17760,18 +17761,23 @@ static bool sortgroupref_is_key(Query *q, Index ref) {
 }
 
 /**
- * @brief Whether the values of the aggregate @p a over the possible worlds
- *        are read off its contributions one by one, so that it can be
- *        exploded into one row per value (@c agg_possible_values).
+ * @brief Whether the values the aggregate @p a takes over the possible worlds
+ *        can be enumerated, so that it can be exploded into one row per value
+ *        (@c agg_possible_values).
  *
- * A @c count() takes every number of its contributions, a @c min(), a
- * @c max() and a @c choose() one of the values they aggregate.  The values
- * of a @c sum() are its subset sums and those of a @c string_agg() one per
- * ordering: neither is read off the contributions, and the aggregate is left
- * to the freezing of its value.
+ * A @c count() takes every number of the rows it counts, a @c min(), a
+ * @c max() and a @c choose() one of the values they aggregate, and a @c sum()
+ * over an integer column one of its subset sums.
+ *
+ * A @c sum() over any other column is left out, and with it @c avg(): the
+ * value of a summation is read back through the evaluator's own arithmetic,
+ * which is that of a @c double, and a subset sum of numbers that are not
+ * integers is not the number that arithmetic reaches (@c 0.1 @c + @c 0.2
+ * comparing unequal to @c 0.3 would lose the row rather than report
+ * anything).  A @c string_agg() takes one value per ordering.  All of those
+ * are left to the freezing of their value.
  */
-static bool aggref_values_are_contributions(const constants_t *constants,
-                                            Aggref *a) {
+static bool aggref_values_explodable(const constants_t *constants, Aggref *a) {
   Oid ns = get_func_namespace(a->aggfnoid);
   char *name = get_func_name(a->aggfnoid);
   bool res;
@@ -17780,7 +17786,11 @@ static bool aggref_values_are_contributions(const constants_t *constants,
     return false;
   res = (ns == PG_CATALOG_NAMESPACE &&
          (!strcmp(name, "count") || !strcmp(name, "min") ||
-          !strcmp(name, "max"))) ||
+          !strcmp(name, "max") ||
+          (!strcmp(name, "sum") && list_length(a->aggargtypes) == 1 &&
+           (linitial_oid(a->aggargtypes) == INT2OID ||
+            linitial_oid(a->aggargtypes) == INT4OID ||
+            linitial_oid(a->aggargtypes) == INT8OID)))) ||
         (ns == constants->OID_SCHEMA_PROVSQL && !strcmp(name, "choose"));
   pfree(name);
   return res;
@@ -17858,7 +17868,7 @@ static bool agg_column_explodable(const constants_t *constants,
     if (te == NULL)
       return false;
     if (IsA(te->expr, Aggref))
-      return aggref_values_are_contributions(constants, (Aggref *)te->expr);
+      return aggref_values_explodable(constants, (Aggref *)te->expr);
     if (!IsA(te->expr, Var))
       return false;
     v = (Var *)te->expr;
@@ -22120,9 +22130,10 @@ static Query *process_query(const constants_t *constants, Query *q,
         provsql_unsupported(
           "the value of an aggregate of this intersection cannot be matched "
           "with the one of its other arm: it is one value per possible world, "
-          "and only a count(), a min(), a max() and a choose() are exploded "
-          "into one row per value they take, in every arm; cast the aggregate "
-          "explicitly (::numeric, ::text, ...) to read its plain value");
+          "and only a count(), a min(), a max(), a choose() and a sum() over "
+          "an integer column take values that can be enumerated and exploded "
+          "into one row each, in every arm; cast the aggregate explicitly "
+          "(::numeric, ::text, ...) to read its plain value");
       if (explode_setop_arms(q, constants, q->setOperations, col))
         exploded = true;
     }
@@ -22276,11 +22287,12 @@ static Query *process_query(const constants_t *constants, Query *q,
               !setop_column_explodable(constants, q, q->setOperations, col))
             provsql_unsupported(
               "the value of an aggregate of this set operation cannot be "
-              "deduplicated: it is one value per possible world, and only a "
-              "count(), a min(), a max() and a choose() are exploded into one "
-              "row per value they take, in every arm; use UNION ALL, or cast "
-              "the aggregate explicitly (::numeric, ::text, ...) to read its "
-              "plain value");
+              "matched with the other arms': it is one value per possible "
+              "world, and only a count(), a min(), a max(), a choose() and a "
+              "sum() over an integer column take values that can be "
+              "enumerated and exploded into one row each, in every arm; use "
+              "UNION ALL, or cast the aggregate explicitly (::numeric, "
+              "::text, ...) to read its plain value");
         }
         {
           /* The provsql columns were removed from q above: that is what the

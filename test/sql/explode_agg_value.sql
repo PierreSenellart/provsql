@@ -130,13 +130,30 @@ DROP TABLE eav_i;
 SELECT count(*) AS c FROM eav GROUP BY g UNION SELECT 1;
 SELECT count(*) AS c FROM eav GROUP BY g EXCEPT SELECT 1;
 
--- The values of a sum are its subset sums, which are not read off its
--- contributions one by one: refused, as is grouping by or deduplicating on the
--- value of any aggregate other than count(), min(), max() and choose().
-SELECT total FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s
+-- The values of a sum over an integer column are its subset sums, reached by
+-- adding its contributions one at a time: group 1 sums 10 and 20, so it takes
+-- 10, 20 or 30, group 2 takes 30, and group 3 takes 40, 50 or 90.  Over the 32
+-- worlds each of those is one pair of rows away (0.25), except 30, which two
+-- groups reach (0.25 + 0.5 - 0.125 = 0.625).
+CREATE TABLE eav_s2 AS
+  SELECT total, round(probability_evaluate(provenance())::numeric, 6) AS pr
+  FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s GROUP BY total;
+SELECT remove_provenance('eav_s2');
+SELECT * FROM eav_s2 ORDER BY total;
+DROP TABLE eav_s2;
+
+-- A sum over a column that is not an integer is refused: its value is read
+-- back through the evaluator's own arithmetic, that of a double, which a
+-- subset sum of such numbers does not reach exactly.  So is an avg(), and any
+-- other aggregate whose values cannot be enumerated.
+CREATE TABLE eav_n(g int, v numeric);
+INSERT INTO eav_n VALUES (1, 0.1), (1, 0.2);
+SELECT add_provenance('eav_n');
+SELECT total FROM (SELECT g, sum(v) AS total FROM eav_n GROUP BY g) s
   GROUP BY total;
-SELECT DISTINCT total FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s;
-SELECT DISTINCT sum(v) AS total FROM eav GROUP BY g;
+DROP TABLE eav_n;
+SELECT a FROM (SELECT g, avg(v) AS a FROM eav GROUP BY g) s GROUP BY a;
+SELECT DISTINCT avg(v) AS a FROM eav GROUP BY g;
 
 -- A count() counts the rows whose value is not NULL, and the null-padded row
 -- of an outer join is not one of them: the count of such a group is 0 although

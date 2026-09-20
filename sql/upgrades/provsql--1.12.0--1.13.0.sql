@@ -2482,6 +2482,8 @@ DECLARE
   n       int;
   counted int;
   first   int;
+  sums    numeric[];
+  one     numeric;
 BEGIN
   /* The planner hands the aggregate result itself (an agg_token), whatever
    * the type the query declares for that column. */
@@ -2531,12 +2533,12 @@ BEGIN
   END IF;
 
   IF (ns, fn) NOT IN (('pg_catalog', 'min'), ('pg_catalog', 'max'),
-                      ('provsql', 'choose')) THEN
+                      ('pg_catalog', 'sum'), ('provsql', 'choose')) THEN
     RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
       MESSAGE = format('ProvSQL: the result of %s() cannot be exploded into '
                        'one row per value it takes over the possible worlds: '
-                       'only count(), min(), max() and choose() take a value '
-                       'read off their contributions', fn),
+                       'only count(), min(), max(), sum() and choose() have '
+                       'values that can be enumerated', fn),
       HINT = 'compare it in a HAVING clause, or cast it explicitly '
              '(::bigint, ...) to read its plain value';
   END IF;
@@ -2547,6 +2549,32 @@ BEGIN
                        'so it cannot be exploded into one row per value it '
                        'takes over the possible worlds: a comparison with '
                        'NULL does not say that the result is NULL', fn);
+  END IF;
+
+  IF (ns, fn) = ('pg_catalog', 'sum') THEN
+    /* The value of a sum is the sum of the rows that are there, so its values
+     * are its subset sums, reached by adding the contributions one at a time,
+     * equal sums collapsing (three rows of 1 take three values, not eight).
+     * The empty subset is no value of its own: a sum over no row is NULL, and
+     * a group without a row is no group.  The planner only sends sums over an
+     * integer column here, whose subset sums the evaluator's own arithmetic
+     * reaches exactly. */
+    sums := ARRAY[]::numeric[];
+    FOREACH one IN ARRAY ARRAY(SELECT v::numeric FROM unnest(vals) AS v) LOOP
+      sums := ARRAY(SELECT DISTINCT s FROM
+                      (SELECT unnest(sums) AS s
+                       UNION ALL SELECT one
+                       UNION ALL SELECT unnest(sums) + one) AS u);
+      IF array_length(sums, 1) > max_values THEN
+        RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+          MESSAGE = format('ProvSQL: the result of %s() takes more than %s '
+                           'values over the possible worlds, too many to '
+                           'explode it into one row per value', fn,
+                           max_values),
+          HINT = 'cast it explicitly (::numeric, ...) to read its plain value';
+      END IF;
+    END LOOP;
+    RETURN ARRAY(SELECT s::text FROM unnest(sums) AS s ORDER BY s);
   END IF;
 
   IF n > max_values THEN
