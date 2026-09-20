@@ -331,6 +331,24 @@ unless it depends on at most 20 input tuples, so it may need
 ``provsql.rv_mc_samples > 0``. (This is the same limitation the moment surface
 has for a bare ``sum(x) + sum(y)``.)
 
+``COALESCE(aggregate, constant)`` is tracked through the same gate, being the
+``CASE`` it means:
+
+.. code-block:: postgresql
+
+    SELECT district, COALESCE(sum(pm25), 0) AS total
+    FROM readings GROUP BY district;
+    --  =  CASE WHEN sum(pm25) IS NOT NULL THEN sum(pm25) ELSE 0 END
+
+The guard is the one ``HAVING sum(pm25) IS NOT NULL`` lowers to, so the value
+is the aggregate in every world where a row it reads a value from is present,
+and the constant in the worlds where the group exists without one (all its
+rows null-valued, as the padded rows of an outer join are). Two arguments and
+a constant default: a default that is itself uncertain, or a third argument,
+leaves the ``COALESCE`` to be read as a plain value. ``GREATEST``, ``LEAST``
+and ``NULLIF`` over an aggregate have no such reading and are read as plain
+values too.
+
 .. _window-aggregates:
 
 Aggregates as Window Functions

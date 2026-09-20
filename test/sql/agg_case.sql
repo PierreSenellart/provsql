@@ -198,4 +198,36 @@ SELECT remove_provenance('cn_r');
 SELECT tag, s::text AS s FROM cn_r ORDER BY tag;
 DROP TABLE cn_r, cn_t, cn_p;
 
+
+-- COALESCE(aggregate, constant) is the CASE it means, CASE WHEN agg IS NOT
+-- NULL THEN agg ELSE constant END, so it lowers to the same gate: its guard is
+-- the NullTest lowering, delta(+Kn), a row the aggregate reads a value from is
+-- present.  Over the two rows of the first group, each present with
+-- probability one half, sum(v) is NULL in the world holding only the
+-- NULL-valued row, so coalesce(sum(v), 0) is 0 there and 5 in the two worlds
+-- holding the other row: E = (0 + 5 + 5)/3 = 3.333333 and the variance is
+-- 50/3 - 100/9 = 5.555556, both conditional on the group existing as every
+-- moment is.  Both rows of the second group are NULL-valued, so the default
+-- answers in every world the group exists in; the third group is certain of
+-- its single row.  A default that is not a constant, and a third argument,
+-- stay as the query wrote them and are read as plain values (no (*) marker).
+CREATE TABLE cc(g int, v int);
+INSERT INTO cc VALUES (1,NULL),(1,5),(2,NULL),(2,NULL),(3,7);
+SELECT add_provenance('cc');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cc; END $$;
+CREATE TABLE cc_r AS
+  SELECT g, coalesce(sum(v), 0) AS s0, coalesce(max(v), -1) AS mx,
+         coalesce(count(*), 0) AS cnt, coalesce(sum(v), g) AS dflt_var,
+         coalesce(sum(v), NULL, 0) AS three
+  FROM cc GROUP BY g;
+SET provsql.active = off;
+SELECT g, s0::text AS s0, round(expected(s0, provsql)::numeric, 6) AS e_s0,
+       round(variance(s0, provsql)::numeric, 6) AS var_s0,
+       mx::text AS mx, round(expected(mx, provsql)::numeric, 6) AS e_mx,
+       cnt::text AS cnt, dflt_var::text AS dflt_var, three::text AS three,
+       round(probability(provsql)::numeric, 6) AS p
+FROM cc_r ORDER BY g;
+SET provsql.active = on;
+DROP TABLE cc_r, cc;
+
 SELECT 'ok'::text AS agg_case_done;

@@ -5864,6 +5864,66 @@ build_agg_case(CaseExpr *ce, const constants_t *constants)
   return (Node *)call;
 }
 
+/**
+ * @brief @c COALESCE(aggregate, @c default) as the searched @c CASE it means.
+ *
+ * @c COALESCE(sum(x), @c 0) is @c CASE @c WHEN @c sum(x) @c IS @c NOT @c NULL
+ * @c THEN @c sum(x) @c ELSE @c 0 @c END, and that @c CASE is one
+ * @c build_agg_case lowers: its guard is a @c NullTest on an aggregate, which
+ * @c having_Expr_to_provenance_cmp turns into @c δ(⊕Kn) -- a row the aggregate
+ * reads a value from is present -- and its default is lifted into a value
+ * gate.  Read as a plain value instead, the whole expression would be frozen,
+ * which is what a @c COALESCE over an aggregate used to be.
+ *
+ * Only two arguments, the first a direct aggregate (so the @c NullTest
+ * lowering accepts it rather than raising) and the second a constant: a
+ * default that is itself uncertain, or a third argument, is left alone.
+ * Returns NULL when the shape does not fit, and the @c COALESCE stays as the
+ * query wrote it.
+ */
+static CaseExpr *
+coalesce_agg_to_case(CoalesceExpr *co, const constants_t *constants)
+{
+  Node *agg, *stripped;
+  NullTest *nt;
+  CaseWhen *cw;
+  CaseExpr *ce;
+
+  if (list_length(co->args) != 2)
+    return NULL;
+  agg = (Node *)linitial(co->args);
+  stripped = strip_agg_cast(agg);
+  if (stripped == NULL || !IsA(stripped, FuncExpr) ||
+      ((FuncExpr *)stripped)->funcid !=
+        constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+    return NULL;
+  {
+    Node *dflt = peel_agg_casts((Node *)lsecond(co->args));
+    if (dflt == NULL || !IsA(dflt, Const))
+      return NULL;
+  }
+
+  nt = makeNode(NullTest);
+  nt->arg = (Expr *)copyObject(agg);
+  nt->nulltesttype = IS_NOT_NULL;
+  nt->argisrow = false;
+  nt->location = -1;
+
+  cw = makeNode(CaseWhen);
+  cw->expr = (Expr *)nt;
+  cw->result = (Expr *)agg;
+  cw->location = -1;
+
+  ce = makeNode(CaseExpr);
+  ce->casetype = co->coalescetype;
+  ce->casecollid = co->coalescecollid;
+  ce->arg = NULL;
+  ce->args = list_make1(cw);
+  ce->defresult = (Expr *)lsecond(co->args);
+  ce->location = co->location;
+  return ce;
+}
+
 /* Target-list mutator: lower each aggregate-carrier searched CASE into an
  * agg_case gate_case.  Sub-expressions are mutated first so a CASE nested in a
  * branch value lowers before its parent wraps it. */
@@ -5879,6 +5939,14 @@ rewrite_agg_case_mutator(Node *node, void *context)
       node, rewrite_agg_case_mutator, context);
     Node *lowered = build_agg_case(ce, constants);
     return lowered != NULL ? lowered : (Node *)ce;
+  }
+  if (IsA(node, CoalesceExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
+    CoalesceExpr *co = (CoalesceExpr *)expression_tree_mutator(
+      node, rewrite_agg_case_mutator, context);
+    CaseExpr *ce = coalesce_agg_to_case(co, constants);
+    Node *lowered = ce != NULL && case_is_agg_carrier(ce, constants)
+      ? build_agg_case(ce, constants) : NULL;
+    return lowered != NULL ? lowered : (Node *)co;
   }
   return expression_tree_mutator(node, rewrite_agg_case_mutator, context);
 }

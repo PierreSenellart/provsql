@@ -3173,6 +3173,14 @@ BEGIN
       WHEN '>=' THEN l >= r
       WHEN '>'  THEN l >  r
     END;
+  ELSIF gt IN ('input', 'delta', 'monus', 'project', 'eq', 'mulinput',
+               'assumed', 'annotation') THEN
+    /* An ordinary provenance expression, not a comparison: the guard a
+     * COALESCE over an aggregate lowers to is the NullTest one,
+     * delta(+Kn) for IS NOT NULL and 1 - +Kn for IS NULL.  Such a guard
+     * holds in the actual data exactly when its Boolean provenance does
+     * with every input row present, which is what plain_truth reads. */
+    RETURN provsql.plain_truth(token);
   END IF;
   RETURN NULL;
 END
