@@ -276,10 +276,12 @@ DECLARE s agg_token; e_val float8; var_val float8;
 BEGIN
   SELECT sum(v) INTO s FROM expectation_agg_t;
   e_val := expected(s); var_val := provsql.variance(s);
-  RAISE NOTICE 'agg_sum_expected=%', e_val;
-  RAISE NOTICE 'agg_sum_variance=%', var_val;
+  -- rounded, so that the digits of a float8 do not depend on the server
+  -- version
+  RAISE NOTICE 'agg_sum_expected=%', round(e_val::numeric, 6);
+  RAISE NOTICE 'agg_sum_variance=%', round(var_val::numeric, 6);
   -- E[SUM^2] = Var[SUM] + E[SUM]^2 = 310 + 484 = 794.
-  RAISE NOTICE 'agg_sum_moment_2=%', moment(s, 2);
+  RAISE NOTICE 'agg_sum_moment_2=%', round(moment(s, 2)::numeric, 6);
 END
 $$;
 

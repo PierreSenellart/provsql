@@ -77,7 +77,9 @@ SELECT 'HAVING cd >= 1, WHERE' AS q, g, p FROM adn_h2 ORDER BY g;
 CREATE TABLE adn_e AS SELECT g, count(*) AS c, count(DISTINCT v) AS cd
   FROM adn WHERE w <> 2 GROUP BY g;
 SELECT remove_provenance('adn_e');
-SELECT 'expected beside DISTINCT' AS q, g, expected(c) AS ec FROM adn_e ORDER BY g;
+-- rounded, so that the digits of a float8 do not depend on the server version
+SELECT 'expected beside DISTINCT' AS q, g,
+       round(expected(c)::numeric, 6) AS ec FROM adn_e ORDER BY g;
 
 DROP FUNCTION adn_check(text, text);
 DROP TABLE adn, adn_u, adn_h, adn_h2, adn_e;
