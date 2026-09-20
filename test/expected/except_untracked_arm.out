@@ -12,7 +12,9 @@ r EXCEPT u|9|0.0000|f
 r EXCEPT u||0.0000|f
 (4 rows)
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+DETAIL:  provsql-reason: except-all; scope: deliberate
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+DETAIL:  provsql-reason: except-all; scope: deliberate
 q|a
 u EXCEPT ALL u (untracked)|7
 u EXCEPT ALL u (untracked)|9

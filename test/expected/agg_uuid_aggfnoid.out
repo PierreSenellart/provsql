@@ -1,5 +1,6 @@
 \set ECHO none
 WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-in-untracked-block-frozen; scope: gap
 sum_avg_distinct|sum_type|avg_type|sum_aggfn|avg_aggfn
 t|agg|agg|pg_catalog.sum|pg_catalog.avg
 (1 row)

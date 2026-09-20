@@ -42,6 +42,7 @@ id|own_token
 3|t
 (2 rows)
 ERROR:  ProvSQL: a subquery over a provenance-tracked relation cannot be used as a scalar subquery / IN / EXISTS expression; put it in the FROM clause instead
+DETAIL:  provsql-reason: provenance-in-sublink; scope: out-of-scope
 remove_provenance
 
 (1 row)

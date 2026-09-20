@@ -207,8 +207,11 @@ ga|b|p
 ||0.5000
 (2 rows)
 ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+DETAIL:  provsql-reason: outer-join-not-lowered; scope: gap
 ERROR:  ProvSQL: unsupported RIGHT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+DETAIL:  provsql-reason: outer-join-not-lowered; scope: gap
 ERROR:  ProvSQL: unsupported FULL JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+DETAIL:  provsql-reason: outer-join-not-lowered; scope: gap
 remove_provenance
 
 (1 row)
@@ -224,7 +227,9 @@ ga|p
 |0.5000
 (2 rows)
 ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+DETAIL:  provsql-reason: outer-join-not-lowered; scope: gap
 ERROR:  ProvSQL: unsupported LEFT JOIN: a provenance-tracked relation sits on the null-padded side of a join that could not be lowered (only a two-relation outer join with no outer reference to the join RTE is); rewrite the query or remove provenance from the null-padded side
+DETAIL:  provsql-reason: outer-join-not-lowered; scope: gap
 remove_provenance
 
 (1 row)

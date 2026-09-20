@@ -19,6 +19,7 @@ add_provenance
 
 (1 row)
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+DETAIL:  provsql-reason: except-all; scope: deliberate
 remove_provenance
 
 (1 row)

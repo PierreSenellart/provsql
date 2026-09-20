@@ -7,8 +7,11 @@ add_provenance
 (1 row)
 -- refused: the provsql column as a value, in any position, alone or in a join
 ERROR:  ProvSQL: INSERT ... SELECT into a table without provenance tracking cannot select the provsql column of a provenance-tracked relation; use provenance() to store the provenance of each row
+DETAIL:  provsql-reason: insert-target-untracked; scope: out-of-scope
 ERROR:  ProvSQL: INSERT ... SELECT into a table without provenance tracking cannot select the provsql column of a provenance-tracked relation; use provenance() to store the provenance of each row
+DETAIL:  provsql-reason: insert-target-untracked; scope: out-of-scope
 ERROR:  ProvSQL: INSERT ... SELECT into a table without provenance tracking cannot select the provsql column of a provenance-tracked relation; use provenance() to store the provenance of each row
+DETAIL:  provsql-reason: insert-target-untracked; scope: out-of-scope
 q|n
 nothing inserted|0
 (1 row)

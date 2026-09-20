@@ -73,3 +73,4 @@ q|g
 expected(sum) > 40|1
 (1 row)
 ERROR:  ProvSQL: HAVING clause mixes agg_token and random_variable comparisons; this combination is not supported
+DETAIL:  provsql-reason: having-mixes-agg-and-rv; scope: out-of-scope

@@ -36,8 +36,11 @@ pid|lbl|p
 2|none|1.000000
 (3 rows)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: this block has more than one subquery over a tracked relation, and the decorrelation groups its rows for one of them
+DETAIL:  provsql-reason: block-several-subqueries; scope: gap
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: it is read as a value rather than as a condition, and SQL gives IN or a quantified comparison the unknown truth where no row matches and a comparison is unknown, which the count of the matches does not tell from false (EXISTS as a value is supported)
+DETAIL:  provsql-reason: read-as-value; scope: deliberate
 WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance, although the statement also tracks sb_c; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
 remove_provenance
 
 (1 row)

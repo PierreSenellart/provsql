@@ -47,6 +47,7 @@ Paul|New York|1
 Susan|Berlin|1
 (7 rows)
 ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
+DETAIL:  provsql-reason: recursion-shape; scope: gap
 add_provenance
 
 (1 row)
@@ -68,6 +69,7 @@ id|name
 4|c
 (4 rows)
 ERROR:  ProvSQL: data-modifying CTE "ins" cannot read CTE "t", which is over a provenance-tracked relation
+DETAIL:  provsql-reason: cte-data-modifying; scope: out-of-scope
 remove_provenance
 
 (1 row)

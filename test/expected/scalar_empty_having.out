@@ -151,3 +151,4 @@ NOTICE:  count(v) IS NOT NULL : 1.0000
 NOTICE:  count(v) IS NOT NULL GROUP BY g: 0.5000 0.7500
 NOTICE:  count(*) IS NULL GROUP BY g: 0.0000 0.0000
 ERROR:  ProvSQL: HAVING IS [NOT] NULL is not supported on aggregate stddev
+DETAIL:  provsql-reason: having-null-test-aggregate; scope: gap

@@ -1,20 +1,31 @@
 \set ECHO none
 ERROR:  ProvSQL: provenance() called on a table without provenance
 ERROR:  ProvSQL: DISTINCT ON not supported
+DETAIL:  provsql-reason: distinct-on; scope: gap
 ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported
+DETAIL:  provsql-reason: distinct-group-by-inconsistent; scope: gap
 ERROR:  ProvSQL: INTERSECT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use INTERSECT, or IN / EXISTS.
+DETAIL:  provsql-reason: intersect-all; scope: deliberate
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
 ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be matched with the other arms': it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each, in every arm; use UNION ALL, or cast the aggregate explicitly (::numeric, ::text, ...) to read its plain value
+DETAIL:  provsql-reason: setop-aggregate-value; scope: gap
 ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be matched with the other arms': it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each, in every arm; use UNION ALL, or cast the aggregate explicitly (::numeric, ::text, ...) to read its plain value
+DETAIL:  provsql-reason: setop-aggregate-value; scope: gap
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: a query may not define a column named "provsql" by hand; ProvSQL manages the provenance column itself
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+DETAIL:  provsql-reason: except-all; scope: deliberate
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+DETAIL:  provsql-reason: except-all; scope: deliberate
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+DETAIL:  provsql-reason: except-all; scope: deliberate
 WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-in-untracked-block-frozen; scope: gap
 remove_provenance
 
 (1 row)
@@ -26,4 +37,6 @@ token
 t
 (1 row)
 ERROR:  ProvSQL: Unsupported aggregate comparison shape in the selection predicate
+DETAIL:  provsql-reason: aggregate-comparison-shape; scope: gap
 ERROR:  ProvSQL: condition on an aggregate result not supported in HAVING: only comparisons, IS [NOT] NULL and their Boolean combinations are (not, e.g., x = ANY(array_agg(...)))
+DETAIL:  provsql-reason: having-condition-shape; scope: gap

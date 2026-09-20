@@ -762,7 +762,7 @@ static bool aggref_over_agg_token_walker(Node *node, void *context) {
          agg_token_var_walker((Node *)agg->aggorder, cx) ||
          agg_token_var_walker((Node *)agg->aggfilter, cx)) &&
         !reaggregates_agg_result(ctx->constants, ctx->q, agg)) {
-      provsql_unsupported("aggregation over aggregate results from "
+      provsql_unsupported(PROVSQL_GAP, "aggregate-over-aggregate", "aggregation over aggregate results from "
                           "a subquery not supported");
     }
   }
@@ -864,7 +864,7 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
               foreach (lc3, q->groupClause) {
                 SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
                 if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
-                  provsql_unsupported(
+                  provsql_unsupported(PROVSQL_GAP, "aggregate-value-as-key", 
                     "the value of this aggregate cannot be a GROUP BY key or "
                     "a DISTINCT column: it is one value per possible world, "
                     "and only a count(), a min(), a max(), a choose() and a "
@@ -1946,10 +1946,10 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
                 *lowered = lappend(*lowered, e);
               } else
                 /* Unsupported recursion shape (e.g. UNION ALL). */
-                provsql_unsupported("Recursive CTEs not supported (unsupported recursion shape)");
+                provsql_unsupported(PROVSQL_GAP, "recursion-shape", "Recursive CTEs not supported (unsupported recursion shape)");
             }
 #else
-            provsql_unsupported("Recursive CTEs not supported");
+            provsql_unsupported(PROVSQL_GAP, "recursion-unsupported-version", "Recursive CTEs not supported");
 #endif
           } else {
             r->rtekind = RTE_SUBQUERY;
@@ -2644,7 +2644,7 @@ static void inline_ctes(const constants_t *constants, Query *q) {
           CommonTableExpr *other = (CommonTableExpr *)lfirst(lc2);
           if (must_inline[j] &&
               query_references_cte((Query *)cte->ctequery, other->ctename))
-            provsql_unsupported("data-modifying CTE \"%s\" cannot read CTE \"%s\", "
+            provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "cte-data-modifying", "data-modifying CTE \"%s\" cannot read CTE \"%s\", "
                                 "which is over a provenance-tracked relation",
                                 cte->ctename, other->ctename);
           ++j;
@@ -2884,7 +2884,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       } else { // Semijoin (should be feasible, but check whether the second
                // provenance information is available) Antijoin (feasible with
                // negation)
-        provsql_unsupported("JOIN type not supported");
+        provsql_unsupported(PROVSQL_GAP, "join-type", "JOIN type not supported");
       }
     } else if (r->rtekind == RTE_FUNCTION) {
       ListCell *lc;
@@ -2910,7 +2910,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
           for (c = 0; c < func->funccolcount; ++c)
             if (!strcmp(get_rte_attribute_name(r, attid + c),
                         PROVSQL_COLUMN_NAME))
-              provsql_unsupported("FROM function returning a provsql column not "
+              provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "from-function-provsql-column", "FROM function returning a provsql column not "
                                   "supported");
         }
 
@@ -2937,7 +2937,7 @@ static List *get_provenance_attributes(const constants_t *constants, Query *q,
       // CTE that cannot be preserved is refused inside inline_ctes
       // itself, on every PostgreSQL version.)
     } else {
-      provsql_unsupported("FROM clause not supported");
+      provsql_unsupported(PROVSQL_GAP, "from-clause-shape", "FROM clause not supported");
     }
   }
 
@@ -4370,7 +4370,7 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
 
       arguments[i] = (Node *)semimodExpr;
     } else {
-      provsql_unsupported("cannot handle complex HAVING expressions");
+      provsql_unsupported(PROVSQL_GAP, "having-complex", "cannot handle complex HAVING expressions");
     }
   }
 
@@ -4482,7 +4482,7 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
   arg = strip_agg_cast(arg);
   if (!IsA(arg, FuncExpr) ||
       ((FuncExpr *)arg)->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
-    provsql_unsupported("HAVING IS [NOT] NULL is only supported directly on an "
+    provsql_unsupported(PROVSQL_GAP, "having-null-test-not-aggregate", "HAVING IS [NOT] NULL is only supported directly on an "
                         "aggregate of a provenance-tracked relation");
   pa = (FuncExpr *)arg;
 
@@ -4548,7 +4548,7 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
         if (strcmp(name, *n) == 0)
           known = true;
       if (!known)
-        provsql_unsupported("HAVING IS [NOT] NULL is not supported on aggregate %s",
+        provsql_unsupported(PROVSQL_GAP, "having-null-test-aggregate", "HAVING IS [NOT] NULL is not supported on aggregate %s",
                             name != NULL ? name : "(unknown)");
       pfree(name);
     }
@@ -4753,7 +4753,7 @@ static FuncExpr *having_Expr_to_provenance_cmp(Expr *expr, const constants_t *co
   else if (IsA(expr, NullTest))
     return having_NullTest_to_provenance((NullTest *)expr, constants, negated);
   else
-    provsql_unsupported("condition on an aggregate result not supported in "
+    provsql_unsupported(PROVSQL_GAP, "having-condition-shape", "condition on an aggregate result not supported in "
                         "HAVING: only comparisons, IS [NOT] NULL and their "
                         "Boolean combinations are (not, e.g., "
                         "x = ANY(array_agg(...)))");
@@ -5267,7 +5267,7 @@ rv_Expr_to_provenance(Expr *expr, const constants_t *constants, bool negated)
     if (rv_cmp_index(constants, opExpr->opfuncid) >= 0)
       return rv_OpExpr_to_provenance_cmp(opExpr, constants, negated);
   }
-  provsql_unsupported("Unsupported sub-expression in random_variable WHERE clause "
+  provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "rv-where-shape", "Unsupported sub-expression in random_variable WHERE clause "
                       "(only Boolean combinations of RV comparisons, optionally "
                       "mixed with ordinary comparisons, are accepted)");
   return NULL; /* unreachable, silences -Wreturn-type */
@@ -6674,7 +6674,7 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
                        expr_contains_rv_cmp((Node *) q->havingQual, constants);
 
       if (rv_having && lift_having)
-        provsql_unsupported("HAVING clause mixes agg_token and random_variable "
+        provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "having-mixes-agg-and-rv", "HAVING clause mixes agg_token and random_variable "
                             "comparisons; this combination is not supported");
 
       if (aggregation && !lift_having) {
@@ -7761,7 +7761,7 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
     foreach (lc, list_concat(list_copy(tctx.aggs), hctx.aggs)) {
       Aggref *ar = lfirst(lc);
       if(!agg_distinct_args_supported(ar))
-        provsql_unsupported("AGG(DISTINCT) with more than one argument is not "
+        provsql_unsupported(PROVSQL_GAP, "agg-distinct-several-arguments", "AGG(DISTINCT) with more than one argument is not "
                             "supported, unless the others are constants");
       else {
         TargetEntry *syn = makeNode(TargetEntry);
@@ -8155,7 +8155,7 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
     return (Node *)io;
   }
 
-  provsql_unsupported("no cast from agg_token to %s for arithmetic on aggregate",
+  provsql_unsupported(PROVSQL_GAP, "agg-arithmetic-no-cast", "no cast from agg_token to %s for arithmetic on aggregate",
                       format_type_be(target_type));
   return arg; /* unreachable */
 }
@@ -9387,7 +9387,7 @@ static Node *provenance_mutator(Node *node, void *ctx) {
 
     if (f->funcid == context->constants->OID_FUNCTION_PROVENANCE) {
       if (context->inside_aggref && context->provsql_has_aggref) {
-        provsql_unsupported(
+        provsql_unsupported(PROVSQL_GAP, "aggregate-over-provenance-aggregate", 
           "applying an SQL aggregate on top of a ProvSQL-introduced "
           "aggregation is not supported: the inner provenance() would "
           "be substituted with an expression containing an aggregate, "
@@ -9488,11 +9488,11 @@ static void normalize_distinct_into_group_by(Query *q) {
   if (!q->distinctClause)
     return;
   if (q->hasDistinctOn)
-    provsql_unsupported("DISTINCT ON not supported");
+    provsql_unsupported(PROVSQL_GAP, "distinct-on", "DISTINCT ON not supported");
   else if (q->hasAggs)
-    provsql_unsupported("DISTINCT on aggregate results not supported");
+    provsql_unsupported(PROVSQL_GAP, "distinct-on-aggregate", "DISTINCT on aggregate results not supported");
   else if (list_length(q->distinctClause) < list_length(q->targetList))
-    provsql_unsupported("Inconsistent DISTINCT and GROUP BY clauses not "
+    provsql_unsupported(PROVSQL_GAP, "distinct-group-by-inconsistent", "Inconsistent DISTINCT and GROUP BY clauses not "
                         "supported");
   else
     transform_distinct_into_group_by(q);
@@ -9721,7 +9721,7 @@ static Query *rewrite_intersect(const constants_t *constants, Query *q) {
   AttrNumber attno = 0;
 
   if (so->all)
-    provsql_unsupported("INTERSECT ALL over provenance-tracked relations is not "
+    provsql_unsupported(PROVSQL_DELIBERATE, "intersect-all", "INTERSECT ALL over provenance-tracked relations is not "
                         "supported: the copies it keeps have no provenance of their "
                         "own. Use INTERSECT, or IN / EXISTS.");
 
@@ -10183,7 +10183,7 @@ static Query *rewrite_non_all_into_external_group_by(Query *q) {
           position = i;
       }
       if (position == 0)
-        provsql_unsupported("ORDER BY of a set operation on an expression that is "
+        provsql_unsupported(PROVSQL_GAP, "setop-order-by-shape", "ORDER BY of a set operation on an expression that is "
                             "not an output column is not supported");
       sort_positions = lappend_int(sort_positions, position);
     }
@@ -10781,6 +10781,24 @@ static bool sublink_classify_walker(Node *node, void *cx) {
   return expression_tree_walker(node, sublink_classify_walker, cx);
 }
 
+/** @brief A refusal cause: a stable tag for tooling, a sentence for a reader. */
+typedef struct {
+  const char *scope;   /**< PROVSQL_DELIBERATE, PROVSQL_GAP or
+                            PROVSQL_OUT_OF_SCOPE */
+  const char *tag;
+  const char *msg;
+} sublink_reason;
+
+/** @brief Build a @c sublink_reason. */
+static sublink_reason sublink_reason_of(const char *scope, const char *tag,
+                                        const char *msg) {
+  sublink_reason r;
+  r.scope = scope;
+  r.tag = tag;
+  r.msg = msg;
+  return r;
+}
+
 /** @brief Context of @c tracked_sublink_count_walker. */
 typedef struct {
   const constants_t *constants;
@@ -10824,8 +10842,8 @@ static bool tracked_sublink_count_walker(Node *node, void *cx) {
  * @param sl         The sublink the rewrites left behind, or @c NULL.
  * @return  A phrase to read after @c "not supported here:".
  */
-static const char *sublink_unsupported_reason(const constants_t *constants,
-                                             Query *q, SubLink *sl) {
+static sublink_reason sublink_unsupported_reason(const constants_t *constants,
+                                                 Query *q, SubLink *sl) {
   Query *b = (sl != NULL && IsA(sl->subselect, Query))
                ? (Query *)sl->subselect : NULL;
 
@@ -10833,34 +10851,44 @@ static const char *sublink_unsupported_reason(const constants_t *constants,
     ListCell *lc;
 
     if (b->setOperations != NULL)
-      return "its body is a set operation (UNION, INTERSECT, EXCEPT), whose "
-             "rows the decorrelation cannot group";
+      return sublink_reason_of(PROVSQL_GAP, "body-set-operation",
+                            "its body is a set operation (UNION, INTERSECT, EXCEPT), whose "
+             "rows the decorrelation cannot group");
     if (b->limitCount != NULL || b->limitOffset != NULL)
-      return "its body truncates its rows with LIMIT or OFFSET, which the "
-             "decorrelation would read on the data as it is";
+      return sublink_reason_of(PROVSQL_GAP, "body-limit",
+                            "its body truncates its rows with LIMIT or OFFSET, which the "
+             "decorrelation would read on the data as it is");
     if (b->cteList != NIL)
-      return "its body has a WITH clause";
+      return sublink_reason_of(PROVSQL_GAP, "body-with-clause",
+                            "its body has a WITH clause");
     if (b->groupClause != NIL || b->groupingSets != NIL ||
         b->havingQual != NULL)
-      return "its body groups rows of its own";
+      return sublink_reason_of(PROVSQL_GAP, "body-groups",
+                            "its body groups rows of its own");
     if (b->hasWindowFuncs)
-      return "its body has a window function";
+      return sublink_reason_of(PROVSQL_GAP, "body-window",
+                            "its body has a window function");
     if (b->distinctClause != NIL && b->hasAggs)
-      return "its body both deduplicates and aggregates";
+      return sublink_reason_of(PROVSQL_GAP, "body-distinct-aggregate",
+                            "its body both deduplicates and aggregates");
     if (query_has_tracked_sublink(constants, b))
-      return "its body holds a subquery of its own over a tracked relation";
+      return sublink_reason_of(PROVSQL_GAP, "body-nested-subquery",
+                            "its body holds a subquery of its own over a tracked relation");
     foreach (lc, b->rtable) {
       RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
       if (r->rtekind == RTE_SUBQUERY)
-        return "its body reads a subquery in its own FROM clause";
+        return sublink_reason_of(PROVSQL_GAP, "body-from-subquery",
+                            "its body reads a subquery in its own FROM clause");
       if (r->rtekind == RTE_FUNCTION || r->rtekind == RTE_VALUES)
-        return "its body reads something other than a relation in its FROM "
-               "clause";
+        return sublink_reason_of(PROVSQL_GAP, "body-from-not-relation",
+                            "its body reads something other than a relation in its FROM "
+               "clause");
     }
     if (b->jointree != NULL) {
       foreach (lc, b->jointree->fromlist)
         if (IsA(lfirst(lc), JoinExpr))
-          return "its body has an outer join";
+          return sublink_reason_of(PROVSQL_GAP, "body-outer-join",
+                            "its body has an outer join");
     }
   }
 
@@ -10869,14 +10897,18 @@ static const char *sublink_unsupported_reason(const constants_t *constants,
    * decorrelation serves one subquery at a time. */
   if (q->groupClause != NIL || q->groupingSets != NIL || q->hasAggs ||
       q->havingQual != NULL)
-    return "this block groups or aggregates rows of its own, where the "
-           "decorrelation needs to group them by the outer rows";
+    return sublink_reason_of(PROVSQL_GAP, "block-groups",
+                            "this block groups or aggregates rows of its own, where the "
+           "decorrelation needs to group them by the outer rows");
   if (q->distinctClause != NIL)
-    return "this block deduplicates its rows";
+    return sublink_reason_of(PROVSQL_GAP, "block-distinct",
+                            "this block deduplicates its rows");
   if (q->setOperations != NULL)
-    return "this block is a set operation";
+    return sublink_reason_of(PROVSQL_GAP, "block-set-operation",
+                            "this block is a set operation");
   if (q->hasWindowFuncs)
-    return "this block has a window function";
+    return sublink_reason_of(PROVSQL_GAP, "block-window",
+                            "this block has a window function");
   {
     tracked_sublink_count_ctx c;
 
@@ -10888,25 +10920,29 @@ static const char *sublink_unsupported_reason(const constants_t *constants,
     if (q->havingQual != NULL)
       tracked_sublink_count_walker(q->havingQual, (void *)&c);
     if (c.n > 1)
-      return "this block has more than one subquery over a tracked relation, "
-             "and the decorrelation groups its rows for one of them";
+      return sublink_reason_of(PROVSQL_GAP, "block-several-subqueries",
+                            "this block has more than one subquery over a tracked relation, "
+             "and the decorrelation groups its rows for one of them");
   }
   if (sl != NULL && sl->subLinkType != EXPR_SUBLINK &&
       sl->subLinkType != EXISTS_SUBLINK && sl->subLinkType != ANY_SUBLINK &&
       sl->subLinkType != ALL_SUBLINK)
-    return "it is a form the decorrelation does not cover (ROWCOMPARE, "
-           "MULTIEXPR, ...)";
+    return sublink_reason_of(PROVSQL_GAP, "form-unsupported",
+                            "it is a form the decorrelation does not cover (ROWCOMPARE, "
+           "MULTIEXPR, ...)");
   /* A quantified comparison read as a VALUE rather than as a condition. */
   if (sl != NULL &&
       (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK) &&
       oj_contains_sublink_walker((Node *)q->targetList, (void *)sl))
-    return "it is read as a value rather than as a condition, and SQL gives "
+    return sublink_reason_of(PROVSQL_DELIBERATE, "read-as-value",
+                            "it is read as a value rather than as a condition, and SQL gives "
            "IN or a quantified comparison the unknown truth where no row "
            "matches and a comparison is unknown, which the count of the "
-           "matches does not tell from false (EXISTS as a value is supported)";
-  return "the position it is in, or the correlation it carries, is not one the "
+           "matches does not tell from false (EXISTS as a value is supported)");
+  return sublink_reason_of(PROVSQL_GAP, "position-or-correlation",
+                            "the position it is in, or the correlation it carries, is not one the "
          "decorrelation covers (a correlation that is not an equality of "
-         "columns, a body reading no tracked relation of its own)";
+         "columns, a body reading no tracked relation of its own)");
 }
 
 /**
@@ -11252,7 +11288,8 @@ static bool unmarked_window_walker(Node *node, void *cx) {
  * @param hint  How to say it is meant, or @c NULL for the plain() marker
  */
 static void report_freeze(const constants_t *constants, Node *frozen,
-                          const char *msg, const char *hint) {
+                          const char *scope, const char *tag, const char *msg,
+                          const char *hint) {
   freeze_rels_ctx inside, rest;
   const char *shared = NULL;
   ListCell *lc;
@@ -11283,14 +11320,16 @@ static void report_freeze(const constants_t *constants, Node *frozen,
       }
   }
   if (shared == NULL)
-    provsql_warning("%s; %s", msg, hint);
+    provsql_warning_tagged(scope, tag, "%s; %s", msg, hint);
   else if (provsql_implicit_freeze == PROVSQL_FREEZE_ERROR)
-    provsql_unsupported("%s, although the statement also tracks %s; %s "
+    provsql_unsupported(scope, tag,
+                        "%s, although the statement also tracks %s; %s "
                         "(provsql.implicit_freeze is 'error')",
                         msg, shared, hint);
   else
-    provsql_warning("%s, although the statement also tracks %s; %s", msg,
-                    shared, hint);
+    provsql_warning_tagged(scope, tag,
+                           "%s, although the statement also tracks %s; %s",
+                           msg, shared, hint);
 }
 
 /** @brief Walker: a value of an aggregate result read by ProvSQL as a
@@ -11755,7 +11794,7 @@ static Expr *except_arm_column(RangeTblEntry *rte, Var *arg, Var *v) {
      * argument missing, which the planner reads as a wild pointer (a crash,
      * in the constant folding of the qual). */
     if (coerced == NULL)
-      provsql_unsupported(
+      provsql_unsupported(PROVSQL_GAP, "setop-column-types", 
         "a column of this set operation cannot be matched with the column of "
         "its other arm: %s against %s; cast both to one type",
         format_type_be(type), format_type_be(v->vartype));
@@ -11810,7 +11849,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
   int attno = 1;
 
   if (!IsA(setOps->larg, RangeTblRef) || !IsA(setOps->rarg, RangeTblRef)) {
-    provsql_unsupported("Unsupported chain of EXCEPT operations");
+    provsql_unsupported(PROVSQL_GAP, "except-chain", "Unsupported chain of EXCEPT operations");
   }
 
   expr->boolop = AND_EXPR;
@@ -11822,7 +11861,7 @@ static bool transform_except_into_join(const constants_t *constants, Query *q) {
     Var *v;
 
     if (!IsA(te->expr, Var))
-      provsql_unsupported("EXCEPT query format not supported");
+      provsql_unsupported(PROVSQL_GAP, "except-shape", "EXCEPT query format not supported");
 
     v = (Var *)te->expr;
 
@@ -12754,7 +12793,7 @@ static void check_unlowered_outer_joins(const constants_t *constants,
        jointree_arm_has_tracked(constants, q, je->rarg)) ||
       ((je->jointype == JOIN_RIGHT || je->jointype == JOIN_FULL) &&
        jointree_arm_has_tracked(constants, q, je->larg)))
-    provsql_unsupported(
+    provsql_unsupported(PROVSQL_GAP, "outer-join-not-lowered", 
       "unsupported %s JOIN: a provenance-tracked relation sits on the "
       "null-padded side of a join that could not be lowered (only a "
       "two-relation outer join with no outer reference to the join RTE "
@@ -16747,7 +16786,7 @@ static void process_set_operation_union(const constants_t *constants,
                                         SetOperationStmt *stmt,
                                         Query *q) {
   if (stmt->op != SETOP_UNION) {
-    provsql_unsupported("Unsupported mixed set operations");
+    provsql_unsupported(PROVSQL_GAP, "setop-mixed", "Unsupported mixed set operations");
   }
   if (IsA(stmt->larg, SetOperationStmt)) {
     process_set_operation_union(constants, (SetOperationStmt *)(stmt->larg), q);
@@ -17086,18 +17125,18 @@ static void error_for_mixed_qual(qual_class c)
       /* An ordinary comparison mixed with an aggregate one is now supported
        * (the regular leaf becomes a deterministic indicator); this fires only
        * when an aggregate comparison itself has an unsupported shape. */
-      provsql_unsupported("Unsupported aggregate comparison shape in the selection "
+      provsql_unsupported(PROVSQL_GAP, "aggregate-comparison-shape", "Unsupported aggregate comparison shape in the selection "
                           "predicate");
       break;
     case QUAL_MIXED_RV_DET:
       /* Likewise: a random_variable comparison mixed with ordinary ones is
        * supported; this fires only on an unsupported random_variable
        * comparison shape. */
-      provsql_unsupported("Unsupported random_variable comparison shape in the "
+      provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "rv-comparison-shape", "Unsupported random_variable comparison shape in the "
                           "WHERE clause");
       break;
     case QUAL_MIXED_AGG_RV:
-      provsql_unsupported("WHERE clause mixes agg_token (HAVING-style) and "
+      provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "where-mixes-agg-and-rv", "WHERE clause mixes agg_token (HAVING-style) and "
                           "random_variable (per-tuple) comparisons inside the "
                           "same Boolean expression; this combination is not "
                           "supported");
@@ -18097,7 +18136,7 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
   List *inner_tl = NIL;
 
   if (src_rte->rtekind != RTE_RELATION && src_rte->rtekind != RTE_SUBQUERY)
-    provsql_unsupported("rewrite_join_agg_token: source RTE kind %d not supported",
+    provsql_unsupported(PROVSQL_GAP, "join-agg-token-source", "rewrite_join_agg_token: source RTE kind %d not supported",
                         (int)src_rte->rtekind);
 
   /* Locate the provsql column of the source RTE. */
@@ -22148,6 +22187,7 @@ static void sort_on_plain_values(const constants_t *constants, Query *q,
                     "disregarding provenance");
   if (windowed)
     report_freeze(constants, NULL,
+                  PROVSQL_GAP, "window-over-aggregate-frozen",
                   "window partitioned or ordered by an aggregate result: it "
                   "is computed on the plain values, those of the database as "
                   "it is, not tracked", NULL);
@@ -23162,7 +23202,7 @@ static Query *process_query(const constants_t *constants, Query *q,
         continue;
       if (!OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES) ||
           !setop_column_explodable(constants, q, q->setOperations, col))
-        provsql_unsupported(
+        provsql_unsupported(PROVSQL_GAP, "intersect-aggregate-value", 
           "the value of an aggregate of this intersection cannot be matched "
           "with the one of its other arm: it is one value per possible world, "
           "and only a count(), a min(), a max(), a choose() and a sum() over "
@@ -23296,7 +23336,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     if (given_evidence != NIL &&
         (q->hasAggs || q->groupClause || q->groupingSets || q->havingQual ||
          q->distinctClause || q->setOperations || q->hasWindowFuncs))
-      provsql_unsupported(
+      provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "given-not-per-row", 
         "provsql.given (whole-tuple output conditioning) is supported only in "
         "a plain per-row SELECT, not in an aggregated / grouped / DISTINCT / "
         "set-operation query; condition the individual tokens with the binary "
@@ -23321,7 +23361,7 @@ static Query *process_query(const constants_t *constants, Query *q,
             continue;
           if (!OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES) ||
               !setop_column_explodable(constants, q, q->setOperations, col))
-            provsql_unsupported(
+            provsql_unsupported(PROVSQL_GAP, "setop-aggregate-value", 
               "the value of an aggregate of this set operation cannot be "
               "matched with the other arms': it is one value per possible "
               "world, and only a count(), a min(), a max(), a choose() and a "
@@ -23534,12 +23574,18 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (has_direct || nested == NIL) {
         if (offender == NULL && nested != NIL)
           offender = (SubLink *)linitial(nested);
-        provsql_unsupported(
-          "subquery over a provenance-tracked relation not supported here: %s",
-          sublink_unsupported_reason(constants, q, offender));
+        {
+          sublink_reason why =
+            sublink_unsupported_reason(constants, q, offender);
+          provsql_unsupported(
+            why.scope, why.tag,
+            "subquery over a provenance-tracked relation not supported here: "
+            "%s", why.msg);
+        }
         supported = false;
       } else {
         report_freeze(constants, (Node *)linitial(nested),
+                      PROVSQL_GAP, "sublink-nested-in-expression-frozen",
                       "scalar subquery nested in an expression is evaluated "
                       "as plain SQL, not tracked; the result keeps only the "
                       "outer provenance", NULL);
@@ -23565,7 +23611,7 @@ static Query *process_query(const constants_t *constants, Query *q,
           supported = false;
         has_difference = true;
       } else {
-        provsql_unsupported("Set operations other than UNION and EXCEPT not "
+        provsql_unsupported(PROVSQL_GAP, "setop-kind", "Set operations other than UNION and EXCEPT not "
                             "supported");
         supported = false;
       }
@@ -23580,7 +23626,7 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (q->groupClause || list_length(q->groupingSets) > 1 ||
           ((GroupingSet *)linitial(q->groupingSets))->kind !=
           GROUPING_SET_EMPTY) {
-        provsql_unsupported("GROUPING SETS, CUBE, and ROLLUP not supported");
+        provsql_unsupported(PROVSQL_GAP, "grouping-sets", "GROUPING SETS, CUBE, and ROLLUP not supported");
         supported = false;
       } else {
         // Simple GROUP BY ()
@@ -23654,6 +23700,7 @@ static Query *process_query(const constants_t *constants, Query *q,
            !replace_window_aggregations(constants, q, prov_atts)))
         if (unmarked_window_walker((Node *)q->targetList, (void *)constants))
           report_freeze(constants, NULL,
+                        PROVSQL_GAP, "window-not-tracked",
                         "window function not supported: its value is "
                         "evaluated as plain SQL, not tracked; provenance is "
                         "tracked per input row only", NULL);
@@ -23910,7 +23957,7 @@ static void process_insert_select(const constants_t *constants, Query *q) {
      * provsql column of an input relation is the token of that input, which
      * is the provenance of the output row only in the simplest queries. */
     if (projects_provsql)
-      provsql_unsupported("INSERT ... SELECT into a table without provenance tracking "
+      provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "insert-target-untracked", "INSERT ... SELECT into a table without provenance tracking "
                           "cannot select the provsql column of a provenance-tracked "
                           "relation; use provenance() to store the provenance of each "
                           "row");
@@ -24248,7 +24295,7 @@ static bool except_all_on_provenance_walker(Node *node, void *data) {
 /** @brief Raise the error @c except_all_on_provenance_walker calls for. */
 static void refuse_except_all(const constants_t *constants, Query *q) {
   if (except_all_on_provenance_walker((Node *)q, (void *)constants))
-    provsql_unsupported("EXCEPT ALL over provenance-tracked relations is not "
+    provsql_unsupported(PROVSQL_DELIBERATE, "except-all", "EXCEPT ALL over provenance-tracked relations is not "
                         "supported: the copies it keeps have no provenance of their "
                         "own. Use EXCEPT, which returns the same rows when the left "
                         "operand has no duplicates, or NOT IN / NOT EXISTS.");
@@ -24285,6 +24332,7 @@ static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
 static void warn_top_limit(const constants_t *constants, Query *q) {
   if (q->sortClause == NIL)
     report_freeze(constants, NULL,
+                  PROVSQL_GAP, "limit-without-order-by",
                   "LIMIT / OFFSET with no ORDER BY over provenance-tracked "
                   "relations keeps the rows the data as it is gives, in the "
                   "order it gives them: which rows those are is left open by "
@@ -24294,6 +24342,7 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
                   "have the truncation read in every world");
   else
     report_freeze(constants, NULL,
+                  PROVSQL_GAP, "limit-not-read-in-every-world",
                   "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
                   "relations is not read in each possible world over an "
                   "aggregation, a DISTINCT, a set operation or sort keys that "
@@ -24305,6 +24354,7 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
 /** @brief Report the freezing @c nested_limit_on_provenance calls for. */
 static void warn_nested_limit(const constants_t *constants) {
   report_freeze(constants, NULL,
+                PROVSQL_GAP, "limit-in-subquery",
                 "LIMIT / OFFSET in a subquery over provenance-tracked "
                 "relations: the rows kept carry the provenance they have in "
                 "the full result, so what is computed from them is not sound "
@@ -24356,7 +24406,7 @@ static PlannedStmt *provsql_planner(Query *q,
     const constants_t constants = get_constants(false);
     if (constants.ok) {
       if (provenance_in_sublink_walker((Node *)q, (void *)&constants))
-        provsql_unsupported("a subquery over a provenance-tracked relation cannot be "
+        provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "provenance-in-sublink", "a subquery over a provenance-tracked relation cannot be "
                             "used as a scalar subquery / IN / EXISTS expression; put "
                             "it in the FROM clause instead");
       refuse_except_all(&constants, q);
@@ -24404,7 +24454,7 @@ static PlannedStmt *provsql_planner(Query *q,
      * SubLinks) and leave provenance() to fail at runtime.  Flag it clearly. */
     if (provsql_active && constants.ok &&
         provenance_in_sublink_walker((Node *)q, (void *)&constants))
-      provsql_unsupported("a subquery over a provenance-tracked relation cannot be "
+      provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "provenance-in-sublink", "a subquery over a provenance-tracked relation cannot be "
                           "used as a scalar subquery / IN / EXISTS expression; put "
                           "it in the FROM clause instead");
 
@@ -24426,6 +24476,7 @@ static PlannedStmt *provsql_planner(Query *q,
         untracked_level_with_tracked_sublink_walker((Node *)q,
                                                     (void *)&constants)) {
       report_freeze(&constants, (Node *)last_tracked_sublink,
+                    PROVSQL_GAP, "sublink-in-untracked-block-frozen",
                     "subquery over a provenance-tracked relation in a query "
                     "without one is evaluated as plain SQL, not tracked",
                     NULL);
@@ -24518,6 +24569,7 @@ static PlannedStmt *provsql_planner(Query *q,
           !untracked_sublink_warned && !nested_sublink_warned &&
           tracked_sublink_remains_walker((Node *)q, (void *)&constants))
         report_freeze(&constants, (Node *)last_tracked_sublink,
+                      PROVSQL_GAP, "sublink-in-untracked-position-frozen",
                       "subquery over a provenance-tracked relation in a "
                       "position that is not tracked is evaluated as plain "
                       "SQL", NULL);
@@ -24526,6 +24578,7 @@ static PlannedStmt *provsql_planner(Query *q,
           OidIsValid(constants.OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE) &&
           frozen_agg_value_walker((Node *)q, (void *)&constants))
         report_freeze(&constants, NULL,
+                      PROVSQL_GAP, "aggregate-read-as-plain-value",
                       "aggregate result read as a plain value (by a "
                       "function, an operator, a comparison) is evaluated as "
                       "plain SQL, not tracked",

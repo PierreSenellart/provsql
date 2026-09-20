@@ -74,7 +74,9 @@ none||t|1.000000
 one|30|t|0.500000
 (2 rows)
 ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be matched with the other arms': it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each, in every arm; use UNION ALL, or cast the aggregate explicitly (::numeric, ::text, ...) to read its plain value
+DETAIL:  provsql-reason: setop-aggregate-value; scope: gap
 ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be matched with the other arms': it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each, in every arm; use UNION ALL, or cast the aggregate explicitly (::numeric, ::text, ...) to read its plain value
+DETAIL:  provsql-reason: setop-aggregate-value; scope: gap
 remove_provenance
 
 (1 row)
@@ -90,8 +92,11 @@ add_provenance
 
 (1 row)
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
 add_provenance
 
 (1 row)

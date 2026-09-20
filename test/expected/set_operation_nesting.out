@@ -114,6 +114,7 @@ EXCEPT over UNION ALL|5|0.5000
 EXCEPT over UNION ALL|7|0.5000
 (4 rows)
 ERROR:  ProvSQL: EXCEPT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use EXCEPT, which returns the same rows when the left operand has no duplicates, or NOT IN / NOT EXISTS.
+DETAIL:  provsql-reason: except-all; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -131,6 +132,7 @@ UNION ALL over INTERSECT|7|0.5000
 UNION ALL over INTERSECT|9|0.0800
 (6 rows)
 ERROR:  ProvSQL: INTERSECT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use INTERSECT, or IN / EXISTS.
+DETAIL:  provsql-reason: intersect-all; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -144,6 +146,7 @@ q|rows
 ORDER BY 1 NULLS FIRST|NULL 1 2 3 5 7 9
 (1 row)
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty, although the statement also tracks sn_r; write LIMIT plain(k) to say so
+DETAIL:  provsql-reason: limit-in-subquery; scope: gap
 remove_provenance
 
 (1 row)
@@ -164,6 +167,7 @@ q|rows
 EXCEPT DESC LIMIT 2|7 5
 (1 row)
 WARNING:  ProvSQL: LIMIT / OFFSET in a subquery over provenance-tracked relations: the rows kept carry the provenance they have in the full result, so what is computed from them is not sound under uncertainty, although the statement also tracks sn_r; write LIMIT plain(k) to say so
+DETAIL:  provsql-reason: limit-in-subquery; scope: gap
 remove_provenance
 
 (1 row)

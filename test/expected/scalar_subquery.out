@@ -84,6 +84,7 @@ add_provenance
 
 (1 row)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body truncates its rows with LIMIT or OFFSET, which the decorrelation would read on the data as it is
+DETAIL:  provsql-reason: body-limit; scope: gap
 add_provenance
 
 (1 row)
@@ -465,6 +466,7 @@ a|v1|v1_gate
 30|75.0000000000000000 (*)|arith
 (3 rows)
 WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
 remove_provenance
 
 (1 row)
@@ -684,6 +686,7 @@ pid|sid|sorted|p
 2|20||0.5000
 (3 rows)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body has an outer join
+DETAIL:  provsql-reason: body-outer-join; scope: gap
 add_provenance
 
 (1 row)
@@ -723,12 +726,14 @@ a|f
 x|3 ⊗ ((𝟙 ⊖ 3) ⊕ 3)
 (1 row)
 WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked is evaluated as plain SQL; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-in-untracked-position-frozen; scope: gap
 a
 1
 2
 3
 (3 rows)
 WARNING:  ProvSQL: subquery over a provenance-tracked relation in a position that is not tracked is evaluated as plain SQL, although the statement also tracks ssp; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-in-untracked-position-frozen; scope: gap
 remove_provenance
 
 (1 row)
@@ -773,6 +778,7 @@ NOT EXISTS DISTINCT|2|2
 NOT EXISTS DISTINCT|3|3
 (12 rows)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: the position it is in, or the correlation it carries, is not one the decorrelation covers (a correlation that is not an equality of columns, a body reading no tracked relation of its own)
+DETAIL:  provsql-reason: position-or-correlation; scope: gap
 add_provenance
 
 (1 row)
@@ -897,3 +903,4 @@ id|s|m
 4||
 (4 rows)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body reads a subquery in its own FROM clause
+DETAIL:  provsql-reason: body-from-subquery; scope: gap

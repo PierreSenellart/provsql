@@ -17,6 +17,7 @@ k|p_self
 2|1.0000
 (2 rows)
 ERROR:  ProvSQL: provsql.given (whole-tuple output conditioning) is supported only in a plain per-row SELECT, not in an aggregated / grouped / DISTINCT / set-operation query; condition the individual tokens with the binary | operator instead
+DETAIL:  provsql-reason: given-not-per-row; scope: out-of-scope
 remove_provenance
 
 (1 row)

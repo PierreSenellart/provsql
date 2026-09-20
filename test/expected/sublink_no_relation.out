@@ -20,10 +20,12 @@ a|b|provsql
 2 (*)|2 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
 WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-in-untracked-block-frozen; scope: gap
 reads_token
 2
 (1 row)
 WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked; mark it plain() to evaluate it as plain SQL
+DETAIL:  provsql-reason: sublink-in-untracked-block-frozen; scope: gap
 id
 5
 6

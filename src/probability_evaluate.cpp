@@ -2526,7 +2526,7 @@ Datum probability_evaluate(PG_FUNCTION_ARGS)
      * comparison of aggregate results none of them could resolve, whose
      * value gates the Boolean translation then meets.  A shape ProvSQL does
      * not support, not an internal error. */
-    provsql_unsupported("probability_evaluate: a comparison ProvSQL could not "
+    provsql_unsupported(PROVSQL_GAP, "comparison-unresolved", "probability_evaluate: a comparison ProvSQL could not "
                         "resolve remains in the circuit (%s): supported are a "
                         "comparison of an aggregate with a constant, between "
                         "numeric aggregates, and between two array_agg results",

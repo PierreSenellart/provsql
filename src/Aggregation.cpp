@@ -63,7 +63,7 @@ AggregationOperator getAggregationOperator(Oid oid)
   } else if(func_name == "bool_or") {
     op = AggregationOperator::OR;
   } else {
-    provsql_unsupported("Aggregation operator %s not supported", func_name.c_str());
+    provsql_unsupported(PROVSQL_GAP, "aggregate-no-evaluator", "Aggregation operator %s not supported", func_name.c_str());
   }
 
   return op;

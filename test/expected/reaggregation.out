@@ -28,4 +28,6 @@ sum of sums|1|35|0.875000|20.000000
 sum of sums|2|14|0.875000|8.000000
 (10 rows)
 ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+DETAIL:  provsql-reason: aggregate-over-aggregate; scope: gap
 ERROR:  ProvSQL: aggregation over aggregate results from a subquery not supported
+DETAIL:  provsql-reason: aggregate-over-aggregate; scope: gap

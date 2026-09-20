@@ -69,7 +69,7 @@ static double shapley_internal
    * thrown deeper in the Boolean-circuit build. */
   GenericCircuit gc = getGenericCircuit(token);
   if(gc.getGateType(gc.getGate(uuid2string(token))) == gate_conditioned)
-    provsql_unsupported("shapley/banzhaf: conditional Shapley / Banzhaf values are "
+    provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "shapley-conditional", "shapley/banzhaf: conditional Shapley / Banzhaf values are "
                         "not supported -- a conditioned token (X | C) cannot be "
                         "passed to shapley() / banzhaf().  Compute the index on the "
                         "unconditioned token, or use probability_evaluate for the "
@@ -183,7 +183,7 @@ Datum shapley_all_vars(PG_FUNCTION_ARGS)
 
     GenericCircuit gc = getGenericCircuit(token);
     if(gc.getGateType(gc.getGate(uuid2string(token))) == gate_conditioned)
-      provsql_unsupported("shapley/banzhaf: conditional Shapley / Banzhaf values are "
+      provsql_unsupported(PROVSQL_OUT_OF_SCOPE, "shapley-conditional", "shapley/banzhaf: conditional Shapley / Banzhaf values are "
                           "not supported -- a conditioned token (X | C) cannot be "
                           "passed to shapley() / banzhaf().  Compute the index on the "
                           "unconditioned token, or use probability_evaluate for the "

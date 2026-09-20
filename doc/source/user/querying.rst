@@ -121,7 +121,40 @@ The following constructs are **not** currently supported; queries using them
 will either raise an error or may cause incorrect provenance tracking.
 A query ProvSQL refuses raises an error with SQLSTATE ``0A000``
 (``feature_not_supported``), so that a client can tell it from an internal
-error (``XX000``):
+error (``XX000``). Its ``DETAIL`` line names the cause twice, once for a
+reader and once for a program:
+
+.. code-block:: text
+
+    ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported
+            here: its body is a set operation (UNION, INTERSECT, EXCEPT), whose
+            rows the decorrelation cannot group
+    DETAIL:  provsql-reason: body-set-operation; scope: gap
+
+The ``provsql-reason`` tag is stable where the sentence is free to be
+reworded, so a tool that surveys what ProvSQL covers can group refusals by
+it. The ``scope`` says what kind of limit it is:
+
+``deliberate``
+    the shape has no provenance to give, so the refusal is the answer:
+    ``EXCEPT ALL`` and ``INTERSECT ALL``, whose kept copies have no
+    provenance of their own; ``IN`` read as a value, whose unknown truth no
+    count of matches tells from false. No rewriting will remove these.
+
+``gap``
+    the query has a provenance and the rewriting does not reach it yet.
+
+``out-of-scope``
+    the feature is outside the provenance of the supported query fragment --
+    random variables and continuous distributions, where-provenance,
+    conditioning, and ProvSQL's own surfaces such as a ``provenance()`` call
+    in an expression.
+
+A warning that names a part evaluated as plain SQL (see :ref:`plain-sql`)
+carries the same two fields, so the reading is the one whichever
+:ref:`provsql.implicit_freeze <provsql-implicit-freeze>` does with it.
+
+The constructs themselves:
 
 * **Subqueries outside FROM** whose body uses an outer join
   (``LEFT`` / ``RIGHT`` / ``FULL``; inner joins, in any syntax, are

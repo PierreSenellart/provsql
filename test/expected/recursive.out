@@ -70,3 +70,4 @@ node|present
 3|t
 (2 rows)
 ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
+DETAIL:  provsql-reason: recursion-shape; scope: gap
