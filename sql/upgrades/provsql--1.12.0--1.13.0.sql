@@ -2480,6 +2480,7 @@ DECLARE
   ns      text;
   vals    text[];
   n       int;
+  counted int;
   first   int;
 BEGIN
   /* The planner hands the aggregate result itself (an agg_token), whatever
@@ -2506,12 +2507,18 @@ BEGIN
   n := coalesce(array_length(vals, 1), 0);
 
   IF (ns, fn) = ('pg_catalog', 'count') THEN
-    /* Every number of contributions is a value; none of them, hence 0, only
-     * where the aggregation is over the whole table (a group with no row is
-     * no group).  A NULL contribution is impossible here: the rewriting of
-     * an aggregate that skips its NULLs drops those rows from the group. */
-    first := CASE WHEN (provsql.get_infos(token)).info2 < 0 THEN 0 ELSE 1 END;
-    IF n + 1 - first > max_values THEN
+    /* A count contributes 1 per row it counts and 0 per row it does not -- a
+     * row whose value is NULL, as the null-padded row of an outer join is --
+     * so its values are the numbers of rows counted, up to how many there are
+     * to count.  Zero is one of them where a row that is not counted can be
+     * the only one there, or where the aggregation is over the whole table; a
+     * group of counted rows only has none of its rows in no world, a group
+     * being no group without a row. */
+    counted := (SELECT count(*) FROM unnest(vals) AS v
+                WHERE v IS NOT NULL AND v <> '0');
+    first := CASE WHEN (provsql.get_infos(token)).info2 < 0 OR counted < n
+                  THEN 0 ELSE 1 END;
+    IF counted + 1 - first > max_values THEN
       RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
         MESSAGE = format('ProvSQL: the result of %s() aggregates %s rows, '
                          'so it takes too many values over the possible '
@@ -2519,7 +2526,8 @@ BEGIN
                          fn, n),
         HINT = 'cast it explicitly (::bigint, ...) to read its plain value';
     END IF;
-    RETURN ARRAY(SELECT i::text FROM generate_series(first, n) AS i);
+    RETURN ARRAY(SELECT i::text
+                 FROM generate_series(least(first, counted), counted) AS i);
   END IF;
 
   IF (ns, fn) NOT IN (('pg_catalog', 'min'), ('pg_catalog', 'max'),

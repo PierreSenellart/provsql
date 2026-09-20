@@ -138,6 +138,40 @@ SELECT total FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s
 SELECT DISTINCT total FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s;
 SELECT DISTINCT sum(v) AS total FROM eav GROUP BY g;
 
+-- A count() counts the rows whose value is not NULL, and the null-padded row
+-- of an outer join is not one of them: the count of such a group is 0 although
+-- the group is there, so 0 is one of the values to explode it into.  Here the
+-- month 'b' has no right row at all and 'a' has one: over the 8 worlds, 0 is
+-- reached whenever 'b' is there or 'a' is there without its right row (0.625),
+-- and 1 exactly when both of the latter are (0.25).
+CREATE TABLE eavl(m text);
+CREATE TABLE eavr(m text, x int);
+INSERT INTO eavl VALUES ('a'), ('b');
+INSERT INTO eavr VALUES ('a', 1);
+SELECT add_provenance('eavl');
+SELECT add_provenance('eavr');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eavl;
+        PERFORM set_prob(provenance(), 0.5) FROM eavr; END $$;
+CREATE TABLE eav_z AS
+  SELECT c, round(probability_evaluate(provenance())::numeric, 6) AS pr
+  FROM (SELECT l.m, count(r.x) AS c FROM eavl l LEFT JOIN eavr r ON r.m = l.m
+        GROUP BY l.m) s GROUP BY c;
+SELECT remove_provenance('eav_z');
+SELECT * FROM eav_z ORDER BY c;
+DROP TABLE eav_z; DROP TABLE eavl; DROP TABLE eavr;
+
+-- An arm of a set operation that groups by columns it does not expose: those
+-- grouping keys are junk entries of the arm, no columns of it, and a row read
+-- from one is no row of the range table (it used to crash the planner).  Each
+-- group is a single row here, so the count is 1 in every world.
+CREATE TABLE eav_j AS
+  SELECT count(*) AS c FROM eav WHERE g < 3 GROUP BY g, v
+  UNION
+  SELECT count(*) FROM eav WHERE g = 3 GROUP BY g, v;
+SELECT remove_provenance('eav_j');
+SELECT * FROM eav_j ORDER BY c;
+DROP TABLE eav_j;
+
 -- The plain value of the sum, said explicitly, groups as plain SQL does.
 CREATE TABLE eav_p AS
   SELECT total::numeric AS total FROM (SELECT g, sum(v) AS total FROM eav

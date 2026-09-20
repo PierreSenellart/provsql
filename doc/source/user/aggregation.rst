@@ -514,9 +514,11 @@ value is the one of the database as it is, and :sqlfunc:`expected` and
 the other moments are taken over the worlds where the row is.
 
 The explosion applies to the aggregates whose values are read off their
-contributions one by one: a ``count()``, which takes every number of its
-contributions, and a ``min()``, a ``max()`` or a :sqlfunc:`choose`, which
-take one of the values they aggregate.  The values of a ``sum()`` are its
+contributions one by one: a ``count()``, which takes every number of the
+rows it counts -- zero included where a row it does not count, such as the
+null-padded row of an outer join, can be the only one there -- and a
+``min()``, a ``max()`` or a :sqlfunc:`choose`, which take one of the values
+they aggregate.  The values of a ``sum()`` are its
 subset sums and those of a ``string_agg()`` one per ordering: grouping by
 one of those is refused with SQLSTATE ``0A000``, and the plain value,
 said explicitly with a cast, groups as plain SQL does:

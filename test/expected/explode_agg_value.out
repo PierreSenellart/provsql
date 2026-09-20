@@ -74,6 +74,25 @@ ERROR:  ProvSQL: the value of an aggregate of this set operation cannot be dedup
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max() and a choose() are exploded into one row per value they take; cast it explicitly (::numeric, ::text, ...) to group by its plain value
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max() and a choose() are exploded into one row per value they take; cast it explicitly (::numeric, ::text, ...) to group by its plain value
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max() and a choose() are exploded into one row per value they take; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+c|pr
+0|0.625000
+1|0.250000
+(2 rows)
+remove_provenance
+
+(1 row)
+c
+1
+(1 row)
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
