@@ -470,13 +470,26 @@ int quick_plain_truth(const pg_uuid_t &token, unsigned depth)
       break;
     {
       FmgrInfo flinfo;
+      /* PostgreSQL 12 made the argument array variable-length, and with it
+       * LOCAL_FCINFO and fcinfo->args[]; before that the call info is a plain
+       * struct with fixed arg / argnull arrays. */
+#if PG_VERSION_NUM >= 120000
       LOCAL_FCINFO(fcinfo, 1);
+#else
+      FunctionCallInfoData fcinfo_data;
+      FunctionCallInfo fcinfo = &fcinfo_data;
+#endif
       Datum d;
 
       fmgr_info(constants.OID_FUNCTION_AGG_GUARD_HOLDS, &flinfo);
       InitFunctionCallInfoData(*fcinfo, &flinfo, 1, InvalidOid, NULL, NULL);
+#if PG_VERSION_NUM >= 120000
       fcinfo->args[0].value = UUIDPGetDatum(&token);
       fcinfo->args[0].isnull = false;
+#else
+      fcinfo->arg[0] = UUIDPGetDatum(&token);
+      fcinfo->argnull[0] = false;
+#endif
       d = FunctionCallInvoke(fcinfo);
       if (!fcinfo->isnull)
         res = DatumGetBool(d) ? 1 : 0;
