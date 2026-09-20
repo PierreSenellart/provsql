@@ -104,5 +104,13 @@ n|t|p
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: the position it is in, or the correlation it carries, is not one the decorrelation covers (a correlation that is not an equality of columns, a body reading no tracked relation of its own)
-DETAIL:  provsql-reason: position-or-correlation; scope: gap
+v|p
+1|0.250000
+(1 row)
+WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end, although the statement also tracks bag_param; mark it plain() to say so
+DETAIL:  provsql-reason: recursion-bound-read-as-plain-value; scope: gap
+n|p
+1|0.500000
+2|0.500000
+3|0.500000
+(3 rows)

@@ -245,11 +245,29 @@ SELECT n, t, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n;
 SET provsql.active = on;
 DROP TABLE bag_r;
 
--- A bound read from a TRACKED relation is refused: each round is a query of
--- its own, and an uncorrelated scalar subquery compared in a WHERE clause is a
--- shape the decorrelation does not cover.  Asserted here without the recursion,
--- which raises the same refusal from inside the driver (its CONTEXT carries
--- the deparsed round, whose text is not the same in every PostgreSQL version).
+-- A bound read from a TRACKED relation: the comparison against one value of a
+-- tracked relation is itself tracked (the value is the one-row aggregation over
+-- that relation, cross-joined), so outside a recursion the row needs both rows
+-- and weighs 0.5 * 0.5.  Inside one, an uncertain bound would leave no round
+-- empty and the rounds would not end, so the bound is read as plain SQL with
+-- the warning that says so, and the answer is the one of the query with that
+-- relation untracked: the three rows of the actual bound, each carrying the
+-- seed's probability.
 SELECT add_provenance('bag_param');
-SELECT v FROM bag_seed WHERE v < (SELECT n FROM bag_param);
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM bag_param; END $$;
+CREATE TABLE bag_r AS SELECT v FROM bag_seed WHERE v < (SELECT n FROM bag_param);
+SET provsql.active = off;
+SELECT v, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY v;
+SET provsql.active = on;
+DROP TABLE bag_r;
+CREATE TABLE bag_r AS
+  WITH RECURSIVE c(n) AS (
+      SELECT v FROM bag_seed
+    UNION ALL
+      SELECT n + 1 FROM c WHERE n < (SELECT n FROM bag_param))
+  SELECT n FROM c;
+SET provsql.active = off;
+SELECT n, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n;
+SET provsql.active = on;
+DROP TABLE bag_r;
 DROP TABLE bag_e, bag_seed, bag_param;

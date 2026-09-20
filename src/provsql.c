@@ -270,6 +270,9 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
                                         Oid value_type);
 static bool node_varies_walker(Node *n, void *ctx);
 static bool oj_contains_sublink_walker(Node *node, void *cx);
+static void report_freeze(const constants_t *constants, Node *frozen,
+                          const char *scope, const char *tag,
+                          const char *msg, const char *hint);
 typedef struct { const char *name; } CteRefCtx;
 static bool cte_reference_walker(Node *node, void *context);
 static bool rte_column_is_aggregate(const constants_t *constants,
@@ -1618,6 +1621,84 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
 #endif
 
 #if PG_VERSION_NUM >= 150000
+/** @brief Context of @c freeze_recursive_guard_mutator. */
+typedef struct rec_guard_ctx {
+  const constants_t *constants;
+  bool frozen;
+  Node *first;       /**< the first bound frozen, for the coherence test */
+} rec_guard_ctx;
+
+/**
+ * @brief Mark an uncorrelated subquery of a recursive term's condition
+ *        @c plain(), so the rounds end where SQL's do.
+ *
+ * @c "WHERE @c n @c < @c (SELECT @c n @c FROM @c param)" bounds a generator, and
+ * reading that bound from a tracked relation makes the condition uncertain: the
+ * round keeps a row annotated zero instead of dropping it, no round is ever
+ * empty, and the iteration has no end -- where SQL's own stops as soon as the
+ * bound is passed.  The bound is therefore evaluated as plain SQL, on the data
+ * as it is: the answer is the provenance of the same query with the bound's
+ * relation untracked, which @c report_freeze names (and which is coherent as
+ * long as the rest of the query does not read that relation).
+ *
+ * Only an uncorrelated body: one reading the working relation is the recursion
+ * itself, not a bound.
+ */
+static Node *freeze_recursive_guard_mutator(Node *node, void *cx) {
+  rec_guard_ctx *ctx = (rec_guard_ctx *)cx;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    Query *body;
+
+    if (sl->subLinkType != EXPR_SUBLINK || !IsA(sl->subselect, Query))
+      return node;
+    body = (Query *)sl->subselect;
+    if (!has_provenance(ctx->constants, body) ||
+        contain_vars_of_level((Node *)body, 1) ||
+        !OidIsValid(ctx->constants->OID_FUNCTION_PLAIN))
+      return node;
+    ctx->frozen = true;
+    if (ctx->first == NULL)
+      ctx->first = (Node *)body;
+    return (Node *)makeFuncExpr(ctx->constants->OID_FUNCTION_PLAIN,
+                                exprType(node), list_make1(node), InvalidOid,
+                                exprCollation(node), COERCE_EXPLICIT_CALL);
+  }
+  if (IsA(node, Query))
+    return node;   /* the body of another subquery is its own business */
+  return expression_tree_mutator(node, freeze_recursive_guard_mutator, cx);
+}
+
+/** @brief Mark the bounds of every term of @p cteq @c plain() (see above).
+ *  @param frozen  Out: the first bound frozen, which tells whether the freezing
+ *                 is coherent (it reads no relation the rest of the statement
+ *                 reads). */
+static bool freeze_recursive_guards(const constants_t *constants, Query *cteq,
+                                    Node **frozen) {
+  rec_guard_ctx ctx;
+  ListCell *lc;
+
+  ctx.constants = constants;
+  ctx.frozen = false;
+  ctx.first = NULL;
+  foreach (lc, cteq->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    Query *arm = (r->rtekind == RTE_SUBQUERY) ? r->subquery : NULL;
+    if (arm == NULL || arm->jointree == NULL || arm->jointree->quals == NULL)
+      continue;
+    arm->jointree->quals =
+      freeze_recursive_guard_mutator(arm->jointree->quals, (void *)&ctx);
+    if (ctx.frozen)
+      arm->hasSubLinks = query_has_own_sublinks(arm);
+  }
+  if (frozen != NULL)
+    *frozen = ctx.first;
+  return ctx.frozen;
+}
+
 /**
  * @brief Lower a recursive CTE to a provenance-aware fixpoint.
  *
@@ -1704,6 +1785,22 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
 
   /* Deparse the whole recursive CTE body to SQL.  It references the working
    * relation by the CTE name; the driver creates a temp table of that name. */
+  /* A bound of a term that reads a tracked relation is evaluated as plain SQL:
+   * an uncertain condition leaves no round empty and the iteration would not
+   * end.  Done before the deparse, so every round sees the marker. */
+  {
+    constants_t cs = get_constants(true);
+    Node *frozen_bound = NULL;
+    if (cs.ok && freeze_recursive_guards(&cs, cteq, &frozen_bound))
+      report_freeze(&cs, frozen_bound, PROVSQL_GAP,
+                    "recursion-bound-read-as-plain-value",
+                    "a bound of a recursive term reading a provenance-tracked "
+                    "relation is evaluated as plain SQL, on the data as it is: "
+                    "an uncertain bound leaves no round of the recursion empty, "
+                    "so the rounds would not end",
+                    "mark it plain() to say so");
+  }
+
   body_text = pg_get_querydef(cteq, false);
 
   /* The bag recursion needs its two terms apart: the rounds apply the recursive
@@ -15542,6 +15639,68 @@ static bool rewrite_uncorrelated_antijoin(const constants_t *constants,
   return true;
 }
 
+/** @brief Context of @c uncorr_qual_sublink_mutator. */
+typedef struct uncorr_qual_ctx {
+  const constants_t *constants;
+  Query *q;          /**< the level whose FROM the derived tables join */
+  bool changed;
+} uncorr_qual_ctx;
+
+/**
+ * @brief Replace an uncorrelated scalar subquery of a qual by a column of the
+ *        one-row derived table it becomes.
+ *
+ * @c "WHERE @c v @c < @c (SELECT @c n @c FROM @c param)" reads one value of a
+ * tracked relation, the same in every row: such a subquery is the case of the
+ * translation without a correlation, a cross product with the one-row
+ * aggregation over its body (@c oj_build_uncorrelated_from_subquery, which picks
+ * the value with @c choose and keeps the at-most-one-row rule of a scalar
+ * subquery in a @c HAVING @c count(*) @c <= @c 1).  The comparison then reads
+ * that column, an aggregate of the derived table, and is lowered like any
+ * comparison against an aggregate value.
+ *
+ * Bodies that are correlated, or not a clean SELECT over tracked relations, are
+ * left where they are for the decorrelation to take.
+ */
+static Node *uncorr_qual_sublink_mutator(Node *node, void *cx) {
+  uncorr_qual_ctx *ctx = (uncorr_qual_ctx *)cx;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    Query *D;
+    RangeTblEntry *d_rte;
+    RangeTblRef *rtr;
+    TargetEntry *dte;
+    Index d_idx;
+
+    if (sl->subLinkType != EXPR_SUBLINK || !IsA(sl->subselect, Query) ||
+        sublink_is_inert(sl))
+      return node;
+    D = oj_build_uncorrelated_from_subquery(ctx->constants,
+                                            (Query *)sl->subselect);
+    if (D == NULL)
+      return node;
+
+    d_rte = oj_make_subquery_rte(D);
+    rtr = makeNode(RangeTblRef);
+    dte = (TargetEntry *)linitial(D->targetList);
+    ctx->q->rtable = lappend(ctx->q->rtable, d_rte);
+    d_idx = list_length(ctx->q->rtable);
+    rtr->rtindex = d_idx;
+    ctx->q->jointree->fromlist = lappend(ctx->q->jointree->fromlist, rtr);
+    ctx->changed = true;
+    return (Node *)makeVar(d_idx, 1, exprType((Node *)dte->expr),
+                           exprTypmod((Node *)dte->expr),
+                           exprCollation((Node *)dte->expr), 0);
+  }
+  /* Not into another query: a sublink of a sublink's body is its own business. */
+  if (IsA(node, Query))
+    return node;
+  return expression_tree_mutator(node, uncorr_qual_sublink_mutator, cx);
+}
+
 /**
  * @brief Move uncorrelated scalar subqueries that are direct target-list entries
  *        into a cross-joined derived aggregate in the outer FROM.
@@ -15594,6 +15753,20 @@ static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
                                exprTypmod((Node *)dte->expr),
                                exprCollation((Node *)dte->expr), 0);
     changed = true;
+  }
+
+  /* And the same in the WHERE clause: a comparison against one value of a
+   * tracked relation. */
+  if (q->jointree->quals != NULL) {
+    uncorr_qual_ctx ctx;
+
+    ctx.constants = constants;
+    ctx.q = q;
+    ctx.changed = false;
+    q->jointree->quals =
+      uncorr_qual_sublink_mutator(q->jointree->quals, (void *)&ctx);
+    if (ctx.changed)
+      changed = true;
   }
 
   if (changed) {
