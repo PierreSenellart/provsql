@@ -65,10 +65,11 @@ SELECT name FROM (SELECT name FROM personnel EXCEPT ALL SELECT name FROM personn
 WITH c AS (SELECT name FROM personnel EXCEPT ALL SELECT name FROM personnel) SELECT * FROM c;
 
 -- A subquery over a tracked relation in a query level the rewriting does not
--- engage on (FROM-less, a LATERAL body computing an array) is evaluated on the
--- data as it is: a warning says its data is treated as certain.  Fetching a
--- token (SELECT provsql FROM ...) is not reading data.
-SELECT 'yes' AS found WHERE EXISTS (SELECT * FROM personnel WHERE id = 1);
+-- engage on -- a LATERAL body computing an array -- is evaluated on the data as
+-- it is, and a warning says so.  Fetching a token (SELECT provsql FROM ...) is
+-- not reading data.  A FROM-less block whose sublinks are the whole condition
+-- is no longer among these: its bodies are lifted into a FROM of its own
+-- (sublink_no_relation).
 CREATE TABLE lateral_array AS
   SELECT p.id, cardinality(b.ids) AS n
   FROM (SELECT DISTINCT id FROM personnel WHERE id < 3) p

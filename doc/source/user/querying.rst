@@ -67,7 +67,14 @@ The following SQL constructs are supported with full provenance tracking:
   over a joined body carries the same antijoin provenance as the
   equivalent ``EXCEPT``.  An aggregate body can be compared against a
   constant or an outer column, including through ``IN``/``NOT IN``
-  (the single-row aggregate body makes these scalar comparisons)
+  (the single-row aggregate body makes these scalar comparisons).
+  A block with no tracked relation of its own, which reads them only
+  through its sublinks -- a ``FROM``-less ``SELECT`` whose condition is an
+  ``EXISTS``, a constant or untracked left side filtered by a ``NOT
+  EXISTS`` -- is tracked as well: the bodies are lifted into a ``FROM`` of
+  its own, so the answer carries the provenance of the semijoin or the
+  antijoin. Where a body cannot be lifted, the block keeps being evaluated
+  by plain SQL with the warning that says so, rather than refused
 * ``GROUP BY``, with ``GROUPING SETS``, ``ROLLUP`` and ``CUBE``
 * ``SELECT DISTINCT`` (set semantics), and ``DISTINCT ON``, read as
   a ``LIMIT 1`` in each group (see :ref:`limit`)
@@ -249,8 +256,10 @@ part is a constant; ProvSQL says which part in a ``WARNING``:
 * a window partitioned by an aggregate result, or ordered by one other
   than the tracked ranks (see :ref:`rank-over-aggregate`);
 * a subquery in a position no rewriting handles (a scalar subquery
-  nested in an expression, a subquery in a query over no tracked
-  relation);
+  nested in an expression; a subquery of a block with no tracked relation
+  of its own whose body cannot be lifted into a ``FROM`` of that block,
+  such as one reading the ``provsql`` column, which is a fetch of tokens
+  and not of data);
 * an ``ORDER BY … LIMIT`` that is not read in every world (see
   :ref:`limit`), and a ``LIMIT`` in a subquery;
 * an aggregate result read as a plain value by a function, an operator or

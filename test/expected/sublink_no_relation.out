@@ -1,0 +1,30 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+create_provenance_mapping
+
+(1 row)
+add_provenance
+
+(1 row)
+found|p|formula
+yes|0.250000|1 ⊗ (𝟙 ⊖ 2)
+(1 row)
+id|p
+4|0.500000
+5|1.000000
+6|1.000000
+(3 rows)
+a|b|provsql
+2 (*)|2 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked; mark it plain() to evaluate it as plain SQL
+reads_token
+2
+(1 row)
+WARNING:  ProvSQL: subquery over a provenance-tracked relation in a query without one is evaluated as plain SQL, not tracked; mark it plain() to evaluate it as plain SQL
+id
+5
+6
+(2 rows)

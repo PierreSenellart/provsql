@@ -23701,6 +23701,133 @@ static bool query_defines_handmade_provsql(Node *node, void *cx) {
 
 
 
+/** @brief Context of @c reads_provsql_walker: the level whose range table
+ *         resolves the @c Vars being looked at. */
+typedef struct {
+  Query *level;
+  bool found;
+} prov_read_ctx;
+
+/**
+ * @brief Walker: does any expression read a @c provsql column?
+ *
+ * Reading the provenance column is a fetch of a token, not a read of data
+ * (@c "SELECT @c count(*) @c FROM @c t @c WHERE @c provsql @c IS @c NOT
+ * @c NULL" is a diagnostic), and ProvSQL leaves such a subquery to plain SQL
+ * rather than rewriting it.  The lift honours that.
+ */
+static bool reads_provsql_walker(Node *node, void *cx) {
+  prov_read_ctx *c = (prov_read_ctx *)cx;
+
+  if (node == NULL || c->found)
+    return false;
+  if (IsA(node, Query)) {
+    prov_read_ctx sub;
+    sub.level = (Query *)node;
+    sub.found = false;
+    query_tree_walker((Query *)node, reads_provsql_walker, (void *)&sub, 0);
+    if (sub.found)
+      c->found = true;
+    return c->found;
+  }
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 && v->varno > 0 && v->varattno > 0 &&
+        c->level != NULL && v->varno <= list_length(c->level->rtable)) {
+      RangeTblEntry *r = rt_fetch(v->varno, c->level->rtable);
+      char *name = get_rte_attribute_name(r, v->varattno);
+      if (name != NULL && strcmp(name, PROVSQL_COLUMN_NAME) == 0)
+        c->found = true;
+    }
+    return c->found;
+  }
+  return expression_tree_walker(node, reads_provsql_walker, cx);
+}
+
+/**
+ * @brief Walker: does a sublink of this level have a body that READS the
+ *        provenance column?
+ *
+ * The columns of an @c EXISTS body are not read at all, so the @c provsql that
+ * a @c "SELECT @c *" over a tracked relation expands to is no such read; for
+ * every other kind the body's columns are the value, so its whole tree counts.
+ * Does not descend into range-table subqueries: they are rewritten on their own.
+ */
+static bool sublink_body_reads_provsql(Node *node, void *cx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query)) {
+      Query *b = (Query *)sl->subselect;
+      prov_read_ctx reads;
+      reads.level = b;
+      reads.found = false;
+      if (sl->subLinkType == EXISTS_SUBLINK) {
+        reads_provsql_walker((Node *)b->jointree, (void *)&reads);
+        reads_provsql_walker((Node *)b->havingQual, (void *)&reads);
+      } else {
+        query_tree_walker(b, reads_provsql_walker, (void *)&reads, 0);
+      }
+      if (reads.found)
+        return true;
+    }
+    /* and the sublinks nested in this one, and its testexpr */
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, sublink_body_reads_provsql, cx,
+                             QTW_IGNORE_RT_SUBQUERIES);
+  return expression_tree_walker(node, sublink_body_reads_provsql, cx);
+}
+
+/**
+ * @brief Lift the tracked bodies of a block's sublinks into its @c FROM.
+ *
+ * A block with no tracked relation of its own -- @c "SELECT @c 'yes' @c WHERE
+ * @c EXISTS(...)", a @c VALUES list filtered by a @c NOT @c EXISTS -- reads
+ * tracked relations only through its sublinks, and @c has_provenance does not
+ * descend into a sublink (a subselect in an expression is planned on its own).
+ * The block is then taken as untracked and none of the sublink rewrites run,
+ * although the semantics has the query: its condition is a semijoin or an
+ * antijoin over the bodies, whose provenance is the answer's.
+ *
+ * What the block lacks is a range-table entry to hang the provenance on, and
+ * the very rewrites that are skipped are what would give it one.  So they are
+ * run here, on a copy, before the planner decides: if they leave a tracked
+ * relation behind, that copy is the query to process; if not, nothing is lost
+ * and the block stays as it was, to be reported as evaluated by plain SQL.
+ *
+ * @return  The rewritten query, or @c NULL when the lift changed nothing that
+ *          makes the block tracked.
+ */
+static Query *lift_tracked_sublinks(const constants_t *constants, Query *q) {
+  Query *lifted;
+
+  /* A body that reads the provenance column is a fetch of tokens, which stays
+   * plain SQL (the rule the "SELECT provsql FROM ..." fetch already follows). */
+  if (sublink_body_reads_provsql((Node *)q, NULL))
+    return NULL;
+
+  lifted = (Query *)copyObject(q);
+
+  rewrite_array_sublinks(constants, lifted);
+  normalize_quantified_aggregate_sublinks(constants, lifted);
+  query_tree_walker(lifted, drop_semijoin_distinct_walker, NULL,
+                    QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
+  rewrite_uncorrelated_antijoin(constants, lifted);
+  rewrite_predicate_sublinks(constants, lifted);
+  move_uncorrelated_where_predicates(constants, lifted);
+  move_uncorrelated_sublinks_to_from(constants, lifted);
+  decorrelate_scalar_sublinks(constants, lifted);
+  /* The lift is worth taking only if it left NO tracked sublink behind: a
+   * block whose sublinks the rewrites decline -- several scalar subqueries
+   * over a tracked relation, a body they cannot decorrelate -- would reach the
+   * refusal of classify_remaining_sublinks, where today it reads the values
+   * with a warning.  A warning must not become an error. */
+  return has_provenance(constants, lifted) &&
+         !query_has_tracked_sublink(constants, lifted) ? lifted : NULL;
+}
+
 /**
  * @brief Whether a LIMIT / OFFSET that stays a truncation applies to a
  *        provenance-tracked query below the top level of @p q.
@@ -23938,6 +24065,8 @@ static PlannedStmt *provsql_planner(Query *q,
      * so widening the gate costs nothing in the common case. */
     const constants_t constants = get_constants(false);
     bool untracked_sublink_warned = false;
+    bool sublinks_lifted = false;     /* the query is the lift's, not the user's */
+    Query *lifted_q = NULL;           /* the lift of a block whose sublinks are tracked */
 
     /* A subquery over a provenance-tracked relation used in an expression
      * context (scalar subquery / IN / EXISTS) is not supported -- and would
@@ -23952,7 +24081,18 @@ static PlannedStmt *provsql_planner(Query *q,
     if (provsql_active && constants.ok)
       refuse_except_all(&constants, q);
 
+    /* A block that reads tracked relations only through its sublinks has no
+     * relation of its own to hang provenance on: the bodies are lifted into
+     * its FROM, on a copy, and the query takes the tracked path below only if
+     * that worked.  Decided here so that the report just after, and the
+     * refusal it turns into under provsql.implicit_freeze = 'error', speak of
+     * a loss that is still one. */
+    if (provsql_active && constants.ok && !has_provenance(&constants, q) &&
+        query_has_tracked_sublink(&constants, q))
+      lifted_q = lift_tracked_sublinks(&constants, q);
+
     if (provsql_active && constants.ok && provsql_executor_depth == 0 &&
+        lifted_q == NULL &&
         untracked_level_with_tracked_sublink_walker((Node *)q,
                                                     (void *)&constants)) {
       report_freeze(&constants, (Node *)last_tracked_sublink,
@@ -23991,6 +24131,18 @@ static PlannedStmt *provsql_planner(Query *q,
       list_free(cls.source_relids);
     }
 
+    /* The lift decided above: the hand-written-provsql check speaks of the
+     * user's query, so it runs before the lifted one takes its place. */
+    if (lifted_q != NULL) {
+      if (provsql_active &&
+          query_defines_handmade_provsql((Node *)q, (void *)&constants))
+        provsql_error("a query may not define a column named \"%s\" by hand; "
+                      "ProvSQL manages the provenance column itself",
+                      PROVSQL_COLUMN_NAME);
+      q = lifted_q;
+      sublinks_lifted = true;
+    }
+
     if (constants.ok && has_provenance(&constants, q)) {
       bool *removed = NULL;
       Query *new_query;
@@ -24001,7 +24153,7 @@ static PlannedStmt *provsql_planner(Query *q,
        * original query before any rewriting -- so the intermediate queries the
        * rewriter builds (which legitimately carry a provsql column) are not
        * flagged. */
-      if (provsql_active &&
+      if (provsql_active && !sublinks_lifted &&
           query_defines_handmade_provsql((Node *)q, (void *)&constants))
         provsql_error("a query may not define a column named \"%s\" by hand; "
                       "ProvSQL manages the provenance column itself",
