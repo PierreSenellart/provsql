@@ -19062,17 +19062,34 @@ static bool is_const_or_param(Node *n) {
  * grouping, @c DISTINCT, set operation or set-returning function), limits
  * that are constants or parameters.  @c OFFSET with @c WITH @c TIES is
  * left out: the rows it skips are counted by position, among peers too.
+ *
+ * An aggregation ordered by one of its aggregates (@c GROUP @c BY @c g
+ * @c ORDER @c BY @c count(*) @c DESC @c LIMIT @c k, the top-k of the groups)
+ * is lowered too: the rank of a group by an aggregate result is rewritten
+ * into the count of the groups before it (@c rewrite_rank_over_aggregate).
  */
 static bool limit_lowerable(const constants_t *constants, Query *q) {
   ListCell *lc;
   bool ties = false;
+  bool ordered_by_agg = false;
+
+  /* One ordering key, which is an aggregate of the query: the top-k of the
+   * groups of an aggregation */
+  if (q->hasAggs && list_length(q->sortClause) == 1) {
+    TargetEntry *te =
+      get_sortgroupclause_tle((SortGroupClause *)linitial(q->sortClause),
+                              q->targetList);
+    ordered_by_agg = te != NULL && contain_aggs_of_level((Node *)te->expr, 0);
+  }
 
   if (!limit_truncates(q) || is_actual_marker(constants, q->limitCount) ||
       is_actual_marker(constants, q->limitOffset))
     return false;
   if (q->commandType != CMD_SELECT || q->utilityStmt != NULL ||
-      q->sortClause == NIL || q->groupClause != NIL ||
-      q->groupingSets != NIL || q->hasAggs || q->havingQual != NULL ||
+      q->sortClause == NIL ||
+      (!ordered_by_agg &&
+       (q->groupClause != NIL || q->hasAggs || q->havingQual != NULL)) ||
+      q->groupingSets != NIL ||
       (q->distinctClause != NIL && !distinct_on_lowerable(constants, q)) ||
       q->setOperations != NULL || q->hasTargetSRFs || q->rowMarks != NIL ||
       q->hasSubLinks)
@@ -19101,7 +19118,10 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
       TargetEntry *te = (TargetEntry *)lfirst(lc_te);
       if (te->ressortgroupref == sgc->tleSortGroupRef) {
         uncertain_value_ctx ctx = {constants, q};
-        if (uncertain_value_walker((Node *)te->expr, &ctx))
+        /* An aggregate key varies between worlds, and the rank over it is
+         * rewritten rather than read on the plain values */
+        if (!ordered_by_agg &&
+            uncertain_value_walker((Node *)te->expr, &ctx))
           return false;
         break;
       }
@@ -20520,6 +20540,498 @@ static void sort_on_plain_values(const constants_t *constants, Query *q,
                   "it is, not tracked", NULL);
 }
 
+/** @brief Context for @c pull_aggregates_mutator. */
+typedef struct pull_aggregates_ctx {
+  Query *inner;    ///< The subquery exposing the aggregates and columns
+  List *pulled;    ///< The expressions it exposes
+  List *resnos;    ///< Their resnos in @c inner (integers)
+} pull_aggregates_ctx;
+
+/** @brief Mutator: an aggregate or a column of this level becomes a
+ *  reference to the column of @c ctx->inner exposing it. */
+static Node *pull_aggregates_mutator(Node *node, void *cx) {
+  pull_aggregates_ctx *ctx = (pull_aggregates_ctx *)cx;
+  bool pull;
+
+  if (node == NULL)
+    return NULL;
+  pull = (IsA(node, Aggref) && ((Aggref *)node)->agglevelsup == 0) ||
+         (IsA(node, Var) && ((Var *)node)->varlevelsup == 0) ||
+         IsA(node, GroupingFunc);
+  if (pull) {
+    ListCell *lc_e, *lc_r;
+    AttrNumber resno = 0;
+    forboth (lc_e, ctx->pulled, lc_r, ctx->resnos)
+      if (equal(lfirst(lc_e), node)) {
+        resno = (AttrNumber)lfirst_int(lc_r);
+        break;
+      }
+    if (resno == 0) {
+      resno = list_length(ctx->inner->targetList) + 1;
+      ctx->inner->targetList = lappend(
+        ctx->inner->targetList,
+        makeTargetEntry((Expr *)copyObject(node), resno, pstrdup("?column?"),
+                        false));
+      ctx->pulled = lappend(ctx->pulled, node);
+      ctx->resnos = lappend_int(ctx->resnos, resno);
+    }
+    return (Node *)makeVar(1, resno, exprType(node), exprTypmod(node),
+                           exprCollation(node), 0);
+  }
+  return expression_tree_mutator(node, pull_aggregates_mutator, cx);
+}
+
+/** @brief Whether a window of @p q reads an aggregate of @p q itself. */
+static bool window_reads_aggregate(Query *q) {
+  ListCell *lc, *lc2;
+
+  foreach (lc, q->windowClause) {
+    WindowClause *wc = (WindowClause *)lfirst(lc);
+    List *both = list_concat(list_copy(wc->partitionClause),
+                             list_copy(wc->orderClause));
+    foreach (lc2, both) {
+      TargetEntry *te = get_sortgroupclause_tle((SortGroupClause *)lfirst(lc2),
+                                                q->targetList);
+      if (te != NULL && contain_aggs_of_level((Node *)te->expr, 0))
+        return true;
+    }
+  }
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (contain_windowfuncs((Node *)te->expr) &&
+        contain_aggs_of_level((Node *)te->expr, 0))
+      return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Compute the aggregation of @p q in a subquery, and its windows over
+ *        that subquery's columns.
+ *
+ * A window that reads an aggregate of its own query level --
+ * @c rank() @c OVER @c (ORDER @c BY @c count(*)), @c sum(count(*)) @c OVER
+ * @c () -- is the window over the rows of the aggregation, which the
+ * rewritings read as a relation of its own: the aggregation moves to a
+ * subquery exposing its grouping columns and its aggregates, and the query
+ * keeps the windows, over those columns.  The rank of a window over an
+ * aggregate result is then rewritten (@c rewrite_rank_over_aggregate).
+ *
+ * Returns @c NULL, leaving @p q alone, when no window reads an aggregate of
+ * @p q, or on a shape it does not split (a @c DISTINCT, an @c ORDER @c BY or
+ * a @c LIMIT of its own, a set operation, a @c WITH).
+ */
+static Query *split_window_over_aggregates(const constants_t *constants,
+                                           Query *q) {
+  pull_aggregates_ctx ctx;
+  Query *inner;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  List *tl = NIL, *colnames = NIL;
+  ListCell *lc;
+
+  if (!q->hasWindowFuncs || q->commandType != CMD_SELECT ||
+      !(q->hasAggs || q->groupClause != NIL) || q->groupingSets != NIL ||
+      q->setOperations != NULL || q->cteList != NIL ||
+      q->distinctClause != NIL || q->sortClause != NIL ||
+      q->limitCount != NULL || q->limitOffset != NULL ||
+      q->rowMarks != NIL || q->jointree == NULL ||
+      !window_reads_aggregate(q))
+    return NULL;
+
+#if PG_VERSION_NUM >= 180000
+  /* The grouping columns read the virtual GROUP entry of the range table,
+   * which the subquery below does not have: back to the base columns. */
+  strip_group_rte_pg18(q);
+#endif
+
+  inner = makeNode(Query);
+  inner->commandType = CMD_SELECT;
+  inner->canSetTag = true;
+  inner->rtable = q->rtable;
+#if PG_VERSION_NUM >= 160000
+  inner->rteperminfos = q->rteperminfos;
+#endif
+  inner->jointree = q->jointree;
+  inner->groupClause = q->groupClause;
+  inner->havingQual = q->havingQual;
+  inner->hasAggs = q->hasAggs;
+  inner->hasDistinctOn = false;
+
+  ctx.inner = inner;
+  ctx.pulled = NIL;
+  ctx.resnos = NIL;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)copyObject(lfirst(lc));
+    te->expr = (Expr *)pull_aggregates_mutator((Node *)te->expr, &ctx);
+    tl = lappend(tl, te);
+  }
+  if (inner->targetList == NIL)
+    return NULL;
+
+  /* The grouping expressions are entries of the subquery, with the sort
+   * group references its GROUP BY names; one the target list does not
+   * expose is added to it, junk. */
+  foreach (lc, inner->groupClause) {
+    SortGroupClause *sgc = (SortGroupClause *)lfirst(lc);
+    Node *expr = (Node *)get_sortgroupclause_expr(sgc, q->targetList);
+    TargetEntry *found = NULL;
+    ListCell *lc2;
+
+    if (expr == NULL)
+      return NULL;
+    foreach (lc2, inner->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc2);
+      if (equal(te->expr, expr)) {
+        found = te;
+        break;
+      }
+    }
+    if (found == NULL) {
+      found = makeTargetEntry((Expr *)copyObject(expr),
+                              list_length(inner->targetList) + 1,
+                              pstrdup("?column?"), true);
+      inner->targetList = lappend(inner->targetList, found);
+    }
+    found->ressortgroupref = sgc->tleSortGroupRef;
+  }
+  inner->hasSubLinks = checkExprHasSubLink((Node *)inner->targetList) ||
+                       checkExprHasSubLink(inner->havingQual) ||
+                       (inner->jointree != NULL &&
+                        checkExprHasSubLink(inner->jointree->quals));
+
+  foreach (lc, inner->targetList)
+    colnames = lappend(colnames,
+                       makeString(pstrdup(
+                         ((TargetEntry *)lfirst(lc))->resname)));
+  rte = oj_make_subquery_rte(inner);
+  rte->eref = makeAlias("grouped", colnames);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+
+  q->targetList = tl;
+  q->rtable = list_make1(rte);
+#if PG_VERSION_NUM >= 160000
+  q->rteperminfos = NIL;
+#endif
+  q->jointree = makeFromExpr(list_make1(rtr), NULL);
+  q->groupClause = NIL;
+  q->havingQual = NULL;
+  q->hasAggs = false;
+  q->hasSubLinks = checkExprHasSubLink((Node *)q->targetList);
+  return q;
+}
+
+/** @brief Whether column @p attno of the subquery @p rte is an aggregate
+ *  result: its entry is an aggregate, or the @c agg_token it becomes once the
+ *  subquery is rewritten. */
+static bool rte_column_is_aggregate(const constants_t *constants,
+                                    RangeTblEntry *rte, AttrNumber attno) {
+  TargetEntry *te;
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || attno < 1 ||
+      attno > list_length(rte->subquery->targetList))
+    return false;
+  te = get_tle_by_resno(rte->subquery->targetList, attno);
+  if (te == NULL)
+    return false;
+  return exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN ||
+         contain_aggs_of_level((Node *)te->expr, 0);
+}
+
+/** @brief Context for @c replace_rank_window_mutator. */
+typedef struct rank_window_ctx {
+  const constants_t *constants; ///< Extension OID cache
+  Query *q;                     ///< The query whose windows are read
+  Index rtindex;                ///< Range-table index of the relation ranked
+  List *identity;               ///< Its columns that identify a row (Vars)
+  bool rewritten;               ///< A window was replaced
+  bool declined;                ///< A window could not be
+} rank_window_ctx;
+
+/**
+ * @brief The rank of the current row among those of @p ctx->rtindex, as a
+ *        subquery counting them, or @c NULL.
+ *
+ * @c rank() @c OVER @c (PARTITION @c BY @c p @c ORDER @c BY @c k) is the
+ * number of rows of the same partition that come before the current one,
+ * itself included:
+ * @code{.sql}
+ *   (SELECT count(*) FROM R b
+ *     WHERE b.p IS NOT DISTINCT FROM a.p
+ *       AND (b.k < a.k OR b.id IS NOT DISTINCT FROM a.id))
+ * @endcode
+ * which is the rank with ties, since a row tying with the current one comes
+ * neither before it nor is it.  The identity columns tell the current row
+ * from the others (the
+ * grouping columns of the relation ranked, which has one row per group), and
+ * @c a is the row of the enclosing query, read one level up.
+ *
+ * Counting the current row spares an addition outside the subquery, which
+ * would leave the subquery in an expression, untracked.
+ */
+static Expr *make_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf,
+                                bool dense) {
+  WindowClause *wc = window_clause_of(ctx->q, wf->winref);
+  RangeTblEntry *ranked = rt_fetch(ctx->rtindex, ctx->q->rtable);
+  SortGroupClause *sgc;
+  TargetEntry *key_te;
+  Node *before, *self = NULL;
+  List *quals = NIL;
+  Query *sub;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  SubLink *sl;
+  Aggref *count;
+  TargetEntry *count_te;
+  Var *key_inner;
+  Oid keytype;
+  ListCell *lc;
+
+  if (wc == NULL || list_length(wc->orderClause) != 1)
+    return NULL;                /* one ordering key, the common shape */
+  sgc = (SortGroupClause *)linitial(wc->orderClause);
+  key_te = get_sortgroupclause_tle(sgc, ctx->q->targetList);
+  if (key_te == NULL || !IsA(key_te->expr, Var) ||
+      !OidIsValid(sgc->sortop))
+    return NULL;
+  keytype = exprType((Node *)key_te->expr);
+
+  /* The subquery reads another row of the same relation */
+  sub = makeNode(Query);
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  rte = copyObject(ranked);
+  if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL)
+    IncrementVarSublevelsUp((Node *)rte->subquery, 1, 1);
+  sub->rtable = list_make1(rte);
+#if PG_VERSION_NUM >= 160000
+  if (ranked->rtekind == RTE_RELATION && ranked->perminfoindex != 0) {
+    RTEPermissionInfo *pi = getRTEPermissionInfo(ctx->q->rteperminfos, ranked);
+    sub->rteperminfos = list_make1(copyObject(pi));
+    rte->perminfoindex = 1;
+  }
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+
+  /* b.k <sortop> a.k: the rows of the partition that come before */
+  key_inner = makeVar(1, ((Var *)key_te->expr)->varattno, keytype,
+                      exprTypmod((Node *)key_te->expr),
+                      exprCollation((Node *)key_te->expr), 0);
+  {
+    Var *key_outer = (Var *)copyObject(key_te->expr);
+    key_outer->varlevelsup = 1;
+    before = (Node *)make_opclause(sgc->sortop, BOOLOID, false,
+                                   (Expr *)key_inner, (Expr *)key_outer,
+                                   InvalidOid, exprCollation((Node *)key_inner));
+  }
+
+  /* ... or the current row itself, told by the identity columns */
+  foreach (lc, ctx->identity) {
+    Var *v = (Var *)lfirst(lc);
+    Var *inner = makeVar(1, v->varattno, v->vartype, v->vartypmod,
+                         v->varcollid, 0);
+    Var *outer = (Var *)copyObject(v);
+    Node *eq;
+    outer->varlevelsup = 1;
+    eq = make_null_safe_equality((Expr *)inner, (Expr *)outer, v->vartype,
+                                 v->varcollid, true);
+    self = self == NULL ? eq
+                        : (Node *)makeBoolExpr(AND_EXPR,
+                                               list_make2(self, eq), -1);
+  }
+  if (self == NULL)
+    return NULL;                /* no column tells the rows apart */
+  quals = list_make1(makeBoolExpr(OR_EXPR, list_make2(before, self), -1));
+
+  /* The partition, matched as GROUP BY matches (two NULLs equal) */
+  foreach (lc, wc->partitionClause) {
+    SortGroupClause *p = (SortGroupClause *)lfirst(lc);
+    TargetEntry *te = get_sortgroupclause_tle(p, ctx->q->targetList);
+    Var *inner, *outer;
+    if (te == NULL || !IsA(te->expr, Var))
+      return NULL;
+    inner = makeVar(1, ((Var *)te->expr)->varattno,
+                    exprType((Node *)te->expr), exprTypmod((Node *)te->expr),
+                    exprCollation((Node *)te->expr), 0);
+    outer = (Var *)copyObject(te->expr);
+    outer->varlevelsup = 1;
+    quals = lappend(quals,
+                    make_null_safe_equality((Expr *)inner, (Expr *)outer,
+                                            inner->vartype, inner->varcollid,
+                                            true));
+  }
+  sub->jointree = makeFromExpr(list_make1(rtr),
+                               list_length(quals) == 1
+                                 ? (Node *)linitial(quals)
+                                 : (Node *)makeBoolExpr(AND_EXPR, quals, -1));
+
+  /* count(*), or count(DISTINCT k) for a dense rank */
+  count = makeNode(Aggref);
+  count->aggfnoid = dense ? F_COUNT_ANY : F_COUNT_;
+  count->aggtype = INT8OID;
+  count->aggtranstype = InvalidOid;
+  count->aggkind = AGGKIND_NORMAL;
+  count->aggstar = !dense;
+  count->location = -1;
+#if PG_VERSION_NUM >= 140000
+  count->aggno = count->aggtransno = -1;
+#endif
+  if (dense) {
+    TargetEntry *arg = makeTargetEntry((Expr *)copyObject(key_inner), 1, NULL,
+                                       false);
+    SortGroupClause *d = makeNode(SortGroupClause);
+    arg->ressortgroupref = 1;
+    count->args = list_make1(arg);
+    count->aggargtypes = list_make1_oid(keytype);
+    d->tleSortGroupRef = 1;
+    get_sort_group_operators(keytype, false, true, false, &d->sortop, &d->eqop,
+                             NULL, &d->hashable);
+    count->aggdistinct = list_make1(d);
+    count->aggorder = list_make1(copyObject(d));
+  } else
+    count->aggargtypes = NIL;
+  count_te = makeTargetEntry((Expr *)count, 1, pstrdup("rank"), false);
+  sub->targetList = list_make1(count_te);
+  sub->hasAggs = true;
+
+  sl = makeNode(SubLink);
+  sl->subLinkType = EXPR_SUBLINK;
+  sl->subselect = (Node *)sub;
+  sl->location = -1;
+  return (Expr *)sl;
+}
+
+/** @brief Mutator: each rank window over the key of @p ctx becomes the
+ *  subquery counting the rows before the current one. */
+static Node *replace_rank_window_mutator(Node *node, void *cx) {
+  rank_window_ctx *ctx = (rank_window_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, WindowFunc)) {
+    WindowFunc *wf = (WindowFunc *)node;
+    Expr *e = NULL;
+    /* dense_rank() would count the distinct keys, which is a DISTINCT on
+     * aggregate results: left untracked, as before. */
+    if (wf->winfnoid == F_RANK_ || wf->winfnoid == F_ROW_NUMBER)
+      e = make_rank_subquery(ctx, wf, false);
+    if (e == NULL) {
+      ctx->declined = true;
+      return node;
+    }
+    ctx->rewritten = true;
+    if (wf->winfnoid == F_ROW_NUMBER &&
+        OidIsValid(ctx->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK))
+      provsql_warning("row_number() over an aggregate result is tracked as "
+                      "rank(), which it differs from when groups tie on the "
+                      "ORDER BY");
+    return (Node *)e;
+  }
+  return expression_tree_mutator(node, replace_rank_window_mutator, cx);
+}
+
+/**
+ * @brief Rewrite the ranks of a window ordered by an aggregate result into
+ *        subqueries counting the rows before each row.
+ *
+ * @c rank() / @c dense_rank() / @c row_number() @c OVER @c (ORDER @c BY
+ * @c count(*)) reads a value that varies between worlds, so the rows before
+ * a row do too: the frame machinery, which reads the ordering values of the
+ * database as it is, cannot track it.  Counting the rows before instead
+ * compares the two aggregate results per pair of rows, which the rewriting
+ * of a correlated aggregate subquery and the comparison of two aggregate
+ * results already track; the count is then an aggregate result itself.
+ *
+ * Fires on a query whose @c FROM is the single relation the window ranks --
+ * a subquery with one row per group, as an aggregation gives -- whose
+ * ordering key is one of its @c agg_token columns, and which has no
+ * aggregate of its own.  Returns @c NULL, leaving @p q alone, otherwise.
+ */
+static Query *rewrite_rank_over_aggregate(const constants_t *constants,
+                                          Query *q) {
+  rank_window_ctx ctx;
+  RangeTblRef *rtr;
+  RangeTblEntry *rte;
+  ListCell *lc;
+  List *tl;
+
+  if (!q->hasWindowFuncs || q->commandType != CMD_SELECT || q->hasAggs ||
+      q->groupClause != NIL || q->groupingSets != NIL ||
+      q->setOperations != NULL || q->cteList != NIL || q->jointree == NULL ||
+      list_length(q->jointree->fromlist) != 1)
+    return NULL;
+  if (!IsA(linitial(q->jointree->fromlist), RangeTblRef))
+    return NULL;
+  rtr = (RangeTblRef *)linitial(q->jointree->fromlist);
+  rte = rt_fetch(rtr->rtindex, q->rtable);
+  if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || rte->lateral)
+    return NULL;
+
+  /* Ordered by an aggregate column of that subquery, and told apart by its
+   * other columns (the grouping ones).  The subquery is not rewritten yet, so
+   * an aggregate column is one whose entry is an aggregate (an @c agg_token
+   * once it is). */
+  ctx.constants = constants;
+  ctx.q = q;
+  ctx.rtindex = rtr->rtindex;
+  ctx.identity = NIL;
+  ctx.rewritten = ctx.declined = false;
+  {
+    bool ordered_by_agg = false;
+    ListCell *lc2;
+    foreach (lc, q->windowClause) {
+      WindowClause *wc = (WindowClause *)lfirst(lc);
+      foreach (lc2, wc->orderClause) {
+        TargetEntry *te =
+          get_sortgroupclause_tle((SortGroupClause *)lfirst(lc2),
+                                  q->targetList);
+        if (te != NULL && IsA(te->expr, Var) &&
+            ((Var *)te->expr)->varno == ctx.rtindex &&
+            ((Var *)te->expr)->varlevelsup == 0 &&
+            rte_column_is_aggregate(constants, rte, ((Var *)te->expr)->varattno))
+          ordered_by_agg = true;
+      }
+    }
+    if (!ordered_by_agg)
+      return NULL;
+  }
+  {
+    AttrNumber attno = 0;
+    foreach (lc, rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      ++attno;
+      if (te->resjunk)
+        continue;
+      if (rte_column_is_aggregate(constants, rte, attno) ||
+          (te->resname != NULL &&
+           strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0))
+        continue;
+      ctx.identity =
+        lappend(ctx.identity,
+                makeVar(ctx.rtindex, attno, exprType((Node *)te->expr),
+                        exprTypmod((Node *)te->expr),
+                        exprCollation((Node *)te->expr), 0));
+    }
+  }
+  if (ctx.identity == NIL)
+    return NULL;
+
+  tl = NIL;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)copyObject(lfirst(lc));
+    te->expr = (Expr *)replace_rank_window_mutator((Node *)te->expr, &ctx);
+    tl = lappend(tl, te);
+  }
+  if (!ctx.rewritten || ctx.declined)
+    return NULL;                /* all of them, or none */
+  q->targetList = tl;
+  q->hasWindowFuncs = contain_windowfuncs((Node *)q->targetList);
+  if (!q->hasWindowFuncs)
+    q->windowClause = NIL;
+  q->hasSubLinks = true;
+  return q;
+}
+
 static Query *process_query(const constants_t *constants, Query *q,
                             bool **removed, bool wrap_root, bool top_level,
                             bool in_boolean_rewrite,
@@ -20801,6 +21313,24 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active) {
     normalize_outer_join_tree(constants, q);
     lower_outer_joins(constants, q);
+  }
+
+  /* A window over the aggregates of this level: the aggregation moves to a
+   * subquery, the windows read its columns. */
+  if (provsql_active && has_provenance(constants, q)) {
+    Query *split = split_window_over_aggregates(constants, q);
+    if (split)
+      return process_query(constants, split, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
+
+  /* A rank over an aggregate result: the subquery counting the rows before
+   * each row, which the correlated-subquery rewriting tracks. */
+  if (provsql_active && has_provenance(constants, q)) {
+    Query *ranked = rewrite_rank_over_aggregate(constants, q);
+    if (ranked)
+      return process_query(constants, ranked, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
   }
 
   /* ORDER BY ... LIMIT k: the filter of a rank.  Before the provenance

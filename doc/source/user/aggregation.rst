@@ -386,9 +386,33 @@ The other window functions still run, with a ``WARNING``: each row
 keeps the provenance of its input row, and the value is an opaque
 scalar. These are ``ntile``, ``percent_rank``, ``cume_dist``, the offset
 functions (``lag``, ``lead``, ``first_value``, ``last_value``,
-``nth_value``), ``ROWS`` and ``GROUPS`` frames with an offset, and
-windows over the aggregates of a ``GROUP BY`` or over aggregate columns
-of a subquery.
+``nth_value``), ``ROWS`` and ``GROUPS`` frames with an offset, and the
+windows over aggregate results other than the ranks below (an aggregate
+over them, ``dense_rank``, a ``PARTITION BY`` on one).
+
+.. _rank-over-aggregate:
+
+Ranking the groups of an aggregation
+-------------------------------------
+
+``rank()`` and ``row_number()`` over an ``ORDER BY`` that reads an
+aggregate result -- the aggregates of the query's own ``GROUP BY``, or
+the aggregate columns of a subquery -- are tracked:
+
+.. code-block:: postgresql
+
+    SELECT tag, count(*) AS n, rank() OVER (ORDER BY count(*) DESC)
+    FROM posttags GROUP BY tag;
+
+The value ranked on varies between worlds, so the groups before a group
+do too, and the frame machinery above, which reads the ordering values
+of the database as it is, does not apply. The rank is read instead as
+the number of groups that come before the group, itself included, which
+compares the two aggregate results for each pair of groups: a group's
+rank is then an aggregate result of its own, whose distribution
+:sqlfunc:`expected` and the others report. ``ORDER BY`` an aggregate
+with a ``LIMIT`` is the filter of that rank (see :ref:`limit`), so the
+top ``k`` groups are those that are among the first ``k`` in a world.
 
 ``ORDER BY`` on a window value sorts on its displayed value.
 

@@ -170,6 +170,11 @@ that condition, and not just the first ``k`` rows of the actual data:
     ORDER BY salary DESC
     LIMIT 3;
 
+The rows ordered may be the groups of an aggregation, ranked on one of
+their aggregates (``GROUP BY tag ORDER BY count(*) DESC LIMIT 10``, the
+ten commonest tags): a group is then kept in the worlds where at most
+``k`` groups have a greater count (see :ref:`rank-over-aggregate`).
+
 ``FETCH FIRST k ROWS WITH TIES`` keeps a row when fewer than ``k``
 present rows come strictly before it, so that the rows tied with the
 ``k``-th are kept as well (``rank()``). ``LIMIT k`` and
@@ -223,7 +228,8 @@ part is a constant; ProvSQL says which part in a ``WARNING``:
 
 * a window function other than those of :ref:`window-aggregates`, whose
   value is the one of the data as it is;
-* a window partitioned or ordered by an aggregate result;
+* a window partitioned by an aggregate result, or ordered by one other
+  than the tracked ranks (see :ref:`rank-over-aggregate`);
 * a subquery in a position no rewriting handles (a scalar subquery
   nested in an expression, a subquery in a query over no tracked
   relation);
