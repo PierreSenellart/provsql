@@ -361,3 +361,39 @@ SELECT g, l::text AS ln, s::text AS sqrt, p::text AS pow, e::text AS exp,
 FROM agg_fn_r ORDER BY g;
 SET provsql.active = on;
 DROP TABLE agg_fn_r; DROP TABLE agg_fn_d;
+
+-- Arithmetic whose result is a floating-point number is tracked as well: the
+-- gate computes in numeric, so the value differs from what real arithmetic
+-- prints in its last digits, and in exchange the division carries provenance.
+-- A cast the query writes to widen an aggregate to real is subsumed by that
+-- numeric arithmetic and is peeled to expose the aggregate; left in place, the
+-- resolution would rather cast both operands to random_variable, a type both
+-- reach implicitly, whose operators carry no aggregate.  Over the worlds of
+-- the four rows of the first group, each present with probability one half,
+-- count(*) is 1, 2, 3 or 4 with probability 4/16, 6/16, 4/16 and 1/16, so
+-- 100 / count(*) is 50 in 0.375 of the worlds and above 30 in all but the
+-- empty one and the full one, 0.875.
+CREATE TABLE agg_fl_d(g int, v int);
+INSERT INTO agg_fl_d VALUES (1, 1), (1, 2), (1, 3), (1, 4), (2, NULL);
+SELECT add_provenance('agg_fl_d');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_fl_d; END $$;
+CREATE TABLE agg_fl_r AS
+  SELECT g, 100 / CAST(count(v) AS REAL) AS r FROM agg_fl_d GROUP BY g;
+SET provsql.active = off;
+-- No row of the second group contributes to count(v), so the division has no
+-- value to read: NULL, as every arithmetic on an aggregate without a value,
+-- where the plain value would divide by the zero count(v) returns there.
+SELECT g, r::text AS r FROM agg_fl_r ORDER BY g;
+SET provsql.active = on;
+DROP TABLE agg_fl_r;
+CREATE TABLE agg_fl_r AS SELECT g, probability(provenance()) AS p
+  FROM agg_fl_d GROUP BY g HAVING 100 / CAST(count(*) AS REAL) = 50;
+SELECT remove_provenance('agg_fl_r');
+SELECT g, round(p::numeric, 6) AS p FROM agg_fl_r ORDER BY g;
+DROP TABLE agg_fl_r;
+CREATE TABLE agg_fl_r AS SELECT g, probability(provenance()) AS p
+  FROM agg_fl_d GROUP BY g HAVING 100 / CAST(count(*) AS REAL) > 30;
+SELECT remove_provenance('agg_fl_r');
+SELECT g, round(p::numeric, 6) AS p FROM agg_fl_r ORDER BY g;
+DROP TABLE agg_fl_r;
+DROP TABLE agg_fl_d;

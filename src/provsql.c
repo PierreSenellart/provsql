@@ -8212,6 +8212,62 @@ static Node *peel_agg_casts(Node *n) {
  * arithmetic on @c random_variable.  Returns the rebuilt @c agg_token
  * expression, or @c NULL if @p op is not arithmetic over an aggregate.
  */
+/**
+ * @brief The aggregate result under a widening numeric cast, or @c NULL.
+ *
+ * @c CAST(count(*) @c AS @c real) reads the count as a number and widens it:
+ * the aggregate is under two casts, the one ProvSQL inserts to read its value
+ * and the one the query writes.  Since the @c agg_token arithmetic computes in
+ * numeric, which every such widening subsumes, the operand is taken as the
+ * aggregate itself and the operation is carried by a gate.
+ *
+ * Only a widening is peeled -- to numeric without a typmod, to @c real or to
+ * @c double @c precision.  A cast that rounds or truncates
+ * (@c CAST(avg(x) @c AS @c int), @c CAST(sum(x) @c AS @c numeric(10,2))) is
+ * part of what the query computes and is left where it is.
+ */
+static Node *peel_widening_agg_cast(Node *n, const constants_t *constants) {
+  Node *inner;
+  Oid t = exprType(n);
+
+  if (t != NUMERICOID && t != FLOAT4OID && t != FLOAT8OID)
+    return NULL;
+  if (t == NUMERICOID && exprTypmod(n) != -1)
+    return NULL;
+  if (IsA(n, FuncExpr) && list_length(((FuncExpr *)n)->args) == 1 &&
+      (((FuncExpr *)n)->funcformat == COERCE_IMPLICIT_CAST ||
+       ((FuncExpr *)n)->funcformat == COERCE_EXPLICIT_CAST))
+    inner = (Node *)linitial(((FuncExpr *)n)->args);
+  else if (IsA(n, RelabelType))
+    inner = (Node *)((RelabelType *)n)->arg;
+  else
+    return NULL;
+  inner = peel_agg_casts(inner);
+  return exprType(inner) == constants->OID_TYPE_AGG_TOKEN ? inner : NULL;
+}
+
+/**
+ * @brief The operand an @c agg_token operator can be given, as @c numeric.
+ *
+ * The @c agg_token arithmetic operators take their other operand as
+ * @c numeric, which every integer type reaches by an implicit cast.  A
+ * floating-point one does not: @c real and @c double @c precision only reach
+ * @c numeric by an assignment cast, so resolution would rather cast BOTH
+ * operands to @c random_variable -- a type both reach implicitly, whose
+ * operators carry no aggregate -- and the swap would then be declined.  The
+ * cast is written here instead, the gate computing in @c numeric anyway.
+ */
+static Node *agg_arith_numeric_operand(Node *n) {
+  Oid t = exprType(n);
+  Node *num;
+
+  if (t != FLOAT4OID && t != FLOAT8OID)
+    return n;
+  num = coerce_to_target_type(NULL, n, t, NUMERICOID, -1, COERCION_ASSIGNMENT,
+                              COERCE_IMPLICIT_CAST, -1);
+  return num != NULL ? num : n;
+}
+
 static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   char *opname;
   bool is_arith;
@@ -8228,15 +8284,21 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
              strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0 ||
              strcmp(opname, "^") == 0;
-  /* Only arithmetic whose result is an integer or a numeric: floating-point
-   * arithmetic (CAST(count(*) AS real) / 30) stays as the query wrote it, on
-   * the values (the agg_token operators compute in numeric, which does not
-   * round as real / double precision do), and so does arithmetic on other
-   * types (a timestamp minus a timestamp). */
+  /* Only arithmetic whose result is a number: arithmetic on other types (a
+   * timestamp minus a timestamp) stays as the query wrote it, on the values.
+   *
+   * A floating-point result is taken as well, though the agg_token operators
+   * compute in numeric and do not round as real / double precision do: what
+   * the value loses in its last digits, the result gains in being tracked at
+   * all -- and a division whose divisor is an aggregate that no row of the
+   * actual data contributes to gives NULL here, where reading the value
+   * divided by the zero it reads there. */
   if (!is_arith || !(op->opresulttype == INT2OID ||
                     op->opresulttype == INT4OID ||
                     op->opresulttype == INT8OID ||
-                    op->opresulttype == NUMERICOID)) {
+                    op->opresulttype == NUMERICOID ||
+                    op->opresulttype == FLOAT4OID ||
+                    op->opresulttype == FLOAT8OID)) {
     pfree(opname);
     return NULL;
   }
@@ -8250,6 +8312,18 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   }
   lp = l ? peel_agg_casts(l) : NULL;
   rp = peel_agg_casts(r);
+  /* An aggregate under a widening cast the query writes is still the
+   * aggregate, the gate's numeric arithmetic subsuming that widening. */
+  if (lp != NULL && exprType(lp) != constants->OID_TYPE_AGG_TOKEN) {
+    Node *w = peel_widening_agg_cast(lp, constants);
+    if (w != NULL)
+      lp = w;
+  }
+  if (exprType(rp) != constants->OID_TYPE_AGG_TOKEN) {
+    Node *w = peel_widening_agg_cast(rp, constants);
+    if (w != NULL)
+      rp = w;
+  }
 
   if (!((lp && exprType(lp) == constants->OID_TYPE_AGG_TOKEN) ||
         exprType(rp) == constants->OID_TYPE_AGG_TOKEN)) {
@@ -8264,6 +8338,10 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     l = lp;
   if (exprType(rp) == constants->OID_TYPE_AGG_TOKEN)
     r = rp;
+  if (l != NULL && exprType(l) != constants->OID_TYPE_AGG_TOKEN)
+    l = agg_arith_numeric_operand(l);
+  if (exprType(r) != constants->OID_TYPE_AGG_TOKEN)
+    r = agg_arith_numeric_operand(r);
 
   pstate = make_parsestate(NULL);
   {

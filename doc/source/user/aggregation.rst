@@ -184,6 +184,22 @@ into real (numeric) division.  The displayed value of such an expression in
 the ``SELECT`` list follows the same rule: ``count(*) / 2`` shows ``1`` for
 a count of 3.
 
+Arithmetic whose result is a floating-point number (``real``, ``double
+precision``) is tracked as well, and a widening cast the query writes to
+reach it -- ``users.downvotes / CAST(count(posts.id) AS REAL)`` -- does not
+stop the tracking: the operation is carried by the token and computed in
+``numeric``, which subsumes that widening.  Two differences follow from
+computing in ``numeric`` rather than in floating point.  The value differs
+in its last digits from what the same expression prints without provenance
+(``100 / CAST(count(*) AS REAL)`` over a count of 15 gives
+``6.6666666666666667`` here and ``6.6666665`` there, ``real`` carrying
+seven digits), so compare such values with a tolerance rather than
+digit for digit.  And a division by an aggregate that the data as it is
+makes zero has no value, ``NULL``, where plain PostgreSQL raises a
+division-by-zero error and returns nothing at all: the row is kept, with
+its provenance, and reading its value says only that this one world has
+none.
+
 The ``choose`` Aggregate
 -------------------------
 

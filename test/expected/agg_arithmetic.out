@@ -191,7 +191,7 @@ r|a|f|e
 933.33|28.0|9.333333|7
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
 remove_provenance
 
 (1 row)
@@ -298,9 +298,9 @@ remove_provenance
 
 (1 row)
 city|r
-Berlin|1
-New York|1
-Paris|1
+Berlin|1.00000000000000000000 (*)
+New York|1.00000000000000000000 (*)
+Paris|1.00000000000000000000 (*)
 (3 rows)
 remove_provenance
 
@@ -332,4 +332,27 @@ WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 g|ln|sqrt|pow|exp|e_ln|e_sqrt
 1|1.3862943611198906|2.000000000000000|16.000000000000000|54.598150033144239|0.902683|1.601961
 2|2.1972245773362194|3.000000000000000|81.000000000000000|8103.0839275753840|2.197225|3.000000
+(2 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+g|r
+1|25.0000000000000000
+2|NULL
+(2 rows)
+remove_provenance
+
+(1 row)
+g|p
+1|0.375000
+2|0.000000
+(2 rows)
+remove_provenance
+
+(1 row)
+g|p
+1|0.875000
+2|0.500000
 (2 rows)
