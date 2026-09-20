@@ -12655,6 +12655,87 @@ static bool join_tree_has_outer_join(Node *n) {
   return false;
 }
 
+/** @brief Collect into @p idx the range-table indexes @p jtnode reads. */
+static void oj_jointree_rtindexes(Node *jtnode, Bitmapset **idx) {
+  if (jtnode == NULL)
+    return;
+  if (IsA(jtnode, RangeTblRef))
+    *idx = bms_add_member(*idx, ((RangeTblRef *)jtnode)->rtindex);
+  else if (IsA(jtnode, FromExpr)) {
+    ListCell *lc;
+    foreach (lc, ((FromExpr *)jtnode)->fromlist)
+      oj_jointree_rtindexes((Node *)lfirst(lc), idx);
+  } else if (IsA(jtnode, JoinExpr)) {
+    JoinExpr *je = (JoinExpr *)jtnode;
+    oj_jointree_rtindexes(je->larg, idx);
+    oj_jointree_rtindexes(je->rarg, idx);
+    if (je->rtindex > 0)
+      *idx = bms_add_member(*idx, je->rtindex);
+  }
+}
+
+/** @brief Context for @c oj_reads_rtindexes_walker. */
+typedef struct oj_reads_ctx {
+  Bitmapset *idx;    ///< The range-table entries looked for
+  int sublevels_up;  ///< Their level, counted from the node walked
+} oj_reads_ctx;
+
+/** @brief Walker: a Var of level @c sublevels_up reading one of @c idx. */
+static bool oj_reads_rtindexes_walker(Node *node, oj_reads_ctx *ctx) {
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    return (int)v->varlevelsup == ctx->sublevels_up &&
+           bms_is_member(v->varno, ctx->idx);
+  }
+  if (IsA(node, Query)) {
+    bool found;
+    ++ctx->sublevels_up;
+    /* No QTW_EXAMINE_RTES_*: the walker reads expressions, and the range
+     * table entries themselves are no expressions (the default descends into
+     * their subqueries and function calls all the same). */
+    found = query_tree_walker((Query *)node, oj_reads_rtindexes_walker,
+                              (void *)ctx, 0);
+    --ctx->sublevels_up;
+    return found;
+  }
+  return expression_tree_walker(node, oj_reads_rtindexes_walker, (void *)ctx);
+}
+
+/**
+ * @brief Whether the LATERAL entry @p r reads a row of @p idx, the entries of
+ *        the outer join that @c lower_outer_joins moves into a subquery.
+ *
+ * Such a LATERAL cannot follow the join there -- its reference would have to
+ * reach inside that subquery -- whereas one that reads nothing of the join (a
+ * LATERAL over constants, or over another item of the same FROM) is no
+ * obstacle and stays where it is.
+ */
+static bool oj_lateral_reads_join(RangeTblEntry *r, Bitmapset *idx) {
+  oj_reads_ctx ctx;
+  ctx.idx = idx;
+  if (r->rtekind == RTE_SUBQUERY) {
+    /* The walker steps into the subquery, which is where the level of an
+     * outer reference is counted from: it reads its siblings one level up. */
+    ctx.sublevels_up = 0;
+    return oj_reads_rtindexes_walker((Node *)r->subquery, &ctx);
+  }
+  /* A function or VALUES entry reads its siblings at its own level.  Its
+   * RangeTblFunction wrappers are no expressions, so each one's call is
+   * walked rather than the list that holds them. */
+  ctx.sublevels_up = 0;
+  {
+    ListCell *lc;
+    foreach (lc, r->functions) {
+      RangeTblFunction *f = (RangeTblFunction *)lfirst(lc);
+      if (oj_reads_rtindexes_walker(f->funcexpr, &ctx))
+        return true;
+    }
+  }
+  return oj_reads_rtindexes_walker((Node *)r->values_lists, &ctx);
+}
+
 /**
  * @brief Bring the outer joins of @p q to the shape @c lower_outer_joins
  *        lowers: one outer join of two range-table entries as the whole FROM.
@@ -12675,9 +12756,23 @@ static bool normalize_outer_join_tree(const constants_t *constants, Query *q) {
   if (q->commandType != CMD_SELECT || q->jointree == NULL ||
       q->setOperations != NULL || !has_provenance(constants, q))
     return false;
-  foreach (lc, q->rtable) {
-    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-    if (r->lateral)
+  /* A LATERAL item that reads a row of the outer join cannot follow it into
+   * the subquery the lowering moves it to (@c oj_lateral_reads_join); one
+   * that reads it not at all stays where it is. */
+  {
+    Bitmapset *joined = NULL;
+    bool reads = false;
+
+    foreach (lc, q->jointree->fromlist)
+      if (join_tree_has_outer_join((Node *)lfirst(lc)))
+        oj_jointree_rtindexes((Node *)lfirst(lc), &joined);
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->lateral && oj_lateral_reads_join(r, joined))
+        reads = true;
+    }
+    bms_free(joined);
+    if (reads)
       return false;
   }
   {

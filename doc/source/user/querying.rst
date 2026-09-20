@@ -123,7 +123,10 @@ error (``XX000``):
   ALL``, which keeps as many copies as the side with fewer has: use
   ``INTERSECT``, or ``IN`` / ``EXISTS``
 * **Outer joins with a provenance-tracked relation on a null-padded
-  side** in a query with a ``LATERAL`` item, or whose ``USING`` /
+  side** beside a ``LATERAL`` item that reads a row of the join itself
+  (the lowering moves the join into a subquery, which such a ``LATERAL``
+  cannot follow; one over constants, or over another item of the same
+  ``FROM``, is fine), or whose ``USING`` /
   ``NATURAL`` merged column is read (see
   :doc:`the chapter on NULLs <nulls>`): refused with an explicit error;
   an outer join whose null-padded side is untracked is fine

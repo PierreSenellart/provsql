@@ -332,3 +332,50 @@ SELECT remove_provenance('ojc_r');
 SELECT * FROM ojc_r ORDER BY q, id, t NULLS FIRST, w NULLS FIRST, p;
 DROP TABLE ojc_r;
 DROP TABLE ojc_a, ojc_b, ojc_c;
+
+-- An outer join beside a LATERAL item.  The lowering moves the join into a
+-- subquery of its own, which a LATERAL reading one of its rows cannot follow:
+-- that one is refused, and only that one.  A LATERAL over constants, or over
+-- another item of the same FROM, stays where it is and the join is lowered as
+-- usual.
+CREATE TABLE ojl_l(id int, m text);
+CREATE TABLE ojl_r(id int, m text);
+CREATE TABLE ojl_o(k int);
+INSERT INTO ojl_l VALUES (1, 'a'), (2, 'b');
+INSERT INTO ojl_r VALUES (1, 'a');
+INSERT INTO ojl_o VALUES (7);
+SELECT add_provenance('ojl_l');
+SELECT add_provenance('ojl_r');
+SELECT add_provenance('ojl_o');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ojl_l;
+        PERFORM set_prob(provenance(), 0.5) FROM ojl_r;
+        PERFORM set_prob(provenance(), 0.5) FROM ojl_o; END $$;
+
+-- A LATERAL over constants: the rows of the left join, each with its own
+-- probability (the matched row needs both, a padded one the left row without
+-- the right, and the row that matches nothing only itself).
+CREATE TABLE ojl_res AS
+  SELECT 'lateral over constants' AS q, l.id, r.id AS rid, x.k,
+         round(probability_evaluate(provenance())::numeric, 4) AS p
+  FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m, LATERAL (SELECT 1 AS k) x
+  UNION ALL
+  -- A LATERAL reading another item of the same FROM: every row also needs
+  -- that item, so each probability is halved.
+  SELECT 'lateral over a sibling', l.id, r.id, y.k,
+         round(probability_evaluate(provenance())::numeric, 4)
+  FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m, ojl_o o,
+       LATERAL (SELECT o.k + 1 AS k) y;
+SELECT remove_provenance('ojl_res');
+SELECT * FROM ojl_res ORDER BY q, id, rid NULLS FIRST;
+DROP TABLE ojl_res;
+
+-- A LATERAL reading a row of the join itself, as a subquery and as a
+-- function: refused, rather than lowered into something that cannot read it.
+SELECT l.id, x.k
+  FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m,
+       LATERAL (SELECT l.id + 1 AS k) x;
+SELECT l.id, z.k
+  FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m,
+       LATERAL unnest(ARRAY[l.id]) z(k);
+
+DROP TABLE ojl_l, ojl_r, ojl_o;
