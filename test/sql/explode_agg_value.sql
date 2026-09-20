@@ -62,12 +62,58 @@ SELECT remove_provenance('eav_s');
 SELECT * FROM eav_s ORDER BY c;
 DROP TABLE eav_s;
 
+-- A DISTINCT over the aggregates of its own level: the aggregation moves to a
+-- subquery and the DISTINCT deduplicates the values, giving the rows of the
+-- GROUP BY above.
+CREATE TABLE eav_sd AS
+  SELECT DISTINCT count(*) AS c FROM eav GROUP BY g;
+SET provsql.active = off;
+SELECT c, round(probability_evaluate(provsql)::numeric, 6) AS pr
+FROM eav_sd ORDER BY c;
+SET provsql.active = on;
+DROP TABLE eav_sd;
+
+-- The same with the grouping column kept: one row per group and per value it
+-- takes, each with the probability of the group taking it.
+CREATE TABLE eav_sg AS
+  SELECT DISTINCT g, count(*) AS c FROM eav GROUP BY g;
+SET provsql.active = off;
+SELECT g, c, round(probability_evaluate(provsql)::numeric, 6) AS pr
+FROM eav_sg ORDER BY g, c;
+SET provsql.active = on;
+DROP TABLE eav_sg;
+
+-- A UNION (non-ALL) of aggregate results: the values of both arms are
+-- exploded, and the deduplication is over them.  The second arm counts only
+-- the rows over 20, so the value 1 is there unless every group of either arm
+-- has all its rows (0.875) and 2 as soon as one of them has two (0.4375).
+CREATE TABLE eav_u AS
+  SELECT count(*) AS c FROM eav GROUP BY g
+  UNION
+  SELECT count(*) FROM eav WHERE v > 20 GROUP BY g;
+SET provsql.active = off;
+SELECT c, round(probability_evaluate(provsql)::numeric, 6) AS pr
+FROM eav_u ORDER BY c;
+SET provsql.active = on;
+DROP TABLE eav_u;
+
+-- EXCEPT matches the rows it removes on those values: refused, as is a UNION
+-- whose other arm aggregates nothing at that column.
+SELECT count(*) AS c FROM eav GROUP BY g
+  EXCEPT
+  SELECT count(*) FROM eav WHERE v > 20 GROUP BY g;
+SELECT count(*) AS c FROM eav GROUP BY g UNION SELECT 1;
+SELECT count(*) AS c FROM eav GROUP BY g
+  INTERSECT
+  SELECT count(*) FROM eav WHERE v > 20 GROUP BY g;
+
 -- The values of a sum are its subset sums, which are not read off its
--- contributions one by one: refused, as is grouping by the value of any
--- aggregate other than count(), min(), max() and choose().
+-- contributions one by one: refused, as is grouping by or deduplicating on the
+-- value of any aggregate other than count(), min(), max() and choose().
 SELECT total FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s
   GROUP BY total;
 SELECT DISTINCT total FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s;
+SELECT DISTINCT sum(v) AS total FROM eav GROUP BY g;
 
 -- The plain value of the sum, said explicitly, groups as plain SQL does.
 CREATE TABLE eav_p AS

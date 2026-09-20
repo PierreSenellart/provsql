@@ -479,6 +479,24 @@ is.  Grouping, deduplicating or uniting on the column is then an
 operation on data like any other, and the row of a value has the
 probability that some group takes it.
 
+The value is read the same way wherever it is read as data: from a
+subquery, as above, or at the level of the aggregation itself.  A
+``SELECT DISTINCT count(*) ... GROUP BY city`` computes its aggregation in
+a subquery and deduplicates the values above it, and a ``UNION`` (non-ALL)
+explodes the aggregate of each of its arms and deduplicates over the
+values of all of them:
+
+.. code-block:: postgresql
+
+    SELECT count(*) FROM employees GROUP BY city
+    UNION
+    SELECT count(*) FROM employees WHERE remote GROUP BY city;
+
+``EXCEPT`` and ``INTERSECT`` over aggregate results are refused, as is a
+``UNION`` whose other arm aggregates nothing at that column: only the
+values of a whole column, exploded in every arm, are deduplicated
+together.  ``UNION ALL`` keeps every row and needs none of this.
+
 An aggregate over exploded rows -- the ``count(*)`` above -- is an
 aggregate over rows that are uncertain like any others: its displayed
 value is the one of the database as it is, and :sqlfunc:`expected` and

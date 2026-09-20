@@ -129,11 +129,13 @@ error (``XX000``):
   an outer join whose null-padded side is untracked is fine
 * ``DISTINCT ON`` over an aggregation, a set operation, or keys or an
   order on values that vary between worlds
-* **Operations on aggregate results requiring comparison or duplicate
-  elimination:** ``DISTINCT`` on aggregates, ``UNION``/``EXCEPT``
-  (non-ALL) with aggregates, ``GROUP BY`` on aggregate results from a
-  subquery, and an aggregate of them other than one of the same kind
-  (see :ref:`reaggregation`)
+* **Operations on the value of an aggregate whose values are not read off
+  its contributions:** grouping by, deduplicating on or uniting on the
+  value of an aggregate other than a ``count``, a ``min``, a ``max`` or a
+  :sqlfunc:`choose`, which are exploded into one row per value they take
+  (see :ref:`explode-agg-value`); ``EXCEPT`` and ``INTERSECT`` (non-ALL)
+  over aggregate results; and an aggregate of them other than one of the
+  same kind (see :ref:`reaggregation`)
 * `Window functions <https://www.postgresql.org/docs/current/tutorial-window.html>`_
   other than aggregates over a frame determined by values and the ranks
   ``RANK``, ``DENSE_RANK``, ``ROW_NUMBER`` (see

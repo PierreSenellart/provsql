@@ -257,6 +257,11 @@ static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
                                      Node *e);
 static bool query_has_own_sublinks(Query *q);
 static Var *group_key_var(Query *q, TargetEntry *te);
+static Query *split_aggregation_into_subquery(Query *q);
+static bool agg_column_explodable(const constants_t *constants,
+                                  RangeTblEntry *rte, AttrNumber attno);
+static bool rte_column_is_aggregate(const constants_t *constants,
+                                    RangeTblEntry *rte, AttrNumber attno);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
 static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
                                      bool nullable);
@@ -17704,6 +17709,46 @@ static bool aggref_values_are_contributions(const constants_t *constants,
 }
 
 /**
+ * @brief Whether column @p attno of every arm of the set-operation tree @p n
+ *        of @p q is an aggregate that can be exploded.
+ *
+ * An arm that aggregates nothing there -- a constant row, a column of a
+ * relation -- is not explodable: its value would be deduplicated against
+ * values that are one per possible world.
+ */
+static bool setop_column_explodable(const constants_t *constants, Query *q,
+                                    Node *n, AttrNumber attno) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, RangeTblRef))
+    return agg_column_explodable(
+      constants, rt_fetch(((RangeTblRef *)n)->rtindex, q->rtable), attno);
+  if (IsA(n, SetOperationStmt))
+    return setop_column_explodable(constants, q,
+                                   ((SetOperationStmt *)n)->larg, attno) &&
+           setop_column_explodable(constants, q,
+                                   ((SetOperationStmt *)n)->rarg, attno);
+  return false;
+}
+
+/** @brief Whether column @p attno of some arm of the set-operation tree @p n
+ *  of @p q is an aggregate result. */
+static bool setop_column_has_aggregate(const constants_t *constants, Query *q,
+                                       Node *n, AttrNumber attno) {
+  if (n == NULL)
+    return false;
+  if (IsA(n, RangeTblRef))
+    return rte_column_is_aggregate(
+      constants, rt_fetch(((RangeTblRef *)n)->rtindex, q->rtable), attno);
+  if (IsA(n, SetOperationStmt))
+    return setop_column_has_aggregate(constants, q,
+                                      ((SetOperationStmt *)n)->larg, attno) ||
+           setop_column_has_aggregate(constants, q,
+                                      ((SetOperationStmt *)n)->rarg, attno);
+  return false;
+}
+
+/**
  * @brief Whether column @p attno of the subquery @p rte is the result of an
  *        aggregate that can be exploded into one row per value it takes.
  *
@@ -17726,6 +17771,11 @@ static bool agg_column_explodable(const constants_t *constants,
     if (rte->rtekind != RTE_SUBQUERY || rte->subquery == NULL || attno < 1 ||
         attno > list_length(rte->subquery->targetList))
       return false;
+    /* A set operation reads its column from each of its arms, and its own
+     * entry names the first one only: every arm has to explode. */
+    if (rte->subquery->setOperations != NULL)
+      return setop_column_explodable(constants, rte->subquery,
+                                     rte->subquery->setOperations, attno);
     te = get_tle_by_resno(rte->subquery->targetList, attno);
     if (te == NULL)
       return false;
@@ -17739,6 +17789,19 @@ static bool agg_column_explodable(const constants_t *constants,
       return false;
     rte = rt_fetch(v->varno, rte->subquery->rtable);
     attno = v->varattno;
+  }
+  return false;
+}
+
+/** @brief Whether every operation of the set-operation tree @p n is a
+ *  @c UNION. */
+static bool setop_tree_all_union(Node *n) {
+  if (n == NULL || IsA(n, RangeTblRef))
+    return true;
+  if (IsA(n, SetOperationStmt)) {
+    SetOperationStmt *st = (SetOperationStmt *)n;
+    return st->op == SETOP_UNION && setop_tree_all_union(st->larg) &&
+           setop_tree_all_union(st->rarg);
   }
   return false;
 }
@@ -21011,13 +21074,6 @@ static bool window_reads_aggregate(Query *q) {
  */
 static Query *split_window_over_aggregates(const constants_t *constants,
                                            Query *q) {
-  pull_aggregates_ctx ctx;
-  Query *inner;
-  RangeTblEntry *rte;
-  RangeTblRef *rtr;
-  List *tl = NIL, *colnames = NIL;
-  ListCell *lc;
-
   if (!q->hasWindowFuncs || q->commandType != CMD_SELECT ||
       !(q->hasAggs || q->groupClause != NIL) || q->groupingSets != NIL ||
       q->setOperations != NULL || q->cteList != NIL ||
@@ -21026,6 +21082,30 @@ static Query *split_window_over_aggregates(const constants_t *constants,
       q->rowMarks != NIL || q->jointree == NULL ||
       !window_reads_aggregate(q))
     return NULL;
+  return split_aggregation_into_subquery(q);
+}
+
+/**
+ * @brief Compute the aggregation of @p q in a subquery, @p q keeping what
+ *        reads its results.
+ *
+ * The aggregation -- the @c FROM, the @c GROUP @c BY, the @c HAVING and the
+ * aggregates of the target list -- moves to a subquery exposing its grouping
+ * columns and its aggregates, and @p q reads those columns.  What it does
+ * with them is left to it: the windows of
+ * @c split_window_over_aggregates, the @c DISTINCT of
+ * @c split_distinct_over_aggregates.
+ *
+ * Returns @c NULL, leaving @p q alone, when the aggregation has nothing to
+ * expose or a grouping expression is not one of its columns.
+ */
+static Query *split_aggregation_into_subquery(Query *q) {
+  pull_aggregates_ctx ctx;
+  Query *inner;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  List *tl = NIL, *colnames = NIL;
+  ListCell *lc;
 
 #if PG_VERSION_NUM >= 180000
   /* The grouping columns read the virtual GROUP entry of the range table,
@@ -21107,6 +21187,55 @@ static Query *split_window_over_aggregates(const constants_t *constants,
   q->havingQual = NULL;
   q->hasAggs = false;
   q->hasSubLinks = checkExprHasSubLink((Node *)q->targetList);
+  return q;
+}
+
+/**
+ * @brief Compute the aggregation of @p q in a subquery when a @c DISTINCT of
+ *        its own deduplicates its results.
+ *
+ * @c SELECT @c DISTINCT @c count(*) @c ... @c GROUP @c BY @c g deduplicates
+ * values that are one per possible world, which is no operation on the data
+ * as it is: the aggregation moves to a subquery and the @c DISTINCT stays
+ * above it, where the aggregate is exploded into one row per value it takes
+ * (@c rewrite_explode_agg_value) and the deduplication is over data.
+ *
+ * Returns @c NULL, leaving @p q alone, when @p q has no @c DISTINCT over an
+ * aggregate of its own, or on a shape it does not split (a @c DISTINCT
+ * @c ON, a window, a set operation, a @c WITH, a @c LIMIT).
+ */
+static Query *split_distinct_over_aggregates(const constants_t *constants,
+                                             Query *q) {
+  List *kept = NIL;
+  AttrNumber resno = 0;
+  ListCell *lc;
+
+  if (q->distinctClause == NIL || q->hasDistinctOn || !q->hasAggs ||
+      q->commandType != CMD_SELECT || q->hasWindowFuncs ||
+      q->groupingSets != NIL || q->setOperations != NULL ||
+      q->cteList != NIL || q->limitCount != NULL || q->limitOffset != NULL ||
+      q->rowMarks != NIL || q->jointree == NULL ||
+      !OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES))
+    return NULL;
+  if (split_aggregation_into_subquery(q) == NULL)
+    return NULL;
+
+  /* The grouping keys the query does not select are the subquery's business
+   * now: a DISTINCT is over the columns the query selects, and one entry more
+   * than it has would read as a DISTINCT that does not cover them. */
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk &&
+        (te->ressortgroupref == 0 ||
+         (get_sortgroupref_clause_noerr(te->ressortgroupref,
+                                        q->distinctClause) == NULL &&
+          get_sortgroupref_clause_noerr(te->ressortgroupref,
+                                        q->sortClause) == NULL)))
+      continue;
+    te->resno = ++resno;
+    kept = lappend(kept, te);
+  }
+  q->targetList = kept;
   return q;
 }
 
@@ -21856,15 +21985,37 @@ static Query *process_query(const constants_t *constants, Query *q,
   if (provsql_active && q->setOperations != NULL &&
       IsA(q->setOperations, SetOperationStmt) &&
       ((SetOperationStmt *)q->setOperations)->op == SETOP_INTERSECT &&
-      has_provenance(constants, q))
+      has_provenance(constants, q)) {
+    /* The intersection matches its rows on their values, which for an
+     * aggregate are one per possible world: said here rather than left to
+     * the comparison the rewriting below would build out of them. */
+    SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
+    AttrNumber col;
+
+    for (col = 1; col <= (AttrNumber)list_length(stmt->colTypes); ++col)
+      if (setop_column_has_aggregate(constants, q, q->setOperations, col))
+        provsql_unsupported(
+          "INTERSECT on aggregate results is not supported: the rows it keeps "
+          "are matched on values that are one per possible world; UNION of "
+          "them is supported, and casting the aggregate explicitly "
+          "(::numeric, ::text, ...) reads its plain value");
     return process_query(constants, rewrite_intersect(constants, q), removed,
                          wrap_root, top_level, in_boolean_rewrite, NULL);
+  }
   if (provsql_active && q->commandType == CMD_SELECT && q->hasAggs &&
       q->hasSubLinks && q->groupClause == NIL && q->groupingSets == NIL &&
       q->setOperations == NULL && q->distinctClause == NIL) {
     Query *outer = scalar_agg_over_uncorrelated_sublinks(constants, q);
     if (outer)
       return process_query(constants, outer, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
+  /* A DISTINCT over the aggregates of this level: the aggregation moves to a
+   * subquery, the DISTINCT deduplicates the values it takes. */
+  if (provsql_active && has_provenance(constants, q)) {
+    Query *split = split_distinct_over_aggregates(constants, q);
+    if (split)
+      return process_query(constants, split, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
   }
   if (provsql_active)
@@ -21981,16 +22132,30 @@ static Query *process_query(const constants_t *constants, Query *q,
       if (stmt->all)
         nest_set_operations(q);
       if (!stmt->all) {
-        /* Check if any branch has aggregates – non-ALL set operations
-         * on aggregate results are not supported because agg_token
-         * lacks comparison operators for deduplication */
-        ListCell *lc_rte;
-        foreach (lc_rte, q->rtable) {
-          RangeTblEntry *rte = (RangeTblEntry *)lfirst(lc_rte);
-          if (rte->rtekind == RTE_SUBQUERY && rte->subquery &&
-              rte->subquery->hasAggs)
-            provsql_unsupported("Non-ALL set operations (UNION, EXCEPT) on "
-                                "aggregate results not supported");
+        /* A branch with aggregates deduplicates values that are one per
+         * possible world: the explosion of each into one row per value it
+         * takes carries it, and what cannot be exploded is refused. */
+        AttrNumber col;
+        int ncols = list_length(stmt->colTypes);
+
+        for (col = 1; col <= ncols; ++col) {
+          if (!setop_column_has_aggregate(constants, q, q->setOperations, col))
+            continue;
+          if (!OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES) ||
+              !setop_column_explodable(constants, q, q->setOperations, col))
+            provsql_unsupported(
+              "the value of an aggregate of this set operation cannot be "
+              "deduplicated: it is one value per possible world, and only a "
+              "count(), a min(), a max() and a choose() are exploded into one "
+              "row per value they take, in every arm; use UNION ALL, or cast "
+              "the aggregate explicitly (::numeric, ::text, ...) to read its "
+              "plain value");
+          if (!setop_tree_all_union(q->setOperations))
+            provsql_unsupported(
+              "EXCEPT on aggregate results is not supported: the rows it "
+              "removes are matched on values that are one per possible world; "
+              "UNION of them is supported, and casting the aggregate "
+              "explicitly (::numeric, ::text, ...) reads its plain value");
         }
         {
           /* The provsql columns were removed from q above: that is what the
