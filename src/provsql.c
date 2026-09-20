@@ -11331,9 +11331,20 @@ static Expr *except_arm_column(RangeTblEntry *rte, Var *arg, Var *v) {
   arg->vartype = type;
   arg->vartypmod = exprTypmod((Node *)te->expr);
   arg->varcollid = exprCollation((Node *)te->expr);
-  return (Expr *)coerce_to_target_type(NULL, (Node *)arg, type, v->vartype,
-                                       v->vartypmod, COERCION_IMPLICIT,
-                                       COERCE_IMPLICIT_CAST, -1);
+  {
+    Node *coerced =
+      coerce_to_target_type(NULL, (Node *)arg, type, v->vartype, v->vartypmod,
+                            COERCION_IMPLICIT, COERCE_IMPLICIT_CAST, -1);
+    /* No coercion, no comparison: a NULL here would be a comparison with one
+     * argument missing, which the planner reads as a wild pointer (a crash,
+     * in the constant folding of the qual). */
+    if (coerced == NULL)
+      provsql_unsupported(
+        "a column of this set operation cannot be matched with the column of "
+        "its other arm: %s against %s; cast both to one type",
+        format_type_be(type), format_type_be(v->vartype));
+    return (Expr *)coerced;
+  }
 }
 
 /** @brief Whether column @p attno of the EXCEPT arm @p rte is the result of
