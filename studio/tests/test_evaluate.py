@@ -1078,10 +1078,14 @@ def test_evaluate_moment_aggregate_exact(client):
     need.
 
     Model: two rows, counts 3 and 4, each present independently with
-    probability 0.5, summed.  total = 3·b1 + 4·b2 with b1,b2 ~ Bern(0.5):
-      E[total]   = 0.5·3 + 0.5·4                 = 3.5
-      Var(total) = 9·Var(b1) + 16·Var(b2)
-                 = 9·0.25 + 16·0.25              = 6.25
+    probability 0.5, summed.  A moment of an aggregate is taken over the
+    worlds where its value exists, and a SUM over no row is SQL NULL, so
+    the moments condition on at least one row being there (probability
+    0.75); the three worlds that have one contribute total = 3, 4 and 7,
+    each with probability 0.25:
+      E[total]   = (3 + 4 + 7)·0.25 / 0.75             = 14/3
+      E[total^2] = (9 + 16 + 49)·0.25 / 0.75           = 74/3
+      Var(total) = 74/3 - (14/3)^2                     = 26/9
     """
     # sum(n) is a plain bigint at parse time; the agg_token only
     # materialises as a result *column*, so build it into a table (as the
@@ -1115,18 +1119,18 @@ def test_evaluate_moment_aggregate_exact(client):
                         json={"key": "provsql.rv_mc_samples", "value": "0"})
         assert r.status_code == 200, r.data
         try:
-            # E[total] = 3.5, exact at any budget.
+            # E[total] = 14/3, exact at any budget.
             resp = client.post("/api/evaluate", json={
                 "token": tok, "semiring": "moment", "arguments": "1;raw",
             })
             assert resp.status_code == 200, resp.data
-            assert abs(float(resp.get_json()["result"]) - 3.5) < 1e-9
-            # Var(total) = 6.25, exact at any budget.
+            assert abs(float(resp.get_json()["result"]) - 14 / 3) < 1e-9
+            # Var(total) = 26/9, exact at any budget.
             resp = client.post("/api/evaluate", json={
                 "token": tok, "semiring": "moment", "arguments": "2;central",
             })
             assert resp.status_code == 200, resp.data
-            assert abs(float(resp.get_json()["result"]) - 6.25) < 1e-9
+            assert abs(float(resp.get_json()["result"]) - 26 / 9) < 1e-9
         finally:
             client.post("/api/config",
                         json={"key": "provsql.rv_mc_samples", "value": "10000"})
