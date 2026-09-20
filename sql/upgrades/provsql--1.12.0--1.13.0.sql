@@ -1086,7 +1086,7 @@ DECLARE
   changed   boolean;        -- circuit changed structurally this round
   set_stable boolean;       -- user-column tuple set unchanged this round
   iters     int := 0;
-  new_count int;            -- rows in _new this round (INSERT ROW_COUNT)
+  new_count int;            -- rows in provsql_rec_new this round (INSERT ROW_COUNT)
   -- Under an absorptive semiring the provenance *value* converges on cyclic
   -- data even though the circuit keeps growing structurally.  A minimal
   -- derivation cannot repeat a tuple, so it has depth <= (number of derivable
@@ -1103,13 +1103,15 @@ DECLARE
   ntuples   int := NULL;    -- the bound above, set once the tuple set stabilises
 BEGIN
   EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
-  DROP TABLE IF EXISTS _new;
+  DROP TABLE IF EXISTS provsql_rec_new;
 
   -- Tracked working table (carries provsql), initially empty, plus a scratch
   -- table of the same shape; both reused across rounds.
-  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
+  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid) ON COMMIT DROP',
+                 work_name, coldef);
   PERFORM provsql.planted_scope(work_name);
-  EXECUTE format('CREATE TEMP TABLE _new (LIKE %I)', work_name);
+  EXECUTE format('CREATE TEMP TABLE provsql_rec_new (LIKE %I) ON COMMIT DROP',
+                 work_name);
 
   LOOP
     iters := iters + 1;
@@ -1131,15 +1133,15 @@ BEGIN
 
     -- One round of naive evaluation: re-run the CTE body over the current
     -- working table.  INSERT targets a tracked table, so ProvSQL fills provsql.
-    -- Take the row count from the INSERT itself (counting _new directly would be
+    -- Take the row count from the INSERT itself (counting provsql_rec_new directly would be
     -- an aggregate over a provenance-tracked table -> an agg_token).
-    EXECUTE 'TRUNCATE _new';
-    EXECUTE format('INSERT INTO _new(%s) %s', colnames, body_sql);
+    EXECUTE 'TRUNCATE provsql_rec_new';
+    EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, body_sql);
     GET DIAGNOSTICS new_count = ROW_COUNT;
 
     -- Exact structural fixpoint test (content-addressed tokens => set equality).
     EXECUTE format(
-      'SELECT EXISTS((TABLE _new EXCEPT TABLE %1$I) UNION ALL (TABLE %1$I EXCEPT TABLE _new))',
+      'SELECT EXISTS((TABLE provsql_rec_new EXCEPT TABLE %1$I) UNION ALL (TABLE %1$I EXCEPT TABLE provsql_rec_new))',
       work_name) INTO changed;
 
     -- In an absorptive class, learn the round bound from the tuple-set
@@ -1148,17 +1150,17 @@ BEGIN
     IF absorptive_mode AND ntuples IS NULL THEN
       EXECUTE format(
         'SELECT NOT EXISTS('
-        || '(SELECT %2$s FROM _new EXCEPT SELECT %2$s FROM %1$I) UNION ALL '
-        || '(SELECT %2$s FROM %1$I EXCEPT SELECT %2$s FROM _new))',
+        || '(SELECT %2$s FROM provsql_rec_new EXCEPT SELECT %2$s FROM %1$I) UNION ALL '
+        || '(SELECT %2$s FROM %1$I EXCEPT SELECT %2$s FROM provsql_rec_new))',
         work_name, colnames) INTO set_stable;
       IF set_stable THEN
         ntuples := new_count;
       END IF;
     END IF;
 
-    -- Copy _new into the working table (tracked -> tracked carries the tokens).
+    -- Copy provsql_rec_new into the working table (tracked -> tracked carries the tokens).
     EXECUTE format('TRUNCATE %I', work_name);
-    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM _new', work_name, colnames);
+    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM provsql_rec_new', work_name, colnames);
 
     -- Structural fixpoint: done (acyclic / fully converged) -- sound for any
     -- semiring.
@@ -1499,8 +1501,10 @@ BEGIN
     END IF;
   EXCEPTION WHEN OTHERS THEN
     IF verbosity >= 10 THEN
+      /* Named as the user named the CTE: the working table carries a name of
+         ours (provsql_rec_<cte>), which is no business of a message. */
       RAISE NOTICE 'ProvSQL: reachability route for "%" fell back to the generic fixpoint (%)',
-        work_name, SQLERRM;
+        regexp_replace(work_name, '^provsql_rec_', ''), SQLERRM;
     END IF;
     PERFORM provsql.eval_recursive(body_sql, work_name, colnames, coldef);
   END;
@@ -3355,15 +3359,18 @@ DECLARE
 BEGIN
   EXECUTE format('DROP TABLE IF EXISTS %I', work_name);
   EXECUTE format('DROP TABLE IF EXISTS %I', all_name);
-  DROP TABLE IF EXISTS _new_all;
+  DROP TABLE IF EXISTS provsql_rec_new;
 
-  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid)', work_name, coldef);
-  EXECUTE format('CREATE TEMP TABLE %I (LIKE %I)', all_name, work_name);
-  EXECUTE format('CREATE TEMP TABLE _new_all (LIKE %I)', work_name);
+  EXECUTE format('CREATE TEMP TABLE %I (%s, provsql uuid) ON COMMIT DROP',
+                 work_name, coldef);
+  EXECUTE format('CREATE TEMP TABLE %I (LIKE %I) ON COMMIT DROP',
+                 all_name, work_name);
+  EXECUTE format('CREATE TEMP TABLE provsql_rec_new (LIKE %I) ON COMMIT DROP',
+                 work_name);
   PERFORM provsql.planted_scope(all_name);
 
   -- The first round: the non-recursive term.
-  EXECUTE format('INSERT INTO _new_all(%s) %s', colnames, q0_sql);
+  EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, q0_sql);
   GET DIAGNOSTICS new_count = ROW_COUNT;
 
   LOOP
@@ -3371,12 +3378,12 @@ BEGIN
 
     -- Every row of the round is an answer, kept as it is: a second derivation
     -- of a tuple is a second row, which is what UNION ALL says.
-    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM _new_all',
+    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM provsql_rec_new',
                    all_name, colnames);
 
     -- The round becomes the relation the recursive term reads.
     EXECUTE format('TRUNCATE %I', work_name);
-    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM _new_all',
+    EXECUTE format('INSERT INTO %1$I(%2$s) SELECT %2$s FROM provsql_rec_new',
                    work_name, colnames);
 
     iters := iters + 1;
@@ -3393,8 +3400,8 @@ BEGIN
               DETAIL = 'provsql-reason: recursion-does-not-end; scope: deliberate';
     END IF;
 
-    EXECUTE format('TRUNCATE _new_all');
-    EXECUTE format('INSERT INTO _new_all(%s) %s', colnames, q1_sql);
+    EXECUTE format('TRUNCATE provsql_rec_new');
+    EXECUTE format('INSERT INTO provsql_rec_new(%s) %s', colnames, q1_sql);
     GET DIAGNOSTICS new_count = ROW_COUNT;
   END LOOP;
 END

@@ -238,6 +238,28 @@ SELECT n, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n, p;
 SET provsql.active = on;
 DROP TABLE bag_r;
 
+-- The tables a recursion works in are named for us, not after the CTE, and they
+-- live no longer than the statement: the temporary schema is searched BEFORE
+-- the search path, so a leftover named after the CTE answered a later statement
+-- of the same session -- with the rows of a statement that had ended, in place
+-- of the user's own relation of that name, and without a word.
+CREATE TABLE leak_e(id int, parent int);
+INSERT INTO leak_e VALUES (1, NULL), (2, 1), (3, 2);
+SELECT add_provenance('leak_e');
+CREATE TABLE leak_r AS
+  WITH RECURSIVE leak_t(id) AS (
+      SELECT id FROM leak_e WHERE parent IS NULL
+    UNION ALL
+      SELECT e.id FROM leak_e e JOIN leak_t ON e.parent = leak_t.id)
+  SELECT count(*)::text AS n FROM leak_t;
+SELECT remove_provenance('leak_r');
+SELECT n FROM leak_r;
+SELECT count(*) AS temporary_relations_left FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname LIKE 'pg_temp%';
+SELECT count(*) FROM leak_t;
+DROP TABLE leak_r, leak_e;
+
 -- A body whose columns include a provsql one -- SELECT * over a tracked
 -- relation, expanded before any hook of ours can hide it -- would give the
 -- working table two columns of that name, and the token the star asks for is

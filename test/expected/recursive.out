@@ -90,6 +90,22 @@ n|p
 add_provenance
 
 (1 row)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+n
+3
+(1 row)
+temporary_relations_left
+0
+(1 row)
+ERROR:  relation "leak_t" does not exist
+LINE 1: SELECT count(*) FROM leak_t;
+                             ^
+add_provenance
+
+(1 row)
 ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
 DETAIL:  provsql-reason: recursion-shape; scope: gap
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost

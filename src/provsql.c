@@ -923,6 +923,10 @@ typedef struct LoweredCte {
   bool        directed;
   const char *edge_quals;
   const char *edge_sql;
+  /* The table the driver filled, which the planting reads: named for us
+   * (provsql_rec_<cte>) rather than after the CTE, so that nothing of ours
+   * shadows a relation the user may name. */
+  const char *work_name;
 #endif
 } LoweredCte;
 
@@ -1621,6 +1625,47 @@ static bool detect_reachability_cte(CommonTableExpr *cte, Query *cteq,
 #endif
 
 #if PG_VERSION_NUM >= 150000
+/** @brief Context of @c rename_cte_self_ref_walker. */
+typedef struct cte_rename_ctx {
+  const char *from;   /**< the CTE's name, as the body writes it */
+  const char *to;     /**< the name of the table the driver fills */
+} cte_rename_ctx;
+
+/**
+ * @brief Walker: point every self-reference of a recursive CTE at the working
+ *        table's own name, keeping the CTE's name as its alias.
+ *
+ * The driver fills a temporary table that the deparsed body reads by name, and
+ * naming that table after the CTE would put a relation called @c t in the
+ * temporary schema -- which PostgreSQL searches BEFORE the search path, so a
+ * later statement of the same session naming @c t would read it instead of the
+ * user's own relation, and answer from data of a statement that has ended.  The
+ * table is therefore named @c provsql_rec_t, and the body reads
+ * @c "provsql_rec_t t", so its column references are unchanged.
+ */
+static bool rename_cte_self_ref_walker(Node *node, void *cx) {
+  cte_rename_ctx *ctx = (cte_rename_ctx *)cx;
+
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    ListCell *lc;
+
+    foreach (lc, q->rtable) {
+      RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+      if (r->rtekind == RTE_CTE && r->ctename != NULL &&
+          strcmp(r->ctename, ctx->from) == 0) {
+        if (r->alias == NULL)
+          r->alias = makeAlias(pstrdup(ctx->from), NIL);
+        r->ctename = pstrdup(ctx->to);
+      }
+    }
+    return query_tree_walker(q, rename_cte_self_ref_walker, cx, 0);
+  }
+  return expression_tree_walker(node, rename_cte_self_ref_walker, cx);
+}
+
 /** @brief Context of @c freeze_recursive_guard_mutator. */
 typedef struct rec_guard_ctx {
   const constants_t *constants;
@@ -1742,6 +1787,8 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   char          *q1_text = NULL;
   bool           bag = false;      /* UNION ALL: one row per derivation */
   char          *all_name = NULL;  /* where the rounds of a bag recursion go */
+  char          *work_name = NULL; /* the table the body reads, named by us */
+  Query         *deparse_q = NULL;  /* the copy whose self-references it names */
   StringInfoData cols, coldef, call, scan;
   ListCell      *lcn, *lct;
   bool           first = true;
@@ -1795,15 +1842,30 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
         return false;
   }
 
-  /* Deparse the whole recursive CTE body to SQL.  It references the working
-   * relation by the CTE name; the driver creates a temp table of that name. */
+  /* Deparse the body from a copy whose self-references name the working table:
+   * "provsql_rec_<cte> <cte>", so that nothing of ours is called what the user
+   * called the CTE (the temporary schema is searched before the search path,
+   * and a leftover of that name would answer a later statement of the session
+   * in place of the user's own relation). */
+  work_name = psprintf("provsql_rec_%s", cte->ctename);
+  {
+    cte_rename_ctx rctx;
+    rctx.from = cte->ctename;
+    rctx.to = work_name;
+    /* Only the copy that is deparsed is renamed: the shape recognisers below
+     * read the query as the user wrote it. */
+    deparse_q = (Query *) copyObject(cteq);
+    rename_cte_self_ref_walker((Node *) deparse_q, (void *) &rctx);
+  }
+
   /* A bound of a term that reads a tracked relation is evaluated as plain SQL:
    * an uncertain condition leaves no round empty and the iteration would not
-   * end.  Done before the deparse, so every round sees the marker. */
+   * end.  Marked on the copy that is deparsed, so every round sees it while the
+   * query the user wrote is left as it is. */
   {
     constants_t cs = get_constants(true);
     Node *frozen_bound = NULL;
-    if (cs.ok && freeze_recursive_guards(&cs, cteq, &frozen_bound))
+    if (cs.ok && freeze_recursive_guards(&cs, deparse_q, &frozen_bound))
       report_freeze(&cs, frozen_bound, PROVSQL_GAP,
                     "recursion-bound-read-as-plain-value",
                     "a bound of a recursive term reading a provenance-tracked "
@@ -1813,7 +1875,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                     "mark it plain() to say so");
   }
 
-  body_text = pg_get_querydef(cteq, false);
+  body_text = pg_get_querydef(deparse_q, false);
 
   /* The bag recursion needs its two terms apart: the rounds apply the recursive
    * one to the previous round, where the set recursion re-runs the whole body
@@ -1821,18 +1883,19 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
    * subquery entry of the body's range table; the recursive one is the arm that
    * names the CTE. */
   if (bag) {
-    SetOperationStmt *so = (SetOperationStmt *) cteq->setOperations;
+    SetOperationStmt *so = (SetOperationStmt *) deparse_q->setOperations;
     RangeTblEntry *l, *r0;
     CteRefCtx ctx;
 
     if (!IsA(so->larg, RangeTblRef) || !IsA(so->rarg, RangeTblRef))
       return false;
-    l = rt_fetch(((RangeTblRef *) so->larg)->rtindex, cteq->rtable);
-    r0 = rt_fetch(((RangeTblRef *) so->rarg)->rtindex, cteq->rtable);
+    l = rt_fetch(((RangeTblRef *) so->larg)->rtindex, deparse_q->rtable);
+    r0 = rt_fetch(((RangeTblRef *) so->rarg)->rtindex, deparse_q->rtable);
     if (l->rtekind != RTE_SUBQUERY || l->subquery == NULL ||
         r0->rtekind != RTE_SUBQUERY || r0->subquery == NULL)
       return false;
-    ctx.name = cte->ctename;
+    /* The self-references now name the working table (renamed above). */
+    ctx.name = work_name;
     if (cte_reference_walker((Node *) r0->subquery, (void *) &ctx)) {
       q0_text = pg_get_querydef(l->subquery, false);
       q1_text = pg_get_querydef(r0->subquery, false);
@@ -1841,7 +1904,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
       q1_text = pg_get_querydef(l->subquery, false);
     } else
       return false;   /* neither term recurses: not this shape */
-    all_name = psprintf("%s_provsql_all", cte->ctename);
+    all_name = psprintf("%s_all", work_name);
   }
 
   /* User column names (comma list) and column definitions (name type). */
@@ -1915,6 +1978,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
        * working table has two columns and per-length tokens). */
       if (entry != NULL && shape.hop_bound < 0) {
         entry->reach_routed = true;
+        entry->work_name = pstrdup(work_name);
         entry->edge_relid = shape.relid;
         entry->src_name = pstrdup(src_name);
         entry->dst_name = pstrdup(dst_name);
@@ -1938,7 +2002,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                        shape.source_text
                          ? quote_literal_cstr(shape.source_text) : "NULL",
                        shape.directed ? "true" : "false",
-                       quote_literal_cstr(cte->ctename),
+                       quote_literal_cstr(work_name),
                        quote_literal_cstr(cols.data),
                        quote_literal_cstr(coldef.data),
                        quote_literal_cstr(coltype),
@@ -1966,14 +2030,14 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                        "%s)",
                        quote_literal_cstr(q0_text),
                        quote_literal_cstr(q1_text),
-                       quote_literal_cstr(cte->ctename),
+                       quote_literal_cstr(work_name),
                        quote_literal_cstr(all_name),
                        quote_literal_cstr(cols.data),
                        quote_literal_cstr(coldef.data));
     } else {
       appendStringInfo(&call, "SELECT provsql.eval_recursive(%s, %s, %s, %s)",
                        quote_literal_cstr(body_text),
-                       quote_literal_cstr(cte->ctename),
+                       quote_literal_cstr(work_name),
                        quote_literal_cstr(cols.data),
                        quote_literal_cstr(coldef.data));
     }
@@ -1988,7 +2052,7 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
   /* Replace the CTE reference with a scan of the populated table. */
   initStringInfo(&scan);
   appendStringInfo(&scan, "SELECT %s FROM %s", cols.data,
-                   quote_identifier(bag ? all_name : cte->ctename));
+                   quote_identifier(bag ? all_name : work_name));
   {
     List *raw = pg_parse_query(scan.data);
     List *analyzed = pg_analyze_and_rewrite_fixedparams(
@@ -2401,7 +2465,9 @@ static void plant_reach_aggregations(List *candidates, List *lowered) {
     initStringInfo(&call);
     appendStringInfo(&call,
                      "SELECT provsql.plant_reach_any_groups(%s, %s, %u::pg_catalog.regclass, %s, %s, ",
-                     quote_literal_cstr(cand->ctename),
+                     quote_literal_cstr(entry->work_name != NULL
+                                          ? entry->work_name
+                                          : cand->ctename),
                      quote_literal_cstr(cand->node_colname),
                      cand->member_relid,
                      quote_literal_cstr(cand->member_attname),
@@ -2618,7 +2684,9 @@ static void plant_reach_conjunctions(List *candidates, List *lowered) {
     initStringInfo(&call);
     appendStringInfo(&call,
                      "SELECT provsql.plant_reach_cover(%s, %s, ",
-                     quote_literal_cstr(cand->ctename),
+                     quote_literal_cstr(entry->work_name != NULL
+                                          ? entry->work_name
+                                          : cand->ctename),
                      quote_literal_cstr(cand->node_colname));
     if (OidIsValid(entry->edge_relid))
       appendStringInfo(&call, "%u::pg_catalog.regclass", entry->edge_relid);
