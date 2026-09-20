@@ -2455,6 +2455,106 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+/** @brief The values the aggregate result @p token takes over the possible
+ *  worlds, as text, to explode that result into one row per value: the value
+ *  of an aggregate read as data (a GROUP BY key, a DISTINCT, an arm of a set
+ *  operation).  The planner annotates the row of a value @c v with the
+ *  comparison gate @c [token @c = @c v], so that the rows of one group are
+ *  pairwise exclusive and exactly one of them is in each world where the
+ *  group is.
+ *
+ *  A @c count() takes every number of its contributions, a @c min(), a
+ *  @c max() and a @c choose() one of their contributed values.  Any other
+ *  aggregate is refused (SQLSTATE 0A000): the values of a @c sum() are its
+ *  subset sums, those of a @c string_agg() one per ordering, and reading
+ *  them off the contributions one by one would be wrong.  A NULL
+ *  contribution is refused as well: whether the result is NULL is then a
+ *  value of its own, which a comparison cannot express (internal use). */
+CREATE FUNCTION agg_possible_values(input anyelement)
+  RETURNS text[] AS
+$$
+DECLARE
+  max_values CONSTANT int := 1000;  -- an explosion multiplies the rows
+  token   uuid;
+  fn      text;
+  ns      text;
+  vals    text[];
+  n       int;
+  first   int;
+BEGIN
+  /* The planner hands the aggregate result itself (an agg_token), whatever
+   * the type the query declares for that column. */
+  IF pg_typeof(input) <> 'provsql.agg_token'::regtype THEN
+    RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+      MESSAGE = 'ProvSQL: only the result of an aggregate can be exploded '
+                'into one row per value it takes over the possible worlds';
+  END IF;
+  token := input::uuid;
+  IF provsql.get_gate_type(token) <> 'agg' THEN
+    RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+      MESSAGE = 'ProvSQL: an arithmetic expression over aggregate results '
+                'cannot be exploded into one row per value it takes over '
+                'the possible worlds';
+  END IF;
+  SELECT p.proname, s.nspname INTO fn, ns
+  FROM pg_catalog.pg_proc p
+       JOIN pg_catalog.pg_namespace s ON s.oid = p.pronamespace
+  WHERE p.oid = (provsql.get_infos(token)).info1;
+
+  vals := ARRAY(SELECT provsql.get_extra((provsql.get_children(sm))[2])
+                FROM unnest(provsql.get_children(token)) AS sm);
+  n := coalesce(array_length(vals, 1), 0);
+
+  IF (ns, fn) = ('pg_catalog', 'count') THEN
+    /* Every number of contributions is a value; none of them, hence 0, only
+     * where the aggregation is over the whole table (a group with no row is
+     * no group).  A NULL contribution is impossible here: the rewriting of
+     * an aggregate that skips its NULLs drops those rows from the group. */
+    first := CASE WHEN (provsql.get_infos(token)).info2 < 0 THEN 0 ELSE 1 END;
+    IF n + 1 - first > max_values THEN
+      RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+        MESSAGE = format('ProvSQL: the result of %s() aggregates %s rows, '
+                         'so it takes too many values over the possible '
+                         'worlds to explode it into one row per value',
+                         fn, n),
+        HINT = 'cast it explicitly (::bigint, ...) to read its plain value';
+    END IF;
+    RETURN ARRAY(SELECT i::text FROM generate_series(first, n) AS i);
+  END IF;
+
+  IF (ns, fn) NOT IN (('pg_catalog', 'min'), ('pg_catalog', 'max'),
+                      ('provsql', 'choose')) THEN
+    RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+      MESSAGE = format('ProvSQL: the result of %s() cannot be exploded into '
+                       'one row per value it takes over the possible worlds: '
+                       'only count(), min(), max() and choose() take a value '
+                       'read off their contributions', fn),
+      HINT = 'compare it in a HAVING clause, or cast it explicitly '
+             '(::bigint, ...) to read its plain value';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM unnest(vals) AS v WHERE v IS NULL) THEN
+    RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+      MESSAGE = format('ProvSQL: the result of %s() aggregates a NULL value, '
+                       'so it cannot be exploded into one row per value it '
+                       'takes over the possible worlds: a comparison with '
+                       'NULL does not say that the result is NULL', fn);
+  END IF;
+
+  IF n > max_values THEN
+    RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
+      MESSAGE = format('ProvSQL: the result of %s() aggregates %s rows, so '
+                       'it takes too many values over the possible worlds to '
+                       'explode it into one row per value', fn, n),
+      HINT = 'cast it explicitly (::bigint, ...) to read its plain value';
+  END IF;
+
+  /* One row per distinct contributed value: each is the minimum (maximum,
+   * choice) of the world where only its own row is. */
+  RETURN ARRAY(SELECT DISTINCT v FROM unnest(vals) AS v ORDER BY v);
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE;
+
 /** @brief Value of an agg_token as text, NULL for a NULL value, without the
  *  provenance-loss warning of the public casts: the value of an aggregate
  *  result read as a plain value where ProvSQL casts it (in a function, an

@@ -244,6 +244,10 @@ typedef struct constants_t {
    *  gate of a @c choose() result exploded into rows; @c InvalidOid on a
    *  schema that predates it. */
   Oid OID_FUNCTION_AGG_TOKEN_EXPLODE_CHILDREN;
+  /** @brief OID of @c agg_possible_values(), the values an aggregate result
+   *  takes over the possible worlds, one per exploded row; @c InvalidOid on
+   *  a schema that predates it. */
+  Oid OID_FUNCTION_AGG_POSSIBLE_VALUES;
   /** @brief OID of @c provenance_semimod_flat(), the contributions of an
    *  aggregate result aggregated again; @c InvalidOid on a schema that
    *  predates it. */

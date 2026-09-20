@@ -1,0 +1,60 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+c|pr
+1|0.875000
+2|0.437500
+(2 rows)
+remove_provenance
+
+(1 row)
+c
+1
+2
+(2 rows)
+remove_provenance
+
+(1 row)
+m|pr
+10|0.250000
+20|0.500000
+30|0.500000
+40|0.250000
+50|0.500000
+(5 rows)
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+remove_provenance
+
+(1 row)
+c|n|e_n|pr
+1|1|1.714286|0.875000
+2|2|1.142857|0.437500
+(2 rows)
+remove_provenance
+
+(1 row)
+c|pr
+0|0.031250
+1|0.156250
+2|0.312500
+3|0.312500
+4|0.156250
+5|0.031250
+(6 rows)
+ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max() and a choose() are exploded into one row per value they take; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max() and a choose() are exploded into one row per value they take; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+remove_provenance
+
+(1 row)
+total
+30
+90
+(2 rows)

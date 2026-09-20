@@ -35,8 +35,10 @@ SELECT city, COUNT(*) FROM personnel GROUP BY city
 UNION
 SELECT city, COUNT(*) FROM personnel WHERE city='Paris' GROUP BY city;
 
--- GROUP BY on aggregate from subquery
-SELECT cnt, COUNT(*) FROM (SELECT city, COUNT(*) AS cnt FROM personnel GROUP BY city) t GROUP BY cnt;
+-- GROUP BY on the value of an aggregate whose values are not read off its
+-- contributions one by one (a count(), a min(), a max() and a choose() are
+-- exploded into one row per value instead, see explode_agg_value)
+SELECT total, COUNT(*) FROM (SELECT city, SUM(id) AS total FROM personnel GROUP BY city) t GROUP BY total;
 
 -- Hand-made provsql column (collides with the auto-added provenance column)
 SELECT name, provenance() AS provsql FROM personnel;

@@ -181,6 +181,11 @@ extern void _PG_fini(void);
  */
 #define PROVSQL_DISTINCT_ALIAS "provsql_distinct"
 
+/** @brief Alias of the lateral column an aggregate value is exploded into:
+ *  one row per value the aggregate takes over the possible worlds
+ *  (@c rewrite_explode_agg_value). */
+#define PROVSQL_EXPLODE_ALIAS "provsql_agg_value"
+
 static planner_hook_type prev_planner = NULL; ///< Previous planner hook (chained)
 /** @brief Depth of CREATE TABLE AS / SELECT INTO / CREATE MATERIALIZED VIEW
  *  being executed: their query's output is stored, not shown. */
@@ -247,6 +252,7 @@ static bool oj_rte_has_provsql(const constants_t *constants,
 static bool expr_is_aggregate_result(const constants_t *constants, Query *q,
                                      Node *e);
 static bool query_has_own_sublinks(Query *q);
+static Var *group_key_var(Query *q, TargetEntry *te);
 static bool distinct_on_lowerable(const constants_t *constants, Query *q);
 static Node *make_null_safe_equality(Expr *l, Expr *r, Oid type, Oid collation,
                                      bool nullable);
@@ -699,6 +705,46 @@ static bool aggref_over_agg_token_walker(Node *node, void *context) {
 }
 
 /**
+ * @brief The column @p te groups by, or @c NULL if it is no plain column.
+ *
+ * PG 18 reads a grouping key through a virtual @c RTE_GROUP entry holding the
+ * key expressions, so the @c Var of such a target entry addresses that entry
+ * and not the relation the key comes from: follow it to the column it groups
+ * by.  Read where it is needed rather than normalised away once, because the
+ * deparsing of a query resolves those Vars in place (a query looked at with
+ * @c provsql.verbose_level at 20 would otherwise be rewritten differently
+ * from the same query run quietly).
+ */
+static Var *group_key_var(Query *q, TargetEntry *te) {
+  Var *v;
+
+  if (te == NULL || te->expr == NULL || !IsA(te->expr, Var))
+    return NULL;
+  v = (Var *)te->expr;
+  if (v->varlevelsup != 0 || v->varno < 1 || v->varattno < 1 ||
+      v->varno > (Index)list_length(q->rtable))
+    return NULL;
+#if PG_VERSION_NUM >= 180000
+  {
+    RangeTblEntry *r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
+    if (r->rtekind == RTE_GROUP) {
+      Node *keyexpr;
+      if (v->varattno > list_length(r->groupexprs))
+        return NULL;
+      keyexpr = (Node *)list_nth(r->groupexprs, v->varattno - 1);
+      if (keyexpr == NULL || !IsA(keyexpr, Var))
+        return NULL;
+      v = (Var *)keyexpr;
+      if (v->varlevelsup != 0 || v->varno < 1 || v->varattno < 1 ||
+          v->varno > (Index)list_length(q->rtable))
+        return NULL;
+    }
+  }
+#endif
+  return v;
+}
+
+/**
  * @brief Retypes aggregation-result Vars in @p q from UUID to @c agg_token.
  *
  * After a subquery that contains @c provenance_aggregate is processed, its
@@ -745,16 +791,21 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
         ListCell *lc2;
         foreach (lc2, q->targetList) {
           TargetEntry *outer_te = (TargetEntry *)lfirst(lc2);
-          if (IsA(outer_te->expr, Var)) {
-            Var *v = (Var *)outer_te->expr;
+          Var *v = group_key_var(q, outer_te);
+          if (v != NULL) {
             if (v->varno == rteid && v->varattno == attno &&
                 outer_te->ressortgroupref > 0) {
               ListCell *lc3;
               foreach (lc3, q->groupClause) {
                 SortGroupClause *sgc = (SortGroupClause *)lfirst(lc3);
                 if (sgc->tleSortGroupRef == outer_te->ressortgroupref)
-                  provsql_unsupported("GROUP BY on aggregate results from "
-                                      "a subquery not supported");
+                  provsql_unsupported(
+                    "the value of this aggregate cannot be a GROUP BY key or "
+                    "a DISTINCT column: it is one value per possible world, "
+                    "and only a count(), a min(), a max() and a choose() are "
+                    "exploded into one row per value they take; cast it "
+                    "explicitly (::numeric, ::text, ...) to group by its "
+                    "plain value");
               }
             }
           }
@@ -17608,6 +17659,295 @@ static Query *rewrite_join_agg_token(Query *q, const constants_t *constants,
 }
 
 /**
+ * @brief Whether @p ref is a @c GROUP @c BY or @c DISTINCT key of @p q.
+ */
+static bool sortgroupref_is_key(Query *q, Index ref) {
+  ListCell *lc;
+  foreach (lc, q->groupClause)
+    if (((SortGroupClause *)lfirst(lc))->tleSortGroupRef == ref)
+      return true;
+  foreach (lc, q->distinctClause)
+    if (((SortGroupClause *)lfirst(lc))->tleSortGroupRef == ref)
+      return true;
+  return false;
+}
+
+/**
+ * @brief Whether the values of the aggregate @p a over the possible worlds
+ *        are read off its contributions one by one, so that it can be
+ *        exploded into one row per value (@c agg_possible_values).
+ *
+ * A @c count() takes every number of its contributions, a @c min(), a
+ * @c max() and a @c choose() one of the values they aggregate.  The values
+ * of a @c sum() are its subset sums and those of a @c string_agg() one per
+ * ordering: neither is read off the contributions, and the aggregate is left
+ * to the freezing of its value.
+ */
+static bool aggref_values_are_contributions(const constants_t *constants,
+                                            Aggref *a) {
+  Oid ns = get_func_namespace(a->aggfnoid);
+  char *name = get_func_name(a->aggfnoid);
+  bool res;
+
+  if (name == NULL)
+    return false;
+  res = (ns == PG_CATALOG_NAMESPACE &&
+         (!strcmp(name, "count") || !strcmp(name, "min") ||
+          !strcmp(name, "max"))) ||
+        (ns == constants->OID_SCHEMA_PROVSQL && !strcmp(name, "choose"));
+  pfree(name);
+  return res;
+}
+
+/**
+ * @brief Whether @p q reads the value of an aggregate of one of its
+ *        subqueries as data: a @c GROUP @c BY key, or a @c DISTINCT column.
+ *
+ * The value of an aggregate is not one value of the database but one per
+ * possible world, so grouping rows by it, or deduplicating on it, is no
+ * operation on the data as it is: it is the explosion of the aggregate into
+ * one row per value it takes (@c rewrite_explode_agg_value).  Recognised
+ * before anything is processed, on the aggregate call itself: a bare
+ * @c Aggref of a tracked subquery whose result the level above groups by.
+ *
+ * Only the first such column is reported: the rewriting re-enters
+ * @c process_query, which finds the next one if there is one.
+ *
+ * @param constants   Extension OID cache.
+ * @param q           Query to inspect.
+ * @param rteid       Out: varno of the subquery owning the aggregate.
+ * @param attno       Out: attno of the aggregate column in it.
+ * @param value_type  Out: the type of the values of that aggregate.
+ * @return  True iff such a column was found.
+ */
+static bool agg_value_read_as_data(const constants_t *constants, Query *q,
+                                   Index *rteid, AttrNumber *attno,
+                                   Oid *value_type) {
+  ListCell *lc;
+
+  if (q->commandType != CMD_SELECT || q->groupingSets != NIL ||
+      (q->groupClause == NIL && q->distinctClause == NIL))
+    return false;
+
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    Var *v;
+    RangeTblEntry *r;
+    TargetEntry *sub_te;
+
+    if (te->ressortgroupref == 0 ||
+        !sortgroupref_is_key(q, te->ressortgroupref))
+      continue;
+    v = group_key_var(q, te);
+    if (v == NULL)
+      continue;
+    r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
+    if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL ||
+        !r->subquery->hasAggs ||
+        v->varattno > list_length(r->subquery->targetList))
+      continue;
+    sub_te = (TargetEntry *)list_nth(r->subquery->targetList, v->varattno - 1);
+    /* A bare aggregate call: arithmetic over aggregates takes its values
+     * over the worlds too, but not one read off the contributions. */
+    if (!IsA(sub_te->expr, Aggref) ||
+        !aggref_values_are_contributions(constants, (Aggref *)sub_te->expr) ||
+        !has_provenance(constants, r->subquery))
+      continue;
+    *rteid = v->varno;
+    *attno = v->varattno;
+    *value_type = exprType((Node *)sub_te->expr);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief The text of an exploded value cast to the type of the aggregate.
+ *
+ * @c agg_possible_values returns the values as text, whatever the type of
+ * the aggregate: an I/O cast reads each back, as the value of a frozen
+ * aggregate is read (@c frozen_agg_value).
+ */
+static Node *explode_value_of_text(Node *txt, Oid value_type) {
+  CoerceViaIO *io;
+  if (value_type == TEXTOID)
+    return txt;
+  io = makeNode(CoerceViaIO);
+  io->arg          = (Expr *)txt;
+  io->resulttype   = value_type;
+  io->resultcollid = get_typcollation(value_type);
+  io->coerceformat = COERCE_EXPLICIT_CAST;
+  io->location     = -1;
+  return (Node *)io;
+}
+
+/**
+ * @brief Explode the aggregate column @p attno of the subquery at @p rteid
+ *        into one row per value that aggregate takes over the possible
+ *        worlds.
+ *
+ * Replaces the subquery @c R at @p rteid by
+ *
+ * @code{.sql}
+ *   SELECT r.c_1, ..., v::T AS c_attno, ..., r.c_n
+ *   FROM R r, LATERAL unnest(agg_possible_values(r.c_attno)) AS v
+ *   WHERE r.c_attno = v::T
+ * @endcode
+ *
+ * The columns keep their order and their types, so the level above is left
+ * as it is: what changes is that the aggregate column now holds a value of
+ * the database, one row per value, in place of an aggregate result.  The
+ * comparison in the @c WHERE is the one ProvSQL already gives a provenance
+ * to (@c having_OpExpr_to_provenance_cmp): the row of a value @c v is
+ * annotated @c [c = v] and keeps no cut of its own, so the rows of one group
+ * are pairwise exclusive and exactly one of them is in each world where the
+ * group is.  Grouping, deduplicating or uniting on that column is then an
+ * operation on data, tracked as any other.
+ *
+ * @param q           Query to rewrite (modified in place).
+ * @param constants   Extension OID cache.
+ * @param rteid       1-based varno of the subquery owning the aggregate.
+ * @param attno       1-based attno of the aggregate column in it.
+ * @param value_type  Type of the values of that aggregate.
+ * @return  The rewritten query, or @c NULL if it cannot be rewritten.
+ */
+static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
+                                        Index rteid, AttrNumber attno,
+                                        Oid value_type) {
+  RangeTblEntry *src_rte = (RangeTblEntry *)list_nth(q->rtable, rteid - 1);
+  TargetEntry *agg_te;
+  Query *inner;
+  RangeTblEntry *inner_src, *val_rte;
+  RangeTblFunction *rtfunc;
+  FuncExpr *possible, *unnest_call;
+  Alias *val_alias, *val_eref;
+  RangeTblRef *rtr1, *rtr2;
+  FromExpr *jt;
+  OpExpr *eq;
+  List *tl = NIL;
+  ListCell *lc;
+  AttrNumber i;
+  Oid eqop, coll;
+  int32 typmod;
+
+  if (src_rte->rtekind != RTE_SUBQUERY || src_rte->subquery == NULL ||
+      attno > list_length(src_rte->subquery->targetList))
+    return NULL;
+  agg_te = (TargetEntry *)list_nth(src_rte->subquery->targetList, attno - 1);
+  typmod = exprTypmod((Node *)agg_te->expr);
+  coll   = exprCollation((Node *)agg_te->expr);
+
+  /* Without an equality there is no [c = v] to annotate the rows with. */
+  eqop = lookup_type_cache(value_type, TYPECACHE_EQ_OPR)->eq_opr;
+  if (!OidIsValid(eqop))
+    return NULL;
+
+  /* --- LATERAL unnest(agg_possible_values(r.c_attno)) AS v --- *
+   * agg_possible_values takes the aggregate result itself: its parameter is
+   * polymorphic, so the Var reaches it as the agg_token the level below
+   * produces (takes_agg_token), whatever the type declared here. */
+  possible = makeFuncExpr(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES,
+                          TEXTARRAYOID,
+                          list_make1(makeVar(1, attno, value_type, typmod,
+                                             coll, 0)),
+                          InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+  unnest_call = makeFuncExpr(constants->OID_UNNEST, TEXTOID,
+                             list_make1(possible), InvalidOid,
+                             DEFAULT_COLLATION_OID, COERCE_EXPLICIT_CALL);
+  unnest_call->funcretset = true;
+
+  rtfunc = makeNode(RangeTblFunction);
+  rtfunc->funcexpr          = (Node *)unnest_call;
+  rtfunc->funccolcount      = 1;
+  rtfunc->funccolnames      = NIL;
+  rtfunc->funccoltypes      = NIL;
+  rtfunc->funccoltypmods    = NIL;
+  rtfunc->funccolcollations = NIL;
+  rtfunc->funcparams        = NULL;
+
+  val_alias = makeNode(Alias);
+  val_eref  = makeNode(Alias);
+  val_alias->aliasname = PROVSQL_EXPLODE_ALIAS;
+  val_eref->aliasname  = PROVSQL_EXPLODE_ALIAS;
+  val_eref->colnames   = list_make1(makeString(PROVSQL_EXPLODE_ALIAS));
+
+  val_rte = makeNode(RangeTblEntry);
+  val_rte->rtekind        = RTE_FUNCTION;
+  val_rte->functions      = list_make1(rtfunc);
+  val_rte->funcordinality = false;
+  val_rte->alias          = val_alias;
+  val_rte->eref           = val_eref;
+  val_rte->lateral        = true;
+  val_rte->inFromCl       = true;
+#if PG_VERSION_NUM < 160000
+  val_rte->requiredPerms  = 0;
+#endif
+
+  /* --- The columns, the aggregate one now an exploded value --- */
+  i = 1;
+  foreach (lc, src_rte->subquery->targetList) {
+    TargetEntry *ste = (TargetEntry *)lfirst(lc);
+    TargetEntry *te = makeNode(TargetEntry);
+
+    te->resno   = i;
+    te->resname = ste->resname ? pstrdup(ste->resname) : NULL;
+    te->resjunk = ste->resjunk;
+    if (i == attno)
+      te->expr = (Expr *)explode_value_of_text(
+        (Node *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
+        value_type);
+    else
+      te->expr = (Expr *)makeVar(1, i, exprType((Node *)ste->expr),
+                                 exprTypmod((Node *)ste->expr),
+                                 exprCollation((Node *)ste->expr), 0);
+    tl = lappend(tl, te);
+    ++i;
+  }
+
+  /* --- WHERE r.c_attno = v::T --- */
+  eq = makeNode(OpExpr);
+  eq->opno         = eqop;
+  eq->opfuncid     = InvalidOid;  /* the planner fills it in */
+  eq->opresulttype = BOOLOID;
+  eq->opretset     = false;
+  eq->opcollid     = InvalidOid;
+  eq->inputcollid  = coll;
+  eq->args = list_make2(
+    makeVar(1, attno, value_type, typmod, coll, 0),
+    explode_value_of_text(
+      (Node *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
+      value_type));
+  eq->location = -1;
+
+  rtr1 = makeNode(RangeTblRef);
+  rtr1->rtindex = 1;
+  rtr2 = makeNode(RangeTblRef);
+  rtr2->rtindex = 2;
+  jt = makeNode(FromExpr);
+  jt->fromlist = list_make2(rtr1, rtr2);
+  jt->quals    = (Node *)eq;
+
+  inner_src = copyObject(src_rte);
+
+  inner = makeNode(Query);
+  inner->commandType   = CMD_SELECT;
+  inner->canSetTag     = true;
+  inner->rtable        = list_make2(inner_src, val_rte);
+  inner->jointree      = jt;
+  inner->targetList    = tl;
+  inner->hasAggs       = false;
+  inner->hasSubLinks   = false;
+  inner->hasTargetSRFs = false;
+
+  /* The subquery keeps the eref, hence the column names and the types, of
+   * what it replaces: the Vars of the level above address the same columns. */
+  src_rte->subquery = inner;
+  src_rte->lateral  = false;
+
+  return q;
+}
+
+/**
  * @brief Wrap @p expr in a @c provsql.assume_boolean FuncExpr.
  *
  * Used by @c make_provenance_expression when its caller (the
@@ -21438,6 +21778,24 @@ static Query *process_query(const constants_t *constants, Query *q,
                                   &join_attno))
       {
         Query *rewritten = rewrite_join_agg_token(q, constants, rteid, join_attno);
+        if (rewritten)
+          return process_query(constants, rewritten, removed, wrap_root,
+                               top_level, in_boolean_rewrite, inv_ctx);
+      }
+    }
+
+    /* The value of a subquery's aggregate read as data -- a GROUP BY key, a
+     * DISTINCT -- is one value per possible world: explode that aggregate
+     * into one row per value it takes, before provenance discovery, so that
+     * the grouping is an operation on data like any other. */
+    if (OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES)) {
+      Index rteid;
+      AttrNumber attno;
+      Oid value_type;
+
+      if (agg_value_read_as_data(constants, q, &rteid, &attno, &value_type)) {
+        Query *rewritten =
+          rewrite_explode_agg_value(q, constants, rteid, attno, value_type);
         if (rewritten)
           return process_query(constants, rewritten, removed, wrap_root,
                                top_level, in_boolean_rewrite, inv_ctx);
