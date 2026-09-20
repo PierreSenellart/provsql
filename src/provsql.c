@@ -754,9 +754,10 @@ static bool aggref_over_agg_token_walker(Node *node, void *context) {
          agg_token_var_walker((Node *)agg->aggdirectargs, cx) ||
          agg_token_var_walker((Node *)agg->aggorder, cx) ||
          agg_token_var_walker((Node *)agg->aggfilter, cx)) &&
-        !reaggregates_agg_result(ctx->constants, ctx->q, agg))
+        !reaggregates_agg_result(ctx->constants, ctx->q, agg)) {
       provsql_unsupported("aggregation over aggregate results from "
                           "a subquery not supported");
+    }
   }
   return expression_tree_walker(node, aggref_over_agg_token_walker, context);
 }
@@ -13058,6 +13059,15 @@ typedef struct oj_sublink_scan {
   SubLink *found_sublink;
   Index target_varno; /* find any level-0 Var on this rel */
   Var *found_var;
+  /** @brief The first such Var whose column is no aggregate result, preferred
+   *  where the column is counted: counting an aggregate result is a test that
+   *  its row is there, which reads as an aggregation over an aggregate result
+   *  and is refused, while any other column of the same rows answers it.
+   *  Recognised by the column, not by its type: the Var still has the type
+   *  the query declares, the retyping to @c agg_token coming later. */
+  Var *found_plain_var;
+  const constants_t *constants;  ///< For that recognition, or NULL to skip it
+  RangeTblEntry *target_rte;     ///< The entry @c target_varno addresses
 } oj_sublink_scan;
 
 static bool oj_sublink_scan_walker(Node *node, void *cx) {
@@ -13071,9 +13081,14 @@ static bool oj_sublink_scan_walker(Node *node, void *cx) {
   }
   if (IsA(node, Var)) {
     Var *v = (Var *)node;
-    if (s->found_var == NULL && v->varlevelsup == 0 &&
-        v->varno == s->target_varno)
-      s->found_var = v;
+    if (v->varlevelsup == 0 && v->varno == s->target_varno) {
+      if (s->found_var == NULL)
+        s->found_var = v;
+      if (s->found_plain_var == NULL &&
+          (s->constants == NULL || s->target_rte == NULL ||
+           !rte_column_is_aggregate(s->constants, s->target_rte, v->varattno)))
+        s->found_plain_var = v;
+    }
   }
   return expression_tree_walker(node, oj_sublink_scan_walker, cx);
 }
@@ -14348,7 +14363,10 @@ static bool rewrite_array_sublinks(const constants_t *constants, Query *q) {
     scan.n_sublinks = 0;
     scan.found_sublink = NULL;
     scan.target_varno = 1; /* Q is rtindex 1 in the subselect */
-    scan.found_var = NULL;
+    scan.found_var = scan.found_plain_var = NULL;
+    scan.constants = constants;
+    scan.target_rte = list_length(sub->rtable) >= 1
+                        ? list_nth_node(RangeTblEntry, sub->rtable, 0) : NULL;
     oj_sublink_scan_walker(sub->jointree->quals, &scan);
     if (scan.found_var == NULL)
       continue; /* uncorrelated: decorrelation would bail anyway */
@@ -15303,7 +15321,9 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
   scan.n_sublinks = 0;
   scan.found_sublink = NULL;
   scan.target_varno = 0;
-  scan.found_var = NULL;
+  scan.found_var = scan.found_plain_var = NULL;
+  scan.constants = NULL;
+  scan.target_rte = NULL;
   oj_sublink_scan_walker((Node *)q->targetList, &scan);
   n_tl_sublinks = scan.n_sublinks;
   if (q->jointree->quals)
@@ -15508,7 +15528,10 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
    * gates) and count(*) (key rewrite) do need a genuine Q column: decline. */
   scan.n_sublinks = 0;
   scan.target_varno = 1; /* Q is at index 1 inside the body */
-  scan.found_var = NULL;
+  scan.found_var = scan.found_plain_var = NULL;
+  scan.constants = constants;
+  scan.target_rte = list_length(sub->rtable) >= 1
+                      ? list_nth_node(RangeTblEntry, sub->rtable, 0) : NULL;
   if (sub->jointree->quals)
     oj_sublink_scan_walker(sub->jointree->quals, &scan);
   if (scan.found_var == NULL &&
@@ -15620,8 +15643,14 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
           }
         }
       }
-      if (qkey == NULL && scan.found_var != NULL) {
-        qkey = (Var *)copyObject(scan.found_var);
+      /* A column that is no aggregate result where there is one: this key is
+       * counted, or tested for NULL inside a FILTER, and reading an aggregate
+       * result that way is an aggregation over one, which is refused. */
+      if (qkey == NULL && (scan.found_plain_var != NULL ||
+                           scan.found_var != NULL)) {
+        qkey = (Var *)copyObject(scan.found_plain_var != NULL
+                                   ? (Node *)scan.found_plain_var
+                                   : (Node *)scan.found_var);
         qkey->varno = Q_idx;
 #if PG_VERSION_NUM >= 130000
         qkey->varnosyn = 0;
@@ -15796,7 +15825,10 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
        * plain value body counts matching rows (count(Q.key) <= 1). */
       having_conjuncts = list_make1(
         is_distinct ? oj_count_distinct_cmp(valexpr, "<=", 1)
-                    : oj_count_cmp((Var *)scan.found_var, Q_idx, "<=", 1));
+                    : oj_count_cmp(scan.found_plain_var != NULL
+                                     ? scan.found_plain_var
+                                     : (Var *)scan.found_var,
+                                   Q_idx, "<=", 1));
       /* A WHERE comparison must test an actual subquery value, so the correlated
        * group has to be non-empty: count(…) = 1, not merely <= 1.  An empty
        * group would give a NULL comparison (the row is excluded), but the value
@@ -15807,7 +15839,10 @@ static bool decorrelate_scalar_sublinks(const constants_t *constants,
         having_conjuncts = lappend(
           having_conjuncts,
           is_distinct ? oj_count_distinct_cmp(valexpr, ">=", 1)
-                      : oj_count_cmp((Var *)scan.found_var, Q_idx, ">=", 1));
+                      : oj_count_cmp(scan.found_plain_var != NULL
+                                       ? scan.found_plain_var
+                                       : (Var *)scan.found_var,
+                                     Q_idx, ">=", 1));
     }
 
     if (in_where) {

@@ -66,3 +66,13 @@ dense_rank over a sum|1|3|2.166667
 dense_rank over a sum|2|1|1.000000
 dense_rank over a sum|3|2|1.583333
 (3 rows)
+WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+q|g|c|p
+top 2 by an arithmetic key|1|3|0.750000
+top 2 by an arithmetic key|2|2|0.468750
+top 2 by an arithmetic key|3|3|0.750000
+(3 rows)

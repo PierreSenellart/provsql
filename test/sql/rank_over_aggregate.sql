@@ -98,4 +98,19 @@ FROM ro_f ORDER BY g;
 SET provsql.active = on;
 DROP TABLE ro_f;
 
+-- (g) The ordering key of a LIMIT over an aggregation may be arithmetic over
+-- an aggregate, not only a bare one: the rank is the filter of that order all
+-- the same.  count(*) + 1 keeps the order of the count, so the top two are the
+-- two-row groups with probability 0.75 and the one-row group with 0.46875, as
+-- in (c).
+CREATE TABLE ro_g AS
+  SELECT g, count(*) + 1 AS c FROM ro GROUP BY g ORDER BY count(*) + 1 DESC
+  LIMIT 2;
+SET provsql.active = off;
+SELECT 'top 2 by an arithmetic key' AS q, g, c::text AS c,
+       round(probability_evaluate(provsql)::numeric, 6) AS p
+FROM ro_g ORDER BY g;
+SET provsql.active = on;
+DROP TABLE ro_g;
+
 DROP TABLE ro;
