@@ -133,11 +133,26 @@ A widening (an integer to ``numeric``, to a float) keeps the value as it is,
 and a narrowing to an integer rounds half away from zero, which is what
 PostgreSQL's own cast does; a cast to ``text``, to a ``boolean`` or to a date
 has no arithmetic behind it and stays a reading of the plain value. What the
-cast starts *from* has to be a number as well, since the carried form computes
-in ``numeric`` over the value the aggregate holds: ``bool_or(flag)::int`` is
-therefore a reading of the plain value, not a carried cast (the value of a
-Boolean aggregate is ``true``, which no arithmetic reads), and so is a cast
-over a text-valued one. Casts that
+cast starts *from* matters as well, since the carried form computes in
+``numeric`` over the value the aggregate holds: a cast over a text-valued
+aggregate is a reading of the plain value, whatever it casts to.
+
+A Boolean aggregate cast to an integer -- ``bool_or(flag)::int``, the only
+cast SQL has on a Boolean -- is carried, not as arithmetic but as the
+indicator it means:
+
+.. code-block:: postgresql
+
+    SELECT member, bool_or(role = 'admin')::int AS is_admin
+    FROM membership GROUP BY member;
+    --  =  CASE WHEN bool_or(…) = true  THEN 1
+    --          WHEN bool_or(…) = false THEN 0 ELSE NULL END
+
+so it is 1 in the worlds where some row of the group satisfies the condition
+and 0 in those where the group exists and none does. The two comparisons are
+what a ``HAVING bool_or(x)`` is normalised to, and a group that is present
+with no value leaves both unknown, which is the ``NULL`` the cast answers
+there. Casts that
 PostgreSQL inserts on its own -- to line up the two arms of a ``GREATEST``, or
 an argument with a parameter -- are not the query's reading and are left where
 they are.

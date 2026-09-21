@@ -6926,6 +6926,85 @@ coalesce_agg_to_case(CoalesceExpr *co, const constants_t *constants)
 }
 
 /**
+ * @brief A Boolean aggregate cast to an integer, as the searched @c CASE that
+ *        cast means.
+ *
+ * The only cast SQL has on a Boolean is to an integer type, and it answers 1
+ * for true, 0 for false and @c NULL for @c NULL.  The value of a Boolean
+ * aggregate is no number, so the carried counterparts, which compute in
+ * @c numeric, cannot take it -- but the indicator the cast stands for is a
+ * @c CASE they can:
+ * @code
+ *   CASE WHEN agg = true THEN 1 WHEN agg = false THEN 0 ELSE NULL END
+ * @endcode
+ * whose guards are the equality the boolean-domain evaluator resolves -- the
+ * one @c "HAVING bool_or(x)" is normalised to -- and whose arms are constants,
+ * lifted into value gates.  Two comparisons rather than a @c NULL test and
+ * one: a @c NULL aggregate makes both of them unknown, so the default answers
+ * for it, which is what the cast does, and the two guards are then shapes the
+ * gate's own value reads as well as the evaluators do (the @c IS @c NULL of a
+ * grouped aggregate is a product with a monus, which it does not).  What comes
+ * out is an @c agg_token like any other carried cast, so
+ * @c "bool_or(flag)::int" is read in every world instead of frozen.
+ *
+ * Declines where the NULL-ness of @p agg has no reading (an @c agg_token read
+ * through a subquery exposes no aggregate), and the cast is then the reading
+ * of the plain value it was.
+ */
+static Node *bool_agg_to_int_case(Node *agg, const constants_t *constants)
+{
+  OpExpr *eq, *ne;
+  CaseWhen *w_true, *w_false;
+  CaseExpr *ce;
+  Oid eqop;
+
+  if (!OidIsValid(constants->OID_FUNCTION_AGG_CASE))
+    return NULL;
+  if (agg_expr_null_gate(agg, constants, true) == NULL)
+    return NULL;
+  eqop = OpernameGetOprid(list_make1(makeString("=")), BOOLOID, BOOLOID);
+  if (!OidIsValid(eqop))
+    return NULL;
+
+  eq = makeNode(OpExpr);
+  eq->opno = eqop;
+  eq->opfuncid = InvalidOid;
+  eq->opresulttype = BOOLOID;
+  eq->opretset = false;
+  eq->opcollid = InvalidOid;
+  eq->inputcollid = InvalidOid;
+  eq->args = list_make2(copyObject(agg), makeBoolConst(true, false));
+  eq->location = -1;
+
+  ne = (OpExpr *)copyObject(eq);
+  ne->args = list_make2(copyObject(agg), makeBoolConst(false, false));
+
+  /* The arms are lifted into value gates, which hold numbers, so they are
+   * built as integers whatever the cast's own target width is: the CASE node
+   * itself is only the shape build_agg_case reads, and the agg_token it
+   * returns is cast back to that target where a consumer needs it. */
+  w_true = makeNode(CaseWhen);
+  w_true->expr = (Expr *)eq;
+  w_true->result = (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                                     Int32GetDatum(1), false, true);
+  w_true->location = -1;
+  w_false = makeNode(CaseWhen);
+  w_false->expr = (Expr *)ne;
+  w_false->result = (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                                      Int32GetDatum(0), false, true);
+  w_false->location = -1;
+
+  ce = makeNode(CaseExpr);
+  ce->casetype = INT4OID;
+  ce->casecollid = InvalidOid;
+  ce->arg = NULL;
+  ce->args = list_make2(w_true, w_false);
+  ce->defresult = (Expr *)makeNullConst(INT4OID, -1, InvalidOid);
+  ce->location = -1;
+  return build_agg_case(ce, constants);
+}
+
+/**
  * @brief @c NULLIF over an aggregate as the searched @c CASE it means.
  *
  * @c NULLIF(a,b) is @c NULL where @c a @c = @c b and @c a otherwise, so
@@ -9804,9 +9883,17 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
     numeric_source = declared[0] == INT2OID || declared[0] == INT4OID ||
                      declared[0] == INT8OID || declared[0] == NUMERICOID ||
                      declared[0] == FLOAT4OID || declared[0] == FLOAT8OID;
+    if (!numeric_source) {
+      const bool boolean_to_integer =
+        declared[0] == BOOLOID && nargs == 1 &&
+        (f->funcresulttype == INT2OID || f->funcresulttype == INT4OID ||
+         f->funcresulttype == INT8OID);
+      pfree(declared);
+      /* The Boolean-to-integer cast is an indicator, and carried as the CASE
+       * it means; every other non-numeric source reads the plain value. */
+      return boolean_to_integer ? bool_agg_to_int_case(arg, constants) : NULL;
+    }
     pfree(declared);
-    if (!numeric_source)
-      return NULL;
   }
   if (nargs == 2) {
     /* A second argument that says how to apply the function rather than what

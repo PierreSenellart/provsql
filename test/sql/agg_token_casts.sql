@@ -110,24 +110,34 @@ FROM atc_cast;
 SET provsql.active = on;
 -- A cast to text is a reading of the plain value, so it is frozen and named.
 SELECT sum(v)::text AS t FROM atc_cast;
--- A cast FROM something that is not a number is one too, whatever it casts to:
+-- A cast FROM something that is not a number cannot be carried the same way:
 -- the counterparts compute in numeric over the value the aggregate carries,
 -- and the value of a bool_or is the text "true", which int4(boolean) -- what
--- "bool_or(x)::int" writes -- would read as a numeric and fail on.  (The only
--- such cast PostgreSQL has is Boolean to integer; it rejects Boolean to
--- numeric or to bigint itself.)  Answered as plain SQL answers it, 1/1 for the
--- member with both groups and 1/0 for the one with A alone, and named.
+-- "bool_or(x)::int" writes -- would read as a numeric.  That one cast is the
+-- indicator it means instead, CASE WHEN agg = true THEN 1 WHEN agg = false
+-- THEN 0 ELSE NULL END, so it is carried: 1/1 for the member of both groups
+-- and 1/0 for the one in A alone, as plain SQL answers, and tracked.
+-- Checked per world over two rows at one half: for the first member,
+-- bool_or(gn='A') is true, false and true over the three worlds where the
+-- group exists, so the indicator is 1, 0, 1 and E = 2/3, and the same for
+-- group B the other way round; the second member holds one row of A, so 1
+-- and 0 with certainty.  (Boolean to integer is the only cast PostgreSQL has
+-- on a Boolean: it rejects Boolean to numeric or to bigint itself.)
 CREATE TABLE atc_bool(m int, gn text);
 INSERT INTO atc_bool VALUES (1,'A'),(1,'B'),(2,'A');
 SELECT add_provenance('atc_bool');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM atc_bool; END $$;
 CREATE TABLE atc_bool_r AS
   SELECT m, bool_or(gn = 'A')::int AS a, bool_or(gn = 'B')::int AS b
   FROM atc_bool GROUP BY m;
 SELECT remove_provenance('atc_bool_r');
-SELECT * FROM atc_bool_r ORDER BY m;
+SELECT m, a::text AS a, round(expected(a)::numeric, 6) AS e_a,
+       b::text AS b, round(expected(b)::numeric, 6) AS e_b
+FROM atc_bool_r ORDER BY m;
 DROP TABLE atc_bool_r;
 -- A text-valued aggregate cast to a number, and one read through a text
--- operator, are the same reading.
+-- operator, have no such indicator behind them and stay a reading of the
+-- plain value.
 SELECT min(gn)::int AS n FROM atc_bool WHERE gn ~ '^[0-9]+$';
 SELECT max(gn) || '!' AS shout FROM atc_bool;
 SELECT remove_provenance('atc_bool');

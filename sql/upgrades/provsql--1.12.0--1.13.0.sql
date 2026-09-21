@@ -4803,4 +4803,135 @@ CREATE OPERATOR CLASS agg_token_ops
     OPERATOR 5 >,
     FUNCTION 1 agg_token_btree_cmp(agg_token, agg_token);
 
+-- 12. A Boolean aggregate cast to an integer is the indicator that cast
+-- means, and is carried: its guards compare the aggregate with true and with
+-- false, which the actual-data reading of a guard has to take although the
+-- value is no number.
+
+/**
+ * @brief The text a value-carrying gate records in the actual data, whatever
+ *        type it is of.
+ *
+ * @c agg_gate_value reads that text as a number and gives up on anything else.
+ * A Boolean aggregate's value is one of those: @c "true" is no number, and yet
+ * @c = and @c <> compare it, which is what the guards of a
+ * @c "bool_or(flag)::int" need.  Descends the value-carrying gates as
+ * @c agg_gate_value does, and answers @c NULL for a gate that records no value
+ * of its own (internal use).
+ */
+CREATE OR REPLACE FUNCTION agg_gate_value_text(token uuid)
+  RETURNS text AS
+$$
+DECLARE
+  gt provsql.provenance_gate := provsql.get_gate_type(token);
+BEGIN
+  IF gt IN ('agg', 'arith', 'value') THEN
+    RETURN provsql.get_extra(token);
+  ELSIF gt = 'semimod' THEN
+    RETURN provsql.agg_gate_value_text((provsql.get_children(token))[2]);
+  ELSIF gt = 'conditioned' THEN
+    RETURN provsql.agg_gate_value_text((provsql.get_children(token))[1]);
+  END IF;
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief Deterministic truth of a Boolean guard sub-circuit, now taking a
+ *        comparison of Boolean values as well as of numbers.
+ */
+CREATE OR REPLACE FUNCTION agg_guard_holds(token UUID)
+  RETURNS boolean AS
+$$
+DECLARE
+  gt provenance_gate := get_gate_type(token);
+  ch uuid[];
+  opname text;
+  l numeric;
+  r numeric;
+  lt text;
+  rt text;
+  all_true boolean;
+  any_true boolean;
+  any_null boolean;
+BEGIN
+  IF gt = 'one' THEN
+    RETURN true;
+  ELSIF gt = 'zero' THEN
+    RETURN false;
+  ELSIF gt IN ('times', 'plus') THEN
+    SELECT bool_and(h), bool_or(h), bool_or(h IS NULL)
+      INTO all_true, any_true, any_null
+      FROM (SELECT provsql.agg_guard_holds(c) AS h
+            FROM unnest(get_children(token)) AS c) AS s;
+    IF gt = 'times' THEN
+      -- AND: false dominates unknown (bool_and skips NULL inputs, so it is
+      -- false exactly when some child is false).
+      RETURN CASE WHEN NOT all_true THEN false
+                  WHEN any_null THEN NULL
+                  ELSE true END;
+    ELSE
+      -- OR: true dominates unknown.
+      RETURN CASE WHEN any_true THEN true
+                  WHEN any_null THEN NULL
+                  ELSE false END;
+    END IF;
+  ELSIF gt = 'cmp' THEN
+    ch := get_children(token);
+    l := agg_gate_value(ch[1]);
+    r := agg_gate_value(ch[2]);
+    IF l IS NULL OR r IS NULL THEN
+      /* A side with no value in the actual data -- an aggregate over no row
+       * there, as a group kept only for other worlds is -- makes the
+       * comparison unknown there, which is what provenance_cmp annotates
+       * zero: it does not hold.  A side whose value this reading does not
+       * take, a timestamp or a random variable, leaves the truth undecided
+       * instead: the value is there, only not as a number. */
+      IF agg_gate_value_missing(ch[1]) OR agg_gate_value_missing(ch[2]) THEN
+        RETURN false;
+      END IF;
+      /* A Boolean pair: the value is there, only not as a number, and = / <>
+       * compare it all the same -- the guards a "bool_or(flag)::int" lowers to
+       * are these.  The literals are checked against a list rather than cast
+       * inside an exception block, which a parallel worker cannot afford, for
+       * the reason agg_gate_value reads its number with a regex. */
+      lt := lower(agg_gate_value_text(ch[1]));
+      rt := lower(agg_gate_value_text(ch[2]));
+      IF lt IN ('true', 'false', 't', 'f') AND
+         rt IN ('true', 'false', 't', 'f') THEN
+        SELECT oprname INTO opname
+          FROM pg_catalog.pg_operator WHERE oid = (get_infos(token)).info1;
+        IF opname = '=' THEN
+          RETURN lt::boolean = rt::boolean;
+        ELSIF opname = '<>' THEN
+          RETURN lt::boolean <> rt::boolean;
+        END IF;
+      END IF;
+      RETURN NULL;
+    END IF;
+    SELECT oprname INTO opname
+      FROM pg_catalog.pg_operator WHERE oid = (get_infos(token)).info1;
+    RETURN CASE opname
+      WHEN '<'  THEN l <  r
+      WHEN '<=' THEN l <= r
+      WHEN '='  THEN l =  r
+      WHEN '<>' THEN l <> r
+      WHEN '>=' THEN l >= r
+      WHEN '>'  THEN l >  r
+    END;
+  ELSIF gt IN ('input', 'delta', 'monus', 'project', 'eq', 'mulinput',
+               'assumed', 'annotation') THEN
+    /* An ordinary provenance expression, not a comparison: the guard a
+     * COALESCE over an aggregate lowers to is the NullTest one,
+     * delta(+Kn) for IS NOT NULL and 1 - +Kn for IS NULL.  Such a guard
+     * holds in the actual data exactly when its Boolean provenance does
+     * with every input row present, which is what plain_truth reads. */
+    RETURN provsql.plain_truth(token);
+  END IF;
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
 SELECT reset_constants_cache();

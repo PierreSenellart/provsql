@@ -2787,6 +2787,35 @@ $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
   SET search_path=provsql,pg_temp,public;
 
 /**
+ * @brief The text a value-carrying gate records in the actual data, whatever
+ *        type it is of.
+ *
+ * @c agg_gate_value reads that text as a number and gives up on anything else.
+ * A Boolean aggregate's value is one of those: @c "true" is no number, and yet
+ * @c = and @c <> compare it, which is what the guards of a
+ * @c "bool_or(flag)::int" need.  Descends the value-carrying gates as
+ * @c agg_gate_value does, and answers @c NULL for a gate that records no value
+ * of its own (internal use).
+ */
+CREATE OR REPLACE FUNCTION agg_gate_value_text(token uuid)
+  RETURNS text AS
+$$
+DECLARE
+  gt provsql.provenance_gate := provsql.get_gate_type(token);
+BEGIN
+  IF gt IN ('agg', 'arith', 'value') THEN
+    RETURN provsql.get_extra(token);
+  ELSIF gt = 'semimod' THEN
+    RETURN provsql.agg_gate_value_text((provsql.get_children(token))[2]);
+  ELSIF gt = 'conditioned' THEN
+    RETURN provsql.agg_gate_value_text((provsql.get_children(token))[1]);
+  END IF;
+  RETURN NULL;
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+/**
  * @brief Deterministic truth of a Boolean guard sub-circuit over aggregate
  *        comparisons, evaluated in the actual world (all input tuples present).
  *
@@ -2807,6 +2836,8 @@ DECLARE
   opname text;
   l numeric;
   r numeric;
+  lt text;
+  rt text;
   all_true boolean;
   any_true boolean;
   any_null boolean;
@@ -2845,6 +2876,23 @@ BEGIN
        * instead: the value is there, only not as a number. */
       IF agg_gate_value_missing(ch[1]) OR agg_gate_value_missing(ch[2]) THEN
         RETURN false;
+      END IF;
+      /* A Boolean pair: the value is there, only not as a number, and = / <>
+       * compare it all the same -- the guards a "bool_or(flag)::int" lowers to
+       * are these.  The literals are checked against a list rather than cast
+       * inside an exception block, which a parallel worker cannot afford, for
+       * the reason agg_gate_value reads its number with a regex. */
+      lt := lower(agg_gate_value_text(ch[1]));
+      rt := lower(agg_gate_value_text(ch[2]));
+      IF lt IN ('true', 'false', 't', 'f') AND
+         rt IN ('true', 'false', 't', 'f') THEN
+        SELECT oprname INTO opname
+          FROM pg_catalog.pg_operator WHERE oid = (get_infos(token)).info1;
+        IF opname = '=' THEN
+          RETURN lt::boolean = rt::boolean;
+        ELSIF opname = '<>' THEN
+          RETURN lt::boolean <> rt::boolean;
+        END IF;
       END IF;
       RETURN NULL;
     END IF;
