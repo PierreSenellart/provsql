@@ -4355,6 +4355,16 @@ static Node *peel_agg_casts(Node *n);
 static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants);
 static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants);
 
+/* Forward declaration: the NULL-ness of an expression over aggregates is read
+ * through the reading of an aggregate's own, and is defined next to the
+ * regular indicator it also uses. */
+static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
+                                    bool want_null);
+
+/* Forward declaration: a CASE over aggregates and what becomes one lower to an
+ * agg_case gate, which the HAVING converters read as they do an aggregate. */
+static Node *try_lower_agg_case(Node *node, const constants_t *constants);
+
 /* ----------------------------------------------------------------------
  * Normalising constant arithmetic over an aggregate in a comparison.
  *
@@ -4691,6 +4701,15 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
           exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
         agg_node = swapped;
     }
+    /* A CASE over aggregates, or what becomes one (GREATEST / LEAST,
+     * COALESCE, NULLIF), is NOT lowered here although try_lower_agg_case
+     * would: the comparison it builds compares an agg_case with a value, and
+     * no evaluator resolves that (the value gates of its arms are not a
+     * semiring operation), so the query would run and its probability fail.
+     * The refusal below says it at planning time instead.  Lowering this
+     * needs the comparison evaluators to read an agg_case operand; the
+     * IS [NOT] NULL of the same expression does not compare, and is read
+     * (agg_expr_null_gate). */
 
     if (agg_node != NULL) {
       // The aggregate side: add an explicit cast of the agg_token to UUID.
@@ -4794,6 +4813,77 @@ static FuncExpr *having_null_filtered_plus(const constants_t *constants,
   return plus;
 }
 
+/** @brief A no-argument gate constructor -- @c gate_one(), @c gate_zero(). */
+static FuncExpr *uuid_const_gate(Oid funcid, const constants_t *constants) {
+  return makeFuncExpr(funcid, constants->OID_TYPE_UUID, NIL, InvalidOid,
+                      InvalidOid, COERCE_EXPLICIT_CALL);
+}
+
+/** @brief @c provenance_plus / @c provenance_times over @p elements, each a
+ *  UUID-valued gate expression, as the variadic call over an array the SQL
+ *  functions take. */
+static FuncExpr *uuid_nary_gate(Oid funcid, List *elements,
+                                const constants_t *constants) {
+  ArrayExpr *array = makeNode(ArrayExpr);
+  FuncExpr *call = makeNode(FuncExpr);
+
+  array->array_typeid = constants->OID_TYPE_UUID_ARRAY;
+  array->array_collid = InvalidOid;
+  array->element_typeid = constants->OID_TYPE_UUID;
+  array->elements = elements;
+  array->multidims = false;
+  array->location = -1;
+
+  call->funcid = funcid;
+  call->funcresulttype = constants->OID_TYPE_UUID;
+  call->funcvariadic = true;
+  call->args = list_make1(array);
+  call->location = -1;
+  return call;
+}
+
+/** @brief @c "𝟙 ⊖ gate", the complement of a Boolean gate. */
+static FuncExpr *uuid_complement(Node *gate, const constants_t *constants) {
+  FuncExpr *monus = makeNode(FuncExpr);
+  monus->funcid = constants->OID_FUNCTION_PROVENANCE_MONUS;
+  monus->funcresulttype = constants->OID_TYPE_UUID;
+  monus->args =
+    list_make2(uuid_const_gate(constants->OID_FUNCTION_GATE_ONE, constants),
+               gate);
+  monus->location = -1;
+  return monus;
+}
+
+/** @brief The aggregates that are @c NULL exactly when they read no value:
+ *  their NULL-ness is the presence of a value row.  @c count is never
+ *  @c NULL and is read apart; a NULL-keeping aggregate (@c array_agg) is
+ *  @c NULL exactly when it reads no row at all, which
+ *  @c aggregate_keeps_nulls tells. */
+static const char *const null_iff_no_value[] = {
+  "sum", "avg", "min", "max", "choose", "bool_and", "bool_or", "every",
+  "string_agg", "xmlagg", "stddev_pop", "var_pop", "bit_and", "bit_or",
+  "bit_xor", "range_agg", "range_intersect_agg", NULL};
+
+/** @brief Whether the NULL-ness of an aggregate of this kind has a reading at
+ *  all: what @c having_NullTest_to_provenance builds a gate for, and what the
+ *  guards of a lowered @c CASE may therefore ask. */
+static bool aggregate_null_has_reading(Oid aggfnoid,
+                                       const constants_t *constants) {
+  char *name = get_func_name(aggfnoid);
+  bool known = aggregate_keeps_nulls(constants, aggfnoid);
+  const char *const *n;
+
+  if (name == NULL)
+    return known;
+  if (strcmp(name, "count") == 0)
+    known = true;
+  for (n = null_iff_no_value; !known && *n != NULL; ++n)
+    if (strcmp(name, *n) == 0)
+      known = true;
+  pfree(name);
+  return known;
+}
+
 /**
  * @brief Convert a @c NullTest on an aggregate (@c agg IS [NOT] NULL) into a
  *        provenance expression.
@@ -4838,9 +4928,21 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
   /* Unwrap a single-argument implicit/explicit cast around the aggregate. */
   arg = strip_agg_cast(arg);
   if (!IsA(arg, FuncExpr) ||
-      ((FuncExpr *)arg)->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+      ((FuncExpr *)arg)->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+    /* Not an aggregate but an expression over aggregates: a lowered CASE (what
+     * a COALESCE, a NULLIF, a GREATEST / LEAST also becomes), arithmetic over
+     * agg_tokens.  Its NULL-ness is read arm by arm, operand by operand. */
+    NullTestType t = nt->nulltesttype;
+    FuncExpr *gate;
+
+    if (negated)
+      t = (t == IS_NULL) ? IS_NOT_NULL : IS_NULL;
+    gate = agg_expr_null_gate(arg, constants, t == IS_NULL);
+    if (gate != NULL)
+      return gate;
     provsql_unsupported(PROVSQL_GAP, "having-null-test-not-aggregate", "HAVING IS [NOT] NULL is only supported directly on an "
                         "aggregate of a provenance-tracked relation");
+  }
   pa = (FuncExpr *)arg;
 
   /* provenance_aggregate(aggfnoid, aggtype, Aggref, array_agg(semimods),
@@ -4874,10 +4976,6 @@ static FuncExpr *having_NullTest_to_provenance(NullTest *nt,
     {
       Oid aggfnoid = DatumGetInt32(((Const *)linitial(pa->args))->constvalue);
       char *name = get_func_name(aggfnoid);
-      static const char *const null_iff_no_value[] = {
-        "sum", "avg", "min", "max", "choose", "bool_and", "bool_or", "every",
-        "string_agg", "xmlagg", "stddev_pop", "var_pop", "bit_and", "bit_or",
-        "bit_xor", "range_agg", "range_intersect_agg", NULL};
       bool known = aggregate_keeps_nulls(constants, aggfnoid);
       const char *const *n;
 
@@ -5030,6 +5128,176 @@ static FuncExpr *make_regular_indicator(const constants_t *constants,
                 : expr);
   ind->location = -1;
   return ind;
+}
+
+/**
+ * @brief The gate of @c "expr IS NULL" (@p want_null) or of
+ *        @c "expr IS NOT NULL", where @p arg is an expression over aggregates
+ *        rather than an aggregate itself.
+ *
+ * An aggregate's own NULL-ness is what @c having_NullTest_to_provenance reads,
+ * from the rows its group holds.  Everything built over aggregates says how
+ * its NULL-ness follows from theirs:
+ *
+ * - a lowered @c CASE (@c agg_case, which a @c COALESCE, a @c NULLIF and a
+ *   @c GREATEST / @c LEAST also become) is NULL exactly where the arm it
+ *   selects is, so the reading is @c "⊕ᵢ (⊗ⱼ<ᵢ ¬gⱼ) ⊗ gᵢ ⊗ null(vᵢ)" over the
+ *   arms and the default -- first-match, as the gate itself is;
+ * - arithmetic over agg_tokens is strict: NULL where one operand is, so
+ *   @c ⊕ over the operands for @c IS @c NULL and @c ⊗ for @c IS @c NOT
+ *   @c NULL;
+ * - a value lifted into a value gate is the same in every world, so its
+ *   NULL-ness is the deterministic indicator of the ordinary test (and, for a
+ *   constant, @c 𝟙 or @c 𝟘 outright: the @c NULL branch of a @c NULLIF is one).
+ *
+ * Returns NULL where the expression is none of these, or where an aggregate
+ * inside it has no reading of its own -- the caller then leaves what it was
+ * lowering as the query wrote it, and the value is read as a plain one.  This
+ * function never raises: declining is how it says no.
+ */
+static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
+                                    bool want_null)
+{
+  Node *node;
+
+  if (arg == NULL || !OidIsValid(constants->OID_FUNCTION_PROVENANCE_MONUS))
+    return NULL;
+  node = peel_agg_casts(arg);
+  if (node == NULL)
+    node = arg;
+  /* An arm of a lowered CASE is a UUID: the COALESCE onto gate_null() that
+   * agg_arm_to_uuid wraps it in, around either the agg_token of the branch or
+   * the value gate of a plain one.  A COALESCE the query itself wrote is not
+   * that -- it is of the value's type, and means its own second argument. */
+  if (IsA(node, CoalesceExpr) && ((CoalesceExpr *)node)->args != NIL &&
+      exprType(node) == constants->OID_TYPE_UUID)
+    node = (Node *)linitial(((CoalesceExpr *)node)->args);
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_AGG_TOKEN_UUID &&
+      ((FuncExpr *)node)->args != NIL) {
+    Node *peeled;
+    node = (Node *)linitial(((FuncExpr *)node)->args);
+    peeled = peel_agg_casts(node);
+    if (peeled != NULL)
+      node = peeled;
+  }
+  /* A CASE the query wrote, in HAVING, where nothing has lowered it yet: it is
+   * the same expression once lowered, and then an agg_case like any other. */
+  {
+    Node *lowered = try_lower_agg_case(node, constants);
+    if (lowered != NULL)
+      return agg_expr_null_gate(lowered, constants, want_null);
+  }
+
+  if (IsA(node, FuncExpr)) {
+    FuncExpr *fe = (FuncExpr *)node;
+
+    /* The aggregate itself: its own reading. */
+    if (fe->funcid == constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
+      NullTest *nt;
+
+      if (fe->args == NIL ||
+          !aggregate_null_has_reading(
+            DatumGetInt32(((Const *)linitial(fe->args))->constvalue),
+            constants))
+        return NULL;
+      nt = makeNode(NullTest);
+      nt->arg = (Expr *)node;
+      nt->nulltesttype = want_null ? IS_NULL : IS_NOT_NULL;
+      nt->argisrow = false;
+      nt->location = -1;
+      return having_NullTest_to_provenance(nt, constants, false);
+    }
+
+    /* A value of the row lifted into a value gate: the same in every world. */
+    if (fe->funcid == constants->OID_FUNCTION_AGG_VALUE_GATE &&
+        fe->args != NIL) {
+      Node *v = (Node *)linitial(fe->args);
+      NullTest *nt;
+
+      if (IsA(v, Const))
+        return uuid_const_gate(((Const *)v)->constisnull == want_null
+                                 ? constants->OID_FUNCTION_GATE_ONE
+                                 : constants->OID_FUNCTION_GATE_ZERO,
+                               constants);
+      nt = makeNode(NullTest);
+      nt->arg = (Expr *)copyObject(v);
+      nt->nulltesttype = IS_NULL;
+      nt->argisrow = false;
+      nt->location = -1;
+      return make_regular_indicator(constants, (Expr *)nt, !want_null);
+    }
+
+    /* A lowered CASE: the arm it selects, arm by arm. */
+    if (fe->funcid == constants->OID_FUNCTION_AGG_CASE && fe->args != NIL &&
+        IsA(linitial(fe->args), ArrayExpr)) {
+      List *elements = ((ArrayExpr *)linitial(fe->args))->elements;
+      int n = list_length(elements), arms = (n - 1) / 2, i, j;
+      List *terms = NIL;
+
+      if (n == 0 || n % 2 == 0)
+        return NULL;
+      for (i = 0; i <= arms; ++i) {
+        /* The arm is selected where its guard holds and none before it does;
+         * the last term is the default, which no guard has claimed. */
+        bool is_default = (i == arms);
+        Node *value = (Node *)list_nth(elements, is_default ? n - 1 : 2 * i + 1);
+        FuncExpr *value_null = agg_expr_null_gate(value, constants, want_null);
+        List *factors = NIL;
+
+        if (value_null == NULL)
+          return NULL;
+        for (j = 0; j < i; ++j)
+          factors = lappend(factors,
+                            uuid_complement(copyObject(list_nth(elements,
+                                                                2 * j)),
+                                            constants));
+        if (!is_default)
+          factors = lappend(factors, copyObject(list_nth(elements, 2 * i)));
+        factors = lappend(factors, value_null);
+        terms = lappend(terms,
+                        uuid_nary_gate(constants->OID_FUNCTION_PROVENANCE_TIMES,
+                                       factors, constants));
+      }
+      return uuid_nary_gate(constants->OID_FUNCTION_PROVENANCE_PLUS, terms,
+                            constants);
+    }
+    return NULL;
+  }
+
+  /* Arithmetic over agg_tokens: strict in every operand. */
+  if (IsA(node, OpExpr) &&
+      exprType(node) == constants->OID_TYPE_AGG_TOKEN) {
+    List *operands = NIL;
+    ListCell *lc;
+
+    foreach (lc, ((OpExpr *)node)->args) {
+      Node *operand = (Node *)lfirst(lc);
+      FuncExpr *gate;
+
+      if (exprType(operand) == constants->OID_TYPE_AGG_TOKEN)
+        gate = agg_expr_null_gate(operand, constants, want_null);
+      else {
+        /* A plain operand, the same in every world. */
+        NullTest *nt = makeNode(NullTest);
+        nt->arg = (Expr *)copyObject(operand);
+        nt->nulltesttype = IS_NULL;
+        nt->argisrow = false;
+        nt->location = -1;
+        gate = make_regular_indicator(constants, (Expr *)nt, !want_null);
+      }
+      if (gate == NULL)
+        return NULL;
+      operands = lappend(operands, gate);
+    }
+    if (operands == NIL)
+      return NULL;
+    /* NULL where ONE operand is, not NULL where EVERY one is not. */
+    return uuid_nary_gate(want_null ? constants->OID_FUNCTION_PROVENANCE_PLUS
+                                    : constants->OID_FUNCTION_PROVENANCE_TIMES,
+                          operands, constants);
+  }
+  return NULL;
 }
 
 /**
@@ -6742,6 +7010,23 @@ static CaseExpr *nullif_agg_to_case(NullIfExpr *ni, const constants_t *constants
  * reading (@c count, @c sum, @c avg, @c min, @c max, @c choose); anything else
  * is left to be read as a plain value.
  */
+/** @brief Whether @p n holds a lowered @c CASE (an @c agg_case gate).  A
+ *  comparison with such an operand is not one the evaluators resolve, so what
+ *  would compare it declines and the value is read as a plain one. */
+static bool agg_case_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_AGG_CASE)
+    return true;
+  return expression_tree_walker(node, agg_case_walker, cx);
+}
+
+static bool agg_expr_has_case(Node *n, const constants_t *constants) {
+  return agg_case_walker(n, (void *)constants);
+}
+
 /** @brief @p n with the casts around an @c agg_token peeled off, or @p n
  *  itself where no @c agg_token is under them (a constant arm keeps the
  *  coercions the query gave it). */
@@ -6764,25 +7049,24 @@ static CaseExpr *minmax_agg_to_case(MinMaxExpr *mm, const constants_t *constants
       TypeCategory(mm->minmaxtype) != TYPCATEGORY_NUMERIC)
     return NULL;
   foreach (lc, mm->args) {
-    Node *arg = strip_agg_cast((Node *)lfirst(lc));
+    Node *arg = peel_agg_token_arm((Node *)lfirst(lc), constants);
 
-    if (arg != NULL && IsA(arg, FuncExpr) &&
-        ((FuncExpr *)arg)->funcid ==
-          constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
-      /* An aggregate: its NULL-ness must have a reading. */
-      Oid aggfnoid =
-        DatumGetInt32(((Const *)linitial(((FuncExpr *)arg)->args))->constvalue);
-      char *name = get_func_name(aggfnoid);
-      bool ok = name != NULL &&
-                (strcmp(name, "count") == 0 || strcmp(name, "sum") == 0 ||
-                 strcmp(name, "avg") == 0 || strcmp(name, "min") == 0 ||
-                 strcmp(name, "max") == 0 || strcmp(name, "choose") == 0);
-      if (name != NULL)
-        pfree(name);
-      if (!ok)
-        return NULL;
-      i++;
-    }
+    if (arg == NULL || exprType(arg) != constants->OID_TYPE_AGG_TOKEN)
+      continue;   /* a plain arm: the CASE lifts it into a value gate */
+    /* An arm that is itself a lowered CASE -- a nested GREATEST / LEAST, a
+     * COALESCE, a NULLIF -- would give the comparison guard an agg_case
+     * operand, which no evaluator resolves: the value would be carried and
+     * then unreadable, so it is read as a plain one instead, as before.  What
+     * the guards need is an aggregate or arithmetic over aggregates, which
+     * they compare as they do in a HAVING. */
+    if (agg_expr_has_case(arg, constants))
+      return NULL;
+    /* Its NULL-ness must have a reading, the CASE testing for it; building the
+     * gate here and dropping it is how we ask, the guards being built again
+     * from the CASE itself. */
+    if (agg_expr_null_gate(arg, constants, true) == NULL)
+      return NULL;
+    i++;
   }
   if (i == 0)
     return NULL;   /* no aggregate: nothing of ours to carry */
@@ -6888,6 +7172,29 @@ rewrite_agg_case_mutator(Node *node, void *context)
     return lowered != NULL ? lowered : (Node *)co;
   }
   return expression_tree_mutator(node, rewrite_agg_case_mutator, context);
+}
+
+/**
+ * @brief A @c CASE over aggregates, or what becomes one (@c GREATEST /
+ *        @c LEAST, @c COALESCE, @c NULLIF), lowered to its @c agg_case gate.
+ *
+ * The target list is lowered by @c rewrite_agg_case_mutator as a whole; a
+ * @c HAVING clause is read expression by expression instead, so this lowers
+ * the one expression the reader has in hand.  Returns NULL where the shape
+ * declines to lower, and the caller then reads the value as a plain one.
+ */
+static Node *try_lower_agg_case(Node *node, const constants_t *constants)
+{
+  Node *lowered;
+
+  if (node == NULL || !OidIsValid(constants->OID_FUNCTION_AGG_CASE))
+    return NULL;
+  if (!IsA(node, CaseExpr) && !IsA(node, MinMaxExpr) &&
+      !IsA(node, CoalesceExpr) && !IsA(node, NullIfExpr))
+    return NULL;
+  lowered = rewrite_agg_case_mutator(copyObject(node), (void *)constants);
+  return (lowered != NULL &&
+          exprType(lowered) == constants->OID_TYPE_AGG_TOKEN) ? lowered : NULL;
 }
 
 /* Lower aggregate-carrier CASEs in the target list, after the aggregate pass
@@ -12977,8 +13284,21 @@ static bool having_entails_group_existence(Expr *expr,
     return !conjunction;
   }
 
-  /* An atom that survived the aggregate test above is a comparison or an
-   * IS [NOT] NULL on an aggregate; both are 0 on the empty group. */
+  /* An IS [NOT] NULL over an EXPRESSION on aggregates reads arm by arm
+   * (agg_expr_null_gate), and an arm that is a value of the row holds in every
+   * world, the empty group included: only the test on the aggregate itself is
+   * 0 there. */
+  if (IsA(expr, NullTest)) {
+    Node *arg = strip_agg_cast((Node *) ((NullTest *) expr)->arg);
+    return arg != NULL &&
+           ((IsA(arg, FuncExpr) &&
+             ((FuncExpr *) arg)->funcid ==
+               constants->OID_FUNCTION_PROVENANCE_AGGREGATE) ||
+            IsA(arg, Aggref));
+  }
+
+  /* An atom that survived the aggregate test above is a comparison on an
+   * aggregate, which is 0 on the empty group. */
   return true;
 }
 

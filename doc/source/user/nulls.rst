@@ -86,6 +86,17 @@ fully supported across possible worlds: ``sum(b) IS NULL`` holds in
 exactly the worlds where the group exists but no non-NULL-valued row is
 present.
 
+The test also reads an *expression* over aggregates, not only an
+aggregate: a ``CASE``, and what becomes one (``GREATEST`` / ``LEAST``,
+``COALESCE``, ``NULLIF``), is NULL exactly where the arm it selects in
+that world is, and arithmetic over aggregates is strict, NULL where one
+of its operands is. So ``HAVING GREATEST(sum(b), min(b)) IS NULL``
+holds in the worlds where the group has rows but none with a value, and
+``HAVING COALESCE(sum(b), 0) IS NULL`` in none. A comparison over such
+an expression -- ``HAVING GREATEST(sum(b), 2) > 5`` -- is a different
+matter and is still refused: see
+:ref:`what a guarded selection carries <case-over-aggregates>`.
+
 **Outer joins.** A LEFT/RIGHT/FULL JOIN between tracked arms is
 lowered into its matched and NULL-padded arms with correct (monus)
 provenance for the padding. Chains of outer joins, outer joins mixed

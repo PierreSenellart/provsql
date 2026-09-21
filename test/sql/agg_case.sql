@@ -284,4 +284,60 @@ SELECT nullif(sum(v), min(v)) AS n FROM cn WHERE g = 1;
 SELECT remove_provenance('cn');
 DROP TABLE cn;
 
+-- An arm that is arithmetic over aggregates, not an aggregate itself: the
+-- guards of the CASE read it as they read one, its NULL-ness included (it is
+-- NULL where an operand is), so GREATEST / LEAST carries it instead of
+-- freezing.  Two rows, 3 and 4, each present with probability one half:
+-- sum(v)*2 is NULL, 6, 8 and 14 over the four worlds, so GREATEST(.., 9) is
+-- 9, 9, 9 and 14 -- the empty world counts here, its value being the other
+-- argument -- and E = 10.25; LEAST(.., 9) is 9, 6, 8 and 9, E = 8.
+CREATE TABLE ca(v bigint);
+INSERT INTO ca VALUES (3),(4);
+SELECT add_provenance('ca');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ca; END $$;
+CREATE TABLE ca_r AS
+  SELECT greatest(sum(v) * 2, 9) AS gt, least(sum(v) * 2, 9) AS ls FROM ca;
+SET provsql.active = off;
+SELECT gt::text AS gt, round(expected(gt, provsql)::numeric, 6) AS e_gt,
+       ls::text AS ls, round(expected(ls, provsql)::numeric, 6) AS e_ls
+FROM ca_r;
+SET provsql.active = on;
+DROP TABLE ca_r;
+SELECT remove_provenance('ca');
+DROP TABLE ca;
+
+-- IS [NOT] NULL of an EXPRESSION over aggregates, in HAVING: not the
+-- aggregate's own NULL-ness but what follows from it, arm by arm for a CASE
+-- (which GREATEST / LEAST and COALESCE become) and operand by operand for
+-- arithmetic, which is strict.  One group of two rows, one of them NULL-valued
+-- and each present with probability one half: sum(v) reads no value in the
+-- world holding only the NULL row, so GREATEST(sum(v), min(v)) is NULL there
+-- and nowhere else -- 1/4 -- and has a value in the two worlds holding the
+-- row of 5 -- 1/2.  Arithmetic over it is NULL exactly where it is, and
+-- COALESCE onto a constant nowhere, whence the zero.
+CREATE TABLE cu(g int, v int);
+INSERT INTO cu VALUES (1,NULL),(1,5);
+SELECT add_provenance('cu');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cu; END $$;
+CREATE TABLE cu_r AS
+SELECT 'greatest IS NULL' AS q,
+       round(probability(provenance())::numeric, 6) AS p
+  FROM (SELECT g FROM cu GROUP BY g
+        HAVING greatest(sum(v), min(v)) IS NULL) s
+UNION ALL
+SELECT 'greatest IS NOT NULL', round(probability(provenance())::numeric, 6)
+  FROM (SELECT g FROM cu GROUP BY g
+        HAVING greatest(sum(v), min(v)) IS NOT NULL) s
+UNION ALL
+SELECT 'sum * 2 IS NULL', round(probability(provenance())::numeric, 6)
+  FROM (SELECT g FROM cu GROUP BY g HAVING sum(v) * 2 IS NULL) s
+UNION ALL
+SELECT 'coalesce IS NULL', round(probability(provenance())::numeric, 6)
+  FROM (SELECT g FROM cu GROUP BY g HAVING coalesce(sum(v), 0) IS NULL) s;
+SELECT remove_provenance('cu_r');
+SELECT * FROM cu_r ORDER BY 1;
+DROP TABLE cu_r;
+SELECT remove_provenance('cu');
+DROP TABLE cu;
+
 SELECT 'ok'::text AS agg_case_done;

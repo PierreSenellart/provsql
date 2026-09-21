@@ -411,9 +411,24 @@ the same way, being the ``CASE`` they mean:
 The two ``NULL`` guards are SQL's reading of a ``NULL`` argument as *no value*
 rather than as an unknown -- ``GREATEST(NULL, 2)`` is 2 -- which a bare
 ``CASE WHEN a > b`` would get wrong, its unknown comparison falling to the
-``ELSE``. Two arguments, and an aggregate one has to be a kind whose
-``NULL``-ness has a reading (``count``, ``sum``, ``avg``, ``min``, ``max``,
-:sqlfunc:`choose`). ``NULLIF`` is the same kind of reading, ``NULLIF(a, b)`` being
+``ELSE``. Two arguments, and an argument that is not a plain value has to be
+one whose ``NULL``-ness has a reading: an aggregate of a kind that is NULL
+exactly when it reads no value (``count``, ``sum``, ``avg``, ``min``, ``max``,
+:sqlfunc:`choose`, ``stddev_pop``, ``var_pop``, the bitwise and Boolean ones),
+or arithmetic over such aggregates, ``GREATEST(sum(pm25) * 2, 9)``, which is
+NULL where one of its operands is.
+
+.. _case-over-aggregates:
+
+An argument that is itself one of these guarded expressions -- a nested
+``GREATEST``, a ``COALESCE`` inside a ``LEAST`` -- is read as a plain value
+instead, with the usual warning. So is any comparison over one, in a
+``HAVING`` or in the guard of a ``CASE`` the query writes. The reason is on
+the evaluator's side rather than the rewriter's: the guard would compare a
+guarded selection with a value, and no evaluator resolves such a comparison
+(the arms of the selection are value gates, which no semiring operation
+combines). The ``IS [NOT] NULL`` of the same expression does not compare, and
+is read. ``NULLIF`` is the same kind of reading, ``NULLIF(a, b)`` being
 ``CASE WHEN a = b THEN NULL ELSE a END``, and is tracked where the compared
 value holds no aggregate of its own:
 
