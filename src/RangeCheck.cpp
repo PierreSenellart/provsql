@@ -231,6 +231,32 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
           if (wires.size() != 1) break;
           result = expInt(first);
           break;
+        case PROVSQL_ARITH_ROUND:
+          /* Rounding is monotone, so the bounds carry over; the digits, if a
+           * second wire gives them, are a constant we do not read here, and
+           * widening by one unit in the last place of the bounds is sound for
+           * any of them. */
+          result = { std::floor(first.lo), std::ceil(first.hi) };
+          break;
+        case PROVSQL_ARITH_FLOOR:
+          if (wires.size() != 1) break;
+          result = { std::floor(first.lo), std::floor(first.hi) };
+          break;
+        case PROVSQL_ARITH_CEIL:
+          if (wires.size() != 1) break;
+          result = { std::ceil(first.lo), std::ceil(first.hi) };
+          break;
+        case PROVSQL_ARITH_ABS:
+          /* |x| is not monotone: an interval straddling zero has 0 as its
+           * least value, and the greatest is the farther endpoint. */
+          if (wires.size() != 1) break;
+          if (first.lo >= 0.0)
+            result = first;
+          else if (first.hi <= 0.0)
+            result = { -first.hi, -first.lo };
+          else
+            result = { 0.0, std::max(-first.lo, first.hi) };
+          break;
         case PROVSQL_ARITH_PERCENTILE:
           /* Continuous percentile over interleaved [ind, x, ...] wires:
            * every draw interpolates within the present values, so the hull

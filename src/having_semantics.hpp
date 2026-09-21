@@ -940,6 +940,29 @@ void provsql_having(
             if (!eval(w[0], world, a, ai)) return false;
             out = -a; is_int = ai; return true;
           }
+          if (aop == PROVSQL_ARITH_ROUND || aop == PROVSQL_ARITH_FLOOR ||
+              aop == PROVSQL_ARITH_CEIL || aop == PROVSQL_ARITH_ABS) {
+            /* Read in the world, on the value the world gives: rounding and
+             * absolute value of a value, never of an expectation. */
+            double a;
+            bool ai;
+            if (w.empty() || !eval(w[0], world, a, ai)) return false;
+            if (aop == PROVSQL_ARITH_FLOOR) out = std::floor(a);
+            else if (aop == PROVSQL_ARITH_CEIL) out = std::ceil(a);
+            else if (aop == PROVSQL_ARITH_ABS) out = std::fabs(a);
+            else if (w.size() == 1) out = std::round(a);
+            else {
+              double d;
+              bool di;
+              if (!eval(w[1], world, d, di)) return false;
+              const double f = std::pow(10.0, d);
+              out = std::round(a * f) / f;
+            }
+            /* An integer in, an integer out, except a rounding to digits of a
+             * value that was not one. */
+            is_int = ai || aop != PROVSQL_ARITH_ROUND || w.size() == 1;
+            return true;
+          }
           if (aop == PROVSQL_ARITH_MAX || aop == PROVSQL_ARITH_MIN) {
             if (w.empty()) return false;
             double r = 0; bool all_int = true, first = true;

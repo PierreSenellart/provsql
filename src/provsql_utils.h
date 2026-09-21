@@ -123,8 +123,14 @@ typedef enum provsql_arith_op {
                                 ///< sorted and linearly interpolated at the
                                 ///< fraction (SQL @c percentile_cont); an
                                 ///< empty draw is NaN (undefined world).
-  PROVSQL_ARITH_INTDIV = 11 ///< binary, child0 / child1 truncated toward
+  PROVSQL_ARITH_INTDIV = 11,///< binary, child0 / child1 truncated toward
                             ///< zero: SQL's division of two integers
+  PROVSQL_ARITH_ROUND = 12, ///< child0 rounded half away from zero, to
+                            ///< child1 decimal digits where a second child
+                            ///< is given (SQL @c round(v) / @c round(v, d))
+  PROVSQL_ARITH_FLOOR = 13, ///< unary, greatest integer <= child0
+  PROVSQL_ARITH_CEIL  = 14, ///< unary, least integer >= child0
+  PROVSQL_ARITH_ABS   = 15  ///< unary, |child0|
 } provsql_arith_op;
 
 /**

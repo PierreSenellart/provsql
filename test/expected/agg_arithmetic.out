@@ -100,6 +100,26 @@ Berlin|3
 New York|3
 Paris|3
 (3 rows)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+remove_provenance
+
+(1 row)
+g|lo
+9223372036854775807|3
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|e|ga|gm
+7 (*)|4.666667|3.5000000000000000 (*)|4 (*)
+(1 row)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)
@@ -201,12 +221,11 @@ r|a|f|e
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
-WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
 remove_provenance
 
 (1 row)
 eq|n|f
-t|7|2.333333
+t|7|2.333333 (*)
 (1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap

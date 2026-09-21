@@ -53,7 +53,7 @@ test: aggregate_null
 test: outer_join
 test: scalar_subquery
 test: join_syntax_equivalence
-test: agg_distinct agg_order_by agg_arithmetic
+test: agg_distinct agg_order_by agg_arithmetic agg_functions
 test: window_aggregates
 test: agg_distinct_null_where
 test: agg_distinct_expr

@@ -125,6 +125,20 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
   if (std::isnan(first)) return NaN;
 
   switch (op) {
+    case PROVSQL_ARITH_ROUND:
+      if (wires.size() == 1) return std::round(first);
+      else {
+        double d = try_eval_constant(gc, wires[1]);
+        if (std::isnan(d)) return NaN;
+        const double f = std::pow(10.0, d);
+        return std::round(first * f) / f;
+      }
+    case PROVSQL_ARITH_FLOOR:
+      return wires.size() == 1 ? std::floor(first) : NaN;
+    case PROVSQL_ARITH_CEIL:
+      return wires.size() == 1 ? std::ceil(first) : NaN;
+    case PROVSQL_ARITH_ABS:
+      return wires.size() == 1 ? std::fabs(first) : NaN;
     case PROVSQL_ARITH_PLUS: {
       double r = first;
       for (std::size_t i = 1; i < wires.size(); ++i) {

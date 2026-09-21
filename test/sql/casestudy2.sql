@@ -330,21 +330,27 @@ FROM result_banzhaf_all ORDER BY bv DESC, study;
 DROP TABLE result_banzhaf_all;
 DROP TABLE target_token;
 
--- Step 16: arithmetic on aggregate results – drops inner agg provenance,
--- preserves group provenance; ProvSQL warns on the agg_token cast.
+-- Step 16: arithmetic on aggregate results – the product of two aggregates is
+-- carried as a gate, and so is the rounding of it (round, floor, ceil and abs
+-- are gate operations), so both columns keep their provenance and are stored
+-- as agg_token; an explicit cast is what reads the plain value, and what an
+-- ORDER BY on a stored column needs, agg_token having no order of its own
+-- (its value is one per world).  The cast has to be one PostgreSQL keeps: a
+-- ::numeric on a rounding that is already numeric is a no-op it elides.
 SET client_min_messages TO ERROR;
 CREATE TABLE result_agg_arith AS
 SELECT exposure, outcome, effect,
        (COUNT(*))::bigint AS n_studies,
        ROUND((MAX(reliability))::numeric, 2) AS top_reliability,
-       ROUND((COUNT(*) * MAX(reliability))::numeric, 4) AS evidence_weight
+       ROUND((COUNT(*) * MAX(reliability))::numeric, 4) AS evidence_weight,
+       (COUNT(*) * MAX(reliability))::numeric AS evidence_weight_value
 FROM f
 GROUP BY exposure, outcome, effect;
 RESET client_min_messages;
 
 SELECT remove_provenance('result_agg_arith');
 SELECT * FROM result_agg_arith
-ORDER BY evidence_weight DESC, exposure, outcome, effect;
+ORDER BY evidence_weight_value DESC, exposure, outcome, effect;
 DROP TABLE result_agg_arith;
 
 -- Step 17: richer aggregates carry provenance (COUNT(DISTINCT), string_agg,

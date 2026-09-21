@@ -107,6 +107,10 @@ ArithmeticOperator arithOpFromTag(unsigned tag, bool &ok)
   case PROVSQL_ARITH_LN:         return ArithmeticOperator::LN;
   case PROVSQL_ARITH_EXP:        return ArithmeticOperator::EXP;
   case PROVSQL_ARITH_PERCENTILE: return ArithmeticOperator::PERCENTILE;
+  case PROVSQL_ARITH_ROUND:      return ArithmeticOperator::ROUND;
+  case PROVSQL_ARITH_FLOOR:      return ArithmeticOperator::FLOOR;
+  case PROVSQL_ARITH_CEIL:       return ArithmeticOperator::CEIL;
+  case PROVSQL_ARITH_ABS:        return ArithmeticOperator::ABS;
   }
 
   ok = false;

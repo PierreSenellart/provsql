@@ -377,6 +377,14 @@ virtual value_type arith(ArithmeticOperator op,
     return functional("ln");
   case ArithmeticOperator::EXP:
     return functional("exp");
+  case ArithmeticOperator::ROUND:
+    return functional("round");
+  case ArithmeticOperator::FLOOR:
+    return functional("floor");
+  case ArithmeticOperator::CEIL:
+    return functional("ceil");
+  case ArithmeticOperator::ABS:
+    return functional("abs");
   case ArithmeticOperator::PERCENTILE:
     // Interleaved [indicator, value] wires; the fraction is in extra.
     if(v.empty() || v.size() % 2 != 0)

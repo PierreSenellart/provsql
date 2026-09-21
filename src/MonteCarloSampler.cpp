@@ -367,6 +367,41 @@ double Sampler::evalScalar(gate_t g)
             throw CircuitException("gate_arith EXP must be unary");
           result = std::exp(evalScalar(wires[0]));
           break;
+        case PROVSQL_ARITH_ROUND:
+        {
+          // SQL round(v) / round(v, d): half away from zero, as numeric
+          // rounding is, and to d digits where a second wire gives d.  The
+          // value is read per world, so the rounding applies to the value the
+          // world has, never to an expectation (rounding does not commute
+          // with it, which is why the moment evaluators sample it).
+          if(wires.empty() || wires.size() > 2)
+            throw CircuitException("gate_arith ROUND takes one or two wires");
+          const double x = evalScalar(wires[0]);
+          if(wires.size() == 1) {
+            result = std::round(x);
+          } else {
+            const double d = evalScalar(wires[1]);
+            if(std::isnan(x) || std::isnan(d)) { result = x + d; break; }
+            const double f = std::pow(10.0, d);
+            result = std::round(x * f) / f;
+          }
+          break;
+        }
+        case PROVSQL_ARITH_FLOOR:
+          if(wires.size() != 1)
+            throw CircuitException("gate_arith FLOOR must be unary");
+          result = std::floor(evalScalar(wires[0]));
+          break;
+        case PROVSQL_ARITH_CEIL:
+          if(wires.size() != 1)
+            throw CircuitException("gate_arith CEIL must be unary");
+          result = std::ceil(evalScalar(wires[0]));
+          break;
+        case PROVSQL_ARITH_ABS:
+          if(wires.size() != 1)
+            throw CircuitException("gate_arith ABS must be unary");
+          result = std::fabs(evalScalar(wires[0]));
+          break;
         case PROVSQL_ARITH_PERCENTILE:
         {
           // Continuous percentile (SQL percentile_cont) over the group's

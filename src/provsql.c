@@ -4362,6 +4362,7 @@ static bool having_entails_group_existence(Expr *expr,
 static Node *normalize_bool_agg_having(Node *n);
 static Node *peel_agg_casts(Node *n);
 static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants);
+static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants);
 
 /* ----------------------------------------------------------------------
  * Normalising constant arithmetic over an aggregate in a comparison.
@@ -4687,6 +4688,14 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
       agg_node = node;
     } else if (IsA(node, OpExpr) && expr_contains_agg(node, constants)) {
       Node *swapped = try_swap_agg_arith((OpExpr *)node, constants);
+      if (swapped != NULL &&
+          exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
+        agg_node = swapped;
+    } else if (IsA(node, FuncExpr) && expr_contains_agg(node, constants)) {
+      /* A function over an aggregate that ProvSQL carries (round, floor,
+       * ceil, abs): the same re-resolution the target list gets, so the
+       * comparison reads the gate rather than the value. */
+      Node *swapped = try_swap_agg_func((FuncExpr *)node, constants);
       if (swapped != NULL &&
           exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
         agg_node = swapped;
@@ -5240,6 +5249,186 @@ static Expr *or_exprs(Expr *a, Expr *b) {
  * A NULL end or a NULL c makes the condition NULL, and the group is dropped:
  * the comparison is then unknown in every world.
  */
+/**
+ * @brief Whether the possibility condition of a comparison under the SQL
+ *        function @p name is one @c having_possible_carried knows how to
+ *        relax: @c floor, @c ceil and @c round move a value by less than one,
+ *        and @c abs reflects it.
+ *
+ * Narrower on purpose than what @c try_swap_agg_func carries, which is
+ * whatever has a @c provsql counterpart: a relaxation is sound only for the
+ * functions it was reasoned about.
+ */
+static bool agg_func_carried(const char *name) {
+  return strcmp(name, "round") == 0 || strcmp(name, "floor") == 0 ||
+         strcmp(name, "ceil") == 0 || strcmp(name, "ceiling") == 0 ||
+         strcmp(name, "abs") == 0;
+}
+
+/** @brief The @c int4 constant @p v, for a bound this relaxes by one. */
+static Node *having_int_const(int32 v) {
+  return (Node *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                           Int32GetDatum(v), false, true);
+}
+
+/** @brief @p op with its two arguments replaced, the same operator. */
+static OpExpr *having_reuse_op(OpExpr *op, Oid opno, Node *agg_side, Node *c,
+                               bool agg_on_left) {
+  OpExpr *out = (OpExpr *)copyObject(op);
+  out->opno = opno;
+  out->opfuncid = InvalidOid;
+  out->args = agg_on_left ? list_make2(agg_side, c) : list_make2(c, agg_side);
+  return out;
+}
+
+static Expr *having_possible_atom(OpExpr *op, const constants_t *constants,
+                                  bool negated);
+
+/**
+ * @brief The PostgreSQL-evaluable necessary condition of a comparison whose
+ *        aggregate side is read by a function ProvSQL carries (@c floor,
+ *        @c ceil, @c round, @c abs), or @c NULL where there is none.
+ *
+ * The rows of the answer are SQL's, so a group in which the comparison holds
+ * in no world is dropped by a condition PostgreSQL evaluates on the data as it
+ * is.  @c having_possible_atom builds one from the aggregate, which it needs as
+ * the compared side; here a function stands in between, and the comparison is
+ * relaxed to see through it, which a necessary condition may be:
+ *
+ * - @c floor, @c ceil and @c round move a value by less than one, so the
+ *   comparison implies the same one on the aggregate with the bound moved by
+ *   one in the permissive direction.  A @c round to a number of digits moves it
+ *   by less still while that number is not negative (@c round(v, @c -2) moves a
+ *   value by up to 50), so a negative or non-constant one declines.
+ * - @c abs reaches a bound where the aggregate reaches it or its opposite, so
+ *   the condition is the disjunction of the two comparisons (their conjunction
+ *   where the bound is from above).
+ *
+ * @param handled  Set when the shape is one of these, whether or not a
+ *                 condition comes out of it.
+ */
+static Expr *having_possible_carried(OpExpr *op, const constants_t *constants,
+                                     bool negated, bool *handled) {
+  Node *l, *r, *agg_side, *c, *inner;
+  FuncExpr *fe;
+  char *name, *opname;
+  Oid opno = op->opno;
+  bool is_abs, agg_on_left, want_hi, want_lo;
+  Expr *hi = NULL, *lo = NULL;
+
+  *handled = false;
+  if (list_length(op->args) != 2)
+    return NULL;
+  l = peel_agg_casts((Node *)linitial(op->args));
+  r = peel_agg_casts((Node *)lsecond(op->args));
+  if (l != NULL && IsA(l, FuncExpr) && expr_contains_agg(l, constants) &&
+      having_side_aggref(l, constants) == NULL &&
+      !expr_contains_agg(r, constants)) {
+    agg_side = l;
+    c = (Node *)lsecond(op->args);
+    agg_on_left = true;
+  } else if (r != NULL && IsA(r, FuncExpr) && expr_contains_agg(r, constants) &&
+             having_side_aggref(r, constants) == NULL &&
+             !expr_contains_agg(l, constants)) {
+    agg_side = r;
+    c = (Node *)linitial(op->args);
+    agg_on_left = false;
+  } else
+    return NULL;
+
+  fe = (FuncExpr *)agg_side;
+  if (get_func_namespace(fe->funcid) != PG_CATALOG_NAMESPACE ||
+      list_length(fe->args) < 1 || list_length(fe->args) > 2)
+    return NULL;
+  name = get_func_name(fe->funcid);
+  if (name == NULL)
+    return NULL;
+  if (!agg_func_carried(name)) {
+    pfree(name);
+    return NULL;
+  }
+  is_abs = strcmp(name, "abs") == 0;
+  pfree(name);
+  /* A rounding to a number of digits: only a non-negative constant keeps the
+   * move below one. */
+  if (!is_abs && list_length(fe->args) == 2) {
+    Node *d = (Node *)lsecond(fe->args);
+    if (!IsA(d, Const) || ((Const *)d)->constisnull ||
+        ((Const *)d)->consttype != INT4OID ||
+        DatumGetInt32(((Const *)d)->constvalue) < 0)
+      return NULL;
+  }
+  inner = (Node *)linitial(fe->args);
+  if (having_side_aggref(inner, constants) == NULL)
+    return NULL;              /* no bare aggregate under the function */
+
+  /* From here the shape is one this covers, so the caller does not fall back
+   * to the atom, which would find no aggregate side and say nothing. */
+  *handled = true;
+  if (negated && OidIsValid(opno))
+    opno = get_negator(opno);
+  if (!OidIsValid(opno))
+    return NULL;
+  if (!agg_on_left) {
+    /* Read the comparison with the aggregate on the left throughout. */
+    opno = get_commutator(opno);
+    if (!OidIsValid(opno))
+      return NULL;
+    agg_on_left = true;
+  }
+  opname = get_opname(opno);
+  if (opname == NULL)
+    return NULL;
+  want_hi = strcmp(opname, ">=") == 0 || strcmp(opname, ">") == 0 ||
+            strcmp(opname, "=") == 0;
+  want_lo = strcmp(opname, "<=") == 0 || strcmp(opname, "<") == 0 ||
+            strcmp(opname, "=") == 0;
+  pfree(opname);
+  if (!want_hi && !want_lo)
+    return NULL;               /* <>: nothing known */
+
+  if (is_abs) {
+    /* |A| op c, with the mirrored comparison on -c: their disjunction bounds
+     * it from below, their conjunction from above. */
+    Oid mirror = get_commutator(opno);
+    Node *neg_c = build_binop("-", having_int_const(0), copyObject(c));
+    if (!OidIsValid(mirror) || neg_c == NULL)
+      return NULL;
+    hi = having_possible_atom(
+      having_reuse_op(op, opno, copyObject(inner), copyObject(c), true),
+      constants, false);
+    lo = having_possible_atom(
+      having_reuse_op(op, mirror, copyObject(inner), neg_c, true),
+      constants, false);
+    if (hi == NULL || lo == NULL)
+      return NULL;
+    return want_lo && !want_hi
+           ? (Expr *)makeBoolExpr(AND_EXPR, list_make2(hi, lo), -1)
+           : or_exprs(hi, lo);
+  }
+
+  if (want_hi) {
+    Node *bound = build_binop("-", copyObject(c), having_int_const(1));
+    if (bound == NULL)
+      return NULL;
+    hi = having_possible_atom(
+      having_reuse_op(op, opno, copyObject(inner), bound, true),
+      constants, false);
+  }
+  if (want_lo) {
+    Node *bound = build_binop("+", copyObject(c), having_int_const(1));
+    if (bound == NULL)
+      return NULL;
+    lo = having_possible_atom(
+      having_reuse_op(op, opno, copyObject(inner), bound, true),
+      constants, false);
+  }
+  if (want_hi && want_lo)
+    return (hi != NULL && lo != NULL)
+           ? (Expr *)makeBoolExpr(AND_EXPR, list_make2(hi, lo), -1) : NULL;
+  return want_hi ? hi : lo;
+}
+
 static Expr *having_possible_atom(OpExpr *op, const constants_t *constants,
                                   bool negated) {
   OpExpr *norm = normalize_agg_comparison(op, constants);
@@ -5403,8 +5592,14 @@ static Expr *having_possible(Expr *expr, const constants_t *constants,
       return (Expr *)linitial(parts);
     return makeBoolExpr(conj ? AND_EXPR : OR_EXPR, parts, -1);
   }
-  if (IsA(expr, OpExpr))
+  if (IsA(expr, OpExpr)) {
+    bool handled = false;
+    Expr *carried = having_possible_carried((OpExpr *)expr, constants,
+                                            negated, &handled);
+    if (handled)
+      return carried;
     return having_possible_atom((OpExpr *)expr, constants, negated);
+  }
   return NULL;
 }
 
@@ -6314,6 +6509,15 @@ coalesce_agg_to_case(CoalesceExpr *co, const constants_t *constants)
  * reading (@c count, @c sum, @c avg, @c min, @c max, @c choose); anything else
  * is left to be read as a plain value.
  */
+/** @brief @p n with the casts around an @c agg_token peeled off, or @p n
+ *  itself where no @c agg_token is under them (a constant arm keeps the
+ *  coercions the query gave it). */
+static Node *peel_agg_token_arm(Node *n, const constants_t *constants) {
+  Node *peeled = peel_agg_casts(n);
+  return (peeled != NULL &&
+          exprType(peeled) == constants->OID_TYPE_AGG_TOKEN) ? peeled : n;
+}
+
 static CaseExpr *minmax_agg_to_case(MinMaxExpr *mm, const constants_t *constants)
 {
   Node *a, *b;
@@ -6350,8 +6554,13 @@ static CaseExpr *minmax_agg_to_case(MinMaxExpr *mm, const constants_t *constants
   if (i == 0)
     return NULL;   /* no aggregate: nothing of ours to carry */
 
-  a = (Node *)linitial(mm->args);
-  b = (Node *)lsecond(mm->args);
+  /* Read each arm through every cast around it: the aggregate pass casts its
+   * agg_token back to the aggregate's own type, and PostgreSQL had already cast
+   * that to the type the two arms share, so an arm can carry two of them --
+   * more than strip_agg_cast peels, and the conditions built below must see the
+   * aggregate itself (their lowering reads its token array). */
+  a = peel_agg_token_arm((Node *)linitial(mm->args), constants);
+  b = peel_agg_token_arm((Node *)lsecond(mm->args), constants);
   cmpop = OpernameGetOprid(
     list_make1(makeString(mm->op == IS_GREATEST ? ">" : "<")),
     mm->minmaxtype, mm->minmaxtype);
@@ -8988,22 +9197,36 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
   Node *arg;
   Oid counterpart;
   List *names;
-  Oid argtypes[1];
+  Oid argtypes[2];
   FuncExpr *swapped;
 
-  if (list_length(f->args) != 1 ||
+  int nargs = list_length(f->args);
+  Node *second = NULL;
+
+  if (nargs < 1 || nargs > 2 ||
       get_func_namespace(f->funcid) != PG_CATALOG_NAMESPACE)
     return NULL;
   arg = peel_agg_casts((Node *)linitial(f->args));
   if (exprType(arg) != constants->OID_TYPE_AGG_TOKEN)
     return NULL;
+  if (nargs == 2) {
+    /* A second argument that says how to apply the function rather than what
+     * to apply it to: the digits of round(v, d).  It is no aggregate result,
+     * and the counterpart takes it as it is. */
+    second = (Node *)lsecond(f->args);
+    if (exprType(second) != INT4OID ||
+        expr_contains_agg(second, constants))
+      return NULL;
+  }
   name = get_func_name(f->funcid);
   if (name == NULL)
     return NULL;
 
   names = list_make2(makeString("provsql"), makeString(name));
   argtypes[0] = constants->OID_TYPE_AGG_TOKEN;
-  counterpart = LookupFuncName(names, 1, argtypes, true);
+  if (nargs == 2)
+    argtypes[1] = INT4OID;
+  counterpart = LookupFuncName(names, nargs, argtypes, true);
   list_free(names);
   pfree(name);
   if (!OidIsValid(counterpart))
@@ -9017,7 +9240,7 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
   swapped->funcformat = COERCE_EXPLICIT_CALL;
   swapped->funccollid = InvalidOid;
   swapped->inputcollid = InvalidOid;
-  swapped->args = list_make1(arg);
+  swapped->args = second != NULL ? list_make2(arg, second) : list_make1(arg);
   swapped->location = f->location;
   return (Node *)swapped;
 }
@@ -17961,7 +18184,10 @@ static void cast_agg_token_in_list(ListCell *lc,
                                    insert_agg_token_casts_context *ctx,
                                    bool through_text, Oid fallback) {
   Var *v = (Var *)lfirst(lc);
-  Oid target = get_agg_token_orig_type(v, ctx);
+  /* A column of a subquery's aggregate is read as its own type; an expression
+   * (an agg_case a nested GREATEST left behind, arithmetic over an aggregate)
+   * has no column to read it from, and takes the type its consumer reads. */
+  Oid target = IsA(v, Var) ? get_agg_token_orig_type(v, ctx) : InvalidOid;
   HeapTuple castTuple;
 
   /* The column is not a bare aggregate (arithmetic on one): its type is the
@@ -18018,8 +18244,11 @@ static void cast_agg_token_args(List *args,
                                 Oid fallback) {
   ListCell *lc;
   foreach (lc, args) {
-    if (IsA(lfirst(lc), Var) &&
-        ((Var *)lfirst(lc))->vartype == ctx->constants->OID_TYPE_AGG_TOKEN)
+    /* Any agg_token argument, not only a Var: an expression left with that
+     * type (the agg_case of a GREATEST nested in another, arithmetic over an
+     * aggregate) would otherwise reach the executor uncast, and the operator
+     * of the node's own type would read the token's bytes as a value of it. */
+    if (exprType((Node *)lfirst(lc)) == ctx->constants->OID_TYPE_AGG_TOKEN)
       cast_agg_token_in_list(lc, ctx, !ctx->in_having, fallback);
   }
 }

@@ -3263,6 +3263,56 @@ $$ SELECT provsql.agg_arith_make(4, ARRAY[(a)::uuid],
      - provsql.agg_token_value(a)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
+-- round / floor / ceil / abs of an agg_token ---------------------------
+-- Named as the SQL functions they stand for, so that the rewriter's
+-- re-resolution of a call whose argument became an agg_token finds them
+-- (try_swap_agg_func), exactly as the operators above are found.  They compute
+-- in numeric, as the operators do, and the gate records the operation so the
+-- value is read per possible world; the moment evaluators sample them, since
+-- rounding does not commute with expectation.
+/** @brief round(agg_token) (gate_arith ROUND). */
+CREATE OR REPLACE FUNCTION round(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(12, ARRAY[(a)::uuid],
+     pg_catalog.round(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief round(agg_token, integer): to @p d decimal digits. */
+CREATE OR REPLACE FUNCTION round(a agg_token, d integer)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(12,
+     ARRAY[(a)::uuid, provsql.agg_value_gate(d::numeric)],
+     pg_catalog.round(provsql.agg_token_value(a), d)); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief floor(agg_token) (gate_arith FLOOR). */
+CREATE OR REPLACE FUNCTION floor(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(13, ARRAY[(a)::uuid],
+     pg_catalog.floor(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief ceil(agg_token) (gate_arith CEIL). */
+CREATE OR REPLACE FUNCTION ceil(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(14, ARRAY[(a)::uuid],
+     pg_catalog.ceil(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief ceiling(agg_token), the SQL synonym of ceil. */
+CREATE OR REPLACE FUNCTION ceiling(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(14, ARRAY[(a)::uuid],
+     pg_catalog.ceil(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief abs(agg_token) (gate_arith ABS). */
+CREATE OR REPLACE FUNCTION abs(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT provsql.agg_arith_make(15, ARRAY[(a)::uuid],
+     pg_catalog.abs(provsql.agg_token_value(a))); $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
 -- agg_token \<op\> numeric ----------------------------------------------
 /** @brief agg_token + numeric (gate_arith PLUS, constant lifted to a value gate). */
 CREATE OR REPLACE FUNCTION agg_token_plus_numeric(a agg_token, b numeric)

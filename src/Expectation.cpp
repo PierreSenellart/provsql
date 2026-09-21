@@ -1501,6 +1501,16 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_raw_moment(gc, g, 1,
             "Expectation of gate_arith " + std::string(isMax ? "MAX" : "MIN"));
         }
+        case PROVSQL_ARITH_ROUND:
+        case PROVSQL_ARITH_FLOOR:
+        case PROVSQL_ARITH_CEIL:
+        case PROVSQL_ARITH_ABS:
+          // Rounding and absolute value do not commute with expectation
+          // either (E[round(X)] is not round(E[X])), and no closed-form image
+          // is registered for them: the estimate over the worlds is what
+          // there is.
+          return mc_raw_moment(gc, g, 1,
+            "Expectation of a gate_arith rounding or absolute value");
         case PROVSQL_ARITH_POW:
         case PROVSQL_ARITH_LN:
         case PROVSQL_ARITH_EXP:
@@ -1644,6 +1654,12 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_var(
             "Variance of gate_arith " +
             std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
+        case PROVSQL_ARITH_ROUND:
+        case PROVSQL_ARITH_FLOOR:
+        case PROVSQL_ARITH_CEIL:
+        case PROVSQL_ARITH_ABS:
+          return mc_var(
+            "Variance of a gate_arith rounding or absolute value");
         case PROVSQL_ARITH_POW:
         case PROVSQL_ARITH_LN:
         case PROVSQL_ARITH_EXP:
@@ -1807,6 +1823,12 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
           return mc_raw_moment(gc, g, k,
             "Raw moment of gate_arith " +
             std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
+        case PROVSQL_ARITH_ROUND:
+        case PROVSQL_ARITH_FLOOR:
+        case PROVSQL_ARITH_CEIL:
+        case PROVSQL_ARITH_ABS:
+          return mc_raw_moment(gc, g, k,
+            "Raw moment of a gate_arith rounding or absolute value");
         case PROVSQL_ARITH_POW:
         case PROVSQL_ARITH_LN:
         case PROVSQL_ARITH_EXP:

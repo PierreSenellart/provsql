@@ -78,6 +78,43 @@ SELECT remove_provenance('agg_arith_greatest');
 SELECT * FROM agg_arith_greatest ORDER BY city;
 DROP TABLE agg_arith_greatest;
 
+-- A GREATEST nested in another (or in a LEAST) is not carried: the inner one
+-- becomes an agg_case, whose agg_token the outer MinMaxExpr then reads as a
+-- plain value -- and it must be CAST to read it, the outer node's own operator
+-- being one on numbers.  Regression for a value made of the token's bytes read
+-- as a numeric (a 66 KB digit string, or "compressed lz4 data is corrupt"
+-- under detoasting), which is what an uncast agg_token argument gave.
+CREATE TABLE agg_arith_nested AS
+  SELECT GREATEST(+9223372036854775807,
+                  LEAST(-9223372036854775808, sum(id::numeric * id))) AS g,
+         GREATEST(3, LEAST(2, count(*))) AS lo
+  FROM personnel;
+SELECT remove_provenance('agg_arith_nested');
+SELECT * FROM agg_arith_nested;
+DROP TABLE agg_arith_nested;
+
+-- GREATEST / LEAST of two aggregates, which PostgreSQL casts to the type they
+-- share: the arms carry two casts then (the aggregate pass's back to the
+-- aggregate's own type, and that one), and the conditions of the CASE they
+-- become must still see the aggregates themselves.  Tracked, and checked
+-- against the four worlds of two rows at 1/2: the values are 3, 4 and 7, so
+-- 14/3 in expectation once the empty world is excluded.
+CREATE TABLE agg_arith_two(val bigint);
+INSERT INTO agg_arith_two VALUES (3),(4);
+SELECT add_provenance('agg_arith_two');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_arith_two; END $$;
+CREATE TABLE agg_arith_two_r AS
+  SELECT greatest(sum(val), min(val)) AS g,
+         round(expected(greatest(sum(val), min(val)))::numeric, 6) AS e,
+         greatest(avg(val), min(val)) AS ga,
+         greatest(min(val), max(val)) AS gm
+  FROM agg_arith_two;
+SELECT remove_provenance('agg_arith_two_r');
+SELECT * FROM agg_arith_two_r;
+DROP TABLE agg_arith_two_r;
+SELECT remove_provenance('agg_arith_two');
+DROP TABLE agg_arith_two;
+
 -- Arithmetic on AVG (numeric type) from subquery
 CREATE TABLE agg_arith_avg AS
   SELECT city, avg_id * 2 AS doubled
@@ -180,12 +217,13 @@ SELECT remove_provenance('agg_arith_hv');
 SELECT n, cities FROM agg_arith_hv;
 DROP TABLE agg_arith_hv;
 
--- Functions and operators over aggregate results read their values: round
--- and abs over arithmetic on a subquery's aggregate, an array aggregate
--- compared to an array, a series between aggregates of a subquery, and a
--- timestamp minus a subquery's min (a type agg_token has no cast to).
--- Floating-point arithmetic stays as the query wrote it, and ProvSQL's own
--- functions still receive the agg_token.
+-- Functions over aggregate results: round, floor, ceil and abs are carried as
+-- gate operations, so they stay tracked (their value is read in every world);
+-- the others read the value of the aggregate as it is on the database -- an
+-- array aggregate compared to an array, a series between aggregates of a
+-- subquery, and a timestamp minus a subquery's min (a type agg_token has no
+-- cast to).  Floating-point arithmetic stays as the query wrote it, and
+-- ProvSQL's own functions still receive the agg_token.
 CREATE TABLE agg_arith_fn AS
   SELECT round(s * 100.0 / 3, 2) AS r, abs(-s * 1.0) AS a,
          round((CAST(s AS real) / 3)::numeric, 6) AS f, expected(c) AS e

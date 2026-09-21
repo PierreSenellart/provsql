@@ -8,12 +8,11 @@ add_provenance
 rows|sum_prob|provsql
 2 (*)|2 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
-WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
 remove_provenance
 
 (1 row)
 rows|sum_p
-2 (*)|1.632000
+2 (*)|1.632000 (*)
 (1 row)
 remove_provenance
 

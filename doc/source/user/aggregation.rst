@@ -530,6 +530,32 @@ An aggregate that reads such a result in a ``FILTER``, an ``ORDER BY`` or a
 the data as it is instead, and reports that reading once for the statement
 (see :ref:`plain-sql`).
 
+Functions of an aggregate result
+--------------------------------
+
+:sqlfunc:`round`, :sqlfunc:`floor`, :sqlfunc:`ceil` (and its synonym
+:sqlfunc:`ceiling`), :sqlfunc:`abs`, ``ln``, ``exp`` and ``sqrt`` of an
+aggregate result are carried as operations of its gate, so the value stays
+tracked and is read in every possible world:
+
+.. code-block:: postgresql
+
+    SELECT city, round(avg(salary), 2) AS average
+    FROM employees GROUP BY city;
+
+The value displayed is the one plain SQL computes, as for any aggregate, and
+a probability or a moment over it is computed per world: ``expected(floor(
+avg(x)))`` is the average of the floors, which is not the floor of the
+average. A comparison on such a value is read per world too, and the groups
+where it can hold in no world are dropped, so the rows are SQL's.
+
+Any other function reads the value of the aggregate on the data as it is and
+reports that reading once for the statement (see :ref:`plain-sql`); an
+explicit cast asks for it. A stored column of such an expression has type
+``agg_token``, which has no order of its own -- its value is one per world --
+so an ``ORDER BY`` on it outside the query that built it needs an explicit
+cast, or a second column carrying the cast value.
+
 .. _explode-agg-value:
 
 Grouping by the value of an aggregate

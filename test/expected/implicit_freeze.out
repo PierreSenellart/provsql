@@ -53,6 +53,9 @@ n
 (1 row)
 ERROR:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks if_a; cast it explicitly (::numeric, ::text, ...) to say so (provsql.implicit_freeze is 'error')
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+tracked|provsql
+20 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 remove_provenance
 

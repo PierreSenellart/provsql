@@ -68,8 +68,12 @@ RESET provsql.active;
 
 -- An aggregate result read as a plain value by a function is evaluated as
 -- plain SQL: refused under 'error'; an explicit cast says so, and runs.
+-- trunc is such a function; round, floor, ceil, abs, ln, exp and sqrt are not,
+-- ProvSQL carrying them as gate operations (see agg_arithmetic), so they stay
+-- tracked and pass under 'error'.
 SET provsql.implicit_freeze = 'error';
-SELECT round(avg(v)) AS r FROM if_a;
+SELECT trunc(avg(v)) AS r FROM if_a;
+SELECT round(avg(v)) AS tracked FROM if_a;
 CREATE TABLE if_r AS SELECT count(*)::numeric AS n FROM if_a;
 RESET provsql.implicit_freeze;
 SELECT remove_provenance('if_r');

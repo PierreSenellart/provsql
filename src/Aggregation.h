@@ -83,7 +83,11 @@ enum class ArithmeticOperator {
   POW,        ///< binary power
   LN,         ///< unary natural logarithm
   EXP,        ///< unary exponential
-  PERCENTILE  ///< continuous percentile over interleaved [indicator, value] wires
+  PERCENTILE, ///< continuous percentile over interleaved [indicator, value] wires
+  ROUND,      ///< rounding, to a number of digits given by a second wire
+  FLOOR,      ///< unary floor
+  CEIL,       ///< unary ceiling
+  ABS         ///< unary absolute value
 };
 
 /**
