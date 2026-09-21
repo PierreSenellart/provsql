@@ -2998,7 +2998,8 @@ BEGIN
   IF provsql.get_gate_type(token) <> 'agg' THEN
     RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
       MESSAGE = 'ProvSQL: only the result of an aggregate can be exploded '
-                'into rows';
+                'into rows',
+      DETAIL = 'provsql-reason: explode-not-an-aggregate; scope: deliberate';
   END IF;
   IF (provsql.get_infos(token)).info1 <>
        'provsql.choose(anyelement)'::regprocedure::oid THEN
@@ -3009,7 +3010,8 @@ BEGIN
                        'clause, or cast it explicitly (::bigint, ...) to '
                        'read its plain value',
                        (SELECT proname FROM pg_catalog.pg_proc
-                        WHERE oid = (provsql.get_infos(token)).info1));
+                        WHERE oid = (provsql.get_infos(token)).info1)),
+      DETAIL = 'provsql-reason: explode-rows-aggregate-kind; scope: gap';
   END IF;
   RETURN provsql.get_children(token);
 END
@@ -3052,14 +3054,16 @@ BEGIN
   IF pg_typeof(input) <> 'provsql.agg_token'::regtype THEN
     RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
       MESSAGE = 'ProvSQL: only the result of an aggregate can be exploded '
-                'into one row per value it takes over the possible worlds';
+                'into one row per value it takes over the possible worlds',
+      DETAIL = 'provsql-reason: explode-not-an-aggregate; scope: deliberate';
   END IF;
   token := input::uuid;
   IF provsql.get_gate_type(token) <> 'agg' THEN
     RAISE EXCEPTION USING ERRCODE = 'feature_not_supported',
       MESSAGE = 'ProvSQL: an arithmetic expression over aggregate results '
                 'cannot be exploded into one row per value it takes over '
-                'the possible worlds';
+                'the possible worlds',
+      DETAIL = 'provsql-reason: explode-arithmetic; scope: gap';
   END IF;
   SELECT p.proname, s.nspname INTO fn, ns
   FROM pg_catalog.pg_proc p
@@ -3095,7 +3099,8 @@ BEGIN
                          'so it takes too many values over the possible '
                          'worlds to explode it into one row per value',
                          fn, n),
-        HINT = 'cast it explicitly (::bigint, ...) to read its plain value';
+        HINT = 'cast it explicitly (::bigint, ...) to read its plain value',
+      DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
     END IF;
     RETURN ARRAY(SELECT i::text
                  FROM generate_series(least(first, counted), counted) AS i);
@@ -3109,7 +3114,8 @@ BEGIN
                        'only count(), min(), max(), sum() and choose() have '
                        'values that can be enumerated', fn),
       HINT = 'compare it in a HAVING clause, or cast it explicitly '
-             '(::bigint, ...) to read its plain value';
+             '(::bigint, ...) to read its plain value',
+      DETAIL = 'provsql-reason: explode-aggregate-kind; scope: gap';
   END IF;
 
   IF EXISTS (SELECT 1 FROM unnest(vals) AS v WHERE v IS NULL) THEN
@@ -3117,7 +3123,8 @@ BEGIN
       MESSAGE = format('ProvSQL: the result of %s() aggregates a NULL value, '
                        'so it cannot be exploded into one row per value it '
                        'takes over the possible worlds: a comparison with '
-                       'NULL does not say that the result is NULL', fn);
+                       'NULL does not say that the result is NULL', fn),
+      DETAIL = 'provsql-reason: explode-null-value; scope: gap';
   END IF;
 
   IF (ns, fn) = ('pg_catalog', 'sum') THEN
@@ -3140,7 +3147,8 @@ BEGIN
                            'values over the possible worlds, too many to '
                            'explode it into one row per value', fn,
                            max_values),
-          HINT = 'cast it explicitly (::numeric, ...) to read its plain value';
+          HINT = 'cast it explicitly (::numeric, ...) to read its plain value',
+      DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
       END IF;
     END LOOP;
     RETURN ARRAY(SELECT s::text FROM unnest(sums) AS s ORDER BY s)
@@ -3153,7 +3161,8 @@ BEGIN
       MESSAGE = format('ProvSQL: the result of %s() aggregates %s rows, so '
                        'it takes too many values over the possible worlds to '
                        'explode it into one row per value', fn, n),
-      HINT = 'cast it explicitly (::bigint, ...) to read its plain value';
+      HINT = 'cast it explicitly (::bigint, ...) to read its plain value',
+      DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
   END IF;
 
   /* One row per distinct contributed value: each is the minimum (maximum,
@@ -7989,7 +7998,8 @@ BEGIN
       -- possible worlds of few inputs, sampled otherwise
       RETURN rv_moment((token)::uuid, k, false, prov);
     ELSE
-      RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation';
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for agg_raw_moment computation',
+      DETAIL = 'provsql-reason: moment-not-an-aggregate; scope: deliberate';
     END IF;
   END IF;
   IF k = 0 THEN
@@ -8218,7 +8228,8 @@ BEGIN
     RETURN rv_moment((token)::uuid, k, false, prov);
   ELSE
     RAISE EXCEPTION USING MESSAGE=
-      'Cannot compute moment for aggregation function ' || aggregation_function;
+      'Cannot compute moment for aggregation function ' || aggregation_function,
+      DETAIL = 'provsql-reason: moment-aggregate-kind; scope: gap';
   END IF;
 
   -- Conditional normalisation: E[X^k · 1_A] / P(A) = E[X^k | A].
@@ -8309,7 +8320,9 @@ BEGIN
     RETURN m1 * (1 - m1);
   END IF;
 
-  RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input);
+  RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: moment-input-type; scope: gap';
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
@@ -8363,7 +8376,9 @@ BEGIN
                                         method, arguments);
   END IF;
 
-  RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input);
+  RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: moment-input-type; scope: gap';
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
@@ -8433,7 +8448,9 @@ BEGIN
     RETURN input::double precision;
   END IF;
 
-  RAISE EXCEPTION 'quantile() is not yet supported for input type %', pg_typeof(input);
+  RAISE EXCEPTION 'quantile() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: quantile-input-type; scope: gap';
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
@@ -8549,7 +8566,8 @@ BEGIN
       atok agg_token := agg_conditioned_target(input::agg_token);
     BEGIN
     IF get_gate_type(atok) <> 'agg' THEN
-      RAISE EXCEPTION USING MESSAGE='Wrong gate type for support computation';
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for support computation',
+      DETAIL = 'provsql-reason: support-not-an-aggregate; scope: deliberate';
     END IF;
     SELECT pp.proname::varchar FROM pg_proc pp
       WHERE oid=(get_infos(atok)).info1
@@ -8582,13 +8600,16 @@ BEGIN
               FROM UNNEST(child_pairs) AS c) sub;
     ELSE
       RAISE EXCEPTION USING MESSAGE=
-        'Cannot compute support for aggregation function ' || aggregation_function;
+        'Cannot compute support for aggregation function ' || aggregation_function,
+      DETAIL = 'provsql-reason: support-aggregate-kind; scope: gap';
     END IF;
     RETURN;
     END;
   END IF;
 
-  RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input);
+  RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: support-input-type; scope: gap';
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 
@@ -8681,7 +8702,9 @@ BEGIN
     RETURN (1 - mu) * power(-mu, k) + mu * power(1 - mu, k);
   END IF;
 
-  RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input);
+  RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: moment-input-type; scope: gap';
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
 

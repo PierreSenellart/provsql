@@ -12,7 +12,8 @@ remove_provenance
 
 (1 row)
 ERROR:  Cannot compute support for aggregation function avg
-CONTEXT:  PL/pgSQL function support(anyelement,uuid,text,text) line 84 at RAISE
+DETAIL:  provsql-reason: support-aggregate-kind; scope: gap
+CONTEXT:  PL/pgSQL function support(anyelement,uuid,text,text) line 85 at RAISE
 remove_provenance
 
 (1 row)
