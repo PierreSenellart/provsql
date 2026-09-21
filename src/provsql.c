@@ -19863,9 +19863,16 @@ static void refuse_agg_token_group_key(const constants_t *constants, Query *q) {
         !sortgroupref_is_key(q, te->ressortgroupref))
       continue;
     /* A key that IS the aggregate's column, or a cast of it, is the
-     * explosion's business and it has already run. */
+     * explosion's business and it has already run.  Peeled here rather than
+     * left to group_key_var, which reads a cast key through PostgreSQL 18's
+     * grouping entry and returns nothing for one on earlier versions. */
     if (group_key_var(q, te) != NULL)
       continue;
+    {
+      Node *peeled = peel_agg_casts((Node *)te->expr);
+      if (peeled != NULL && IsA(peeled, Var))
+        continue;
+    }
     c.constants = constants;
     c.q = q;
     c.found = false;
