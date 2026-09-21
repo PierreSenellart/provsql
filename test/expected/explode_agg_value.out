@@ -224,3 +224,25 @@ remove_provenance
 f
 t
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+cnt|s
+1|1
+2|2
+(2 rows)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+total|s
+1|1
+2|2
+(2 rows)
+remove_provenance
+
+(1 row)

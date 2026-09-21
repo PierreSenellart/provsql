@@ -385,7 +385,13 @@ static Var *make_provenance_attribute(const constants_t *constants, Query *q,
   v->location = -1;
 
 #if PG_VERSION_NUM >= 160000
-  if (r->perminfoindex != 0) {
+  /* The index is into THIS query's permission info; a rewriting that copies an
+   * entry between queries has to carry that across (rewrite_explode_agg_value
+   * does).  Reading past the list would be a segfault, so an index that does
+   * not address it leaves the column unmarked rather than crashing: the
+   * privilege is then checked wherever the entry that does exist says. */
+  if (r->perminfoindex != 0 &&
+      r->perminfoindex <= (Index)list_length(q->rteperminfos)) {
     RTEPermissionInfo *rpi =
       list_nth_node(RTEPermissionInfo, q->rteperminfos, r->perminfoindex - 1);
     rpi->selectedCols = bms_add_member(
@@ -21507,6 +21513,23 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   inner->hasAggs       = false;
   inner->hasSubLinks   = false;
   inner->hasTargetSRFs = false;
+#if PG_VERSION_NUM >= 160000
+  /* The copied entry carries the index of ITS query's permission info, and
+   * this is another query: carry the entry across so the privilege on what it
+   * reads is still checked, and clear the index where there is none.  A
+   * subquery entry usually has none -- but the entry of a VIEW does, the
+   * rewriter leaving it the view's own so that reading through the view is
+   * checked, and without this that index addressed a list this query does not
+   * have (a segfault, and difftest's five-line one: a view's aggregate column
+   * grouped by). */
+  if (src_rte->perminfoindex != 0) {
+    RTEPermissionInfo *pi = getRTEPermissionInfo(q->rteperminfos, src_rte);
+    inner->rteperminfos = list_make1(copyObject(pi));
+    inner_src->perminfoindex = 1;
+  } else
+    inner_src->perminfoindex = 0;
+  val_rte->perminfoindex = 0;   /* a function entry has no privilege of its own */
+#endif
 
   /* The subquery keeps the eref, hence the column names and the types, of
    * what it replaces: the Vars of the level above address the same columns. */

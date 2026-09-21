@@ -350,3 +350,33 @@ SELECT g, coalesce(f1::text,'NULL') AS f1, coalesce(f2::text,'NULL') AS f2,
 SELECT remove_provenance('ect_sc');
 SELECT * FROM ect_sc;
 DROP TABLE ect_no, ect_sc, ect;
+
+-- Through a VIEW, which is where the explosion segfaulted (difftest's
+-- five-line reproduction, and four queries of the SQLShare corpus): the entry
+-- of a view carries the permission info of the query the rewriter expanded it
+-- in, so copying it into the wrapper the explosion builds left an index into a
+-- list that query does not have.  Answers what plain SQL answers, 1|1 and
+-- 2|2, the counts of the two names being one value each and the sum of a
+-- single value being that value.
+CREATE TABLE ecv_base(name text);
+INSERT INTO ecv_base VALUES ('a'), ('a'), ('b');
+SELECT add_provenance('ecv_base');
+CREATE VIEW ecv(name, cnt) AS
+  SELECT name, count(name) AS cnt FROM ecv_base GROUP BY name;
+CREATE TABLE ecv_r AS SELECT cnt, sum(cnt) AS s FROM ecv GROUP BY cnt;
+SELECT remove_provenance('ecv_r');
+SELECT cnt::text AS cnt, s::text AS s FROM ecv_r ORDER BY 1;
+DROP TABLE ecv_r;
+-- And the same grouping read through a join of two views, the other shape the
+-- corpus holds.
+CREATE VIEW ecv2(name, total) AS
+  SELECT name, count(*) AS total FROM ecv_base GROUP BY name;
+CREATE TABLE ecv_r AS
+  SELECT total, sum(cnt) AS s FROM ecv JOIN ecv2 ON ecv.name = ecv2.name
+  GROUP BY total;
+SELECT remove_provenance('ecv_r');
+SELECT total::text AS total, s::text AS s FROM ecv_r ORDER BY 1;
+DROP TABLE ecv_r;
+DROP VIEW ecv2, ecv;
+SELECT remove_provenance('ecv_base');
+DROP TABLE ecv_base;
