@@ -31,7 +31,19 @@ DROP TABLE if_r;
 -- Incoherent: refused
 SELECT id, generate_series(1, (SELECT min(v) / 10 FROM if_a)) AS g FROM if_a;
 SELECT id, lag(v) OVER (ORDER BY id) AS l FROM if_a;
-SELECT v, count(*) FROM if_a GROUP BY v ORDER BY count(*) DESC, v LIMIT 1;
+-- A truncation of an aggregation by keys that read no aggregate: the cut is
+-- taken on the data as it is, which is deliberate, and refused here like the
+-- rest.  (A truncation whose keys are certain and whose query keeps its rows
+-- is the filter of a rank instead, and tracked -- see limit_rank.)
+SELECT v, count(*) AS n FROM if_a GROUP BY v ORDER BY v LIMIT 1;
+-- Whereas the top-k of an aggregation, tie-breaker and all, is the filter of a
+-- rank: tracked, so it passes under 'error', and it answers with every group
+-- that is the first in some world.
+CREATE TABLE if_r AS
+  SELECT v, count(*) AS n FROM if_a GROUP BY v ORDER BY count(*) DESC, v LIMIT 1;
+SELECT remove_provenance('if_r');
+SELECT v, n::text AS n FROM if_r ORDER BY v;
+DROP TABLE if_r;
 -- Marked plain(): silent, the value of the data as it is
 CREATE TABLE if_r AS
   SELECT id, generate_series(1, plain((SELECT min(v) / 10 FROM if_a))) AS g,

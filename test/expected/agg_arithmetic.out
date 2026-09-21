@@ -336,17 +336,13 @@ remove_provenance
 n
 7
 (1 row)
-WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
-DETAIL:  provsql-reason: window-not-tracked; scope: gap
-WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: it is computed on the plain values, those of the database as it is, not tracked, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
-DETAIL:  provsql-reason: window-over-aggregate-frozen; scope: gap
 remove_provenance
 
 (1 row)
 city|r
-Berlin|2
-New York|3
-Paris|1
+Berlin|2 (*)
+New York|3 (*)
+Paris|1 (*)
 (3 rows)
 add_provenance
 

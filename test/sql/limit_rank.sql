@@ -246,5 +246,38 @@ CREATE TABLE lr_top AS
 SELECT remove_provenance('lr_top');
 SELECT userid, p FROM lr_top ORDER BY userid;
 DROP TABLE lr_top;
+-- An ORDER BY of SEVERAL keys, the aggregate one and a tie-breaker beside it,
+-- which is how a top-k is written where two groups can have the same count:
+-- the rank is the lexicographic one, so a group that ties on the count is
+-- before or after by the second key rather than tying.  Two rows in the first
+-- group and one in the second, each present with probability one half: the
+-- first group is in the top one of every world where it has a row (3/4), and
+-- the second only in the world where its row is there and neither of the
+-- others is (1/8) -- where the count alone would leave it the rank of a tie in
+-- the two worlds where the counts are equal (3/8).  And because the keys hold
+-- the grouping column, no two groups can tie on all of them: row_number() is
+-- the rank it is tracked as, so the warning that they may differ is not
+-- raised.
+CREATE TABLE lr_tie(g int, d int);
+INSERT INTO lr_tie VALUES (1,10),(1,10),(2,20);
+SELECT add_provenance('lr_tie');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM lr_tie; END $$;
+CREATE TABLE lr_top AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT g, count(*) AS n FROM lr_tie GROUP BY g) t
+  ORDER BY n DESC, g ASC LIMIT 1;
+SELECT remove_provenance('lr_top');
+SELECT g, p FROM lr_top ORDER BY g;
+DROP TABLE lr_top;
+-- The same without the tie-breaker, where the tie stands.
+CREATE TABLE lr_top AS
+  SELECT g, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT g, count(*) AS n FROM lr_tie GROUP BY g) t
+  ORDER BY n DESC LIMIT 1;
+SELECT remove_provenance('lr_top');
+SELECT g, p FROM lr_top ORDER BY g;
+DROP TABLE lr_top;
+SELECT remove_provenance('lr_tie');
+DROP TABLE lr_tie;
 SELECT remove_provenance('lr_v');
 DROP TABLE lr_v;

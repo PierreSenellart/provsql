@@ -22937,6 +22937,8 @@ static bool is_const_or_param(Node *n) {
  * into the count of the groups before it (@c rewrite_rank_over_aggregate).
  */
 static bool sort_key_reads_agg_value(const constants_t *constants, Query *q);
+static bool te_reads_agg_value(const constants_t *constants, Query *q,
+                               TargetEntry *te);
 
 static bool limit_lowerable(const constants_t *constants, Query *q) {
   ListCell *lc;
@@ -22953,8 +22955,7 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
    * @c warn_top_limit): what that reports as a gap is what this lowers, so a
    * survey counting the tag is counting this lowering's coverage.  Keep them
    * shared; giving either a predicate of its own takes that evidence away. */
-  if (list_length(q->sortClause) == 1)
-    ordered_by_agg = sort_key_reads_agg_value(constants, q);
+  ordered_by_agg = sort_key_reads_agg_value(constants, q);
 
   if (!limit_truncates(q) || is_actual_marker(constants, q->limitCount) ||
       is_actual_marker(constants, q->limitOffset))
@@ -22997,8 +22998,11 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
       if (te->ressortgroupref == sgc->tleSortGroupRef) {
         uncertain_value_ctx ctx = {constants, q};
         /* An aggregate key varies between worlds, and the rank over it is
-         * rewritten rather than read on the plain values */
-        if (!ordered_by_agg &&
+         * rewritten rather than read on the plain values.  A key BESIDE one
+         * breaks its ties -- the count-then-date idiom -- and has to be a
+         * value of the data, the same in every world, as the keys of a
+         * truncation that reads no aggregate all do. */
+        if (!te_reads_agg_value(constants, q, te) &&
             uncertain_value_walker((Node *)te->expr, &ctx))
           return false;
         break;
@@ -24738,6 +24742,83 @@ typedef struct rank_window_ctx {
   bool declined;                ///< A window could not be
 } rank_window_ctx;
 
+/** @brief The two readings of a sort key of a rank: @c b.k inside the
+ *  subquery that counts, and @c a.k of the row ranked, one level up. */
+static void rank_key_vars(rank_window_ctx *ctx, SortGroupClause *k,
+                          Var **inner, Var **outer) {
+  TargetEntry *te = get_sortgroupclause_tle(k, ctx->q->targetList);
+  Var *v = (Var *)te->expr;
+
+  *inner = makeVar(1, v->varattno, v->vartype, v->vartypmod, v->varcollid, 0);
+  *outer = (Var *)copyObject(v);
+  (*outer)->varlevelsup = 1;
+}
+
+/** @brief Whether the key @p k of a rank reads an aggregate result, which is
+ *  compared per possible world, rather than a value of the data. */
+static bool rank_key_is_aggregate(rank_window_ctx *ctx, SortGroupClause *k) {
+  TargetEntry *te = get_sortgroupclause_tle(k, ctx->q->targetList);
+  RangeTblEntry *ranked = rt_fetch(ctx->rtindex, ctx->q->rtable);
+
+  return te != NULL && IsA(te->expr, Var) &&
+         rte_column_is_aggregate(ctx->constants, ranked,
+                                 ((Var *)te->expr)->varattno);
+}
+
+/**
+ * @brief @c "b.k ≺ a.k" -- the row the counting subquery reads comes strictly
+ *        before the one ranked, on the key @p k alone.
+ *
+ * A key that reads an aggregate is compared by the ordering operator, which is
+ * the comparison of two aggregate results that the correlated-subquery
+ * rewriting tracks; a @c NULL aggregate satisfies no comparison, as the
+ * evaluators read it everywhere else.  A key of the data carries the @c NULLS
+ * @c FIRST / @c LAST the query asked for, which the bare operator does not say
+ * (a comparison with @c NULL is unknown, so neither row would come before the
+ * other).
+ */
+static Node *rank_key_before(rank_window_ctx *ctx, SortGroupClause *k) {
+  Var *inner, *outer;
+  Node *lt;
+
+  rank_key_vars(ctx, k, &inner, &outer);
+  lt = (Node *)make_opclause(k->sortop, BOOLOID, false, (Expr *)inner,
+                             (Expr *)outer, InvalidOid, inner->varcollid);
+  if (rank_key_is_aggregate(ctx, k))
+    return lt;
+  {
+    NullTest *in_null = makeNode(NullTest), *out_null = makeNode(NullTest);
+
+    in_null->arg = (Expr *)copyObject(inner);
+    in_null->nulltesttype = k->nulls_first ? IS_NULL : IS_NOT_NULL;
+    out_null->arg = (Expr *)copyObject(outer);
+    out_null->nulltesttype = k->nulls_first ? IS_NOT_NULL : IS_NULL;
+    in_null->argisrow = out_null->argisrow = false;
+    in_null->location = out_null->location = -1;
+    return (Node *)makeBoolExpr(
+      OR_EXPR,
+      list_make2(lt, makeBoolExpr(AND_EXPR, list_make2(in_null, out_null), -1)),
+      -1);
+  }
+}
+
+/** @brief @c "b.k = a.k" -- the two rows tie on the key @p k, so the next key
+ *  decides.  Two @c NULLs of the data tie, as they do for @c GROUP @c BY. */
+static Node *rank_key_same(rank_window_ctx *ctx, SortGroupClause *k) {
+  Var *inner, *outer;
+
+  rank_key_vars(ctx, k, &inner, &outer);
+  if (rank_key_is_aggregate(ctx, k)) {
+    if (!OidIsValid(k->eqop))
+      return NULL;
+    return (Node *)make_opclause(k->eqop, BOOLOID, false, (Expr *)inner,
+                                 (Expr *)outer, InvalidOid, inner->varcollid);
+  }
+  return (Node *)make_null_safe_equality((Expr *)inner, (Expr *)outer,
+                                         inner->vartype, inner->varcollid,
+                                         true);
+}
+
 /**
  * @brief The rank of the current row among those of @p ctx->rtindex, as a
  *        subquery counting them, or @c NULL.
@@ -24777,13 +24858,22 @@ static Expr *make_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf,
   Oid keytype;
   ListCell *lc;
 
-  if (wc == NULL || list_length(wc->orderClause) != 1)
-    return NULL;                /* one ordering key, the common shape */
+  if (wc == NULL || wc->orderClause == NIL)
+    return NULL;
+  if (dense && list_length(wc->orderClause) != 1)
+    return NULL;                /* count(DISTINCT k) is over one key */
+  foreach (lc, wc->orderClause) {
+    SortGroupClause *k = (SortGroupClause *)lfirst(lc);
+    TargetEntry *te = get_sortgroupclause_tle(k, ctx->q->targetList);
+    /* Every key is compared, so every key has to be a column of the relation
+     * ranked and have an ordering operator. */
+    if (te == NULL || !IsA(te->expr, Var) || !OidIsValid(k->sortop))
+      return NULL;
+    if (list_length(wc->orderClause) > 1 && !OidIsValid(k->eqop))
+      return NULL;              /* no equality to break its ties on */
+  }
   sgc = (SortGroupClause *)linitial(wc->orderClause);
   key_te = get_sortgroupclause_tle(sgc, ctx->q->targetList);
-  if (key_te == NULL || !IsA(key_te->expr, Var) ||
-      !OidIsValid(sgc->sortop))
-    return NULL;
   keytype = exprType((Node *)key_te->expr);
 
   /* The subquery reads another row of the same relation */
@@ -24804,16 +24894,47 @@ static Expr *make_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf,
   rtr = makeNode(RangeTblRef);
   rtr->rtindex = 1;
 
-  /* b.k <sortop> a.k: the rows of the partition that come before */
+  /* b.k <sortop> a.k: the rows of the partition that come before.  With
+   * several keys that is the lexicographic order the ORDER BY means -- the
+   * first key on which the two rows differ decides -- so
+   *   k₁ ≺ k₁'  OR  (k₁ = k₁' AND k₂ ≺ k₂')  OR  …
+   * which is how a top-k ranked by a count and broken by a date or an id
+   * reads.  The keys beside the aggregate are values of the data, the same in
+   * every world, so they add no world and only break ties inside one. */
   key_inner = makeVar(1, ((Var *)key_te->expr)->varattno, keytype,
                       exprTypmod((Node *)key_te->expr),
                       exprCollation((Node *)key_te->expr), 0);
   {
-    Var *key_outer = (Var *)copyObject(key_te->expr);
-    key_outer->varlevelsup = 1;
-    before = (Node *)make_opclause(sgc->sortop, BOOLOID, false,
-                                   (Expr *)key_inner, (Expr *)key_outer,
-                                   InvalidOid, exprCollation((Node *)key_inner));
+    List *terms = NIL;
+    ListCell *lc_i;
+    int i = 0;
+
+    foreach (lc_i, wc->orderClause) {
+      List *conj = NIL;
+      ListCell *lc_j;
+      int j = 0;
+      Node *term;
+
+      foreach (lc_j, wc->orderClause) {
+        if (j++ >= i)
+          break;
+        term = rank_key_same(ctx, (SortGroupClause *)lfirst(lc_j));
+        if (term == NULL)
+          return NULL;
+        conj = lappend(conj, term);
+      }
+      term = rank_key_before(ctx, (SortGroupClause *)lfirst(lc_i));
+      if (term == NULL)
+        return NULL;
+      conj = lappend(conj, term);
+      terms = lappend(terms, list_length(conj) == 1
+                              ? (Node *)linitial(conj)
+                              : (Node *)makeBoolExpr(AND_EXPR, conj, -1));
+      ++i;
+    }
+    before = list_length(terms) == 1
+               ? (Node *)linitial(terms)
+               : (Node *)makeBoolExpr(OR_EXPR, terms, -1);
   }
 
   /* ... or the current row itself, told by the identity columns */
@@ -25097,6 +25218,45 @@ static Expr *make_dense_rank_subquery(rank_window_ctx *ctx, WindowFunc *wf) {
   return (Expr *)sl;
 }
 
+/**
+ * @brief Whether the order of the rank window @p wf tells every two rows of
+ *        the relation ranked apart, so that no two of them tie.
+ *
+ * True where the ordering keys hold every column that identifies a row (the
+ * grouping columns of an aggregation): two distinct rows differ on one of
+ * them, so they differ on a key.  A @c row_number() is then the @c rank() it
+ * is tracked as, and the warning that they may differ has nothing to warn
+ * about -- which is the common case once a top-k breaks the ties of its count
+ * on a date or an id.
+ */
+static bool rank_order_is_total(rank_window_ctx *ctx, WindowFunc *wf) {
+  WindowClause *wc = window_clause_of(ctx->q, wf->winref);
+  ListCell *lc;
+
+  if (wc == NULL)
+    return false;
+  foreach (lc, ctx->identity) {
+    Var *id = (Var *)lfirst(lc);
+    ListCell *lc_k;
+    bool covered = false;
+
+    foreach (lc_k, wc->orderClause) {
+      TargetEntry *te =
+        get_sortgroupclause_tle((SortGroupClause *)lfirst(lc_k),
+                                ctx->q->targetList);
+      if (te != NULL && IsA(te->expr, Var) &&
+          ((Var *)te->expr)->varattno == id->varattno &&
+          ((Var *)te->expr)->varno == id->varno) {
+        covered = true;
+        break;
+      }
+    }
+    if (!covered)
+      return false;
+  }
+  return ctx->identity != NIL;
+}
+
 /** @brief Mutator: each rank window over the key of @p ctx becomes the
  *  subquery counting the rows before the current one. */
 static Node *replace_rank_window_mutator(Node *node, void *cx) {
@@ -25120,7 +25280,8 @@ static Node *replace_rank_window_mutator(Node *node, void *cx) {
     }
     ctx->rewritten = true;
     if (wf->winfnoid == F_ROW_NUMBER &&
-        OidIsValid(ctx->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK))
+        OidIsValid(ctx->constants->OID_FUNCTION_ROW_NUMBER_AS_RANK) &&
+        !rank_order_is_total(ctx, wf))
       provsql_warning("row_number() over an aggregate result is tracked as "
                       "rank(), which it differs from when groups tie on the "
                       "ORDER BY");
@@ -26682,21 +26843,28 @@ static bool reads_agg_value_walker(Node *node, void *cx) {
   return expression_tree_walker(node, reads_agg_value_walker, cx);
 }
 
-/** @brief Whether a sort key of @p q reads the value of an aggregate. */
-static bool sort_key_reads_agg_value(const constants_t *constants, Query *q) {
-  ListCell *lc;
+/** @brief Whether the entry @p te of @p q reads the value of an aggregate. */
+static bool te_reads_agg_value(const constants_t *constants, Query *q,
+                               TargetEntry *te) {
   agg_value_read_ctx c;
 
+  if (te == NULL)
+    return false;
   c.constants = constants;
   c.q = q;
   c.found = false;
+  reads_agg_value_walker((Node *)te->expr, &c);
+  return c.found;
+}
+
+/** @brief Whether a sort key of @p q reads the value of an aggregate. */
+static bool sort_key_reads_agg_value(const constants_t *constants, Query *q) {
+  ListCell *lc;
+
   foreach (lc, q->sortClause) {
-    TargetEntry *te = get_sortgroupclause_tle((SortGroupClause *)lfirst(lc),
-                                              q->targetList);
-    if (te == NULL)
-      continue;
-    reads_agg_value_walker((Node *)te->expr, &c);
-    if (c.found)
+    if (te_reads_agg_value(constants, q,
+                           get_sortgroupclause_tle(
+                             (SortGroupClause *)lfirst(lc), q->targetList)))
       return true;
   }
   return false;

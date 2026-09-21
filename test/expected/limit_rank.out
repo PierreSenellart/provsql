@@ -165,6 +165,29 @@ userid|p
 2|0.500000
 3|0.500000
 (3 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+remove_provenance
+
+(1 row)
+g|p
+1|0.750000
+2|0.125000
+(2 rows)
+WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+remove_provenance
+
+(1 row)
+g|p
+1|0.750000
+2|0.375000
+(2 rows)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

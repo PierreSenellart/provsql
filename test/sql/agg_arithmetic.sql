@@ -360,7 +360,9 @@ DROP TABLE agg_arith_fn, agg_arith_ts;
 
 -- A correlated scalar subquery in an expression beside aggregates, a COALESCE
 -- in the target list of an ORDER BY ... LIMIT, and a window ordered by a
--- COUNT(DISTINCT): planned without internal errors.
+-- COUNT(DISTINCT) and a column beside it: planned without internal errors, and
+-- the rank of two keys is tracked (the subquery counting the groups before
+-- each group compares them lexicographically), so the values carry (*).
 SET client_min_messages = error;
 CREATE TABLE agg_arith_fn AS
   SELECT p.city, count(*)::real / (SELECT count(*) FROM personnel q
