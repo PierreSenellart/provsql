@@ -30,3 +30,20 @@ id
 5
 6
 (2 rows)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+n|pr
+3|1.000000
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+n|pr
+3|1.000000
+(1 row)
+n
+1
+(1 row)

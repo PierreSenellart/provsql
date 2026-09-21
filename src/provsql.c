@@ -11424,8 +11424,38 @@ static bool has_provenance(const constants_t *constants, Query *q) {
 /** @brief Context for @c sublink_over_tracked_walker. */
 typedef struct {
   const constants_t *constants;
+  List *ctes;      ///< The @c WITH list in scope, to resolve a body's CTE reads
   bool found;
 } sublink_tracked_ctx;
+
+/**
+ * @brief Whether @p body reads a @c WITH entry of @p ctes that is tracked.
+ *
+ * A sublink body that reads a CTE has an @c RTE_CTE, not a relation, so
+ * @c has_provenance of the body alone says nothing: what is tracked is the
+ * CTE's own query, declared at the level the sublink sits in.
+ */
+static bool body_reads_tracked_cte(const constants_t *constants, List *ctes,
+                                   Query *body) {
+  ListCell *lc;
+
+  if (ctes == NIL || body == NULL)
+    return false;
+  foreach (lc, body->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    ListCell *lc2;
+    if (r->rtekind != RTE_CTE || r->ctename == NULL)
+      continue;
+    foreach (lc2, ctes) {
+      CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc2);
+      if (cte->ctename != NULL && strcmp(cte->ctename, r->ctename) == 0 &&
+          cte->ctequery != NULL && IsA(cte->ctequery, Query) &&
+          has_provenance(constants, (Query *)cte->ctequery))
+        return true;
+    }
+  }
+  return false;
+}
 
 /** @brief Walker: set @c found if a @c SubLink whose subselect (transitively)
  *  involves a provenance-tracked relation is reached. */
@@ -11436,7 +11466,9 @@ static bool sublink_over_tracked_walker(Node *node, void *cx) {
   if (IsA(node, SubLink)) {
     SubLink *sl = (SubLink *)node;
     if (IsA(sl->subselect, Query) &&
-        has_provenance(c->constants, (Query *)sl->subselect)) {
+        (has_provenance(c->constants, (Query *)sl->subselect) ||
+         body_reads_tracked_cte(c->constants, c->ctes,
+                                (Query *)sl->subselect))) {
       c->found = true;
       return true;
     }
@@ -11463,6 +11495,7 @@ static bool sublink_over_tracked_walker(Node *node, void *cx) {
 static bool query_has_tracked_sublink(const constants_t *constants, Query *q) {
   sublink_tracked_ctx c;
   c.constants = constants;
+  c.ctes = q->cteList;
   c.found = false;
   sublink_over_tracked_walker((Node *)q->targetList, &c);
   if (!c.found && q->jointree)
@@ -16039,11 +16072,44 @@ static bool oj_wrap_body_with_match_ind(const constants_t *constants,
  * @c gate_zero row that drops out -- exactly what a hand-written derived
  * aggregate does; the correlated path's 0-match NULL row is not reconstructed.
  */
+/**
+ * @brief The query of a @c WITH entry @p r names in @p ctes, when that entry is
+ *        tracked and yields exactly one row in every possible world.
+ *
+ * A scalar aggregation (aggregates, no grouping, no set operation, no DISTINCT,
+ * no LIMIT) has one row whatever the data, so a body reading it is a one-row
+ * derived table as it stands: it needs neither the @c choose() of a value body
+ * nor the @c HAVING that gates the worlds with more than one row.
+ */
+static Query *tracked_one_row_cte(const constants_t *constants, List *ctes,
+                                  const RangeTblEntry *r) {
+  ListCell *lc;
+
+  if (ctes == NIL || r->rtekind != RTE_CTE || r->ctename == NULL)
+    return NULL;
+  foreach (lc, ctes) {
+    CommonTableExpr *cte = (CommonTableExpr *)lfirst(lc);
+    Query *cq;
+    if (cte->ctename == NULL || strcmp(cte->ctename, r->ctename) != 0 ||
+        cte->ctequery == NULL || !IsA(cte->ctequery, Query))
+      continue;
+    cq = (Query *)cte->ctequery;
+    if (cq->hasAggs && cq->groupClause == NIL && cq->groupingSets == NIL &&
+        cq->setOperations == NULL && cq->distinctClause == NIL &&
+        cq->limitCount == NULL && cq->limitOffset == NULL &&
+        has_provenance(constants, cq))
+      return cq;
+    return NULL;
+  }
+  return NULL;
+}
+
 static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
-                                                  Query *body) {
+                                                  Query *body, List *ctes) {
   Query *D;
   TargetEntry *vte;
   ListCell *lc;
+  bool one_row_cte = false;
 
   if (!IsA(body, Query) || body->commandType != CMD_SELECT)
     return NULL;
@@ -16062,6 +16128,14 @@ static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
    * tracked subquery (a comma-join is fine -- D is then an inner join). */
   foreach (lc, body->rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+    /* A body reading a tracked one-row WITH entry: the entry is the derived
+     * table, and the reference resolves in the query the body moves into,
+     * whose WITH list is the one consulted here. */
+    if (list_length(body->rtable) == 1 &&
+        tracked_one_row_cte(constants, ctes, r) != NULL) {
+      one_row_cte = true;
+      continue;
+    }
     if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
       return NULL;
   }
@@ -16072,7 +16146,10 @@ static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
 
   vte = (TargetEntry *)linitial(body->targetList);
 
-  if (body->hasAggs) {
+  if (one_row_cte) {
+    /* One row in every world already: the body is the derived table. */
+    D = (Query *)copyObject(body);
+  } else if (body->hasAggs) {
     /* Aggregate body: a single bare aggregate (one row, no grouping). */
     if (!IsA(vte->expr, Aggref))
       return NULL;
@@ -16527,7 +16604,8 @@ static Node *uncorr_qual_sublink_mutator(Node *node, void *cx) {
         sublink_is_inert(sl))
       return node;
     D = oj_build_uncorrelated_from_subquery(ctx->constants,
-                                            (Query *)sl->subselect);
+                                            (Query *)sl->subselect,
+                                            ctx->q ? ctx->q->cteList : NIL);
     if (D == NULL)
       return node;
 
@@ -16586,7 +16664,8 @@ static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
       continue;
     if (sublink_is_inert(sl))
       continue; /* an inert fetch stays an untracked scalar subquery */
-    D = oj_build_uncorrelated_from_subquery(constants, (Query *)sl->subselect);
+    D = oj_build_uncorrelated_from_subquery(constants, (Query *)sl->subselect,
+                                            q->cteList);
     if (D == NULL)
       continue;
 
@@ -21988,6 +22067,7 @@ static bool conjunct_tests_tracked_sublink(const constants_t *constants,
                                            Node *n) {
   sublink_tracked_ctx tctx;
   tctx.constants = constants;
+  tctx.ctes = NIL;
   tctx.found = false;
   sublink_over_tracked_walker(n, &tctx);
   return tctx.found;
@@ -22386,6 +22466,7 @@ static Query *split_aggregation_over_sublinks(const constants_t *constants,
       checkExprHasSubLink(q->havingQual))
     return NULL;
   tctx.constants = constants;
+  tctx.ctes = q->cteList;
   tctx.found = false;
   sublink_over_tracked_walker(q->jointree->quals, &tctx);
   if (!tctx.found)
@@ -22534,7 +22615,7 @@ static Query *distinct_over_windows(const constants_t *constants, Query *q) {
 /** @brief Is @p te a scalar subquery that @c move_uncorrelated_sublinks_to_from
  *  moves to the FROM? */
 static bool is_movable_uncorrelated_sublink(const constants_t *constants,
-                                            TargetEntry *te) {
+                                            TargetEntry *te, List *ctes) {
   SubLink *sl;
   if (!IsA(te->expr, SubLink))
     return false;
@@ -22542,7 +22623,8 @@ static bool is_movable_uncorrelated_sublink(const constants_t *constants,
   return sl->subLinkType == EXPR_SUBLINK && IsA(sl->subselect, Query) &&
          !sublink_is_inert(sl) &&
          oj_build_uncorrelated_from_subquery(constants,
-                                             (Query *)sl->subselect) != NULL;
+                                             (Query *)sl->subselect,
+                                             ctes) != NULL;
 }
 
 /**
@@ -22575,7 +22657,8 @@ static Query *scalar_agg_over_uncorrelated_sublinks(const constants_t *constants
     if (!te->resjunk &&
         reads_provenance_walker((Node *)te->expr, (void *)constants))
       return NULL;
-    if (!te->resjunk && is_movable_uncorrelated_sublink(constants, te))
+    if (!te->resjunk && is_movable_uncorrelated_sublink(constants, te,
+                                                       q->cteList))
       found = true;
   }
   if (!found)
@@ -22589,7 +22672,8 @@ static Query *scalar_agg_over_uncorrelated_sublinks(const constants_t *constants
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     TargetEntry *ote;
-    if (!te->resjunk && is_movable_uncorrelated_sublink(constants, te)) {
+    if (!te->resjunk && is_movable_uncorrelated_sublink(constants, te,
+                                                       q->cteList)) {
       ote = makeTargetEntry(te->expr, te->resno, te->resname, false);
     } else {
       AttrNumber resno = list_length(inner_tl) + 1;
@@ -25669,7 +25753,18 @@ static PlannedStmt *provsql_planner(Query *q,
      * that worked.  Decided here so that the report just after, and the
      * refusal it turns into under provsql.implicit_freeze = 'error', speak of
      * a loss that is still one. */
-    if (provsql_active && constants.ok && !has_provenance(&constants, q) &&
+    if (provsql_active && constants.ok &&
+        (!has_provenance(&constants, q) ||
+         /* A level with no source of its own has nothing to hang provenance
+          * on either, and has_provenance says nothing about that: a WITH whose
+          * query is tracked makes it true although the WITH is read only inside
+          * a sublink ("WITH c AS (SELECT count(*) FROM p) SELECT (SELECT n FROM
+          * c)"), which without the lift answers with no provenance column and
+          * no warning. */
+         (q->jointree == NULL || q->jointree->fromlist == NIL)) &&
+        /* Not a provenance() fetch: those sublinks are inert on purpose and
+         * the early pass resolves them where they stand. */
+        !query_has_inert_fetch(&constants, q) &&
         query_has_tracked_sublink(&constants, q))
       lifted_q = lift_tracked_sublinks(&constants, q);
 

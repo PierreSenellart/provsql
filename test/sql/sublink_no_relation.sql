@@ -61,5 +61,35 @@ SELECT (SELECT count(*) FROM snr_t WHERE provsql IS NOT NULL) AS reads_token;
 SELECT * FROM (VALUES (4),(5),(6)) AS v(id)
 WHERE NOT EXISTS (SELECT * FROM snr_u u WHERE u.id = v.id) ORDER BY 1;
 
+-- A WITH read only inside such a sublink.  has_provenance is true of the block
+-- (it walks the WITH), so the lift used to be skipped, and the block answered
+-- with NO provenance column and no warning at all -- the one shape of this
+-- family that was silent.  The body is a one-row WITH entry, a scalar
+-- aggregation, so it moves into the FROM as it stands: no choose(), no HAVING
+-- gating the worlds with more than one row, since it has exactly one in every
+-- world.  It must give what the same query written with the body in the FROM
+-- gives, value and annotation alike.
+-- Only a sublink that IS a target entry moves: one nested inside an expression
+-- would have its agg_token coerced to a scalar on the way, so it stays where it
+-- is (move_uncorrelated_sublinks_to_from).
+CREATE TABLE snr_cte AS
+  WITH c AS (SELECT sum(val) AS n FROM snr_t)
+  SELECT (SELECT n FROM c) AS n,
+         round(probability_evaluate(provenance())::numeric, 6) AS pr;
+SELECT remove_provenance('snr_cte');
+SELECT n::text AS n, pr FROM snr_cte;
+DROP TABLE snr_cte;
+CREATE TABLE snr_cte AS
+  WITH c AS (SELECT sum(val) AS n FROM snr_t)
+  SELECT s.n, round(probability_evaluate(provenance())::numeric, 6) AS pr
+  FROM (SELECT n FROM c) s;
+SELECT remove_provenance('snr_cte');
+SELECT n::text AS n, pr FROM snr_cte;
+DROP TABLE snr_cte;
+
+-- A WITH that reads no tracked relation stays plain SQL, with no provenance
+-- column: there is nothing to track.
+WITH u AS (SELECT 1 AS n) SELECT (SELECT n FROM u) AS n;
+
 DROP TABLE snr_t, snr_u, snr_plain;
 DROP TABLE snr_m;
