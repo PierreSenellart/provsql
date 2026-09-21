@@ -4568,13 +4568,18 @@ $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messag
 -- 9. add_provenance names the views that read the table and were defined
 --    before the call: such a view kept the columns the table had then, so
 --    it carries no provenance column and a query over it is answered as
---    plain SQL.  This is the PostgreSQL 14+ body, which is the one in
---    force on any server this upgrade runs on.
+--    plain SQL.  The PG14+ and pre-14 bodies differ (statement triggers),
+--    and this script runs on either, so each is installed under the same
+--    server_version_num guard the earlier upgrades use.
 -- ----------------------------------------------------------------------
 
+DO $$
+BEGIN
+  IF current_setting('server_version_num')::int >= 140000 THEN
+    EXECUTE $sql$
 CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
   RETURNS void AS
-$$
+$func$
 BEGIN
   -- Idempotence: a second add_provenance on an already-tracked table is
   -- a no-op with a NOTICE, so setup scripts and notebook cells can be
@@ -4638,6 +4643,82 @@ BEGIN
     END IF;
   END;
 END
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$func$ LANGUAGE plpgsql SECURITY DEFINER;
+    $sql$;
+  ELSE
+    EXECUTE $sql$
+CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
+  RETURNS void AS
+$func$
+BEGIN
+  -- Idempotence: a second add_provenance on an already-tracked table is
+  -- a no-op with a NOTICE, so setup scripts and notebook cells can be
+  -- re-run freely.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % already has provenance tracking', _tbl;
+    RETURN;
+  END IF;
+  -- No DEFAULT: the guard trigger mints the UUID, so the trigger can
+  -- distinguish "user omitted" (NULL) from "user supplied a value".
+  -- No UNIQUE: we no longer rely on it to keep the table TID -- the
+  -- guard does that semantically -- and a UNIQUE would reject the
+  -- legitimate cross-table UUID copy that just flips the table to
+  -- OPAQUE.  We keep a plain index for fast UUID-keyed lookups.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
+  EXECUTE format(
+    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    _tbl);
+  PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  -- Seed the base-ancestor set to {self}: a base TID table's atoms
+  -- come from itself and no other relation.  CTAS-derived tables
+  -- inherit unions of source ancestor sets; that is handled by the
+  -- CTAS hook (a separate slice), not here.
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+  -- A view defined before this call selected the columns the table had then,
+  -- so it has no provsql column and never will: PostgreSQL resolved its
+  -- "SELECT *" at definition time.  A query over such a view is answered
+  -- without provenance and without a warning -- the rewriting sees a relation
+  -- that carries none -- so the one place where saying it is useful is here,
+  -- where recreating the view is the remedy.
+  DECLARE
+    stale text;
+  BEGIN
+    SELECT string_agg(DISTINCT v.rel::regclass::text, ', ') INTO stale
+      FROM (SELECT r.ev_class AS rel
+              FROM pg_catalog.pg_depend d
+              JOIN pg_catalog.pg_rewrite r ON r.oid = d.objid
+             WHERE d.classid = 'pg_catalog.pg_rewrite'::regclass
+               AND d.refclassid = 'pg_catalog.pg_class'::regclass
+               AND d.refobjid = _tbl
+               AND r.ev_class <> _tbl) AS v
+     WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                        WHERE a.attrelid = v.rel AND a.attname = 'provsql'
+                          AND NOT a.attisdropped);
+    IF stale IS NOT NULL THEN
+      RAISE WARNING 'ProvSQL: % is read by views defined before it was '
+                    'tracked, which have no provenance column of their own, '
+                    'so a query over one of them is answered as plain SQL, '
+                    'not tracked: %',
+                    _tbl, stale
+        USING HINT = 'recreate the view (CREATE OR REPLACE VIEW ... or DROP and '
+                     'CREATE) so that its definition reads the tracked table',
+              DETAIL = 'provsql-reason: view-defined-before-tracking; '
+                       'scope: gap';
+    END IF;
+  END;
+END
+$func$ LANGUAGE plpgsql SECURITY DEFINER;
+    $sql$;
+  END IF;
+END
+$$;
 
 SELECT reset_constants_cache();
