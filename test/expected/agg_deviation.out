@@ -37,7 +37,8 @@ g|sd|vp
 1|1.5275252316519467|1.5555555555555556
 2||0
 (2 rows)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks dev; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 sd_float|provsql
 1.527525|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)

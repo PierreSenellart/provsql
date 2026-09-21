@@ -3339,6 +3339,50 @@ $$ SELECT provsql.agg_arith_make(12,
      pg_catalog.round(provsql.agg_token_value(a), d)); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
+/** @cond INTERNAL */
+/**
+ * @brief A cast of an aggregate result to a number, as the function of its
+ *        value that it is.
+ *
+ * A cast is a function call like any other, so the rewriting swaps
+ * @c pg_catalog.numeric(x) over an agg_token for @c provsql.numeric(agg_token)
+ * wherever one is declared -- which is how round() and floor() became gate
+ * operations.  Between numbers the value is carried rather than frozen: a
+ * widening (an integer to @c numeric, to a float) keeps it as it is, and a
+ * narrowing to an integer is the rounding gate, PostgreSQL's own cast rounding
+ * half away from zero as that gate does.  A cast to text, to a boolean or to a
+ * date has no arithmetic behind it and stays a reading of the plain value.
+ */
+CREATE OR REPLACE FUNCTION "numeric"(a agg_token)
+  RETURNS agg_token AS $$ SELECT a $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief float8(agg_token): the value, as a double precision reads it. */
+CREATE OR REPLACE FUNCTION "float8"(a agg_token)
+  RETURNS agg_token AS $$ SELECT a $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief float4(agg_token): the value, as a real reads it. */
+CREATE OR REPLACE FUNCTION "float4"(a agg_token)
+  RETURNS agg_token AS $$ SELECT a $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief int8(agg_token): the value rounded, as the cast to bigint rounds. */
+CREATE OR REPLACE FUNCTION "int8"(a agg_token)
+  RETURNS agg_token AS $$ SELECT provsql.round(a) $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief int4(agg_token): the value rounded, as the cast to integer rounds. */
+CREATE OR REPLACE FUNCTION "int4"(a agg_token)
+  RETURNS agg_token AS $$ SELECT provsql.round(a) $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief int2(agg_token): the value rounded, as the cast to smallint rounds. */
+CREATE OR REPLACE FUNCTION "int2"(a agg_token)
+  RETURNS agg_token AS $$ SELECT provsql.round(a) $$
+  LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+/** @endcond */
+
 /** @brief floor(agg_token) (gate_arith FLOOR). */
 CREATE OR REPLACE FUNCTION floor(a agg_token)
   RETURNS agg_token AS
@@ -6043,6 +6087,29 @@ CREATE OPERATOR >= (
   COMMUTATOR = <=,
   NEGATOR    = <
 );
+
+/**
+ * @brief Order @c agg_token values by the value each carries.
+ *
+ * With a cast of an aggregate carried rather than frozen, a column of
+ * @c agg_token is what a query sorts, groups or takes the DISTINCT of, and
+ * those need an ordering.  It is the ordering of the values on the data as it
+ * is -- the one ProvSQL already documents for @c ORDER @c BY on an aggregate
+ * -- and the comparison says so, once for the statement.
+ */
+CREATE OR REPLACE FUNCTION agg_token_btree_cmp(a agg_token, b agg_token)
+  RETURNS integer AS 'MODULE_PATHNAME', 'agg_token_btree_cmp'
+  LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR CLASS agg_token_ops
+  DEFAULT FOR TYPE agg_token USING btree AS
+    OPERATOR 1 <,
+    OPERATOR 2 <=,
+    OPERATOR 3 =,
+    OPERATOR 4 >=,
+    OPERATOR 5 >,
+    FUNCTION 1 agg_token_btree_cmp(agg_token, agg_token);
+
 
 CREATE OPERATOR > (
   LEFTARG    = random_variable,

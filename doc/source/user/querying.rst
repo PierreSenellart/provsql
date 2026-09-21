@@ -353,8 +353,9 @@ setting :ref:`provsql.implicit_freeze <provsql-implicit-freeze>` to
 ``'error'`` refuses the query instead.
 
 Marking the part with :sqlfunc:`plain` says that plain SQL is meant, and
-silences the warning (for an aggregate result, an explicit cast does, as
-``count(*)::numeric``, with a warning that its provenance is lost): ``plain((SELECT max(x) FROM t))``,
+silences the warning -- it is the only thing that does, a cast of an aggregate
+to a number being carried rather than read as a plain value (see
+:doc:`aggregation`): ``plain((SELECT max(x) FROM t))``,
 ``plain(lag(v) OVER (ORDER BY d))``, ``LIMIT plain(k)``:
 
 .. code-block:: postgresql

@@ -81,3 +81,50 @@ SELECT a, b::text AS b FROM atc_conv ORDER BY a;
 DROP TABLE atc_conv;
 SELECT remove_provenance('atc_many');
 DROP TABLE atc_many;
+
+-- A cast of an aggregate result to a number is the function of its value that
+-- it is, and is carried rather than frozen: the rewriting swaps the
+-- pg_catalog cast over an agg_token for the provsql counterpart of the same
+-- name, as it does for round() and floor().  A widening keeps the value, a
+-- narrowing to an integer rounds as PostgreSQL's own cast rounds, and a cast
+-- to text (or to a boolean, or a date) has no arithmetic behind it and stays a
+-- reading of the plain value, which the freezing names.
+CREATE TABLE atc_cast(v int);
+INSERT INTO atc_cast VALUES (1), (2), (4);
+SELECT add_provenance('atc_cast');
+CREATE TABLE atc_cast_r AS
+  SELECT sum(v)::numeric AS to_numeric, avg(v)::bigint AS to_bigint,
+         sum(v)::float8 AS to_float
+  FROM atc_cast;
+SELECT remove_provenance('atc_cast_r');
+SELECT to_numeric::text AS to_numeric, to_bigint::text AS to_bigint,
+       to_float::text AS to_float
+FROM atc_cast_r;
+DROP TABLE atc_cast_r;
+-- Cast the same three ways with the rewriting off, which the values must equal
+-- (avg is 2.33, and the cast to bigint rounds it to 2).
+SET provsql.active = off;
+SELECT sum(v)::numeric AS to_numeric, avg(v)::bigint AS to_bigint,
+       sum(v)::float8 AS to_float
+FROM atc_cast;
+SET provsql.active = on;
+-- A cast to text is a reading of the plain value, so it is frozen and named.
+SELECT sum(v)::text AS t FROM atc_cast;
+
+-- An agg_token column has an ordering of its own, on the value each token
+-- carries: numbers as numbers (50 before 30, not the other way as the text of
+-- the values would have it), a token without a value first, and the statement
+-- told once that this is the order of the data as it is.
+CREATE TABLE atc_ord(g int, v int);
+INSERT INTO atc_ord VALUES (1, 30), (2, 5), (3, 50);
+SELECT add_provenance('atc_ord');
+CREATE TABLE atc_ord_r AS
+  SELECT g, sum(v)::numeric AS s FROM atc_ord GROUP BY g;
+SELECT remove_provenance('atc_ord_r');
+-- Aliased apart from the column: "s::text AS s" would order by the text.
+SELECT g, s::text AS shown FROM atc_ord_r ORDER BY s DESC;
+DROP TABLE atc_ord_r;
+SELECT remove_provenance('atc_ord');
+DROP TABLE atc_ord;
+SELECT remove_provenance('atc_cast');
+DROP TABLE atc_cast;

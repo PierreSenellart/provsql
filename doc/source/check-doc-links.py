@@ -206,6 +206,10 @@ INTERNAL_FUNCTIONS = {
     # aggregate final functions, like sum_rv_ffunc; 'rv_case' / 'provenance_case'
     # are the CASE-over-RV builders behind the planner-hook rewrite.
     'greatest', 'least', 'random_variable_btree_cmp',
+    # 'agg_token_btree_cmp' is the btree comparison support of agg_token: it
+    # orders two aggregate results by the value each carries, and the manual
+    # describes that ordering in prose rather than by name.
+    'agg_token_btree_cmp',
     'extremum_rv_ffunc', 'max_rv_ffunc', 'min_rv_ffunc',
     'rv_case', 'provenance_case',
     # ('simplified_circuit_subgraph' and 'rv_histogram' are now in

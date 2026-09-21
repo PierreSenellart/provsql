@@ -487,12 +487,6 @@ static bool is_target_agg_var(Node *node,
 static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
                                     const constants_t *constants);
 
-/** @brief Whether the casts of @c agg_token values built now are explicit,
- *  written by the user (@c count(*)::numeric): they say that the plain value
- *  is meant, like @c plain().  The others, which ProvSQL inserts where a
- *  value is read, are frozen values (@c frozen_agg_value). */
-static bool agg_cast_explicit = false;
-
 /**
  * @brief The value of the @c agg_token @p arg as a @p target_type, read by
  *        ProvSQL where the query reads a plain value.
@@ -664,17 +658,10 @@ aggregation_type_mutator(Node *node, void *ctx) {
                                          : &((RelabelType *)node)->arg;
     Var *v = (Var *)*argp;
     Oid orig_type = v->vartype;
-    bool saved = agg_cast_explicit;
-    agg_cast_explicit =
-      (IsA(node, CoerceViaIO) &&
-       ((CoerceViaIO *)node)->coerceformat == COERCE_EXPLICIT_CAST) ||
-      (IsA(node, RelabelType) &&
-       ((RelabelType *)node)->relabelformat == COERCE_EXPLICIT_CAST);
     v->vartype = context->constants->OID_TYPE_AGG_TOKEN;
     v->varcollid = InvalidOid;
     *argp = (Expr *)cast_agg_token_to_type((Node *)v, orig_type,
                                            context->constants);
-    agg_cast_explicit = saved;
     return node;
   }
 
@@ -9102,7 +9089,13 @@ static Node *cast_agg_token_to_type(Node *arg, Oid target_type,
   CoercionPathType pathtype;
   Oid castfuncid;
 
-  if (!agg_cast_explicit) {
+  /* Whether the cast was written by the user or put there by the rewriting,
+   * the value read is the one the data as it is gives: the freezing names that
+   * loss, with its tag and under provsql.implicit_freeze, and plain() is how a
+   * user says they mean it.  A cast used to exempt the read from all of that,
+   * from a time when agg_token could be used in few places, the freezing had
+   * no policy behind it and plain() did not exist. */
+  {
     Node *frozen = frozen_agg_value(arg, target_type, constants);
     if (frozen != NULL)
       return frozen;
@@ -9498,6 +9491,12 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
   if (nargs < 1 || nargs > 2 ||
       get_func_namespace(f->funcid) != PG_CATALOG_NAMESPACE)
     return NULL;
+  /* A cast the QUERY wrote is a function application over the value, and is
+   * carried as one; a cast PostgreSQL inserted to line two arms of a GREATEST
+   * up, or an argument with a parameter, is not the query's reading and is
+   * left where the lowerings that peel casts expect to find it. */
+  if (f->funcformat == COERCE_IMPLICIT_CAST)
+    return NULL;
   arg = peel_agg_casts((Node *)linitial(f->args));
   if (exprType(arg) != constants->OID_TYPE_AGG_TOKEN)
     return NULL;
@@ -9575,12 +9574,9 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
     FuncExpr *fe = (FuncExpr *)result;
     if (fe->funcid != constants->OID_FUNCTION_PROVENANCE_AGGREGATE) {
       Node *swapped = try_swap_agg_func(fe, constants);
-      bool saved = agg_cast_explicit;
       if (swapped != NULL)
         return swapped;
-      agg_cast_explicit = fe->funcformat == COERCE_EXPLICIT_CAST;
       maybe_cast_agg_token_args(fe->args, fe->funcid, constants);
-      agg_cast_explicit = saved;
     }
   } else if (IsA(result, WindowFunc)) {
     /* A window function over the aggregates of the groups
@@ -9632,9 +9628,7 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
     /* min(d)::text: a conversion through the type's I/O reads the value of
      * the aggregate in its own type, not the text of the agg_token. */
     CoerceViaIO *io = (CoerceViaIO *)result;
-    bool saved = agg_cast_explicit;
     Node *cast = NULL;
-    agg_cast_explicit = io->coerceformat == COERCE_EXPLICIT_CAST;
     if (IsA(io->arg, FuncExpr) &&
         ((FuncExpr *)io->arg)->funcid ==
           constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
@@ -9643,7 +9637,6 @@ static Node *cast_agg_token_mutator(Node *node, void *ctx) {
     else
       cast = cast_agg_token_to_type((Node *)io->arg, io->resulttype,
                                     constants);
-    agg_cast_explicit = saved;
     if (cast != NULL)
       return cast;
   } else if (IsA(result, BoolExpr)) {
@@ -18929,6 +18922,19 @@ static Oid get_agg_token_orig_type(Var *v, insert_agg_token_casts_context *ctx) 
   return orig_agg_type_of_var(ctx->query, v, ctx->constants, 0);
 }
 
+/** @brief Whether @p v reads an @c agg_token column of a stored relation,
+ *  rather than one this statement computes (a subquery's aggregate). */
+static bool agg_token_var_of_stored_relation(Var *v,
+                                             insert_agg_token_casts_context *ctx) {
+  RangeTblEntry *rte;
+
+  if (!IsA(v, Var) || v->varlevelsup != 0 || v->varno < 1 ||
+      ctx->query == NULL || v->varno > list_length(ctx->query->rtable))
+    return false;
+  rte = (RangeTblEntry *)list_nth(ctx->query->rtable, v->varno - 1);
+  return rte->rtekind == RTE_RELATION;
+}
+
 /**
  * @brief Wrap an agg_token Var in a cast to its original type, in place.
  */
@@ -18950,8 +18956,11 @@ static void cast_agg_token_in_list(ListCell *lc,
     return;
 
   /* Read as a plain value (not in a HAVING clause, whose lowering reads the
-   * column itself) */
-  if (through_text && !agg_cast_explicit) {
+   * column itself).  A column of a STORED relation is not one of these: its
+   * value was computed and written by an earlier statement, so reading it now
+   * is a conversion and nothing is being frozen -- the freezing is about a
+   * value this statement would otherwise track. */
+  if (through_text && !agg_token_var_of_stored_relation(v, ctx)) {
     Node *frozen = frozen_agg_value((Node *)v, target, ctx->constants);
     if (frozen != NULL) {
       lfirst(lc) = frozen;
@@ -19121,6 +19130,22 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
   }
   if (IsA(node, FuncExpr)) {
     FuncExpr *fe = (FuncExpr *)node;
+    /* plain(x) over an aggregate: the marker says the value is meant, so the
+     * value is what it becomes -- read once, here, rather than left an
+     * agg_token for the executor to convert per row with the warning that a
+     * conversion gives.  The type it takes is the one the call was resolved
+     * with, before the aggregate below it became a token. */
+    if (OidIsValid(ctx->constants->OID_FUNCTION_PLAIN) &&
+        fe->funcid == ctx->constants->OID_FUNCTION_PLAIN &&
+        list_length(fe->args) == 1 &&
+        exprType((Node *)linitial(fe->args)) ==
+          ctx->constants->OID_TYPE_AGG_TOKEN &&
+        fe->funcresulttype != ctx->constants->OID_TYPE_AGG_TOKEN) {
+      Node *value = frozen_agg_value((Node *)linitial(fe->args),
+                                     fe->funcresulttype, ctx->constants);
+      if (value != NULL)
+        return value;
+    }
     if (fe->funcid != ctx->constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
       cast_agg_token_func_args(fe->args, fe->funcid, ctx);
     return node;
@@ -23959,6 +23984,12 @@ static void sort_on_plain_values(const constants_t *constants, Query *q,
         op_input_types(sgc->eqop, &ltype, &rtype);
       else
         continue;
+      /* The key is ordered as an agg_token: its own ordering reads the value
+       * each token carries, numbers as numbers, and says so once for the
+       * statement.  Routing it through the text of the value instead would
+       * order 50 before 5. */
+      if (ltype == constants->OID_TYPE_AGG_TOKEN)
+        continue;
       if (!OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT))
         provsql_error("ORDER BY on the result of an aggregate function is not "
                       "supported by this version of the provsql schema; run "
@@ -26527,7 +26558,7 @@ static PlannedStmt *provsql_planner(Query *q,
                       "as plain SQL, on the data as it is: the rows it "
                       "aggregates carry their provenance, the value they carry "
                       "is the one of the database as it is",
-                      "cast the inner aggregate explicitly (::numeric, ...) to "
+                      "mark the inner aggregate plain() to "
                       "say so");
 
       /* The frozen values an aggregate over an aggregate result reads are
@@ -26542,7 +26573,7 @@ static PlannedStmt *provsql_planner(Query *q,
                       "aggregate result read as a plain value (by a "
                       "function, an operator, a comparison) is evaluated as "
                       "plain SQL, not tracked",
-                      "cast it explicitly (::numeric, ::text, ...) to say "
+                      "mark it plain() to say "
                       "so");
 
 #if PG_VERSION_NUM >= 150000

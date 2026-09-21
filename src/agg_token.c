@@ -230,6 +230,92 @@ static void warn_conversion_once(const char *target) {
                   target);
 }
 
+
+/** @brief The "sorted on the plain value" warning, once for a statement. */
+static void warn_ordering_once(void)
+{
+  static unsigned seen = (unsigned)-1;
+
+  if (seen == provsql_stmt_serial)
+    return;
+  seen = provsql_stmt_serial;
+  provsql_warning("ordering or grouping an aggregate result reads its value "
+                  "on the data as it is, the one this statement computed: "
+                  "another possible world need not order them the same way");
+}
+
+/** @brief Whether @p v is the text of a number, as @c numeric_in would read
+ *  it: the check a comparison makes before parsing, since parsing what is not
+ *  one would raise where a comparison must not. */
+static bool text_is_number(const char *v)
+{
+  const char *p = v;
+  bool digits = false;
+
+  if (p == NULL)
+    return false;
+  while (*p == ' ') ++p;
+  if (*p == '+' || *p == '-') ++p;
+  while (*p >= '0' && *p <= '9') { ++p; digits = true; }
+  if (*p == '.') {
+    ++p;
+    while (*p >= '0' && *p <= '9') { ++p; digits = true; }
+  }
+  if (digits && (*p == 'e' || *p == 'E')) {
+    ++p;
+    if (*p == '+' || *p == '-') ++p;
+    if (!(*p >= '0' && *p <= '9')) return false;
+    while (*p >= '0' && *p <= '9') ++p;
+  }
+  while (*p == ' ') ++p;
+  return digits && *p == '\0';
+}
+
+PG_FUNCTION_INFO_V1(agg_token_btree_cmp);
+/**
+ * @brief Order two @c agg_token values by the value each carries.
+ *
+ * An @c agg_token is a value and a provenance, and the value is the one the
+ * data as it is gives: ordering by it -- @c ORDER @c BY, @c DISTINCT, a
+ * @c GROUP @c BY that sorts -- is ordering by that one value, which another
+ * possible world need not agree with.  The warning says so, once for the
+ * statement rather than once per comparison, since a sort makes n log n of
+ * them.
+ *
+ * A token with no value (an aggregate over no row) sorts first, as a @c NULL
+ * does under @c NULLS @c FIRST; two numbers are compared as numbers and
+ * anything else by its text, so that the order is total whatever the
+ * aggregate's own type.
+ */
+Datum
+agg_token_btree_cmp(PG_FUNCTION_ARGS)
+{
+  agg_token *a = (agg_token *) PG_GETARG_POINTER(0);
+  agg_token *b = (agg_token *) PG_GETARG_POINTER(1);
+  bool a_null = agg_token_val_is_null(a), b_null = agg_token_val_is_null(b);
+  const char *av, *bv;
+
+  warn_ordering_once();
+
+  if (a_null || b_null)
+    PG_RETURN_INT32(a_null && b_null ? 0 : (a_null ? -1 : 1));
+  av = agg_token_value_cstring(a);
+  bv = agg_token_value_cstring(b);
+  if (text_is_number(av) && text_is_number(bv)) {
+    Datum na = DirectFunctionCall3(numeric_in, CStringGetDatum(av),
+                                   ObjectIdGetDatum(InvalidOid),
+                                   Int32GetDatum(-1));
+    Datum nb = DirectFunctionCall3(numeric_in, CStringGetDatum(bv),
+                                   ObjectIdGetDatum(InvalidOid),
+                                   Int32GetDatum(-1));
+    PG_RETURN_INT32(DatumGetInt32(DirectFunctionCall2(numeric_cmp, na, nb)));
+  }
+  {
+    int c = strcmp(av, bv);
+    PG_RETURN_INT32(c < 0 ? -1 : (c > 0 ? 1 : 0));
+  }
+}
+
 PG_FUNCTION_INFO_V1(agg_token_to_numeric);
 /**
  * @brief Cast an @c agg_token to @c numeric, extracting only the value.

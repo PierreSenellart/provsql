@@ -16,7 +16,7 @@ s_num|s_f8|s_i4|s_i8|s_txt|c_i4
 s_value
 42
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
 remove_provenance
@@ -25,7 +25,7 @@ remove_provenance
 m|m1|m2
 98|42|3
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -33,7 +33,7 @@ remove_provenance
 j|c|f
 {"n" : 2, "vs" : [10,32]}|2!|42
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -76,6 +76,43 @@ a|b
 15|15
 18|18
 (3 rows)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+to_numeric|to_bigint|to_float
+7|2|7
+(1 row)
+to_numeric|to_bigint|to_float
+7|2|7
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_cast; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+t|provsql
+7|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: ordering or grouping an aggregate result reads its value on the data as it is, the one this statement computed: another possible world need not order them the same way
+g|shown
+3|50
+1|30
+2|5
+(3 rows)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

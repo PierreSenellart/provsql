@@ -49,14 +49,13 @@ Field agent|5 (*)
 HR|7 (*)
 Janitor|3 (*)
 (6 rows)
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 remove_provenance
 
 (1 row)
 city|cnt_numeric
-Berlin|2
-New York|2
-Paris|3
+Berlin|2 (*)
+New York|2 (*)
+Paris|3 (*)
 (3 rows)
 remove_provenance
 
@@ -68,7 +67,7 @@ Paris|4 (*)
 (3 rows)
 WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -78,7 +77,7 @@ Berlin|2 (*)|7
 New York|2 (*)|7
 Paris|3 (*)|7
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -88,7 +87,7 @@ Berlin|2
 New York|2
 Paris|3
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -98,7 +97,7 @@ Berlin|3
 New York|3
 Paris|3
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -126,7 +125,7 @@ Berlin|11.0000000000000000 (*)
 New York|3.0000000000000000 (*)
 Paris|9.3333333333333334 (*)
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -152,7 +151,7 @@ Berlin|11 (*)|3 (*)|2 (*)
 New York|3 (*)|3 (*)|2 (*)
 Paris|14 (*)|3 (*)|3 (*)
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -173,7 +172,8 @@ Paris|1 (*)|4 (*)|1.5000000000000000 (*)|2 (*)|-1 (*)
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_dates; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
 (1 row)
@@ -181,7 +181,7 @@ label|ts|txt
 a|Wed Jan 15 00:00:00 2020|01-15-2020
 b|Sat Feb 01 00:00:00 2020|02-01-2020
 (2 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_dates; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_dates; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -204,7 +204,7 @@ remove_provenance
 n|cities
 2 (*)|Berlin,New York (*)
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -212,7 +212,7 @@ remove_provenance
 r|a|f|e
 933.33|28.0|9.333333|7
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -220,7 +220,7 @@ remove_provenance
 eq|n|f
 t|7|2.333333 (*)
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -233,7 +233,7 @@ g
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_ts; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_ts; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -250,7 +250,7 @@ Berlin|0 (*)
 New York|0 (*)
 Paris|3 (*)
 (3 rows)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -258,7 +258,7 @@ remove_provenance
 r
 2.333
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -279,7 +279,7 @@ WARNING:  ProvSQL: window function not supported: its value is evaluated as plai
 DETAIL:  provsql-reason: window-not-tracked; scope: gap
 WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: it is computed on the plain values, those of the database as it is, not tracked, although the statement also tracks personnel; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: window-over-aggregate-frozen; scope: gap
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks personnel; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
@@ -315,7 +315,7 @@ Paris|1 (*)|10 (*)
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_ts; cast it explicitly (::numeric, ::text, ...) to say so
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks agg_arith_ts; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 

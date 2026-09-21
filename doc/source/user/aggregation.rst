@@ -114,11 +114,40 @@ return type (e.g., ``bigint`` for ``COUNT``, ``numeric`` for ``AVG``,
 The value is then evaluated as plain SQL, on the data as it is (see
 :ref:`plain-sql`): the planner emits one warning for the statement, naming a
 relation it tracks, and :ref:`provsql.implicit_freeze
-<provsql-implicit-freeze>` set to ``'error'`` refuses the query. An explicit
-cast (``cnt::numeric``) says that the plain value is meant: it still warns
-that the provenance information is lost in the conversion, but it is never
-refused. The provenance of the aggregate group itself is still tracked in
-the ``provsql`` column.
+<provsql-implicit-freeze>` set to ``'error'`` refuses the query. Marking the
+part with :sqlfunc:`plain` says that the plain value is meant, and is the only
+thing that does. The provenance of the aggregate group itself is still tracked
+in the ``provsql`` column.
+
+A cast to a **number** is not such a reading at all: it is a function of the
+value, like ``round`` or ``abs``, and it is carried.
+
+.. code-block:: postgresql
+
+    SELECT SUM(salary)::numeric FROM employees;   -- tracked, the same number
+    SELECT AVG(salary)::bigint  FROM employees;   -- tracked, rounded as the
+                                                  -- cast itself rounds
+    SELECT SUM(salary)::text    FROM employees;   -- the plain value, named
+
+A widening (an integer to ``numeric``, to a float) keeps the value as it is,
+and a narrowing to an integer rounds half away from zero, which is what
+PostgreSQL's own cast does; a cast to ``text``, to a ``boolean`` or to a date
+has no arithmetic behind it and stays a reading of the plain value. Casts that
+PostgreSQL inserts on its own -- to line up the two arms of a ``GREATEST``, or
+an argument with a parameter -- are not the query's reading and are left where
+they are.
+
+Because such a cast keeps the ``agg_token``, a column of one is what a query
+then sorts, groups or takes the ``DISTINCT`` of. The type has an ordering for
+that: the values on the data as it is, numbers compared as numbers and a
+result with no value first. It is one order out of the many the possible
+worlds have, so the statement is told once:
+
+.. code-block:: text
+
+    WARNING: ordering or grouping an aggregate result reads its value on the
+    data as it is, the one this statement computed: another possible world
+    need not order them the same way
 
 Window functions over aggregate results (e.g. ``SUM(cnt) OVER ()``)
 execute but are **not** provenance-aware: the aggregate argument is cast

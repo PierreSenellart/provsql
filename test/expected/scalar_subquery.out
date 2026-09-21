@@ -816,7 +816,8 @@ add_provenance
 create_provenance_mapping
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks ssx; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
 
 (1 row)
