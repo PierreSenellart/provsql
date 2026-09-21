@@ -12427,6 +12427,73 @@ static bool freeze_relations_walker(Node *node, void *cx) {
 }
 
 /** @brief Walker: a window function outside any @c plain() call. */
+/**
+ * @brief Whether a window function is one the fragment leaves out: its value
+ *        is an offset into the partition or a rank ratio, or its frame is a
+ *        positional one.
+ *
+ * @c lag and its kind read the row a given number of rows away, and
+ * @c cume_dist and @c percent_rank a ratio of counts: which row that is, and
+ * what the counts are, depends on which rows are there, so there is no value
+ * to carry rather than one not carried yet.  A frame counted in ROWS or in
+ * GROUPS says the same of an ordinary aggregate: @c sum(x) @c OVER
+ * @c (ORDER @c BY @c c @c ROWS @c BETWEEN @c 2 @c PRECEDING @c AND @c CURRENT
+ * @c ROW) sums a set of rows that another world moves.  A frame that spans the
+ * whole partition does not.
+ */
+static bool window_outside_fragment(Query *q, WindowFunc *wf) {
+  static const char *const kinds[] = {
+    "lag", "lead", "first_value", "last_value", "nth_value",
+    "ntile", "percent_rank", "cume_dist"
+  };
+  char *name = get_func_name(wf->winfnoid);
+  WindowClause *wc;
+  size_t i;
+
+  if (name != NULL) {
+    for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); ++i)
+      if (strcmp(name, kinds[i]) == 0) {
+        pfree(name);
+        return true;
+      }
+    pfree(name);
+  }
+  wc = window_clause_of(q, wf->winref);
+  if (wc != NULL && (wc->frameOptions & (FRAMEOPTION_ROWS | FRAMEOPTION_GROUPS))
+      && !((wc->frameOptions & FRAMEOPTION_START_UNBOUNDED_PRECEDING) &&
+           (wc->frameOptions & FRAMEOPTION_END_UNBOUNDED_FOLLOWING)))
+    return true;
+  return false;
+}
+
+/** @brief Context for @c window_kinds_walker. */
+typedef struct {
+  const constants_t *constants;
+  Query *q;
+  bool outside;   ///< a window the fragment leaves out was met
+  bool inside;    ///< a window it covers was met
+} window_kinds_ctx;
+
+/** @brief Walker: which kinds of untracked window function @p q holds. */
+static bool window_kinds_walker(Node *node, void *cx) {
+  window_kinds_ctx *c = (window_kinds_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, WindowFunc)) {
+    if (window_outside_fragment(c->q, (WindowFunc *)node))
+      c->outside = true;
+    else
+      c->inside = true;
+    return false;
+  }
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == c->constants->OID_FUNCTION_PLAIN)
+    return false;
+  if (IsA(node, Query))
+    return false;
+  return expression_tree_walker(node, window_kinds_walker, cx);
+}
+
 static bool unmarked_window_walker(Node *node, void *cx) {
   const constants_t *constants = (const constants_t *)cx;
   if (node == NULL)
@@ -25444,12 +25511,32 @@ static Query *process_query(const constants_t *constants, Query *q,
           (q->hasAggs || q->groupClause != NIL || q->groupingSets != NIL ||
            has_union || has_difference ||
            !replace_window_aggregations(constants, q, prov_atts)))
-        if (unmarked_window_walker((Node *)q->targetList, (void *)constants))
-          report_freeze(constants, NULL,
-                        PROVSQL_DELIBERATE, "window-not-tracked",
-                        "window function not supported: its value is "
-                        "evaluated as plain SQL, not tracked; provenance is "
-                        "tracked per input row only", NULL);
+        if (unmarked_window_walker((Node *)q->targetList, (void *)constants)) {
+          /* Reported per kind rather than per query: a query can hold a lag,
+           * whose value no world but the actual one has, beside a window over
+           * an aggregate value, which is a reading not reached yet.  The two
+           * want different scopes, and a reader of the first should not be
+           * told to expect the second to arrive. */
+          window_kinds_ctx wk;
+          wk.constants = constants;
+          wk.q = q;
+          wk.outside = wk.inside = false;
+          window_kinds_walker((Node *)q->targetList, &wk);
+          if (wk.outside)
+            report_freeze(constants, NULL,
+                          PROVSQL_DELIBERATE, "window-not-tracked",
+                          "window function not supported: its value is an "
+                          "offset into the partition, a ratio of ranks or a "
+                          "frame counted in rows, which the rows that are "
+                          "there decide, so it is evaluated as plain SQL, not "
+                          "tracked", NULL);
+          if (wk.inside)
+            report_freeze(constants, NULL,
+                          PROVSQL_GAP, "window-not-tracked",
+                          "window function not supported: its value is "
+                          "evaluated as plain SQL, not tracked; provenance is "
+                          "tracked per input row only", NULL);
+        }
 
       /* Insert casts for agg_token Vars used in arithmetic or window
        * functions, now that WHERE-to-HAVING migration is done */
@@ -26074,6 +26161,76 @@ static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
          has_provenance(constants, q) && !limit_lowerable(constants, q);
 }
 
+/** @brief Context for @c reads_agg_value_walker. */
+typedef struct {
+  const constants_t *constants;
+  Query *q;
+  bool found;
+} agg_value_read_ctx;
+
+/**
+ * @brief Walker: does the expression read the value of an aggregate?
+ *
+ * An aggregate of the block itself, a column of a FROM subquery that is one,
+ * or a scalar subquery that aggregates: the three shapes a sort key takes when
+ * it orders by "how many" rather than by a value of the data.  The wider
+ * reading is the one the fragment uses, and the one the top-k of an
+ * aggregation needs: the key of
+ * @c "ORDER @c BY @c (SELECT @c count(*) @c ...) @c DESC @c LIMIT @c 10" is an
+ * aggregate value as much as @c "ORDER @c BY @c count(*)" is.
+ */
+static bool reads_agg_value_walker(Node *node, void *cx) {
+  agg_value_read_ctx *c = (agg_value_read_ctx *)cx;
+
+  if (node == NULL || c->found)
+    return false;
+  if (IsA(node, Aggref)) {
+    c->found = true;
+    return true;
+  }
+  if (IsA(node, SubLink)) {
+    SubLink *sl = (SubLink *)node;
+    if (IsA(sl->subselect, Query) && ((Query *)sl->subselect)->hasAggs) {
+      c->found = true;
+      return true;
+    }
+    return false;
+  }
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    RangeTblEntry *r;
+    if (v->varlevelsup != 0 || v->varno == 0 || v->varattno <= 0 ||
+        v->varno > list_length(c->q->rtable))
+      return false;
+    r = (RangeTblEntry *)list_nth(c->q->rtable, v->varno - 1);
+    if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL &&
+        rte_column_is_aggregate(c->constants, r, v->varattno))
+      c->found = true;
+    return c->found;
+  }
+  return expression_tree_walker(node, reads_agg_value_walker, cx);
+}
+
+/** @brief Whether a sort key of @p q reads the value of an aggregate. */
+static bool sort_key_reads_agg_value(const constants_t *constants, Query *q) {
+  ListCell *lc;
+  agg_value_read_ctx c;
+
+  c.constants = constants;
+  c.q = q;
+  c.found = false;
+  foreach (lc, q->sortClause) {
+    TargetEntry *te = get_sortgroupclause_tle((SortGroupClause *)lfirst(lc),
+                                              q->targetList);
+    if (te == NULL)
+      continue;
+    reads_agg_value_walker((Node *)te->expr, &c);
+    if (c.found)
+      return true;
+  }
+  return false;
+}
+
 /** @brief Report the freezing @c top_limit_is_truncation calls for. */
 static void warn_top_limit(const constants_t *constants, Query *q) {
   if (q->sortClause == NIL)
@@ -26087,8 +26244,14 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
                   "write LIMIT plain(k) to say so, or ORDER BY the rows to "
                   "have the truncation read in every world");
   else
+    /* The truncation of a top-k whose key is an aggregate value is a reading
+     * the fragment has -- the filter of a rank -- and that is not built yet;
+     * one over keys of the data is a cut of the actual result, which no
+     * provenance describes. */
     report_freeze(constants, NULL,
-                  PROVSQL_DELIBERATE, "limit-not-read-in-every-world",
+                  sort_key_reads_agg_value(constants, q) ? PROVSQL_GAP
+                                                         : PROVSQL_DELIBERATE,
+                  "limit-not-read-in-every-world",
                   "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
                   "relations is not read in each possible world over an "
                   "aggregation, a DISTINCT, a set operation or sort keys that "

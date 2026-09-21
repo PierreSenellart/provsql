@@ -159,10 +159,15 @@ it. The ``scope`` says what kind of limit it is:
     false; a ``LIMIT`` that truncates the result as the data as it is gives it,
     with no ``ORDER BY`` or over an aggregation, a ``DISTINCT`` or a set
     operation, and one in a subquery, since which rows are kept is left open by
-    SQL and depends on the rows before them; a window function whose value is
-    an offset into the partition (``lag``, ``lead``), a ratio of ranks
-    (``cume_dist``, ``percent_rank``) or a positional frame, whose reading
-    varies with which rows are present; a recursion outside the shape the
+    SQL and depends on the rows before them -- but a top-k whose sort key reads
+    an aggregate value (``ORDER BY count(*) DESC LIMIT 10``, or the same key
+    through a subquery) is the filter of a rank, which has a reading, so it is
+    reported as a ``gap`` instead; a window function whose value is
+    an offset into the partition (``lag``, ``lead``, ``first_value``,
+    ``last_value``, ``nth_value``), a ratio of ranks (``ntile``,
+    ``percent_rank``, ``cume_dist``) or an aggregate over a frame counted in
+    rows or groups rather than spanning the partition, all of which the rows
+    that are there decide; a recursion outside the shape the
     fixpoint is defined for. No rewriting will remove these.
 
 ``gap``
