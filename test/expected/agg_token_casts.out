@@ -6,10 +6,15 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 s_num|s_f8|s_i4|s_i8|s_txt|c_i4
 42|42|42|42|42|2
 (1 row)
@@ -19,6 +24,7 @@ s_value
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -42,21 +48,28 @@ j|cc
 {"n" : 2}|2!
 (1 row)
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 lit_num
 42
 (1 row)
 WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 lit_i4
 42
 (1 row)
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 empty_num_null|empty_f8_null|empty_i4_null|empty_i8_null|empty_value_null
 t|t|t|t|t
 (1 row)
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 nullword_num_null
 t
 (1 row)
@@ -67,10 +80,12 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 a|b
 12|12
 15|15
@@ -86,6 +101,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 to_numeric|to_bigint|to_float
 7|2|7
 (1 row)
@@ -104,6 +120,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 m|a|e_a|b|e_b
 1|1|0.666667|1|0.666667
 2|1|1.000000|0|0.000000
@@ -128,6 +145,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 WARNING:  ProvSQL: ordering or grouping an aggregate result reads its value on the data as it is, the one this statement computed: another possible world need not order them the same way
 g|shown
 3|50

@@ -51,6 +51,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 sum_times|sum_of_times|avg_times|max_plus|min_minus
 8000.0|8000.0|8.0000000000000000|5|3
 (1 row)

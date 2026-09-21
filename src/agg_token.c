@@ -212,13 +212,20 @@ static void warn_conversion_once(const char *target) {
   static int nseen = 0;
   int i;
 
+  /* Tagged like a freezing, and scoped deliberate, although nothing is frozen
+   * here: this is the conversion of a token the RELATION holds -- reading
+   * "x::text" of a column an earlier statement wrote -- and the text of a
+   * token is the value on the data as it is, which no rewriting gives a
+   * provenance to.  The tag is its own, not the freezing's
+   * (aggregate-read-as-plain-value), so that a survey counting causes does not
+   * take a read of stored data for a fragment ProvSQL failed to track. */
   for (i = 0; i < nseen; ++i)
     if (seen_target[i] == target) {
       if (seen_serial[i] == provsql_stmt_serial)
         return;
       seen_serial[i] = provsql_stmt_serial;
-      provsql_warning("converting agg_token to %s: provenance information is "
-                      "lost", target);
+      provsql_warning_tagged(PROVSQL_DELIBERATE, "stored-agg-token-conversion", "converting agg_token to %s: provenance information is "
+                             "lost", target);
       return;
     }
   if (nseen < (int)(sizeof(seen_target) / sizeof(seen_target[0]))) {
@@ -226,8 +233,8 @@ static void warn_conversion_once(const char *target) {
     seen_serial[nseen] = provsql_stmt_serial;
     ++nseen;
   }
-  provsql_warning("converting agg_token to %s: provenance information is lost",
-                  target);
+  provsql_warning_tagged(PROVSQL_DELIBERATE, "stored-agg-token-conversion", "converting agg_token to %s: provenance information is lost",
+                         target);
 }
 
 

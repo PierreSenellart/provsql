@@ -871,6 +871,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 id|s1|c1|children|m
 1|1|1|2|11
 2|1|2|1|11
@@ -881,6 +882,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 rn|id|children
 1|1|2
 2|2|1
@@ -891,6 +893,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 u|n|c
 1|2|1
 2|2|2
@@ -899,6 +902,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 id|s|m
 1|10|10
 2|14|10

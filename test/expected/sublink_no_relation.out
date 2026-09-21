@@ -34,6 +34,7 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 n|pr
 3|1.000000
 (1 row)
@@ -41,10 +42,12 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 n|pr
 3|1.000000
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 below|e_below|total|e_total
 1|0.500000|2|1.000000
 (1 row)

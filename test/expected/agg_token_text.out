@@ -70,10 +70,12 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 s|len
 abcdefghijabcdefghijabcdefghij1,abcdefghijabcdefghijabcdefghij2,abcdefghijabcdefghijabcdefghij3,abcdefghijabcdefghijabcdefghij4,abcdefghijabcdefghijabcdefghij5 (*)|159
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 ranges
 5
 (1 row)

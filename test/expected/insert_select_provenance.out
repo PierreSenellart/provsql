@@ -24,11 +24,13 @@ Magdalen|Nancy|Magdalen ⊗ Nancy
 WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
 WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 c|s
 7|28
 (1 row)
 WARNING:  ProvSQL: INSERT ... SELECT on provenance-tracked tables: source provenance is not propagated to inserted rows
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 city|n
 Berlin|2
 New York|2
@@ -38,6 +40,7 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
 remove_provenance
 
 (1 row)
