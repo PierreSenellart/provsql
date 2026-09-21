@@ -152,10 +152,18 @@ reworded, so a tool that surveys what ProvSQL covers can group refusals by
 it. The ``scope`` says what kind of limit it is:
 
 ``deliberate``
-    the shape has no provenance to give, so the refusal is the answer:
-    ``EXCEPT ALL`` and ``INTERSECT ALL``, whose kept copies have no
-    provenance of their own; ``IN`` read as a value, whose unknown truth no
-    count of matches tells from false. No rewriting will remove these.
+    the shape has no provenance to give, so the refusal -- or the warning that
+    names what was read as plain SQL -- is the answer: ``EXCEPT ALL`` and
+    ``INTERSECT ALL``, whose kept copies have no provenance of their own;
+    ``IN`` read as a value, whose unknown truth no count of matches tells from
+    false; a ``LIMIT`` that truncates the result as the data as it is gives it,
+    with no ``ORDER BY`` or over an aggregation, a ``DISTINCT`` or a set
+    operation, and one in a subquery, since which rows are kept is left open by
+    SQL and depends on the rows before them; a window function whose value is
+    an offset into the partition (``lag``, ``lead``), a ratio of ranks
+    (``cume_dist``, ``percent_rank``) or a positional frame, whose reading
+    varies with which rows are present; a recursion outside the shape the
+    fixpoint is defined for. No rewriting will remove these.
 
 ``gap``
     the query has a provenance and the rewriting does not reach it yet.

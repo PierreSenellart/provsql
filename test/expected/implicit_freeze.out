@@ -10,15 +10,15 @@ DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
 WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
 WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL
-DETAIL:  provsql-reason: window-not-tracked; scope: gap
+DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
 WARNING:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
 ERROR:  ProvSQL: scalar subquery nested in an expression is evaluated as plain SQL, not tracked; the result keeps only the outer provenance, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL (provsql.implicit_freeze is 'error')
 DETAIL:  provsql-reason: sublink-nested-in-expression-frozen; scope: gap
 ERROR:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks if_a; mark it plain() to evaluate it as plain SQL (provsql.implicit_freeze is 'error')
-DETAIL:  provsql-reason: window-not-tracked; scope: gap
+DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
 ERROR:  ProvSQL: ORDER BY ... LIMIT / OFFSET over provenance-tracked relations is not read in each possible world over an aggregation, a DISTINCT, a set operation or sort keys that vary between worlds: it truncates the actual result, whose rows keep the provenance they have in the full result, although the statement also tracks if_a; write LIMIT plain(k) to say so (provsql.implicit_freeze is 'error')
-DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: gap
+DETAIL:  provsql-reason: limit-not-read-in-every-world; scope: deliberate
 remove_provenance
 
 (1 row)

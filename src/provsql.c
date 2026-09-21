@@ -2284,7 +2284,7 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
                 *lowered = lappend(*lowered, e);
               } else
                 /* Unsupported recursion shape (e.g. UNION ALL). */
-                provsql_unsupported(PROVSQL_GAP, "recursion-shape", "Recursive CTEs not supported (unsupported recursion shape)");
+                provsql_unsupported(PROVSQL_DELIBERATE, "recursion-shape", "Recursive CTEs not supported (unsupported recursion shape)");
             }
 #else
             provsql_unsupported(PROVSQL_GAP, "recursion-unsupported-version", "Recursive CTEs not supported");
@@ -25086,7 +25086,7 @@ static Query *process_query(const constants_t *constants, Query *q,
            !replace_window_aggregations(constants, q, prov_atts)))
         if (unmarked_window_walker((Node *)q->targetList, (void *)constants))
           report_freeze(constants, NULL,
-                        PROVSQL_GAP, "window-not-tracked",
+                        PROVSQL_DELIBERATE, "window-not-tracked",
                         "window function not supported: its value is "
                         "evaluated as plain SQL, not tracked; provenance is "
                         "tracked per input row only", NULL);
@@ -25718,7 +25718,7 @@ static bool top_limit_is_truncation(const constants_t *constants, Query *q) {
 static void warn_top_limit(const constants_t *constants, Query *q) {
   if (q->sortClause == NIL)
     report_freeze(constants, NULL,
-                  PROVSQL_GAP, "limit-without-order-by",
+                  PROVSQL_DELIBERATE, "limit-without-order-by",
                   "LIMIT / OFFSET with no ORDER BY over provenance-tracked "
                   "relations keeps the rows the data as it is gives, in the "
                   "order it gives them: which rows those are is left open by "
@@ -25728,7 +25728,7 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
                   "have the truncation read in every world");
   else
     report_freeze(constants, NULL,
-                  PROVSQL_GAP, "limit-not-read-in-every-world",
+                  PROVSQL_DELIBERATE, "limit-not-read-in-every-world",
                   "ORDER BY ... LIMIT / OFFSET over provenance-tracked "
                   "relations is not read in each possible world over an "
                   "aggregation, a DISTINCT, a set operation or sort keys that "
@@ -25740,7 +25740,7 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
 /** @brief Report the freezing @c nested_limit_on_provenance calls for. */
 static void warn_nested_limit(const constants_t *constants) {
   report_freeze(constants, NULL,
-                PROVSQL_GAP, "limit-in-subquery",
+                PROVSQL_DELIBERATE, "limit-in-subquery",
                 "LIMIT / OFFSET in a subquery over provenance-tracked "
                 "relations: the rows kept carry the provenance they have in "
                 "the full result, so what is computed from them is not sound "

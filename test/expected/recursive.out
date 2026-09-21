@@ -72,7 +72,7 @@ node|present
 3|t
 (2 rows)
 ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
-DETAIL:  provsql-reason: recursion-shape; scope: gap
+DETAIL:  provsql-reason: recursion-shape; scope: deliberate
 add_provenance
 
 (1 row)
@@ -107,7 +107,7 @@ add_provenance
 
 (1 row)
 ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
-DETAIL:  provsql-reason: recursion-shape; scope: gap
+DETAIL:  provsql-reason: recursion-shape; scope: deliberate
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 remove_provenance
 

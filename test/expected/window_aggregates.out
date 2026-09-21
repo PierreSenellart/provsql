@@ -95,7 +95,7 @@ id|s
 4|80 (*)
 (6 rows)
 WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
-DETAIL:  provsql-reason: window-not-tracked; scope: gap
+DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
 remove_provenance
 
 (1 row)
@@ -108,7 +108,7 @@ id|prev|half|pr|last2
 6|5|2|1.0000|12
 (6 rows)
 WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
-DETAIL:  provsql-reason: window-not-tracked; scope: gap
+DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
 WARNING:  ProvSQL: window partitioned or ordered by an aggregate result: it is computed on the plain values, those of the database as it is, not tracked, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
 DETAIL:  provsql-reason: window-over-aggregate-frozen; scope: gap
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks wa; cast it explicitly (::numeric, ::text, ...) to say so
@@ -233,7 +233,7 @@ pairs
 1
 (1 row)
 WARNING:  ProvSQL: window function not supported: its value is evaluated as plain SQL, not tracked; provenance is tracked per input row only, although the statement also tracks wa; mark it plain() to evaluate it as plain SQL
-DETAIL:  provsql-reason: window-not-tracked; scope: gap
+DETAIL:  provsql-reason: window-not-tracked; scope: deliberate
 remove_provenance
 
 (1 row)
