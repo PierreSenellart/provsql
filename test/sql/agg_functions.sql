@@ -14,7 +14,11 @@
 -- ----------------------------------------------------------------------
 
 CREATE TABLE af_t(g int, v int);
-INSERT INTO af_t VALUES (1,10),(1,20),(1,5),(2,7),(2,3),(3,4);
+-- Group 4 holds a negative value so that abs() is not the identity on any of
+-- the groups it is read over: with every value positive, a gate that returned
+-- its input unchanged would answer every assertion below correctly.  Its sum is
+-- -4 on the whole data, 6, 2 or -4 depending on the world.
+INSERT INTO af_t VALUES (1,10),(1,20),(1,5),(2,7),(2,3),(3,4),(4,-6),(4,2);
 SELECT add_provenance('af_t');
 DO $$ BEGIN
   PERFORM set_prob(provenance(), 0.3) FROM af_t WHERE v = 10;
@@ -23,6 +27,8 @@ DO $$ BEGIN
   PERFORM set_prob(provenance(), 0.4) FROM af_t WHERE v = 7;
   PERFORM set_prob(provenance(), 0.6) FROM af_t WHERE v = 3;
   PERFORM set_prob(provenance(), 0.8) FROM af_t WHERE v = 4;
+  PERFORM set_prob(provenance(), 0.5) FROM af_t WHERE v = -6;
+  PERFORM set_prob(provenance(), 0.5) FROM af_t WHERE v = 2;
 END $$;
 
 -- The value shown is the one plain SQL computes; its expectation is over the
