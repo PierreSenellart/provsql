@@ -1,0 +1,36 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+k|p
+1|0.125000
+2|0.125000
+(2 rows)
+k
+1
+2
+(2 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.375000
+2|0.375000
+3|0.500000
+(3 rows)
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body groups rows of its own and the value compared is an aggregate of them, which is one value per possible world
+DETAIL:  provsql-reason: body-groups-aggregate; scope: gap
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body groups rows of its own
+DETAIL:  provsql-reason: body-groups; scope: gap
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

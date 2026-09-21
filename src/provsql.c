@@ -11568,9 +11568,23 @@ static sublink_reason sublink_unsupported_reason(const constants_t *constants,
       return sublink_reason_of(PROVSQL_GAP, "body-with-clause",
                             "its body has a WITH clause");
     if (b->groupClause != NIL || b->groupingSets != NIL ||
-        b->havingQual != NULL)
+        b->havingQual != NULL) {
+      /* A grouped body whose columns are keys is carried (wrap_body_grouping);
+       * one that exposes an aggregate of its groups is not, and the reason is
+       * the aggregate rather than the grouping: the value compared is one per
+       * possible world, which the semijoin's correlation does not read. */
+      ListCell *lct;
+      foreach (lct, b->targetList) {
+        TargetEntry *te = (TargetEntry *)lfirst(lct);
+        if (!te->resjunk && expr_contains_aggref_walker((Node *)te->expr, NULL))
+          return sublink_reason_of(PROVSQL_GAP, "body-groups-aggregate",
+                            "its body groups rows of its own and the value "
+             "compared is an aggregate of them, which is one value per "
+             "possible world");
+      }
       return sublink_reason_of(PROVSQL_GAP, "body-groups",
                             "its body groups rows of its own");
+    }
     if (b->hasWindowFuncs)
       return sublink_reason_of(PROVSQL_GAP, "body-window",
                             "its body has a window function");
@@ -14728,6 +14742,133 @@ static bool wrap_body_sublinks(Query *sub) {
 }
 
 /**
+ * @brief Move a sublink body that groups rows of its own into a derived table,
+ *        so that what is left outside is the existence test the decorrelation
+ *        already lowers.
+ *
+ * @c "x @c IN @c (SELECT @c max(v) @c FROM @c u @c GROUP @c BY @c g)" becomes
+ * @c "x @c IN @c (SELECT @c m @c FROM @c (SELECT @c max(v) @c AS @c m @c FROM
+ * @c u @c GROUP @c BY @c g) @c d)": the grouping stays inside the derived
+ * table, which is tracked as any subquery of a FROM clause is -- one row per
+ * group, annotated by the group -- and the predicate over it is the semijoin
+ * @c R @c ⊗ @c ⊕D that @c build_count_predicate builds.
+ *
+ * Only an uncorrelated body.  A correlated one would have its rows grouped
+ * before the correlation is applied, which is a different query -- unless the
+ * correlated column is a grouping key, where the groups are the same either
+ * way; that case is not lifted here.
+ *
+ * And only a body whose columns are grouping keys, never an aggregate result:
+ * the value an aggregate takes is one per possible world, so @c "x @c IN
+ * @c (SELECT @c max(v) @c ... @c GROUP @c BY @c g)" is a comparison against a
+ * per-world value, which the semijoin's own correlation does not read (it
+ * answered every row of the outer relation, where SQL answers one).  That
+ * shape stays refused, and the message keeps naming the body's grouping.
+ *
+ * @return  True when the body was wrapped (it now groups nothing of its own).
+ */
+static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
+  Query *d;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  List *colnames = NIL, *tl = NIL;
+  ListCell *lc;
+  bool any_tracked = false;
+
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT)
+    return false;
+  if (sub->groupClause == NIL && sub->groupingSets == NIL &&
+      sub->havingQual == NULL && !sub->hasAggs)
+    return false;                 /* nothing of its own to group */
+  /* The shapes the wrap does not carry: they are read inside the derived table
+   * as they would be anywhere else, but the body's own reading of them is what
+   * the diagnosis names, so leave them to it. */
+  if (sub->setOperations != NULL || sub->cteList != NIL ||
+      sub->hasWindowFuncs || sub->hasSubLinks || sub->distinctClause != NIL ||
+      sub->limitCount != NULL || sub->limitOffset != NULL ||
+      sub->rtable == NIL || sub->jointree == NULL)
+    return false;
+  if (reads_outside_walker((Node *)sub, 0))
+    return false;                 /* correlated: the groups would differ */
+  if (sub->groupClause == NIL)
+    return false;                 /* a scalar aggregate: its column is a value
+                                   * per world, see below */
+  foreach (lc, sub->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    if (te->resjunk)
+      continue;
+    if (expr_contains_aggref_walker((Node *)te->expr, NULL))
+      return false;               /* compared against a per-world value */
+  }
+  foreach (lc, sub->rtable) {
+    RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
+#if PG_VERSION_NUM >= 180000
+    /* The virtual entry PG 18 gives a grouped query for its keys is no data
+     * source, and travels with the grouping into the derived table. */
+    if (r->rtekind == RTE_GROUP)
+      continue;
+#endif
+    if (r->rtekind != RTE_RELATION)
+      return false;
+    if (oj_rte_has_provsql(constants, r))
+      any_tracked = true;
+  }
+  if (!any_tracked)
+    return false;                 /* untracked body: PostgreSQL's own machinery */
+
+  /* d is the body as it stands; sub becomes the query that reads it. */
+  d = makeNode(Query);
+  memcpy(d, sub, sizeof(Query));
+
+  {
+    Index attno = 0;
+    foreach (lc, d->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      Var *v;
+      ++attno;
+      if (te->resjunk)
+        continue;                 /* an ORDER BY of the body's own */
+      v = makeVar(1, attno, exprType((Node *)te->expr),
+                  exprTypmod((Node *)te->expr), exprCollation((Node *)te->expr),
+                  0);
+      tl = lappend(tl, makeTargetEntry((Expr *)v, te->resno,
+                                       te->resname != NULL
+                                         ? pstrdup(te->resname) : NULL, false));
+    }
+    if (tl == NIL)
+      return false;               /* nothing to read: leave the body alone */
+    foreach (lc, d->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      colnames = lappend(colnames, makeString(pstrdup(
+        te->resname != NULL ? te->resname : "?column?")));
+    }
+  }
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = d;
+  rte->eref = makeAlias("grouped", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+
+  MemSet(sub, 0, sizeof(Query));
+  sub->type = T_Query;
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  sub->rtable = list_make1(rte);
+#if PG_VERSION_NUM >= 160000
+  sub->rteperminfos = NIL;        /* the permissions travel with d's rtable */
+#endif
+  sub->jointree = makeFromExpr(list_make1(rtr), NULL);
+  sub->targetList = tl;
+  return true;
+}
+
+/**
  * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
  *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
  *
@@ -15439,6 +15580,11 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
     if (IsA(inner, SubLink) && IsA(((SubLink *)inner)->subselect, Query)) {
       sl = (SubLink *)inner;
       wrap_body_sublinks((Query *)sl->subselect);
+      /* A grouped body of an IN / op ANY / op ALL becomes a derived table the
+       * semijoin reads; an EXISTS body is left as it is, its existence test
+       * having no column to read and the uncorrelated arm no key to count. */
+      if (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK)
+        wrap_body_grouping(constants, (Query *)sl->subselect);
       if (sl->subLinkType == EXISTS_SUBLINK &&
           predicate_subselect_decorrelatable(constants,
                                              (Query *)sl->subselect, false)) {
