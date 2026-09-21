@@ -501,6 +501,10 @@ extern char *provsql_last_eval_method;
  * provsql.aggtoken_text_as_uuid GUC. */
 extern bool provsql_aggtoken_text_as_uuid;
 
+/** @brief Serial of the user's current statement (@c provsql.c), read by the
+ *  @c agg_token conversions to warn once for a statement, not once per row. */
+extern unsigned provsql_stmt_serial;
+
 /** Colon-separated list of directories prepended to PATH when ProvSQL
  * spawns external tools (d4, c2d, minic2d, dsharp, weightmc, graph-easy),
  * set by the provsql.tool_search_path run-time configuration parameter.

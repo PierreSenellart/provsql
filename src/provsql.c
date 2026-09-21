@@ -212,6 +212,10 @@ static int provsql_in_ctas = 0;
  * user's plan, so they see depth >= 1 and skip the NOTICE. */
 static int provsql_executor_depth = 0;
 
+/** @brief Counts the user's statements, so that a warning a conversion emits
+ *  at run time is given once for a statement rather than once per row. */
+unsigned provsql_stmt_serial = 0;
+
 /** @brief @c provsql_executor_depth when each open subtransaction started,
  *  by nesting level, to restore it when the subtransaction aborts. */
 #define PROVSQL_MAX_SUBXACT_DEPTH 64
@@ -26182,6 +26186,8 @@ static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorEnd_hook_type   prev_ExecutorEnd   = NULL;
 
 static void provsql_executor_start(QueryDesc *queryDesc, int eflags) {
+  if (provsql_executor_depth == 0)
+    ++provsql_stmt_serial;   /* a new statement of the user: see agg_token.c */
   provsql_executor_depth++;
   PG_TRY();
   {

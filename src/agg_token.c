@@ -194,6 +194,42 @@ agg_token_val_is_null(const agg_token *aggtok)
   return aggtok->val[0] == '\0' || strcmp(aggtok->val, "NULL") == 0;
 }
 
+/**
+ * @brief The "provenance information is lost" warning of a conversion, once
+ *        for a statement and for each target type.
+ *
+ * A conversion runs for every row, and so did its warning: a query over a
+ * large relation wrote one line per row, which says nothing the first does not
+ * and which has filled a server log before.  The statement is identified by
+ * @c provsql_stmt_serial, which the executor hook bumps for the user's
+ * outermost statement; a conversion outside any statement of the user (a
+ * direct call in a function the rewriting runs) warns once as well.
+ */
+static void warn_conversion_once(const char *target) {
+  /* One remembered serial per target type: the list is short and fixed. */
+  static const char *seen_target[8];
+  static unsigned seen_serial[8];
+  static int nseen = 0;
+  int i;
+
+  for (i = 0; i < nseen; ++i)
+    if (seen_target[i] == target) {
+      if (seen_serial[i] == provsql_stmt_serial)
+        return;
+      seen_serial[i] = provsql_stmt_serial;
+      provsql_warning("converting agg_token to %s: provenance information is "
+                      "lost", target);
+      return;
+    }
+  if (nseen < (int)(sizeof(seen_target) / sizeof(seen_target[0]))) {
+    seen_target[nseen] = target;
+    seen_serial[nseen] = provsql_stmt_serial;
+    ++nseen;
+  }
+  provsql_warning("converting agg_token to %s: provenance information is lost",
+                  target);
+}
+
 PG_FUNCTION_INFO_V1(agg_token_to_numeric);
 /**
  * @brief Cast an @c agg_token to @c numeric, extracting only the value.
@@ -207,7 +243,7 @@ agg_token_to_numeric(PG_FUNCTION_ARGS)
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
   Datum result;
 
-  provsql_warning("converting agg_token to numeric: provenance information is lost");
+  warn_conversion_once("numeric");
 
   if (agg_token_val_is_null(aggtok))
     PG_RETURN_NULL();
@@ -259,7 +295,7 @@ agg_token_to_float8(PG_FUNCTION_ARGS)
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
   Datum result;
 
-  provsql_warning("converting agg_token to double precision: provenance information is lost");
+  warn_conversion_once("double precision");
 
   if (agg_token_val_is_null(aggtok))
     PG_RETURN_NULL();
@@ -282,7 +318,7 @@ agg_token_to_int4(PG_FUNCTION_ARGS)
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
   Datum result;
 
-  provsql_warning("converting agg_token to integer: provenance information is lost");
+  warn_conversion_once("integer");
 
   if (agg_token_val_is_null(aggtok))
     PG_RETURN_NULL();
@@ -305,7 +341,7 @@ agg_token_to_int8(PG_FUNCTION_ARGS)
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
   Datum result;
 
-  provsql_warning("converting agg_token to bigint: provenance information is lost");
+  warn_conversion_once("bigint");
 
   if (agg_token_val_is_null(aggtok))
     PG_RETURN_NULL();
@@ -328,7 +364,7 @@ agg_token_to_bool(PG_FUNCTION_ARGS)
 {
   agg_token *aggtok = (agg_token *) PG_GETARG_POINTER(0);
 
-  provsql_warning("converting agg_token to boolean: provenance information is lost");
+  warn_conversion_once("boolean");
 
   if (agg_token_val_is_null(aggtok))
     PG_RETURN_NULL();
@@ -353,7 +389,7 @@ agg_token_to_text(PG_FUNCTION_ARGS)
   const char *val;
   int len;
 
-  provsql_warning("converting agg_token to text: provenance information is lost");
+  warn_conversion_once("text");
 
   val = agg_token_value_cstring(aggtok);
   len = strlen(val);

@@ -50,8 +50,6 @@ HR|7 (*)
 Janitor|3 (*)
 (6 rows)
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 remove_provenance
 
 (1 row)
@@ -175,9 +173,6 @@ Paris|1 (*)|4 (*)|1.5000000000000000 (*)|2 (*)|-1 (*)
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 remove_provenance
 
@@ -359,13 +354,6 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 g|ln|sqrt|pow|exp|e_ln|e_sqrt
 1|1.386294|2.000000|16.000000|54.598150|0.902683|1.601961
 2|2.197225|3.000000|81.000000|8103.083928|2.197225|3.000000
@@ -373,7 +361,6 @@ g|ln|sqrt|pow|exp|e_ln|e_sqrt
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 g|r
 1|25.000000

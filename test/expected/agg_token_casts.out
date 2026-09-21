@@ -10,7 +10,6 @@ WARNING:  ProvSQL: converting agg_token to double precision: provenance informat
 WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to integer: provenance information is lost
 s_num|s_f8|s_i4|s_i8|s_txt|c_i4
 42|42|42|42|42|2
 (1 row)
@@ -64,3 +63,19 @@ t
 ERROR:  invalid input syntax for agg_token: "garbage"
 LINE 1: SELECT 'garbage'::provsql.agg_token;
                ^
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+a|b
+12|12
+15|15
+18|18
+(3 rows)
+remove_provenance
+
+(1 row)

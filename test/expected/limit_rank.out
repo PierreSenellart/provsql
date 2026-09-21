@@ -138,7 +138,6 @@ candidates
 6
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 g|c|type
 a|5|provsql.agg_token
 b|3|provsql.agg_token

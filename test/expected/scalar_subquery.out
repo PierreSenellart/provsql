@@ -817,8 +817,6 @@ create_provenance_mapping
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 remove_provenance
 
 (1 row)
@@ -872,17 +870,6 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 id|s1|c1|children|m
 1|1|1|2|11
 2|1|2|1|11
@@ -892,13 +879,6 @@ id|s1|c1|children|m
 remove_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 rn|id|children
 1|1|2
@@ -910,9 +890,6 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 u|n|c
 1|2|1
 2|2|2
@@ -920,9 +897,6 @@ u|n|c
 remove_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 id|s|m
 1|10|10

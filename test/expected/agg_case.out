@@ -76,8 +76,6 @@ remove_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 tag|s|e_s|d
 a|20|20.0000|01-01-2021
 b|||
@@ -86,7 +84,6 @@ c|||
 remove_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 tag|s
 a|
@@ -98,27 +95,11 @@ add_provenance
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cc; cast it explicitly (::numeric, ::text, ...) to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 g|s0|e_s0|var_s0|mx|e_mx|cnt|dflt_var|three|p
 1|5|3.333333|5.555556|5|3.000000|2|5|5|0.750000
 2|0|0.000000|0.000000|-1|-1.000000|2|2|0|0.750000
 3|7|7.000000|0.000000|7|7.000000|1|7|7|0.500000
 (3 rows)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 g|gt|e_gt|ls|e_ls
 1|5|4.000000|2|2.000000
@@ -126,16 +107,12 @@ g|gt|e_gt|ls|e_ls
 3|7|7.000000|2|2.000000
 (3 rows)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 gt|ls
 2|2
 (1 row)
 add_provenance
 
 (1 row)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 g|n3|e_n3|n1|p
 1||1.500000|2|0.750000

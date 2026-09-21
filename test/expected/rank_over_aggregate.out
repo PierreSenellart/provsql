@@ -3,21 +3,11 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 q|g|c|rk|e_rank
 window over a subquery|1|2|1|1.166667
 window over a subquery|2|1|3|1.500000
 window over a subquery|3|2|1|1.166667
 (3 rows)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 q|g|c|rk|e_rank
 window over its own aggregates|1|2|1|1.166667
@@ -30,15 +20,11 @@ same tokens as (a)|t
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
 WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 q|g|c|p
 top 2|1|2|0.750000
 top 2|2|1|0.468750
 top 2|3|2|0.750000
 (3 rows)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 q|g|dr|e_dense
 dense_rank|1|2|1.250000
@@ -49,17 +35,12 @@ add_provenance
 
 (1 row)
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 q|part|g|dr|e_dense
 dense_rank per partition|x|1|2|1.166667
 dense_rank per partition|x|2|1|1.000000
 dense_rank per partition|y|3|2|1.166667
 dense_rank per partition|y|4|1|1.000000
 (4 rows)
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 q|g|dr|e_dense
 dense_rank over a sum|1|3|2.166667
@@ -68,8 +49,6 @@ dense_rank over a sum|3|2|1.583333
 (3 rows)
 WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
 WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 q|g|c|p
 top 2 by an arithmetic key|1|3|0.750000

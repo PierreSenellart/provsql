@@ -61,3 +61,23 @@ SELECT ('( 00000000-0000-0000-0000-000000000000 , NULL )'::provsql.agg_token)::n
 
 -- Malformed literal: a clean type-input error.
 SELECT 'garbage'::provsql.agg_token;
+
+-- The warning a conversion gives is one for the statement and for each target
+-- type, not one per row: it says nothing the first does not, and a query over
+-- a large relation used to write a line for every row (a round of the
+-- differential testing once filled a server log with them).  Three rows here,
+-- two target types, so two warnings.
+CREATE TABLE atc_many(g int, v int);
+INSERT INTO atc_many SELECT i % 3, i FROM generate_series(1, 9) i;
+SELECT add_provenance('atc_many');
+-- Three groups, so three conversions of the sum to numeric: ONE warning, where
+-- there was one per row.  The cast to bigint is the sum's own type, so it
+-- converts nothing and the column stays tracked.
+CREATE TABLE atc_conv AS
+  SELECT total::numeric AS a, total::bigint AS b
+    FROM (SELECT g, sum(v) AS total FROM atc_many GROUP BY g) s;
+SELECT remove_provenance('atc_conv');
+SELECT a, b::text AS b FROM atc_conv ORDER BY a;
+DROP TABLE atc_conv;
+SELECT remove_provenance('atc_many');
+DROP TABLE atc_many;

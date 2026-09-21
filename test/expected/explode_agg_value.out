@@ -27,7 +27,6 @@ m|pr
 50|0.500000
 (5 rows)
 WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to bigint: provenance information is lost
 remove_provenance
 
 (1 row)
@@ -152,8 +151,6 @@ remove_provenance
 n
 1
 (1 row)
-WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
-WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
 WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
 remove_provenance
 
