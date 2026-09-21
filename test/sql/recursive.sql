@@ -264,7 +264,10 @@ DROP TABLE leak_r, leak_e;
 -- relation, expanded before any hook of ours can hide it -- would give the
 -- working table two columns of that name, and the token the star asks for is
 -- not data the rounds carry: refused, where the same recursion written with
--- explicit columns answers.
+-- explicit columns answers.  The refusal names the STAR as the cause and is
+-- scoped a gap, not the shape of the recursion: the recursion is fine (the
+-- reference may sit on either side of the join, and the semantics translates
+-- such a query), so what the user can act on is writing the columns out.
 CREATE TABLE bag_star(id int, parent_id int);
 INSERT INTO bag_star VALUES (1, NULL), (2, 1), (3, 2);
 SELECT add_provenance('bag_star');

@@ -1888,6 +1888,24 @@ static bool freeze_recursive_guards(const constants_t *constants, Query *cteq,
  *               scanning the populated table
  * @param entry  memo entry filled with the reachability details, or @c NULL
  */
+/**
+ * @brief Whether the columns of @p cte include a provenance one.
+ *
+ * @c "SELECT *" over a provenance-tracked relation expands to the provenance
+ * column at parse analysis, before any hook of ours runs, so a recursive term
+ * written that way asks for a token as data.  Told apart from the shapes the
+ * recursion lowering declines for their own reasons, since the cause is the
+ * star and what the user can do about it is to write the columns out.
+ */
+static bool cte_colnames_hold_provenance(CommonTableExpr *cte) {
+  ListCell *lc;
+
+  foreach (lc, cte->ctecolnames)
+    if (strcmp(strVal(lfirst(lc)), PROVSQL_COLUMN_NAME) == 0)
+      return true;
+  return false;
+}
+
 static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
                                 LoweredCte *entry) {
   Query         *cteq = (Query *) cte->ctequery;
@@ -1943,13 +1961,10 @@ static bool lower_recursive_cte(CommonTableExpr *cte, RangeTblEntry *r,
    * relation, expanded at parse analysis, before any hook of ours -- would give
    * the working table two columns of that name, its own and the driver's.  The
    * value the user asked for is a token, which the rounds do not carry as data,
-   * so the shape is refused rather than half-answered. */
-  {
-    ListCell *lcc;
-    foreach (lcc, cte->ctecolnames)
-      if (strcmp(strVal(lfirst(lcc)), PROVSQL_COLUMN_NAME) == 0)
-        return false;
-  }
+   * so the shape is refused rather than half-answered; the caller says so by
+   * that cause rather than by the shape of the recursion, which is fine. */
+  if (cte_colnames_hold_provenance(cte))
+    return false;
 
   /* Deparse the body from a copy whose self-references name the working table:
    * "provsql_rec_<cte> <cte>", so that nothing of ours is called what the user
@@ -2273,8 +2288,25 @@ static void inline_ctes_in_rtable(List *rtable, List *cteList, List **lowered,
                 e->name = pstrdup(cte->ctename);
                 e->subquery = copyObject(r->subquery);
                 *lowered = lappend(*lowered, e);
-              } else
-                /* Unsupported recursion shape (e.g. UNION ALL). */
+              } else if (cte_colnames_hold_provenance(cte))
+                /* The cause is the star, not the shape of the recursion: the
+                 * semantics gives such a query a reading, and the rewriting
+                 * does not reach it, so this is a gap and it names what the
+                 * user can do about it. */
+                provsql_unsupported(PROVSQL_GAP, "recursive-term-star-provenance", "a recursive term of \"%s\" holds a provenance column: "
+                                    "\"SELECT *\" over a provenance-tracked "
+                                    "relation expands to it at parse analysis, "
+                                    "before any hook of ProvSQL, so the working "
+                                    "table would hold two columns of that name "
+                                    "-- the rounds' own and this one -- and the "
+                                    "token the star asks for is not data the "
+                                    "rounds carry",
+                                    cte->ctename);
+              else
+                /* A shape the lowering declines for a reason of its own: an
+                 * aggregate or a window function in the recursive term, a
+                 * set-returning function, a set operation that is not a
+                 * UNION. */
                 provsql_unsupported(PROVSQL_DELIBERATE, "recursion-shape", "Recursive CTEs not supported (unsupported recursion shape)");
             }
 #else

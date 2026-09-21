@@ -107,8 +107,8 @@ LINE 1: SELECT count(*) FROM leak_t;
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: Recursive CTEs not supported (unsupported recursion shape)
-DETAIL:  provsql-reason: recursion-shape; scope: deliberate
+ERROR:  ProvSQL: a recursive term of "t" holds a provenance column: "SELECT *" over a provenance-tracked relation expands to it at parse analysis, before any hook of ProvSQL, so the working table would hold two columns of that name -- the rounds' own and this one -- and the token the star asks for is not data the rounds carry
+DETAIL:  provsql-reason: recursive-term-star-provenance; scope: gap
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks provsql_rec_t_all; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
