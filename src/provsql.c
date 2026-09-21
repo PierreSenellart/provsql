@@ -14879,9 +14879,12 @@ static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
    * that does not need the derived table below. */
   if (sub->havingQual == NULL && !sub->hasAggs && sub->groupingSets == NIL &&
       sub->groupClause != NIL && sub->sortClause == NIL) {
+#if PG_VERSION_NUM >= 180000
     /* PG 18 reads the keys through a virtual entry, whose columns go back on
-     * the tables they come from once the grouping is gone. */
+     * the tables they come from once the grouping is gone; no earlier version
+     * has one, and the helper itself is compiled only there. */
     strip_group_rte_pg18(sub);
+#endif
     sub->groupClause = NIL;
     return false;
   }
