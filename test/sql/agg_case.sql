@@ -303,8 +303,69 @@ SELECT gt::text AS gt, round(expected(gt, provsql)::numeric, 6) AS e_gt,
 FROM ca_r;
 SET provsql.active = on;
 DROP TABLE ca_r;
+
+-- An arm that is itself a guarded selection: a GREATEST of a LEAST, and the
+-- other way round.  The outer guard then compares a guarded selection with a
+-- value, which the probability side expands arm by arm (CaseCmpExpander)
+-- rather than meeting a value gate it has no operation for.  Over the same
+-- four worlds: greatest(1, least(4, sum)) is 4, 3, 4, 4 -- the empty world
+-- reads the NULL sum as no value, so the LEAST is its other argument -- and
+-- E = 3.75; least(greatest(sum, 5), 6) is 5, 5, 5, 6, E = 5.25.
+CREATE TABLE ca_r AS
+  SELECT greatest(1, least(4, sum(v))) AS gl, least(greatest(sum(v), 5), 6) AS lg
+  FROM ca;
+SET provsql.active = off;
+SELECT gl::text AS gl, round(expected(gl, provsql)::numeric, 6) AS e_gl,
+       lg::text AS lg, round(expected(lg, provsql)::numeric, 6) AS e_lg
+FROM ca_r;
+SET provsql.active = on;
+DROP TABLE ca_r;
+
+-- The same comparison in a HAVING, where it used to be refused as a complex
+-- HAVING expression: greatest(sum, 2) is 2, 3, 4 and 7 over the four worlds,
+-- so it exceeds 3 in the two holding the row of 4 -- probability 1/2 -- and
+-- COALESCE onto a constant reads the same way.
+CREATE TABLE ca_h AS
+SELECT 'greatest > 3' AS q, round(probability(provenance())::numeric, 6) AS p
+  FROM (SELECT 1 AS k FROM ca GROUP BY 1 HAVING greatest(sum(v), 2) > 3) s
+UNION ALL
+SELECT 'coalesce > 3', round(probability(provenance())::numeric, 6)
+  FROM (SELECT 1 AS k FROM ca GROUP BY 1 HAVING coalesce(sum(v), 0) > 3) s
+UNION ALL
+-- The selection on the right of the comparison: the same reading.
+SELECT '3 < greatest', round(probability(provenance())::numeric, 6)
+  FROM (SELECT 1 AS k FROM ca GROUP BY 1 HAVING 3 < greatest(sum(v), 2)) s
+UNION ALL
+-- One on each side, which takes a round of the expansion per side: 2 > 5,
+-- 3 > 3, 4 > 4 and 7 > 5 over the four worlds, so only the last one, 1/4.
+SELECT 'greatest > least', round(probability(provenance())::numeric, 6)
+  FROM (SELECT 1 AS k FROM ca GROUP BY 1
+        HAVING greatest(sum(v), 2) > least(sum(v), 5)) s;
+SELECT remove_provenance('ca_h');
+SELECT * FROM ca_h ORDER BY 1;
+DROP TABLE ca_h;
 SELECT remove_provenance('ca');
 DROP TABLE ca;
+
+-- Grouped, where a world may hold no row of the group at all: the reading has
+-- to keep that world out, which the guards of the expansion do (they are 𝟘
+-- there) rather than letting a constant arm answer for an absent group.  Rows
+-- 3 and 5 in the first group, 7 in the second, each present with probability
+-- one half: greatest(1, least(4, sum)) is 3, 4 and 4 over the worlds where
+-- the first group exists, E = 11/3, and 4 over the one where the second does.
+CREATE TABLE cg(g int, v int);
+INSERT INTO cg VALUES (1,3),(1,5),(2,7);
+SELECT add_provenance('cg');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cg; END $$;
+CREATE TABLE cg_r AS
+  SELECT g, greatest(1, least(4, sum(v))) AS gl FROM cg GROUP BY g;
+SET provsql.active = off;
+SELECT g, gl::text AS gl, round(expected(gl, provsql)::numeric, 6) AS e_gl
+FROM cg_r ORDER BY g;
+SET provsql.active = on;
+DROP TABLE cg_r;
+SELECT remove_provenance('cg');
+DROP TABLE cg;
 
 -- IS [NOT] NULL of an EXPRESSION over aggregates, in HAVING: not the
 -- aggregate's own NULL-ness but what follows from it, arm by arm for a CASE

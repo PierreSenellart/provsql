@@ -420,15 +420,32 @@ NULL where one of its operands is.
 
 .. _case-over-aggregates:
 
-An argument that is itself one of these guarded expressions -- a nested
-``GREATEST``, a ``COALESCE`` inside a ``LEAST`` -- is read as a plain value
-instead, with the usual warning. So is any comparison over one, in a
-``HAVING`` or in the guard of a ``CASE`` the query writes. The reason is on
-the evaluator's side rather than the rewriter's: the guard would compare a
-guarded selection with a value, and no evaluator resolves such a comparison
-(the arms of the selection are value gates, which no semiring operation
-combines). The ``IS [NOT] NULL`` of the same expression does not compare, and
-is read. ``NULLIF`` is the same kind of reading, ``NULLIF(a, b)`` being
+An argument may itself be one of these guarded expressions -- a nested
+``GREATEST``, a ``COALESCE`` inside a ``LEAST`` -- and so may the aggregate
+side of a comparison, in a ``HAVING`` or in the guard of a ``CASE`` the query
+writes:
+
+.. code-block:: postgresql
+
+    SELECT district FROM readings GROUP BY district
+    HAVING GREATEST(sum(pm25), 2) > 3;
+
+A comparison whose operand is a guarded selection is expanded, on the
+probability side, into the comparisons of its arms:
+
+.. math::
+
+    \mathit{CASE}(g_1,v_1,\dots,g_k,v_k,d) \bowtie O \;=\;
+    \bigoplus_i \Big(\bigotimes_{j<i} \neg g_j\Big) \otimes g_i \otimes
+    (v_i \bowtie O) \;\oplus\;
+    \Big(\bigotimes_j \neg g_j\Big) \otimes (d \bowtie O)
+
+which is exact: one arm is selected in each world, so the terms are mutually
+exclusive, and each arm comparison is an ordinary one -- an aggregate against
+the other operand, which the closed-form evaluators and the possible-world
+enumeration resolve as they always have. A comparison between two constants
+is decided in the expansion itself. Without it the guard would reach the
+Boolean translation as a value gate, which no semiring operation combines. ``NULLIF`` is the same kind of reading, ``NULLIF(a, b)`` being
 ``CASE WHEN a = b THEN NULL ELSE a END``, and is tracked where the compared
 value holds no aggregate of its own:
 

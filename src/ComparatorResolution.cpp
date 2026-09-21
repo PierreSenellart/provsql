@@ -9,6 +9,7 @@
 
 #include "AggMarginalEvaluator.h"
 #include "AnalyticEvaluator.h"
+#include "CaseCmpExpander.h"
 #include "CountCmpEvaluator.h"
 #include "HybridEvaluator.h"
 #include "MinMaxCmpEvaluator.h"
@@ -46,6 +47,13 @@ std::size_t count_reachable(const GenericCircuit &gc, gate_t r)
 void resolveComparators(GenericCircuit &gc, gate_t root,
                         bool simplify, bool decompose)
 {
+  // A comparison over a guarded selection (a gate_case, what a CASE, a
+  // COALESCE, a GREATEST / LEAST over aggregates becomes) is expanded first,
+  // into the arm comparisons it stands for: everything below then sees
+  // ordinary comparisons, and the value gates of the arms never reach the
+  // Boolean translation, which has no operation for them.
+  const unsigned case_cmp = runCaseCmpExpander(gc);
+
   // Hybrid-evaluator value simplifier: constant-fold gate_arith, drop
   // identity wires, collapse PLUS over independent RVs into a closed-form
   // gate_rv.  Runs before AnalyticEvaluator so newly-bare leaves unlock the
@@ -91,10 +99,11 @@ void resolveComparators(GenericCircuit &gc, gate_t root,
   const unsigned always_true = runHavingAlwaysTrueRewriter(gc);
 
   const unsigned total =
-    analytic + count_cmp + minmax + sum + agg_marginal + always_true;
+    case_cmp + analytic + count_cmp + minmax + sum + agg_marginal + always_true;
   if (total > 0 && provsql_verbose >= 5) {
     const std::size_t gates_after = count_reachable(gc, root);
     std::vector<std::string> parts;
+    if (case_cmp > 0)     parts.push_back(std::to_string(case_cmp) + " guarded selection");
     if (analytic > 0)     parts.push_back(std::to_string(analytic) + " analytic");
     if (count_cmp > 0)    parts.push_back(std::to_string(count_cmp) + " Poisson-binomial");
     if (minmax > 0)       parts.push_back(std::to_string(minmax) + " min/max");

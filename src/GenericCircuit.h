@@ -527,6 +527,27 @@ gate_t addAnonymousArithGate(provsql_arith_op op,
 }
 
 /**
+ * @brief Allocate a fresh gate of type @p type over @p wires_.
+ *
+ * The general form of the @c addAnonymous* helpers, for a pass that
+ * builds a small expression of ordinary gates rather than one leaf:
+ * @c CaseCmpExpander builds the @c gate_plus / @c gate_times /
+ * @c gate_monus / @c gate_cmp of a guarded selection's expansion this
+ * way.  A unique synthetic UUID is minted for the same reason as
+ * @c addAnonymousInputGate; the caller sets @c infos / @c extra itself
+ * where the gate type carries them.
+ */
+gate_t addAnonymousGate(gate_type type, std::vector<gate_t> wires_) {
+  gate_t id = addGate();
+  setGateType(id, type);
+  getWires(id) = std::move(wires_);
+  std::string u = "dec-gate-" + std::to_string(static_cast<size_t>(id));
+  uuid2id[u] = id;
+  id2uuid[id] = u;
+  return id;
+}
+
+/**
  * @brief Allocate a fresh @c gate_value gate carrying the textual
  *        scalar @p text.
  *

@@ -4700,16 +4700,15 @@ static FuncExpr *having_OpExpr_to_provenance_cmp(OpExpr *opExpr, const constants
       if (swapped != NULL &&
           exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
         agg_node = swapped;
+    } else if (expr_contains_agg(node, constants)) {
+      /* A CASE over aggregates, or what becomes one (GREATEST / LEAST,
+       * COALESCE, NULLIF): the target list lowers it to an agg_case, and the
+       * comparison reads that gate rather than the value it would freeze.
+       * The comparison of a guarded selection is expanded, arm by arm, into
+       * the comparisons of its arms by the probability side's
+       * CaseCmpExpander, so what reaches an evaluator is an ordinary one. */
+      agg_node = try_lower_agg_case(node, constants);
     }
-    /* A CASE over aggregates, or what becomes one (GREATEST / LEAST,
-     * COALESCE, NULLIF), is NOT lowered here although try_lower_agg_case
-     * would: the comparison it builds compares an agg_case with a value, and
-     * no evaluator resolves that (the value gates of its arms are not a
-     * semiring operation), so the query would run and its probability fail.
-     * The refusal below says it at planning time instead.  Lowering this
-     * needs the comparison evaluators to read an agg_case operand; the
-     * IS [NOT] NULL of the same expression does not compare, and is read
-     * (agg_expr_null_gate). */
 
     if (agg_node != NULL) {
       // The aggregate side: add an explicit cast of the agg_token to UUID.
@@ -7010,23 +7009,6 @@ static CaseExpr *nullif_agg_to_case(NullIfExpr *ni, const constants_t *constants
  * reading (@c count, @c sum, @c avg, @c min, @c max, @c choose); anything else
  * is left to be read as a plain value.
  */
-/** @brief Whether @p n holds a lowered @c CASE (an @c agg_case gate).  A
- *  comparison with such an operand is not one the evaluators resolve, so what
- *  would compare it declines and the value is read as a plain one. */
-static bool agg_case_walker(Node *node, void *cx) {
-  const constants_t *constants = (const constants_t *)cx;
-  if (node == NULL)
-    return false;
-  if (IsA(node, FuncExpr) &&
-      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_AGG_CASE)
-    return true;
-  return expression_tree_walker(node, agg_case_walker, cx);
-}
-
-static bool agg_expr_has_case(Node *n, const constants_t *constants) {
-  return agg_case_walker(n, (void *)constants);
-}
-
 /** @brief @p n with the casts around an @c agg_token peeled off, or @p n
  *  itself where no @c agg_token is under them (a constant arm keeps the
  *  coercions the query gave it). */
@@ -7053,15 +7035,11 @@ static CaseExpr *minmax_agg_to_case(MinMaxExpr *mm, const constants_t *constants
 
     if (arg == NULL || exprType(arg) != constants->OID_TYPE_AGG_TOKEN)
       continue;   /* a plain arm: the CASE lifts it into a value gate */
-    /* An arm that is itself a lowered CASE -- a nested GREATEST / LEAST, a
-     * COALESCE, a NULLIF -- would give the comparison guard an agg_case
-     * operand, which no evaluator resolves: the value would be carried and
-     * then unreadable, so it is read as a plain one instead, as before.  What
-     * the guards need is an aggregate or arithmetic over aggregates, which
-     * they compare as they do in a HAVING. */
-    if (agg_expr_has_case(arg, constants))
-      return NULL;
-    /* Its NULL-ness must have a reading, the CASE testing for it; building the
+    /* An arm may be an aggregate, arithmetic over aggregates, or itself a
+     * lowered CASE (a nested GREATEST / LEAST, a COALESCE, a NULLIF): the
+     * guard comparing the last of those is expanded arm by arm on the
+     * probability side (CaseCmpExpander), so it is read like the others.
+     * Its NULL-ness must have a reading, the CASE testing for it; building the
      * gate here and dropping it is how we ask, the guards being built again
      * from the CASE itself. */
     if (agg_expr_null_gate(arg, constants, true) == NULL)

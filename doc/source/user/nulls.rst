@@ -93,8 +93,8 @@ that world is, and arithmetic over aggregates is strict, NULL where one
 of its operands is. So ``HAVING GREATEST(sum(b), min(b)) IS NULL``
 holds in the worlds where the group has rows but none with a value, and
 ``HAVING COALESCE(sum(b), 0) IS NULL`` in none. A comparison over such
-an expression -- ``HAVING GREATEST(sum(b), 2) > 5`` -- is a different
-matter and is still refused: see
+an expression -- ``HAVING GREATEST(sum(b), 2) > 5`` -- is read as well,
+by a different route: see
 :ref:`what a guarded selection carries <case-over-aggregates>`.
 
 **Outer joins.** A LEFT/RIGHT/FULL JOIN between tracked arms is

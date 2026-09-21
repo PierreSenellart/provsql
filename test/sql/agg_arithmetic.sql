@@ -78,14 +78,15 @@ SELECT remove_provenance('agg_arith_greatest');
 SELECT * FROM agg_arith_greatest ORDER BY city;
 DROP TABLE agg_arith_greatest;
 
--- A GREATEST nested in another (or in a LEAST) is not carried: the inner one
--- becomes an agg_case, and the guard the outer one needs would compare that
--- guarded selection with a value, which no evaluator resolves -- so the outer
--- MinMaxExpr reads its agg_token as a plain value instead, and it must be CAST
--- to read it, the outer node's own operator being one on numbers.  Regression
--- for a value made of the token's bytes read as a numeric (a 66 KB digit
--- string, or "compressed lz4 data is corrupt" under detoasting), which is what
--- an uncast agg_token argument gave.
+-- A GREATEST nested in another (or in a LEAST): the inner one becomes an
+-- agg_case, which the outer MinMaxExpr reads as any other agg_token argument
+-- -- and it must be CAST to read it, the outer node's own operator being one
+-- on numbers.  Regression for a value made of the token's bytes read as a
+-- numeric (a 66 KB digit string, or "compressed lz4 data is corrupt" under
+-- detoasting), which is what an uncast agg_token argument gave.  Both values
+-- here are the same in every world (the overflow bounds swallow the
+-- aggregate), so this checks the reading of the token and not the tracking:
+-- agg_case has the nested selections whose value varies.
 CREATE TABLE agg_arith_nested AS
   SELECT GREATEST(+9223372036854775807,
                   LEAST(-9223372036854775808, sum(id::numeric * id))) AS g,

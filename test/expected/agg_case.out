@@ -133,6 +133,30 @@ WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 gt|e_gt|ls|e_ls
 14|10.250000|9|8.000000
 (1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+gl|e_gl|lg|e_lg
+4|3.750000|6|5.250000
+(1 row)
+remove_provenance
+
+(1 row)
+q|p
+3 < greatest|0.500000
+coalesce > 3|0.500000
+greatest > 3|0.500000
+greatest > least|0.250000
+(4 rows)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+g|gl|e_gl
+1|4|3.666667
+2|4|4.000000
+(2 rows)
 remove_provenance
 
 (1 row)
