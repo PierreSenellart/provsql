@@ -45,6 +45,28 @@ groups_kept
 groups|provsql
 2 (*)|d265daa9-f206-561d-845c-2a85fa0fa72c
 (1 row)
+WARNING:  ProvSQL: an aggregate of an aggregate result of another kind (an avg of a count, a max of a sum) reads the inner value as plain SQL, on the data as it is: the rows it aggregates carry their provenance, the value they carry is the one of the database as it is, although the statement also tracks l_nested; cast the inner aggregate explicitly (::numeric, ...) to say so
+DETAIL:  provsql-reason: aggregate-over-aggregate; scope: gap
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+sum_times|sum_of_times|avg_times|max_plus|min_minus
+8000.0|8000.0|8.0000000000000000|5|3
+(1 row)
+sum_times|sum_of_times|avg_times|max_plus|min_minus
+8000.0|8000.0|8.0000000000000000|5|3
+(1 row)
+remove_provenance
+
+(1 row)
+e_times|e_sum
+4015.686275|4.015686
+(1 row)
 remove_provenance
 
 (1 row)

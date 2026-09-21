@@ -9557,6 +9557,14 @@ static Node *try_push_into_aggref(OpExpr *op, const constants_t *constants) {
   /* Keep the aggregate's argument type, so its function/return type stay valid. */
   if (exprType(new_arg) != exprType(old_arg))
     return NULL;
+  /* An agg_token argument hides the type of the value it carries: the token of
+   * an aggregate over bigints times a numeric constant is still an agg_token,
+   * so the check above passes while the per-row value becomes numeric and the
+   * aggregate PostgreSQL resolved still reads bigints.  Such arithmetic stays
+   * outside the aggregate, where the gate_arith carries it over the gate of
+   * the aggregate itself. */
+  if (exprType(old_arg) == constants->OID_TYPE_AGG_TOKEN)
+    return NULL;
 
   newar = (Aggref *)copyObject(ar);
   ((TargetEntry *)linitial(newar->args))->expr = (Expr *)new_arg;
@@ -18644,6 +18652,30 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
         exprType((Node *)ce->defresult) == agg)
       ce->defresult = (Expr *)cast_agg_token_node((Node *)ce->defresult,
                                                   ce->casetype, ctx);
+    return node;
+  }
+  if (IsA(node, Aggref)) {
+    /* sum(cnt * 100) over the aggregate of a subquery: the argument is an
+     * agg_token expression, and the aggregate PostgreSQL resolved reads a
+     * value of its own type, so left uncast it reads the token's bytes -- a
+     * number that is not the value, or a varlena that is not one at all.  What
+     * an aggregate of an aggregate reads is the value, as everywhere else.
+     * Only a plain aggregate: the formal arguments of an ordered-set one start
+     * after its direct arguments, which this indexing does not follow.
+     * provsql's own token aggregates are left alone by the cast itself, their
+     * formal argument being an agg_token. */
+    Aggref *ar = (Aggref *)node;
+    if (ar->aggkind == AGGKIND_NORMAL && ar->args != NIL) {
+      List *plain = NIL;
+      ListCell *lc;
+      int i;
+      foreach (lc, ar->args)
+        plain = lappend(plain, ((TargetEntry *)lfirst(lc))->expr);
+      cast_agg_token_func_args(plain, ar->aggfnoid, ctx);
+      i = 0;
+      foreach (lc, ar->args)
+        ((TargetEntry *)lfirst(lc))->expr = (Expr *)list_nth(plain, i++);
+    }
     return node;
   }
   if (IsA(node, WindowFunc)) {

@@ -90,6 +90,45 @@ DROP TABLE result_e;
 SELECT count(*) AS groups
   FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
 
+-- Case F: arithmetic over such a re-aggregation.  The value the outer
+-- aggregate reads is the inner aggregate's, and the constant arithmetic around
+-- it must read that value too: left as it is, the token itself would be read as
+-- a number of the aggregate's own type, which is not one (the value was in the
+-- billions, it changed from one execution to the next, and a sum of the product
+-- read a varlena that is not one at all -- "compressed pglz data is corrupt").
+-- The constant stays outside the aggregate here, where the gate_arith carries
+-- it over the aggregate's gate: pushing it inside would make the per-row value
+-- numeric while the aggregate PostgreSQL resolved still reads bigints.  Every
+-- column is compared with what plain SQL answers on the data as it is.
+CREATE TABLE result_f AS
+  SELECT sum(c) * 1000.0 AS sum_times, sum(c * 1000.0) AS sum_of_times,
+         avg(c) * 2 AS avg_times, max(c) + 1 AS max_plus, min(c) - 1 AS min_minus
+    FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+SELECT remove_provenance('result_f');
+SELECT sum_times::text, sum_of_times::text, avg_times::text, max_plus::text,
+       min_minus::text FROM result_f;
+DROP TABLE result_f;
+-- The same on the data as it is, which the values above must equal.
+SET provsql.active = off;
+SELECT sum(c) * 1000.0 AS sum_times, sum(c * 1000.0) AS sum_of_times,
+       avg(c) * 2 AS avg_times, max(c) + 1 AS max_plus, min(c) - 1 AS min_minus
+  FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+RESET provsql.active;
+-- Read in every world, not only in the one the data gives: the eight rows are
+-- each present with probability one half, so the sum of the two inner counts is
+-- the number of them that are there, of expectation 4.  expected() conditions on
+-- the value being defined, and it is undefined only in the single world where no
+-- row at all is there, so what it gives is 4 * 256/255 = 4.015686.  The scaled
+-- column has to be exactly a thousand times that, which is the invariant the
+-- arithmetic must keep: 4015.686275.
+CREATE TABLE result_f2 AS
+  SELECT round(expected(sum(c) * 1000.0)::numeric, 6) AS e_times,
+         round(expected(sum(c))::numeric, 6) AS e_sum
+    FROM (SELECT id, count(*) AS c FROM l_nested GROUP BY id) t;
+SELECT remove_provenance('result_f2');
+SELECT * FROM result_f2;
+DROP TABLE result_f2;
+
 SELECT remove_provenance('l_nested');
 SELECT remove_provenance('r_nested');
 DROP TABLE l_nested;
