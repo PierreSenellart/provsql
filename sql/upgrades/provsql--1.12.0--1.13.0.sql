@@ -4563,4 +4563,81 @@ BEGIN
 END
 $$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messages = warning;
 
+
+-- ----------------------------------------------------------------------
+-- 9. add_provenance names the views that read the table and were defined
+--    before the call: such a view kept the columns the table had then, so
+--    it carries no provenance column and a query over it is answered as
+--    plain SQL.  This is the PostgreSQL 14+ body, which is the one in
+--    force on any server this upgrade runs on.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION add_provenance(_tbl regclass)
+  RETURNS void AS
+$$
+BEGIN
+  -- Idempotence: a second add_provenance on an already-tracked table is
+  -- a no-op with a NOTICE, so setup scripts and notebook cells can be
+  -- re-run freely.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = _tbl AND attname = 'provsql' AND NOT attisdropped
+  ) THEN
+    RAISE NOTICE 'table % already has provenance tracking', _tbl;
+    RETURN;
+  END IF;
+  -- See the common-version body for the rationale of dropping the
+  -- column DEFAULT and UNIQUE in favour of provenance_guard + a
+  -- plain index.
+  EXECUTE format('ALTER TABLE %s ADD COLUMN provsql UUID', _tbl);
+  EXECUTE format(
+    'UPDATE %s SET provsql = public.uuid_generate_v4() WHERE provsql IS NULL',
+    _tbl);
+  EXECUTE format('CREATE INDEX ON %s(provsql)', _tbl);
+  EXECUTE format(
+    'CREATE TRIGGER provenance_guard BEFORE INSERT OR UPDATE OF provsql '
+    'ON %s FOR EACH ROW EXECUTE FUNCTION provsql.provenance_guard()',
+    _tbl);
+
+  EXECUTE format('CREATE TRIGGER insert_statement AFTER INSERT ON %s REFERENCING NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE FUNCTION provsql.insert_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER delete_statement AFTER DELETE ON %s REFERENCING OLD TABLE AS OLD_TABLE FOR EACH STATEMENT EXECUTE FUNCTION provsql.delete_statement_trigger()', _tbl);
+  EXECUTE format('CREATE TRIGGER update_statement AFTER UPDATE ON %s REFERENCING OLD TABLE AS OLD_TABLE NEW TABLE AS NEW_TABLE FOR EACH STATEMENT EXECUTE FUNCTION provsql.update_statement_trigger()', _tbl);
+
+  PERFORM provsql.set_table_info(_tbl::oid, 'tid');
+  PERFORM provsql.set_ancestors(_tbl::oid, ARRAY[_tbl::oid]);
+  -- A view defined before this call selected the columns the table had then,
+  -- so it has no provsql column and never will: PostgreSQL resolved its
+  -- "SELECT *" at definition time.  A query over such a view is answered
+  -- without provenance and without a warning -- the rewriting sees a relation
+  -- that carries none -- so the one place where saying it is useful is here,
+  -- where recreating the view is the remedy.
+  DECLARE
+    stale text;
+  BEGIN
+    SELECT string_agg(DISTINCT v.rel::regclass::text, ', ') INTO stale
+      FROM (SELECT r.ev_class AS rel
+              FROM pg_catalog.pg_depend d
+              JOIN pg_catalog.pg_rewrite r ON r.oid = d.objid
+             WHERE d.classid = 'pg_catalog.pg_rewrite'::regclass
+               AND d.refclassid = 'pg_catalog.pg_class'::regclass
+               AND d.refobjid = _tbl
+               AND r.ev_class <> _tbl) AS v
+     WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                        WHERE a.attrelid = v.rel AND a.attname = 'provsql'
+                          AND NOT a.attisdropped);
+    IF stale IS NOT NULL THEN
+      RAISE WARNING 'ProvSQL: % is read by views defined before it was '
+                    'tracked, which have no provenance column of their own, '
+                    'so a query over one of them is answered as plain SQL, '
+                    'not tracked: %',
+                    _tbl, stale
+        USING HINT = 'recreate the view (CREATE OR REPLACE VIEW ... or DROP and '
+                     'CREATE) so that its definition reads the tracked table',
+              DETAIL = 'provsql-reason: view-defined-before-tracking; '
+                       'scope: gap';
+    END IF;
+  END;
+END
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 SELECT reset_constants_cache();

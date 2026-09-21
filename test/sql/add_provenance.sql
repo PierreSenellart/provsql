@@ -53,3 +53,23 @@ SELECT count(*) FROM personnel_name;
 CREATE TABLE untracked (x int);
 SELECT remove_provenance('untracked');
 DROP TABLE untracked;
+
+-- A view defined before add_provenance keeps the columns the table had then,
+-- so it carries no provsql column and a query over it is answered as plain
+-- SQL, silently: add_provenance names such views, since recreating them is the
+-- remedy and this is where it is actionable.  A view of another table, and one
+-- created after the call, are not named.
+CREATE TABLE stale_src (x int);
+CREATE VIEW stale_v AS SELECT x FROM stale_src;
+CREATE VIEW stale_v2 AS SELECT count(*) AS n FROM stale_src;
+CREATE TABLE other_src (y int);
+CREATE VIEW other_v AS SELECT y FROM other_src;
+SELECT add_provenance('stale_src');
+CREATE VIEW fresh_v AS SELECT x FROM stale_src;
+-- Said once: a second call is the idempotent no-op and reports nothing more.
+SELECT add_provenance('stale_src');
+-- A table no view reads at all says nothing.
+CREATE TABLE unread_src (z int);
+SELECT add_provenance('unread_src');
+DROP VIEW fresh_v, stale_v2, stale_v, other_v;
+DROP TABLE stale_src, other_src, unread_src;

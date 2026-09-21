@@ -33,3 +33,16 @@ NOTICE:  table untracked does not have provenance tracking
 remove_provenance
 
 (1 row)
+WARNING:  ProvSQL: stale_src is read by views defined before it was tracked, which have no provenance column of their own, so a query over one of them is answered as plain SQL, not tracked: stale_v, stale_v2
+DETAIL:  provsql-reason: view-defined-before-tracking; scope: gap
+HINT:  recreate the view (CREATE OR REPLACE VIEW ... or DROP and CREATE) so that its definition reads the tracked table
+add_provenance
+
+(1 row)
+NOTICE:  table stale_src already has provenance tracking
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
