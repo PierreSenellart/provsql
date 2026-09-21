@@ -64,6 +64,11 @@ SELECT * FROM if_r ORDER BY id;
 DROP TABLE if_r, if_m;
 SET provsql.active = off;
 SELECT count(*) AS n FROM plain(NULL::if_b);
+-- The whole row of such a source is its columns, without the place the
+-- provenance column holds in the relation: that place is kept in the entry so
+-- the attribute numbers still match, and it would otherwise show as a
+-- trailing, always empty field.
+SELECT b FROM plain(NULL::if_b) b ORDER BY 1;
 RESET provsql.active;
 
 -- An aggregate result read as a plain value by a function is evaluated as

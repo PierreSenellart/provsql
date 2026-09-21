@@ -12053,6 +12053,55 @@ static void hide_plain_provsql_columns(Query *q) {
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     bool hide = false;
+    /* The whole row of such a source: the column stands in the entry so that
+     * the attribute numbers still match the relation's, but it is no part of
+     * the row the query reads -- without this it shows as a trailing, always
+     * empty field. */
+    if (!te->resjunk && IsA(te->expr, Var) &&
+        ((Var *)te->expr)->varlevelsup == 0 &&
+        ((Var *)te->expr)->varattno == 0) {
+      Var *v = (Var *)te->expr;
+      RangeTblEntry *r = rt_fetch(v->varno, q->rtable);
+      if (r->rtekind == RTE_SUBQUERY && is_inert_subselect(r->subquery)) {
+        List *args = NIL, *names = NIL;
+        ListCell *lc2;
+        bool found = false;
+        foreach (lc2, r->subquery->targetList) {
+          TargetEntry *ste = (TargetEntry *)lfirst(lc2);
+          if (ste->resjunk)
+            continue;
+          if (ste->resname != NULL &&
+              strcmp(ste->resname, "plain_provsql") == 0) {
+            found = true;
+            continue;
+          }
+          /* The placeholder the rewrite puts where a DROPPED column was, to
+           * keep the attribute numbers: PostgreSQL leaves a dropped column
+           * out of a whole-row value, and so does this. */
+          if (ste->resname != NULL &&
+              strncmp(ste->resname, "dropped_", 8) == 0 &&
+              IsA(ste->expr, Const) && ((Const *)ste->expr)->constisnull &&
+              ((Const *)ste->expr)->consttype == INT4OID)
+            continue;
+          args = lappend(args, makeVar(v->varno, ste->resno,
+                                       exprType((Node *)ste->expr),
+                                       exprTypmod((Node *)ste->expr),
+                                       exprCollation((Node *)ste->expr), 0));
+          names = lappend(names, makeString(pstrdup(ste->resname != NULL
+                                                      ? ste->resname
+                                                      : "?column?")));
+        }
+        if (found && args != NIL) {
+          RowExpr *row = makeNode(RowExpr);
+          row->args = args;
+          row->row_typeid = RECORDOID;
+          row->row_format = COERCE_IMPLICIT_CAST;
+          row->colnames = names;
+          row->location = -1;
+          te->expr = (Expr *)row;
+        }
+      }
+    }
     if (!te->resjunk && IsA(te->expr, Var) &&
         ((Var *)te->expr)->varlevelsup == 0 && ((Var *)te->expr)->varattno > 0) {
       Var *v = (Var *)te->expr;
@@ -23261,6 +23310,21 @@ static Var *tracked_wholerow(wholerow_ctx *ctx, Node *n) {
       rte->subquery->commandType == CMD_SELECT &&
       has_provenance(ctx->constants, rte->subquery))
     return v;
+  /* A plain(NULL::t) source: the entry the rewriting made of it keeps a
+   * column where the relation has its provsql, as plain_provsql, so that the
+   * attribute numbers still match the relation's.  It is not part of the row
+   * either -- a whole-row value would otherwise carry an always-NULL field
+   * that the query never asked for. */
+  if (rte->rtekind == RTE_SUBQUERY && rte->subquery != NULL &&
+      rte->subquery->commandType == CMD_SELECT) {
+    ListCell *lc;
+    foreach (lc, rte->subquery->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      if (!te->resjunk && te->resname != NULL &&
+          strcmp(te->resname, "plain_provsql") == 0)
+        return v;
+    }
+  }
   return NULL;
 }
 
@@ -23304,7 +23368,9 @@ static Node *row_without_provsql(wholerow_ctx *ctx, Var *v) {
     foreach (lc, rte->subquery->targetList) {
       TargetEntry *te = (TargetEntry *)lfirst(lc);
       if (te->resjunk ||
-          (te->resname != NULL && strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0))
+          (te->resname != NULL &&
+           (strcmp(te->resname, PROVSQL_COLUMN_NAME) == 0 ||
+            strcmp(te->resname, "plain_provsql") == 0)))
         continue;
       args = lappend(args, makeVar(v->varno, te->resno,
                                    exprType((Node *)te->expr),
