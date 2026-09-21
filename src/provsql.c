@@ -12134,6 +12134,8 @@ static Query *freeze_statement = NULL;
 typedef struct freeze_rels_ctx {
   const constants_t *constants;
   Node *skip;        ///< A node not to enter (the frozen part)
+  bool skip_by_shape;   ///< @c skip is not a node of the statement: match its shape
+  bool shape_skipped;   ///< one such match has been skipped already
   List *relids;      ///< The base relations read (OIDs)
   List *names;       ///< The relations as read, for messages (OIDs)
   bool unknown;      ///< A tracked relation with no recorded base relations
@@ -12143,7 +12145,23 @@ typedef struct freeze_rels_ctx {
  *  tree, but in @c ctx->skip. */
 static bool freeze_relations_walker(Node *node, void *cx) {
   freeze_rels_ctx *ctx = (freeze_rels_ctx *)cx;
-  if (node == NULL || node == ctx->skip)
+  if (node == NULL)
+    return false;
+  /* The frozen part is skipped where the rest of the statement is read.  By
+   * address, and by shape ONLY where no address of the statement is the frozen
+   * node: a freezing marked on a COPY of the query -- the recursion's bound,
+   * marked on the copy that is deparsed for the rounds -- hands a node the
+   * statement holds an equal of but not the same, and counting that equal
+   * would report the statement as tracking what the frozen part alone reads.
+   * Where the node IS the statement's own, shape is not enough: a query can
+   * hold two identical subqueries, one of them tracked (two EXISTS of the same
+   * body, the second frozen), and skipping both would hide a relation that is
+   * genuinely read on either side. */
+  if (ctx->skip != NULL &&
+      (node == ctx->skip ||
+       (ctx->skip_by_shape && !ctx->shape_skipped &&
+        nodeTag(node) == nodeTag(ctx->skip) && equal(node, ctx->skip) &&
+        (ctx->shape_skipped = true))))
     return false;
   if (IsA(node, Query)) {
     Query *q = (Query *)node;
@@ -12201,6 +12219,23 @@ static bool unmarked_window_walker(Node *node, void *cx) {
  * @param msg   What is frozen, the message
  * @param hint  How to say it is meant, or @c NULL for the plain() marker
  */
+/** @brief Context for @c holds_node_walker. */
+typedef struct { Node *target; bool found; } holds_node_ctx;
+
+/** @brief Walker: is @p target one of the nodes of the tree, by address? */
+static bool holds_node_walker(Node *node, void *cx) {
+  holds_node_ctx *c = (holds_node_ctx *)cx;
+  if (node == NULL || c->found)
+    return false;
+  if (node == c->target) {
+    c->found = true;
+    return true;
+  }
+  if (IsA(node, Query))
+    return query_tree_walker((Query *)node, holds_node_walker, cx, 0);
+  return expression_tree_walker(node, holds_node_walker, cx);
+}
+
 static void report_freeze(const constants_t *constants, Node *frozen,
                           const char *scope, const char *tag, const char *msg,
                           const char *hint) {
@@ -12220,6 +12255,15 @@ static void report_freeze(const constants_t *constants, Node *frozen,
   rest.unknown = inside.unknown = false;
   rest.skip = frozen;
   inside.skip = NULL;
+  rest.skip_by_shape = inside.skip_by_shape = false;
+  rest.shape_skipped = inside.shape_skipped = false;
+  if (frozen != NULL) {
+    holds_node_ctx h;
+    h.target = frozen;
+    h.found = false;
+    holds_node_walker((Node *)freeze_statement, &h);
+    rest.skip_by_shape = !h.found;
+  }
   freeze_relations_walker((Node *)freeze_statement, &rest);
   if (frozen == NULL) {
     if (rest.names != NIL)

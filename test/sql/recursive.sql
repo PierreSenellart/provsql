@@ -340,4 +340,23 @@ SET provsql.active = off;
 SELECT n, round(probability(provsql)::numeric, 6) AS p FROM bag_r ORDER BY n;
 SET provsql.active = on;
 DROP TABLE bag_r;
+-- The freezing of the bound is COHERENT: the relation the bound reads is read
+-- nowhere else in the statement, so what the answer gives is the provenance of
+-- the query with that relation untracked, and provsql.implicit_freeze = 'error'
+-- leaves it a warning rather than refusing the query.  The bound is marked on
+-- the copy of the body that is deparsed for the rounds, so the node reported is
+-- not one of the statement's own; the coherence test recognises it by its shape
+-- there, and only there (a statement that holds two identical subqueries, one
+-- frozen and one tracked, still reports the relation as read both ways).
+SET provsql.implicit_freeze = 'error';
+CREATE TABLE bag_r AS
+  WITH RECURSIVE c(n) AS (
+      SELECT v FROM bag_seed
+    UNION ALL
+      SELECT n + 1 FROM c WHERE n < (SELECT n FROM bag_param))
+  SELECT n FROM c;
+RESET provsql.implicit_freeze;
+SELECT remove_provenance('bag_r');
+SELECT count(*) AS rows_under_error FROM bag_r;
+DROP TABLE bag_r;
 DROP TABLE bag_e, bag_seed, bag_param;

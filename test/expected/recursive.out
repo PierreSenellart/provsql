@@ -137,10 +137,18 @@ add_provenance
 v|p
 1|0.250000
 (1 row)
-WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end, although the statement also tracks bag_param; mark it plain() to say so
+WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end; mark it plain() to say so
 DETAIL:  provsql-reason: recursion-bound-read-as-plain-value; scope: gap
 n|p
 1|0.500000
 2|0.500000
 3|0.500000
 (3 rows)
+WARNING:  ProvSQL: a bound of a recursive term reading a provenance-tracked relation is evaluated as plain SQL, on the data as it is: an uncertain bound leaves no round of the recursion empty, so the rounds would not end; mark it plain() to say so
+DETAIL:  provsql-reason: recursion-bound-read-as-plain-value; scope: gap
+remove_provenance
+
+(1 row)
+rows_under_error
+3
+(1 row)
