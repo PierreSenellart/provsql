@@ -5293,6 +5293,15 @@ static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
       return uuid_nary_gate(constants->OID_FUNCTION_PROVENANCE_PLUS, terms,
                             constants);
     }
+    /* A function ProvSQL carries over an agg_token -- round, ln, sqrt, and so
+     * the sqrt a stddev's rewrite puts over the CASE of its variance -- is
+     * strict, so its NULL-ness IS its argument's and could be read here.  It
+     * is not, on purpose: reading it would let a GREATEST carry such an arm,
+     * and the moment of the gate that results is wrong -- E[greatest(var_pop
+     * x, 0)] comes out 0 where the four worlds give 0.0625, with or without
+     * Monte Carlo samples, while E[var_pop x] on its own is exact.  The gap is
+     * in the moment of a CASE nested in a CASE of that shape, not in the
+     * reading, so the arm stays a plain value until that is fixed. */
     return NULL;
   }
 
