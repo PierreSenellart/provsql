@@ -185,6 +185,21 @@ g|p
 1|0.750000
 2|0.375000
 (2 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: row_number() / LIMIT / DISTINCT ON is tracked as rank() (WITH TIES), which it differs from when rows tie on the ORDER BY
+remove_provenance
+
+(1 row)
+k|p
+1|0.250000
+1|0.500000
+2|0.375000
+(3 rows)
+remove_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)

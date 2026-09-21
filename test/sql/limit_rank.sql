@@ -277,6 +277,31 @@ CREATE TABLE lr_top AS
 SELECT remove_provenance('lr_top');
 SELECT g, p FROM lr_top ORDER BY g;
 DROP TABLE lr_top;
+-- A sort key that reads an aggregate of a DERIVED TABLE while the block that
+-- truncates groups as well: on PostgreSQL 18 such a key is a Var of the
+-- virtual RTE_GROUP entry holding the grouping expressions, not of the derived
+-- table, so following it is what tells this apart from a cut of the actual
+-- result (prevalence-ac measured this shape refused on the corpus, where it is
+-- "GROUP BY b.badgecount ORDER BY b.badgecount DESC LIMIT 10" over a derived
+-- table that counts).  Two rows of the first key and one of the second, each
+-- present with probability one half, top-1 by the derived count: the first key
+-- holds it in every world where it has a row, and the group-by on that count
+-- explodes it into one row per value the count takes -- 1/4 for the two rows
+-- and 1/2 for one of them, 3/4 together -- while the second holds it in the
+-- worlds where its row is there and the first has at most one, 3/8.
+CREATE TABLE lr_b(k int, v int);
+INSERT INTO lr_b VALUES (1,1),(1,2),(2,3);
+SELECT add_provenance('lr_b');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM lr_b; END $$;
+CREATE TABLE lr_top AS
+  SELECT b.k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT k, count(*) AS c FROM lr_b GROUP BY k) b
+  GROUP BY b.k, b.c ORDER BY b.c DESC LIMIT 1;
+SELECT remove_provenance('lr_top');
+SELECT k, p FROM lr_top ORDER BY k, p;
+DROP TABLE lr_top;
+SELECT remove_provenance('lr_b');
+DROP TABLE lr_b;
 SELECT remove_provenance('lr_tie');
 DROP TABLE lr_tie;
 SELECT remove_provenance('lr_v');

@@ -26835,6 +26835,21 @@ static bool reads_agg_value_walker(Node *node, void *cx) {
         v->varno > list_length(c->q->rtable))
       return false;
     r = (RangeTblEntry *)list_nth(c->q->rtable, v->varno - 1);
+#if PG_VERSION_NUM >= 180000
+    /* PG 18 reads a grouping key through a virtual RTE_GROUP entry, so the Var
+     * of a key that reads an aggregate of a derived table -- "GROUP BY
+     * b.badgecount ORDER BY b.badgecount DESC LIMIT 10" over a derived table
+     * that counts -- addresses that entry rather than the table.  Follow it to
+     * the expression grouped by, as @c group_key_var does where it needs the
+     * column: without this the top-k of such a key is read as a cut of the
+     * actual result on PG 18 and as the rank it is everywhere else. */
+    if (r->rtekind == RTE_GROUP && v->varattno <= list_length(r->groupexprs)) {
+      Node *keyexpr = (Node *)list_nth(r->groupexprs, v->varattno - 1);
+      if (keyexpr != NULL)
+        reads_agg_value_walker(keyexpr, cx);
+      return c->found;
+    }
+#endif
     if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL &&
         rte_column_is_aggregate(c->constants, r, v->varattno))
       c->found = true;
