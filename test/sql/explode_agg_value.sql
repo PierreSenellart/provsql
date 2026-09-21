@@ -265,6 +265,27 @@ SELECT remove_provenance('eav_p');
 SELECT * FROM eav_p ORDER BY total;
 DROP TABLE eav_p;
 
+-- An EXPRESSION over the aggregate's value is refused, rather than grouped by
+-- the token each row carries -- which is what PostgreSQL would do with it, one
+-- group per row, silently: floor(ln(cnt)) takes values of its own, none of them
+-- among the contributions the aggregate reads, so there is nothing to
+-- enumerate.  Found by difftest on sede/c83bcfbb51, where three rows that SQL
+-- puts in one group came back as three groups of one.  Both forms refuse, the
+-- bare one and the one whose cast sits inside the expression (which read the
+-- token's bytes as a varlena: "compressed lz4 data is corrupt").
+SELECT floor(ln(total)) AS k, count(*) AS n
+  FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s GROUP BY 1;
+SELECT floor(ln(total::numeric)) AS k, count(*) AS n
+  FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s GROUP BY 1;
+-- Reading such an expression WITHOUT grouping by it is untouched: its value is
+-- the one the data gives, frozen and warned as before.
+CREATE TABLE eav_expr AS
+  SELECT floor(ln(total)) AS k
+    FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s;
+SELECT remove_provenance('eav_expr');
+SELECT k FROM eav_expr ORDER BY k;
+DROP TABLE eav_expr;
+
 DROP TABLE eav;
 
 -- The TRUTH of a comparison of an aggregate against a constant is one truth

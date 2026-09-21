@@ -19790,6 +19790,84 @@ static bool agg_column_explodable(const constants_t *constants,
  * @param value_type  Out: the type of the values of that aggregate.
  * @return  True iff such a column was found.
  */
+/** @brief Context for @c reads_subquery_aggregate_walker. */
+typedef struct {
+  const constants_t *constants;
+  Query *q;
+  bool found;
+} subagg_read_ctx;
+
+/** @brief Walker: a @c Var of this level reading a column that is an
+ *  aggregate of a @c FROM subquery. */
+static bool reads_subquery_aggregate_walker(Node *node, void *cx) {
+  subagg_read_ctx *c = (subagg_read_ctx *)cx;
+
+  if (node == NULL || c->found)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    RangeTblEntry *r;
+    if (v->varlevelsup != 0 || v->varno == 0 || v->varattno <= 0 ||
+        v->varno > list_length(c->q->rtable))
+      return false;
+    r = (RangeTblEntry *)list_nth(c->q->rtable, v->varno - 1);
+    if (r->rtekind == RTE_SUBQUERY && r->subquery != NULL &&
+        has_provenance(c->constants, r->subquery) &&
+        rte_column_is_aggregate(c->constants, r, v->varattno))
+      c->found = true;
+    return c->found;
+  }
+  return expression_tree_walker(node, reads_subquery_aggregate_walker, cx);
+}
+
+/**
+ * @brief Refuse a @c GROUP @c BY / @c DISTINCT key that is an expression over
+ *        the value of a subquery's aggregate.
+ *
+ * The explosion (@c agg_value_read_as_data) reads the values of an aggregate
+ * COLUMN, and of a cast of one; an expression over it -- @c floor(ln(cnt)),
+ * @c cnt * 2 -- takes values of its own, which are not among the
+ * contributions the aggregate reads, so there is nothing to enumerate. Left
+ * alone the key keeps its @c agg_token once the aggregate is lowered, and
+ * PostgreSQL then groups by the token: one group per row, silently, where the
+ * answer has one group for all the rows whose value agrees. Refused rather
+ * than answered wrongly; the aggregate itself, or a cast of it, can be
+ * grouped.
+ */
+static void refuse_agg_token_group_key(const constants_t *constants, Query *q) {
+  ListCell *lc;
+
+  if (q->commandType != CMD_SELECT ||
+      (q->groupClause == NIL && q->distinctClause == NIL))
+    return;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+    subagg_read_ctx c;
+
+    if (te->ressortgroupref == 0 ||
+        !sortgroupref_is_key(q, te->ressortgroupref))
+      continue;
+    /* A key that IS the aggregate's column, or a cast of it, is the
+     * explosion's business and it has already run. */
+    if (group_key_var(q, te) != NULL)
+      continue;
+    c.constants = constants;
+    c.q = q;
+    c.found = false;
+    reads_subquery_aggregate_walker((Node *)te->expr, &c);
+    if (!c.found)
+      continue;
+    provsql_unsupported(PROVSQL_GAP, "group-by-aggregate-expression",
+                        "grouping by an expression over the value of an "
+                        "aggregate is not supported: the values such an "
+                        "expression takes over the possible worlds are not "
+                        "among the ones the aggregate reads, so its rows "
+                        "cannot be exploded into one per value; group by the "
+                        "aggregate itself, which is exploded, or compute the "
+                        "expression in the subquery that aggregates");
+  }
+}
+
 static bool agg_value_read_as_data(const constants_t *constants, Query *q,
                                    Index *rteid, AttrNumber *attno,
                                    Oid *value_type) {
@@ -24720,6 +24798,15 @@ static Query *process_query(const constants_t *constants, Query *q,
                                top_level, in_boolean_rewrite, inv_ctx);
       }
     }
+
+    /* A group key that is an EXPRESSION over an aggregate, which the
+     * explosion above does not reach: refuse rather than group the rows by
+     * the token each carries.  PostgreSQL groups by the key's value, and the
+     * value of an agg_token is the token itself, one per row, so every row
+     * would form a group of its own and the answer would be silently wrong
+     * (a count of the rows of each group would be 1 everywhere). */
+    if (provsql_active && constants->ok)
+      refuse_agg_token_group_key(constants, q);
 
     /* The truth of a comparison of an aggregate against a constant, read in
      * the select list, is one truth per world too: explode the rows into the
