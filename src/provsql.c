@@ -10010,6 +10010,24 @@ static Node *window_aggregation_mutator(Node *node, void *ctx) {
  * @return @c false if some window function was left untracked, its value an
  *         opaque scalar.
  */
+/** @brief Walker: a window function that no @c plain() marker covers.
+ *
+ * @c plain(f(x) OVER w) says the window value is meant as plain SQL, so the
+ * entry holding it is not one for the window rewriting to track: tracking it
+ * would make an @c agg_token the marker then has to read back, once per row,
+ * through the cast that warns that provenance is lost. */
+static bool windowfunc_outside_plain_walker(Node *node, void *cx) {
+  const constants_t *constants = (const constants_t *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, FuncExpr) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_PLAIN)
+    return false;                 /* marked: its window functions are its own */
+  if (IsA(node, WindowFunc))
+    return true;
+  return expression_tree_walker(node, windowfunc_outside_plain_walker, cx);
+}
+
 static bool replace_window_aggregations(const constants_t *constants,
                                         Query *q, List *prov_atts) {
   window_aggregation_context ctx = {constants, q, prov_atts, false};
@@ -10037,8 +10055,12 @@ static bool replace_window_aggregations(const constants_t *constants,
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     Expr *orig;
 
-    /* A junk entry is a sort key only: it stays the displayed value. */
-    if (te->resjunk || !contain_windowfuncs((Node *)te->expr))
+    /* A junk entry is a sort key only: it stays the displayed value.  An entry
+     * whose window functions are all under a plain() marker is the user's own
+     * reading and is left alone. */
+    if (te->resjunk || !contain_windowfuncs((Node *)te->expr) ||
+        !windowfunc_outside_plain_walker((Node *)te->expr,
+                                         (void *)constants))
       continue;
     orig = (Expr *)copyObject(te->expr);
     te->expr = (Expr *)window_aggregation_mutator((Node *)te->expr, &ctx);

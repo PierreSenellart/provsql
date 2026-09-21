@@ -265,6 +265,17 @@ SELECT * FROM wa_groups_offset ORDER BY id;
 DROP TABLE wa_groups_offset;
 
 
+-- plain() over a window aggregate says the value is meant as plain SQL: the
+-- entry is left to PostgreSQL, so the value is the one of the data as it is
+-- and the row keeps its own provenance.  Without this the window value was
+-- tracked in spite of the marker and then read back through the cast, which
+-- warns that provenance is lost -- once per row.
+CREATE TABLE wa_plainmark AS
+  SELECT id, plain(sum(x) OVER (PARTITION BY g)) AS s FROM wa;
+SELECT remove_provenance('wa_plainmark');
+SELECT id, s FROM wa_plainmark ORDER BY id;
+DROP TABLE wa_plainmark;
+
 DROP FUNCTION wa_report(text, text, text);
 DROP FUNCTION wa_check(text, text);
 DROP TABLE wa, wa_plain;
