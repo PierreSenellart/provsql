@@ -5203,6 +5203,181 @@ static Aggref *aggref_with_filter(Aggref *ar, Expr *cond) {
   return res;
 }
 
+static Aggref *oj_make_aggref(Oid aggfnoid, Oid aggtype, Oid argtype,
+                              Expr *arg);
+
+/** @brief The built-in aggregate @p name over @p argtype, or @c InvalidOid. */
+static Oid builtin_aggregate(const char *name, Oid argtype) {
+  Oid fn = LookupFuncName(list_make1(makeString(pstrdup(name))), 1, &argtype,
+                          true);
+  if (!OidIsValid(fn) || fn >= FirstNormalObjectId ||
+      !SearchSysCacheExists1(AGGFNOID, ObjectIdGetDatum(fn)))
+    return InvalidOid;
+  return fn;
+}
+
+/** @brief @p n as @c numeric, where it is not one already. */
+static Node *to_numeric(Node *n) {
+  if (exprType(n) == NUMERICOID)
+    return n;
+  return coerce_to_target_type(NULL, n, exprType(n), NUMERICOID, -1,
+                               COERCION_EXPLICIT, COERCE_EXPLICIT_CAST, -1);
+}
+
+/**
+ * @brief @c stddev / @c variance of @p ar as the arithmetic over @c sum,
+ *        @c sum of squares and @c count that defines it, or @c NULL.
+ *
+ * PostgreSQL computes these with an accumulator of its own, which the
+ * provenance machinery has no reading of: the result is a value per world and
+ * nothing carries it.  Their definition is arithmetic over aggregates that ARE
+ * carried,
+ * @code
+ *   var_samp(x) = (count(x)*sum(x*x) - sum(x)^2) / (count(x)*(count(x)-1))
+ *   var_pop(x)  = (count(x)*sum(x*x) - sum(x)^2) / (count(x)*count(x))
+ *   stddev(x)   = var(x) ^ 0.5
+ * @endcode
+ * in that shape and no other: PostgreSQL divides once, at the end, and a
+ * form that divides earlier rounds differently -- 2.333...34 where
+ * PostgreSQL prints 2.333...33.
+ * and over an EXACT argument type (an integer, a @c numeric) that arithmetic
+ * is the same number PostgreSQL's own accumulator gives, digit for digit.
+ * Over a floating-point one it need not be, so those are left as they were.
+ *
+ * The guard is what a group of too few rows needs: @c var_samp divides by
+ * @c count-1, which is 0 where the group has one row, and SQL answers @c NULL
+ * there rather than raising.  Over the possible worlds such a group is the
+ * common case, not an edge one, so the guard is a @c CASE the aggregate-case
+ * lowering carries (its condition compares a @c count with a constant).
+ */
+static Node *deviation_as_arithmetic(Aggref *ar, const constants_t *constants) {
+  static const struct { const char *name; bool sample, root; } kinds[] = {
+    {"stddev", true, true},       {"stddev_samp", true, true},
+    {"stddev_pop", false, true},  {"variance", true, false},
+    {"var_samp", true, false},    {"var_pop", false, false},
+  };
+  char *name;
+  int i, k = -1;
+  Node *x, *xn, *s1, *s2, *c, *core, *res;
+  Oid argtype, sumfn, countfn;
+  CaseExpr *ce;
+  CaseWhen *cw;
+
+  if (ar->aggkind != AGGKIND_NORMAL || ar->aggfilter != NULL ||
+      ar->aggdistinct != NIL || ar->aggorder != NIL ||
+      list_length(ar->args) != 1 || ar->aggfnoid >= FirstNormalObjectId)
+    return NULL;
+  name = get_func_name(ar->aggfnoid);
+  if (name == NULL)
+    return NULL;
+  for (i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); ++i)
+    if (strcmp(name, kinds[i].name) == 0) {
+      k = i;
+      break;
+    }
+  pfree(name);
+  if (k < 0)
+    return NULL;
+
+  x = (Node *)((TargetEntry *)linitial(ar->args))->expr;
+  argtype = exprType(x);
+  /* An exact argument only: see above. */
+  if (argtype != INT2OID && argtype != INT4OID && argtype != INT8OID &&
+      argtype != NUMERICOID)
+    return NULL;
+  sumfn = builtin_aggregate("sum", NUMERICOID);
+  /* count(expr) is count(any): it has no signature on the argument's own type,
+   * so it is named by its own oid rather than looked up. */
+  countfn = F_COUNT_ANY;
+  if (!OidIsValid(sumfn))
+    return NULL;
+  xn = to_numeric((Node *)copyObject(x));
+  if (xn == NULL)
+    return NULL;
+
+  s1 = (Node *)oj_make_aggref(sumfn, NUMERICOID, NUMERICOID,
+                              (Expr *)copyObject(xn));
+  s2 = (Node *)oj_make_aggref(
+    sumfn, NUMERICOID, NUMERICOID,
+    (Expr *)build_binop("*", (Node *)copyObject(xn), (Node *)copyObject(xn)));
+  c = (Node *)oj_make_aggref(countfn, INT8OID, argtype,
+                             (Expr *)copyObject(x));
+
+  {
+    Node *cn = to_numeric((Node *)copyObject(c));
+    Node *two = (Node *)makeConst(NUMERICOID, -1, InvalidOid, -1,
+                                  DirectFunctionCall1(int8_numeric,
+                                                      Int64GetDatum(2)),
+                                  false, false);
+    Node *one = (Node *)makeConst(NUMERICOID, -1, InvalidOid, -1,
+                                  DirectFunctionCall1(int8_numeric,
+                                                      Int64GetDatum(1)),
+                                  false, false);
+    /* count(x)*sum(x*x) - sum(x)^2, divided once. */
+    core = build_binop("-", build_binop("*", (Node *)copyObject(cn), s2),
+                       build_binop("^", s1, two));
+    res = build_binop(
+      "/", core,
+      build_binop("*", (Node *)copyObject(cn),
+                  kinds[k].sample
+                    ? build_binop("-", (Node *)copyObject(cn), one)
+                    : (Node *)copyObject(cn)));
+  }
+  if (kinds[k].root)
+    res = build_binop("^", res,
+                      (Node *)makeConst(NUMERICOID, -1, InvalidOid, -1,
+                                        DirectFunctionCall3(
+                                          numeric_in, CStringGetDatum("0.5"),
+                                          ObjectIdGetDatum(InvalidOid),
+                                          Int32GetDatum(-1)),
+                                        false, false));
+
+  /* Two guards, then the arithmetic:
+   *   too few rows (one for a sample, none for a population): NULL, which is
+   *     what SQL answers rather than dividing by zero;
+   *   a numerator of zero: 0 exactly, where the division would keep the
+   *     trailing zeros of its own scale and print 0.00000000000000000000
+   *     where PostgreSQL prints 0;
+   *   otherwise the quotient. */
+  {
+    CaseWhen *few = makeNode(CaseWhen);
+    CaseWhen *zero = makeNode(CaseWhen);
+
+    few->expr = (Expr *)build_binop(
+      "<=", (Node *)copyObject(c),
+      (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                        Int64GetDatum(kinds[k].sample ? 1 : 0), false,
+                        FLOAT8PASSBYVAL));
+    few->result = (Expr *)makeNullConst(NUMERICOID, -1, InvalidOid);
+    few->location = -1;
+
+    zero->expr = (Expr *)build_binop(
+      "=", (Node *)copyObject(core),
+      (Node *)makeConst(NUMERICOID, -1, InvalidOid, -1,
+                        DirectFunctionCall1(int8_numeric, Int64GetDatum(0)),
+                        false, false));
+    zero->result = (Expr *)makeConst(NUMERICOID, -1, InvalidOid, -1,
+                                     DirectFunctionCall1(int8_numeric,
+                                                         Int64GetDatum(0)),
+                                     false, false);
+    zero->location = -1;
+
+    cw = makeNode(CaseWhen);
+    cw->expr = (Expr *)makeBoolConst(true, false);
+    cw->result = (Expr *)res;
+    cw->location = -1;
+
+    ce = makeNode(CaseExpr);
+    ce->casetype = NUMERICOID;
+    ce->casecollid = InvalidOid;
+    ce->arg = NULL;
+    ce->args = list_make3(few, zero, cw);
+    ce->defresult = (Expr *)makeNullConst(NUMERICOID, -1, InvalidOid);
+    ce->location = ar->location;
+  }
+  return (Node *)ce;
+}
+
 /**
  * @brief Copy of @p ar computing the built-in aggregate @p name (@c "min" or
  *        @c "max") of the same argument, or @c NULL if there is none declared
@@ -6725,6 +6900,44 @@ rewrite_agg_case_mutator(Node *node, void *context)
 
 /* Lower aggregate-carrier CASEs in the target list, after the aggregate pass
  * has turned the branch aggregates into agg_tokens. */
+/** @brief Context for @c deviation_mutator. */
+typedef struct { const constants_t *constants; bool changed; } deviation_ctx;
+
+/** @brief Mutator: each @c stddev / @c variance as the arithmetic it is. */
+static Node *deviation_mutator(Node *node, void *cx) {
+  deviation_ctx *c = (deviation_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Aggref)) {
+    Node *rewritten = deviation_as_arithmetic((Aggref *)node, c->constants);
+    if (rewritten != NULL) {
+      c->changed = true;
+      return rewritten;
+    }
+    return node;    /* its argument is of the level below: leave it alone */
+  }
+  return expression_tree_mutator(node, deviation_mutator, cx);
+}
+
+/**
+ * @brief Read every @c stddev / @c variance of @p q as the arithmetic over
+ *        @c sum, @c sum of squares and @c count that defines it.
+ *
+ * Run before the aggregates are lowered, so that what the provenance pass
+ * meets are the aggregates it carries.  @c q->hasAggs stays true, and the
+ * @c CASE the guard makes is lowered by @c rewrite_agg_cases just after.
+ */
+static void rewrite_deviation_aggregates(const constants_t *constants,
+                                         Query *q) {
+  deviation_ctx c;
+  c.constants = constants;
+  c.changed = false;
+  /* The select list only: a HAVING over such an aggregate has its own
+   * lowering, which reads an Aggref and not the arithmetic that defines it,
+   * and whose refusals name the aggregate the user wrote. */
+  q->targetList = (List *)deviation_mutator((Node *)q->targetList, &c);
+}
+
 static void
 rewrite_agg_cases(const constants_t *constants, Query *q)
 {
@@ -25202,6 +25415,10 @@ static Query *process_query(const constants_t *constants, Query *q,
       }
 
       if (q->hasAggs) {
+        /* stddev / variance are arithmetic over sum, sum of squares and
+         * count: read them as that before the aggregates are lowered, so the
+         * pass below carries them like any other. */
+        rewrite_deviation_aggregates(constants, q);
         // Compute aggregation expressions
         replace_aggregations_by_provenance_aggregate(
           constants, q, prov_atts,

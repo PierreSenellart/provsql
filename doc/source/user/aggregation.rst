@@ -70,6 +70,26 @@ Aggregate Functions
 The aggregate functions ``COUNT``, ``SUM``, ``MIN``, ``MAX``, and ``AVG``
 are all supported over provenance-tracked tables.
 
+``stddev``, ``variance`` and their ``_samp`` and ``_pop`` forms are supported
+over an exact argument (an integer, a ``numeric``), where they are read as the
+arithmetic that defines them,
+
+.. code-block:: postgresql
+
+    SELECT stddev(pm25) FROM readings;
+    --  =  CASE WHEN count(pm25) <= 1 THEN NULL
+    --          WHEN count(pm25) * sum(pm25*pm25) - sum(pm25)^2 = 0 THEN 0
+    --          ELSE ((count(pm25) * sum(pm25*pm25) - sum(pm25)^2)
+    --                / (count(pm25) * (count(pm25) - 1))) ^ 0.5 END
+
+over the sums and the count, which are tracked. The value is the one
+PostgreSQL's own accumulator gives, and it is read in every possible world
+like any other arithmetic over aggregates: the first guard is the ``NULL`` a
+group of one row has, the second keeps an exact zero from carrying the
+trailing digits of the division's scale. Over a floating-point argument the
+arithmetic need not round as PostgreSQL's accumulator does, so those are left
+as a value of the data as it is, with the warning that says so.
+
 Arithmetic on Aggregate Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

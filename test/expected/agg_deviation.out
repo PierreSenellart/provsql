@@ -1,0 +1,36 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+sd|var|sdp|vp
+1.5275252316519467|2.3333333333333333|1.2472191289246471|1.5555555555555556
+(1 row)
+sd|var|sdp|vp
+1.5275252316519467|2.3333333333333333|1.2472191289246471|1.5555555555555556
+(1 row)
+e_sd|e_var|e_sdp|e_vp
+1.442541|2.333333|1.061805|1.263889
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+g|sd|vp
+1|1.5275252316519467|1.5555555555555556
+2||0
+(2 rows)
+g|sd|vp
+1|1.5275252316519467|1.5555555555555556
+2||0
+(2 rows)
+WARNING:  ProvSQL: converting agg_token to double precision: provenance information is lost
+sd_float|provsql
+1.5275252316519468|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+remove_provenance
+
+(1 row)
