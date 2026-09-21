@@ -142,3 +142,29 @@ g|c|type
 a|5|provsql.agg_token
 b|3|provsql.agg_token
 (2 rows)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+remove_provenance
+
+(1 row)
+userid|p
+1|0.750000
+2|0.500000
+3|0.500000
+(3 rows)
+WARNING:  ProvSQL: row_number() over an aggregate result is tracked as rank(), which it differs from when groups tie on the ORDER BY
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+remove_provenance
+
+(1 row)
+userid|p
+1|0.750000
+2|0.500000
+3|0.500000
+(3 rows)
+remove_provenance
+
+(1 row)

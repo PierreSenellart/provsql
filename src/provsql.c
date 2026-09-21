@@ -22503,6 +22503,8 @@ static bool is_const_or_param(Node *n) {
  * is lowered too: the rank of a group by an aggregate result is rewritten
  * into the count of the groups before it (@c rewrite_rank_over_aggregate).
  */
+static bool sort_key_reads_agg_value(const constants_t *constants, Query *q);
+
 static bool limit_lowerable(const constants_t *constants, Query *q) {
   ListCell *lc;
   bool ties = false;
@@ -22510,12 +22512,8 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
 
   /* One ordering key, which is an aggregate of the query: the top-k of the
    * groups of an aggregation */
-  if (q->hasAggs && list_length(q->sortClause) == 1) {
-    TargetEntry *te =
-      get_sortgroupclause_tle((SortGroupClause *)linitial(q->sortClause),
-                              q->targetList);
-    ordered_by_agg = te != NULL && contain_aggs_of_level((Node *)te->expr, 0);
-  }
+  if (list_length(q->sortClause) == 1)
+    ordered_by_agg = sort_key_reads_agg_value(constants, q);
 
   if (!limit_truncates(q) || is_actual_marker(constants, q->limitCount) ||
       is_actual_marker(constants, q->limitOffset))
@@ -22527,7 +22525,11 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
       q->groupingSets != NIL ||
       (q->distinctClause != NIL && !distinct_on_lowerable(constants, q)) ||
       q->setOperations != NULL || q->hasTargetSRFs || q->rowMarks != NIL ||
-      q->hasSubLinks)
+      /* A subquery of its own is left alone, EXCEPT where the sort key is what
+       * reads an aggregate value: the top-k of "ORDER BY (SELECT count(*) …)"
+       * is the filter of a rank like any other, and the sublink is decorrelated
+       * before the rank is built. */
+      (q->hasSubLinks && !ordered_by_agg))
     return false;
   if ((q->limitCount != NULL && !is_const_or_param(q->limitCount)) ||
       (q->limitOffset != NULL && !is_const_or_param(q->limitOffset)))
@@ -24258,8 +24260,25 @@ static bool rte_column_is_aggregate(const constants_t *constants,
   te = get_tle_by_resno(rte->subquery->targetList, attno);
   if (te == NULL)
     return false;
-  return exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN ||
-         contain_aggs_of_level((Node *)te->expr, 0);
+  if (exprType((Node *)te->expr) == constants->OID_TYPE_AGG_TOKEN ||
+      contain_aggs_of_level((Node *)te->expr, 0))
+    return true;
+  /* A column that only passes another subquery's column through -- the
+   * wrapper the LIMIT lowering builds around the query it ranks, and the
+   * `SELECT * FROM (SELECT ... GROUP BY ...) t` a user writes -- is that
+   * column: a rank over it is a rank over the aggregate, and a group key
+   * reading it reads the aggregate's value. */
+  if (IsA(te->expr, Var)) {
+    Var *v = (Var *)te->expr;
+    if (v->varlevelsup == 0 && v->varno >= 1 && v->varattno >= 1 &&
+        v->varno <= list_length(rte->subquery->rtable)) {
+      RangeTblEntry *inner =
+        (RangeTblEntry *)list_nth(rte->subquery->rtable, v->varno - 1);
+      if (inner != rte)
+        return rte_column_is_aggregate(constants, inner, v->varattno);
+    }
+  }
+  return false;
 }
 
 /** @brief Context for @c replace_rank_window_mutator. */

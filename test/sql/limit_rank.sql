@@ -211,3 +211,40 @@ DROP VIEW lr_world.lr;
 DROP SCHEMA lr_world;
 DROP TABLE lr, lr_plain;
 
+
+-- The top-k of an aggregation whose sort key is NOT a bare aggregate of the
+-- block: an aggregate column of a derived table, and a scalar subquery that
+-- counts -- the way the query is usually written (103 such queries in the
+-- SEDE corpus, prevalence-ac).  Both are the filter of a rank like the bare
+-- form, so the answer holds every row that is in the top k in SOME world, each
+-- with the provenance of being there.
+--
+-- What blocked them: the lowering wraps the query it ranks in a pass-through
+-- subquery, and the rank-over-an-aggregate rewrite looked for the aggregation
+-- directly below the window, so the wrapper hid it.
+--
+-- Over four rows at one half, two of them of the first group: the first group
+-- is in the top two of every world where it has a row (3/4), the others in
+-- every world where theirs is there (1/2).
+CREATE TABLE lr_v(id int, userid int);
+INSERT INTO lr_v VALUES (1,1),(2,1),(3,2),(4,3);
+SELECT add_provenance('lr_v');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM lr_v; END $$;
+CREATE TABLE lr_top AS
+  SELECT userid, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT userid, count(*) AS n FROM lr_v GROUP BY userid) t
+  ORDER BY n DESC LIMIT 2;
+SELECT remove_provenance('lr_top');
+SELECT userid, p FROM lr_top ORDER BY userid;
+DROP TABLE lr_top;
+CREATE TABLE lr_top AS
+  SELECT userid,
+         round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM (SELECT DISTINCT userid FROM lr_v) u
+  ORDER BY (SELECT count(*) FROM lr_v WHERE lr_v.userid = u.userid) DESC
+  LIMIT 2;
+SELECT remove_provenance('lr_top');
+SELECT userid, p FROM lr_top ORDER BY userid;
+DROP TABLE lr_top;
+SELECT remove_provenance('lr_v');
+DROP TABLE lr_v;
