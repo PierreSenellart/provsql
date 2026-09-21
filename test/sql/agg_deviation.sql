@@ -58,6 +58,34 @@ FROM dev_e;
 SET provsql.active = on;
 DROP TABLE dev_e;
 
+-- difftest found the population forms counting only the worlds with two rows
+-- or more, as if they followed the sample rule: over {2,4} at one half each,
+-- E[var_pop | defined] is (0 + 0 + 1)/3 = 1/3 and not 1.  The cause was the
+-- guard that keeps an exact zero from printing the trailing digits of the
+-- division's scale: a comparison of the NUMERATOR with zero is not read in
+-- every world, so the worlds it picks dropped out of the moments.  The guard
+-- is a COUNT compared with a constant now, which is read in every world.  One
+-- case is left over: a variance that is exactly zero over SEVERAL equal rows
+-- takes the quotient and prints 0.00000000000000000000 where PostgreSQL prints
+-- 0.  Catching that needs the comparison of an arithmetic expression over
+-- aggregates to be readable per world, which is a gap of its own.
+CREATE TABLE dev_pop(v int);
+INSERT INTO dev_pop VALUES (2), (4);
+SELECT add_provenance('dev_pop');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM dev_pop; END $$;
+CREATE TABLE dev_p AS
+  SELECT var_pop(v) AS vp, stddev_pop(v) AS sdp, variance(v) AS var FROM dev_pop;
+SET provsql.active = off;
+SELECT vp::text AS vp,
+       round(expected(vp, provsql)::numeric, 6) AS e_vp,
+       round(expected(sdp, provsql)::numeric, 6) AS e_sdp,
+       round(expected(var, provsql)::numeric, 6) AS e_var
+FROM dev_p;
+SET provsql.active = on;
+DROP TABLE dev_p;
+SELECT remove_provenance('dev_pop');
+DROP TABLE dev_pop;
+
 -- A group of one row: the sample forms divide by count-1, which is zero there,
 -- and SQL answers NULL rather than raising.  The guard says so, per world.
 CREATE TABLE dev_g AS
@@ -76,7 +104,9 @@ SET provsql.active = on;
 
 -- A floating-point argument is left as it was: its value is the one of the
 -- data as it is, and no other world is read.
-SELECT stddev(f)::text AS sd_float FROM dev WHERE g = 1;
+-- Rounded: a float8 prints a different number of digits from one PostgreSQL
+-- version to the next.
+SELECT round(stddev(f)::numeric, 6)::text AS sd_float FROM dev WHERE g = 1;
 
 SELECT remove_provenance('dev');
 DROP TABLE dev;

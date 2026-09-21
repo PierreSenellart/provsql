@@ -5351,11 +5351,15 @@ static Node *deviation_as_arithmetic(Aggref *ar, const constants_t *constants) {
     few->result = (Expr *)makeNullConst(NUMERICOID, -1, InvalidOid);
     few->location = -1;
 
+    /* A population form over a single row is 0, and the division that would
+     * give it keeps the trailing zeros of its own scale where PostgreSQL
+     * prints 0.  The guard is a COUNT compared with a constant, which is read
+     * in every world; a comparison of the numerator with zero would not be,
+     * and the worlds it picks would drop out of the moments. */
     zero->expr = (Expr *)build_binop(
-      "=", (Node *)copyObject(core),
-      (Node *)makeConst(NUMERICOID, -1, InvalidOid, -1,
-                        DirectFunctionCall1(int8_numeric, Int64GetDatum(0)),
-                        false, false));
+      "=", (Node *)copyObject(c),
+      (Node *)makeConst(INT8OID, -1, InvalidOid, sizeof(int64),
+                        Int64GetDatum(1), false, FLOAT8PASSBYVAL));
     zero->result = (Expr *)makeConst(NUMERICOID, -1, InvalidOid, -1,
                                      DirectFunctionCall1(int8_numeric,
                                                          Int64GetDatum(0)),
@@ -5371,7 +5375,8 @@ static Node *deviation_as_arithmetic(Aggref *ar, const constants_t *constants) {
     ce->casetype = NUMERICOID;
     ce->casecollid = InvalidOid;
     ce->arg = NULL;
-    ce->args = list_make3(few, zero, cw);
+    ce->args = kinds[k].sample ? list_make2(few, cw)
+                               : list_make3(few, zero, cw);
     ce->defresult = (Expr *)makeNullConst(NUMERICOID, -1, InvalidOid);
     ce->location = ar->location;
   }
