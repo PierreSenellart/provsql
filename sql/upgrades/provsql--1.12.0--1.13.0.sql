@@ -390,10 +390,14 @@ BEGIN
        AND a.attnum   > 0
        AND NOT a.attisdropped;
     IF block_key_cols IS NULL OR array_length(block_key_cols, 1) IS NULL THEN
-      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att;
+      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: repair-key-columns; scope: gap';
     END IF;
     IF array_length(block_key_cols, 1) > 16 THEN
-      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported';
+      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: repair-key-too-wide; scope: gap';
     END IF;
   END IF;
 
@@ -2208,7 +2212,8 @@ BEGIN
       'random-variable leaf (a gate_rv), got a % gate', provsql.get_gate_type(leaf)
       USING HINT = 'observe binds a datum to a single distribution leaf; '
         'observing a derived quantity (a sum, product, or comparison) needs '
-        'a change-of-variables density and is out of scope.';
+        'a change-of-variables density and is out of scope.',
+      DETAIL = 'provsql-reason: observe-argument-kind; scope: out-of-scope';
   END IF;
   IF NOT provsql.is_finite_float8(datum) THEN
     RAISE EXCEPTION 'provsql.observe: datum must be finite (got %)', datum;
@@ -3198,7 +3203,9 @@ BEGIN
   ELSIF semiring = 'counting' THEN
     RETURN provsql.provenance_evaluate_compiled(token, mapping, 'counting', 1) <> 0;
   ELSE
-    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring;
+    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: nonzero-semiring; scope: gap';
   END IF;
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
@@ -3541,5 +3548,1019 @@ $$ LANGUAGE plpgsql SET client_min_messages = warning;
 --    warmed under the previous version would not know the two values
 --    added in section 1.
 -- ----------------------------------------------------------------------
+
+-- ----------------------------------------------------------------------
+-- 8. Every refusal names its cause and its scope in the DETAIL line
+--    (provsql-reason / scope), so that a survey of what ProvSQL covers
+--    can group refusals by a stable tag rather than by their wording.
+--    These are the functions that carry one and that no section above
+--    redefines; their bodies are otherwise unchanged.
+-- ----------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION cond_predicate(target UUID, predicate boolean)
+  RETURNS UUID AS
+$$
+BEGIN
+  RAISE EXCEPTION 'uuid | (predicate) must be rewritten by the ProvSQL '
+    'planner hook: the right operand must be a Boolean combination of '
+    'random_variable / aggregate comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION predicate_cond_predicate(target boolean, evidence boolean)
+  RETURNS UUID AS
+$$
+BEGIN
+  RAISE EXCEPTION '(predicate) | (predicate) must be rewritten by the ProvSQL '
+    'planner hook: both operands must be Boolean combinations of '
+    'random_variable / aggregate comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION given(predicate boolean) RETURNS UUID AS
+$$
+BEGIN
+  RAISE EXCEPTION 'given(predicate) / prefix | (predicate) must be rewritten '
+    'by the ProvSQL planner hook: the operand must be a Boolean combination '
+    'of random_variable / aggregate comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION provenance_evaluate(
+  token UUID,
+  token2value regclass,
+  element_one anyelement,
+  value_type regtype,
+  plus_function regproc,
+  times_function regproc,
+  monus_function regproc,
+  delta_function regproc)
+  RETURNS anyelement AS
+$$
+DECLARE
+  gate_type provenance_gate;
+  result ALIAS FOR $0;
+  children UUID[];
+--  cmp_value anyelement;
+--  temp_result anyelement;
+  value_text TEXT;
+BEGIN
+  SELECT get_gate_type(token) INTO gate_type;
+
+  IF gate_type IS NULL THEN
+    RETURN NULL;
+
+  ELSIF gate_type = 'input' THEN
+    EXECUTE format('SELECT value FROM %s WHERE provenance=%L', token2value, token)
+      INTO result;
+    IF result IS NULL THEN
+      result := element_one;
+    END IF;
+  ELSIF gate_type = 'mulinput' THEN
+    SELECT concat('{',(get_children(token))[1]::text,'=',(get_infos(token)).info1,'}')
+      INTO result;
+  ELSIF gate_type='update' THEN
+    EXECUTE format('SELECT value FROM %s WHERE provenance=%L',token2value,token) INTO result;
+    IF result IS NULL THEN
+      result:=element_one;
+    END IF;
+  ELSIF gate_type = 'plus' THEN
+    EXECUTE format('SELECT %s(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
+      plus_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
+      INTO result;
+
+  ELSIF gate_type = 'times' THEN
+    EXECUTE format('SELECT %s(provsql.provenance_evaluate(t,%L,%L::%s,%L,%L,%L,%L,%L)) FROM unnest(get_children(%L)) AS t',
+      times_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
+      INTO result;
+
+  ELSIF gate_type = 'monus' THEN
+    IF monus_function IS NULL THEN
+      RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function',
+      DETAIL = 'provsql-reason: semiring-no-monus; scope: deliberate';
+    ELSE
+      EXECUTE format('SELECT %s(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, ' ||
+                     'provsql.provenance_evaluate(c[2],%L,%L::%s,%L,%L,%L,%L,%L) AS a2 FROM get_children(%L) c) tmp',
+        monus_function, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function,
+        token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function, token)
+      INTO result;
+    END IF;
+
+  ELSIF gate_type = 'eq' THEN
+    EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+
+/*  elsif gate_type = 'cmp' then
+
+    EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO temp_result;
+
+    EXECUTE format('SELECT get_extra((get_children(%L))[2])', token)
+      INTO cmp_value;
+
+    IF temp_result::text = cmp_value::text THEN
+      SELECT concat('{',temp_result::text,'=',cmp_value::text,'}')
+      INTO result;
+    ELSE
+      RETURN gate_zero()
+      */
+
+
+
+  ELSIF gate_type = 'delta' THEN
+    IF delta_function IS NULL THEN
+      RAISE EXCEPTION USING MESSAGE='Provenance with aggregation evaluated over a semiring without delta function',
+      DETAIL = 'provsql-reason: semiring-no-delta; scope: deliberate';
+    ELSE
+      EXECUTE format('SELECT %I(a) FROM (SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a) tmp',
+        delta_function, token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+    END IF;
+
+  ELSIF gate_type = 'zero' THEN
+    EXECUTE format('SELECT %I(a) FROM (SELECT %L::%I AS a WHERE FALSE) temp', plus_function, element_one, value_type)
+      INTO result;
+
+  ELSIF gate_type = 'one' THEN
+    EXECUTE format('SELECT %L::%I', element_one, value_type)
+      INTO result;
+
+  ELSIF gate_type = 'project' THEN
+    EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+
+  ELSIF gate_type = 'annotation' THEN
+    -- Transparent single-child wrapper (carries the inversion-free certificate
+    -- / per-input order keys in extra, inert for every semiring): evaluate
+    -- through to the child, like 'project'.
+    EXECUTE format('SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L)',
+      token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
+      INTO result;
+
+  ELSE
+    RAISE EXCEPTION USING MESSAGE='provenance_evaluate cannot be called on formulas using ' || gate_type || ' gates; use compiled semirings instead',
+      DETAIL = 'provsql-reason: evaluate-gate-kind; scope: gap';
+  END IF;
+
+  RETURN result;
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
+
+CREATE OR REPLACE FUNCTION agg_token_cond_predicate(
+  a agg_token, predicate boolean) RETURNS agg_token AS
+$$
+BEGIN
+  RAISE EXCEPTION 'agg_token | (predicate) must be rewritten by the ProvSQL '
+    'planner hook: the right operand must be a Boolean combination of '
+    'aggregate / random_variable comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION agg_token_comp_numeric(a agg_token, b numeric)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION numeric_comp_agg_token(a numeric, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION agg_token_comp_agg_token(a agg_token, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION agg_token_comp_text(a agg_token, b text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION text_comp_agg_token(a text, b agg_token)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION mixture(
+  p uuid, x random_variable, y random_variable)
+  RETURNS random_variable AS
+$$
+DECLARE
+  token uuid;
+  p_kind provsql.provenance_gate;
+  x_uuid uuid;
+  y_uuid uuid;
+  x_kind provsql.provenance_gate;
+  y_kind provsql.provenance_gate;
+BEGIN
+  p_kind := provsql.get_gate_type(p);
+  IF p_kind NOT IN ('input','mulinput','update',
+                    'plus','times','monus',
+                    'project','eq','cmp',
+                    'zero','one') THEN
+    RAISE EXCEPTION 'provsql.mixture: p must be a Boolean gate '
+                    '(input/mulinput/update/plus/times/monus/project/eq/cmp/zero/one), got %', p_kind
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: mixture-argument-kind; scope: out-of-scope';
+  END IF;
+
+  x_uuid := (x)::uuid;
+  y_uuid := (y)::uuid;
+  x_kind := provsql.get_gate_type(x_uuid);
+  y_kind := provsql.get_gate_type(y_uuid);
+  IF x_kind NOT IN ('rv','value','arith','mixture') THEN
+    RAISE EXCEPTION 'provsql.mixture: x must be a scalar RV root (rv / value / arith / mixture), got %', x_kind
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: mixture-argument-kind; scope: out-of-scope';
+  END IF;
+  IF y_kind NOT IN ('rv','value','arith','mixture') THEN
+    RAISE EXCEPTION 'provsql.mixture: y must be a scalar RV root (rv / value / arith / mixture), got %', y_kind
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: mixture-argument-kind; scope: out-of-scope';
+  END IF;
+
+  token := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(),
+    concat('mixture', p, x_uuid, y_uuid));
+  PERFORM provsql.create_gate(token, 'mixture', ARRAY[p, x_uuid, y_uuid]);
+  RETURN provsql.random_variable_make(token);
+END
+$$ LANGUAGE plpgsql STRICT IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_cmp_placeholder(
+  a random_variable, b random_variable)
+  RETURNS boolean AS
+$$
+BEGIN
+  RAISE EXCEPTION 'random_variable comparison must be rewritten by the '
+                  'ProvSQL planner hook (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: rv-operator-not-rewritten; scope: out-of-scope';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_btree_cmp(
+  a random_variable, b random_variable) RETURNS integer AS
+$$
+BEGIN
+  RAISE EXCEPTION 'comparison or ordering of random_variable values is '
+                  'meaningless: a random_variable is a distribution, not a scalar'
+    USING HINT =
+      'Compare them as a probabilistic event -- in a WHERE / JOIN clause or '
+      'with probability(x > y); take order statistics with provsql.greatest / '
+      'provsql.least (or the min / max aggregates); summarise numerically with '
+      'expected / variance / support.',
+      DETAIL = 'provsql-reason: rv-comparison; scope: out-of-scope';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION random_variable_cond_predicate(
+  rv random_variable, predicate boolean) RETURNS random_variable AS
+$$
+BEGIN
+  RAISE EXCEPTION 'random_variable | (predicate) must be rewritten by the '
+    'ProvSQL planner hook: the right operand must be a Boolean combination '
+    'of random_variable comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: rv-operator-not-rewritten; scope: out-of-scope';
+END
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION shapley_observe(
+    target uuid, evidence uuid, payoff text DEFAULT 'expected')
+  RETURNS TABLE(observation uuid, value double precision) AS
+$$
+DECLARE
+  atoms uuid[];
+  n int;
+  nmasks int;
+  pv double precision[];
+  popc int[];
+  fact double precision[];
+  mask int;
+  i int;
+  j int;
+  cnt int;
+  subset uuid[];
+  ev_s uuid;
+  sh double precision;
+  bit int;
+  s_size int;
+BEGIN
+  IF payoff NOT IN ('expected', 'variance') THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: payoff must be ''expected'' or '
+      '''variance'' (got %)', payoff;
+  END IF;
+  atoms := provsql.observe_atoms(evidence);
+  n := coalesce(array_length(atoms, 1), 0);
+  IF n = 0 THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: evidence contains no observe() '
+      'atoms (got a % gate)', provsql.get_gate_type(evidence)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: shapley-observe-no-evidence; scope: out-of-scope';
+  END IF;
+  IF n > 12 THEN
+    RAISE EXCEPTION 'provsql.shapley_observe: exact attribution over % '
+      'observations is exponential; capped at 12 (sampling-based '
+      'attribution is future work)', n
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: shapley-observe-too-many; scope: out-of-scope';
+  END IF;
+
+  -- factorials 0!..n!  (fact[k+1] = k!)
+  fact := ARRAY[1::double precision];
+  FOR i IN 1..n LOOP fact := fact || (fact[i] * i); END LOOP;
+
+  nmasks := (1 << n);
+  pv   := array_fill(NULL::double precision, ARRAY[nmasks]);
+  popc := array_fill(0, ARRAY[nmasks]);
+
+  -- Payoff value function for every subset of observations.
+  FOR mask IN 0 .. nmasks - 1 LOOP
+    subset := ARRAY[]::uuid[];
+    cnt := 0;
+    FOR i IN 0 .. n - 1 LOOP
+      IF (mask >> i) & 1 = 1 THEN
+        subset := subset || atoms[i + 1];
+        cnt := cnt + 1;
+      END IF;
+    END LOOP;
+    popc[mask + 1] := cnt;
+    IF cnt = 0 THEN
+      ev_s := provsql.gate_one();              -- prior (no evidence)
+    ELSE
+      ev_s := provsql.provenance_times(VARIADIC subset);
+    END IF;
+    IF payoff = 'expected' THEN
+      pv[mask + 1] := provsql.rv_moment(target, 1, false, ev_s);
+    ELSE
+      pv[mask + 1] := provsql.rv_moment(target, 2, true, ev_s);
+    END IF;
+  END LOOP;
+
+  -- Shapley value of each observation atom.
+  FOR i IN 0 .. n - 1 LOOP
+    sh := 0;
+    bit := (1 << i);
+    FOR mask IN 0 .. nmasks - 1 LOOP
+      IF (mask >> i) & 1 = 0 THEN               -- subsets S not containing i
+        s_size := popc[mask + 1];
+        -- weight |S|! (n-|S|-1)! / n!
+        sh := sh + (fact[s_size + 1] * fact[n - s_size] / fact[n + 1])
+                 * (pv[(mask | bit) + 1] - pv[mask + 1]);
+      END IF;
+    END LOOP;
+    observation := atoms[i + 1];
+    value := sh;
+    RETURN NEXT;
+  END LOOP;
+END
+$$ LANGUAGE plpgsql VOLATILE
+   SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION variance(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  m1 float8;
+  m2 float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- Conditioning on prov is handled inside rv_moment: when prov
+    -- resolves to gate_one() (the default, or load-time
+    -- simplification of any always-true sub-circuit) the
+    -- unconditional analytical path runs unchanged; otherwise the
+    -- joint-circuit loader unifies shared gate_rv leaves between
+    -- input and prov, and the conditional path runs either
+    -- truncated-distribution closed form or MC rejection.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), 2, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- Collapsed fast path: E[C] and E[C^2] from a single circuit load and plan
+    -- build, instead of two agg_raw_moment() calls that each reload.  Mirrors
+    -- the guard in agg_raw_moment (unconditional only, prov = one); on any
+    -- mismatch agg_collapsed_moments returns NULL and we fall through to the
+    -- generic per-order path (which handles conditioning, SUM enumeration, ...).
+    IF rv_conditioned_prov(input::uuid, prov) = gate_one() THEN
+      DECLARE ms float8[];
+      BEGIN
+        ms := agg_collapsed_moments(
+                (agg_conditioned_target(input::agg_token))::uuid);
+        IF ms IS NOT NULL THEN
+          RETURN ms[2] - ms[1] * ms[1];
+        END IF;
+      END;
+    END IF;
+    m1 := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    m2 := agg_raw_moment(agg_conditioned_target(input::agg_token), 2,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    IF m1 IS NULL OR m2 IS NULL THEN
+      RETURN NULL;
+    END IF;
+    RETURN m2 - m1 * m1;
+  END IF;
+
+  -- Bernoulli event token (see moment()): Var[X] = p(1 - p).
+  IF pg_typeof(input) = 'uuid'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    m1 := provsql.probability_evaluate(provsql.cond(input::uuid, prov),
+                                       method, arguments);
+    RETURN m1 * (1 - m1);
+  END IF;
+
+  RAISE EXCEPTION 'variance() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: moment-input-type; scope: gap';
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), k, false,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    RETURN agg_raw_moment(agg_conditioned_target(input::agg_token), k,
+                          rv_conditioned_prov(input::uuid, prov), method, arguments);
+  END IF;
+
+  -- A bare provenance event token (a gate_cmp lifted from an RV comparison,
+  -- e.g. expected(x <= c)) is a Bernoulli indicator: X in {0,1}, so every raw
+  -- moment E[X^k] with k >= 1 equals P(event), and E[X^0] = 1.  cond() applies
+  -- the optional conditioning prov (a no-op for the default gate_one()).
+  IF pg_typeof(input) = 'uuid'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k = 0 THEN
+      RETURN 1;
+    END IF;
+    RETURN provsql.probability_evaluate(provsql.cond(input::uuid, prov),
+                                        method, arguments);
+  END IF;
+
+  RAISE EXCEPTION 'moment() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: moment-input-type; scope: gap';
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION quantile(
+  input ANYELEMENT,
+  p double precision,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+BEGIN
+  IF p IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF p <> p OR p < 0 OR p > 1 THEN
+    RAISE EXCEPTION 'quantile: p must be in [0, 1] (got %)', p;
+  END IF;
+
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance(): rv_quantile handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_quantile(
+      rv_conditioned_target((input::random_variable)::uuid), p,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) IN ('smallint'::regtype, 'integer'::regtype,
+                          'bigint'::regtype, 'numeric'::regtype,
+                          'real'::regtype, 'double precision'::regtype) THEN
+    -- A deterministic scalar is a Dirac: every quantile is the value.
+    RETURN input::double precision;
+  END IF;
+
+  RAISE EXCEPTION 'quantile() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: quantile-input-type; scope: gap';
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION support(
+  input ANYELEMENT,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL,
+  OUT lo float8,
+  OUT hi float8)
+  AS $$
+DECLARE
+  aggregation_function VARCHAR;
+  child_pairs uuid[];
+  values_arr float8[];
+  total_probability float8;
+BEGIN
+  IF input IS NULL THEN
+    lo := NULL; hi := NULL; RETURN;
+  END IF;
+
+  -- Plain numeric: degenerate point support.  Lets `support(2.5)` /
+  -- `support(42)` / etc.  return (2.5, 2.5) without making the user
+  -- wrap in `as_random`.
+  IF pg_typeof(input) IN (
+       'smallint'::regtype, 'integer'::regtype, 'bigint'::regtype,
+       'numeric'::regtype, 'real'::regtype, 'double precision'::regtype) THEN
+    lo := input::double precision;
+    hi := input::double precision;
+    RETURN;
+  END IF;
+
+  -- random_variable is binary-coercible to uuid (explicit cast
+  -- below), so a single rv_support call covers both shapes.
+  -- rv_support handles
+  -- gate_value (point), gate_rv (distribution), gate_arith
+  -- (propagated), and falls back to the conservative all-real
+  -- interval for any other gate kind.  Conditioning on prov is not
+  -- supported (would require restricting the underlying joint
+  -- distribution by the indicator of prov, which has no closed form
+  -- for the basic distributions we ship).
+  IF pg_typeof(input) IN ('random_variable'::regtype, 'uuid'::regtype) THEN
+    -- Conditional support: rv_support folds the AND-conjunct interval
+    -- constraints from prov into the unconditional support.  When
+    -- prov is gate_one() the unconditional support is returned
+    -- unchanged.
+    SELECT r.lo, r.hi INTO lo, hi
+      FROM provsql.rv_support(
+             rv_conditioned_target(input::uuid),
+             rv_conditioned_prov(input::uuid, prov)) r;
+    RETURN;
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    -- A conditioned aggregate SUM(x)|C: the value-range support is that of
+    -- the target aggregate (conditioning can only tighten it; the
+    -- conservative range stays valid), so unpack to the target gate.
+    DECLARE
+      atok agg_token := agg_conditioned_target(input::agg_token);
+    BEGIN
+    IF get_gate_type(atok) <> 'agg' THEN
+      RAISE EXCEPTION USING MESSAGE='Wrong gate type for support computation',
+      DETAIL = 'provsql-reason: support-not-an-aggregate; scope: deliberate';
+    END IF;
+    SELECT pp.proname::varchar FROM pg_proc pp
+      WHERE oid=(get_infos(atok)).info1
+      INTO aggregation_function;
+    child_pairs := get_children(atok);
+
+    IF aggregation_function = 'sum' OR aggregation_function = 'count' THEN
+      -- count(col) is a SUM of per-row 0/1 indicators (empty group = 0), so its
+      -- support is computed like SUM; count(*) arrives as 'sum'.
+      -- Empty agg_token: SUM is identically 0.
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        lo := 0; hi := 0; RETURN;
+      END IF;
+      SELECT sum(LEAST(v, 0::float8)), sum(GREATEST(v, 0::float8))
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM unnest(child_pairs) AS c) sub;
+    ELSIF aggregation_function = 'min' OR aggregation_function = 'max' THEN
+      -- MIN/MAX over the empty input world are NULL, not ±Infinity (matching the
+      -- moment surface): the empty world carries no value, so the support is just
+      -- the range of the per-row values [min(v), max(v)].  A structurally empty
+      -- aggregate has no defined value at all -> NULL support.
+      IF COALESCE(array_length(child_pairs, 1), 0) = 0 THEN
+        lo := NULL; hi := NULL; RETURN;
+      END IF;
+
+      SELECT min(v), max(v)
+        INTO lo, hi
+        FROM (SELECT CAST(get_extra((get_children(c))[2]) AS float8) AS v
+              FROM UNNEST(child_pairs) AS c) sub;
+    ELSE
+      RAISE EXCEPTION USING MESSAGE=
+        'Cannot compute support for aggregation function ' || aggregation_function,
+      DETAIL = 'provsql-reason: support-aggregate-kind; scope: gap';
+    END IF;
+    RETURN;
+    END;
+  END IF;
+
+  RAISE EXCEPTION 'support() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: support-input-type; scope: gap';
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION central_moment(
+  input ANYELEMENT,
+  k integer,
+  prov UUID = gate_one(),
+  method text = NULL,
+  arguments text = NULL)
+  RETURNS DOUBLE PRECISION AS $$
+DECLARE
+  mu float8;
+  total float8;
+  i integer;
+  raw_i float8;
+  binom float8;
+  -- iterative binomial coefficient C(k, i)
+  k_double float8;
+BEGIN
+  IF pg_typeof(input) = 'random_variable'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    -- See variance() above: rv_moment handles the conditional/unconditional
+    -- dispatch internally based on the resolved prov gate type.
+    RETURN provsql.rv_moment(
+      rv_conditioned_target((input::random_variable)::uuid), k, true,
+      rv_conditioned_prov((input::random_variable)::uuid, prov));
+  END IF;
+
+  IF pg_typeof(input) = 'agg_token'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k < 0 THEN
+      RAISE EXCEPTION 'central_moment(): k must be non-negative (got %)', k;
+    END IF;
+    IF k = 0 THEN RETURN 1; END IF;
+    IF k = 1 THEN RETURN 0; END IF;
+
+    mu := agg_raw_moment(agg_conditioned_target(input::agg_token), 1,
+                         rv_conditioned_prov(input::uuid, prov), method, arguments);
+    IF mu IS NULL THEN RETURN NULL; END IF;
+    -- mu may be ±Infinity for empty MIN / MAX with positive empty
+    -- probability; central_moment is undefined in that case.
+    IF mu = 'Infinity'::float8 OR mu = '-Infinity'::float8 THEN
+      RETURN mu;
+    END IF;
+
+    total := 0;
+    binom := 1;  -- C(k, 0)
+    k_double := k;
+    FOR i IN 0..k LOOP
+      raw_i := agg_raw_moment(agg_conditioned_target(input::agg_token), i,
+                              rv_conditioned_prov(input::uuid, prov), method, arguments);
+      IF raw_i IS NULL THEN RETURN NULL; END IF;
+      total := total + binom * power(-mu, k - i) * raw_i;
+      -- C(k, i+1) = C(k, i) * (k - i) / (i + 1)
+      IF i < k THEN
+        binom := binom * (k_double - i) / (i + 1);
+      END IF;
+    END LOOP;
+    RETURN total;
+  END IF;
+
+  -- Bernoulli event token (see moment()): with p = P(event),
+  -- E[(X-p)^k] = (1-p)(-p)^k + p(1-p)^k; k = 0 -> 1, k = 1 -> 0.
+  IF pg_typeof(input) = 'uuid'::regtype THEN
+    IF input IS NULL OR k IS NULL THEN
+      RETURN NULL;
+    END IF;
+    IF k < 0 THEN
+      RAISE EXCEPTION 'central_moment(): k must be non-negative (got %)', k;
+    END IF;
+    IF k = 0 THEN RETURN 1; END IF;
+    IF k = 1 THEN RETURN 0; END IF;
+    mu := provsql.probability_evaluate(provsql.cond(input::uuid, prov),
+                                       method, arguments);
+    RETURN (1 - mu) * power(-mu, k) + mu * power(1 - mu, k);
+  END IF;
+
+  RAISE EXCEPTION 'central_moment() is not yet supported for input type %', pg_typeof(input)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: moment-input-type; scope: gap';
+END
+$$ LANGUAGE plpgsql PARALLEL SAFE SET search_path=provsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION gather_reachability_edges(
+  IN rel regclass,
+  IN source_attribute TEXT,
+  IN destination_attribute TEXT,
+  IN extra_vertices TEXT[],
+  IN edge_quals TEXT DEFAULT NULL,
+  IN rel_sql TEXT DEFAULT NULL,
+  OUT sources INT[],
+  OUT destinations INT[],
+  OUT tokens UUID[],
+  OUT probabilities DOUBLE PRECISION[],
+  OUT block_keys UUID[],
+  OUT block_indices INT[],
+  OUT extra_ids INT[],
+  OUT vertices TEXT[])
+AS
+$$
+DECLARE
+  tkind text;
+  bkey_expr text;
+  sel_probs text;
+  sel_bkeys text;
+  sel_bidx text;
+  verbosity int := coalesce(current_setting('provsql.verbose_level', true)::int, 0);
+BEGIN
+  -- Consult the per-table characterisation registry (TID / BID / OPAQUE,
+  -- maintained by add_provenance / repair_key and the CTAS lineage hook):
+  -- a TID relation is certified all-independent-inputs, a BID relation
+  -- holds input or mulinput rows with the block structure given by the
+  -- registry's key columns.  Derived (OPAQUE), unregistered, or
+  -- subquery-defined edges take the fully dynamic per-token path.
+  IF rel IS NOT NULL AND rel_sql IS NULL THEN
+    tkind := (provsql.get_table_info(rel::oid)).kind;
+  END IF;
+  IF tkind NOT IN ('tid', 'bid') THEN
+    tkind := NULL;
+  END IF;
+  IF tkind = 'bid' THEN
+    SELECT string_agg(quote_ident(a.attname) || '::text', ' || '','' || '
+                      ORDER BY k.ord)
+      INTO bkey_expr
+      FROM unnest((provsql.get_table_info(rel::oid)).block_key)
+             WITH ORDINALITY AS k(attnum, ord)
+      JOIN pg_attribute a ON a.attrelid = rel AND a.attnum = k.attnum;
+    -- An empty registry key means the whole table is one block.
+    bkey_expr := coalesce(bkey_expr, quote_literal(''));
+  END IF;
+  IF tkind IS NOT NULL AND verbosity >= 20 THEN
+    -- The function-level client_min_messages = warning (which silences
+    -- the CTAS / DROP TABLE chatter) would also swallow this notice;
+    -- lift it for the one RAISE.  The function-level SET restores the
+    -- caller's value at exit regardless.
+    PERFORM set_config('client_min_messages', 'notice', true);
+    RAISE NOTICE 'ProvSQL: catalog characterises % as %', rel, upper(tkind);
+    PERFORM set_config('client_min_messages', 'warning', true);
+  END IF;
+
+  -- Materialize the edges with their tokens; the planner hook resolves
+  -- provenance() over the tracked relation, and remove_provenance strips
+  -- the automatic provsql column so the later aggregation is plain SQL.
+  -- For a BID relation the synthetic per-block key (a v5 UUID over the
+  -- registry key columns' values) is computed here, while the columns
+  -- are in scope.
+  DROP TABLE IF EXISTS provsql_reachability_edges_tmp;
+  EXECUTE format(
+    'CREATE TEMP TABLE provsql_reachability_edges_tmp AS '
+    || 'SELECT %1$I::text AS u, %2$I::text AS v, '
+    || 'provsql.strip_annotations(provsql.provenance()) AS token%5$s '
+    || 'FROM %3$s WHERE %1$I IS NOT NULL AND %2$I IS NOT NULL%4$s',
+    source_attribute, destination_attribute,
+    CASE WHEN rel_sql IS NULL THEN rel::text
+         ELSE '(' || rel_sql || ') AS provsql_edge_subquery' END,
+    CASE WHEN edge_quals IS NULL THEN ''
+         ELSE ' AND (' || edge_quals || ')' END,
+    CASE WHEN tkind = 'bid'
+         THEN ', public.uuid_generate_v5(provsql.uuid_ns_provsql(), '
+              || quote_literal('bidblock' || rel::text || ':')
+              || ' || ' || bkey_expr || ') AS bkey'
+         ELSE ', NULL::uuid AS bkey' END);
+  PERFORM provsql.remove_provenance('provsql_reachability_edges_tmp');
+
+  DROP TABLE IF EXISTS provsql_reachability_support_tmp;
+  IF tkind IS NULL THEN
+    -- Dynamic path: validate the token shapes and, for conjunction-shaped
+    -- (join-defined) tokens, the pairwise disjointness of their supports.
+    IF EXISTS (SELECT 1 FROM provsql_reachability_edges_tmp
+               WHERE provsql.get_gate_type(token) NOT IN ('input', 'mulinput', 'times',
+                                                  'project', 'eq')) THEN
+      DROP TABLE provsql_reachability_edges_tmp;
+      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input, repair_key, or conjunctive join tokens', coalesce(rel::text, 'the edge query')
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-provenance-shape; scope: gap';
+    END IF;
+    CREATE TEMP TABLE provsql_reachability_support_tmp AS
+      SELECT t.token, l.leaf
+      FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp
+            WHERE provsql.get_gate_type(token) IN ('times', 'project', 'eq')) t,
+           LATERAL unnest(provsql.token_conjunctive_leaves(t.token)) AS l(leaf);
+    IF EXISTS (SELECT 1
+               FROM (SELECT DISTINCT token FROM provsql_reachability_edges_tmp) t
+               WHERE provsql.get_gate_type(t.token) IN ('times', 'project', 'eq')
+                 AND provsql.token_conjunctive_leaves(t.token) IS NULL) THEN
+      DROP TABLE provsql_reachability_support_tmp;
+      DROP TABLE provsql_reachability_edges_tmp;
+      RAISE EXCEPTION 'reachability: a join-defined edge token is not a pure conjunction of base tuples'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-edge-not-conjunction; scope: gap';
+    END IF;
+    IF EXISTS (SELECT 1 FROM (
+                 SELECT leaf FROM provsql_reachability_support_tmp
+                 UNION ALL
+                 SELECT DISTINCT token FROM provsql_reachability_edges_tmp
+                 WHERE provsql.get_gate_type(token) = 'input'
+               ) all_leaves
+               GROUP BY leaf HAVING count(*) > 1) THEN
+      DROP TABLE provsql_reachability_support_tmp;
+      DROP TABLE provsql_reachability_edges_tmp;
+      RAISE EXCEPTION 'reachability: join-defined edges share base tuples (their supports overlap), so they are not independent'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-edges-share-tuples; scope: gap';
+    END IF;
+  END IF;
+
+  -- Per-kind classification expressions for the final aggregation: a TID
+  -- relation needs no per-row gate introspection at all; a BID relation
+  -- one get_gate_type per row (the input/mulinput split), block keys from
+  -- the precomputed column-derived key and indices by numbering within
+  -- the block; the dynamic path reads the gates.
+  IF tkind = 'tid' THEN
+    sel_probs := 'coalesce(provsql.get_prob(e.token), 1.0)';
+    sel_bkeys := $sql$'00000000-0000-0000-0000-000000000000'::uuid$sql$;
+    sel_bidx  := '0';
+  ELSIF tkind = 'bid' THEN
+    sel_probs := 'coalesce(provsql.get_prob(e.token), 1.0)';
+    sel_bkeys := $sql$CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                      THEN e.bkey
+                      ELSE '00000000-0000-0000-0000-000000000000'::uuid END$sql$;
+    sel_bidx  := 'e.bidx';
+  ELSE
+    sel_probs := $sql$CASE WHEN provsql.get_gate_type(e.token) IN ('times','project','eq')
+                      THEN (SELECT CASE WHEN bool_or(coalesce(provsql.get_prob(s.leaf),1.0) = 0)
+                                        THEN 0.0
+                                        ELSE exp(sum(ln(coalesce(provsql.get_prob(s.leaf),1.0)))) END
+                            FROM provsql_reachability_support_tmp s
+                            WHERE s.token = e.token)
+                      ELSE coalesce(provsql.get_prob(e.token), 1.0) END$sql$;
+    sel_bkeys := $sql$CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                      THEN (provsql.get_children(e.token))[1]
+                      ELSE '00000000-0000-0000-0000-000000000000'::uuid END$sql$;
+    sel_bidx  := $sql$CASE WHEN provsql.get_gate_type(e.token) = 'mulinput'
+                      THEN (provsql.get_infos(e.token)).info1 ELSE 0 END$sql$;
+  END IF;
+
+  EXECUTE format(
+    $sql$
+    WITH verts AS (
+      SELECT u AS x FROM provsql_reachability_edges_tmp
+      UNION SELECT v FROM provsql_reachability_edges_tmp
+      UNION SELECT unnest($1)),
+    ids AS (
+      SELECT x, (row_number() OVER (ORDER BY x))::int AS id FROM verts)
+    SELECT array_agg(iu.id), array_agg(iv.id),
+           array_agg(e.token),
+           array_agg(%s),
+           array_agg(%s),
+           array_agg(%s),
+           (SELECT array_agg(i.id ORDER BY ev.ord)
+              FROM unnest($1) WITH ORDINALITY AS ev(x, ord)
+              JOIN ids i ON i.x = ev.x),
+           (SELECT array_agg(x ORDER BY id) FROM ids)
+      FROM (SELECT t.*,
+                   (row_number() OVER (PARTITION BY t.bkey))::int AS bidx
+            FROM provsql_reachability_edges_tmp t) e
+      JOIN ids iu ON iu.x = e.u
+      JOIN ids iv ON iv.x = e.v
+    $sql$, sel_probs, sel_bkeys, sel_bidx)
+    INTO sources, destinations, tokens, probabilities, block_keys,
+         block_indices, extra_ids, vertices
+    USING extra_vertices;
+
+  DROP TABLE provsql_reachability_edges_tmp;
+  DROP TABLE IF EXISTS provsql_reachability_support_tmp;
+END
+-- No SET search_path: the deparsed edge subquery (and the regclass
+-- rendering) must resolve against the caller's search_path; the ProvSQL
+-- calls above are schema-qualified instead.
+$$ LANGUAGE plpgsql SET client_min_messages = warning;
+
+CREATE OR REPLACE FUNCTION gather_reachability_sources(
+  IN rel regclass,
+  IN source_attribute TEXT,
+  OUT source_values TEXT[],
+  OUT source_tokens UUID[],
+  OUT source_probabilities DOUBLE PRECISION[])
+AS
+$$
+DECLARE
+  tracked boolean;
+  tkind text;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = rel AND attname = 'provsql'
+      AND atttypid = 'uuid'::regtype AND NOT attisdropped)
+  INTO tracked;
+
+  -- Registry consultation: a TID source relation is certified
+  -- all-base-input, so the per-row gate check can be skipped; a BID one
+  -- holds block-correlated tuples, which a probabilistic source set
+  -- cannot model -- reject it before gathering anything.
+  IF tracked THEN
+    tkind := (get_table_info(rel::oid)).kind;
+    IF tkind = 'bid' THEN
+      RAISE EXCEPTION 'reachability: % is block-independent (repair_key); block-correlated source sets are not supported', rel
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-block-correlated; scope: gap';
+    END IF;
+  END IF;
+
+  DROP TABLE IF EXISTS provsql_reachability_sources_tmp;
+  IF tracked THEN
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_reachability_sources_tmp AS '
+      || 'SELECT %1$I::text AS x, provenance() AS token '
+      || 'FROM %2$s WHERE %1$I IS NOT NULL',
+      source_attribute, rel);
+    PERFORM remove_provenance('provsql_reachability_sources_tmp');
+    IF tkind IS DISTINCT FROM 'tid'
+       AND EXISTS (SELECT 1 FROM provsql_reachability_sources_tmp
+                   WHERE get_gate_type(token) <> 'input') THEN
+      DROP TABLE provsql_reachability_sources_tmp;
+      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input tokens (independent tuples); views or query results are not supported', rel
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-not-base-inputs; scope: gap';
+    END IF;
+    SELECT array_agg(x), array_agg(token),
+           array_agg(coalesce(get_prob(token), 1.0))
+      INTO source_values, source_tokens, source_probabilities
+      FROM provsql_reachability_sources_tmp;
+    DROP TABLE provsql_reachability_sources_tmp;
+  ELSE
+    EXECUTE format(
+      'CREATE TEMP TABLE provsql_reachability_sources_tmp AS '
+      || 'SELECT DISTINCT %1$I::text AS x FROM %2$s WHERE %1$I IS NOT NULL',
+      source_attribute, rel);
+    SELECT array_agg(x),
+           array_agg('00000000-0000-0000-0000-000000000000'::uuid),
+           array_agg(1.0::float8)
+      INTO source_values, source_tokens, source_probabilities
+      FROM provsql_reachability_sources_tmp;
+    DROP TABLE provsql_reachability_sources_tmp;
+  END IF;
+END
+$$ LANGUAGE plpgsql SET search_path=provsql,pg_temp,public SET client_min_messages = warning;
 
 SELECT reset_constants_cache();

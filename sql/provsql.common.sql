@@ -587,7 +587,9 @@ $$
 BEGIN
   RAISE EXCEPTION 'uuid | (predicate) must be rewritten by the ProvSQL '
     'planner hook: the right operand must be a Boolean combination of '
-    'random_variable / aggregate comparisons (is provsql.active off?)';
+    'random_variable / aggregate comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -613,7 +615,9 @@ $$
 BEGIN
   RAISE EXCEPTION '(predicate) | (predicate) must be rewritten by the ProvSQL '
     'planner hook: both operands must be Boolean combinations of '
-    'random_variable / aggregate comparisons (is provsql.active off?)';
+    'random_variable / aggregate comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -703,7 +707,9 @@ $$
 BEGIN
   RAISE EXCEPTION 'given(predicate) / prefix | (predicate) must be rewritten '
     'by the ProvSQL planner hook: the operand must be a Boolean combination '
-    'of random_variable / aggregate comparisons (is provsql.active off?)';
+    'of random_variable / aggregate comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -1283,10 +1289,14 @@ BEGIN
        AND a.attnum   > 0
        AND NOT a.attisdropped;
     IF block_key_cols IS NULL OR array_length(block_key_cols, 1) IS NULL THEN
-      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att;
+      RAISE EXCEPTION 'repair_key: could not resolve key columns from "%"', key_att
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: repair-key-columns; scope: gap';
     END IF;
     IF array_length(block_key_cols, 1) > 16 THEN
-      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported';
+      RAISE EXCEPTION 'repair_key: block key wider than 16 columns is not supported'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: repair-key-too-wide; scope: gap';
     END IF;
   END IF;
 
@@ -2188,7 +2198,8 @@ BEGIN
 
   ELSIF gate_type = 'monus' THEN
     IF monus_function IS NULL THEN
-      RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function';
+      RAISE EXCEPTION USING MESSAGE='Provenance with negation evaluated over a semiring without monus function',
+      DETAIL = 'provsql-reason: semiring-no-monus; scope: deliberate';
     ELSE
       EXECUTE format('SELECT %s(a1,a2) FROM (SELECT provsql.provenance_evaluate(c[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a1, ' ||
                      'provsql.provenance_evaluate(c[2],%L,%L::%s,%L,%L,%L,%L,%L) AS a2 FROM get_children(%L) c) tmp',
@@ -2222,7 +2233,8 @@ BEGIN
 
   ELSIF gate_type = 'delta' THEN
     IF delta_function IS NULL THEN
-      RAISE EXCEPTION USING MESSAGE='Provenance with aggregation evaluated over a semiring without delta function';
+      RAISE EXCEPTION USING MESSAGE='Provenance with aggregation evaluated over a semiring without delta function',
+      DETAIL = 'provsql-reason: semiring-no-delta; scope: deliberate';
     ELSE
       EXECUTE format('SELECT %I(a) FROM (SELECT provsql.provenance_evaluate((get_children(%L))[1],%L,%L::%s,%L,%L,%L,%L,%L) AS a) tmp',
         delta_function, token, token2value, element_one, value_type, value_type, plus_function, times_function, monus_function, delta_function)
@@ -2251,7 +2263,8 @@ BEGIN
       INTO result;
 
   ELSE
-    RAISE EXCEPTION USING MESSAGE='provenance_evaluate cannot be called on formulas using ' || gate_type || ' gates; use compiled semirings instead';
+    RAISE EXCEPTION USING MESSAGE='provenance_evaluate cannot be called on formulas using ' || gate_type || ' gates; use compiled semirings instead',
+      DETAIL = 'provsql-reason: evaluate-gate-kind; scope: gap';
   END IF;
 
   RETURN result;
@@ -3538,7 +3551,9 @@ $$
 BEGIN
   RAISE EXCEPTION 'agg_token | (predicate) must be rewritten by the ProvSQL '
     'planner hook: the right operand must be a Boolean combination of '
-    'aggregate / random_variable comparisons (is provsql.active off?)';
+    'aggregate / random_variable comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: operator-not-rewritten; scope: gap';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -3582,7 +3597,9 @@ LANGUAGE plpgsql
 IMMUTABLE STRICT PARALLEL SAFE
 AS $$
 BEGIN
-  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior';
+  RAISE EXCEPTION 'Comparison agg_token-numeric not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
 END;
 $$;
 
@@ -3598,7 +3615,9 @@ LANGUAGE plpgsql
 IMMUTABLE STRICT PARALLEL SAFE
 AS $$
 BEGIN
-  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior';
+  RAISE EXCEPTION 'Comparison numeric-agg_token not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
 END;
 $$;
 
@@ -3719,7 +3738,9 @@ LANGUAGE plpgsql
 IMMUTABLE STRICT PARALLEL SAFE
 AS $$
 BEGIN
-  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior';
+  RAISE EXCEPTION 'Comparison agg_token-agg_token not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
 END;
 $$;
 
@@ -3767,7 +3788,9 @@ LANGUAGE plpgsql
 IMMUTABLE STRICT PARALLEL SAFE
 AS $$
 BEGIN
-  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior';
+  RAISE EXCEPTION 'Comparison agg_token-text not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
 END;
 $$;
 
@@ -3783,7 +3806,9 @@ LANGUAGE plpgsql
 IMMUTABLE STRICT PARALLEL SAFE
 AS $$
 BEGIN
-  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior';
+  RAISE EXCEPTION 'Comparison text-agg_token not implemented, should be replaced by ProvSQL behavior'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: agg-comparison-not-rewritten; scope: gap';
 END;
 $$;
 
@@ -5083,7 +5108,9 @@ BEGIN
                     'project','eq','cmp',
                     'zero','one') THEN
     RAISE EXCEPTION 'provsql.mixture: p must be a Boolean gate '
-                    '(input/mulinput/update/plus/times/monus/project/eq/cmp/zero/one), got %', p_kind;
+                    '(input/mulinput/update/plus/times/monus/project/eq/cmp/zero/one), got %', p_kind
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: mixture-argument-kind; scope: out-of-scope';
   END IF;
 
   x_uuid := (x)::uuid;
@@ -5091,10 +5118,14 @@ BEGIN
   x_kind := provsql.get_gate_type(x_uuid);
   y_kind := provsql.get_gate_type(y_uuid);
   IF x_kind NOT IN ('rv','value','arith','mixture') THEN
-    RAISE EXCEPTION 'provsql.mixture: x must be a scalar RV root (rv / value / arith / mixture), got %', x_kind;
+    RAISE EXCEPTION 'provsql.mixture: x must be a scalar RV root (rv / value / arith / mixture), got %', x_kind
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: mixture-argument-kind; scope: out-of-scope';
   END IF;
   IF y_kind NOT IN ('rv','value','arith','mixture') THEN
-    RAISE EXCEPTION 'provsql.mixture: y must be a scalar RV root (rv / value / arith / mixture), got %', y_kind;
+    RAISE EXCEPTION 'provsql.mixture: y must be a scalar RV root (rv / value / arith / mixture), got %', y_kind
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: mixture-argument-kind; scope: out-of-scope';
   END IF;
 
   token := public.uuid_generate_v5(
@@ -5802,7 +5833,9 @@ CREATE OR REPLACE FUNCTION random_variable_cmp_placeholder(
 $$
 BEGIN
   RAISE EXCEPTION 'random_variable comparison must be rewritten by the '
-                  'ProvSQL planner hook (is provsql.active off?)';
+                  'ProvSQL planner hook (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: rv-operator-not-rewritten; scope: out-of-scope';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -6011,7 +6044,8 @@ BEGIN
       'Compare them as a probabilistic event -- in a WHERE / JOIN clause or '
       'with probability(x > y); take order statistics with provsql.greatest / '
       'provsql.least (or the min / max aggregates); summarise numerically with '
-      'expected / variance / support.';
+      'expected / variance / support.',
+      DETAIL = 'provsql-reason: rv-comparison; scope: out-of-scope';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -6109,7 +6143,9 @@ $$
 BEGIN
   RAISE EXCEPTION 'random_variable | (predicate) must be rewritten by the '
     'ProvSQL planner hook: the right operand must be a Boolean combination '
-    'of random_variable comparisons (is provsql.active off?)';
+    'of random_variable comparisons (is provsql.active off?)'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: rv-operator-not-rewritten; scope: out-of-scope';
 END
 $$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
@@ -6256,7 +6292,8 @@ BEGIN
       'random-variable leaf (a gate_rv), got a % gate', provsql.get_gate_type(leaf)
       USING HINT = 'observe binds a datum to a single distribution leaf; '
         'observing a derived quantity (a sum, product, or comparison) needs '
-        'a change-of-variables density and is out of scope.';
+        'a change-of-variables density and is out of scope.',
+      DETAIL = 'provsql-reason: observe-argument-kind; scope: out-of-scope';
   END IF;
   IF NOT provsql.is_finite_float8(datum) THEN
     RAISE EXCEPTION 'provsql.observe: datum must be finite (got %)', datum;
@@ -6381,12 +6418,16 @@ BEGIN
   n := coalesce(array_length(atoms, 1), 0);
   IF n = 0 THEN
     RAISE EXCEPTION 'provsql.shapley_observe: evidence contains no observe() '
-      'atoms (got a % gate)', provsql.get_gate_type(evidence);
+      'atoms (got a % gate)', provsql.get_gate_type(evidence)
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: shapley-observe-no-evidence; scope: out-of-scope';
   END IF;
   IF n > 12 THEN
     RAISE EXCEPTION 'provsql.shapley_observe: exact attribution over % '
       'observations is exponential; capped at 12 (sampling-based '
-      'attribution is future work)', n;
+      'attribution is future work)', n
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: shapley-observe-too-many; scope: out-of-scope';
   END IF;
 
   -- factorials 0!..n!  (fact[k+1] = k!)
@@ -10340,7 +10381,9 @@ BEGIN
                WHERE provsql.get_gate_type(token) NOT IN ('input', 'mulinput', 'times',
                                                   'project', 'eq')) THEN
       DROP TABLE provsql_reachability_edges_tmp;
-      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input, repair_key, or conjunctive join tokens', coalesce(rel::text, 'the edge query');
+      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input, repair_key, or conjunctive join tokens', coalesce(rel::text, 'the edge query')
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-provenance-shape; scope: gap';
     END IF;
     CREATE TEMP TABLE provsql_reachability_support_tmp AS
       SELECT t.token, l.leaf
@@ -10353,7 +10396,9 @@ BEGIN
                  AND provsql.token_conjunctive_leaves(t.token) IS NULL) THEN
       DROP TABLE provsql_reachability_support_tmp;
       DROP TABLE provsql_reachability_edges_tmp;
-      RAISE EXCEPTION 'reachability: a join-defined edge token is not a pure conjunction of base tuples';
+      RAISE EXCEPTION 'reachability: a join-defined edge token is not a pure conjunction of base tuples'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-edge-not-conjunction; scope: gap';
     END IF;
     IF EXISTS (SELECT 1 FROM (
                  SELECT leaf FROM provsql_reachability_support_tmp
@@ -10364,7 +10409,9 @@ BEGIN
                GROUP BY leaf HAVING count(*) > 1) THEN
       DROP TABLE provsql_reachability_support_tmp;
       DROP TABLE provsql_reachability_edges_tmp;
-      RAISE EXCEPTION 'reachability: join-defined edges share base tuples (their supports overlap), so they are not independent';
+      RAISE EXCEPTION 'reachability: join-defined edges share base tuples (their supports overlap), so they are not independent'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-edges-share-tuples; scope: gap';
     END IF;
   END IF;
 
@@ -10475,7 +10522,9 @@ BEGIN
   IF tracked THEN
     tkind := (get_table_info(rel::oid)).kind;
     IF tkind = 'bid' THEN
-      RAISE EXCEPTION 'reachability: % is block-independent (repair_key); block-correlated source sets are not supported', rel;
+      RAISE EXCEPTION 'reachability: % is block-independent (repair_key); block-correlated source sets are not supported', rel
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-block-correlated; scope: gap';
     END IF;
   END IF;
 
@@ -10491,7 +10540,9 @@ BEGIN
        AND EXISTS (SELECT 1 FROM provsql_reachability_sources_tmp
                    WHERE get_gate_type(token) <> 'input') THEN
       DROP TABLE provsql_reachability_sources_tmp;
-      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input tokens (independent tuples); views or query results are not supported', rel;
+      RAISE EXCEPTION 'reachability: the provenance of % must consist of base input tokens (independent tuples); views or query results are not supported', rel
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: reachability-not-base-inputs; scope: gap';
     END IF;
     SELECT array_agg(x), array_agg(token),
            array_agg(coalesce(get_prob(token), 1.0))
@@ -11201,7 +11252,9 @@ BEGIN
   ELSIF semiring = 'counting' THEN
     RETURN provsql.provenance_evaluate_compiled(token, mapping, 'counting', 1) <> 0;
   ELSE
-    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring;
+    RAISE EXCEPTION 'nonzero: unsupported semiring "%" (supported: boolean, counting; NULL for the universal zero test)', semiring
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL = 'provsql-reason: nonzero-semiring; scope: gap';
   END IF;
 END
 $$ LANGUAGE plpgsql PARALLEL SAFE STABLE;
