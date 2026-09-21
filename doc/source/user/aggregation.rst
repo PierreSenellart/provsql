@@ -132,7 +132,12 @@ value, like ``round`` or ``abs``, and it is carried.
 A widening (an integer to ``numeric``, to a float) keeps the value as it is,
 and a narrowing to an integer rounds half away from zero, which is what
 PostgreSQL's own cast does; a cast to ``text``, to a ``boolean`` or to a date
-has no arithmetic behind it and stays a reading of the plain value. Casts that
+has no arithmetic behind it and stays a reading of the plain value. What the
+cast starts *from* has to be a number as well, since the carried form computes
+in ``numeric`` over the value the aggregate holds: ``bool_or(flag)::int`` is
+therefore a reading of the plain value, not a carried cast (the value of a
+Boolean aggregate is ``true``, which no arithmetic reads), and so is a cast
+over a text-valued one. Casts that
 PostgreSQL inserts on its own -- to line up the two arms of a ``GREATEST``, or
 an argument with a parameter -- are not the query's reading and are left where
 they are.

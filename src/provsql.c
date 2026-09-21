@@ -9785,6 +9785,29 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
   arg = peel_agg_casts((Node *)linitial(f->args));
   if (exprType(arg) != constants->OID_TYPE_AGG_TOKEN)
     return NULL;
+  /* The counterparts compute in numeric, over the number the aggregate's value
+   * is, so the function has to be one OF a number: the value of a bool_or is
+   * the text "true", and int4(boolean) over it -- what `bool_or(x)::int`
+   * writes -- would read that text as a numeric and fail.  What the function
+   * is declared to take says which, whatever the aggregate under the
+   * agg_token is (one read through a subquery exposes no aggregate at all), so
+   * a cast whose source is a Boolean, a text, a date is left to read the
+   * plain value, as a cast TO one of those is. */
+  {
+    Oid *declared = NULL;
+    int ndeclared = 0;
+    bool numeric_source;
+
+    get_func_signature(f->funcid, &declared, &ndeclared);
+    if (declared == NULL || ndeclared < 1)
+      return NULL;
+    numeric_source = declared[0] == INT2OID || declared[0] == INT4OID ||
+                     declared[0] == INT8OID || declared[0] == NUMERICOID ||
+                     declared[0] == FLOAT4OID || declared[0] == FLOAT8OID;
+    pfree(declared);
+    if (!numeric_source)
+      return NULL;
+  }
   if (nargs == 2) {
     /* A second argument that says how to apply the function rather than what
      * to apply it to: the digits of round(v, d).  It is no aggregate result,

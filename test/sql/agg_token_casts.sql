@@ -110,6 +110,28 @@ FROM atc_cast;
 SET provsql.active = on;
 -- A cast to text is a reading of the plain value, so it is frozen and named.
 SELECT sum(v)::text AS t FROM atc_cast;
+-- A cast FROM something that is not a number is one too, whatever it casts to:
+-- the counterparts compute in numeric over the value the aggregate carries,
+-- and the value of a bool_or is the text "true", which int4(boolean) -- what
+-- "bool_or(x)::int" writes -- would read as a numeric and fail on.  (The only
+-- such cast PostgreSQL has is Boolean to integer; it rejects Boolean to
+-- numeric or to bigint itself.)  Answered as plain SQL answers it, 1/1 for the
+-- member with both groups and 1/0 for the one with A alone, and named.
+CREATE TABLE atc_bool(m int, gn text);
+INSERT INTO atc_bool VALUES (1,'A'),(1,'B'),(2,'A');
+SELECT add_provenance('atc_bool');
+CREATE TABLE atc_bool_r AS
+  SELECT m, bool_or(gn = 'A')::int AS a, bool_or(gn = 'B')::int AS b
+  FROM atc_bool GROUP BY m;
+SELECT remove_provenance('atc_bool_r');
+SELECT * FROM atc_bool_r ORDER BY m;
+DROP TABLE atc_bool_r;
+-- A text-valued aggregate cast to a number, and one read through a text
+-- operator, are the same reading.
+SELECT min(gn)::int AS n FROM atc_bool WHERE gn ~ '^[0-9]+$';
+SELECT max(gn) || '!' AS shout FROM atc_bool;
+SELECT remove_provenance('atc_bool');
+DROP TABLE atc_bool;
 
 -- An agg_token column has an ordering of its own, on the value each token
 -- carries: numbers as numbers (50 before 30, not the other way as the text of

@@ -100,6 +100,31 @@ t|provsql
 add_provenance
 
 (1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_bool; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+remove_provenance
+
+(1 row)
+m|a|b
+1|1|1
+2|1|0
+(2 rows)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_bool; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+n|provsql
+|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks atc_bool; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+shout|provsql
+B!|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+remove_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
 remove_provenance
 
 (1 row)
