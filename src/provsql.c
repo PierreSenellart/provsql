@@ -16081,8 +16081,8 @@ static bool oj_wrap_body_with_match_ind(const constants_t *constants,
  * derived table as it stands: it needs neither the @c choose() of a value body
  * nor the @c HAVING that gates the worlds with more than one row.
  */
-static Query *tracked_one_row_cte(const constants_t *constants, List *ctes,
-                                  const RangeTblEntry *r) {
+static Query *tracked_cte_of(const constants_t *constants, List *ctes,
+                             const RangeTblEntry *r) {
   ListCell *lc;
 
   if (ctes == NIL || r->rtekind != RTE_CTE || r->ctename == NULL)
@@ -16094,14 +16094,18 @@ static Query *tracked_one_row_cte(const constants_t *constants, List *ctes,
         cte->ctequery == NULL || !IsA(cte->ctequery, Query))
       continue;
     cq = (Query *)cte->ctequery;
-    if (cq->hasAggs && cq->groupClause == NIL && cq->groupingSets == NIL &&
-        cq->setOperations == NULL && cq->distinctClause == NIL &&
-        cq->limitCount == NULL && cq->limitOffset == NULL &&
-        has_provenance(constants, cq))
-      return cq;
-    return NULL;
+    return has_provenance(constants, cq) ? cq : NULL;
   }
   return NULL;
+}
+
+/** @brief Whether @p cq is one row in every possible world: a bare aggregate,
+ *  which is defined over no row as well as over some. */
+static bool query_is_scalar_aggregation(const Query *cq) {
+  return cq->hasAggs && cq->groupClause == NIL && cq->groupingSets == NIL &&
+         cq->setOperations == NULL && cq->distinctClause == NIL &&
+         cq->havingQual == NULL && cq->limitCount == NULL &&
+         cq->limitOffset == NULL;
 }
 
 static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
@@ -16128,13 +16132,20 @@ static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
    * tracked subquery (a comma-join is fine -- D is then an inner join). */
   foreach (lc, body->rtable) {
     RangeTblEntry *r = (RangeTblEntry *)lfirst(lc);
-    /* A body reading a tracked one-row WITH entry: the entry is the derived
-     * table, and the reference resolves in the query the body moves into,
-     * whose WITH list is the one consulted here. */
-    if (list_length(body->rtable) == 1 &&
-        tracked_one_row_cte(constants, ctes, r) != NULL) {
-      one_row_cte = true;
-      continue;
+    /* A body reading a tracked WITH entry, which resolves in the query the
+     * body moves into -- whose WITH list is the one consulted here.  Taken
+     * where the body is one row in every world without a wrapper: either the
+     * entry is itself a bare aggregate and the body reads it, or the body
+     * aggregates it. */
+    if (list_length(body->rtable) == 1) {
+      Query *cq = tracked_cte_of(constants, ctes, r);
+      if (cq != NULL && (query_is_scalar_aggregation(cq) ||
+                         query_is_scalar_aggregation(body))) {
+        one_row_cte = true;
+        continue;
+      }
+      if (cq != NULL)
+        return NULL;   /* a value body over a many-row entry: not this route */
     }
     if (r->rtekind != RTE_RELATION || !oj_rte_has_provsql(constants, r))
       return NULL;
@@ -16147,7 +16158,11 @@ static Query *oj_build_uncorrelated_from_subquery(const constants_t *constants,
   vte = (TargetEntry *)linitial(body->targetList);
 
   if (one_row_cte) {
-    /* One row in every world already: the body is the derived table. */
+    /* One row in every world already, whether the body aggregates the entry or
+     * reads an entry that is itself an aggregate: the body is the derived
+     * table, with no choose() and no HAVING gating a second row. */
+    if (body->hasAggs && !IsA(vte->expr, Aggref))
+      return NULL;
     D = (Query *)copyObject(body);
   } else if (body->hasAggs) {
     /* Aggregate body: a single bare aggregate (one row, no grouping). */

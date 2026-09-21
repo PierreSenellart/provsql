@@ -87,6 +87,23 @@ SELECT remove_provenance('snr_cte');
 SELECT n::text AS n, pr FROM snr_cte;
 DROP TABLE snr_cte;
 
+-- The WITH entry needs not be the one-row one: what the route needs is a body
+-- that is one row in every world, so a body which AGGREGATES a many-row entry
+-- qualifies as well (difftest dba/137185, two such bodies in one block).  Over
+-- snr_t = {1, 2} at one half each, and its duplicate-free copy, the count of
+-- the rows below 2 is 1 in the worlds holding the first row, so its expectation
+-- is one half, and the count of all rows has expectation 1.
+CREATE TABLE snr_cte AS
+  WITH d AS (SELECT DISTINCT val FROM snr_t)
+  SELECT (SELECT count(*) FROM d WHERE val < 2) AS below,
+         (SELECT count(*) FROM d) AS total;
+SET provsql.active = off;
+SELECT below::text AS below, round(expected(below, provsql)::numeric, 6) AS e_below,
+       total::text AS total, round(expected(total, provsql)::numeric, 6) AS e_total
+FROM snr_cte;
+SET provsql.active = on;
+DROP TABLE snr_cte;
+
 -- A WITH that reads no tracked relation stays plain SQL, with no provenance
 -- column: there is nothing to track.
 WITH u AS (SELECT 1 AS n) SELECT (SELECT n FROM u) AS n;
