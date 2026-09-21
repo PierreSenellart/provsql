@@ -364,8 +364,18 @@ rather than as an unknown -- ``GREATEST(NULL, 2)`` is 2 -- which a bare
 ``CASE WHEN a > b`` would get wrong, its unknown comparison falling to the
 ``ELSE``. Two arguments, and an aggregate one has to be a kind whose
 ``NULL``-ness has a reading (``count``, ``sum``, ``avg``, ``min``, ``max``,
-:sqlfunc:`choose`). ``NULLIF`` over an aggregate has no such reading and is
-read as a plain value.
+:sqlfunc:`choose`). ``NULLIF`` is the same kind of reading, ``NULLIF(a, b)`` being
+``CASE WHEN a = b THEN NULL ELSE a END``, and is tracked where the compared
+value holds no aggregate of its own:
+
+.. code-block:: postgresql
+
+    SELECT district, NULLIF(sum(pm25), 0) AS nonzero
+    FROM readings GROUP BY district;
+    --  =  CASE WHEN sum(pm25) = 0 THEN NULL ELSE sum(pm25) END
+
+where a ``NULL`` sum makes the guard unknown, so the ``ELSE`` gives it back and
+``NULLIF`` answers ``NULL`` there, as SQL does.
 
 .. _window-aggregates:
 

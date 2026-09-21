@@ -143,10 +143,11 @@ SELECT provsql.agg_token_value_text(provsql.agg_token_uuid(expr)) AS disp
 FROM agg_arith_disp ORDER BY 1;
 DROP TABLE agg_arith_disp;
 
--- COALESCE, GREATEST, NULLIF over an aggregate of the same query.  The first
--- two are the CASE they mean and are tracked (see agg_case); NULLIF has no such
--- reading, so its agg_token is cast back to the aggregate's type (with the
--- warning), not read as a value of the expression's type.
+-- COALESCE, GREATEST and NULLIF over an aggregate of the same query: each is
+-- the CASE it means and all three are tracked (see agg_case).  NULLIF(COUNT(*),
+-- 1) is NULL in the worlds where the city holds exactly one row and the count
+-- elsewhere, which is why the column is a tracked value rather than the count
+-- read as a plain one.
 CREATE TABLE agg_arith_cg AS
   SELECT city, COALESCE(SUM(id), 0) AS s, GREATEST(COUNT(*), 3) AS g,
          NULLIF(COUNT(*), 1) AS n

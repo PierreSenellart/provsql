@@ -257,5 +257,31 @@ SET provsql.active = off;
 SELECT gt::text AS gt, ls::text AS ls FROM cc_r;
 SET provsql.active = on;
 DROP TABLE cc_r, cc;
+-- NULLIF(aggregate, value) is the CASE it means as well, CASE WHEN agg = value
+-- THEN NULL ELSE agg END, so it lowers to the same gate: its guard is the
+-- comparison lowering, and a NULL aggregate falls to the ELSE, which is what
+-- SQL answers there too.  The compared value bites in some worlds and not in
+-- others, so the answer is neither the aggregate everywhere nor NULL
+-- everywhere: over the two rows of the first group, each present with
+-- probability one half, sum(v) is 1, 2 or 3, so NULLIF(sum(v), 3) is 1, 2 and
+-- NULL, E = 1.5 over the worlds where it has a value.  The second group holds
+-- one row of 5, which the compared value never equals.
+CREATE TABLE cn(g int, v int);
+INSERT INTO cn VALUES (1,1),(1,2),(2,5);
+SELECT add_provenance('cn');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM cn; END $$;
+CREATE TABLE cn_r AS
+  SELECT g, nullif(sum(v), 3) AS n3, nullif(count(*), 1) AS n1 FROM cn GROUP BY g;
+SET provsql.active = off;
+SELECT g, n3::text AS n3, round(expected(n3, provsql)::numeric, 6) AS e_n3,
+       n1::text AS n1, round(probability(provsql)::numeric, 6) AS p
+FROM cn_r ORDER BY g;
+SET provsql.active = on;
+DROP TABLE cn_r;
+-- Compared against an aggregate of its own: two aggregates on one row, which
+-- the CASE would read as two branches, so it stays a plain value and says so.
+SELECT nullif(sum(v), min(v)) AS n FROM cn WHERE g = 1;
+SELECT remove_provenance('cn');
+DROP TABLE cn;
 
 SELECT 'ok'::text AS agg_case_done;

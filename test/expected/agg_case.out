@@ -130,6 +130,25 @@ WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
 gt|ls
 2|2
 (1 row)
+add_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+g|n3|e_n3|n1|p
+1||1.500000|2|0.750000
+2|5|5.000000||0.500000
+(2 rows)
+WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks cn; cast it explicitly (::numeric, ::text, ...) to say so
+DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
+n|provsql
+3|d265daa9-f206-561d-845c-2a85fa0fa72c
+(1 row)
+remove_provenance
+
+(1 row)
 agg_case_done
 ok
 (1 row)

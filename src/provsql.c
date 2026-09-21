@@ -6488,6 +6488,68 @@ coalesce_agg_to_case(CoalesceExpr *co, const constants_t *constants)
 }
 
 /**
+ * @brief @c NULLIF over an aggregate as the searched @c CASE it means.
+ *
+ * @c NULLIF(a,b) is @c NULL where @c a @c = @c b and @c a otherwise, so
+ * @code
+ *   CASE WHEN a = b THEN NULL ELSE a END
+ * @endcode
+ * says it, including where @c a is @c NULL: the equality is then unknown, the
+ * @c ELSE gives @c a back, and @c NULL is what @c NULLIF answers there too.
+ * The guard is a comparison between an aggregate and a value of the row, which
+ * @c having_Expr_to_provenance_cmp reads as it does the guards of a @c CASE the
+ * query wrote itself.
+ *
+ * The compared value has to hold no aggregate of its own, as a @c COALESCE
+ * default does not (@c coalesce_agg_to_case): it is lifted into a value gate,
+ * so what it needs is to be the same in every world.
+ */
+static CaseExpr *nullif_agg_to_case(NullIfExpr *ni, const constants_t *constants)
+{
+  Node *agg, *stripped;
+  OpExpr *eq;
+  CaseWhen *cw;
+  CaseExpr *ce;
+
+  if (list_length(ni->args) != 2)
+    return NULL;
+  agg = (Node *)linitial(ni->args);
+  stripped = strip_agg_cast(agg);
+  if (stripped == NULL || !IsA(stripped, FuncExpr) ||
+      ((FuncExpr *)stripped)->funcid !=
+        constants->OID_FUNCTION_PROVENANCE_AGGREGATE)
+    return NULL;
+  if (has_aggtoken((Node *)lsecond(ni->args), constants) ||
+      contain_aggs_of_level((Node *)lsecond(ni->args), 0))
+    return NULL;
+
+  eq = makeNode(OpExpr);
+  eq->opno = ni->opno;
+  eq->opfuncid = ni->opfuncid;
+  eq->opresulttype = BOOLOID;
+  eq->opretset = false;
+  eq->opcollid = InvalidOid;
+  eq->inputcollid = ni->inputcollid;
+  eq->args = list_make2(copyObject(agg), copyObject((Node *)lsecond(ni->args)));
+  eq->location = ni->location;
+
+  cw = makeNode(CaseWhen);
+  cw->expr = (Expr *)eq;
+  cw->result = (Expr *)makeNullConst(exprType((Node *)ni), exprTypmod((Node *)ni),
+                                     exprCollation((Node *)ni));
+  cw->location = -1;
+
+  ce = makeNode(CaseExpr);
+  ce->casetype = exprType((Node *)ni);
+  ce->casecollid = exprCollation((Node *)ni);
+  ce->arg = NULL;
+  ce->args = list_make1(cw);
+  ce->defresult = (Expr *)agg;
+  ce->location = ni->location;
+  return ce;
+}
+
+/**
  * @brief @c GREATEST / @c LEAST of two arguments as the searched @c CASE it
  *        means.
  *
@@ -6637,6 +6699,14 @@ rewrite_agg_case_mutator(Node *node, void *context)
     Node *lowered = ce != NULL && case_is_agg_carrier(ce, constants)
       ? build_agg_case(ce, constants) : NULL;
     return lowered != NULL ? lowered : (Node *)mm;
+  }
+  if (IsA(node, NullIfExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
+    NullIfExpr *ni = (NullIfExpr *)expression_tree_mutator(
+      node, rewrite_agg_case_mutator, context);
+    CaseExpr *ce = nullif_agg_to_case(ni, constants);
+    Node *lowered = ce != NULL && case_is_agg_carrier(ce, constants)
+      ? build_agg_case(ce, constants) : NULL;
+    return lowered != NULL ? lowered : (Node *)ni;
   }
   if (IsA(node, CoalesceExpr) && OidIsValid(constants->OID_FUNCTION_AGG_CASE)) {
     CoalesceExpr *co = (CoalesceExpr *)expression_tree_mutator(
