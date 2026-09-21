@@ -24,6 +24,33 @@ k|p
 2|0.375000
 3|0.500000
 (3 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.375000
+2|0.375000
+3|0.250000
+(3 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.375000
+2|0.375000
+3|0.250000
+(3 rows)
+remove_provenance
+
+(1 row)
+k|g|p
+1|10|0.250000
+1|10|0.250000
+2|20|0.375000
+3|30|0.250000
+(4 rows)
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body groups rows of its own, reads those groups with a HAVING, and is correlated with the query around it, so its groups are not the same from one outer row to the next
+DETAIL:  provsql-reason: body-groups-correlated; scope: gap
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body groups rows of its own and the value compared is an aggregate of them, which is one value per possible world
 DETAIL:  provsql-reason: body-groups-aggregate; scope: gap
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body groups rows of its own

@@ -48,6 +48,44 @@ SELECT remove_provenance('bg_notin');
 SELECT * FROM bg_notin ORDER BY k;
 DROP TABLE bg_notin;
 
+-- A grouping that reads none of its groups is deduplication and nothing else,
+-- so it is dropped and the condition lowered as it is without it, correlated or
+-- not.  Both forms must give the same rows and the same probabilities: what the
+-- grouping removes are duplicates, which a membership test does not read.
+CREATE TABLE bg_dedup AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE k IN (SELECT bgu.k FROM bgu WHERE bgu.v > 1 GROUP BY bgu.k);
+SELECT remove_provenance('bg_dedup');
+SELECT * FROM bg_dedup ORDER BY k;
+DROP TABLE bg_dedup;
+CREATE TABLE bg_nodedup AS
+  SELECT k, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt WHERE k IN (SELECT bgu.k FROM bgu WHERE bgu.v > 1);
+SELECT remove_provenance('bg_nodedup');
+SELECT * FROM bg_nodedup ORDER BY k;
+DROP TABLE bg_nodedup;
+
+-- Correlated, and over a comparison of two columns at once: the groups of such
+-- a body differ from one outer row to the next, which is why a grouping read by
+-- a HAVING or an aggregate stays refused below; a grouping that only
+-- deduplicates does not care.
+CREATE TABLE bg_corr AS
+  SELECT bgt.k, bgu2.g,
+         round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM bgt, bgu AS bgu2
+  WHERE (bgt.k, bgu2.g) IN (SELECT bgu.k, bgu.g FROM bgu
+                            WHERE bgu.k = bgt.k GROUP BY bgu.k, bgu.g);
+SELECT remove_provenance('bg_corr');
+SELECT * FROM bg_corr ORDER BY k, g, p;
+DROP TABLE bg_corr;
+
+-- A body whose grouping IS read, by a HAVING of its own, and correlated: the
+-- groups differ per outer row, so it stays refused, and the refusal names the
+-- correlation (body-groups-correlated) rather than the grouping alone, that
+-- being what an uncorrelated body of the same shape is carried in spite of.
+SELECT k FROM bgt WHERE k IN (SELECT bgu.k FROM bgu WHERE bgu.k = bgt.k
+                              GROUP BY bgu.k HAVING count(*) > 1);
+
 -- Compared against an aggregate result: refused, and the message still names
 -- the body's grouping rather than the derived table the wrap would have made.
 SELECT k FROM bgt WHERE x IN (SELECT max(v) FROM bgu GROUP BY g);

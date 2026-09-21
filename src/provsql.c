@@ -11548,6 +11548,8 @@ static bool tracked_sublink_count_walker(Node *node, void *cx) {
  * @param sl         The sublink the rewrites left behind, or @c NULL.
  * @return  A phrase to read after @c "not supported here:".
  */
+static bool reads_outside_walker(Node *node, Index depth);
+
 static sublink_reason sublink_unsupported_reason(const constants_t *constants,
                                                  Query *q, SubLink *sl) {
   Query *b = (sl != NULL && IsA(sl->subselect, Query))
@@ -11582,6 +11584,17 @@ static sublink_reason sublink_unsupported_reason(const constants_t *constants,
              "compared is an aggregate of them, which is one value per "
              "possible world");
       }
+      /* A grouping that nothing reads is dropped as the deduplication it is,
+       * so what is left here is a body whose groups a HAVING reads.  That is
+       * carried for an uncorrelated body, whose groups are the same for every
+       * outer row; a correlated one has its own groups per outer row, which the
+       * derived table cannot hold. */
+      if (reads_outside_walker((Node *)b, 0))
+        return sublink_reason_of(PROVSQL_GAP, "body-groups-correlated",
+                            "its body groups rows of its own, reads those "
+             "groups with a HAVING, and is correlated with the query around "
+             "it, so its groups are not the same from one outer row to the "
+             "next");
       return sublink_reason_of(PROVSQL_GAP, "body-groups",
                             "its body groups rows of its own");
     }
@@ -14788,6 +14801,20 @@ static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
       sub->limitCount != NULL || sub->limitOffset != NULL ||
       sub->rtable == NIL || sub->jointree == NULL)
     return false;
+  /* A grouping that reads none of its groups is deduplication and nothing
+   * else: the set of values the body projects is the same without it, and a
+   * membership test reads that set, not how many times a value occurs in it.
+   * Dropping it leaves an ordinary subquery condition, which the decorrelation
+   * lowers whether it is correlated or not, so this is the one grouped shape
+   * that does not need the derived table below. */
+  if (sub->havingQual == NULL && !sub->hasAggs && sub->groupingSets == NIL &&
+      sub->groupClause != NIL && sub->sortClause == NIL) {
+    /* PG 18 reads the keys through a virtual entry, whose columns go back on
+     * the tables they come from once the grouping is gone. */
+    strip_group_rte_pg18(sub);
+    sub->groupClause = NIL;
+    return false;
+  }
   if (reads_outside_walker((Node *)sub, 0))
     return false;                 /* correlated: the groups would differ */
   if (sub->groupClause == NIL)
