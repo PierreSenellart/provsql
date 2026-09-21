@@ -22535,8 +22535,16 @@ static bool limit_lowerable(const constants_t *constants, Query *q) {
   bool ties = false;
   bool ordered_by_agg = false;
 
-  /* One ordering key, which is an aggregate of the query: the top-k of the
-   * groups of an aggregation */
+  /* One ordering key that reads an aggregate value: the top-k of the groups of
+   * an aggregation.  The value needs not be an aggregate of this block -- an
+   * aggregate column of a FROM subquery, or a scalar subquery that counts, is
+   * the same top-k and the commonest way it is written.
+   *
+   * @c sort_key_reads_agg_value is deliberately the SAME predicate the
+   * freezing report uses for @c limit-not-read-in-every-world (see
+   * @c warn_top_limit): what that reports as a gap is what this lowers, so a
+   * survey counting the tag is counting this lowering's coverage.  Keep them
+   * shared; giving either a predicate of its own takes that evidence away. */
   if (list_length(q->sortClause) == 1)
     ordered_by_agg = sort_key_reads_agg_value(constants, q);
 
@@ -26300,9 +26308,10 @@ static void warn_top_limit(const constants_t *constants, Query *q) {
                   "have the truncation read in every world");
   else
     /* The truncation of a top-k whose key is an aggregate value is a reading
-     * the fragment has -- the filter of a rank -- and that is not built yet;
-     * one over keys of the data is a cut of the actual result, which no
-     * provenance describes. */
+     * the fragment has -- the filter of a rank, which @c limit_lowerable
+     * builds -- where one over keys of the data is a cut of the actual result,
+     * which no provenance describes.  The predicate is shared with that
+     * lowering on purpose (see the comment there). */
     report_freeze(constants, NULL,
                   sort_key_reads_agg_value(constants, q) ? PROVSQL_GAP
                                                          : PROVSQL_DELIBERATE,
