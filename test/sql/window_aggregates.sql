@@ -75,6 +75,19 @@ SELECT * FROM wa_report('min',
   'min(x) OVER (PARTITION BY g)', 'v < 15');
 SELECT * FROM wa_report('avg',
   'avg(x) OVER (PARTITION BY g)', 'v > 18');
+-- A ratio of TWO aggregates, which the per-world evaluation used to truncate:
+-- the gate says which division SQL means (the rewriting emits the integer one
+-- exactly where the expression's type is an integer type), and reading that
+-- from the values instead made "count / count" 1 or 0 per world, so this
+-- comparison answered the probability that the two counts are equal -- 0.3
+-- where the enumeration says 0.452 for row 2.  Rows 2 and 3 are peers, which
+-- is where the two counts differ by more than the rows after them.
+SELECT * FROM wa_report('ratio of two counts',
+  '(count(*) OVER (PARTITION BY g ORDER BY x))::numeric
+     / (count(*) OVER (PARTITION BY g))::numeric', 'v > 0.5');
+SELECT * FROM wa_report('ratio of two sums',
+  '(sum(x) OVER (PARTITION BY g ORDER BY x))::numeric
+     / (sum(x) OVER (PARTITION BY g))::numeric', 'v > 0.6');
 SELECT * FROM wa_report('share of the partition',
   'x * 100 / sum(x) OVER (PARTITION BY g)', 'v > 30');
 SELECT * FROM wa_report('rest of the partition',

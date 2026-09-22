@@ -925,12 +925,19 @@ void provsql_having(
             if (aop == PROVSQL_ARITH_INTDIV) {  // SQL division of integers
               out = std::trunc(a / b);
               is_int = true;
-            } else if (ai && bi) {     // SQL integer division truncates toward zero
-              out = static_cast<double>(static_cast<long long>(a) /
-                                        static_cast<long long>(b));
-              is_int = true;
             } else {
-              out = a / b; is_int = false;
+              /* A real division, whatever the operands happen to be in this
+               * world.  Which of the two divisions SQL means is the gate's to
+               * say -- the rewriting emits INTDIV exactly where the
+               * expression's type is an integer one -- and deciding it again
+               * from the values truncated a division the query wrote over
+               * numbers: count(*) OVER w / count(*) OVER w0 came out 1 or 0
+               * per world, so a comparison over it answered the probability
+               * that the two counts are equal.  The other five evaluators
+               * (Monte Carlo, RangeCheck, Expectation, the simplifier, the
+               * collapsed moment) all read the op and not the values. */
+              out = a / b;
+              is_int = false;
             }
             return true;
           }
