@@ -32,8 +32,14 @@ id|p
 1|0.125000
 2|0.250000
 (2 rows)
-ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body is a set operation (UNION, INTERSECT, EXCEPT), whose rows the decorrelation cannot group
-DETAIL:  provsql-reason: body-set-operation; scope: gap
+remove_provenance
+
+(1 row)
+id|p
+1|0.187500
+2|0.187500
+3|0.187500
+(3 rows)
 ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body is a set operation (UNION, INTERSECT, EXCEPT), whose rows the decorrelation cannot group
 DETAIL:  provsql-reason: body-set-operation; scope: gap
 remove_provenance

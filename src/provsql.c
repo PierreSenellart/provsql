@@ -16879,15 +16879,17 @@ static SubLink *na_not_exists(Node *n) {
   return (SubLink *)inner;
 }
 
-/** @brief Where each relation of the source query lands in the pair block:
- *  R at 1, P at 2. */
+/** @brief Where the relations of the source query land in the pair block: the
+ *  ones of its own FROM keep their index, and the body's relation goes after
+ *  them. */
 typedef struct na_pair_ctx {
-  Index r_idx;  ///< R's index in the query being rewritten
+  Index p_new;  ///< where the body's relation lands in the pair block
 } na_pair_ctx;
 
 /** @brief Mutator for the body's own correlation, one level below the query:
- *  what reads P (level 0, its only relation) becomes relation 2 of the pair
- *  block, and what reads R comes down to relation 1 of it. */
+ *  what reads the body's relation (level 0, its only one) becomes @c p_new of
+ *  the pair block, and what reads the query's own relations comes down a level,
+ *  keeping the index it had -- the pair block holds them at the same places. */
 static Node *na_corr_out_mut(Node *node, void *cx) {
   na_pair_ctx *c = (na_pair_ctx *)cx;
   if (node == NULL)
@@ -16896,11 +16898,10 @@ static Node *na_corr_out_mut(Node *node, void *cx) {
     Var *v = (Var *)node;
     if (v->varlevelsup == 0 && v->varno == 1) {
       v = (Var *)copyObject(v);
-      v->varno = 2;
-    } else if (v->varlevelsup == 1 && v->varno == c->r_idx) {
+      v->varno = c->p_new;
+    } else if (v->varlevelsup == 1) {
       v = (Var *)copyObject(v);
       v->varlevelsup = 0;
-      v->varno = 1;
     } else
       return node;
 #if PG_VERSION_NUM >= 130000
@@ -16913,8 +16914,8 @@ static Node *na_corr_out_mut(Node *node, void *cx) {
 }
 
 /** @brief Mutator for the inner body, which keeps its level (one below the pair
- *  block): what read P and R two and three levels up in the source now read
- *  relations 2 and 1 of the block just above. */
+ *  block): what read the body's relation and the query's own two and three
+ *  levels up now read the block just above. */
 static Node *na_corr_in_mut(Node *node, void *cx) {
   na_pair_ctx *c = (na_pair_ctx *)cx;
   if (node == NULL)
@@ -16923,11 +16924,10 @@ static Node *na_corr_in_mut(Node *node, void *cx) {
     Var *v = (Var *)node;
     if (v->varlevelsup == 1 && v->varno == 1) {
       v = (Var *)copyObject(v);
-      v->varno = 2;
-    } else if (v->varlevelsup == 2 && v->varno == c->r_idx) {
+      v->varno = c->p_new;
+    } else if (v->varlevelsup == 2) {
       v = (Var *)copyObject(v);
       v->varlevelsup = 1;
-      v->varno = 1;
     } else
       return node;
 #if PG_VERSION_NUM >= 130000
@@ -16955,9 +16955,9 @@ static RangeTblEntry *na_copy_rel(Query *to, Query *from, RangeTblEntry *src) {
   return copy;
 }
 
-/** @brief @c "l IS NOT DISTINCT FROM r", the NULL-safe equality the projection
- *  of R has to be matched on: a plain @c = would miss an R row with a NULL in
- *  any of its columns, and let it through the antijoin it should not pass. */
+/** @brief @c "l IS NOT DISTINCT FROM r".  A plain @c = would miss a row with a
+ *  NULL in the column, and let it through an antijoin it should not pass; it is
+ *  also the matching a set operation does, which reads two NULLs as equal. */
 static Node *na_not_distinct(Expr *l, Expr *r) {
   DistinctExpr *de = makeNode(DistinctExpr);
   Oid t = exprType((Node *)l);
@@ -16983,8 +16983,102 @@ static Node *na_not_distinct(Expr *l, Expr *r) {
 }
 
 /**
- * @brief Read a nested antijoin as the antijoin of R against the projection of
- *        its bad pairs (see the block comment above).
+ * @brief Read a @c "NOT EXISTS (A EXCEPT B)" body as the nested antijoin it is,
+ *        and return the body to read in its place, or @c NULL.
+ *
+ * @c "A EXCEPT B is empty" is @c "every row of A is a row of B" -- the same
+ * division as a nested antijoin, written with a set operation instead of a
+ * second @c NOT @c EXISTS.  So the arms are put back in that form:
+ *
+ *   NOT EXISTS (SELECT e FROM P WHERE qA
+ *                EXCEPT SELECT f FROM C WHERE qB)
+ *   =  NOT EXISTS (SELECT 1 FROM P WHERE qA
+ *                   AND NOT EXISTS (SELECT 1 FROM C
+ *                                    WHERE qB AND f IS NOT DISTINCT FROM e))
+ *
+ * and @c rewrite_nested_antijoin then reads the result.  The match is on all
+ * the arms' columns, NULL-safely, which is how a set operation compares rows.
+ *
+ * @c EXCEPT @c ALL is a different question -- it asks whether A has MORE copies
+ * of a row than B, not whether B has the row at all -- and is declined.  An arm
+ * of a set operation sits one level further down than a plain body, so what it
+ * reads of the query around comes up one level here.
+ */
+static Query *na_except_to_nested(const constants_t *constants, Query *sub) {
+  SetOperationStmt *setop;
+  RangeTblEntry *l_rte, *r_rte;
+  Query *A, *B;
+  ListCell *la, *lb;
+  List *matches = NIL;
+
+  if (!IsA(sub, Query) || sub->setOperations == NULL)
+    return NULL;
+  if (!IsA(sub->setOperations, SetOperationStmt))
+    return NULL;
+  setop = (SetOperationStmt *)sub->setOperations;
+  if (setop->op != SETOP_EXCEPT || setop->all)
+    return NULL;
+  if (!IsA(setop->larg, RangeTblRef) || !IsA(setop->rarg, RangeTblRef))
+    return NULL;
+  if (sub->cteList != NIL || sub->limitCount != NULL || sub->limitOffset != NULL)
+    return NULL;
+
+  l_rte = rt_fetch(((RangeTblRef *)setop->larg)->rtindex, sub->rtable);
+  r_rte = rt_fetch(((RangeTblRef *)setop->rarg)->rtindex, sub->rtable);
+  if (l_rte->rtekind != RTE_SUBQUERY || r_rte->rtekind != RTE_SUBQUERY ||
+      l_rte->subquery == NULL || r_rte->subquery == NULL)
+    return NULL;
+  A = (Query *)copyObject(l_rte->subquery);
+  B = (Query *)copyObject(r_rte->subquery);
+  if (na_body_relation(A, false) == NULL || na_body_relation(B, false) == NULL)
+    return NULL;
+  if (A->jointree->quals == NULL || B->jointree->quals == NULL)
+    return NULL;
+  if (list_length(A->targetList) != list_length(B->targetList))
+    return NULL;
+
+  /* "f IS NOT DISTINCT FROM e", read from inside B: its own columns are where
+   * they are, and A's are one level up once B sits under A. */
+  forboth (la, A->targetList, lb, B->targetList) {
+    TargetEntry *ta = (TargetEntry *)lfirst(la);
+    TargetEntry *tb = (TargetEntry *)lfirst(lb);
+    Node *e, *m;
+    if (ta->resjunk || tb->resjunk)
+      return NULL;
+    e = (Node *)copyObject(ta->expr);
+    IncrementVarSublevelsUp(e, 1, 0);
+    m = na_not_distinct((Expr *)copyObject(tb->expr), (Expr *)e);
+    if (m == NULL)
+      return NULL;
+    matches = lappend(matches, m);
+  }
+
+  /* A becomes the body itself, one level up from where it was. */
+  IncrementVarSublevelsUp((Node *)A, -1, 2);
+  B->jointree->quals = (Node *)makeBoolExpr(
+    AND_EXPR, lcons(B->jointree->quals, matches), -1);
+  B->hasSubLinks = false;
+  {
+    SubLink *isl = makeNode(SubLink);
+    isl->subLinkType = EXISTS_SUBLINK;
+    isl->subselect = (Node *)B;
+    isl->testexpr = NULL;
+    isl->operName = NIL;
+    isl->location = -1;
+    A->jointree->quals = (Node *)makeBoolExpr(
+      AND_EXPR,
+      list_make2(A->jointree->quals,
+                 makeBoolExpr(NOT_EXPR, list_make1(isl), -1)),
+      -1);
+  }
+  A->hasSubLinks = true;
+  (void)constants;
+  return A;
+}
+
+/**
+ * @brief Read a nested antijoin as the antijoin of the query's own rows against
+ *        the projection of its bad pairs (see the block comment above).
  *
  * @return  Whether @p q was rewritten.  Every shape this does not cover is
  *          declined silently, and the usual sublink handling then reports it.
@@ -16994,25 +17088,36 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
   ListCell *lc;
   SubLink *outer_sl = NULL, *inner_sl = NULL;
   Query *pbody, *cbody, *pair, *probe;
-  RangeTblEntry *p_rte, *c_rte, *r_rte, *bad_rte;
-  Index r_idx;
+  RangeTblEntry *p_rte, *c_rte, *bad_rte;
   Node *corr_out;
-  oj_cols rc;
   na_pair_ctx pc;
   RangeTblRef *ref;
-  List *colnames = NIL;
-  int i;
+  List *colnames = NIL, *outer_cols = NIL;
+  int nrel, ncol = 0, i, k;
+  bool any_tracked = false;
 
   if (q->commandType != CMD_SELECT || !q->hasSubLinks)
     return false;
-  if (q->jointree == NULL || list_length(q->jointree->fromlist) != 1 ||
-      !IsA(linitial(q->jointree->fromlist), RangeTblRef) ||
-      q->jointree->quals == NULL)
+  if (q->jointree == NULL || q->jointree->quals == NULL)
     return false;
-  r_idx = ((RangeTblRef *)linitial(q->jointree->fromlist))->rtindex;
-  r_rte = rt_fetch(r_idx, q->rtable);
-  if (r_rte->rtekind != RTE_RELATION || r_rte->tablesample != NULL)
+  /* The query's own FROM: base relations only, and exactly the ones of its
+   * range table, so the pair block can hold them at the same indices. */
+  nrel = list_length(q->jointree->fromlist);
+  if (nrel < 1 || nrel != list_length(q->rtable))
     return false;
+  for (i = 0; i < nrel; ++i) {
+    RangeTblEntry *rte;
+    if (!IsA(list_nth(q->jointree->fromlist, i), RangeTblRef))
+      return false;
+    if ((int)((RangeTblRef *)list_nth(q->jointree->fromlist, i))->rtindex !=
+        i + 1)
+      return false;
+    rte = rt_fetch(i + 1, q->rtable);
+    if (rte->rtekind != RTE_RELATION || rte->tablesample != NULL)
+      return false;
+    if (oj_rte_has_provsql(constants, rte))
+      any_tracked = true;
+  }
 
   /* One NOT EXISTS in the WHERE, and no other conjunct holding a subquery. */
   conjs = (IsA(q->jointree->quals, BoolExpr) &&
@@ -17032,12 +17137,16 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
   if (outer_sl == NULL || checkExprHasSubLink((Node *)q->targetList))
     return false;
 
-  pbody = (Query *)outer_sl->subselect;
+  /* A set-operation body says the same thing with EXCEPT: put it back in the
+   * nested form first, and read that. */
+  pbody = na_except_to_nested(constants, (Query *)outer_sl->subselect);
+  if (pbody == NULL)
+    pbody = (Query *)outer_sl->subselect;
   p_rte = na_body_relation(pbody, true);
   if (p_rte == NULL || pbody->jointree->quals == NULL)
     return false;
 
-  /* Its WHERE: one NOT EXISTS, the rest the correlation with R. */
+  /* Its WHERE: one NOT EXISTS, the rest the correlation with the query. */
   conjs = (IsA(pbody->jointree->quals, BoolExpr) &&
            ((BoolExpr *)pbody->jointree->quals)->boolop == AND_EXPR)
             ? ((BoolExpr *)pbody->jointree->quals)->args
@@ -17060,26 +17169,32 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
   if (c_rte == NULL || cbody->jointree->quals == NULL)
     return false;
 
-  if (!oj_rte_has_provsql(constants, r_rte) &&
-      !oj_rte_has_provsql(constants, p_rte) &&
+  if (!any_tracked && !oj_rte_has_provsql(constants, p_rte) &&
       !oj_rte_has_provsql(constants, c_rte))
     return false; /* nothing tracked: PostgreSQL's own machinery */
 
-  oj_collect_cols(constants, r_rte, &rc);
-  if (rc.n == 0)
-    return false;
+  /* The user columns of every relation of the query's own FROM, in order. */
+  for (k = 1; k <= nrel; ++k) {
+    oj_cols *rc = (oj_cols *)palloc0(sizeof(oj_cols));
+    oj_collect_cols(constants, rt_fetch(k, q->rtable), rc);
+    if (rc->n == 0)
+      return false;
+    outer_cols = lappend(outer_cols, rc);
+    ncol += rc->n;
+  }
 
-  /* ---- The bad pairs: R and P joined on the correlation, minus those whose
-   * P has a matching C; projected on R's own columns. ---- */
+  /* ---- The bad pairs: the query's relations and the body's, joined on the
+   * correlation, minus those whose row has a match; projected on the
+   * query's own columns. ---- */
   pair = makeNode(Query);
   pair->commandType = CMD_SELECT;
   pair->canSetTag = true;
-  pc.r_idx = r_idx;
-  {
-    RangeTblEntry *r_copy = na_copy_rel(pair, q, r_rte);
-    RangeTblEntry *p_copy = na_copy_rel(pair, pbody, p_rte);
-    pair->rtable = list_make2(r_copy, p_copy);
-  }
+  for (k = 1; k <= nrel; ++k)
+    pair->rtable =
+      lappend(pair->rtable, na_copy_rel(pair, q, rt_fetch(k, q->rtable)));
+  pair->rtable = lappend(pair->rtable, na_copy_rel(pair, pbody, p_rte));
+  pc.p_new = nrel + 1;
+
   corr_out = p_rest == NIL
                ? (Node *)makeBoolConst(true, false)
                : (Node *)copyObject(list_length(p_rest) == 1
@@ -17090,7 +17205,7 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
   {
     Query *cb = (Query *)copyObject(cbody);
     SubLink *isl = makeNode(SubLink);
-    List *fl;
+    List *fl = NIL;
 
     cb->jointree->quals = na_corr_in_mut(cb->jointree->quals, &pc);
     cb->targetList = (List *)na_corr_in_mut((Node *)cb->targetList, &pc);
@@ -17100,13 +17215,11 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
     isl->operName = NIL;
     isl->location = -1;
 
-    fl = NIL;
-    ref = makeNode(RangeTblRef);
-    ref->rtindex = 1;
-    fl = lappend(fl, ref);
-    ref = makeNode(RangeTblRef);
-    ref->rtindex = 2;
-    fl = lappend(fl, ref);
+    for (k = 1; k <= nrel + 1; ++k) {
+      ref = makeNode(RangeTblRef);
+      ref->rtindex = k;
+      fl = lappend(fl, ref);
+    }
     pair->jointree = makeFromExpr(
       fl, (Node *)makeBoolExpr(
             AND_EXPR,
@@ -17115,15 +17228,21 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
             -1));
   }
   pair->hasSubLinks = true;
-  for (i = 0; i < rc.n; ++i) {
-    Var *v = makeVar(1, rc.attno[i], rc.type[i], rc.typmod[i], rc.coll[i], 0);
-    pair->targetList = lappend(
-      pair->targetList,
-      makeTargetEntry((Expr *)v, i + 1, pstrdup(rc.name[i]), false));
-    colnames = lappend(colnames, makeString(pstrdup(rc.name[i])));
+  for (k = 0; k < nrel; ++k) {
+    oj_cols *rc = (oj_cols *)list_nth(outer_cols, k);
+    for (i = 0; i < rc->n; ++i) {
+      Var *v = makeVar(k + 1, rc->attno[i], rc->type[i], rc->typmod[i],
+                       rc->coll[i], 0);
+      char *nm = psprintf("c%d_%d", k + 1, i + 1);
+      pair->targetList =
+        lappend(pair->targetList,
+                makeTargetEntry((Expr *)v, list_length(pair->targetList) + 1,
+                                nm, false));
+      colnames = lappend(colnames, makeString(pstrdup(nm)));
+    }
   }
 
-  /* ---- The antijoin: R against that projection, matched column by column. ---- */
+  /* ---- The antijoin: the query's rows against that projection. ---- */
   bad_rte = makeNode(RangeTblEntry);
   bad_rte->rtekind = RTE_SUBQUERY;
   bad_rte->subquery = pair;
@@ -17139,14 +17258,22 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
   probe->rtable = list_make1(bad_rte);
   ref = makeNode(RangeTblRef);
   ref->rtindex = 1;
-  for (i = 0; i < rc.n; ++i) {
-    Node *eq = na_not_distinct(
-      (Expr *)makeVar(1, i + 1, rc.type[i], rc.typmod[i], rc.coll[i], 0),
-      (Expr *)makeVar(r_idx, rc.attno[i], rc.type[i], rc.typmod[i], rc.coll[i],
-                      1));
-    if (eq == NULL)
-      return false; /* a column with no equality and no text form: decline */
-    corr = lappend(corr, eq);
+  {
+    int pos = 0;
+    for (k = 0; k < nrel; ++k) {
+      oj_cols *rc = (oj_cols *)list_nth(outer_cols, k);
+      for (i = 0; i < rc->n; ++i) {
+        Node *eq = na_not_distinct(
+          (Expr *)makeVar(1, pos + 1, rc->type[i], rc->typmod[i], rc->coll[i],
+                          0),
+          (Expr *)makeVar(k + 1, rc->attno[i], rc->type[i], rc->typmod[i],
+                          rc->coll[i], 1));
+        if (eq == NULL)
+          return false;
+        corr = lappend(corr, eq);
+        ++pos;
+      }
+    }
   }
   probe->jointree = makeFromExpr(
     list_make1(ref),
@@ -17164,8 +17291,7 @@ static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
     osl->testexpr = NULL;
     osl->operName = NIL;
     osl->location = -1;
-    rest = lappend(rest,
-                   makeBoolExpr(NOT_EXPR, list_make1(osl), -1));
+    rest = lappend(rest, makeBoolExpr(NOT_EXPR, list_make1(osl), -1));
   }
   q->jointree->quals =
     list_length(rest) == 1 ? (Node *)linitial(rest)

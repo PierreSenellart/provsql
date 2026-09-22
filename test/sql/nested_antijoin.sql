@@ -72,5 +72,46 @@ SELECT remove_provenance('na_r');
 SELECT id, round(p::numeric, 6) AS p FROM na_r ORDER BY id;
 DROP TABLE na_r;
 
+-- The same division written with a set operation: "A EXCEPT B is empty" is
+-- "every row of A is a row of B", so the arms are put back in the nested form
+-- and read there.  The query around has TWO relations of its own, one read by
+-- each arm's correlation, and the pair block holds them both.
+-- r1 sells p1 and p2, c1 likes only p1: the answer is
+-- r1 ∧ c1 ∧ (¬s1 ∨ l1) ∧ ¬s2 = 1/2 · 1/2 · 3/4 · 1/2.
+CREATE TABLE ncr(rname text);
+INSERT INTO ncr VALUES ('r1');
+CREATE TABLE ncc(cname text);
+INSERT INTO ncc VALUES ('c1');
+CREATE TABLE ncs(rname text, pizza text);
+INSERT INTO ncs VALUES ('r1', 'p1'), ('r1', 'p2');
+CREATE TABLE ncl(cname text, pizza text);
+INSERT INTO ncl VALUES ('c1', 'p1');
+SELECT add_provenance('ncr');
+SELECT add_provenance('ncc');
+SELECT add_provenance('ncs');
+SELECT add_provenance('ncl');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ncr; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ncc; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ncs; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ncl; END $$;
+-- No row on this data: p2 is sold and not liked.
+SET provsql.active = off;
+SELECT r.rname, c.cname FROM ncr r, ncc c
+ WHERE NOT EXISTS (SELECT pizza FROM ncs WHERE rname = r.rname
+                   EXCEPT SELECT pizza FROM ncl WHERE cname = c.cname);
+SET provsql.active = on;
+CREATE TABLE na_r AS SELECT r.rname, c.cname, probability(provenance()) AS p
+  FROM ncr r, ncc c
+ WHERE NOT EXISTS (SELECT pizza FROM ncs WHERE rname = r.rname
+                   EXCEPT SELECT pizza FROM ncl WHERE cname = c.cname);
+SELECT remove_provenance('na_r');
+SELECT rname, cname, round(p::numeric, 6) AS p FROM na_r ORDER BY rname, cname;
+DROP TABLE na_r;
+-- EXCEPT ALL asks a different question -- whether A has MORE copies of a row
+-- than B -- so it is not this division and is not read as one.
+SELECT r.rname FROM ncr r, ncc c
+ WHERE NOT EXISTS (SELECT pizza FROM ncs WHERE rname = r.rname
+                   EXCEPT ALL SELECT pizza FROM ncl WHERE cname = c.cname);
+DROP TABLE ncr, ncc, ncs, ncl;
 DROP TABLE nau, nap, nac, nbu, nbp, nbc;
 DROP SCHEMA nested_antijoin_test CASCADE;

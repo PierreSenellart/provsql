@@ -12,7 +12,9 @@
 -- that correlation into the derived table, which is a different rule.  And only
 -- a membership test: an existence test's decorrelation wants base relations in
 -- the body's FROM, so wrapping it there would name the derived table instead of
--- the set operation and fix nothing.
+-- the set operation and fix nothing.  An existence test over an EXCEPT is not
+-- wrapped either, but it is not refused: that one says "every row of A is a row
+-- of B", so it is read as the nested antijoin it is (rewrite_nested_antijoin).
 -- ----------------------------------------------------------------------
 
 CREATE TABLE sop(id int);
@@ -73,10 +75,19 @@ SELECT remove_provenance('so_r');
 SELECT id, p FROM so_r ORDER BY id;
 DROP TABLE so_r;
 
--- The same body under an existence test: refused, naming the set operation.
-SELECT id FROM sop p WHERE NOT EXISTS (SELECT postid FROM sot WHERE tagid = 'a'
-                                       EXCEPT
-                                       SELECT postid FROM sot WHERE tagid = 'b');
+-- The same body under an existence test.  "A EXCEPT B is empty" is "every row
+-- of A is a row of B", the division a nested antijoin is, so it is read as one
+-- rather than wrapped: every 'a' row present needs its 'b' row present, and
+-- (2, 'a') has none, so the condition is (¬a1 ∨ b1) ∧ ¬a2 = 3/4 · 1/2, and each
+-- row of sop carries its own half of that.  No row on the data as it is.
+CREATE TABLE so_r AS
+  SELECT id, round(probability_evaluate(provenance())::numeric, 6) AS p
+  FROM sop p WHERE NOT EXISTS (SELECT postid FROM sot WHERE tagid = 'a'
+                               EXCEPT
+                               SELECT postid FROM sot WHERE tagid = 'b');
+SELECT remove_provenance('so_r');
+SELECT id, p FROM so_r ORDER BY id;
+DROP TABLE so_r;
 -- A correlated arm: refused, and naming the set operation as well.
 SELECT id FROM sop p WHERE id IN (SELECT postid FROM sot WHERE tagid = 'a'
                                   INTERSECT
