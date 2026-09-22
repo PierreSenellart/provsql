@@ -52,6 +52,7 @@ test: agg_kinds
 test: aggregate_null
 test: outer_join
 test: nested_antijoin
+test: sublink_block_shapes
 test: scalar_subquery
 test: join_syntax_equivalence
 test: agg_distinct agg_order_by agg_arithmetic agg_functions agg_deviation

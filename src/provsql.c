@@ -18273,6 +18273,270 @@ static Node *uncorr_qual_sublink_mutator(Node *node, void *cx) {
 }
 
 /**
+ * @brief The left side of a top-level membership test @c "lhs IN (body)" whose
+ *        body reads nothing outside it, or @c NULL.
+ *
+ * PostgreSQL gives @c IN an @c ANY_SUBLINK whose testexpr compares the left
+ * side with a @c Param standing for the body's column.  Only equality is a
+ * membership test; an @c op @c ANY with another operator is a different
+ * condition and is left alone.
+ */
+static Node *unc_membership_lhs(Node *node, SubLink **sl_out) {
+  SubLink *sl;
+  OpExpr *op;
+  Node *lhs = NULL;
+  bool saw_param = false;
+  ListCell *lc;
+
+  if (node == NULL || !IsA(node, SubLink))
+    return NULL;
+  sl = (SubLink *)node;
+  if (sl->subLinkType != ANY_SUBLINK || !IsA(sl->subselect, Query))
+    return NULL;
+  if (sl->testexpr == NULL || !IsA(sl->testexpr, OpExpr))
+    return NULL;
+  op = (OpExpr *)sl->testexpr;
+  if (list_length(op->args) != 2)
+    return NULL;
+  {
+    char *opname = get_opname(op->opno);
+    bool eq = opname != NULL && strcmp(opname, "=") == 0;
+    if (opname != NULL)
+      pfree(opname);
+    if (!eq)
+      return NULL;
+  }
+  foreach (lc, op->args) {
+    Node *a = (Node *)lfirst(lc);
+    if (IsA(a, Param) && ((Param *)a)->paramkind == PARAM_SUBLINK)
+      saw_param = true;
+    else
+      lhs = a;
+  }
+  if (!saw_param || lhs == NULL)
+    return NULL;
+  if (reads_outside_walker((Node *)sl->subselect, 0))
+    return NULL; /* correlated: the decorrelation's business, not this one */
+  *sl_out = sl;
+  return lhs;
+}
+
+/**
+ * @brief Does @p q read something in its @c FROM that is not a base relation?
+ *
+ * The decorrelation of a subquery condition groups the rows of the block by the
+ * relations of its @c FROM, which it wants to be base ones; a subquery there --
+ * an aggregate read as a value, a derived table -- is not one, and the lowering
+ * declines.  An UNCORRELATED membership test needs no grouping at all, so it can
+ * be read as a join instead, and this says when that is worth doing: only where
+ * the ordinary route would have declined, so the shapes it already handles keep
+ * the circuit they have.
+ */
+static bool unc_from_has_non_relation(Query *q) {
+  ListCell *lc;
+  if (q->jointree == NULL)
+    return false;
+  foreach (lc, q->jointree->fromlist) {
+    Node *f = (Node *)lfirst(lc);
+    RangeTblEntry *rte;
+    if (!IsA(f, RangeTblRef))
+      return true;
+    rte = rt_fetch(((RangeTblRef *)f)->rtindex, q->rtable);
+    if (rte->rtekind != RTE_RELATION)
+      return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Read an uncorrelated membership test as a join against the values of
+ *        its body, deduplicated: @c "x IN (SELECT k FROM B WHERE p)" becomes
+ *        @c "…, (SELECT DISTINCT k FROM B WHERE p) v WHERE x = v.k".
+ *
+ * A semijoin against a set, which is what the condition says, and the ⊕ over the
+ * body's rows that share a value is the @c DISTINCT's own -- tracked as any
+ * deduplication is.  No grouping of the block is involved, so nothing here cares
+ * what else its @c FROM reads, which is the whole point: the count-predicate
+ * route wants base relations there and declines beside an aggregate read as a
+ * value.
+ *
+ * @return  The replacement qual, or @c NULL where the shape is not this one.
+ */
+static Node *unc_membership_to_join(const constants_t *constants, Query *q,
+                                   Node *conj) {
+  SubLink *sl = NULL;
+  Node *lhs = unc_membership_lhs(conj, &sl);
+  Query *body, *D;
+  RangeTblEntry *d_rte;
+  RangeTblRef *rtr;
+  TargetEntry *te;
+  SortGroupClause *sgc;
+  Index d_idx;
+  bool tracked = false;
+  ListCell *lc;
+
+  if (lhs == NULL)
+    return NULL;
+  body = (Query *)sl->subselect;
+  if (body->commandType != CMD_SELECT || body->setOperations != NULL ||
+      body->groupClause != NIL || body->groupingSets != NIL || body->hasAggs ||
+      body->hasWindowFuncs || body->distinctClause != NIL ||
+      body->limitCount != NULL || body->limitOffset != NULL ||
+      body->cteList != NIL || body->havingQual != NULL || body->hasSubLinks ||
+      body->sortClause != NIL)
+    return NULL;
+  if (list_length(body->targetList) != 1 ||
+      ((TargetEntry *)linitial(body->targetList))->resjunk)
+    return NULL;
+  foreach (lc, body->rtable)
+    if (oj_rte_has_provsql(constants, (RangeTblEntry *)lfirst(lc)))
+      tracked = true;
+  if (!tracked)
+    return NULL; /* untracked body: PostgreSQL's own machinery */
+
+  D = (Query *)copyObject(body);
+  te = (TargetEntry *)linitial(D->targetList);
+  te->ressortgroupref = 1;
+  sgc = makeNode(SortGroupClause);
+  sgc->tleSortGroupRef = 1;
+  get_sort_group_operators(exprType((Node *)te->expr), false, true, false,
+                           &sgc->sortop, &sgc->eqop, NULL, &sgc->hashable);
+  if (!OidIsValid(sgc->eqop))
+    return NULL;
+  D->distinctClause = list_make1(sgc);
+  D->hasDistinctOn = false;
+
+  d_rte = oj_make_subquery_rte(D);
+  q->rtable = lappend(q->rtable, d_rte);
+  d_idx = list_length(q->rtable);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = d_idx;
+  q->jointree->fromlist = lappend(q->jointree->fromlist, rtr);
+
+  return build_binop("=", (Node *)copyObject(lhs),
+                     (Node *)makeVar(d_idx, 1, exprType((Node *)te->expr),
+                                     exprTypmod((Node *)te->expr),
+                                     exprCollation((Node *)te->expr), 0));
+}
+
+/**
+ * @brief Give a block whose @c FROM reads no tracked relation a carrier for the
+ *        provenance its condition has: a certain provenance column on the
+ *        untracked source.
+ *
+ * @c "SELECT … FROM (VALUES (4),(5),(6)) v WHERE NOT EXISTS (SELECT … FROM T
+ * WHERE T.k = v.id)" has a provenance -- @c "1 ⊖ ⊕" of the matching rows of
+ * @c T -- and the only thing missing is an entry to carry it: the decorrelation
+ * reads the provenance of the block's own rows, and a @c VALUES list has none.
+ * Every row of one is there in every world, so a @c gate_one() column says
+ * exactly the truth and @c "1 ⊗ (what the subquery contributes)" is the answer.
+ * Without it the condition was frozen and read as plain SQL: the right rows, no
+ * provenance.
+ *
+ * A @c VALUES in a @c FROM is a subquery entry over a @c VALUES one, so the
+ * column goes on that subquery's own target list -- no new entry, and what the
+ * block already reads keeps its attribute number.
+ *
+ * @return  Whether @p q gained one.
+ */
+static bool wrap_untracked_from_for_sublink(const constants_t *constants,
+                                           Query *q) {
+  RangeTblEntry *rte;
+  Query *sub;
+  FuncExpr *one;
+  ListCell *lc;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || q->jointree == NULL)
+    return false;
+  if (list_length(q->jointree->fromlist) != 1 ||
+      !IsA(linitial(q->jointree->fromlist), RangeTblRef))
+    return false;
+  if (!query_has_tracked_sublink(constants, q))
+    return false;
+  /* Only where nothing of the block's own is tracked: otherwise the row has a
+   * provenance already and this would add a second, certain factor. */
+  foreach (lc, q->rtable)
+    if (oj_rte_has_provsql(constants, (RangeTblEntry *)lfirst(lc)))
+      return false;
+
+  rte = rt_fetch(((RangeTblRef *)linitial(q->jointree->fromlist))->rtindex,
+                 q->rtable);
+  if (rte->rtekind != RTE_SUBQUERY || rte->lateral || rte->subquery == NULL)
+    return false;
+  sub = rte->subquery;
+  /* A bare VALUES list, and nothing else: adding a column to anything that
+   * groups, deduplicates or unites its rows would change what it returns. */
+  if (sub->commandType != CMD_SELECT || list_length(sub->rtable) != 1 ||
+      ((RangeTblEntry *)linitial(sub->rtable))->rtekind != RTE_VALUES ||
+      sub->setOperations != NULL || sub->distinctClause != NIL ||
+      sub->groupClause != NIL || sub->groupingSets != NIL || sub->hasAggs ||
+      sub->hasWindowFuncs || sub->limitCount != NULL ||
+      sub->limitOffset != NULL || sub->cteList != NIL || sub->hasSubLinks)
+    return false;
+  foreach (lc, sub->targetList)
+    if (((TargetEntry *)lfirst(lc))->resjunk)
+      return false;
+
+  one = makeNode(FuncExpr);
+  one->funcid = constants->OID_FUNCTION_GATE_ONE;
+  one->funcresulttype = constants->OID_TYPE_UUID;
+  one->args = NIL;
+  one->location = -1;
+  sub->targetList =
+    lappend(sub->targetList,
+            makeTargetEntry((Expr *)one, list_length(sub->targetList) + 1,
+                            pstrdup(PROVSQL_COLUMN_NAME), false));
+  rte->eref->colnames = lappend(rte->eref->colnames,
+                                makeString(pstrdup(PROVSQL_COLUMN_NAME)));
+  return true;
+}
+
+/**
+ * @brief Read every uncorrelated membership test of @p q as a join against the
+ *        deduplicated body, where the block's own FROM holds something that is
+ *        not a base relation.
+ *
+ * Runs BEFORE the predicate-sublink lowering: that one turns @c "x IN (body)"
+ * into @c "(SELECT count(*) FROM body WHERE body.k = x) >= 1", which makes the
+ * body correlated and hands the result to a decorrelation that wants to group
+ * the block by base relations -- and declines beside a subquery in the FROM.
+ * Taken as a join first, the condition never becomes a count at all.
+ *
+ * @return  Whether anything moved.
+ */
+static bool rewrite_uncorrelated_membership(const constants_t *constants,
+                                            Query *q) {
+  List *conjs, *kept = NIL;
+  ListCell *lc;
+  bool moved = false;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks || q->jointree == NULL ||
+      q->jointree->quals == NULL)
+    return false;
+  if (!unc_from_has_non_relation(q))
+    return false;
+
+  conjs = (IsA(q->jointree->quals, BoolExpr) &&
+           ((BoolExpr *)q->jointree->quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)q->jointree->quals)->args
+            : list_make1(q->jointree->quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    Node *repl = unc_membership_to_join(constants, q, c);
+    kept = lappend(kept, repl != NULL ? repl : c);
+    if (repl != NULL)
+      moved = true;
+  }
+  if (!moved)
+    return false;
+  q->jointree->quals =
+    list_length(kept) == 1 ? (Node *)linitial(kept)
+                           : (Node *)makeBoolExpr(AND_EXPR, kept, -1);
+  q->hasSubLinks = query_has_own_sublinks(q);
+  return true;
+}
+
+/**
  * @brief Move uncorrelated scalar subqueries that are direct target-list entries
  *        into a cross-joined derived aggregate in the outer FROM.
  *
@@ -18327,6 +18591,9 @@ static bool move_uncorrelated_sublinks_to_from(const constants_t *constants,
     changed = true;
   }
 
+  /* An uncorrelated membership test beside something in the FROM that is not a
+   * base relation: read it as a join against the deduplicated body, which needs
+   * no grouping of the block and so does not care what else the FROM reads. */
   /* And the same in the WHERE clause: a comparison against one value of a
    * tracked relation. */
   if (q->jointree->quals != NULL) {
@@ -26662,7 +26929,9 @@ static Query *process_query(const constants_t *constants, Query *q,
     query_tree_walker(q, drop_semijoin_distinct_walker, NULL,
                       QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
     rewrite_uncorrelated_antijoin(constants, q);
+    wrap_untracked_from_for_sublink(constants, q);
     rewrite_nested_antijoin(constants, q);
+    rewrite_uncorrelated_membership(constants, q);
     rewrite_predicate_sublinks(constants, q);
     move_uncorrelated_where_predicates(constants, q);
     move_uncorrelated_sublinks_to_from(constants, q);

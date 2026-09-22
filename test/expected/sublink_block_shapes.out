@@ -1,0 +1,43 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+id
+5
+6
+(2 rows)
+remove_provenance
+
+(1 row)
+id|p
+4|0.500000
+5|1.000000
+6|1.000000
+(3 rows)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+id
+1
+2
+3
+(3 rows)
+remove_provenance
+
+(1 row)
+id|p
+1|0.375000
+2|0.375000
+3|0.250000
+(3 rows)
+remove_provenance
+
+(1 row)
+id|p
+1|0.375000
+2|0.375000
+3|0.250000
+(3 rows)
