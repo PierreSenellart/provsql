@@ -15891,6 +15891,93 @@ static bool wrap_body_grouping(const constants_t *constants, Query *sub) {
 }
 
 /**
+ * @brief A sublink body that is a set operation becomes a derived table the
+ *        semijoin reads.
+ *
+ * @c "x IN (A INTERSECT B)" is @c "x IN (SELECT d.c FROM (A INTERSECT B) d)":
+ * the set operation is a query ProvSQL rewrites like any other -- the
+ * provenance of an intersection, a union, a difference -- and what is left at
+ * the sublink's own level is a plain @c SELECT over one derived table, which
+ * the decorrelation lowers as it lowers any other body.  Relational algebra
+ * inside a semijoin, which is why it belongs at the bottom of the fragment
+ * chain rather than at its edge.
+ *
+ * Only an UNCORRELATED body: an arm that reads the block above would have to
+ * carry that correlation into the derived table, which takes a @c LATERAL and
+ * a rule for distributing the correlation over the arms -- the two ends are
+ * different rules and this is the first of them.
+ */
+static bool wrap_body_setop(const constants_t *constants, Query *sub) {
+  Query *d;
+  RangeTblEntry *rte;
+  RangeTblRef *rtr;
+  List *colnames = NIL, *tl = NIL;
+  ListCell *lc;
+
+  if (!IsA(sub, Query) || sub->commandType != CMD_SELECT ||
+      sub->setOperations == NULL)
+    return false;
+  if (sub->cteList != NIL || sub->limitCount != NULL ||
+      sub->limitOffset != NULL)
+    return false;                 /* read inside the derived table as ever */
+  if (reads_outside_walker((Node *)sub, 0))
+    return false;                 /* correlated: the other rule */
+  if (!has_provenance(constants, sub))
+    return false;                 /* untracked: PostgreSQL's own machinery */
+
+  /* d is the set operation as it stands; sub becomes the query that reads it. */
+  d = makeNode(Query);
+  memcpy(d, sub, sizeof(Query));
+
+  {
+    Index attno = 0;
+    foreach (lc, d->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      Var *v;
+      ++attno;
+      if (te->resjunk)
+        continue;
+      v = makeVar(1, attno, exprType((Node *)te->expr),
+                  exprTypmod((Node *)te->expr), exprCollation((Node *)te->expr),
+                  0);
+      tl = lappend(tl, makeTargetEntry((Expr *)v, te->resno,
+                                       te->resname != NULL
+                                         ? pstrdup(te->resname) : NULL, false));
+    }
+    if (tl == NIL)
+      return false;
+    foreach (lc, d->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+      colnames = lappend(colnames, makeString(pstrdup(
+        te->resname != NULL ? te->resname : "?column?")));
+    }
+  }
+
+  rte = makeNode(RangeTblEntry);
+  rte->rtekind = RTE_SUBQUERY;
+  rte->subquery = d;
+  rte->eref = makeAlias("setop", colnames);
+  rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  rte->requiredPerms = ACL_SELECT;
+#endif
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+
+  MemSet(sub, 0, sizeof(Query));
+  sub->type = T_Query;
+  sub->commandType = CMD_SELECT;
+  sub->canSetTag = true;
+  sub->rtable = list_make1(rte);
+#if PG_VERSION_NUM >= 160000
+  sub->rteperminfos = NIL;        /* the permissions travel with d's rtable */
+#endif
+  sub->jointree = makeFromExpr(list_make1(rtr), NULL);
+  sub->targetList = tl;
+  return true;
+}
+
+/**
  * @brief Is @p sub a subselect that the predicate-sublink rewrite can turn into
  *        a correlated @c "SELECT count(*) FROM Q WHERE corr"?
  *
@@ -16607,6 +16694,14 @@ static bool rewrite_predicate_sublinks(const constants_t *constants, Query *q) {
        * having no column to read and the uncorrelated arm no key to count. */
       if (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK)
         wrap_body_grouping(constants, (Query *)sl->subselect);
+      /* A set operation as the body, for a MEMBERSHIP test: the derived table
+       * is what the semijoin reads.  Not for an existence test, whose
+       * decorrelation wants base relations in the body's FROM -- wrapping it
+       * there would trade the reason that names the set operation for one that
+       * names the derived table the wrap itself introduced, which is a worse
+       * diagnosis and not a fix. */
+      if (sl->subLinkType == ANY_SUBLINK || sl->subLinkType == ALL_SUBLINK)
+        wrap_body_setop(constants, (Query *)sl->subselect);
       if (sl->subLinkType == EXISTS_SUBLINK &&
           predicate_subselect_decorrelatable(constants,
                                              (Query *)sl->subselect, false)) {

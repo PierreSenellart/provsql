@@ -1,0 +1,44 @@
+\set ECHO none
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+1|0.125000
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+1|0.062500
+(1 row)
+remove_provenance
+
+(1 row)
+id|p
+1|0.375000
+2|0.250000
+3|0.250000
+(3 rows)
+remove_provenance
+
+(1 row)
+id|p
+1|0.125000
+2|0.250000
+(2 rows)
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body is a set operation (UNION, INTERSECT, EXCEPT), whose rows the decorrelation cannot group
+DETAIL:  provsql-reason: body-set-operation; scope: gap
+ERROR:  ProvSQL: subquery over a provenance-tracked relation not supported here: its body is a set operation (UNION, INTERSECT, EXCEPT), whose rows the decorrelation cannot group
+DETAIL:  provsql-reason: body-set-operation; scope: gap
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
