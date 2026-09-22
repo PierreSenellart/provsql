@@ -2406,14 +2406,14 @@ CREATE FUNCTION provenance_semimod_nested(val agg_token, token uuid)
 -- value is read per possible world; the moment evaluators sample them, since
 -- rounding does not commute with expectation.
 /** @brief round(agg_token) (gate_arith ROUND). */
-CREATE OR REPLACE FUNCTION round(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_round(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(12, ARRAY[(a)::uuid],
      pg_catalog.round(provsql.agg_token_value(a))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief round(agg_token, integer): to @p d decimal digits. */
-CREATE OR REPLACE FUNCTION round(a agg_token, d integer)
+CREATE OR REPLACE FUNCTION provsql_round(a agg_token, d integer)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(12,
      ARRAY[(a)::uuid, provsql.agg_value_gate(d::numeric)],
@@ -2421,28 +2421,28 @@ $$ SELECT provsql.agg_arith_make(12,
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief floor(agg_token) (gate_arith FLOOR). */
-CREATE OR REPLACE FUNCTION floor(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_floor(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(13, ARRAY[(a)::uuid],
      pg_catalog.floor(provsql.agg_token_value(a))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief ceil(agg_token) (gate_arith CEIL). */
-CREATE OR REPLACE FUNCTION ceil(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_ceil(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(14, ARRAY[(a)::uuid],
      pg_catalog.ceil(provsql.agg_token_value(a))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief ceiling(agg_token), the SQL synonym of ceil. */
-CREATE OR REPLACE FUNCTION ceiling(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_ceiling(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(14, ARRAY[(a)::uuid],
      pg_catalog.ceil(provsql.agg_token_value(a))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief abs(agg_token) (gate_arith ABS). */
-CREATE OR REPLACE FUNCTION abs(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_abs(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(15, ARRAY[(a)::uuid],
      pg_catalog.abs(provsql.agg_token_value(a))); $$
@@ -3346,14 +3346,14 @@ $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
 /** @brief ln(agg_token) (gate_arith LN): the logarithm of the value the
  *  aggregate takes, in every world, rather than of the one it takes in the
  *  database as it is. */
-CREATE OR REPLACE FUNCTION ln(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_ln(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(8, ARRAY[(a)::uuid],
      ln(provsql.agg_token_value(a))); $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief exp(agg_token) (gate_arith EXP). */
-CREATE OR REPLACE FUNCTION exp(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_exp(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(9, ARRAY[(a)::uuid],
      exp(provsql.agg_token_value(a))); $$
@@ -3361,7 +3361,7 @@ $$ SELECT provsql.agg_arith_make(9, ARRAY[(a)::uuid],
 
 /** @brief sqrt(agg_token): the square root is the power of one half
  *  (gate_arith POW, whose exponent is a value gate). */
-CREATE OR REPLACE FUNCTION sqrt(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_sqrt(a agg_token)
   RETURNS agg_token AS
 $$ SELECT provsql.agg_arith_make(7,
      ARRAY[(a)::uuid, provsql.agg_value_gate(0.5)],
@@ -4735,7 +4735,7 @@ $$;
  *        value that it is.
  *
  * A cast is a function call like any other, so the rewriting swaps
- * @c pg_catalog.numeric(x) over an agg_token for @c provsql.numeric(agg_token)
+ * @c pg_catalog.numeric(x) over an agg_token for @c provsql.provsql_numeric(agg_token)
  * wherever one is declared -- which is how round() and floor() became gate
  * operations.  Between numbers the value is carried rather than frozen: a
  * widening (an integer to @c numeric, to a float) keeps it as it is, and a
@@ -4743,33 +4743,33 @@ $$;
  * half away from zero as that gate does.  A cast to text, to a boolean or to a
  * date has no arithmetic behind it and stays a reading of the plain value.
  */
-CREATE OR REPLACE FUNCTION "numeric"(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_numeric(a agg_token)
   RETURNS agg_token AS $$ SELECT a $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief float8(agg_token): the value, as a double precision reads it. */
-CREATE OR REPLACE FUNCTION "float8"(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_float8(a agg_token)
   RETURNS agg_token AS $$ SELECT a $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief float4(agg_token): the value, as a real reads it. */
-CREATE OR REPLACE FUNCTION "float4"(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_float4(a agg_token)
   RETURNS agg_token AS $$ SELECT a $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief int8(agg_token): the value rounded, as the cast to bigint rounds. */
-CREATE OR REPLACE FUNCTION "int8"(a agg_token)
-  RETURNS agg_token AS $$ SELECT provsql.round(a) $$
+CREATE OR REPLACE FUNCTION provsql_int8(a agg_token)
+  RETURNS agg_token AS $$ SELECT provsql.provsql_round(a) $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief int4(agg_token): the value rounded, as the cast to integer rounds. */
-CREATE OR REPLACE FUNCTION "int4"(a agg_token)
-  RETURNS agg_token AS $$ SELECT provsql.round(a) $$
+CREATE OR REPLACE FUNCTION provsql_int4(a agg_token)
+  RETURNS agg_token AS $$ SELECT provsql.provsql_round(a) $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 
 /** @brief int2(agg_token): the value rounded, as the cast to smallint rounds. */
-CREATE OR REPLACE FUNCTION "int2"(a agg_token)
-  RETURNS agg_token AS $$ SELECT provsql.round(a) $$
+CREATE OR REPLACE FUNCTION provsql_int2(a agg_token)
+  RETURNS agg_token AS $$ SELECT provsql.provsql_round(a) $$
   LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
 /** @endcond */
 
@@ -5102,7 +5102,7 @@ $$ LANGUAGE sql STABLE STRICT PARALLEL SAFE;
  * treats it as the value of its child.  A token already read in that type is
  * returned as it is, so nothing is wrapped twice.
  */
-CREATE OR REPLACE FUNCTION "float8"(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_float8(a agg_token)
   RETURNS agg_token AS
 $$ SELECT CASE
      WHEN provsql.agg_token_value_type((a)::uuid) = 'float8'::regtype::oid
@@ -5115,7 +5115,7 @@ $$ SELECT CASE
 /** @brief float4(agg_token): the value, as a real reads it (see float8). */
 
 /** @brief float4(agg_token): the value, as a real reads it (see float8). */
-CREATE OR REPLACE FUNCTION "float4"(a agg_token)
+CREATE OR REPLACE FUNCTION provsql_float4(a agg_token)
   RETURNS agg_token AS
 $$ SELECT CASE
      WHEN provsql.agg_token_value_type((a)::uuid) = 'float4'::regtype::oid
@@ -5124,5 +5124,28 @@ $$ SELECT CASE
             (provsql.agg_token_value(a)::float4)::numeric)
    END $$
   LANGUAGE sql STABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+-- The agg_token counterparts of round, abs, the casts and the rest used to
+-- carry the name of the pg_catalog function they stand for.  Beside that
+-- function they made an untyped literal ambiguous for anyone with provsql in
+-- their search_path -- "function abs(unknown) is not unique" on
+-- "ABS('0.20')", since an unknown argument is resolved by type category and
+-- the two candidates are in different ones -- so they now carry a name of
+-- their own and the old ones go.  Nothing outside the rewriting called them.
+DROP FUNCTION IF EXISTS provsql.round(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.round(provsql.agg_token, integer);
+DROP FUNCTION IF EXISTS provsql."numeric"(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql."float8"(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql."float4"(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql."int8"(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql."int4"(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql."int2"(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.floor(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.ceil(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.ceiling(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.abs(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.ln(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.exp(provsql.agg_token);
+DROP FUNCTION IF EXISTS provsql.sqrt(provsql.agg_token);
 
 SELECT reset_constants_cache();

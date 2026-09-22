@@ -668,8 +668,8 @@ the data as it is instead, and reports that reading once for the statement
 Functions of an aggregate result
 --------------------------------
 
-:sqlfunc:`round`, :sqlfunc:`floor`, :sqlfunc:`ceil` (and its synonym
-:sqlfunc:`ceiling`), :sqlfunc:`abs`, ``ln``, ``exp`` and ``sqrt`` of an
+``round``, ``floor``, ``ceil`` (and its synonym ``ceiling``), ``abs``,
+``ln``, ``exp`` and ``sqrt`` of an
 aggregate result are carried as operations of its gate, so the value stays
 tracked and is read in every possible world:
 

@@ -426,6 +426,26 @@ SELECT sum(x) / 3 AS f8_div, sum(x) / 7 AS f8_div7, sum(x) * 2 AS f8_times,
        sum(i)::float8 / sum(i) AS cast_tok, sqrt(sum(x)) AS f8_sqrt
 FROM agg_ty;
 SET provsql.active = on;
+-- sqrt, ln and exp of a float aggregate are computed in that type, not in
+-- numeric: numeric computes them to a fixed scale, which lost the last digit of
+-- a double (sqrt of 3 came out to fifteen decimals).  Over a numeric column
+-- they are still numeric's own answer, which is the one SQL gives there.  Both
+-- rows below are the same query with the rewriting off.
+CREATE TABLE agg_ty_t AS
+  SELECT sqrt(sum(x)) AS f8_sqrt, ln(sum(x)) AS f8_ln, exp(sum(x)) AS f8_exp,
+         sqrt(sum(n)) AS num_sqrt
+  FROM agg_ty;
+SELECT remove_provenance('agg_ty_t');
+SELECT f8_sqrt::text AS f8_sqrt, f8_ln::text AS f8_ln, f8_exp::text AS f8_exp,
+       num_sqrt::text AS num_sqrt
+FROM agg_ty_t;
+SET provsql.active = off;
+SELECT sqrt(sum(x)) AS f8_sqrt, ln(sum(x)) AS f8_ln, exp(sum(x)) AS f8_exp,
+       sqrt(sum(n)) AS num_sqrt
+FROM agg_ty;
+SET provsql.active = on;
+DROP TABLE agg_ty_t;
+
 -- The per-world reading goes through the same gate, which is the value of its
 -- child: over the seven non-empty worlds of three rows at one half, sum(x)/3
 -- takes 1/3, 2/3, 1, 1, 4/3, 5/3 and 2, so E = 8/7, and a comparison over a

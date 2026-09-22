@@ -116,6 +116,19 @@ INTERNAL_FUNCTIONS = {
     # them answers in: read by agg_arith_make to record it on the gate and by
     # agg_token_value_text to read the value in it, never by a user.
     'agg_token_value_type', 'agg_arith_result_type',
+    # The agg_token counterparts of the built-in numeric functions: the
+    # rewriter swaps round(avg(x)), abs(sum(x)), sum(x)::numeric and so on to
+    # these, so that the rounding or the conversion becomes a gate instead of
+    # a computation on a frozen value.  They are named provsql_<name> rather
+    # than <name> so that a user's own round() or abs() is never captured by
+    # them; only the rewriter writes their names.  agg_transcendental is the
+    # helper the sqrt/ln/exp ones share, which reads the value in the type the
+    # gate records so the answer matches plain SQL digit for digit.
+    'provsql_round', 'provsql_floor', 'provsql_ceil', 'provsql_ceiling',
+    'provsql_abs', 'provsql_sqrt', 'provsql_ln', 'provsql_exp',
+    'provsql_numeric', 'provsql_float8', 'provsql_float4',
+    'provsql_int8', 'provsql_int4', 'provsql_int2',
+    'agg_transcendental',
     # Recursive-CTE fixpoint drivers: invoked by the planner hook
     # (lower_recursive_cte) when lowering a WITH RECURSIVE query, never
     # called directly by users.  eval_reachability is the

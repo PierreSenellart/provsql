@@ -44,6 +44,25 @@ CREATE TABLE atr AS
 SELECT remove_provenance('atr');
 SELECT * FROM atr;
 DROP TABLE atr;
+-- The agg_token counterparts of round, abs, the casts and the rest carry names
+-- of their own -- provsql_abs, provsql_round -- and not the names of the
+-- pg_catalog functions they stand for.  Beside those functions they made an
+-- untyped literal ambiguous for anyone with provsql in their search_path: an
+-- unknown argument is resolved by type category, pg_catalog's candidates are
+-- numeric and an agg_token one is not, and PostgreSQL then refuses to choose
+-- ("function abs(unknown) is not unique").  The rewriting looks the
+-- counterparts up under their own names, so this resolves and the carrying
+-- below still happens.
+SELECT abs('0.20') AS untyped_abs;
+SELECT round('0.25') AS untyped_round;
+CREATE TABLE atc_carry AS
+  SELECT abs(sum(v)) AS a, round(avg(v)) AS r, floor(sum(v)) AS f,
+         sqrt(sum(v)) AS q
+  FROM atc;
+SELECT remove_provenance('atc_carry');
+SELECT a::text AS a, r::text AS r, f::text AS f, q::text AS q FROM atc_carry;
+DROP TABLE atc_carry;
+
 DROP TABLE atc;
 
 -- Literals: '( <uuid> , <value> )'.  The casts read only the value part,

@@ -9886,7 +9886,7 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     Oid argtypes[1] = {constants->OID_TYPE_AGG_TOKEN};
     List *names = list_make2(makeString("provsql"),
                              makeString(op->opresulttype == FLOAT8OID
-                                          ? "float8" : "float4"));
+                                          ? "provsql_float8" : "provsql_float4"));
     Oid fn = LookupFuncName(names, 1, argtypes, true);
     list_free(names);
     if (OidIsValid(fn)) {
@@ -9927,6 +9927,7 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
 
   int nargs = list_length(f->args);
   Node *second = NULL;
+  Oid declared_float = InvalidOid;   /* the float type the call takes, if any */
 
   if (nargs < 1 || nargs > 2 ||
       get_func_namespace(f->funcid) != PG_CATALOG_NAMESPACE)
@@ -9959,6 +9960,8 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
     numeric_source = declared[0] == INT2OID || declared[0] == INT4OID ||
                      declared[0] == INT8OID || declared[0] == NUMERICOID ||
                      declared[0] == FLOAT4OID || declared[0] == FLOAT8OID;
+    if (declared[0] == FLOAT8OID || declared[0] == FLOAT4OID)
+      declared_float = declared[0];
     if (!numeric_source) {
       const bool boolean_to_integer =
         declared[0] == BOOLOID && nargs == 1 &&
@@ -9984,7 +9987,41 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
   if (name == NULL)
     return NULL;
 
-  names = list_make2(makeString("provsql"), makeString(name));
+  /* Where the function SQL resolved takes a float, its argument was coerced to
+   * that type before the call -- sqrt(bigint) is sqrt(double precision) over a
+   * coerced argument -- and the counterpart computes in the type the value is
+   * read in, so the argument says which that is.  Reading it back through the
+   * conversion counterpart is how: it returns the token unchanged where the
+   * type is already right, so nothing is wrapped that does not need it, and
+   * without it a sqrt of an integer sum came out in numeric, to numeric's own
+   * scale, where SQL gives a double. */
+  if (declared_float) {
+    Oid argtypes1[1] = {constants->OID_TYPE_AGG_TOKEN};
+    List *cnames = list_make2(makeString("provsql"),
+                              makeString(declared_float == FLOAT8OID
+                                           ? "provsql_float8"
+                                           : "provsql_float4"));
+    Oid cfn = LookupFuncName(cnames, 1, argtypes1, true);
+    list_free(cnames);
+    if (OidIsValid(cfn)) {
+      FuncExpr *conv = makeNode(FuncExpr);
+      conv->funcid = cfn;
+      conv->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
+      conv->funcformat = COERCE_EXPLICIT_CALL;
+      conv->args = list_make1(arg);
+      conv->location = -1;
+      arg = (Node *)conv;
+    }
+  }
+
+  /* The counterparts carry a name of their own -- provsql_abs, provsql_round --
+   * rather than the catalog one they stand for: a function named abs beside
+   * pg_catalog's makes abs('0.20') ambiguous for anyone with provsql in their
+   * search_path, since an untyped literal is resolved by type category and the
+   * two candidates are in different ones.  The rewriting looks the counterpart
+   * up under that name; nothing else refers to them. */
+  names = list_make2(makeString("provsql"),
+                     makeString(psprintf("provsql_%s", name)));
   argtypes[0] = constants->OID_TYPE_AGG_TOKEN;
   if (nargs == 2)
     argtypes[1] = INT4OID;
