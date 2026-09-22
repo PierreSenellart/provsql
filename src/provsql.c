@@ -15066,6 +15066,56 @@ static bool normalize_outer_join_tree(const constants_t *constants, Query *q) {
  *
  * @return @c true if the query was rewritten.
  */
+/** @brief Context for @c oj_syscol_walker. */
+typedef struct oj_syscol_ctx {
+  Index r_idx;        ///< left arm of the outer join being lowered
+  Index s_idx;        ///< right arm
+  int sublevels_up;   ///< current query nesting depth
+  bool found;         ///< a whole-row or system-column reference to an arm
+} oj_syscol_ctx;
+
+/**
+ * @brief Walker: does any Var read a whole row (@c varattno @c 0) or a system
+ *        column (@c varattno @c < @c 0, @c ctid, @c xmin, ...) of either arm
+ *        of the outer join being lowered?
+ *
+ * The lowering puts each arm in a subquery, and a subquery has neither: a
+ * system column locates a physical row, which the rows of a subquery do not
+ * have, and the relation's own row type is not the subquery's.  A whole-row
+ * value the rewriting reads as an anonymous record is already gone by here
+ * (@c hide_provsql_in_wholerows runs first), so one still present is one that
+ * pass left because the relation's own row type is needed -- which the
+ * lowering cannot give either.
+ *
+ * Left in place, such a Var keeps a varno the lowering retargets and an
+ * attribute number the new entry has no column for, and what came out was not
+ * a refusal but a broken tree: "attribute 24 of relation (null) does not
+ * exist", "type tid is not composite", "ROW() column has type integer instead
+ * of type text", and -- for @c count(DISTINCT @c p.ctid) over two outer joins
+ * -- a segfault in the planner, writing past @c attr_needed of the wrong
+ * relation.
+ */
+static bool oj_syscol_walker(Node *node, void *cx) {
+  oj_syscol_ctx *c = (oj_syscol_ctx *)cx;
+  if (node == NULL)
+    return false;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if ((int)v->varlevelsup == c->sublevels_up && v->varattno <= 0 &&
+        (v->varno == c->r_idx || v->varno == c->s_idx))
+      c->found = true;
+    return false;
+  }
+  if (IsA(node, Query)) {
+    bool res;
+    c->sublevels_up++;
+    res = query_tree_walker((Query *)node, oj_syscol_walker, cx, 0);
+    c->sublevels_up--;
+    return res;
+  }
+  return expression_tree_walker(node, oj_syscol_walker, cx);
+}
+
 static bool lower_outer_joins(const constants_t *constants, Query *q) {
   JoinExpr *je;
   RangeTblRef *lref, *rref;
@@ -15116,6 +15166,19 @@ static bool lower_outer_joins(const constants_t *constants, Query *q) {
 #endif
   if (oj_refs_join_index(q, join_idx))
     return false;
+  {
+    oj_syscol_ctx sc;
+    sc.r_idx = R_idx;
+    sc.s_idx = S_idx;
+    sc.sublevels_up = 0;
+    sc.found = false;
+    query_tree_walker(q, oj_syscol_walker, &sc, 0);
+    if (sc.found)
+      provsql_unsupported(PROVSQL_GAP, "outer-join-whole-row-or-system-column",
+                          "a whole-row value, or a system column (ctid, xmin, ...), of a "
+                          "relation of an outer join is read, and lowering the join puts "
+                          "that relation in a subquery, which has neither");
+  }
 
 #if PG_VERSION_NUM >= 180000
   /* Flatten PG 18's synthetic RTE_GROUP so grouped-column Vars are base-
@@ -15393,14 +15456,12 @@ static OpExpr *oj_count_cmp(Var *found_var, Index q_idx, const char *opstr,
 /** @brief Build @c "count(DISTINCT v) <op> n" -- the at-most-one-DISTINCT-value
  *  gate of a @c "SELECT DISTINCT v" body (NULLs, on the null-padded antijoin
  *  rows, are ignored by @c count, so an empty group counts 0). */
-static OpExpr *oj_count_distinct_cmp(Expr *valexpr, const char *opstr,
-                                     int64 n) {
+/** @brief Build @c "count(DISTINCT v)" over @p valexpr. */
+static Aggref *oj_make_count_distinct(Expr *valexpr) {
   Aggref *cnt = makeNode(Aggref);
   TargetEntry *arg = makeTargetEntry((Expr *)copyObject((Node *)valexpr), 1,
                                      NULL, false);
   SortGroupClause *sgc = makeNode(SortGroupClause);
-  OpExpr *op = makeNode(OpExpr);
-  Oid o;
 
   arg->ressortgroupref = 1;
   sgc->tleSortGroupRef = 1;
@@ -15419,6 +15480,14 @@ static OpExpr *oj_count_distinct_cmp(Expr *valexpr, const char *opstr,
 #if PG_VERSION_NUM >= 140000
   cnt->aggno = cnt->aggtransno = -1;
 #endif
+  return cnt;
+}
+
+static OpExpr *oj_count_distinct_cmp(Expr *valexpr, const char *opstr,
+                                     int64 n) {
+  Aggref *cnt = oj_make_count_distinct(valexpr);
+  OpExpr *op = makeNode(OpExpr);
+  Oid o;
 
   o = OpernameGetOprid(list_make1(makeString((char *)opstr)), INT8OID, INT8OID);
   op->opno = o;

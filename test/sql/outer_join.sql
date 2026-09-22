@@ -378,4 +378,30 @@ SELECT l.id, z.k
   FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m,
        LATERAL unnest(ARRAY[l.id]) z(k);
 
+-- A whole-row value, or a system column, of a relation of an outer join: the
+-- lowering puts that relation in a subquery, which has neither, so it is
+-- refused rather than lowered into a tree that cannot be read.  Each of these
+-- used to come out as something other than a refusal -- "attribute 24 of
+-- relation (null) does not exist", "type tid is not composite", "ROW() column
+-- has type integer instead of type text" -- and the first one segfaulted the
+-- planner, writing past the attr_needed array of the wrong relation.
+SELECT l.id FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m
+  LEFT JOIN ojl_o o ON o.k = r.id GROUP BY l.id
+HAVING count(DISTINCT r.ctid) = count(DISTINCT CASE WHEN o.k IS NOT NULL THEN r.ctid END);
+SELECT l.id, count(DISTINCT r.ctid) FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m
+  GROUP BY l.id;
+SELECT l.id, count(CASE WHEN r.m = 'a' THEN r END) FROM ojl_l l
+  LEFT JOIN ojl_r r ON r.m = l.m GROUP BY l.id;
+-- A whole row the rewriting reads as an anonymous record is replaced before
+-- the lowering, so it is not one of these and still answers.
+CREATE TABLE ojl_res AS
+  SELECT l.id, count(DISTINCT r) AS n FROM ojl_l l LEFT JOIN ojl_r r ON r.m = l.m
+  GROUP BY l.id;
+SELECT remove_provenance('ojl_res');
+SELECT * FROM ojl_res ORDER BY id;
+DROP TABLE ojl_res;
+-- A system column without an outer join is not relocated, so it is read.
+SELECT count(r.ctid) FROM ojl_r r;
+SELECT count(r.ctid) FROM ojl_r r JOIN ojl_l l ON r.m = l.m;
+
 DROP TABLE ojl_l, ojl_r, ojl_o;
