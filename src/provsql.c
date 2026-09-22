@@ -16799,6 +16799,380 @@ static Node *bool_exists_mutator(Node *node, void *cx) {
   return expression_tree_mutator(node, bool_exists_mutator, cx);
 }
 
+/* -------------------------------------------------------------------------
+ * Nested antijoin
+ *
+ * "every P of this R has a matching C" is written in SQL as an antijoin whose
+ * body holds an antijoin of its own,
+ *
+ *   SELECT R.cols FROM R
+ *    WHERE NOT EXISTS (SELECT 1 FROM P
+ *                       WHERE corr_out(P, R)
+ *                         AND NOT EXISTS (SELECT 1 FROM C
+ *                                          WHERE corr_in(C, P, R)))
+ *
+ * and the decorrelation has no rule for it: it moves the conjuncts of a body
+ * that read nothing outside, and here the inner test reads R, two levels up.
+ *
+ * It is relational division, and relational algebra factors it into operations
+ * the rewriting already lowers -- a join and two plain antijoins:
+ *
+ *   R ⋉̄ π_R( (R ⋈ P on corr_out) ⋉̄ C on corr_in )
+ *
+ * The pairs (r, p) whose p has no matching c are the bad ones; project them on
+ * R and antijoin R against that.  Written back as SQL, the inner antijoin is an
+ * ordinary single-level one over a block that holds R and P in its own FROM,
+ * and the outer test reads an UNCORRELATED derived table -- two shapes the
+ * decorrelation already covers, so this pass only has to build them.
+ *
+ * Nothing here aggregates.  An earlier version of this lowering read the
+ * division as a pair of counts over a chain of outer joins, which answered
+ * correctly but put an F₁ query through aggregate machinery, needing a row
+ * serialised to text to identify it and inheriting the empty-group questions
+ * that go with a HAVING.  An R with no P at all needs no case of its own here:
+ * no bad pair carries it, so its antijoin is over ⊕ of nothing.
+ *
+ * R is read twice, once outside and once in the pair block.  That is a repeated
+ * leaf in the circuit, which is what provenance circuits are for; the
+ * probability is over the same token, not over two independent copies of it.
+ * ------------------------------------------------------------------------- */
+
+/** @brief The single relation of @p b, where @p b is a body this pass can
+ *  read: one base relation in its FROM, nothing else of its own. */
+static RangeTblEntry *na_body_relation(Query *b, bool allow_sublink) {
+  RangeTblEntry *rte;
+  if (b == NULL || !IsA(b, Query) || b->commandType != CMD_SELECT)
+    return NULL;
+  if (b->hasAggs || b->groupClause != NIL || b->groupingSets != NIL ||
+      b->distinctClause != NIL || b->setOperations != NULL ||
+      b->hasWindowFuncs || b->limitCount != NULL || b->limitOffset != NULL ||
+      b->cteList != NIL || b->havingQual != NULL || b->sortClause != NIL)
+    return NULL;
+  if (!allow_sublink && b->hasSubLinks)
+    return NULL;
+  if (list_length(b->rtable) != 1 || b->jointree == NULL ||
+      list_length(b->jointree->fromlist) != 1 ||
+      !IsA(linitial(b->jointree->fromlist), RangeTblRef) ||
+      ((RangeTblRef *)linitial(b->jointree->fromlist))->rtindex != 1)
+    return NULL;
+  rte = (RangeTblEntry *)linitial(b->rtable);
+  if (rte->rtekind != RTE_RELATION || rte->tablesample != NULL)
+    return NULL;
+  return rte;
+}
+
+/** @brief The @c NOT @c EXISTS SubLink of @p n, or @c NULL. */
+static SubLink *na_not_exists(Node *n) {
+  BoolExpr *b;
+  Node *inner;
+  if (n == NULL || !IsA(n, BoolExpr))
+    return NULL;
+  b = (BoolExpr *)n;
+  if (b->boolop != NOT_EXPR || list_length(b->args) != 1)
+    return NULL;
+  inner = (Node *)linitial(b->args);
+  if (!IsA(inner, SubLink))
+    return NULL;
+  if (((SubLink *)inner)->subLinkType != EXISTS_SUBLINK ||
+      !IsA(((SubLink *)inner)->subselect, Query))
+    return NULL;
+  return (SubLink *)inner;
+}
+
+/** @brief Where each relation of the source query lands in the pair block:
+ *  R at 1, P at 2. */
+typedef struct na_pair_ctx {
+  Index r_idx;  ///< R's index in the query being rewritten
+} na_pair_ctx;
+
+/** @brief Mutator for the body's own correlation, one level below the query:
+ *  what reads P (level 0, its only relation) becomes relation 2 of the pair
+ *  block, and what reads R comes down to relation 1 of it. */
+static Node *na_corr_out_mut(Node *node, void *cx) {
+  na_pair_ctx *c = (na_pair_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 0 && v->varno == 1) {
+      v = (Var *)copyObject(v);
+      v->varno = 2;
+    } else if (v->varlevelsup == 1 && v->varno == c->r_idx) {
+      v = (Var *)copyObject(v);
+      v->varlevelsup = 0;
+      v->varno = 1;
+    } else
+      return node;
+#if PG_VERSION_NUM >= 130000
+    v->varnosyn = 0;
+    v->varattnosyn = 0;
+#endif
+    return (Node *)v;
+  }
+  return expression_tree_mutator(node, na_corr_out_mut, cx);
+}
+
+/** @brief Mutator for the inner body, which keeps its level (one below the pair
+ *  block): what read P and R two and three levels up in the source now read
+ *  relations 2 and 1 of the block just above. */
+static Node *na_corr_in_mut(Node *node, void *cx) {
+  na_pair_ctx *c = (na_pair_ctx *)cx;
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, Var)) {
+    Var *v = (Var *)node;
+    if (v->varlevelsup == 1 && v->varno == 1) {
+      v = (Var *)copyObject(v);
+      v->varno = 2;
+    } else if (v->varlevelsup == 2 && v->varno == c->r_idx) {
+      v = (Var *)copyObject(v);
+      v->varlevelsup = 1;
+      v->varno = 1;
+    } else
+      return node;
+#if PG_VERSION_NUM >= 130000
+    v->varnosyn = 0;
+    v->varattnosyn = 0;
+#endif
+    return (Node *)v;
+  }
+  return expression_tree_mutator(node, na_corr_in_mut, cx);
+}
+
+/** @brief Copy the relation entry @p src of @p from into @p to, with its
+ *  permission info. */
+static RangeTblEntry *na_copy_rel(Query *to, Query *from, RangeTblEntry *src) {
+  RangeTblEntry *copy = copyObject(src);
+#if PG_VERSION_NUM >= 160000
+  if (src->perminfoindex != 0) {
+    RTEPermissionInfo *pi = getRTEPermissionInfo(from->rteperminfos, src);
+    to->rteperminfos = lappend(to->rteperminfos, copyObject(pi));
+    copy->perminfoindex = list_length(to->rteperminfos);
+  }
+#else
+  (void)from;
+#endif
+  return copy;
+}
+
+/** @brief @c "l IS NOT DISTINCT FROM r", the NULL-safe equality the projection
+ *  of R has to be matched on: a plain @c = would miss an R row with a NULL in
+ *  any of its columns, and let it through the antijoin it should not pass. */
+static Node *na_not_distinct(Expr *l, Expr *r) {
+  DistinctExpr *de = makeNode(DistinctExpr);
+  Oid t = exprType((Node *)l);
+  Oid eqop;
+
+  if (!type_has_equality(t)) {
+    l = expr_as_text(l);
+    r = expr_as_text(r);
+    t = TEXTOID;
+  }
+  eqop = OpernameGetOprid(list_make1(makeString("=")), t, t);
+  if (!OidIsValid(eqop))
+    return NULL;
+  de->opno = eqop;
+  de->opfuncid = get_opcode(eqop);
+  de->opresulttype = BOOLOID;
+  de->opretset = false;
+  de->opcollid = InvalidOid;
+  de->inputcollid = exprCollation((Node *)l);
+  de->args = list_make2(l, r);
+  de->location = -1;
+  return (Node *)makeBoolExpr(NOT_EXPR, list_make1(de), -1);
+}
+
+/**
+ * @brief Read a nested antijoin as the antijoin of R against the projection of
+ *        its bad pairs (see the block comment above).
+ *
+ * @return  Whether @p q was rewritten.  Every shape this does not cover is
+ *          declined silently, and the usual sublink handling then reports it.
+ */
+static bool rewrite_nested_antijoin(const constants_t *constants, Query *q) {
+  List *conjs, *rest = NIL, *p_rest = NIL, *corr = NIL;
+  ListCell *lc;
+  SubLink *outer_sl = NULL, *inner_sl = NULL;
+  Query *pbody, *cbody, *pair, *probe;
+  RangeTblEntry *p_rte, *c_rte, *r_rte, *bad_rte;
+  Index r_idx;
+  Node *corr_out;
+  oj_cols rc;
+  na_pair_ctx pc;
+  RangeTblRef *ref;
+  List *colnames = NIL;
+  int i;
+
+  if (q->commandType != CMD_SELECT || !q->hasSubLinks)
+    return false;
+  if (q->jointree == NULL || list_length(q->jointree->fromlist) != 1 ||
+      !IsA(linitial(q->jointree->fromlist), RangeTblRef) ||
+      q->jointree->quals == NULL)
+    return false;
+  r_idx = ((RangeTblRef *)linitial(q->jointree->fromlist))->rtindex;
+  r_rte = rt_fetch(r_idx, q->rtable);
+  if (r_rte->rtekind != RTE_RELATION || r_rte->tablesample != NULL)
+    return false;
+
+  /* One NOT EXISTS in the WHERE, and no other conjunct holding a subquery. */
+  conjs = (IsA(q->jointree->quals, BoolExpr) &&
+           ((BoolExpr *)q->jointree->quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)q->jointree->quals)->args
+            : list_make1(q->jointree->quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    SubLink *sl = na_not_exists(c);
+    if (sl != NULL && outer_sl == NULL)
+      outer_sl = sl;
+    else if (checkExprHasSubLink(c))
+      return false;
+    else
+      rest = lappend(rest, c);
+  }
+  if (outer_sl == NULL || checkExprHasSubLink((Node *)q->targetList))
+    return false;
+
+  pbody = (Query *)outer_sl->subselect;
+  p_rte = na_body_relation(pbody, true);
+  if (p_rte == NULL || pbody->jointree->quals == NULL)
+    return false;
+
+  /* Its WHERE: one NOT EXISTS, the rest the correlation with R. */
+  conjs = (IsA(pbody->jointree->quals, BoolExpr) &&
+           ((BoolExpr *)pbody->jointree->quals)->boolop == AND_EXPR)
+            ? ((BoolExpr *)pbody->jointree->quals)->args
+            : list_make1(pbody->jointree->quals);
+  foreach (lc, conjs) {
+    Node *c = (Node *)lfirst(lc);
+    SubLink *sl = na_not_exists(c);
+    if (sl != NULL && inner_sl == NULL)
+      inner_sl = sl;
+    else if (checkExprHasSubLink(c))
+      return false;
+    else
+      p_rest = lappend(p_rest, c);
+  }
+  if (inner_sl == NULL || checkExprHasSubLink((Node *)pbody->targetList))
+    return false;
+
+  cbody = (Query *)inner_sl->subselect;
+  c_rte = na_body_relation(cbody, false);
+  if (c_rte == NULL || cbody->jointree->quals == NULL)
+    return false;
+
+  if (!oj_rte_has_provsql(constants, r_rte) &&
+      !oj_rte_has_provsql(constants, p_rte) &&
+      !oj_rte_has_provsql(constants, c_rte))
+    return false; /* nothing tracked: PostgreSQL's own machinery */
+
+  oj_collect_cols(constants, r_rte, &rc);
+  if (rc.n == 0)
+    return false;
+
+  /* ---- The bad pairs: R and P joined on the correlation, minus those whose
+   * P has a matching C; projected on R's own columns. ---- */
+  pair = makeNode(Query);
+  pair->commandType = CMD_SELECT;
+  pair->canSetTag = true;
+  pc.r_idx = r_idx;
+  {
+    RangeTblEntry *r_copy = na_copy_rel(pair, q, r_rte);
+    RangeTblEntry *p_copy = na_copy_rel(pair, pbody, p_rte);
+    pair->rtable = list_make2(r_copy, p_copy);
+  }
+  corr_out = p_rest == NIL
+               ? (Node *)makeBoolConst(true, false)
+               : (Node *)copyObject(list_length(p_rest) == 1
+                                      ? (Node *)linitial(p_rest)
+                                      : (Node *)makeBoolExpr(AND_EXPR, p_rest,
+                                                             -1));
+  corr_out = na_corr_out_mut(corr_out, &pc);
+  {
+    Query *cb = (Query *)copyObject(cbody);
+    SubLink *isl = makeNode(SubLink);
+    List *fl;
+
+    cb->jointree->quals = na_corr_in_mut(cb->jointree->quals, &pc);
+    cb->targetList = (List *)na_corr_in_mut((Node *)cb->targetList, &pc);
+    isl->subLinkType = EXISTS_SUBLINK;
+    isl->subselect = (Node *)cb;
+    isl->testexpr = NULL;
+    isl->operName = NIL;
+    isl->location = -1;
+
+    fl = NIL;
+    ref = makeNode(RangeTblRef);
+    ref->rtindex = 1;
+    fl = lappend(fl, ref);
+    ref = makeNode(RangeTblRef);
+    ref->rtindex = 2;
+    fl = lappend(fl, ref);
+    pair->jointree = makeFromExpr(
+      fl, (Node *)makeBoolExpr(
+            AND_EXPR,
+            list_make2(corr_out,
+                       makeBoolExpr(NOT_EXPR, list_make1(isl), -1)),
+            -1));
+  }
+  pair->hasSubLinks = true;
+  for (i = 0; i < rc.n; ++i) {
+    Var *v = makeVar(1, rc.attno[i], rc.type[i], rc.typmod[i], rc.coll[i], 0);
+    pair->targetList = lappend(
+      pair->targetList,
+      makeTargetEntry((Expr *)v, i + 1, pstrdup(rc.name[i]), false));
+    colnames = lappend(colnames, makeString(pstrdup(rc.name[i])));
+  }
+
+  /* ---- The antijoin: R against that projection, matched column by column. ---- */
+  bad_rte = makeNode(RangeTblEntry);
+  bad_rte->rtekind = RTE_SUBQUERY;
+  bad_rte->subquery = pair;
+  bad_rte->eref = makeAlias("bad", colnames);
+  bad_rte->inFromCl = true;
+#if PG_VERSION_NUM < 160000
+  bad_rte->requiredPerms = ACL_SELECT;
+#endif
+
+  probe = makeNode(Query);
+  probe->commandType = CMD_SELECT;
+  probe->canSetTag = true;
+  probe->rtable = list_make1(bad_rte);
+  ref = makeNode(RangeTblRef);
+  ref->rtindex = 1;
+  for (i = 0; i < rc.n; ++i) {
+    Node *eq = na_not_distinct(
+      (Expr *)makeVar(1, i + 1, rc.type[i], rc.typmod[i], rc.coll[i], 0),
+      (Expr *)makeVar(r_idx, rc.attno[i], rc.type[i], rc.typmod[i], rc.coll[i],
+                      1));
+    if (eq == NULL)
+      return false; /* a column with no equality and no text form: decline */
+    corr = lappend(corr, eq);
+  }
+  probe->jointree = makeFromExpr(
+    list_make1(ref),
+    list_length(corr) == 1 ? (Node *)linitial(corr)
+                           : (Node *)makeBoolExpr(AND_EXPR, corr, -1));
+  probe->targetList = list_make1(makeTargetEntry(
+    (Expr *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32), Int32GetDatum(1),
+                      false, true),
+    1, pstrdup("?column?"), false));
+
+  {
+    SubLink *osl = makeNode(SubLink);
+    osl->subLinkType = EXISTS_SUBLINK;
+    osl->subselect = (Node *)probe;
+    osl->testexpr = NULL;
+    osl->operName = NIL;
+    osl->location = -1;
+    rest = lappend(rest,
+                   makeBoolExpr(NOT_EXPR, list_make1(osl), -1));
+  }
+  q->jointree->quals =
+    list_length(rest) == 1 ? (Node *)linitial(rest)
+                           : (Node *)makeBoolExpr(AND_EXPR, rest, -1);
+  return true;
+}
+
 /**
  * @brief Rewrite top-level @c EXISTS / @c IN WHERE conjuncts (optionally negated)
  *        over tracked relations into correlated @c count(*) comparisons.
@@ -26162,6 +26536,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     query_tree_walker(q, drop_semijoin_distinct_walker, NULL,
                       QTW_IGNORE_RT_SUBQUERIES | QTW_IGNORE_CTE_SUBQUERIES);
     rewrite_uncorrelated_antijoin(constants, q);
+    rewrite_nested_antijoin(constants, q);
     rewrite_predicate_sublinks(constants, q);
     move_uncorrelated_where_predicates(constants, q);
     move_uncorrelated_sublinks_to_from(constants, q);
