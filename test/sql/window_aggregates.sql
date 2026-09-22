@@ -88,6 +88,16 @@ SELECT * FROM wa_report('ratio of two counts',
 SELECT * FROM wa_report('ratio of two sums',
   '(sum(x) OVER (PARTITION BY g ORDER BY x))::numeric
      / (sum(x) OVER (PARTITION BY g))::numeric', 'v > 0.6');
+-- cume_dist() is that ratio, by its definition -- the rows up to the current
+-- row's peers over the rows of the partition -- so it is tracked where it used
+-- to be read as a plain value, and the enumeration says it is right in each of
+-- the 64 worlds.
+SELECT * FROM wa_report('cume_dist over a partition',
+  'cume_dist() OVER (PARTITION BY g ORDER BY x)', 'v > 0.5');
+SELECT * FROM wa_report('cume_dist, whole table',
+  'cume_dist() OVER (ORDER BY x)', 'v >= 0.5');
+SELECT * FROM wa_report('cume_dist, descending',
+  'cume_dist() OVER (PARTITION BY g ORDER BY x DESC)', 'v = 1');
 SELECT * FROM wa_report('share of the partition',
   'x * 100 / sum(x) OVER (PARTITION BY g)', 'v > 30');
 SELECT * FROM wa_report('rest of the partition',

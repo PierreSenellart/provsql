@@ -24625,6 +24625,132 @@ static bool window_reads_aggregate(Query *q) {
  * @p q, or on a shape it does not split (a @c DISTINCT, an @c ORDER @c BY or
  * a @c LIMIT of its own, a set operation, a @c WITH).
  */
+/** @brief Context for @c cume_dist_mutator. */
+typedef struct cume_dist_ctx {
+  const constants_t *constants;
+  Query *q;                 ///< The query whose windows are rewritten
+  bool rewritten;           ///< One was
+  bool declined;            ///< One could not be
+} cume_dist_ctx;
+
+/**
+ * @brief The window with the partition of @p wc and no ordering, creating it
+ *        where the query has none: what @c cume_dist divides by.
+ */
+static Index partition_only_winref(Query *q, WindowClause *wc) {
+  ListCell *lc;
+  WindowClause *w0;
+  Index maxref = 0;
+
+  foreach (lc, q->windowClause) {
+    WindowClause *c = (WindowClause *)lfirst(lc);
+    if (c->orderClause == NIL && equal(c->partitionClause, wc->partitionClause))
+      return c->winref;
+    if (c->winref > maxref)
+      maxref = c->winref;
+  }
+  w0 = (WindowClause *)copyObject(wc);
+  w0->name = NULL;
+  w0->refname = NULL;
+  w0->orderClause = NIL;
+  w0->copiedOrder = false;
+  w0->winref = maxref + 1;
+  /* The frame is the one a window without ORDER BY has: every row of the
+   * partition is a peer of every other, so RANGE UNBOUNDED PRECEDING AND
+   * CURRENT ROW is the whole partition, which is what the divisor counts. */
+  q->windowClause = lappend(q->windowClause, w0);
+  return w0->winref;
+}
+
+/** @brief @c count(*) over the window @p winref. */
+static WindowFunc *window_count_star(Index winref) {
+  WindowFunc *wf = makeNode(WindowFunc);
+
+  wf->winfnoid = F_COUNT_;
+  wf->wintype = INT8OID;
+  wf->wincollid = InvalidOid;
+  wf->inputcollid = InvalidOid;
+  wf->args = NIL;
+  wf->aggfilter = NULL;
+  wf->winref = winref;
+  wf->winstar = true;
+  wf->winagg = true;
+  wf->location = -1;
+  return wf;
+}
+
+/**
+ * @brief Mutator: each @c cume_dist() becomes the ratio of counts it is.
+ *
+ * @c cume_dist() @c OVER @c w is the number of rows up to the current row's
+ * peers over the number of rows of the partition.  The first is
+ * @c count(*) @c OVER @c w -- the default frame of a window with an
+ * @c ORDER @c BY is @c RANGE @c UNBOUNDED @c PRECEDING @c AND @c CURRENT
+ * @c ROW, which holds exactly those rows, peers included -- and the second the
+ * same count over the partition with no ordering.  Both are aggregates ProvSQL
+ * tracks, so the ratio is tracked where the window function itself was read as
+ * a plain value; each is read as @c double @c precision, the type
+ * @c cume_dist answers in, so the value prints what SQL prints.
+ */
+static Node *cume_dist_mutator(Node *node, void *cx) {
+  cume_dist_ctx *ctx = (cume_dist_ctx *)cx;
+
+  if (node == NULL)
+    return NULL;
+  if (IsA(node, WindowFunc) && ((WindowFunc *)node)->winfnoid == F_CUME_DIST_) {
+    WindowFunc *wf = (WindowFunc *)node;
+    WindowClause *wc = window_clause_of(ctx->q, wf->winref);
+    Index w0;
+    Node *num, *den;
+    Oid divop;
+
+    /* A frame the query wrote is not this reading (SQL gives a ranking
+     * function no frame, but a copy of one may carry it). */
+    if (wc == NULL || (wc->frameOptions & FRAMEOPTION_NONDEFAULT) != 0) {
+      ctx->declined = true;
+      return node;
+    }
+    divop = OpernameGetOprid(list_make1(makeString("/")), FLOAT8OID, FLOAT8OID);
+    if (!OidIsValid(divop)) {
+      ctx->declined = true;
+      return node;
+    }
+    w0 = partition_only_winref(ctx->q, wc);
+    num = coerce_to_target_type(NULL, (Node *)window_count_star(wf->winref),
+                                INT8OID, FLOAT8OID, -1, COERCION_EXPLICIT,
+                                COERCE_EXPLICIT_CAST, -1);
+    den = coerce_to_target_type(NULL, (Node *)window_count_star(w0), INT8OID,
+                                FLOAT8OID, -1, COERCION_EXPLICIT,
+                                COERCE_EXPLICIT_CAST, -1);
+    if (num == NULL || den == NULL) {
+      ctx->declined = true;
+      return node;
+    }
+    ctx->rewritten = true;
+    return (Node *)make_opclause(divop, FLOAT8OID, false, (Expr *)num,
+                                 (Expr *)den, InvalidOid, InvalidOid);
+  }
+  return expression_tree_mutator(node, cume_dist_mutator, cx);
+}
+
+/**
+ * @brief Rewrite the @c cume_dist() windows of @p q into ratios of counts, or
+ *        return @c NULL leaving @p q alone.
+ */
+static Query *rewrite_cume_dist(const constants_t *constants, Query *q) {
+  cume_dist_ctx ctx;
+
+  if (!q->hasWindowFuncs || q->commandType != CMD_SELECT)
+    return NULL;
+  ctx.constants = constants;
+  ctx.q = q;
+  ctx.rewritten = ctx.declined = false;
+  q->targetList = (List *)cume_dist_mutator((Node *)q->targetList, &ctx);
+  if (!ctx.rewritten || ctx.declined)
+    return NULL;              /* all of them, or none */
+  return q;
+}
+
 static Query *split_window_over_aggregates(const constants_t *constants,
                                            Query *q) {
   if (!q->hasWindowFuncs || q->commandType != CMD_SELECT ||
@@ -25807,6 +25933,14 @@ static Query *process_query(const constants_t *constants, Query *q,
 
   /* A window over the aggregates of this level: the aggregation moves to a
    * subquery, the windows read its columns. */
+  if (provsql_active && has_provenance(constants, q)) {
+    Query *cume = rewrite_cume_dist(constants, q);
+    if (cume)
+      return process_query(constants, cume, removed, wrap_root, top_level,
+                           in_boolean_rewrite, NULL);
+  }
+
+  /* An aggregate read by a window: the aggregation moves to a subquery. */
   if (provsql_active && has_provenance(constants, q)) {
     Query *split = split_window_over_aggregates(constants, q);
     if (split)

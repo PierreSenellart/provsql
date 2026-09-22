@@ -45,6 +45,15 @@ q|exact|probabilities
 ratio of two sums|t|{0.018000000,0.328000000,0.448000000,0.400000000,0.060000000,0.900000000}
 (1 row)
 q|exact|probabilities
+cume_dist over a partition|t|{0.018000000,0.452000000,0.588000000,0.400000000,0.060000000,0.900000000}
+(1 row)
+q|exact|probabilities
+cume_dist, whole table|t|{0.183840000,0.500000000,0.700000000,0.400000000,0.061560000,0.556200000}
+(1 row)
+q|exact|probabilities
+cume_dist, descending|t|{0.200000000,0.400000000,0.560000000,0.048000000,0.600000000,0.360000000}
+(1 row)
+q|exact|probabilities
 share of the partition|t|{0.078000000,0.360000000,0.560000000,0.400000000,0.600000000,0.900000000}
 (1 row)
 q|exact|probabilities

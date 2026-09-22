@@ -498,6 +498,15 @@ where a ``NULL`` sum makes the guard unknown, so the ``ELSE`` gives it back and
 Aggregates as Window Functions
 -------------------------------
 
+``cume_dist()`` is tracked as well, being the ratio of two counts it is defined
+to be: the rows up to the current row's peers, over the rows of the partition.
+Both are aggregates over frames determined by values, so the ratio is read in
+every world, and it prints what SQL prints. ``percent_rank()`` is not yet --
+it is ``(rank - 1) / (count - 1)``, whose zero denominator for a single row
+needs a guard that is read as a plain value today -- nor are ``ntile`` and the
+offset windows (``lag``, ``lead``), whose value is decided by which rows are
+there rather than by their values.
+
 An aggregate used as a window function, ``f(x) OVER (…)``, is tracked
 as the aggregate of a group is. Each output row keeps the provenance of
 its input row, and the value becomes an ``agg_token`` over the rows of
