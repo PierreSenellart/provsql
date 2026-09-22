@@ -138,6 +138,14 @@ BooleanCircuit getBooleanCircuit(pg_uuid_t token, gate_t &gate)
  */
 static void applyLoadTimeSimplification(GenericCircuit &gc)
 {
+  /* A comparison whose two sides are the very same gate is settled by the
+   * operator alone -- and settling it true is the OR over the group's
+   * k-gates, not gate_one.  It has to be decided BEFORE the folds below,
+   * which would otherwise read it as a constant and lose with it the fact
+   * that the group is there.  Not gated by simplify_on_load: it is a
+   * structural rewrite, and leaving it undone is a wrong answer, not a
+   * missed simplification. */
+  provsql::runReflexiveCmpRewriter(gc);
   if (provsql_simplify_on_load) {
     provsql::runRangeCheck(gc);
     /* Fold deterministic @c gate_arith subtrees to @c gate_value

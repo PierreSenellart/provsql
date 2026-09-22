@@ -54,6 +54,11 @@ void resolveComparators(GenericCircuit &gc, gate_t root,
   // Boolean translation, which has no operation for them.
   const unsigned case_cmp = runCaseCmpExpander(gc);
 
+  // A comparison whose two sides are the same gate is settled by the operator
+  // alone.  Decided here, at the front: the value simplifier below would fold
+  // it to a constant and lose with it the fact that the group is there.
+  const unsigned reflexive = runReflexiveCmpRewriter(gc);
+
   // Hybrid-evaluator value simplifier: constant-fold gate_arith, drop
   // identity wires, collapse PLUS over independent RVs into a closed-form
   // gate_rv.  Runs before AnalyticEvaluator so newly-bare leaves unlock the
@@ -99,11 +104,13 @@ void resolveComparators(GenericCircuit &gc, gate_t root,
   const unsigned always_true = runHavingAlwaysTrueRewriter(gc);
 
   const unsigned total =
-    case_cmp + analytic + count_cmp + minmax + sum + agg_marginal + always_true;
+    case_cmp + reflexive + analytic + count_cmp + minmax + sum + agg_marginal +
+    always_true;
   if (total > 0 && provsql_verbose >= 5) {
     const std::size_t gates_after = count_reachable(gc, root);
     std::vector<std::string> parts;
     if (case_cmp > 0)     parts.push_back(std::to_string(case_cmp) + " guarded selection");
+    if (reflexive > 0)    parts.push_back(std::to_string(reflexive) + " reflexive comparison");
     if (analytic > 0)     parts.push_back(std::to_string(analytic) + " analytic");
     if (count_cmp > 0)    parts.push_back(std::to_string(count_cmp) + " Poisson-binomial");
     if (minmax > 0)       parts.push_back(std::to_string(minmax) + " min/max");

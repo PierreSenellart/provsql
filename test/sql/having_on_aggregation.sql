@@ -201,3 +201,54 @@ SELECT * FROM result_having_no_searchpath ORDER BY city;
 
 DROP TABLE result_having_no_searchpath;
 
+
+SET search_path TO provsql_test,provsql;
+
+-- A HAVING comparing two aggregates that read the same rows and contribute the
+-- same value on each: count(v) and count(w) over a group both count its rows,
+-- so the circuit, which is hash-consed, has ONE gate on both sides of the
+-- comparison and the operator settles it whatever the data.  Settling it true
+-- must not give the constant one: a tautology over a group still says that the
+-- group is there, and the constant would credit the world where the group is
+-- empty and SQL returns no row at all.  Three rows at one half in the first
+-- group, two in the second, so a group is there with probability 1 - 1/8 and
+-- 1 - 1/4; the reflexive-false operators hold in no world at all.
+CREATE TABLE hre(g int, v int, w int);
+INSERT INTO hre VALUES (1, 1, 9), (1, 2, 9), (1, 2, 8), (2, 5, 9), (2, 6, 9);
+SELECT add_provenance('hre');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM hre; END $$;
+CREATE TABLE hre_r AS SELECT g, probability(provenance()) AS p FROM hre
+  GROUP BY g HAVING count(v) = count(w);
+SELECT remove_provenance('hre_r');
+SELECT g, round(p::numeric, 6) AS p FROM hre_r ORDER BY g;
+DROP TABLE hre_r;
+CREATE TABLE hre_r AS SELECT g, probability(provenance()) AS p FROM hre
+  GROUP BY g HAVING count(v) >= count(w);
+SELECT remove_provenance('hre_r');
+SELECT g, round(p::numeric, 6) AS p FROM hre_r ORDER BY g;
+DROP TABLE hre_r;
+CREATE TABLE hre_r AS SELECT g, probability(provenance()) AS p FROM hre
+  GROUP BY g HAVING count(v) <> count(w);
+SELECT remove_provenance('hre_r');
+SELECT g, round(p::numeric, 6) AS p FROM hre_r ORDER BY g;
+DROP TABLE hre_r;
+-- Without a GROUP BY the single result row is there in every world, the empty
+-- one included, where count reads 0 on both sides: the tautology is certain.
+CREATE TABLE hre_r AS SELECT probability(provenance()) AS p FROM hre
+  HAVING count(v) = count(w);
+SELECT remove_provenance('hre_r');
+SELECT round(p::numeric, 6) AS p FROM hre_r;
+DROP TABLE hre_r;
+-- Comparisons the fix must leave alone: a threshold, and two aggregates that
+-- are NOT the same gate (count(*) counts rows, count(v) counts values).
+CREATE TABLE hre_r AS SELECT g, probability(provenance()) AS p FROM hre
+  GROUP BY g HAVING count(*) = count(v);
+SELECT remove_provenance('hre_r');
+SELECT g, round(p::numeric, 6) AS p FROM hre_r ORDER BY g;
+DROP TABLE hre_r;
+CREATE TABLE hre_r AS SELECT g, probability(provenance()) AS p FROM hre
+  GROUP BY g HAVING count(v) = 3;
+SELECT remove_provenance('hre_r');
+SELECT g, round(p::numeric, 6) AS p FROM hre_r ORDER BY g;
+DROP TABLE hre_r;
+DROP TABLE hre;

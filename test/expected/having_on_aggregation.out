@@ -65,3 +65,46 @@ remove_provenance
 city|count
 Paris|3 (*)
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|p
+1|0.875000
+2|0.750000
+(2 rows)
+remove_provenance
+
+(1 row)
+g|p
+1|0.875000
+2|0.750000
+(2 rows)
+remove_provenance
+
+(1 row)
+g|p
+1|0.000000
+2|0.000000
+(2 rows)
+remove_provenance
+
+(1 row)
+p
+1.000000
+(1 row)
+remove_provenance
+
+(1 row)
+g|p
+1|0.875000
+2|0.750000
+(2 rows)
+remove_provenance
+
+(1 row)
+g|p
+1|0.125000
+(1 row)

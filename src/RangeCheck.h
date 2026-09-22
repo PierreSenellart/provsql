@@ -288,6 +288,8 @@ unsigned runRangeCheck(GenericCircuit &gc);
  * @return Number of comparators rewritten.  See the implementation
  *         doc comment in @c RangeCheck.cpp for the full contract.
  */
+unsigned runReflexiveCmpRewriter(GenericCircuit &gc);
+
 unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc);
 
 }  // namespace provsql

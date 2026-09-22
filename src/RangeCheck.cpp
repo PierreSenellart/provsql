@@ -1259,6 +1259,99 @@ unsigned runRangeCheck(GenericCircuit &gc)
  * @param gc  Circuit to mutate in place.
  * @return    Number of comparators rewritten to gate_plus.
  */
+/**
+ * @brief Decide every comparison whose two sides are the very same gate.
+ *
+ * Two aggregates that read the same rows and contribute the same value on
+ * each are ONE gate, the circuit being hash-consed: @c count(v) and
+ * @c count(w) over a group both count its rows.  The comparison is then
+ * settled by the operator alone, whatever the data -- but settling it TRUE
+ * is not @c gate_one.  A tautology over a group still says that the group is
+ * there, which is the OR over the k-gates; @c gate_one would credit the world
+ * where the group is empty and SQL returns no row at all.  That is the
+ * over-credit the doc comment on @c decideAggVsConstCmp describes, reached by
+ * another road.
+ *
+ * Runs at the FRONT of the resolution pipeline: this is a structural fact
+ * about the circuit, not a probabilistic one, and the value simplifier that
+ * runs early would otherwise fold the comparison away as a constant and lose
+ * the group with it.
+ */
+unsigned runReflexiveCmpRewriter(GenericCircuit &gc)
+{
+  unsigned resolved = 0;
+  const auto nb = gc.getNbGates();
+  std::vector<gate_t> cmps;
+  for (std::size_t i = 0; i < nb; ++i) {
+    auto g = static_cast<gate_t>(i);
+    if (gc.getGateType(g) == gate_cmp)
+      cmps.push_back(g);
+  }
+
+  for (gate_t c : cmps) {
+    if (gc.getGateType(c) != gate_cmp) continue;  /* defensive */
+    bool ok = false;
+    ComparisonOperator op = cmpOpFromOid(gc.getInfos(c).first, ok);
+    if (!ok) continue;
+    const auto &wires = gc.getWires(c);
+    if (wires.size() != 2) continue;
+    const bool lhs_is_agg = gc.getGateType(wires[0]) == gate_agg;
+    /* The very same gate on both sides.  Two aggregates that read the same
+   * rows and contribute the same value on each are ONE gate, the circuit
+   * being hash-consed: count(v) and count(w) over a group both count its
+   * rows, so the comparison is decided by the operator alone, whatever the
+   * data.  Deciding it true must not give gate_one, though -- a tautology
+   * over a group still says that the group is there, which is the OR over
+   * the k-gates.  gate_one would credit the world where the group is empty,
+   * where SQL returns no row at all; that is the same over-credit the doc
+   * comment on decideAggVsConstCmp describes, reached by another road. */
+  if (!(wires[0] == wires[1] && lhs_is_agg)) continue;
+  {
+    const bool reflexive_true = op == ComparisonOperator::EQ ||
+                                op == ComparisonOperator::LE ||
+                                op == ComparisonOperator::GE;
+    gate_t agg = wires[0];
+    std::vector<gate_t> ks;
+    bool shape_ok = true;
+
+    /* Every contribution a value: the aggregate then has a value on any
+     * non-empty group, so the comparison is not the UNKNOWN of a NULL
+     * aggregate, which SQL filters out. */
+    for (gate_t ch : gc.getWires(agg)) {
+      if (gc.getGateType(ch) != gate_semimod) { shape_ok = false; break; }
+      const auto &sw = gc.getWires(ch);
+      if (sw.size() != 2 || gc.getGateType(sw[1]) != gate_value) {
+        shape_ok = false;
+        break;
+      }
+      ks.push_back(sw[0]);
+    }
+    if (!shape_ok) continue;
+
+    if (!reflexive_true) {
+      gc.resolveGateToZero(c);  /* x < x, x > x, x <> x: in no world */
+      ++resolved;
+      continue;
+    }
+    /* A scalar COUNT has a value over no row too (it is 0), so its
+     * tautology holds in every world, the empty one included. */
+    if ((gc.getInfos(agg).second & PROVSQL_AGG_SCALAR_FLAG) != 0 &&
+        getAggregationOperator(gc.getInfos(agg).first) ==
+          AggregationOperator::COUNT) {
+      gc.resolveCmpToBernoulli(c, 1.0);
+      ++resolved;
+      continue;
+    }
+    if (ks.empty()) continue;
+    gc.resolveCmpToPlusOfKGates(c, ks);
+    ++resolved;
+    continue;
+  }
+
+  }
+  return resolved;
+}
+
 unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc)
 {
   unsigned resolved = 0;
@@ -1284,6 +1377,7 @@ unsigned runHavingAlwaysTrueRewriter(GenericCircuit &gc)
 
     bool lhs_is_agg = gc.getGateType(wires[0]) == gate_agg;
     bool rhs_is_agg = gc.getGateType(wires[1]) == gate_agg;
+
     if (lhs_is_agg == rhs_is_agg) continue;  /* both agg or neither */
 
     gate_t agg_side   = lhs_is_agg ? wires[0] : wires[1];
