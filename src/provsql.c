@@ -9144,12 +9144,33 @@ static Query *rewrite_agg_distinct(Query *q, const constants_t *constants) {
       if(!agg_distinct_args_supported(ar))
         provsql_unsupported(PROVSQL_GAP, "agg-distinct-several-arguments", "AGG(DISTINCT) with more than one argument is not "
                             "supported, unless the others are constants");
+      else if (ar->aggfilter != NULL &&
+               aggregate_keeps_nulls(constants, ar->aggfnoid))
+        provsql_unsupported(PROVSQL_GAP, "agg-distinct-filter-keeps-nulls",
+                            "AGG(DISTINCT x) FILTER (WHERE ...) is not supported for an "
+                            "aggregate that reads a NULL input as a value of its own");
       else {
         TargetEntry *syn = makeNode(TargetEntry);
         Expr *key_expr = (Expr *)((TargetEntry *)linitial(ar->args))->expr;
-        Query *inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
+        Query *inner;
         Query *outer;
+        /* A FILTER goes into the key, as "CASE WHEN filter THEN key END", and
+         * not into the WHERE of the deduplicating subquery: the filter applies
+         * before the deduplication either way, but a WHERE would drop a group
+         * the filter empties, where the count of such a group is 0 and its row
+         * is in the answer.  The rows the filter rejects read as one NULL key,
+         * which an aggregate that skips NULL inputs does not see -- and one
+         * that reads a NULL as a value of its own (array_agg, json_agg) is
+         * refused above rather than given the extra element.  The filter must
+         * not stay on the aggregate either: its Vars name the relations of the
+         * query around it, which the subquery that aggregates the deduplicated
+         * keys does not have (the "no relation entry for relid" it raised). */
+        if (ar->aggfilter != NULL)
+          key_expr = make_case_when((Expr *)copyObject(ar->aggfilter),
+                                    (Expr *)copyObject(key_expr), NULL);
+        inner = build_inner_for_distinct_key(q, key_expr, groupby_tes);
         syn->expr  = (Expr *) copyObject(ar);
+        ((Aggref *)syn->expr)->aggfilter = NULL;
         syn->resno = 1;
         outer = build_outer_for_distinct_key(syn, inner, n_gb, constants);
         outer_queries = lappend(outer_queries, outer);

@@ -67,3 +67,31 @@ id|n
 6|1
 7|1
 (7 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+g|n|d|nw|s
+1|0|2|1|
+2|2|2|0|11
+(2 rows)
+remove_provenance
+
+(1 row)
+g|p
+1|0.000000
+2|0.750000
+(2 rows)
+remove_provenance
+
+(1 row)
+g|p
+1|0.500000
+2|0.000000
+(2 rows)
+ERROR:  ProvSQL: AGG(DISTINCT x) FILTER (WHERE ...) is not supported for an aggregate that reads a NULL input as a value of its own
+DETAIL:  provsql-reason: agg-distinct-filter-keeps-nulls; scope: gap

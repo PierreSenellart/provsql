@@ -101,3 +101,47 @@ CREATE TABLE agg_result6 AS
 SELECT remove_provenance('agg_result6');
 SELECT * FROM agg_result6 ORDER BY id;
 DROP TABLE agg_result6;
+
+-- AGG(DISTINCT key) FILTER (WHERE f).  The filter goes into the key, as
+-- "CASE WHEN f THEN key END", and not into the WHERE of the deduplicating
+-- subquery: a filter that rejects every row of a group leaves that group with
+-- a count of 0 and its row in the answer, where a WHERE would have dropped the
+-- group with the join.  Over a FROM of one relation the filter was already
+-- read; over a join it named a relation the deduplicating subquery does not
+-- have, and the rewriting raised "no relation entry for relid".
+CREATE TABLE afd(g int, v int, w int);
+INSERT INTO afd VALUES (1, 1, 9), (1, 2, 9), (1, 2, 8), (2, 5, 9), (2, 6, 9);
+SELECT add_provenance('afd');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM afd; END $$;
+-- No row of group 1 passes v > 4, so its count is 0 and the group stays; the
+-- sum of an empty selection is NULL, as it is in plain SQL.  The filter reads a
+-- column that is not the key (w), so it applies row by row before the
+-- deduplication: of group 1 only (1, 2, 8) has w = 8.
+CREATE TABLE afd_r AS
+  SELECT g, count(DISTINCT v) FILTER (WHERE v > 4) AS n,
+            count(DISTINCT v) AS d,
+            count(DISTINCT v) FILTER (WHERE w = 8) AS nw,
+            sum(DISTINCT v) FILTER (WHERE v > 4) AS s
+  FROM afd, (VALUES (1), (2)) x(k) WHERE x.k = 1 GROUP BY g;
+SELECT remove_provenance('afd_r');
+SELECT g, n::text AS n, d::text AS d, nw::text AS nw, s::text AS s
+  FROM afd_r ORDER BY g;
+DROP TABLE afd_r;
+-- Read in a HAVING, the filtered count carries the provenance of the rows the
+-- filter keeps: group 2 holds as soon as one of its two rows is there,
+-- 1 - 1/4 = 0.75, and for w = 8 group 1 holds exactly when (1, 2, 8) is,
+-- one half.  A group no world can satisfy has probability 0.
+CREATE TABLE afd_r AS SELECT g, probability(provenance()) AS p FROM afd
+  GROUP BY g HAVING count(DISTINCT v) FILTER (WHERE v > 4) >= 1;
+SELECT remove_provenance('afd_r');
+SELECT g, round(p::numeric, 6) AS p FROM afd_r ORDER BY g;
+DROP TABLE afd_r;
+CREATE TABLE afd_r AS SELECT g, probability(provenance()) AS p FROM afd
+  GROUP BY g HAVING count(DISTINCT v) FILTER (WHERE w = 8) >= 1;
+SELECT remove_provenance('afd_r');
+SELECT g, round(p::numeric, 6) AS p FROM afd_r ORDER BY g;
+DROP TABLE afd_r;
+-- An aggregate that reads a NULL input as a value of its own would see the
+-- rejected rows as an extra element, so it is refused rather than given one.
+SELECT g, array_agg(DISTINCT v) FILTER (WHERE v > 4) FROM afd GROUP BY g;
+DROP TABLE afd;

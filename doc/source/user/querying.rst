@@ -126,7 +126,9 @@ The following SQL constructs are supported with full provenance tracking:
   fails the predicate may still appear in the result, with a provenance
   that evaluates to zero where the predicate fails; a group that can
   pass in no possible world may be left out)
-* ``FILTER`` clause on aggregates
+* ``FILTER`` clause on aggregates; on an ``AGG(DISTINCT …)`` it asks for an
+  aggregate that skips NULL inputs, so ``array_agg(DISTINCT …) FILTER (…)``
+  and the ``json_agg`` family are refused there
 * ``INSERT … SELECT`` (provenance propagated when target table is
   provenance-tracked)
 
