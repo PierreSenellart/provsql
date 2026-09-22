@@ -130,7 +130,19 @@ typedef enum provsql_arith_op {
                             ///< is given (SQL @c round(v) / @c round(v, d))
   PROVSQL_ARITH_FLOOR = 13, ///< unary, greatest integer <= child0
   PROVSQL_ARITH_CEIL  = 14, ///< unary, least integer >= child0
-  PROVSQL_ARITH_ABS   = 15  ///< unary, |child0|
+  PROVSQL_ARITH_ABS   = 15, ///< unary, |child0|
+  PROVSQL_ARITH_ASFLOAT8 = 16,///< unary, child0 as @c double @c precision
+                            ///< reads it.  The gates compute in @c numeric,
+                            ///< which loses nothing; a query whose expression
+                            ///< is a float reads the value as SQL does, and
+                            ///< this is what says so -- the rewriter puts it
+                            ///< where the type would otherwise be lost (the
+                            ///< widening cast it peels off an aggregate, the
+                            ///< result of arithmetic it swapped onto the
+                            ///< agg_token operators).  Transparent to every
+                            ///< pass that walks arithmetic: it is the value of
+                            ///< its child, rounded to that type.
+  PROVSQL_ARITH_ASFLOAT4 = 17 ///< unary, child0 as @c real reads it
 } provsql_arith_op;
 
 /**

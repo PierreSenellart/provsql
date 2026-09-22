@@ -1501,6 +1501,13 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_raw_moment(gc, g, 1,
             "Expectation of gate_arith " + std::string(isMax ? "MAX" : "MIN"));
         }
+        case PROVSQL_ARITH_ASFLOAT8:
+          /* The value as double precision reads it, which is the value these
+           * evaluators already carry: the moment is its child's, exactly. */
+          if (wires.size() == 1)
+            return rec_expectation(gc, wires[0], fp);
+          /* fall through to the sampled group otherwise */
+        case PROVSQL_ARITH_ASFLOAT4:
         case PROVSQL_ARITH_ROUND:
         case PROVSQL_ARITH_FLOOR:
         case PROVSQL_ARITH_CEIL:
@@ -1654,6 +1661,13 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
           return mc_var(
             "Variance of gate_arith " +
             std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
+        case PROVSQL_ARITH_ASFLOAT8:
+          /* The value as double precision reads it, which is the value these
+           * evaluators already carry: the moment is its child's, exactly. */
+          if (wires.size() == 1)
+            return rec_variance(gc, wires[0], fp);
+          /* fall through to the sampled group otherwise */
+        case PROVSQL_ARITH_ASFLOAT4:
         case PROVSQL_ARITH_ROUND:
         case PROVSQL_ARITH_FLOOR:
         case PROVSQL_ARITH_CEIL:
@@ -1823,6 +1837,13 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
           return mc_raw_moment(gc, g, k,
             "Raw moment of gate_arith " +
             std::string(op == PROVSQL_ARITH_MAX ? "MAX" : "MIN"));
+        case PROVSQL_ARITH_ASFLOAT8:
+          /* The value as double precision reads it, which is the value these
+           * evaluators already carry: the moment is its child's, exactly. */
+          if (wires.size() == 1)
+            return rec_raw_moment(gc, wires[0], k, fp);
+          /* fall through to the sampled group otherwise */
+        case PROVSQL_ARITH_ASFLOAT4:
         case PROVSQL_ARITH_ROUND:
         case PROVSQL_ARITH_FLOOR:
         case PROVSQL_ARITH_CEIL:

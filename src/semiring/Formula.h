@@ -385,6 +385,10 @@ virtual value_type arith(ArithmeticOperator op,
     return functional("ceil");
   case ArithmeticOperator::ABS:
     return functional("abs");
+  case ArithmeticOperator::AS_FLOAT8:
+    return functional("float8");
+  case ArithmeticOperator::AS_FLOAT4:
+    return functional("float4");
   case ArithmeticOperator::PERCENTILE:
     // Interleaved [indicator, value] wires; the fraction is in extra.
     if(v.empty() || v.size() % 2 != 0)

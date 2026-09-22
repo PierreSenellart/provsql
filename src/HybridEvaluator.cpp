@@ -139,6 +139,13 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
       return wires.size() == 1 ? std::ceil(first) : NaN;
     case PROVSQL_ARITH_ABS:
       return wires.size() == 1 ? std::fabs(first) : NaN;
+    case PROVSQL_ARITH_ASFLOAT8:
+      /* The value read as its own type: a double is what these evaluators
+       * already carry, so this one is the value itself. */
+      return wires.size() == 1 ? first : NaN;
+    case PROVSQL_ARITH_ASFLOAT4:
+      return wires.size() == 1
+               ? static_cast<double>(static_cast<float>(first)) : NaN;
     case PROVSQL_ARITH_PLUS: {
       double r = first;
       for (std::size_t i = 1; i < wires.size(); ++i) {

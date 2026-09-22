@@ -402,6 +402,17 @@ double Sampler::evalScalar(gate_t g)
             throw CircuitException("gate_arith ABS must be unary");
           result = std::fabs(evalScalar(wires[0]));
           break;
+        case PROVSQL_ARITH_ASFLOAT8:
+          if(wires.size() != 1)
+            throw CircuitException("gate_arith ASFLOAT8 must be unary");
+          result = evalScalar(wires[0]);   /* already a double */
+          break;
+        case PROVSQL_ARITH_ASFLOAT4:
+          if(wires.size() != 1)
+            throw CircuitException("gate_arith ASFLOAT4 must be unary");
+          result = static_cast<double>(
+                     static_cast<float>(evalScalar(wires[0])));
+          break;
         case PROVSQL_ARITH_PERCENTILE:
         {
           // Continuous percentile (SQL percentile_cont) over the group's

@@ -257,17 +257,32 @@ Arithmetic whose result is a floating-point number (``real``, ``double
 precision``) is tracked as well, and a widening cast the query writes to
 reach it -- ``users.downvotes / CAST(count(posts.id) AS REAL)`` -- does not
 stop the tracking: the operation is carried by the token and computed in
-``numeric``, which subsumes that widening.  Two differences follow from
-computing in ``numeric`` rather than in floating point.  The value differs
-in its last digits from what the same expression prints without provenance
-(``100 / CAST(count(*) AS REAL)`` over a count of 15 gives
-``6.6666666666666667`` here and ``6.6666665`` there, ``real`` carrying
-seven digits), so compare such values with a tolerance rather than
-digit for digit.  And a division by an aggregate that the data as it is
-makes zero has no value, ``NULL``, where plain PostgreSQL raises a
-division-by-zero error and returns nothing at all: the row is kept, with
-its provenance, and reading its value says only that this one world has
-none.
+``numeric``, which subsumes that widening.
+
+The value is *read* in the type the expression has, so it prints what SQL
+prints: ``sum(x) / 3`` over a ``double precision`` column gives ``2`` and not
+``numeric``'s ``2.0000000000000000``, ``100 / CAST(count(*) AS REAL)`` over
+fifteen rows gives ``6.666666666666667``, and
+``(count(*) * max(x))::numeric`` over such a column gives ``1.9`` rather than
+the ``1.90`` a numeric multiplication would give.  Two things carry the type.
+A gate records the one it can tell from what it holds -- the aggregate's own
+type, and the types of its operands.  Where the type is the query's alone,
+because the rewriting peeled a widening cast off the aggregate or coerced a
+float operand, the reading is put back explicitly: a cast to ``double
+precision`` or to ``real`` over an aggregate is a gate of its own, the value
+read in that type, and it is transparent to everything else -- the comparison
+``sum(x)::float8 > 5`` still reaches the closed-form evaluators, and the
+expectation of such an expression is its child's.
+
+The value is still *computed* in ``numeric``, which loses nothing: for the four
+basic operations, computing exactly and then reading in ``double precision``
+gives what floating-point arithmetic gives, since it rounds each result the
+same way.  ``^`` is the exception, where the last digit may differ.
+
+A division by an aggregate that the data as it is makes zero has no value,
+``NULL``, where plain PostgreSQL raises a division-by-zero error and returns
+nothing at all: the row is kept, with its provenance, and reading its value
+says only that this one world has none.
 
 The ``choose`` Aggregate
 -------------------------

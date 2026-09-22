@@ -4934,4 +4934,195 @@ END
 $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
   SET search_path=provsql,pg_temp,public;
 
+-- An arith gate records the type of the expression it stands for, beside the
+-- value it computed in numeric: the value is then READ as SQL reads it, a
+-- double precision result printing its 16 digits where numeric prints twenty
+-- (2 rather than 2.0000000000000000 for sum(x)/3 over a float column).  An agg
+-- gate already carried its aggregate's type in the same field.  Where the type
+-- is the query's own -- a cast the rewriting peels off an aggregate, a float
+-- operand it coerces to numeric -- the float8 / float4 counterparts carry it,
+-- and they are gates now rather than the identity they were.
+/**
+ * @brief The SQL type of the value an @c agg_token carries.
+ *
+ * An @c agg gate holds the aggregate's own result type in @c info2, next to
+ * the scalar flag in its top bit; an @c arith gate holds the result type of
+ * the operation it stands for, put there by @c agg_arith_make.  Every other
+ * aggregate-carrying gate holds a value the rewriting computed in @c numeric,
+ * which is what it answers for them.
+ */
+CREATE OR REPLACE FUNCTION agg_token_value_type(token UUID)
+  RETURNS oid AS
+$$
+  SELECT CASE provsql.get_gate_type(token)
+    WHEN 'agg' THEN (i.info2 & 2147483647)::oid
+    WHEN 'arith' THEN CASE WHEN coalesce(i.info2, 0) = 0
+                        THEN 'numeric'::regtype::oid ELSE i.info2::oid END
+    ELSE 'numeric'::regtype::oid
+  END
+  FROM provsql.get_infos(token) i;
+$$ LANGUAGE sql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+/**
+ * @brief The type the operation @p op over @p children answers in, by SQL's
+ *        own numeric tower.
+ *
+ * The gate computes in @c numeric whatever the types are -- it is the value
+ * that is stored, and a wider one loses nothing -- but the value is READ in
+ * the type the query's expression has, and @c double @c precision prints 16
+ * digits where @c numeric prints every one it holds.  Recording the type is
+ * what lets the reading round as SQL does; deriving it from the children makes
+ * it a function of the gate, so two statements building the same expression
+ * still agree on its token.
+ *
+ * Two operations are not the tower: the integer division SQL writes as @c "/"
+ * over integers (the @c INTDIV gate) answers in the integer type, and
+ * @c round(v, d) exists only over @c numeric, so it answers in @c numeric.
+ */
+CREATE OR REPLACE FUNCTION agg_arith_result_type(op int, children uuid[])
+  RETURNS oid AS
+$$
+DECLARE
+  t oid;
+  c uuid;
+  has_float8 boolean := false;
+  has_float4 boolean := false;
+  has_numeric boolean := false;
+  widest_int oid := NULL;
+BEGIN
+  IF children IS NULL THEN
+    RETURN 'numeric'::regtype::oid;
+  END IF;
+  FOREACH c IN ARRAY children LOOP
+    t := provsql.agg_token_value_type(c);
+    IF t = 'float8'::regtype::oid THEN has_float8 := true;
+    ELSIF t = 'float4'::regtype::oid THEN has_float4 := true;
+    ELSIF t = 'numeric'::regtype::oid THEN has_numeric := true;
+    ELSIF t = 'int8'::regtype::oid THEN widest_int := 'int8'::regtype::oid;
+    ELSIF t = 'int4'::regtype::oid THEN
+      widest_int := coalesce(nullif(widest_int, 'int2'::regtype::oid),
+                             'int4'::regtype::oid);
+    ELSIF t = 'int2'::regtype::oid THEN
+      widest_int := coalesce(widest_int, 'int2'::regtype::oid);
+    END IF;
+  END LOOP;
+  IF op = 16 THEN     -- the value as double precision reads it
+    RETURN 'float8'::regtype::oid;
+  END IF;
+  IF op = 17 THEN     -- ... as real reads it
+    RETURN 'float4'::regtype::oid;
+  END IF;
+  IF op = 11 THEN     -- INTDIV
+    RETURN coalesce(widest_int, 'int8'::regtype::oid);
+  END IF;
+  IF op = 12 AND array_length(children, 1) = 2 THEN   -- round(v, digits)
+    RETURN 'numeric'::regtype::oid;
+  END IF;
+  IF has_float8 THEN
+    RETURN 'float8'::regtype::oid;
+  END IF;
+  IF has_float4 THEN  -- no real-with-numeric operator: SQL widens both
+    RETURN CASE WHEN has_numeric THEN 'float8'::regtype::oid
+                ELSE 'float4'::regtype::oid END;
+  END IF;
+  IF has_numeric THEN
+    RETURN 'numeric'::regtype::oid;
+  END IF;
+  RETURN coalesce(widest_int, 'numeric'::regtype::oid);
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public;
+
+CREATE OR REPLACE FUNCTION agg_arith_make(op int, children uuid[], val numeric)
+  RETURNS agg_token AS
+$$
+DECLARE
+  token uuid := public.uuid_generate_v5(
+    provsql.uuid_ns_provsql(), concat('arith', op::text, children::text));
+  restype oid;
+  shown text;
+BEGIN
+  IF op IS NULL OR children IS NULL THEN
+    RETURN NULL;
+  END IF;
+  -- The gate keeps the value as it was computed, in numeric: that is what the
+  -- evaluators read, and the wider type loses nothing.  The type of the
+  -- expression goes beside it, so the value can be READ as SQL reads it.
+  restype := provsql.agg_arith_result_type(op, children);
+  PERFORM provsql.create_gate(token, 'arith', children, op, restype::int,
+                              val::text);
+  -- A NULL value (a division by zero on a row the database as it is may not
+  -- have) keeps the gate: its value in the other worlds is in the circuit.
+  shown := CASE
+    WHEN val IS NULL THEN 'NULL'
+    WHEN restype = 'float8'::regtype::oid THEN (val::float8)::text
+    WHEN restype = 'float4'::regtype::oid THEN (val::float4)::text
+    ELSE val::text
+  END;
+  RETURN format('( %s , %s )', token::text, shown)::provsql.agg_token;
+END
+$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION agg_token_value_text(token UUID)
+  RETURNS text AS
+$$
+  SELECT CASE
+    -- agg gates: extra is set by aggregate evaluation, in the aggregate's own
+    -- type, so it reads as it is.
+    WHEN provsql.get_gate_type(token) = 'agg'
+      THEN provsql.get_extra(token) || ' (*)'
+    -- arith gates: extra is the value agg_arith_make computed, in numeric
+    -- whatever the expression's type, so it is read in that type -- a double
+    -- precision result prints its 16 digits and not numeric's twenty.
+    WHEN provsql.get_gate_type(token) = 'arith'
+      THEN CASE provsql.agg_token_value_type(token)
+             WHEN 'float8'::regtype::oid
+               THEN (provsql.get_extra(token)::numeric::float8)::text || ' (*)'
+             WHEN 'float4'::regtype::oid
+               THEN (provsql.get_extra(token)::numeric::float4)::text || ' (*)'
+             ELSE provsql.get_extra(token) || ' (*)'
+           END
+    -- other aggregate-carrying gates: resolve the actual-world value
+    -- through the circuit.
+    WHEN provsql.get_gate_type(token) IN ('case', 'conditioned', 'semimod', 'value')
+      THEN provsql.agg_gate_value(token)::text || ' (*)'
+    ELSE NULL
+  END;
+$$ LANGUAGE sql STABLE STRICT PARALLEL SAFE;
+
+/**
+ * @brief float8(agg_token): the value, as a double precision reads it.
+ *
+ * Not the identity it once was: the gates compute in @c numeric, and this is
+ * what says that the expression is a float, so that its value is read as SQL
+ * reads it -- 2 and not 2.0000000000000000 for @c sum(x)/3 over such a column.
+ * The gate is the rounding to that type, and every pass that walks arithmetic
+ * treats it as the value of its child.  A token already read in that type is
+ * returned as it is, so nothing is wrapped twice.
+ */
+CREATE OR REPLACE FUNCTION "float8"(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT CASE
+     WHEN provsql.agg_token_value_type((a)::uuid) = 'float8'::regtype::oid
+       THEN a
+     ELSE provsql.agg_arith_make(16, ARRAY[(a)::uuid],
+            (provsql.agg_token_value(a)::float8)::numeric)
+   END $$
+  LANGUAGE sql STABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
+/** @brief float4(agg_token): the value, as a real reads it (see float8). */
+
+/** @brief float4(agg_token): the value, as a real reads it (see float8). */
+CREATE OR REPLACE FUNCTION "float4"(a agg_token)
+  RETURNS agg_token AS
+$$ SELECT CASE
+     WHEN provsql.agg_token_value_type((a)::uuid) = 'float4'::regtype::oid
+       THEN a
+     ELSE provsql.agg_arith_make(17, ARRAY[(a)::uuid],
+            (provsql.agg_token_value(a)::float4)::numeric)
+   END $$
+  LANGUAGE sql STABLE STRICT PARALLEL SAFE SET search_path=provsql,pg_temp,public;
+
 SELECT reset_constants_cache();

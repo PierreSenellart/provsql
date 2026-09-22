@@ -9750,12 +9750,14 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
   /* Only arithmetic whose result is a number: arithmetic on other types (a
    * timestamp minus a timestamp) stays as the query wrote it, on the values.
    *
-   * A floating-point result is taken as well, though the agg_token operators
-   * compute in numeric and do not round as real / double precision do: what
-   * the value loses in its last digits, the result gains in being tracked at
-   * all -- and a division whose divisor is an aggregate that no row of the
-   * actual data contributes to gives NULL here, where reading the value
-   * divided by the zero it reads there. */
+   * A floating-point result is taken as well: the agg_token operators compute
+   * in numeric, which loses nothing, and the value is READ in the type of the
+   * expression -- from what the gate can tell of its children
+   * (agg_arith_result_type), and where the type is the query's alone, from the
+   * reading this function puts back below (the float8 / float4 counterpart
+   * over the swapped expression).  A division whose divisor is an aggregate
+   * that no row of the actual data contributes to gives NULL here, where
+   * reading the value divided by the zero it reads there. */
   if (!is_arith || !(op->opresulttype == INT2OID ||
                     op->opresulttype == INT4OID ||
                     op->opresulttype == INT8OID ||
@@ -9870,6 +9872,33 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     }
   }
   pfree(opname);
+  /* The expression's own type, where the gates would not have it.  They
+   * compute in numeric, which loses nothing, and record the type they can tell
+   * from their children -- the aggregate's own, the operands'.  What they
+   * cannot tell is a float the query asked for and this function peeled off or
+   * coerced away: the REAL of "100 / CAST(count(*) AS REAL)", whose gate sees a
+   * count and a number.  Reading it back through the cast counterpart says so,
+   * and that counterpart returns the token unchanged where the type is already
+   * right, so nothing is wrapped that does not need it. */
+  if (newop != NULL &&
+      (op->opresulttype == FLOAT8OID || op->opresulttype == FLOAT4OID) &&
+      exprType((Node *)newop) == constants->OID_TYPE_AGG_TOKEN) {
+    Oid argtypes[1] = {constants->OID_TYPE_AGG_TOKEN};
+    List *names = list_make2(makeString("provsql"),
+                             makeString(op->opresulttype == FLOAT8OID
+                                          ? "float8" : "float4"));
+    Oid fn = LookupFuncName(names, 1, argtypes, true);
+    list_free(names);
+    if (OidIsValid(fn)) {
+      FuncExpr *as = makeNode(FuncExpr);
+      as->funcid = fn;
+      as->funcresulttype = constants->OID_TYPE_AGG_TOKEN;
+      as->funcformat = COERCE_EXPLICIT_CALL;
+      as->args = list_make1(newop);
+      as->location = -1;
+      newop = (Expr *)as;
+    }
+  }
   return (Node *)newop;
 }
 

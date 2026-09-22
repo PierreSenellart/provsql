@@ -111,6 +111,8 @@ ArithmeticOperator arithOpFromTag(unsigned tag, bool &ok)
   case PROVSQL_ARITH_FLOOR:      return ArithmeticOperator::FLOOR;
   case PROVSQL_ARITH_CEIL:       return ArithmeticOperator::CEIL;
   case PROVSQL_ARITH_ABS:        return ArithmeticOperator::ABS;
+  case PROVSQL_ARITH_ASFLOAT8:   return ArithmeticOperator::AS_FLOAT8;
+  case PROVSQL_ARITH_ASFLOAT4:   return ArithmeticOperator::AS_FLOAT4;
   }
 
   ok = false;

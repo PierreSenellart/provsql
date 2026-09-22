@@ -56,6 +56,12 @@ bool matchAggCmp(GenericCircuit &gc, gate_t cmp, AggCmpMatch &out)
       } else if (aop == PROVSQL_ARITH_NEG && w.size() == 1) {
         inner = w[0];
         sign = -sign;
+      } else if ((aop == PROVSQL_ARITH_ASFLOAT8 ||
+                  aop == PROVSQL_ARITH_ASFLOAT4) && w.size() == 1) {
+        /* The value read in its own type: the comparison is the same one on
+         * the value below, so a cast the query writes over an aggregate keeps
+         * the closed forms (sum(x)::float8 > 5 is sum(x) > 5). */
+        inner = w[0];
       } else
         return g;
       via.push_back(g);

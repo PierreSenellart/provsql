@@ -940,6 +940,18 @@ void provsql_having(
             if (!eval(w[0], world, a, ai)) return false;
             out = -a; is_int = ai; return true;
           }
+          if (aop == PROVSQL_ARITH_ASFLOAT8 ||
+              aop == PROVSQL_ARITH_ASFLOAT4) {
+            /* The value read in its own type: a double is what this carries,
+             * and a real rounds it to seven digits. */
+            double a;
+            bool ai;
+            if (w.size() != 1 || !eval(w[0], world, a, ai)) return false;
+            out = aop == PROVSQL_ARITH_ASFLOAT8
+                    ? a : static_cast<double>(static_cast<float>(a));
+            is_int = ai;
+            return true;
+          }
           if (aop == PROVSQL_ARITH_ROUND || aop == PROVSQL_ARITH_FLOOR ||
               aop == PROVSQL_ARITH_CEIL || aop == PROVSQL_ARITH_ABS) {
             /* Read in the world, on the value the world gives: rounding and

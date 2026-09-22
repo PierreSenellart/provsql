@@ -246,6 +246,17 @@ Interval intervalOf(const GenericCircuit &gc, gate_t g,
           if (wires.size() != 1) break;
           result = { std::ceil(first.lo), std::ceil(first.hi) };
           break;
+        case PROVSQL_ARITH_ASFLOAT8:
+          /* The value in its own type: a double carries it as it is, and
+           * rounding to a real is monotone, so the interval follows. */
+          if (wires.size() != 1) break;
+          result = first;
+          break;
+        case PROVSQL_ARITH_ASFLOAT4:
+          if (wires.size() != 1) break;
+          result = { static_cast<double>(static_cast<float>(first.lo)),
+                     static_cast<double>(static_cast<float>(first.hi)) };
+          break;
         case PROVSQL_ARITH_ABS:
           /* |x| is not monotone: an interval straddling zero has 0 as its
            * least value, and the greatest is the farther endpoint. */

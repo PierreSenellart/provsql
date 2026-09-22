@@ -87,7 +87,9 @@ enum class ArithmeticOperator {
   ROUND,      ///< rounding, to a number of digits given by a second wire
   FLOOR,      ///< unary floor
   CEIL,       ///< unary ceiling
-  ABS         ///< unary absolute value
+  ABS,        ///< unary absolute value
+  AS_FLOAT8,  ///< unary: the value as double precision reads it
+  AS_FLOAT4   ///< unary: the value as real reads it
 };
 
 /**

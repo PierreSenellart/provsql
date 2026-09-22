@@ -384,6 +384,65 @@ SELECT remove_provenance('agg_arith_fn');
 SELECT city, r FROM agg_arith_fn ORDER BY city;
 DROP TABLE agg_arith_fn;
 
+-- The value of an arithmetic gate is READ in the type the query's expression
+-- has, which the gate records beside the value it computes in numeric (an agg
+-- gate already carried its aggregate's type in the same field).  Without that,
+-- a double precision result printed numeric's twenty digits where SQL prints
+-- sixteen -- 2.0000000000000000 for sum(x)/3 -- and a numeric multiplication's
+-- scale where the expression is a float: every column below is what plain SQL
+-- answers, which the second query checks by computing the same thing with the
+-- rewriting off.
+CREATE TABLE agg_ty(x float8, n numeric, i int);
+INSERT INTO agg_ty VALUES (1,1,1), (2,2,2), (3,3,3);
+SELECT add_provenance('agg_ty');
+CREATE TABLE agg_ty_r AS
+  SELECT sum(x) / 3 AS f8_div, sum(x) / 7 AS f8_div7, sum(x) * 2 AS f8_times,
+         sum(n) / 3 AS num_div, sum(i) / 3 AS int_div,
+         sum(x::float4) / 3 AS f4_div, round(sum(n), 2) AS num_round,
+         (count(*) * max(x))::numeric AS float_then_numeric,
+         -- The float the gates cannot tell from their children: the query's
+         -- own cast, which the rewriting peels off the aggregate (the first)
+         -- or coerces away on the other operand (the second), and a cast over
+         -- an agg_token where no operand carries a type at all (the third).
+         -- Read back through the type, which is what the AS_FLOAT8 gate says.
+         100 / CAST(count(*) AS REAL) AS peeled_cast,
+         sum(i) * 1.5::float8 AS float_operand,
+         sum(i)::float8 / sum(i) AS cast_over_token,
+         sqrt(sum(x)) AS f8_sqrt
+  FROM agg_ty;
+SELECT remove_provenance('agg_ty_r');
+SELECT f8_div::text AS f8_div, f8_div7::text AS f8_div7, f8_times::text AS f8_times,
+       num_div::text AS num_div, int_div::text AS int_div, f4_div::text AS f4_div,
+       num_round::text AS num_round, float_then_numeric::text AS ftn,
+       peeled_cast::text AS peeled, float_operand::text AS f_operand,
+       cast_over_token::text AS cast_tok, f8_sqrt::text AS f8_sqrt
+FROM agg_ty_r;
+SET provsql.active = off;
+SELECT sum(x) / 3 AS f8_div, sum(x) / 7 AS f8_div7, sum(x) * 2 AS f8_times,
+       sum(n) / 3 AS num_div, sum(i) / 3 AS int_div,
+       sum(x::float4) / 3 AS f4_div, round(sum(n), 2) AS num_round,
+       (count(*) * max(x))::numeric AS ftn,
+       100 / CAST(count(*) AS REAL) AS peeled, sum(i) * 1.5::float8 AS f_operand,
+       sum(i)::float8 / sum(i) AS cast_tok, sqrt(sum(x)) AS f8_sqrt
+FROM agg_ty;
+SET provsql.active = on;
+-- The per-world reading goes through the same gate, which is the value of its
+-- child: over the seven non-empty worlds of three rows at one half, sum(x)/3
+-- takes 1/3, 2/3, 1, 1, 4/3, 5/3 and 2, so E = 8/7, and a comparison over a
+-- cast still reaches the closed forms -- sum(i)::float8 > 3 holds in the three
+-- worlds whose sum exceeds 3, 3/8.
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_ty; END $$;
+SELECT round(expected(sum(x) / 3)::numeric, 6) AS e_f8_div FROM agg_ty;
+CREATE TABLE agg_ty_p AS
+SELECT round(probability(provenance())::numeric, 6) AS p_cast_cmp
+  FROM (SELECT 1 AS k FROM agg_ty GROUP BY 1 HAVING sum(i)::float8 > 3) t;
+SELECT remove_provenance('agg_ty_p');
+SELECT * FROM agg_ty_p;
+DROP TABLE agg_ty_p;
+DROP TABLE agg_ty_r;
+SELECT remove_provenance('agg_ty');
+DROP TABLE agg_ty;
+
 -- ln, exp, sqrt of an aggregate result, and its power of a constant: the gate
 -- carries the operation and computes it in every world, where reading the
 -- value of the database as it is would leave the result untracked.  Over the

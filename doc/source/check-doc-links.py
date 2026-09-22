@@ -112,6 +112,10 @@ INTERNAL_FUNCTIONS = {
     # Doxygen CREATE OPERATOR artefacts (<procedure>_<rightarg> shape).
     'agg_token_op_agg_token', 'agg_token_op_numeric', 'numeric_op_agg_token',
     'agg_token_make', 'agg_value_gate', 'agg_token_value', 'agg_arith_make',
+    # The type an agg_token's value has, and the type the arithmetic over
+    # them answers in: read by agg_arith_make to record it on the gate and by
+    # agg_token_value_text to read the value in it, never by a user.
+    'agg_token_value_type', 'agg_arith_result_type',
     # Recursive-CTE fixpoint drivers: invoked by the planner hook
     # (lower_recursive_cte) when lowering a WITH RECURSIVE query, never
     # called directly by users.  eval_reachability is the
