@@ -9746,7 +9746,7 @@ static Node *try_swap_agg_arith(OpExpr *op, const constants_t *constants) {
     return NULL;
   is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
              strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0 ||
-             strcmp(opname, "^") == 0;
+             strcmp(opname, "^") == 0 || strcmp(opname, "@") == 0;
   /* Only arithmetic whose result is a number: arithmetic on other types (a
    * timestamp minus a timestamp) stays as the query wrote it, on the values.
    *
@@ -17830,7 +17830,7 @@ static bool oj_sub_bodies_coalescible(Query *a, Query *b) {
 }
 
 /**
- * @brief Is @p node a binary/unary @c +,-,*,/ operator expression?
+ * @brief Is @p node a binary/unary @c +,-,*,/,^,@ operator expression?
  *
  * Mirrors the predicate in @c try_swap_agg_arith: exactly the arithmetic
  * operators whose @c agg_token overloads build a @c gate_arith token that
@@ -17853,7 +17853,7 @@ static bool oj_is_arith_opexpr(Node *node) {
     return false;
   is_arith = strcmp(opname, "+") == 0 || strcmp(opname, "-") == 0 ||
              strcmp(opname, "*") == 0 || strcmp(opname, "/") == 0 ||
-             strcmp(opname, "^") == 0;
+             strcmp(opname, "^") == 0 || strcmp(opname, "@") == 0;
   pfree(opname);
   return is_arith;
 }

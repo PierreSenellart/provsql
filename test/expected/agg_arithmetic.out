@@ -413,3 +413,22 @@ g|p
 1|0.875000
 2|0.500000
 (2 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+e_abs|e_absfn|e_signed
+2.333333|2.333333|-1.666667
+(1 row)
+WARNING:  ProvSQL: ORDER BY on an aggregate result sorts on its plain value, the one computed on the database as it is, disregarding provenance
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+v|a
+1|1
+5|3
+(2 rows)

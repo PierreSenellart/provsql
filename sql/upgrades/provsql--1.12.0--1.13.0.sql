@@ -5148,4 +5148,15 @@ DROP FUNCTION IF EXISTS provsql.ln(provsql.agg_token);
 DROP FUNCTION IF EXISTS provsql.exp(provsql.agg_token);
 DROP FUNCTION IF EXISTS provsql.sqrt(provsql.agg_token);
 
+-- Prefix @ (absolute value) over agg_token: PostgreSQL's own @ has
+-- numeric_abs / int8abs for a procedure rather than abs, so the rewriter
+-- cannot reach the counterpart through the operator's function and the
+-- operator is declared over agg_token instead.
+DO $$
+BEGIN
+  CREATE OPERATOR provsql.@ (RIGHTARG=provsql.agg_token,
+                             PROCEDURE=provsql.provsql_abs);
+EXCEPTION WHEN duplicate_function THEN NULL;
+END $$;
+
 SELECT reset_constants_cache();

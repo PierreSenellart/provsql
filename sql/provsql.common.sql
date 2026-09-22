@@ -3688,6 +3688,11 @@ CREATE OPERATOR - (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_mi
 CREATE OPERATOR * (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_times, COMMUTATOR = *);
 CREATE OPERATOR / (LEFTARG=agg_token, RIGHTARG=agg_token, PROCEDURE=agg_token_div);
 CREATE OPERATOR - (RIGHTARG=agg_token, PROCEDURE=agg_token_neg);
+/* Prefix @ is PostgreSQL's absolute value.  Its own procedure is numeric_abs
+   or int8abs rather than abs, so the swap cannot reach the counterpart by
+   resolving the operator's function: the operator over agg_token is declared
+   here instead, and ORDER BY @(2 - max(x)) carries its gate like abs(...). */
+CREATE OPERATOR @ (RIGHTARG=agg_token, PROCEDURE=provsql_abs);
 
 /** @brief ln(agg_token) (gate_arith LN): the logarithm of the value the
  *  aggregate takes, in every world, rather than of the one it takes in the

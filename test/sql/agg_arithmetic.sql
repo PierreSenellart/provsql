@@ -527,3 +527,33 @@ SELECT remove_provenance('agg_fl_r');
 SELECT g, round(p::numeric, 6) AS p FROM agg_fl_r ORDER BY g;
 DROP TABLE agg_fl_r;
 DROP TABLE agg_fl_d;
+
+-- Prefix @ is PostgreSQL's absolute value.  Its procedure is numeric_abs or
+-- int8abs rather than abs, so the operator over agg_token is declared rather
+-- than reached through the operator's function: @(2 - max(v)) carries its gate
+-- as abs(2 - max(v)) does, instead of reading the plain value.
+-- Two rows at one half, so three worlds carry the group: {1} reads |2-1| = 1,
+-- and {5} and {1,5} both read |2-5| = 3, so the expectation of the absolute
+-- value is (1+3+3)/3 = 2.333333.  The absolute value OF the expectation is
+-- |(1-3-3)/3| = 1.666667, which is what reading the plain value would give:
+-- the two tell the gate apart, where data of one sign could not.
+CREATE TABLE agg_at_d(v int);
+INSERT INTO agg_at_d VALUES (1), (5);
+SELECT add_provenance('agg_at_d');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_at_d; END $$;
+CREATE TABLE agg_at_r AS SELECT
+  round(expected(@(2 - max(v)))::numeric, 6) AS e_abs,
+  round(expected(abs(2 - max(v)))::numeric, 6) AS e_absfn,
+  round(expected(2 - max(v))::numeric, 6) AS e_signed
+  FROM agg_at_d;
+SELECT remove_provenance('agg_at_r');
+SELECT * FROM agg_at_r;
+DROP TABLE agg_at_r;
+-- The corpus shape: sorting on it warns that the sort reads the plain value,
+-- which is the ORDER BY reading and no longer the frozen-aggregate one.
+CREATE TABLE agg_at_r AS
+  SELECT v, @(2 - max(v)) AS a FROM agg_at_d GROUP BY v ORDER BY @(2 - max(v)), v;
+SELECT remove_provenance('agg_at_r');
+SELECT v, a::numeric AS a FROM agg_at_r ORDER BY v;
+DROP TABLE agg_at_r;
+DROP TABLE agg_at_d;
