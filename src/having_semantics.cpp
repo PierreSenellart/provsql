@@ -172,6 +172,7 @@ bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale) {
   if (s[i] == '+' || s[i] == '-') { neg = (s[i] == '-'); ++i; }
   std::string digits;
   int sc = 0;
+  int exponent = 0;
   bool seen_dot = false, seen_digit = false;
   for (; i < s.size(); ++i) {
     char ch = s[i];
@@ -182,8 +183,32 @@ bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale) {
       digits.push_back(ch);
       if (seen_dot) ++sc;
       seen_digit = true;
+    } else if (ch == 'e' || ch == 'E') {
+      /* A float's own text uses an exponent for large and small magnitudes
+       * (1e+20, 2.5e-07), and that is the same decimal with its point moved:
+       * read it, and let the scale below carry it.  Without this, a comparison
+       * against a value the arithmetic computed in double declined the exact
+       * grid and fell to the enumeration, which is sound but slower and
+       * sometimes refused. */
+      bool eneg = false;
+      std::string edigits;
+      if (!seen_digit) return false;
+      ++i;
+      if (i < s.size() && (s[i] == '+' || s[i] == '-')) {
+        eneg = (s[i] == '-');
+        ++i;
+      }
+      for (; i < s.size(); ++i) {
+        if (s[i] < '0' || s[i] > '9') return false;
+        edigits.push_back(s[i]);
+        if (edigits.size() > 4) return false;   /* far beyond any grid */
+      }
+      if (edigits.empty()) return false;
+      exponent = std::stoi(edigits);
+      if (eneg) exponent = -exponent;
+      break;
     } else {
-      return false;                 // 'e'/'E', inf, nan, separators, ...
+      return false;                 // inf, nan, separators, ...
     }
   }
   if (!seen_digit) return false;
@@ -196,6 +221,16 @@ bool parse_decimal_scaled(const std::string &s, long &mantissa, int &scale) {
   while (sc > 0 && !digits.empty() && digits.back() == '0') {
     digits.pop_back();
     --sc;
+  }
+  /* The exponent moves the point: 1e+20 is the digit 1 with twenty zeros, and
+   * 2.5e-07 is 25 at scale 8.  A negative scale is the first of those, and the
+   * zeros go into the digits, where a value too wide for the grid overflows
+   * below and is declined as any other wide value is. */
+  sc -= exponent;
+  while (sc < 0) {
+    digits.push_back('0');
+    ++sc;
+    if (digits.size() > 18) return false;
   }
   try {
     std::size_t pos = 0;
