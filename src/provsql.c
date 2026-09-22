@@ -10977,17 +10977,44 @@ static void transform_distinct_into_group_by(Query *q) {
  * @param q  Query to normalise in place.
  */
 static void normalize_distinct_into_group_by(Query *q) {
+  int entries = 0;
+  ListCell *lc;
+
   if (!q->distinctClause)
     return;
   if (q->hasDistinctOn)
     provsql_unsupported(PROVSQL_GAP, "distinct-on", "DISTINCT ON not supported");
   else if (q->hasAggs)
     provsql_unsupported(PROVSQL_GAP, "distinct-on-aggregate", "DISTINCT on aggregate results not supported");
-  else if (list_length(q->distinctClause) < list_length(q->targetList))
-    provsql_unsupported(PROVSQL_GAP, "distinct-group-by-inconsistent", "Inconsistent DISTINCT and GROUP BY clauses not "
-                        "supported");
-  else
-    transform_distinct_into_group_by(q);
+  else {
+    /* A GROUP BY whose groups nothing reads is duplicate elimination and
+     * nothing else, and a DISTINCT over its keys eliminates the same
+     * duplicates: the set of rows is the one the DISTINCT alone gives, so the
+     * grouping goes and the normalisation below is the one a plain
+     * SELECT DISTINCT gets.  (The same reading as in wrap_body_grouping, where
+     * a grouped sublink body that reads no group is lowered by dropping the
+     * grouping.)  SQL requires every selected column to be a grouping key, so
+     * the DISTINCT is always over a subset of them. */
+    if (q->groupClause != NIL && q->groupingSets == NIL &&
+        q->havingQual == NULL) {
+#if PG_VERSION_NUM >= 180000
+      strip_group_rte_pg18(q);
+#endif
+      q->groupClause = NIL;
+    }
+    /* A key the query groups by without selecting it has a junk entry of its
+     * own, which is no column of the result: what the DISTINCT has to cover is
+     * the columns, and counting the junk ones read a consistent DISTINCT as an
+     * inconsistent one. */
+    foreach (lc, q->targetList)
+      if (!((TargetEntry *)lfirst(lc))->resjunk)
+        ++entries;
+    if (list_length(q->distinctClause) < entries)
+      provsql_unsupported(PROVSQL_GAP, "distinct-group-by-inconsistent", "Inconsistent DISTINCT and GROUP BY clauses not "
+                          "supported");
+    else
+      transform_distinct_into_group_by(q);
+  }
 }
 
 /**

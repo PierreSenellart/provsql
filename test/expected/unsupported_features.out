@@ -2,8 +2,6 @@
 ERROR:  ProvSQL: provenance() called on a table without provenance
 ERROR:  ProvSQL: DISTINCT ON not supported
 DETAIL:  provsql-reason: distinct-on; scope: gap
-ERROR:  ProvSQL: Inconsistent DISTINCT and GROUP BY clauses not supported
-DETAIL:  provsql-reason: distinct-group-by-inconsistent; scope: gap
 ERROR:  ProvSQL: INTERSECT ALL over provenance-tracked relations is not supported: the copies it keeps have no provenance of their own. Use INTERSECT, or IN / EXISTS.
 DETAIL:  provsql-reason: intersect-all; scope: deliberate
 ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value

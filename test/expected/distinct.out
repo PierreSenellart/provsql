@@ -29,3 +29,36 @@ Berlin|Ellen
 New York|John
 Paris|Dave
 (3 rows)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+k|p
+1|0.750000
+2|0.500000
+(2 rows)
+remove_provenance
+
+(1 row)
+k|p
+1|0.750000
+2|0.500000
+(2 rows)
+remove_provenance
+
+(1 row)
+n|p
+1|0.750000
+2|0.250000
+(2 rows)
+remove_provenance
+
+(1 row)
+p
+0.875000
+(1 row)
+remove_provenance
+
+(1 row)

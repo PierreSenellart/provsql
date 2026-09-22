@@ -10,13 +10,6 @@ FROM
     personnel
 GROUP BY city;
 
-SELECT DISTINCT
-    1
-FROM
-    personnel
-GROUP BY
-    city;
-
 SELECT
     *
 FROM
