@@ -291,6 +291,11 @@ SELECT label, c::uuid <> r::uuid AS token_differs,
        array_length(provsql.get_children(c::uuid), 1) AS children,
        (provsql.get_infos(c::uuid)).info1 AS info1, (provsql.get_infos(c::uuid)).info2 AS info2,
        left(provsql.get_extra(c::uuid), 40) AS extra,
+       -- The output is the value's own text and the marker -- except for a value
+       -- reading NULL, which prints the marker alone: SQL writes nothing for a
+       -- NULL, so writing the four characters would put data where a reader
+       -- expects none.  That row reads f here, and only that row; the empty
+       -- text HAS a value and keeps its place before the marker.
        provsql.agg_token_out(c)::text = provsql.get_extra(c::uuid) || ' (*)' AS value_is_extra
 FROM (
   SELECT 0 AS k, 'integer' AS label,

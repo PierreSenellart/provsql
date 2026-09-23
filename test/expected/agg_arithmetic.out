@@ -307,7 +307,7 @@ remove_provenance
 (1 row)
 city|n|q
 Berlin|1 (*)|10 (*)
-New York|0 (*)|NULL (*)
+New York|0 (*)|(*)
 Paris|1 (*)|10 (*)
 (3 rows)
 add_provenance

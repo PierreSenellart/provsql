@@ -129,7 +129,10 @@ PG_FUNCTION_INFO_V1(agg_token_out);
  * @brief Produce a display string for an @c agg_token.
  *
  * Default: returns @c "value (*)" (the running value followed by
- * @c " (*)"), matching @c EXPLAIN and direct @c CAST to text.
+ * @c " (*)"), matching @c EXPLAIN and direct @c CAST to text.  Where the value
+ * is SQL NULL it is @c "(*)" alone: SQL writes nothing for a NULL, so writing
+ * @c "NULL" would put four characters where a reader expects none, and a text
+ * client would read them as data.
  *
  * When the @c provsql.aggtoken_text_as_uuid GUC is on, returns the
  * underlying provenance UUID instead. This is the form ProvSQL
@@ -148,6 +151,19 @@ agg_token_out(PG_FUNCTION_ARGS)
 
   if (provsql_aggtoken_text_as_uuid)
     result = psprintf("%s", aggtok->tok);
+  else if (strcmp(aggtok->val, "NULL") == 0)
+    /* The value is SQL NULL here -- an aggregate with no value, or one the
+     * arithmetic has none for (a division whose divisor reads zero, which
+     * ProvSQL answers rather than raising so that the other worlds stay
+     * answerable).  SQL never writes the four characters NULL, so neither do
+     * we: the marker alone says the row is tracked and has no value here.
+     *
+     * Only that spelling, NOT the empty value string @c agg_token_val_is_null
+     * also accepts: an aggregate of the empty text has a value, and writing it
+     * as though it had none would lose the difference.  The two are already
+     * indistinguishable in what the gate records, which is a separate matter
+     * from printing them alike. */
+    result = pstrdup("(*)");
   else
     result = psprintf("%s (*)", agg_token_value_cstring(aggtok));
 

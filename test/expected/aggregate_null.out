@@ -59,3 +59,19 @@ remove_provenance
 having|p
 count(*)+count(*)>=2|0.7500
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|n|p
+1|f|0.500000
+1|t|0.000000
+2|f|0.500000
+2|t|0.000000
+3|f|0.000000
+3|t|0.500000
+(6 rows)
+ERROR:  ProvSQL: HAVING IS [NOT] NULL is only supported directly on an aggregate of a provenance-tracked relation
+DETAIL:  provsql-reason: having-null-test-not-aggregate; scope: gap

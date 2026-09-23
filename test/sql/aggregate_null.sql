@@ -119,3 +119,28 @@ SELECT 'count(*)+count(*)>=2' AS having, p FROM an_nc;
 DROP TABLE an_nc;
 
 DROP TABLE an_n;
+
+-- IS [NOT] NULL of an expression over aggregates is a truth per world, the
+-- value it tests having one per world, so it explodes into the two rows those
+-- truths give -- as a comparison against a constant does.  Read on the datum
+-- instead it answered from the agg_token, which is never the null datum (the
+-- row is there), and so said NOT NULL of a value that is null, silently.
+-- Two rows and not three: a value either is null in a world or is not.
+CREATE TABLE anx(g int, a int, b int);
+INSERT INTO anx VALUES (1, 5, 2), (2, 7, 0), (3, 9, NULL);
+SELECT add_provenance('anx');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM anx; END $$;
+-- One row per group at one half.  sum(b) is null only for group 3, whose only
+-- b is NULL, so the matching truth carries the group's own half and the other
+-- carries nothing.
+CREATE TABLE anx_r AS
+  SELECT g, sum(b) IS NULL AS n, probability(provenance()) AS p
+  FROM anx GROUP BY g;
+SELECT remove_provenance('anx_r');
+SELECT g, n, round(p::numeric, 6) AS p FROM anx_r ORDER BY g, n;
+DROP TABLE anx_r;
+-- A division is null where its divisor reads zero, which is not a nullness of
+-- either operand, so the null gate cannot build it operand by operand: refused
+-- by name rather than answered wrongly.
+SELECT g, (sum(a)/sum(b)) IS NULL FROM anx GROUP BY g;
+DROP TABLE anx;

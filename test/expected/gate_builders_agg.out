@@ -64,7 +64,7 @@ text[] with quotes|t|t|agg|3|2108|23|{"gba a","gba \"b\"",NULL}|t
 enum|t|t|agg|3|2108|23|gba large|t
 domain|t|t|agg|3|2108|23|918.27|t
 jsonb|t|t|agg|3|2108|23|{"gba": [918, 273]}|t
-text reading NULL|t|t|agg|3|2108|23|NULL|t
+text reading NULL|t|t|agg|3|2108|23|NULL|f
 empty text|t|t|agg|3|2108|23||t
 long text|t|t|agg|3|2108|23|gba long 918273 gba long 918273 gba long|t
 (25 rows)

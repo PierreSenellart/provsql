@@ -22012,6 +22012,23 @@ static bool agg_cmp_truth_walker(Node *n, agg_cmp_truth_ctx *ctx) {
     ctx->found = n;
     return true;
   }
+  /* IS [NOT] NULL of an expression over aggregates is a truth per world as
+   * much as a comparison is: the value it tests has one value per world, so it
+   * is null in some and not in others.  Read on the datum instead, it answers
+   * from the agg_token -- which is never the null datum, the row being there --
+   * and so says NOT NULL of a value that is null, silently.  Two rows and not
+   * three: a value either is null in a world or is not, so there is no unknown
+   * arm.  The condition itself is built by the HAVING null test
+   * (having_NullTest_to_provenance, through agg_expr_null_gate); a shape it
+   * cannot build refuses there by name rather than answering wrongly here. */
+  if (IsA(n, NullTest) && ((NullTest *)n)->arg != NULL &&
+      !((NullTest *)n)->argisrow &&
+      contain_aggs_of_level((Node *)((NullTest *)n)->arg, 0)) {
+    ctx->found = n;
+    ctx->agg = NULL;
+    ctx->nullable = false;
+    return true;
+  }
   return expression_tree_walker(n, agg_cmp_truth_walker, (void *)ctx);
 }
 

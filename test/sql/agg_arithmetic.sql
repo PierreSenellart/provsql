@@ -510,6 +510,12 @@ SET provsql.active = off;
 -- No row of the second group contributes to count(v), so the division has no
 -- value to read: NULL, as every arithmetic on an aggregate without a value,
 -- where the plain value would divide by the zero count(v) returns there.
+-- Plain SQL RAISES on that division and ProvSQL answers NULL, which is
+-- deliberate and not to be "fixed": the value of the database as it is is one
+-- world of many, and raising there would abort the statement and take every
+-- other world's answer with it -- including the probability that the row is
+-- there at all, which is well defined and is the question ProvSQL is for.  The
+-- same reading as a HAVING that keeps a group failing its predicate.
 -- The text of an aggregate with no value is "NULL", not a number: the second
 -- group reads as no value at all, where the scale of the first is rounded away
 -- (it is not the same in every PostgreSQL version).
