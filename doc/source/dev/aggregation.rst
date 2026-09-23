@@ -111,10 +111,17 @@ from three gate types in :cfunc:`gate_type`:
   :sqlfunc:`get_infos`) record the PostgreSQL OID of the
   aggregate function and the OID of its result type, so the
   evaluator can later instantiate the right |cpp| accumulator.
-  The high bit of ``info2`` flags a *scalar* (no ``GROUP BY``)
-  aggregation (``PROVSQL_AGG_TYPE_MASK`` in
-  :cfile:`provsql_utils.h`); consumers mask it off before using
-  the result-type OID.
+  The high bit of ``info2`` (``PROVSQL_AGG_SCALAR_FLAG``, in
+  :cfile:`provsql_utils.h`) flags a *scalar* (no ``GROUP BY``)
+  aggregation; consumers AND ``info2`` with
+  ``PROVSQL_AGG_TYPE_MASK`` to recover the result-type OID before
+  using it.  So ``info2`` of a ``count`` reads ``20`` (``int8``),
+  of a text aggregate ``25``, of a ``float8`` one ``701``, each
+  with the high bit set where there is no ``GROUP BY``.  This is
+  the only place the type of a value is recorded: an evaluator
+  that instead infers it from how the value's text looks will
+  read a text column of numerals as numbers, and order it
+  numerically where PostgreSQL orders it lexicographically.
 
 Row-level provenance and the δ operator
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
