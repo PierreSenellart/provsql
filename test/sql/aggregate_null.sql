@@ -139,13 +139,26 @@ CREATE TABLE anx_r AS
 SELECT remove_provenance('anx_r');
 SELECT g, n, round(p::numeric, 6) AS p FROM anx_r ORDER BY g, n;
 DROP TABLE anx_r;
--- A division is null where its divisor reads zero, which is not a nullness of
--- either operand, so the null gate cannot build it operand by operand: refused
--- by name rather than answered wrongly.  A gap against the semantics, which
--- gives a division by zero the value null and so has the test in the fragment,
--- and not a deviation: closing it needs the nullness of a division to be "an
--- operand is null OR the divisor reads zero".
-SELECT g, (sum(a)/sum(b)) IS NULL FROM anx GROUP BY g;
+-- A division is null where its divisor reads zero, which is no operand's
+-- nullness: the gate ORs one more term onto the operands' own, the comparison
+-- of the divisor against zero, read per world.  The semantics has the test in
+-- the fragment -- a division by zero is null there, by the convention that
+-- totalizes a function undefined at zero -- so a refusal here was a gap against
+-- it and not a deviation.  SQL raises rather than answering null, in the worlds
+-- where the divisor cancels only, which is the convention to argue with.
+-- Read through a materialised table, as everything above: the truth gates are
+-- derived from the per-run input tokens, so printing a provenance column here
+-- would print a different uuid at every run.
+-- The three reasons, one per group, each row at one half: group 1 divides 5 by 2
+-- and is never null (false carries the group's half, true nothing); group 2
+-- divides 7 by a b of 0, null for the divisor -- the reason that is ours and not
+-- SQL's, which raises there; group 3 sums a single NULL b, null for an operand.
+CREATE TABLE anx_d AS
+  SELECT g, (sum(a)/sum(b)) IS NULL AS n, probability(provenance()) AS p
+  FROM anx GROUP BY g;
+SELECT remove_provenance('anx_d');
+SELECT g, n, round(p::numeric, 6) AS p FROM anx_d ORDER BY g, n;
+DROP TABLE anx_d;
 -- As a SORT KEY the same test is not exploded -- a key is no answer -- and it
 -- orders the rows on whether the value is null in the database as it is, which
 -- is what a sort on an aggregate's value does.  That has to be SAID, though:
@@ -183,4 +196,50 @@ CREATE TABLE anx_s AS SELECT plain(sum(b)) IS NULL AS n FROM anx;
 SELECT remove_provenance('anx_s');
 SELECT n FROM anx_s;
 DROP TABLE anx_s;
+-- Two rows in one group at one half, whose b cancels when both are there:
+-- the empty world has no group at all (a quarter), {10/1} and {20/-1} divide
+-- fine (a half together), and {30/0} is the null one (a quarter).  So IS NULL
+-- carries 0.25 and IS NOT NULL 0.5, and the two add up to the 0.75 the group
+-- exists with -- neither operand being null in any of those worlds, which is
+-- what a strictness-only reading would have answered 0 for.
+CREATE TABLE anz(g int, a int, b int);
+INSERT INTO anz VALUES (1, 10, 1), (1, 20, -1);
+SELECT add_provenance('anz');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM anz; END $$;
+CREATE TABLE anz_r AS
+  SELECT g, (sum(a)/sum(b)) IS NULL AS n, probability(provenance()) AS p
+  FROM anz GROUP BY g;
+SELECT remove_provenance('anz_r');
+SELECT g, n, round(p::numeric, 6) AS p FROM anz_r ORDER BY n;
+DROP TABLE anz_r;
+CREATE TABLE anz_r AS
+  SELECT g, (sum(a)/sum(b)) IS NOT NULL AS n, probability(provenance()) AS p
+  FROM anz GROUP BY g;
+SELECT remove_provenance('anz_r');
+SELECT g, n, round(p::numeric, 6) AS p FROM anz_r ORDER BY n;
+DROP TABLE anz_r;
+-- The same in a HAVING, which keeps the one truth it asks for.
+CREATE TABLE anz_r AS
+  SELECT g, probability(provenance()) AS p
+  FROM anz GROUP BY g HAVING (sum(a)/sum(b)) IS NULL;
+SELECT remove_provenance('anz_r');
+SELECT g, round(p::numeric, 6) AS p FROM anz_r;
+DROP TABLE anz_r;
+CREATE TABLE anz_r AS
+  SELECT g, probability(provenance()) AS p
+  FROM anz GROUP BY g HAVING (sum(a)/sum(b)) IS NOT NULL;
+SELECT remove_provenance('anz_r');
+SELECT g, round(p::numeric, 6) AS p FROM anz_r;
+DROP TABLE anz_r;
+-- A PLAIN divisor is the same number in every world, so the added term settles
+-- rather than exploding: 2 is never zero, the truth is false wherever the group
+-- is there (0.75) and true nowhere.  Refused before, for want of the term.
+CREATE TABLE anz_r AS
+  SELECT g, (sum(a)/2) IS NULL AS n, probability(provenance()) AS p
+  FROM anz GROUP BY g;
+SELECT remove_provenance('anz_r');
+SELECT g, n, round(p::numeric, 6) AS p FROM anz_r ORDER BY n;
+DROP TABLE anz_r;
+SELECT remove_provenance('anz');
+DROP TABLE anz;
 DROP TABLE anx;

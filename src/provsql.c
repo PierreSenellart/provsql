@@ -5222,6 +5222,178 @@ static FuncExpr *make_regular_indicator(const constants_t *constants,
  * lowering as the query wrote it, and the value is read as a plain one.  This
  * function never raises: declining is how it says no.
  */
+/**
+ * @brief The gate of "this divisor reads zero in this world", or of "it does
+ *        not" (@p want_zero false), or @c NULL where it cannot be built.
+ *
+ * A division is NULL where an operand is -- which is every operand's own
+ * reading -- and ALSO where the divisor reads zero.  That second condition is
+ * no operand's nullness but a COMPARISON of the divisor against zero, per
+ * world: a divisor that cancels in one world and not in another is null there
+ * and not here, so it explodes into the truths the worlds give it rather than
+ * settling on the divisor the data as it is displays.  SQL RAISES there instead
+ * of answering NULL; the NULL is the algebra's totalization of a function
+ * undefined at zero (semantics, @c \S aggexpr), which is the convention to
+ * argue with if anyone objects, not this gate.
+ *
+ * A divisor that is itself an @c agg_token gets the comparison gate the HAVING
+ * machinery builds for an aggregate against a constant; a plain one is the same
+ * number in every world, so an ordinary indicator on @c "divisor = 0" says it.
+ */
+static FuncExpr *divisor_zero_gate(Node *divisor, const constants_t *constants,
+                                   bool want_zero) {
+  Const *zero, *oid;
+  FuncExpr *cast, *one, *semimod, *cmp;
+  Oid opno;
+
+  if (divisor == NULL)
+    return NULL;
+
+  if (exprType(divisor) != constants->OID_TYPE_AGG_TOKEN) {
+    ParseState *pstate = make_parsestate(NULL);
+    Node *eq;
+
+    zero = makeConst(NUMERICOID, -1, InvalidOid, -1,
+                     DirectFunctionCall3(numeric_in, CStringGetDatum("0"),
+                                         ObjectIdGetDatum(NUMERICOID),
+                                         Int32GetDatum(-1)),
+                     false, false);
+    eq = (Node *)make_op(pstate, list_make1(makeString("=")),
+                         copyObject(divisor), (Node *)zero, NULL, -1);
+    free_parsestate(pstate);
+    if (eq == NULL)
+      return NULL;
+    return make_regular_indicator(constants, (Expr *)eq, !want_zero);
+  }
+
+  /* provenance_cmp(agg_token_uuid(divisor), "=" , semimod(0, gate_one())) --
+   * the shape having_OpExpr_to_provenance_cmp builds for an aggregate against a
+   * literal, read here on a divisor no comparison of the query mentions. */
+  opno = OpernameGetOprid(list_make1(makeString("=")), NUMERICOID, NUMERICOID);
+  if (!OidIsValid(opno))
+    return NULL;
+  if (!want_zero) {
+    opno = get_negator(opno);
+    if (!OidIsValid(opno))
+      return NULL;
+  }
+
+  cast = makeNode(FuncExpr);
+  cast->funcid = constants->OID_FUNCTION_AGG_TOKEN_UUID;
+  cast->funcresulttype = constants->OID_TYPE_UUID;
+  cast->args = list_make1(copyObject(divisor));
+  cast->location = -1;
+
+  one = makeNode(FuncExpr);
+  one->funcid = constants->OID_FUNCTION_GATE_ONE;
+  one->funcresulttype = constants->OID_TYPE_UUID;
+  one->args = NIL;
+  one->location = -1;
+
+  zero = makeConst(NUMERICOID, -1, InvalidOid, -1,
+                   DirectFunctionCall3(numeric_in, CStringGetDatum("0"),
+                                       ObjectIdGetDatum(NUMERICOID),
+                                       Int32GetDatum(-1)),
+                   false, false);
+
+  semimod = makeNode(FuncExpr);
+  semimod->funcid = constants->OID_FUNCTION_PROVENANCE_SEMIMOD;
+  semimod->funcresulttype = constants->OID_TYPE_UUID;
+  semimod->args = list_make2((Expr *)zero, (Expr *)one);
+  semimod->location = -1;
+
+  oid = makeConst(constants->OID_TYPE_INT, -1, InvalidOid, sizeof(int32),
+                  Int32GetDatum(opno), false, true);
+
+  cmp = makeNode(FuncExpr);
+  cmp->funcid = constants->OID_FUNCTION_PROVENANCE_CMP;
+  cmp->funcresulttype = constants->OID_TYPE_UUID;
+  cmp->args = list_make3((Expr *)cast, (Expr *)oid, (Expr *)semimod);
+  cmp->location = -1;
+  return cmp;
+}
+
+/**
+ * @brief The arguments of a division over @c agg_token, or @c NIL.
+ *
+ * Both spellings the rewriting makes: the @c "/" operator over @c agg_token,
+ * and the @c agg_token_intdiv counterpart a division the query wrote on
+ * integers is routed to, which is a call and not an operator.
+ */
+static List *agg_token_division_args(Node *node,
+                                     const constants_t *constants) {
+  if (node == NULL || exprType(node) != constants->OID_TYPE_AGG_TOKEN)
+    return NIL;
+  if (IsA(node, OpExpr) && list_length(((OpExpr *)node)->args) == 2) {
+    char *opname = get_opname(((OpExpr *)node)->opno);
+    bool div = opname != NULL && strcmp(opname, "/") == 0;
+
+    if (opname != NULL)
+      pfree(opname);
+    return div ? ((OpExpr *)node)->args : NIL;
+  }
+  if (IsA(node, FuncExpr) && list_length(((FuncExpr *)node)->args) == 2 &&
+      get_func_namespace(((FuncExpr *)node)->funcid) ==
+        get_namespace_oid("provsql", true)) {
+    char *name = get_func_name(((FuncExpr *)node)->funcid);
+    bool div = name != NULL && strncmp(name, "agg_token_intdiv", 16) == 0;
+
+    if (name != NULL)
+      pfree(name);
+    return div ? ((FuncExpr *)node)->args : NIL;
+  }
+  return NIL;
+}
+
+/**
+ * @brief The gate of @c "expr IS [NOT] NULL" for an arithmetic expression over
+ *        @c agg_token, strict in every operand of @p args.
+ *
+ * @p div_args, when not @c NIL, says the arithmetic is a DIVISION and carries
+ * its two arguments: its second is the divisor, whose reading zero makes the
+ * division null on top of any operand's own nullness (@c divisor_zero_gate).
+ */
+static FuncExpr *agg_arith_strict_null_gate(List *args, List *div_args,
+                                            const constants_t *constants,
+                                            bool want_null) {
+  List *operands = NIL;
+  ListCell *lc;
+
+  foreach (lc, args) {
+    Node *operand = (Node *)lfirst(lc);
+    FuncExpr *gate;
+
+    if (exprType(operand) == constants->OID_TYPE_AGG_TOKEN)
+      gate = agg_expr_null_gate(operand, constants, want_null);
+    else {
+      /* A plain operand, the same in every world. */
+      NullTest *nt = makeNode(NullTest);
+      nt->arg = (Expr *)copyObject(operand);
+      nt->nulltesttype = IS_NULL;
+      nt->argisrow = false;
+      nt->location = -1;
+      gate = make_regular_indicator(constants, (Expr *)nt, !want_null);
+    }
+    if (gate == NULL)
+      return NULL;
+    operands = lappend(operands, gate);
+  }
+  if (operands == NIL)
+    return NULL;
+  if (div_args != NIL) {
+    FuncExpr *zero = divisor_zero_gate((Node *)lsecond(div_args), constants,
+                                       want_null);
+
+    if (zero == NULL)
+      return NULL;
+    operands = lappend(operands, zero);
+  }
+  /* NULL where ONE of those holds, not NULL where EVERY one fails. */
+  return uuid_nary_gate(want_null ? constants->OID_FUNCTION_PROVENANCE_PLUS
+                                  : constants->OID_FUNCTION_PROVENANCE_TIMES,
+                        operands, constants);
+}
+
 static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
                                     bool want_null)
 {
@@ -5329,6 +5501,17 @@ static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
       return uuid_nary_gate(constants->OID_FUNCTION_PROVENANCE_PLUS, terms,
                             constants);
     }
+    /* An integer division, which the rewriting spells as a call and not as an
+     * operator (agg_token_intdiv): the same reading as the division operator
+     * below, divisor included. */
+    {
+      List *div_args = agg_token_division_args(node, constants);
+
+      if (div_args != NIL)
+        return agg_arith_strict_null_gate(div_args, div_args, constants,
+                                          want_null);
+    }
+
     /* A function ProvSQL carries over an agg_token -- round, ln, sqrt, and so
      * the sqrt a stddev's rewrite puts over the CASE of its variance -- is
      * strict, so its NULL-ness IS its argument's and could be read here.  It
@@ -5343,36 +5526,10 @@ static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
 
   /* Arithmetic over agg_tokens: strict in every operand. */
   if (IsA(node, OpExpr) &&
-      exprType(node) == constants->OID_TYPE_AGG_TOKEN) {
-    List *operands = NIL;
-    ListCell *lc;
-
-    foreach (lc, ((OpExpr *)node)->args) {
-      Node *operand = (Node *)lfirst(lc);
-      FuncExpr *gate;
-
-      if (exprType(operand) == constants->OID_TYPE_AGG_TOKEN)
-        gate = agg_expr_null_gate(operand, constants, want_null);
-      else {
-        /* A plain operand, the same in every world. */
-        NullTest *nt = makeNode(NullTest);
-        nt->arg = (Expr *)copyObject(operand);
-        nt->nulltesttype = IS_NULL;
-        nt->argisrow = false;
-        nt->location = -1;
-        gate = make_regular_indicator(constants, (Expr *)nt, !want_null);
-      }
-      if (gate == NULL)
-        return NULL;
-      operands = lappend(operands, gate);
-    }
-    if (operands == NIL)
-      return NULL;
-    /* NULL where ONE operand is, not NULL where EVERY one is not. */
-    return uuid_nary_gate(want_null ? constants->OID_FUNCTION_PROVENANCE_PLUS
-                                    : constants->OID_FUNCTION_PROVENANCE_TIMES,
-                          operands, constants);
-  }
+      exprType(node) == constants->OID_TYPE_AGG_TOKEN)
+    return agg_arith_strict_null_gate(((OpExpr *)node)->args,
+                                      agg_token_division_args(node, constants),
+                                      constants, want_null);
   return NULL;
 }
 
