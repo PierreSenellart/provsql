@@ -810,6 +810,27 @@ the provenance of the group existing without a value to compare.  A row whose
 truth holds in no world has probability zero, which is ProvSQL's reading of an
 absent row, and the ones provably so are dropped outright.
 
+``IS NULL`` and ``IS NOT NULL`` of an expression over aggregates are read the
+same way, the value they test having one value per world and so being null in
+some and not in others:
+
+.. code-block:: postgresql
+
+    SELECT city, sum(salary) IS NULL AS no_salary
+    FROM employees GROUP BY city;
+
+Two rows rather than three -- a value either is null in a world or is not, so
+there is no *unknown* -- and a division is a case the reading does not reach: it
+is null where its divisor reads zero, which is no operand's nullness, and that
+one is refused by name rather than answered.  Read on the ``agg_token`` instead,
+such a test would answer from the token, which is there whenever the row is, and
+so report NOT NULL of a value that is null.
+
+In the condition of a ``HAVING``, or as a sort key, none of this applies: the
+first is already the provenance of the group, and a sort key is not an answer --
+it orders the rows on the data as it is, as an ``ORDER BY`` on the value of an
+aggregate does.
+
 The comparison is the condition the annotation carries, so no value of the
 aggregate has to be enumerated: unlike grouping by the value, this works for
 a ``sum()`` over any column and for an ``avg()``.  It applies to ``count``,

@@ -141,6 +141,23 @@ SELECT g, n, round(p::numeric, 6) AS p FROM anx_r ORDER BY g, n;
 DROP TABLE anx_r;
 -- A division is null where its divisor reads zero, which is not a nullness of
 -- either operand, so the null gate cannot build it operand by operand: refused
--- by name rather than answered wrongly.
+-- by name rather than answered wrongly.  A gap against the semantics, which
+-- gives a division by zero the value null and so has the test in the fragment,
+-- and not a deviation: closing it needs the nullness of a division to be "an
+-- operand is null OR the divisor reads zero".
 SELECT g, (sum(a)/sum(b)) IS NULL FROM anx GROUP BY g;
+-- As a SORT KEY the same test is not exploded -- a key is no answer -- and it
+-- orders the rows on whether the value is null in the database as it is, which
+-- is what a sort on an aggregate's value does.  That has to be SAID, though:
+-- ordering on the value warns, and on a comparison warns, and this warned
+-- nothing until the sort pass learned to look inside a boolean key.  Group 3 is
+-- the null one, so it comes first under DESC.
+-- Materialised so the rows carry no provenance column: printing one would print
+-- a uuid derived from the per-run input tokens, which differs between runs.  The
+-- order is read back by ctid, the insertion order of a table just created.
+CREATE TABLE anx_o AS
+  SELECT g FROM anx GROUP BY g ORDER BY (sum(b) IS NULL) DESC, g;
+SELECT remove_provenance('anx_o');
+SELECT string_agg(g::text, ',' ORDER BY ctid) AS sorted FROM anx_o;
+DROP TABLE anx_o;
 DROP TABLE anx;

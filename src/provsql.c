@@ -25458,6 +25458,36 @@ static void hide_provsql_in_wholerows(const constants_t *constants, Query *q,
     }
 }
 
+/** @brief Context for @c sort_key_reads_agg_null_walker. */
+typedef struct agg_null_key_ctx {
+  const constants_t *constants;
+  bool found;
+} agg_null_key_ctx;
+
+/**
+ * @brief Walker: does the expression hold an @c IS @c [NOT] @c NULL of an
+ *        aggregate result?
+ *
+ * Such a test in a sort key is read on the value the aggregate has in the
+ * database as it is, which orders the rows as plain SQL would -- and says
+ * nothing, where sorting on the value itself says so.  In the select list the
+ * same test is a truth per world and explodes
+ * (@c rewrite_explode_agg_cmp_truth); a sort key is no answer, so it is not
+ * exploded, which is exactly why the loss has to be reported instead.
+ */
+static bool sort_key_reads_agg_null_walker(Node *node, void *cx) {
+  agg_null_key_ctx *ctx = (agg_null_key_ctx *)cx;
+  if (node == NULL || ctx->found)
+    return false;
+  if (IsA(node, NullTest) && ((NullTest *)node)->arg != NULL &&
+      exprType((Node *)((NullTest *)node)->arg) ==
+        ctx->constants->OID_TYPE_AGG_TOKEN) {
+    ctx->found = true;
+    return true;
+  }
+  return expression_tree_walker(node, sort_key_reads_agg_null_walker, cx);
+}
+
 /**
  * @brief Sort an @c ORDER @c BY on an aggregate result on its value.
  *
@@ -25497,8 +25527,21 @@ static void sort_on_plain_values(const constants_t *constants, Query *q,
       ListCell *lm;
       bool done = false;
 
-      if (exprType((Node *)te->expr) != constants->OID_TYPE_AGG_TOKEN)
+      if (exprType((Node *)te->expr) != constants->OID_TYPE_AGG_TOKEN) {
+        /* Not an aggregate result itself, but a test of one read as a plain
+         * value: IS [NOT] NULL of an aggregate orders the rows on whether its
+         * value is null in the database as it is.  Nothing to move -- the test
+         * already reads the value -- only to say, as the value's own ordering
+         * does. */
+        agg_null_key_ctx nctx;
+        nctx.constants = constants;
+        nctx.found = false;
+        sort_key_reads_agg_null_walker((Node *)te->expr, (void *)&nctx);
+        if (nctx.found) {
+          if (k == 0) sorted = true; else windowed = true;
+        }
         continue;
+      }
       /* A key already moved (the same column in two clauses). */
       for (lm = list_head(moved); lm != NULL; lm = my_lnext(moved, my_lnext(moved, lm)))
         if ((Index)lfirst_int(lm) == sgc->tleSortGroupRef) {
