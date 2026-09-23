@@ -160,4 +160,27 @@ CREATE TABLE anx_o AS
 SELECT remove_provenance('anx_o');
 SELECT string_agg(g::text, ',' ORDER BY ctid) AS sorted FROM anx_o;
 DROP TABLE anx_o;
+-- The same test in a SCALAR aggregation, which has no grouping to explode the
+-- truths over: it answers on the database as it is -- sum(b) is 2 there, so
+-- false -- where the worlds holding neither the b of group 1 nor that of group
+-- 2, a quarter of the eight, make the sum null and the truth true.  That is the
+-- right answer for that one world and says nothing about the others, which is
+-- what every plain reading of an aggregate is reported for, and this one was
+-- reported by nothing: a comparison in the same position is caught through the
+-- frozen value it reads, and a null test reads none -- it is answered by the
+-- token itself, which provenance_aggregate returns as the null datum exactly
+-- where the aggregate has no value in the data as it is.
+CREATE TABLE anx_s AS SELECT sum(b) IS NULL AS n FROM anx;
+SELECT remove_provenance('anx_s');
+SELECT n FROM anx_s;
+DROP TABLE anx_s;
+CREATE TABLE anx_s AS SELECT sum(b) IS NOT NULL AS n FROM anx;
+SELECT remove_provenance('anx_s');
+SELECT n FROM anx_s;
+DROP TABLE anx_s;
+-- plain() says so, and silences the report, as it does for every other reading.
+CREATE TABLE anx_s AS SELECT plain(sum(b)) IS NULL AS n FROM anx;
+SELECT remove_provenance('anx_s');
+SELECT n FROM anx_s;
+DROP TABLE anx_s;
 DROP TABLE anx;

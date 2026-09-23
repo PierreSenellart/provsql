@@ -82,3 +82,25 @@ remove_provenance
 sorted
 3,1,2
 (1 row)
+WARNING:  ProvSQL: whether an aggregate result is NULL is read on the database as it is, not tracked: its truth is exploded into the worlds only where the block groups, although the statement also tracks anx; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-nullness-read-as-plain-value; scope: gap
+remove_provenance
+
+(1 row)
+n
+f
+(1 row)
+WARNING:  ProvSQL: whether an aggregate result is NULL is read on the database as it is, not tracked: its truth is exploded into the worlds only where the block groups, although the statement also tracks anx; mark it plain() to say so
+DETAIL:  provsql-reason: aggregate-nullness-read-as-plain-value; scope: gap
+remove_provenance
+
+(1 row)
+n
+t
+(1 row)
+remove_provenance
+
+(1 row)
+n
+f
+(1 row)

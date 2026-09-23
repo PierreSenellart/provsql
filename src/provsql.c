@@ -13228,6 +13228,83 @@ static bool frozen_agg_value_walker(Node *node, void *cx) {
   return expression_tree_walker(node, frozen_agg_value_walker, cx);
 }
 
+/** @brief Whether @p ref is ordered by, or by a window of, @p q. */
+static bool sortgroupref_is_sort_key(Query *q, Index ref) {
+  ListCell *lc;
+
+  foreach (lc, q->sortClause)
+    if (((SortGroupClause *)lfirst(lc))->tleSortGroupRef == ref)
+      return true;
+  foreach (lc, q->windowClause) {
+    WindowClause *wc = (WindowClause *)lfirst(lc);
+    ListCell *lc2;
+
+    foreach (lc2, wc->partitionClause)
+      if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef == ref)
+        return true;
+    foreach (lc2, wc->orderClause)
+      if (((SortGroupClause *)lfirst(lc2))->tleSortGroupRef == ref)
+        return true;
+  }
+  return false;
+}
+
+/** @brief State of @c agg_token_null_test_walker: the sort keys to pass over. */
+typedef struct agg_null_test_ctx {
+  const constants_t *constants;
+  List *sort_keys;     /**< expressions read as an order and not as an answer */
+} agg_null_test_ctx;
+
+/**
+ * @brief Walker: a NULL test left ON an @c agg_token, which reads the
+ *        aggregate's nullness in the database as it is.
+ *
+ * The truth of @c IS @c NULL over a tracked aggregate is exploded into the
+ * truths the worlds give it where the block groups (@c
+ * rewrite_explode_agg_cmp_truth).  A scalar aggregation has no grouping to
+ * explode over, so the test stays on the token -- and answers, since
+ * @c provenance_aggregate returns SQL NULL exactly where the aggregate has no
+ * value in the data as it is.  That is the right answer for that one world and
+ * says nothing about the others, which is what every other plain reading of an
+ * aggregate is reported for; the comparison in the same position is reported
+ * already, through the @c frozen_agg_value it goes through, and the null test
+ * goes through none.
+ *
+ * A test that is only a SORT KEY is passed over: @c sort_on_plain_values says
+ * of it that the order reads the plain value, and one reading wants one report.
+ * A test a query both answers and orders by is an answer, its target entry
+ * carrying the value out, and is reported.
+ */
+static bool agg_token_null_test_walker(Node *node, void *cx) {
+  agg_null_test_ctx *ctx = (agg_null_test_ctx *)cx;
+
+  if (node == NULL)
+    return false;
+  if (IsA(node, Query)) {
+    Query *q = (Query *)node;
+    List *saved = ctx->sort_keys;
+    ListCell *lc;
+    bool found;
+
+    foreach (lc, q->targetList) {
+      TargetEntry *te = (TargetEntry *)lfirst(lc);
+
+      if (te->resjunk && te->ressortgroupref != 0 &&
+          sortgroupref_is_sort_key(q, te->ressortgroupref))
+        ctx->sort_keys = lappend(ctx->sort_keys, te->expr);
+    }
+    found = query_tree_walker(q, agg_token_null_test_walker, cx, 0);
+    ctx->sort_keys = saved;
+    return found;
+  }
+  if (IsA(node, NullTest) && ((NullTest *)node)->arg != NULL &&
+      exprType((Node *)((NullTest *)node)->arg) ==
+        ctx->constants->OID_TYPE_AGG_TOKEN &&
+      !list_member_ptr(ctx->sort_keys, node))
+    return true;
+  return expression_tree_walker(node, agg_token_null_test_walker, cx);
+}
+
 /**
  * @brief Walker over the expressions of one query level: a sublink whose
  *        body reads a tracked relation for its data.
@@ -28523,6 +28600,7 @@ static PlannedStmt *provsql_planner(Query *q,
       bool *removed = NULL;
       Query *new_query;
       clock_t begin = 0;
+      agg_null_test_ctx nullness_ctx;
 
       /* A user query may not define its own provsql column by hand; ProvSQL
        * manages the provenance column itself.  Checked here, once, on the
@@ -28591,6 +28669,20 @@ static PlannedStmt *provsql_planner(Query *q,
                       "aggregate result read as a plain value (by a "
                       "function, an operator, a comparison) is evaluated as "
                       "plain SQL, not tracked",
+                      "mark it plain() to say "
+                      "so");
+
+      /* The nullness of an aggregate read on the data as it is, which no
+       * frozen_agg_value carries and which the report above therefore misses. */
+      nullness_ctx.constants = &constants;
+      nullness_ctx.sort_keys = NIL;
+      if (provsql_active && provsql_executor_depth == 0 &&
+          agg_token_null_test_walker((Node *)q, (void *)&nullness_ctx))
+        report_freeze(&constants, NULL,
+                      PROVSQL_GAP, "aggregate-nullness-read-as-plain-value",
+                      "whether an aggregate result is NULL is read on the "
+                      "database as it is, not tracked: its truth is exploded "
+                      "into the worlds only where the block groups",
                       "mark it plain() to say "
                       "so");
 
