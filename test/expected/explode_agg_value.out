@@ -92,11 +92,11 @@ total|pr
 add_provenance
 
 (1 row)
-ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; mark it plain() to group by its plain value
 DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
-ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; mark it plain() to group by its plain value
 DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
-ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; cast it explicitly (::numeric, ::text, ...) to group by its plain value
+ERROR:  ProvSQL: the value of this aggregate cannot be a GROUP BY key or a DISTINCT column: it is one value per possible world, and only a count(), a min(), a max(), a choose() and a sum() over an integer column take values that can be enumerated and exploded into one row each; mark it plain() to group by its plain value
 DETAIL:  provsql-reason: aggregate-value-as-key; scope: gap
 add_provenance
 

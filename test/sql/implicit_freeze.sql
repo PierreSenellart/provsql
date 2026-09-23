@@ -97,6 +97,22 @@ SELECT remove_provenance('if_r');
 SELECT * FROM if_r;
 DROP TABLE if_r;
 
+-- What plain() is for: the report says "mark it plain() to say so", so marking
+-- it has to stop the report.  It did not -- the marker was consumed into the
+-- same accessor an unmarked read produces, so a read the user had asked for was
+-- reported back to them -- and it now reads through the silent accessor
+-- instead.  The value is the one of the database as it is either way.
+SELECT plain(sum(v)) AS asked FROM if_a;
+-- An unmarked read of the same value still reports, which is the half that
+-- must not be lost in making the other silent.
+SELECT trunc(avg(v)) AS unmarked FROM if_a;
+-- And under implicit_freeze = 'error', a marked read is still allowed while an
+-- unmarked one raises: the marker is consent, not a way to silence the policy.
+SET provsql.implicit_freeze = 'error';
+SELECT plain(sum(v)) AS asked_under_error FROM if_a;
+SELECT trunc(avg(v)) AS unmarked_under_error FROM if_a;
+RESET provsql.implicit_freeze;
+
 SELECT remove_provenance('if_a');
 SELECT remove_provenance('if_b');
 DROP TABLE if_a, if_b;

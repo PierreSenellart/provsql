@@ -38,8 +38,8 @@ remove_provenance
 grp|formula
 A|(1 ⊗ (𝟙 ⊖ (2 ⊕ 3))) ⊕ (3 ⊗ (𝟙 ⊖ (1 ⊕ 2))) ⊕ (1 ⊗ 3 ⊗ (𝟙 ⊖ 2))
 (1 row)
-ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or cast it explicitly (::bigint, ...) to read its plain value
-ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or cast it explicitly (::bigint, ...) to read its plain value
+ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or mark it plain() to read its plain value
+ERROR:  ProvSQL: the result of count() cannot be exploded into rows, one per value it aggregates: only that of choose() is one of them; compare it in a HAVING clause, or mark it plain() to read its plain value
 explode_table
 
 (1 row)

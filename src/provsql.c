@@ -523,6 +523,37 @@ static Node *frozen_agg_value(Node *arg, Oid target_type,
 }
 
 /**
+ * @brief The value of the @c agg_token @p arg as a @p target_type, read where
+ *        the query ASKED for the plain value with @c plain().
+ *
+ * The same value as @c frozen_agg_value, through @c agg_token_plain_text
+ * rather than @c agg_token_frozen_value.  Neither warns at execution; what
+ * differs is that the statement's report of its frozen values looks for the
+ * latter (@c frozen_agg_value_walker), so a read the user asked for is not
+ * reported back to them -- which is what @c "mark it plain() to say so" says
+ * will happen.  @c NULL on a schema without the function.
+ */
+static Node *plain_agg_value(Node *arg, Oid target_type,
+                             const constants_t *constants) {
+  FuncExpr *value;
+  CoerceViaIO *io;
+  if (!OidIsValid(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT))
+    return NULL;
+  value = makeFuncExpr(constants->OID_FUNCTION_AGG_TOKEN_PLAIN_TEXT,
+                       TEXTOID, list_make1(arg), InvalidOid,
+                       DEFAULT_COLLATION_OID, COERCE_IMPLICIT_CAST);
+  if (target_type == TEXTOID)
+    return (Node *)value;
+  io = makeNode(CoerceViaIO);
+  io->arg = (Expr *)value;
+  io->resulttype = target_type;
+  io->resultcollid = get_typcollation(target_type);
+  io->coerceformat = COERCE_IMPLICIT_CAST;
+  io->location = -1;
+  return (Node *)io;
+}
+
+/**
  * @brief Whether argument @p i of function @p funcid takes an @c agg_token
  *        as it is: a parameter of type @c agg_token, or a polymorphic one of
  *        a ProvSQL function (@c expected(cnt), @c sr_formula(cnt, ...)).
@@ -989,9 +1020,8 @@ static void fix_type_of_aggregation_result(const constants_t *constants,
                     "a DISTINCT column: it is one value per possible world, "
                     "and only a count(), a min(), a max(), a choose() and a "
                     "sum() over an integer column take values that can be "
-                    "enumerated and exploded into one row each; cast it "
-                    "explicitly (::numeric, ::text, ...) to group by its "
-                    "plain value");
+                    "enumerated and exploded into one row each; mark it "
+                    "plain() to group by its plain value");
               }
             }
           }
@@ -20641,8 +20671,15 @@ insert_agg_token_casts_mutator(Node *node, void *data) {
         exprType((Node *)linitial(fe->args)) ==
           ctx->constants->OID_TYPE_AGG_TOKEN &&
         fe->funcresulttype != ctx->constants->OID_TYPE_AGG_TOKEN) {
-      Node *value = frozen_agg_value((Node *)linitial(fe->args),
-                                     fe->funcresulttype, ctx->constants);
+      /* Read through the plain accessor, not the frozen one: the marker says
+       * the user asked for this value, and the statement's report of frozen
+       * values looks for the frozen accessor, so asking is now distinguishable
+       * from being caught out. */
+      Node *value = plain_agg_value((Node *)linitial(fe->args),
+                                    fe->funcresulttype, ctx->constants);
+      if (value == NULL)
+        value = frozen_agg_value((Node *)linitial(fe->args),
+                                 fe->funcresulttype, ctx->constants);
       if (value != NULL)
         return value;
     }
@@ -26934,8 +26971,8 @@ static Query *process_query(const constants_t *constants, Query *q,
           "with the one of its other arm: it is one value per possible world, "
           "and only a count(), a min(), a max(), a choose() and a sum() over "
           "an integer column take values that can be enumerated and exploded "
-          "into one row each, in every arm; cast the aggregate explicitly "
-          "(::numeric, ::text, ...) to read its plain value");
+          "into one row each, in every arm; mark the aggregate plain() to "
+          "read its plain value");
       if (explode_setop_arms(q, constants, q->setOperations, col))
         exploded = true;
     }

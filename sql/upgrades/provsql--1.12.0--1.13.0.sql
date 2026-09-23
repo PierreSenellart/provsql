@@ -2372,8 +2372,7 @@ BEGIN
       MESSAGE = format('ProvSQL: the result of %s() cannot be exploded into '
                        'rows, one per value it aggregates: only that of '
                        'choose() is one of them; compare it in a HAVING '
-                       'clause, or cast it explicitly (::bigint, ...) to '
-                       'read its plain value',
+                       'clause, or mark it plain() to read its plain value',
                        (SELECT proname FROM pg_catalog.pg_proc
                         WHERE oid = (provsql.get_infos(token)).info1)),
       DETAIL = 'provsql-reason: explode-rows-aggregate-kind; scope: gap';
@@ -2653,7 +2652,7 @@ BEGIN
                          'so it takes too many values over the possible '
                          'worlds to explode it into one row per value',
                          fn, n),
-        HINT = 'cast it explicitly (::bigint, ...) to read its plain value',
+        HINT = 'mark it plain() to read its plain value',
       DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
     END IF;
     RETURN ARRAY(SELECT i::text
@@ -2667,8 +2666,8 @@ BEGIN
                        'one row per value it takes over the possible worlds: '
                        'only count(), min(), max(), sum() and choose() have '
                        'values that can be enumerated', fn),
-      HINT = 'compare it in a HAVING clause, or cast it explicitly '
-             '(::bigint, ...) to read its plain value',
+      HINT = 'compare it in a HAVING clause, or mark it plain() to read its '
+             'plain value',
       DETAIL = 'provsql-reason: explode-aggregate-kind; scope: gap';
   END IF;
 
@@ -2701,7 +2700,7 @@ BEGIN
                            'values over the possible worlds, too many to '
                            'explode it into one row per value', fn,
                            max_values),
-          HINT = 'cast it explicitly (::numeric, ...) to read its plain value',
+          HINT = 'mark it plain() to read its plain value',
       DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
       END IF;
     END LOOP;
@@ -2715,7 +2714,7 @@ BEGIN
       MESSAGE = format('ProvSQL: the result of %s() aggregates %s rows, so '
                        'it takes too many values over the possible worlds to '
                        'explode it into one row per value', fn, n),
-      HINT = 'cast it explicitly (::bigint, ...) to read its plain value',
+      HINT = 'mark it plain() to read its plain value',
       DETAIL = 'provsql-reason: explode-too-many-values; scope: gap';
   END IF;
 
