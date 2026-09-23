@@ -25526,6 +25526,47 @@ static bool sort_key_reads_agg_null_walker(Node *node, void *cx) {
 }
 
 /**
+ * @brief Refuse a grouping key that is STILL an @c agg_token once every
+ *        rewriting has run.
+ *
+ * @c refuse_agg_token_group_key catches an expression over a subquery's
+ * AGGREGATE early, by asking what the subquery's column is.  It cannot catch an
+ * expression over a tracked window RANK -- @c "index / 1000" over a
+ * @c row_number() -- because at that point the column is a @c WindowFunc, not an
+ * aggregate and not yet an @c agg_token, so nothing identifies it.  Here the
+ * arithmetic has been swapped onto the @c agg_token operators, so the key's own
+ * type answers the question: a key that is an @c agg_token groups by one token
+ * per row, and returns one group per row where SQL returns one group for every
+ * row whose value agrees -- silently, a wrong GROUPING rather than a wrong
+ * value, which nothing checking values would catch.
+ *
+ * A key read to a plain type -- @c plain(...), which the refusals name -- is not
+ * an @c agg_token by here and is not caught; neither is an exploded key, whose
+ * rows carry the value rather than the token.
+ */
+static void refuse_tracked_group_key(const constants_t *constants, Query *q) {
+  ListCell *lc;
+
+  if (q->commandType != CMD_SELECT ||
+      (q->groupClause == NIL && q->distinctClause == NIL))
+    return;
+  foreach (lc, q->targetList) {
+    TargetEntry *te = (TargetEntry *)lfirst(lc);
+
+    if (te->ressortgroupref == 0 ||
+        !sortgroupref_is_key(q, te->ressortgroupref))
+      continue;
+    if (exprType((Node *)te->expr) != constants->OID_TYPE_AGG_TOKEN)
+      continue;
+    provsql_unsupported(PROVSQL_GAP, "group-by-tracked-expression",
+      "grouping by an expression over a tracked value is not supported: the "
+      "arithmetic over it is tracked too, so the grouping would be by one "
+      "token per row rather than by the value, and would return one group per "
+      "row where SQL returns one; mark it plain() to group by its plain value");
+  }
+}
+
+/**
  * @brief Sort an @c ORDER @c BY on an aggregate result on its value.
  *
  * An @c agg_token has no ordering.  Each sort key of @p q whose column is an
@@ -27569,6 +27610,7 @@ static Query *process_query(const constants_t *constants, Query *q,
     }
   }
 
+  refuse_tracked_group_key(constants, q);
   sort_on_plain_values(constants, q, top_level);
 
   if (provsql_verbose >= 50)

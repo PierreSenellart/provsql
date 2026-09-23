@@ -277,6 +277,36 @@ SELECT floor(ln(total)) AS k, count(*) AS n
   FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s GROUP BY 1;
 SELECT floor(ln(total::numeric)) AS k, count(*) AS n
   FROM (SELECT g, sum(v) AS total FROM eav GROUP BY g) s GROUP BY 1;
+-- The same over a window RANK, which the check above cannot see: at the point it
+-- runs the column is a WindowFunc, neither an aggregate nor yet an agg_token, so
+-- nothing identifies it -- and the key then groups by one token per row.  Caught
+-- instead once every rewriting has run, where the key's own type answers it.
+-- Found by difftest on dba/249853: thirty rows that SQL puts in ONE group (the
+-- row_number runs 1..30 and 30/1000 truncates to 0) came back as thirty groups
+-- of one, silently.  Neither of us read it as a grouping bug at first -- the
+-- query computes sqrt(avg(power(x,2))) and looked like an arithmetic one.
+CREATE TABLE eav_rank(i int);
+INSERT INTO eav_rank SELECT g FROM generate_series(1, 30) g;
+SELECT add_provenance('eav_rank');
+SELECT index / 1000 AS k, count(*) AS n
+  FROM (SELECT row_number() OVER (ORDER BY i) AS index FROM eav_rank) s GROUP BY 1;
+-- Marked plain(), which the refusal names, it groups as SQL does: one group.
+CREATE TABLE eav_rk AS
+  SELECT plain(index / 1000) AS k, count(*) AS n
+    FROM (SELECT row_number() OVER (ORDER BY i) AS index FROM eav_rank) s GROUP BY 1;
+SELECT remove_provenance('eav_rk');
+SELECT k, n::text AS n FROM eav_rk ORDER BY k;
+DROP TABLE eav_rk;
+-- And a key that is a plain column of the same subquery is untouched.
+CREATE TABLE eav_rk AS
+  SELECT i / 1000 AS k, count(*) AS n
+    FROM (SELECT i, row_number() OVER (ORDER BY i) AS index FROM eav_rank) s GROUP BY 1;
+SELECT remove_provenance('eav_rk');
+SELECT k, n::text AS n FROM eav_rk ORDER BY k;
+DROP TABLE eav_rk;
+SELECT remove_provenance('eav_rank');
+DROP TABLE eav_rank;
+
 -- Reading such an expression WITHOUT grouping by it is untouched: its value is
 -- the one the data gives, frozen and warned as before.
 CREATE TABLE eav_expr AS

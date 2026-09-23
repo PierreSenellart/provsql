@@ -166,6 +166,30 @@ ERROR:  ProvSQL: grouping by an expression over the value of an aggregate is not
 DETAIL:  provsql-reason: group-by-aggregate-expression; scope: gap
 ERROR:  ProvSQL: grouping by an expression over the value of an aggregate is not supported: the values such an expression takes over the possible worlds are not among the ones the aggregate reads, so its rows cannot be exploded into one per value; group by the aggregate itself, which is exploded, or compute the expression in the subquery that aggregates
 DETAIL:  provsql-reason: group-by-aggregate-expression; scope: gap
+add_provenance
+
+(1 row)
+ERROR:  ProvSQL: grouping by an expression over a tracked value is not supported: the arithmetic over it is tracked too, so the grouping would be by one token per row rather than by the value, and would return one group per row where SQL returns one; mark it plain() to group by its plain value
+DETAIL:  provsql-reason: group-by-tracked-expression; scope: gap
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+k|n
+0|30
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to text: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+k|n
+0|30
+(1 row)
+remove_provenance
+
+(1 row)
 WARNING:  ProvSQL: aggregate result read as a plain value (by a function, an operator, a comparison) is evaluated as plain SQL, not tracked, although the statement also tracks eav; mark it plain() to say so
 DETAIL:  provsql-reason: aggregate-read-as-plain-value; scope: gap
 remove_provenance
