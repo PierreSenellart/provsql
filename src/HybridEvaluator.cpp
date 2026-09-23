@@ -173,13 +173,16 @@ double try_eval_constant(const GenericCircuit &gc, gate_t g)
     case PROVSQL_ARITH_DIV: {
       if (wires.size() != 2) return NaN;
       double v = try_eval_constant(gc, wires[1]);
-      if (std::isnan(v)) return NaN;
+      /* A zero divisor has no constant value to fold to: declining it leaves
+       * the DIV gate alone, where folding it would put an infinity in a value
+       * gate for every reader downstream. */
+      if (std::isnan(v) || v == 0.0) return NaN;
       return first / v;
     }
     case PROVSQL_ARITH_INTDIV: {
       if (wires.size() != 2) return NaN;
       double v = try_eval_constant(gc, wires[1]);
-      if (std::isnan(v)) return NaN;
+      if (std::isnan(v) || v == 0.0) return NaN;
       return std::trunc(first / v);
     }
     case PROVSQL_ARITH_NEG:

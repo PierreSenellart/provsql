@@ -615,3 +615,35 @@ SELECT c::numeric AS c FROM agg_dec_r;
 DROP TABLE agg_dec_r;
 SELECT remove_provenance('agg_dec_d');
 DROP TABLE agg_dec_d;
+
+-- expected() reads the division in every world, and a world whose divisor
+-- cancels has no value there -- the same reading as the count(v) division
+-- above, where plain SQL raises and ProvSQL answers over the worlds that have
+-- a value.  Two rows at one half: the empty world leaves sum(a) without a
+-- contributor, {(10,1)} reads 10/1 = 10, {(20,-1)} reads 20/-1 = -20, and the
+-- two together read 30/0, which has none.  Two of the four worlds carry a
+-- value, equally likely, so the expectation is (10-20)/2 = -5.  Dividing
+-- anyway put an infinity into the average, and expected() came back Infinity
+-- -- while the same division under a HAVING already answered over the other
+-- worlds: the quotient exceeds 5 in the first world alone, so 0.25.
+CREATE TABLE agg_zd(a int, b int);
+INSERT INTO agg_zd VALUES (10, 1), (20, -1);
+SELECT add_provenance('agg_zd');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_zd; END $$;
+-- The database as it is divides by zero, so plain SQL has no answer here at
+-- all: every number below is one ProvSQL alone gives.
+SET provsql.active = off;
+SELECT sum(a) / sum(b) AS plain FROM agg_zd;
+SET provsql.active = on;
+CREATE TABLE agg_zd_r AS
+  SELECT round(expected(sum(a) / sum(b))::numeric, 6) AS e FROM agg_zd;
+SELECT remove_provenance('agg_zd_r');
+SELECT * FROM agg_zd_r;
+DROP TABLE agg_zd_r;
+CREATE TABLE agg_zd_r AS
+  SELECT probability(provenance()) AS p FROM agg_zd HAVING sum(a) / sum(b) > 5;
+SELECT remove_provenance('agg_zd_r');
+SELECT round(p::numeric, 6) AS p FROM agg_zd_r;
+DROP TABLE agg_zd_r;
+SELECT remove_provenance('agg_zd');
+DROP TABLE agg_zd;

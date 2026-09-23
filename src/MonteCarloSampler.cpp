@@ -295,15 +295,33 @@ double Sampler::evalScalar(gate_t g)
           result = evalScalar(wires[0]) - evalScalar(wires[1]);
           break;
         case PROVSQL_ARITH_DIV:
-          if(wires.size() != 2)
-            throw CircuitException("gate_arith DIV must be binary");
-          result = evalScalar(wires[0]) / evalScalar(wires[1]);
-          break;
         case PROVSQL_ARITH_INTDIV:
+        {
           if(wires.size() != 2)
-            throw CircuitException("gate_arith INTDIV must be binary");
-          result = std::trunc(evalScalar(wires[0]) / evalScalar(wires[1]));
+            throw CircuitException(
+                    std::string("gate_arith ")
+                    + (op == PROVSQL_ARITH_DIV ? "DIV" : "INTDIV")
+                    + " must be binary");
+          const double num = evalScalar(wires[0]);
+          const double den = evalScalar(wires[1]);
+          // A divisor that is zero in THIS world leaves the world without a
+          // value, as SQL leaves the query without a result there: the draw is
+          // a missing observation and the moment is taken over the worlds that
+          // do have one, exactly as for an aggregate with no contributing row.
+          // Dividing anyway gave an infinity that swallowed the estimate --
+          // expected(sum(a)/sum(b)) came back Infinity for data whose divisor
+          // cancels in one world only, where the same division under a HAVING
+          // answers over the other worlds (having_semantics declines this one).
+          // NaN is this sampler's marker for such a world (see POW below), and
+          // the moment estimators skip those draws.
+          if(den == 0.0)
+            result = std::numeric_limits<double>::quiet_NaN();
+          else if(op == PROVSQL_ARITH_INTDIV)
+            result = std::trunc(num / den);
+          else
+            result = num / den;
           break;
+        }
         case PROVSQL_ARITH_NEG:
           if(wires.size() != 1)
             throw CircuitException("gate_arith NEG must be unary");

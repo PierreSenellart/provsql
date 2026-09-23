@@ -108,10 +108,14 @@ double evalWithVar(const GenericCircuit &gc, gate_t g, gate_t var, double val)
         }
         case PROVSQL_ARITH_MINUS:
           return (w.size() == 2) ? ev(w[0]) - ev(w[1]) : kNaN;
+        // A zero divisor leaves the world without a value rather than an
+        // infinity, the answer every other evaluator gives it.
         case PROVSQL_ARITH_DIV:
-          return (w.size() == 2) ? ev(w[0]) / ev(w[1]) : kNaN;
+          return (w.size() == 2 && ev(w[1]) != 0.0) ? ev(w[0]) / ev(w[1])
+                                                    : kNaN;
         case PROVSQL_ARITH_INTDIV:
-          return (w.size() == 2) ? std::trunc(ev(w[0]) / ev(w[1])) : kNaN;
+          return (w.size() == 2 && ev(w[1]) != 0.0)
+                   ? std::trunc(ev(w[0]) / ev(w[1])) : kNaN;
         case PROVSQL_ARITH_NEG:
           return (w.size() == 1) ? -ev(w[0]) : kNaN;
         default:

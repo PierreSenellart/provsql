@@ -463,3 +463,22 @@ c
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+ERROR:  division by zero
+remove_provenance
+
+(1 row)
+e
+-5.000000
+(1 row)
+remove_provenance
+
+(1 row)
+p
+0.250000
+(1 row)
+remove_provenance
+
+(1 row)

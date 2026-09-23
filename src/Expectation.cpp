@@ -1481,6 +1481,11 @@ double rec_expectation(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
             throw CircuitException("gate_arith DIV must be binary");
           if (gc.getGateType(wires[1]) == gate_value) {
             const double divisor = parseDoubleStrict(gc.getExtra(wires[1]));
+            /* A divisor that is zero in every world leaves no world with a
+             * value, so there is no moment to report: NaN, as for a world an
+             * aggregate has no contributor in, rather than an infinity. */
+            if (divisor == 0.0)
+              return std::numeric_limits<double>::quiet_NaN();
             return rec_expectation(gc, wires[0], fp) / divisor;
           }
           return mc_raw_moment(gc, g, 1,
@@ -1650,6 +1655,8 @@ double rec_variance(const GenericCircuit &gc, gate_t g, FootprintCache &fp)
             throw CircuitException("gate_arith DIV must be binary");
           if (gc.getGateType(wires[1]) == gate_value) {
             const double divisor = parseDoubleStrict(gc.getExtra(wires[1]));
+            if (divisor == 0.0)
+              return std::numeric_limits<double>::quiet_NaN();
             return rec_variance(gc, wires[0], fp) / (divisor * divisor);
           }
           return mc_var(
@@ -1825,6 +1832,8 @@ double rec_raw_moment(const GenericCircuit &gc, gate_t g, unsigned k,
             throw CircuitException("gate_arith DIV must be binary");
           if (gc.getGateType(wires[1]) == gate_value) {
             const double divisor = parseDoubleStrict(gc.getExtra(wires[1]));
+            if (divisor == 0.0)
+              return std::numeric_limits<double>::quiet_NaN();
             return rec_raw_moment(gc, wires[0], k, fp)
                  / std::pow(divisor, static_cast<double>(k));
           }
