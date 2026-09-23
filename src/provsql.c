@@ -10038,6 +10038,39 @@ static Node *try_swap_agg_func(FuncExpr *f, const constants_t *constants) {
   if (name == NULL)
     return NULL;
 
+  /* CAST(v AS numeric(p,s)), which `decimal(p,s)` also writes, is the length
+   * coercion numeric(numeric,int4) applied to the typmod, and what it does to
+   * the value is to round it to s digits: it is carried as the ROUND
+   * counterpart over that scale, so the token survives a decimal(p,s) written
+   * around an aggregate.  The PRECISION is dropped rather than carried: which
+   * worlds overflow it is not what the cast says, and raising "numeric field
+   * overflow" because the actual data overflows would lose every other world,
+   * as raising on a divisor that is zero there only would (see
+   * try_swap_agg_arith). */
+  if (strcmp(name, "numeric") == 0 && nargs == 2) {
+    Node *tm = (Node *)lsecond(f->args);
+    int32 typmod;
+
+    if (!IsA(tm, Const) || ((Const *)tm)->constisnull ||
+        ((Const *)tm)->consttype != INT4OID) {
+      pfree(name);
+      return NULL;
+    }
+    typmod = DatumGetInt32(((Const *)tm)->constvalue);
+    if (typmod < (int32)VARHDRSZ) {
+      pfree(name);
+      return arg;            /* no typmod: the cast rounds nothing */
+    }
+    /* The scale sits in the low bits, biased so that a negative one -- allowed
+     * since PostgreSQL 15, numeric(10,-2) rounding to hundreds -- fits there. */
+    second = (Node *)makeConst(INT4OID, -1, InvalidOid, sizeof(int32),
+                               Int32GetDatum(((((typmod - (int32)VARHDRSZ) &
+                                                0x7ff) ^ 1024) - 1024)),
+                               false, true);
+    pfree(name);
+    name = pstrdup("round");
+  }
+
   /* Where the function SQL resolved takes a float, its argument was coerced to
    * that type before the call -- sqrt(bigint) is sqrt(double precision) over a
    * coerced argument -- and the counterpart computes in the type the value is

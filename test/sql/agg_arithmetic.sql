@@ -563,3 +563,55 @@ SELECT remove_provenance('agg_at_r');
 SELECT v, a::numeric AS a FROM agg_at_r ORDER BY v;
 DROP TABLE agg_at_r;
 DROP TABLE agg_at_d;
+
+-- CAST(sum(v) AS numeric(10,1)), and the decimal(p,s) spelling of it, is the
+-- length coercion numeric(numeric,int4) over a typmod rather than a function
+-- of its own, so it had no counterpart to be re-resolved onto and read the
+-- plain value.  It is carried as the ROUND gate over the scale the typmod
+-- encodes, which is what applying the typmod does to the value.
+-- Two rows at one half, so three worlds carry the group: the sums are 10.126,
+-- 3.5 and 13.626, each one third.  Rounded to one digit they are 10.1, 3.5 and
+-- 13.6, of expectation 27.2/3 = 9.066667, and to none 10, 4 and 14, of
+-- expectation 28/3 = 9.333333 -- neither of which is the rounding of the
+-- expectation of the sum, 9.084, so the numbers say the cast is applied in
+-- every world and not once at the end.
+CREATE TABLE agg_dec_d(v numeric);
+INSERT INTO agg_dec_d VALUES (10.126), (3.5);
+SELECT add_provenance('agg_dec_d');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_dec_d; END $$;
+CREATE TABLE agg_dec_r AS SELECT
+  round(expected(sum(v))::numeric, 6) AS e_sum,
+  round(expected(CAST(sum(v) AS numeric(10,1)))::numeric, 6) AS e_cast1,
+  round(expected(sum(v)::decimal(10,1))::numeric, 6) AS e_dec1,
+  round(expected(round(sum(v), 1))::numeric, 6) AS e_round1,
+  round(expected(CAST(sum(v) AS numeric(10)))::numeric, 6) AS e_cast0,
+  round(expected(round(sum(v), 0))::numeric, 6) AS e_round0
+  FROM agg_dec_d;
+SELECT remove_provenance('agg_dec_r');
+SELECT * FROM agg_dec_r;
+DROP TABLE agg_dec_r;
+-- The value in the data as it is, which the cast must still give, and which
+-- carries the token: 13.626 to one digit, and to none.
+CREATE TABLE agg_dec_r AS
+  SELECT CAST(sum(v) AS numeric(10,1)) AS c1, CAST(sum(v) AS numeric(10)) AS c0
+    FROM agg_dec_d;
+SELECT remove_provenance('agg_dec_r');
+SELECT c1::numeric AS c1, c0::numeric AS c0 FROM agg_dec_r;
+DROP TABLE agg_dec_r;
+-- The PRECISION is not carried: plain SQL raises "numeric field overflow" here,
+-- 1242.2 not fitting three digits, and ProvSQL gives the value.  Which worlds
+-- overflow is not what the cast says -- the world holding 3.5 alone fits -- and
+-- raising because the actual data overflows would lose every other world, as
+-- raising on a divisor that is zero only there would (see the division above).
+INSERT INTO agg_dec_d VALUES (1228.551);
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_dec_d
+  WHERE probability(provenance()) IS NULL; END $$;
+SET provsql.active = off;
+SELECT sum(v) AS plain_sum FROM agg_dec_d;
+SET provsql.active = on;
+CREATE TABLE agg_dec_r AS SELECT CAST(sum(v) AS numeric(3,1)) AS c FROM agg_dec_d;
+SELECT remove_provenance('agg_dec_r');
+SELECT c::numeric AS c FROM agg_dec_r;
+DROP TABLE agg_dec_r;
+SELECT remove_provenance('agg_dec_d');
+DROP TABLE agg_dec_d;
