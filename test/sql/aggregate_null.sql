@@ -264,3 +264,51 @@ SELECT g, n, round(p::numeric, 6) AS p FROM anw_r ORDER BY g, n;
 DROP TABLE anw_r;
 SELECT remove_provenance('anw');
 DROP TABLE anw;
+
+-- A SCALAR aggregation's IS NULL over an EXPRESSION.  Its single result row
+-- always exists, so there is no group whose existence the predicate must also
+-- assert -- but the HAVING plumbing multiplied by the group's plus all the
+-- same, and that drops the world where no row is present, which is the very
+-- world where the test holds.  `having_entails_group_existence` answers true
+-- for a null test written directly on an aggregate and false for one over an
+-- expression, so the same question answered 0.5 read directly and 0.25 through
+-- (sum(x)+1): the grouped reading, in a query that has no groups.
+-- Found by a brute-force oracle over all 2^n subsets rather than by reading the
+-- code, which is the point: the answer was a plausible number, not an error.
+-- Two rows at one half, one of them NULL.  sum(x) is null in the world with no
+-- row at all (a quarter) and in the world holding the NULL row alone (a
+-- quarter), so 0.5 -- and every reading over it is null exactly there.
+CREATE TABLE ans(g int, x int);
+INSERT INTO ans VALUES (1, NULL), (1, 5);
+SELECT add_provenance('ans');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM ans; END $$;
+CREATE TABLE ans_r AS
+  SELECT probability(provenance()) AS p FROM ans HAVING sum(x) IS NULL;
+SELECT remove_provenance('ans_r');
+SELECT round(p::numeric, 6) AS direct FROM ans_r;
+DROP TABLE ans_r;
+CREATE TABLE ans_r AS
+  SELECT probability(provenance()) AS p FROM ans HAVING (sum(x)+1) IS NULL;
+SELECT remove_provenance('ans_r');
+SELECT round(p::numeric, 6) AS arithmetic FROM ans_r;
+DROP TABLE ans_r;
+CREATE TABLE ans_r AS
+  SELECT probability(provenance()) AS p FROM ans HAVING sqrt(sum(x)) IS NULL;
+SELECT remove_provenance('ans_r');
+SELECT round(p::numeric, 6) AS carried_function FROM ans_r;
+DROP TABLE ans_r;
+-- The control that pins the distinction: GROUPED over the same two rows, the
+-- group's existence IS something the predicate must assert, and the world with
+-- no row is no row OF THIS GROUP, so it is not counted.  0.25, the world
+-- holding the NULL row alone.
+CREATE TABLE ans_r AS
+  SELECT probability(provenance()) AS p
+  FROM ans GROUP BY g HAVING (sum(x)+1) IS NULL;
+SELECT remove_provenance('ans_r');
+SELECT round(p::numeric, 6) AS grouped FROM ans_r;
+DROP TABLE ans_r;
+-- And a window with no GROUP BY is not a scalar aggregation either: it gives a
+-- row per input row, whose tokens carry that row's own existence, so the
+-- product stays.  Taking it for one made every ranked row certain.
+SELECT remove_provenance('ans');
+DROP TABLE ans;

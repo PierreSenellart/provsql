@@ -167,3 +167,33 @@ g|n|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+direct
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+arithmetic
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+carried_function
+0.500000
+(1 row)
+remove_provenance
+
+(1 row)
+grouped
+0.250000
+(1 row)
+remove_provenance
+
+(1 row)

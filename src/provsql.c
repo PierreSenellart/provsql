@@ -8366,7 +8366,30 @@ static Expr *make_provenance_expression(const constants_t *constants, Query *q,
          * factors (a join partner's annotation among them), and anything else
          * -- an earlier comparison on the same group, an input -- is kept and
          * multiplied. */
+        /* A SCALAR aggregation has a single always-present result row, so
+         * there is no group whose existence the predicate must also assert,
+         * and multiplying by the group's plus would drop the world where no
+         * row is present at all.  A predicate can hold in that world: read
+         * directly, `sum(x) IS NULL` answered 0.5 on two rows one of which is
+         * NULL, and through `(sum(x)+1) IS NULL` it answered 0.25 -- the
+         * empty world lost, which is exactly the grouped reading.  On four
+         * non-null rows the same pair read 0.0625 and 0.  A comparison is 0 in
+         * that world anyway (`count(*) = 0` is the exception and entails
+         * existence by the atom rule below), which is why only the null test
+         * over an expression showed it.
+         *
+         * No GROUP BY is NOT on its own what makes the row always present: a
+         * query with WINDOW functions and none returns one row per input row,
+         * and a rank or a rank-based LIMIT is exactly that -- the tokens there
+         * do carry the row's existence, and skipping the product made every
+         * such row certain (limit_rank and rank_over_aggregate read 1.000000
+         * where they read 0.750000 and 0.500000).  So: an aggregation this
+         * level owns, with no grouping, no window and no DISTINCT. */
+        bool scalar_row = aggregation && q->groupClause == NIL &&
+                          q->groupingSets == NIL && !q->hasWindowFuncs &&
+                          q->distinctClause == NIL;
         bool entails =
+          scalar_row ||
           having_entails_group_existence((Expr *) q->havingQual, constants,
                                          false);
         Expr *group_plus = result;      /* the group's plus, still delta-free */
