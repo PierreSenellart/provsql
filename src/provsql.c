@@ -13433,6 +13433,15 @@ static bool frozen_agg_value_walker(Node *node, void *cx) {
   const constants_t *constants = (const constants_t *)cx;
   if (node == NULL)
     return false;
+  /* Under a plain() the query wrote, nothing is reported: the marker says the
+   * plain value is what was asked for, and it says so of everything inside it.
+   * plain(sum(x))::text was silent while plain(sum(x)::text) was not, the
+   * marker there wrapping an expression that already reads the value rather
+   * than the aggregate itself -- so one of the two natural spellings of "mark
+   * it plain() to say so" was answered and the other was not. */
+  if (IsA(node, FuncExpr) && OidIsValid(constants->OID_FUNCTION_PLAIN) &&
+      ((FuncExpr *)node)->funcid == constants->OID_FUNCTION_PLAIN)
+    return false;
   if (IsA(node, FuncExpr) &&
       ((FuncExpr *)node)->funcid ==
         constants->OID_FUNCTION_AGG_TOKEN_FROZEN_VALUE)
@@ -13511,6 +13520,13 @@ static bool agg_token_null_test_walker(Node *node, void *cx) {
     ctx->sort_keys = saved;
     return found;
   }
+  /* Under a plain() the query wrote, nothing is reported, as for the frozen
+   * values: the marker says the plain reading is what was asked for, of
+   * everything inside it. */
+  if (IsA(node, FuncExpr) &&
+      OidIsValid(ctx->constants->OID_FUNCTION_PLAIN) &&
+      ((FuncExpr *)node)->funcid == ctx->constants->OID_FUNCTION_PLAIN)
+    return false;
   if (IsA(node, NullTest) && ((NullTest *)node)->arg != NULL &&
       exprType((Node *)((NullTest *)node)->arg) ==
         ctx->constants->OID_TYPE_AGG_TOKEN &&

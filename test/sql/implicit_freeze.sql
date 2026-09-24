@@ -113,6 +113,23 @@ SELECT plain(sum(v)) AS asked_under_error FROM if_a;
 SELECT trunc(avg(v)) AS unmarked_under_error FROM if_a;
 RESET provsql.implicit_freeze;
 
+-- The marker around the WHOLE EXPRESSION, the other natural way to write it:
+-- plain(sum(v)) marks the aggregate, plain(sum(v)::text) marks an expression
+-- that already reads it.  The first was silent and the second was not, so one
+-- spelling of "mark it plain() to say so" was answered and the other was not --
+-- the report looks for the frozen accessor, and under a marker that wraps an
+-- expression the accessor inside it is still the frozen one.  Nothing under a
+-- plain() is reported now, whichever of the two it wraps, and the value is the
+-- same either way.
+SELECT plain(sum(v)::text) AS asked_whole FROM if_a;
+SELECT plain(sum(v) > 0) AS asked_comparison FROM if_a;
+SELECT plain(sum(v) IS NULL) AS asked_nullness FROM if_a;
+-- The unmarked spellings still report, each under its own reason, which is the
+-- half that must not be lost in making the other silent.
+SELECT sum(v)::text AS unmarked_text FROM if_a;
+SELECT (sum(v) > 0) AS unmarked_comparison FROM if_a;
+SELECT (sum(v) IS NULL) AS unmarked_nullness FROM if_a;
+
 SELECT remove_provenance('if_a');
 SELECT remove_provenance('if_b');
 DROP TABLE if_a, if_b;
