@@ -110,3 +110,38 @@ SELECT round(stddev(f)::numeric, 6)::text AS sd_float FROM dev WHERE g = 1;
 
 SELECT remove_provenance('dev');
 DROP TABLE dev;
+
+-- The moment of a deviation over a group that is not always there.  A var_pop
+-- is a CASE: the count against 0, the count against 1, and a formula over the
+-- sums.  In the world where the group has NO row, both guards are comparisons
+-- over an aggregate that has no value there, so neither fires and the FORMULA
+-- arm is selected -- and `agg_defined_event` called an arith gate defined in
+-- every world, so that world was counted although the formula's operands have
+-- no value in it.  Arithmetic is strict, so an arith is defined where its
+-- operands are, which is what it now answers.
+-- The reading with the row's provenance and the reading without it MUST agree
+-- here: the only world without a value is the one where the group is absent, so
+-- there is nothing for the condition to remove -- exactly as for min and sum,
+-- which agreed all along and are kept below as the contrast.
+-- One row in the first group and two in the second, each at one half:
+--   g1: the value is 0 wherever it exists, so 0 either way.
+--   g2: var_pop is 0 over {5}, 0 over {6} and 0.25 over {5,6}, so 0.25/3 =
+--       0.083333; its square root is 0.5 over {5,6}, so 0.5/3 = 0.166667.
+-- Before the fix these read NaN and 0.125, and NaN and 0.25.
+CREATE TABLE dev_m(g int, x int);
+INSERT INTO dev_m VALUES (1,4), (2,5), (2,6);
+SELECT add_provenance('dev_m');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM dev_m; END $$;
+CREATE TABLE dev_mr AS SELECT g,
+  round(expected(var_pop(x))::numeric, 6) AS vp,
+  round(expected(var_pop(x), provenance())::numeric, 6) AS vp_cond,
+  round(expected(stddev_pop(x))::numeric, 6) AS sp,
+  round(expected(stddev_pop(x), provenance())::numeric, 6) AS sp_cond,
+  round(expected(min(x))::numeric, 6) AS mn,
+  round(expected(sum(x))::numeric, 6) AS sm
+  FROM dev_m GROUP BY g;
+SELECT remove_provenance('dev_mr');
+SELECT * FROM dev_mr ORDER BY g;
+DROP TABLE dev_mr;
+SELECT remove_provenance('dev_m');
+DROP TABLE dev_m;

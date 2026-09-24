@@ -48,3 +48,16 @@ sd_float|provsql
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|vp|vp_cond|sp|sp_cond|mn|sm
+1|0.000000|0.000000|0.000000|0.000000|4.000000|4.000000
+2|0.083333|0.083333|0.166667|0.166667|5.333333|7.333333
+(2 rows)
+remove_provenance
+
+(1 row)

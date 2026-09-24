@@ -5158,4 +5158,75 @@ BEGIN
 EXCEPTION WHEN duplicate_function THEN NULL;
 END $$;
 
+/* An arith gate is defined where its operands are, arithmetic being strict:
+ * saying it is defined everywhere made a grouped var_pop moment count the
+ * world in which the group has no row. */
+CREATE OR REPLACE FUNCTION agg_defined_event(token uuid)
+  RETURNS uuid AS $$
+DECLARE
+  gt provenance_gate := get_gate_type(token);
+  fname varchar;
+  toks uuid[];
+  wires uuid[];
+  nw integer;
+  m integer;
+  i integer;
+  running_neg uuid := gate_one();
+  parts uuid[] := '{}';
+BEGIN
+  IF token = gate_null() THEN
+    RETURN gate_zero();     -- the NULL value: never defined
+  END IF;
+  IF gt = 'agg' THEN
+    SELECT proname INTO fname
+      FROM pg_proc WHERE oid = (get_infos(token)).info1;
+    -- A scalar COUNT has a row in every world, counting a real 0 over none;
+    -- every other aggregate (a SUM over no row is SQL NULL, a grouped one has
+    -- no row at all) is defined only where a contributing row is.
+    IF fname = 'count' AND (get_infos(token)).info2 < 0 THEN
+      RETURN gate_one();
+    END IF;
+    SELECT array_agg((get_children(c))[1]) INTO toks
+      FROM unnest(get_children(token)) AS c;
+    IF toks IS NULL THEN
+      RETURN gate_zero();   -- structurally empty aggregate: never defined
+    END IF;
+    RETURN provenance_plus(toks);
+  ELSIF gt = 'case' THEN
+    wires := get_children(token);
+    nw := array_length(wires, 1);
+    m := (nw - 1) / 2;
+    FOR i IN 1..m LOOP
+      parts := parts || provenance_times(
+        running_neg, wires[2 * i - 1],
+        agg_defined_event(wires[2 * i]));
+      running_neg := provenance_times(running_neg,
+                                      provenance_not(wires[2 * i - 1]));
+    END LOOP;
+    parts := parts || provenance_times(running_neg,
+                                       agg_defined_event(wires[nw]));
+    RETURN provenance_plus(parts);
+  ELSIF gt = 'arith' THEN
+    -- Arithmetic is STRICT: a value exists where every operand's does.  Saying
+    -- gate_one here made a var_pop moment count the world where the group has
+    -- no row.  Its CASE guards a count against 0 and against 1, and a
+    -- comparison over an aggregate that has no value holds in no world, so in
+    -- the empty world neither guard fires and the FORMULA arm is the one
+    -- selected -- an arith over the sums, whose operands have no value there.
+    -- Declared defined, that world was counted, and expected(var_pop(x)) came
+    -- out NaN for a one-row group whose value is 0 wherever it exists.
+    SELECT array_agg(agg_defined_event(c)) INTO parts
+      FROM unnest(get_children(token)) AS c;
+    IF parts IS NULL OR array_length(parts, 1) IS NULL THEN
+      RETURN gate_one();
+    END IF;
+    RETURN provenance_times(VARIADIC parts);
+  END IF;
+  -- value / anything else: a value exists in every world (gate_null, the one
+  -- value that never does, is answered at the top).
+  RETURN gate_one();
+END
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
+  SET search_path=provsql,pg_temp,public SECURITY DEFINER;
+
 SELECT reset_constants_cache();

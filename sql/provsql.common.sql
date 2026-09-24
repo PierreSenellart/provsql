@@ -8200,8 +8200,24 @@ BEGIN
     parts := parts || provenance_times(running_neg,
                                        agg_defined_event(wires[nw]));
     RETURN provenance_plus(parts);
+  ELSIF gt = 'arith' THEN
+    -- Arithmetic is STRICT: a value exists where every operand's does.  Saying
+    -- gate_one here made a var_pop moment count the world where the group has
+    -- no row.  Its CASE guards a count against 0 and against 1, and a
+    -- comparison over an aggregate that has no value holds in no world, so in
+    -- the empty world neither guard fires and the FORMULA arm is the one
+    -- selected -- an arith over the sums, whose operands have no value there.
+    -- Declared defined, that world was counted, and expected(var_pop(x)) came
+    -- out NaN for a one-row group whose value is 0 wherever it exists.
+    SELECT array_agg(agg_defined_event(c)) INTO parts
+      FROM unnest(get_children(token)) AS c;
+    IF parts IS NULL OR array_length(parts, 1) IS NULL THEN
+      RETURN gate_one();
+    END IF;
+    RETURN provenance_times(VARIADIC parts);
   END IF;
-  -- value / arith / anything else: a value exists in every world.
+  -- value / anything else: a value exists in every world (gate_null, the one
+  -- value that never does, is answered at the top).
   RETURN gate_one();
 END
 $$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE
