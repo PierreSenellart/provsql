@@ -273,3 +273,31 @@ total|s
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+src|a|b|p
+A|||0.250000
+A|10|1|0.250000
+A|20|2|0.250000
+A|30|3|0.250000
+B|0|0|0.250000
+B|1|0|0.250000
+B|1|1|0.250000
+B|2|1|0.250000
+(8 rows)
+total_mass
+2.000000
+(1 row)
+remove_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)

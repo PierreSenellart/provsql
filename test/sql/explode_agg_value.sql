@@ -410,3 +410,43 @@ DROP TABLE ecv_r;
 DROP VIEW ecv2, ecv;
 SELECT remove_provenance('ecv_base');
 DROP TABLE ecv_base;
+
+-- TWO aggregate columns in a set-operation arm.  Each column is exploded into
+-- the values its aggregate takes, and whether NULL is among them is read off
+-- that column's own Aggref -- so the columns have to be exploded in ONE pass:
+-- a pass that had wrapped the arm first would leave the next column a plain Var
+-- of that wrapper, with no Aggref to read and nowhere to put the companion
+-- count, and NULL would be a candidate for the first column only.  It was, and
+-- the row of the world where the arm holds NO row -- both sums NULL -- was
+-- therefore never produced, its probability carried by nothing.  difftest's
+-- sede/2b7555de26, whose arms are SUM, SUM against COUNT(CASE), verdict B wrong.
+-- Two rows per arm at one half, so four worlds each, a quarter apiece.
+--   arm A, sum(v) and sum(g) over (10,1) and (20,2):
+--     no row -> (NULL, NULL) | {10,1} -> (10,1) | {20,2} -> (20,2) | both -> (30,3)
+--   arm B, count(CASE x>4) and count(CASE x>5) over 5 and 6, never NULL:
+--     no row -> (0,0) | {5} -> (1,0) | {6} -> (1,1) | both -> (2,1)
+-- Eight rows at 0.25, and they sum to 2 -- one row of each arm in every world.
+-- The combinations no world realises come back with a provenance of zero, which
+-- says of itself that no world holds them; the rows below are the ones that do.
+CREATE TABLE eua(v int, g int);
+INSERT INTO eua VALUES (10, 1), (20, 2);
+CREATE TABLE eub(x int);
+INSERT INTO eub VALUES (5), (6);
+SELECT add_provenance('eua');
+SELECT add_provenance('eub');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eua; END $$;
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM eub; END $$;
+CREATE TABLE eua_r AS
+  SELECT src, a, b, probability(provenance()) AS p FROM (
+    SELECT 'A' AS src, sum(v) AS a, sum(g) AS b FROM eua
+    UNION
+    SELECT 'B', count(CASE WHEN x > 4 THEN 1 ELSE NULL END),
+                count(CASE WHEN x > 5 THEN 1 ELSE NULL END) FROM eub) z;
+SELECT remove_provenance('eua_r');
+SELECT src, a, b, round(p::numeric, 6) AS p FROM eua_r WHERE p > 0
+  ORDER BY src, a NULLS FIRST, b;
+SELECT round(sum(p)::numeric, 6) AS total_mass FROM eua_r;
+DROP TABLE eua_r;
+SELECT remove_provenance('eua');
+SELECT remove_provenance('eub');
+DROP TABLE eua, eub;

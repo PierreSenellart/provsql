@@ -278,9 +278,24 @@ static bool agg_column_explodable(const constants_t *constants,
                                   RangeTblEntry *rte, AttrNumber attno);
 static Query *rewrite_explode_agg_cmp_truth(Query *q,
                                             const constants_t *constants);
-static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
-                                        Index rteid, AttrNumber attno,
-                                        Oid value_type);
+/**
+ * @brief One column of a subquery to explode: where it is, and the type the
+ *        values of its aggregate take.
+ */
+typedef struct explode_col {
+  AttrNumber attno;
+  Oid value_type;
+  /* Filled in while the wrapper is built, from the PRISTINE arm. */
+  TargetEntry *agg_te;
+  Oid eqop;
+  Oid coll;
+  int32 typmod;
+  Aggref *nullable_count;   /**< count(arg), gating the NULL value */
+  AttrNumber cnt_resno;     /**< its column in the source, 0 where there is none */
+  Index varno;              /**< the range-table index of this column's unnest */
+} explode_col;
+static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
+                                         Index rteid, List *cols);
 static bool node_varies_walker(Node *n, void *ctx);
 static bool oj_contains_sublink_walker(Node *node, void *cx);
 static bool has_aggtoken(Node *node, const constants_t *constants);
@@ -22196,20 +22211,33 @@ static void refuse_agg_token_group_key(const constants_t *constants, Query *q) {
   }
 }
 
-static bool agg_value_read_as_data(const constants_t *constants, Query *q,
-                                   Index *rteid, AttrNumber *attno,
-                                   Oid *value_type) {
+/**
+ * @brief Every aggregate column of ONE subquery that @p q reads as data, as a
+ *        list of @c explode_col, or @c NIL.
+ *
+ * @c agg_value_read_as_data answers with the first such column; the explosion
+ * takes all of a subquery's at once, each column's NULL value being read off
+ * its own @c Aggref (see @c rewrite_explode_agg_values).  Columns of a second
+ * subquery are left to the next pass, which recursion reaches.
+ */
+static List *agg_values_read_as_data(const constants_t *constants, Query *q,
+                                     Index *rteid) {
+  Index first = 0;
+  List *cols = NIL;
   ListCell *lc;
 
   if (q->commandType != CMD_SELECT || q->groupingSets != NIL ||
       (q->groupClause == NIL && q->distinctClause == NIL))
-    return false;
+    return NIL;
 
   foreach (lc, q->targetList) {
     TargetEntry *te = (TargetEntry *)lfirst(lc);
     Var *v;
     RangeTblEntry *r;
     TargetEntry *sub_te;
+    explode_col *c;
+    ListCell *lc2;
+    bool seen = false;
 
     if (te->ressortgroupref == 0 ||
         !sortgroupref_is_key(q, te->ressortgroupref))
@@ -22218,26 +22246,33 @@ static bool agg_value_read_as_data(const constants_t *constants, Query *q,
     if (v == NULL)
       continue;
     r = (RangeTblEntry *)list_nth(q->rtable, v->varno - 1);
-    /* A LATERAL subquery reads the rows of what comes before it in the FROM:
-     * the explosion wraps it in a subquery of its own, which carries no such
-     * dependency, so its aggregate is left to the freezing of its value. */
     if (r->rtekind != RTE_SUBQUERY || r->subquery == NULL || r->lateral ||
         v->varattno > list_length(r->subquery->targetList))
       continue;
-    sub_te = (TargetEntry *)list_nth(r->subquery->targetList, v->varattno - 1);
-    /* An aggregate whose values are read off its contributions: arithmetic
-     * over aggregates takes its values over the worlds too, but none of
-     * them is one of the contributions. */
     if (!agg_column_explodable(constants, r, v->varattno) ||
         !has_provenance(constants, r->subquery))
       continue;
-    *rteid = v->varno;
-    *attno = v->varattno;
-    *value_type = exprType((Node *)sub_te->expr);
-    return true;
+    if (first == 0)
+      first = v->varno;
+    else if (v->varno != first)
+      continue;                   /* another subquery: the next pass takes it */
+    foreach (lc2, cols)
+      if (((explode_col *)lfirst(lc2))->attno == v->varattno)
+        seen = true;              /* the same column twice among the keys */
+    if (seen)
+      continue;
+    sub_te = (TargetEntry *)list_nth(r->subquery->targetList, v->varattno - 1);
+    c = (explode_col *)palloc0(sizeof(explode_col));
+    c->attno = v->varattno;
+    c->value_type = exprType((Node *)sub_te->expr);
+    cols = lappend(cols, c);
   }
-  return false;
+  if (cols == NIL)
+    return NIL;
+  *rteid = first;
+  return cols;
 }
+
 
 /* -------------------------------------------------------------------------
  * The truth of a comparison of an aggregate against a constant, as data
@@ -22615,127 +22650,160 @@ static Node *explode_value_of_text(Node *txt, Oid value_type) {
  *
  * @return  Whether every arm was exploded.
  */
+
 static bool explode_setop_arms(Query *q, const constants_t *constants, Node *n,
-                               AttrNumber attno) {
+                               List *cols) {
   if (n == NULL)
     return false;
   if (IsA(n, RangeTblRef)) {
     Index rtindex = ((RangeTblRef *)n)->rtindex;
     RangeTblEntry *arm = rt_fetch(rtindex, q->rtable);
-    TargetEntry *te;
+    List *mine = NIL;
+    ListCell *lc;
 
-    if (arm->rtekind != RTE_SUBQUERY || arm->subquery == NULL ||
-        attno > list_length(arm->subquery->targetList))
+    if (arm->rtekind != RTE_SUBQUERY || arm->subquery == NULL)
       return false;
-    te = get_tle_by_resno(arm->subquery->targetList, attno);
-    if (te == NULL)
-      return false;
-    return rewrite_explode_agg_value(q, constants, rtindex, attno,
-                                     exprType((Node *)te->expr)) != NULL;
+    /* The columns as THIS arm has them: the value type is its own column's,
+     * the set operation's arms agreeing on the type but not on the aggregate. */
+    foreach (lc, cols) {
+      explode_col *c = (explode_col *)lfirst(lc);
+      explode_col *mc;
+      TargetEntry *te;
+
+      if (c->attno > list_length(arm->subquery->targetList))
+        return false;
+      te = get_tle_by_resno(arm->subquery->targetList, c->attno);
+      if (te == NULL)
+        return false;
+      mc = (explode_col *)palloc0(sizeof(explode_col));
+      mc->attno = c->attno;
+      mc->value_type = exprType((Node *)te->expr);
+      mine = lappend(mine, mc);
+    }
+    return rewrite_explode_agg_values(q, constants, rtindex, mine) != NULL;
   }
   if (IsA(n, SetOperationStmt))
     return explode_setop_arms(q, constants, ((SetOperationStmt *)n)->larg,
-                              attno) &&
+                              cols) &&
            explode_setop_arms(q, constants, ((SetOperationStmt *)n)->rarg,
-                              attno);
+                              cols);
   return false;
 }
 
 /**
- * @brief Explode the aggregate column @p attno of the subquery at @p rteid
- *        into one row per value that aggregate takes over the possible
+ * @brief The aggregate columns @p cols of the subquery at @p rteid, each
+ *        exploded into one row per value its aggregate takes over the possible
  *        worlds.
  *
  * Replaces the subquery @c R at @p rteid by
  *
  * @code{.sql}
- *   SELECT r.c_1, ..., v::T AS c_attno, ..., r.c_n
- *   FROM R r, LATERAL unnest(agg_possible_values(r.c_attno)) AS v
- *   WHERE r.c_attno = v::T
+ *   SELECT r.c_1, ..., v_1::T AS c_a1, ..., v_k::T AS c_ak, ..., r.c_n
+ *   FROM R r, LATERAL unnest(agg_possible_values(r.c_a1)) AS v_1,
+ *             ..., LATERAL unnest(agg_possible_values(r.c_ak)) AS v_k
+ *   WHERE (v_1 IS NULL AND r.c_a1 IS NULL) OR r.c_a1 = v_1::T
+ *     AND ...
  * @endcode
  *
  * The columns keep their order and their types, so the level above is left
- * as it is: what changes is that the aggregate column now holds a value of
- * the database, one row per value, in place of an aggregate result.  The
- * comparison in the @c WHERE is the one ProvSQL already gives a provenance
- * to (@c having_OpExpr_to_provenance_cmp): the row of a value @c v is
- * annotated @c [c = v] and keeps no cut of its own, so the rows of one group
- * are pairwise exclusive and exactly one of them is in each world where the
- * group is.  Grouping, deduplicating or uniting on that column is then an
- * operation on data, tracked as any other.
+ * as it is: what changes is that each aggregate column now holds a value of
+ * the database, one row per combination of values.  The comparison in the
+ * @c WHERE is the one ProvSQL already gives a provenance to (@c
+ * having_OpExpr_to_provenance_cmp): the row of a value @c v is annotated
+ * @c [c = v] and keeps no cut of its own, so the rows of one group are
+ * pairwise exclusive and exactly one of them is in each world where the group
+ * is.  Grouping, deduplicating or uniting on that column is then an operation
+ * on data, tracked as any other.
+ *
+ * SEVERAL columns are exploded in ONE pass, and that is not a convenience: the
+ * decision of whether a column can take NULL, and the companion @c count(arg)
+ * that annotates the row where it does, are both read off the column's own
+ * @c Aggref.  A pass that wrapped the arm first would leave the next column a
+ * plain @c Var of that wrapper, with no @c Aggref to read and nowhere to put a
+ * count -- the wrapper aggregates nothing.  Exploded one at a time, a
+ * two-aggregate arm therefore lost the row of the world where the arm holds no
+ * row at all: `SUM(a), SUM(b)` in a `UNION` arm gave every realised
+ * combination its right probability and dropped `(NULL, NULL)`, whose mass
+ * (an eighth, on two rows at one half) no row carried.  The combinations no
+ * world realises are emitted with a provenance of zero, which says of itself
+ * that no world holds it.
  *
  * @param q           Query to rewrite (modified in place).
  * @param constants   Extension OID cache.
- * @param rteid       1-based varno of the subquery owning the aggregate.
- * @param attno       1-based attno of the aggregate column in it.
- * @param value_type  Type of the values of that aggregate.
- * @return  The rewritten query, or @c NULL if it cannot be rewritten.
+ * @param rteid       1-based varno of the subquery owning the aggregates.
+ * @param cols        The columns to explode, at least one.
+ * @return  @p q, or @c NULL where the shape is not one this can rewrite.
  */
-static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
-                                        Index rteid, AttrNumber attno,
-                                        Oid value_type) {
+static Query *rewrite_explode_agg_values(Query *q, const constants_t *constants,
+                                         Index rteid, List *cols) {
   RangeTblEntry *src_rte = (RangeTblEntry *)list_nth(q->rtable, rteid - 1);
-  TargetEntry *agg_te;
   Query *inner;
-  RangeTblEntry *inner_src, *val_rte;
-  RangeTblFunction *rtfunc;
-  FuncExpr *possible, *unnest_call;
-  Alias *val_alias, *val_eref;
-  RangeTblRef *rtr1, *rtr2;
+  RangeTblEntry *inner_src;
+  RangeTblRef *rtr;
   FromExpr *jt;
-  OpExpr *eq;
-  List *tl = NIL;
-  ListCell *lc;
-  AttrNumber i;
-  Oid eqop, coll;
-  int32 typmod;
-  Aggref *nullable_count = NULL;  /* count(arg), gating the NULL value */
-  AttrNumber cnt_resno = 0;       /* its column in the source */
+  List *tl = NIL, *val_rtes = NIL, *quals = NIL;
+  ListCell *lc, *lc2;
+  AttrNumber i, base_resno;
+  Index next_varno;
 
-  if (src_rte->rtekind != RTE_SUBQUERY || src_rte->subquery == NULL ||
-      attno > list_length(src_rte->subquery->targetList))
+  if (cols == NIL)
     return NULL;
+  if (src_rte->rtekind != RTE_SUBQUERY || src_rte->subquery == NULL)
+    return NULL;
+  foreach (lc, cols)
+    if (((explode_col *)lfirst(lc))->attno >
+        list_length(src_rte->subquery->targetList))
+      return NULL;
   /* The rows of a set operation come from its arms: explode them there */
   if (src_rte->subquery->setOperations != NULL)
     return explode_setop_arms(src_rte->subquery, constants,
-                              src_rte->subquery->setOperations, attno)
+                              src_rte->subquery->setOperations, cols)
              ? q : NULL;
-  agg_te = get_tle_by_resno(src_rte->subquery->targetList, attno);
-  if (agg_te == NULL || agg_te->resjunk)
-    return NULL;
-  typmod = exprTypmod((Node *)agg_te->expr);
-  coll   = exprCollation((Node *)agg_te->expr);
 
-  /* Without an equality there is no [c = v] to annotate the rows with. */
-  eqop = lookup_type_cache(value_type, TYPECACHE_EQ_OPR)->eq_opr;
-  if (!OidIsValid(eqop))
-    return NULL;
+  base_resno = list_length(src_rte->subquery->targetList);
+  next_varno = 2;               /* 1 is the source; the unnests follow */
 
-  /* Can the aggregate take no value, in a world the query still answers?  An
-   * aggregation over the whole table gives its row in every world, including
-   * the one holding none of its rows, and there its sum (minimum, maximum,
-   * choice) is NULL -- a value of the aggregate like any other, which the rows
-   * of the explosion have to hold.  A count is 0 rather than NULL there, and a
-   * grouped aggregation has no row at all, so neither needs it.
-   *
-   * The row of that value is annotated by "no row contributes", which is the
-   * comparison count(arg) = 0 over the same argument: a companion count is
-   * added to the source for it, exposed to this wrapper only. */
-  {
-    Node *aggnode = strip_agg_cast((Node *)agg_te->expr);
+  /* --- Per column: its aggregate, its equality, its NULL gate --- */
+  foreach (lc, cols) {
+    explode_col *c = (explode_col *)lfirst(lc);
 
-    if (aggnode != NULL && IsA(aggnode, Aggref) &&
-        src_rte->subquery->groupClause == NIL &&
-        src_rte->subquery->groupingSets == NIL) {
-      Aggref *ar = (Aggref *)aggnode;
-      char *name = get_func_name(ar->aggfnoid);
+    c->agg_te = get_tle_by_resno(src_rte->subquery->targetList, c->attno);
+    if (c->agg_te == NULL || c->agg_te->resjunk)
+      return NULL;
+    c->typmod = exprTypmod((Node *)c->agg_te->expr);
+    c->coll   = exprCollation((Node *)c->agg_te->expr);
+    /* Without an equality there is no [c = v] to annotate the rows with. */
+    c->eqop = lookup_type_cache(c->value_type, TYPECACHE_EQ_OPR)->eq_opr;
+    if (!OidIsValid(c->eqop))
+      return NULL;
+    c->nullable_count = NULL;
+    c->cnt_resno = 0;
+    c->varno = next_varno++;
 
-      if (name != NULL &&
-          (strcmp(name, "sum") == 0 || strcmp(name, "min") == 0 ||
-           strcmp(name, "max") == 0 || strcmp(name, "choose") == 0) &&
-          list_length(ar->args) == 1 && !ar->aggstar) {
-        TargetEntry *arg = (TargetEntry *)linitial(ar->args);
-        {
+    /* Can the aggregate take no value, in a world the query still answers?  An
+     * aggregation over the whole table gives its row in every world, including
+     * the one holding none of its rows, and there its sum (minimum, maximum,
+     * choice) is NULL -- a value of the aggregate like any other, which the rows
+     * of the explosion have to hold.  A count is 0 rather than NULL there, and a
+     * grouped aggregation has no row at all, so neither needs it.
+     *
+     * The row of that value is annotated by "no row contributes", which is the
+     * comparison count(arg) = 0 over the same argument: a companion count is
+     * added to the source for it, exposed to this wrapper only. */
+    {
+      Node *aggnode = strip_agg_cast((Node *)c->agg_te->expr);
+
+      if (aggnode != NULL && IsA(aggnode, Aggref) &&
+          src_rte->subquery->groupClause == NIL &&
+          src_rte->subquery->groupingSets == NIL) {
+        Aggref *ar = (Aggref *)aggnode;
+        char *name = get_func_name(ar->aggfnoid);
+
+        if (name != NULL &&
+            (strcmp(name, "sum") == 0 || strcmp(name, "min") == 0 ||
+             strcmp(name, "max") == 0 || strcmp(name, "choose") == 0) &&
+            list_length(ar->args) == 1 && !ar->aggstar) {
+          TargetEntry *arg = (TargetEntry *)linitial(ar->args);
           Aggref *cnt = makeNode(Aggref);
 
           /* count(expr), whose argument is the pseudo-type "any": the same
@@ -22758,79 +22826,92 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
 #if PG_VERSION_NUM >= 140000
           cnt->aggno = cnt->aggtransno = -1;
 #endif
-          nullable_count = cnt;
-          /* Appended to the copy below, so its column is the next one. */
-          cnt_resno = list_length(src_rte->subquery->targetList) + 1;
+          c->nullable_count = cnt;
+          /* Appended to the copy below, in the order of this list. */
+          c->cnt_resno = ++base_resno;
         }
+        if (name != NULL)
+          pfree(name);
       }
-      if (name != NULL)
-        pfree(name);
     }
   }
 
-  /* --- LATERAL unnest(agg_possible_values(r.c_attno)) AS v --- *
+  /* --- One LATERAL unnest(agg_possible_values(r.c)) per column --- *
    * agg_possible_values takes the aggregate result itself: its parameter is
    * polymorphic, so the Var reaches it as the agg_token the level below
    * produces (takes_agg_token), whatever the type declared here. */
-  possible = makeFuncExpr(
-    constants->OID_FUNCTION_AGG_POSSIBLE_VALUES, TEXTARRAYOID,
-    list_make2(makeVar(1, agg_te->resno, value_type, typmod, coll, 0),
-               makeBoolConst(nullable_count != NULL, false)),
-    InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
-  /* An aggregate with no contribution at all -- one whose WHERE keeps no row --
-   * has no value in any world: SQL gives the row with NULL, and its token is
-   * NULL, on which agg_possible_values (strict) gives NULL.  Unnesting that
-   * would yield no row and lose the answer, so it explodes into the one value
-   * it takes, NULL, which the qual below lets through unconditionally. */
-  {
-    CoalesceExpr *co = makeNode(CoalesceExpr);
-    ArrayExpr *one_null = makeNode(ArrayExpr);
-    Const *null_text = makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1,
-                                 (Datum)0, true, false);
+  foreach (lc, cols) {
+    explode_col *c = (explode_col *)lfirst(lc);
+    FuncExpr *possible, *unnest_call;
+    RangeTblFunction *rtfunc;
+    Alias *val_alias, *val_eref;
+    RangeTblEntry *val_rte;
+    char *alias_name = psprintf("%s%d", PROVSQL_EXPLODE_ALIAS,
+                                (int)c->varno - 1);
 
-    one_null->array_typeid = TEXTARRAYOID;
-    one_null->element_typeid = TEXTOID;
-    one_null->multidims = false;
-    one_null->location = -1;
-    one_null->elements = list_make1(null_text);
-    co->coalescetype = TEXTARRAYOID;
-    co->coalescecollid = InvalidOid;
-    co->args = list_make2(possible, one_null);
-    co->location = -1;
-    unnest_call = makeFuncExpr(constants->OID_UNNEST, TEXTOID,
-                               list_make1(co), InvalidOid,
-                               DEFAULT_COLLATION_OID, COERCE_EXPLICIT_CALL);
-  }
-  unnest_call->funcretset = true;
+    possible = makeFuncExpr(
+      constants->OID_FUNCTION_AGG_POSSIBLE_VALUES, TEXTARRAYOID,
+      list_make2(makeVar(1, c->agg_te->resno, c->value_type, c->typmod,
+                         c->coll, 0),
+                 makeBoolConst(c->nullable_count != NULL, false)),
+      InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+    /* An aggregate with no contribution at all -- one whose WHERE keeps no row
+     * -- has no value in any world: SQL gives the row with NULL, and its token
+     * is NULL, on which agg_possible_values (strict) gives NULL.  Unnesting
+     * that would yield no row and lose the answer, so it explodes into the one
+     * value it takes, NULL, which the qual below lets through
+     * unconditionally. */
+    {
+      CoalesceExpr *co = makeNode(CoalesceExpr);
+      ArrayExpr *one_null = makeNode(ArrayExpr);
+      Const *null_text = makeConst(TEXTOID, -1, DEFAULT_COLLATION_OID, -1,
+                                   (Datum)0, true, false);
 
-  rtfunc = makeNode(RangeTblFunction);
-  rtfunc->funcexpr          = (Node *)unnest_call;
-  rtfunc->funccolcount      = 1;
-  rtfunc->funccolnames      = NIL;
-  rtfunc->funccoltypes      = NIL;
-  rtfunc->funccoltypmods    = NIL;
-  rtfunc->funccolcollations = NIL;
-  rtfunc->funcparams        = NULL;
+      one_null->array_typeid = TEXTARRAYOID;
+      one_null->element_typeid = TEXTOID;
+      one_null->multidims = false;
+      one_null->location = -1;
+      one_null->elements = list_make1(null_text);
+      co->coalescetype = TEXTARRAYOID;
+      co->coalescecollid = InvalidOid;
+      co->args = list_make2(possible, one_null);
+      co->location = -1;
+      unnest_call = makeFuncExpr(constants->OID_UNNEST, TEXTOID,
+                                 list_make1(co), InvalidOid,
+                                 DEFAULT_COLLATION_OID, COERCE_EXPLICIT_CALL);
+    }
+    unnest_call->funcretset = true;
 
-  val_alias = makeNode(Alias);
-  val_eref  = makeNode(Alias);
-  val_alias->aliasname = PROVSQL_EXPLODE_ALIAS;
-  val_eref->aliasname  = PROVSQL_EXPLODE_ALIAS;
-  val_eref->colnames   = list_make1(makeString(PROVSQL_EXPLODE_ALIAS));
+    rtfunc = makeNode(RangeTblFunction);
+    rtfunc->funcexpr          = (Node *)unnest_call;
+    rtfunc->funccolcount      = 1;
+    rtfunc->funccolnames      = NIL;
+    rtfunc->funccoltypes      = NIL;
+    rtfunc->funccoltypmods    = NIL;
+    rtfunc->funccolcollations = NIL;
+    rtfunc->funcparams        = NULL;
 
-  val_rte = makeNode(RangeTblEntry);
-  val_rte->rtekind        = RTE_FUNCTION;
-  val_rte->functions      = list_make1(rtfunc);
-  val_rte->funcordinality = false;
-  val_rte->alias          = val_alias;
-  val_rte->eref           = val_eref;
-  val_rte->lateral        = true;
-  val_rte->inFromCl       = true;
+    val_alias = makeNode(Alias);
+    val_eref  = makeNode(Alias);
+    val_alias->aliasname = alias_name;
+    val_eref->aliasname  = alias_name;
+    val_eref->colnames   = list_make1(makeString(alias_name));
+
+    val_rte = makeNode(RangeTblEntry);
+    val_rte->rtekind        = RTE_FUNCTION;
+    val_rte->functions      = list_make1(rtfunc);
+    val_rte->funcordinality = false;
+    val_rte->alias          = val_alias;
+    val_rte->eref           = val_eref;
+    val_rte->lateral        = true;
+    val_rte->inFromCl       = true;
 #if PG_VERSION_NUM < 160000
-  val_rte->requiredPerms  = 0;
+    val_rte->requiredPerms  = 0;
 #endif
+    val_rtes = lappend(val_rtes, val_rte);
+  }
 
-  /* --- The columns, the aggregate one now an exploded value --- *
+  /* --- The columns, each exploded one an exploded value --- *
    * A junk entry is the subquery's own business -- a grouping key or a sort
    * key it does not expose -- and no column of the range-table entry: a Var
    * reading it would be out of range (the planner sizes what it reads by the
@@ -22840,17 +22921,21 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   foreach (lc, src_rte->subquery->targetList) {
     TargetEntry *ste = (TargetEntry *)lfirst(lc);
     TargetEntry *te;
+    explode_col *mine = NULL;
 
     if (ste->resjunk)
       continue;
+    foreach (lc2, cols)
+      if (((explode_col *)lfirst(lc2))->attno == ste->resno)
+        mine = (explode_col *)lfirst(lc2);
     te = makeNode(TargetEntry);
     te->resno   = i++;
     te->resname = ste->resname ? pstrdup(ste->resname) : NULL;
     te->resjunk = false;
-    if (ste->resno == attno)
+    if (mine != NULL)
       te->expr = (Expr *)explode_value_of_text(
-        (Node *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
-        value_type);
+        (Node *)makeVar(mine->varno, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
+        mine->value_type);
     else
       te->expr = (Expr *)makeVar(1, ste->resno, exprType((Node *)ste->expr),
                                  exprTypmod((Node *)ste->expr),
@@ -22858,7 +22943,7 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
     tl = lappend(tl, te);
   }
 
-  /* --- WHERE (v IS NULL AND r.c_attno IS NULL) OR r.c_attno = v::T --- *
+  /* --- WHERE, per column: (v IS NULL AND cnt = 0) OR r.c_attno = v::T --- *
    * NULL is a value of the aggregate like any other: the one it takes where no
    * row contributes to it, which an aggregation over the whole table reaches in
    * the world holding none of its rows (a grouped one has no row there at all).
@@ -22867,36 +22952,32 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
    * against NULL reading as unknown, which is annotated zero and would drop it.
    * An aggregate with no contribution anywhere takes NULL in every world, and
    * the same test annotates it @c one, leaving its row as it stands. */
-  eq = makeNode(OpExpr);
-  eq->opno         = eqop;
-  eq->opfuncid     = InvalidOid;  /* the planner fills it in */
-  eq->opresulttype = BOOLOID;
-  eq->opretset     = false;
-  eq->opcollid     = InvalidOid;
-  eq->inputcollid  = coll;
-  eq->args = list_make2(
-    makeVar(1, agg_te->resno, value_type, typmod, coll, 0),
-    explode_value_of_text(
-      (Node *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
-      value_type));
-  eq->location = -1;
-
-  rtr1 = makeNode(RangeTblRef);
-  rtr1->rtindex = 1;
-  rtr2 = makeNode(RangeTblRef);
-  rtr2->rtindex = 2;
-  jt = makeNode(FromExpr);
-  jt->fromlist = list_make2(rtr1, rtr2);
-  {
+  foreach (lc, cols) {
+    explode_col *c = (explode_col *)lfirst(lc);
+    OpExpr *eq = makeNode(OpExpr);
     NullTest *v_null = makeNode(NullTest);
     Node *null_arm;
 
-    v_null->arg = (Expr *)makeVar(2, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0);
+    eq->opno         = c->eqop;
+    eq->opfuncid     = InvalidOid;  /* the planner fills it in */
+    eq->opresulttype = BOOLOID;
+    eq->opretset     = false;
+    eq->opcollid     = InvalidOid;
+    eq->inputcollid  = c->coll;
+    eq->args = list_make2(
+      makeVar(1, c->agg_te->resno, c->value_type, c->typmod, c->coll, 0),
+      explode_value_of_text(
+        (Node *)makeVar(c->varno, 1, TEXTOID, -1, DEFAULT_COLLATION_OID, 0),
+        c->value_type));
+    eq->location = -1;
+
+    v_null->arg = (Expr *)makeVar(c->varno, 1, TEXTOID, -1,
+                                  DEFAULT_COLLATION_OID, 0);
     v_null->nulltesttype = IS_NULL;
     v_null->argisrow = false;
     v_null->location = -1;
     null_arm = (Node *)v_null;
-    if (cnt_resno != 0) {
+    if (c->cnt_resno != 0) {
       /* The NULL value holds exactly where no row contributes: count(arg) = 0,
        * an ordinary comparison of an aggregate with a constant, which carries
        * the provenance of that world. */
@@ -22911,31 +22992,51 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
       no_row->opcollid = InvalidOid;
       no_row->inputcollid = InvalidOid;
       no_row->args = list_make2(
-        makeVar(1, cnt_resno, INT8OID, -1, InvalidOid, 0),
+        makeVar(1, c->cnt_resno, INT8OID, -1, InvalidOid, 0),
         makeConst(INT8OID, -1, InvalidOid, sizeof(int64), Int64GetDatum(0),
                   false, FLOAT8PASSBYVAL));
       no_row->location = -1;
       null_arm = (Node *)makeBoolExpr(AND_EXPR,
                                       list_make2(v_null, no_row), -1);
     }
-    jt->quals = (Node *)makeBoolExpr(OR_EXPR,
-                                     list_make2(null_arm, (Node *)eq), -1);
+    quals = lappend(quals, makeBoolExpr(OR_EXPR,
+                                        list_make2(null_arm, (Node *)eq), -1));
   }
 
-  inner_src = copyObject(src_rte);
-  if (nullable_count != NULL) {
-    /* The companion count goes on the copy the wrapper reads, not on the source
-     * the rest of the query sees: the wrapper's own target list leaves it out,
-     * so the level above finds the columns it had. */
-    Query *sub = inner_src->subquery;
-    TargetEntry *cnt_te =
-      makeTargetEntry((Expr *)nullable_count, cnt_resno,
-                      pstrdup(PROVSQL_AGG_COUNT_COLNAME), false);
+  rtr = makeNode(RangeTblRef);
+  rtr->rtindex = 1;
+  jt = makeNode(FromExpr);
+  jt->fromlist = list_make1(rtr);
+  foreach (lc, cols) {
+    RangeTblRef *r = makeNode(RangeTblRef);
 
+    r->rtindex = ((explode_col *)lfirst(lc))->varno;
+    jt->fromlist = lappend(jt->fromlist, r);
+  }
+  jt->quals = list_length(quals) == 1
+                ? (Node *)linitial(quals)
+                : (Node *)makeBoolExpr(AND_EXPR, quals, -1);
+
+  inner_src = copyObject(src_rte);
+  /* The companion counts go on the copy the wrapper reads, not on the source
+   * the rest of the query sees: the wrapper's own target list leaves them out,
+   * so the level above finds the columns it had.  They are appended in the
+   * order their resnos were handed out above. */
+  foreach (lc, cols) {
+    explode_col *c = (explode_col *)lfirst(lc);
+    Query *sub = inner_src->subquery;
+    TargetEntry *cnt_te;
+    char *cnt_name;
+
+    if (c->nullable_count == NULL)
+      continue;
+    cnt_name = psprintf("%s%d", PROVSQL_AGG_COUNT_COLNAME, (int)c->cnt_resno);
+    cnt_te = makeTargetEntry((Expr *)c->nullable_count, c->cnt_resno,
+                             cnt_name, false);
     sub->targetList = lappend(sub->targetList, cnt_te);
     sub->hasAggs = true;
-    inner_src->eref->colnames = lappend(
-      inner_src->eref->colnames, makeString(pstrdup(PROVSQL_AGG_COUNT_COLNAME)));
+    inner_src->eref->colnames =
+      lappend(inner_src->eref->colnames, makeString(cnt_name));
   }
   /* The subquery is one level deeper now: what it reads of the levels above
    * (a correlated body, the row a rank compares with) is read one further
@@ -22946,7 +23047,7 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
   inner = makeNode(Query);
   inner->commandType   = CMD_SELECT;
   inner->canSetTag     = true;
-  inner->rtable        = list_make2(inner_src, val_rte);
+  inner->rtable        = lcons(inner_src, val_rtes);
   inner->jointree      = jt;
   inner->targetList    = tl;
   inner->hasAggs       = false;
@@ -22967,7 +23068,9 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
     inner_src->perminfoindex = 1;
   } else
     inner_src->perminfoindex = 0;
-  val_rte->perminfoindex = 0;   /* a function entry has no privilege of its own */
+  foreach (lc, val_rtes)
+    /* a function entry has no privilege of its own */
+    ((RangeTblEntry *)lfirst(lc))->perminfoindex = 0;
 #endif
 
   /* The subquery keeps the eref, hence the column names and the types, of
@@ -22977,6 +23080,7 @@ static Query *rewrite_explode_agg_value(Query *q, const constants_t *constants,
 
   return q;
 }
+
 
 /**
  * @brief Wrap @p expr in a @c provsql.assume_boolean FuncExpr.
@@ -27340,9 +27444,11 @@ static Query *process_query(const constants_t *constants, Query *q,
      * lets the explosion fire on its own. */
     SetOperationStmt *stmt = (SetOperationStmt *)q->setOperations;
     AttrNumber col;
-    bool exploded = false;
+    List *cols = NIL;
 
     for (col = 1; col <= (AttrNumber)list_length(stmt->colTypes); ++col) {
+      explode_col *c;
+
       if (!setop_column_has_aggregate(constants, q, q->setOperations, col))
         continue;
       if (!OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES) ||
@@ -27354,10 +27460,16 @@ static Query *process_query(const constants_t *constants, Query *q,
           "an integer column take values that can be enumerated and exploded "
           "into one row each, in every arm; mark the aggregate plain() to "
           "read its plain value");
-      if (explode_setop_arms(q, constants, q->setOperations, col))
-        exploded = true;
+      c = (explode_col *)palloc0(sizeof(explode_col));
+      c->attno = col;
+      c->value_type = list_nth_oid(stmt->colTypes, col - 1);
+      cols = lappend(cols, c);
     }
-    if (exploded)
+    /* Every aggregate column of an arm in ONE pass: a column's NULL value is
+     * read off its own Aggref, which a pass that had already wrapped the arm
+     * would no longer find (see rewrite_explode_agg_values). */
+    if (cols != NIL &&
+        explode_setop_arms(q, constants, q->setOperations, cols))
       return process_query(constants, q, removed, wrap_root, top_level,
                            in_boolean_rewrite, NULL);
     return process_query(constants, rewrite_intersect(constants, q), removed,
@@ -27581,12 +27693,11 @@ static Query *process_query(const constants_t *constants, Query *q,
      * the grouping is an operation on data like any other. */
     if (OidIsValid(constants->OID_FUNCTION_AGG_POSSIBLE_VALUES)) {
       Index rteid;
-      AttrNumber attno;
-      Oid value_type;
+      List *cols = agg_values_read_as_data(constants, q, &rteid);
 
-      if (agg_value_read_as_data(constants, q, &rteid, &attno, &value_type)) {
+      if (cols != NIL) {
         Query *rewritten =
-          rewrite_explode_agg_value(q, constants, rteid, attno, value_type);
+          rewrite_explode_agg_values(q, constants, rteid, cols);
         if (rewritten)
           return process_query(constants, rewritten, removed, wrap_root,
                                top_level, in_boolean_rewrite, inv_ctx);
