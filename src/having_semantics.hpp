@@ -1032,7 +1032,58 @@ void provsql_having(
             }
             out = r; is_int = all_int; return true;
           }
-          return false;
+          if (aop == PROVSQL_ARITH_PERCENTILE) {
+            /* A continuous percentile over the group's rows: the wires are
+             * interleaved [ind_1, x_1, ...] with ind_i the row's 0/1 presence,
+             * and the fraction is the gate's own text.  The values the world
+             * holds are sorted and interpolated at the fraction, as
+             * MonteCarloSampler reads them; a world holding none of them has no
+             * value, like an aggregate with no contributing row.  No comparison
+             * reaches this today -- the gate is built for percentile_cont over
+             * a random variable, whose circuits the sampler reads -- so it is
+             * written to the sampler's reading rather than to a measurement. */
+            std::vector<double> members;
+            double fraction, pos, fp;
+            std::size_t lo;
+
+            if (w.empty() || w.size() % 2 != 0) return false;
+            try {
+              fraction = std::stod(c.getExtra(gx));
+            } catch (const std::exception &) {
+              return false;
+            }
+            for (std::size_t i = 0; i < w.size(); i += 2) {
+              double ind, x;
+              bool ii, xi;
+
+              if (!eval(w[i], world, ind, ii)) return false;
+              if (ind < 0.5) continue;              /* the row is not here */
+              if (!eval(w[i + 1], world, x, xi)) return false;
+              members.push_back(x);
+            }
+            if (members.empty()) return false;
+            std::sort(members.begin(), members.end());
+            pos = fraction * static_cast<double>(members.size() - 1);
+            lo = static_cast<std::size_t>(pos);
+            fp = pos - static_cast<double>(lo);
+            out = (lo + 1 < members.size())
+                    ? members[lo] + fp * (members[lo + 1] - members[lo])
+                    : members[lo];
+            is_int = false;
+            return true;
+          }
+          /* An arithmetic this evaluator does not know.  Falling through to
+           * "this world has no value" is what made a HAVING over sqrt, ln or
+           * exp answer probability 0 in every world, silently and with
+           * confidence, for as long as those three arms were missing: the
+           * caller reads no value as "the comparison does not hold here".  An
+           * unimplemented operator has to be told apart from a world that
+           * genuinely has no value, so it raises, as every other evaluator's
+           * default does (MonteCarloSampler, Expectation).  A new gate_arith
+           * operator therefore fails loudly here until it is read. */
+          throw CircuitException(
+                  "having_semantics: unknown gate_arith operator tag: " +
+                  std::to_string(aop));
         }
         return false;
       };

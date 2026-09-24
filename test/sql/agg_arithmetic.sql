@@ -740,3 +740,48 @@ SELECT round(p::numeric, 6) AS p FROM agg_tr_r;
 DROP TABLE agg_tr_r;
 SELECT remove_provenance('agg_tr_d');
 DROP TABLE agg_tr_d;
+
+-- A GREATEST or LEAST whose arm is a function ProvSQL carries -- sqrt, ln, and
+-- so the sqrt a stddev's rewrite puts over the CASE of its variance -- used to
+-- freeze and warn: agg_expr_null_gate declined to read the nullness of such a
+-- function, on the ground that the moment of the CASE that then lowers was
+-- wrong, E[greatest(var_pop x, 0)] coming out 0 against the 0.0625 the worlds
+-- give.  The moment was never wrong.  That 0 was the per-world evaluator having
+-- no arm for POW, LN or EXP: the CASE's GUARD is a comparison over the sqrt,
+-- over the squaring inside a variance, so it held in no world at all and the
+-- zero arm was the one always selected.  Read per world (just above), the same
+-- shapes are exact and the arm no longer freezes.
+-- Two rows at one half, four worlds a quarter each.  GREATEST and LEAST ignore a
+-- NULL argument, so the world holding no row contributes the other one:
+--   var_pop     NULL, 0, 0, 0.25            -> greatest(.,0) mean 0.25/4 = 0.0625
+--   sqrt(sum)   NULL, 1, 1.4142136, 1.7320508 -> greatest(.,0) mean 1.0365661
+--   ln(sum)     NULL, 0, 0.6931472, 1.0986123 -> least(.,1)    mean 0.6732868
+--   stddev_samp NULL, NULL, NULL, 0.7071068   -> greatest(.,0) mean 0.1767767
+--   stddev_pop  NULL, 0, 0, 0.5               -> greatest(.,0) mean 0.125
+-- Exact and not sampled: the same to ten digits under three Monte Carlo seeds.
+CREATE TABLE agg_ca_d(x int);
+INSERT INTO agg_ca_d VALUES (1), (2);
+SELECT add_provenance('agg_ca_d');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM agg_ca_d; END $$;
+CREATE TABLE agg_ca_r AS SELECT
+  round(expected(greatest(var_pop(x), 0))::numeric, 6) AS varpop,
+  round(expected(greatest(sqrt(sum(x)), 0))::numeric, 6) AS sqrt_arm,
+  round(expected(least(ln(sum(x)), 1))::numeric, 6) AS ln_arm,
+  round(expected(greatest(stddev_samp(x), 0))::numeric, 6) AS stddev_samp_arm,
+  round(expected(greatest(stddev_pop(x), 0))::numeric, 6) AS stddev_pop_arm
+  FROM agg_ca_d;
+SELECT remove_provenance('agg_ca_r');
+SELECT * FROM agg_ca_r;
+DROP TABLE agg_ca_r;
+-- The value in the data as it is, which carries the token now rather than being
+-- frozen: greatest(sqrt(3), 0) = 1.732051, the number plain SQL gives.
+CREATE TABLE agg_ca_r AS
+  SELECT greatest(sqrt(sum(x)), 0) AS v FROM agg_ca_d;
+SELECT remove_provenance('agg_ca_r');
+SELECT round(v::numeric, 6) AS v FROM agg_ca_r;
+DROP TABLE agg_ca_r;
+SET provsql.active = off;
+SELECT round(greatest(sqrt(sum(x)), 0)::numeric, 6) AS plain_v FROM agg_ca_d;
+SET provsql.active = on;
+SELECT remove_provenance('agg_ca_d');
+DROP TABLE agg_ca_d;

@@ -554,3 +554,26 @@ p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+varpop|sqrt_arm|ln_arm|stddev_samp_arm|stddev_pop_arm
+0.062500|1.036566|0.673287|0.176777|0.125000
+(1 row)
+remove_provenance
+
+(1 row)
+WARNING:  ProvSQL: converting agg_token to numeric: provenance information is lost
+DETAIL:  provsql-reason: stored-agg-token-conversion; scope: deliberate
+v
+1.732051
+(1 row)
+plain_v
+1.732051
+(1 row)
+remove_provenance
+
+(1 row)

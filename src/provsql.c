@@ -5514,13 +5514,47 @@ static FuncExpr *agg_expr_null_gate(Node *arg, const constants_t *constants,
 
     /* A function ProvSQL carries over an agg_token -- round, ln, sqrt, and so
      * the sqrt a stddev's rewrite puts over the CASE of its variance -- is
-     * strict, so its NULL-ness IS its argument's and could be read here.  It
-     * is not, on purpose: reading it would let a GREATEST carry such an arm,
-     * and the moment of the gate that results is wrong -- E[greatest(var_pop
-     * x, 0)] comes out 0 where the four worlds give 0.0625, with or without
-     * Monte Carlo samples, while E[var_pop x] on its own is exact.  The gap is
-     * in the moment of a CASE nested in a CASE of that shape, not in the
-     * reading, so the arm stays a plain value until that is fixed. */
+     * STRICT, so its NULL-ness IS its argument's, and that is what is read
+     * here.  It was declined for a long while, on the ground that a GREATEST
+     * would then carry such an arm and the moment of the resulting CASE was
+     * wrong: E[greatest(var_pop x, 0)] came out 0 where the four worlds give
+     * 0.0625.  The moment was never wrong.  That 0 was the per-world
+     * evaluator having no arm for POW, LN or EXP, so the CASE's GUARD -- a
+     * comparison over the sqrt, over the squaring inside a variance -- held in
+     * no world at all and the zero arm was always the one selected.  With
+     * those three read per world the same shape gives 0.0625, sqrt 1.0365661,
+     * ln 0.4479399, exp 7.5482187, each the value the worlds give.
+     *
+     * Either the counterpart is already in place, the target list having
+     * swapped it, or the call is still the catalog one over the aggregate --
+     * which is where an IS NULL meets it, before that swap -- and asking for
+     * the swap says whether ProvSQL carries it. */
+    {
+      Node *inner = NULL;
+
+      if (get_func_namespace(fe->funcid) == get_namespace_oid("provsql", true) &&
+          fe->args != NIL &&
+          exprType((Node *)linitial(fe->args)) == constants->OID_TYPE_AGG_TOKEN)
+        inner = (Node *)linitial(fe->args);
+      else {
+        Node *swapped = try_swap_agg_func(fe, constants);
+
+        /* A FuncExpr is the counterpart; anything else -- the CASE a Boolean
+         * cast becomes -- is not this reading. */
+        if (swapped != NULL && IsA(swapped, FuncExpr) &&
+            ((FuncExpr *)swapped)->args != NIL &&
+            exprType(swapped) == constants->OID_TYPE_AGG_TOKEN)
+          inner = (Node *)linitial(((FuncExpr *)swapped)->args);
+      }
+      if (inner != NULL) {
+        Node *peeled = peel_agg_casts(inner);
+
+        if (peeled != NULL)
+          inner = peeled;
+        if (exprType(inner) == constants->OID_TYPE_AGG_TOKEN)
+          return agg_expr_null_gate(inner, constants, want_null);
+      }
+    }
     return NULL;
   }
 

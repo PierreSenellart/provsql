@@ -152,3 +152,18 @@ g|n|p
 remove_provenance
 
 (1 row)
+add_provenance
+
+(1 row)
+remove_provenance
+
+(1 row)
+g|n|p
+1|f|0.500000
+1|t|0.000000
+2|f|0.750000
+2|t|0.000000
+(4 rows)
+remove_provenance
+
+(1 row)

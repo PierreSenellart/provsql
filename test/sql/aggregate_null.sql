@@ -243,3 +243,24 @@ DROP TABLE anz_r;
 SELECT remove_provenance('anz');
 DROP TABLE anz;
 DROP TABLE anx;
+-- The nullness of a function ProvSQL carries is its argument's, the function
+-- being strict, so sqrt(sum(x)) IS NULL is the sum's own nullness.  It was
+-- refused by name until the reading was lifted, and the refusal outlived its
+-- reason: here the NullTest's argument is still the pg_catalog sqrt over the
+-- aggregate, not the counterpart the target list swaps in, so asking for that
+-- swap is what says ProvSQL carries the function.
+-- One row in group 1 and two in group 2, each at one half.  The sum is null in
+-- no world where the group is there, so false carries the group's own
+-- probability -- 0.5 and 0.75 -- and true carries nothing.
+CREATE TABLE anw(g int, x int);
+INSERT INTO anw VALUES (1, 4), (2, 1), (2, 3);
+SELECT add_provenance('anw');
+DO $$ BEGIN PERFORM set_prob(provenance(), 0.5) FROM anw; END $$;
+CREATE TABLE anw_r AS
+  SELECT g, sqrt(sum(x)) IS NULL AS n, probability(provenance()) AS p
+  FROM anw GROUP BY g;
+SELECT remove_provenance('anw_r');
+SELECT g, n, round(p::numeric, 6) AS p FROM anw_r ORDER BY g, n;
+DROP TABLE anw_r;
+SELECT remove_provenance('anw');
+DROP TABLE anw;
